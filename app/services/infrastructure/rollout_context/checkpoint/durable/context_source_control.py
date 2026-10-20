@@ -13,9 +13,13 @@ from app.domain.itemized.mutation_intents import ApplySourceLifecycleDecision
 from app.domain.itemized.records import CanonicalItemRecord
 from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_control_state import (
     ContextSourceControlMutation,
+    ContextSourceControlReceipt,
     ContextSourceControlState,
     ContextSourceOwnerKey,
     ContextSourceTrackingStatus,
+)
+from app.services.infrastructure.rollout_context.runtime.context_sources.models import (
+    _normalize_skill_name,
 )
 from app.services.infrastructure.rollout_context.storage.primitives import (
     RolloutNotMaterializedError,
@@ -224,7 +228,7 @@ class ContextSourceControlStorageMixin:
     def apply_context_source_control_mutation(
         self,
         mutation: ContextSourceControlMutation,
-    ) -> ContextSourceControlState:
+    ) -> ContextSourceControlReceipt:
         """同一事务读取旧控制行并消费 CSM 决策；不触碰 canonical 文件锁。
 
         只在尚未物化时 initialize，既有库不回收在途 JSONL 尾部。
@@ -249,16 +253,56 @@ class ContextSourceControlStorageMixin:
                 (owner.session_id, owner.thread_id, state.source_id),
             ).fetchone()
             stored = _state_from_row(tuple(row)) if row is not None else None
+            replaced = mutation.replaced_state
+            old_stored = None
+            if replaced is not None:
+                old_row = connection.execute(
+                    f"SELECT {_SELECT_COLUMNS} FROM {_TABLE_NAME} "
+                    "WHERE session_id = ? AND thread_id = ? AND source_id = ?",
+                    (owner.session_id, owner.thread_id, replaced.source_id),
+                ).fetchone()
+                old_stored = _state_from_row(tuple(old_row)) if old_row is not None else None
+                if old_stored is not None and old_stored.tracking_status == "untracked" and (
+                    old_stored.state_revision == replaced.state_revision + 1
+                    and old_stored.durable_fields() == replaced.durable_fields()
+                    and stored is not None and stored.durable_fields() == state.durable_fields()
+                    and stored.state_revision == state.state_revision + 1
+                ):
+                    return ContextSourceControlReceipt(stored, old_stored)
+                if old_stored is None or old_stored.tracking_status != "tracked" or (
+                    old_stored.state_revision != replaced.state_revision
+                    or replace(old_stored, tracking_status="untracked").durable_fields() != replaced.durable_fields()
+                ):
+                    raise RuntimeError("context-source-control-state-conflict: rebind 原 tracking 已变化")
+                if stored is not None and stored.tracking_status != "untracked":
+                    raise RuntimeError("context-source-control-state-conflict: rebind 目标已被跟踪")
+                tracked = connection.execute(
+                    f"SELECT source_id, name FROM {_TABLE_NAME} "
+                    "WHERE session_id = ? AND thread_id = ? AND tracking_status = 'tracked'",
+                    (owner.session_id, owner.thread_id),
+                ).fetchall()
+                if any(
+                    source_id != replaced.source_id
+                    and _normalize_skill_name(name) == _normalize_skill_name(state.name)
+                    for source_id, name in tracked
+                ):
+                    raise RuntimeError("context-source-control-state-conflict: rebind 存在其它同名 tracking")
             if stored is not None:
-                if mutation.operation != "register" and state.binding_revision != stored.binding_revision:
+                if mutation.operation != "register" and replaced is None and state.binding_revision != stored.binding_revision:
                     raise RuntimeError("context-source-control-state-conflict: 只有 register 可以更新来源绑定")
                 if mutation.operation in {"register", "observe"} and state.tracking_status != stored.tracking_status:
                     raise RuntimeError("context-source-control-state-conflict: tracking 变化必须使用 track/untrack")
-                if mutation.operation != "observe" and state.latest_revision != stored.latest_revision:
+                if mutation.operation != "observe" and replaced is None and state.latest_revision != stored.latest_revision:
                     raise RuntimeError("context-source-control-state-conflict: 内容观察必须使用 observe")
+            # 旧行只从同事务的权威记录派生；两次写入任一失败均整体回滚。
+            frozen = None
+            if old_stored is not None:
+                frozen = self._write_context_source_control_transaction(
+                    connection, replace(old_stored, tracking_status="untracked"), old_stored,
+                )
             result = self._write_context_source_control_transaction(connection, state, stored)
             connection.commit()
-            return result
+            return ContextSourceControlReceipt(result, frozen)
 
     def _write_context_source_control_transaction(
         self,

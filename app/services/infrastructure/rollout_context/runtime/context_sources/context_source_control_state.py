@@ -18,6 +18,9 @@ from typing import Literal, Protocol
 
 from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
 from app.domain.itemized.epoch.prefix_epoch import PendingPrefixEpochTransition
+from app.services.infrastructure.rollout_context.runtime.context_sources.models import (
+    _normalize_skill_name,
+)
 
 ContextSourceTrackingStatus = Literal["tracked", "untracked"]
 """``untracked`` 即 OpenSpec 的 frozen 状态：停止消费 revision 且不再恢复。"""
@@ -146,6 +149,8 @@ class ContextSourceControlMutation:
 
     operation: ContextSourceControlOperation
     state: ContextSourceControlState
+    # 旧 registration 的预期冻结值；state_revision 仍为冻结前 CAS 版本。
+    replaced_state: ContextSourceControlState | None = None
 
     def __post_init__(self) -> None:
         if self.operation not in {"register", "observe", "track", "untrack"}:
@@ -156,6 +161,25 @@ class ContextSourceControlMutation:
             "tracked" if self.operation == "track" else "untracked"
         ):
             raise ValueError("ContextSourceControlMutation 与 tracking_status 不一致")
+        old = self.replaced_state
+        if old is not None and (
+            self.operation != "track"
+            or not isinstance(old, ContextSourceControlState)
+            or old.owner != self.state.owner
+            or old.source_id == self.state.source_id
+            or old.source_kind != "skill" or self.state.source_kind != "skill"
+            or _normalize_skill_name(old.name) != _normalize_skill_name(self.state.name)
+            or old.tracking_status != "untracked"
+        ):
+            raise ValueError("ContextSourceControlMutation rebind 必须冻结同 owner 的同名旧 Skill")
+
+
+@dataclass(frozen=True, slots=True)
+class ContextSourceControlReceipt:
+    """同一控制事务确认的新状态和可选的已冻结旧 registration。"""
+
+    state: ContextSourceControlState
+    replaced_state: ContextSourceControlState | None = None
 
 
 class ContextSourceControlStatePort(Protocol):
@@ -180,7 +204,7 @@ class ContextSourceControlStatePort(Protocol):
     def apply_context_source_control_mutation(
         self,
         mutation: ContextSourceControlMutation,
-    ) -> ContextSourceControlState:
+    ) -> ContextSourceControlReceipt:
         """在同一 owner read/write 事务中消费控制决策，返回已确认的状态。
 
         控制字段与已存记录完全一致时必须幂等返回，不推进 ``state_revision``。
@@ -191,6 +215,7 @@ class ContextSourceControlStatePort(Protocol):
 __all__ = [
     "ContextSourceControlMutation",
     "ContextSourceControlOperation",
+    "ContextSourceControlReceipt",
     "ContextSourceControlState",
     "ContextSourceControlStatePort",
     "ContextSourceOwnerKey",

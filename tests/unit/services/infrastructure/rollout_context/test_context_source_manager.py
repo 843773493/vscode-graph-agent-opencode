@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import hashlib
 import json
-from contextlib import nullcontext
+import sqlite3
+from contextlib import closing, nullcontext
 
 import pytest
 from pydantic import ValidationError
@@ -375,6 +376,142 @@ def test_load_tracked_with_changed_effective_entry_rebinds_and_freezes_old(sourc
     # 旧 context item 逐字节保持不变。
     assert old_activation.content == "v1\n"
     assert old_activation.revision != rebound_delta.revision
+
+
+@pytest.mark.parametrize("new_visible", [False, True])
+def test_rebind_write_failure_preserves_old_tracking_and_retry(source_seal_case, new_visible):
+    manager = _manager(source_seal_case)
+    _install_snapshot(manager, "debugging", "v1\n")
+    manager.load_skill("debugging", mode="tracked")
+    source_seal_case.seal(manager)
+    uri = "boxteam://workspace/test/resources/skills/debugging-next/SKILL.md"
+    manager.register(ContextSourceDescriptor(
+        source_id="skill:debugging-next", source_kind="skill", name="debugging",
+        description="新来源", internal_locator=uri, resource_uri=uri,
+    ))
+    _install_snapshot(manager, "debugging", "v2\n", display_uri=uri)
+    if new_visible:
+        manager.activate_skill_content("debugging", "v2\n")
+        source_seal_case.seal(manager)
+    saver, owner = source_seal_case.saver, source_seal_case.owner
+    before = saver.load_context_source_control_states(owner)
+    pending = manager.prepare_sources()
+    with closing(saver._storage.storage._connect(owner.thread_id, session_id=owner.session_id)) as connection:
+        for action in ("INSERT", "UPDATE"):
+            connection.execute(
+                f"CREATE TRIGGER refuse_rebind_{action} BEFORE {action} ON context_source_control_states "
+                "WHEN NEW.source_id = 'skill:debugging-next' AND NEW.tracking_status = 'tracked' "
+                "BEGIN SELECT RAISE(ABORT, 'injected rebind failure'); END"
+            )
+        connection.commit()
+        with pytest.raises(sqlite3.IntegrityError, match="injected rebind failure"):
+            manager.load_skill("debugging", mode="tracked")
+        assert saver.load_context_source_control_states(owner) == before
+        assert manager.prepare_sources() == pending
+        assert manager.source_observation_state("skill:debugging")[0] == "tracked"
+        for action in ("INSERT", "UPDATE"):
+            connection.execute(f"DROP TRIGGER refuse_rebind_{action}")
+        connection.commit()
+    receipt = manager.load_skill("debugging", mode="tracked")
+    assert receipt.source_rebound is True
+    assert receipt.status == ("already_active" if new_visible else "rebound")
+    controls = {state.source_id: state for state in saver.load_context_source_control_states(owner)}
+    assert controls["skill:debugging"].tracking_status == "untracked"
+    assert controls["skill:debugging-next"].tracking_status == "tracked"
+    assert controls["skill:debugging-next"].latest_revision == _revision("v2\n")
+    reloaded = source_seal_case.manager()
+    assert reloaded.source_observation_state("skill:debugging")[0] == "untracked"
+    assert reloaded.source_observation_state("skill:debugging-next")[0] == "tracked"
+    stable = saver.load_context_source_control_states(owner)
+    assert manager.load_skill("debugging", mode="tracked").source_rebound is False
+    assert saver.load_context_source_control_states(owner) == stable
+
+
+@pytest.mark.parametrize("new_visible", [False, True])
+def test_rebind_frozen_snapshot_registration_is_atomic(source_seal_case, new_visible):
+    manager = _manager(source_seal_case)
+    _install_snapshot(manager, "debugging", "v1\n")
+    manager.load_skill("debugging", mode="tracked")
+    source_seal_case.seal(manager)
+    uri = "boxteam://workspace/test/resources/skills/new/SKILL.md"
+    binding = SkillCatalogBinding(
+        name="debugging", resource_id="entry:new:activation", entry_identity="entry:new",
+        display_uri=uri, activation_revision=_revision("v2\n"), body="v2\n",
+    )
+    snapshot = SkillCatalogActivationSnapshot(catalog_revision="catalog-new", entries={"debugging": binding})
+    if new_visible:
+        manager.load_skill("debugging", activation_snapshot=snapshot)
+        source_seal_case.seal(manager)
+        snapshot = SkillCatalogActivationSnapshot(catalog_revision="catalog-next", entries={"debugging": binding})
+    saver, owner = source_seal_case.saver, source_seal_case.owner
+    before = saver.load_context_source_control_states(owner)
+    pending, descriptors = manager.prepare_sources(), manager.descriptors()
+    with closing(saver._storage.storage._connect(owner.thread_id, session_id=owner.session_id)) as connection:
+        for action in ("INSERT", "UPDATE"):
+            connection.execute(
+                f"CREATE TRIGGER refuse_frozen_{action} BEFORE {action} ON context_source_control_states "
+                "WHEN NEW.source_id = 'skill:entry:new' AND NEW.tracking_status = 'tracked' "
+                "BEGIN SELECT RAISE(ABORT, 'injected frozen rebind failure'); END"
+            )
+        connection.commit()
+        with pytest.raises(sqlite3.IntegrityError, match="injected frozen rebind failure"):
+            manager.load_skill("debugging", mode="tracked", activation_snapshot=snapshot)
+        assert saver.load_context_source_control_states(owner) == before
+        assert manager.prepare_sources() == pending
+        assert manager.descriptors() == descriptors
+        assert manager._source_ids_by_name["debugging"] == (
+            "skill:entry:new" if new_visible else "skill:debugging"
+        )
+        for action in ("INSERT", "UPDATE"):
+            connection.execute(f"DROP TRIGGER refuse_frozen_{action}")
+        connection.commit()
+    receipt = manager.load_skill("debugging", mode="tracked", activation_snapshot=snapshot)
+    assert receipt.source_rebound is True
+    states = {state.source_id: state for state in saver.load_context_source_control_states(owner)}
+    assert states["skill:debugging"].tracking_status == "untracked"
+    assert states["skill:entry:new"].tracking_status == "tracked"
+    assert states["skill:entry:new"].binding_revision == snapshot.catalog_revision
+
+
+@pytest.mark.parametrize(("old_tracked", "mode"), [(False, "snapshot"), (False, "tracked"), (True, "tracked")])
+def test_load_restores_observed_unapplied_activation_after_restart(source_seal_case, old_tracked, mode):
+    manager = _manager(source_seal_case)
+    if old_tracked:
+        _install_snapshot(manager, "debugging", "v1\n")
+        manager.load_skill("debugging", mode="tracked")
+        source_seal_case.seal(manager)
+    binding = SkillCatalogBinding(
+        name="debugging", resource_id="entry:new:activation", entry_identity="entry:new",
+        display_uri="boxteam://workspace/test/resources/skills/new/SKILL.md",
+        activation_revision=_revision("v2\n"), body="v2\n",
+    )
+    snapshot = SkillCatalogActivationSnapshot(catalog_revision="catalog-new", entries={"debugging": binding})
+    # 真实 snapshot 入口只观察，尚未 seal；冷 manager 只恢复控制行，不带正文和 pending。
+    manager.load_skill("debugging", activation_snapshot=snapshot)
+    # 来源 owner 在冷启动重新登记已知 descriptor；缺 descriptor 的 rebind 仍应拒绝。
+    manager = _manager(source_seal_case)
+    assert manager.prepare_pending() is None
+    assert manager._sources["skill:entry:new"].latest_content is None
+
+    receipt = manager.load_skill("debugging", mode=mode, activation_snapshot=snapshot)
+
+    assert receipt.status == ("rebound" if old_tracked else "loaded")
+    assert receipt.source_rebound is old_tracked
+    assert receipt.tracked is (mode == "tracked")
+    assert receipt.queued is True
+    states = {state.source_id: state for state in source_seal_case.saver.load_context_source_control_states(source_seal_case.owner)}
+    assert states["skill:entry:new"].latest_visible_committed_revision is None
+    if old_tracked:
+        assert states["skill:debugging"].tracking_status == "untracked"
+    (delta,) = source_seal_case.seal(manager)[0].deltas
+    assert delta.source_id == "skill:entry:new"
+    assert delta.content == binding.body
+    assert delta.revision == binding.activation_revision
+    assert delta.kind == "activation"
+    again = manager.load_skill("debugging", mode=mode, activation_snapshot=snapshot)
+    assert again.status == "already_active"
+    assert again.queued is False
+    assert again.source_rebound is False
 
 
 def test_load_tracked_same_effective_entry_is_idempotent_already_active(source_seal_case):

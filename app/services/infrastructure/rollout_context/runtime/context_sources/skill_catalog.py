@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
+from dataclasses import replace
 
 from app.domain.itemized.resource_activation import (
     ResourceActivationSnapshotRef,
@@ -151,54 +152,28 @@ class SkillCatalogMixin:
             for source_id, binding in observations:
                 self.observe(source_id, binding.body, revision=binding.activation_revision)
 
-        def _resolve_activation_binding(self, name: str, snapshot: SkillCatalogActivationSnapshot | None = None) -> SkillCatalogBinding:
-            """从冻结 snapshot 解析 exact binding；缺失/不一致 fail closed。"""
-            snapshot = self._skill_activation_snapshot if snapshot is None else snapshot
-            if snapshot is None:
-                raise SkillCatalogSnapshotConflict(
-                    "skill-catalog-snapshot-conflict: 尚无冻结 SkillCatalog "
-                    "activation snapshot；snapshot/tracked 只能从冻结 snapshot 解析"
-                )
-            binding = snapshot.entries.get(name)
-            if binding is None:
-                raise KeyError(f"Skill 不存在: name={name}")
-            # 按当前 effective entry 解析已登记 registration（与 load_skill 同一
-            # 名称索引），不假设固定 ``skill:{name}`` source identity：同名高优先级
-            # entry 覆盖后，对应 registration 的 display_uri 才是该 binding 的对照。
-            registered_source_id = self._source_ids_by_name.get(binding.name)
-            state = (
-                self._sources.get(registered_source_id)
-                if registered_source_id is not None
-                else None
-            )
-            if (
-                state is not None
-                and state.descriptor is not None
-                and state.descriptor.resource_uri is not None
-                and state.descriptor.resource_uri != binding.display_uri
-            ):
-                raise SkillCatalogSnapshotConflict(
-                    "skill-catalog-snapshot-conflict: 冻结 binding 与已登记来源不一致: "
-                    f"name={name} frozen={binding.display_uri} "
-                    f"registered={state.descriptor.resource_uri}"
-                )
-            return binding
-
         def load_skill(self, name: str, mode: SkillLoadMode = "snapshot", *, activation_snapshot: SkillCatalogActivationSnapshot | None = None) -> SkillLoadReceipt:
             if not isinstance(name, str) or not name.strip():
                 raise ValueError("skill_load.name 必须是非空字符串")
             if mode not in {"snapshot", "tracked", "untrack"}:
                 raise ValueError("skill_load.mode 只能是 snapshot、tracked 或 untrack")
             normalized = _normalize_skill_name(name)
+            binding = None
             if mode != "untrack" and activation_snapshot is not None:
-                frozen_binding = activation_snapshot.entries.get(normalized)
-                if frozen_binding is None:
+                binding = activation_snapshot.entries.get(normalized)
+                if binding is None:
                     raise KeyError(f"Skill 不存在: name={normalized}")
-                self.register_skill_binding(frozen_binding, catalog_revision=activation_snapshot.catalog_revision)
-            source_id = self._source_ids_by_name.get(normalized)
-            if source_id is None:
-                raise KeyError(f"Skill 不存在: name={normalized}")
-            state = self._sources[source_id]
+                state = self._registration_candidate(ContextSourceDescriptor(
+                    source_id=f"skill:{binding.entry_identity}", source_kind="skill",
+                    name=binding.name, description=binding.description,
+                    internal_locator=binding.display_uri, resource_uri=binding.display_uri,
+                ), activation_snapshot.catalog_revision)
+                source_id = state.source_id
+            else:
+                source_id = self._source_ids_by_name.get(normalized)
+                if source_id is None:
+                    raise KeyError(f"Skill 不存在: name={normalized}")
+                state = self._sources[source_id]
             display_uri = (
                 state.descriptor.resource_uri if state.descriptor is not None else None
             )
@@ -256,44 +231,45 @@ class SkillCatalogMixin:
 
             # snapshot/tracked 只从冻结 Turn/ModelCall SkillCatalogSnapshot 的
             # exact binding 解析；同名 catalog 新 revision 不影响已冻结调用。
-            binding = self._resolve_activation_binding(normalized, activation_snapshot)
-            source_rebound = False
-            if state.latest_revision is None:
-                self.activate_skill_content(
-                    normalized,
-                    binding.body,
-                    revision=binding.activation_revision,
-                )
-                state = self._sources[source_id]
-            elif (
-                state.latest_revision != binding.activation_revision
+            if binding is None:
+                snapshot = self.frozen_skill_catalog()
+                binding = snapshot.entries.get(normalized)
+                if binding is None:
+                    raise KeyError(f"Skill 不存在: name={normalized}")
+            if state.descriptor is not None and state.descriptor.resource_uri is not None and (
+                state.descriptor.resource_uri != binding.display_uri
             ):
+                raise SkillCatalogSnapshotConflict(
+                    "skill-catalog-snapshot-conflict: 冻结 binding 与已登记来源不一致: "
+                    f"name={normalized} frozen={binding.display_uri} registered={state.descriptor.resource_uri}"
+                )
+            rebound = None
+            if mode == "tracked":
+                conflicting = [
+                    candidate for candidate in self._sources.values()
+                    if candidate.source_id != source_id and candidate.tracked
+                    and _normalize_skill_name(candidate.name) == normalized
+                ]
+                if conflicting:
+                    rebound = self._rebound_registrations(conflicting, normalized, binding.display_uri)
+            if state.latest_revision is not None and state.latest_revision != binding.activation_revision:
                 raise SkillCatalogSnapshotConflict(
                     "skill-catalog-snapshot-conflict: 冻结 binding 与 live activation "
                     f"状态不一致: name={normalized} frozen={binding.activation_revision} "
                     f"live={state.latest_revision}"
                 )
-            if mode == "tracked":
-                conflicting = [
-                    candidate
-                    for candidate in self._sources.values()
-                    if candidate.source_id != source_id
-                    and candidate.tracked
-                    and _normalize_skill_name(candidate.name) == normalized
-                ]
-                if conflicting:
-                    # 判据是 resolved source identity（registration 绑定的
-                    # ``name + catalog_entry_identity + resolved_source_identity``
-                    # 的 model-visible 投影），不是时间戳或物理路径。
-                    rebound = self._rebound_registrations(
-                        conflicting, normalized, binding.display_uri
-                    )
-                    if rebound is not None:
-                        # effective entry identity 已变：在同一 CSM owner mutation
-                        # 内冻结旧 registration，并为当前 effective entry 建新 tracking。
-                        self._freeze_rebound_registration(rebound)
-                        source_rebound = True
-                state = self._set_tracking_status(state, "tracked")
+            source_rebound = rebound is not None
+            if rebound is not None:
+                state = self._rebind_skill_registration(state, rebound, binding)
+            else:
+                if activation_snapshot is not None:
+                    self._persist_control_state(state, operation="register")
+                    self._install_registration(state)
+                if state.latest_visible_committed_revision != binding.activation_revision:
+                    self.activate_skill_content(normalized, binding.body, revision=binding.activation_revision)
+                    state = self._sources[source_id]
+                if mode == "tracked":
+                    state = self._set_tracking_status(state, "tracked")
             status: SkillLoadStatus
             append_status: SkillLoadAppendStatus
             if source_id in self._pending:
@@ -361,21 +337,28 @@ class SkillCatalogMixin:
                 )
             return existing
 
-        def _freeze_rebound_registration(self, state: SourceState) -> None:
-            """显式 rebind 时把旧 registration 冻结为 untracked 并持久化。
-
-            复用 3.5 的唯一 tracking 原语：只改 tracking 状态、不删除、不重写
-            已提交 item；旧 context item 逐字节保持不变。按当前 effective entry
-            的 source identity 唯一裁决，不做 name-only 猜测。
-            """
-            self._set_tracking_status(state, "untracked")
-            # OpenSpec 3.8-C：tracking 状态变化的成功边界发布轻量事件（内存通知）。
-            self._publish_lifecycle_event(
-                source_id=state.source_id,
-                source_kind=state.source_kind,
-                kind="untracked",
-                revision=state.latest_revision,
+        def _rebind_skill_registration(
+            self, state: SourceState, old: SourceState, binding: SkillCatalogBinding,
+        ) -> SourceState:
+            """同事务冻结旧 tracking 并提交新完整观察；确认前不安装候选或发事件。"""
+            # 冷恢复只有 observed 控制行；未 applied 的正文仍须从本次冻结 binding 入队。
+            needs_activation = state.latest_visible_committed_revision != binding.activation_revision
+            candidate = (
+                self._source_observation_candidate(state, binding.body, binding.activation_revision)
+                if needs_activation else replace(state)
             )
+            candidate.tracking_status = "tracked"
+            frozen = replace(old, tracking_status="untracked")
+            self._persist_control_state(candidate, operation="track", replaced_state=frozen)
+            self._sources[old.source_id] = frozen
+            self._install_registration(candidate)
+            if needs_activation:
+                self._queue_delta(candidate)
+            self._publish_lifecycle_event(
+                source_id=frozen.source_id, source_kind=frozen.source_kind,
+                kind="untracked", revision=frozen.latest_revision,
+            )
+            return candidate
 
         def descriptor_for_skill(self, name: str) -> ContextSourceDescriptor:
             """只给受信 source owner 解析内部 descriptor，不进入模型协议。"""

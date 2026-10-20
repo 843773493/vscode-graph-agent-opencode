@@ -56,17 +56,23 @@ class SourceLifecycleMixin:
             self, state: SourceState, content: str, revision: str,
         ) -> None:
             """普通观察与 Skill 激活共用候选提交；失败不发布正文、provenance 或 delta。"""
+            candidate = self._source_observation_candidate(state, content, revision)
+            self._persist_control_state(candidate, operation="observe")
+            self._sources[state.source_id] = candidate
+            self._queue_delta(candidate)
+
+        def _source_observation_candidate(
+            self, state: SourceState, content: str, revision: str,
+        ) -> SourceState:
+            """从已提交基准准备观察候选，不改 registration、队列或发布缓存。"""
             observed = list(state.observed_revisions)
             if revision not in observed:
                 observed.append(revision)
-            candidate = replace(
+            return replace(
                 state, latest_revision=revision, latest_content=content,
                 pending_kind="activation" if state.latest_visible_committed_revision is None else "delta",
                 observed_revisions=observed,
             )
-            self._persist_control_state(candidate, operation="observe")
-            self._sources[state.source_id] = candidate
-            self._queue_delta(candidate)
 
         def mark_pending_observation(
             self,

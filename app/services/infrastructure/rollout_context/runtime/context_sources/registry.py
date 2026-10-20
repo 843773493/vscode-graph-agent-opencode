@@ -103,6 +103,15 @@ class SourceRegistryMixin:
             revision 提供 ``binding_revision``，表示目录/来源绑定版本；它不同于
             observation 产生的来源内容 ``latest_revision``，不得将两者互相冒充。
             """
+            state = self._registration_candidate(descriptor, binding_revision, tracking_status)
+            self._persist_control_state(state, operation="register")
+            self._install_registration(state)
+
+        def _registration_candidate(
+            self, descriptor: ContextSourceDescriptor, binding_revision: str | None,
+            tracking_status: ContextSourceTrackingStatus = "untracked",
+        ) -> SourceState:
+            """准备目录绑定；只有成功 mutation 才安装名称索引与 registration。"""
             if binding_revision is not None and (
                 not isinstance(binding_revision, str) or not binding_revision
             ):
@@ -129,14 +138,16 @@ class SourceRegistryMixin:
                 state.bind_descriptor(descriptor)
                 if binding_revision is not None:
                     state.binding_revision = binding_revision
-            self._persist_control_state(state, operation="register")
-            self._sources[descriptor.source_id] = state
+            return state
+
+        def _install_registration(self, state: SourceState) -> None:
+            self._sources[state.source_id] = state
             # 名称索引保持最近一次 catalog 注册顺序；同名高优先级 entry 覆盖
             # 索引但不自动改绑既有 active registration（tasks 3.3-A），
             # untrack 仍按 active tracked registration 定位原 registration。
-            normalized_name = _normalize_skill_name(descriptor.name)
+            normalized_name = _normalize_skill_name(state.name)
             self._source_ids_by_name.pop(normalized_name, None)
-            self._source_ids_by_name[normalized_name] = descriptor.source_id
+            self._source_ids_by_name[normalized_name] = state.source_id
 
         def _set_tracking_status(
             self, state: SourceState, status: ContextSourceTrackingStatus,
@@ -185,21 +196,48 @@ class SourceRegistryMixin:
             state: SourceState,
             *,
             operation: ContextSourceControlOperation,
+            replaced_state: SourceState | None = None,
         ) -> None:
-            """把具有跨重启价值的 registration 状态经唯一 owner 端口写入。
+            """唯一 owner 确认候选；rebind 的新观察和旧冻结同事务提交。"""
+            port, owner = self._control_state_port, self._owner
+            if port is None or owner is None or not state.has_durable_interest():
+                return
+            durable_states = {
+                stored.source_id: stored
+                for stored in port.load_context_source_control_states(owner)
+            }
+            durable = durable_states.get(state.source_id)
+            snapshot = self._control_state_snapshot(state, durable)
+            replaced = (
+                self._control_state_snapshot(replaced_state, durable_states.get(replaced_state.source_id))
+                if replaced_state is not None else None
+            )
+            if replaced is None and durable is not None and durable.durable_fields() == snapshot.durable_fields():
+                state.persisted_state_revision = durable.state_revision
+                state.persisted_fields = durable.durable_fields()
+                return
+            receipt = port.apply_context_source_control_mutation(
+                ContextSourceControlMutation(operation, snapshot, replaced),
+            )
+            pairs = [(state, receipt.state)]
+            if replaced_state is not None:
+                if receipt.replaced_state is None:
+                    raise RuntimeError("context source 控制端口缺少 rebind 旧 registration 回执")
+                pairs.append((replaced_state, receipt.replaced_state))
+            for candidate, stored in pairs:
+                if stored.owner != owner or stored.source_id != candidate.source_id:
+                    raise RuntimeError("context source 控制端口返回不匹配的 registration")
+            for candidate, stored in pairs:
+                candidate.persisted_state_revision = stored.state_revision
+                candidate.persisted_fields = stored.durable_fields()
 
-            本端口只保存 observed/tracking；applied 只能由 assembly seal 事务推进。
-            """
-            port = self._control_state_port
+        def _control_state_snapshot(
+            self, state: SourceState, durable: ContextSourceControlState | None,
+        ) -> ContextSourceControlState:
+            """只准备 CAS 输入；容许晚到 seal receipt，不吸收其它 writer 的变化。"""
             owner = self._owner
-            if port is None or owner is None:
-                return
-            if not state.has_durable_interest():
-                return
-            durable = next((
-                stored for stored in port.load_context_source_control_states(owner)
-                if stored.source_id == state.source_id
-            ), None)
+            if owner is None:
+                raise RuntimeError("持久控制快照缺少 SessionThread owner")
             if durable is not None and durable.state_revision != state.persisted_state_revision:
                 # seal 可以在 CSM 确认前推进 applied；观察路径只对齐这一个变化，
                 # 不吸收其它 writer 的 observed/tracking 漂移。
@@ -227,7 +265,7 @@ class SourceRegistryMixin:
                     raise RuntimeError(
                         "context-source-control-state-conflict: observed/tracking 已被其它 writer 推进"
                     )
-            snapshot = ContextSourceControlState(
+            return ContextSourceControlState(
                 owner=owner,
                 source_id=state.source_id,
                 source_kind=state.source_kind,
@@ -240,23 +278,6 @@ class SourceRegistryMixin:
                 latest_revision=state.latest_revision,
                 state_revision=durable.state_revision if durable is not None else state.persisted_state_revision,
             )
-            if durable is not None and durable.durable_fields() == snapshot.durable_fields():
-                state.persisted_state_revision = durable.state_revision
-                state.persisted_fields = durable.durable_fields()
-                return
-            stored = port.apply_context_source_control_mutation(
-                ContextSourceControlMutation(operation, snapshot),
-            )
-            if stored.owner != owner or stored.source_id != state.source_id:
-                raise RuntimeError(
-                    "context source 控制状态端口返回了不匹配的 registration: "
-                    f"expected=({owner.session_id},{owner.thread_id},"
-                    f"{state.source_id}) "
-                    f"actual=({stored.owner.session_id},{stored.owner.thread_id},"
-                    f"{stored.source_id})"
-                )
-            state.persisted_state_revision = stored.state_revision
-            state.persisted_fields = stored.durable_fields()
 
         def _sync_persisted_control_states(self, source_ids: set[str]) -> None:
             """按 owner durable truth 重新校准内存 CAS 基准。

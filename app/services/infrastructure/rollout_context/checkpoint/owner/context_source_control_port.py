@@ -6,6 +6,7 @@ from app.domain.itemized.mutation_intents import ApplySourceLifecycleDecision
 from app.domain.itemized.records import CanonicalItemRecord
 from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_control_state import (
     ContextSourceControlMutation,
+    ContextSourceControlReceipt,
     ContextSourceControlState,
     ContextSourceOwnerKey,
 )
@@ -60,7 +61,7 @@ class ContextSourceControlOwnerMixin:
     def apply_context_source_control_mutation(
         self,
         mutation: ContextSourceControlMutation,
-    ) -> ContextSourceControlState:
+    ) -> ContextSourceControlReceipt:
         if not isinstance(mutation, ContextSourceControlMutation):
             raise TypeError(
                 "apply_context_source_control_mutation 需要 ContextSourceControlMutation"

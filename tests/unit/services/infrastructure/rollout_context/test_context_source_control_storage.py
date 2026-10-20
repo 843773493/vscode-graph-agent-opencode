@@ -458,8 +458,8 @@ def test_write_is_idempotent_and_does_not_advance_state_revision(
         latest_revision="sha256:latest",
     )
 
-    first = rollout_storage.checkpoints.apply_context_source_control_mutation(ContextSourceControlMutation("register", state))
-    second = rollout_storage.checkpoints.apply_context_source_control_mutation(ContextSourceControlMutation("register", state))
+    first = rollout_storage.checkpoints.apply_context_source_control_mutation(ContextSourceControlMutation("register", state)).state
+    second = rollout_storage.checkpoints.apply_context_source_control_mutation(ContextSourceControlMutation("register", state)).state
 
     assert first.state_revision == 1
     assert second == first
@@ -481,7 +481,7 @@ def test_control_mutation_cannot_publish_an_applied_revision(
     if existing:
         state = control_state_port.apply_context_source_control_mutation(
             ContextSourceControlMutation("register", state),
-        )
+        ).state
     before = control_state_port.load_context_source_control_states(owner)
     forged = replace(
         state, latest_visible_committed_revision=state.latest_revision,
@@ -504,7 +504,7 @@ def test_control_mutations_keep_observation_and_tracking_separate(
             name="Agent 说明", binding_revision="catalog-1", tracking_status="tracked",
             latest_revision="revision-1", latest_visible_committed_revision=None,
         )),
-    )
+    ).state
     changes = (
         ("observe", replace(state, tracking_status="untracked")),
         ("track", replace(state, latest_revision="revision-2")),
@@ -519,10 +519,10 @@ def test_control_mutations_keep_observation_and_tracking_separate(
         assert control_state_port.load_context_source_control_states(owner) == (state,)
     observed = control_state_port.apply_context_source_control_mutation(
         ContextSourceControlMutation("observe", replace(state, latest_revision="revision-2")),
-    )
+    ).state
     untracked = control_state_port.apply_context_source_control_mutation(
         ContextSourceControlMutation("untrack", replace(observed, tracking_status="untracked")),
-    )
+    ).state
     assert untracked.latest_revision == "revision-2"
     assert untracked.latest_visible_committed_revision is None
     assert untracked.state_revision == state.state_revision + 2
@@ -545,7 +545,7 @@ def test_concurrent_control_mutations_share_one_cas_baseline(
         barrier.wait()
         return control_state_port.apply_context_source_control_mutation(
             ContextSourceControlMutation("register", state),
-        )
+        ).state
 
     with ThreadPoolExecutor(max_workers=2) as pool:
         futures = [pool.submit(register) for _ in range(2)]
@@ -558,7 +558,7 @@ def test_concurrent_control_mutations_share_one_cas_baseline(
         try:
             return control_state_port.apply_context_source_control_mutation(
                 ContextSourceControlMutation("observe", replace(first, latest_revision=revision)),
-            )
+            ).state
         except RuntimeError as error:
             return error
 
@@ -571,6 +571,38 @@ def test_concurrent_control_mutations_share_one_cas_baseline(
     assert "context-source-control-state-conflict" in str(failures[0])
     assert winners[0].state_revision == 2
     assert control_state_port.load_context_source_control_states(owner) == (winners[0],)
+
+
+def test_rebind_receipt_replay_requires_both_exact_cas_versions(control_state_port, owner):
+    old = control_state_port.apply_context_source_control_mutation(ContextSourceControlMutation(
+        "register", ContextSourceControlState(
+            owner=owner, source_id="skill:old", source_kind="skill", name="demo",
+            binding_revision="old-catalog", tracking_status="tracked",
+            latest_revision="old-revision", latest_visible_committed_revision=None,
+        ),
+    )).state
+    target = ContextSourceControlState(
+        owner=owner, source_id="skill:new", source_kind="skill", name="demo",
+        binding_revision="new-catalog", tracking_status="tracked",
+        latest_revision="new-revision", latest_visible_committed_revision=None,
+    )
+    mutation = ContextSourceControlMutation("track", target, replace(old, tracking_status="untracked"))
+    receipt = control_state_port.apply_context_source_control_mutation(mutation)
+    assert receipt.replaced_state == replace(
+        old, tracking_status="untracked", state_revision=old.state_revision + 1,
+        updated_at=receipt.replaced_state.updated_at,
+    )
+    assert control_state_port.apply_context_source_control_mutation(mutation) == receipt
+    before = control_state_port.load_context_source_control_states(owner)
+    for bad in (
+        replace(mutation, state=replace(target, state_revision=100)),
+        replace(mutation, replaced_state=replace(mutation.replaced_state, state_revision=100)),
+        replace(mutation, replaced_state=replace(mutation.replaced_state, latest_revision="forged")),
+        replace(mutation, state=replace(target, latest_visible_committed_revision="forged")),
+    ):
+        with pytest.raises(RuntimeError, match="context-source-control-state-conflict"):
+            control_state_port.apply_context_source_control_mutation(bad)
+        assert control_state_port.load_context_source_control_states(owner) == before
 
 
 def test_write_rejects_stale_state_revision(
@@ -587,7 +619,7 @@ def test_write_rejects_stale_state_revision(
         latest_visible_committed_revision=None,
         latest_revision="sha256:latest",
     )
-    stored = rollout_storage.checkpoints.apply_context_source_control_mutation(ContextSourceControlMutation("register", state))
+    stored = rollout_storage.checkpoints.apply_context_source_control_mutation(ContextSourceControlMutation("register", state)).state
 
     with pytest.raises(RuntimeError, match="context-source-control-state-conflict"):
         rollout_storage.checkpoints.apply_context_source_control_mutation(
@@ -677,7 +709,7 @@ def test_write_does_not_take_rollout_file_lock(
                 latest_visible_committed_revision=None,
                 latest_revision="sha256:latest",
             ))
-        )
+        ).state
         assert stored.state_revision == 1
     finally:
         release.set()
