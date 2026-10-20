@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import sqlite3
 from contextlib import closing
@@ -194,6 +195,7 @@ async def test_model_file_tools_execute_on_fixed_federated_owner(communication_t
         if len(results) == 3:
             return _tool("read_file", {"path": file_uri}, "call_remote_read")
         assert "1\tneedle TARGET OWNER" in results[3]["content"]
+        assert "sha256:" + hashlib.sha256(b"needle TARGET OWNER\n").hexdigest() in results[3]["content"]
         if len(results) == 4:
             return _tool("read_file", {"path": missing_uri}, "call_remote_missing")
         assert json.loads(results[4]["content"])["code"] == "target_not_resolvable"

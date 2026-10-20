@@ -311,17 +311,21 @@ class ResourceNavigation:
     @staticmethod
     def _stat(path: Path) -> tuple[int, ...]:
         metadata = path.stat()
-        return metadata.st_dev, metadata.st_ino, metadata.st_mode, metadata.st_size, metadata.st_mtime_ns
+        return metadata.st_dev, metadata.st_ino, metadata.st_mode, metadata.st_size, metadata.st_mtime_ns, metadata.st_ctime_ns
 
     def _read(
         self, path: Path, node: ResourceNavigationNodeDTO,
         request: ResourceNavigationRequest, deadline: float,
     ) -> ResourceNavigationResultDTO:
         # 字节预算覆盖跳过的行；不为读取登记身份、快照或 activation。
+        before = self._stat(path)
         with path.open("rb") as stream:
             data = stream.read(request.max_bytes + 1)
         self._check_deadline(deadline)
+        if self._stat(path) != before:
+            raise ResourceFileOperationError("execution_failed", "文件在读取期间改变，请重新读取", reason="file_changed")
         truncated = len(data) > request.max_bytes
+        content_hash = None if truncated else "sha256:" + hashlib.sha256(data).hexdigest()
         filename = parse_resource_uri(node.uri).tail_segments[-1]
         media_type = _MEDIA_EXTENSIONS.get(Path(filename).suffix.lower()) if request.read_format == "auto" else None
         if media_type is not None:
@@ -330,6 +334,7 @@ class ResourceNavigation:
             result = ResourceNavigationResultDTO(
                 node=node, content=base64.b64encode(data).decode("ascii"), content_encoding="base64",
                 media_type=media_type, mime_type=mimetypes.guess_type("file" + Path(filename).suffix)[0] or "application/octet-stream",
+                content_hash=content_hash,
             )
             # 媒体必须完整；不能裁剪 base64 后伪报有效原件。
             return self._response(result, request, deadline)
@@ -352,6 +357,7 @@ class ResourceNavigation:
         result = ResourceNavigationResultDTO(
             node=node, content=content, content_encoding="utf-8", media_type="text",
             line_offset=request.line_offset, truncated=truncated, truncation_reason=reason,
+            content_hash=content_hash,
         )
         if self._size(result) > request.max_response_bytes:
             # JSON 转义计入总响应，只裁完整字符并披露截断。

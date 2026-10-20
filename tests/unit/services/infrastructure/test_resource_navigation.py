@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 import threading
 from contextlib import contextmanager
@@ -271,14 +272,63 @@ async def test_read_format_is_explicit_and_line_windows_preserve_raw_text(naviga
     media = await owner.navigate(query.model_copy(update={"read_format": "auto"}), local_gateway_id=GATEWAY_ID)
     assert media.content_encoding == "base64" and base64.b64decode(media.content) == b"\xff\x00image"
     assert media.media_type == "image" and media.mime_type == "image/png" and not media.truncated
+    assert media.content_hash == "sha256:" + hashlib.sha256(b"\xff\x00image").hexdigest()
     (workspace / "text.txt").write_bytes(b"\xef\xbb\xbfalpha\r\nbeta\r\ngamma\n")
     text = await owner.navigate(ResourceNavigationRequest(uri=uri + "/text.txt", operation="read",
         line_offset=2, max_lines=1), local_gateway_id=GATEWAY_ID)
     assert text.content == "beta\r\n" and text.line_offset == 2 and text.content_encoding == "utf-8"
     assert text.truncated and text.truncation_reason == "line_limit"
+    assert text.content_hash == "sha256:" + hashlib.sha256((workspace / "text.txt").read_bytes()).hexdigest()
     for operation in ("list", "search", "describe"):
         with pytest.raises(ValidationError, match="格式和行范围"):
             ResourceNavigationRequest(uri=uri, operation=operation, query="text" if operation == "search" else None, line_offset=2)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("raw", [b"", b"\xef\xbb\xbfalpha\r\nbeta\n", "正文\r\n".encode()])
+async def test_read_hash_versions_original_bytes_and_not_display(navigation_case, raw) -> None:
+    owner, workspace, uri = navigation_case
+    (workspace / "text.txt").write_bytes(raw)
+    result = await owner.navigate(ResourceNavigationRequest(uri=uri + "/text.txt", operation="read"), local_gateway_id=GATEWAY_ID)
+    assert result.content == raw.decode("utf-8")
+    assert result.content_hash == "sha256:" + hashlib.sha256(raw).hexdigest()
+    assert (await owner.navigate(ResourceNavigationRequest(uri=uri, operation="list"), local_gateway_id=GATEWAY_ID)).content_hash is None
+
+
+@pytest.mark.asyncio
+async def test_response_truncation_keeps_full_hash_but_byte_window_does_not(navigation_case) -> None:
+    owner, workspace, uri = navigation_case
+    raw = ('正文"\\\n' * 500).encode()
+    (workspace / "text.txt").write_bytes(raw)
+    query = ResourceNavigationRequest(uri=uri + "/text.txt", operation="read", max_bytes=len(raw), max_response_bytes=1024)
+    displayed = await owner.navigate(query, local_gateway_id=GATEWAY_ID)
+    assert displayed.truncation_reason == "response_byte_limit"
+    assert displayed.content_hash == "sha256:" + hashlib.sha256(raw).hexdigest()
+    assert displayed.content_hash != "sha256:" + hashlib.sha256(displayed.content.encode()).hexdigest()
+    window = await owner.navigate(query.model_copy(update={"max_bytes": 16}), local_gateway_id=GATEWAY_ID)
+    assert window.truncation_reason == "file_byte_limit" and window.content_hash is None
+
+
+@pytest.mark.asyncio
+async def test_read_rejects_file_rewritten_during_read_even_with_restored_mtime(navigation_case, monkeypatch) -> None:
+    owner, workspace, uri = navigation_case
+    path = workspace / "text.txt"
+    path.write_bytes(b"first")
+    metadata = path.stat()
+    original_open = Path.open
+
+    @contextmanager
+    def changed_open(target, mode="r", *args, **kwargs):
+        with original_open(target, mode, *args, **kwargs) as stream:
+            yield stream
+        if target == path and mode == "rb":
+            path.write_bytes(b"later")
+            resource_navigation.os.utime(path, ns=(metadata.st_atime_ns, metadata.st_mtime_ns))
+
+    monkeypatch.setattr(Path, "open", changed_open)
+    with pytest.raises(ResourceFileOperationError) as failure:
+        await owner.navigate(ResourceNavigationRequest(uri=uri + "/text.txt", operation="read"), local_gateway_id=GATEWAY_ID)
+    assert (failure.value.code, failure.value.reason) == ("execution_failed", "file_changed")
 
 
 @pytest.mark.asyncio

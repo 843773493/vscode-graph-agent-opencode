@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import sqlite3
 from contextlib import closing
@@ -112,7 +113,7 @@ async def test_real_workspace_gateway_navigation_is_fixed_lightweight_and_contai
                 for forbidden in (str(workspace), str(home), "local-dev-token"):
                     assert forbidden not in response.text
                 assert set(response.json()["data"]) == {"node", "entries", "content", "truncated", "next_cursor", "truncation_reason", "view",
-                                                        "content_encoding", "media_type", "mime_type", "line_offset", "matches"}
+                                                        "content_encoding", "media_type", "mime_type", "line_offset", "matches", "content_hash"}
                 assert response.json()["data"]["view"] == "live"
                 assert response.json()["data"]["node"]["uri"] == parse_resource_uri(uri, local_gateway_id=gateway_id).display_uri
                 for node in (response.json()["data"]["node"], *response.json()["data"]["entries"]):
@@ -132,6 +133,9 @@ async def test_real_workspace_gateway_navigation_is_fixed_lightweight_and_contai
             assert (await navigate(found["entries"][0]["uri"], "read"))["content"] == "工作区源码 Ω\n"
             bounded = await navigate(found["entries"][0]["uri"], "read", max_bytes=4)
             assert bounded["content"] == "工" and bounded["truncated"]
+            assert bounded["content_hash"] is None
+            full = await navigate(found["entries"][0]["uri"], "read")
+            assert full["content_hash"] == "sha256:" + hashlib.sha256((workspace / "src/中文 文件.v2.md").read_bytes()).hexdigest()
             assert (await navigate(files_root, "list", limit=1))["truncated"]
             bulk = await navigate(files_root, "search", query="bulk-needle", limit=7)
             assert len(bulk["entries"]) == 7 and bulk["truncated"]

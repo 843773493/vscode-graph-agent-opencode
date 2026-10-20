@@ -46,6 +46,8 @@ read/write 的文件目标、ls/glob/grep 的根目标和 apply_patch 的根目�
 
 搜索工具面登记为 graph revision10，旧 selector 仍明确拒绝。同步/异步共用搜索实现时保留 callable 类型标注，确保真实 LangGraph runtime 注入和装配可用。旧会话产物搜索仍交原 SessionArtifactBackend，待第5组生成/消费全迁后物理删除。wcmatch 已是固定 DeepAgents 依赖；登记直接依赖时根包动态 metadata 因 node_modules 重复嵌套路径失败，保留具名 TODO，未为此修改环境或构建配置。多页重复扫描优化继续按用户要求延期。
 
+读取版本切片将完整原始文件字节的 `sha256:<hex>` 作为公开 `content_hash` 返回，并写入文本 read_file 的模型可见正文。BOM、CRLF、空文件及媒体均按原字节计算；行数或展示响应截断仍可提供完整原件版本，字节窗口未读全则不提供版本。读取前后核对 inode、mode、size、mtime 与 ctime，发现变化明确报 `file_changed`；这是读取时的变化检测，不承诺阻止读取后的外部并发。hash 和提示计入最终工具回执预算，不注册持久快照。工具能力面登记为 graph revision11 的 `filesystem-read:raw-byte-hash`，旧 revision10 明确拒绝。后续写入必须使用该版本或明确的 expected_absent，不能从执行时当前内容补造调用者预期。
+
 ### 4. 条件写入与多文件发布结果
 
 write/edit/patch 的内容前置使用精确原始 byte `sha256:<hex>` 或该 owner 已有等价 revision；创建使用 expected_absent。owner 在一个根内串行自己管理的 mutation，先校验所有 preimage/能力/patch、准备结果，再在每次发布前重新核当前 preimage；同目录临时文件经完整写入和原子替换发布，失败回收自己的句柄和未发布临时文件。

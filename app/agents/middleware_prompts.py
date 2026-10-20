@@ -45,6 +45,8 @@ FILESYSTEM_TOOL_DESCRIPTIONS = {
         "Read a file using a workspace-relative/native path or a resource URI. Paths returned by ls, glob, "
         "and grep are reusable unchanged. Use the 1-indexed `line_offset` and "
         "optional `max_lines` for large text files. "
+        "When all original bytes were read, returns their sha256 content_hash for conditional writes, "
+        "even if displayed lines are truncated; an incomplete byte window has no version. "
         "Images, audio, video, and PDFs return multimodal content; do not paginate those files. "
         "Skill file URIs return content without activation; use skill_load to activate instructions. "
         "Do not access `.boxteam` runtime data directly. max_bytes bounds the scanned prefix including skipped lines; "

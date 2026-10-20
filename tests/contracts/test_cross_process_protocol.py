@@ -33,6 +33,7 @@ def test_resource_read_request_and_media_result_survive_proto_wire() -> None:
     result = ResourceNavigationResultDTO.model_validate({
         "node": {"uri": request.uri, "resource_shape": "file", "operations": ["describe", "read"], "child_path": None},
         "content": "iVBORw==", "content_encoding": "base64", "media_type": "image", "mime_type": "image/png",
+        "content_hash": "sha256:" + "a" * 64,
     })
     encoded = ParseDict(result.model_dump(exclude_none=True), public_pb2.ResourceNavigationResultDTO()).SerializeToString()
     received = public_pb2.ResourceNavigationResultDTO.FromString(encoded)

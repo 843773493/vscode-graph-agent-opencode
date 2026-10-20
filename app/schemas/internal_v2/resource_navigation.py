@@ -84,3 +84,4 @@ class ResourceNavigationResultDTO(BaseModel):
     mime_type: str | None = None
     line_offset: int | None = None
     matches: tuple[ResourceNavigationMatchDTO, ...] = ()
+    content_hash: str | None = Field(default=None, pattern=r"^sha256:[0-9a-f]{64}$")

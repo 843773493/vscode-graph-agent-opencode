@@ -1627,6 +1627,8 @@ export interface ResourceNavigationResultDTO {
   mime_type?: string | undefined;
   line_offset?: number | undefined;
   matches: ResourceNavigationMatchDTO[];
+  /** 完整原始文件字节的 sha256；字节窗口未读全时缺省，不是展示片段的版本。 */
+  content_hash?: string | undefined;
 }
 
 export interface ResourceNavigationMatchDTO {
@@ -12706,6 +12708,7 @@ function createBaseResourceNavigationResultDTO(): ResourceNavigationResultDTO {
     mime_type: undefined,
     line_offset: undefined,
     matches: [],
+    content_hash: undefined,
   };
 }
 
@@ -12728,6 +12731,7 @@ export const ResourceNavigationResultDTO: MessageFns<ResourceNavigationResultDTO
       matches: globalThis.Array.isArray(object?.matches)
         ? object.matches.map((e: any) => ResourceNavigationMatchDTO.fromJSON(e))
         : [],
+      content_hash: isSet(object.content_hash) ? globalThis.String(object.content_hash) : undefined,
     };
   },
 
@@ -12769,6 +12773,9 @@ export const ResourceNavigationResultDTO: MessageFns<ResourceNavigationResultDTO
     if (message.matches?.length) {
       obj.matches = message.matches.map((e) => ResourceNavigationMatchDTO.toJSON(e));
     }
+    if (message.content_hash !== undefined) {
+      obj.content_hash = message.content_hash;
+    }
     return obj;
   },
 
@@ -12791,6 +12798,7 @@ export const ResourceNavigationResultDTO: MessageFns<ResourceNavigationResultDTO
     message.mime_type = object.mime_type ?? undefined;
     message.line_offset = object.line_offset ?? undefined;
     message.matches = object.matches?.map((e) => ResourceNavigationMatchDTO.fromPartial(e)) || [];
+    message.content_hash = object.content_hash ?? undefined;
     return message;
   },
 };

@@ -99,7 +99,7 @@ def test_resource_navigation_wire_keeps_bounded_request_and_lightweight_nodes() 
         "node": 1, "entries": 2, "content": 3, "truncated": 4,
         "next_cursor": 5, "truncation_reason": 6, "view": 7,
         "content_encoding": 8, "media_type": 9, "mime_type": 10, "line_offset": 11,
-        "matches": 12,
+        "matches": 12, "content_hash": 13,
     }
     listing = public_pb2.ResourceNavigationResultDTO(node=root, entries=[file], truncated=True,
         next_cursor="opaque-next", truncation_reason="entry_limit", view="live")

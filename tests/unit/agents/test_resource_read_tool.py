@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 import time
 from pathlib import Path
@@ -60,6 +61,9 @@ async def test_three_read_inputs_share_fixed_owner_and_preserve_bytes(read_case,
     assert results[0] == results[1] == results[2]
     assert "\ufeffline one\r" in results[0].content and "line two" in results[0].content
     assert results[0].additional_kwargs["resource_navigation"]["node"]["uri"] == uri
+    version = "sha256:" + hashlib.sha256(target.read_bytes()).hexdigest()
+    assert results[0].additional_kwargs["resource_navigation"]["content_hash"] == version
+    assert version in results[0].content
     assert str(workspace) not in results[0].model_dump_json() and "RELAY DECOY" not in results[0].content
 
 
@@ -112,6 +116,7 @@ async def test_existing_media_set_is_complete_not_utf8_decoded(read_case, synchr
     assert block["mime_type"]
     assert result.additional_kwargs["read_file_path"] == owner.input_uri(name)
     assert result.additional_kwargs["resource_navigation"]["truncated"] is False
+    assert result.additional_kwargs["resource_navigation"]["content_hash"] == "sha256:" + hashlib.sha256(raw).hexdigest()
 
 
 @pytest.mark.asyncio
@@ -141,6 +146,11 @@ async def test_read_ranges_encoding_and_media_budgets_fail_honestly(read_case, s
     result = await _read(tools, "text.txt", synchronous, line_offset=2, max_lines=1)
     assert "2\tsecond" in result.content and "first" not in result.content and "third" not in result.content
     assert result.additional_kwargs["resource_navigation"]["truncation_reason"] == "line_limit"
+    version = "sha256:" + hashlib.sha256((workspace / "text.txt").read_bytes()).hexdigest()
+    assert version in result.content
+    result = await _read(tools, "text.txt", synchronous, max_bytes=3)
+    assert result.status == "success" and result.additional_kwargs["resource_navigation"]["content_hash"] is None
+    assert version not in result.content and "sha256:" not in result.content
     result = await _read(tools, "text.txt", synchronous, line_offset=2, max_bytes=3)
     assert result.status == "error" and json.loads(result.content)["reason"] == "file_byte_limit"
     result = await _read(tools, "text.txt", synchronous, line_offset=5)
@@ -164,6 +174,7 @@ async def test_formatted_read_result_has_total_byte_and_time_budget(read_case, m
     assert result.status == "success" and len(result.model_dump_json().encode()) <= 2048
     assert result.additional_kwargs["resource_navigation"]["truncation_reason"] == "response_byte_limit"
     assert "已截断" in result.content
+    assert "sha256:" + hashlib.sha256((workspace / "text.txt").read_bytes()).hexdigest() in result.content
     original = owner.input_uri
 
     def slow(value):

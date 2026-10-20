@@ -287,6 +287,8 @@ def _read_navigation_message(
         result.content, start_line=result.line_offset or 1,
     )
     def message_for(text: str, reason: str | None) -> ToolMessage:
+        if result.content_hash is not None:
+            text += f"\n[原文件字节版本：{result.content_hash}]"
         if reason is not None:
             text += f"\n[内容已截断：{reason}；目标 {result.node.uri}。按行继续或显式增加字节预算。]"
         return ToolMessage(content=text, name="read_file", tool_call_id=runtime.tool_call_id,

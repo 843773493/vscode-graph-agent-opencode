@@ -1610,6 +1610,8 @@ message ResourceNavigationResultDTO {
   optional string mime_type = 10;
   optional uint32 line_offset = 11;
   repeated ResourceNavigationMatchDTO matches = 12;
+  // 完整原始文件字节的 sha256；字节窗口未读全时缺省，不是展示片段的版本。
+  optional string content_hash = 13;
 }
 
 message ResourceNavigationMatchDTO {

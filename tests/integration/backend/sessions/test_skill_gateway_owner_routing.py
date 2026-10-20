@@ -378,7 +378,7 @@ async def test_remote_skill_navigation_is_lightweight_encoded_and_fixed_to_owner
             return body
         data = body["data"]
         assert set(data) == {"node", "entries", "content", "truncated", "next_cursor", "truncation_reason", "view",
-                             "content_encoding", "media_type", "mime_type", "line_offset", "matches"}
+                             "content_encoding", "media_type", "mime_type", "line_offset", "matches", "content_hash"}
         assert data["view"] == "live"
         assert data["node"]["uri"] == parse_resource_uri(uri, local_gateway_id=target.gateway_id).display_uri
         for node in (data["node"], *data["entries"]):

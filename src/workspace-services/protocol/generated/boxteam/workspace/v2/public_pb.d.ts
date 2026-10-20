@@ -7030,6 +7030,13 @@ export declare type ResourceNavigationResultDTO = Message<"boxteam.workspace.v2.
    * @generated from field: repeated boxteam.workspace.v2.ResourceNavigationMatchDTO matches = 12;
    */
   matches: ResourceNavigationMatchDTO[];
+
+  /**
+   * 完整原始文件字节的 sha256；字节窗口未读全时缺省，不是展示片段的版本。
+   *
+   * @generated from field: optional string content_hash = 13;
+   */
+  contentHash?: string | undefined;
 };
 
 /**
