@@ -28,7 +28,6 @@ from app.services.infrastructure.config.state import (
     dump_json,
     prepare_config_for_persistence,
     redact_config_payload,
-    restore_environment_secret_references,
 )
 from app.services.infrastructure.config_service.config_agent_tools import (
     ConfigAgentToolsMixin,
@@ -464,21 +463,7 @@ class ConfigSourceLayersMixin:
             )
             return dict(payload)
 
-        try:
-            payload = parse_stable_config_file(file_snapshot)
-        except Exception:
-            if (
-                source_record is not None
-                and source_record.payload is not None
-                and not self._snapshot_store.has_snapshot()
-            ):
-                restored = restore_environment_secret_references(source_record.payload)
-                if not isinstance(restored, dict):
-                    raise TypeError("SQLite 兼容配置恢复结果必须是对象")
-                prepare_config_for_persistence(restored)
-                payload = restored
-            else:
-                raise
+        payload = parse_stable_config_file(file_snapshot)
         if payload is None:
             raise RuntimeError(f"present 配置文件解析为空: {path}")
         prepare_config_for_persistence(payload)

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from dataclasses import replace
 from pathlib import Path
 
 import jsonschema
@@ -675,7 +676,7 @@ def test_workspace_persisted_source_layer_rejects_unregistered_keys(
         ConfigService._resolve_persisted_layer(source_key)
 
 
-def test_workspace_config_restarts_from_sqlite_after_source_json_changes(
+def test_workspace_config_restarts_from_active_snapshot_after_source_json_changes(
     tmp_path: Path,
 ) -> None:
     config_path = _write_workspace_config(tmp_path, _base_config())
@@ -688,6 +689,8 @@ def test_workspace_config_restarts_from_sqlite_after_source_json_changes(
             workspace_root=workspace_root,
             workspace_state_store=store,
         )
+        first.validate_workspace_config()
+        assert store.get_active_config_snapshot("workspace") is not None
         assert first.get_logger_level() == "INFO"
         config_path.write_text("{ this is not valid jsonc", encoding="utf-8")
         second = ConfigService(
@@ -697,6 +700,56 @@ def test_workspace_config_restarts_from_sqlite_after_source_json_changes(
             workspace_state_store=store,
         )
         assert second.get_logger_level() == "INFO"
+    finally:
+        store.close()
+
+
+@pytest.mark.parametrize(("invalid_source", "exception"), [
+    ("{ this is not valid jsonc", ValueError),
+    ("[]", TypeError),
+])
+def test_cold_start_rejects_invalid_source_without_committed_active_snapshot(
+    tmp_path: Path, invalid_source: str, exception: type[Exception],
+) -> None:
+    config_path = _write_workspace_config(tmp_path, _base_config())
+    workspace_root = tmp_path / "workspace"
+    store = WorkspaceStateStore(workspace_root=workspace_root)
+    try:
+        first = ConfigService(
+            config_dir=Path.cwd() / "configs", config_path=config_path,
+            workspace_root=workspace_root, workspace_state_store=store,
+        )
+        # 来源已导入、active 尚未发布，模拟首次启动在两者之间退出。
+        assert first.get_logger_level() == "INFO"
+        source = store.get_source_layer("workspace_mutable_override")
+        assert source is not None
+        assert store.get_active_config_snapshot("workspace") is None
+        store.close()
+        store = WorkspaceStateStore(workspace_root=workspace_root)
+        config_path.write_text(invalid_source, encoding="utf-8")
+        recovered = ConfigService(
+            config_dir=Path.cwd() / "configs", config_path=config_path,
+            workspace_root=workspace_root, workspace_state_store=store,
+        )
+        for _ in range(2):
+            with pytest.raises(exception):
+                recovered.get_logger_level()
+            unchanged = store.get_source_layer("workspace_mutable_override")
+            assert unchanged is not None
+            # 既有秘密迁移会刷新更新时间，但不得发布损坏来源的任何业务字段。
+            assert unchanged == replace(source, updated_at=unchanged.updated_at)
+            assert store.get_active_config_snapshot("workspace") is None
+            assert store.get_pending_config_candidate(config_domain="workspace") is None
+        # 修复源文件后，原 owner 可以从真实新内容建立唯一 active。
+        fixed = _base_config()
+        fixed["logger"]["level"] = "debug"
+        config_path.write_text(json.dumps(fixed), encoding="utf-8")
+        recovered.validate_workspace_config()
+        assert recovered.get_logger_level() == "DEBUG"
+        assert store.get_active_config_snapshot("workspace") is not None
+        changed = store.get_source_layer("workspace_mutable_override")
+        assert changed.layer_revision == source.layer_revision + 1
+        assert changed.layer_digest != source.layer_digest
     finally:
         store.close()
 
