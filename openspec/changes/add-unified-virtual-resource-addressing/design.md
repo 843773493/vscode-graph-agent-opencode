@@ -37,11 +37,19 @@
 
 - **ResourceIdentity**：持久化，无 revision，不依赖激活工作区 → 用于去重与 lineage。
 - **URI**：持久化，允许悬空，禁 revision/hash → 软件内部与模型可见载荷的默认引用形式。
-- **real path**：资源访问时仅在原生 owner 的最终 fs/sqlite 调用点临时出现；不得进入模型载荷、普通 DTO、解析结果或跨 Gateway 资源投影。物理 workspace root 是单独的控制面启动绑定，只由负责原生 target 的 Gateway 唯一 registry 持久化，具体合同引用 `add-multi-workspace-backend-mounting`，不归 URI 或解析器管理。
+- **real path**：资源访问时仅在原生 owner 的最终 fs/sqlite 调用点及必要局部链路临时使用，不作为资源引用进入模型载荷、普通响应 DTO、解析结果或跨 Gateway 资源投影。原生目录选择/注册和普通文件原生路径是具名请求输入，不放宽输出/持久化边界。物理 workspace root 仍是唯一控制面持久化例外，由负责原生 target 的 Gateway registry 持有，合同引用 `add-multi-workspace-backend-mounting`。
 
 **理由**：审计发现的真实缺陷正是资源路径泄漏（skill 目录扫描、`skillPaths.ts` 解析物理路径、catalog URI 裸拼接、`ConfigSourceLayerRecord.source_path` 落库）。资源引用以身份和 URI 表达；唯一 Gateway root binding 是目标生命周期的控制面输入，不能作为 URI、资源记录或跨 Gateway 资源投影携带。
 
 **备选**：把 revision 编进 URI（被否：revision 变化会让同一资源产生不同地址，破坏「地址稳定、revision 独立」）；把 real path 作为可选调试字段随资源记录持久化（被否：正是当前要消除的违约）。将 workspace root 复制进 managed-group 或联邦记录同样被否；只允许唯一 Gateway registry 持有根绑定，注册请求必须由 `add-multi-workspace-backend-mounting` 的唯一 root-binding requirement 授权后作为控制面输入送达原生 owner，中继不持久化或转为资源数据。
+
+### D1a：保留三种文件输入，在目标端统一解释
+
+普通文件入口接受相对路径、绝对路径和资源 URI，引用公共 spec「普通文件入口必须保留原生路径输入并统一目标解析」。先固定目标 Gateway/机器与工作区或选定目录，再在目标端按原生平台解释路径，归入同一文件 owner；中继当前目录、source 文件系统与激活工作区切换都不能改变目标。工作区内路径可转换为已有 URI；工作区外路径沿既有能力和授权处理，不能偷偷改为工作区内目标或强制先注册。Windows 盘符与路径分隔符不能先被 source 的 POSIX 规则改写。
+
+原生路径只作为请求输入及目标端临时访问值，内部持久引用、普通响应和跨 Gateway 资源投影继续采用 URI；没有现成 URI 模板的外部目标复用既有 owner/API，不增造 kind、第二解析器或第二操作链路。终端/shell 保留操作系统原生语义；Gateway 原生目录选择/注册是独立管理能力，其裁定不构成普通文件绝对路径禁令。
+
+当前 `_absolute_to_workspace_relative()` 对外部 POSIX 路径的 `path.lstrip("/")` 会把 `/etc/hosts` 改投工作区内的 `etc/hosts`，同时与 DeepAgents 的前导斜杠虚拟根混用。迁移时必须先清点并迁齐 `WorkspaceToolPathResolver`、filesystem tools、debugging、apply_patch 及直接/间接测试，使 backend 虚拟路径通过明确的内部入口转换，用户路径始终保留原生语义，然后删除歧义回退。验收从真实读写入口比较三种输入的实际对象，并用外部文件与工作区同名对照文件验证无误读/误写；跨 Gateway 和 Windows 目标须核目标端内容及 source/relay 不变，不能只测字符串 helper。
 
 ### D2：保留既有段序，scope_id 全必填
 
@@ -106,6 +114,8 @@
 **理由**：只有实际持有资源的进程能做权威解析；转发方不得猜测路径。把 `visited set`/`max_transit_gateways`/`max_gateway_hops`/总 deadline 做成显式 policy 常量，是因为拓扑会变，解析器不应因拓扑调整而重写。星型（最多一次中继）与仓库既有联邦拓扑一致。
 
 **不变量**：`locator 是输入，不是输出`。
+
+普通文件原生路径可按 D1a 作为固定目标的具名请求输入转送；中继不解析、不持久化，也不得将其返回为资源引用。资源 URI 及目标授权仍使用本唯一 owner，不能因支持原生路径另建跨 Gateway 执行链。
 
 **备选**：转发方缓存并本地解析对端资源（被否：第二份事实源）；对端返回 real path 由本机访问（被否：跨边界传资源 locator，且远端路径在本机无意义）；把上界写死在解析器里（被否：拓扑变化即改代码）。经目标 Gateway 按 `add-multi-workspace-backend-mounting` 唯一 root-binding requirement 授权的 workspace registration 是独立控制面输入，可把用户提供的 root 交给原生 Gateway owner；relay 只转送，不授权、不持久化该输入，它不进入资源解析或跨 Gateway projection。
 

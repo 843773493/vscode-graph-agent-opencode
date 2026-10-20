@@ -25,7 +25,8 @@
 - **配置来源地址与逻辑来源层由本 change 唯一裁定**：配置文件地址使用既有 `config` kind；URI 只标识可寻址来源文件，`layer` 与 `precedence` 是独立兄弟字段。具体逻辑 layer 闭集与 precedence 见 requirement「配置 layer 必须表示逻辑来源且与载体和快照分离」；SQLite 只作内部 carrier，`runtime_override` 可无 URI，`active_snapshot` / `pending_snapshot` 与 `sources[]` 分开。其他 change 只引用该定义，不新增 kind 或 URI 形态。
 - 固化**identity 独立于 URI**：同一逻辑名出现在两个不同 scope 时是两个不同 identity；跨来源等价/覆盖是独立 concern。
 - 固化**默认寻址政策**：配置/skill/状态/资源引用默认用 URI 传递；新增持久化字段若需定位资源，一律用 `identity + URI(+ 独立 revision 字段)`，不得存 real path。唯一例外是 `add-multi-workspace-backend-mounting` 定义的原生 Gateway workspace-root binding；它不是资源引用，不得复制到 managed group、普通 DTO 或业务记录。
-- 建立**可机械检查的 real path 不变量**：除上述唯一 workspace-root binding 与按 `add-multi-workspace-backend-mounting` requirement「工作区物理根必须绑定到唯一原生 Gateway」获授权的注册请求输入外，real path 出现在持久化记录、普通 API 响应体、联邦资源投影、解析结果或模型可见载荷中即为缺陷；该输入只送达负责该原生 target 的 Gateway，不由中继 Gateway 持久化或转为资源数据。
+- 建立**可机械检查的 real path 不变量**：唯一持久化例外仍是上述 workspace-root binding；具名请求输入边界包括原生目录选择/注册和普通文件的原生路径输入。real path 不得作为资源引用进入业务持久化、普通 API 响应、联邦资源投影、解析结果或系统生成的模型载荷；路径输入只交固定目标解析与执行，中继不将其保存或转为资源数据。
+- **普通文件路径输入合同（2026-10-20 用户裁定）**：相对路径、绝对路径、资源 URI 均为合法入口，内部统一解析后复用同一文件 owner。相对路径基于明确目标工作区/目录；绝对路径按目标机器原生语义解释，工作区外访问遵守既有能力和授权，不得重定向到工作区内或因 URI 化强制先注册工作区。Windows 盘符同样由目标平台解释；终端/shell 保留原生语义。该输入合同不放宽 URI 输出/持久引用政策，Gateway 管理目录入口也不限制普通文件绝对路径输入。
 - **真实路径外泄（已消除，保留为可机械复核的不变量）**：配置来源层记录曾以 `ConfigSourceLayerRecord.source_path`/`backup_path` 把真实路径落进 SQLite，配置来源列表 API 曾以 `ConfigSourceDTO.path`/`ConfigSourcesDTO.schema_path` 把真实路径写进响应体；两处已分别由 `50bffa45`（持久化改 URI）与 `76ed0089`（响应体改 URI）消除，详见 requirement「既有配置来源持久化必须按同一模式迁移为 URI 兄弟字段」。
 - **迁移面为新写入与消费切换，不迁旧开发数据**：历史基线取证为157 live + 44 dev/temp库中 `boxteam://` 零命中；当时挂点为来源控制状态与activation display_uri。该盘点只描述当时状态，不作为实施后仍零落盘的条件。当前字段、生产writer和读侧按各自唯一owner核对并接通；必要时按授权清理开发中间数据，不扫描或升级旧URI实例。新增附件/工具结果旧scheme的源码消费迁移在文件工具change验收。
 - **收口四个 change**：在途 `add-context-injection-lifecycle`、并行 `migrate-session-context-resource-uri` 与 `add-multi-workspace-backend-mounting`，以及第四个 `add-workspace-persistent-resource-management`；术语、scope、scope_id 语义、kind 与拒绝码写法一致，无同义异名。
@@ -33,6 +34,7 @@
 
 - **可导航根与轻量访问（2026-10-05 修订）**：唯一 owner 登记 directory/file/domain_object、导航和操作能力及 child path 模板；技能包根可访问 SKILL.md/references/scripts，files/root 以稳定 `workspace_id` 定位到原生 Gateway 的唯一物理根绑定，URI 与解析结果不承载该根路径。结构/身份段和文件段分别校验，文件段一次 UTF-8 解码；普通导航/搜索/读取不逐文件登记长期身份或快照。Session/assembly按领域owner的引用/view访问，附件/工具结果只公布单文件模板。
 - **文件消费边界**：独立 `add-unified-resource-file-tools` 承接现有文件工具、目标端执行、冲突/补丁/失败及旧会话产物scheme迁移；本change只拥有寻址公共合同。Skill文件读取不激活，skill_load仍归context owner；send/read/wait沿原Session计划收口。
+- **已确认的路径歧义缺陷**：`app/agents/workspace_tool_paths.py::_absolute_to_workspace_relative()` 把工作区外 POSIX 绝对路径经 `path.lstrip("/")` 改作工作区相对路径，例如 `/etc/hosts` 被改投 `/work/project/etc/hosts`。须区分用户原生路径与 DeepAgents 内部虚拟路径，全量迁齐调用方后移除该回退；三种输入同文件、外部目标不重定向、远端按目标平台执行均须从真实读写入口验收，规划修订不代表缺陷已修复。
 
 - **Fork目标与资源复用（2026-10-13）**：在既有session kind登记Workspace Session集合、Session和Thread领域模板；source/target与创建意图、view/revision/anchor分开。定义资源目标统一检查合同，复用已有归属、retention_scope、关联、修订/hash/可用性和owner操作能力，输出引用复用、必要保活、快照迁移或明确遗漏；只补缺少的owner能力，不增加实例fork布尔属性或第二生命周期registry。跨端创建和资源副作用由领域owner执行，URI解析不授予fork权限。
 

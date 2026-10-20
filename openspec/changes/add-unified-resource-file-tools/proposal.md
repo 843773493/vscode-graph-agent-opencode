@@ -5,6 +5,7 @@
 ## What Changes
 
 - **BREAKING** 将 `ls/read_file/glob/grep/write_file/edit_file/apply_patch` 接入统一资源寻址的唯一解析器和文件 owner；搜索条件与目标根分开，结果返回可继续访问的资源 URI。
+- 普通文件目标保留相对路径、绝对路径和资源 URI 三种输入，引用统一寻址 owner 的原生路径输入合同；在明确目标机器/工作区或目录上统一解析，不用 source/relay 当前目录。工作区外绝对路径按既有能力和授权访问或明确拒绝，不重定向到工作区内、不因 URI 化强制先注册；Windows 路径按目标平台解释。
 - 消费 `add-unified-virtual-resource-addressing` 定义的目录根、单文件、领域对象与分段编码；技能包和工作区文件树支持导航，领域对象不因拥有 URI 而成为文件目录。
 - 搜索和读取不逐文件注册长期 ResourceIdentity 或快照；普通 hash 按读取/冲突检查需要计算。显式上下文追踪和历史恢复仍由原来源 owner 管理。
 - 固定目标 Gateway、工作区和资源根，复用既有联邦路由；列目录、搜索、读取与补丁在目标 owner 所属进程执行，不可达或不支持时明确失败。
@@ -28,5 +29,7 @@
 
 - 依赖：`add-unified-virtual-resource-addressing` 的可导航根/路径编码与联邦能力；`add-context-injection-lifecycle` 的读取与激活分离；`migrate-session-context-resource-uri` 和 itemized 的既有会话目标 owner。
 - 实施影响面：工作区文件工具/backend 与路径解析、资源平台及文件 API、Gateway 联邦透明路由、附件和工具输出 store、Provider/历史投影、协议与客户端引用，以及对应测试。
+- 已确认缺陷：`workspace_tool_paths.py::_absolute_to_workspace_relative()` 将工作区外绝对路径去除前导斜杠后拼入工作区，可能误读/误写同名文件。须迁齐用户路径和 DeepAgents 内部虚拟路径的调用边界后移除歧义回退；不能只修改 helper 而保留其它旧执行链。该项仍待实施。
 - 首批文本写入覆盖既有 write/edit 与 apply_patch 的新增、修改、删除和同根文本文件移动，保留原补丁能力；通用目录管理的 `mkdir/move/copy/remove` 仍留后续，不能用其延期删除已有文本补丁能力。普通文本读取有界且严格 UTF-8，既有 read_file 媒体读取与附件二进制传输经统一 URI 交原 owner，保留原工具结果和 Provider 合同。终端/Python/浏览器/调试的进程执行、新增通用二进制读写、`watch/tail`、跨 Gateway 复制与通用 `operation_id` 不纳入。
 - 规划完成不代表生产实现完成；先固定公共合同，再本地技能包导航、目标端执行、工作区写入和旧链路删除，不打断当前 R 实现。
+- 终端/shell 继续使用目标操作系统原生路径语义；Gateway 原生目录选择和工作区注册保留，其管理入口边界不取消普通文件绝对路径输入。原生路径仅是具名请求输入，内部持久引用、普通响应及跨 Gateway 资源投影继续遵循 URI 合同。

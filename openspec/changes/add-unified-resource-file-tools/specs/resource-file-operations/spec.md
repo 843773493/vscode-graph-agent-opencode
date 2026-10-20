@@ -6,7 +6,24 @@
 
 ### Requirement: 文件工具必须共用唯一寻址与文件 owner
 
-系统 MUST 使 `ls/read_file/glob/grep/write_file/edit_file/apply_patch` 消费 `add-unified-virtual-resource-addressing` 的 URI 语法、导航形态、操作能力和错误登记。目标 URI 与 glob/grep 查询条件 MUST 为独立字段，查询文本不得参与 authority、工作区或根解析。每个调用在执行前固定目标 Gateway、工作区、资源根及规范子路径；既有工具的相对路径入口须在明确工作区边界统一归一到该合同，不保留独立旧解析器。
+系统 MUST 使 `ls/read_file/glob/grep/write_file/edit_file/apply_patch` 消费 `add-unified-virtual-resource-addressing` 的 URI 语法、导航形态、操作能力和错误登记，并遵守其「普通文件入口必须保留原生路径输入并统一目标解析」。普通文件/根目标 MUST 接受相对路径、绝对路径和资源 URI；目标与 glob/grep 查询条件 MUST 为独立字段，查询文本不得参与 authority、工作区或根解析。每个调用在执行前固定目标 Gateway/机器、目标工作区或选定目录及规范子路径，三种输入通过同一目标解析边界交同一文件 owner，不保留独立旧解析器或执行链。
+
+原生路径仅作为公共 owner 登记的请求输入；持久资源引用、普通响应及跨 Gateway 资源投影继续遵循 URI 合同。外部绝对路径按既有能力和授权处理，不得通过去除根/盘符改投工作区，也不得以 URI 化取消既有外部文件能力或要求先注册工作区。用户原生路径和 DeepAgents 内部虚拟路径 MUST 以明确入口或类型区分，迁齐调用方后移除歧义回退。终端/shell 仍按目标操作系统解释路径，Gateway 原生目录选择/注册的管理入口不限制普通文件绝对路径输入。
+
+#### Scenario: 三种输入经真实入口访问同一对象
+
+- **WHEN** 对同一目标工作区文件，分别使用相对路径、目标原生绝对路径和资源 URI 读取或授权写入
+- **THEN** 三者访问同一实际文件，产生相同规范资源引用并遵守相同能力/冲突规则，不产生副本或另一条操作链
+
+#### Scenario: 外部绝对路径不误读误写工作区文件
+
+- **WHEN** 目标工作区内存在 `etc/hosts` 对照文件，而普通文件入口收到目标机器的 `/etc/hosts`
+- **THEN** 在隔离验收目标上读取/授权写入真正的外部文件，或明确拒绝且零写入；工作区对照文件始终不被读取为替代结果或被修改
+
+#### Scenario: 远端原生路径只在目标机器解释
+
+- **WHEN** source/relay 与目标采用不同当前目录或操作系统，普通文件入口收到已明确目标的相对路径或 Windows 等原生绝对路径
+- **THEN** 目标机器按其原生语义和选定目录执行，实际目标内容/修改可核实，source/relay 同名文件不变，不在中继重绑定或本地 fallback
 
 #### Scenario: 搜索条件不改变目标
 

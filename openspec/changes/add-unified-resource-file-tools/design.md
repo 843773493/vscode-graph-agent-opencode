@@ -12,7 +12,11 @@
 
 ### 1. 一个内部目标，按资源形态分派
 
-read/write 接收完整文件 URI，ls/glob/grep 接收根 URI 与独立查询参数，apply_patch 接收一个根 URI 与相对文件 patch。全部由寻址 owner 归一为固定 Gateway/workspace/root/child binding，再由目标文件 owner 执行。现有受信调用方若有普通相对路径，在其显式工作区边界构造同一 URI；不维持另一套解释规则，也不允许裸路径在中继端重新绑定当前工作区。拒绝万能目录映射：领域对象不暴露磁盘树，Skill 目录读取不调用 CSM。
+read/write 的文件目标、ls/glob/grep 的根目标和 apply_patch 的根目标均接受相对路径、绝对路径或资源 URI，引用统一寻址 owner「普通文件入口必须保留原生路径输入并统一目标解析」；查询条件与目标分开，patch 内部文件名仍只允许相对已固定根的路径。先固定目标 Gateway/机器和工作区或选定目录，再由目标端统一解释输入并交同一文件 owner 执行；相对路径不能借用 source/relay 进程当前目录，绝对路径按目标平台（含 Windows 盘符）解释。工作区内路径可归一为已有 URI，工作区外路径按既有能力/授权处理，不得偷偷拼入工作区、转到本地同名文件或要求先注册工作区。
+
+原生路径是具名请求输入，不能因此进入内部持久资源引用、普通响应或跨 Gateway 资源投影；无已有 URI 模板的外部目标沿既有 owner/API，不自造 kind 或第二操作链。拒绝万能目录映射：领域对象不暴露磁盘树，Skill 目录读取不调用 CSM。终端/shell 保留原生路径语义，Gateway 原生目录选择/注册的管理边界不限制普通文件绝对路径输入。
+
+当前 `workspace_tool_paths.py::_absolute_to_workspace_relative()` 在绝对路径不属于工作区时使用 `path.lstrip("/")`，把 `/etc/hosts` 错投工作区的 `etc/hosts`。实施先全仓清点 `WorkspaceToolPathResolver`、filesystem tools、debugging、apply_patch 及 backend 输出转换和测试，分离用户原生绝对路径与 DeepAgents 内部虚拟路径入口，再删除该歧义回退与重复执行链。`backend_virtual_to_workspace_relative` 等内部转换不得成为猜测用户路径的兜底；既有把 `/src/main.mjs` 当虚拟根的测试须转为明确的 backend 输入测试，并补真实用户绝对路径的相反断言。
 
 ### 2. 实际 owner 就地执行，路由不是持有数据
 
@@ -44,6 +48,7 @@ write/edit/patch 的内容前置使用精确原始 byte `sha256:<hex>` 或该 ow
 
 - 文件名编码与现有身份 profile 混用 → 公共 grammar 先交完整构造/解析往返与拒绝矩阵，所有消费者只引用，不再加 parser。
 - 远端路由虽正确但文件仍在 source 执行 → 两端同名不同内容/标记文件验收，验证远端修改及 source 不变。
+- 原生绝对路径被当作虚拟根重定向 → 用外部实际文件和工作区内同名对照文件，从读写入口核实实际对象与零误写；覆盖相对/绝对/URI 同文件、不同 relay 当前目录以及 Windows 目标机器解释。
 - 外部编辑器竞争/进程崩溃 → 诚实披露 CAS 能力边界和部分/未知效果，以原目标内容核实，不伪造回滚。
 - 改进 Skill 导航误增 activation → 读取前后对 catalog/source-control/activation 记录逐项断言不变，显式 skill_load 才进入来源事务。
 
@@ -51,6 +56,6 @@ write/edit/patch 的内容前置使用精确原始 byte `sha256:<hex>` 或该 ow
 
 1. 先完成统一寻址的根、路径编码和能力登记；现有 context 规范删除通用读取禁令但保留唯一激活 owner。新增任务不因规划已写而勾选。
 2. 先落一条技能目录只读纵向链路，再通过同一合同实现目标端读取/搜索，验证真实远端与固定目标。
-3. 接工作区源码根和条件写入/补丁；验证冲突、preflight 零写入、部分发布、断线未知及重开核实。
+3. 接工作区源码根和条件写入/补丁；同批迁齐三种目标输入及用户/内部虚拟路径边界，删除绝对路径歧义回退；验证实际目标、外部路径不重定向、冲突、preflight 零写入、部分发布、断线未知及重开核实。
 4. 平移会话产物全部直接和间接消费者、协议与测试；删除旧解析链与 scheme，开发中间数据按已授权清理。
 5. 按 tasks 逐项验收。公开破坏性改动同闭包一次交付，不保留旧链兼容回退；若候选失败则不发布该候选，已发生的目标写入按真实 owner 结果处理。

@@ -35,7 +35,7 @@
 
 - **资源身份 / ResourceIdentity**：不透明、稳定、**不含 revision**、**不依赖当前激活工作区**，持久化，用于去重与 lineage。
 - **资源 URI**：可解析的地址，持久化，**允许悬空**（指向已不存在的资源是合法值），**禁止编码 revision 或 hash**，是软件内部与模型可见载荷中传递资源的默认形式。
-- **真实路径 / real path**：业务资源访问时在机器本地临时使用，只在原生 owner 的最终 fs/sqlite 调用点及其必要的局部调用链中存在；除「工作区物理根必须绑定到唯一原生 Gateway」定义的控制面 root binding 外，MUST NOT 持久化。真实路径 MUST NOT 进入模型可见载荷、普通 API/Workspace DTO、解析结果或跨 Gateway 资源投影。唯一 root binding 只由负责原生 target 的 Gateway registry 持久化，且不是可传递的资源引用；注册输入只可在 `add-multi-workspace-backend-mounting` 的该 requirement 授权后送达原生 owner。
+- **真实路径 / real path**：业务资源访问时在机器本地临时使用，只在原生 owner 的最终 fs/sqlite 调用点及其必要的局部调用链中存在；除「工作区物理根必须绑定到唯一原生 Gateway」定义的控制面 root binding 外，MUST NOT 持久化。真实路径 MUST NOT 作为资源引用进入模型可见载荷、普通 API/Workspace 响应 DTO、解析结果或跨 Gateway 资源投影。具名输入边界有两类：该 root-binding requirement 授权的原生目录选择/工作区注册，以及本 capability「普通文件入口必须保留原生路径输入并统一目标解析」登记的普通文件路径输入。输入许可不扩大真实路径输出或持久化例外。
 
 #### Scenario: 业务资源 real path 只在本地访问链中存在
 
@@ -44,7 +44,7 @@
 
 #### Scenario: real path 外泄即缺陷
 
-- **WHEN** 除唯一原生 Gateway root binding 或按 `add-multi-workspace-backend-mounting` 授权后发往该 owner 的注册输入外，API 响应体、业务持久化记录、解析结果、跨 Gateway 资源投影或模型可见载荷中出现 real path
+- **WHEN** 除唯一原生 Gateway root binding 外，API 响应体、业务持久化记录、解析结果、跨 Gateway 资源投影或系统生成的模型资源引用中出现 real path
 - **THEN** 系统 MUST 将其判定为缺陷并显式失败，不得以 `display_uri`、日志脱敏或截断静默掩盖；root binding 也 MUST NOT 出现在上述输出中
 
 #### Scenario: 工作区根绑定是唯一控制面持久化例外
@@ -67,6 +67,41 @@
 - **WHEN** 调用方持有 ResourceIdentity 但需要访问资源
 - **THEN** 它仍然通过 URI（或 URI 解析链）定位资源，不得把 identity 当作可解析地址；反之 URI 也不得被当作资源身份用于去重
 
+### Requirement: 普通文件入口必须保留原生路径输入并统一目标解析
+
+普通文件入口 MUST 接受相对路径、绝对路径和资源 URI，保留既有文件访问能力。三种输入 MUST 经同一目标解析边界交给同一文件 owner 的操作链路，不得保留独立的旧路径执行链。资源 URI 的语法、身份、能力与授权规则继续使用本 capability 的唯一定义。
+
+- 相对路径 MUST 基于明确选定的目标工作区或目录解析；调用执行前固定目标 Gateway、工作区/目录及所属机器，不得借用 source、relay 或进程当前目录。缺少解析基准时 MUST 明确失败。
+- 绝对路径 MUST 由目标机器按原生文件系统语义解释，包括 Windows 盘符、分隔符及目标平台支持的其它原生绝对路径形式。工作区内路径可归一为对应资源 URI；工作区外路径 MUST 按既有能力和授权访问指定对象，或明确拒绝，MUST NOT 去掉根/盘符后拼入工作区、改投本地同名文件，或以 URI 化为由要求先注册工作区才能使用既有外部文件能力。
+- 原生路径是具名的请求输入例外，只用于固定目标后的解析与执行；必要的中继只向该目标转送输入，不在中继端进行文件系统解析或保存为资源引用。内部持久引用、普通响应、解析结果及跨 Gateway 资源投影继续遵循 URI 合同，不得因接受路径输入而返回或持久化真实路径。没有现成 URI 模板的外部目标沿既有 owner/API 能力处理，不得自行扩展 URI kind 或伪造工作区归属。
+- 用户原生绝对路径与 DeepAgents 等 backend 的内部虚拟路径 MUST 有明确不同的入口或类型；内部虚拟根的转换不得应用于用户路径。全量迁移直接/间接调用方及测试后 MUST 删除歧义回退，不保留按同一个前导斜杠猜测两种语义的分支。
+- 终端与 shell MUST 保留目标操作系统的原生路径语义，不自动把路径或命令改为 URI。Gateway 原生目录选择与工作区注册仍是独立管理入口；它们的输入例外 MUST NOT 被解释为禁止普通文件入口接受绝对路径。
+
+#### Scenario: 三种输入定位同一文件
+
+- **WHEN** 对明确目标工作区内的同一文件，分别以相对路径、目标机器绝对路径和对应资源 URI 执行读取或授权写入
+- **THEN** 三者到达同一 owner、访问同一实际文件并遵守相同能力/冲突规则；结果使用同一规范资源引用，写入不产生其它目标的副本
+
+#### Scenario: 工作区外绝对路径不能重定向
+
+- **WHEN** 工作区为 `/work/project`，输入 `/etc/hosts`，且工作区内另有 `etc/hosts` 作为对照文件
+- **THEN** 读取或写入仅按目标端能力和授权访问真正的 `/etc/hosts`，或明确拒绝且零写入；MUST NOT 读取或修改 `/work/project/etc/hosts`，也不得伪报成功
+
+#### Scenario: 相对路径不依赖中继当前目录
+
+- **WHEN** 相对路径的目标目录已明确，而 source 或 relay 进程的当前目录不同或发生变化
+- **THEN** 读取与写入仍命中选定目标目录下的同一文件，缺少基准时明确失败，不猜测当前工作区
+
+#### Scenario: 远端路径由目标平台解释
+
+- **WHEN** 经 Gateway 向远端目标提交原生绝对路径，包括 Windows 目标上的盘符路径，而 source/relay 机器存在同名文件或采用不同操作系统
+- **THEN** 路径只在目标机器按其平台语义解析与执行；目标文件的内容/变更可核实，source/relay 文件保持不变，输出与持久引用不携带真实路径
+
+#### Scenario: backend 虚拟路径不冒充用户绝对路径
+
+- **WHEN** backend 使用内部虚拟路径 `/src/main.mjs`，而用户也可输入原生绝对路径
+- **THEN** 虚拟路径仅由明确的 backend 转换入口解释，用户输入保持目标机器绝对路径语义；不得共用去除前导斜杠的回退来猜测归属
+
 ### Requirement: 「位置」必须有可机械判定的统一判据
 
 资源引用中的「位置 / location」判定 MUST 使用如下**可机械判定**的统一判据，MUST NOT 各 change 自行解释：一个字段承载的是「位置」，当且仅当它（或由它经确定性推导得到的值）可直接用于 `open`/`stat`/`join` 等文件系统或 sqlite 访问，且指向本体位于持久化记录 owner 之外的资源或产物。据此：
@@ -75,7 +110,7 @@
 - **可判定为「位置」⇒ MUST NOT 落盘**：任何「位置」MUST 由 `资源身份 / ResourceIdentity` 加 `资源 URI`（必要时加并列 revision 字段）表达；当且仅当该位置可由 owner 身份（资源 id 与工作区身份）确定性推导时，MUST NOT 落盘，改为在该次 fs/进程调用栈内由 owner 身份重推导。
 - **不可由 owner 身份推导、但必须对外可寻址 ⇒ MUST 用既有 API 端点引用**，MUST NOT 落盘 real path、MUST NOT 为此自造 URI kind、MUST NOT 裸拼接 URI。
 - **唯一例外边界**：owner **自身**的运行态字段（典型为终端 shell 的当前工作目录）表达的是 owner 的运行状态而非「资源所在位置」，MUST NOT 被当作位置引用或位置表达；此类字段 MUST 以工作区内**相对路径**持久化，MUST NOT 落盘绝对路径或工作区根路径。
-- **real path 出现在一般持久化记录、API 响应体或模型可见载荷中 ⇒ 缺陷**：唯一例外是工作区物理根作为控制面 mount binding 仅存于负责原生 target 的 Gateway registry；经 `add-multi-workspace-backend-mounting` 授权的注册输入只送达该 owner。任何例外都不允许将根复制到业务记录、普通 DTO、解析结果、模型载荷或联邦资源投影。违反时 MUST 显式失败，MUST NOT 以脱敏、截断或 `display_uri` 静默掩盖。
+- **real path 出现在一般持久化记录、API 响应体或系统生成的模型资源引用中 ⇒ 缺陷**：唯一持久化例外是工作区物理根作为控制面 mount binding 仅存于负责原生 target 的 Gateway registry。原生目录选择/注册与普通文件路径请求的具名输入边界引用前述 requirements，不授权将真实路径复制到业务记录、普通响应 DTO、解析结果或联邦资源投影。违反时 MUST 显式失败，MUST NOT 以脱敏、截断或 `display_uri` 静默掩盖。
 
 以上判据 MUST 是「位置 vs 非位置」的唯一判定来源；`add-workspace-persistent-resource-management` 的 D-A2/D-A3 与 owner 运行态字段例外 MUST 引用本 requirement，MUST NOT 另立一套判据。
 

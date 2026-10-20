@@ -3,6 +3,7 @@
 - [ ] 1.1 等待并核验统一寻址1.4/3.4/7.1/第8组的根、分段编码、导航能力和产物单文件模板；消费者不自行定义kind/parser，公共合同完整后再推进依赖实现。
 - [ ] 1.2 全仓清点文件工具、backend、UI/API/CLI、附件和工具输出生成/消费、Provider、历史投影、协议与测试，建立直接/间接caller清单与唯一文件owner边界。
 - [ ] 1.3 固定工具目标/查询、limits/cursor、条件写入和逐文件执行结果类型，按spec区分寻址错误和文件执行错误；跨端操作授权独立于send/read/wait，不新增通用operation_id。
+- [ ] 1.4 按公共 owner 的原生路径输入合同清点并迁齐相对/绝对/URI 目标解析，以及 `WorkspaceToolPathResolver`、filesystem tools、debugging、apply_patch、backend 输出转换和直接/间接测试；明确用户原生路径与 DeepAgents 虚拟路径的入口/类型，保持一条操作链，不扩大 patch 内部相对文件名的能力。
 
 ## 2. 本地技能包目录与轻量读取
 
@@ -16,6 +17,7 @@
 - [ ] 3.1 复用现有Gateway联邦路由将文件调用交实际owner；不返回真实路径给source代执行，固定target与attempt channel lease分离。
 - [ ] 3.2 两端同名不同内容的真实Gateway场景验证远端ls/read/grep及总deadline、不可达、不支持、撤权明确失败；source同名文件不变，无本地fallback。
 - [ ] 3.3 验证调用期间切换激活工作区、重连和cursor续页不改变既定Gateway/workspace/root；跨界响应/记录不含locator或credential。
+- [ ] 3.4 从真实读写入口验证三种输入命中同一文件、相对路径不受 source/relay 当前目录影响、远端绝对路径按目标平台解释（含 Windows 盘符）；使用两端同名对照文件核实目标内容和 source/relay 零误写，目标失败不本地 fallback。
 
 ## 4. 工作区源码树与条件写入
 
@@ -25,6 +27,7 @@
 - [ ] 4.4 故障注入覆盖多文件首个发布后失败、目标退出/响应丢失、取消尚未确认和重开核实；逐文件published/not_published/not_attempted/unknown准确，禁止自动重放/假回滚。
 - [ ] 4.5 两个真实目标验证远端patch修改目标端、source不变；独立权限、失败能力、目标固定与UTF-8/raw-byte hash合同一致。
 - [ ] 4.6 复用既有apply_patch add/delete与hints/move正式测试，保留输入、内容和changeset断言；覆盖删除版本冲突、移动目的版本/expected_absent冲突及目的已发布但源未删除的逐路径部分结果，不把文本文件操作扩成通用目录mutation。
+- [ ] 4.7 在隔离目标中用外部绝对路径和工作区内同名对照文件验证真实读取、授权写入或拒绝零写入，确保工作区外目标不被重定向、不被强制先注册工作区；迁齐调用方后物理删除 `_absolute_to_workspace_relative()` 的 `path.lstrip("/")` 歧义回退，并将虚拟根旧测试迁入明确 backend 边界，保留终端/shell 原生路径与 Gateway 管理目录入口。
 
 ## 5. 会话产物与旧链路下线
 
