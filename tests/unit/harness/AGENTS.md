@@ -1,6 +1,6 @@
 # 目录用途
 
-存放测试 harness 自身纯函数、命令生成和进程生命周期的单元测试；生命周期用 mock 注入启动、就绪、中断和清理结果。
+存放测试 harness 自身纯函数、命令生成和资源装配生命周期的单元测试；生命周期用 mock 注入启动、就绪、中断和清理结果。
 
 ```text
 harness/
@@ -13,6 +13,7 @@ harness/
 │   └── test_http_readiness.py          HTTP 就绪预算、身份与退出诊断
 ├── test_run_context.py                测试运行上下文
 ├── test_catalog_fixture_lifetime.py   SQLite catalog 装具归属
+├── test_workspace_tool_fixture_lifetime.py  资源工具装具的多资源清理及错误链
 ├── test_ports.py                      测试文件端口分配
 └── test_*.py                          配置、命令生成与 API 等待器
 ```

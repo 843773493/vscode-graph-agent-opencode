@@ -44,3 +44,4 @@ support/
 - `session_navigation_http.py` 的30秒等待覆盖实际HTTP请求、轮询间隔和可选的删除settlement；期限只属于本次观察，不取消后端导航操作。传输层异常和调用方取消原样传播，不能翻译为operation超时；提交入口返回的是operation ID，等待入口返回终态回执。
 - `wait_for_backend_ready` 专门核对响应正文的工作区 UUID，连接和重试也受剩余预算约束；HTTP拒绝保留有界诊断正文并关闭响应，不把身份不符或异常状态轮询至超时。
 - `session_catalog_owner.py` 只管理测试 catalog 的连接生命周期；登记和定向释放使用同一绝对路径，避免相对路径与绝对路径形成两个 owner。关闭发生中断时仍尝试释放全部选中组件，再汇总原始异常；生产 catalog 装配不依赖此替身。
+- `workspace_tool_runtime.py` 的装具退出清理在原 admission 内依次重置调用/作用域绑定、关闭执行作用域、释放浏览器与终端；任一步骤失败或取消仍尝试剩余动作。退出应用 lifespan 后分别关闭活动库和 catalog；准备失败也走该外层清理，多个原始错误由标准退出栈的异常链保留，不另建业务关闭入口。

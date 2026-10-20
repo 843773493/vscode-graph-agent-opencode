@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from contextlib import AsyncExitStack, ExitStack, asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -49,9 +49,12 @@ async def workspace_tool_runtime(
         catalog_provider_scope(registry),
     ):
         container = registry.get(workspace_id)
-        if application is not None:
-            application.state.workspace_container_registry = registry
-        try:
+        with ExitStack() as runtime_cleanup:
+            runtime_cleanup.callback(container.session_catalog.close)
+            runtime_cleanup.callback(container.workspace_activity_service.store.close)
+            if application is not None:
+                runtime_cleanup.callback(setattr, application.state, "workspace_container_registry", None)
+                application.state.workspace_container_registry = registry
             async with _workspace_lifespan(container):
                 session = await container.session_service.create(
                     SessionCreateRequest(title="真实 工作区资源工具调用")
@@ -90,16 +93,10 @@ async def workspace_tool_runtime(
                     with execution_admission_scope(
                         admission, langgraph_thread_id=thread_id
                     ):
-                        try:
+                        async with AsyncExitStack() as thread_cleanup:
+                            thread_cleanup.push_async_callback(container.terminal_resource_owner.cleanup_session, session.session_id)
+                            thread_cleanup.push_async_callback(container.browser_resource_owner.cleanup_session, session.session_id)
+                            thread_cleanup.push_async_callback(scope.close)
+                            thread_cleanup.callback(reset_current_turn_execution_scope, scope_token)
+                            thread_cleanup.callback(context.reset_tool_call_id, call_token)
                             yield container, session.session_id, context
-                        finally:
-                            context.reset_tool_call_id(call_token)
-                            reset_current_turn_execution_scope(scope_token)
-                            await scope.close()
-                            await container.browser_resource_owner.cleanup_session(session.session_id)
-                            await container.terminal_resource_owner.cleanup_session(session.session_id)
-        finally:
-            if application is not None:
-                application.state.workspace_container_registry = None
-            container.workspace_activity_service.store.close()
-            container.session_catalog.close()

@@ -249,3 +249,65 @@ def test_windows_fixture_releases_created_processes_and_logs(
     for spawned in spawn.call_args_list:
         assert spawned.kwargs["stdout"].closed
         assert spawned.kwargs["stderr"].closed
+
+
+@pytest.fixture
+def page_server_startup(
+    monkeypatch: pytest.MonkeyPatch,
+) -> tuple[Iterator[str], Mock, Mock, list[str]]:
+    server, thread = Mock(), Mock()
+    cleanups: list[str] = []
+    server.shutdown.side_effect = lambda: cleanups.append("shutdown")
+    thread.join.side_effect = lambda **_kwargs: cleanups.append("join")
+    server.server_close.side_effect = lambda: cleanups.append("socket-close")
+    monkeypatch.setattr(performance_case, "ThreadingHTTPServer", Mock(return_value=server))
+    monkeypatch.setattr(performance_case, "threading", SimpleNamespace(Thread=Mock(return_value=thread)))
+    monkeypatch.setattr(performance_case, "integration_port_block_for_file", lambda _path: SimpleNamespace(port=lambda _offset: 18062))
+    request = SimpleNamespace(node=SimpleNamespace(fspath=performance_case.__file__))
+    fixture = performance_case.dynamic_page_server.__wrapped__(request)
+    return fixture, server, thread, cleanups
+
+
+@pytest.mark.parametrize("interrupted", [False, True])
+def test_page_server_thread_start_failure_releases_bound_socket(
+    page_server_startup: tuple[Iterator[str], Mock, Mock, list[str]], interrupted: bool,
+) -> None:
+    fixture, server, thread, cleanups = page_server_startup
+    error = KeyboardInterrupt("线程启动中断") if interrupted else RuntimeError("线程启动失败")
+    thread.start.side_effect = error
+
+    with pytest.raises(type(error)) as failure:
+        next(fixture)
+
+    assert failure.value is error
+    assert cleanups == ["socket-close"]
+    server.shutdown.assert_not_called()
+    thread.join.assert_not_called()
+
+
+@pytest.mark.parametrize("stage", ["none", "shutdown", "join", "socket-close"])
+@pytest.mark.parametrize("interrupted", [False, True])
+def test_page_server_teardown_attempts_all_owned_cleanup_and_keeps_body_error(
+    page_server_startup: tuple[Iterator[str], Mock, Mock, list[str]], stage: str, interrupted: bool,
+) -> None:
+    fixture, server, thread, cleanups = page_server_startup
+    body_error = LookupError("页面服务使用失败")
+    cleanup_error = KeyboardInterrupt("页面服务清理中断") if interrupted else OSError("页面服务清理失败")
+    if stage != "none":
+        action = {"shutdown": server.shutdown, "join": thread.join, "socket-close": server.server_close}[stage]
+
+        def fail_cleanup(**_kwargs: object) -> None:
+            cleanups.append(stage)
+            raise cleanup_error
+
+        action.side_effect = fail_cleanup
+
+    assert next(fixture) == "http://127.0.0.1:18062/"
+    with pytest.raises(type(body_error) if stage == "none" else type(cleanup_error)) as failure:
+        fixture.throw(body_error)
+
+    assert failure.value is (body_error if stage == "none" else cleanup_error)
+    if stage != "none":
+        assert cleanup_error.__context__ is body_error
+    assert cleanups == ["shutdown", "join", "socket-close"]
+    thread.join.assert_called_once_with(timeout=5)

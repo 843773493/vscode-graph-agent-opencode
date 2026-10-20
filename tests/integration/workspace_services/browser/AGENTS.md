@@ -27,3 +27,5 @@ browser/
 ## 规范
 
 - 工作区、端口和产物按测试文件隔离到 `out/tests/integration/workspace_services/browser/`。
+- 工具测试的进程内`browser_runtime`与后端进程必须共用`integration_startup_mount`提供的显式服务地址；仅创建专属端口的辅助进程，不会自动改变进程内容器的目标，不能依赖默认8012/8015恰好可用。
+- 性能测试的页面HTTP服务在绑定后立即登记socket关闭；线程成功启动后再登记shutdown和join，避免启动失败时保留监听端口。停止、等待线程、关闭socket是独立释放动作，某一步失败或中断仍尝试后续动作，并保留原异常链。

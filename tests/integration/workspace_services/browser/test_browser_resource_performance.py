@@ -366,15 +366,14 @@ async def _measure_latest_frame_delivery(backend_port: int, browser_id: str, wor
 @pytest.fixture(scope="module")
 def dynamic_page_server(request: pytest.FixtureRequest) -> Generator[str, None, None]:
     port = integration_port_block_for_file(Path(request.node.fspath)).port(62)
-    server = ThreadingHTTPServer(("127.0.0.1", port), _DynamicPageHandler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    try:
+    with ExitStack() as lifetime:
+        server = ThreadingHTTPServer(("127.0.0.1", port), _DynamicPageHandler)
+        lifetime.callback(server.server_close)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        lifetime.callback(thread.join, timeout=5)
+        lifetime.callback(server.shutdown)
         yield f"http://127.0.0.1:{port}/"
-    finally:
-        server.shutdown()
-        server.server_close()
-        thread.join(timeout=5)
 
 
 @pytest.mark.skipif(os.name != "posix" or not Path("/proc").is_dir(), reason="需要 Linux /proc")

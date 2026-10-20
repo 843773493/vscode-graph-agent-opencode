@@ -241,10 +241,14 @@ def browser_application() -> FastAPI:
 async def browser_runtime(
     browser_manager_processes: tuple[int, int],
     integration_workspace_root_path: str,
+    integration_startup_mount: MountedWorkspace,
     browser_application: FastAPI,
 ) -> AsyncIterator[WorkspaceToolRuntime]:
     del browser_manager_processes
-    async with workspace_tool_runtime(Path(integration_workspace_root_path), application=browser_application) as runtime:
+    async with workspace_tool_runtime(
+        Path(integration_workspace_root_path), application=browser_application,
+        startup_mount=integration_startup_mount,
+    ) as runtime:
         yield runtime
 
 
