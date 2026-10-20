@@ -6,7 +6,8 @@
 
 ```text
 terminal/
-├── server/      PTY、终端状态、输出顺序和持久化
+├── server/      PTY、终端状态与持久化
+│   └── output/  输出字节边界、增量重放和逐连接流控
 ├── client/      attach网页及静态HTTP服务
 ├── protocol/    HTTP/WebSocket消息的线格式适配
 └── shared/      Node与浏览器共用的无状态命令文本处理

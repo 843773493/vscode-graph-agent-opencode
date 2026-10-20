@@ -8,7 +8,7 @@ shared/
 └── commandText.test.js  同一份实现的文本行为检查
 ```
 
-命令协议语义独占一份实现；server决定何时推导状态，client决定何时展示，shared不负责两者的调用时机。UTF-8字节边界仍归server/terminalUtf8Output.js，传输字段转换仍归protocol/messages.js。
+命令协议语义独占一份实现；server决定何时推导状态，client决定何时展示，shared不负责两者的调用时机。UTF-8字节边界仍归server/output/terminalUtf8Output.js，传输字段转换仍归protocol/messages.js。
 
 ## 可修改内容
 

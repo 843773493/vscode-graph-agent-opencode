@@ -63,7 +63,10 @@ export class TerminalManager {
     });
     this.stateDir = this.stateStore.stateDir;
     this.stateFile = this.stateStore.stateFile;
-    this.sessions = new Map();
+    /** 按 terminal_id 保存终端资源，含保留的非运行记录，与聊天 Session/Thread 分开。
+     * @type {Map<string, TerminalSession>}
+     */
+    this.terminalsById = new Map();
     this.capacityLock = Promise.resolve();
     this.persistRequested = false;
     this.persistPromise = null;
@@ -87,7 +90,7 @@ export class TerminalManager {
       }
       const restored = await this.restoreRecord(record);
       const session = new TerminalSession({ record: restored, manager: this });
-      this.sessions.set(session.id, session);
+      this.terminalsById.set(session.id, session);
     }
     await this.pruneTerminalHistory();
     await this.persist();
@@ -135,7 +138,7 @@ export class TerminalManager {
         this.persistRequested = false;
         await this.stateStore.write({
           updated_at: nowIso(),
-          terminals: [...this.sessions.values()].map((session) => session.toRecord()),
+          terminals: [...this.terminalsById.values()].map((session) => session.toRecord()),
         });
       }
     } finally {
@@ -144,13 +147,13 @@ export class TerminalManager {
   }
 
   list() {
-    return [...this.sessions.values()]
+    return [...this.terminalsById.values()]
       .map((session) => session.snapshot())
       .sort((left, right) => right.updated_at.localeCompare(left.updated_at));
   }
 
   get(id) {
-    const session = this.sessions.get(id);
+    const session = this.terminalsById.get(id);
     if (!session) {
       throw new Error(`终端不存在: ${id}`);
     }
@@ -213,7 +216,7 @@ export class TerminalManager {
     if (typeof terminalId !== "string" || !/^term_[a-f0-9]{32}$/.test(terminalId)) {
       throw new Error("Terminal 必须由 Python owner 提供 resource_id");
     }
-    if (!Number.isSafeInteger(ownerRevision) || ownerRevision < 1 || this.sessions.has(terminalId)) {
+    if (!Number.isSafeInteger(ownerRevision) || ownerRevision < 1 || this.terminalsById.has(terminalId)) {
       throw new Error(`Terminal owner revision 或身份冲突: ${terminalId}`);
     }
     await this.pruneTerminalHistory();
@@ -241,11 +244,11 @@ export class TerminalManager {
         updated_at: nowIso(),
       },
     });
-    this.sessions.set(id, session);
+    this.terminalsById.set(id, session);
     try {
       await session.start();
     } catch (error) {
-      this.sessions.delete(id);
+      this.terminalsById.delete(id);
       await session.dispose();
       await this.persist();
       throw error;
@@ -330,7 +333,7 @@ export class TerminalManager {
   }
 
   async ensureExecutionCapacity() {
-    const active = [...this.sessions.values()]
+    const active = [...this.terminalsById.values()]
       .filter(
         (session) => session.status === "running" || session.status === "created",
       );
@@ -345,13 +348,13 @@ export class TerminalManager {
   }
 
   async pruneTerminalHistory() {
-    const historical = [...this.sessions.values()]
+    const historical = [...this.terminalsById.values()]
       .filter((session) => session.status === "deleted")
       .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
     const removed = historical.slice(MAX_RETAINED_TERMINAL_HISTORY);
     for (const session of removed) {
       await session.dispose();
-      this.sessions.delete(session.id);
+      this.terminalsById.delete(session.id);
     }
     if (removed.length > 0) {
       await this.persist();
@@ -383,7 +386,7 @@ export class TerminalManager {
   }
 
   async shutdown(reason = "terminal_manager_shutdown") {
-    await Promise.all([...this.sessions.values()].map(async (session) => {
+    await Promise.all([...this.terminalsById.values()].map(async (session) => {
       if (session.status === "running") {
         session.markReconciliationStatus("reconcile_required");
         session.releaseReason = reason;

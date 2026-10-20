@@ -185,7 +185,7 @@ async function main() {
           ok: true,
           process_id: process.pid,
           workspace_id: workspaceId,
-          terminal_count: manager.list().length,
+          terminal_count: manager.terminalsById.size,
         });
         return;
       }

@@ -11,22 +11,27 @@ server/
 ├── isolatedPtyProcess.js          后端持有的隔离 worker 句柄与 IPC
 ├── ptyWorker.js                   worker 内的 PTY 与输出背压
 ├── terminalProcessUtils.js        系统进程身份、信号及退出判定
-├── terminalOutputMultiplexer.js   模型与客户端的输出游标、重放和广播
-├── terminalOutputMultiplexerEncoding.test.js 多连接编码复用、独立重放与socket拒收
-├── terminalUtf8Output.js          PTY文本的UTF-8字节上限、尾部保留与事件切块
+├── output/                       输出字节边界、重放与逐连接流控
+│   ├── terminalOutputMultiplexer.js 模型与客户端输出游标、重放和广播
+│   ├── terminalUtf8Output.js       UTF-8字节上限、尾部保留与事件切块
+│   └── *.test.js                  字节边界、窗口、控制顺序与编码复用
 ├── terminalStateStore.js          工作区内终端记录的文件读写
 └── *.test.js                      对应模块的单元测试
 ```
 
 单终端行为归 Session，跨终端策略归 Manager；系统进程是否仍在执行由进程层判断。Linux 僵尸进程已停止执行，父进程尚未回收不构成终端停止失败。
 
+`TerminalManager.terminalsById`按`terminal_id`保存`TerminalSession`资源实例，含仍保留的非运行记录；它不是聊天Session或Thread集合。管理器内部资源集合与跨层业务身份用具体资源名区分，不保留旧字段别名。
+
 工作区身份校验归`workspaceIdentity.js`；Manager、后端入口与attach静态服务直接引用，不为取得校验函数而加载Session或PTY管理链。该模块只验证显式UUID并读取现有权威身份文件，不创建身份、管理终端或补默认工作区。
 
 Manager拥有唯一在途状态保存：先登记共享Promise，同轮请求合并，再取当前终端记录串行写入；写入期间新增请求由下一轮快照覆盖，所有等待方在排空后才成功。快照或writer的同步、异步异常原样交给等待方，并释放本次Promise，让后续显式保存可恢复；不能留下旧失败或自动重试。
 
+`/health`的`terminal_count`直接读取Manager当前资源Map的大小，含仍保留的非运行记录，与列表条目数量同义；它不是活跃PTY进程数。健康计数不生成、排序终端展示快照，也不读取或过滤输出buffer。
+
 Session的`toRecord()`是恢复事实的唯一组装入口，供Manager落盘；原始输出只存`buffer`一份。`snapshot()`在该记录上补齐`display_buffer`、当前`client_count`和`pty_worker_pid`供HTTP/WebSocket/模型读取；这些派生或连接观察不写入状态文件。恢复时从原始输出计算展示、从当前句柄取得连接信息，不维护第二份展示正文或持久连接状态。
 
-文本处理先区分“字节边界”和“命令协议语义”：前者归 `terminalUtf8Output.js`，后者归 `../shared/commandText.js`。两者只接收值并返回值，不持有资源或状态；Session决定何时解析并更新命令事实，Multiplexer决定输出顺序和消费窗口。展示文本只过滤含标记的整行，不替换原始buffer；输入标签是最后一个去掉首尾空白的非空行，不是命令执行结果。
+文本处理先区分“字节边界”和“命令协议语义”：前者归 `output/terminalUtf8Output.js`，后者归 `../shared/commandText.js`。两者只接收值并返回值，不持有资源或状态；Session决定何时解析并更新命令事实，Multiplexer决定输出顺序和消费窗口。展示文本只过滤含标记的整行，不替换原始buffer；输入标签是最后一个去掉首尾空白的非空行，不是命令执行结果。
 
 输入标签按CR、LF或CRLF分行，先跳过尾部空白再定位最后有效行，不为全部输入做归一化或逐行分配；无换行走原生查询快速路径。Unicode空白只按trim语义处理，不把行内Unicode分隔符或ANSI当成新行。此结果只更新last_input，交给PTY及广播的输入仍是完整原文；全空白输入不清空既有标签及其来源时刻。
 
@@ -48,19 +53,7 @@ Session的`toRecord()`是恢复事实的唯一组装入口，供Manager落盘；
 
 输出身份分三层理解：worker的`outputPacketId`（IPC字段仍为`messageId`）逐包计费，宿主结束本次分发后逐包回执；Session另行产生输出`sequence`，UI按该序号累计确认；聊天消息ID属于业务层，与前两者无关。worker的`ptyOutputPaused`仅暂停node-pty输出读取，未确认UTF-8字节超过高水位时暂停、低于低水位时恢复，不表示OS进程或Job暂停。重复或未知IPC包回执不重复释放字节额度。
 
-文本字节边界归 `terminalUtf8Output.js`，输出顺序、游标和背压归 Multiplexer；缓冲截断只能从完整字符开始，保留正文不得因解码替换字符而再次超过上限。无需切块的输出直接形成一个事件。
-
-尾部只保留256KiB，不应编码已经确定会丢弃的整段输入。UTF-8每个UTF-16单元至少占1字节，因此只需编码最后256Ki个单元，再按字节边界对齐；扫描与编码范围由保留上限约束。未超限字符串保持原值，超限时沿用UTF-8编码对孤立代理项的替换语义。
-
-超出64KiB的单次输出按码点宽度累计UTF-8字节，确定边界后从原字符串切片；不逐字符调用编码函数或拼接块正文。码点决定字符宽度，UTF-16偏移决定切片位置，孤立代理项按3字节计费且保留原值，不能把这两种单位混作同一偏移。
-
-输出sequence只有Session逐一递增产生，重放环只从头部淘汰，因此Multiplexer可用序号差加逻辑头偏移定位增量起点，无需从头扫描或维护第二份位置索引。淘汰立即释放正文引用，空前缀达到数组一半后集中压缩，避免大量小输出逐项shift搬移。字节窗口、ACK、控制事件顺序及缺口resync仍由同一Multiplexer处理。
-
-模型增量读取从已定位的后缀直接拼接正文，不为读取再复制事件数组或提取一份正文数组；不缓存拼接结果，不修改重放记录。字节保留上限、游标校验和缺口快照仍归同一读取入口。
-
-客户端未确认队列只记录sequence和字节数，ACK累计确认到指定序号；逻辑头游标推进后同样集中压缩。窗口计费只包含未确认后缀；resync替换整份待确认快照时必须同时归零头游标，防止旧游标跳过新快照的确认。该队列与模型读取的重放缓冲各管自己的消费状态。
-
-多个连接接收同一输出事件时，Multiplexer只在本次同步广播内复用现有协议owner生成的封包；广播返回即释放这个局部映射，重放记录不额外保留编码正文。后续ACK续传、socket重试和重连仍按各自游标重新编码；没有连接时不编码输出，不另建持久传输缓存或第二套序列化合同。
+输出的字节边界、增量重放与逐连接流控集中在`output/`，见[输出目录约束](output/AGENTS.md)。Session持有PTY事实与输出序号，output管理保留字节及各消费者的游标，协议编码仍只引用`../protocol/messages.js`。
 
 ## 可修改内容
 

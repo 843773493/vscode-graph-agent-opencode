@@ -102,7 +102,7 @@ test("终端落盘只保存一份原始输出，重启重建完整展示快照",
       completion_event_id: "terminal_completed:term_durable_output:9",
     },
   });
-  manager.sessions.set(session.id, session);
+  manager.terminalsById.set(session.id, session);
   const expectedSnapshot = session.snapshot();
   assert.equal(expectedSnapshot.buffer, rawOutput);
   assert.equal(expectedSnapshot.display_buffer, "中文输出\r\n");
@@ -150,7 +150,7 @@ test("工作区达到 64 个 PTY 时拒绝创建且不隐式终止任何资源",
   const terminated = [];
   for (let index = 0; index < MAX_ACTIVE_EXECUTIONS_PER_WORKSPACE; index += 1) {
     const id = `term_${String(index).padStart(2, "0")}`;
-    manager.sessions.set(id, {
+    manager.terminalsById.set(id, {
       id,
       status: "running",
       lastCommandStatus: "running",
@@ -167,7 +167,7 @@ test("工作区达到 64 个 PTY 时拒绝创建且不隐式终止任何资源",
 
   await assert.rejects(manager.ensureExecutionCapacity(), /工作区终端进程已达到上限/);
   assert.deepEqual(terminated, []);
-  assert.equal(manager.sessions.size, MAX_ACTIVE_EXECUTIONS_PER_WORKSPACE);
+  assert.equal(manager.terminalsById.size, MAX_ACTIVE_EXECUTIONS_PER_WORKSPACE);
 });
 
 test("已完成命令的存活 shell 仍占用 PTY 上限", async () => {
@@ -176,7 +176,7 @@ test("已完成命令的存活 shell 仍占用 PTY 上限", async () => {
     workspaceId: "00000000-0000-4000-8000-000000000001",
   });
   for (let index = 0; index < MAX_ACTIVE_EXECUTIONS_PER_WORKSPACE; index += 1) {
-    manager.sessions.set(`term_${index}`, {
+    manager.terminalsById.set(`term_${index}`, {
       status: "running",
       lastCommandStatus: "completed",
       lastUsedAt: new Date(index * 1_000).toISOString(),
@@ -194,7 +194,7 @@ test("终端管理器只保留有界的近期终态历史", async () => {
   const disposed = [];
   for (let index = 0; index < MAX_RETAINED_TERMINAL_HISTORY + 2; index += 1) {
     const id = `term_${index}`;
-    manager.sessions.set(id, {
+    manager.terminalsById.set(id, {
       id,
       status: "deleted",
       updatedAt: new Date(index * 1_000).toISOString(),
@@ -209,7 +209,7 @@ test("终端管理器只保留有界的近期终态历史", async () => {
 
   await manager.pruneTerminalHistory();
 
-  assert.equal(manager.sessions.size, MAX_RETAINED_TERMINAL_HISTORY);
+  assert.equal(manager.terminalsById.size, MAX_RETAINED_TERMINAL_HISTORY);
   assert.deepEqual(disposed, ["term_1", "term_0"]);
 });
 
@@ -234,7 +234,7 @@ test("完成 steering 返回统一的终端信封", async () => {
       return snapshot;
     },
   };
-  manager.sessions.set("term_steering", session);
+  manager.terminalsById.set("term_steering", session);
 
   const result = await manager.finishSteering("term_steering", {
     completionEventId: "terminal_completed:term_steering:4",
@@ -269,11 +269,11 @@ test("停止但未删除的 owner 资源不会被历史裁剪", async () => {
   const manager = new TerminalManager({ workspaceRoot: createTerminalTestWorkspace(), workspaceId: "00000000-0000-4000-8000-000000000001" });
   for (let index = 0; index < MAX_RETAINED_TERMINAL_HISTORY + 10; index += 1) {
     const id = `term_stopped_${index}`;
-    manager.sessions.set(id, { id, status: "terminated", toRecord: () => ({ terminal_id: id }) });
+    manager.terminalsById.set(id, { id, status: "terminated", toRecord: () => ({ terminal_id: id }) });
   }
   await manager.pruneTerminalHistory();
   await manager.ensureExecutionCapacity();
-  assert.equal(manager.sessions.size, MAX_RETAINED_TERMINAL_HISTORY + 10);
+  assert.equal(manager.terminalsById.size, MAX_RETAINED_TERMINAL_HISTORY + 10);
 });
 
 test("grant 一次消费，过期或 owner 版本变化立即失效", async () => {
@@ -284,7 +284,7 @@ test("grant 一次消费，过期或 owner 版本变化立即失效", async () =
     terminal_id: id, workspace_id: workspaceId, transport_owner_revision: 1,
     reconciliation_status: "verified", cwd_relative: ".", status: "running",
   } });
-  manager.sessions.set(id, terminal);
+  manager.terminalsById.set(id, terminal);
   const first = manager.issueTransportGrant(id, { ownerRevision: 1, association: "opaque-owner-ref" });
   assert.equal(manager.consumeTransportGrant(id, first.grant_token).association, "opaque-owner-ref");
   assert.throws(() => manager.consumeTransportGrant(id, first.grant_token), /已消费/);
@@ -304,7 +304,7 @@ test("同轮保存只写最终状态，全部等待方在写入完成后返回",
   const manager = new TerminalManager({ workspaceRoot: createTerminalTestWorkspace(), workspaceId: "00000000-0000-4000-8000-000000000001" });
   let version = 0;
   const saved = [];
-  manager.sessions.set("term_save", { toRecord: () => ({ version }) });
+  manager.terminalsById.set("term_save", { toRecord: () => ({ version }) });
   manager.stateStore.write = async (payload) => { saved.push(structuredClone(payload.terminals)); };
 
   const requests = Array.from({ length: 100 }, (_, index) => {
@@ -326,7 +326,7 @@ test("写入期间的新保存请求串行落盘，等待方不提前成功", as
   let completed = 0;
   const saved = [];
   const requests = [];
-  manager.sessions.set("term_save", { toRecord: () => ({ version }) });
+  manager.terminalsById.set("term_save", { toRecord: () => ({ version }) });
   manager.stateStore.write = async (payload) => {
     const index = saved.length;
     saved.push(structuredClone(payload.terminals));
@@ -366,7 +366,7 @@ for (const failureStage of ["snapshot", "sync_writer", "async_writer"]) {
     const failure = new Error(`保存失败: ${failureStage}`);
     let shouldFail = true;
     let saved = null;
-    manager.sessions.set("term_failure", { toRecord: () => {
+    manager.terminalsById.set("term_failure", { toRecord: () => {
       if (shouldFail && failureStage === "snapshot") throw failure;
       return { version: 2 };
     } });

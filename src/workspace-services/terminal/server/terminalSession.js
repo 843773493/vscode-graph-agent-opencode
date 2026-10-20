@@ -5,8 +5,8 @@ import {
 import { existsSync, statSync } from "node:fs";
 import path from "node:path";
 import { IsolatedPtyProcess } from "./isolatedPtyProcess.js";
-import { TerminalOutputMultiplexer } from "./terminalOutputMultiplexer.js";
-import { splitTerminalOutputChunks, trimTerminalBuffer } from "./terminalUtf8Output.js";
+import { TerminalOutputMultiplexer } from "./output/terminalOutputMultiplexer.js";
+import { splitTerminalOutputChunks, trimTerminalBuffer } from "./output/terminalUtf8Output.js";
 import {
   commandMarkersFromInput,
   lastNonEmptyInputLine,

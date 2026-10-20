@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
 import { TerminalOutputMultiplexer } from "./terminalOutputMultiplexer.js";
-import { encodeTerminalServerMessage } from "../protocol/messages.js";
+import { encodeTerminalServerMessage } from "../../protocol/messages.js";
 
 function createEncodedClient() {
   return {

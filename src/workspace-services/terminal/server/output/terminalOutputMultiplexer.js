@@ -1,9 +1,24 @@
-import { encodeTerminalServerMessage } from "../protocol/messages.js";
+import { encodeTerminalServerMessage } from "../../protocol/messages.js";
 
 const MAX_REPLAY_BYTES = 512 * 1024;
 const MAX_CLIENT_UNACKNOWLEDGED_BYTES = 256 * 1024;
 const MAX_CONTROL_QUEUE_BYTES = 256 * 1024;
 const SOCKET_RETRY_DELAY_MS = 50;
+
+/**
+ * 单个attach连接的输出交付状态，不是Terminal生命周期或模型读取游标。
+ * @typedef {object} TerminalClientFlowState
+ * @property {number} acknowledgedSequence 连接的累计确认游标，接入时以重放起点或当前快照序号初始化；不表示屏幕已绘制或模型已读取。
+ * @property {number} sentSequence 已交给连接的输出序号，含attached/resync快照代表的消费基线。
+ * @property {Array<{sequence: number, byteCount: number}|null>} inFlightEvents 未确认计费记录只含序号和UTF-8字节数，已确认前缀置null，不保存正文。
+ * @property {number} inFlightEventStartIndex 未确认记录在数组中的逻辑起点。
+ * @property {number} unacknowledgedBytes 未确认正文的UTF-8字节总数，快照同样计费。
+ * @property {boolean} attachedMessageSent attached消息是否已交给连接，不代表客户端已确认。
+ * @property {"ack"|"socket"|null} blockedOn 当前停止发送的原因；等待ACK与等待socket可写分别恢复。
+ * @property {ReturnType<typeof setTimeout>|null} socketRetryTimer socket拒收后的重试句柄，不是ACK超时。
+ * @property {Array<{afterSequence: number, message: object, byteCount: number}>} controlQueue 按输出序号屏障排队的控制消息。
+ * @property {number} controlQueueBytes 控制队列按JSON正文计费的UTF-8字节数。
+ */
 
 export class TerminalOutputMultiplexer {
   constructor({
@@ -17,7 +32,8 @@ export class TerminalOutputMultiplexer {
     this.terminalId = terminalId;
     this.getSequence = getSequence;
     this.getSnapshot = getSnapshot;
-    this.clients = new Map();
+    /** @type {Map<object, TerminalClientFlowState>} */
+    this.clientFlowStates = new Map();
     // Session逐一递增sequence；淘汰只推进头游标，避免逐事件搬移整个数组。
     this.outputEvents = [];
     this.outputEventStartIndex = 0;
@@ -28,7 +44,7 @@ export class TerminalOutputMultiplexer {
   }
 
   get clientCount() {
-    return this.clients.size;
+    return this.clientFlowStates.size;
   }
 
   readAfter(afterSequence) {
@@ -80,25 +96,26 @@ export class TerminalOutputMultiplexer {
   }
 
   async attach(client, { afterSequence = null, beforeNotify = null } = {}) {
-    const state = {
+    /** @type {TerminalClientFlowState} */
+    const clientFlow = {
       acknowledgedSequence: 0,
       sentSequence: 0,
       inFlightEvents: [],
       inFlightEventStartIndex: 0,
       unacknowledgedBytes: 0,
-      ready: false,
-      blocked: null,
-      retryTimer: null,
+      attachedMessageSent: false,
+      blockedOn: null,
+      socketRetryTimer: null,
       controlQueue: [],
       controlQueueBytes: 0,
     };
-    this.clients.set(client, state);
+    this.clientFlowStates.set(client, clientFlow);
     try {
       if (beforeNotify) {
         await beforeNotify();
       }
     } catch (error) {
-      this.clients.delete(client);
+      this.clientFlowStates.delete(client);
       throw error;
     }
     const currentSequence = this.getSequence();
@@ -110,8 +127,8 @@ export class TerminalOutputMultiplexer {
     const canReplay = requestedSequence !== null
       && requestedSequence <= currentSequence
       && requestedSequence >= earliestSequence - 1;
-    state.acknowledgedSequence = canReplay ? requestedSequence : currentSequence;
-    state.sentSequence = canReplay ? requestedSequence : currentSequence;
+    clientFlow.acknowledgedSequence = canReplay ? requestedSequence : currentSequence;
+    clientFlow.sentSequence = canReplay ? requestedSequence : currentSequence;
     const snapshot = this.getSnapshot();
     const attachedSnapshot = canReplay
       ? { ...snapshot, buffer: "", display_buffer: "" }
@@ -123,29 +140,29 @@ export class TerminalOutputMultiplexer {
       replayMode: canReplay ? "incremental" : "snapshot",
       resumeFromSequence: canReplay ? requestedSequence : currentSequence,
     })) {
-      this.clients.delete(client);
+      this.clientFlowStates.delete(client);
       throw new Error(`发送终端 attached 消息失败: terminal_id=${this.terminalId}`);
     }
-    state.ready = true;
+    clientFlow.attachedMessageSent = true;
     if (!canReplay && requestedSequence !== null) {
-      state.inFlightEvents.push({
+      clientFlow.inFlightEvents.push({
         sequence: currentSequence,
         byteCount: Buffer.byteLength(snapshot.buffer || "", "utf8"),
       });
-      state.unacknowledgedBytes = state.inFlightEvents[0].byteCount;
-      state.blocked = "ack";
+      clientFlow.unacknowledgedBytes = clientFlow.inFlightEvents[0].byteCount;
+      clientFlow.blockedOn = "ack";
     }
-    if (state.blocked === null) {
-      this.flushClientReplay(client, state);
+    if (clientFlow.blockedOn === null) {
+      this.flushClientReplay(client, clientFlow);
     }
   }
 
   async detach(client, { beforeNotify = null } = {}) {
-    const state = this.clients.get(client);
-    if (state && state.retryTimer !== null) {
-      clearTimeout(state.retryTimer);
+    const clientFlow = this.clientFlowStates.get(client);
+    if (clientFlow && clientFlow.socketRetryTimer !== null) {
+      clearTimeout(clientFlow.socketRetryTimer);
     }
-    this.clients.delete(client);
+    this.clientFlowStates.delete(client);
     if (beforeNotify) {
       await beforeNotify();
     }
@@ -156,38 +173,38 @@ export class TerminalOutputMultiplexer {
   }
 
   acknowledge(client, sequence) {
-    const state = this.clients.get(client);
-    if (!state) {
+    const clientFlow = this.clientFlowStates.get(client);
+    if (!clientFlow) {
       throw new Error(`客户端尚未 attach 到终端: terminal_id=${this.terminalId}`);
     }
-    if (!Number.isInteger(sequence) || sequence < 0 || sequence > state.sentSequence) {
+    if (!Number.isInteger(sequence) || sequence < 0 || sequence > clientFlow.sentSequence) {
       throw new Error(
-        `终端 ACK sequence 无效: terminal_id=${this.terminalId}, sequence=${sequence}, sent_sequence=${state.sentSequence}`,
+        `终端 ACK sequence 无效: terminal_id=${this.terminalId}, sequence=${sequence}, sent_sequence=${clientFlow.sentSequence}`,
       );
     }
-    state.acknowledgedSequence = Math.max(state.acknowledgedSequence, sequence);
+    clientFlow.acknowledgedSequence = Math.max(clientFlow.acknowledgedSequence, sequence);
     while (
-      state.inFlightEventStartIndex < state.inFlightEvents.length
-      && state.inFlightEvents[state.inFlightEventStartIndex].sequence <= state.acknowledgedSequence
+      clientFlow.inFlightEventStartIndex < clientFlow.inFlightEvents.length
+      && clientFlow.inFlightEvents[clientFlow.inFlightEventStartIndex].sequence <= clientFlow.acknowledgedSequence
     ) {
-      const acknowledged = state.inFlightEvents[state.inFlightEventStartIndex];
-      state.inFlightEvents[state.inFlightEventStartIndex] = null;
-      state.inFlightEventStartIndex += 1;
-      state.unacknowledgedBytes = Math.max(
-        state.unacknowledgedBytes - acknowledged.byteCount,
+      const acknowledged = clientFlow.inFlightEvents[clientFlow.inFlightEventStartIndex];
+      clientFlow.inFlightEvents[clientFlow.inFlightEventStartIndex] = null;
+      clientFlow.inFlightEventStartIndex += 1;
+      clientFlow.unacknowledgedBytes = Math.max(
+        clientFlow.unacknowledgedBytes - acknowledged.byteCount,
         0,
       );
     }
     // ACK可能逐条到达；和重放缓冲一样，集中压缩以避免反复搬移未确认事件。
     if (
-      state.inFlightEventStartIndex > 0
-      && state.inFlightEventStartIndex * 2 >= state.inFlightEvents.length
+      clientFlow.inFlightEventStartIndex > 0
+      && clientFlow.inFlightEventStartIndex * 2 >= clientFlow.inFlightEvents.length
     ) {
-      state.inFlightEvents = state.inFlightEvents.slice(state.inFlightEventStartIndex);
-      state.inFlightEventStartIndex = 0;
+      clientFlow.inFlightEvents = clientFlow.inFlightEvents.slice(clientFlow.inFlightEventStartIndex);
+      clientFlow.inFlightEventStartIndex = 0;
     }
-    state.blocked = null;
-    this.flushClientReplay(client, state);
+    clientFlow.blockedOn = null;
+    this.flushClientReplay(client, clientFlow);
   }
 
   /**
@@ -219,36 +236,39 @@ export class TerminalOutputMultiplexer {
       this.outputEventStartIndex = 0;
     }
     // 只在本次同步广播内共享封包，不把编码正文留在重放缓冲中。
-    const encodedOutputs = this.clients.size > 1 ? new Map() : null;
-    for (const [client, state] of this.clients) {
-      if (!state.ready || state.blocked !== null) {
+    const encodedOutputs = this.clientFlowStates.size > 1 ? new Map() : null;
+    for (const [client, clientFlow] of this.clientFlowStates) {
+      if (!clientFlow.attachedMessageSent || clientFlow.blockedOn !== null) {
         continue;
       }
-      this.flushClientReplay(client, state, encodedOutputs);
+      this.flushClientReplay(client, clientFlow, encodedOutputs);
     }
   }
 
   broadcast(message) {
+    if (this.clientFlowStates.size === 0) {
+      return;
+    }
     const afterSequence = this.getSequence();
     const byteCount = Buffer.byteLength(JSON.stringify(message), "utf8");
-    for (const [client, state] of this.clients) {
-      if (state.controlQueueBytes + byteCount > this.maxControlQueueBytes) {
-        this.disconnectSlowClient(client, state);
+    for (const [client, clientFlow] of this.clientFlowStates) {
+      if (clientFlow.controlQueueBytes + byteCount > this.maxControlQueueBytes) {
+        this.disconnectSlowClient(client, clientFlow);
         continue;
       }
-      state.controlQueue.push({ afterSequence, message, byteCount });
-      state.controlQueueBytes += byteCount;
-      if (state.ready && state.blocked === null) {
-        this.flushClientReplay(client, state);
+      clientFlow.controlQueue.push({ afterSequence, message, byteCount });
+      clientFlow.controlQueueBytes += byteCount;
+      if (clientFlow.attachedMessageSent && clientFlow.blockedOn === null) {
+        this.flushClientReplay(client, clientFlow);
       }
     }
   }
 
-  flushClientReplay(client, state, encodedOutputs = null) {
+  flushClientReplay(client, clientFlow, encodedOutputs = null) {
     const currentSequence = this.getSequence();
     const earliestSequence = this.outputEvents[this.outputEventStartIndex]?.sequence
       ?? currentSequence + 1;
-    if (state.sentSequence < earliestSequence - 1) {
+    if (clientFlow.sentSequence < earliestSequence - 1) {
       const snapshot = this.getSnapshot();
       const sent = client.sendJson({
         type: "resync",
@@ -256,34 +276,34 @@ export class TerminalOutputMultiplexer {
         snapshot,
       });
       if (!sent) {
-        this.scheduleSocketRetry(client, state);
+        this.scheduleSocketRetry(client, clientFlow);
         return;
       }
-      state.sentSequence = currentSequence;
-      state.inFlightEvents = [{
+      clientFlow.sentSequence = currentSequence;
+      clientFlow.inFlightEvents = [{
         sequence: currentSequence,
         byteCount: Buffer.byteLength(snapshot.buffer || "", "utf8"),
       }];
-      state.inFlightEventStartIndex = 0;
-      state.unacknowledgedBytes = state.inFlightEvents[0].byteCount;
-      state.blocked = "ack";
+      clientFlow.inFlightEventStartIndex = 0;
+      clientFlow.unacknowledgedBytes = clientFlow.inFlightEvents[0].byteCount;
+      clientFlow.blockedOn = "ack";
       return;
     }
     for (
-      let index = this.outputEventStartIndex + state.sentSequence - earliestSequence + 1;
+      let index = this.outputEventStartIndex + clientFlow.sentSequence - earliestSequence + 1;
       index < this.outputEvents.length;
       index += 1
     ) {
       const event = this.outputEvents[index];
-      if (!this.flushControlsThrough(client, state, event.sequence - 1)) {
+      if (!this.flushControlsThrough(client, clientFlow, event.sequence - 1)) {
         return;
       }
       if (
-        state.inFlightEventStartIndex < state.inFlightEvents.length
-        && state.unacknowledgedBytes + event.byteCount
+        clientFlow.inFlightEventStartIndex < clientFlow.inFlightEvents.length
+        && clientFlow.unacknowledgedBytes + event.byteCount
           > this.maxClientUnacknowledgedBytes
       ) {
-        state.blocked = "ack";
+        clientFlow.blockedOn = "ack";
         return;
       }
       let encoded = encodedOutputs?.get(event);
@@ -293,69 +313,69 @@ export class TerminalOutputMultiplexer {
         encodedOutputs?.set(event, encoded);
       }
       if (!client.sendRaw(encoded)) {
-        this.scheduleSocketRetry(client, state);
+        this.scheduleSocketRetry(client, clientFlow);
         return;
       }
-      state.sentSequence = event.sequence;
-      state.inFlightEvents.push({
+      clientFlow.sentSequence = event.sequence;
+      clientFlow.inFlightEvents.push({
         sequence: event.sequence,
         byteCount: event.byteCount,
       });
-      state.unacknowledgedBytes += event.byteCount;
+      clientFlow.unacknowledgedBytes += event.byteCount;
     }
-    if (!this.flushControlsThrough(client, state, currentSequence)) {
+    if (!this.flushControlsThrough(client, clientFlow, currentSequence)) {
       return;
     }
-    state.blocked = null;
+    clientFlow.blockedOn = null;
   }
 
-  flushControlsThrough(client, state, sequence) {
+  flushControlsThrough(client, clientFlow, sequence) {
     while (
-      state.controlQueue.length > 0
-      && state.controlQueue[0].afterSequence <= sequence
+      clientFlow.controlQueue.length > 0
+      && clientFlow.controlQueue[0].afterSequence <= sequence
     ) {
-      if (!client.sendJson(state.controlQueue[0].message)) {
-        this.scheduleSocketRetry(client, state);
+      if (!client.sendJson(clientFlow.controlQueue[0].message)) {
+        this.scheduleSocketRetry(client, clientFlow);
         return false;
       }
-      const sent = state.controlQueue.shift();
-      state.controlQueueBytes = Math.max(state.controlQueueBytes - sent.byteCount, 0);
+      const sent = clientFlow.controlQueue.shift();
+      clientFlow.controlQueueBytes = Math.max(clientFlow.controlQueueBytes - sent.byteCount, 0);
     }
     return true;
   }
 
-  scheduleSocketRetry(client, state) {
-    state.blocked = "socket";
-    if (state.retryTimer !== null) {
+  scheduleSocketRetry(client, clientFlow) {
+    clientFlow.blockedOn = "socket";
+    if (clientFlow.socketRetryTimer !== null) {
       return;
     }
-    state.retryTimer = setTimeout(() => {
-      state.retryTimer = null;
-      if (this.clients.get(client) !== state) {
+    clientFlow.socketRetryTimer = setTimeout(() => {
+      clientFlow.socketRetryTimer = null;
+      if (this.clientFlowStates.get(client) !== clientFlow) {
         return;
       }
-      state.blocked = null;
-      this.flushClientReplay(client, state);
+      clientFlow.blockedOn = null;
+      this.flushClientReplay(client, clientFlow);
     }, this.socketRetryDelayMs);
   }
 
-  disconnectSlowClient(client, state) {
-    if (state.retryTimer !== null) {
-      clearTimeout(state.retryTimer);
+  disconnectSlowClient(client, clientFlow) {
+    if (clientFlow.socketRetryTimer !== null) {
+      clearTimeout(clientFlow.socketRetryTimer);
     }
-    this.clients.delete(client);
+    this.clientFlowStates.delete(client);
     client.close(
       1013,
-      `终端控制事件积压超过上限: terminal_id=${this.terminalId}, bytes=${state.controlQueueBytes}`,
+      `终端控制事件积压超过上限: terminal_id=${this.terminalId}, bytes=${clientFlow.controlQueueBytes}`,
     );
   }
 
   dispose() {
-    for (const state of this.clients.values()) {
-      if (state.retryTimer !== null) {
-        clearTimeout(state.retryTimer);
+    for (const clientFlow of this.clientFlowStates.values()) {
+      if (clientFlow.socketRetryTimer !== null) {
+        clearTimeout(clientFlow.socketRetryTimer);
       }
     }
-    this.clients.clear();
+    this.clientFlowStates.clear();
   }
 }
