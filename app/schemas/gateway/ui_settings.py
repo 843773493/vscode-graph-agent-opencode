@@ -4,7 +4,16 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from app.core.resource_uri import parse_resource_uri
 from app.gateway.theme.defaults import DEFAULT_THEME_BACKGROUND_OVERLAY
+
+
+def _file_reference(value: str) -> str:
+    # 设置只保存 owner 已返回的地址；原生输入必须先经过普通文件入口。
+    resource = parse_resource_uri(value)
+    if resource.kind != "files":
+        raise ValueError("UI 文件引用必须使用 files 资源 URI")
+    return resource.display_uri
 
 
 class WebUIMainAreaRatiosDTO(BaseModel):
@@ -74,6 +83,16 @@ class WebUILayoutSettingsDTO(BaseModel):
         | None
     ) = None
 
+    @field_validator("workspace_preview_file_paths")
+    @classmethod
+    def validate_preview_files(cls, values: list[str] | None) -> list[str] | None:
+        return [_file_reference(value) for value in values] if values is not None else None
+
+    @field_validator("workspace_preview_active_file_path")
+    @classmethod
+    def validate_active_preview_file(cls, value: str | None) -> str | None:
+        return _file_reference(value) if value is not None else None
+
     @field_validator("auxiliary_tab_order")
     @classmethod
     def validate_auxiliary_tab_order(
@@ -135,7 +154,7 @@ class WebUIWorkspaceFileTreeSettingsDTO(BaseModel):
                 raise ValueError("文件树工作区 ID 长度不能超过 4096")
             if len(paths) > 1000 or any(len(path) > 4096 for path in paths):
                 raise ValueError("单个工作区最多保存 1000 个长度不超过 4096 的路径")
-            normalized[workspace_id] = sorted(set(paths))
+            normalized[workspace_id] = sorted({_file_reference(path) for path in paths})
         return normalized
 
 

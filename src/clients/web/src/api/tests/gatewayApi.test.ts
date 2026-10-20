@@ -696,11 +696,11 @@ describe("Gateway UI 设置读取边界", () => {
   });
 
   test("合法的展开态读取后按工作区归一去重排序", async () => {
-    stubUiSettingsFetch({ "ws-a": ["src", "", "src"] });
+    stubUiSettingsFetch({ "ws-a": ["boxteam://workspace/ws-a/resources/files/root/src", "boxteam://workspace/ws-a/resources/files/root", "boxteam://workspace/ws-a/resources/files/root/src"] });
 
     const settings = await getGatewayUiSettings(49_921);
     expect(settings.workspace_file_tree.expanded_paths_by_workspace)
-      .toEqual({ "ws-a": ["", "src"] });
+      .toEqual({ "ws-a": ["boxteam://workspace/ws-a/resources/files/root", "boxteam://workspace/ws-a/resources/files/root/src"] });
   });
 });
 

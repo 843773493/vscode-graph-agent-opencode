@@ -5,6 +5,8 @@ from __future__ import annotations
 import logging
 
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.exception_handlers import request_validation_exception_handler
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
@@ -50,6 +52,21 @@ async def gateway_http_exception_handler(
             "request_id": request_id,
         },
     )
+
+
+@app.exception_handler(RequestValidationError)
+async def gateway_request_validation_exception_handler(
+    request: Request,
+    error: RequestValidationError,
+) -> JSONResponse:
+    if request.method == "PUT" and request.url.path == "/api/gateway/ui-settings":
+        # 设置拒绝原生文件引用时，只报告字段和类别；输入及 grammar 消息可能含真实位置。
+        return JSONResponse(status_code=422, content={
+            "detail": [{"loc": failure["loc"], "type": failure["type"], "msg": "UI 设置字段校验失败"}
+                       for failure in error.errors()],
+            "request_id": get_request_id(request),
+        })
+    return await request_validation_exception_handler(request, error)
 
 
 register_gateway_routes(app)

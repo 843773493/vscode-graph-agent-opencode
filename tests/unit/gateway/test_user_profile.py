@@ -51,6 +51,41 @@ def test_ui_settings_round_trip_does_not_store_native_directory_history(user_pro
     assert reopened.read_ui_settings(user_id="user-a") == settings
 
 
+def test_file_preferences_round_trip_keeps_workspace_and_gateway_uris(user_profile_store, tmp_path):
+    workspace = "boxteam://workspace/absent-workspace/resources/files/root"
+    gateway = "boxteam://gateway/gateway_01900000000070008000000000000001/resources/files/01900000000070008000000000000001"
+    uri = gateway + "/%E4%B8%AD%20%252F.txt"
+    settings = WebUISettingsDTO(layout={"workspace_preview_file_paths": [uri],
+        "workspace_preview_active_file_path": uri},
+        workspace_file_tree={"expanded_paths_by_workspace": {"target": [workspace, gateway]}})
+    user_profile_store.write_ui_settings(user_id="user-a", settings=settings)
+    profile_path = user_profile_store.user_path("user-a") / "profile.jsonc"
+    original = profile_path.read_bytes()
+    assert str(tmp_path).encode() not in original
+    reopened = UserProfileStore(gateway_root=tmp_path / "gateway")
+    assert reopened.read_ui_settings(user_id="user-a") == settings
+    assert profile_path.read_bytes() == original
+
+
+@pytest.mark.parametrize("section,field,value", [
+    ("layout", "workspace_preview_file_paths", ["/private/native.txt"]),
+    ("layout", "workspace_preview_active_file_path", r"C:\private\native.txt"),
+    ("preferences", "workspace_file_tree", {"expanded_paths_by_workspace": {"target": ["src"]}}),
+])
+def test_obsolete_file_preferences_fail_cold_read_and_write_without_rewriting(user_profile_store, section, field, value):
+    profile_path = user_profile_store.user_path("user-a") / "profile.jsonc"
+    profile = json.loads(profile_path.read_text())
+    profile[section][field] = value
+    original = json.dumps(profile).encode()
+    profile_path.write_bytes(original)
+    reopened = UserProfileStore(gateway_root=profile_path.parent.parent.parent)
+    with pytest.raises(ValueError):
+        reopened.read_ui_settings(user_id="user-a")
+    with pytest.raises(ValueError):
+        reopened.write_ui_settings(user_id="user-a", settings=WebUISettingsDTO())
+    assert profile_path.read_bytes() == original
+
+
 def test_user_profile_rejects_obsolete_native_directory_history_without_rewriting(user_profile_store):
     profile_path = user_profile_store.user_path("user-a") / "profile.jsonc"
     profile = json.loads(profile_path.read_text())

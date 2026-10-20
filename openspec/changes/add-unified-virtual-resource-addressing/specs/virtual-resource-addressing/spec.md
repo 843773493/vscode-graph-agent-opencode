@@ -57,6 +57,12 @@
 - **WHEN** 一条持久化的 URI 指向的资源配置已被删除
 - **THEN** 该 URI 仍是合法值，读取时返回结构化「未找到」拒绝码，而不是把 URI 判定为格式非法
 
+#### Scenario: 界面偏好的文件引用必须持久化 URI
+
+- **WHEN** 文件预览页签、活动文件或文件树展开态写入、读取 Gateway 用户 profile
+- **THEN** 文件引用只接受中央 grammar 校验的 files URI，保留规范编码、固定目标与合法悬空引用；原生路径输入须先经文件 owner 取得 URI，再保存展示偏好。旧路径载荷明确失败且不改写原 profile，不猜目标工作区、不静默丢弃、不以空字符串代替目录根
+- **AND** 该入口的请求校验和 profile 冷读失败只向普通响应报告字段与错误类别，不复制真实位置；拒绝保持明确，附带同一 request_id
+
 #### Scenario: revision 不进入 URI
 
 - **WHEN** 系统需要表达某资源的精确 revision 或 hash

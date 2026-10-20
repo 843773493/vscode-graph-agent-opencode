@@ -26,7 +26,6 @@ from tests.integration.backend.sessions.test_session_communication_pipeline impo
 )
 from tests.support.api_helpers import create_session
 from tests.support.gateway_processes import (
-    acquire_gateway_guest,
     close_gateway_process,
     start_gateway_process,
 )
@@ -46,7 +45,9 @@ async def _browse(case, fixture: dict, artifacts: Path) -> dict:
     process = await asyncio.to_thread(subprocess.run, ["bun",
         "tests/integration/clients/web/workspace_files/native_directory_browser.mjs"],
         env={**os.environ, "BOXTEAM_BROWSER_BASE_URL": str(case.client.base_url),
-             "BOXTEAM_BROWSER_FIXTURE": json.dumps(fixture, ensure_ascii=False),
+             "BOXTEAM_BROWSER_FIXTURE": json.dumps({**fixture, "cookies": [
+                 {"name": cookie.name, "value": cookie.value, "url": str(case.client.base_url)}
+                 for cookie in case.client.cookies.jar]}, ensure_ascii=False),
              "BOXTEAM_BROWSER_RESULT_PATH": str(result_path),
              "BOXTEAM_BROWSER_RUNTIME_PATH": str(case.workspace.parent / "runtime/browser"),
              "PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH": executable},
@@ -78,6 +79,11 @@ def _workspace_state(response) -> dict:
 }}], indirect=True)
 async def test_unregistered_directory_browser_edit_and_shortcut_reopen(communication_case):
     case = communication_case
+    user_id = "file-preference-user"
+    created = await case.client.post("/api/gateway/users", json={"user_id": user_id, "display_name": "文件偏好验收"})
+    assert created.status_code == 200, created.text
+    access = await case.client.post(f"/api/gateway/users/{user_id}/access", json={"client_label": "文件偏好验收"})
+    assert access.status_code == 200, access.text
     external = case.workspace.parent / "未注册 目录%"
     external.mkdir(exist_ok=True)
     original, edited = "原生目录正文 Ω\n", "浏览器实际编辑 Ω\n"
@@ -89,7 +95,7 @@ async def test_unregistered_directory_browser_edit_and_shortcut_reopen(communica
     initial_state = _workspace_state(before)
     initial_registry = _registry(case.workspace)
     fixture = {"session_id": session_id, "session_title": title, "directory": str(external),
-               "file_name": file.name, "original": original, "edited": edited}
+               "file_name": file.name, "original": original, "edited": edited, "persist_files": True}
     artifacts = case.artifacts / f"run-{os.getpid()}"
     result = await _browse(case, fixture, artifacts / "edit-and-reload")
     uri = result["shortcut_uri"]
@@ -110,6 +116,43 @@ async def test_unregistered_directory_browser_edit_and_shortcut_reopen(communica
     saved = json.loads(persisted.read_text())
     assert saved["shortcuts"] == [{"path": uri, "label": external.name}]
     assert str(external) not in persisted.read_text()
+    profile_path = case.workspace.parent / "boxteam-home/state/gateway/users" / user_id / "profile.jsonc"
+    profile = json.loads(profile_path.read_text())
+    preview_uri = result["file_preferences"]["layout"]["workspace_preview_active_file_path"]
+    assert profile["layout"]["workspace_preview_file_paths"] == [preview_uri]
+    assert profile["layout"]["workspace_preview_active_file_path"] == preview_uri
+    expanded = profile["preferences"]["workspace_file_tree"]["expanded_paths_by_workspace"]
+    assert uri in next(iter(expanded.values()))
+    assert str(external) not in profile_path.read_text()
+    for field, value in (("workspace_preview_file_paths", [str(file)]), ("workspace_preview_active_file_path", str(file))):
+        original_profile = profile_path.read_bytes()
+        denied = await case.client.put("/api/gateway/ui-settings", json={"layout": {field: value}})
+        assert denied.status_code == 422, denied.text
+        assert str(external) not in denied.text
+        assert denied.json()["request_id"] == denied.headers["X-Request-ID"]
+        assert denied.json()["detail"] == [{"loc": ["body", "layout", field], "type": "value_error", "msg": "UI 设置字段校验失败"}]
+        assert profile_path.read_bytes() == original_profile
+    denied = await case.client.put("/api/gateway/ui-settings", json={"workspace_file_tree": {
+        "expanded_paths_by_workspace": {"target": [str(external)]}}})
+    assert denied.status_code == 422, denied.text
+    assert str(external) not in denied.text
+    assert denied.json()["request_id"] == denied.headers["X-Request-ID"]
+    assert denied.json()["detail"] == [{"loc": ["body", "workspace_file_tree", "expanded_paths_by_workspace"],
+                                        "type": "value_error", "msg": "UI 设置字段校验失败"}]
+    assert profile_path.read_bytes() == original_profile
+    # 损坏的旧落盘值不是本次请求输入；冷读与更新失败均不得把它回显到普通响应。
+    invalid_profile = {**profile, "layout": {**profile["layout"], "workspace_preview_file_paths": [str(file)]}}
+    invalid_bytes = json.dumps(invalid_profile).encode()
+    profile_path.write_bytes(invalid_bytes)
+    try:
+        for method, options in (("GET", {}), ("PUT", {"json": {"layout": {"workbench_view": "sessions"}}})):
+            rejected = await case.client.request(method, "/api/gateway/ui-settings", **options)
+            assert rejected.status_code == 409, rejected.text
+            assert "workspace_preview_file_paths" in rejected.text
+            assert str(external) not in rejected.text
+            assert profile_path.read_bytes() == invalid_bytes
+    finally:
+        profile_path.write_bytes(original_profile)
     # 两个 owner 均重启，新 Chromium context 没有本地快捷目录或文件内容缓存。
     await case.hard_restart()
     previous_gateway = case.gateway
@@ -120,11 +163,13 @@ async def test_unregistered_directory_browser_edit_and_shortcut_reopen(communica
         extra_env={"BOXTEAM_WEB_ASSETS": str(Path.cwd() / "src/clients/web/dist")},
     )
     assert case.gateway.process.pid != previous_gateway.process.pid
-    await acquire_gateway_guest(case.client)
+    access = await case.client.post(f"/api/gateway/users/{user_id}/takeover", json={"client_label": "冷读文件偏好验收"})
+    assert access.status_code == 200, access.text
     health = await case.client.get("/api/gateway/health")
     assert health.status_code == 200 and health.json()["data"]["gateway_id"] == case.gateway_id
     reopened = await _browse(case, {**fixture, "shortcut_uri": uri}, artifacts / "cold-reopen")
     assert reopened["shortcut_uri"] == uri and reopened["reopened_content"] == edited
+    assert reopened["file_preferences"]["layout"]["workspace_preview_active_file_path"] == preview_uri
     assert file.read_text(encoding="utf-8") == edited
     after_restart = await case.client.get("/api/gateway/workspaces")
     assert after_restart.status_code == 200, after_restart.text

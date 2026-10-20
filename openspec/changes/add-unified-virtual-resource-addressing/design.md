@@ -61,6 +61,8 @@ Gateway 在现有控制面 SQLite 中唯一保存目录 ID→原生根绑定，�
 
 文件树、编辑器、快捷方式、目录版本与 operation/SSE 统一消费 URI；删除 filesystem: 展示伪协议、绝对 root_path 和业务库 real_path 等旧引用。后台 staging 只记相对 owner 的稳定 operation/step 身份，源/目的文件记 URI。保留当前精确目录 revision、条件编辑、部分/未知效果、分页快照、去重和同 ID 恢复合同，不用改预期来掩盖失败。
 
+Gateway 用户 profile 的文件预览与目录展开引用同样只保存文件 owner 已返回的 files URI；冷读和更新共用 DTO 校验，旧路径明确失败且保留原件。设置请求及冷读错误只报告字段与类别，不把原生输入或磁盘旧位置复制到普通响应。
+
 Gateway 只为目标端现有文件 owner 提供受认证的同机临时绑定，不执行 enumerate/read/write。首次请求与后台恢复都必须能按 URI 从原生控制面取得绑定；不能只依赖一次请求注入的缓存，也不能把根复制到业务库。实际执行继续复用 WorkspaceService/WorkspaceFileOperations；执行路由是服务归属，不改变资源归属。缺绑定明确失败，不回退当前工作区。实现同批迁齐所有直接/间接消费者后下线旧路径链，不留下 URI wrapper 与旧绝对路径两套执行。
 
 ### D2：保留既有段序，scope_id 全必填

@@ -72,11 +72,11 @@ describe("持久化 id 集合切换", () => {
 describe("文件树展开态归一化", () => {
   test("合法载荷去重、稳定排序并保持每个工作区独立", () => {
     expect(normalizeExpandedPathsByWorkspace({
-      "workspace-b": ["src", "", "src"],
-      "workspace-a": ["lib"],
+      "workspace-b": ["boxteam://workspace/workspace-b/resources/files/root/src", "boxteam://workspace/workspace-b/resources/files/root", "boxteam://workspace/workspace-b/resources/files/root/src"],
+      "workspace-a": ["boxteam://workspace/workspace-a/resources/files/root/lib"],
     })).toEqual({
-      "workspace-a": ["lib"],
-      "workspace-b": ["", "src"],
+      "workspace-a": ["boxteam://workspace/workspace-a/resources/files/root/lib"],
+      "workspace-b": ["boxteam://workspace/workspace-b/resources/files/root", "boxteam://workspace/workspace-b/resources/files/root/src"],
     });
   });
 

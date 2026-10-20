@@ -26,8 +26,8 @@ const fakeUiSettings = {
   },
   workspace_file_tree: {
     expanded_paths_by_workspace: {
-      "ws-active": ["/active"],
-      "ws-other": ["/other"],
+      "ws-active": ["boxteam://workspace/ws-active/resources/files/root"],
+      "ws-other": ["boxteam://workspace/ws-other/resources/files/root"],
     },
   },
 } as unknown as WebUiSettings;
@@ -601,7 +601,7 @@ describe("Gateway 工作区删除", () => {
         expanded_root_tree_ids: ["workspace:ws-active"],
       },
       workspace_file_tree: {
-        expanded_paths_by_workspace: { "ws-active": ["/active"] },
+        expanded_paths_by_workspace: { "ws-active": ["boxteam://workspace/ws-active/resources/files/root"] },
       },
     });
   });

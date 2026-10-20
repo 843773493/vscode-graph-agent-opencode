@@ -30,7 +30,7 @@ const current: WebUiSettings = {
   },
   workspace_file_tree: {
     expanded_paths_by_workspace: {
-      "workspace-a": ["", "src"],
+      "workspace-a": ["boxteam://workspace/workspace-a/resources/files/root", "boxteam://workspace/workspace-a/resources/files/root/src"],
     },
   },
 };
@@ -74,7 +74,7 @@ test("游客设置更新保留未参与本次补丁的页面内存状态", () =>
   if (merged.session_sidebar.sort_mode !== "created") {
     throw new Error("游客侧栏更新没有应用本次返回的偏好");
   }
-  if (merged.workspace_file_tree.expanded_paths_by_workspace["workspace-a"]?.join(",") !== ",src") {
+  if (merged.workspace_file_tree.expanded_paths_by_workspace["workspace-a"]?.join(",") !== "boxteam://workspace/workspace-a/resources/files/root,boxteam://workspace/workspace-a/resources/files/root/src") {
     throw new Error("游客布局更新不应清除文件树展开状态");
   }
 });

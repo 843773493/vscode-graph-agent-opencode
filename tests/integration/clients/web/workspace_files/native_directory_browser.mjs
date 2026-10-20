@@ -21,6 +21,7 @@ let browser, context, page;
 try {
   browser = await chromium.launch({ executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH, headless: true });
   context = await browser.newContext({ viewport: { width: 1920, height: 1100 } });
+  await context.addCookies(fixture.cookies ?? []);
   page = await context.newPage();
   page.setDefaultTimeout(15_000);
   page.on("pageerror", (error) => pageErrors.push(String(error)));
@@ -46,6 +47,29 @@ try {
   await page.goto(process.env.BOXTEAM_BROWSER_BASE_URL, { waitUntil: "domcontentloaded" });
   await selectSession();
   const editor = page.locator(".workspace-preview-text-editor:visible");
+  const filePreferences = async (directoryUri) => {
+    const credential = await context.request.get(`${process.env.BOXTEAM_BROWSER_BASE_URL}/api/gateway/auth/local-credential`);
+    assert.equal(credential.status(), 200);
+    const { data: { token } } = await credential.json();
+    const deadline = Date.now() + 15_000;
+    while (Date.now() < deadline) {
+      const response = await context.request.get(`${process.env.BOXTEAM_BROWSER_BASE_URL}/api/gateway/ui-settings`, {
+        headers: { "X-Local-Token": token },
+      });
+      assert.equal(response.status(), 200, await response.text());
+      const body = await response.json();
+      assert.ok(body.request_id);
+      assert.equal(body.request_id, response.headers()["x-request-id"]);
+      assert.ok(!JSON.stringify(body).includes(fixture.directory), "UI 设置响应泄露原生绝对目录");
+      const { data } = body;
+      const active = data.layout.workspace_preview_active_file_path;
+      const expanded = Object.values(data.workspace_file_tree.expanded_paths_by_workspace).flat();
+      if (active?.startsWith(directoryUri + "/") && data.layout.workspace_preview_file_paths.includes(active)
+          && expanded.includes(directoryUri)) return data;
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    throw new Error("真实用户 profile 没有持久化文件预览及目录展开 URI");
+  };
   if (fixture.references) {
     const opened = [];
     for (const reference of fixture.references) {
@@ -128,8 +152,13 @@ try {
     assert.equal(settings.session_shortcuts.length, 1);
     shortcut = settings.session_shortcuts[0];
     assert.ok(shortcut.path.startsWith("boxteam://gateway/"));
+    if (fixture.persist_files) await filePreferences(shortcut.path);
     await page.reload({ waitUntil: "domcontentloaded" });
     await selectSession();
+  }
+  if (fixture.persist_files) {
+    await editor.waitFor();
+    assert.equal(await editor.inputValue(), fixture.edited, "页面应从用户 profile 自动恢复文件预览");
   }
   const shortcutRow = page.locator(".files-tree-shortcut .files-tree-quick-main");
   await shortcutRow.waitFor();
@@ -142,8 +171,9 @@ try {
   assert.equal(await editor.inputValue(), fixture.edited);
   await Promise.all(pending);
   assert.deepEqual(pageErrors, []);
+  const preferences = fixture.persist_files ? await filePreferences(shortcut.path) : null;
   await writeFile(output, JSON.stringify({ shortcut_uri: shortcut.path, reopened_content: await editor.inputValue(),
-    page_errors: pageErrors, exchanges }, null, 2) + "\n");
+    file_preferences: preferences, page_errors: pageErrors, exchanges }, null, 2) + "\n");
   }
   await page.screenshot({ path: `${artifacts}/native-directory-browser.png` });
 } catch (error) {

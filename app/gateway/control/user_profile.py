@@ -7,6 +7,8 @@ import tempfile
 from dataclasses import asdict, replace
 from pathlib import Path
 
+from pydantic import ValidationError
+
 from app.gateway.config import ConfiguredTheme, GatewayConfig
 from app.gateway.control.user_access import USER_ID_PATTERN
 from app.schemas.gateway.ui_settings import WebUISettingsDTO
@@ -132,19 +134,28 @@ class UserProfileStore:
         shutil.rmtree(profile_root)
 
     def read_ui_settings(self, *, user_id: str) -> WebUISettingsDTO:
-        profile = self.read_profile(user_id=user_id)
+        return self._ui_settings_from_profile(self.read_profile(user_id=user_id), user_id=user_id)
+
+    @staticmethod
+    def _ui_settings_from_profile(profile: dict[str, object], *, user_id: str) -> WebUISettingsDTO:
         preferences = profile.get("preferences", {})
         if not isinstance(preferences, dict):
             raise ValueError(f"用户 profile.preferences 必须是对象: user_id={user_id}")
-        return WebUISettingsDTO.model_validate(
-            {
-                "theme": profile.get("theme", {}),
-                "layout": profile.get("layout", {}),
-                "session_sidebar": preferences.get("session_sidebar", {}),
-                "workspace_file_tree": preferences.get("workspace_file_tree", {}),
-                "gateway_console": preferences.get("gateway_console", {}),
-            }
-        )
+        try:
+            return WebUISettingsDTO.model_validate(
+                {
+                    "theme": profile.get("theme", {}),
+                    "layout": profile.get("layout", {}),
+                    "session_sidebar": preferences.get("session_sidebar", {}),
+                    "workspace_file_tree": preferences.get("workspace_file_tree", {}),
+                    "gateway_console": preferences.get("gateway_console", {}),
+                }
+            )
+        except ValidationError as error:
+            # profile 不是请求输入；对外明确报告字段和错误类别，不回显磁盘中的原生位置。
+            failures = [{"field": ".".join(str(part) for part in failure["loc"]), "type": failure["type"]}
+                        for failure in error.errors(include_input=False, include_context=False, include_url=False)]
+            raise ValueError(f"用户 profile UI 设置校验失败: user_id={user_id}, errors={failures}") from error
 
     def write_ui_settings(
         self,
@@ -153,6 +164,8 @@ class UserProfileStore:
         settings: WebUISettingsDTO,
     ) -> None:
         profile = self.read_profile(user_id=user_id)
+        # 不能用合法新补丁覆盖损坏的旧引用，使它看起来已成功恢复。
+        self._ui_settings_from_profile(profile, user_id=user_id)
         serialized = settings.model_dump(
             mode="json",
             exclude={"theme": {"resolved_theme"}},

@@ -1,6 +1,11 @@
 import pytest
+from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
+from app.gateway.control.gateway_state import GatewayStateStore
+from app.gateway.control.user_access import UserAccessService
+from app.gateway.control.user_profile import UserProfileStore
+from app.gateway.main import app
 from app.gateway.ui_settings import merge_web_ui_settings_values
 from app.schemas.gateway.ui_settings import (
     WebUILayoutSettingsDTO,
@@ -153,3 +158,67 @@ def test_gateway_ui_settings_rejects_removed_layout_fields():
 def test_ui_settings_rejects_native_directory_history(model):
     with pytest.raises(ValidationError, match="recent_local_workspace_paths"):
         model.model_validate({"recent_local_workspace_paths": ["/private/native-directory"]})
+
+
+@pytest.fixture
+def file_preference_payload():
+    def payload(field, value):
+        if field == "expanded_paths_by_workspace":
+            return {"workspace_file_tree": {field: {"target": [value]}}}
+        return {"layout": {field: value if field.endswith("active_file_path") else [value]}}
+    return payload
+
+
+@pytest.mark.parametrize("model", [WebUISettingsDTO, WebUISettingsUpdateDTO])
+@pytest.mark.parametrize("field", ["workspace_preview_file_paths", "workspace_preview_active_file_path", "expanded_paths_by_workspace"])
+@pytest.mark.parametrize("value", [
+    "/private/native/file.txt", r"C:\private\file.txt", r"\\server\share\file.txt",
+    "src/file.txt", "", "file:///private/file.txt",
+    "boxteam://workspace/target/resources/files/root/../file.txt",
+    "boxteam://workspace/target/resources/files/root/a%2Fb.txt",
+    "boxteam://workspace/target/resources/config/workspace",
+])
+def test_ui_file_preferences_reject_paths_and_nonfile_uris(model, field, value, file_preference_payload):
+    with pytest.raises(ValidationError):
+        model.model_validate(file_preference_payload(field, value))
+
+
+def test_ui_file_preferences_preserve_target_dangling_uri_and_canonical_encoding():
+    root = "boxteam://workspace/absent-target/resources/files/root"
+    uri = root + "/%e4%b8%ad%20%252F.txt"
+    canonical = root + "/%E4%B8%AD%20%252F.txt"
+    settings = merge_web_ui_settings_values(WebUISettingsDTO(), WebUISettingsUpdateDTO(
+        layout={"workspace_preview_file_paths": [uri], "workspace_preview_active_file_path": uri},
+        workspace_file_tree={"expanded_paths_by_workspace": {"routing-target": [root, root]}}))
+    assert settings.layout.workspace_preview_file_paths == [canonical]
+    assert settings.layout.workspace_preview_active_file_path == canonical
+    assert settings.workspace_file_tree.expanded_paths_by_workspace == {"routing-target": [root]}
+
+
+@pytest.fixture
+def ui_settings_client(tmp_path, monkeypatch):
+    root = tmp_path / "gateway"
+    monkeypatch.setenv("BOXTEAM_GATEWAY_ROOT", str(root))
+    state = GatewayStateStore(path=root / "gateway.sqlite")
+    monkeypatch.setattr(app.state, "user_access_service", UserAccessService(state=state), raising=False)
+    monkeypatch.setattr(app.state, "user_profile_store", UserProfileStore(gateway_root=root), raising=False)
+    client = TestClient(app)
+    try:
+        credential = client.get("/api/gateway/auth/local-credential")
+        client.headers["X-Local-Token"] = credential.json()["data"]["token"]
+        yield client
+    finally:
+        client.close()
+        state.close()
+
+
+@pytest.mark.parametrize("field", ["workspace_preview_file_paths", "workspace_preview_active_file_path", "expanded_paths_by_workspace"])
+@pytest.mark.parametrize("value", ["/private/native.txt", r"C:\private\native.txt", "boxteam://workspace/target/resources/files/root/a%2Fb.txt"])
+def test_ui_file_preference_http_rejection_does_not_echo_input(ui_settings_client, file_preference_payload, field, value):
+    response = ui_settings_client.put("/api/gateway/ui-settings", json=file_preference_payload(field, value))
+    assert response.status_code == 422, response.text
+    assert value not in response.text
+    body = response.json()
+    assert body["request_id"] == response.headers["X-Request-ID"]
+    assert body["detail"] == [{"loc": ["body", "workspace_file_tree" if field == "expanded_paths_by_workspace" else "layout", field],
+                               "type": "value_error", "msg": "UI 设置字段校验失败"}]
