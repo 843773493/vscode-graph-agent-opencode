@@ -258,7 +258,7 @@ class RolloutStorage(
             return self._locks.setdefault(
                 key,
                 _RolloutOperationLock(
-                    self.root(session_id, thread_id=owner_thread_id).parent
+                    self.root(session_id, checkpoint_ns, thread_id=owner_thread_id).parent
                     / ".rollout.write.lock",
                     timeout_seconds=_ROLLOUT_FILE_LOCK_TIMEOUT_SECONDS,
                 ),
