@@ -15,6 +15,9 @@ from collections.abc import Iterator
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+# TODO（依赖元数据）：wcmatch 已由固定 DeepAgents 引入；根包动态 metadata 构建失败，修复构建后登记直接依赖。
+from wcmatch import glob as wcglob
+
 from app.core.distribution_identity import load_distribution_id
 from app.core.exceptions import ForbiddenError
 from app.core.resource_uri import (
@@ -23,6 +26,7 @@ from app.core.resource_uri import (
     resource_display_uri,
 )
 from app.schemas.internal_v2.resource_navigation import (
+    ResourceNavigationMatchDTO,
     ResourceNavigationNodeDTO,
     ResourceNavigationRequest,
     ResourceNavigationResultDTO,
@@ -179,12 +183,14 @@ class ResourceNavigation:
         prefix_checked = offset == 0
         consumed, consumed_prefix = 0, prefix.hexdigest()
         entries: list[ResourceNavigationNodeDTO] = []
+        matches: list[ResourceNavigationMatchDTO] = []
+        seen: set[str] = set()
         # 预留固定长度的续页及截断字段，序列化后的实际正文仍在 _response 核验。
         response_bytes = self._size(ResourceNavigationResultDTO(
             node=node, truncated=True, next_cursor="x" * 512, truncation_reason="response_byte_limit",
         ))
-        for index, (child_node, metadata) in enumerate(self._walk(root, children, parsed, request, deadline), start=1):
-            prefix.update(json.dumps((child_node.uri, metadata), separators=(",", ":")).encode())
+        for index, (child_node, metadata, match) in enumerate(self._search_items(root, children, parsed, node, request, deadline), start=1):
+            prefix.update(json.dumps((child_node.uri, metadata, match.model_dump() if match is not None else None), separators=(",", ":")).encode())
             if index <= offset:
                 if index == offset:
                     prefix_checked = prefix.hexdigest() == expected_prefix
@@ -192,24 +198,96 @@ class ResourceNavigation:
                         raise ResourceFileOperationError("execution_failed", "目录已改变，不能沿旧 cursor 续页", reason="stale_cursor")
                     consumed, consumed_prefix = index, prefix.hexdigest()
                 continue
-            matches = request.operation == "list" or request.query in "/".join(parse_resource_uri(child_node.uri).tail_segments[1:])
-            if matches:
-                entry_bytes = len(child_node.model_dump_json().encode()) + 1
-                reason = "entry_limit" if len(entries) == request.limit else (
+            relative = parse_resource_uri(child_node.uri).tail_segments[len(parsed.tail_segments):]
+            name = "/".join(relative) or parsed.tail_segments[-1]
+            if request.operation == "list":
+                included = True
+            elif request.search_mode == "content":
+                included = match is not None
+            elif request.search_mode == "glob":
+                included = child_node.resource_shape == "file" and self._glob_matches(name, request.query)
+            else:
+                included = request.query in "/".join(parse_resource_uri(child_node.uri).tail_segments[1:])
+            if included:
+                entry_bytes = 0 if child_node.uri in seen else len(child_node.model_dump_json().encode()) + 1
+                if match is not None:
+                    entry_bytes += len(match.model_dump_json().encode()) + 1
+                reason = "entry_limit" if (len(matches) if request.search_mode == "content" else len(entries)) == request.limit else (
                     "response_byte_limit" if response_bytes + entry_bytes > request.max_response_bytes else None
                 )
                 if reason is not None:
                     if not entries:
                         raise ResourceFileOperationError("output_limit_exceeded", "响应预算不足以容纳一个文件节点及续页凭据", reason="response_byte_limit")
                     cursor = self._encode_cursor(binding, consumed, consumed_prefix)
-                    return self._response(ResourceNavigationResultDTO(node=node, entries=tuple(entries),
+                    return self._response(ResourceNavigationResultDTO(node=node, entries=tuple(entries), matches=tuple(matches),
                         truncated=True, next_cursor=cursor, truncation_reason=reason), request, deadline)
-                entries.append(child_node)
+                if child_node.uri not in seen:
+                    entries.append(child_node)
+                    seen.add(child_node.uri)
+                if match is not None:
+                    matches.append(match)
                 response_bytes += entry_bytes
             consumed, consumed_prefix = index, prefix.hexdigest()
         if not prefix_checked:
             raise ResourceFileOperationError("execution_failed", "目录已改变，旧 cursor 的位置不存在", reason="stale_cursor")
-        return self._response(ResourceNavigationResultDTO(node=node, entries=tuple(entries)), request, deadline)
+        return self._response(ResourceNavigationResultDTO(node=node, entries=tuple(entries), matches=tuple(matches)), request, deadline)
+
+    @staticmethod
+    def _glob_matches(name: str, pattern: str) -> bool:
+        # 保留原 glob 在各层目录匹配文件的语义；模式从不参与目标解析。
+        return wcglob.globmatch(name, "**/" + pattern.lstrip("/"), flags=wcglob.GLOBSTAR | wcglob.BRACE | wcglob.DOTGLOB)
+
+    def _search_items(
+        self, root: Path, children: tuple[str, ...], parsed: ParsedResourceUri,
+        node: ResourceNavigationNodeDTO, request: ResourceNavigationRequest, deadline: float,
+    ) -> Iterator[tuple[ResourceNavigationNodeDTO, tuple[int, ...], ResourceNavigationMatchDTO | None]]:
+        path = self._contained(root, children, parsed)
+        candidates = self._walk(root, children, parsed, request, deadline) if node.resource_shape == "directory" else iter(((node, self._stat(path)),))
+        for child, metadata in candidates:
+            self._check_deadline(deadline)
+            if request.operation != "search" or request.search_mode != "content" or child.resource_shape != "file":
+                yield child, metadata, None
+                continue
+            target = parse_resource_uri(child.uri)
+            name = "/".join(target.tail_segments[len(parsed.tail_segments):]) or target.tail_segments[-1]
+            if (request.file_glob is not None and not self._glob_matches(name, request.file_glob)) or Path(name).suffix.lower() in _MEDIA_EXTENSIONS:
+                yield child, metadata, None
+                continue
+            file = self._contained(root, target.tail_segments[1:], target)
+            with file.open("rb") as stream:
+                data = stream.read(request.max_bytes + 1)
+            self._check_deadline(deadline)
+            if self._stat(file) != metadata:
+                raise ResourceFileOperationError("execution_failed", "文件在搜索期间改变，请重新读取", reason="file_changed")
+            # 与既有 grep 一致跳过二进制；已知媒体不进入文本解码。
+            if b"\0" in data:
+                yield child, metadata, None
+                continue
+            if len(data) > request.max_bytes:
+                raise ResourceFileOperationError("output_limit_exceeded", "搜索文件超过读取上限，请缩小过滤或增加 max_bytes", reason="file_byte_limit")
+            try:
+                content = data.decode("utf-8")
+            except UnicodeDecodeError as error:
+                raise ResourceFileOperationError("invalid_encoding", "搜索文件不是有效的 UTF-8 文本", reason="utf8") from error
+            found = False
+            for line_number, line in enumerate(content.splitlines(), start=1):
+                self._check_deadline(deadline)
+                column = line.find(request.query)
+                if column < 0:
+                    continue
+                found = True
+                start = max(0, column - request.max_snippet_bytes // 8)
+                raw = line[start:].encode("utf-8")
+                snippet = codecs.getincrementaldecoder("utf-8")().decode(raw[:request.max_snippet_bytes], final=False)
+                yield child, metadata, ResourceNavigationMatchDTO(uri=child.uri, line=line_number, column=column + 1,
+                    text=snippet, snippet_start_column=start + 1, truncated=start > 0 or len(raw) > request.max_snippet_bytes)
+            if not found:
+                yield child, metadata, None
+
+    @staticmethod
+    def _stat(path: Path) -> tuple[int, ...]:
+        metadata = path.stat()
+        return metadata.st_dev, metadata.st_ino, metadata.st_mode, metadata.st_size, metadata.st_mtime_ns
 
     def _read(
         self, path: Path, node: ResourceNavigationNodeDTO,
@@ -299,16 +377,16 @@ class ResourceNavigation:
                 # 私有存储不作为文件树 child 发布；直接请求和别名仍在 _contained 拒绝。
                 if parsed.kind == "files" and child_parts[0] == ".boxteam":
                     continue
+                if request.search_mode == "content" and child.name in {".git", "node_modules", ".boxteam"}:
+                    continue
                 child_path = self._contained(root, child_parts, parsed)
                 uri = resource_display_uri(
                     scope=parsed.scope, scope_id=parsed.scope_id, kind=parsed.kind,
                     tail_segments=(parsed.tail_segments[0], *child_parts),
                 )
                 child_node = self._node(parse_resource_uri(uri), child_path)
-                metadata = child_path.stat()
                 # 仅校验续页前缀的可变视图，不作为文件内容 hash 或历史 revision。
-                yield child_node, (metadata.st_dev, metadata.st_ino, metadata.st_mode,
-                                   metadata.st_size, metadata.st_mtime_ns)
+                yield child_node, self._stat(child_path)
                 if request.operation == "search" and child_node.resource_shape == "directory":
                     pending.append(child_parts)
             if request.operation == "list":

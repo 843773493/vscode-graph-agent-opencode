@@ -10,7 +10,10 @@
 
 ## 2. 本地技能包目录与轻量读取
 
-- [ ] 2.1 接通ls/read_file/glob/grep到同一文件owner，先贯穿技能包根、SKILL.md、references/scripts多层导航；结果URI可继续访问，pattern不参与目标解析。
+- [x] 2.1 接通ls/read_file/glob/grep到同一文件owner，先贯穿技能包根、SKILL.md、references/scripts多层导航；结果URI可继续访问，pattern不参与目标解析。
+  - 2026-10-20 搜索切片：普通 glob/grep 已共用 ResourceNavigation，删除旧 DeepAgents glob 和本机 rg 执行/解析；公开 search 增加 path/glob/content 模式及 URI/行列/有界片段。单文件匹配可分页，cursor 绑定查询及限制并校验可变前缀；媒体/二进制、UTF-8、文件/扫描/回执预算明确处理。保留既有产物业务 owner，旧 scheme 全迁仍属第5组。graph revision10；共享 callable 保留标注，补真实 ToolNode 装配回归。
+  - `resource-search-unit-001` 259 passed、1 deselected/13.59秒；清晰化路径查询分支后 `resource-search-final-unit-002` 62 passed/2.22秒。`resource-search-http-001` 为1 passed、2 failed/161.65秒：新增联邦文件改变旧排序假设，现按两页核完整 URI 集合；模型真实装配暴露 partial 缺少类型标注，现保留原 callable metadata 并补回归。原件保留，修复后真实入口重验见后续证据；不把首轮局部单测称业务验收完成。
+  - 修复后 `resource-search-http-002` 为3 passed/183.76秒、exit0：模型实际执行三层ls→glob→单文件grep→read_file，核正确Gateway正文、六条owner/request_id回执及来源/activation不变；星型联邦补验远端单文件两页匹配、URI读回与source同名对照不变；正式Workspace/Gateway导航继续通过。`resource-search-graph-unit-003` 84 passed/2.78秒，含真实ToolNode装配；`resource-search-final-unit-004` 136 passed、2 failed，唯一新失败为权限测试错误向glob传入grep专有参数，纠正测试输入后 `resource-search-permissions-unit-005` 13 passed/0.78秒，完整保留输出。
   - 2026-10-20 `read_file` 后续切片：普通读取已迁到同一 Container 导航 owner，移除旧 DeepAgents 普通 read 调用；三种输入、Skill 返回 URI、行范围、严格 UTF-8、完整媒体及最终 ToolMessage 字节预算共用该链路。既有附件和工具输出仍交独立业务 owner，旧地址迁移留第5组；glob/grep 和写入未迁齐，本项保持未勾。工具面登记 graph revision9，旧 selector 明确拒绝。普通 Skill 读取提示禁令已撤销，激活仍归 skill_load。
   - 具名原件沿用同任务 `artifacts/runs/`：`resource-read-unit-002` 189项通过/9.43秒，覆盖同步/异步真实工具入口、三种输入及不同relay cwd、完整既有媒体集合、实际读取结果的Provider投影、UTF-8/BOM/换行/行范围、预算、symlink/私有存储和既有读取规则；`resource-read-contract-unit-001` 106项通过/16.19秒，覆盖真实协议字段、protobuf序列化、Gateway代理、来源连接及graph装配。均exit0；已知 SummarizationToolMiddleware denylist 基线失败仍具名排除，未改其断言。
   - `resource-read-http-001` 为7 passed、1 failed/212.94秒：5项Agent工厂、星型联邦固定目标及模型实际ls→read_file均通过，读取核目标端不同正文、owner PID、request_id和来源/activation不增加。唯一失败为旧轻量导航测试仍只接受七个响应字段，已按新增公开格式字段更新完整断言；保留该失败原件，后续定向重验见下方。`resource-read-unit-001` 新Provider测试误期望内部图片已转换成image_url，按既有完整image block合同修正后通过，未修改Provider生产实现。
@@ -22,6 +25,7 @@
 - [ ] 2.2 实现有界匹配/字节/deadline、截断及与目标查询绑定的分页；明确可变目录变化，不依赖逐文件持久快照。
   - 共享导航 owner 已实现目录/路径搜索的条目与序列化字节截断、总扫描量及单次 owner 期限；续页绑定真实 Gateway、规范根、操作、查询和全部限制。重新有界扫描时校验已消费前缀的 stat metadata，变更显式失败，结果披露 `view=live`；不把该摘要当内容 hash/revision，不建历史目录快照。UTF-8 读取只截完整字符，HTTP 层检查最终响应预算。完整模型 ls/read/glob/grep 与跨 Gateway 全程共享预算仍待迁齐，本项保持未勾。
   - TODO（续页性能）：当前每页重新执行有界扫描，长目录多页的重复工作待主体功能完成后实测优化；不得为此新增逐文件持久快照或第二目录事实源，不能把有界正确性验收称为性能达标。
+  - TODO（依赖元数据）：wcmatch 10.1 已由固定 DeepAgents 引入且存在于 uv.lock/运行环境；`uv add --no-sync wcmatch` 在根包动态 metadata 阶段因重复嵌套 node_modules 中不存在的 es-toolkit 路径失败，未改 pyproject/lock 或环境。根包构建修复后登记直接依赖，当前实现旁已具名标记。
   - 最终定向证据位于 `out/tests/temp/openspec_takeover/artifacts/runs/`：`resource-navigation-bounds-final-unit-004` 为118 passed/14.64秒，覆盖绑定 cursor、跨目录稀疏匹配续页、前缀变化、排序前扫描上限、UTF-8/JSON 字节预算、序列化共用期限、阻塞只读 I/O 的等待超时及错误回执身份；原生调用本身不会被异步取消强行中断，worker 恢复后仍检查原期限。`resource-navigation-bounds-final-http-003` 为3 passed/136.32秒，经真实 Gateway/Workspace、SSH 星型联邦及远端 Gateway Skill owner 验证257文件续页、最终 HTTP 字节限制、返回 URI 重开、文件执行错误透传、目标固定及 tracking/activation 不变。两项均exit 0、源码在运行中未变，不能替代模型 glob/grep 或跨端总预算验收。
   - 初轮完整组合 `resource-navigation-bounds-gateway-integration-001` 在已有失败后中断，为3 failed、2 passed/297.51秒、exit 2；原输出保留。文件执行错误透传及 UTF-8 旧断言已修齐并经最终定向运行验证；共享后端的既有路由歧义仍按3.3保留 TODO，未宣称该文件或整组全绿。另有 `resource-navigation-bounds-owner-routing-002` 的冷恢复 owner/request_id 定向证据，2 passed/121.44秒；后续导航期限变更由最终三场景补验，不以该旧运行代替新导航源码验收。
 - [ ] 2.3 从真实工具入口验证中文/空格/点号/百分号文件名、一次解码及越界symlink拒绝；搜索大量文件前后身份/source/snapshot条目数不变。
@@ -56,6 +60,8 @@
 ## 6. 验证与交付
 
 - [ ] 6.1 同步公开DTO/proto/OpenAPI/客户端和测试，静态分析及官方生成器检查；涉及Web则独立类型检查和bun build，正式测试按既有out/tests路径并带进程外保护。
+  - 搜索公开合同已同步 proto/DTO/官方生成类型/OpenAPI；`resource-search-protocol-format-001`、`resource-search-protocol-generate-001` 通过官方 Buf lint/build/生成及真实26c514cd基线breaking。`resource-search-openapi-001` 导出、`resource-search-web-types-001` 真实tsc及 `resource-search-web-build-001` 正式Web构建均exit0。相关Python静态初轮仅SIM102已修，`resource-search-static-002` exit0；最终工具装配/结果权限修订后补验见后续记录。所有运行沿用进程外超时/内存保护及命令、指纹、原始输出、退出码证据。
+  - 搜索最终17个相关Python文件 `resource-search-final-static-003` Ruff exit0；`resource-search-openspec-001` strict exit0。最终仅纠正权限测试的glob输入及记录证据，补最终静态/spec校验。搜索工具与导航owner合计净减72行；旧rg、旧普通glob执行及路径列表重写已全仓检索清零，产物旧scheme具名待第5组全迁后删除。
   - 读取协议切片：`resource-read-protocol-format-001` Buf格式、`resource-read-protocol-generate-001` 官方lint/build/生成与真实提交b27cf91b为基线的breaking检查、`resource-read-openapi-001` OpenAPI导出均exit0；`resource-read-web-types-001`真实tsc与`resource-read-web-build-001`正式Web构建均exit0，构建17.23秒。`resource-read-static-002`相关Python Ruff通过；最终测试差异还需下方补验。全部验证使用进程外超时和内存限制，保留命令、源码前后指纹、原始输出和退出码；不以本切片关闭其它工具、写入或产物协议验收。
   - 最终14个相关Python文件的`resource-read-final-static-003` Ruff通过。新增响应字段的完整断言已迁齐公开协议、跨进程序列化、Workspace及Gateway真实入口测试；读取生产源码在unit-002、contract-unit-001及各HTTP验收之间未再改动，既有成功证据按依赖复用，未为统计重跑。
   - 2026-10-20 ls 切片未改变公开HTTP/proto字段，无需重复生成。`resource-ls-final-static-002` 对26个变更Python文件 Ruff通过；`resource-ls-openspec-final-001` strict通过；辅助Browser服务最终 `resource-ls-browser-final-002` 为93个Node及195个Bun用例通过。同期清理装具的17项故障用例包含在 `resource-ls-unit-003`，HTTP页面装具及graph核验包含在 `resource-ls-graph-unit-004`；不运行延期的长性能场景。原始命令、指纹、退出码和日志见同任务artifacts/runs；这些局部证据不替代其余工具或完整Web验收，本项保持未勾。

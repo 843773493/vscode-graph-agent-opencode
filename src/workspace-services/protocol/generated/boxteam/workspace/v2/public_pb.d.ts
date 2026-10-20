@@ -6909,6 +6909,23 @@ export declare type ResourceNavigationRequest = Message<"boxteam.workspace.v2.Re
    * @generated from field: optional uint32 max_lines = 12;
    */
   maxLines?: number | undefined;
+
+  /**
+   * path 为文件名包含查询；glob 与 content 分别匹配路径模式和文本行。
+   *
+   * @generated from field: string search_mode = 13;
+   */
+  searchMode: string;
+
+  /**
+   * @generated from field: optional string file_glob = 14;
+   */
+  fileGlob?: string | undefined;
+
+  /**
+   * @generated from field: uint32 max_snippet_bytes = 15;
+   */
+  maxSnippetBytes: number;
 };
 
 /**
@@ -7008,6 +7025,11 @@ export declare type ResourceNavigationResultDTO = Message<"boxteam.workspace.v2.
    * @generated from field: optional uint32 line_offset = 11;
    */
   lineOffset?: number | undefined;
+
+  /**
+   * @generated from field: repeated boxteam.workspace.v2.ResourceNavigationMatchDTO matches = 12;
+   */
+  matches: ResourceNavigationMatchDTO[];
 };
 
 /**
@@ -7015,6 +7037,47 @@ export declare type ResourceNavigationResultDTO = Message<"boxteam.workspace.v2.
  * Use `create(ResourceNavigationResultDTOSchema)` to create a new message.
  */
 export declare const ResourceNavigationResultDTOSchema: GenMessage<ResourceNavigationResultDTO>;
+
+/**
+ * @generated from message boxteam.workspace.v2.ResourceNavigationMatchDTO
+ */
+export declare type ResourceNavigationMatchDTO = Message<"boxteam.workspace.v2.ResourceNavigationMatchDTO"> & {
+  /**
+   * @generated from field: string uri = 1;
+   */
+  uri: string;
+
+  /**
+   * @generated from field: uint32 line = 2;
+   */
+  line: number;
+
+  /**
+   * @generated from field: uint32 column = 3;
+   */
+  column: number;
+
+  /**
+   * @generated from field: string text = 4;
+   */
+  text: string;
+
+  /**
+   * @generated from field: uint32 snippet_start_column = 5;
+   */
+  snippetStartColumn: number;
+
+  /**
+   * @generated from field: bool truncated = 6;
+   */
+  truncated: boolean;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.ResourceNavigationMatchDTO.
+ * Use `create(ResourceNavigationMatchDTOSchema)` to create a new message.
+ */
+export declare const ResourceNavigationMatchDTOSchema: GenMessage<ResourceNavigationMatchDTO>;
 
 /**
  * @generated from message boxteam.workspace.v2.WorkspaceResourceDTO

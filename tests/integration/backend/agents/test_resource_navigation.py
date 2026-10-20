@@ -112,7 +112,7 @@ async def test_real_workspace_gateway_navigation_is_fixed_lightweight_and_contai
                 for forbidden in (str(workspace), str(home), "local-dev-token"):
                     assert forbidden not in response.text
                 assert set(response.json()["data"]) == {"node", "entries", "content", "truncated", "next_cursor", "truncation_reason", "view",
-                                                        "content_encoding", "media_type", "mime_type", "line_offset"}
+                                                        "content_encoding", "media_type", "mime_type", "line_offset", "matches"}
                 assert response.json()["data"]["view"] == "live"
                 assert response.json()["data"]["node"]["uri"] == parse_resource_uri(uri, local_gateway_id=gateway_id).display_uri
                 for node in (response.json()["data"]["node"], *response.json()["data"]["entries"]):

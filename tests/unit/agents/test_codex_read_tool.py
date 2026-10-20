@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import base64
 import json
-import subprocess
+import time
 from pathlib import Path
 from types import SimpleNamespace
 from typing import cast
@@ -13,7 +13,6 @@ from langchain.tools import ToolRuntime
 from langchain_core.messages import ToolMessage
 from pydantic import ValidationError
 
-from app.agents import workspace_filesystem_tools
 from app.agents.workspace_backend import build_workspace_backend
 from app.core.resource_uri import resource_display_uri
 from app.core.workspace_identity import bind_workspace_id
@@ -278,8 +277,8 @@ async def test_deepagents_filesystem_tools_share_relative_path_contract(
     assert relative_path in glob_result.content
     assert relative_path in grep_result.content
     assert json.loads(ls_result.content)["entries"][0]["uri"].endswith("/files/root/src/shared-contract.txt")
-    assert "/src/shared-contract.txt" not in glob_result.content
-    assert "/src/shared-contract.txt" not in grep_result.content
+    assert json.loads(glob_result.content)["entries"][0]["uri"].endswith("/files/root/src/shared-contract.txt")
+    assert grep_result.content.splitlines()[0].startswith("boxteam://workspace/")
     assert relative_path in write_result.content
     assert relative_path in edit_result.content
     assert "after contract marker" in read_result.content
@@ -373,7 +372,7 @@ async def test_listing_tools_hide_and_reject_boxteam_runtime(
         result = await tools[tool_name].coroutine(runtime=runtime, **kwargs)
         assert isinstance(result, ToolMessage)
         assert result.status == "error"
-        if tool_name in {"ls", "read_file"}:
+        if tool_name in {"ls", "read_file", "glob"}:
             assert json.loads(result.content)["code"] == "capability_denied"
         else:
             assert "运行时目录" in result.content
@@ -494,31 +493,31 @@ async def test_grep_returns_bounded_timeout_without_python_fallback(
         backend=build_workspace_backend(tmp_path),
         tool_token_limit_before_evict=None,
     )
-    configure_filesystem_tools(middleware, workspace_root=tmp_path)
+    owner = configure_filesystem_tools(middleware, workspace_root=tmp_path)
     tool = next(item for item in middleware.tools if item.name == "grep")
     runtime = cast(
         "ToolRuntime[None, FilesystemState]",
         SimpleNamespace(tool_call_id="call_bounded_grep_timeout"),
     )
 
-    def raise_timeout(*_args, **_kwargs):
-        raise subprocess.TimeoutExpired(
-            cmd="rg",
-            timeout=workspace_filesystem_tools.DEFAULT_GREP_TIMEOUT_SECONDS,
-        )
+    original = owner.input_uri
 
-    monkeypatch.setattr(workspace_filesystem_tools.subprocess, "run", raise_timeout)
+    def slow_input(value):
+        time.sleep(0.02)
+        return original(value)
+
+    monkeypatch.setattr(owner, "input_uri", slow_input)
     result = await tool.coroutine(
         pattern="needle",
         path="src",
         glob="**/*.py",
+        timeout_ms=1,
         runtime=runtime,
     )
 
     assert isinstance(result, ToolMessage)
     assert result.status == "error"
-    assert "10 秒内未完成" in result.content
-    assert "path='src'" in result.content
+    assert json.loads(result.content)["reason"] == "deadline"
 
 
 @pytest.mark.asyncio

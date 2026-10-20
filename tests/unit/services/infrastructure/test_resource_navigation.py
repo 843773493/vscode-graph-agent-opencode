@@ -279,3 +279,17 @@ async def test_read_format_is_explicit_and_line_windows_preserve_raw_text(naviga
     for operation in ("list", "search", "describe"):
         with pytest.raises(ValidationError, match="格式和行范围"):
             ResourceNavigationRequest(uri=uri, operation=operation, query="text" if operation == "search" else None, line_offset=2)
+
+
+@pytest.mark.asyncio
+async def test_content_search_preserves_match_position_when_excerpt_is_bounded(navigation_case) -> None:
+    owner, workspace, uri = navigation_case
+    text = "中文" * 1000 + "needle" + "后文" * 1000
+    (workspace / "long.txt").write_text(text)
+    result = await owner.navigate(ResourceNavigationRequest(uri=uri + "/long.txt", operation="search",
+        search_mode="content", query="needle", max_snippet_bytes=32), local_gateway_id=GATEWAY_ID)
+    match, = result.matches
+    assert (match.line, match.column) == (1, 2001)
+    assert match.truncated and len(match.text.encode()) <= 32 and "needle" in match.text
+    assert text[match.snippet_start_column - 1:].startswith(match.text)
+    assert match.uri == result.entries[0].uri == uri + "/long.txt"

@@ -394,9 +394,9 @@ def test_resolve_fails_on_capability_hash_drift(
 def test_deep_agent_graph_binding_is_descriptor_stable() -> None:
     binding = DEEP_AGENT_GRAPH_BINDING
     assert binding.graph_id == DEEP_AGENT_GRAPH_ID == "deep-agent"
-    assert binding.graph_revision == 9
+    assert binding.graph_revision == 10
     assert "PatchToolCallsMiddleware" not in DEEP_AGENT_MIDDLEWARE_STACK
-    assert binding.graph_schema_hash == "sha256:e9522373c795bcbacbf1f2adff721cf260fda24b16bd7f32c27d6c8cc41adc9e"
+    assert binding.graph_schema_hash == "sha256:938582d305896893dcb2c6468469011a3cecff69ac01bce401cec9ed40f986fa"
     assert binding.capability_profile_hash == "sha256:c5c064f94d290eed5e016d92c45dd5e1acd6a43753e9fd48296f031412f0b870"
     assert binding.graph_schema_hash == compute_graph_schema_hash(
         graph_id=DEEP_AGENT_GRAPH_ID,

@@ -33,6 +33,10 @@ async def test_navigation_uses_original_star_channels_and_fixed_owner(communicat
     assert native_root.startswith(f"boxteam://gateway/{target.gateway_id}/resources/files/")
     child = target.workspace / "src/联邦 文件.v2.md"
     child.write_text("跨 Gateway 正文 Ω\n")
+    search_file = target.workspace / "src/联邦 搜索%.txt"
+    search_file.write_text("needle-on-target\nneedle-on-target second\n")
+    decoy = source.workspace / "src/联邦 搜索%.txt"
+    decoy.write_text("SOURCE DECOY\n")
     skill = target.workspace / ".boxteam/skills/navigation/references"
     skill.mkdir(parents=True)
     (skill.parent / "SKILL.md").write_text("---\nname: navigation\ndescription: 导航验证\n---\n正文\n")
@@ -74,6 +78,16 @@ async def test_navigation_uses_original_star_channels_and_fixed_owner(communicat
     direct = await navigate(hub, root, "list")
     relayed = await navigate(source, root, "list")
     assert direct == relayed
+    file_uri = uri("files", "root", "src", "联邦 搜索%.txt")
+    searched = await navigate(source, file_uri, "search", search_mode="content", query="needle-on-target", limit=1)
+    match, = searched["matches"]
+    assert match["uri"] == searched["entries"][0]["uri"] == file_uri
+    assert (match["line"], match["column"], match["text"]) == (1, 1, "needle-on-target")
+    assert searched["truncated"] and searched["next_cursor"]
+    following_match = await navigate(source, file_uri, "search", search_mode="content", query="needle-on-target", limit=1, cursor=searched["next_cursor"])
+    assert following_match["matches"][0]["line"] == 2 and not following_match["truncated"]
+    assert (await navigate(source, file_uri, "read"))["content"] == search_file.read_text()
+    assert decoy.read_text() == "SOURCE DECOY\n"
     first = await navigate(source, root, "list", limit=1)
     assert first["truncated"] and first["next_cursor"]
     following = await navigate(source, root, "list", limit=1, cursor=first["next_cursor"])
@@ -106,7 +120,10 @@ async def test_navigation_uses_original_star_channels_and_fixed_owner(communicat
     assert entry["uri"].startswith(f"boxteam://{target.gateway_id}/")
     assert (await navigate(source, entry["uri"], "read"))["content"] == "跨 Gateway 正文 Ω\n"
     found = await navigate(source, root, "search", query="联邦", limit=1)
-    assert len(found["entries"]) == 1 and found["entries"][0]["uri"] == entry["uri"]
+    assert len(found["entries"]) == 1 and found["truncated"]
+    remaining = await navigate(source, root, "search", query="联邦", limit=1, cursor=found["next_cursor"])
+    assert len(remaining["entries"]) == 1 and not remaining["truncated"]
+    assert {found["entries"][0]["uri"], remaining["entries"][0]["uri"]} == {entry["uri"], file_uri}
     assert (await navigate(source, entry["uri"], "read", max_bytes=3))["truncated"] is True
     for scope, segments, expected in (
         ("workspace", ("navigation", "references", "远端.md"), "工作区技能 child\n"),

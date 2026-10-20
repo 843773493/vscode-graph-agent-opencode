@@ -27,6 +27,9 @@ class ResourceNavigationRequest(BaseModel):
     read_format: Literal["text", "auto"] = "text"
     line_offset: int | None = Field(default=None, ge=1)
     max_lines: int | None = Field(default=None, ge=1)
+    search_mode: Literal["path", "glob", "content"] = "path"
+    file_glob: str | None = Field(default=None, min_length=1)
+    max_snippet_bytes: int = Field(default=2048, ge=16, le=8192)
 
     @model_validator(mode="after")
     def require_search_query(self) -> ResourceNavigationRequest:
@@ -39,6 +42,10 @@ class ResourceNavigationRequest(BaseModel):
             raise ValueError("只有 list/search 接受 cursor")
         if self.operation != "read" and (self.read_format != "text" or self.line_offset is not None or self.max_lines is not None):
             raise ValueError("只有 read 接受格式和行范围")
+        if self.operation != "search" and (self.search_mode != "path" or self.file_glob is not None):
+            raise ValueError("只有 search 接受搜索模式和文件过滤")
+        if self.file_glob is not None and self.search_mode != "content":
+            raise ValueError("只有内容搜索接受 file_glob")
         return self
 
 
@@ -49,6 +56,17 @@ class ResourceNavigationNodeDTO(BaseModel):
     resource_shape: ResourceShape
     operations: tuple[ResourceNavigationOperation, ...]
     child_path: Literal["file_segments"] | None = None
+
+
+class ResourceNavigationMatchDTO(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    uri: str
+    line: int = Field(ge=1)
+    column: int = Field(ge=1)
+    text: str
+    snippet_start_column: int = Field(ge=1)
+    truncated: bool = False
 
 
 class ResourceNavigationResultDTO(BaseModel):
@@ -65,3 +83,4 @@ class ResourceNavigationResultDTO(BaseModel):
     media_type: Literal["text", "image", "audio", "video", "file"] | None = None
     mime_type: str | None = None
     line_offset: int | None = None
+    matches: tuple[ResourceNavigationMatchDTO, ...] = ()

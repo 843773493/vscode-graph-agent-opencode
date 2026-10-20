@@ -29,7 +29,7 @@ FILESYSTEM_SYSTEM_PROMPT = (
     "external targets require the target owner's native-directory capability and otherwise fail explicitly without redirection. "
     "ls returns bounded JSON with resource URIs and an optional next_cursor; pass the same target and limits when continuing. "
     "Workspace files URIs returned by ls and paths returned by glob and grep can be passed unchanged to "
-    "read_file, write_file, edit_file, and workspace source-debugging tools. Skill directory/file URIs support ls/read_file "
+    "read_file, write_file, edit_file, and workspace source-debugging tools. Skill directory/file URIs support ls/read_file/glob/grep "
     "without activation or tracking; only `skill_load` by name activates instructions. "
     "Never list, glob, grep, or read any `.boxteam` path directly. read_file uses a 1-indexed `line_offset`, "
     "reports truncation, and has explicit byte/response/deadline budgets."
@@ -56,13 +56,14 @@ FILESYSTEM_TOOL_DESCRIPTIONS = {
         "preserve indentation, and use replace_all only when every occurrence should change."
     ),
     "glob": (
-        "Find files below a base directory using a glob pattern; prefer a workspace-relative "
-        "base path."
+        "Find files recursively below a workspace-relative/native target or resource URI. The pattern never changes the target. "
+        "Returns bounded URI JSON; continue next_cursor with the same target, pattern and limits."
     ),
     "grep": (
-        "Search source files below a path with a bounded timeout and result limit; prefer a "
+        "Search literal text below a workspace-relative/native path or resource URI with explicit scan/byte/deadline limits; prefer a "
         "workspace-relative path and do not search `.boxteam` runtime logs or use an unscoped "
-        "workspace-root recursive search."
+        "workspace-root recursive search. Results contain reusable URIs, line numbers and bounded snippets; count is per page. "
+        "Continue next_cursor with the same target, query, glob and limits. Known media and NUL-containing binary files are skipped."
     ),
 }
 

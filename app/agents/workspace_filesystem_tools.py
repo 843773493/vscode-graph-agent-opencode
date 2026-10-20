@@ -1,12 +1,11 @@
-import ast
 import asyncio
 import base64
 import json
 import logging
 import mimetypes
-import subprocess
 import time
 from collections.abc import Awaitable, Callable
+from functools import partial, update_wrapper
 from pathlib import Path, PurePosixPath
 from typing import Annotated, Literal, cast
 
@@ -53,19 +52,6 @@ from app.services.infrastructure.resource_platform.virtual_resources.resolver im
 GrepOutputMode = Literal["files_with_matches", "content", "count"]
 logger = logging.getLogger(__name__)
 DEFAULT_MAX_LINES = 2_000
-DEFAULT_GREP_TIMEOUT_SECONDS = 10
-GREP_TIMEOUT_GRACE_SECONDS = 1
-GREP_MAX_FILE_SIZE = "10M"
-GREP_MAX_MATCHES_PER_FILE = 256
-GREP_MAX_MATCHES_TOTAL = 2_048
-GREP_EXCLUDED_GLOBS = (
-    "!.boxteam",
-    "!.boxteam/**",
-    "!.git",
-    "!.git/**",
-    "!node_modules",
-    "!node_modules/**",
-)
 class _ToolSchema(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -125,16 +111,24 @@ class WorkspaceEditFileSchema(_ToolSchema):
     runtime: Annotated[object, InjectedToolArg]
 
 
-class WorkspaceGlobSchema(_ToolSchema):
+class _SearchSchema(_ToolSchema):
+    limit: int = Field(default=100, ge=1, le=1000)
+    cursor: str | None = Field(default=None, min_length=1, max_length=2048)
+    timeout_ms: int = Field(default=10000, ge=1, le=30000)
+    scan_limit: int = Field(default=10000, ge=1, le=100000)
+    max_response_bytes: int = Field(default=1048576, ge=1024, le=1048576)
+    runtime: Annotated[object, InjectedToolArg]
+
+
+class WorkspaceGlobSchema(_SearchSchema):
     pattern: str = Field(description="Glob pattern to match files.")
     path: str = Field(
         default=".",
         description="Base directory; prefer a workspace-relative path and defaults to '.'.",
     )
-    runtime: Annotated[object, InjectedToolArg]
 
 
-class WorkspaceGrepSchema(_ToolSchema):
+class WorkspaceGrepSchema(_SearchSchema):
     pattern: str = Field(description="Literal text to search for.")
     path: str | None = Field(
         default=None,
@@ -148,7 +142,8 @@ class WorkspaceGrepSchema(_ToolSchema):
         default="files_with_matches",
         description="Output format for matching files.",
     )
-    runtime: Annotated[object, InjectedToolArg]
+    max_bytes: int = Field(default=10485760, ge=1, le=33554432)
+    max_snippet_bytes: int = Field(default=2048, ge=16, le=8192)
 
 
 def _tool_implementations(
@@ -188,7 +183,7 @@ def _path_error(
             "owner": "resource_uri_grammar" if isinstance(error, ResourceUriGrammarError) else "resource_uri_resolver",
             "code": error.reason_code, "message": str(error),
         }, ensure_ascii=False)
-    elif tool_name in {"ls", "read_file"} and isinstance(error, (OSError, httpx.HTTPError)):
+    elif tool_name in {"ls", "read_file", "glob", "grep"} and isinstance(error, (OSError, httpx.HTTPError)):
         logger.error("文件导航执行失败", exc_info=error)
         content = json.dumps({
             "owner": "resource_file_operations", "code": "execution_failed",
@@ -224,31 +219,6 @@ def _rewrite_known_path(
     return message.model_copy(
         update={"content": content, "additional_kwargs": additional_kwargs}
     )
-
-
-def _rewrite_path_list(message: ToolMessage) -> ToolMessage:
-    if message.status != "success" or not isinstance(message.content, str):
-        return message
-    try:
-        paths = ast.literal_eval(message.content)
-    except (SyntaxError, ValueError):
-        return message
-    if not isinstance(paths, list) or not all(isinstance(path, str) for path in paths):
-        return message
-    relative_paths = []
-    for path in paths:
-        relative_path = (
-            backend_virtual_to_workspace_relative(path) if path.startswith("/") else path
-        )
-        if _is_hidden_runtime_path(relative_path):
-            continue
-        relative_paths.append(relative_path)
-    return message.model_copy(update={"content": str(relative_paths)})
-
-
-def _is_hidden_runtime_path(relative_path: str) -> bool:
-    normalized = relative_path.replace("\\", "/").lstrip("/")
-    return normalized == ".boxteam" or normalized.startswith(".boxteam/")
 
 
 def _runtime_path_error(tool_name: str, relative_path: str) -> ValueError:
@@ -338,6 +308,8 @@ def _read_navigation_message(
 
 def _validate_glob_pattern(pattern: str) -> None:
     normalized = pattern.replace("\\", "/")
+    if ".." in PurePosixPath(normalized).parts:
+        raise ValueError("glob 模式不能包含越界路径段")
     if ".boxteam" in PurePosixPath(normalized).parts or ".boxteam/" in normalized:
         raise _runtime_path_error("glob", pattern)
 
@@ -354,19 +326,6 @@ def _grep_scope_error(relative_path: str, glob: str | None) -> ValueError:
     )
 
 
-def _validate_grep_scope(
-    resolver: WorkspaceToolPathResolver,
-    path: str | None,
-    glob: str | None,
-) -> str:
-    relative_path = resolver.normalize_relative_path(path or ".")
-    if ".boxteam" in PurePosixPath(relative_path).parts:
-        raise _grep_scope_error(relative_path, glob)
-    if relative_path == "." and (glob is None or "**" in glob):
-        raise _grep_scope_error(relative_path, glob)
-    return relative_path
-
-
 def _grep_result_error(
     runtime: ToolRuntime[None, FilesystemState],
     detail: str,
@@ -376,125 +335,6 @@ def _grep_result_error(
         name="grep",
         tool_call_id=runtime.tool_call_id,
         status="error",
-    )
-
-
-def _run_bounded_workspace_grep(
-    *,
-    pattern: str,
-    relative_path: str,
-    glob: str | None,
-    output_mode: GrepOutputMode,
-    workspace_root: Path,
-    runtime: ToolRuntime[None, FilesystemState],
-) -> ToolMessage:
-    search_path = workspace_root if relative_path == "." else workspace_root / relative_path
-    command = [
-        "rg",
-        "--json",
-        "--fixed-strings",
-        "--hidden",
-        "--no-messages",
-        "--max-filesize",
-        GREP_MAX_FILE_SIZE,
-    ]
-    if glob:
-        command.extend(("--glob", glob))
-    for excluded_glob in GREP_EXCLUDED_GLOBS:
-        command.extend(("--glob", excluded_glob))
-    command.extend(
-        (
-            "--max-count",
-            str(GREP_MAX_MATCHES_PER_FILE),
-            "--",
-            pattern,
-            str(search_path),
-        )
-    )
-
-    try:
-        completed = subprocess.run(
-            command,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=DEFAULT_GREP_TIMEOUT_SECONDS,
-            check=False,
-        )
-    except subprocess.TimeoutExpired:
-        return _grep_result_error(
-            runtime,
-            "grep 在 "
-            f"{DEFAULT_GREP_TIMEOUT_SECONDS} 秒内未完成，已终止搜索；"
-            f"path={relative_path!r}, glob={glob!r}。请缩小 path 或 glob 后重试。",
-        )
-    except FileNotFoundError:
-        return _grep_result_error(
-            runtime,
-            "grep 需要可用的 rg 命令；当前运行环境未找到 rg，"
-            "未执行无界的备用递归扫描。",
-        )
-    except OSError as error:
-        return _grep_result_error(runtime, f"grep 启动失败: {error}")
-
-    if completed.returncode not in {0, 1}:
-        detail = completed.stderr.strip() or f"rg 退出码为 {completed.returncode}"
-        return _grep_result_error(runtime, f"grep 执行失败: {detail}")
-
-    matches: list[dict[str, str | int]] = []
-    truncated = False
-    resolved_root = workspace_root.resolve()
-    for line in completed.stdout.splitlines():
-        try:
-            event = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if event.get("type") != "match":
-            continue
-        data = event.get("data")
-        if not isinstance(data, dict):
-            continue
-        path_data = data.get("path")
-        lines_data = data.get("lines")
-        raw_path = path_data.get("text") if isinstance(path_data, dict) else None
-        line_number = data.get("line_number")
-        line_text = lines_data.get("text", "") if isinstance(lines_data, dict) else ""
-        if (
-            not isinstance(raw_path, str)
-            or not isinstance(line_number, int)
-            or not isinstance(line_text, str)
-        ):
-            continue
-        try:
-            match_path = Path(raw_path).resolve()
-            match_relative = match_path.relative_to(resolved_root).as_posix()
-        except (OSError, RuntimeError, ValueError):
-            continue
-        if ".boxteam" in PurePosixPath(match_relative).parts:
-            continue
-        if len(matches) >= GREP_MAX_MATCHES_TOTAL:
-            truncated = True
-            continue
-        matches.append(
-            {
-                "path": match_relative,
-                "line": line_number,
-                "text": line_text.rstrip("\n"),
-            }
-        )
-
-    content = format_grep_matches(matches, output_mode)
-    if truncated:
-        content += (
-            "\n[grep 结果已限制为 "
-            f"{GREP_MAX_MATCHES_TOTAL} 条；请缩小 path 或 glob 后继续搜索]"
-        )
-    return ToolMessage(
-        content=content,
-        name="grep",
-        tool_call_id=runtime.tool_call_id,
-        status="success",
     )
 
 
@@ -559,7 +399,7 @@ def configure_workspace_filesystem_tools(
         raise TypeError("Session artifacts route 必须由唯一 SessionArtifactBackend 装配")
     implementations = {
         name: _tool_implementations(middleware, name)
-        for name in ("write_file", "edit_file", "glob")
+        for name in ("write_file", "edit_file")
     }
 
     def resolve_paths(
@@ -809,124 +649,134 @@ def configure_workspace_filesystem_tools(
             relative_path=relative_path,
         )
 
-    def sync_glob(
-        pattern: str,
-        runtime: ToolRuntime[None, FilesystemState],
-        path: str = ".",
-    ) -> ToolMessage:
-        try:
+    def search_request(
+        tool_name: str, pattern: str, path: str | None, glob: str | None,
+        limit: int, cursor: str | None, timeout_ms: int, scan_limit: int,
+        max_response_bytes: int, max_bytes: int, max_snippet_bytes: int,
+    ) -> ResourceNavigationRequest:
+        if tool_name == "glob":
             _validate_glob_pattern(pattern)
-            _, backend_path = resolve_paths("glob", path)
-        except ValueError as error:
-            return _path_error("glob", runtime, error)
-        return _rewrite_path_list(
-            implementations["glob"][0](
-                pattern=pattern,
-                path=backend_path,
-                runtime=runtime,
-            )
-        )
-
-    async def async_glob(
-        pattern: str,
-        runtime: ToolRuntime[None, FilesystemState],
-        path: str = ".",
-    ) -> ToolMessage:
-        try:
-            _validate_glob_pattern(pattern)
-            _, backend_path = resolve_paths("glob", path)
-        except ValueError as error:
-            return _path_error("glob", runtime, error)
-        return _rewrite_path_list(
-            await implementations["glob"][1](
-                pattern=pattern,
-                path=backend_path,
-                runtime=runtime,
-            )
-        )
-
-    def sync_grep(
-        pattern: str,
-        runtime: ToolRuntime[None, FilesystemState],
-        path: str | None = None,
-        glob: str | None = None,
-        output_mode: GrepOutputMode = "files_with_matches",
-    ) -> ToolMessage:
-        try:
-            relative_path = _validate_grep_scope(resolver, path, glob)
-        except ValueError as error:
-            return _path_error("grep", runtime, error)
-        if relative_path == "session-artifacts" or relative_path.startswith(
-            "session-artifacts/"
+        uri = resource_navigation.input_uri("." if path is None else path)
+        target = parse_resource_uri(uri)
+        if tool_name == "grep" and target.kind == "files" and (
+            ".boxteam" in target.tail_segments[1:] or
+            (target.scope == "workspace" and len(target.tail_segments) == 1 and (glob is None or "**" in glob))
         ):
-            return _run_session_artifact_grep(
-                pattern=pattern,
-                relative_path=relative_path,
-                glob=glob,
-                output_mode=output_mode,
-                backend=session_artifact_backend,
-                runtime=runtime,
-            )
-        return _run_bounded_workspace_grep(
-            pattern=pattern,
-            relative_path=relative_path,
-            glob=glob,
-            output_mode=output_mode,
-            workspace_root=resolver.workspace_root,
-            runtime=runtime,
-        )
+            raise _grep_scope_error(uri, glob)
+        require_read_permission(uri)
+        return ResourceNavigationRequest(uri=uri, operation="search", query=pattern,
+            search_mode="glob" if tool_name == "glob" else "content", file_glob=glob,
+            limit=limit, cursor=cursor, timeout_ms=timeout_ms, scan_limit=scan_limit,
+            max_response_bytes=max_response_bytes, max_bytes=max_bytes, max_snippet_bytes=max_snippet_bytes)
 
-    async def async_grep(
-        pattern: str,
-        runtime: ToolRuntime[None, FilesystemState],
-        path: str | None = None,
-        glob: str | None = None,
-        output_mode: GrepOutputMode = "files_with_matches",
+    def search_message(
+        tool_name: str, result: ResourceNavigationResultDTO, output_mode: GrepOutputMode,
+        runtime: ToolRuntime[None, FilesystemState], max_response_bytes: int,
     ) -> ToolMessage:
+        entries = []
+        for entry in result.entries:
+            parsed = parse_resource_uri(entry.uri)
+            permission_path = "/" + "/".join(parsed.tail_segments[1:]) if parsed.scope == "workspace" and parsed.kind == "files" else entry.uri
+            if _check_fs_permission(middleware._permissions, "read", permission_path) != "deny":
+                entries.append(entry)
+        allowed = {entry.uri for entry in entries}
+        result = result.model_copy(update={"entries": tuple(entries),
+            "matches": tuple(match for match in result.matches if match.uri in allowed)})
+        if tool_name == "glob":
+            message = ToolMessage(content=result.model_dump_json(), name=tool_name,
+                tool_call_id=runtime.tool_call_id, status="success")
+        else:
+            matches = [{"path": match.uri, "line": match.line,
+                        "text": match.text + (" [片段已截断]" if match.truncated else "")} for match in result.matches]
+            metadata = result.model_dump(exclude={"entries", "matches", "content"})
+            content = format_grep_matches(matches, output_mode)
+            content += "\n" + json.dumps(metadata, ensure_ascii=False)
+            message = ToolMessage(content=content, name=tool_name, tool_call_id=runtime.tool_call_id,
+                                  status="success", additional_kwargs={"resource_navigation": metadata})
+        if len(message.model_dump_json().encode()) > max_response_bytes:
+            raise ResourceFileOperationError("output_limit_exceeded", "搜索工具回执超过字节预算，请减少 limit 或片段长度", reason="response_byte_limit")
+        return message
+
+    def artifact_search(
+        tool_name: str, pattern: str, path: str | None, glob: str | None,
+        output_mode: GrepOutputMode, runtime: ToolRuntime[None, FilesystemState],
+    ) -> ToolMessage | None:
+        # TODO（第5组）：产物生成/消费迁齐后删除旧目录地址，不开放 Session 私有磁盘树。
+        if path is None or not (path == "session-artifacts" or path.startswith(("session-artifacts/", "boxteam-session://"))):
+            return None
+        relative_path, backend_path = resolve_paths(tool_name, path)
+        if tool_name == "grep":
+            return _run_session_artifact_grep(pattern=pattern, relative_path=relative_path, glob=glob,
+                output_mode=output_mode, backend=session_artifact_backend, runtime=runtime)
+        _validate_glob_pattern(pattern)
+        result = session_artifact_backend.glob(pattern, path=backend_path.removeprefix("/session-artifacts") or "/")
+        if result.error:
+            raise ValueError(result.error)
+        paths = ["session-artifacts/" + item["path"].lstrip("/") for item in result.matches or []]
+        return ToolMessage(content=str(paths), name=tool_name, tool_call_id=runtime.tool_call_id, status="success")
+
+    def sync_search(
+        pattern: str, runtime: ToolRuntime[None, FilesystemState], path: str | None = None,
+        glob: str | None = None, output_mode: GrepOutputMode = "files_with_matches",
+        limit: int = 100, cursor: str | None = None, timeout_ms: int = 10000, scan_limit: int = 10000,
+        max_response_bytes: int = 1048576, max_bytes: int = 10485760, max_snippet_bytes: int = 2048,
+        *, tool_name: str,
+    ) -> ToolMessage:
+        deadline = time.monotonic() + timeout_ms / 1000
         try:
-            relative_path = _validate_grep_scope(resolver, path, glob)
-        except ValueError as error:
-            return _path_error("grep", runtime, error)
-        if relative_path == "session-artifacts" or relative_path.startswith(
-            "session-artifacts/"
-        ):
-            return await asyncio.to_thread(
-                _run_session_artifact_grep,
-                pattern=pattern,
-                relative_path=relative_path,
-                glob=glob,
-                output_mode=output_mode,
-                backend=session_artifact_backend,
-                runtime=runtime,
-            )
+            artifact = artifact_search(tool_name, pattern, path, glob, output_mode, runtime)
+            if artifact is not None:
+                return artifact
+            gateway_id = require_current_gateway_id(tool_name)
+            request = search_request(tool_name, pattern, path, glob, limit, cursor, timeout_ms, scan_limit,
+                                     max_response_bytes, max_bytes, max_snippet_bytes)
+            if time.monotonic() >= deadline:
+                raise TimeoutError
+            result = resource_navigation.navigate_sync(request, local_gateway_id=gateway_id)
+            message = search_message(tool_name, result, output_mode, runtime, max_response_bytes)
+            if time.monotonic() >= deadline:
+                raise TimeoutError
+            return message
+        except (TimeoutError, httpx.TimeoutException):
+            return _path_error(tool_name, runtime, ResourceFileOperationError(
+                "output_limit_exceeded", "文件搜索超过本次总期限", reason="deadline"))
+        except (OSError, RuntimeError, ValueError, httpx.HTTPError) as error:
+            return _path_error(tool_name, runtime, error)
+
+    async def async_search(
+        pattern: str, runtime: ToolRuntime[None, FilesystemState], path: str | None = None,
+        glob: str | None = None, output_mode: GrepOutputMode = "files_with_matches",
+        limit: int = 100, cursor: str | None = None, timeout_ms: int = 10000, scan_limit: int = 10000,
+        max_response_bytes: int = 1048576, max_bytes: int = 10485760, max_snippet_bytes: int = 2048,
+        *, tool_name: str,
+    ) -> ToolMessage:
+        deadline = time.monotonic() + timeout_ms / 1000
         try:
-            return await asyncio.wait_for(
-                asyncio.to_thread(
-                    _run_bounded_workspace_grep,
-                    pattern=pattern,
-                    relative_path=relative_path,
-                    glob=glob,
-                    output_mode=output_mode,
-                    workspace_root=resolver.workspace_root,
-                    runtime=runtime,
-                ),
-                timeout=DEFAULT_GREP_TIMEOUT_SECONDS + GREP_TIMEOUT_GRACE_SECONDS,
-            )
-        except TimeoutError:
-            return _grep_result_error(
-                runtime,
-                "grep 调度层在 "
-                f"{DEFAULT_GREP_TIMEOUT_SECONDS + GREP_TIMEOUT_GRACE_SECONDS} 秒内未完成，"
-                "已取消本次工具结果；请缩小 path 或 glob 后重试。",
-            )
+            gateway_id = require_current_gateway_id(tool_name)
+            async with asyncio.timeout(timeout_ms / 1000):
+                artifact = await asyncio.to_thread(artifact_search, tool_name, pattern, path, glob, output_mode, runtime)
+                if artifact is not None:
+                    return artifact
+                request = await asyncio.to_thread(search_request, tool_name, pattern, path, glob, limit, cursor, timeout_ms,
+                    scan_limit, max_response_bytes, max_bytes, max_snippet_bytes)
+                result = await resource_navigation.navigate(request, local_gateway_id=gateway_id)
+                message = search_message(tool_name, result, output_mode, runtime, max_response_bytes)
+                if time.monotonic() >= deadline:
+                    raise TimeoutError
+                return message
+        except (TimeoutError, httpx.TimeoutException):
+            return _path_error(tool_name, runtime, ResourceFileOperationError(
+                "output_limit_exceeded", "文件搜索超过本次总期限", reason="deadline"))
+        except (OSError, RuntimeError, ValueError, httpx.HTTPError) as error:
+            return _path_error(tool_name, runtime, error)
 
     replacements = {
         "ls": (sync_ls, async_ls, WorkspaceLsSchema),
         "read_file": (sync_read_file, async_read_file, WorkspaceReadFileSchema),
         "write_file": (sync_write_file, async_write_file, WorkspaceWriteFileSchema),
         "edit_file": (sync_edit_file, async_edit_file, WorkspaceEditFileSchema),
-        "glob": (sync_glob, async_glob, WorkspaceGlobSchema),
-        "grep": (sync_grep, async_grep, WorkspaceGrepSchema),
+        "glob": (update_wrapper(partial(sync_search, tool_name="glob"), sync_search), update_wrapper(partial(async_search, tool_name="glob"), async_search), WorkspaceGlobSchema),
+        "grep": (update_wrapper(partial(sync_search, tool_name="grep"), sync_search), update_wrapper(partial(async_search, tool_name="grep"), async_search), WorkspaceGrepSchema),
     }
     for index, tool in enumerate(middleware.tools):
         replacement = replacements.get(tool.name)

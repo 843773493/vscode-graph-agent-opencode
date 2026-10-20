@@ -299,7 +299,7 @@ def test_user_scope_resolves_through_catalog() -> None:
         ("boxteam://workspace/ws-1/resources/files/root", "directory", ("describe", "list", "search"), "file_segments"),
         ("boxteam://inline/dist-1/resources/skills/review", "directory", ("describe", "list", "search"), "file_segments"),
         ("boxteam://workspace/ws-1/resources/skills/review/references", "directory", ("describe", "list", "search"), "file_segments"),
-        ("boxteam://workspace/ws-1/resources/skills/review/SKILL.md", "file", ("describe", "read"), None),
+        ("boxteam://workspace/ws-1/resources/skills/review/SKILL.md", "file", ("describe", "read", "search"), None),
         ("boxteam://workspace/ws-1/resources/agent-spec/root/AGENTS.md", "file", ("describe", "read"), None),
         ("boxteam://inline/dist-1/resources/config/workspace_inline", "file", ("describe", "read"), None),
         ("boxteam://workspace/ws-1/resources/session/sess-1", "domain_object", ("describe",), None),

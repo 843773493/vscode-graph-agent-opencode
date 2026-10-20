@@ -1583,6 +1583,10 @@ message ResourceNavigationRequest {
   string read_format = 10;
   optional uint32 line_offset = 11;
   optional uint32 max_lines = 12;
+  // path 为文件名包含查询；glob 与 content 分别匹配路径模式和文本行。
+  string search_mode = 13;
+  optional string file_glob = 14;
+  uint32 max_snippet_bytes = 15;
 }
 
 message ResourceNavigationNodeDTO {
@@ -1605,6 +1609,16 @@ message ResourceNavigationResultDTO {
   optional string media_type = 9;
   optional string mime_type = 10;
   optional uint32 line_offset = 11;
+  repeated ResourceNavigationMatchDTO matches = 12;
+}
+
+message ResourceNavigationMatchDTO {
+  string uri = 1;
+  uint32 line = 2;
+  uint32 column = 3;
+  string text = 4;
+  uint32 snippet_start_column = 5;
+  bool truncated = 6;
 }
 
 message WorkspaceResourceDTO {

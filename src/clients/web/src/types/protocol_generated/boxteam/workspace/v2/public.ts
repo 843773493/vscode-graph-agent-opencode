@@ -1595,7 +1595,13 @@ export interface ResourceNavigationRequest {
   /** 默认严格文本；auto 仅按 owner 已支持的扩展名读取完整媒体。 */
   read_format: string;
   line_offset?: number | undefined;
-  max_lines?: number | undefined;
+  max_lines?:
+    | number
+    | undefined;
+  /** path 为文件名包含查询；glob 与 content 分别匹配路径模式和文本行。 */
+  search_mode: string;
+  file_glob?: string | undefined;
+  max_snippet_bytes: number;
 }
 
 export interface ResourceNavigationNodeDTO {
@@ -1620,6 +1626,16 @@ export interface ResourceNavigationResultDTO {
   media_type?: string | undefined;
   mime_type?: string | undefined;
   line_offset?: number | undefined;
+  matches: ResourceNavigationMatchDTO[];
+}
+
+export interface ResourceNavigationMatchDTO {
+  uri: string;
+  line: number;
+  column: number;
+  text: string;
+  snippet_start_column: number;
+  truncated: boolean;
 }
 
 export interface WorkspaceResourceDTO {
@@ -12529,6 +12545,9 @@ function createBaseResourceNavigationRequest(): ResourceNavigationRequest {
     read_format: "",
     line_offset: undefined,
     max_lines: undefined,
+    search_mode: "",
+    file_glob: undefined,
+    max_snippet_bytes: 0,
   };
 }
 
@@ -12547,6 +12566,9 @@ export const ResourceNavigationRequest: MessageFns<ResourceNavigationRequest> = 
       read_format: isSet(object.read_format) ? globalThis.String(object.read_format) : "",
       line_offset: isSet(object.line_offset) ? globalThis.Number(object.line_offset) : undefined,
       max_lines: isSet(object.max_lines) ? globalThis.Number(object.max_lines) : undefined,
+      search_mode: isSet(object.search_mode) ? globalThis.String(object.search_mode) : "",
+      file_glob: isSet(object.file_glob) ? globalThis.String(object.file_glob) : undefined,
+      max_snippet_bytes: isSet(object.max_snippet_bytes) ? globalThis.Number(object.max_snippet_bytes) : 0,
     };
   },
 
@@ -12588,6 +12610,15 @@ export const ResourceNavigationRequest: MessageFns<ResourceNavigationRequest> = 
     if (message.max_lines !== undefined) {
       obj.max_lines = Math.round(message.max_lines);
     }
+    if (message.search_mode !== "") {
+      obj.search_mode = message.search_mode;
+    }
+    if (message.file_glob !== undefined) {
+      obj.file_glob = message.file_glob;
+    }
+    if (message.max_snippet_bytes !== 0) {
+      obj.max_snippet_bytes = Math.round(message.max_snippet_bytes);
+    }
     return obj;
   },
 
@@ -12608,6 +12639,9 @@ export const ResourceNavigationRequest: MessageFns<ResourceNavigationRequest> = 
     message.read_format = object.read_format ?? "";
     message.line_offset = object.line_offset ?? undefined;
     message.max_lines = object.max_lines ?? undefined;
+    message.search_mode = object.search_mode ?? "";
+    message.file_glob = object.file_glob ?? undefined;
+    message.max_snippet_bytes = object.max_snippet_bytes ?? 0;
     return message;
   },
 };
@@ -12671,6 +12705,7 @@ function createBaseResourceNavigationResultDTO(): ResourceNavigationResultDTO {
     media_type: undefined,
     mime_type: undefined,
     line_offset: undefined,
+    matches: [],
   };
 }
 
@@ -12690,6 +12725,9 @@ export const ResourceNavigationResultDTO: MessageFns<ResourceNavigationResultDTO
       media_type: isSet(object.media_type) ? globalThis.String(object.media_type) : undefined,
       mime_type: isSet(object.mime_type) ? globalThis.String(object.mime_type) : undefined,
       line_offset: isSet(object.line_offset) ? globalThis.Number(object.line_offset) : undefined,
+      matches: globalThis.Array.isArray(object?.matches)
+        ? object.matches.map((e: any) => ResourceNavigationMatchDTO.fromJSON(e))
+        : [],
     };
   },
 
@@ -12728,6 +12766,9 @@ export const ResourceNavigationResultDTO: MessageFns<ResourceNavigationResultDTO
     if (message.line_offset !== undefined) {
       obj.line_offset = Math.round(message.line_offset);
     }
+    if (message.matches?.length) {
+      obj.matches = message.matches.map((e) => ResourceNavigationMatchDTO.toJSON(e));
+    }
     return obj;
   },
 
@@ -12749,6 +12790,61 @@ export const ResourceNavigationResultDTO: MessageFns<ResourceNavigationResultDTO
     message.media_type = object.media_type ?? undefined;
     message.mime_type = object.mime_type ?? undefined;
     message.line_offset = object.line_offset ?? undefined;
+    message.matches = object.matches?.map((e) => ResourceNavigationMatchDTO.fromPartial(e)) || [];
+    return message;
+  },
+};
+
+function createBaseResourceNavigationMatchDTO(): ResourceNavigationMatchDTO {
+  return { uri: "", line: 0, column: 0, text: "", snippet_start_column: 0, truncated: false };
+}
+
+export const ResourceNavigationMatchDTO: MessageFns<ResourceNavigationMatchDTO> = {
+  fromJSON(object: any): ResourceNavigationMatchDTO {
+    return {
+      uri: isSet(object.uri) ? globalThis.String(object.uri) : "",
+      line: isSet(object.line) ? globalThis.Number(object.line) : 0,
+      column: isSet(object.column) ? globalThis.Number(object.column) : 0,
+      text: isSet(object.text) ? globalThis.String(object.text) : "",
+      snippet_start_column: isSet(object.snippet_start_column) ? globalThis.Number(object.snippet_start_column) : 0,
+      truncated: isSet(object.truncated) ? globalThis.Boolean(object.truncated) : false,
+    };
+  },
+
+  toJSON(message: ResourceNavigationMatchDTO): unknown {
+    const obj: any = {};
+    if (message.uri !== "") {
+      obj.uri = message.uri;
+    }
+    if (message.line !== 0) {
+      obj.line = Math.round(message.line);
+    }
+    if (message.column !== 0) {
+      obj.column = Math.round(message.column);
+    }
+    if (message.text !== "") {
+      obj.text = message.text;
+    }
+    if (message.snippet_start_column !== 0) {
+      obj.snippet_start_column = Math.round(message.snippet_start_column);
+    }
+    if (message.truncated !== false) {
+      obj.truncated = message.truncated;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<ResourceNavigationMatchDTO>, I>>(base?: I): ResourceNavigationMatchDTO {
+    return ResourceNavigationMatchDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<ResourceNavigationMatchDTO>, I>>(object: I): ResourceNavigationMatchDTO {
+    const message = createBaseResourceNavigationMatchDTO();
+    message.uri = object.uri ?? "";
+    message.line = object.line ?? 0;
+    message.column = object.column ?? 0;
+    message.text = object.text ?? "";
+    message.snippet_start_column = object.snippet_start_column ?? 0;
+    message.truncated = object.truncated ?? false;
     return message;
   },
 };

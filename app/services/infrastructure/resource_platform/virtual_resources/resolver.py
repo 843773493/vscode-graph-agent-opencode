@@ -146,6 +146,7 @@ def resource_navigation_node(
         raise ResourceUriResolveError("capability_denied", "领域资源不公开私有文件树")
     operations = (
         ("describe", "list", "search") if resource_shape == "directory"
+        else ("describe", "read", "search") if resource_shape == "file" and parsed.kind in {"files", "skills"}
         else ("describe", "read") if resource_shape == "file" else ("describe",)
     )
     return ResourceNavigationNode(

@@ -378,7 +378,7 @@ async def test_remote_skill_navigation_is_lightweight_encoded_and_fixed_to_owner
             return body
         data = body["data"]
         assert set(data) == {"node", "entries", "content", "truncated", "next_cursor", "truncation_reason", "view",
-                             "content_encoding", "media_type", "mime_type", "line_offset"}
+                             "content_encoding", "media_type", "mime_type", "line_offset", "matches"}
         assert data["view"] == "live"
         assert data["node"]["uri"] == parse_resource_uri(uri, local_gateway_id=target.gateway_id).display_uri
         for node in (data["node"], *data["entries"]):
@@ -465,7 +465,7 @@ async def test_remote_skill_navigation_is_lightweight_encoded_and_fixed_to_owner
                                                   "backend_pid": target.backend.process.pid, "owner_pid": target.gateway.process.pid})
 
 
-async def test_model_ls_and_read_gateway_skill_children_without_activation(skill_gateways: SkillGatewayCase):
+async def test_model_ls_read_and_search_gateway_skill_children_without_activation(skill_gateways: SkillGatewayCase):
     case = skill_gateways
     target = case.nodes["b"]
     for name, node in case.nodes.items():
@@ -511,6 +511,16 @@ async def test_model_ls_and_read_gateway_skill_children_without_activation(skill
             return _tool("ls", {"path": child["uri"]}, "call_model_ls_" + directory)
         child, = result["entries"]
         assert child["uri"] == root_uri + "/references/scripts/owner-b-%E4%B8%AD%E6%96%87%20%25.txt"
+        globs = [json.loads(message["content"]) for message in payload["messages"]
+                 if message["role"] == "tool" and message.get("name") == "glob"]
+        if not globs:
+            return _tool("glob", {"path": result["node"]["uri"], "pattern": "*.txt"}, "call_model_glob")
+        assert [entry["uri"] for entry in globs[-1]["entries"]] == [child["uri"]]
+        greps = [message["content"] for message in payload["messages"]
+                 if message["role"] == "tool" and message.get("name") == "grep"]
+        if not greps:
+            return _tool("grep", {"path": child["uri"], "pattern": "read-body-owner-b", "output_mode": "content"}, "call_model_grep")
+        assert child["uri"] in greps[-1] and "read-body-owner-b" in greps[-1] and "read-body-owner-a" not in greps[-1]
         reads = [message for message in payload["messages"] if message["role"] == "tool" and message.get("name") == "read_file"]
         if not reads:
             return _tool("read_file", {"path": child["uri"]}, "call_model_read_child")
@@ -526,14 +536,14 @@ async def test_model_ls_and_read_gateway_skill_children_without_activation(skill
     assert len(listed) == 3
     rows = [row for row in case.observations() if row["event"] == "workspace_response"
             and row["method"] == "POST" and row["sent_request_id"] == "req-model-ls-navigation"]
-    assert len(rows) == 4
+    assert len(rows) == 6
     for row in rows:
         assert row["sent_request_id"] == row["context_request_id"] == row["response_request_id"] == row["envelope_request_id"] == "req-model-ls-navigation"
         assert row["status"] == 200 and row["pid"] == target.backend.process.pid
     assert {row["uri"] for row in rows} == {result["node"]["uri"] for result in listed} | {listed[-1]["entries"][0]["uri"]}
     owners = [row for row in case.observations() if row["event"] == "owner_receipt"
               and row["request_id"] == "req-model-ls-navigation" and row["kind"] == "navigation"]
-    assert len(owners) == 4
+    assert len(owners) == 6
     for row in owners:
         assert row["pid"] == target.gateway.process.pid
         assert row["owner_gateway_id"] == row["request_gateway_id"] == row["result_gateway_id"] == target.gateway_id

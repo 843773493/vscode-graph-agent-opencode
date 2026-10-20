@@ -38,6 +38,10 @@ read/write 的文件目标、ls/glob/grep 的根目标和 apply_patch 的根目�
 
 导航的既有默认字节预算不变，显式单次读取上限为32 MiB、响应上限48 MiB；模型读取默认分别为16/24 MiB，并以10秒总期限覆盖解析、目标执行和工具投影。格式化后的行号、截断提示及媒体 metadata 计入最终工具响应。普通 Skill URI 的 ls/read 不激活来源；提示词撤销普通读取禁令，`skill_load` 仍独占激活。现有工作区读取规则对相对/绝对/URI输入一致生效，附件和工具输出仍交独立原业务 owner，旧产物地址的全量迁移继续归第5组。此次工具面登记为 graph revision 9，加入 `filesystem-read:bounded-uri-media`；旧 selector 明确拒绝，未保留旧图回退。
 
+普通模型 `glob/grep` 随后迁入相同导航 owner，删除 DeepAgents 普通 glob 调用、本机 rg 子进程及其无界输出解析。已有 `search` 操作显式区分 path/glob/content，默认仍是原路径包含查询；glob 模式只匹配文件，grep 为固定字符串按匹配行分页，单文件目标也能搜索。匹配公布规范 URI、一索引行列、片段起始列及 UTF-8 字节有界片段；同一文件跨页仍绑定原目标、查询和限制，前缀变化明确拒绝，不建立持久搜索快照。已知媒体和含 NUL 二进制跳过，未知非 UTF-8 文本、文件字节超限和扫描超限明确失败，不能冒充无匹配。内容递归沿既有规则排除 .git/node_modules/.boxteam；工具结果过滤既有拒绝读取规则，并核最终 ToolMessage 字节预算。grep 的 count 只计本页匹配行，截断和 cursor 明确披露。
+
+搜索工具面登记为 graph revision10，旧 selector 仍明确拒绝。同步/异步共用搜索实现时保留 callable 类型标注，确保真实 LangGraph runtime 注入和装配可用。旧会话产物搜索仍交原 SessionArtifactBackend，待第5组生成/消费全迁后物理删除。wcmatch 已是固定 DeepAgents 依赖；登记直接依赖时根包动态 metadata 因 node_modules 重复嵌套路径失败，保留具名 TODO，未为此修改环境或构建配置。多页重复扫描优化继续按用户要求延期。
+
 ### 4. 条件写入与多文件发布结果
 
 write/edit/patch 的内容前置使用精确原始 byte `sha256:<hex>` 或该 owner 已有等价 revision；创建使用 expected_absent。owner 在一个根内串行自己管理的 mutation，先校验所有 preimage/能力/patch、准备结果，再在每次发布前重新核当前 preimage；同目录临时文件经完整写入和原子替换发布，失败回收自己的句柄和未发布临时文件。

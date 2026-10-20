@@ -263,6 +263,22 @@ def test_navigation_remote_response_cannot_change_owner_or_escape_root(bad_uri: 
     assert error.value.code == "federation-malformed-frame"
 
 
+def test_search_match_uris_are_qualified_and_must_belong_to_returned_files() -> None:
+    uri = f"boxteam://workspace/{WORKSPACE_ID}/resources/files/root/src/file.txt"
+    result = ResourceNavigationResultDTO.model_validate({
+        "node": {"uri": uri, "resource_shape": "file", "operations": ["describe", "read", "search"]},
+        "entries": [{"uri": uri, "resource_shape": "file", "operations": ["read", "search"]}],
+        "matches": [{"uri": uri, "line": 3, "column": 7, "text": "needle", "snippet_start_column": 7}],
+    })
+    qualified = _qualify_result(result, uri=uri, gateway_id="gateway_target")
+    expected = uri.replace("boxteam://", "boxteam://gateway_target/")
+    assert qualified.node.uri == qualified.entries[0].uri == qualified.matches[0].uri == expected
+    bad_match = result.matches[0].model_copy(update={"uri": uri.replace("file.txt", "unreturned.txt")})
+    with pytest.raises(FederationError) as failure:
+        _qualify_result(result.model_copy(update={"matches": (bad_match,)}), uri=uri, gateway_id="gateway_target")
+    assert failure.value.code == "federation-malformed-frame"
+
+
 @pytest.mark.parametrize("bad", ["uri", "shape", "extra"])
 async def test_navigation_invalid_remote_frame_is_sanitized_at_http_boundary(navigation_proxy, navigation_relay: _NavigationRelay, bad: str) -> None:
     client, _, _ = navigation_proxy
