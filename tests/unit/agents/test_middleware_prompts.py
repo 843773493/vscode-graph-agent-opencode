@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Any
+from unittest.mock import MagicMock
 
 from deepagents.backends.state import StateBackend
 from deepagents.middleware.filesystem import FilesystemMiddleware
@@ -79,6 +80,7 @@ def _build_middleware(
         model=FakeListChatModel(responses=["ok"]),
         backend=StateBackend(),
         workspace_root=tmp_path,
+        resource_navigation=MagicMock(),
         permissions=None,
         resolved_skills=skill_catalog,
         context_source_manager=context_source_manager or ContextSourceManager(),

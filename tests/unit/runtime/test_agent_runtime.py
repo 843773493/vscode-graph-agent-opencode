@@ -47,6 +47,7 @@ def test_build_session_agent_runtime_injects_job_service() -> None:
     assert create_runtime.call_args.kwargs["mcp_tools"] is mcp_tools
     assert create_runtime.call_args.kwargs["resource_registry"] is resource_registry
     assert create_runtime.call_args.kwargs["resource_activation"] is resource_activation
+    assert create_runtime.call_args.kwargs["resource_navigation"] is dependency_provider.get_resource_navigation.return_value
     assert create_runtime.call_args.kwargs["skill_catalog"] is skill_catalog
     dependency_provider.get_mcp_tools.assert_not_called()
     assert (

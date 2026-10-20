@@ -206,6 +206,7 @@ class _AgentRuntimeDependencyProvider(AgentRuntimeDependencyProvider):
         workspace_session_context_client: WorkspaceSessionContextClientProtocol,
         session_target_resolver: SessionTargetResolverProtocol,
         mcp_catalog_owner: McpCatalogOwner,
+        resource_navigation: ResourceNavigation,
     ) -> None:
         self._message_service = message_service
         self._session_service = session_service
@@ -216,6 +217,7 @@ class _AgentRuntimeDependencyProvider(AgentRuntimeDependencyProvider):
         self._workspace_session_context_client = workspace_session_context_client
         self._session_target_resolver = session_target_resolver
         self._mcp_catalog_owner = mcp_catalog_owner
+        self._resource_navigation = resource_navigation
         self._node_debug_service: NodeDebugService | None = None
         self._job_service: JobServiceProtocol | None = None
         self._session_orchestrator: SessionOrchestrator | None = None
@@ -240,6 +242,9 @@ class _AgentRuntimeDependencyProvider(AgentRuntimeDependencyProvider):
 
     def get_checkpointer(self) -> BaseCheckpointSaver:
         return self._checkpointer
+
+    def get_resource_navigation(self) -> ResourceNavigation:
+        return self._resource_navigation
 
     def get_terminal_resource_owner(self) -> TerminalResourceOwner:
         return self._terminal_resource_owner
@@ -727,6 +732,7 @@ def _build_app_container(
         workspace_session_context_client=workspace_session_context_client,
         session_target_resolver=session_target_resolver,
         mcp_catalog_owner=mcp_catalog_owner,
+        resource_navigation=resource_navigation,
     )
     dependency_provider.set_goal_service(goal_service)
     # ThreadResidency：30 分钟 idle 卸载判定器（OpenSpec 2.8/8.8-A）。debug 服务把

@@ -30,6 +30,10 @@ read/write 的文件目标、ls/glob/grep 的根目标和 apply_patch 的根目�
 
 只读导航的首个切片在共享 `ResourceNavigation` owner 内设置单次总期限、扫描节点、单文件字节和序列化响应字节上限。目录和路径搜索返回 `view=live`；续页绑定 Gateway、规范 URI、操作、查询和限制，校验已消费前缀的节点及 stat metadata，变化时明确拒绝。此摘要只用于检测可变视图变化，不是内容 revision 或历史快照。扫描超限要求缩小范围；条目或正文预算截断会披露原因，目录/搜索可续页时返回 cursor。HTTP 层还核验包含请求回执的最终响应，不能容纳时返回文件执行域的 `output_limit_exceeded`。递归扫描通过 `scandir` 在排序前限制枚举量，不登记来源或 activation；普通模型工具、内容搜索和跨 Gateway 全程预算仍待后续任务接通。
 
+模型 `ls` 首先迁入该共享 owner，工具返回同一有界导航 JSON，包含节点 URI、`entries`、`truncated`、`truncation_reason`、`next_cursor` 和 `view=live`。相对路径与原生绝对路径复用已装配的 `WorkspaceFilePaths`；URI 交公共 grammar/resolver。Container 将唯一导航 owner 经 runtime provider、Agent factory 和 middleware 传入，不按 thread 重建。同步和异步工具共用本地文件执行内核；同步 HTTP 使用独立同步 client，异步 HTTP 使用独立异步 client，普通 Gateway 导航不建立来源观察 state，也不借用长期 watcher 的事件循环或连接。工具期限覆盖输入解析及结果交付；原生阻塞 I/O 不能被取消强制中断，超期结果不会伪报成功。
+
+该工具能力面变化登记为 deep-agent graph revision 8，工具声明加入 `filesystem-ls:bounded-uri-navigation` 并更新 schema hash；旧持久 selector 按既有精确匹配合同明确拒绝，不回退到新图或保留旧 ls。工作区文件 URI 可继续交现有 read_file；Skill 目录 URI 可继续 ls，Skill 文件读取、glob/grep 和写入迁移仍待各自切片完成，不能将目录节点公布的 read 能力误称为模型 read_file 已完成迁移。
+
 ### 4. 条件写入与多文件发布结果
 
 write/edit/patch 的内容前置使用精确原始 byte `sha256:<hex>` 或该 owner 已有等价 revision；创建使用 expected_absent。owner 在一个根内串行自己管理的 mutation，先校验所有 preimage/能力/patch、准备结果，再在每次发布前重新核当前 preimage；同目录临时文件经完整写入和原子替换发布，失败回收自己的句柄和未发布临时文件。

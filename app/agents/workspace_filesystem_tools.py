@@ -2,11 +2,14 @@ import ast
 import asyncio
 import base64
 import json
+import logging
 import subprocess
+import time
 from collections.abc import Awaitable, Callable
 from pathlib import Path, PurePosixPath
 from typing import Annotated, Literal, cast
 
+import httpx
 from deepagents.backends import CompositeBackend
 from deepagents.backends.protocol import FileData, ReadResult
 from deepagents.backends.utils import (
@@ -26,8 +29,19 @@ from app.agents.workspace_tool_paths import (
     WorkspaceToolPathResolver,
     backend_virtual_to_workspace_relative,
 )
+from app.core.resource_uri import ResourceUriGrammarError
+from app.core.trace_middleware import require_current_gateway_id
+from app.schemas.internal_v2.resource_navigation import ResourceNavigationRequest
+from app.services.infrastructure.resource_platform.sources.resource_navigation import (
+    ResourceFileOperationError,
+    ResourceNavigation,
+)
+from app.services.infrastructure.resource_platform.virtual_resources.resolver import (
+    ResourceUriResolveError,
+)
 
 GrepOutputMode = Literal["files_with_matches", "content", "count"]
+logger = logging.getLogger(__name__)
 DEFAULT_MAX_LINES = 2_000
 DEFAULT_GREP_TIMEOUT_SECONDS = 10
 GREP_TIMEOUT_GRACE_SECONDS = 1
@@ -49,10 +63,14 @@ class _ToolSchema(BaseModel):
 class WorkspaceLsSchema(_ToolSchema):
     path: str = Field(
         description=(
-            "Directory path to list; prefer a workspace-relative path and use "
-            "'.' for the workspace root."
+            "Directory target: a workspace-relative/native path or resource URI; use '.' for the workspace root."
         )
     )
+    limit: int = Field(default=100, ge=1, le=1000)
+    cursor: str | None = Field(default=None, min_length=1, max_length=2048)
+    timeout_ms: int = Field(default=10000, ge=1, le=30000)
+    scan_limit: int = Field(default=10000, ge=1, le=100000)
+    max_response_bytes: int = Field(default=1048576, ge=1024, le=1048576)
     runtime: Annotated[object, InjectedToolArg]
 
 
@@ -151,10 +169,27 @@ def _tool_implementations(
 def _path_error(
     tool_name: str,
     runtime: ToolRuntime[None, FilesystemState],
-    error: OSError | RuntimeError | ValueError,
+    error: OSError | RuntimeError | ValueError | httpx.HTTPError,
 ) -> ToolMessage:
+    if isinstance(error, ResourceFileOperationError):
+        content = json.dumps(error.detail(), ensure_ascii=False)
+    elif isinstance(error, (ResourceUriGrammarError, ResourceUriResolveError)):
+        content = json.dumps({
+            "owner": "resource_uri_grammar" if isinstance(error, ResourceUriGrammarError) else "resource_uri_resolver",
+            "code": error.reason_code, "message": str(error),
+        }, ensure_ascii=False)
+    elif tool_name == "ls" and isinstance(error, (OSError, httpx.HTTPError)):
+        logger.error("目录导航执行失败", exc_info=error)
+        content = json.dumps({
+            "owner": "resource_file_operations", "code": "execution_failed",
+            "reason": "filesystem" if isinstance(error, OSError) else "transport",
+            "type": type(error).__name__, "errno": getattr(error, "errno", None),
+            "message": error.strerror if isinstance(error, OSError) else "目录导航传输失败",
+        }, ensure_ascii=False)
+    else:
+        content = f"Error: {error}"
     return ToolMessage(
-        content=f"Error: {error}",
+        content=content,
         name=tool_name,
         tool_call_id=runtime.tool_call_id,
         status="error",
@@ -458,8 +493,9 @@ def configure_workspace_filesystem_tools(
     middleware: FilesystemMiddleware,
     *,
     workspace_root: Path,
+    resource_navigation: ResourceNavigation,
 ) -> None:
-    """用户相对/原生绝对/URI 目标经同一解析后进入 DeepAgents 虚拟后端。"""
+    """目录导航交共享文件 owner；其余工具在内部 backend 边界执行。"""
 
     resolver = WorkspaceToolPathResolver(workspace_root)
     session_artifact_backend = (
@@ -471,7 +507,7 @@ def configure_workspace_filesystem_tools(
         raise TypeError("Session artifacts route 必须由唯一 SessionArtifactBackend 装配")
     implementations = {
         name: _tool_implementations(middleware, name)
-        for name in ("ls", "read_file", "write_file", "edit_file", "glob")
+        for name in ("read_file", "write_file", "edit_file", "glob")
     }
 
     def resolve_paths(
@@ -491,25 +527,53 @@ def configure_workspace_filesystem_tools(
     def sync_ls(
         path: str,
         runtime: ToolRuntime[None, FilesystemState],
+        limit: int = 100, cursor: str | None = None, timeout_ms: int = 10000,
+        scan_limit: int = 10000, max_response_bytes: int = 1048576,
     ) -> ToolMessage:
+        deadline = time.monotonic() + timeout_ms / 1000
         try:
-            _, backend_path = resolve_paths("ls", path)
-        except ValueError as error:
+            gateway_id = require_current_gateway_id("ls")
+            uri = resource_navigation.input_uri(path)
+            if time.monotonic() >= deadline:
+                raise TimeoutError
+            result = resource_navigation.navigate_sync(ResourceNavigationRequest(
+                uri=uri, operation="list", limit=limit, cursor=cursor,
+                timeout_ms=timeout_ms, scan_limit=scan_limit, max_response_bytes=max_response_bytes,
+            ), local_gateway_id=gateway_id)
+            if time.monotonic() >= deadline:
+                raise ResourceFileOperationError("output_limit_exceeded", "目录导航超过本次总期限", reason="deadline")
+        except (TimeoutError, httpx.TimeoutException):
+            return _path_error("ls", runtime, ResourceFileOperationError(
+                "output_limit_exceeded", "目录导航超过本次总期限", reason="deadline",
+            ))
+        except (OSError, RuntimeError, ValueError, httpx.HTTPError) as error:
             return _path_error("ls", runtime, error)
-        return _rewrite_path_list(
-            implementations["ls"][0](path=backend_path, runtime=runtime)
+        return ToolMessage(
+            content=result.model_dump_json(), name="ls", tool_call_id=runtime.tool_call_id, status="success",
         )
 
     async def async_ls(
         path: str,
         runtime: ToolRuntime[None, FilesystemState],
+        limit: int = 100, cursor: str | None = None, timeout_ms: int = 10000,
+        scan_limit: int = 10000, max_response_bytes: int = 1048576,
     ) -> ToolMessage:
         try:
-            _, backend_path = resolve_paths("ls", path)
-        except ValueError as error:
+            gateway_id = require_current_gateway_id("ls")
+            async with asyncio.timeout(timeout_ms / 1000):
+                uri = await asyncio.to_thread(resource_navigation.input_uri, path)
+                result = await resource_navigation.navigate(ResourceNavigationRequest(
+                    uri=uri, operation="list", limit=limit, cursor=cursor,
+                    timeout_ms=timeout_ms, scan_limit=scan_limit, max_response_bytes=max_response_bytes,
+                ), local_gateway_id=gateway_id)
+        except (TimeoutError, httpx.TimeoutException):
+            return _path_error("ls", runtime, ResourceFileOperationError(
+                "output_limit_exceeded", "目录导航超过本次总期限", reason="deadline",
+            ))
+        except (OSError, RuntimeError, ValueError, httpx.HTTPError) as error:
             return _path_error("ls", runtime, error)
-        return _rewrite_path_list(
-            await implementations["ls"][1](path=backend_path, runtime=runtime)
+        return ToolMessage(
+            content=result.model_dump_json(), name="ls", tool_call_id=runtime.tool_call_id, status="success",
         )
 
     def sync_read_file(

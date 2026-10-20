@@ -11,6 +11,10 @@
 ## 2. 本地技能包目录与轻量读取
 
 - [ ] 2.1 接通ls/read_file/glob/grep到同一文件owner，先贯穿技能包根、SKILL.md、references/scripts多层导航；结果URI可继续访问，pattern不参与目标解析。
+  - 2026-10-20 `ls` 垂直切片已完成：唯一 Container 导航 owner 经 runtime provider/factory/middleware 注入，同步及异步工具复用同一文件内核，删除旧 DeepAgents ls 调用。相对/原生绝对/URI 输入归同一目标；返回有界 URI JSON，可继续导航 references/scripts 多层目录，保留 cursor、扫描/响应字节限制及包含输入解析的总期限。普通 Gateway 导航使用独立请求，不创建来源观察 state；graph revision 提升为8并登记新的工具面 hash，旧 selector 明确拒绝。Skill 文件 read_file、glob/grep 与写入仍未迁齐，整项保持未勾。
+  - 具名证据统一位于 `out/tests/temp/openspec_takeover/artifacts/runs/`：`resource-ls-unit-003` 162项通过（26.19秒外层），覆盖工具三种输入、不同relay cwd、一次编码、URI重开、cursor绑定、越界与装配；`resource-ls-graph-unit-004` 99项通过（12.58秒外层），补graph及装具回归。`resource-ls-http-final-004` 正式matrix为7 passed/132.08秒，含5项真实Agent工厂集成、真实Gateway轻量导航和模型实际ls三层目录，核目标owner PID、同一request_id回执、同名对照、来源/activation不增加及新assembly仍引用同一activation。三个运行均exit0且源码前后指纹一致。
+  - 最后只修改 ls 的原生I/O及HTTP错误输出：保留执行错误域、type/errno，原始错误写入内部日志，模型回执不暴露宿主路径或endpoint；`resource-ls-error-boundary-005` 对真实工具入口补验45项通过。其余成功链路复用上述集成证据；不把这些局部通过称整组文件工具验收完成。
+  - 失败归因保留：`resource-ls-unit-001/002` 中新测试分别误判未装配外部根与越界symlink错误，已按真实能力合同修正；压缩middleware denylist用例在完整 `git archive 3010c8ec` 基线 `resource-ls-baseline-001` 同样失败，保留原断言，最终定向运行具名排除此项。`resource-ls-http-001` 的观察装具只监听旧连接、漏记普通导航回执，已迁移；`resource-ls-http-002` 与 `resource-ls-model-http-003` 的新断言先后误把新Turn初始化及每次模型请求的assembly记录当作导航激活，最终在首次真实工具前取基线，并同时核来源/activation计数及assembly指向的snapshot/hash/provenance。原失败输出保留，未削弱目标、身份、正文或来源激活合同。
 - [ ] 2.2 实现有界匹配/字节/deadline、截断及与目标查询绑定的分页；明确可变目录变化，不依赖逐文件持久快照。
   - 共享导航 owner 已实现目录/路径搜索的条目与序列化字节截断、总扫描量及单次 owner 期限；续页绑定真实 Gateway、规范根、操作、查询和全部限制。重新有界扫描时校验已消费前缀的 stat metadata，变更显式失败，结果披露 `view=live`；不把该摘要当内容 hash/revision，不建历史目录快照。UTF-8 读取只截完整字符，HTTP 层检查最终响应预算。完整模型 ls/read/glob/grep 与跨 Gateway 全程共享预算仍待迁齐，本项保持未勾。
   - TODO（续页性能）：当前每页重新执行有界扫描，长目录多页的重复工作待主体功能完成后实测优化；不得为此新增逐文件持久快照或第二目录事实源，不能把有界正确性验收称为性能达标。
@@ -48,6 +52,7 @@
 ## 6. 验证与交付
 
 - [ ] 6.1 同步公开DTO/proto/OpenAPI/客户端和测试，静态分析及官方生成器检查；涉及Web则独立类型检查和bun build，正式测试按既有out/tests路径并带进程外保护。
+  - 2026-10-20 ls 切片未改变公开HTTP/proto字段，无需重复生成。`resource-ls-final-static-002` 对26个变更Python文件 Ruff通过；`resource-ls-openspec-final-001` strict通过；辅助Browser服务最终 `resource-ls-browser-final-002` 为93个Node及195个Bun用例通过。同期清理装具的17项故障用例包含在 `resource-ls-unit-003`，HTTP页面装具及graph核验包含在 `resource-ls-graph-unit-004`；不运行延期的长性能场景。原始命令、指纹、退出码和日志见同任务artifacts/runs；这些局部证据不替代其余工具或完整Web验收，本项保持未勾。
   - 本轮导航协议切片通过官方 Buf format/lint/build、以真实提交 `a6ce2bc979477e03039c92f338d189158b8c1744` 为基线的 breaking 及官方生成器；OpenAPI 已导出。原件分别为 `resource-navigation-bounds-protocol-format-001`、`resource-navigation-bounds-protocol-generate-001`、`resource-navigation-bounds-openapi-001`，均exit 0。`resource-navigation-bounds-web-types-001` 真实 tsc 与 `resource-navigation-bounds-web-build-001` 正式 Web 构建均exit 0；之后未修改相应前端源码/生成类型。最终15个变更 Python 文件的 `resource-navigation-bounds-final-static-003` Ruff exit 0。所有测试均由 `run_task.py` 提供进程外 timeout/内存保护，保留命令、源码指纹、原始输出、实际退出码及进程回收记录；本项其余工具/写入/产物协议仍未完成，保持未勾。
 - [ ] 6.2 完成首批真实验收：技能多层导航、搜索无逐文件注册、远端就地执行、激活切换目标固定、并发明确冲突、读Skill无激活；复用未变测试，对新差异及实际入口留固定候选证据。
 - [ ] 6.3 固定Git树导出完整补丁、核全部调用迁移/删除和候选外改动，经独立审查及串行集成后勾对应任务；严格OpenSpec校验，不把规划完成当生产完成。

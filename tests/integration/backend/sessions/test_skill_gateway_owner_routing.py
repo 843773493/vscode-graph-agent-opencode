@@ -6,6 +6,7 @@ import asyncio
 import json
 import sqlite3
 from collections.abc import Callable
+from contextlib import closing
 from dataclasses import dataclass, replace
 from hashlib import sha256
 from pathlib import Path
@@ -449,6 +450,80 @@ async def test_remote_skill_navigation_is_lightweight_encoded_and_fixed_to_owner
     assert not case.source_responses("a") and not case.source_responses("b")
     case.record("remote-navigation-lightweight", {"before": before, "after": after, "publication": current.json(),
                                                   "backend_pid": target.backend.process.pid, "owner_pid": target.gateway.process.pid})
+
+
+async def test_model_ls_navigates_gateway_skill_children_without_activation(skill_gateways: SkillGatewayCase):
+    case = skill_gateways
+    target = case.nodes["b"]
+    for name, node in case.nodes.items():
+        directory = node.gateway_home / "skills" / SKILL_NAME / "references" / "scripts"
+        directory.mkdir(parents=True)
+        (directory / f"owner-{name}-中文 %.txt").write_text(f"owner-{name}")
+    root_uri = resource_display_uri(scope="gateway", scope_id=target.gateway_id,
+                                    kind="skills", tail_segments=(SKILL_NAME,))
+    session = await create_session(target.client, "模型目录导航")
+    before = None
+    listed = []
+
+    def tracking_facts():
+        counts = _tracking_counts(case.context.workspace_root)
+        # 每次真实模型请求都会保存 assembly binding；核其仍指向原 activation，而非禁止正常装配记录。
+        counts = {key: value for key, value in counts.items() if not key.endswith(":resource_activation_assembly_bindings")}
+        assembly_owners = {}
+        for database in case.context.workspace_root.rglob("index.sqlite"):
+            with closing(sqlite3.connect(f"file:{database}?mode=ro", uri=True)) as connection:
+                owners = connection.execute("""SELECT DISTINCT activation_snapshot_id, bindings_hash,
+                    activation_provenance_hash FROM resource_activation_assembly_bindings
+                    ORDER BY activation_snapshot_id, bindings_hash, activation_provenance_hash""").fetchall()
+            assembly_owners[str(database.relative_to(case.context.workspace_root))] = owners
+        return {"counts": counts, "assembly_owners": assembly_owners}
+
+    def reply(payload):
+        nonlocal before
+        results = [json.loads(message["content"]) for message in payload["messages"]
+                   if message["role"] == "tool" and message.get("name") == "ls"]
+        if not results:
+            # 本轮指令来源已由真实 preparation 登记；只比较普通工具执行前后。
+            assert before is None
+            before = tracking_facts()
+            return _tool("ls", {"path": root_uri}, "call_model_ls_root")
+        result = results[-1]
+        listed.append(result)
+        assert result["node"]["uri"].startswith(root_uri)
+        assert not result["truncated"] and result["view"] == "live"
+        if len(results) < 3:
+            directory = "references" if len(results) == 1 else "scripts"
+            child, = [entry for entry in result["entries"] if entry["uri"].endswith("/" + directory)]
+            return _tool("ls", {"path": child["uri"]}, "call_model_ls_" + directory)
+        child, = result["entries"]
+        assert child["uri"] == root_uri + "/references/scripts/owner-b-%E4%B8%AD%E6%96%87%20%25.txt"
+        wire = json.dumps(payload, ensure_ascii=False)
+        assert "owner-a-" not in wire and "private-skill-owner-" not in wire
+        return {"content": "已验证目标 Gateway 的多层目录"}
+
+    case.model.response_callback = reply
+    accepted = await case.send("b", session, "浏览目标 Skill 目录", "req-model-ls-navigation")
+    await _completed(target.client, accepted["job_id"])
+    assert len(listed) == 3
+    rows = [row for row in case.observations() if row["event"] == "workspace_response"
+            and row["method"] == "POST" and row["sent_request_id"] == "req-model-ls-navigation"]
+    assert len(rows) == 3
+    for row in rows:
+        assert row["sent_request_id"] == row["context_request_id"] == row["response_request_id"] == row["envelope_request_id"] == "req-model-ls-navigation"
+        assert row["status"] == 200 and row["pid"] == target.backend.process.pid
+    assert {row["uri"] for row in rows} == {result["node"]["uri"] for result in listed}
+    owners = [row for row in case.observations() if row["event"] == "owner_receipt"
+              and row["request_id"] == "req-model-ls-navigation" and row["kind"] == "navigation"]
+    assert len(owners) == 3
+    for row in owners:
+        assert row["pid"] == target.gateway.process.pid
+        assert row["owner_gateway_id"] == row["request_gateway_id"] == row["result_gateway_id"] == target.gateway_id
+        assert row["request_workspace_id"] == row["result_workspace_id"] == target.workspace_id
+        assert row["result_request_id"] == "req-model-ls-navigation" and row["status"] == 200
+    after = tracking_facts()
+    assert before is not None
+    assert before == after
+    case.record("model-ls-navigation", {"results": listed, "before": before, "after": after, "receipts": rows})
 
 
 async def test_queued_job_cold_restore_keeps_frozen_gateway_and_request_id(skill_gateways):

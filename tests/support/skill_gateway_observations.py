@@ -26,13 +26,17 @@ def _record(event: str, values: dict[str, object]) -> None:
 
 
 def _request_values(request: httpx.Request) -> dict[str, object]:
-    task = asyncio.current_task()
+    try:
+        task = asyncio.current_task()
+    except RuntimeError:
+        task = None
     return {
         "method": request.method, "path": request.url.path, "url": str(request.url),
         "sent_request_id": request.headers.get("X-Request-ID"),
         "if_none_match": request.headers.get("If-None-Match"),
         "context_request_id": get_current_request_id(),
         "task": task.get_name() if task is not None else None,
+        "uri": json.loads(request.content)["uri"] if request.method == "POST" else None,
     }
 
 
@@ -42,6 +46,10 @@ async def _request(request: httpx.Request) -> None:
 
 async def _response(response: httpx.Response) -> None:
     await response.aread()
+    _record_response(response)
+
+
+def _record_response(response: httpx.Response) -> None:
     envelope_id = None
     if response.content and "application/json" in response.headers.get("Content-Type", ""):
         envelope_id = response.json().get("request_id")
@@ -62,6 +70,16 @@ class ObservedGatewaySkillSources(GatewaySkillSources):
             client.event_hooks["request"].append(_request)
             client.event_hooks["response"].append(_response)
         return client
+
+    def _navigation_request(self, request, *, gateway_id):
+        parsed, outgoing = super()._navigation_request(request, gateway_id=gateway_id)
+        _record("workspace_request", _request_values(outgoing))
+        return parsed, outgoing
+
+    @staticmethod
+    def _navigation_response(response, parsed, request_id, gateway_id):
+        _record_response(response)
+        return GatewaySkillSources._navigation_response(response, parsed, request_id, gateway_id)
 
 
 class ObservedGatewaySkillSourcePort(GatewaySkillSourcePort):

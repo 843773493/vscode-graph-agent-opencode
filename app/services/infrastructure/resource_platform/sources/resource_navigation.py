@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from app.core.distribution_identity import load_distribution_id
+from app.core.exceptions import ForbiddenError
 from app.core.resource_uri import (
     ParsedResourceUri,
     parse_resource_uri,
@@ -85,20 +86,50 @@ class ResourceNavigation:
         self._gateway_skills_root = gateway_skills_root.absolute() if gateway_skills_root is not None else None
         self._gateway_id = gateway_id
 
+    def input_uri(self, value: str) -> str:
+        """原生输入只在固定文件 owner 解释；资源 URI 留给唯一 grammar 校验。"""
+        if "://" in value:
+            return value
+        if self._file_paths is None:
+            raise ResourceUriResolveError("capability_denied", "此 owner 不接受原生文件路径")
+        try:
+            return self._file_paths.resolve(value, allow_empty=False)[1]
+        except ForbiddenError as error:
+            raise ResourceUriResolveError("capability_denied", "原生文件目标越出固定目录能力") from error
+
+    def _parse_target(self, request: ResourceNavigationRequest, gateway_id: str) -> ParsedResourceUri:
+        parsed = parse_resource_uri(request.uri, local_gateway_id=gateway_id)
+        if parsed.gateway_authority is not None:
+            raise ResourceUriResolveError("scope_mismatch", "此入口只解析固定本机 Gateway 的资源")
+        if self._gateway_id is not None and gateway_id != self._gateway_id:
+            raise ResourceUriResolveError("scope_mismatch", "Gateway Skill 导航 owner 身份不一致")
+        distribution_id = load_distribution_id() if parsed.scope == "inline" else None
+        require_scope_binding(parsed.scope, parsed.scope_id, ResolutionContext(
+            workspace_id=self._workspace_id, gateway_id=gateway_id,
+            distribution_id=distribution_id,
+        ))
+        return parsed
+
+    def navigate_sync(
+        self, request: ResourceNavigationRequest, *, local_gateway_id: str,
+    ) -> ResourceNavigationResultDTO:
+        """同步工具复用同一解析与文件执行；HTTP 传输不借用异步观察连接。"""
+        deadline = time.monotonic() + request.timeout_ms / 1000
+        parsed = self._parse_target(request, local_gateway_id)
+        if parsed.scope == "gateway" and parsed.kind == "skills" and self._workspace_root is not None:
+            if self._gateway_sources is None:
+                raise ResourceUriResolveError("unknown_resource", "没有对应的 Gateway 文件 owner")
+            result = self._gateway_sources.navigate_sync(
+                request.model_copy(update={"uri": parsed.display_uri}), gateway_id=local_gateway_id,
+            )
+            return self._response(result, request, deadline)
+        return self._navigate_local(parsed, request, local_gateway_id, deadline)
+
     async def navigate(
         self, request: ResourceNavigationRequest, *, local_gateway_id: str,
     ) -> ResourceNavigationResultDTO:
         deadline = time.monotonic() + request.timeout_ms / 1000
-        parsed = parse_resource_uri(request.uri, local_gateway_id=local_gateway_id)
-        if parsed.gateway_authority is not None:
-            raise ResourceUriResolveError("scope_mismatch", "此入口只解析固定本机 Gateway 的资源")
-        if self._gateway_id is not None and local_gateway_id != self._gateway_id:
-            raise ResourceUriResolveError("scope_mismatch", "Gateway Skill 导航 owner 身份不一致")
-        distribution_id = load_distribution_id() if parsed.scope == "inline" else None
-        require_scope_binding(parsed.scope, parsed.scope_id, ResolutionContext(
-            workspace_id=self._workspace_id, gateway_id=local_gateway_id,
-            distribution_id=distribution_id,
-        ))
+        parsed = self._parse_target(request, local_gateway_id)
         try:
             async with asyncio.timeout(max(0, deadline - time.monotonic())):
                 if parsed.scope == "gateway" and parsed.kind == "skills" and self._workspace_root is not None:

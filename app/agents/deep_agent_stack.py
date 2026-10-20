@@ -55,6 +55,9 @@ from app.domain.itemized.hashing import sha256_jcs
 from app.services.infrastructure.resource_platform.registry.context_source_reactor import (
     ContextSourceReactor,
 )
+from app.services.infrastructure.resource_platform.sources.resource_navigation import (
+    ResourceNavigation,
+)
 from app.services.infrastructure.resource_platform.sources.workspace_file_resources import (
     WorkspaceFileResourceRegistry,
 )
@@ -132,6 +135,7 @@ def build_deep_agent_middleware(
     model: BaseChatModel,
     backend: BackendProtocol,
     workspace_root: Path,
+    resource_navigation: ResourceNavigation,
     permissions: list[FilesystemPermission] | None,
     resolved_skills: PublishedSkillCatalog | None,
     compaction_preflight: CompactionPreflightPort,
@@ -179,6 +183,7 @@ def build_deep_agent_middleware(
     configure_workspace_filesystem_tools(
         filesystem_middleware,
         workspace_root=workspace_root,
+        resource_navigation=resource_navigation,
     )
     _filter_middleware_tools(
         filesystem_middleware,

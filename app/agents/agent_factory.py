@@ -111,6 +111,9 @@ from app.services.infrastructure.resource_platform.registry.context_source_react
 from app.services.infrastructure.resource_platform.registry.semantic_registry import (
     ResourceRegistry,
 )
+from app.services.infrastructure.resource_platform.sources.resource_navigation import (
+    ResourceNavigation,
+)
 from app.services.infrastructure.resource_platform.sources.workspace_file_resources import (
     WorkspaceFileResourceRegistry,
 )
@@ -421,6 +424,7 @@ def create_my_deep_agent(
     resource_registry: ResourceRegistry,
     resource_activation: ResourceActivationCoordinator | None,
     workspace_root: Path,
+    resource_navigation: ResourceNavigation,
     include_team_tools: bool = False,
     owns_thread: bool = True,
 ) -> Any:
@@ -859,6 +863,7 @@ def create_my_deep_agent(
         model=model,
         backend=backend,
         workspace_root=workspace_root,
+        resource_navigation=resource_navigation,
         permissions=permissions,
         resolved_skills=resolved_skills,
         execution_owned_skill_catalog=resource_activation is not None,
@@ -1001,6 +1006,7 @@ def create_runtime_deep_agent_for_session(
     workspace_root: Path,
     include_team_tools: bool = False,
     graph_binding_store: GraphBindingStorePort,
+    resource_navigation: ResourceNavigation,
     owns_thread: bool = True,
 ):
     if config_service is None:
@@ -1092,6 +1098,7 @@ def create_runtime_deep_agent_for_session(
         resource_registry=resource_registry,
         resource_activation=resource_activation,
         include_team_tools=include_team_tools,
+        resource_navigation=resource_navigation,
         interrupt_on={tool_name: True for tool_name in direct_confirmation_tool_names},
         custom_tool_confirmation_names=custom_tool_confirmation_names,
         config_service=service,

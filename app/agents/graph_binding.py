@@ -12,7 +12,7 @@ SessionThread 的 generation scope 持有，工厂通过 :class:`ThreadRuntimeBi
 显式绑定该 thread。跨 Turn 复用同代图，每轮 execution admission 由 Runner
 重新绑定，禁止把已编译图或首次 admission 交给其它 thread。
 
-hash 口径（deep-agent revision 7）：两个 hash 都是「确定性 canonical JSON →
+hash 口径（deep-agent revision 8）：两个 hash 都是「确定性 canonical JSON →
 sha256」的稳定内容摘要，摘要形状遵循
 ``app/services/infrastructure/events/channel_events.py`` 的同一标准
 （``sha256:`` + 恰好 64 位小写 hex，fullmatch 全匹配校验）：
@@ -21,7 +21,7 @@ sha256」的稳定内容摘要，摘要形状遵循
   （有序）+ graph_id 的确定性序列化。
 - ``capability_profile_hash``：能力 profile 平面键值映射的确定性序列化。
 
-revision 7 的 slot/profile 是代码内声明式骨架（``DEEP_AGENT_MIDDLEWARE_STACK``
+revision 8 的 slot/profile 是代码内声明式骨架（``DEEP_AGENT_MIDDLEWARE_STACK``
 等常量），而不是按 generation 实际构建产物逐次计算：resolved 工具面与
 middleware 的实际出现会随 denylist/overrides/MCP 连接状态按 generation 漂移，
 若把它们直接纳入 hash，同一 ``(graph_id, graph_revision)`` 的重复注册会触发
@@ -337,10 +337,10 @@ def compute_capability_profile_hash(
 DEEP_AGENT_GRAPH_ID: Final[str] = "deep-agent"
 """deep agent graph family 的固定标识。"""
 
-DEEP_AGENT_GRAPH_REVISION: Final[int] = 7
+DEEP_AGENT_GRAPH_REVISION: Final[int] = 8
 """deep agent 当前代码的 graph revision；改动图骨架/能力面时必须 +1。"""
 
-# revision 7 的 middleware 栈声明式骨架：与 build_deep_agent_middleware 的
+# revision 8 的 middleware 栈声明式骨架：与 build_deep_agent_middleware 的
 # 有序 slot 一一对应。条件 slot（按 denylist/配置/MCP 状态出现）也以固定 slot
 # 名进入声明；按 invocation 的实际出现不属于 selector 校验范围（见模块
 # docstring 的 TODO）。
@@ -360,16 +360,17 @@ DEEP_AGENT_MIDDLEWARE_STACK: Final[tuple[str, ...]] = (
     "StructuredPromptValidationMiddleware",
 )
 
-# revision 7 的工具面声明式骨架：内置默认工具、custom specs、扩展工具统一
+# revision 8 的工具面声明式骨架：内置默认工具、custom specs、扩展工具统一
 # invoke_extension_tool 信封、skill_load 工具。
 DEEP_AGENT_TOOL_FACE: Final[tuple[str, ...]] = (
     "builtin-default-tools",
+    "filesystem-ls:bounded-uri-navigation",
     "custom-spec-tools",
     "extension-invoker-envelope:invoke_extension_tool",
     "skill-load-tool",
 )
 
-# revision 7 的能力 profile：main thread 产品合同（child profile
+# revision 8 的能力 profile：main thread 产品合同（child profile
 # goal_enabled=false 属于后续 ThreadRuntimePolicy 轮次）。
 DEEP_AGENT_CAPABILITY_PROFILE: Final[Mapping[str, object]] = MappingProxyType(
     {

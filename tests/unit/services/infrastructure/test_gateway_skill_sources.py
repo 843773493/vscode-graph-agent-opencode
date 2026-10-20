@@ -84,6 +84,18 @@ async def source_case(tmp_path: Path, request_identity: str):
         await owner.close()
 
 
+@pytest.fixture
+def navigation_transport(monkeypatch: pytest.MonkeyPatch):
+    sync_client, async_client = httpx.Client, httpx.AsyncClient
+
+    def install(reply):
+        transport = httpx.MockTransport(reply)
+        monkeypatch.setattr(httpx, "Client", lambda **kwargs: sync_client(transport=transport, **kwargs))
+        monkeypatch.setattr(httpx, "AsyncClient", lambda **kwargs: async_client(transport=transport, **kwargs))
+
+    return install
+
+
 async def test_authentication_failure_blocks_retained_revision_until_authenticated_recovery(
     source_case, request_identity: str,
 ):
@@ -292,8 +304,9 @@ async def test_independent_poll_304_requires_valid_request_identity_and_empty_bo
 
 
 @pytest.mark.parametrize("failure", [None, "missing-header", "header-drift", "missing-body", "body-drift"])
+@pytest.mark.parametrize("mode", ["sync", "async"])
 async def test_navigation_200_echoes_and_validates_request_identity(
-    source_case, request_identity: str, failure: str | None,
+    source_case, navigation_transport, request_identity: str, failure: str | None, mode: str,
 ):
     owner, source, _skill, _channel = source_case
     request = ResourceNavigationRequest(
@@ -317,12 +330,19 @@ async def test_navigation_200_echoes_and_validates_request_identity(
             payload["request_id"] = "another-request"
         return httpx.Response(200, json=payload, headers=headers)
 
-    source._state(GATEWAY_ID).client = httpx.AsyncClient(transport=httpx.MockTransport(reply))
+    navigation_transport(reply)
+
+    async def navigate():
+        if mode == "sync":
+            return source.navigate_sync(request, gateway_id=GATEWAY_ID)
+        return await source.navigate(request, gateway_id=GATEWAY_ID)
+
     if failure is None:
-        assert await source.navigate(request, gateway_id=GATEWAY_ID) == result
+        assert await navigate() == result
     else:
         with pytest.raises(ValueError):
-            await source.navigate(request, gateway_id=GATEWAY_ID)
+            await navigate()
+    assert source._owners == {}, "普通导航不能创建来源观察 owner"
 
 
 async def test_initial_binding_requires_request_identity_before_http(source_case):
@@ -340,7 +360,8 @@ async def test_initial_binding_requires_request_identity_before_http(source_case
     assert requests == []
 
 
-async def test_navigation_preserves_file_execution_error_domain(source_case, request_identity: str):
+@pytest.mark.parametrize("mode", ["sync", "async"])
+async def test_navigation_preserves_file_execution_error_domain(source_case, navigation_transport, request_identity: str, mode: str):
     _owner, source, _skill, _channel = source_case
     detail = {"owner": "resource_file_operations", "code": "output_limit_exceeded",
               "reason": "scan_limit", "message": "目录扫描达到本次节点上限"}
@@ -349,12 +370,17 @@ async def test_navigation_preserves_file_execution_error_domain(source_case, req
         assert request.headers["X-Request-ID"] == request_identity
         return httpx.Response(400, json={"detail": detail}, headers={"X-Request-ID": request_identity})
 
-    source._state(GATEWAY_ID).client = httpx.AsyncClient(transport=httpx.MockTransport(reply))
+    navigation_transport(reply)
+    request = ResourceNavigationRequest(
+        uri=f"boxteam://gateway/{GATEWAY_ID}/resources/skills/demo", operation="list", scan_limit=1,
+    )
     with pytest.raises(ResourceFileOperationError) as failure:
-        await source.navigate(ResourceNavigationRequest(
-            uri=f"boxteam://gateway/{GATEWAY_ID}/resources/skills/demo", operation="list", scan_limit=1,
-        ), gateway_id=GATEWAY_ID)
+        if mode == "sync":
+            source.navigate_sync(request, gateway_id=GATEWAY_ID)
+        else:
+            await source.navigate(request, gateway_id=GATEWAY_ID)
     assert failure.value.detail() == detail
+    assert source._owners == {}
 
 
 async def test_observer_uses_empty_context_and_gateway_generated_request_ids(

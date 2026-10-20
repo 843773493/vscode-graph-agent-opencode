@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-import ast
 import base64
+import json
 import subprocess
 from pathlib import Path
 from types import SimpleNamespace
@@ -15,7 +15,6 @@ from pydantic import ValidationError
 
 from app.agents import workspace_filesystem_tools
 from app.agents.workspace_backend import build_workspace_backend
-from app.agents.workspace_filesystem_tools import configure_workspace_filesystem_tools
 from app.core.resource_uri import resource_display_uri
 from app.core.workspace_identity import bind_workspace_id
 from app.schemas.internal_v2.message import AttachmentRef
@@ -29,12 +28,12 @@ from app.services.infrastructure.tool_output_store import (
 
 
 @pytest.fixture
-def configured_read_tool(tmp_path):
+def configured_read_tool(configure_filesystem_tools, tmp_path):
     middleware = FilesystemMiddleware(
         backend=build_workspace_backend(tmp_path),
         tool_token_limit_before_evict=None,
     )
-    configure_workspace_filesystem_tools(middleware, workspace_root=tmp_path)
+    configure_filesystem_tools(middleware, workspace_root=tmp_path)
     tool = next(tool for tool in middleware.tools if tool.name == "read_file")
     return tmp_path, tool
 
@@ -194,7 +193,7 @@ async def test_read_file_resolves_relative_path_from_workspace(configured_read_t
 
 
 @pytest.mark.asyncio
-async def test_read_file_reuses_path_returned_by_ls(configured_read_tool):
+async def test_read_file_reuses_path_returned_by_ls(configure_filesystem_tools, configured_read_tool):
     workspace_root, tool = configured_read_tool
     file_path = workspace_root / "listed-file.txt"
     file_path.write_text("listed path works", encoding="utf-8")
@@ -202,14 +201,14 @@ async def test_read_file_reuses_path_returned_by_ls(configured_read_tool):
         backend=build_workspace_backend(workspace_root),
         tool_token_limit_before_evict=None,
     )
-    configure_workspace_filesystem_tools(middleware, workspace_root=workspace_root)
+    configure_filesystem_tools(middleware, workspace_root=workspace_root)
     ls_tool = next(item for item in middleware.tools if item.name == "ls")
     runtime = cast(
         "ToolRuntime[None, FilesystemState]",
         SimpleNamespace(tool_call_id="call_listed_path"),
     )
     listing = await ls_tool.coroutine(path=".", runtime=runtime)
-    listed_paths = ast.literal_eval(listing.content)
+    listed_paths = [entry["uri"] for entry in json.loads(listing.content)["entries"]]
     listed_path = next(
         path for path in listed_paths if path.endswith("listed-file.txt")
     )
@@ -223,13 +222,14 @@ async def test_read_file_reuses_path_returned_by_ls(configured_read_tool):
 
 @pytest.mark.asyncio
 async def test_deepagents_filesystem_tools_share_relative_path_contract(
+    configure_filesystem_tools,
     tmp_path: Path,
 ) -> None:
     middleware = FilesystemMiddleware(
         backend=build_workspace_backend(tmp_path),
         tool_token_limit_before_evict=None,
     )
-    configure_workspace_filesystem_tools(middleware, workspace_root=tmp_path)
+    configure_filesystem_tools(middleware, workspace_root=tmp_path)
     tools = {item.name: item for item in middleware.tools}
     runtime = cast(
         "ToolRuntime[None, FilesystemState]",
@@ -277,7 +277,7 @@ async def test_deepagents_filesystem_tools_share_relative_path_contract(
     assert relative_path in ls_result.content
     assert relative_path in glob_result.content
     assert relative_path in grep_result.content
-    assert "/src/shared-contract.txt" not in ls_result.content
+    assert json.loads(ls_result.content)["entries"][0]["uri"].endswith("/files/root/src/shared-contract.txt")
     assert "/src/shared-contract.txt" not in glob_result.content
     assert "/src/shared-contract.txt" not in grep_result.content
     assert relative_path in write_result.content
@@ -287,13 +287,14 @@ async def test_deepagents_filesystem_tools_share_relative_path_contract(
 
 @pytest.mark.asyncio
 async def test_grep_rejects_boxteam_runtime_and_unscoped_root_search(
+    configure_filesystem_tools,
     tmp_path: Path,
 ) -> None:
     middleware = FilesystemMiddleware(
         backend=build_workspace_backend(tmp_path),
         tool_token_limit_before_evict=None,
     )
-    configure_workspace_filesystem_tools(middleware, workspace_root=tmp_path)
+    configure_filesystem_tools(middleware, workspace_root=tmp_path)
     tool = next(item for item in middleware.tools if item.name == "grep")
     runtime = cast(
         "ToolRuntime[None, FilesystemState]",
@@ -323,6 +324,7 @@ async def test_grep_rejects_boxteam_runtime_and_unscoped_root_search(
 
 @pytest.mark.asyncio
 async def test_listing_tools_hide_and_reject_boxteam_runtime(
+    configure_filesystem_tools,
     tmp_path: Path,
 ) -> None:
     (tmp_path / "src").mkdir()
@@ -335,7 +337,7 @@ async def test_listing_tools_hide_and_reject_boxteam_runtime(
         backend=build_workspace_backend(tmp_path),
         tool_token_limit_before_evict=None,
     )
-    configure_workspace_filesystem_tools(middleware, workspace_root=tmp_path)
+    configure_filesystem_tools(middleware, workspace_root=tmp_path)
     tools = {item.name: item for item in middleware.tools}
     runtime = cast(
         "ToolRuntime[None, FilesystemState]",
@@ -371,16 +373,19 @@ async def test_listing_tools_hide_and_reject_boxteam_runtime(
         result = await tools[tool_name].coroutine(runtime=runtime, **kwargs)
         assert isinstance(result, ToolMessage)
         assert result.status == "error"
-        assert "运行时目录" in result.content
+        if tool_name == "ls":
+            assert json.loads(result.content)["code"] == "capability_denied"
+        else:
+            assert "运行时目录" in result.content
 
 
 @pytest.mark.asyncio
-async def test_glob_rejects_runtime_pattern_before_backend_scan(tmp_path: Path) -> None:
+async def test_glob_rejects_runtime_pattern_before_backend_scan(configure_filesystem_tools, tmp_path: Path) -> None:
     middleware = FilesystemMiddleware(
         backend=build_workspace_backend(tmp_path),
         tool_token_limit_before_evict=None,
     )
-    configure_workspace_filesystem_tools(middleware, workspace_root=tmp_path)
+    configure_filesystem_tools(middleware, workspace_root=tmp_path)
     tool = next(item for item in middleware.tools if item.name == "glob")
     runtime = cast(
         "ToolRuntime[None, FilesystemState]",
@@ -398,7 +403,7 @@ async def test_glob_rejects_runtime_pattern_before_backend_scan(tmp_path: Path) 
 
 
 @pytest.fixture
-async def attachment_tools(tmp_path: Path, session_bundle_factory):
+async def attachment_tools(configure_filesystem_tools, tmp_path: Path, session_bundle_factory):
     """附件通过真实 ingest 发布，工具只取得当前 Session 的受信读取端口。"""
     session_id = "ses_019b781159d47374805bc4427d081a14"
     session_bundle_factory(tmp_path / ".boxteam" / "sessions", session_id)
@@ -415,7 +420,7 @@ async def attachment_tools(tmp_path: Path, session_bundle_factory):
         backend=build_workspace_backend(tmp_path, attachment_reader=read),
         tool_token_limit_before_evict=None,
     )
-    configure_workspace_filesystem_tools(middleware, workspace_root=tmp_path)
+    configure_filesystem_tools(middleware, workspace_root=tmp_path)
     tools = {item.name: item for item in middleware.tools}
     yield tmp_path, tools, ref, store
     store.close()
@@ -471,13 +476,17 @@ async def test_logical_attachment_rejects_cross_session_writes_and_old_paths(att
         result = await tools[tool_name].coroutine(runtime=runtime, **kwargs)
         assert isinstance(result, ToolMessage)
         assert result.status == "error"
-        assert "运行时目录" in result.content or "capability" in result.content
+        if tool_name == "ls":
+            assert json.loads(result.content)["code"] == "unknown_scheme"
+        else:
+            assert "运行时目录" in result.content or "capability" in result.content
     assert store.read("ses_019b781159d47374805bc4427d081a14", ref.file_id).data == before
     assert not (store._path_resolver.resolve_session_node("ses_019b781159d47374805bc4427d081a14") / "attachments").exists()
 
 
 @pytest.mark.asyncio
 async def test_grep_returns_bounded_timeout_without_python_fallback(
+    configure_filesystem_tools,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -485,7 +494,7 @@ async def test_grep_returns_bounded_timeout_without_python_fallback(
         backend=build_workspace_backend(tmp_path),
         tool_token_limit_before_evict=None,
     )
-    configure_workspace_filesystem_tools(middleware, workspace_root=tmp_path)
+    configure_filesystem_tools(middleware, workspace_root=tmp_path)
     tool = next(item for item in middleware.tools if item.name == "grep")
     runtime = cast(
         "ToolRuntime[None, FilesystemState]",
@@ -514,6 +523,7 @@ async def test_grep_returns_bounded_timeout_without_python_fallback(
 
 @pytest.mark.asyncio
 async def test_filesystem_tools_accept_target_native_absolute_paths(
+    configure_filesystem_tools,
     tmp_path: Path,
 ) -> None:
     (tmp_path / "src").mkdir()
@@ -522,7 +532,7 @@ async def test_filesystem_tools_accept_target_native_absolute_paths(
         backend=build_workspace_backend(tmp_path),
         tool_token_limit_before_evict=None,
     )
-    configure_workspace_filesystem_tools(middleware, workspace_root=tmp_path)
+    configure_filesystem_tools(middleware, workspace_root=tmp_path)
     tools = {item.name: item for item in middleware.tools}
     runtime = cast(
         "ToolRuntime[None, FilesystemState]",
@@ -545,6 +555,7 @@ async def test_filesystem_tools_accept_target_native_absolute_paths(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("input_kind", ["relative", "absolute", "uri"])
 async def test_filesystem_tools_share_target_resolution(
+    configure_filesystem_tools,
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, input_kind: str,
 ) -> None:
     workspace, relay = tmp_path / "workspace", tmp_path / "relay"
@@ -555,7 +566,7 @@ async def test_filesystem_tools_share_target_resolution(
     source.write_text("selected target\n", encoding="utf-8")
     monkeypatch.chdir(relay)
     middleware = FilesystemMiddleware(backend=build_workspace_backend(workspace), tool_token_limit_before_evict=None)
-    configure_workspace_filesystem_tools(middleware, workspace_root=workspace)
+    configure_filesystem_tools(middleware, workspace_root=workspace)
     tools = {item.name: item for item in middleware.tools}
     runtime = cast("ToolRuntime[None, FilesystemState]", SimpleNamespace(tool_call_id="call_fixed_target"))
 
@@ -583,7 +594,7 @@ async def test_filesystem_tools_share_target_resolution(
 
 
 @pytest.mark.asyncio
-async def test_external_absolute_inputs_never_read_or_write_workspace_decoys(tmp_path: Path) -> None:
+async def test_external_absolute_inputs_never_read_or_write_workspace_decoys(configure_filesystem_tools, tmp_path: Path) -> None:
     workspace, outside = tmp_path / "workspace", tmp_path / "outside"
     workspace.mkdir()
     outside.mkdir()
@@ -592,7 +603,7 @@ async def test_external_absolute_inputs_never_read_or_write_workspace_decoys(tmp
     (outside / "owned.txt").write_text("REAL OUTSIDE", encoding="utf-8")
     (decoy / "owned.txt").write_text("DECOY", encoding="utf-8")
     middleware = FilesystemMiddleware(backend=build_workspace_backend(workspace), tool_token_limit_before_evict=None)
-    configure_workspace_filesystem_tools(middleware, workspace_root=workspace)
+    configure_filesystem_tools(middleware, workspace_root=workspace)
     tools = {item.name: item for item in middleware.tools}
     runtime = cast("ToolRuntime[None, FilesystemState]", SimpleNamespace(tool_call_id="call_no_redirect"))
     operations = [
@@ -615,13 +626,14 @@ async def test_external_absolute_inputs_never_read_or_write_workspace_decoys(tmp
 
 @pytest.mark.asyncio
 async def test_filesystem_tools_reject_escaping_paths(
+    configure_filesystem_tools,
     tmp_path: Path,
 ) -> None:
     middleware = FilesystemMiddleware(
         backend=build_workspace_backend(tmp_path),
         tool_token_limit_before_evict=None,
     )
-    configure_workspace_filesystem_tools(middleware, workspace_root=tmp_path)
+    configure_filesystem_tools(middleware, workspace_root=tmp_path)
     tools = {item.name: item for item in middleware.tools}
     runtime = cast(
         "ToolRuntime[None, FilesystemState]",
@@ -641,13 +653,14 @@ async def test_filesystem_tools_reject_escaping_paths(
 
 @pytest.mark.asyncio
 async def test_read_file_rejects_agent_visible_bundled_skill_path(
+    configure_filesystem_tools,
     tmp_path: Path,
 ) -> None:
     middleware = FilesystemMiddleware(
         backend=build_workspace_backend(tmp_path),
         tool_token_limit_before_evict=None,
     )
-    configure_workspace_filesystem_tools(middleware, workspace_root=tmp_path)
+    configure_filesystem_tools(middleware, workspace_root=tmp_path)
     tool = next(item for item in middleware.tools if item.name == "read_file")
     runtime = cast(
         "ToolRuntime[None, FilesystemState]",
@@ -666,13 +679,14 @@ async def test_read_file_rejects_agent_visible_bundled_skill_path(
 
 @pytest.mark.asyncio
 async def test_read_file_rejects_non_definition_system_skill_paths(
+    configure_filesystem_tools,
     tmp_path: Path,
 ) -> None:
     middleware = FilesystemMiddleware(
         backend=build_workspace_backend(tmp_path),
         tool_token_limit_before_evict=None,
     )
-    configure_workspace_filesystem_tools(middleware, workspace_root=tmp_path)
+    configure_filesystem_tools(middleware, workspace_root=tmp_path)
     tool = next(item for item in middleware.tools if item.name == "read_file")
     runtime = cast(
         "ToolRuntime[None, FilesystemState]",
@@ -691,6 +705,7 @@ async def test_read_file_rejects_non_definition_system_skill_paths(
 
 @pytest.mark.asyncio
 async def test_read_file_resolves_model_visible_session_artifact_path(
+    configure_filesystem_tools,
     tmp_path: Path,
     session_bundle_factory,
 ) -> None:
@@ -720,7 +735,7 @@ async def test_read_file_resolves_model_visible_session_artifact_path(
         backend=build_workspace_backend(tmp_path),
         tool_token_limit_before_evict=None,
     )
-    configure_workspace_filesystem_tools(middleware, workspace_root=tmp_path)
+    configure_filesystem_tools(middleware, workspace_root=tmp_path)
     read_tool = next(item for item in middleware.tools if item.name == "read_file")
     runtime = cast(
         "ToolRuntime[None, FilesystemState]",
@@ -736,6 +751,7 @@ async def test_read_file_resolves_model_visible_session_artifact_path(
 
 @pytest.mark.asyncio
 async def test_grep_resolves_model_visible_session_artifact_path(
+    configure_filesystem_tools,
     tmp_path: Path,
     session_bundle_factory,
 ) -> None:
@@ -764,7 +780,7 @@ async def test_grep_resolves_model_visible_session_artifact_path(
         backend=build_workspace_backend(tmp_path),
         tool_token_limit_before_evict=None,
     )
-    configure_workspace_filesystem_tools(middleware, workspace_root=tmp_path)
+    configure_filesystem_tools(middleware, workspace_root=tmp_path)
     grep_tool = next(item for item in middleware.tools if item.name == "grep")
     runtime = cast(
         "ToolRuntime[None, FilesystemState]",
@@ -784,12 +800,12 @@ async def test_grep_resolves_model_visible_session_artifact_path(
     assert read_path in result.content
 
 
-def test_all_filesystem_tool_schemas_require_relative_paths(tmp_path: Path) -> None:
+def test_all_filesystem_tool_schemas_require_relative_paths(configure_filesystem_tools, tmp_path: Path) -> None:
     middleware = FilesystemMiddleware(
         backend=build_workspace_backend(tmp_path),
         tool_token_limit_before_evict=None,
     )
-    configure_workspace_filesystem_tools(middleware, workspace_root=tmp_path)
+    configure_filesystem_tools(middleware, workspace_root=tmp_path)
 
     for tool in middleware.tools:
         if tool.name == "execute":

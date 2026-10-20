@@ -27,6 +27,7 @@ from app.agents.tools.skill_loading import create_skill_load_tool
 from app.core.execution_admission_context import execution_admission_scope
 from app.core.lifecycle import LifetimeScope
 from app.core.session_thread_context import session_thread_owner_scope
+from app.core.workspace_identity import load_or_create_workspace_id
 from app.domain.itemized.mutation_intents import MutationIntentOwner
 from app.domain.itemized.resource_activation import ResourceActivationPolicySnapshot
 from app.services.infrastructure.events.event_channel_service import EventChannelService
@@ -36,6 +37,9 @@ from app.services.infrastructure.resource_platform.bootstrap import (
 )
 from app.services.infrastructure.resource_platform.registry.semantic_registry import (
     ResourceRegistry,
+)
+from app.services.infrastructure.resource_platform.sources.resource_navigation import (
+    ResourceNavigation,
 )
 from app.services.infrastructure.rollout_context.activation.body import (
     ResourceActivationBodyStore,
@@ -47,6 +51,7 @@ from app.services.infrastructure.rollout_context.runtime.context_sources.skill_c
     skill_catalog_from_activation,
 )
 from app.services.infrastructure.tool_selection_store import ToolSelectionStore
+from app.services.infrastructure.workspace_files.paths import WorkspaceFilePaths
 from app.services.orchestration.resource_activation import (
     ResourceActivationCoordinator,
     ResourceActivationError,
@@ -138,6 +143,10 @@ def factory_context(registry_db, request, monkeypatch):
         workspace_session_context_client=MagicMock(), config_service=config,
         workspace_root=workspace, workspace_file_resource_registry=platform.file_registry, middleware=[],
         resource_registry=registry, resource_activation=coordinator,
+        resource_navigation=ResourceNavigation(
+            workspace_root=workspace, workspace_id=load_or_create_workspace_id(workspace),
+            file_paths=WorkspaceFilePaths(workspace=workspace, workspace_id=load_or_create_workspace_id(workspace), bindings=None),
+        ),
         mcp_catalog_owner=owner, reactor_lifetime_scope=scope,
     )
     bridge = captured["execution"]

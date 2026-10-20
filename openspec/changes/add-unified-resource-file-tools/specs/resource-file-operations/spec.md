@@ -56,6 +56,16 @@
 - **WHEN** 将搜索 cursor 用于不同根、操作或查询
 - **THEN** 显式拒绝，不跳到新目标继续读取
 
+#### Scenario: 模型目录导航复用同一文件执行
+
+- **WHEN** 模型经同步或异步 ls 列出工作区或已公布 Skill 目录，或使用相同目标和限制续页
+- **THEN** 两个入口使用同一文件 owner 与 URI 导航结果合同；原 DeepAgents ls 执行不再被调用，普通导航不建立来源观察或上下文激活，已有事件循环中也能使用同步入口
+
+#### Scenario: 普通工具执行期间存在后续模型装配
+
+- **WHEN** ls 结果驱动同一轮的后续模型请求，运行时保存新的 assembly binding
+- **THEN** 新装配仍引用原有 activation snapshot、bindings hash 与 provenance，普通导航不新增来源控制、来源快照或 activation；不能把正常模型装配回执误认成文件来源激活
+
 ### Requirement: 普通文本读写必须遵守能力与修订边界
 
 普通文本读取与首批写入 MUST 使用严格 UTF-8 文本和原始字节内容 hash，不隐式改写换行、BOM 或 Unicode。读取可有明确范围/截断标志，不完整内容不得标作完整；普通文件 hash 按需计算。既有 `read_file` 支持的图片等媒体读取 MUST 保留其工具结果合同，不能因文本编码限制而失效；媒体类型与读取能力由实际资源 owner 公布，不将任意非 UTF-8 文件猜成媒体。文件写入 MUST 校验 owner 公布的写能力，绑定预期当前内容 hash 或 owner 的等价 revision；创建 MUST 使用明确的预期不存在条件。只读根、固定历史 revision、领域对象以及由附件/工具结果 owner 管理的产物不得被通用文件工具覆盖。文件工具不得写入上下文来源控制或伪造来源 revision。

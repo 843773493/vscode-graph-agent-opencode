@@ -27,8 +27,9 @@ FILESYSTEM_SYSTEM_PROMPT = (
     "workspace root and paths such as `src/main.js` for files; this is the unambiguous recommended "
     "form and stays valid when the workspace moves. Absolute paths that point inside the workspace "
     "and workspace files resource URIs are accepted and normalized to their workspace-relative form; "
-    "external targets exceed these tools' workspace capability and fail explicitly without redirection. Always echo back the relative "
-    "path returned by the tools. Paths returned by ls, glob, and grep can be passed unchanged to "
+    "external targets require the target owner's native-directory capability and otherwise fail explicitly without redirection. "
+    "ls returns bounded JSON with resource URIs and an optional next_cursor; pass the same target and limits when continuing. "
+    "Workspace files URIs returned by ls and paths returned by glob and grep can be passed unchanged to "
     "read_file, write_file, edit_file, and workspace source-debugging tools. Skill正文只能通过 "
     "`skill_load` 按名称激活，不要用 read_file 读取 Skill，也不要把 Skill 的内部路径传给工具。 "
     "Never list, glob, grep, or read any `.boxteam` path. read_file uses a 1-indexed `line_offset`."
@@ -36,8 +37,9 @@ FILESYSTEM_SYSTEM_PROMPT = (
 
 FILESYSTEM_TOOL_DESCRIPTIONS = {
     "ls": (
-        "List entries below a directory; prefer a workspace-relative path and use `.` "
-        "for the workspace root."
+        "List a directory using a workspace-relative/native path or a resource URI; use `.` for the workspace root. "
+        "Returns bounded JSON entries with reusable URIs, truncation_reason and next_cursor. "
+        "Continue with the same target and limits; this is a live directory view, not a historical snapshot."
     ),
     "read_file": (
         "Read a file; prefer a workspace-relative path. Paths returned by ls, glob, "

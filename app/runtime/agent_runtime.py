@@ -32,6 +32,9 @@ from app.services.infrastructure.node_debug.service import NodeDebugService
 from app.services.infrastructure.resource_platform.registry.semantic_registry import (
     ResourceRegistry,
 )
+from app.services.infrastructure.resource_platform.sources.resource_navigation import (
+    ResourceNavigation,
+)
 from app.services.infrastructure.resource_platform.sources.workspace_file_resources import (
     WorkspaceFileResourceRegistry,
 )
@@ -65,6 +68,8 @@ class AgentRuntimeDependencyProvider(Protocol):
     def get_job_service(self) -> JobServiceProtocol: ...
 
     def get_checkpointer(self) -> BaseCheckpointSaver: ...
+
+    def get_resource_navigation(self) -> ResourceNavigation: ...
 
     def get_terminal_resource_owner(self) -> TerminalResourceOwner: ...
 
@@ -168,6 +173,7 @@ def build_session_agent_runtime(
             else None
         ),
         checkpointer=checkpointer,
+        resource_navigation=dependency_provider.get_resource_navigation(),
         name=name or resolved_agent_id,
         override_model=override_model,
         model_routing_enabled=model_routing_enabled,

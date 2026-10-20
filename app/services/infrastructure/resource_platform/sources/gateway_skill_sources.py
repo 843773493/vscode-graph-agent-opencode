@@ -12,7 +12,11 @@ from dataclasses import dataclass, field
 
 import httpx
 
-from app.core.resource_uri import parse_resource_uri, skill_display_uri
+from app.core.resource_uri import (
+    ParsedResourceUri,
+    parse_resource_uri,
+    skill_display_uri,
+)
 from app.core.trace_middleware import require_current_request_id
 from app.domain.itemized.hashing import canonical_json_bytes
 from app.schemas.gateway.skill_sources import GatewaySkillSourcesDTO
@@ -87,16 +91,14 @@ class GatewaySkillSources:
             raise RuntimeError(f"Gateway Skill source unavailable: gateway_id={gateway_id}, error={state.error if state is not None else 'not-ready'}")
         return state.snapshot
 
-    async def navigate(
+    def _navigation_request(
         self, request: ResourceNavigationRequest, *, gateway_id: str,
-    ) -> ResourceNavigationResultDTO:
-        """经显式配置的可信 Gateway 路由到目标 owner，不启动快照观察。"""
+    ) -> tuple[ParsedResourceUri, httpx.Request]:
         parsed = parse_resource_uri(request.uri, local_gateway_id=gateway_id)
         if parsed.gateway_authority is not None or parsed.scope != "gateway" or parsed.scope_id != gateway_id or parsed.kind != "skills":
             raise ResourceUriResolveError("scope_mismatch", "Gateway Skill 导航目标与固定 owner 不符")
-        state = self._state(gateway_id)
         request_id = require_current_request_id("Gateway Skill navigation")
-        response = await self._client(state).post(
+        outgoing = httpx.Request("POST",
             self._connection.resolve_gateway_url()
             + f"/api/gateway/skill-source-connections/{gateway_id}/workspaces/{self._workspace_id}/navigation",
             headers={
@@ -104,8 +106,35 @@ class GatewaySkillSources:
                 "X-Request-ID": request_id,
             },
             json=request.model_copy(update={"uri": parsed.display_uri}).model_dump(),
-            timeout=self._connection.resolve_timeout_seconds(),
+            extensions={"timeout": httpx.Timeout(min(
+                self._connection.resolve_timeout_seconds(), request.timeout_ms / 1000,
+            )).as_dict()},
         )
+        return parsed, outgoing
+
+    def navigate_sync(
+        self, request: ResourceNavigationRequest, *, gateway_id: str,
+    ) -> ResourceNavigationResultDTO:
+        parsed, outgoing = self._navigation_request(request, gateway_id=gateway_id)
+        with httpx.Client(trust_env=False, follow_redirects=False) as client:
+            response = client.send(outgoing)
+        return self._navigation_response(response, parsed, outgoing.headers["X-Request-ID"], gateway_id)
+
+    async def navigate(
+        self, request: ResourceNavigationRequest, *, gateway_id: str,
+    ) -> ResourceNavigationResultDTO:
+        """只读传输不建立 source owner，也不复用绑定其它事件循环的观察连接。"""
+        parsed, outgoing = self._navigation_request(request, gateway_id=gateway_id)
+        async with httpx.AsyncClient(trust_env=False, follow_redirects=False) as client:
+            response = await client.send(outgoing)
+        return self._navigation_response(response, parsed, outgoing.headers["X-Request-ID"], gateway_id)
+
+    @staticmethod
+    def _navigation_response(
+        response: httpx.Response, parsed: ParsedResourceUri, request_id: str, gateway_id: str,
+    ) -> ResourceNavigationResultDTO:
+        if response.headers.get("X-Request-ID") != request_id:
+            raise ValueError("Gateway Skill navigation 响应头 request_id 与创建请求不一致")
         if response.status_code in {400, 403, 404}:
             detail = response.json().get("detail")
             if isinstance(detail, dict) and detail.get("owner") == "resource_uri_resolver":
@@ -113,8 +142,6 @@ class GatewaySkillSources:
             if isinstance(detail, dict) and detail.get("owner") == "resource_file_operations":
                 raise ResourceFileOperationError(detail["code"], detail["message"], reason=detail["reason"])
         response.raise_for_status()
-        if response.headers.get("X-Request-ID") != request_id:
-            raise ValueError("Gateway Skill navigation 响应头 request_id 与创建请求不一致")
         envelope = APIResponse[ResourceNavigationResultDTO].model_validate_json(response.content)
         if envelope.request_id != request_id:
             raise ValueError("Gateway Skill navigation 响应正文 request_id 与创建请求不一致")
