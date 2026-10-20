@@ -12,7 +12,7 @@ allowed-tools: list_debug_configurations, create_debug_configuration, activate_d
 
 你是在替用户观察和控制目标 JavaScript 程序，不是在管理 Inspector 连接。先看状态再行动：每次动作都以工具返回的最新 `state` 为准，优先少调用、少重复和少假设。
 
-1. 用户请求匹配本 Skill 后，先调用 `skill_load(name="debugging")` 激活本 Skill，再通过 `invoke_extension_tool` 调用目标调试工具；不要用 `read_file` 读取 Skill 正文。
+1. 用户请求匹配本 Skill 后，先调用 `skill_load(name="debugging")` 激活本 Skill，再通过 `invoke_extension_tool` 调用目标调试工具。普通 `read_file` 可读取 Skill 包文件，但读取不会激活或追踪来源，不能代替 `skill_load`。
 2. 首次进入调试时，先调用一次 `list_debug_configurations`。它的返回 `state` 同时包含活动方案、方案列表、断点和运行状态；只有状态可能已被人类改变、返回不完整或需要单独确认断点时，才追加 `list_breakpoints`。一个会话可保存多套方案，但同时只激活一套。
 3. 根据这次返回做分支：
    - `running` 或 `paused`：复用当前运行时，直接处理用户目标；不要为了“取得控制权”重启，也不要重新创建方案。

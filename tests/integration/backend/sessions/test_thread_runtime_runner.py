@@ -367,7 +367,7 @@ async def test_real_tool_body_waits_for_durable_start_and_producer_closes(
     producer_tasks: set[asyncio.Task[object]] = set()
     stream_ids: list[str] = []
     start_error = RuntimeError("真实 tool.started 提交失败")
-    create_agent = agent_factory.create_agent
+    create_agent = agent_factory.create_model_call_agent
     commit = MessageStreamWriter.commit
     on_tool_start = AgentRunLifecycleCallbackHandler.on_tool_start
     process = stream_retry.process_agent_event_stream
@@ -466,7 +466,7 @@ async def test_real_tool_body_waits_for_durable_start_and_producer_closes(
             {"choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]},
         ]
 
-    monkeypatch.setattr(agent_factory, "create_agent", record_agent)
+    monkeypatch.setattr(agent_factory, "create_model_call_agent", record_agent)
     monkeypatch.setattr(AgentRunLifecycleCallbackHandler, "on_tool_start", record_callback)
     monkeypatch.setattr(MessageStreamWriter, "commit", gated_commit)
     monkeypatch.setattr(stream_retry, "process_agent_event_stream", record_processor)
@@ -562,7 +562,7 @@ async def test_real_tool_callback_rejection_preserves_original_error_without_att
     callback_tasks: list[asyncio.Task[object]] = []
     runtimes: list[MessageStreamRuntime] = []
     middleware_failed = asyncio.Event()
-    create_agent = agent_factory.create_agent
+    create_agent = agent_factory.create_model_call_agent
     on_tool_start = AgentRunLifecycleCallbackHandler.on_tool_start
     wrap_tool_call = ToolInvocationContextMiddleware.awrap_tool_call
     tool_call_for_callback = MessageStreamRuntime.tool_call_for_callback
@@ -643,7 +643,7 @@ async def test_real_tool_callback_rejection_preserves_original_error_without_att
             {"choices": [{"index": 0, "delta": {}, "finish_reason": "tool_calls"}]},
         ]
 
-    monkeypatch.setattr(agent_factory, "create_agent", record_agent)
+    monkeypatch.setattr(agent_factory, "create_model_call_agent", record_agent)
     monkeypatch.setattr(AgentRunLifecycleCallbackHandler, "on_tool_start", reject_claimed_callback)
     monkeypatch.setattr(ToolInvocationContextMiddleware, "awrap_tool_call", record_middleware)
     monkeypatch.setattr(MessageStreamRuntime, "tool_call_for_callback", read_rejected_binding)
@@ -1771,7 +1771,7 @@ async def test_real_compile_failure_closes_created_reactor_and_retry_rebuilds(
 ):
     case = runtime_case
     session_id, thread_id = await _session(case.runner)
-    compiler = agent_factory.create_agent
+    compiler = agent_factory.create_model_call_agent
     calls = 0
 
     def fail_once(*args, **kwargs):
@@ -1781,7 +1781,7 @@ async def test_real_compile_failure_closes_created_reactor_and_retry_rebuilds(
             raise RuntimeError("测试真实 compiler 首次失败")
         return compiler(*args, **kwargs)
 
-    monkeypatch.setattr(agent_factory, "create_agent", fail_once)
+    monkeypatch.setattr(agent_factory, "create_model_call_agent", fail_once)
     job = await _start_job(case.runner, "user", session_id, thread_id)
     assert job.task is not None
     await asyncio.wait_for(asyncio.shield(job.task), 8)
@@ -1887,7 +1887,7 @@ async def test_failed_compile_scope_retains_owner_until_cleanup_then_fences_late
     case = runtime_case
     session_id, thread_id = await _session(case.runner)
     admission = _admit(case.runner, session_id, thread_id, "user")
-    compiler = agent_factory.create_agent
+    compiler = agent_factory.create_model_call_agent
     allow_close = threading.Event()
     compiler_calls = 0
     cleanup_calls = 0
@@ -1906,7 +1906,7 @@ async def test_failed_compile_scope_retains_owner_until_cleanup_then_fences_late
             raise RuntimeError("真实 compiler 与清理双失败")
         return compiler(*args, **kwargs)
 
-    monkeypatch.setattr(agent_factory, "create_agent", fail_once)
+    monkeypatch.setattr(agent_factory, "create_model_call_agent", fail_once)
     with pytest.raises(ExceptionGroup, match="构建与资源释放均失败") as failure:
         await _lease(case, admission)
     assert "真实 compiler" in str(failure.value.exceptions[0])
@@ -1941,7 +1941,7 @@ async def test_retry_after_failed_compile_cleanup_closes_old_scope_before_build(
     case = runtime_case
     session_id, thread_id = await _session(case.runner)
     admission = _admit(case.runner, session_id, thread_id, "user")
-    compiler = agent_factory.create_agent
+    compiler = agent_factory.create_model_call_agent
     order: list[str] = []
     compiler_calls = 0
 
@@ -1960,7 +1960,7 @@ async def test_retry_after_failed_compile_cleanup_closes_old_scope_before_build(
         assert case.build_scopes[0].state == "closed"
         return compiler(*args, **kwargs)
 
-    monkeypatch.setattr(agent_factory, "create_agent", fail_compile_once)
+    monkeypatch.setattr(agent_factory, "create_model_call_agent", fail_compile_once)
     with pytest.raises(ExceptionGroup, match="构建与资源释放均失败"):
         await _lease(case, admission)
     lease = await asyncio.wait_for(_lease(case, admission), 8)
@@ -2268,7 +2268,8 @@ async def test_real_runner_refreshes_tracked_skill_in_same_generation_and_stops_
     original_source = file_registry.snapshot(uri)
     assert original_source.content == frontmatter + old_body
     assert scope.state == "open" and pair == (session_id, thread_id)
-    assert len(set(file_registry.observation_channel.subscriber_ids) - subscribers_before) == 2
+    # Skill 由 execution catalog 唯一发布，CSM reactor 不重复订阅 Skill 来源。
+    assert len(set(file_registry.observation_channel.subscriber_ids) - subscribers_before) == 1
     publication_tasks = [
         task for task in asyncio.all_tasks()
         if task.get_name() == f"boxteam-skill-catalog:{scope.name}"
@@ -2620,7 +2621,7 @@ async def test_real_runner_skill_tool_consumes_frozen_provenance_after_live_refr
     model_starts: list[str] = []
     resolutions: list[tuple[str, ResourceActivationSnapshotRef, str]] = []
     live_catalogs = []
-    create_agent = agent_factory.create_agent
+    create_agent = agent_factory.create_model_call_agent
     register_start = StepModelCallAdapter.register
     resolve_activation = case.runner.saver.load_tool_call_resource_activation
     wrap_tool = ToolInvocationContextMiddleware.awrap_tool_call
@@ -2703,7 +2704,7 @@ async def test_real_runner_skill_tool_consumes_frozen_provenance_after_live_refr
             {"choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]},
         ]
 
-    monkeypatch.setattr(agent_factory, "create_agent", record_agent)
+    monkeypatch.setattr(agent_factory, "create_model_call_agent", record_agent)
     monkeypatch.setattr(StepModelCallAdapter, "register", record_model_start)
     monkeypatch.setattr(case.runner.saver, "load_tool_call_resource_activation", record_resolution)
     monkeypatch.setattr(ToolInvocationContextMiddleware, "awrap_tool_call", audit_skill_tool)

@@ -472,6 +472,10 @@ async def test_model_ls_read_and_search_gateway_skill_children_without_activatio
         directory = node.gateway_home / "skills" / SKILL_NAME / "references" / "scripts"
         directory.mkdir(parents=True)
         (directory / f"owner-{name}-中文 %.txt").write_text(f"read-body-owner-{name}\n")
+        bulk = directory / "bulk"
+        bulk.mkdir()
+        for index in range(257):
+            (bulk / f"bulk-{index:03}.txt").write_text(f"untracked-bulk-owner-{name}\n")
     root_uri = resource_display_uri(scope="gateway", scope_id=target.gateway_id,
                                     kind="skills", tail_segments=(SKILL_NAME,))
     session = await create_session(target.client, "模型目录导航")
@@ -482,14 +486,17 @@ async def test_model_ls_read_and_search_gateway_skill_children_without_activatio
         counts = _tracking_counts(case.context.workspace_root)
         # 每次真实模型请求都会保存 assembly binding；核其仍指向原 activation，而非禁止正常装配记录。
         counts = {key: value for key, value in counts.items() if not key.endswith(":resource_activation_assembly_bindings")}
-        assembly_owners = {}
+        assembly_owners, control_states = {}, {}
         for database in case.context.workspace_root.rglob("index.sqlite"):
             with closing(sqlite3.connect(f"file:{database}?mode=ro", uri=True)) as connection:
                 owners = connection.execute("""SELECT DISTINCT activation_snapshot_id, bindings_hash,
                     activation_provenance_hash FROM resource_activation_assembly_bindings
                     ORDER BY activation_snapshot_id, bindings_hash, activation_provenance_hash""").fetchall()
+                control_states[str(database.relative_to(case.context.workspace_root))] = connection.execute(
+                    "SELECT * FROM context_source_control_states ORDER BY session_id,thread_id,source_id",
+                ).fetchall()
             assembly_owners[str(database.relative_to(case.context.workspace_root))] = owners
-        return {"counts": counts, "assembly_owners": assembly_owners}
+        return {"counts": counts, "assembly_owners": assembly_owners, "control_states": control_states}
 
     def reply(payload):
         nonlocal before
@@ -505,29 +512,36 @@ async def test_model_ls_read_and_search_gateway_skill_children_without_activatio
             listed.append(result)
         assert result["node"]["uri"].startswith(root_uri)
         assert not result["truncated"] and result["view"] == "live"
+        skill_reads = [message for message in payload["messages"] if message["role"] == "tool"
+                       and message.get("tool_call_id") == "call_model_read_skill"]
+        if not skill_reads:
+            skill, = [entry for entry in results[0]["entries"] if entry["uri"].endswith("/SKILL.md")]
+            return _tool("read_file", {"path": skill["uri"]}, "call_model_read_skill")
+        assert "5\tprivate-skill-owner-b" in skill_reads[0]["content"]
         if len(results) < 3:
             directory = "references" if len(results) == 1 else "scripts"
             child, = [entry for entry in result["entries"] if entry["uri"].endswith("/" + directory)]
             return _tool("ls", {"path": child["uri"]}, "call_model_ls_" + directory)
-        child, = result["entries"]
+        child, = [entry for entry in result["entries"] if entry["resource_shape"] == "file"]
         assert child["uri"] == root_uri + "/references/scripts/owner-b-%E4%B8%AD%E6%96%87%20%25.txt"
         globs = [json.loads(message["content"]) for message in payload["messages"]
                  if message["role"] == "tool" and message.get("name") == "glob"]
         if not globs:
-            return _tool("glob", {"path": result["node"]["uri"], "pattern": "*.txt"}, "call_model_glob")
+            return _tool("glob", {"path": result["node"]["uri"], "pattern": "owner-b-*.txt"}, "call_model_glob")
         assert [entry["uri"] for entry in globs[-1]["entries"]] == [child["uri"]]
         greps = [message["content"] for message in payload["messages"]
                  if message["role"] == "tool" and message.get("name") == "grep"]
         if not greps:
             return _tool("grep", {"path": child["uri"], "pattern": "read-body-owner-b", "output_mode": "content"}, "call_model_grep")
         assert child["uri"] in greps[-1] and "read-body-owner-b" in greps[-1] and "read-body-owner-a" not in greps[-1]
-        reads = [message for message in payload["messages"] if message["role"] == "tool" and message.get("name") == "read_file"]
+        reads = [message for message in payload["messages"] if message["role"] == "tool"
+                 and message.get("tool_call_id") == "call_model_read_child"]
         if not reads:
             return _tool("read_file", {"path": child["uri"]}, "call_model_read_child")
         read, = reads
         assert "1\tread-body-owner-b" in read["content"] and "read-body-owner-a" not in read["content"]
         wire = json.dumps(payload, ensure_ascii=False)
-        assert "owner-a-" not in wire and "private-skill-owner-" not in wire
+        assert "owner-a-" not in wire and "private-skill-owner-a" not in wire
         return {"content": "已验证目标 Gateway 的多层目录和实际文件正文"}
 
     case.model.response_callback = reply
@@ -536,14 +550,16 @@ async def test_model_ls_read_and_search_gateway_skill_children_without_activatio
     assert len(listed) == 3
     rows = [row for row in case.observations() if row["event"] == "workspace_response"
             and row["method"] == "POST" and row["sent_request_id"] == "req-model-ls-navigation"]
-    assert len(rows) == 6
+    assert len(rows) == 7
     for row in rows:
         assert row["sent_request_id"] == row["context_request_id"] == row["response_request_id"] == row["envelope_request_id"] == "req-model-ls-navigation"
         assert row["status"] == 200 and row["pid"] == target.backend.process.pid
-    assert {row["uri"] for row in rows} == {result["node"]["uri"] for result in listed} | {listed[-1]["entries"][0]["uri"]}
+    assert {row["uri"] for row in rows} == {result["node"]["uri"] for result in listed} | {
+        root_uri + "/references/scripts/owner-b-%E4%B8%AD%E6%96%87%20%25.txt", root_uri + "/SKILL.md",
+    }
     owners = [row for row in case.observations() if row["event"] == "owner_receipt"
               and row["request_id"] == "req-model-ls-navigation" and row["kind"] == "navigation"]
-    assert len(owners) == 6
+    assert len(owners) == 7
     for row in owners:
         assert row["pid"] == target.gateway.process.pid
         assert row["owner_gateway_id"] == row["request_gateway_id"] == row["result_gateway_id"] == target.gateway_id
@@ -553,6 +569,62 @@ async def test_model_ls_read_and_search_gateway_skill_children_without_activatio
     assert before is not None
     assert before == after
     case.record("model-ls-navigation", {"results": listed, "before": before, "after": after, "receipts": rows})
+
+
+async def test_read_skill_does_not_replace_call_frozen_activation(skill_gateways: SkillGatewayCase):
+    case = skill_gateways
+    target = case.nodes["b"]
+    original = case.snapshots["b"]["entries"][0]
+    skill_file = target.gateway_home / "skills" / SKILL_NAME / "SKILL.md"
+    body = original["content"].split("---\n", 2)[2]
+    updated = original["content"].replace(body, "changed-after-read-owner-b Ω\n")
+    skill_uri = resource_display_uri(scope="gateway", scope_id=target.gateway_id,
+        kind="skills", tail_segments=(SKILL_NAME, "SKILL.md"))
+    captured, release = Event(), Event()
+    receipts = []
+
+    def reply(payload):
+        results = [message for message in payload["messages"] if message["role"] == "tool"]
+        if not results:
+            return _tool("read_file", {"path": skill_uri}, "call_frozen_skill_read")
+        assert "5\tprivate-skill-owner-b" in results[0]["content"]
+        if len(results) == 1:
+            # Provider 已收到发起 skill_load 的封存请求；由进程外测试先推进真实来源。
+            captured.set()
+            assert release.wait(15), "测试未接受新版 Skill 来源"
+            return _tool("skill_load", {"name": SKILL_NAME}, "call_frozen_skill_load")
+        receipt = json.loads(results[-1]["content"])
+        assert receipt["status"] == "loaded" and receipt["tracked"] is False, receipt
+        assert receipt["display_uri"] == skill_uri
+        assert receipt["content_hash"] == "sha256:" + sha256(body.encode()).hexdigest()
+        assert "changed-after-read-owner-b" not in json.dumps(payload, ensure_ascii=False)
+        receipts.append(receipt)
+        return {"content": "普通读取和冻结激活保持独立"}
+
+    case.model.response_callback = reply
+    session = await create_session(target.client, "读取后冻结激活")
+    try:
+        accepted = await case.send("b", session, "先读取再激活 Skill", "req-read-then-frozen-load")
+        await _until(captured.is_set)
+        skill_file.write_text(updated)
+        raw_path = f"/api/gateway/skill-sources/{target.gateway_id}/workspaces/{target.workspace_id}"
+        async with asyncio.timeout(10):
+            while True:
+                response = await target.client.get(raw_path)
+                assert response.status_code == 200, response.text
+                current = response.json()["data"]
+                if current["revision"] != case.snapshots["b"]["revision"]:
+                    assert current["entries"][0]["content"] == updated
+                    assert current["entries"][0]["entry_identity"] == original["entry_identity"]
+                    break
+                await asyncio.sleep(0.02)
+        release.set()
+        await _completed(target.client, accepted["job_id"])
+        assert len(receipts) == 1 and skill_file.read_text() == updated
+        assert receipts[0]["revision"] != current["entries"][0]["revision"]
+        case.record("read-then-frozen-load", {"receipt": receipts[0], "original": original, "current": current})
+    finally:
+        release.set()
 
 
 async def test_queued_job_cold_restore_keeps_frozen_gateway_and_request_id(skill_gateways):

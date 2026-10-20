@@ -415,7 +415,8 @@ async def test_prompt_drives_agent_debug_tools_through_real_backend(
     assert "invalid_breakpoints" in skill_text
     assert "不需要先交接控制权" in skill_text
     assert "先用 `read_file` 读取 `.boxteam/bundled-skills/debugging/SKILL.md`" not in skill_text
-    assert "不要用 `read_file` 读取 Skill 正文" in skill_text
+    assert "普通 `read_file` 可读取 Skill 包文件" in skill_text
+    assert "读取不会激活或追踪来源，不能代替 `skill_load`" in skill_text
 
     create_response = await scripted_client.post(
         "/api/v1/sessions",
@@ -428,7 +429,7 @@ async def test_prompt_drives_agent_debug_tools_through_real_backend(
     prompt = (
         f"请调试入口文件 {state.fixture_path} 及其依赖文件 {state.worker_path}，工作目录是 .。"
         "先使用 skill_load(name=debugging) 加载 debugging Skill 和可用调试方案；"
-        "不要用 read_file 读取 Skill 正文；如果没有匹配的具名方案就自己创建。"
+        "普通读取不能代替 Skill 激活；如果没有匹配的具名方案就自己创建。"
         "在入口累加和相关模块累加处设置断点并启动。每次真实停住后，先说明当前代码作用，"
         "再通过调试表达式把当前帧里的 state.counter 加一，然后继续到下一个断点，"
         "最后重新读取状态确认程序正常结束。不要修改源码来伪造计数变化。"

@@ -29,8 +29,9 @@
   - TODO（依赖元数据）：wcmatch 10.1 已由固定 DeepAgents 引入且存在于 uv.lock/运行环境；`uv add --no-sync wcmatch` 在根包动态 metadata 阶段因重复嵌套 node_modules 中不存在的 es-toolkit 路径失败，未改 pyproject/lock 或环境。根包构建修复后登记直接依赖，当前实现旁已具名标记。
   - 最终定向证据位于 `out/tests/temp/openspec_takeover/artifacts/runs/`：`resource-navigation-bounds-final-unit-004` 为118 passed/14.64秒，覆盖绑定 cursor、跨目录稀疏匹配续页、前缀变化、排序前扫描上限、UTF-8/JSON 字节预算、序列化共用期限、阻塞只读 I/O 的等待超时及错误回执身份；原生调用本身不会被异步取消强行中断，worker 恢复后仍检查原期限。`resource-navigation-bounds-final-http-003` 为3 passed/136.32秒，经真实 Gateway/Workspace、SSH 星型联邦及远端 Gateway Skill owner 验证257文件续页、最终 HTTP 字节限制、返回 URI 重开、文件执行错误透传、目标固定及 tracking/activation 不变。两项均exit 0、源码在运行中未变，不能替代模型 glob/grep 或跨端总预算验收。
   - 初轮完整组合 `resource-navigation-bounds-gateway-integration-001` 在已有失败后中断，为3 failed、2 passed/297.51秒、exit 2；原输出保留。文件执行错误透传及 UTF-8 旧断言已修齐并经最终定向运行验证；共享后端的既有路由歧义仍按3.3保留 TODO，未宣称该文件或整组全绿。另有 `resource-navigation-bounds-owner-routing-002` 的冷恢复 owner/request_id 定向证据，2 passed/121.44秒；后续导航期限变更由最终三场景补验，不以该旧运行代替新导航源码验收。
-- [ ] 2.3 从真实工具入口验证中文/空格/点号/百分号文件名、一次解码及越界symlink拒绝；搜索大量文件前后身份/source/snapshot条目数不变。
-- [ ] 2.4 与context第8组联验读取Skill无activation/tracking/source-control写入、显式skill_load冻结来源不变，旧挂载/白名单下线。
+- [x] 2.3 从真实工具入口验证中文/空格/点号/百分号文件名、一次解码及越界symlink拒绝；搜索大量文件前后身份/source/snapshot条目数不变。
+- [x] 2.4 与context第8组联验读取Skill无activation/tracking/source-control写入、显式skill_load冻结来源不变，旧挂载/白名单下线。
+  - 2026-10-20 2.3/2.4与context第8组共同验收：`skill-read-activation-unit-001`、`skill-read-activation-http-001`、`skill-read-bulk-http-002` 覆盖模型实际 SKILL.md/多层导航、中文空格点号百分号一次编码、越界symlink拒绝、257文件真实工具扫描，读取前后source control完整行与activation/snapshot不变；每次正常assembly仍引用同一activation/hash/provenance。封存skill_load请求后改写并接受live来源，仍核原冻结正文hash；同名覆盖/rebind及原版本恢复由相应unit、真实Runner通过项与 `skill-read-runtime-fixture-002` 覆盖。旧Skill挂载、白名单及提示禁令已检索清理；附带调试完整流程因端口9000被占用未执行，不宣称该流程通过。`file-navigation-bounds-audit-001` 另46项通过，复核分页、前缀变化、编码及有界读取；总跨端预算2.2/3.2仍单独验收，长目录续页性能TODO保留。原件沿同任务artifacts/runs。
 
 ## 3. 目标端读取与搜索
 

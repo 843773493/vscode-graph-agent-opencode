@@ -252,7 +252,11 @@
 
 **验收门槛的可勾选条目**：本文字第九节三条验收门槛的可勾选 tasks 条目见 `add-itemized-rollout-context/tasks.md` 的 9.8–9.10（本条只作具名引用，不复述其内容）。
 
-## 8. 技能目录读取与激活边界（2026-10-05 修订，未实施）
+## 8. 技能目录读取与激活边界（2026-10-05 修订）
 
-- [ ] 8.1 将旧管理型Skill通用读取禁令替换为统一寻址owner的目录/单文件读取能力，移除现有工具入口相关拒绝分支；不恢复.boxteam Skill挂载、路径白名单或通用read激活行为。文件工具接入由add-unified-resource-file-tools实现，本项核context边界。
-- [ ] 8.2 从真实read_file入口读取SKILL.md及多层references/scripts，验证catalog/source控制/activation/tracking记录无变化；读取后源文件变化，显式skill_load仍只消费调用冻结snapshot，并维持同名覆盖/rebind与revision合同。不得用普通工具正文替代SourceReconciler已接受快照。
+- [x] 8.1 将旧管理型Skill通用读取禁令替换为统一寻址owner的目录/单文件读取能力，移除现有工具入口相关拒绝分支；不恢复.boxteam Skill挂载、路径白名单或通用read激活行为。文件工具接入由add-unified-resource-file-tools实现，本项核context边界。
+- [x] 8.2 从真实read_file入口读取SKILL.md及多层references/scripts，验证catalog/source控制/activation/tracking记录无变化；读取后源文件变化，显式skill_load仍只消费调用冻结snapshot，并维持同名覆盖/rebind与revision合同。不得用普通工具正文替代SourceReconciler已接受快照。
+
+  - 2026-10-20 第8组验收：普通文件工具复用公共导航 owner，旧 Skill 虚拟挂载和读取白名单没有恢复；debugging Skill 的旧通用读取禁令已改成“读取不激活或追踪，不能替代 skill_load”。`skill-read-activation-http-001` 两项真实 Gateway/Backend 与模型协议桩通过：模型经返回 URI 读取 SKILL.md、多层 references/scripts；普通工具前后来源控制完整行、activation计数以及每次 assembly 引用的 snapshot/hash/provenance 相同。进程外测试在发起 skill_load 的 Provider 请求已封存后改写真实文件，并等待 Gateway 发布新正文和版本；实际工具仍返回原正文 hash及冻结revision。不是外部真实模型 E2E。
+  - `skill-read-bulk-http-002` 在相同真实工具链加257文件扫描后通过，未逐文件登记身份/来源/activation；`skill-read-activation-unit-001` 115项通过，覆盖同步/异步读取、编码/权限、来源冻结、同名覆盖及显式rebind。`skill-read-rebind-regression-001` 扩展回归为48通过、2失败：失败分别是测试仍探测旧 create_agent 编译符号及旧双订阅数量；按现行 create_model_call_agent 和 execution catalog 唯一发布合同迁移后，`skill-read-runtime-fixture-002` 两项通过，保留原冻正文、raw revision、重启恢复、generation与关闭后不发布等断言。另5处同文件编译探针已一并迁移，`skill-read-compiler-hooks-003` 的7个完成/失败/编译重试/清理fence场景全部通过，未改原错误、先后顺序或owner断言。
+  - `skill-read-debug-flow-001` 在产品执行前因固定端口9000被占用而 setup失败，未终止未知进程、改环境或把该流程称为通过。上述原始命令、源码指纹、输出和退出码在 `out/tests/temp/openspec_takeover/artifacts/runs/`；完整Web/外部Provider及本change其它未勾任务未由本组替代。
