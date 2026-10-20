@@ -10,12 +10,16 @@ from uuid import UUID
 import pytest
 from langchain.agents.middleware import ModelRequest, ModelResponse
 from langchain.agents.middleware.types import ExtendedModelResponse
-from langchain_core.messages import AIMessage, AIMessageChunk, ToolMessage
+from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, ToolMessage
 from langgraph.types import Command
 
 from app.agents import model_call_execution
 from app.agents.model_call_execution import ModelCallExecution
 from app.core.identifier import uuid7_datetime_from_hex
+from app.core.model_request_context import (
+    SummaryCandidateScope,
+    summary_candidate_scope,
+)
 from app.services.infrastructure.rollout_context.checkpoint.message_codec import (
     LangChainMessageCodec,
 )
@@ -108,8 +112,9 @@ async def test_vendor_carrier_binds_emitting_call_and_its_structured_tool_result
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("mode", ["sync", "async"])
+@pytest.mark.parametrize("summary", [False, True])
 async def test_request_tool_result_phase_precedes_preparation(
-    bridge, response_dispatch, monkeypatch, mode,
+    bridge, response_dispatch, monkeypatch, mode, summary,
 ):
     model_call_id, _dispatch = response_dispatch
     call = {"id": "call-queued", "name": "read_file", "args": {"path": "README.md"}}
@@ -117,7 +122,8 @@ async def test_request_tool_result_phase_precedes_preparation(
         AIMessage(content="", id=f"lc_run--{model_call_id}", tool_calls=[call]),
         ToolMessage(content="真实 README", tool_call_id=call["id"]),
     ]
-    request = ModelRequest(model=MagicMock(), messages=messages)
+    request = ModelRequest(model=MagicMock(), messages=[HumanMessage(content="仅摘要早期历史")] if summary else messages)
+    candidate = SummaryCandidateScope(0, "initial", True, False, canonical_messages=tuple(messages))
     observed = []
     phases = []
     sync_projection = bridge._prepare_projection.return_value
@@ -152,14 +158,15 @@ async def test_request_tool_result_phase_precedes_preparation(
         model_call_execution, "get_current_model_delta_sink",
         lambda: SimpleNamespace(complete_tool_from_message=reconcile),
     )
-    if mode == "sync":
-        bridge.execute(request)
-        assert phases == ["observe", "prepare"]
-        reconcile.assert_not_awaited()
-    else:
-        await bridge.aexecute(request)
-        reconcile.assert_awaited_once_with(messages[1], model_call_id=model_call_id)
-        assert phases == ["observe", "reconcile", "prepare"]
+    with summary_candidate_scope(candidate) if summary else nullcontext():
+        if mode == "sync":
+            bridge.execute(request)
+            assert phases == ["observe", "prepare"]
+            reconcile.assert_not_awaited()
+        else:
+            await bridge.aexecute(request)
+            reconcile.assert_awaited_once_with(messages[1], model_call_id=model_call_id)
+            assert phases == ["observe", "reconcile", "prepare"]
     assert observed == [(f"{model_call_id}:tool-call:call-queued", "canonical.tool_result.before_commit")]
     assert LangChainMessageCodec().tool_result_call_ids([
         messages[0], messages[1],

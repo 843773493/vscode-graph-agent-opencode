@@ -9,7 +9,7 @@ from dataclasses import replace
 from types import SimpleNamespace
 
 import pytest
-from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 
 from app.agents.graph_binding import (
     DEEP_AGENT_CAPABILITY_PROFILE,
@@ -40,6 +40,9 @@ from app.services.infrastructure.rollout_context.assembly.plans import (
 )
 from app.services.infrastructure.rollout_context.assembly.plans import (
     sealing as plan_sealing,
+)
+from app.services.infrastructure.rollout_context.checkpoint.boundary.tool_protocol_boundary import (
+    ToolProtocolBoundaryConflict,
 )
 from app.services.infrastructure.rollout_context.checkpoint.owner import context_owner
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
@@ -380,7 +383,7 @@ def test_prepare_reuses_only_pure_predecessor_validation_within_one_attempt(
     messages = tuple(project_summary_source(group) for group in summary_source_groups(items).values())
     prepare(
         "pure-validation-summary", request_messages=messages,
-        summary_candidate=SummaryCandidateScope(0, "initial", False, True),
+        summary_candidate=SummaryCandidateScope(0, "initial", False, True, canonical_messages=messages),
     )
     prepare("pure-validation-third")
     assert [entry[1] for entry in registrations] == [0, 1, 0, 0, 1]
@@ -868,6 +871,53 @@ def test_cold_assembly_rejects_independently_damaged_tool_snapshot(production_co
     ).fetchone() == (damaged_json, *original[1:])
 
 
+@pytest.mark.parametrize("terminal_available", [False, True])
+def test_summary_seal_reconciles_original_tool_group(production_context, terminal_available):
+    """摘要只发送早期 user；seal 仍必须提交原始末轮结果，真实缺失时明确拒绝。"""
+    saver, session, thread, connection, _manager, prepare = production_context
+    root = saver._storage.storage.read_items(session, thread)[0]
+    original_user = project_summary_source((root,))
+    assistant = AIMessage(
+        content="", id="summary-tail-call", response_metadata={"model_call_id": "summary-tail-model"},
+        tool_calls=[{"id": "summary-tail-tool", "name": "read_file", "args": {"path": "README.md"}}],
+    )
+    result = ToolMessage(content="真实末轮结果", id="summary-tail-result", tool_call_id="summary-tail-tool", name="read_file")
+    execution_id, = connection.execute("SELECT execution_id FROM item_catalog WHERE item_id=?", (root.item_id,)).fetchone()
+    admission = saver.execution_admission(session, thread_id=thread, execution_id=execution_id)
+    with (
+        session_thread_owner_scope(MutationIntentOwner(session, thread), langgraph_thread_id=thread),
+        execution_admission_scope(admission, langgraph_thread_id=thread),
+    ):
+        saver.ensure_request_items(
+            session, thread, turn_id=root.turn_id, execution_id=execution_id, messages=(assistant,),
+        )
+    original_items = saver._storage.storage.read_items(session, thread)
+    scope = SummaryCandidateScope(
+        0, "initial", False, True,
+        canonical_messages=(original_user, assistant, result) if terminal_available else (original_user, assistant),
+    )
+    if not terminal_available:
+        with pytest.raises(ToolProtocolBoundaryConflict, match="tool-protocol-boundary-conflict"):
+            prepare("summary-tail-missing", request_messages=(original_user,), summary_candidate=scope)
+        assert saver._storage.storage.read_items(session, thread) == original_items
+        assert connection.execute("SELECT assembly_id FROM context_assemblies").fetchall() == []
+        return
+    prepared = prepare("summary-tail-complete", request_messages=(original_user,), summary_candidate=scope)
+    snapshot = prepared["snapshot"]
+    assert snapshot.selection_policy == "summary_candidate"
+    result_item, = [item for item in saver._storage.storage.read_items(session, thread) if item.semantic_kind == "tool_result"]
+    assert result_item.payload["content"] == result.content
+    backing = [entry for entry in snapshot.selection if entry.ref.ref_type == "canonical_item"]
+    # 摘要只追溯实际候选的来源；尾组结算到 canonical 历史，不进入摘要 selection。
+    assert {entry.ref.ref_id for entry in backing} == {root.item_id}
+    assert all(not entry.included for entry in backing)
+    assert not any(isinstance(message, ToolMessage) for message in prepared["messages"])
+    assert not any(isinstance(message, AIMessage) and message.tool_calls for message in prepared["messages"])
+    with RolloutCheckpointSaver(saver._storage.storage.sessions_dir) as cold:
+        assert cold.get_context_assembly(session, thread, assembly_id=snapshot.assembly_id) == snapshot
+        assert cold._storage.storage.read_items(session, thread, item_ids=(result_item.item_id,)) == [result_item]
+
+
 @pytest.mark.parametrize("with_predecessor", [False, True])
 @pytest.mark.parametrize("minimal_system", [False, True])
 def test_summary_prepare_keeps_canonical_sources_without_applying_pending(
@@ -881,7 +931,7 @@ def test_summary_prepare_keeps_canonical_sources_without_applying_pending(
     messages = tuple(project_summary_source(group) for group in summary_source_groups(items).values())
     result = prepare(
         "summary-candidate", request_messages=messages,
-        summary_candidate=SummaryCandidateScope(0, "initial", False, minimal_system),
+        summary_candidate=SummaryCandidateScope(0, "initial", False, minimal_system, canonical_messages=messages),
     )
     snapshot = saver.get_context_assembly(session, thread, assembly_id=result["assembly_id"])
     assert snapshot.selection_policy == "summary_candidate"
@@ -933,7 +983,7 @@ def test_summary_prepare_rejects_damaged_predecessor_detail(
     with pytest.raises(DetailUnavailableError, match="typed v3"):
         prepare(
             "summary-damaged-candidate", request_messages=messages,
-            summary_candidate=SummaryCandidateScope(0, "initial", False, minimal_system),
+            summary_candidate=SummaryCandidateScope(0, "initial", False, minimal_system, canonical_messages=messages),
         )
     assert connection.execute("SELECT assembly_id FROM context_assemblies").fetchall() == [(previous["assembly_id"],)]
     assert manager.prepare_pending() == pending

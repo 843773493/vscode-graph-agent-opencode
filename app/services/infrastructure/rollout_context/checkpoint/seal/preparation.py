@@ -224,8 +224,8 @@ def prepare_registered_context(
             # Registry 等待期间 canonical 可能推进；封存前复用唯一边界端口重新检查。
             conflict, previous = owner.prepare_model_call_boundary(
                 session_id, thread_id, turn_id=turn_id, execution_id=execution_id,
-                messages=request_messages, checkpoint_ns=checkpoint_ns,
-                reconcile_request_items=summary_candidate is None,
+                messages=summary_candidate.canonical_messages if summary_candidate is not None else request_messages,
+                checkpoint_ns=checkpoint_ns,
                 validated_predecessors=validated_predecessors,
             )
             if conflict is not None:

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any, NotRequired, TypedDict, cast, overload
@@ -62,6 +62,11 @@ if TYPE_CHECKING:
     )
 
 logger = logging.getLogger(__name__)
+
+
+def _canonical_messages(request: ModelRequest[Any]) -> Sequence[BaseMessage]:
+    candidate = current_summary_candidate()
+    return candidate.canonical_messages if candidate is not None else request.messages
 
 
 def _runtime_thread_id(request: ModelRequest[Any]) -> str:
@@ -375,8 +380,7 @@ class ModelCallExecution:
             self._checkpointer.prepare_model_call_boundary,
             context.admission.session_id, context.admission.thread_id,
             turn_id=context.admission.turn_id, execution_id=context.admission.execution_id,
-            messages=request.messages, checkpoint_ns=context.checkpoint_ns,
-            reconcile_request_items=current_summary_candidate() is None,
+            messages=_canonical_messages(request), checkpoint_ns=context.checkpoint_ns,
             validated_predecessors={},
         ))
 
@@ -421,6 +425,7 @@ class ModelCallExecution:
                 "schema": "provider-boundary-input:v1",
                 "creation_key": context.creation_key,
                 "request_messages": [message.model_dump(mode="json") for message in request.messages],
+                "canonical_messages": [message.model_dump(mode="json") for message in _canonical_messages(request)],
                 "summary_candidate": candidate.identity() if candidate is not None else None,
             })
             async with self._context_control_admission(
@@ -612,7 +617,7 @@ class ModelCallExecution:
         self,
         request: ModelRequest[Any],
     ) -> ModelResponse[Any]:
-        for call_id in LangChainMessageCodec().tool_result_call_ids(request.messages):
+        for call_id in LangChainMessageCodec().tool_result_call_ids(_canonical_messages(request)):
             observe_phase_sync(call_id, "canonical.tool_result.before_commit")
         prepared, messages, tools = self._prepare_projection(request)
         # LangChain 的 provider handler 返回时，外层 astream_events 可能尚未
@@ -634,17 +639,18 @@ class ModelCallExecution:
     ) -> ModelResponse[Any]:
         # ToolMessage 可能先于外层 on_tool_end 抵达请求边界；在任何同步
         # preparation/rollout 锁之前观察同一真实结果，不能阻塞 backend loop。
-        for call_id in LangChainMessageCodec().tool_result_call_ids(request.messages):
+        canonical_messages = _canonical_messages(request)
+        for call_id in LangChainMessageCodec().tool_result_call_ids(canonical_messages):
             await observe_phase(call_id, "canonical.tool_result.before_commit")
         delta_sink = get_current_model_delta_sink()
         reconcile = getattr(delta_sink, "complete_tool_from_message", None)
         tool_results: list[tuple[ToolMessage, str]] = []
         if callable(reconcile):
             codec = LangChainMessageCodec()
-            for index, message in enumerate(request.messages):
+            for index, message in enumerate(canonical_messages):
                 if not isinstance(message, ToolMessage):
                     continue
-                emitting_model_call_id = codec.tool_message_model_call_id(message, request.messages[:index])
+                emitting_model_call_id = codec.tool_message_model_call_id(message, canonical_messages[:index])
                 if emitting_model_call_id is None:
                     raise RuntimeError("source-mismatch: ToolMessage reconciliation 缺少 emitting model-call identity")
                 tool_results.append((message, emitting_model_call_id))

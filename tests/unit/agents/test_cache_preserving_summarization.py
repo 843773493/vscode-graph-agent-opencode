@@ -48,6 +48,7 @@ from app.core.model_delta_context import (
     reset_current_model_delta_sink,
     set_current_model_delta_sink,
 )
+from app.core.model_request_context import current_summary_candidate
 from app.core.path_utils import workspace_context
 from app.core.session_thread_context import session_thread_owner_scope
 from app.domain.itemized.mutation_intents import MutationIntentOwner
@@ -435,7 +436,7 @@ async def test_reasoning_only_summary_is_retried_with_minimal_request(asynchrono
     })
     request = ModelRequest(
         model=None,
-        messages=[],
+        messages=messages,
         system_message=SystemMessage(content="完整工作区系统提示"),
         tools=[{"type": "function", "function": {"name": "read_file"}}],
         response_format=response_format,
@@ -444,6 +445,11 @@ async def test_reasoning_only_summary_is_retried_with_minimal_request(asynchrono
 
     def handler(next_request: ModelRequest) -> ModelResponse:
         observed.append(next_request)
+        candidate = current_summary_candidate()
+        assert candidate is not None
+        assert candidate.canonical_messages == tuple(messages)
+        assert next_request.messages != messages
+        assert "canonical_messages" not in candidate.identity()
         if len(observed) == 1:
             return ModelResponse(
                 result=[

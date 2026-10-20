@@ -19,22 +19,30 @@ from __future__ import annotations
 import json
 import sqlite3
 from collections.abc import Iterator
+from contextlib import nullcontext
 from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from deepagents.middleware.patch_tool_calls import PatchToolCallsMiddleware
+from langchain.agents.middleware import ModelRequest
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
 from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.base import empty_checkpoint
 from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 
 from app.abstractions.turn_terminal_status import ToolResultCompletion
+from app.agents.model_call_execution import ModelCallExecution
 from app.agents.summarization.planning import build_cache_preserving_event
 from app.agents.summarization.projection import apply_summarization_event
 from app.agents.summarization.state import CachePreservingPartition
 from app.core.checkpoint_config import build_checkpoint_config
 from app.core.execution_admission_context import execution_admission_scope
+from app.core.model_request_context import (
+    SummaryCandidateScope,
+    summary_candidate_scope,
+)
 from app.core.session_thread_context import session_thread_owner_scope
 from app.domain.itemized.enums import (
     CanonicalItemStatus,
@@ -319,6 +327,53 @@ def _persist_tool_declarations(storage: RolloutContextStore) -> str:
     for call in (stream_call, checkpoint_call):
         storage.executions.append_items(SESSION_ID, thread_id, (call,), execution_id=MODEL_CALL_ID)
     return thread_id
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("checkpoint_ns", ["", "model:summary"])
+@pytest.mark.parametrize("stream_result_first", [False, True])
+async def test_summary_boundary_commits_original_result_before_stream_completion(
+    storage, carrier_saver, tool_declarations, registered_tool_set_producer_factory,
+    checkpoint_ns, stream_result_first,
+):
+    """摘要候选截掉末轮工具组时，仍以完整原始输入结算真实 canonical 边界。"""
+    thread_id = tool_declarations
+    if stream_result_first:
+        storage.executions.append_items(SESSION_ID, thread_id, (_live_tool_result(3),), execution_id=MODEL_CALL_ID)
+    original = (
+        AIMessage(content="", id="request-call", response_metadata={"model_call_id": MODEL_CALL_ID},
+                  tool_calls=[{"id": PROVIDER_TOOL_CALL_ID, "name": "task", "args": {}}]),
+        ToolMessage(content=RESULT_CONTENT, id="request-result", name="task", tool_call_id=PROVIDER_TOOL_CALL_ID),
+    )
+    candidate_messages = [HumanMessage(content="只摘要早期历史，不包含末轮工具结果", id="summary-instruction")]
+    request = ModelRequest(model=object(), messages=candidate_messages)
+    execution = ModelCallExecution(
+        checkpointer=carrier_saver, session_id=SESSION_ID, thread_id=thread_id,
+        context_source_manager=ContextSourceManager(), tool_set_producer=registered_tool_set_producer_factory(),
+        resource_activation=None, context_read_admission=nullcontext,
+        context_control_admission=lambda *_args: nullcontext(),
+    )
+    admission = carrier_saver.execution_admission(SESSION_ID, thread_id=thread_id, execution_id=MODEL_CALL_ID)
+    context = SimpleNamespace(admission=admission, checkpoint_ns=checkpoint_ns)
+    with (
+        session_thread_owner_scope(MutationIntentOwner(SESSION_ID, thread_id), langgraph_thread_id=thread_id),
+        execution_admission_scope(admission, langgraph_thread_id=thread_id),
+        summary_candidate_scope(SummaryCandidateScope(0, "initial", False, True, canonical_messages=original)),
+    ):
+        conflict, cancelled = await execution._settle_boundary(request, context)
+        assert conflict is None and cancelled is None
+        committed = storage.storage.read_items(SESSION_ID, thread_id)
+        assert "item-request-result" in {item.item_id for item in committed}
+        assert all(item.message_group_id != "message-summary-instruction" for item in committed)
+        assert request.messages == candidate_messages
+        # request carrier 已闭合；较迟的 stream terminal 只能追加其自己的身份。
+        if not stream_result_first:
+            storage.executions.append_items(SESSION_ID, thread_id, (_live_tool_result(3),), execution_id=MODEL_CALL_ID)
+        with RolloutCheckpointSaver(storage.storage.sessions_dir) as cold:
+            execution._checkpointer = cold
+            conflict, cancelled = await execution._settle_boundary(request, context)
+            assert conflict is None and cancelled is None
+        assert set(_catalog_tool_result_ids(storage)) == {"item-request-result", _live_tool_result(3).item_id}
 
 
 @pytest.fixture

@@ -313,7 +313,6 @@ class RolloutCheckpointSaver(
     def prepare_model_call_boundary(
         self, session_id: str, thread_id: str, *, turn_id: str | None,
         execution_id: str, messages: Sequence[object], checkpoint_ns: str = "",
-        reconcile_request_items: bool = True,
         validated_predecessors: _ValidatedPredecessors,
     ) -> tuple[ToolProtocolBoundaryConflict | None, ContextAssemblySnapshot | None]:
         """先提交 canonical group 并检查闭合；预期冲突不撤销已提交事实。"""
@@ -328,11 +327,10 @@ class RolloutCheckpointSaver(
                 self._storage.checkpoints.ensure_active_view_contains_turn_root(
                     session_id, thread_id, turn_id=turn_id, checkpoint_ns=checkpoint_ns,
                 )
-            if reconcile_request_items:
-                self.ensure_request_items(
-                    session_id, thread_id, turn_id=turn_id, execution_id=execution_id,
-                    messages=messages, checkpoint_ns=checkpoint_ns,
-                )
+            self.ensure_request_items(
+                session_id, thread_id, turn_id=turn_id, execution_id=execution_id,
+                messages=messages, checkpoint_ns=checkpoint_ns,
+            )
             with self._context_reader.open_snapshot(session_id, thread_id, checkpoint_ns) as snapshot:
                 predecessor = self._storage.assemblies.latest_context_assembly(
                     snapshot, validated_predecessors=validated_predecessors,

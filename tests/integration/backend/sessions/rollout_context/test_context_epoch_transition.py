@@ -384,7 +384,7 @@ def test_summary_reads_rebuild_once_without_applying_sources_or_epoch(
     rebuild_reads.clear()
     result = case.prepare(
         "summary-read", request_messages=messages,
-        summary_candidate=SummaryCandidateScope(0, "initial", False, minimal_system),
+        summary_candidate=SummaryCandidateScope(0, "initial", False, minimal_system, canonical_messages=messages),
     )
     assert len(rebuild_reads) == 1
     assert (rebuild_reads[0] is not None) is with_transition

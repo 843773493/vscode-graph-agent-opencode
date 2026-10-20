@@ -378,12 +378,12 @@ class CachePreservingSummarizationMiddleware(_DeepAgentsSummarizationMiddleware)
             remove_tools=minimal_system,
             minimal_system=minimal_system,
         )
-        with summary_candidate_scope(SummaryCandidateScope(candidate_ordinal, "initial", not minimal_system, minimal_system, retry_source_message_ids)):
+        with summary_candidate_scope(SummaryCandidateScope(candidate_ordinal, "initial", not minimal_system, minimal_system, retry_source_message_ids, canonical_messages=tuple(request.messages))):
             response = handler(summary_request)
         try:
             return _summary_response_text(response)
         except SummaryToolCallError:
-            with summary_candidate_scope(SummaryCandidateScope(candidate_ordinal, "tool_free", False, minimal_system, retry_source_message_ids)):
+            with summary_candidate_scope(SummaryCandidateScope(candidate_ordinal, "tool_free", False, minimal_system, retry_source_message_ids, canonical_messages=tuple(request.messages))):
                 response = handler(
                     self._summary_request(
                         request,
@@ -396,7 +396,7 @@ class CachePreservingSummarizationMiddleware(_DeepAgentsSummarizationMiddleware)
         except SummaryTextError:
             # reasoning 模型可能在带完整工具和系统提示的摘要请求中只返回思考块。
             # 摘要正文不能暴露思考内容，改用无工具的最小请求重新生成可见摘要。
-            with summary_candidate_scope(SummaryCandidateScope(candidate_ordinal, "visible_text", False, True, retry_source_message_ids)):
+            with summary_candidate_scope(SummaryCandidateScope(candidate_ordinal, "visible_text", False, True, retry_source_message_ids, canonical_messages=tuple(request.messages))):
                 response = handler(
                     self._summary_request(
                         request,
@@ -423,12 +423,12 @@ class CachePreservingSummarizationMiddleware(_DeepAgentsSummarizationMiddleware)
             remove_tools=minimal_system,
             minimal_system=minimal_system,
         )
-        with summary_candidate_scope(SummaryCandidateScope(candidate_ordinal, "initial", not minimal_system, minimal_system, retry_source_message_ids)):
+        with summary_candidate_scope(SummaryCandidateScope(candidate_ordinal, "initial", not minimal_system, minimal_system, retry_source_message_ids, canonical_messages=tuple(request.messages))):
             response = await handler(summary_request)
         try:
             return _summary_response_text(response)
         except SummaryToolCallError:
-            with summary_candidate_scope(SummaryCandidateScope(candidate_ordinal, "tool_free", False, minimal_system, retry_source_message_ids)):
+            with summary_candidate_scope(SummaryCandidateScope(candidate_ordinal, "tool_free", False, minimal_system, retry_source_message_ids, canonical_messages=tuple(request.messages))):
                 response = await handler(
                     self._summary_request(
                         request,
@@ -441,7 +441,7 @@ class CachePreservingSummarizationMiddleware(_DeepAgentsSummarizationMiddleware)
         except SummaryTextError:
             # reasoning 模型可能在带完整工具和系统提示的摘要请求中只返回思考块。
             # 摘要正文不能暴露思考内容，改用无工具的最小请求重新生成可见摘要。
-            with summary_candidate_scope(SummaryCandidateScope(candidate_ordinal, "visible_text", False, True, retry_source_message_ids)):
+            with summary_candidate_scope(SummaryCandidateScope(candidate_ordinal, "visible_text", False, True, retry_source_message_ids, canonical_messages=tuple(request.messages))):
                 response = await handler(
                     self._summary_request(
                         request,

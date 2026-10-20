@@ -5,8 +5,11 @@ from __future__ import annotations
 from collections.abc import Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
-from dataclasses import asdict, dataclass
-from typing import Literal
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING, Literal
+
+if TYPE_CHECKING:
+    from langchain_core.messages import BaseMessage
 
 
 @dataclass(frozen=True, slots=True)
@@ -16,6 +19,8 @@ class SummaryCandidateScope:
     tools_enabled: bool
     minimal_system: bool
     retry_source_message_ids: tuple[str, ...] = ()
+    # 原始完整输入只供 canonical 边界结算，不是摘要请求正文或持久身份。
+    canonical_messages: tuple[BaseMessage, ...] = field(kw_only=True, repr=False)
 
     def __post_init__(self) -> None:
         if type(self.candidate_ordinal) is not int or self.candidate_ordinal < 0:
@@ -30,7 +35,13 @@ class SummaryCandidateScope:
             raise ValueError("摘要重试来源必须是唯一的消息 ID 元组")
 
     def identity(self) -> dict[str, object]:
-        return asdict(self)
+        return {
+            "candidate_ordinal": self.candidate_ordinal,
+            "retry_phase": self.retry_phase,
+            "tools_enabled": self.tools_enabled,
+            "minimal_system": self.minimal_system,
+            "retry_source_message_ids": self.retry_source_message_ids,
+        }
 
 
 _CURRENT_SUMMARY_CANDIDATE: ContextVar[SummaryCandidateScope | None] = ContextVar(

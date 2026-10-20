@@ -331,7 +331,7 @@ async def test_summary_reasoning_response_reaches_summary_owner(
         return handler(request)
 
     request = ModelRequest(model=primary, messages=[HumanMessage(content="生成摘要")])
-    with summary_candidate_scope(SummaryCandidateScope(0, "initial", True, False)):
+    with summary_candidate_scope(SummaryCandidateScope(0, "initial", True, False, canonical_messages=tuple(request.messages))):
         actual = await middleware.awrap_model_call(request, ahandler) if asynchronous else middleware.wrap_model_call(request, handler)
     assert actual is response
     assert requested == ([primary, fallback] if provider_failure else [primary])
