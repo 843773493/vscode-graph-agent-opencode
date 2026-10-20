@@ -3,8 +3,14 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import codecs
+import hashlib
+import json
+import os
 import stat
+import time
+from collections.abc import Iterator
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -42,6 +48,18 @@ def _resolve_path(path: Path) -> Path:
         raise ResourceUriResolveError("capability_denied", "资源路径包含符号链接循环") from error
 
 
+class ResourceFileOperationError(ValueError):
+    """文件执行失败与 URI grammar/归属解析失败保持独立错误域。"""
+
+    def __init__(self, code: str, message: str, *, reason: str) -> None:
+        super().__init__(message)
+        self.code, self.reason = code, reason
+
+    def detail(self) -> dict[str, str]:
+        return {"owner": "resource_file_operations", "code": self.code,
+                "reason": self.reason, "message": str(self)}
+
+
 class ResourceNavigation:
     """Workspace 与 Gateway 共用一个文件访问实现，根绑定只来自显式 owner。"""
 
@@ -70,6 +88,7 @@ class ResourceNavigation:
     async def navigate(
         self, request: ResourceNavigationRequest, *, local_gateway_id: str,
     ) -> ResourceNavigationResultDTO:
+        deadline = time.monotonic() + request.timeout_ms / 1000
         parsed = parse_resource_uri(request.uri, local_gateway_id=local_gateway_id)
         if parsed.gateway_authority is not None:
             raise ResourceUriResolveError("scope_mismatch", "此入口只解析固定本机 Gateway 的资源")
@@ -80,19 +99,32 @@ class ResourceNavigation:
             workspace_id=self._workspace_id, gateway_id=local_gateway_id,
             distribution_id=distribution_id,
         ))
-        if parsed.scope == "gateway" and parsed.kind == "skills" and self._workspace_root is not None:
-            if self._gateway_sources is None:
-                raise ResourceUriResolveError("unknown_resource", "没有对应的 Gateway 文件 owner")
-            return await self._gateway_sources.navigate(
-                request.model_copy(update={"uri": parsed.display_uri}), gateway_id=local_gateway_id,
-            )
-        root, children = await asyncio.to_thread(self._root, parsed)
+        try:
+            async with asyncio.timeout(max(0, deadline - time.monotonic())):
+                if parsed.scope == "gateway" and parsed.kind == "skills" and self._workspace_root is not None:
+                    if self._gateway_sources is None:
+                        raise ResourceUriResolveError("unknown_resource", "没有对应的 Gateway 文件 owner")
+                    result = await self._gateway_sources.navigate(
+                        request.model_copy(update={"uri": parsed.display_uri}), gateway_id=local_gateway_id,
+                    )
+                    return self._response(result, request, deadline)
+                # 取消等待不能中断原生阻塞 I/O；只读 worker 恢复后仍检查同一 deadline。
+                return await asyncio.to_thread(self._navigate_local, parsed, request, local_gateway_id, deadline)
+        except TimeoutError as error:
+            raise ResourceFileOperationError("output_limit_exceeded", "文件导航超过本次总期限", reason="deadline") from error
+
+    def _navigate_local(
+        self, parsed: ParsedResourceUri, request: ResourceNavigationRequest,
+        gateway_id: str, deadline: float,
+    ) -> ResourceNavigationResultDTO:
+        self._check_deadline(deadline)
+        root, children = self._root(parsed)
         path = self._contained(root, children, parsed)
         node = self._node(parsed, path)
         if request.operation not in node.operations:
             raise ResourceUriResolveError("capability_denied", "资源不允许所请求的导航操作")
         if request.operation == "describe":
-            return ResourceNavigationResultDTO(node=node)
+            return self._response(ResourceNavigationResultDTO(node=node), request, deadline)
         if request.operation == "read":
             # 普通读取有界且不 hash、不经过来源 reconciler，也不产生 activation。
             with path.open("rb") as stream:
@@ -100,18 +132,98 @@ class ResourceNavigation:
             truncated = len(data) > request.max_bytes
             content_bytes = data[:request.max_bytes]
             # 有界窗口可能在 UTF-8 字符内部结束；增量 decoder 只保留完整字符，非法正文仍失败。
-            content = codecs.getincrementaldecoder("utf-8")().decode(content_bytes, final=not truncated)
-            return ResourceNavigationResultDTO(node=node, content=content, truncated=truncated)
+            try:
+                content = codecs.getincrementaldecoder("utf-8")().decode(content_bytes, final=not truncated)
+            except UnicodeDecodeError as error:
+                raise ResourceFileOperationError("invalid_encoding", "文件内容不是有效的 UTF-8 文本", reason="utf8") from error
+            result = ResourceNavigationResultDTO(node=node, content=content, truncated=truncated,
+                truncation_reason="file_byte_limit" if truncated else None)
+            if self._size(result) > request.max_response_bytes:
+                # JSON 转义也计入总响应；仅裁完整字符，不伪报返回了完整文件。
+                low, high = 0, len(content)
+                while low < high:
+                    self._check_deadline(deadline)
+                    middle = (low + high + 1) // 2
+                    candidate = result.model_copy(update={"content": content[:middle], "truncated": True,
+                                                         "truncation_reason": "response_byte_limit"})
+                    if self._size(candidate) <= request.max_response_bytes:
+                        low = middle
+                    else:
+                        high = middle - 1
+                result = result.model_copy(update={"content": content[:low], "truncated": True,
+                                                  "truncation_reason": "response_byte_limit"})
+            return self._response(result, request, deadline)
+        binding = hashlib.sha256(json.dumps(
+            {**request.model_dump(exclude={"uri", "cursor"}), "uri": parsed.display_uri, "gateway_id": gateway_id},
+            sort_keys=True, separators=(",", ":"),
+        ).encode()).hexdigest()
+        # TODO：多页目前重复有界扫描，待主体完成后按实测优化，不能引入第二目录事实源。
+        offset, expected_prefix = self._decode_cursor(request.cursor, binding)
+        root_stat = path.stat()
+        prefix = hashlib.sha256(str((root_stat.st_dev, root_stat.st_ino, root_stat.st_mtime_ns)).encode())
+        prefix_checked = offset == 0
+        consumed, consumed_prefix = 0, prefix.hexdigest()
         entries: list[ResourceNavigationNodeDTO] = []
+        # 预留固定长度的续页及截断字段，序列化后的实际正文仍在 _response 核验。
+        response_bytes = self._size(ResourceNavigationResultDTO(
+            node=node, truncated=True, next_cursor="x" * 512, truncation_reason="response_byte_limit",
+        ))
+        for index, (child_node, metadata) in enumerate(self._walk(root, children, parsed, request, deadline), start=1):
+            prefix.update(json.dumps((child_node.uri, metadata), separators=(",", ":")).encode())
+            if index <= offset:
+                if index == offset:
+                    prefix_checked = prefix.hexdigest() == expected_prefix
+                    if not prefix_checked:
+                        raise ResourceFileOperationError("execution_failed", "目录已改变，不能沿旧 cursor 续页", reason="stale_cursor")
+                    consumed, consumed_prefix = index, prefix.hexdigest()
+                continue
+            matches = request.operation == "list" or request.query in "/".join(parse_resource_uri(child_node.uri).tail_segments[1:])
+            if matches:
+                entry_bytes = len(child_node.model_dump_json().encode()) + 1
+                reason = "entry_limit" if len(entries) == request.limit else (
+                    "response_byte_limit" if response_bytes + entry_bytes > request.max_response_bytes else None
+                )
+                if reason is not None:
+                    if not entries:
+                        raise ResourceFileOperationError("output_limit_exceeded", "响应预算不足以容纳一个文件节点及续页凭据", reason="response_byte_limit")
+                    cursor = self._encode_cursor(binding, consumed, consumed_prefix)
+                    return self._response(ResourceNavigationResultDTO(node=node, entries=tuple(entries),
+                        truncated=True, next_cursor=cursor, truncation_reason=reason), request, deadline)
+                entries.append(child_node)
+                response_bytes += entry_bytes
+            consumed, consumed_prefix = index, prefix.hexdigest()
+        if not prefix_checked:
+            raise ResourceFileOperationError("execution_failed", "目录已改变，旧 cursor 的位置不存在", reason="stale_cursor")
+        return self._response(ResourceNavigationResultDTO(node=node, entries=tuple(entries)), request, deadline)
+
+    def _walk(
+        self, root: Path, children: tuple[str, ...], parsed: ParsedResourceUri,
+        request: ResourceNavigationRequest, deadline: float,
+    ) -> Iterator[tuple[ResourceNavigationNodeDTO, tuple[int, ...]]]:
         pending = [children]
         visited: set[Path] = set()
+        scanned = 0
         while pending:
+            self._check_deadline(deadline)
             relative = pending.pop()
             directory = self._contained(root, relative, parsed)
             if directory in visited:
                 continue
             visited.add(directory)
-            for child in sorted(directory.iterdir(), key=lambda item: item.name):
+            before = directory.stat().st_mtime_ns
+            bounded_children: list[Path] = []
+            # Path.iterdir 在部分 Python 版本会先调用 listdir；scandir 才真正逐项消费。
+            with os.scandir(directory) as children_stream:
+                for child in children_stream:
+                    self._check_deadline(deadline)
+                    scanned += 1
+                    if scanned > request.scan_limit:
+                        raise ResourceFileOperationError("output_limit_exceeded", "目录扫描达到本次节点上限，请缩小目标范围", reason="scan_limit")
+                    bounded_children.append(directory / child.name)
+            if directory.stat().st_mtime_ns != before:
+                raise ResourceFileOperationError("execution_failed", "目录在枚举期间改变，请重新读取", reason="directory_changed")
+            for child in sorted(bounded_children, key=lambda item: item.name):
+                self._check_deadline(deadline)
                 child_parts = (*relative, child.name)
                 # 私有存储不作为文件树 child 发布；直接请求和别名仍在 _contained 拒绝。
                 if parsed.kind == "files" and child_parts[0] == ".boxteam":
@@ -122,15 +234,51 @@ class ResourceNavigation:
                     tail_segments=(parsed.tail_segments[0], *child_parts),
                 )
                 child_node = self._node(parse_resource_uri(uri), child_path)
-                if request.operation == "list" or request.query in "/".join(child_parts):
-                    if len(entries) == request.limit:
-                        return ResourceNavigationResultDTO(node=node, entries=tuple(entries), truncated=True)
-                    entries.append(child_node)
+                metadata = child_path.stat()
+                # 仅校验续页前缀的可变视图，不作为文件内容 hash 或历史 revision。
+                yield child_node, (metadata.st_dev, metadata.st_ino, metadata.st_mode,
+                                   metadata.st_size, metadata.st_mtime_ns)
                 if request.operation == "search" and child_node.resource_shape == "directory":
                     pending.append(child_parts)
             if request.operation == "list":
                 break
-        return ResourceNavigationResultDTO(node=node, entries=tuple(entries))
+
+    @staticmethod
+    def _check_deadline(deadline: float) -> None:
+        if time.monotonic() >= deadline:
+            raise ResourceFileOperationError("output_limit_exceeded", "文件导航超过本次总期限", reason="deadline")
+
+    @staticmethod
+    def _size(result: ResourceNavigationResultDTO) -> int:
+        return len(result.model_dump_json().encode("utf-8"))
+
+    def _response(self, result: ResourceNavigationResultDTO, request: ResourceNavigationRequest,
+                  deadline: float) -> ResourceNavigationResultDTO:
+        self._check_deadline(deadline)
+        if self._size(result) > request.max_response_bytes:
+            raise ResourceFileOperationError("output_limit_exceeded", "资源导航响应超过总字节上限", reason="response_byte_limit")
+        self._check_deadline(deadline)
+        return result
+
+    @staticmethod
+    def _encode_cursor(binding: str, offset: int, prefix: str) -> str:
+        raw = json.dumps({"v": 1, "binding": binding, "offset": offset, "prefix": prefix}, separators=(",", ":")).encode()
+        return base64.urlsafe_b64encode(raw).decode().rstrip("=")
+
+    @staticmethod
+    def _decode_cursor(cursor: str | None, binding: str) -> tuple[int, str | None]:
+        if cursor is None:
+            return 0, None
+        try:
+            value = json.loads(base64.b64decode(cursor + "=" * (-len(cursor) % 4), altchars=b"-_", validate=True))
+        except (ValueError, UnicodeError) as error:
+            raise ResourceFileOperationError("execution_failed", "文件导航 cursor 无效", reason="invalid_cursor") from error
+        if (not isinstance(value, dict) or set(value) != {"v", "binding", "offset", "prefix"}
+                or value["v"] != 1 or value["binding"] != binding
+                or type(value["offset"]) is not int or value["offset"] <= 0
+                or not isinstance(value["prefix"], str) or len(value["prefix"]) != 64):
+            raise ResourceFileOperationError("execution_failed", "cursor 与目标、操作或查询限制不一致", reason="invalid_cursor")
+        return value["offset"], value["prefix"]
 
     def _root(self, parsed: ParsedResourceUri) -> tuple[Path, tuple[str, ...]]:
         if parsed.kind == "files" and self._file_paths is not None:

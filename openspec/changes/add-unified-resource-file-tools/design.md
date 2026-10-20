@@ -28,6 +28,8 @@ read/write 的文件目标、ls/glob/grep 的根目标和 apply_patch 的根目�
 
 目录/搜索返回 URI、shape、可用操作、相对显示名及有界匹配。使用显式 limits/deadline 和与目标/查询绑定的 opaque continuation，普通可变视图披露变化，无法继续时明确失败，不承诺固定历史分页。只为实际读取/条件写入计算原始 byte SHA-256；不使用 mtime 冒充内容版本，不为搜索建逐文件 ResourceIdentity。上下文追踪继续进入原 source owner。
 
+只读导航的首个切片在共享 `ResourceNavigation` owner 内设置单次总期限、扫描节点、单文件字节和序列化响应字节上限。目录和路径搜索返回 `view=live`；续页绑定 Gateway、规范 URI、操作、查询和限制，校验已消费前缀的节点及 stat metadata，变化时明确拒绝。此摘要只用于检测可变视图变化，不是内容 revision 或历史快照。扫描超限要求缩小范围；条目或正文预算截断会披露原因，目录/搜索可续页时返回 cursor。HTTP 层还核验包含请求回执的最终响应，不能容纳时返回文件执行域的 `output_limit_exceeded`。递归扫描通过 `scandir` 在排序前限制枚举量，不登记来源或 activation；普通模型工具、内容搜索和跨 Gateway 全程预算仍待后续任务接通。
+
 ### 4. 条件写入与多文件发布结果
 
 write/edit/patch 的内容前置使用精确原始 byte `sha256:<hex>` 或该 owner 已有等价 revision；创建使用 expected_absent。owner 在一个根内串行自己管理的 mutation，先校验所有 preimage/能力/patch、准备结果，再在每次发布前重新核当前 preimage；同目录临时文件经完整写入和原子替换发布，失败回收自己的句柄和未发布临时文件。

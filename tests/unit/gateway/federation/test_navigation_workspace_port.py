@@ -8,9 +8,13 @@ import httpx
 import pytest
 
 from app.core.trace_middleware import reset_current_gateway_id, set_current_gateway_id
-from app.gateway.federation.errors import FederationError
+from app.gateway.federation.errors import (
+    FEDERATION_SESSION_MAIN_UNAVAILABLE,
+    FEDERATION_TARGET_OWNER_REJECTED,
+    FederationError,
+)
 from tests.support.communication import WORKSPACE_ID
-from tests.unit.gateway.test_federation_workspace_port import _HTTPContext
+from tests.unit.gateway.test_federation_workspace_port import REQUEST_ID, _HTTPContext
 from tests.unit.gateway.test_federation_workspace_port import (
     http_context as http_context,  # noqa: PLC0414 - 复用真实 HTTP port fixture
 )
@@ -75,6 +79,23 @@ async def test_navigation_invalid_owner_reply_never_discloses_raw_data(http_cont
         await http_context.port.execute(operation="read", target=TARGET, body=BODY, origin="gateway_source", timeout=2.5)
     assert error.value.code == "federation-malformed-frame"
     assert "/private/owner-locator" not in str(error.value)
+
+
+@pytest.mark.parametrize("identity", ["valid", "wrong-header", "wrong-body"])
+async def test_navigation_preserves_file_error_only_with_matching_request_identity(http_context: _HTTPContext, identity: str) -> None:
+    detail = {"owner": "resource_file_operations", "code": "output_limit_exceeded",
+              "reason": "scan_limit", "message": "目录扫描达到本次节点上限"}
+    http_context.status = 400
+    http_context.data = {"detail": detail, "request_id": REQUEST_ID if identity != "wrong-body" else "other"}
+    if identity == "wrong-header":
+        http_context.header_request_id = "other"
+    with pytest.raises(FederationError) as error:
+        await http_context.port.execute(operation="read", target=TARGET, body=BODY, origin="gateway_source", timeout=2.5)
+    if identity == "valid":
+        assert error.value.code == FEDERATION_TARGET_OWNER_REJECTED
+        assert error.value.detail == detail
+    else:
+        assert error.value.code == FEDERATION_SESSION_MAIN_UNAVAILABLE
 
 
 @pytest.mark.parametrize("failure,code", [

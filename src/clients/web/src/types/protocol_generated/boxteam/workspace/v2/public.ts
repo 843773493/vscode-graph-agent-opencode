@@ -1584,6 +1584,14 @@ export interface ResourceNavigationRequest {
   query?: string | undefined;
   limit: number;
   max_bytes: number;
+  /** 续页绑定目标、操作、查询和读取限制，不包含物理路径。 */
+  cursor?:
+    | string
+    | undefined;
+  /** 单次 owner 调用的总预算（毫秒），不为每个文件重新计时。 */
+  timeout_ms: number;
+  scan_limit: number;
+  max_response_bytes: number;
 }
 
 export interface ResourceNavigationNodeDTO {
@@ -1598,6 +1606,12 @@ export interface ResourceNavigationResultDTO {
   entries: ResourceNavigationNodeDTO[];
   content?: string | undefined;
   truncated: boolean;
+  next_cursor?: string | undefined;
+  truncation_reason?:
+    | string
+    | undefined;
+  /** 普通文件目录为可变视图；续页不表示历史快照。 */
+  view: string;
 }
 
 export interface WorkspaceResourceDTO {
@@ -12494,7 +12508,17 @@ export const ResourceThreadRef: MessageFns<ResourceThreadRef> = {
 };
 
 function createBaseResourceNavigationRequest(): ResourceNavigationRequest {
-  return { uri: "", operation: "", query: undefined, limit: 0, max_bytes: 0 };
+  return {
+    uri: "",
+    operation: "",
+    query: undefined,
+    limit: 0,
+    max_bytes: 0,
+    cursor: undefined,
+    timeout_ms: 0,
+    scan_limit: 0,
+    max_response_bytes: 0,
+  };
 }
 
 export const ResourceNavigationRequest: MessageFns<ResourceNavigationRequest> = {
@@ -12505,6 +12529,10 @@ export const ResourceNavigationRequest: MessageFns<ResourceNavigationRequest> = 
       query: isSet(object.query) ? globalThis.String(object.query) : undefined,
       limit: isSet(object.limit) ? globalThis.Number(object.limit) : 0,
       max_bytes: isSet(object.max_bytes) ? globalThis.Number(object.max_bytes) : 0,
+      cursor: isSet(object.cursor) ? globalThis.String(object.cursor) : undefined,
+      timeout_ms: isSet(object.timeout_ms) ? globalThis.Number(object.timeout_ms) : 0,
+      scan_limit: isSet(object.scan_limit) ? globalThis.Number(object.scan_limit) : 0,
+      max_response_bytes: isSet(object.max_response_bytes) ? globalThis.Number(object.max_response_bytes) : 0,
     };
   },
 
@@ -12525,6 +12553,18 @@ export const ResourceNavigationRequest: MessageFns<ResourceNavigationRequest> = 
     if (message.max_bytes !== 0) {
       obj.max_bytes = Math.round(message.max_bytes);
     }
+    if (message.cursor !== undefined) {
+      obj.cursor = message.cursor;
+    }
+    if (message.timeout_ms !== 0) {
+      obj.timeout_ms = Math.round(message.timeout_ms);
+    }
+    if (message.scan_limit !== 0) {
+      obj.scan_limit = Math.round(message.scan_limit);
+    }
+    if (message.max_response_bytes !== 0) {
+      obj.max_response_bytes = Math.round(message.max_response_bytes);
+    }
     return obj;
   },
 
@@ -12538,6 +12578,10 @@ export const ResourceNavigationRequest: MessageFns<ResourceNavigationRequest> = 
     message.query = object.query ?? undefined;
     message.limit = object.limit ?? 0;
     message.max_bytes = object.max_bytes ?? 0;
+    message.cursor = object.cursor ?? undefined;
+    message.timeout_ms = object.timeout_ms ?? 0;
+    message.scan_limit = object.scan_limit ?? 0;
+    message.max_response_bytes = object.max_response_bytes ?? 0;
     return message;
   },
 };
@@ -12589,7 +12633,15 @@ export const ResourceNavigationNodeDTO: MessageFns<ResourceNavigationNodeDTO> = 
 };
 
 function createBaseResourceNavigationResultDTO(): ResourceNavigationResultDTO {
-  return { node: undefined, entries: [], content: undefined, truncated: false };
+  return {
+    node: undefined,
+    entries: [],
+    content: undefined,
+    truncated: false,
+    next_cursor: undefined,
+    truncation_reason: undefined,
+    view: "",
+  };
 }
 
 export const ResourceNavigationResultDTO: MessageFns<ResourceNavigationResultDTO> = {
@@ -12601,6 +12653,9 @@ export const ResourceNavigationResultDTO: MessageFns<ResourceNavigationResultDTO
         : [],
       content: isSet(object.content) ? globalThis.String(object.content) : undefined,
       truncated: isSet(object.truncated) ? globalThis.Boolean(object.truncated) : false,
+      next_cursor: isSet(object.next_cursor) ? globalThis.String(object.next_cursor) : undefined,
+      truncation_reason: isSet(object.truncation_reason) ? globalThis.String(object.truncation_reason) : undefined,
+      view: isSet(object.view) ? globalThis.String(object.view) : "",
     };
   },
 
@@ -12618,6 +12673,15 @@ export const ResourceNavigationResultDTO: MessageFns<ResourceNavigationResultDTO
     if (message.truncated !== false) {
       obj.truncated = message.truncated;
     }
+    if (message.next_cursor !== undefined) {
+      obj.next_cursor = message.next_cursor;
+    }
+    if (message.truncation_reason !== undefined) {
+      obj.truncation_reason = message.truncation_reason;
+    }
+    if (message.view !== "") {
+      obj.view = message.view;
+    }
     return obj;
   },
 
@@ -12632,6 +12696,9 @@ export const ResourceNavigationResultDTO: MessageFns<ResourceNavigationResultDTO
     message.entries = object.entries?.map((e) => ResourceNavigationNodeDTO.fromPartial(e)) || [];
     message.content = object.content ?? undefined;
     message.truncated = object.truncated ?? false;
+    message.next_cursor = object.next_cursor ?? undefined;
+    message.truncation_reason = object.truncation_reason ?? undefined;
+    message.view = object.view ?? "";
     return message;
   },
 };

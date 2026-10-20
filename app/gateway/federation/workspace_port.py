@@ -201,6 +201,10 @@ class WorkspaceSessionMainPort:
                 if response.headers.get("content-type", "").startswith("application/json"):
                     payload = response.json()
                     detail = payload.get("detail") if isinstance(payload, dict) else None
+                    if path == "/api/v1/resources/navigation" and isinstance(detail, dict) and detail.get("owner") == "resource_file_operations":
+                        if payload.get("request_id") != request_id or response.headers.get("X-Request-ID") != request_id:
+                            raise FederationError(FEDERATION_SESSION_MAIN_UNAVAILABLE, "工作区文件错误响应 request_id 漂移")
+                        raise FederationError(FEDERATION_TARGET_OWNER_REJECTED, "目标文件操作失败", detail=detail)
                     code = detail.get("code") if isinstance(detail, dict) else None
                     if isinstance(code, str) and (
                         code in RESOURCE_URI_RESOLVE_REASON_CODES or code == "snapshot_changed"
@@ -302,6 +306,9 @@ class WorkspaceSessionMainPort:
             from app.schemas.internal_v2.resource_navigation import (
                 ResourceNavigationResultDTO,
             )
+            from app.services.infrastructure.resource_platform.sources.resource_navigation import (
+                ResourceFileOperationError,
+            )
             from app.services.infrastructure.resource_platform.virtual_resources.resolver import (
                 ResourceUriResolveError,
             )
@@ -342,6 +349,8 @@ class WorkspaceSessionMainPort:
                         raise FederationError(FEDERATION_TARGET_NOT_RESOLVABLE, "导航 scope 未共享或不存在")
             except ResourceUriResolveError as error:
                 raise FederationError(FEDERATION_TARGET_NOT_RESOLVABLE, "导航资源未共享或不存在") from error
+            except ResourceFileOperationError as error:
+                raise FederationError(FEDERATION_TARGET_OWNER_REJECTED, "目标文件操作失败", detail=error.detail()) from error
             except (TimeoutError, httpx.TimeoutException) as error:
                 raise FederationError(FEDERATION_DEADLINE_EXCEEDED, "资源导航超过联邦总 deadline") from error
             except httpx.RequestError as error:

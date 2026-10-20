@@ -36,6 +36,9 @@ from app.services.infrastructure.resource_platform.observation.resource_observat
 from app.services.infrastructure.resource_platform.sources.gateway_skill_sources import (
     GatewaySkillSources,
 )
+from app.services.infrastructure.resource_platform.sources.resource_navigation import (
+    ResourceFileOperationError,
+)
 from app.services.infrastructure.resource_platform.sources.workspace_file_resources import (
     WorkspaceFileResourceRegistry,
 )
@@ -335,6 +338,23 @@ async def test_initial_binding_requires_request_identity_before_http(source_case
     finally:
         reset_current_request_id(token)
     assert requests == []
+
+
+async def test_navigation_preserves_file_execution_error_domain(source_case, request_identity: str):
+    _owner, source, _skill, _channel = source_case
+    detail = {"owner": "resource_file_operations", "code": "output_limit_exceeded",
+              "reason": "scan_limit", "message": "目录扫描达到本次节点上限"}
+
+    def reply(request: httpx.Request) -> httpx.Response:
+        assert request.headers["X-Request-ID"] == request_identity
+        return httpx.Response(400, json={"detail": detail}, headers={"X-Request-ID": request_identity})
+
+    source._state(GATEWAY_ID).client = httpx.AsyncClient(transport=httpx.MockTransport(reply))
+    with pytest.raises(ResourceFileOperationError) as failure:
+        await source.navigate(ResourceNavigationRequest(
+            uri=f"boxteam://gateway/{GATEWAY_ID}/resources/skills/demo", operation="list", scan_limit=1,
+        ), gateway_id=GATEWAY_ID)
+    assert failure.value.detail() == detail
 
 
 async def test_observer_uses_empty_context_and_gateway_generated_request_ids(

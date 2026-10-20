@@ -26,6 +26,9 @@ from app.services.infrastructure.resource_platform.observation.resource_observat
     ResourceObservation,
     ResourceObservationChannel,
 )
+from app.services.infrastructure.resource_platform.sources.resource_navigation import (
+    ResourceFileOperationError,
+)
 from app.services.infrastructure.resource_platform.virtual_resources.resolver import (
     ResourceUriResolveError,
 )
@@ -107,6 +110,8 @@ class GatewaySkillSources:
             detail = response.json().get("detail")
             if isinstance(detail, dict) and detail.get("owner") == "resource_uri_resolver":
                 raise ResourceUriResolveError(detail["code"], detail["message"])
+            if isinstance(detail, dict) and detail.get("owner") == "resource_file_operations":
+                raise ResourceFileOperationError(detail["code"], detail["message"], reason=detail["reason"])
         response.raise_for_status()
         if response.headers.get("X-Request-ID") != request_id:
             raise ValueError("Gateway Skill navigation 响应头 request_id 与创建请求不一致")

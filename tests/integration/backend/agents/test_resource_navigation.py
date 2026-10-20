@@ -107,10 +107,12 @@ async def test_real_workspace_gateway_navigation_is_fixed_lightweight_and_contai
                 response = await client.post(path, json={"uri": uri, "operation": operation, **extra})
                 receipts.append({"uri": uri, "operation": operation, "status": response.status_code, "body": response.json()})
                 assert response.status_code == 200, response.text
+                assert len(response.content) <= extra.get("max_response_bytes", 1048576)
                 assert response.headers["X-Request-ID"] == response.json()["request_id"]
                 for forbidden in (str(workspace), str(home), "local-dev-token"):
                     assert forbidden not in response.text
-                assert set(response.json()["data"]) == {"node", "entries", "content", "truncated"}
+                assert set(response.json()["data"]) == {"node", "entries", "content", "truncated", "next_cursor", "truncation_reason", "view"}
+                assert response.json()["data"]["view"] == "live"
                 assert response.json()["data"]["node"]["uri"] == parse_resource_uri(uri, local_gateway_id=gateway_id).display_uri
                 for node in (response.json()["data"]["node"], *response.json()["data"]["entries"]):
                     assert set(node) == {"uri", "resource_shape", "operations", "child_path"}
@@ -134,6 +136,29 @@ async def test_real_workspace_gateway_navigation_is_fixed_lightweight_and_contai
             assert len(bulk["entries"]) == 7 and bulk["truncated"]
             assert all(node["resource_shape"] == "file" for node in bulk["entries"])
             assert (await navigate(bulk["entries"][0]["uri"], "read"))["content"] == "未追踪源码\n"
+            budget_root = files_root + "/src/navigation-untracked"
+            budget_page = await navigate(budget_root, "list", max_response_bytes=1400)
+            assert budget_page["truncated"] and budget_page["truncation_reason"] == "response_byte_limit"
+            budget_next = await navigate(budget_root, "list", max_response_bytes=1400, cursor=budget_page["next_cursor"])
+            assert {entry["uri"] for entry in budget_page["entries"]}.isdisjoint(entry["uri"] for entry in budget_next["entries"])
+            cursor, seen = None, []
+            while True:
+                page = await navigate(files_root + "/src/navigation-untracked", "search", query="bulk-needle", limit=60, cursor=cursor)
+                assert len(page["entries"]) <= 60
+                seen.extend(entry["uri"] for entry in page["entries"])
+                if not page["truncated"]:
+                    assert page["next_cursor"] is None
+                    break
+                assert page["truncation_reason"] == "entry_limit" and page["next_cursor"]
+                cursor = page["next_cursor"]
+            assert len(seen) == len(set(seen)) == 257
+            rejected = await client.post(path, json={"uri": files_root, "operation": "search", "query": "bulk-needle", "cursor": cursor or bulk["next_cursor"]})
+            assert rejected.status_code == 400
+            assert rejected.json()["detail"]["owner"] == "resource_file_operations"
+            limited = await client.post(path, json={"uri": files_root, "operation": "list", "scan_limit": 1})
+            assert limited.status_code == 400
+            assert limited.json()["detail"]["code"] == "output_limit_exceeded"
+            assert limited.json()["detail"]["reason"] == "scan_limit"
             agents_uri = resource_display_uri(scope="workspace", scope_id=workspace_id, kind="agent-spec", tail_segments=("root", "AGENTS.md"))
             agents = await navigate(agents_uri, "read")
             assert agents["content"] == "工作区规范\n"
@@ -148,6 +173,15 @@ async def test_real_workspace_gateway_navigation_is_fixed_lightweight_and_contai
                 entry = next(node for node in listed["entries"] if node["uri"].endswith("/SKILL.md"))
                 assert entry["resource_shape"] == "file" and entry["child_path"] is None
                 assert (await navigate(entry["uri"], "read"))["content"]
+                if scope != "inline":
+                    paged = await navigate(uri, "list", limit=1)
+                    assert paged["truncated"] and paged["next_cursor"]
+                    following = await navigate(uri, "list", limit=1, cursor=paged["next_cursor"])
+                    assert following["entries"][0]["uri"] != paged["entries"][0]["uri"]
+                    limited = await client.post(path, json={"uri": uri, "operation": "list", "scan_limit": 1})
+                    assert limited.status_code == 400, limited.text
+                    assert limited.json()["detail"]["owner"] == "resource_file_operations"
+                    assert limited.json()["detail"]["reason"] == "scan_limit"
                 if scope == "inline":
                     continue
                 found = await navigate(uri, "search", query="中文 文档")

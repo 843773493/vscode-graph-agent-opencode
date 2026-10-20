@@ -22,6 +22,9 @@ from app.schemas.internal_v2.resource_navigation import (
     ResourceNavigationRequest,
     ResourceNavigationResultDTO,
 )
+from app.services.infrastructure.resource_platform.sources.resource_navigation import (
+    ResourceFileOperationError,
+)
 
 router = APIRouter()
 
@@ -74,6 +77,16 @@ def _snapshot_response(
     return APIResponse(data=GatewaySkillSourcesDTO.model_validate(result["data"]), request_id=request_id)
 
 
+def _navigation_response(result: dict[str, object], body: ResourceNavigationRequest,
+                         request_id: str) -> APIResponse[ResourceNavigationResultDTO]:
+    envelope = APIResponse(data=ResourceNavigationResultDTO.model_validate(result["data"]), request_id=request_id)
+    if len(envelope.model_dump_json().encode("utf-8")) > body.max_response_bytes:
+        raise HTTPException(400, detail=ResourceFileOperationError(
+            "output_limit_exceeded", "导航响应及请求回执超过总字节上限", reason="response_byte_limit",
+        ).detail())
+    return envelope
+
+
 @router.post(
     "/api/gateway/skill-sources/{gateway_id}/workspaces/{workspace_id}/navigation",
     response_model=APIResponse[ResourceNavigationResultDTO],
@@ -90,7 +103,7 @@ async def navigate_skill_source(
         request=request, registry=registry, owner=owner, gateway_id=gateway_id,
         workspace_id=workspace_id, request_id=request_id, kind="navigation", navigation=body,
     )
-    return APIResponse(data=ResourceNavigationResultDTO.model_validate(result["data"]), request_id=request_id)
+    return _navigation_response(result, body, request_id)
 
 
 @router.get(
@@ -130,7 +143,7 @@ async def navigate_connected_skill_source(
         workspace_id=workspace_id, request_id=request_id, kind="navigation", navigation=body,
         resolve_owner=True,
     )
-    return APIResponse(data=ResourceNavigationResultDTO.model_validate(result["data"]), request_id=request_id)
+    return _navigation_response(result, body, request_id)
 
 
 @router.get(

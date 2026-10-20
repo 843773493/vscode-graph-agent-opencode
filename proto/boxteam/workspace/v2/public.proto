@@ -1573,6 +1573,12 @@ message ResourceNavigationRequest {
   optional string query = 3;
   uint32 limit = 4;
   uint32 max_bytes = 5;
+  // 续页绑定目标、操作、查询和读取限制，不包含物理路径。
+  optional string cursor = 6;
+  // 单次 owner 调用的总预算（毫秒），不为每个文件重新计时。
+  uint32 timeout_ms = 7;
+  uint32 scan_limit = 8;
+  uint32 max_response_bytes = 9;
 }
 
 message ResourceNavigationNodeDTO {
@@ -1587,6 +1593,10 @@ message ResourceNavigationResultDTO {
   repeated ResourceNavigationNodeDTO entries = 2;
   optional string content = 3;
   bool truncated = 4;
+  optional string next_cursor = 5;
+  optional string truncation_reason = 6;
+  // 普通文件目录为可变视图；续页不表示历史快照。
+  string view = 7;
 }
 
 message WorkspaceResourceDTO {

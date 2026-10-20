@@ -373,7 +373,8 @@ async def test_remote_skill_navigation_is_lightweight_encoded_and_fixed_to_owner
         if status != 200:
             return body
         data = body["data"]
-        assert set(data) == {"node", "entries", "content", "truncated"}
+        assert set(data) == {"node", "entries", "content", "truncated", "next_cursor", "truncation_reason", "view"}
+        assert data["view"] == "live"
         assert data["node"]["uri"] == parse_resource_uri(uri, local_gateway_id=target.gateway_id).display_uri
         for node in (data["node"], *data["entries"]):
             assert set(node) == {"uri", "resource_shape", "operations", "child_path"}
@@ -429,7 +430,8 @@ async def test_remote_skill_navigation_is_lightweight_encoded_and_fixed_to_owner
         assert denied["detail"]["owner"] == "resource_uri_grammar" and denied["detail"]["code"] == code
     await navigate(root_uri + "/SKILL.md", "write", status=422)
     invalid_content = await navigate(root_uri + "/scripts/non-text.bin", "read", status=400)
-    assert invalid_content["detail"] == {"owner": "resource_navigation", "type": "UnicodeDecodeError", "errno": None}
+    assert invalid_content["detail"] == {"owner": "resource_file_operations", "code": "invalid_encoding",
+                                         "reason": "utf8", "message": "文件内容不是有效的 UTF-8 文本"}
     outside = case.context.workspace_root / "remote-private-proof.txt"
     outside.write_text("私有根外正文\n")
     link = target.gateway_home / "skills" / SKILL_NAME / "references/escape"

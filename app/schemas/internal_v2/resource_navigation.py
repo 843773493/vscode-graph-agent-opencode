@@ -20,6 +20,10 @@ class ResourceNavigationRequest(BaseModel):
     query: str | None = None
     limit: int = Field(default=100, ge=1, le=1000)
     max_bytes: int = Field(default=65536, ge=1, le=1048576)
+    cursor: str | None = Field(default=None, min_length=1, max_length=2048)
+    timeout_ms: int = Field(default=10000, ge=1, le=30000)
+    scan_limit: int = Field(default=10000, ge=1, le=100000)
+    max_response_bytes: int = Field(default=1048576, ge=1024, le=1048576)
 
     @model_validator(mode="after")
     def require_search_query(self) -> ResourceNavigationRequest:
@@ -28,6 +32,8 @@ class ResourceNavigationRequest(BaseModel):
                 raise ValueError("search 必须提供非空 query")
         elif self.query is not None:
             raise ValueError("只有 search 接受 query")
+        if self.cursor is not None and self.operation not in {"list", "search"}:
+            raise ValueError("只有 list/search 接受 cursor")
         return self
 
 
@@ -47,3 +53,6 @@ class ResourceNavigationResultDTO(BaseModel):
     entries: tuple[ResourceNavigationNodeDTO, ...] = ()
     content: str | None = None
     truncated: bool = False
+    next_cursor: str | None = None
+    truncation_reason: Literal["entry_limit", "response_byte_limit", "file_byte_limit"] | None = None
+    view: Literal["live"] = "live"

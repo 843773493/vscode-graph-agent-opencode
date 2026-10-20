@@ -6868,6 +6868,30 @@ export declare type ResourceNavigationRequest = Message<"boxteam.workspace.v2.Re
    * @generated from field: uint32 max_bytes = 5;
    */
   maxBytes: number;
+
+  /**
+   * 续页绑定目标、操作、查询和读取限制，不包含物理路径。
+   *
+   * @generated from field: optional string cursor = 6;
+   */
+  cursor?: string | undefined;
+
+  /**
+   * 单次 owner 调用的总预算（毫秒），不为每个文件重新计时。
+   *
+   * @generated from field: uint32 timeout_ms = 7;
+   */
+  timeoutMs: number;
+
+  /**
+   * @generated from field: uint32 scan_limit = 8;
+   */
+  scanLimit: number;
+
+  /**
+   * @generated from field: uint32 max_response_bytes = 9;
+   */
+  maxResponseBytes: number;
 };
 
 /**
@@ -6930,6 +6954,23 @@ export declare type ResourceNavigationResultDTO = Message<"boxteam.workspace.v2.
    * @generated from field: bool truncated = 4;
    */
   truncated: boolean;
+
+  /**
+   * @generated from field: optional string next_cursor = 5;
+   */
+  nextCursor?: string | undefined;
+
+  /**
+   * @generated from field: optional string truncation_reason = 6;
+   */
+  truncationReason?: string | undefined;
+
+  /**
+   * 普通文件目录为可变视图；续页不表示历史快照。
+   *
+   * @generated from field: string view = 7;
+   */
+  view: string;
 };
 
 /**

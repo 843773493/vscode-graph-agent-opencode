@@ -9,6 +9,7 @@ from uuid import uuid4
 
 from app.core.resource_uri import resource_display_uri
 from app.gateway.credentials import FederationCredentialStore
+from app.gateway.federation.errors import FEDERATION_TARGET_OWNER_REJECTED
 from tests.integration.backend.agents.test_resource_navigation import _tracking_counts
 from tests.integration.backend.sessions.test_session_communication_pipeline import (
     communication_triad as communication_triad,  # noqa: PLC0414 - 正式 fixture 按当前测试文件隔离
@@ -73,6 +74,20 @@ async def test_navigation_uses_original_star_channels_and_fixed_owner(communicat
     direct = await navigate(hub, root, "list")
     relayed = await navigate(source, root, "list")
     assert direct == relayed
+    first = await navigate(source, root, "list", limit=1)
+    assert first["truncated"] and first["next_cursor"]
+    following = await navigate(source, root, "list", limit=1, cursor=first["next_cursor"])
+    assert following["entries"][0]["uri"] != first["entries"][0]["uri"]
+    assert following["entries"][0]["uri"].startswith(f"boxteam://{target.gateway_id}/")
+    for address in (root, uri("skills", "navigation", scope="gateway")):
+        limited = await source.client.post("/api/v1/resources/navigation", json={
+            "uri": address, "operation": "list", "scan_limit": 1,
+        })
+        assert limited.status_code == 409, limited.text
+        error = limited.json()["detail"]
+        assert error["code"] == FEDERATION_TARGET_OWNER_REJECTED
+        assert error["detail"]["owner"] == "resource_file_operations"
+        assert error["detail"]["reason"] == "scan_limit"
     # canonical remote route 也必须使用同一 read grant；不能依赖对端 HTTP 凭据直读。
     local_root = uri("files", "root", "src", authority=None)
     canonical_path = f"/api/v1/workspaces/{target.workspace_id}/resources/navigation"

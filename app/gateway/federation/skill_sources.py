@@ -21,6 +21,9 @@ from app.gateway.federation.protocol import METHOD_SKILL_SOURCES, require_str
 from app.gateway.registry import GatewayWorkspaceRegistry
 from app.gateway.runtime.skill_sources import GatewaySkillSourceOwner
 from app.schemas.internal_v2.resource_navigation import ResourceNavigationRequest
+from app.services.infrastructure.resource_platform.sources.resource_navigation import (
+    ResourceFileOperationError,
+)
 from app.services.infrastructure.resource_platform.virtual_resources.resolver import (
     ResourceUriResolveError,
 )
@@ -71,6 +74,8 @@ class GatewaySkillSourcePort:
         except ResourceUriResolveError as error:
             return {**identity, "status": 404 if error.reason_code == "unknown_resource" else 403,
                     "detail": {"owner": "resource_uri_resolver", "code": error.reason_code, "message": str(error)}}
+        except ResourceFileOperationError as error:
+            return {**identity, "status": 400, "detail": error.detail()}
         except (OSError, UnicodeError) as error:
             return {**identity, "status": 400, "detail": {"owner": "resource_navigation", "type": type(error).__name__, "errno": getattr(error, "errno", None)}}
         return {**identity, "status": 200, "data": result.model_dump(mode="json")}

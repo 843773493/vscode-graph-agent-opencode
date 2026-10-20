@@ -39,6 +39,9 @@ from app.schemas.internal_v2.resource_navigation import (
     ResourceNavigationRequest,
     ResourceNavigationResultDTO,
 )
+from app.services.infrastructure.resource_platform.sources.resource_navigation import (
+    ResourceFileOperationError,
+)
 from app.services.infrastructure.resource_platform.virtual_resources.resolver import (
     ResourceUriResolveError,
 )
@@ -85,6 +88,7 @@ async def _navigate(
             targets = [target for target in _registry(request).targets() if target.backend_workspace_id == backend_workspace_id]
             if not targets:
                 raise HTTPException(404, detail="workspace 未注册或不存在")
+            # TODO：同一后端注册到多个 Gateway 的固定工作区路由需按显式 owner 消歧；当前重复目标仍明确拒绝。
             if len(targets) != 1:
                 raise FederationError(FEDERATION_TARGET_AMBIGUOUS, "多个 Gateway route 指向同一导航 workspace")
             workspace_target = targets[0]
@@ -151,6 +155,8 @@ async def _navigate(
             except ValidationError as error:
                 raise FederationError(FEDERATION_MALFORMED_FRAME, "导航响应不符合目标 owner 合同") from error
             result = _qualify_result(result, uri=payload.uri, gateway_id=target.gateway_id)
+            if len(result.model_dump_json().encode("utf-8")) > payload.max_response_bytes:
+                raise ResourceFileOperationError("output_limit_exceeded", "限定 Gateway 后的导航响应超过总字节上限", reason="response_byte_limit")
     except FederationError as error:
         if error.code in {FEDERATION_CAPABILITY_DENIED, FEDERATION_HARDENING_ACTIVE, FEDERATION_TARGET_NOT_RESOLVABLE} or (error.code == FEDERATION_AUTHORIZATION_REVOKED and error.detail.get("capability") == "read"):
             error = FederationError(FEDERATION_TARGET_NOT_RESOLVABLE, "导航资源未共享或不存在")
@@ -159,10 +165,17 @@ async def _navigate(
         raise HTTPException(400, detail={"owner": "resource_uri_grammar", "code": error.reason_code, "message": str(error)}) from error
     except ResourceUriResolveError as error:
         raise HTTPException(404 if error.reason_code == "unknown_resource" else 403, detail={"owner": "resource_uri_resolver", "code": error.reason_code, "message": str(error)}) from error
+    except ResourceFileOperationError as error:
+        raise HTTPException(400, detail=error.detail()) from error
     except (OSError, UnicodeError) as error:
         raise HTTPException(400, detail={"owner": "resource_navigation", "type": type(error).__name__, "errno": getattr(error, "errno", None)}) from error
     request_id = get_request_id(request)
-    return Response(content=APIResponse(data=result, request_id=request_id).model_dump_json(), media_type="application/json", headers={"X-Request-ID": request_id})
+    content = APIResponse(data=result, request_id=request_id).model_dump_json()
+    if len(content.encode("utf-8")) > payload.max_response_bytes:
+        raise HTTPException(400, detail=ResourceFileOperationError(
+            "output_limit_exceeded", "导航响应及请求回执超过总字节上限", reason="response_byte_limit",
+        ).detail())
+    return Response(content=content, media_type="application/json", headers={"X-Request-ID": request_id})
 
 
 @router.post("/api/v1/resources/navigation", response_model=APIResponse[ResourceNavigationResultDTO])
