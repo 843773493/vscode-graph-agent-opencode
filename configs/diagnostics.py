@@ -132,7 +132,6 @@ def _jsonc_domain_diagnostic(
             effective = merge_json_objects(effective, payload)
         validated = validate_config(
             effective,
-            config_path=Path(f"<merged-{domain}-configuration>"),
             schema_path=schema_path,
         )
         canonical = json.dumps(

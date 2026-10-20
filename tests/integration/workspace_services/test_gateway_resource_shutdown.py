@@ -126,7 +126,7 @@ def shutdown_environment(
         "api_mode": target["api_mode"],
     })
     config["agents"]["default"]["model"]["fallback_providers"] = []
-    validate_config(config, config_path=config_path, schema_path=Path.cwd() / "configs/workspace_schema.jsonc")
+    validate_config(config, schema_path=Path.cwd() / "configs/workspace_schema.jsonc")
     config_path.write_text(json.dumps(config, ensure_ascii=False, indent=2))
     temporary = Path(integration_workspace_root_path).parent / "runtime/tmp"
     temporary.mkdir(parents=True, exist_ok=True)

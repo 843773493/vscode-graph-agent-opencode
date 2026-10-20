@@ -40,7 +40,6 @@ def merge_json_objects(
 def validate_config(
     config: dict[str, object],
     *,
-    config_path: Path,
     schema_path: Path,
 ) -> dict[str, object]:
     schema = read_jsonc_object(schema_path)
@@ -54,8 +53,7 @@ def validate_config(
     except jsonschema.ValidationError as error:
         location = ".".join(str(item) for item in error.absolute_path) or "<root>"
         raise ValueError(
-            f"配置验证失败: config={config_path} schema={schema_path} "
-            f"location={location}: {error.message}"
+            f"配置验证失败: location={location}: {error.message}"
         ) from error
     return config
 
@@ -68,6 +66,5 @@ def load_validated_config(
     config = read_jsonc_object(config_path)
     return validate_config(
         config,
-        config_path=config_path,
         schema_path=schema_path,
     )

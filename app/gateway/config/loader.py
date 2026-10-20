@@ -195,7 +195,6 @@ def load_gateway_config(
             source_paths.append(state_store.path)
     validate_config(
         raw_gateway_config,
-        config_path=resolved_config_path,
         schema_path=resolved_schema_path,
     )
     _normalize_connection_ids(
@@ -210,7 +209,6 @@ def load_gateway_config(
     # 旧版先按 v1 结构校验，再校验补入 connection_id 的规范化候选。
     validate_config(
         raw_gateway_config,
-        config_path=resolved_config_path,
         schema_path=resolved_schema_path,
     )
     raw_workspaces = raw_gateway_config["workspaces"]

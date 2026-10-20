@@ -6,6 +6,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from jsonschema import ValidationError
 
 import app.gateway.config as gateway_config_module
 from app.gateway.config import (
@@ -359,8 +360,14 @@ def test_load_gateway_config_rejects_schema_violation(
 ) -> None:
     config_path, schema_path = _write_gateway_config(tmp_path, [workspace])
 
-    with pytest.raises(ValueError, match="配置验证失败"):
+    with pytest.raises(ValueError, match="配置验证失败") as failure:
         load_gateway_config(config_path=config_path, schema_path=schema_path)
+    cause = failure.value.__cause__
+    assert isinstance(cause, ValidationError)
+    location = ".".join(str(part) for part in cause.absolute_path) or "<root>"
+    assert str(failure.value) == f"配置验证失败: location={location}: {cause.message}"
+    assert str(config_path) not in str(failure.value)
+    assert str(schema_path) not in str(failure.value)
 
 
 def test_load_gateway_config_skips_disabled_workspace(tmp_path: Path) -> None:
