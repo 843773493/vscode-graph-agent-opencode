@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
+from hashlib import sha256
 from pathlib import Path
 
 from app.agents.tools.apply_patch import create_apply_patch_tool
+from app.core.workspace_identity import load_or_create_workspace_id
 from app.tool_testing.definitions import PreparedToolTest, ToolTestEvaluation
 
 
@@ -25,13 +28,19 @@ class ApplyPatchScenarioCase:
     ) -> PreparedToolTest:
         del workspace_root, asset_root
         attempt_root.mkdir(parents=True)
+        load_or_create_workspace_id(attempt_root)
         for relative_path, content in self.initial_files.items():
             target = attempt_root / relative_path
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text(content, encoding="utf-8")
 
+        versions = {
+            name: "sha256:" + sha256((attempt_root / name).read_bytes()).hexdigest()
+            if (attempt_root / name).is_file() else "absent"
+            for name in sorted(self.initial_files.keys() | self.expected_files.keys())
+        }
         return PreparedToolTest(
-            prompt=self.prompt_template,
+            prompt=self.prompt_template + "\nexpected_versions = " + json.dumps(versions, ensure_ascii=False),
             tool=create_apply_patch_tool(workspace_root=attempt_root),
         )
 
@@ -120,7 +129,7 @@ def create_apply_patch_cases() -> list[ApplyPatchScenarioCase]:
         ),
         ApplyPatchScenarioCase(
             case_id="apply_patch_multi_file_transaction",
-            title="多文件事务",
+            title="多文件补丁",
             prompt_template=(
                 "只调用一次 apply_patch，在同一个补丁中完成三个操作：把 config.txt "
                 "中的 enabled=false 改成 enabled=true；删除 legacy.txt；新增 "

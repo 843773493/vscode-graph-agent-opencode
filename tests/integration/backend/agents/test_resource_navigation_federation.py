@@ -217,3 +217,60 @@ async def test_model_file_tools_execute_on_fixed_federated_owner(communication_t
     (artifacts / "model-federated-files.json").write_text(json.dumps({"results": tool_results,
         "target_tracking_before": before, "target_tracking_after": _tracking_counts(target.workspace / ".boxteam")},
         ensure_ascii=False, indent=2) + "\n")
+
+
+async def test_model_conditional_patch_preserves_file_operations_and_changesets(communication_triad):
+    nodes, model, artifacts = communication_triad
+    source = nodes["b"]
+    (source.workspace / "src/patch-source.txt").write_bytes(b"old\n")
+    (source.workspace / "src/patch-delete.txt").write_bytes(b"delete\n")
+    root = resource_display_uri(scope="workspace", scope_id=source.workspace_id, kind="files", tail_segments=("root", "src"))
+    session = await create_session(source.client, "模型条件补丁")
+    receipt = None
+    patch = "*** Begin Patch\n*** Update File: patch-source.txt\n*** Move to: patch-destination.txt\n@@\n-old\n+new\n*** Delete File: patch-delete.txt\n*** Add File: patch-created.txt\n+created\n*** End Patch"
+
+    def reply(payload):
+        nonlocal receipt
+        messages = payload["messages"]
+        if not any(message["role"] == "user" and "conditional-patch-trigger" in str(message["content"]) for message in messages):
+            return {"content": "条件补丁"}
+        results = [message for message in messages if message["role"] == "tool"]
+        if not results:
+            return _tool("read_file", {"path": root + "/patch-source.txt"}, "call_patch_read_source")
+        if len(results) == 1:
+            return _tool("read_file", {"path": root + "/patch-delete.txt"}, "call_patch_read_delete")
+        if len(results) == 2:
+            import re
+            versions = {name: re.search(r"sha256:[0-9a-f]{64}", message["content"]).group()
+                        for name, message in zip(("patch-source.txt", "patch-delete.txt"), results, strict=True)}
+            assert versions == {"patch-source.txt": "sha256:" + hashlib.sha256(b"old\n").hexdigest(),
+                                "patch-delete.txt": "sha256:" + hashlib.sha256(b"delete\n").hexdigest()}
+            versions.update({"patch-destination.txt": "absent", "patch-created.txt": "absent"})
+            return _tool("apply_patch", {"input": patch, "explanation": "新增、删除和同根移动", "target": root,
+                                        "expected_versions": versions}, "call_conditional_patch")
+        receipt = json.loads(results[2]["content"])
+        assert receipt["status"] == "success" and receipt["effect"] == "completed", receipt
+        assert all(item["state"] == "published" for item in receipt["files"])
+        assert receipt["target"] == root
+        return {"content": "已核实条件补丁与逐文件发布回执"}
+
+    model.response_callback = reply
+    accepted = await source.client.post(f"/api/v1/sessions/{session}/messages", json={
+        "message": {"content": "conditional-patch-trigger"}, "run": {"mode": "single_agent", "agent_id": "default"},
+    }, headers={"X-Request-ID": "req-model-conditional-patch"})
+    assert accepted.status_code == 200, accepted.text
+    await _completed(source.client, accepted.json()["data"]["job_id"])
+    assert receipt is not None
+    assert (source.workspace / "src/patch-destination.txt").read_bytes() == b"new\n"
+    assert (source.workspace / "src/patch-created.txt").read_bytes() == b"created"
+    assert not (source.workspace / "src/patch-source.txt").exists() and not (source.workspace / "src/patch-delete.txt").exists()
+    response = await source.client.get(f"/api/v1/sessions/{session}/changesets/all")
+    assert response.status_code == 200, response.text
+    changes = {item["file_path"]: item for item in response.json()["data"]["files"]}
+    assert set(changes) == {"/src/patch-source.txt", "/src/patch-destination.txt", "/src/patch-delete.txt", "/src/patch-created.txt"}
+    assert changes["/src/patch-source.txt"]["kind"] == changes["/src/patch-delete.txt"]["kind"] == "delete"
+    assert changes["/src/patch-destination.txt"]["kind"] == changes["/src/patch-created.txt"]["kind"] == "create"
+    assert "-old" in changes["/src/patch-source.txt"]["diff_text"] and "+new" in changes["/src/patch-destination.txt"]["diff_text"]
+    wire = json.dumps(model.requests)
+    assert all(str(node.workspace) not in wire for node in nodes.values())
+    (artifacts / "model-conditional-patch.json").write_text(json.dumps({"receipt": receipt, "changeset": response.json()}, ensure_ascii=False, indent=2) + "\n")

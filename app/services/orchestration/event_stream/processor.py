@@ -68,6 +68,7 @@ from app.services.orchestration.event_stream.reader import (
 from app.services.orchestration.event_stream.tool_events import (
     SUBAGENT_TOOL_NAMES,
     activity_result_detail,
+    apply_patch_has_file_effects,
     apply_patch_snapshots_from_result,
     build_tool_display_context,
     file_paths_from_tool_args,
@@ -671,17 +672,20 @@ async def process_agent_event_stream(
                 stored_edits: list[StoredFileEdit] = []
                 if run_id:
                     snapshots = file_edit_snapshots_by_run_id.pop(run_id, None)
+                    has_file_effects = tool_output_succeeded(raw_output) or (
+                        display_context.tool_name == APPLY_PATCH_TOOL_NAME and apply_patch_has_file_effects(raw_result_text)
+                    )
                     if (
                         snapshots is None
                         and display_context.tool_name == APPLY_PATCH_TOOL_NAME
-                        and tool_output_succeeded(raw_output)
+                        and has_file_effects
                     ):
                         snapshots = apply_patch_snapshots_from_result(
                             result_text=raw_result_text,
                             session_changes_service=session_changes_service,
                             workspace_root=workspace_root,
                         )
-                    if snapshots is not None and tool_output_succeeded(raw_output):
+                    if snapshots is not None and has_file_effects:
                         for snapshot in snapshots:
                             stored_edit = (
                                 await session_changes_service.record_tool_file_edit(

@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from app.core.hashing import sha256_hex
+from app.services.infrastructure.workspace_files.runtime import rename_entry_exclusive
 
 
 class WorkspaceFileConflictError(RuntimeError):
@@ -62,10 +63,25 @@ def read_file_preimage(path: Path, *, reference: str, max_bytes: int | None = No
     return FilePreimage(content, after)
 
 
-def publish_file_content(path: Path, content: bytes, *, before: FilePreimage, reference: str) -> FilePreimage:
+def require_file_preimage(path: Path, *, before: FilePreimage | None, reference: str) -> None:
+    if before is None:
+        if path.exists() or path.is_symlink():
+            raise WorkspaceFileConflictError(f"目标不满足 expected_absent: {reference}")
+        return
+    try:
+        latest = read_file_preimage(path, reference=reference, max_bytes=len(before.content))
+    except (FileNotFoundError, IsADirectoryError, ValueError) as error:
+        raise WorkspaceFileConflictError(f"文件在保存期间发生变化，请重新载入后再保存: {reference}") from error
+    if latest.content != before.content:
+        raise WorkspaceFileConflictError(f"文件在保存期间发生变化，请重新载入后再保存: {reference}")
+
+
+def publish_file_content(path: Path, content: bytes, *, before: FilePreimage | None,
+                         reference: str, mode: int | None = None) -> FilePreimage:
     """调用者持有同一 Workspace mutation lock；外部 writer 仍可在核对后竞争。"""
     temporary_path: Path | None = None
     try:
+        path.parent.mkdir(parents=True, exist_ok=True)
         descriptor, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
         temporary_path = Path(temporary_name)
         with os.fdopen(descriptor, "wb") as stream:
@@ -73,15 +89,14 @@ def publish_file_content(path: Path, content: bytes, *, before: FilePreimage, re
             stream.flush()
             os.fsync(stream.fileno())
         # TODO：Windows 使用继承 ACL；不要把 POSIX mode bits 当作安全边界。
-        if os.name != "nt":
-            os.chmod(temporary_path, before.mode)
-        try:
-            latest = read_file_preimage(path, reference=reference, max_bytes=len(before.content))
-        except (FileNotFoundError, IsADirectoryError, ValueError) as error:
-            raise WorkspaceFileConflictError(f"文件在保存期间发生变化，请重新载入后再保存: {reference}") from error
-        if latest.content != before.content:
-            raise WorkspaceFileConflictError(f"文件在保存期间发生变化，请重新载入后再保存: {reference}")
-        os.replace(temporary_path, path)
+        publish_mode = before.mode if before is not None else mode
+        if os.name != "nt" and publish_mode is not None:
+            os.chmod(temporary_path, publish_mode)
+        require_file_preimage(path, before=before, reference=reference)
+        if before is None:
+            rename_entry_exclusive(temporary_path, path)
+        else:
+            os.replace(temporary_path, path)
         temporary_path = None
         # 发布后不恢复旧内容；外部 writer 的新内容不能被自动回滚覆盖。
         try:
@@ -94,3 +109,10 @@ def publish_file_content(path: Path, content: bytes, *, before: FilePreimage, re
     finally:
         if temporary_path is not None:
             temporary_path.unlink(missing_ok=True)
+
+
+def delete_file_content(path: Path, *, before: FilePreimage, reference: str) -> None:
+    require_file_preimage(path, before=before, reference=reference)
+    path.unlink()
+    if path.exists() or path.is_symlink():
+        raise FilePublicationUnverifiedError(reference, "absent", None)

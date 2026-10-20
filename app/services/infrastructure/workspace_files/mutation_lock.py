@@ -34,14 +34,13 @@ def workspace_file_mutation_lock(workspace_root: Path) -> Iterator[None]:
     if not acquired:
         raise TimeoutError(
             "文件写入进程内锁获取超时: "
-            f"workspace={workspace_root} "
             f"timeout_seconds={MUTATION_LOCK_TIMEOUT_SECONDS:g}"
         )
     try:
         lock_path = workspace_root / _LOCK_PATH
         lock_path.parent.mkdir(parents=True, exist_ok=True)
         with lock_path.open("a+b") as lock_file:
-            _acquire_workspace_file_lock(lock_file, lock_path)
+            _acquire_workspace_file_lock(lock_file)
             try:
                 yield
             finally:
@@ -50,7 +49,7 @@ def workspace_file_mutation_lock(workspace_root: Path) -> Iterator[None]:
         thread_lock.release()
 
 
-def _acquire_workspace_file_lock(lock_file: BinaryIO, lock_path: Path) -> None:
+def _acquire_workspace_file_lock(lock_file: BinaryIO) -> None:
     """在跨进程锁被占用时有界等待，避免文件写入永久卡住调用者。"""
     if os.name == "nt":
         # TODO: Windows CI 覆盖跨进程文件锁的释放与异常恢复。
@@ -70,7 +69,6 @@ def _acquire_workspace_file_lock(lock_file: BinaryIO, lock_path: Path) -> None:
                 if remaining <= 0:
                     raise TimeoutError(
                         "文件写入跨进程锁获取超时: "
-                        f"path={lock_path} "
                         f"timeout_seconds={MUTATION_LOCK_TIMEOUT_SECONDS:g}"
                     ) from error
                 time.sleep(min(_POLL_INTERVAL_SECONDS, remaining))
@@ -88,7 +86,6 @@ def _acquire_workspace_file_lock(lock_file: BinaryIO, lock_path: Path) -> None:
             if remaining <= 0:
                 raise TimeoutError(
                     "文件写入跨进程锁获取超时: "
-                    f"path={lock_path} "
                     f"timeout_seconds={MUTATION_LOCK_TIMEOUT_SECONDS:g}"
                 ) from error
             time.sleep(min(_POLL_INTERVAL_SECONDS, remaining))
@@ -107,5 +104,3 @@ def _release_workspace_file_lock(lock_file: BinaryIO) -> None:
     import fcntl
 
     fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
-
-

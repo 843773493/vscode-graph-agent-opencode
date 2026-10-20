@@ -29,23 +29,13 @@ def write_apply_patch_journal(
     return journal_id
 
 
-def delete_apply_patch_journal(
-    journal_id: str,
-    *,
-    workspace_root: Path | None = None,
-) -> None:
-    journal_path = _journal_root(workspace_root) / f"{journal_id}.json"
-    if journal_path.exists():
-        journal_path.unlink()
-
-
 def update_apply_patch_journal(
     journal_id: str,
-    verification: list[dict[str, object]],
+    publications: list[dict[str, object]],
     *,
     workspace_root: Path | None = None,
 ) -> None:
-    """把补丁写入后的实际文件校验结果追加到 journal。"""
+    """把补丁的逐文件发布结果追加到 journal。"""
     journal_path = _journal_root(workspace_root) / f"{journal_id}.json"
     if not journal_path.is_file():
         raise RuntimeError(f"apply_patch journal 缺失: {journal_path}")
@@ -55,7 +45,7 @@ def update_apply_patch_journal(
         raise RuntimeError(f"apply_patch journal 损坏: {journal_path}") from exc
     if not isinstance(journal, dict):
         raise TypeError(f"apply_patch journal 格式错误: {journal_path}")
-    journal["verification"] = verification
+    journal["files"] = publications
     journal_path.write_text(
         json.dumps(journal, ensure_ascii=False, indent=2),
         encoding="utf-8",

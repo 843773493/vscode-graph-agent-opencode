@@ -58,5 +58,3 @@ def test_apply_patch_file_lock_times_out_when_cross_process_lock_is_busy(
         match="文件写入跨进程锁获取超时",
     ), mutation_lock.workspace_file_mutation_lock(tmp_path.resolve()):
         pass
-
-

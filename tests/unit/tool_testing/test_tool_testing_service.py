@@ -152,7 +152,8 @@ class _BoundModel:
                 tool_calls=[
                     {
                         "name": "apply_patch",
-                        "args": {"input": patch, "explanation": "测试补丁"},
+                        "args": {"input": patch, "explanation": "测试补丁",
+                                 "expected_versions": json.loads(re.search(r"expected_versions = (.+)", prompt).group(1))},
                         "id": f"call-{self._provider_id}",
                         "type": "tool_call",
                     }

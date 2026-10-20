@@ -1,17 +1,15 @@
+"""固定根内先完整校验，再逐文件发布；部分效果永不自动回滚。"""
 from __future__ import annotations
 
-import os
-import tempfile
+import re
 from dataclasses import dataclass
-from hashlib import sha256
 from pathlib import Path, PureWindowsPath
 
 from app.agents.tools.apply_patch.journal import (
-    delete_apply_patch_journal,
     update_apply_patch_journal,
     write_apply_patch_journal,
 )
-from app.agents.tools.apply_patch.models import ActionType, Commit
+from app.agents.tools.apply_patch.models import ActionType, Commit, DiffError
 from app.agents.tools.apply_patch.parser import (
     identify_files_added,
     identify_files_affected,
@@ -19,290 +17,258 @@ from app.agents.tools.apply_patch.parser import (
     parse_patch,
 )
 from app.agents.workspace_tool_paths import normalize_workspace_relative_path
+from app.core.hashing import sha256_hex
 from app.core.path_utils import get_workspace_root
+from app.core.resource_uri import parse_resource_uri
+from app.core.trace_middleware import get_current_gateway_id
+from app.core.workspace_identity import read_workspace_id
+from app.services.infrastructure.resource_platform.virtual_resources.resolver import (
+    ResourceUriResolveError,
+)
 from app.services.infrastructure.workspace_files.mutation_lock import (
     workspace_file_mutation_lock,
 )
+from app.services.infrastructure.workspace_files.paths import WorkspaceFilePaths
+from app.services.infrastructure.workspace_files.text_publication import (
+    FilePreimage,
+    FilePublicationUnverifiedError,
+    WorkspaceFileConflictError,
+    delete_file_content,
+    publish_file_content,
+    read_file_preimage,
+)
+
+_MAX_FILE_BYTES = 33554432
+_VERSION = re.compile(r"(?:absent|sha256:[0-9a-f]{64})\Z")
 
 
 @dataclass(frozen=True, slots=True)
 class FileSnapshot:
-    requested_path: str
     virtual_path: str
+    uri: str
     real_path: Path
-    existed: bool
-    content: str
-    mode: int | None
+    before: FilePreimage | None
+
+    @property
+    def version(self) -> str:
+        return "absent" if self.before is None else self.before.content_hash
 
 
 @dataclass(frozen=True, slots=True)
-class AffectedFile:
-    path: str
+class PatchStep:
+    snapshot: FileSnapshot
+    content: bytes | None
     operation: str
+    mode: int | None = None
 
 
-def apply_patch_text(
-    patch_text: str,
-    *,
-    explanation: str,
-    workspace_root: Path | None = None,
-) -> dict[str, object]:
-    root = (workspace_root or get_workspace_root()).resolve()
-    with workspace_file_mutation_lock(root):
-        needed_paths = identify_files_needed(patch_text)
-        added_paths = identify_files_added(patch_text)
-        _validate_declared_paths(identify_files_affected(patch_text), root)
-        current_files = _load_current_files(needed_paths, root)
-        _validate_added_files(added_paths, root)
-        commit = parse_patch(patch_text, current_files)
-        snapshots = _capture_snapshots(_commit_paths(commit), root)
-        journal_id = write_apply_patch_journal(
-            [_journal_payload(item) for item in snapshots],
-            workspace_root=root,
-        )
-
-        try:
-            affected_files = _apply_commit_transactionally(commit, snapshots, root)
-            verification = _verify_commit(commit, snapshots, root)
-            update_apply_patch_journal(
-                journal_id,
-                verification,
-                workspace_root=root,
-            )
-        except BaseException:
-            _restore_snapshots(snapshots)
-            delete_apply_patch_journal(journal_id, workspace_root=root)
+def apply_patch_text(patch_text: str, *, explanation: str, expected_versions: dict[str, str],
+                     workspace_root: Path | None = None, target: str = ".") -> dict[str, object]:
+    workspace = (workspace_root or get_workspace_root()).resolve()
+    paths = WorkspaceFilePaths(workspace=workspace, workspace_id=read_workspace_id(workspace), bindings=None)
+    if "://" in target:
+        parsed = parse_resource_uri(target, local_gateway_id=get_current_gateway_id())
+        if parsed.gateway_authority is not None:
+            # TODO：文件写入联邦路由接通前明确拒绝，绝不向本机同名目录回退。
+            raise ResourceUriResolveError("capability_denied", "目标 Gateway 的补丁执行尚未接通")
+        if parsed.scope != "workspace" or parsed.kind != "files":
+            raise ResourceUriResolveError("capability_denied", "该资源没有工作区文本补丁能力")
+        if parsed.scope_id != paths.workspace_id:
+            raise ResourceUriResolveError("unknown_resource", "不是本次固定工作区目标")
+    root, root_uri = paths.resolve(target, reject_symlink=True)
+    if root.is_relative_to(workspace / ".boxteam"):
+        raise ValueError("补丁禁止访问 .boxteam 私有存储")
+    if not root.is_dir():
+        raise NotADirectoryError("apply_patch 目标必须是已存在的目录根")
+    result: dict[str, object] | None = None
+    try:
+        with workspace_file_mutation_lock(workspace):
+            declared = identify_files_affected(patch_text)
+            _validate_declared_paths(declared, root)
+            if set(expected_versions) != set(declared):
+                raise DiffError("expected_versions 必须精确覆盖全部文件路径，包含移动的源与目的")
+            snapshots = _capture_snapshots(declared, root, workspace, paths, expected_versions)
+            current = {name: snapshots[name].before.content.decode("utf-8").replace(_line_ending(snapshots[name].before), "\n") for name in identify_files_needed(patch_text)
+                       if snapshots[name].before is not None}
+            for name in identify_files_added(patch_text):
+                if snapshots[name].before is not None:
+                    raise WorkspaceFileConflictError(f"新增目标不满足 expected_absent: {snapshots[name].uri}")
+            commit = parse_patch(patch_text, current)
+            steps = _prepare_steps(commit, snapshots)
+            if not any((step.snapshot.before is None) != (step.content is None) or
+                       (step.snapshot.before is not None and step.snapshot.before.content != step.content) for step in steps):
+                raise DiffError("apply_patch 校验失败: 工作区文件字节未发生变化")
+            journal_id = write_apply_patch_journal([
+                {"file_path": item.virtual_path, "uri": item.uri, "before_exists": item.before is not None,
+                 "before_content": "" if item.before is None else item.before.content.decode("utf-8").replace("\r\n", "\n").replace("\r", "\n")}
+                for item in snapshots.values()
+            ], workspace_root=workspace)
+            publications, failure = _publish_steps(steps)
+            try:
+                update_apply_patch_journal(journal_id, publications, workspace_root=workspace)
+            except (OSError, RuntimeError, ValueError) as error:
+                failure = error
+            states = {item["state"] for item in publications}
+            effect = ("unknown" if "unknown" in states else "completed" if states == {"published"} else
+                      "partial" if "published" in states else "not_executed")
+            result: dict[str, object] = {
+                "status": "success" if failure is None else "error", "effect": effect,
+                "explanation": explanation, "target": root_uri, "journal_id": journal_id,
+                "fuzz": int(commit.fuzz), "files": publications, "retryable": False,
+            }
+            if failure is not None:
+                result.update(code="revision_conflict" if isinstance(failure, WorkspaceFileConflictError) else "execution_failed",
+                              error_type=type(failure).__name__, error=_error_detail(failure),
+                              recovery="重新读取原目标，核实逐文件结果后再决定后续操作；禁止自动重放或恢复旧内容")
+    except (OSError, RuntimeError) as error:
+        if result is None:
             raise
-
-        return {
-            "status": "success",
-            "explanation": explanation,
-            "journal_id": journal_id,
-            "fuzz": int(commit.fuzz),
-            "files": [
-                {"path": item.path, "operation": item.operation}
-                for item in affected_files
-            ],
-            "verification": verification,
-        }
+        # 文件效果已有回执；释放锁的失败不能将它改报为“未执行”。
+        result.update(status="error", lock_release_error=_error_detail(error))
+        result.setdefault("code", "execution_failed")
+    return result
 
 
-def extract_apply_patch_file_paths(
-    patch_text: str,
-    *,
-    workspace_root: Path | None = None,
-) -> list[str]:
+def extract_apply_patch_file_paths(patch_text: str, *, workspace_root: Path | None = None) -> list[str]:
     paths = identify_files_affected(patch_text)
     _validate_declared_paths(paths, (workspace_root or get_workspace_root()).resolve())
     return paths
 
 
-def _load_current_files(paths: list[str], workspace_root: Path) -> dict[str, str]:
-    result: dict[str, str] = {}
-    for requested_path in paths:
-        real_path = _resolve_workspace_file(requested_path, workspace_root)
-        if not real_path.is_file():
-            raise FileNotFoundError(f"File not found: {requested_path}")
-        result[requested_path] = real_path.read_text(encoding="utf-8")
-    return result
-
-
-def _validate_added_files(paths: list[str], workspace_root: Path) -> None:
-    for requested_path in paths:
-        real_path = _resolve_workspace_file(requested_path, workspace_root)
-        if real_path.exists():
-            raise FileExistsError(f"Add File target already exists: {requested_path}")
-
-
-def _validate_declared_paths(paths: list[str], workspace_root: Path) -> None:
-    if len(paths) != len(set(paths)):
-        duplicate = next(path for path in paths if paths.count(path) > 1)
-        raise ValueError(f"Duplicate patch path: {duplicate}")
-    for path in paths:
-        _resolve_workspace_file(path, workspace_root)
-
-
-def _commit_paths(commit: Commit) -> list[str]:
-    paths: dict[str, None] = {}
-    for path, change in commit.changes.items():
-        paths.setdefault(path, None)
-        if change.move_path:
-            paths.setdefault(change.move_path, None)
-    return list(paths)
-
-
-def _capture_snapshots(paths: list[str], workspace_root: Path) -> list[FileSnapshot]:
-    snapshots: list[FileSnapshot] = []
-    for requested_path in paths:
-        real_path = _resolve_workspace_file(requested_path, workspace_root)
-        if real_path.exists() and not real_path.is_file():
-            raise RuntimeError(f"apply_patch 只能修改普通文件: {requested_path}")
-        existed = real_path.exists()
-        snapshots.append(
-            FileSnapshot(
-                requested_path=requested_path,
-                virtual_path=_virtual_path(real_path, workspace_root),
-                real_path=real_path,
-                existed=existed,
-                content=real_path.read_text(encoding="utf-8") if existed else "",
-                mode=real_path.stat().st_mode if existed else None,
-            )
-        )
+def _capture_snapshots(names: list[str], root: Path, workspace: Path, paths: WorkspaceFilePaths,
+                       expected: dict[str, str]) -> dict[str, FileSnapshot]:
+    snapshots = {}
+    for name in names:
+        version = expected[name]
+        if not isinstance(version, str) or _VERSION.fullmatch(version) is None:
+            raise DiffError(f"文件预期版本必须是 sha256:<hex> 或 absent: {name}")
+        path = _resolve_workspace_file(name, root)
+        uri = paths.reference(path)
+        before = read_file_preimage(path, reference=uri, max_bytes=_MAX_FILE_BYTES) if path.exists() or path.is_symlink() else None
+        if before is not None:
+            # 删除和移动也只属于文本能力，不能借补丁扩成任意节点 mutation。
+            if b"\x00" in before.content:
+                raise ValueError(f"补丁目标不是文本文件: {uri}")
+            before.content.decode("utf-8")
+        snapshot = FileSnapshot("/" + path.relative_to(workspace).as_posix(), uri, path, before)
+        if snapshot.version != version:
+            raise WorkspaceFileConflictError(f"补丁目标版本冲突，请重新读取: {uri}; expected={version}; actual={snapshot.version}")
+        snapshots[name] = snapshot
     return snapshots
 
 
-def _journal_payload(snapshot: FileSnapshot) -> dict[str, object]:
-    return {
-        "file_path": snapshot.virtual_path,
-        "before_exists": snapshot.existed,
-        "before_content": snapshot.content,
-    }
-
-
-def _apply_commit_transactionally(
-    commit: Commit,
-    snapshots: list[FileSnapshot],
-    workspace_root: Path,
-) -> list[AffectedFile]:
-    affected: list[AffectedFile] = []
-    try:
-        for requested_path, change in commit.changes.items():
-            source = _resolve_workspace_file(requested_path, workspace_root)
-            if change.type == ActionType.DELETE:
-                source.unlink()
-                affected.append(AffectedFile(requested_path, "delete"))
-            elif change.type == ActionType.ADD:
-                _atomic_write(source, change.new_content or "", mode=None)
-                affected.append(AffectedFile(requested_path, "add"))
-            elif change.move_path:
-                target = _resolve_workspace_file(change.move_path, workspace_root)
-                _atomic_write(target, change.new_content or "", mode=_existing_mode(source))
-                source.unlink()
-                affected.append(AffectedFile(requested_path, "move"))
-                affected.append(AffectedFile(change.move_path, "move"))
-            else:
-                _atomic_write(source, change.new_content or "", mode=_existing_mode(source))
-                affected.append(AffectedFile(requested_path, "update"))
-    except BaseException as exc:
-        try:
-            _restore_snapshots(snapshots)
-        except BaseException as rollback_error:
-            raise RuntimeError(
-                "apply_patch 执行失败且工作区回滚失败: "
-                f"apply_error={exc!r}; rollback_error={rollback_error!r}"
-            ) from rollback_error
-        raise
-    return affected
-
-
-def _verify_commit(
-    commit: Commit,
-    snapshots: list[FileSnapshot],
-    workspace_root: Path,
-) -> list[dict[str, object]]:
-    """校验补丁返回前的真实文件内容，防止把模型口述当成写入成功。"""
-    expected: dict[str, tuple[bool, str]] = {}
-    for requested_path, change in commit.changes.items():
+def _prepare_steps(commit: Commit, snapshots: dict[str, FileSnapshot]) -> list[PatchStep]:
+    steps = []
+    touched: set[str] = set()
+    for name, change in commit.changes.items():
+        source = snapshots[name]
+        # 补丁匹配逻辑行；纯 CRLF 原件发布时保留其行结尾，版本始终按原字节。
+        content = (change.new_content or "").replace("\n", _line_ending(source.before)).encode("utf-8")
         if change.type == ActionType.DELETE:
-            expected[requested_path] = (False, "")
+            steps.append(PatchStep(source, None, "delete"))
         elif change.move_path:
-            expected[requested_path] = (False, "")
-            expected[change.move_path] = (True, change.new_content or "")
+            destination = snapshots[change.move_path]
+            steps.append(PatchStep(destination, content, "move", source.before.mode))
+            steps.append(PatchStep(source, None, "move"))
         else:
-            expected[requested_path] = (True, change.new_content or "")
-
-    before_by_path = {snapshot.requested_path: snapshot for snapshot in snapshots}
-    verification: list[dict[str, object]] = []
-    changed = False
-    for requested_path, (expected_exists, expected_content) in expected.items():
-        real_path = _resolve_workspace_file(requested_path, workspace_root)
-        exists = real_path.exists()
-        if exists and not real_path.is_file():
-            raise RuntimeError(
-                f"apply_patch 写入后目标不是普通文件: {requested_path}"
-            )
-        actual_bytes = real_path.read_bytes() if exists else b""
-        expected_bytes = expected_content.encode("utf-8")
-        actual_content = actual_bytes.decode("utf-8") if exists else ""
-        if exists != expected_exists or actual_bytes != expected_bytes:
-            raise RuntimeError(
-                "apply_patch 写入校验失败: "
-                f"path={requested_path}, expected_exists={expected_exists}, "
-                f"actual_exists={exists}"
-            )
-        before = before_by_path.get(requested_path)
-        if before is not None and (
-            before.existed != exists or before.content != actual_content
-        ):
-            changed = True
-        verification.append(
-            {
-                "path": _virtual_path(real_path, workspace_root),
-                "exists": exists,
-                "size_bytes": real_path.stat().st_size if exists else 0,
-                "sha256": (
-                    sha256(real_path.read_bytes()).hexdigest() if exists else None
-                ),
-            }
-        )
-    if not changed:
-        raise RuntimeError("apply_patch 写入校验失败: 工作区文件字节未发生变化")
-    return verification
+            steps.append(PatchStep(source, content, change.type.value))
+    for step in steps:
+        if step.snapshot.uri in touched:
+            raise DiffError(f"补丁重复修改同一文件: {step.snapshot.uri}")
+        touched.add(step.snapshot.uri)
+        if step.content is not None and (len(step.content) > _MAX_FILE_BYTES or b"\x00" in step.content):
+            raise ValueError(f"补丁文本超过预算或包含二进制内容: {step.snapshot.uri}")
+    return steps
 
 
-def _restore_snapshots(snapshots: list[FileSnapshot]) -> None:
-    for snapshot in snapshots:
-        if snapshot.existed:
-            _atomic_write(snapshot.real_path, snapshot.content, mode=snapshot.mode)
-        elif snapshot.real_path.exists():
-            if not snapshot.real_path.is_file():
-                raise RuntimeError(f"回滚目标不是普通文件: {snapshot.real_path}")
-            snapshot.real_path.unlink()
+def _line_ending(before: FilePreimage | None) -> str:
+    return "\r\n" if before is not None and b"\r\n" in before.content and b"\n" not in before.content.replace(b"\r\n", b"") else "\n"
 
 
-def _atomic_write(path: Path, content: str, *, mode: int | None) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    descriptor, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
-    temporary_path = Path(temporary_name)
+def _publish_steps(steps: list[PatchStep]) -> tuple[list[dict[str, object]], Exception | None]:
+    attempted = 0
+    failure: Exception | None = None
+    confirmed: set[int] = set()
+    unverified: set[int] = set()
+    for step in steps:
+        attempted += 1
+        try:
+            if step.content is None:
+                if step.snapshot.before is None:
+                    raise DiffError(f"删除源文件不存在: {step.snapshot.uri}")
+                delete_file_content(step.snapshot.real_path, before=step.snapshot.before, reference=step.snapshot.uri)
+            else:
+                publish_file_content(step.snapshot.real_path, step.content, before=step.snapshot.before,
+                                     reference=step.snapshot.uri, mode=step.mode)
+            confirmed.add(attempted - 1)
+        except (OSError, RuntimeError, ValueError) as error:
+            failure = error
+            if isinstance(error, FilePublicationUnverifiedError):
+                unverified.add(attempted - 1)
+            break
+    publications = []
+    for index, step in enumerate(steps):
+        observed, observation_error = _observe(step.snapshot)
+        after_version = "absent" if step.content is None else "sha256:" + sha256_hex(step.content)
+        if index >= attempted:
+            state = "not_attempted"
+        elif observation_error is not None:
+            state = "unknown"
+        elif observed == after_version:
+            state = "published" if index in confirmed else "unknown"
+        elif observed == step.snapshot.version and index not in confirmed and index not in unverified:
+            state = "not_published"
+        else:
+            state = "unknown"
+        if index < attempted and state != "published" and failure is None:
+            failure = FilePublicationUnverifiedError(step.snapshot.uri, after_version, observed)
+        publications.append({"path": step.snapshot.uri, "operation": step.operation, "state": state,
+                             "expected_version": step.snapshot.version, "intended_version": after_version,
+                             "exists": None if observed is None else observed != "absent",
+                             "content_hash": observed if observed != "absent" else None})
+    return publications, failure
+
+
+def _observe(snapshot: FileSnapshot) -> tuple[str | None, Exception | None]:
     try:
-        with os.fdopen(descriptor, "w", encoding="utf-8", newline="") as stream:
-            stream.write(content)
-            stream.flush()
-            os.fsync(stream.fileno())
-        # TODO: Windows 使用继承 ACL；不要把 POSIX mode bits 当作安全边界。
-        if mode is not None and os.name != "nt":
-            os.chmod(temporary_path, mode)
-        os.replace(temporary_path, path)
-    except BaseException:
-        if temporary_path.exists():
-            temporary_path.unlink()
-        raise
+        if not snapshot.real_path.exists() and not snapshot.real_path.is_symlink():
+            return "absent", None
+        return read_file_preimage(snapshot.real_path, reference=snapshot.uri, max_bytes=_MAX_FILE_BYTES).content_hash, None
+    except (OSError, RuntimeError, ValueError) as error:
+        return None, error
 
 
-def _existing_mode(path: Path) -> int | None:
-    return path.stat().st_mode if path.exists() else None
+def _error_detail(error: Exception) -> str:
+    if isinstance(error, OSError) and (error.filename is not None or error.filename2 is not None):
+        return f"{type(error).__name__}: {error.strerror}, errno={error.errno}"
+    return str(error)
+
+
+def _validate_declared_paths(paths: list[str], workspace_root: Path) -> None:
+    targets = [_resolve_workspace_file(path, workspace_root) for path in paths]
+    if len(targets) != len(set(targets)):
+        raise DiffError("补丁中的多个路径指向同一文件")
+    target_set = set(targets)
+    for target in targets:
+        parent = target.parent
+        while parent != workspace_root:
+            if parent in target_set:
+                raise DiffError("补丁文件目标不能互为祖先与后代")
+            if parent.exists() and not parent.is_dir():
+                raise DiffError("补丁文件的现有父路径必须是目录")
+            parent = parent.parent
 
 
 def _resolve_workspace_file(file_path: str, workspace_root: Path) -> Path:
-    workspace_root = workspace_root.resolve()
     if "://" in file_path or Path(file_path).is_absolute() or PureWindowsPath(file_path).drive:
         raise ValueError(f"apply_patch 文件路径无效: 补丁内文件名必须相对固定根: {file_path}")
     try:
-        relative_path = normalize_workspace_relative_path(
-            file_path,
-            workspace_root=workspace_root,
-        )
+        relative = normalize_workspace_relative_path(file_path, workspace_root=workspace_root)
     except ValueError as error:
         raise ValueError(f"apply_patch 文件路径无效: {file_path} ({error})") from error
-    real_path = (workspace_root / relative_path).resolve()
-    if real_path != workspace_root:
-        try:
-            real_path.relative_to(workspace_root)
-        except ValueError as exc:
-            raise ValueError(f"文件路径超出工作区: {file_path}") from exc
-    return real_path
-
-
-def _virtual_path(real_path: Path, workspace_root: Path) -> str:
-    workspace_root = workspace_root.resolve()
-    return "/" + real_path.relative_to(workspace_root).as_posix()
+    path = (workspace_root / relative).resolve()
+    if path == workspace_root or not path.is_relative_to(workspace_root):
+        raise ValueError(f"apply_patch 文件路径无效: 文件必须位于固定根内: {file_path}")
+    if path.relative_to(workspace_root).parts[0] == ".boxteam":
+        raise ValueError("补丁禁止访问 .boxteam 私有存储")
+    return path

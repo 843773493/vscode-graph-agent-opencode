@@ -58,6 +58,8 @@ write/edit/patch 的内容前置使用精确原始 byte `sha256:<hex>` 或该 ow
 
 ### 5. 执行结果与寻址拒绝分开
 
+2026-10-20 条件补丁切片已将原执行与自动回滚链物理替换为共享 mutation lock、原字节 preimage 和单文件发布原语。`expected_versions` 必填且精确覆盖补丁所有相对路径，移动包含源和目的；每项取先前读取的 `sha256:<hex>` 或明确 `absent`。固定根支持工作区相对路径、目标原生绝对路径和 Workspace files URI，补丁内仍只允许根下相对文件名；整批先校验版本、文本、路径别名、祖先冲突和现有父目录，再写 journal 和逐路径发布。新文件使用独占创建，已有文件原子替换，删除后核实不存在；保留 BOM、纯 CRLF 与原文件 mode。失败停止后续发布，不恢复已发布文件；最终回执给出 `published/not_published/not_attempted/unknown`、预期/目标/实际原字节版本，`retryable=false`。相同字节的外部竞争及发布后恢复原件不能冒充已确认发布或确定未执行。事件流即使收到失败回执，也把已发布或未知路径交原 SessionChanges owner，未尝试路径不进入 changeset；旧 `verification` 第二回执和反向恢复实现已删除。异步工具保留原事件循环上的生命周期回调，仅文件执行交工作线程，避免同步 StructuredTool 在另一个事件循环等待工具开始身份。远端补丁仍以具名 TODO 明确拒绝，write/edit 和取消/响应丢失闭包继续后续实施。
+
 寻址三个错误域引用统一 owner；文件执行原因只在 resource-file-operations spec 登记。确定拒绝和 preflight 失败为未执行；发布完成才为完成；中途失败为部分；无法观察实际效果为未知。调用 cancel 与确认停止分开，source deadline 不抹去目标可能的写入。未知结果先对原目标核实，禁止自动重放。复用现有工具调用身份记录诊断；不预设所有文件操作需要新 operation_id 或 durable coordinator。
 
 ### 6. 会话产物仍是业务文件引用
