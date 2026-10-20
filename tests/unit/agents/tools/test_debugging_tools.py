@@ -29,6 +29,7 @@ from app.schemas.internal_v2.node_debug import (
 )
 
 _MAIN_THREAD_ID = "thr_00000000700070008000000000000001"
+_CHILD_THREAD_ID = "thr_00000000700070008000000000000002"
 _MISSING_CONFIGURATION_ID = "dbgcfg_" + "b" * 32
 
 
@@ -129,7 +130,9 @@ def _tool_map(tmp_path: Path, service: MagicMock) -> dict[str, object]:
             session_id="ses_debug_launch",
             workspace_root=tmp_path,
             node_debug_service=service,
-            invocation_context=ToolInvocationContext(),
+            invocation_context=ToolInvocationContext(thread_binding=ThreadRuntimeBinding(
+                session_id="ses_debug_launch", thread_id=_MAIN_THREAD_ID,
+            )),
         )
     }
 
@@ -231,7 +234,9 @@ async def test_logpoint_maps_to_non_pausing_breakpoint_definition(
         session_id="ses_debug_logpoint",
         workspace_root=tmp_path,
         node_debug_service=service,
-        invocation_context=ToolInvocationContext(),
+        invocation_context=ToolInvocationContext(thread_binding=ThreadRuntimeBinding(
+            session_id=state.session_id, thread_id=state.thread_id,
+        )),
     )
 
     result = await next(tool for tool in tools if tool.name == "add_logpoint").ainvoke(
@@ -294,7 +299,9 @@ async def test_start_and_final_control_result_include_invalid_breakpoints(
         session_id=started_state.session_id,
         workspace_root=tmp_path,
         node_debug_service=service,
-        invocation_context=ToolInvocationContext(),
+        invocation_context=ToolInvocationContext(thread_binding=ThreadRuntimeBinding(
+            session_id=started_state.session_id, thread_id=started_state.thread_id,
+        )),
     )
     by_name = {tool.name: tool for tool in tools}
 
@@ -369,7 +376,9 @@ async def test_model_state_does_not_leak_unrequested_variable_values(
         session_id=paused_debug_state.session_id,
         workspace_root=tmp_path,
         node_debug_service=service,
-        invocation_context=ToolInvocationContext(),
+        invocation_context=ToolInvocationContext(thread_binding=ThreadRuntimeBinding(
+            session_id=paused_debug_state.session_id, thread_id=paused_debug_state.thread_id,
+        )),
     )
 
     result = await next(
@@ -405,7 +414,9 @@ async def test_requested_variable_values_are_redacted_before_model_response(
         session_id=paused_debug_state.session_id,
         workspace_root=tmp_path,
         node_debug_service=service,
-        invocation_context=ToolInvocationContext(),
+        invocation_context=ToolInvocationContext(thread_binding=ThreadRuntimeBinding(
+            session_id=paused_debug_state.session_id, thread_id=paused_debug_state.thread_id,
+        )),
     )
 
     result = await next(
@@ -453,7 +464,9 @@ async def test_evaluate_expression_redacts_sensitive_expression_result(
         session_id=paused_debug_state.session_id,
         workspace_root=tmp_path,
         node_debug_service=service,
-        invocation_context=ToolInvocationContext(),
+        invocation_context=ToolInvocationContext(thread_binding=ThreadRuntimeBinding(
+            session_id=paused_debug_state.session_id, thread_id=paused_debug_state.thread_id,
+        )),
     )
 
     result = await next(
@@ -506,12 +519,12 @@ async def test_tools_resolve_owner_from_trusted_thread_binding(tmp_path: Path) -
 
 
 @pytest.mark.asyncio
-async def test_alias_binding_passes_precise_parent_child_owner_to_service(
+async def test_child_binding_passes_precise_session_thread_owner_to_service(
     tmp_path: Path,
 ) -> None:
     state = NodeDebugStateDTO(
         session_id="ses_parent_debug",
-        thread_id="ses_child_thread",
+        thread_id=_CHILD_THREAD_ID,
         status="idle",
     )
     service = MagicMock()
@@ -524,17 +537,17 @@ async def test_alias_binding_passes_precise_parent_child_owner_to_service(
         invocation_context=ToolInvocationContext(
             thread_binding=ThreadRuntimeBinding(
                 session_id="ses_parent_debug",
-                thread_id="ses_child_thread",
+                thread_id=_CHILD_THREAD_ID,
             )
         ),
     )
 
     await next(tool for tool in tools if tool.name == "list_breakpoints").ainvoke({})
 
-    # 工具层只传绑定结果；别名折叠仍由服务层唯一实现。
+    # 工具层传递受信的精确 child 归属，不再使用 Session ID 别名。
     assert {
         call_args.args for call_args in service.get_state.await_args_list
-    } == {("ses_parent_debug", "ses_child_thread")}
+    } == {("ses_parent_debug", _CHILD_THREAD_ID)}
 
 
 @pytest.mark.asyncio
@@ -543,7 +556,7 @@ async def test_model_state_and_tool_schemas_hide_runtime_identity(
 ) -> None:
     state = NodeDebugStateDTO(
         session_id="ses_hidden_identity",
-        thread_id="ses_child_thread",
+        thread_id=_CHILD_THREAD_ID,
         status="idle",
     )
     service = MagicMock()
@@ -553,7 +566,9 @@ async def test_model_state_and_tool_schemas_hide_runtime_identity(
         session_id="ses_hidden_identity",
         workspace_root=tmp_path,
         node_debug_service=service,
-        invocation_context=ToolInvocationContext(),
+        invocation_context=ToolInvocationContext(thread_binding=ThreadRuntimeBinding(
+            session_id=state.session_id, thread_id=state.thread_id,
+        )),
     )
     by_name = {tool.name: tool for tool in tools}
 

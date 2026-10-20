@@ -1,11 +1,14 @@
 ## 1. 公共合同与调用清点
 
-- [ ] 1.1 等待并核验统一寻址1.4/3.4/7.1/第8组的根、分段编码、导航能力和产物单文件模板；消费者不自行定义kind/parser，公共合同完整后再推进依赖实现。
-- [ ] 1.2 全仓清点文件工具、backend、UI/API/CLI、附件和工具输出生成/消费、Provider、历史投影、协议与测试，建立直接/间接caller清单与唯一文件owner边界。
+- [x] 1.1 等待并核验统一寻址1.4/3.4/7.1/第8组的根、分段编码、导航能力和产物单文件模板；消费者不自行定义kind/parser，公共合同完整后再推进依赖实现。
+  - 对照统一寻址对应已勾任务及当前 `core/resource_uri.py`、共享 resolver/导航节点：files/root、Skill根/child、Session单文件模板、一次分段编码与 authority 合同均已提供。第2/3/5组真实工具、Gateway和产物验收实际消费这些公共定义；本change没有第二份kind/parser。
+- [x] 1.2 全仓清点文件工具、backend、UI/API/CLI、附件和工具输出生成/消费、Provider、历史投影、协议与测试，建立直接/间接caller清单与唯一文件owner边界。
+  - 当前调用清单集中登记在 design §1.1，涵盖装配、六个普通工具及patch、调试、工具测试、Web/API、Gateway联邦、journal/changeset、附件/工具结果、Provider/history与协议/测试。全仓检索后普通文件不再调用 DeepAgents 执行链；仅内部 workspace_backend 保留框架虚拟工作区。
 - [x] 1.3 固定工具目标/查询、limits/cursor、条件写入和逐文件执行结果类型，按spec区分寻址错误和文件执行错误；跨端操作授权独立于send/read/wait，不新增通用operation_id。
   - 2026-10-20 只读导航切片：公开 proto/DTO 增加 cursor、timeout_ms、scan_limit、max_response_bytes，以及 next_cursor、truncation_reason、view。Workspace/Gateway 共用现有 `ResourceNavigation`，文件执行错误独立于 grammar/resolver，并沿原 Gateway 来源及联邦路由传递；未增加逐文件身份或操作账本。写入前置、逐文件发布结果和模型工具调用合同仍未接通，本项保持未勾。
-- [ ] 1.4 按公共 owner 的原生路径输入合同清点并迁齐相对/绝对/URI 目标解析，以及 `WorkspaceToolPathResolver`、filesystem tools、debugging、apply_patch、backend 输出转换和直接/间接测试；明确用户原生路径与 DeepAgents 虚拟路径的入口/类型，保持一条操作链，不扩大 patch 内部相对文件名的能力。
-  - 2026-10-20 本地解析切片：删除 `_absolute_to_workspace_relative()` 及其去根回退；`ls/read_file/glob/grep/write_file/edit_file` 和源码调试共用显式工作区目标，接受相对路径、工作区内原生绝对路径和 Workspace files URI。原生解析复用 `core/path_utils.py::resolve_native_file_path`，URI 复用公共 grammar/文件 owner，身份只读不创建；不借中继进程 cwd。补丁内部文件名保持相对固定根，DeepAgents 虚拟根只在 backend 内部使用；调试 Skill 同步三种输入。尚未完成统一 URI 结果、其它资源根/远端与第5组产物调用迁移，本项保持未勾。
+- [x] 1.4 按公共 owner 的原生路径输入合同清点并迁齐相对/绝对/URI 目标解析，以及 `WorkspaceToolPathResolver`、filesystem tools、debugging、apply_patch、backend 输出转换和直接/间接测试；明确用户原生路径与 DeepAgents 虚拟路径的入口/类型，保持一条操作链，不扩大 patch 内部相对文件名的能力。
+  - `_absolute_to_workspace_relative()` 及去根回退已删除；六个普通文件工具与调试接受显式工作区相对/原生绝对/Workspace files URI。native 复用中央 resolver，URI 复用公共 grammar/文件 owner，解析不创建身份、不借 relay cwd，patch 内部文件名仍相对固定根。第2/3/5组已接完整 URI 导航、远端 URI 和产物链；原生远端/Windows真实主机验收仍由3.4负责。
+  - 最终全仓迁齐后删除仅剩测试调用的虚拟转换、normalize/resolve包装和DeepAgents validate_path依赖，源码调试只保留实际方法。`debug-path-single-owner-unit-002` 46项通过，含实际调试工具三输入、服务收到的精确相对路径/SessionThread、源码启动参数、脱敏、显式cwd与三种越界symlink拒绝及内部backend虚拟根回归；静态 `debug-path-single-owner-static-002` 通过。独立只读复审通过。首轮13个旧调试装具在进入路径解析前因缺canonical binding或非法旧thread ID失败，依据HEAD同一校验迁装具与合法child身份，保留业务、精确归属和脱敏断言；不为过测降低生产约束。原件保留在同任务 artifacts/runs。
 - [x] 1.5 核验统一寻址 owner 2.7 的未注册目录 gateway/files 根及文件树浏览/编辑、快捷目录保存/重开、响应/持久化消费者已接通，本 change 复用该闭包接入模型文件工具；真实 UI 验收实际对象、编辑结果与工作区注册表不变，不要求或自动注册、不伪造 workspace_id、不收窄既有能力。
   - 2026-10-20 统一寻址2.7已由 `native-directory-browser-006` 完成生产页面浏览/编辑、URI快捷目录刷新及双owner重启重开验收，注册表不变。`native-directory-model-001` 随后经真实 Agent/ToolNode 与本地模型协议桩执行绝对路径 ls→URI glob→绝对路径 read_file→同 URI read_file→URI grep，五项真实工具结果命中同一原生文件；工作区旧回退位置的同名对照保持不变，完整注册表行不变，模型工具回执无原生目录。两轮均 exit0，完成 UI 与模型消费闭包。
 

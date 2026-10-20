@@ -18,7 +18,24 @@ read/write 的文件目标、ls/glob/grep 的根目标和 apply_patch 的根目�
 
 未注册目录的文件树浏览、编辑与快捷目录保留，由统一寻址 owner 先补齐规范引用，消费者同批迁响应、持久化与重开，不私建模板、不借用工作区身份、不以注册为访问前提。真实 UI 验收需核指定目录内容、编辑实际文件、重开快捷目录和工作区注册表不变，不能用改为只读或删除目录入口来消除真实路径字段。
 
-2026-10-20 本地切片已删除 `workspace_tool_paths.py::_absolute_to_workspace_relative()` 及其 `path.lstrip("/")` 歧义回退。`core/path_utils.py::resolve_native_file_path` 是目标机器原生路径的统一解释入口，显式绑定根；Web 文件 owner 按既有能力允许外部绝对路径，当前模型文件/调试工具保持工作区能力，外部目标明确拒绝。Workspace files URI 使用公共 grammar、只读既有工作区身份，再交同一文件 owner 和内部操作链；解析不创建身份。补丁内部文件名明确限制为固定根下的相对路径，不能从普通文件目标合同推导绝对文件名。`backend_virtual_to_workspace_relative` 等转换仅消费内部 backend 输出；原虚拟根断言已与真实用户绝对路径测试分开。完整 URI 输出、技能导航、远端执行和会话产物仍按后续任务迁齐，旧 `boxteam-session://` 的生成/消费统一在第5组完成后删除。
+2026-10-20 路径迁移已删除 `workspace_tool_paths.py::_absolute_to_workspace_relative()` 及其 `path.lstrip("/")` 歧义回退。`core/path_utils.py::resolve_native_file_path` 是目标机器原生路径的统一解释入口，显式绑定根；Web 文件 owner 按既有能力允许外部绝对路径，模型只读导航复用同一原生目录能力，模型文本修改与源码调试保持工作区能力，越界明确拒绝。Workspace files URI 使用公共 grammar、只读既有工作区身份，再交同一文件 owner 和内部操作链；解析不创建身份。补丁内部文件名仍相对固定根。旧虚拟路径转换和冗余解析导出已全仓检索并物理删除，`WorkspaceToolPathResolver` 只保留源码调试实际调用的 `workspace_relative_path`；不再借 DeepAgents 的虚拟 `validate_path` 解释用户路径。内部虚拟 `/` 只由 `workspace_backend.py` 的框架 backend 消费，普通文件工具不调用它。URI 输出、技能导航、远端 URI 执行及产物迁移已在各自任务完成，远端原生路径与 Windows 主机仍按3.4独立验收。
+
+### 1.1 直接与间接调用清单
+
+在 `app/`、`src/`、`scripts/`、`tools/`、`resources/` 与 `tests/` 检索普通文件工具、backend、路径解析与产物引用，当前生产调用边界如下。CLI/维护命令没有独立的普通文件执行链，工具测试服务也调用下面的同一工具。
+
+| 入口/消费者 | 唯一执行或归属链 |
+| --- | --- |
+| Container、runtime/agent_runtime、agent_factory、deep_agent_stack | 装配同一个 ResourceNavigation 和 WorkspaceTextMutationOwner；模型参数不选第二个 backend |
+| workspace_filesystem_tools 的 ls/read_file/glob/grep | ResourceNavigation → WorkspaceFilePaths / 原 Skill owner；远端经 GatewayResourceNavigation 与现有 federation 到实际 owner |
+| write_file/edit_file、tools/apply_patch、tool_testing/cases | WorkspaceTextMutationOwner → text_mutation / text_patch → 共用原字节发布与锁；会话 journal 保存实际后件 |
+| event_stream/processor、SessionChanges | 消费 journal 的规范 URI 和已核实后件，不重读 source 同名文件；Web 审查消费相同 URI |
+| tools/debugging | WorkspaceToolPathResolver.workspace_relative_path → 中央 native resolver 或 WorkspaceFilePaths；仅源码调试工作区能力 |
+| api/workspace、WorkspaceService、workspace_files/operations、file_tree_settings_service | 同一 WorkspaceFilePaths；Web api/workspaceFilesystem 和文件树消费 URI，原生目录由 Gateway 唯一 root binding 持有 |
+| api/resources、Gateway resource_navigation / workspace_proxy、federation workspace_port / skill_sources | 公共 DTO 和中央 grammar / resolver；Gateway 只路由，不代执行工作区文件 |
+| attachment_content_service、attachment_blob_catalog、tool_output_store、tool_output_middleware | 原附件/工具结果 owner 生成精确 Session 单文件 URI；ResourceFileReader 按原授权读字节，不开放私有目录 |
+| UserContentBuilder、message_service、Provider 投影、mapping/itemized/history、Web 附件内容 API | 消费相同产物 URI 和原业务身份；媒体/thumbnail 仍由原 owner 提供 |
+| core/resource_uri、公开 proto/DTO、Python/TS 生成物、contracts 与各层测试 | grammar、模板与错误域只有公共 owner 一处；调用方不自造 parser、kind 或虚拟路径 alias |
 
 ### 2. 实际 owner 就地执行，路由不是持有数据
 

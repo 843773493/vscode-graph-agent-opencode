@@ -5,11 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from app.agents.workspace_tool_paths import (
-    WorkspaceToolPathResolver,
-    backend_virtual_to_workspace_relative,
-    normalize_workspace_relative_path,
-)
+from app.agents.workspace_tool_paths import WorkspaceToolPathResolver
 from app.core.resource_uri import resource_display_uri
 from app.core.workspace_identity import bind_workspace_id
 
@@ -22,54 +18,47 @@ from app.core.workspace_identity import bind_workspace_id
         (".", "."),
     ],
 )
-def test_normalize_workspace_relative_path_uses_standard_paths(
+def test_workspace_resolver_uses_standard_paths(
+    tmp_path: Path,
     raw_path: str,
     expected: str,
 ) -> None:
-    assert normalize_workspace_relative_path(raw_path) == expected
+    assert WorkspaceToolPathResolver(tmp_path).workspace_relative_path(raw_path) == expected
 
 
 @pytest.mark.parametrize(
     "raw_path",
-    ["", "../secret", "~/secret", "C:/secret"],
+    ["", "../secret", "src/../secret", "bad\x00path"],
 )
-def test_normalize_workspace_relative_path_rejects_empty_or_escaping_paths(
+def test_workspace_resolver_rejects_empty_or_escaping_paths(
+    tmp_path: Path,
     raw_path: str,
 ) -> None:
     with pytest.raises(ValueError):
-        normalize_workspace_relative_path(raw_path)
+        WorkspaceToolPathResolver(tmp_path).workspace_relative_path(raw_path)
 
 
-def test_user_absolute_path_requires_explicit_target() -> None:
-    with pytest.raises(ValueError, match="明确目标工作区"):
-        normalize_workspace_relative_path("/src/main.mjs")
-
-
-def test_normalize_workspace_relative_path_maps_host_absolute_inside_workspace(
+def test_workspace_resolver_maps_host_absolute_inside_workspace(
     tmp_path: Path,
 ) -> None:
     workspace_root = tmp_path / "workspace"
     inside = (workspace_root / "src" / "main.mjs").resolve()
 
     assert (
-        normalize_workspace_relative_path(
-            str(inside),
-            workspace_root=workspace_root,
-        )
+        WorkspaceToolPathResolver(workspace_root).workspace_relative_path(str(inside))
         == "src/main.mjs"
     )
 
 
-def test_workspace_resolver_maps_relative_path_to_internal_virtual_path(
+def test_workspace_resolver_binds_root_without_relay_cwd(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    resolver = WorkspaceToolPathResolver(tmp_path)
-
-    assert resolver.resolve_workspace_path("src/main.mjs") == (
-        tmp_path / "src" / "main.mjs"
-    )
-    assert resolver.backend_virtual_path("src/main.mjs") == "/src/main.mjs"
-    assert resolver.backend_virtual_path(".") == "/"
+    root = tmp_path / "workspace"
+    root.mkdir()
+    resolver = WorkspaceToolPathResolver(root)
+    monkeypatch.chdir(tmp_path)
+    assert resolver.workspace_relative_path("src/main.mjs") == "src/main.mjs"
     assert resolver.workspace_relative_path(".") == "."
 
 
@@ -81,18 +70,13 @@ def test_workspace_resolver_never_escapes_on_host_absolute_path(
     host_path = (tmp_path / "outside.mjs").resolve()
 
     with pytest.raises(ValueError, match="访问能力"):
-        resolver.resolve_workspace_path(str(host_path))
-
-
-def test_backend_virtual_path_is_hidden_from_model_output() -> None:
-    assert backend_virtual_to_workspace_relative("/src/main.mjs") == "src/main.mjs"
-    assert backend_virtual_to_workspace_relative("/") == "."
+        resolver.workspace_relative_path(str(host_path))
 
 
 @pytest.mark.parametrize("raw_path", ["boxteam-session://current/attachments/att_owned", "boxteam-session://current/attachments/../secret"])
-def test_ordinary_workspace_resolver_rejects_old_artifact_scheme(raw_path: str) -> None:
+def test_ordinary_workspace_resolver_rejects_old_artifact_scheme(tmp_path: Path, raw_path: str) -> None:
     with pytest.raises(ValueError):
-        normalize_workspace_relative_path(raw_path)
+        WorkspaceToolPathResolver(tmp_path).workspace_relative_path(raw_path)
 
 
 def test_three_inputs_share_workspace_target_without_identity_writes(tmp_path: Path) -> None:
@@ -103,14 +87,14 @@ def test_three_inputs_share_workspace_target_without_identity_writes(tmp_path: P
     resolver = WorkspaceToolPathResolver(tmp_path)
     relative = "目录/文件 %.txt"
     uri = resource_display_uri(scope="workspace", scope_id=workspace_id, kind="files", tail_segments=("root", "目录", "文件 %.txt"))
-    assert [resolver.resolve_workspace_path(value) for value in [relative, str(tmp_path / relative), uri]] == [tmp_path / relative] * 3
+    assert [resolver.workspace_relative_path(value) for value in [relative, str(tmp_path / relative), uri]] == [relative] * 3
     assert identity.stat().st_mtime_ns == before.st_mtime_ns
 
 
 def test_uri_does_not_create_missing_workspace_identity(tmp_path: Path) -> None:
     uri = resource_display_uri(scope="workspace", scope_id="019d1b4a-1111-7000-8000-000000000001", kind="files", tail_segments=("root", "file.txt"))
     with pytest.raises(FileNotFoundError):
-        WorkspaceToolPathResolver(tmp_path).resolve_workspace_path(uri)
+        WorkspaceToolPathResolver(tmp_path).workspace_relative_path(uri)
     assert not (tmp_path / ".boxteam").exists()
 
 
@@ -121,7 +105,7 @@ def test_uri_does_not_create_missing_workspace_identity(tmp_path: Path) -> None:
 ])
 def test_unsupported_uri_never_becomes_native_filename(tmp_path: Path, value: str) -> None:
     with pytest.raises(ValueError):
-        WorkspaceToolPathResolver(tmp_path).resolve_workspace_path(value)
+        WorkspaceToolPathResolver(tmp_path).workspace_relative_path(value)
     assert not (tmp_path / ".boxteam").exists()
 
 
@@ -129,4 +113,21 @@ def test_unsupported_uri_never_becomes_native_filename(tmp_path: Path, value: st
 @pytest.mark.parametrize("value", ["C:/other.txt", r"C:\other.txt", r"\\server\share\other.txt", r"src\main.mjs"])
 def test_foreign_paths_never_become_posix_workspace_targets(tmp_path: Path, value: str) -> None:
     with pytest.raises(ValueError):
-        WorkspaceToolPathResolver(tmp_path).resolve_workspace_path(value)
+        WorkspaceToolPathResolver(tmp_path).workspace_relative_path(value)
+
+
+@pytest.mark.parametrize("input_kind", ["relative", "absolute", "uri"])
+def test_symlink_outside_workspace_is_rejected(tmp_path: Path, input_kind: str) -> None:
+    root = tmp_path / "workspace"
+    workspace_id = bind_workspace_id(root, "019d1b4a-1111-7000-8000-000000000001")
+    outside = tmp_path / "outside.txt"
+    outside.write_text("outside", encoding="utf-8")
+    (root / "link.txt").symlink_to(outside)
+    value = {
+        "relative": "link.txt",
+        "absolute": str(root / "link.txt"),
+        "uri": resource_display_uri(scope="workspace", scope_id=workspace_id, kind="files", tail_segments=("root", "link.txt")),
+    }[input_kind]
+    with pytest.raises(ValueError, match="访问能力"):
+        WorkspaceToolPathResolver(root).workspace_relative_path(value)
+    assert outside.read_text(encoding="utf-8") == "outside"
