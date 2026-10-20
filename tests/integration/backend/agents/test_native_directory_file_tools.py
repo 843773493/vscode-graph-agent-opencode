@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import sqlite3
 from contextlib import closing
@@ -31,6 +32,9 @@ async def test_model_tools_reopen_native_directory_without_registration(communic
     external.mkdir(exist_ok=True)
     file = external / "中文 文件%.txt"
     file.write_text("native-directory-needle Ω\n", encoding="utf-8")
+    version = "sha256:" + hashlib.sha256(file.read_bytes()).hexdigest()
+    blocked = external / "blocked.txt"
+    blocked.unlink(missing_ok=True)
     decoy = case.workspace / str(file).lstrip("/")
     decoy.parent.mkdir(parents=True)
     decoy.write_text("WORKSPACE REDIRECT DECOY\n")
@@ -65,10 +69,25 @@ async def test_model_tools_reopen_native_directory_without_registration(communic
             return _tool("read_file", {"path": entry["uri"]}, "call_native_uri_read")
         assert results[2]["content"] == results[3]["content"]
         assert "1\tnative-directory-needle Ω" in results[3]["content"]
+        assert version in results[3]["content"]
         if len(results) == 4:
             return _tool("grep", {"path": root.display_uri, "pattern": "native-directory-needle",
                                   "output_mode": "content"}, "call_native_grep")
         assert entry["uri"] in results[4]["content"] and "native-directory-needle Ω" in results[4]["content"]
+        if len(results) == 5:
+            return _tool("edit_file", {"file_path": str(file), "old_string": "needle", "new_string": "changed",
+                                      "expected_version": version}, "call_native_edit_denied")
+        if len(results) == 6:
+            return _tool("write_file", {"file_path": str(blocked), "content": "blocked", "expected_version": "absent"},
+                         "call_native_write_denied")
+        if len(results) == 7:
+            return _tool("apply_patch", {"target": str(external), "explanation": "核实工作区外写入能力拒绝",
+                "input": f"*** Begin Patch\n*** Update File: {file.name}\n@@\n-native-directory-needle Ω\n+changed\n*** End Patch",
+                "expected_versions": {file.name: version}}, "call_native_patch_denied")
+        for message in results[5:]:
+            denied = json.loads(message["content"])
+            assert (denied["status"], denied["effect"], denied["owner"], denied["code"], denied["retryable"]) == (
+                "error", "not_executed", "resource_uri_resolver", "capability_denied", False), denied
         wire = json.dumps(results, ensure_ascii=False)
         assert str(external) not in wire and "WORKSPACE REDIRECT DECOY" not in wire
         tool_results[:] = results
@@ -80,8 +99,12 @@ async def test_model_tools_reopen_native_directory_without_registration(communic
     })
     assert accepted.status_code == 200, accepted.text
     await _completed(case.client, accepted.json()["data"]["job_id"])
-    assert len(tool_results) == 5
+    assert len(tool_results) == 8
     assert file.read_text() == "native-directory-needle Ω\n" and decoy.read_text() == "WORKSPACE REDIRECT DECOY\n"
+    assert not blocked.exists() and not (decoy.parent / blocked.name).exists()
+    changes = await case.client.get(f"/api/v1/sessions/{session}/changesets/all")
+    assert changes.status_code == 200, changes.text
+    assert changes.json()["data"]["files"] == []
     assert registry() == before
     assert not (external / ".boxteam").exists()
     case.record("native-directory-tools", {"results": tool_results, "registry_before": before, "registry_after": registry()})
