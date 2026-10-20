@@ -386,7 +386,6 @@ class SessionCompactResultDTO(BaseModel):
     summarized_message_count: int
     retained_message_count: int
     summary: str | None = None
-    history_file_path: str | None = None
     strategy: Literal["cache_preserving", "cache_replacement"] | None = None
     compacted_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 

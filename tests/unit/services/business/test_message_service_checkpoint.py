@@ -682,7 +682,6 @@ async def test_agent_context_state_applies_summarization_event(
                     id="summary-old-context",
                     additional_kwargs={"lc_source": "summarization"},
                 ),
-                "file_path": "/conversation_history/ses_019bab7eeedc7a5f83bddb61e54d8a28.md",
             },
         },
         "channel_versions": {"messages": "1", "_summarization_event": "1"},
@@ -716,10 +715,7 @@ async def test_agent_context_state_applies_summarization_event(
     assert state["raw_message_count"] == 4
     assert state["compacted"] is True
     assert state["compaction_cutoff"] == 2
-    assert (
-        state["history_file_path"]
-        == "/conversation_history/ses_019bab7eeedc7a5f83bddb61e54d8a28.md"
-    )
+    assert "history_file_path" not in state
     assert [record["content"] for record in state["records"]] == [
         "旧上下文摘要",
         "保留问题",
@@ -763,7 +759,6 @@ async def test_agent_context_state_applies_cache_preserving_event(
                     id="summary-cache-preserving-context",
                     additional_kwargs={"lc_source": "summarization"},
                 ),
-                "file_path": "/conversation_history/ses_019bd626995878aa855827ea5ee075e3.md",
             },
         },
         "channel_versions": {"messages": "1", "_summarization_event": "1"},

@@ -3707,11 +3707,6 @@ export declare type SessionCompactResultDTO = Message<"boxteam.workspace.v2.Sess
   summary?: string | undefined;
 
   /**
-   * @generated from field: optional string history_file_path = 10;
-   */
-  historyFilePath?: string | undefined;
-
-  /**
    * @generated from field: optional string strategy = 11;
    */
   strategy?: string | undefined;

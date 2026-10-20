@@ -199,7 +199,6 @@ describe("Composer /compact 命令", () => {
       summarized_message_count: 0,
       retained_message_count: 12,
       summary: null,
-      history_file_path: null,
       strategy: null,
       compacted_at: null,
     };

@@ -110,7 +110,6 @@ def _build_summarization_middleware(
     model: BaseChatModel,
     backend: BackendProtocol,
     *,
-    compact_tool_enabled: bool,
     compaction_preflight: CompactionPreflightPort,
 ) -> list[AgentMiddleware]:
     summarization = create_cache_preserving_summarization_middleware(
@@ -118,9 +117,6 @@ def _build_summarization_middleware(
         backend,
         compaction_preflight=compaction_preflight,
     )
-    if not compact_tool_enabled:
-        return [summarization]
-
     tool_middleware = CachePreservingSummarizationToolMiddleware(
         summarization,
         system_prompt=None,
@@ -205,8 +201,6 @@ def build_deep_agent_middleware(
             *_build_summarization_middleware(
                 model,
                 backend,
-                compact_tool_enabled="compact_conversation"
-                not in resolved_tool_denylist,
                 compaction_preflight=compaction_preflight,
             ),
             StructuredToolCallMiddleware(),

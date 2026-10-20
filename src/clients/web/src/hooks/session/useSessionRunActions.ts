@@ -348,7 +348,6 @@ export function useSessionRunActions({
             effective_message_count_after: result.effective_message_count_after,
             summarized_message_count: result.summarized_message_count,
             retained_message_count: result.retained_message_count,
-            history_file_path: result.history_file_path,
           },
           result.message,
           currentSessionCacheKey ?? result.session_id,

@@ -316,7 +316,6 @@ class MessageService(MessageContentProjectionMixin):
                 "raw_message_count": 0,
                 "compacted": False,
                 "compaction_cutoff": None,
-                "history_file_path": None,
             }
 
         checkpoint = checkpoint_tuple.checkpoint
@@ -335,7 +334,6 @@ class MessageService(MessageContentProjectionMixin):
         event = channel_values.get("_summarization_event")
         compacted = event is not None
         compaction_cutoff: int | None = None
-        history_file_path: str | None = None
         effective_messages = list(raw_messages)
         if event is not None:
             if not isinstance(event, Mapping):
@@ -352,13 +350,6 @@ class MessageService(MessageContentProjectionMixin):
                 )
             if summary_message is None:
                 raise ValueError("_summarization_event 缺少 summary_message")
-            raw_history_file_path = event.get("file_path")
-            if raw_history_file_path is not None and not isinstance(
-                raw_history_file_path,
-                str,
-            ):
-                raise TypeError("_summarization_event.file_path 应为字符串或 null")
-            history_file_path = raw_history_file_path
             effective_messages = apply_summarization_event(raw_messages, event)
 
         records: list[dict[str, object]] = []
@@ -379,7 +370,6 @@ class MessageService(MessageContentProjectionMixin):
             "raw_message_count": len(raw_messages),
             "compacted": compacted,
             "compaction_cutoff": compaction_cutoff,
-            "history_file_path": history_file_path,
         }
 
     async def get_agent_state_messages(self, session_id: str) -> AgentStateMessagesDTO:

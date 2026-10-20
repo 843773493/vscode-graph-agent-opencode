@@ -831,7 +831,8 @@ message SessionCompactResultDTO {
   int64 summarized_message_count = 7;
   int64 retained_message_count = 8;
   optional string summary = 9;
-  optional string history_file_path = 10;
+  reserved 10;
+  reserved "history_file_path";
   optional string strategy = 11;
   optional google.protobuf.Timestamp compacted_at = 12;
 }

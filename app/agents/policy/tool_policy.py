@@ -36,6 +36,7 @@ DEFAULT_AGENT_TOOL_NAMES = frozenset(
         "glob",
         "grep",
         "compact_conversation",
+        "read_compaction_history",
     }
 )
 

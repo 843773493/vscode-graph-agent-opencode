@@ -829,7 +829,6 @@ export interface SessionCompactResultDTO {
   summarized_message_count: number;
   retained_message_count: number;
   summary?: string | undefined;
-  history_file_path?: string | undefined;
   strategy?: string | undefined;
   compacted_at?: string | undefined;
 }
@@ -7855,7 +7854,6 @@ function createBaseSessionCompactResultDTO(): SessionCompactResultDTO {
     summarized_message_count: 0,
     retained_message_count: 0,
     summary: undefined,
-    history_file_path: undefined,
     strategy: undefined,
     compacted_at: undefined,
   };
@@ -7881,7 +7879,6 @@ export const SessionCompactResultDTO: MessageFns<SessionCompactResultDTO> = {
         ? globalThis.Number(object.retained_message_count)
         : 0,
       summary: isSet(object.summary) ? globalThis.String(object.summary) : undefined,
-      history_file_path: isSet(object.history_file_path) ? globalThis.String(object.history_file_path) : undefined,
       strategy: isSet(object.strategy) ? globalThis.String(object.strategy) : undefined,
       compacted_at: isSet(object.compacted_at) ? globalThis.String(object.compacted_at) : undefined,
     };
@@ -7916,9 +7913,6 @@ export const SessionCompactResultDTO: MessageFns<SessionCompactResultDTO> = {
     if (message.summary !== undefined) {
       obj.summary = message.summary;
     }
-    if (message.history_file_path !== undefined) {
-      obj.history_file_path = message.history_file_path;
-    }
     if (message.strategy !== undefined) {
       obj.strategy = message.strategy;
     }
@@ -7942,7 +7936,6 @@ export const SessionCompactResultDTO: MessageFns<SessionCompactResultDTO> = {
     message.summarized_message_count = object.summarized_message_count ?? 0;
     message.retained_message_count = object.retained_message_count ?? 0;
     message.summary = object.summary ?? undefined;
-    message.history_file_path = object.history_file_path ?? undefined;
     message.strategy = object.strategy ?? undefined;
     message.compacted_at = object.compacted_at ?? undefined;
     return message;

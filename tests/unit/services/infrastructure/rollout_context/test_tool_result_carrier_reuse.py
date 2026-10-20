@@ -691,7 +691,7 @@ async def test_compaction_checkpoint_preserves_selected_state_cutoff(
     event = build_cache_preserving_event(
         CachePreservingPartition(prefix_messages=state[:1], messages_to_summarize=state[1:3],
                                  preserved_messages=state[3:], state_cutoff=3),
-        summary_message=summary, file_path=str(storage.storage.sessions_dir / "compaction-history.md"),
+        summary_message=summary,
     )
     checkpoint = empty_checkpoint()
     checkpoint["id"] = "compaction-selected-carrier-cutoff"

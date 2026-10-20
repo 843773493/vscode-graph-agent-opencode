@@ -178,7 +178,6 @@ def build_cache_preserving_event(
     partition: CachePreservingPartition,
     *,
     summary_message: AnyMessage,
-    file_path: str,
     strategy: str = CACHE_PRESERVING_STRATEGY,
 ) -> dict[str, object]:
     event: dict[str, object] = {
@@ -186,7 +185,6 @@ def build_cache_preserving_event(
         "cutoff_index": partition.state_cutoff,
         "cache_prefix_messages": partition.prefix_messages,
         "summary_message": summary_message,
-        "file_path": file_path,
     }
     cutoff_message = (
         partition.messages_to_summarize[-1] if partition.messages_to_summarize else None

@@ -6985,6 +6985,12 @@ async function runRealCompaction(surface) {
     method: "PATCH", headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ agent_id: "default", changes: [{ tool_id: compact.tool_id, execution_enabled: true, model_visible: true }] }),
   });
+  const historyTool = tools.find((tool) => tool.name === "read_compaction_history");
+  assert.ok(historyTool, "正常 ToolSet catalog 必须提供压缩历史读取工具");
+  await ownerApi(surface, "/api/v1/tools/selection", {
+    method: "PATCH", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ agent_id: "default", changes: [{ tool_id: historyTool.tool_id, execution_enabled: true, model_visible: true }] }),
+  });
   const owner = await createProductSession(surface, "真实 compact_conversation");
   const prepared = [];
   for (let index = 0; index < 3; index += 1) prepared.push(await completeOwnerTurn(owner,
@@ -6995,12 +7001,31 @@ async function runRealCompaction(surface) {
   const compactCall = { ...toolResponse("compact-real-tool", "compact_conversation", {}), usage: { input: 100000, output: 16 } };
   const actual = await completeOwnerTurn(owner, "压缩前文的详细过程，然后保留简短结果。", [
     compactCall, { label: "compact-summary-provider", text: "前面三轮均通过 read_file 核对 README，事实一致。" },
-    finalResponse("compact-after-final", "真实压缩已完成，后续上下文保留了摘要。"),
+    toolResponse("compact-read-history", "read_compaction_history", { line_offset: 1, limit: 2000 }),
+    finalResponse("compact-after-final", "真实压缩已完成，已通过归档工具读回原始消息。"),
   ]);
   const history = await loadThreadHistory(owner);
   const turn = history.items.at(-1);
   const summaries = turn.response_parts.filter((part) => part.kind === "compaction_summary");
   assert.equal(summaries.length, 1, "真实压缩只能添加一个独立 compaction_summary");
+  assert.ok(summaries[0].text.includes("read_compaction_history(line_offset=1, limit=200)"),
+    "摘要必须指向模型可执行的精确 thread 归档读取工具");
+  assert.ok(!summaries[0].text.includes("session-artifacts/") && !summaries[0].text.includes("history.md"),
+    "模型与持久 history 摘要不得携带可推导的归档位置");
+  const archiveRead = turn.response_parts.find((part) => part.kind === "tool_result"
+    && part.tool_name === "read_compaction_history");
+  assert.ok(archiveRead, "模型必须实际调用工具取回归档原文");
+  const archiveText = JSON.stringify(archiveRead);
+  assert.ok(archiveText.includes("压缩素材 1") && archiveText.includes("第 1 轮已确认 README"),
+    "工具结果必须含已摘要的原始用户消息与回答");
+  // 第 0 轮属于保留的缓存前缀，归档只收录实际移出的中段。
+  const compactedRequest = await modelRequest(actual.calls[2]);
+  const compactedMessages = JSON.stringify(compactedRequest.request.messages);
+  assert.ok(compactedMessages.includes("压缩素材 0") && compactedMessages.includes("第 0 轮已确认 README"),
+    "压缩后的模型请求必须保留第 0 轮缓存前缀");
+  assert.ok(!compactedMessages.includes("压缩素材 1") && !compactedMessages.includes("第 1 轮已确认 README"),
+    "归档读取必须取回已从模型请求移出的中段原文");
+  assert.ok(!archiveText.includes("压缩素材 0"), "缓存前缀不得被当作已压缩中段重复归档");
   const expandable = turn.response_parts.filter((part) => part.kind !== "final_text");
   assert.equal(turn.activity_stats.item_count, expandable.length);
   assert.equal(turn.activity_stats.item_count, expandable.filter((part) => part.kind !== "compaction_summary").length + 1);
@@ -7012,7 +7037,8 @@ async function runRealCompaction(surface) {
   const sources = JSON.parse(await display.getAttribute("data-response-sources"));
   assert.deepEqual(sources.map(partCoordinate), summaries.map(partCoordinate));
   assert.ok((await display.innerText()).includes("README"));
-  return { sessionId: owner.sessionId, prepared, actual, summary: summaries[0], activity: turn.activity_stats };
+  return { sessionId: owner.sessionId, prepared, actual, summary: summaries[0], archiveRead,
+    compactedRequest: compactedRequest.identity, activity: turn.activity_stats };
 }
 
 async function runChildFifoAndResidency(surface) {
@@ -9098,9 +9124,9 @@ async function runSection8Product(browser, primaryPage) {
     for (const name of section8Selection.selected) {
       assert.equal(typeof scenarios[name]?.run, "function", '未知 Section 8 场景：' + name);
       result.runningScenario = name;
-      await browserStartup(`scenario_${name}`, async () => {
-        facts[name] = await scenarios[name].run();
-      });
+      await browserPhase(`scenario_${name}`, "begin");
+      facts[name] = await scenarios[name].run();
+      await browserPhase(`scenario_${name}`, "end");
     }
     delete result.runningScenario;
     return facts;
@@ -9115,20 +9141,20 @@ async function runSection8Product(browser, primaryPage) {
 
 const phasePath = standaloneSelfTest ? ""
   : `${requiredEnvironment("BOXTEAM_BROWSER_ARTIFACT_ROOT")}/basic-chat-tool-loop-phases.log`;
+async function browserPhase(label, suffix) {
+  const line = `${new Date().toISOString()} ${label}_${suffix} pid=${process.pid}\n`;
+  await writeFile(phasePath, line, { flag: "a" });
+  process.stdout.write(line);
+}
 async function browserStartup(label, create) {
-  const phase = async (suffix) => {
-    const line = `${new Date().toISOString()} ${label}_${suffix} pid=${process.pid}\n`;
-    await writeFile(phasePath, line, { flag: "a" });
-    process.stdout.write(line);
-  };
-  await phase("begin");
+  await browserPhase(label, "begin");
   let timer;
   try {
     const value = await Promise.race([
       create(),
       new Promise((_, reject) => { timer = setTimeout(() => reject(new Error(`${label} 超过原 30000ms 浏览器操作期限`)), 30_000); }),
     ]);
-    await phase("end");
+    await browserPhase(label, "end");
     return value;
   } finally {
     clearTimeout(timer);

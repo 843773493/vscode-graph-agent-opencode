@@ -3644,7 +3644,7 @@ async def test_compaction_fork_keeps_only_required_body_backing(
     event = build_cache_preserving_event(
         CachePreservingPartition(prefix_messages=[], messages_to_summarize=summarized,
                                  preserved_messages=retained, state_cutoff=len(summarized)),
-        summary_message=summary, file_path=str(fork_context.workspace / "compaction-history.md"),
+        summary_message=summary,
     )
     compacted = _checkpoint("compaction-selected-checkpoint", [*summarized, *retained])
     frozen_state = {"false_flag": False, "zero_count": 0, "empty_map": {}, "empty_list": [], "none_value": None}
@@ -3937,7 +3937,7 @@ async def test_fork_rejects_orphan_tool_result_before_publication(
     event = build_cache_preserving_event(
         CachePreservingPartition(prefix_messages=[], messages_to_summarize=summarized,
                                  preserved_messages=retained, state_cutoff=len(summarized)),
-        summary_message=summary, file_path=str(fork_context.workspace / "queue-compaction-history.md"),
+        summary_message=summary,
     )
     compacted = _checkpoint("queue-compacted", [*summarized, *retained])
     compacted["channel_values"]["_summarization_event"] = event
@@ -8261,7 +8261,7 @@ async def test_http_published_fork_without_attachment_claim_rejects_deleting_tar
         event = build_cache_preserving_event(
             CachePreservingPartition(prefix_messages=[], messages_to_summarize=old_messages,
                                      preserved_messages=[user], state_cutoff=len(old_messages)),
-            summary_message=summary, file_path=str(context.workspace / "unclaimed-copy-history.md"),
+            summary_message=summary,
         )
         compacted = _checkpoint("cp-unclaimed-copy-compaction", [*old_messages, user])
         compacted["channel_values"]["_summarization_event"] = event

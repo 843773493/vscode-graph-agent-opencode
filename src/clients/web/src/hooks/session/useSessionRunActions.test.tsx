@@ -869,7 +869,6 @@ describe("在途运行动作的迟到回写不得污染已切到的会话", () =
       effective_message_count_before: 10,
       effective_message_count_after: 4,
       retained_message_count: 7,
-      history_file_path: null,
     }));
     await compacting;
 
@@ -1070,7 +1069,6 @@ describe("在途运行动作的迟到回写不得污染已切到的会话", () =
       effective_message_count_before: 10,
       effective_message_count_after: 4,
       retained_message_count: 7,
-      history_file_path: null,
     }));
     await compacting;
 

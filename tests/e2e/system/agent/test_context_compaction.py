@@ -297,7 +297,7 @@ async def test_session_context_compact_writes_summarization_event(
     assert result["summarized_message_count"] == 0
     assert result["retained_message_count"] == 10
     assert result["summary"] is None
-    assert result["history_file_path"] is None
+    assert "history_file_path" not in result
 
     saver = RolloutCheckpointSaver(
         sessions_dir=Path(e2e_workspace_root_path) / ".boxteam" / "sessions"
@@ -336,9 +336,10 @@ async def test_session_context_compact_writes_summarization_event(
     assert compact_event["strategy"] == "cache_preserving"
     assert len(compact_event["cache_prefix_messages"]) >= 2
     assert compact_event["cutoff_index"] > len(compact_event["cache_prefix_messages"])
-    assert compact_event["file_path"] == (
-        f"session-artifacts/{session_id}/context/{thread_id}/history.md"
-    )
+    assert "file_path" not in compact_event
+    summary_content = str(compact_event["summary_message"].content)
+    assert "read_compaction_history(line_offset=1, limit=200)" in summary_content
+    assert "session-artifacts/" not in summary_content and "history.md" not in summary_content
     assert compact_event["summary_message"].additional_kwargs.get("lc_source") == "summarization"
     assert channel_values["_force_cache_compaction"] is False
 

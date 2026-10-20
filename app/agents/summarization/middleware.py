@@ -26,6 +26,7 @@ from langchain.agents.middleware.types import ExtendedModelResponse, hook_config
 from langchain_core.exceptions import ContextOverflowError
 from langchain_core.messages import (
     AnyMessage,
+    HumanMessage,
 )
 from langgraph.config import get_config
 from langgraph.types import Command
@@ -57,7 +58,6 @@ from app.agents.summarization.state import (
     SummaryTextError,
     SummaryToolCallError,
 )
-from app.agents.workspace_tool_paths import backend_virtual_to_workspace_relative
 from app.core.identifier import create_uuid_hex
 from app.core.model_request_context import (
     SummaryCandidateScope,
@@ -295,7 +295,7 @@ class CachePreservingSummarizationMiddleware(_DeepAgentsSummarizationMiddleware)
         return request.override(messages=messages, response_format=None)
 
     @staticmethod
-    def _freeze_summary_message(request: ModelRequest, message: AnyMessage) -> AnyMessage:
+    def _build_summary_message(request: ModelRequest, summary: str) -> HumanMessage:
         info = request.runtime.execution_info if request.runtime is not None else None
         identity = {
             "checkpoint_id": getattr(info, "checkpoint_id", None),
@@ -306,7 +306,21 @@ class CachePreservingSummarizationMiddleware(_DeepAgentsSummarizationMiddleware)
             raise RuntimeError("compaction summary 缺少持久 checkpoint/task 身份")
         if type(identity["node_attempt"]) is not int or identity["node_attempt"] < 1:
             raise RuntimeError("compaction summary 缺少合法 node_attempt")
-        return message.model_copy(update={"id": f"summary-{sha256_jcs(identity)}"})
+        thread_id = getattr(info, "thread_id", None)
+        if not isinstance(thread_id, str) or not thread_id:
+            raise RuntimeError("compaction summary 缺少 LangGraph thread_id")
+        require_current_session_thread_owner(langgraph_thread_id=thread_id)
+        return HumanMessage(
+            id=f"summary-{sha256_jcs(identity)}",
+            content=(
+                "You are in the middle of a conversation that has been summarized.\n\n"
+                "Use read_compaction_history(line_offset=1, limit=200) to retrieve the "
+                "original archived messages for this conversation thread. Continue with "
+                "the next line_offset when more lines are needed.\n\n"
+                f"A condensed summary follows:\n\n<summary>\n{summary}\n</summary>"
+            ),
+            additional_kwargs={"lc_source": "summarization"},
+        )
 
     @hook_config(can_jump_to=["model"])
     def after_model(self, state: CachePreservingSummarizationState, runtime: object) -> dict[str, object] | None:
@@ -550,15 +564,10 @@ class CachePreservingSummarizationMiddleware(_DeepAgentsSummarizationMiddleware)
                     before,
                 )
             raise
-        model_file_path = backend_virtual_to_workspace_relative(file_path)
-        summary_message = self._build_new_messages_with_path(summary, model_file_path)[
-            0
-        ]
-        summary_message = self._freeze_summary_message(request, summary_message)
+        summary_message = self._build_summary_message(request, summary)
         event = build_cache_preserving_event(
             partition,
             summary_message=summary_message,
-            file_path=model_file_path,
             strategy=(
                 CACHE_PRESERVING_STRATEGY
                 if partition.prefix_messages
@@ -693,15 +702,10 @@ class CachePreservingSummarizationMiddleware(_DeepAgentsSummarizationMiddleware)
                     before,
                 )
             raise
-        model_file_path = backend_virtual_to_workspace_relative(file_path)
-        summary_message = self._build_new_messages_with_path(summary, model_file_path)[
-            0
-        ]
-        summary_message = self._freeze_summary_message(request, summary_message)
+        summary_message = self._build_summary_message(request, summary)
         event = build_cache_preserving_event(
             partition,
             summary_message=summary_message,
-            file_path=model_file_path,
             strategy=(
                 CACHE_PRESERVING_STRATEGY
                 if partition.prefix_messages

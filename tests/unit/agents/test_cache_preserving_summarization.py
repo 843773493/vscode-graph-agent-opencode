@@ -48,6 +48,7 @@ from app.core.model_delta_context import (
     reset_current_model_delta_sink,
     set_current_model_delta_sink,
 )
+from app.core.path_utils import workspace_context
 from app.core.session_thread_context import session_thread_owner_scope
 from app.domain.itemized.mutation_intents import MutationIntentOwner
 from app.services.infrastructure.rollout_context.checkpoint.boundary.compaction_boundary_adapter import (
@@ -67,6 +68,7 @@ class _SummarizationBoundaryStub:
 
 
 _PREFLIGHT_OWNER = MutationIntentOwner("ses_preflight", "thr_preflight")
+_PREFLIGHT_WORKSPACE_ID = "019c58e6-e9f5-7137-85f9-9a3f3e5768d8"
 
 
 def _conversation(pair_count: int) -> list[HumanMessage | AIMessage]:
@@ -138,10 +140,11 @@ class _InMemoryPreflight:
 
 
 @pytest.fixture
-def preflight_runtime() -> Iterator[SimpleNamespace]:
+def preflight_runtime(tmp_path) -> Iterator[SimpleNamespace]:
     """运行时 thread 与显式会话 owner 分别注入，不能用 session 冒充 thread。"""
-    with session_thread_owner_scope(
-        _PREFLIGHT_OWNER, langgraph_thread_id=_PREFLIGHT_OWNER.thread_id
+    with (
+        workspace_context(_PREFLIGHT_WORKSPACE_ID, tmp_path),
+        session_thread_owner_scope(_PREFLIGHT_OWNER, langgraph_thread_id=_PREFLIGHT_OWNER.thread_id),
     ):
         yield SimpleNamespace(
             execution_info=SimpleNamespace(
@@ -227,7 +230,6 @@ def test_cache_preserving_event_keeps_prefix_byte_equivalent() -> None:
     event = build_cache_preserving_event(
         partition,
         summary_message=summary,
-        file_path="/history.md",
     )
 
     effective = apply_summarization_event(messages, event)
@@ -252,7 +254,6 @@ def test_repeated_compaction_rolls_old_summary_without_moving_prefix() -> None:
     first_event = build_cache_preserving_event(
         first_partition,
         summary_message=HumanMessage(content="第一次摘要"),
-        file_path="/history.md",
     )
     first_effective = apply_summarization_event(raw_messages, first_event)
 
@@ -271,7 +272,6 @@ def test_repeated_compaction_rolls_old_summary_without_moving_prefix() -> None:
     second_event = build_cache_preserving_event(
         second_partition,
         summary_message=HumanMessage(content="第二次摘要"),
-        file_path="/history.md",
     )
     second_effective = apply_summarization_event(raw_messages, second_event)
     assert second_effective[:4] == raw_messages[:4]
@@ -1168,7 +1168,7 @@ def test_untriggered_path_calls_handler_without_parent_argument_truncation() -> 
     )
 
 
-def test_compaction_exposes_history_as_workspace_relative_path(preflight_runtime: SimpleNamespace) -> None:
+def test_compaction_references_callable_history_tool_without_persisting_archive_location(preflight_runtime: SimpleNamespace) -> None:
     before = [HumanMessage(content="待压缩消息")]
     partition = CachePreservingPartition(
         prefix_messages=[],
@@ -1176,10 +1176,9 @@ def test_compaction_exposes_history_as_workspace_relative_path(preflight_runtime
         preserved_messages=[],
         state_cutoff=1,
     )
-    observed_paths: list[str] = []
 
     class _CompactionStub:
-        _freeze_summary_message = staticmethod(CachePreservingSummarizationMiddleware._freeze_summary_message)
+        _build_summary_message = staticmethod(CachePreservingSummarizationMiddleware._build_summary_message)
 
         @staticmethod
         def _prepare_cache_compaction(_: ModelRequest):
@@ -1198,11 +1197,6 @@ def test_compaction_exposes_history_as_workspace_relative_path(preflight_runtime
             return "压缩摘要"
 
         @staticmethod
-        def _build_new_messages_with_path(summary: str, file_path: str):
-            observed_paths.append(file_path)
-            return [HumanMessage(content=f"{summary}\n{file_path}")]
-
-        @staticmethod
         def _ensure_compaction_reduces_tokens(*_):
             return None
 
@@ -1213,10 +1207,12 @@ def test_compaction_exposes_history_as_workspace_relative_path(preflight_runtime
     )
 
     assert isinstance(response, ExtendedModelResponse)
-    assert observed_paths == ["session-artifacts/ses_relative/context/thr_relative/history.md"]
-    assert response.command.update["_summarization_event"]["file_path"] == (
-        "session-artifacts/ses_relative/context/thr_relative/history.md"
-    )
+    event = response.command.update["_summarization_event"]
+    assert "file_path" not in event
+    content = event["summary_message"].content
+    assert "read_compaction_history(line_offset=1, limit=200)" in content
+    assert "<summary>\n压缩摘要\n</summary>" in content
+    assert "session-artifacts/" not in content and "history.md" not in content
 
 
 def test_forced_compaction_without_safe_partition_clears_one_shot_flag() -> None:
@@ -1415,7 +1411,6 @@ def test_prepare_preserves_complete_api_round_without_new_human_boundary(
     event = build_cache_preserving_event(
         partition,
         summary_message=HumanMessage(content="工具轮摘要"),
-        file_path="/history.md",
     )
     projected = apply_summarization_event(messages, event)
     assert event["strategy"] == CACHE_PRESERVING_STRATEGY
@@ -1437,7 +1432,7 @@ async def test_async_compaction_uses_context_activity_handler(preflight_runtime:
     )
 
     class _CompactionStub:
-        _freeze_summary_message = staticmethod(CachePreservingSummarizationMiddleware._freeze_summary_message)
+        _build_summary_message = staticmethod(CachePreservingSummarizationMiddleware._build_summary_message)
 
         @staticmethod
         def _prepare_cache_compaction(
@@ -1460,10 +1455,6 @@ async def test_async_compaction_uses_context_activity_handler(preflight_runtime:
         @staticmethod
         async def _acreate_cache_preserving_summary(*_: object) -> str:
             return "历史摘要"
-
-        @staticmethod
-        def _build_new_messages_with_path(*_: object) -> list[HumanMessage]:
-            return [HumanMessage(content="历史摘要")]
 
         @staticmethod
         def _ensure_compaction_reduces_tokens(*_: object) -> None:
@@ -1578,7 +1569,6 @@ def test_cache_replacement_sync_overflow_reaches_minimal_fallback(
     event = build_cache_preserving_event(
         partition,
         summary_message=summary_message,
-        file_path="/history.md",
         strategy=CACHE_REPLACEMENT_STRATEGY,
     )
     assert apply_summarization_event(messages, event) == [
@@ -1630,7 +1620,6 @@ def test_replacement_rolls_existing_cache_prefix_and_summary_together(
         "cutoff_index": 8,
         "cache_prefix_messages": raw_messages[:4],
         "summary_message": old_summary,
-        "file_path": "/history.md",
     }
     effective = apply_summarization_event(raw_messages, old_event)
 
@@ -1687,7 +1676,6 @@ def test_replacement_rolls_existing_cache_prefix_and_summary_together(
     new_event = build_cache_preserving_event(
         replacement,
         summary_message=new_summary,
-        file_path="/history.md",
         strategy=CACHE_REPLACEMENT_STRATEGY,
     )
     modified = [new_summary, *replacement.preserved_messages]
@@ -1733,7 +1721,6 @@ def test_encrypted_reasoning_block_survives_prefix_and_tail_projection() -> None
     event = build_cache_preserving_event(
         partition,
         summary_message=HumanMessage(content="摘要"),
-        file_path="/history.md",
     )
 
     projected = apply_summarization_event(messages, event)

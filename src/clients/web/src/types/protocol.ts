@@ -515,10 +515,9 @@ export type SessionSkillUntrackResult = Omit<WorkspaceProtocol.SessionSkillUntra
 };
 export type SessionUpdateRequest = WorkspaceProtocol.SessionUpdateRequest;
 export type DeleteSessionResult = WorkspaceProtocol.DeleteSessionResultDTO;
-export type SessionCompactResult = Omit<WorkspaceProtocol.SessionCompactResultDTO, "status" | "summary" | "history_file_path" | "strategy" | "compacted_at"> & {
+export type SessionCompactResult = Omit<WorkspaceProtocol.SessionCompactResultDTO, "status" | "summary" | "strategy" | "compacted_at"> & {
   status: "scheduled" | "compacted" | "skipped";
   summary?: string | null;
-  history_file_path?: string | null;
   strategy?: "cache_preserving" | "cache_replacement" | null;
   compacted_at?: string | null;
 };

@@ -197,7 +197,6 @@ class _FakeMessageSource:
             "raw_message_count": len(self.records),
             "compacted": True,
             "compaction_cutoff": 2,
-            "history_file_path": "/private/history.jsonl",
         }
 
 

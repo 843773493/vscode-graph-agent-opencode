@@ -2,20 +2,86 @@
 
 from __future__ import annotations
 
+import logging
+from typing import Annotated
+
+from deepagents.backends.protocol import ReadResult
+from deepagents.backends.utils import format_content_with_line_numbers
 from deepagents.middleware.summarization import SummarizationToolMiddleware
 from langchain.tools import ToolRuntime
 from langchain_core.messages import (
     AnyMessage,
     ToolMessage,
 )
+from langchain_core.tools import BaseTool, StructuredTool, ToolException
 from langgraph.types import Command
+from pydantic import Field
 
+from app.agents.summarization.middleware import CachePreservingSummarizationMiddleware
 from app.agents.summarization.planning import build_safe_compaction_partition
 from app.agents.summarization.state import CachePreservingPartition
+
+logger = logging.getLogger(__name__)
 
 
 class CachePreservingSummarizationToolMiddleware(SummarizationToolMiddleware):
     """让 compact_conversation 工具使用与自动压缩相同的缓存优先策略。"""
+
+    def __init__(
+        self,
+        summarization: CachePreservingSummarizationMiddleware,
+        *,
+        system_prompt: str | None = None,
+    ) -> None:
+        super().__init__(summarization, system_prompt=system_prompt)
+        self.tools.append(self._create_read_history_tool(summarization))
+
+    def _create_read_history_tool(
+        self, summarization: CachePreservingSummarizationMiddleware,
+    ) -> BaseTool:
+        def content(result: ReadResult, line_offset: int) -> str:
+            if result.error:
+                logger.error("压缩历史 backend 读取失败: %s", result.error)
+                raise ToolException(
+                    "detail-unavailable: 当前 thread 的压缩归档不可读取；"
+                    f"line_offset={line_offset}。归档缺失或读取失败时不会改读其它 thread。"
+                )
+            if result.file_data is None or result.file_data["encoding"] != "utf-8":
+                raise RuntimeError("压缩历史必须返回 UTF-8 正文")
+            return format_content_with_line_numbers(
+                result.file_data["content"], start_line=line_offset,
+            )
+
+        def read_history(
+            runtime: ToolRuntime,
+            line_offset: Annotated[int, Field(ge=1)] = 1,
+            limit: Annotated[int, Field(ge=1, le=2000)] = 200,
+        ) -> str:
+            # 路径只在本次调用栈推导；模型不能选择其它 SessionThread。
+            path = summarization._get_history_path()
+            result = self._resolve_backend(runtime).read(path, offset=line_offset - 1, limit=limit)
+            return content(result, line_offset)
+
+        async def aread_history(
+            runtime: ToolRuntime,
+            line_offset: Annotated[int, Field(ge=1)] = 1,
+            limit: Annotated[int, Field(ge=1, le=2000)] = 200,
+        ) -> str:
+            path = summarization._get_history_path()
+            result = await self._resolve_backend(runtime).aread(path, offset=line_offset - 1, limit=limit)
+            return content(result, line_offset)
+
+        return StructuredTool.from_function(
+            name="read_compaction_history",
+            description=(
+                "读取当前会话精确 thread 的压缩归档原文，包含已从模型上下文移除的消息。"
+                "line_offset 从1开始，limit 是行数；返回带行号的原文，可按下一行继续读取。"
+                "不接受路径、Session ID 或 Thread ID。"
+            ),
+            func=read_history,
+            coroutine=aread_history,
+            handle_tool_error=True,
+        )
 
     def _partition_for_tool(
         self,

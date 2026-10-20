@@ -81,7 +81,6 @@ const composerActions: Omit<ComposerContextType, "state"> = {
     summarized_message_count: 0,
     retained_message_count: 0,
     summary: null,
-    history_file_path: null,
     strategy: null,
     compacted_at: null,
   }),

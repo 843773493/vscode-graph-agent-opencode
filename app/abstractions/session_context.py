@@ -55,7 +55,6 @@ class AgentContextState(TypedDict):
     raw_message_count: int
     compacted: bool
     compaction_cutoff: int | None
-    history_file_path: str | None
 
 
 class SessionContextMessageSourceProtocol(Protocol):
