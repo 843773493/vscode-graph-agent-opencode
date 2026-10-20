@@ -1,3 +1,4 @@
+import { stripCommandMarkerLines } from "./shared/commandText.js";
 import { installTerminalUserActions } from "./terminalUserActions.js";
 import { encodeTerminalClientMessage } from "./protocol/messages.js";
 
@@ -208,25 +209,8 @@ function describeSnapshot(snapshot) {
   return `终端: ${statusLabel(snapshot.status)} · ${commandStatus} · cwd: ${snapshot.cwd_relative}`;
 }
 
-function sanitizeTerminalDisplay(value) {
-  const parts = String(value || "").split(/(\r\n|\n)/);
-  let display = "";
-  for (let index = 0; index < parts.length; index += 2) {
-    const line = parts[index] || "";
-    const separator = parts[index + 1] || "";
-    if (
-      line.includes("__BOXTEAM_CMD_START_") ||
-      line.includes("__BOXTEAM_CMD_DONE_")
-    ) {
-      continue;
-    }
-    display += line + separator;
-  }
-  return display;
-}
-
 function snapshotDisplayBuffer(snapshot) {
-  return snapshot.display_buffer ?? sanitizeTerminalDisplay(snapshot.buffer || "");
+  return snapshot.display_buffer ?? stripCommandMarkerLines(String(snapshot.buffer || ""));
 }
 
 function renderSnapshot(display) {
@@ -493,7 +477,7 @@ async function attach() {
         acknowledgeOutput(message.sequence);
         return;
       }
-      terminal.write(sanitizeTerminalDisplay(message.data), () => {
+      terminal.write(stripCommandMarkerLines(String(message.data || "")), () => {
         acknowledgeOutput(message.sequence);
       });
       return;

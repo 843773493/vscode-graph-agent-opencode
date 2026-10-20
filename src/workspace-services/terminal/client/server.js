@@ -3,7 +3,7 @@ import path from "node:path";
 import { existsSync, statSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
-import { validateWorkspaceId, verifyWorkspaceIdentity } from "../server/terminalManager.js";
+import { validateWorkspaceId, verifyWorkspaceIdentity } from "../server/workspaceIdentity.js";
 
 const DEFAULT_HOST = "127.0.0.1";
 const DEFAULT_PORT = 8013;
@@ -40,7 +40,10 @@ function resolveModuleAsset(pathname, assetRoot) {
   const decodedPathname = decodeURIComponent(pathname);
   let moduleRoot;
   let relativePath;
-  if (decodedPathname === "/protocol/messages.js") {
+  if (decodedPathname === "/shared/commandText.js") {
+    moduleRoot = path.resolve(currentDir, "..", "shared");
+    relativePath = "commandText.js";
+  } else if (decodedPathname === "/protocol/messages.js") {
     moduleRoot = path.resolve(currentDir, "..", "protocol");
     relativePath = "messages.js";
   } else if (decodedPathname.startsWith("/protocol/generated/")) {

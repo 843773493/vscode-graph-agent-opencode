@@ -25,14 +25,12 @@ from app.core.workspace_identity import (
 from app.gateway.runtime.process import ManagedProcess
 from configs.installer import install_user_configuration
 from tests.e2e.system.gateway.gateway_target import GatewaySshTarget, wait_for_ssh_ready
-from tests.e2e.system.workspace_services.terminal.terminal_process_helpers import (
-    start_terminal_backend,
-)
 from tests.harness.python.browser_manager import (
     close_browser_manager_processes,
     start_browser_manager_processes,
 )
 from tests.harness.python.run_context import TestRunContext
+from tests.harness.python.terminal_backend import start_terminal_backend
 from tests.support.catalog_session_bundle import seed_catalog_session_bundle
 from tests.support.gateway_processes import (
     LOCAL_TOKEN_HEADERS,
@@ -42,7 +40,7 @@ from tests.support.gateway_processes import (
     reset_gateway_persistent_state,
     start_gateway_process,
 )
-from tests.support.ports import E2EPortBlock, integration_port_block_for_file
+from tests.support.ports import TestFilePortBlock, integration_port_block_for_file
 from tests.support.process_scope import register_test_process, unregister_test_process
 from tests.support.processes import (
     BackendProcess,
@@ -114,7 +112,7 @@ async def open_communication_triad(
     *,
     resource_service_nodes: tuple[str, ...] = (),
     shared_session_ids: tuple[str, ...] = (),
-    ports: E2EPortBlock | None = None,
+    ports: TestFilePortBlock | None = None,
     backend_asgi_app: str = "app.main:app",
     backend_environment: dict[str, str] | None = None,
     gateway_environment: dict[str, str] | None = None,
@@ -187,12 +185,14 @@ async def open_communication_triad(
                     ensure_local_port_available(service_port, service_name="会话信息正式辅助服务")
                 terminal = await asyncio.to_thread(
                     start_terminal_backend, backend_port=terminal_port, workspace_root=str(workspace),
+                    artifacts_dir=context.artifacts_dir,
                 )
                 register_test_process(terminal, lambda process=terminal: terminate_process(process))
                 resources.push_async_callback(asyncio.to_thread, unregister_test_process, terminal)
                 resources.push_async_callback(asyncio.to_thread, terminate_process, terminal)
                 browser = await asyncio.to_thread(
                     start_browser_manager_processes, workspace_root=workspace,
+                    artifacts_dir=context.artifacts_dir,
                     backend_port=browser_port, frontend_port=browser_frontend_port,
                     backend_host="127.0.0.1",
                 )

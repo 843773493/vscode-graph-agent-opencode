@@ -8,6 +8,7 @@ from pathlib import Path
 from urllib.parse import quote
 
 from app.core.workspace_identity import load_or_create_workspace_id
+from tests.harness.python.process_output import spawn_logged_process
 from tests.support.processes import (
     ensure_local_port_available,
     terminate_process,
@@ -32,6 +33,7 @@ class BrowserFrontendProcess:
 def start_browser_manager_processes(
     *,
     workspace_root: Path,
+    artifacts_dir: Path,
     backend_port: int,
     frontend_port: int,
     backend_host: str,
@@ -48,7 +50,7 @@ def start_browser_manager_processes(
     env["BOXTEAM_BROWSER_WORKSPACE_ROOT"] = str(workspace_root)
     env["BOXTEAM_WORKSPACE_ID"] = load_or_create_workspace_id(workspace_root)
 
-    backend_process = subprocess.Popen(
+    backend_process, backend_logs = spawn_logged_process(
         [
             node_bin,
             "backend.js",
@@ -63,12 +65,11 @@ def start_browser_manager_processes(
         ],
         cwd=project_root / "src" / "workspace-services" / "browser" / "server",
         env=env,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
+        artifacts_dir=artifacts_dir,
+        log_name="browser-backend",
     )
     try:
-        frontend_process = subprocess.Popen(
+        frontend_process, frontend_logs = spawn_logged_process(
             [
                 node_bin,
                 "server.js",
@@ -85,11 +86,12 @@ def start_browser_manager_processes(
             ],
             cwd=project_root / "src" / "workspace-services" / "browser" / "client",
             env=env,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
+            artifacts_dir=artifacts_dir,
+            log_name="browser-frontend",
         )
     except BaseException as startup_error:
+        for path in backend_logs:
+            startup_error.add_note(f"Browser 测试进程日志：{path}")
         try:
             terminate_process(backend_process)
         except BaseException as cleanup_error:  # noqa: BLE001 - 两个错误都必须保留
@@ -108,6 +110,8 @@ def start_browser_manager_processes(
         wait_for_http_ok(f"http://127.0.0.1:{backend_port}/health", backend_process)
         wait_for_http_ok(f"http://127.0.0.1:{frontend_port}/health", frontend_process)
     except BaseException as startup_error:
+        for path in (*backend_logs, *frontend_logs):
+            startup_error.add_note(f"Browser 测试进程日志：{path}")
         try:
             close_browser_manager_processes(handle)
         except BaseException as cleanup_error:  # noqa: BLE001 - 两个错误都必须保留
@@ -133,6 +137,7 @@ def close_browser_manager_processes(handle: BrowserManagerProcesses) -> None:
 def start_browser_frontend_process(
     *,
     workspace_root: Path,
+    artifacts_dir: Path,
     frontend_port: int,
 ) -> BrowserFrontendProcess:
     ensure_local_port_available(frontend_port, service_name="浏览器管理器前端")
@@ -143,7 +148,7 @@ def start_browser_frontend_process(
     env = os.environ.copy()
     env["WORKSPACE_ROOT"] = str(workspace_root)
     env["BOXTEAM_WORKSPACE_ID"] = load_or_create_workspace_id(workspace_root)
-    process = subprocess.Popen(
+    process, logs = spawn_logged_process(
         [
             node_bin,
             "server.js",
@@ -160,14 +165,15 @@ def start_browser_frontend_process(
         ],
         cwd=project_root / "src" / "workspace-services" / "browser" / "client",
         env=env,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
+        artifacts_dir=artifacts_dir,
+        log_name="browser-frontend",
     )
     handle = BrowserFrontendProcess(process=process, port=frontend_port)
     try:
         wait_for_http_ok(f"http://127.0.0.1:{frontend_port}/health", process)
     except BaseException as startup_error:
+        for path in logs:
+            startup_error.add_note(f"Browser 测试进程日志：{path}")
         try:
             close_browser_frontend_process(handle)
         except BaseException as cleanup_error:  # noqa: BLE001 - 两个错误都必须保留

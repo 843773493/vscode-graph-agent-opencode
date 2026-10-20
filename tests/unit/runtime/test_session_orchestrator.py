@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime
+from pathlib import Path
+from threading import Event
 from unittest.mock import MagicMock
 
 import pytest
@@ -15,6 +18,9 @@ from app.runtime.session_orchestrator import SessionOrchestrator
 from app.schemas.internal_v2.common import MessageRole
 from app.schemas.internal_v2.job import JobDispatchSnapshotDTO
 from app.schemas.internal_v2.message import MessageDTO
+from app.services.infrastructure.rollout_context.storage.primitives import (
+    _RolloutOperationLock,
+)
 
 
 @pytest.fixture
@@ -67,6 +73,54 @@ async def test_existing_child_message_keeps_persisted_owner_through_acceptance_j
     sessions.path_resolver.resolve_thread_node.assert_called_with(
         "ses_prepared_child", "thr_prepared_child"
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cancel", [False, True])
+async def test_message_acceptance_waits_for_rollout_without_blocking_event_loop(
+    prepared_child_dispatch_case, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, cancel: bool,
+):
+    orchestrator, messages, jobs, _bus, _sessions = prepared_child_dispatch_case
+    prepared = await orchestrator.prepare_user_message(
+        "ses_prepared_child", "并发发送给 child", thread_id="thr_prepared_child"
+    )
+    lock_path = tmp_path / "rollout.lock"
+    entered = Event()
+    original_accept = messages.accept_user_message
+
+    def accept(message, *, execution_identity):
+        entered.set()
+        with _RolloutOperationLock(lock_path):
+            original_accept(message, execution_identity=execution_identity)
+
+    monkeypatch.setattr(messages, "accept_user_message", accept)
+    dispatch = None
+    try:
+        async with _RolloutOperationLock(lock_path):
+            dispatch = asyncio.create_task(orchestrator.dispatch_existing_message(
+                prepared.session_id, prepared,
+                execution_binding=_user_identity("job_prepared_child"),
+            ))
+            assert await asyncio.to_thread(entered.wait, 3)
+            if cancel:
+                dispatch.cancel()
+                await asyncio.sleep(0)
+            assert not dispatch.done(), "等锁或取消均不能提前释放消息准备窗口"
+            assert messages.accepted_messages == []
+            assert jobs.started == []
+        if cancel:
+            with pytest.raises(asyncio.CancelledError):
+                await asyncio.wait_for(dispatch, timeout=3)
+            assert jobs.started == []
+        else:
+            result = await asyncio.wait_for(dispatch, timeout=3)
+            assert result.thread_id == "thr_prepared_child"
+            assert len(jobs.started) == 1
+        assert messages.accepted_messages == [(prepared, _user_identity("job_prepared_child"))]
+    finally:
+        if dispatch is not None and not dispatch.done():
+            dispatch.cancel()
+            await asyncio.gather(dispatch, return_exceptions=True)
 
 
 @pytest.mark.parametrize("conflict", ["session", "thread"])

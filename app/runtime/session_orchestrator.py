@@ -5,6 +5,7 @@ from app.abstractions.job_event_bus import JobEventBusProtocol
 from app.abstractions.job_service import JobServiceProtocol
 from app.core.identifier import create_prefixed_id
 from app.core.job_event_bus import EventType
+from app.core.shielded_cleanup import run_sync_shielded
 from app.domain.itemized.execution_admission import (
     ExecutionBinding,
     InternalExecutionIntent,
@@ -313,7 +314,8 @@ class SessionOrchestrator:
                 raise ValueError("未预留 execution binding 时不得单独预留 Job ID")
             execution_binding = self._job_service.reserve_user_execution_identity()
         if isinstance(execution_binding, UserExecutionIdentity):
-            self._message_service.accept_user_message(
+            await run_sync_shielded(
+                self._message_service.accept_user_message,
                 message,
                 execution_identity=execution_binding,
             )

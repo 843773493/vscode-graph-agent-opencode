@@ -4,11 +4,10 @@ import json
 import os
 import shutil
 import subprocess
-import time
+from contextlib import ExitStack
 from dataclasses import dataclass
 from pathlib import Path
 from typing import IO
-from urllib.request import Request, urlopen
 
 import commentjson
 import httpx
@@ -20,10 +19,10 @@ from tests.support.processes import (
     ensure_local_port_available,
     resolve_workspace_python_executable,
     terminate_process,
+    wait_for_http_ok,
 )
 
 LOCAL_TOKEN_HEADERS = {"X-Local-Token": "local-dev-token"}
-READY_TIMEOUT_SECONDS = 60
 
 
 def _test_boxteam_home(workspace_root: Path) -> Path:
@@ -103,23 +102,11 @@ async def acquire_gateway_guest(client: httpx.AsyncClient) -> None:
 
 
 def wait_for_gateway_ready(port: int, process: subprocess.Popen[str]) -> None:
-    deadline = time.monotonic() + READY_TIMEOUT_SECONDS
-    request = Request(
+    wait_for_http_ok(
         f"http://127.0.0.1:{port}/api/gateway/health",
+        process,
         headers=LOCAL_TOKEN_HEADERS,
     )
-    while time.monotonic() < deadline:
-        if process.poll() is not None:
-            raise RuntimeError(
-                f"Gateway 提前退出: pid={process.pid}, returncode={process.returncode}"
-            )
-        try:
-            with urlopen(request, timeout=1) as response:
-                if response.status == 200:
-                    return
-        except OSError:
-            time.sleep(1)
-    raise TimeoutError(f"Gateway 在 {READY_TIMEOUT_SECONDS} 秒内未就绪: {port}")
 
 
 def start_gateway_process(
@@ -142,14 +129,6 @@ def start_gateway_process(
         config_root=boxteam_home / "config",
         project_root=project_root,
         force=refresh_config,
-    )
-    log_dir = artifacts_dir or workspace_root / ".boxteam" / "logs"
-    log_dir.mkdir(parents=True, exist_ok=True)
-    stdout_file = open(  # noqa: SIM115
-        log_dir / "gateway.stdout.log", "a", encoding="utf-8"
-    )
-    stderr_file = open(  # noqa: SIM115
-        log_dir / "gateway.stderr.log", "a", encoding="utf-8"
     )
     env = os.environ.copy()
     env["WORKSPACE_ROOT"] = str(workspace_root)
@@ -182,32 +161,44 @@ def start_gateway_process(
         env["BOXTEAM_DEFAULT_BACKEND_URL"] = default_backend_url
     else:
         env.pop("BOXTEAM_DEFAULT_BACKEND_URL", None)
-    process = subprocess.Popen(
-        [
-            str(python_executable),
-            "-m",
-            "uvicorn",
-            asgi_app,
-            "--host",
-            "127.0.0.1",
-            "--port",
-            str(port),
-            "--timeout-graceful-shutdown",
-            "2",
-            "--log-level",
-            "warning",
-        ],
-        cwd=project_root,
-        env=env,
-        stdout=stdout_file,
-        stderr=stderr_file,
-    )
-    handle = GatewayProcess(
-        process=process,
-        stdout_file=stdout_file,
-        stderr_file=stderr_file,
-        port=port,
-    )
+    cmd = [
+        str(python_executable),
+        "-m",
+        "uvicorn",
+        asgi_app,
+        "--host",
+        "127.0.0.1",
+        "--port",
+        str(port),
+        "--timeout-graceful-shutdown",
+        "2",
+        "--log-level",
+        "warning",
+    ]
+    log_dir = artifacts_dir or workspace_root / ".boxteam" / "logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    # 输入检查完成后才打开日志；进程创建成功后再移交给 GatewayProcess。
+    with ExitStack() as log_files:
+        stdout_file = log_files.enter_context(open(
+            log_dir / "gateway.stdout.log", "a", encoding="utf-8",
+        ))
+        stderr_file = log_files.enter_context(open(
+            log_dir / "gateway.stderr.log", "a", encoding="utf-8",
+        ))
+        process = subprocess.Popen(
+            cmd,
+            cwd=project_root,
+            env=env,
+            stdout=stdout_file,
+            stderr=stderr_file,
+        )
+        handle = GatewayProcess(
+            process=process,
+            stdout_file=stdout_file,
+            stderr_file=stderr_file,
+            port=port,
+        )
+        log_files.pop_all()
     try:
         wait_for_gateway_ready(port, process)
     except BaseException as startup_error:
@@ -227,11 +218,18 @@ def start_gateway_process(
 
 
 def close_gateway_process(handle: GatewayProcess) -> None:
-    try:
-        terminate_process(handle.process)
-    finally:
-        handle.stdout_file.close()
-        handle.stderr_file.close()
+    errors: list[BaseException] = []
+    for cleanup in (
+        lambda: terminate_process(handle.process),
+        handle.stdout_file.close,
+        handle.stderr_file.close,
+    ):
+        try:
+            cleanup()
+        except BaseException as error:  # noqa: BLE001 - 中断也须释放其余资源，再报告全部错误。
+            errors.append(error)
+    if errors:
+        raise BaseExceptionGroup("Gateway 测试进程及日志清理失败", errors)
     unregister_test_process(handle)
 
 

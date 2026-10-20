@@ -1,7 +1,20 @@
 from __future__ import annotations
 
+import json
 import shutil
+from functools import lru_cache
 from pathlib import Path
+
+import commentjson
+
+
+@lru_cache(maxsize=16)
+def render_test_workspace_config(source_text: str) -> str:
+    """按完整源文本复用不可变配置正文；各测试仍写入自己的目录。"""
+    payload = commentjson.loads(source_text)
+    payload["$schema"] = "./workspace_schema.jsonc"
+    payload["config_version"] = 1
+    return json.dumps(payload, ensure_ascii=False, indent=2) + "\n"
 
 
 def prepare_test_workspace(

@@ -88,7 +88,7 @@ def _headers(request_id: str) -> dict[str, str]:
     return {
         "X-Local-Token": "local-dev-token",
         "X-Request-ID": request_id,
-        "X-BoxTeam-Gateway-Id": "gateway_test",
+        "X-BoxTeam-Gateway-Id": "gateway_789f146c159aa74461af8dacca7341ca",
         "X-BoxTeam-Navigation-Actor": "user:test-user",
     }
 

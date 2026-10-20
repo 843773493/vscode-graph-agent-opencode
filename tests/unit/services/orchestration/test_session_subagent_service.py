@@ -184,7 +184,7 @@ async def test_delegate_creates_durable_child_thread_with_pending_intent(
 ) -> None:
     service = make_service(parent_session, factory)
 
-    gateway_token = set_current_gateway_id("gateway_frozen_creation")
+    gateway_token = set_current_gateway_id("gateway_9c65b6f74b8dc349e3f5b7c61da3e622")
     request_token = set_current_request_id("request-frozen-creation")
     try:
         accepted = await delegate_parent(service, parent_session)
@@ -226,12 +226,12 @@ async def test_delegate_creates_durable_child_thread_with_pending_intent(
         assert intent.execution_binding_id == accepted.execution_binding_id
         assert intent.job_id == accepted.frozen_job_id
         record = control.get_thread_creation_record(accepted.delegation_id)
-        assert json.loads(record.task_seed)["gateway_id"] == "gateway_frozen_creation"
+        assert json.loads(record.task_seed)["gateway_id"] == "gateway_9c65b6f74b8dc349e3f5b7c61da3e622"
         assert json.loads(record.task_seed)["request_id"] == "request-frozen-creation"
         frozen = frozen_thread_seed(record)
-        assert frozen.gateway_id == "gateway_frozen_creation"
+        assert frozen.gateway_id == "gateway_9c65b6f74b8dc349e3f5b7c61da3e622"
         assert frozen.request_id == "request-frozen-creation"
-        assert "gateway_frozen_creation" not in frozen.message.content
+        assert "gateway_9c65b6f74b8dc349e3f5b7c61da3e622" not in frozen.message.content
         assert "request-frozen-creation" not in frozen.message.content
         # child thread 只有一条初始 intent。
         assert len(control.list_initial_execution_intents()) == 1
@@ -260,11 +260,11 @@ async def test_delegate_gateway_identity_is_part_of_creation_preimage(
     parent_session: SessionDTO, factory: OwnerThreadCreationFactory,
 ) -> None:
     service = make_service(parent_session, factory)
-    gateway_token = set_current_gateway_id("gateway_original")
+    gateway_token = set_current_gateway_id("gateway_8c772bdb36628078d9ec54d581cc8e77")
     try:
         first = await delegate_parent(service, parent_session)
         assert await delegate_parent(service, parent_session) == first
-        changed_token = set_current_gateway_id("gateway_changed")
+        changed_token = set_current_gateway_id("gateway_b168e092f12bbc103a1bb5632f45a37c")
         try:
             with pytest.raises(RuntimeError, match="冲突"):
                 await delegate_parent(service, parent_session)

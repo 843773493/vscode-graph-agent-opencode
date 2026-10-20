@@ -6,9 +6,13 @@ import { existsSync, statSync } from "node:fs";
 import path from "node:path";
 import { IsolatedPtyProcess } from "./isolatedPtyProcess.js";
 import { TerminalOutputMultiplexer } from "./terminalOutputMultiplexer.js";
-
-const MAX_BUFFER_BYTES = 256 * 1024;
-const MAX_OUTPUT_EVENT_BYTES = 64 * 1024;
+import { splitTerminalOutputChunks, trimTerminalBuffer } from "./terminalUtf8Output.js";
+import {
+  commandMarkersFromInput,
+  lastNonEmptyInputLine,
+  latestCommandExitCode,
+  stripCommandMarkerLines,
+} from "../shared/commandText.js";
 
 export function nowIso() {
   return new Date().toISOString();
@@ -79,97 +83,6 @@ export function shellArgs() {
   return ["-i"];
 }
 
-function trimBuffer(value) {
-  const buffer = Buffer.from(value, "utf8");
-  if (buffer.length <= MAX_BUFFER_BYTES) {
-    return value;
-  }
-  return buffer.subarray(buffer.length - MAX_BUFFER_BYTES).toString("utf8");
-}
-
-function splitUtf8Chunks(value, maxBytes = MAX_OUTPUT_EVENT_BYTES) {
-  const chunks = [];
-  let chunk = "";
-  let chunkBytes = 0;
-  for (const character of value) {
-    const characterBytes = Buffer.byteLength(character, "utf8");
-    if (chunk && chunkBytes + characterBytes > maxBytes) {
-      chunks.push(chunk);
-      chunk = "";
-      chunkBytes = 0;
-    }
-    chunk += character;
-    chunkBytes += characterBytes;
-  }
-  if (chunk) {
-    chunks.push(chunk);
-  }
-  return chunks;
-}
-
-function normalizeTerminalLines(value) {
-  return value.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
-}
-
-function commandMarkersFromInput(data) {
-  const startMatch = data.match(/__BOXTEAM_CMD_START_([a-f0-9]+)__/);
-  const doneMatch = data.match(/__BOXTEAM_CMD_DONE_([a-f0-9]+)__/);
-  if (!startMatch || !doneMatch || startMatch[1] !== doneMatch[1]) {
-    return { startMarker: null, doneMarker: null };
-  }
-  return {
-    startMarker: startMatch[0],
-    doneMarker: doneMatch[0],
-  };
-}
-
-function inputLabel(data) {
-  return normalizeTerminalLines(data)
-    .split("\n")
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .at(-1) || null;
-}
-
-function stripAnsi(value) {
-  return value
-    .replace(/\x1B\][^\x07]*(?:\x07|\x1B\\)/g, "")
-    .replace(/\x1B\[[0-?]*[ -/]*[@-~]/g, "");
-}
-
-function latestCommandExitCode(buffer, doneMarker = null) {
-  const markerPattern = doneMarker
-    ? doneMarker.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
-    : "__BOXTEAM_CMD_DONE_[a-f0-9]+__";
-  const normalizedBuffer = stripAnsi(normalizeTerminalLines(buffer));
-  const matches = [
-    ...normalizedBuffer.matchAll(
-      new RegExp(`${markerPattern}:(\\d+)`, "g"),
-    ),
-  ];
-  if (matches.length === 0) {
-    return null;
-  }
-  return Number(matches.at(-1)?.[1]);
-}
-
-function displayBuffer(buffer) {
-  const parts = buffer.split(/(\r\n|\n)/);
-  let display = "";
-  for (let index = 0; index < parts.length; index += 2) {
-    const line = parts[index] || "";
-    const separator = parts[index + 1] || "";
-    if (
-      line.includes("__BOXTEAM_CMD_START_") ||
-      line.includes("__BOXTEAM_CMD_DONE_")
-    ) {
-      continue;
-    }
-    display += line + separator;
-  }
-  return display;
-}
-
 export class TerminalSession {
   constructor({ record, manager }) {
     validateTerminalRecord(record, manager.workspaceId);
@@ -178,6 +91,7 @@ export class TerminalSession {
     this.workspaceId = record.workspace_id;
     // 唯一领域版本的传输影子，仅用于拒绝过期 grant；不决定保留、关联或回收。
     this.transportOwnerRevision = record.transport_owner_revision;
+    /** @type {Map<object, import("./terminalManager.js").TerminalTransportGrant>} */
     this.transports = new Map();
     this.reconciliationStatus = record.reconciliation_status;
     this.ownerAgentId = record.owner_agent_id || null;
@@ -188,17 +102,22 @@ export class TerminalSession {
     this.cwd = path.resolve(manager.workspaceRoot, record.cwd_relative);
     this.cols = record.cols || 100;
     this.rows = record.rows || 30;
+    // 本地执行记录的 UTC ISO 创建时间，不是操作系统进程的创建标记。
     this.createdAt = record.created_at || nowIso();
     this.updatedAt = record.updated_at || this.createdAt;
     this.lastUsedAt = record.last_used_at || this.updatedAt;
+    // Manager 收到 worker 就绪、确认执行结束的 UTC ISO 时间，均为观察时刻。
     this.startedAt = record.started_at || null;
     this.endedAt = record.ended_at || null;
     this.status = record.status || "created";
     this.exitCode = record.exit_code ?? null;
     this.signal = record.signal ?? null;
+    // PTY 执行根进程的 PID；隔离 worker PID 由 ptyProcess.workerPid 单独提供。
     this.osPid = record.os_pid ?? null;
     this.processGroupId = record.process_group_id ?? null;
+    /** @type {number|string|null} 操作系统 SID / Darwin sess，不是业务 Session ID。 */
     this.processSessionId = record.process_session_id ?? null;
+    /** @type {number|string|null} 同 TerminalProcessStat：Linux 时钟滴答数或 POSIX lstart 原文，只作进程身份比较。 */
     this.processStartTime = record.process_start_time ?? null;
     this.releaseReason = record.release_reason ?? null;
     this.sequence = record.sequence || 0;
@@ -245,20 +164,22 @@ export class TerminalSession {
     const isolatedPty = new IsolatedPtyProcess();
     this.ptyProcess = isolatedPty;
     isolatedPty.onData((data) => {
-      this.buffer = trimBuffer(this.buffer + data);
-      const timestamp = nowIso();
-      for (const chunk of splitUtf8Chunks(data)) {
+      this.buffer = trimTerminalBuffer(this.buffer + data);
+      const outputReceivedAt = nowIso();
+      for (const chunk of splitTerminalOutputChunks(data)) {
         this.sequence += 1;
         this.outputMultiplexer.recordAndBroadcast({
           type: "output",
           terminalId: this.id,
           sequence: this.sequence,
           data: chunk,
-          timestamp,
+          timestamp: outputReceivedAt,
         });
       }
-      const exitCode = latestCommandExitCode(this.buffer, this.lastCommandDoneMarker);
-      if (exitCode !== null && this.lastCommandStatus === "running") {
+      const exitCode = this.lastCommandStatus === "running"
+        ? latestCommandExitCode(this.buffer, this.lastCommandDoneMarker)
+        : null;
+      if (exitCode !== null) {
         this.lastCommandStatus = "completed";
         this.lastCommandExitCode = exitCode;
         this.lastCommandCompletedAt = nowIso();
@@ -477,7 +398,7 @@ export class TerminalSession {
       this.steeringDispatched = false;
       this.completionEventId = null;
     } else {
-      const label = inputLabel(data);
+      const label = lastNonEmptyInputLine(data);
       if (label) {
         this.lastInput = label;
         this.lastInputSource = source;
@@ -629,12 +550,12 @@ export class TerminalSession {
     return true;
   }
 
-  syncOwnerRevision(revision) {
-    if (!Number.isSafeInteger(revision) || revision < this.transportOwnerRevision) {
-      throw new Error(`终端传输 owner revision 过期或无效: terminal_id=${this.id}, revision=${revision}`);
+  syncOwnerRevision(transportOwnerRevision) {
+    if (!Number.isSafeInteger(transportOwnerRevision) || transportOwnerRevision < this.transportOwnerRevision) {
+      throw new Error(`终端传输 owner revision 过期或无效: terminal_id=${this.id}, revision=${transportOwnerRevision}`);
     }
-    if (revision !== this.transportOwnerRevision) {
-      this.transportOwnerRevision = revision;
+    if (transportOwnerRevision !== this.transportOwnerRevision) {
+      this.transportOwnerRevision = transportOwnerRevision;
       this.closeTransports("terminal owner changed");
       this.touch();
     }
@@ -648,7 +569,7 @@ export class TerminalSession {
   }
 
   assertTransport(client) {
-    if (this.transports.get(client)?.revision !== this.transportOwnerRevision) {
+    if (this.transports.get(client)?.transportOwnerRevision !== this.transportOwnerRevision) {
       throw new Error(`终端连接授权已过期: terminal_id=${this.id}`);
     }
   }
@@ -770,7 +691,8 @@ export class TerminalSession {
     this.outputMultiplexer.broadcast(message);
   }
 
-  snapshot() {
+  toRecord() {
+    // 持久记录只保存恢复所需事实；展示正文和当前连接信息在对外快照中派生。
     return {
       terminal_id: this.id,
       workspace_id: this.workspaceId,
@@ -780,7 +702,7 @@ export class TerminalSession {
       title: this.title,
       command: this.command,
       args: this.args,
-      // 对外快照只承载工作区内相对目录；绝对真实路径 MUST NOT 出现在 API 响应体、
+      // 持久记录和对外快照只承载工作区内相对目录；绝对真实路径 MUST NOT 出现在 API 响应体、
       // WebSocket 状态或模型可见载荷（裁定 D-A2/D-A3）。
       cwd_relative: this.cwdRelative,
       cols: this.cols,
@@ -798,7 +720,6 @@ export class TerminalSession {
       process_start_time: this.processStartTime,
       release_reason: this.releaseReason,
       os_pid: this.osPid,
-      pty_worker_pid: this.ptyProcess?.workerPid ?? null,
       sequence: this.sequence,
       model_output_sequence: this.modelOutputSequence,
       command_start_sequence: this.commandStartSequence,
@@ -808,7 +729,6 @@ export class TerminalSession {
       steering_dispatched: this.steeringDispatched,
       completion_event_id: this.completionEventId,
       buffer: this.buffer,
-      display_buffer: displayBuffer(this.buffer),
       last_command: this.lastCommand,
       last_command_status: this.lastCommandStatus,
       last_command_exit_code: this.lastCommandExitCode,
@@ -819,12 +739,15 @@ export class TerminalSession {
       last_input: this.lastInput,
       last_input_source: this.lastInputSource,
       last_input_at: this.lastInputAt,
-      client_count: this.outputMultiplexer.clientCount,
     };
   }
 
-  toRecord() {
-    // 快照本身已只承载工作区内相对路径；绝对路径仅在调用栈内解析（裁定 D-A2/D-A7）。
-    return this.snapshot();
+  snapshot() {
+    return {
+      ...this.toRecord(),
+      pty_worker_pid: this.ptyProcess?.workerPid ?? null,
+      display_buffer: stripCommandMarkerLines(this.buffer),
+      client_count: this.outputMultiplexer.clientCount,
+    };
   }
 }

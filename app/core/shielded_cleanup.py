@@ -13,6 +13,10 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Awaitable, Callable
+from typing import ParamSpec, TypeVar
+
+P = ParamSpec("P")
+T = TypeVar("T")
 
 
 async def run_cleanup_shielded(cleanup: Callable[[], Awaitable[None]]) -> None:
@@ -29,3 +33,16 @@ async def run_cleanup_shielded(cleanup: Callable[[], Awaitable[None]]) -> None:
         except asyncio.CancelledError:
             continue
     cleanup_task.result()
+
+
+async def run_sync_shielded(operation: Callable[P, T], *args: P.args, **kwargs: P.kwargs) -> T:
+    """同步 I/O 交给 worker；取消须等 worker 结算后再释放调用方的准入。"""
+    worker = asyncio.create_task(asyncio.to_thread(operation, *args, **kwargs))
+
+    async def settle() -> None:
+        await worker
+
+    try:
+        return await asyncio.shield(worker)
+    finally:
+        await run_cleanup_shielded(settle)

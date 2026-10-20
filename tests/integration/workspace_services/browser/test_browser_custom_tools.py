@@ -3,10 +3,9 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-import shutil
-import subprocess
 import time
 from collections.abc import AsyncIterator, Generator
+from contextlib import ExitStack
 from pathlib import Path
 from urllib.error import HTTPError
 from urllib.parse import quote
@@ -37,16 +36,15 @@ from app.core.trace_middleware import TraceMiddleware
 from app.core.workspace_identity import load_or_create_workspace_id
 from app.main import workspace_api
 from app.services.business.workspace_resources.records import ThreadRef
-from tests.e2e.system.workspace_services.terminal.terminal_process_helpers import (
-    start_terminal_backend,
+from tests.harness.python.browser_manager import (
+    close_browser_manager_processes,
+    start_browser_manager_processes,
 )
+from tests.harness.python.run_context import TestRunContext
+from tests.harness.python.terminal_backend import start_terminal_backend
 from tests.support.api_waiters import wait_for_job_done
 from tests.support.messages import last_assistant_message
-from tests.support.processes import (
-    kill_process_on_port,
-    terminate_process,
-    wait_for_http_ok,
-)
+from tests.support.processes import terminate_process
 from tests.support.trace import get_trace_payload
 from tests.support.workspace_tool_runtime import (
     WorkspaceToolRuntime,
@@ -218,75 +216,17 @@ def browser_manager_processes(
     integration_workspace_root_path: str,
 ) -> Generator[tuple[int, int], None, None]:
     backend_port, frontend_port = browser_manager_env
-    kill_process_on_port(backend_port)
-    kill_process_on_port(frontend_port)
-
-    project_root = Path.cwd().resolve()
-    workspace_root = str(Path(integration_workspace_root_path).resolve())
-    node_bin = shutil.which("node")
-    if node_bin is None:
-        raise RuntimeError("未找到 node，无法启动浏览器 e2e 进程")
-
-    env = os.environ.copy()
-    env["WORKSPACE_ROOT"] = workspace_root
-    env["BOXTEAM_BROWSER_WORKSPACE_ROOT"] = workspace_root
-    env["BOXTEAM_WORKSPACE_ID"] = load_or_create_workspace_id(Path(workspace_root))
-
-    backend_process = subprocess.Popen(
-        [
-            node_bin,
-            "backend.js",
-            "--host",
-            "127.0.0.1",
-            "--port",
-            str(backend_port),
-            "--frontend-url",
-            f"http://127.0.0.1:{frontend_port}",
-            "--workspace-root",
-            workspace_root,
-        ],
-        cwd=project_root / "src" / "workspace-services" / "browser" / "server",
-        env=env,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-    )
-    frontend_process = subprocess.Popen(
-        [
-            node_bin,
-            "server.js",
-            "--host",
-            "127.0.0.1",
-            "--port",
-            str(frontend_port),
-            "--backend-url",
-            f"http://127.0.0.1:{backend_port}",
-            "--workspace-root",
-            workspace_root,
-            "--asset-root",
-            str(project_root),
-        ],
-        cwd=project_root / "src" / "workspace-services" / "browser" / "client",
-        env=env,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-    )
-
-    terminal_process = None
-    try:
-        terminal_process = start_terminal_backend(backend_port=backend_port + 2, workspace_root=workspace_root)
-        wait_for_http_ok(f"http://127.0.0.1:{backend_port}/health", backend_process)
-        wait_for_http_ok(f"http://127.0.0.1:{frontend_port}/health", frontend_process)
+    workspace = Path(integration_workspace_root_path).resolve()
+    with ExitStack() as lifetime:
+        browser = start_browser_manager_processes(
+            workspace_root=workspace, backend_port=backend_port,
+            artifacts_dir=TestRunContext.from_test_file(Path(__file__)).artifacts_dir,
+            frontend_port=frontend_port, backend_host="127.0.0.1",
+        )
+        lifetime.callback(close_browser_manager_processes, browser)
+        terminal = start_terminal_backend(backend_port=backend_port + 2, workspace_root=str(workspace), artifacts_dir=TestRunContext.from_test_file(Path(__file__)).artifacts_dir)
+        lifetime.callback(terminate_process, terminal)
         yield backend_port, frontend_port
-    finally:
-        terminate_process(frontend_process)
-        terminate_process(backend_process)
-        kill_process_on_port(frontend_port)
-        kill_process_on_port(backend_port)
-        if terminal_process is not None:
-            terminate_process(terminal_process)
-        kill_process_on_port(backend_port + 2)
 
 
 @pytest.fixture

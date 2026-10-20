@@ -77,13 +77,14 @@ function moreSevere(left, right) {
   return LEVEL_RANK[left] >= LEVEL_RANK[right] ? left : right;
 }
 
+// 降级候选起点与当前时刻均为同一注入时钟的Unix毫秒值；StableMs阈值才是持续时长。
 export function classifyMemoryPressure({
   usedRatio,
   psiSomeAvg10 = 0,
   eventDelta = {},
   previousLevel = "normal",
-  exitCandidateSince = null,
-  nowMs,
+  exitCandidateSinceUnixMs = null,
+  nowUnixMs,
   thresholds = DEFAULT_MEMORY_PRESSURE_THRESHOLDS,
 }) {
   let rawLevel = pressureLevelForRatio(usedRatio, thresholds);
@@ -94,7 +95,7 @@ export function classifyMemoryPressure({
   }
 
   if (LEVEL_RANK[rawLevel] >= LEVEL_RANK[previousLevel]) {
-    return { level: rawLevel, exitCandidateSince: null, rawLevel };
+    return { level: rawLevel, exitCandidateSinceUnixMs: null, rawLevel };
   }
 
   let nextLevel;
@@ -115,16 +116,16 @@ export function classifyMemoryPressure({
       && psiSomeAvg10 < thresholds.warningExitPsiSomeAvg10;
     exitStableMs = thresholds.warningExitStableMs;
   } else {
-    return { level: rawLevel, exitCandidateSince: null, rawLevel };
+    return { level: rawLevel, exitCandidateSinceUnixMs: null, rawLevel };
   }
   if (!exitEligible) {
-    return { level: previousLevel, exitCandidateSince: null, rawLevel };
+    return { level: previousLevel, exitCandidateSinceUnixMs: null, rawLevel };
   }
-  const candidateSince = exitCandidateSince ?? nowMs;
-  const level = nowMs - candidateSince >= exitStableMs ? nextLevel : previousLevel;
+  const candidateSinceUnixMs = exitCandidateSinceUnixMs ?? nowUnixMs;
+  const level = nowUnixMs - candidateSinceUnixMs >= exitStableMs ? nextLevel : previousLevel;
   return {
     level,
-    exitCandidateSince: level === previousLevel ? candidateSince : null,
+    exitCandidateSinceUnixMs: level === previousLevel ? candidateSinceUnixMs : null,
     rawLevel,
   };
 }
@@ -157,8 +158,9 @@ export class BrowserMemoryPressureMonitor {
     this.now = now;
     this.thresholds = { ...DEFAULT_MEMORY_PRESSURE_THRESHOLDS, ...thresholds };
     this.level = "normal";
-    this.exitCandidateSince = null;
-    this.previousEvents = null;
+    this.exitCandidateSinceUnixMs = null;
+    /** @type {{ directory: string, counters: Record<string, number> } | null} 同一cgroup的上次累计事件观测。 */
+    this.previousCgroupEventSample = null;
   }
 
   async hostMemory() {
@@ -205,32 +207,34 @@ export class BrowserMemoryPressureMonitor {
   }
 
   async sample() {
-    const sampledAtMs = this.now();
+    const sampledAtUnixMs = this.now();
     const host = await this.hostMemory();
     const hostUsedRatio = Math.min(1, Math.max(0, 1 - host.availableBytes / host.totalBytes));
     const cgroup = await this.cgroupMemory();
     const effectiveUsedRatio = Math.max(hostUsedRatio, cgroup?.usedRatio ?? 0);
     const currentEvents = cgroup?.events ?? {};
     const eventDelta = {};
-    if (this.previousEvents) {
-      for (const key of new Set([...Object.keys(this.previousEvents), ...Object.keys(currentEvents)])) {
-        eventDelta[key] = Math.max(0, (currentEvents[key] || 0) - (this.previousEvents[key] || 0));
+    const previousSample = this.previousCgroupEventSample;
+    if (cgroup && previousSample?.directory === cgroup.directory) {
+      for (const key of new Set([...Object.keys(previousSample.counters), ...Object.keys(currentEvents)])) {
+        eventDelta[key] = Math.max(0, (currentEvents[key] || 0) - (previousSample.counters[key] || 0));
       }
     }
-    this.previousEvents = currentEvents;
+    // 换组或中断观测后只建立基线，不能把另一来源的历史累计量算作本轮新增事件。
+    this.previousCgroupEventSample = cgroup ? { directory: cgroup.directory, counters: currentEvents } : null;
     const classified = classifyMemoryPressure({
       usedRatio: effectiveUsedRatio,
       psiSomeAvg10: cgroup?.someAvg10 ?? 0,
       eventDelta,
       previousLevel: this.level,
-      exitCandidateSince: this.exitCandidateSince,
-      nowMs: sampledAtMs,
+      exitCandidateSinceUnixMs: this.exitCandidateSinceUnixMs,
+      nowUnixMs: sampledAtUnixMs,
       thresholds: this.thresholds,
     });
     this.level = classified.level;
-    this.exitCandidateSince = classified.exitCandidateSince;
+    this.exitCandidateSinceUnixMs = classified.exitCandidateSinceUnixMs;
     return {
-      sampled_at: new Date(sampledAtMs).toISOString(),
+      sampled_at: new Date(sampledAtUnixMs).toISOString(),
       level: classified.level,
       raw_level: classified.rawLevel,
       effective_used_ratio: effectiveUsedRatio,

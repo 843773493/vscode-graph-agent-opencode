@@ -5,6 +5,7 @@ import json
 import os
 import shutil
 import subprocess
+from contextlib import ExitStack
 from pathlib import Path
 
 import httpx
@@ -14,7 +15,7 @@ from tests.harness.python.browser_manager import (
     close_browser_frontend_process,
     start_browser_frontend_process,
 )
-from tests.harness.python.terminal_manager import (
+from tests.harness.python.terminal_frontend import (
     close_terminal_frontend_process,
     start_terminal_frontend_process,
 )
@@ -64,16 +65,19 @@ async def test_manual_browser_creation_attaches_and_accepts_first_navigation(
     gateway_port = port_block.port(20)
     browser_frontend_port = port_block.port(21)
     terminal_frontend_port = port_block.port(22)
-    terminal_frontend = start_terminal_frontend_process(
-        workspace_root=workspace_root,
-        frontend_port=terminal_frontend_port,
-    )
-    browser_frontend = start_browser_frontend_process(
-        workspace_root=workspace_root,
-        frontend_port=browser_frontend_port,
-    )
-    gateway = None
-    try:
+    with ExitStack() as lifetime:
+        terminal_frontend = start_terminal_frontend_process(
+            workspace_root=workspace_root,
+            artifacts_dir=artifacts,
+            frontend_port=terminal_frontend_port,
+        )
+        lifetime.callback(close_terminal_frontend_process, terminal_frontend)
+        browser_frontend = start_browser_frontend_process(
+            workspace_root=workspace_root,
+            artifacts_dir=artifacts,
+            frontend_port=browser_frontend_port,
+        )
+        lifetime.callback(close_browser_frontend_process, browser_frontend)
         gateway = start_gateway_process(
             workspace_root=workspace_root,
             default_backend_url=None,
@@ -84,6 +88,7 @@ async def test_manual_browser_creation_attaches_and_accepts_first_navigation(
                 "BOXTEAM_BROWSER_FRONTEND_URL": f"http://127.0.0.1:{browser_frontend_port}",
             },
         )
+        lifetime.callback(close_gateway_process, gateway)
         async with httpx.AsyncClient(
             base_url=f"http://127.0.0.1:{gateway_port}",
             headers=LOCAL_TOKEN_HEADERS,
@@ -157,8 +162,3 @@ async def test_manual_browser_creation_attaches_and_accepts_first_navigation(
         assert "\x1b" not in browser_result["tab_and_navigation_failure"]["failedOverlay"]
         assert browser_result["tab_and_navigation_failure"]["recoveredTitle"] == "RECOVERED_BLUE"
         assert "ERR_" not in browser_result["tab_and_navigation_failure"]["recoveredStatus"]
-    finally:
-        if gateway is not None:
-            close_gateway_process(gateway)
-        close_terminal_frontend_process(terminal_frontend)
-        close_browser_frontend_process(browser_frontend)

@@ -3,13 +3,17 @@ import { randomUUID } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
+import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
 
+import { TestRunContext } from "../../../harness/js/run-context.mjs";
+
 const projectRoot = process.cwd();
-const artifactDirectory = path.join(
-  projectRoot,
-  "out/tests/integration/clients/web/session_catalog_outbox_idb/artifacts",
-);
+const runContext = TestRunContext.fromTestFile(fileURLToPath(import.meta.url), projectRoot);
+const artifactDirectory = runContext.artifactsDir;
+const runtimeDirectory = path.join(runContext.outputRoot, "runtime");
+await mkdir(runtimeDirectory, { recursive: true });
+for (const name of ["TMPDIR", "TMP", "TEMP"]) process.env[name] = runtimeDirectory;
 const bundleDirectory = path.join(artifactDirectory, "bundle");
 await mkdir(bundleDirectory, { recursive: true });
 
@@ -50,113 +54,121 @@ const html = `<!doctype html>
   </body>
 </html>`;
 
-const server = createServer(async (request, response) => {
-  const pathname = new URL(request.url ?? "/", "http://127.0.0.1").pathname;
-  if (pathname === "/") {
-    response.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
-    response.end(html);
-    return;
-  }
-  const bundlePath = bundlePaths.get(pathname);
-  if (bundlePath) {
-    response.writeHead(200, { "Content-Type": "text/javascript; charset=utf-8" });
-    response.end(await readFile(bundlePath));
-    return;
-  }
-  response.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" });
-  response.end(`未找到 harness 资源: ${pathname}`);
-});
-
-await new Promise((resolve, reject) => {
-  server.once("error", reject);
-  server.listen(0, "127.0.0.1", resolve);
-});
-
-const address = server.address();
-if (!address || typeof address === "string") throw new Error("测试 harness 未取得 TCP 端口");
-const baseUrl = `http://127.0.0.1:${address.port}`;
-
-function assert(condition, message) {
-  if (!condition) throw new Error(message);
-}
-
-function equal(actual, expected, message) {
-  if (JSON.stringify(actual) !== JSON.stringify(expected)) {
-    throw new Error(`${message}: 实际 ${JSON.stringify(actual)}，期望 ${JSON.stringify(expected)}`);
-  }
-}
-
-const partition = {
-  gatewayId: "idb-browser-test",
-  workspaceId: `workspace-${randomUUID()}`,
-  principal: "guest",
-};
-const upgradePartition = { ...partition, workspaceId: `upgrade-${randomUUID()}` };
-const collisionPartition = { ...partition, workspaceId: `collision-${randomUUID()}` };
-const receiptPartition = { ...partition, workspaceId: `receipt-${randomUUID()}` };
-const operationIds = {
-  upgrade: randomUUID().replaceAll("-", ""),
-  first: randomUUID().replaceAll("-", ""),
-  second: randomUUID().replaceAll("-", ""),
-  afterPrune: randomUUID().replaceAll("-", ""),
-  sequenceOriginal: randomUUID().replaceAll("-", ""),
-  sequenceCollision: randomUUID().replaceAll("-", ""),
-  durableReceipt: randomUUID().replaceAll("-", ""),
-};
-
-async function insertFromPage(page, targetPartition, operationId, name) {
-  return await page.evaluate(async ({ targetPartition: partitionValue, operationId: id, name: operationName }) => {
-    const { state, storage } = window.outboxModules;
-    const database = window.outboxDatabase ?? await storage.openCatalogOutboxDatabase();
-    window.outboxDatabase = database;
-    const port = window.outboxPort ?? storage.createIndexedDbCatalogOutboxPort(database);
-    window.outboxPort = port;
-    const operation = state.addCatalogOutboxIntent(
-      state.createCatalogOutbox(partitionValue),
-      id,
-      { kind: "rename_node", targetNodeId: "node-1", name: operationName },
-      { baseCatalogRevision: 7, expectedRevision: 3 },
-    ).operations[0];
-    return await storage.persistCatalogOutboxPendingOperation(port, partitionValue, operation);
-  }, { targetPartition, operationId, name });
-}
-
-async function readPartition(page, targetPartition) {
-  return await page.evaluate(async (partitionValue) => {
-    const { storage } = window.outboxModules;
-    const database = window.outboxDatabase ?? await storage.openCatalogOutboxDatabase();
-    window.outboxDatabase = database;
-    const port = window.outboxPort ?? storage.createIndexedDbCatalogOutboxPort(database);
-    window.outboxPort = port;
-    const partitionKey = window.outboxModules.state.catalogOutboxPartitionKey(partitionValue);
-    const records = await port.load(partitionKey);
-    return records.map((record) => record);
-  }, targetPartition);
-}
-
-async function applyReceiptsFromPage(page, targetPartition, receipts) {
-  return await page.evaluate(async ({ targetPartition: partitionValue, receipts: items }) => {
-    const { state, storage } = window.outboxModules;
-    const database = window.outboxDatabase ?? await storage.openCatalogOutboxDatabase();
-    window.outboxDatabase = database;
-    const port = window.outboxPort ?? storage.createIndexedDbCatalogOutboxPort(database);
-    window.outboxPort = port;
-    return await port.applyReceipts(state.catalogOutboxPartitionKey(partitionValue), items);
-  }, { targetPartition, receipts });
-}
-
-let outcome;
-let browser;
-let context;
-let pageA;
-let pageB;
-const browserErrors = [];
+let executionError;
 try {
+  const server = createServer(async (request, response) => {
+    const pathname = new URL(request.url ?? "/", "http://127.0.0.1").pathname;
+    if (pathname === "/") {
+      response.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+      response.end(html);
+      return;
+    }
+    const bundlePath = bundlePaths.get(pathname);
+    if (bundlePath) {
+      response.writeHead(200, { "Content-Type": "text/javascript; charset=utf-8" });
+      response.end(await readFile(bundlePath));
+      return;
+    }
+    response.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" });
+    response.end(`未找到 harness 资源: ${pathname}`);
+  });
+
+  runContext.addCleanup("outbox HTTP server", async () => {
+    if (server.listening) {
+      await new Promise((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
+    }
+  });
+  await new Promise((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", resolve);
+  });
+
+  const address = server.address();
+  if (!address || typeof address === "string") throw new Error("测试 harness 未取得 TCP 端口");
+  const baseUrl = `http://127.0.0.1:${address.port}`;
+
+  function assert(condition, message) {
+    if (!condition) throw new Error(message);
+  }
+
+  function equal(actual, expected, message) {
+    if (JSON.stringify(actual) !== JSON.stringify(expected)) {
+      throw new Error(`${message}: 实际 ${JSON.stringify(actual)}，期望 ${JSON.stringify(expected)}`);
+    }
+  }
+
+  const partition = {
+    gatewayId: "idb-browser-test",
+    workspaceId: `workspace-${randomUUID()}`,
+    principal: "guest",
+  };
+  const upgradePartition = { ...partition, workspaceId: `upgrade-${randomUUID()}` };
+  const collisionPartition = { ...partition, workspaceId: `collision-${randomUUID()}` };
+  const receiptPartition = { ...partition, workspaceId: `receipt-${randomUUID()}` };
+  const operationIds = {
+    upgrade: randomUUID().replaceAll("-", ""),
+    first: randomUUID().replaceAll("-", ""),
+    second: randomUUID().replaceAll("-", ""),
+    afterPrune: randomUUID().replaceAll("-", ""),
+    sequenceOriginal: randomUUID().replaceAll("-", ""),
+    sequenceCollision: randomUUID().replaceAll("-", ""),
+    durableReceipt: randomUUID().replaceAll("-", ""),
+  };
+
+  async function insertFromPage(page, targetPartition, operationId, name) {
+    return await page.evaluate(async ({ targetPartition: partitionValue, operationId: id, name: operationName }) => {
+      const { state, storage } = window.outboxModules;
+      const database = window.outboxDatabase ?? await storage.openCatalogOutboxDatabase();
+      window.outboxDatabase = database;
+      const port = window.outboxPort ?? storage.createIndexedDbCatalogOutboxPort(database);
+      window.outboxPort = port;
+      const operation = state.addCatalogOutboxIntent(
+        state.createCatalogOutbox(partitionValue),
+        id,
+        { kind: "rename_node", targetNodeId: "node-1", name: operationName },
+        { baseCatalogRevision: 7, expectedRevision: 3 },
+      ).operations[0];
+      return await storage.persistCatalogOutboxPendingOperation(port, partitionValue, operation);
+    }, { targetPartition, operationId, name });
+  }
+
+  async function readPartition(page, targetPartition) {
+    return await page.evaluate(async (partitionValue) => {
+      const { storage } = window.outboxModules;
+      const database = window.outboxDatabase ?? await storage.openCatalogOutboxDatabase();
+      window.outboxDatabase = database;
+      const port = window.outboxPort ?? storage.createIndexedDbCatalogOutboxPort(database);
+      window.outboxPort = port;
+      const partitionKey = window.outboxModules.state.catalogOutboxPartitionKey(partitionValue);
+      const records = await port.load(partitionKey);
+      return records.map((record) => record);
+    }, targetPartition);
+  }
+
+  async function applyReceiptsFromPage(page, targetPartition, receipts) {
+    return await page.evaluate(async ({ targetPartition: partitionValue, receipts: items }) => {
+      const { state, storage } = window.outboxModules;
+      const database = window.outboxDatabase ?? await storage.openCatalogOutboxDatabase();
+      window.outboxDatabase = database;
+      const port = window.outboxPort ?? storage.createIndexedDbCatalogOutboxPort(database);
+      window.outboxPort = port;
+      return await port.applyReceipts(state.catalogOutboxPartitionKey(partitionValue), items);
+    }, { targetPartition, receipts });
+  }
+
+  let outcome;
+  let browser;
+  let context;
+  let pageA;
+  let pageB;
+  const browserErrors = [];
   browser = await chromium.launch({
     executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH || undefined,
     headless: true,
   });
+  runContext.addCleanup("outbox Chromium", () => browser.close());
   context = await browser.newContext();
+  runContext.addCleanup("outbox browser context", () => context.close());
   pageA = await context.newPage();
   pageB = await context.newPage();
   for (const page of [pageA, pageB]) {
@@ -549,8 +561,16 @@ try {
     "utf8",
   );
   process.stdout.write(`${JSON.stringify(outcome)}\n`);
+} catch (error) {
+  executionError = error;
+  throw error;
 } finally {
-  if (context) await context.close();
-  if (browser) await browser.close();
-  await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+  try {
+    await runContext.close();
+  } catch (cleanupError) {
+    if (executionError) {
+      throw new AggregateError([executionError, cleanupError], "IndexedDB浏览器装具执行与清理均失败");
+    }
+    throw cleanupError;
+  }
 }

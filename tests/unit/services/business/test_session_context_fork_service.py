@@ -85,7 +85,7 @@ def fork_boundary(monkeypatch: pytest.MonkeyPatch) -> Iterator[_ForkBoundary]:
     child_owner = AsyncMock(side_effect=AssertionError("远端目标不得调用本地创建 owner"))
     monkeypatch.setattr(service, "_fork_main", main_owner)
     monkeypatch.setattr(service, "_fork_child", child_owner)
-    token = set_current_gateway_id("gateway_origin")
+    token = set_current_gateway_id("gateway_ce27c875d842690955440795c9de8a35")
     try:
         yield _ForkBoundary(service, sessions, transport, main_owner, child_owner)
     finally:
@@ -150,7 +150,7 @@ async def test_remote_intent_consumes_runtime_owner_facts_before_creation(
     target_domain = SOURCE_WORKSPACE_ID if shared_owner else TARGET_WORKSPACE_ID
     fork_boundary.sessions.workspace_id = target_domain
     fork_request = fork_request.model_copy(update={
-        "target_container_uri": session_resource_uri(target_domain, TARGET_SESSION_ID, gateway_authority="gateway_origin"),
+        "target_container_uri": session_resource_uri(target_domain, TARGET_SESSION_ID, gateway_authority="gateway_ce27c875d842690955440795c9de8a35"),
     })
     source_intent["request"] = fork_request.model_dump(mode="json")
     owner = fork_boundary.service._checkpointer.forks
@@ -192,7 +192,7 @@ async def test_same_domain_different_owner_stops_before_durable_capture_decision
     request = fork_request.model_copy(update={
         "source_uri": thread_resource_uri(SOURCE_WORKSPACE_ID, SOURCE_SESSION_ID, SOURCE_THREAD_ID,
                                            gateway_authority="gateway_source"),
-        "target_container_uri": workspace_session_inventory_uri(SOURCE_WORKSPACE_ID, gateway_authority="gateway_origin"),
+        "target_container_uri": workspace_session_inventory_uri(SOURCE_WORKSPACE_ID, gateway_authority="gateway_ce27c875d842690955440795c9de8a35"),
         "creation_kind": "new_session_main",
     })
     reply = {**source_intent, "request": request.model_dump(mode="json"), "source_uri": request.source_uri,
@@ -214,7 +214,7 @@ async def test_shared_materialization_consumes_durable_decision_without_transpor
 ) -> None:
     intent = {name: value for name, value in source_intent.items()
               if name not in {"source_owner_instance_id", "source_storage_domain_id", "source_target_creation_preimage_hash"}}
-    intent.update(source_remote=True, target_gateway_id="gateway_origin")
+    intent.update(source_remote=True, target_gateway_id="gateway_ce27c875d842690955440795c9de8a35")
     owner = fork_boundary.service._checkpointer.forks
     owner.require_creation_capture_decision.return_value = (SOURCE_WORKSPACE_ID, SOURCE_WORKSPACE_ID, True)
     owner.materialized_resource_choices.return_value = []
@@ -259,7 +259,7 @@ async def test_remote_fork_preserves_exact_source_and_published_target(
     assert result.session.uri == session_resource_uri(TARGET_WORKSPACE_ID, TARGET_SESSION_ID)
     assert len(fork_boundary.transport.calls) == 1
     forwarded = fork_boundary.transport.calls[0]
-    assert forwarded.action == "create" and forwarded.source_gateway_id == "gateway_origin"
+    assert forwarded.action == "create" and forwarded.source_gateway_id == "gateway_ce27c875d842690955440795c9de8a35"
     assert forwarded.request == request
     assert forwarded.fork_target.uri == target_uri and forwarded.fork_target.fork_role == "target"
     assert result.thread_uri != target_uri and result.thread_id != TARGET_CONTAINER_THREAD_ID

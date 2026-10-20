@@ -3,7 +3,7 @@ import path from "node:path";
 import { existsSync, statSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
-import { validateWorkspaceId } from "../server/browserManager.js";
+import { validateWorkspaceId } from "../server/workspaceIdentity.js";
 
 const DEFAULT_HOST = "127.0.0.1";
 const DEFAULT_PORT = 8016;

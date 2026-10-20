@@ -16,33 +16,38 @@ from app.api.deps import (
 from app.api.resources import router
 from app.core.path_utils import workspace_context
 from app.core.trace_middleware import TraceMiddleware
-from tests.support.browser_owner import BrowserBundle, build_browser_bundle
-from tests.support.terminal_owner import (
-    CHILD,
+from tests.support.resource_owners.browser import (
+    BrowserOwnerFixture,
+    build_browser_owner_fixture,
+)
+from tests.support.resource_owners.sessions import (
+    CHILD_THREAD_A,
     SESSION_A,
     THREAD_A,
     WORKSPACE_ID,
-    Bundle,
-    build_terminal_bundle,
+)
+from tests.support.resource_owners.terminal import (
+    TerminalOwnerFixture,
+    build_terminal_owner_fixture,
 )
 
 
 @pytest.fixture
-def browser(tmp_path: Path) -> BrowserBundle:
+def browser(tmp_path: Path) -> BrowserOwnerFixture:
     root = tmp_path / "browser"
     root.mkdir()
-    return build_browser_bundle(root)
+    return build_browser_owner_fixture(root)
 
 
 @pytest.fixture
-def terminal(tmp_path: Path) -> Bundle:
+def terminal(tmp_path: Path) -> TerminalOwnerFixture:
     root = tmp_path / "terminal"
     root.mkdir()
-    return build_terminal_bundle(root)
+    return build_terminal_owner_fixture(root)
 
 
 @pytest.fixture
-def client(browser: BrowserBundle, terminal: Bundle) -> Iterator[TestClient]:
+def client(browser: BrowserOwnerFixture, terminal: TerminalOwnerFixture) -> Iterator[TestClient]:
     application = FastAPI()
     application.add_middleware(TraceMiddleware)
     application.include_router(router, prefix="/api/v1")
@@ -64,7 +69,7 @@ def client(browser: BrowserBundle, terminal: Bundle) -> Iterator[TestClient]:
 
 def create(client: TestClient) -> dict[str, object]:
     response = client.post("/api/v1/resources/browsers", json={
-        "session_id": SESSION_A, "thread_id": CHILD, "retention_scope": "thread",
+        "session_id": SESSION_A, "thread_id": CHILD_THREAD_A, "retention_scope": "thread",
     })
     assert response.status_code == 200, response.text
     assert response.json()["request_id"] == response.headers["X-Request-ID"]
@@ -72,17 +77,17 @@ def create(client: TestClient) -> dict[str, object]:
 
 
 def test_browser_api_real_operation_lease_uses_trace_and_exact_thread(
-    client: TestClient, browser: BrowserBundle, monkeypatch: pytest.MonkeyPatch,
+    client: TestClient, browser: BrowserOwnerFixture, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     resource = create(client)
     rid = resource["resource_id"]
-    assert resource["thread_associations"] == [{"session_id": SESSION_A, "thread_id": CHILD}]
+    assert resource["thread_associations"] == [{"session_id": SESSION_A, "thread_id": CHILD_THREAD_A}]
     observed: list[tuple[str, str]] = []
     perform = browser.transport.perform
 
     async def checked(resource_id: str, action: str, payload: dict[str, object], *, actor: str) -> dict[str, object]:
         lease, = browser.leases.leases_for_resource(resource_id)
-        assert lease.holder_thread_id == CHILD
+        assert lease.holder_thread_id == CHILD_THREAD_A
         observed.append((lease.turn_stream_id, lease.operation_id))
         return await perform(resource_id, action, payload, actor=actor)
 
@@ -133,7 +138,7 @@ def test_browser_owner_api_union_grant_promote_and_unassociated_delete(client: T
 
 
 def test_owner_api_preserves_live_browser_title_and_terminal_title(
-    client: TestClient, browser: BrowserBundle, terminal: Bundle,
+    client: TestClient, browser: BrowserOwnerFixture, terminal: TerminalOwnerFixture,
 ) -> None:
     resource = create(client)
     rid = resource["resource_id"]
@@ -158,7 +163,7 @@ def test_owner_api_preserves_live_browser_title_and_terminal_title(
 
 @pytest.mark.parametrize("state", ["freezing", "restoring"])
 def test_failed_transition_receipt_blocks_following_operation(
-    client: TestClient, browser: BrowserBundle, state: str,
+    client: TestClient, browser: BrowserOwnerFixture, state: str,
 ) -> None:
     resource = create(client)
     rid = resource["resource_id"]
@@ -180,7 +185,7 @@ def test_failed_transition_receipt_blocks_following_operation(
 
 
 def test_lost_browser_action_receipt_is_unknown_and_error_redacts_real_path(
-    client: TestClient, browser: BrowserBundle,
+    client: TestClient, browser: BrowserOwnerFixture,
 ) -> None:
     resource = create(client)
     rid = resource["resource_id"]
@@ -197,7 +202,7 @@ def test_lost_browser_action_receipt_is_unknown_and_error_redacts_real_path(
 
 
 def test_browser_api_delete_rejects_thread_association_without_side_effects(
-    client: TestClient, browser: BrowserBundle, monkeypatch: pytest.MonkeyPatch,
+    client: TestClient, browser: BrowserOwnerFixture, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     created = create(client)
     resource_id = created["resource_id"]

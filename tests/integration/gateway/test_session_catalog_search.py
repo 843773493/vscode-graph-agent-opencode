@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from app.gateway.workspace_ids import build_managed_local_workspace_id
-
 import asyncio
 import json
 from datetime import UTC, datetime
@@ -11,6 +9,7 @@ import httpx
 import pytest
 
 from app.core.identifier import create_prefixed_id
+from app.gateway.workspace_ids import build_managed_local_workspace_id
 from tests.integration.stubs.http_stubs import generation_target_stub
 from tests.support.gateway_processes import (
     LOCAL_TOKEN_HEADERS,
@@ -50,7 +49,7 @@ async def test_gateway_aggregates_catalog_breadcrumbs_and_reports_offline_worksp
             headers={
                 **LOCAL_TOKEN_HEADERS,
                 "X-BoxTeam-Workspace-Id": primary_backend.workspace_id,
-                "X-BoxTeam-Gateway-Id": "0197d9a3-7d2a-7c29-8d76-58b3cf3f8a21",
+                "X-BoxTeam-Gateway-Id": "gateway_0123456789abcdef0123456789abcdef",
                 "X-BoxTeam-Navigation-Actor": "guest",
             },
             timeout=30,

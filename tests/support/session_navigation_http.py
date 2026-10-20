@@ -6,6 +6,8 @@ from typing import Literal
 
 import httpx
 
+NAVIGATION_OPERATION_WAIT_SECONDS = 30
+
 _TERMINAL_STATES = {
     "committed",
     "rejected",
@@ -28,39 +30,45 @@ async def wait_for_navigation_operation(
     *,
     wait_for_settlement: bool = False,
 ) -> dict[str, object]:
-    deadline = asyncio.get_running_loop().time() + 30
-    while asyncio.get_running_loop().time() < deadline:
-        response = await client.get(
-            "/api/v1/session-catalog/operations",
-            params={"operation_id": operation_id},
-        )
-        assert response.status_code == 200, response.text
-        data = _response_data(response)
-        items = data.get("items")
-        if not isinstance(items, list):
-            raise TypeError(f"导航 operation 状态缺少 items: {response.text}")
-        receipt = next(
-            (
-                item
-                for item in items
-                if isinstance(item, dict)
-                and item.get("operation_id") == operation_id
-            ),
-            None,
-        )
-        if receipt is not None:
-            state = receipt.get("state")
-            pending_delete_settlement = (
-                wait_for_settlement
-                and state == "committed"
-                and receipt.get("kind") in {"delete_folder", "delete_session"}
-                and receipt.get("settlement") == "pending"
-            )
-            if state in _TERMINAL_STATES and not pending_delete_settlement:
-                return receipt
-        await asyncio.sleep(0.05)
-    detail = "物理 settlement 未到终态" if wait_for_settlement else "未到终态"
-    raise AssertionError(f"导航 operation {detail}: {operation_id}")
+    """等待终态；同一个期限覆盖请求、轮询间隔及可选的物理 settlement。"""
+    timeout = asyncio.timeout(NAVIGATION_OPERATION_WAIT_SECONDS)
+    try:
+        async with timeout:
+            while True:
+                response = await client.get(
+                    "/api/v1/session-catalog/operations",
+                    params={"operation_id": operation_id},
+                )
+                assert response.status_code == 200, response.text
+                data = _response_data(response)
+                items = data.get("items")
+                if not isinstance(items, list):
+                    raise TypeError(f"导航 operation 状态缺少 items: {response.text}")
+                receipt = next(
+                    (
+                        item
+                        for item in items
+                        if isinstance(item, dict)
+                        and item.get("operation_id") == operation_id
+                    ),
+                    None,
+                )
+                if receipt is not None:
+                    state = receipt.get("state")
+                    pending_delete_settlement = (
+                        wait_for_settlement
+                        and state == "committed"
+                        and receipt.get("kind") in {"delete_folder", "delete_session"}
+                        and receipt.get("settlement") == "pending"
+                    )
+                    if state in _TERMINAL_STATES and not pending_delete_settlement:
+                        return receipt
+                await asyncio.sleep(0.05)
+    except TimeoutError as error:
+        if not timeout.expired():
+            raise
+        detail = "物理 settlement 未到终态" if wait_for_settlement else "未到终态"
+        raise AssertionError(f"导航 operation {detail}: {operation_id}") from error
 
 
 async def enqueue_navigation_operation(
@@ -77,7 +85,8 @@ async def enqueue_navigation_operation(
     name: str | None = None,
     parent_node_id: str | None | object = _PARENT_UNSET,
     recursive: bool = False,
-) -> dict[str, object]:
+) -> str:
+    """提交导航 intent，并返回 durable acceptance 回显的 operation ID。"""
     snapshot_response = await client.get("/api/v1/session-catalog/snapshot")
     assert snapshot_response.status_code == 200, snapshot_response.text
     snapshot = _response_data(snapshot_response)

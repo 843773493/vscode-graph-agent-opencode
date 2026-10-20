@@ -1,6 +1,10 @@
-import { writeFile } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
+import path from "node:path";
 import process from "node:process";
+import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
+
+import { TestRunContext } from "../../../harness/js/run-context.mjs";
 
 function requiredEnvironment(name) {
   const value = process.env[name];
@@ -75,16 +79,24 @@ async function waitUntil(predicate, label, timeout = 30_000) {
   throw new Error(`等待${label}超时`);
 }
 
-const browser = await chromium.launch({ executablePath, headless: true });
-const context = await browser.newContext({
-  viewport: { width: 1920, height: 1100 },
-});
-const page = await context.newPage();
+const runContext = TestRunContext.fromTestFile(fileURLToPath(import.meta.url));
+const runtimeDirectory = path.join(runContext.outputRoot, "runtime");
+await mkdir(runtimeDirectory, { recursive: true });
+for (const name of ["TMPDIR", "TMP", "TEMP"]) process.env[name] = runtimeDirectory;
+let page;
+let executionError;
 const pageErrors = [];
-page.on("pageerror", (error) => pageErrors.push(String(error)));
 let result;
 
 try {
+  const browser = await chromium.launch({ executablePath, headless: true });
+  runContext.addCleanup("边界展示 Chromium", () => browser.close());
+  const context = await browser.newContext({
+    viewport: { width: 1920, height: 1100 },
+  });
+  runContext.addCleanup("边界展示 context", () => context.close());
+  page = await context.newPage();
+  page.on("pageerror", (error) => pageErrors.push(String(error)));
   await ensureGuest(page);
   const history = await api(
     page,
@@ -180,11 +192,16 @@ try {
     throw new Error(`未知工具结果展示错误: ${JSON.stringify(result)}`);
   }
 } catch (error) {
-  await page
-    .screenshot({ path: screenshotPath, fullPage: true })
-    .catch(() => undefined);
+  executionError = error;
+  if (page) await page.screenshot({ path: screenshotPath, fullPage: true }).catch(() => undefined);
   throw error;
 } finally {
-  await context.close();
-  await browser.close();
+  try {
+    await runContext.close();
+  } catch (cleanupError) {
+    if (executionError) {
+      throw new AggregateError([executionError, cleanupError], "边界展示执行与清理均失败");
+    }
+    throw cleanupError;
+  }
 }

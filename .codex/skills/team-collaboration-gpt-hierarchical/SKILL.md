@@ -1,11 +1,13 @@
 ---
 name: team-collaboration-gpt-hierarchical
-description: 使用最多三个 Luna 协调子代理管理唯一核心 Sol 和辅助 Luna 孙代理，承接本仓库持续开发、独审和交付，减少主线程接收调度上下文。仅整理技能时不启动业务团队。
+description: 按通用三层模式协调核心 Sol 与辅助 Luna；用户指定时也支持本线程单人辅助外部核心 owner。仅整理技能时不启动业务团队。
 ---
 
 # GPT 分层团队协作
 
 主模型由用户选择。主线程接收用户指令、确定范围、处理协调层无法解决的裁决；交付协调层持续推进已授权任务。仅准备技能不授权继续历史实施，用户要求在某个功能边界停止时，不自动接下一闭包。
+
+本轮用户指定外部核心接管：外部 OpenSpec owner 自主贯穿核心实现、验证与交付；本线程单人辅助，不调用 subagent，当前团队已停用且不唤醒 Sol。用户可按任务指定本线程单人辅助并禁用 subagent；此模式只做无冲突边角修复、命名、工具、测试或文档，核心写面优先，非核心 finding 自行闭环，核心 finding 只交准确证据，不派核心返工、不阻断核心、不设逐批 GO 门，也不要求核心等待。本轮模式跳过下方普通团队的 Sol 创建/续派、Luna 派单、候选冻结与逐批 GO 规则；其它任务仍使用通用三层方案。
 
 ## 团队结构
 
@@ -18,7 +20,7 @@ description: 使用最多三个 Luna 协调子代理管理唯一核心 Sol 和�
 | 核心 grandchild | `gpt-6.1-sol` / `max`，全队唯一 | 贯穿完整核心场景，同批迁齐声明、权威写入、查询、恢复、DTO、消费者和测试 |
 | 辅助 grandchildren | `gpt-6-luna` / `max` | 消费者及测试前提核查、独审、外围小修，并自行完成相关验证 |
 
-主线程最多直接管理 3 个 child；全部后代最多 15 个。业务协调者与唯一 Git 集成者可以分开，但集成职责须由本轮明确指定的既有成员承担，不额外突破直属 child 上限；作者和审查者不写 Git index。长期实施至少保持 3 名有明确授权工作的 Luna，包含协调者；收尾按实际工作留人，不为凑人数扩大范围。只有交付协调者创建或续派唯一核心 Sol。child 可管理 grandchildren，孙层不继续派生。
+主线程最多直接管理 3 个 child；全部后代最多 15 个。业务协调者与唯一 Git 集成者可以分开，但集成职责须由本轮明确指定的既有成员承担，不额外突破直属 child 上限；作者和审查者不写 Git index。普通团队模式下，长期实施至少保持 3 名有明确授权工作的 Luna，包含协调者；收尾按实际工作留人，不为凑人数扩大范围，由交付协调者创建或续派唯一核心 Sol。child 可管理 grandchildren，孙层不继续派生。
 
 切换旧团队时先结束旧写租约和在途运行；旧直系 Sol 停写交接后，再创建新的核心 grandchild。主线程不直接管理孙代理的日常实现或报告；真实阻塞需要主介入时，限定范围，处理后归还协调层。
 
@@ -46,13 +48,13 @@ completed 成员用 continue/followup 唤醒；send/deliver 只补运行中任�
 
 ## 实施与审查怎样衔接
 
-Sol 改完整核心场景；Luna 可在作者实施期只读当前源码与真实入口的消费者闭包（含 SQL 列、loader、恢复及测试 setup），将注明所读源码版本的观察交直属协调者收敛并与交付协调者、Sol 协同。按现有授权做源码只读核查时，读前后取 SHA 用来限定观察版本，不是审批门；授权未变时无需为此另向主线程申请许可。隔离小修由 Luna 完成自己的相关验证，不交 Sol 补救。公共合同只设一个写入 owner。
+普通团队模式由 Sol 改完整核心场景；Luna 可在作者实施期只读当前源码与真实入口的消费者闭包（含 SQL 列、loader、恢复及测试 setup），将注明所读源码版本的观察交直属协调者收敛并与交付协调者、Sol 协同。按现有授权做源码只读核查时，读前后取 SHA 用来限定观察版本，不是审批门；授权未变时无需为此另向主线程申请许可。隔离小修由 Luna 完成自己的相关验证，不交 Sol 补救。公共合同只设一个写入 owner。
 
 一次授权覆盖该任务的必要实现、接线和受保护验证。协调者分配运行窗口后，作者可以连续完成临时诊断脚本、实际输入固定、运行与有证据的接线修正；不逐个脚本或 profile 设置 STOP→转交→二次授权。优先复用真实入口及有效 fixture，不为诊断自造另一套业务前提。临时观测只证明它实际覆盖的行为，人为锁竞争不等于复现产品持锁故障。
 
-整批迁齐后集中静态检查、少量真实完整入口与受影响回归，保留已约定的验收门。候选交独审时冻结本批写面，锁定唯一正式 manifest 与固定 Git 树并严格重建。持续 goal 中，协调者须在冻结前准备下一具体未闭场景及写面，交出候选后立即续派唯一 Sol；冻结本批不等于让作者等待独审或 Git 集成。下一改动若依赖或涉及冻结源码，由协调者合并完整合同并更新候选，不为并行制造无关任务；用户指定的停止边界仍优先。
+普通团队模式下，整批迁齐后集中静态检查、少量真实完整入口与受影响回归，保留已约定的验收门。候选交独审时冻结本批写面，锁定唯一正式 manifest 与固定 Git 树并严格重建。持续 goal 中，协调者须在冻结前准备下一具体未闭场景及写面，交出候选后立即续派唯一 Sol；冻结本批不等于让作者等待独审或 Git 集成。下一改动若依赖或涉及冻结源码，由协调者合并完整合同并更新候选，不为并行制造无关任务；用户指定的停止边界仍优先。
 
-未参与写入者基于固定候选的 manifest 和 Git tree 核完整调用链，GO 同时记录结论所依赖的源码 blob。最终提交 tree 仍按最终 manifest 机械核对。parent commit 或无关文档变化本身不撤销相关源码审查结论：依赖 blob 未变时复用 GO，只审新增或变化的相关依赖；依赖 blob 改变时补审受影响部分。审查疑点先查真实 caller 和错误路径，再决定是否阻断；附加标签、报告形式或尚无具体错误路径的精度猜测不自动成为新验收门。复用结论不放宽身份、顺序、冲突或错误归属断言。
+普通团队模式下，未参与写入者基于固定候选的 manifest 和 Git tree 核完整调用链，GO 同时记录结论所依赖的源码 blob。最终提交 tree 仍按最终 manifest 机械核对。parent commit 或无关文档变化本身不撤销相关源码审查结论：依赖 blob 未变时复用 GO，只审新增或变化的相关依赖；依赖 blob 改变时补审受影响部分。审查疑点先查真实 caller 和错误路径，再决定是否阻断；附加标签、报告形式或尚无具体错误路径的精度猜测不自动成为新验收门。复用结论不放宽身份、顺序、冲突或错误归属断言。
 
 Git index 的创建、写入与状态变更由本轮唯一集成者负责，并使用绝对私有 `GIT_INDEX_FILE` 与 `GIT_OPTIONAL_LOCKS=0`，保留共享暂存。作者和审查者不建或写 Git index；审查者在固定候选审查中可设置 `GIT_OPTIONAL_LOCKS=0`，只读查询指定不可变 Git 对象（`rev-parse`、`show`、`cat-file`、`ls-tree`），无需建索引。只有本轮唯一集成者在用户已授权时执行普通提交与 push，并核提交树和远端 SHA；不 force、不改写历史。上游审查失败不能记作 GO；必要替代审查须保持作者独立性，并明确记录替代范围。
 
@@ -98,5 +100,6 @@ Git index 的创建、写入与状态变更由本轮唯一集成者负责，并�
 - **接续职责与实际交付**：RUN20/21 曾出现局部 GO 后停派、候选漏项或混入非本批文件及分批补交；本轮看到 completed 写者在收到 `continue` 前有空档，集成队列称“续派”时写者仍未收到具体任务。CIL010 将原 17 路与 v3 的 8 路按路径合并去重为完整 19 路候选，commit `4050ef02ac04aba1c530059ba4c73f3797a13334` 与 `postpush-remote` 的远端 SHA 一致。证据：`out/tests/temp/2026/10/19/goal-delivery-owner21/metadata-integrator-owner21/artifacts/cil010-composite-001-integration-001/commit-verified.json` 和同目录 `receipts/postpush-remote/`。本轮交付可核实，但仍未证明整体提速。
 - **GO 与最终 tree 的边界**：本轮 queue23 曾因先提交无关 STATE/current-entry 文档会改变 JCS parent tree，提出重绑与重审；root 裁定仅按相关源码依赖 blob 的变化补审。queue23 接受后独立提交并推送文档 `e1347658747dd0e83e2bb9bdcc97c51123ccd74d`，沿用源码 GO，并保留最终 tree 核验。此记录只覆盖一次协调修正，不证明整体提速。原件：queue23 当前记录 `out/tests/temp/2026/10/19/integration-queue-owner23/coordinator/artifacts/CURRENT`；writer commit、parent、tree 与远端核对见 `out/tests/temp/2026/10/19/integration-queue-owner23/team-writer/artifacts/state-current-entry-docs-001/commands/{023-commit-sha,024-commit-parent,025-commit-tree,030-postpush-remote}/`。
 - **共享 fixture 与旧结果**：RUN19 固定 SSH 端口冲突、旧源码 SHA 的 setup error 曾被混作业务失败；正式 fixture 生命周期需独占运行窗口，修复后的结论不能由旧输入结果覆盖。原件位于同一 RUN19 根的 `core_sol/artifacts/runs/same-owner-repro-001/`、`core_sol/artifacts/runs/uri-transfer-and-run15-locks-001/` 及 `sshd-identity-luna/artifacts/attempt-{003,005,007}/`。
+- **9.9 误派归位**：epoch-neutral hash 未勾项曾被当成生产缺口派给 Sol；真实 caller 核查后确认 v1 hash 实现符合合同，剩余 9.9 是 dispatch member-schema 覆盖断言，已转 Luna 补验收。此例只记录职责纠正，不宣称提速或整项验收完成。原件：`out/tests/temp/2026/10/19/core-coordination-owner22/independent_review_cil74_001/artifacts/itemized-9_9-contract-preaudit-001/report.md` 与 `out/tests/temp/2026/10/19/core-coordination-owner22/coordinator/artifacts/CURRENT.md`。
 
 上面未写完整路径的 RUN19 原件，均相对 `out/tests/temp/2026/10/19/goal-core-resume-19/`。

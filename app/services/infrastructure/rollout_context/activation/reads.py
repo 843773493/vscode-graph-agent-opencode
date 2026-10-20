@@ -43,6 +43,7 @@ from app.services.infrastructure.rollout_context.runtime.detail_manifest import 
     DetailUnavailableError,
 )
 from app.services.infrastructure.rollout_context.storage.catalog.history_scope import (
+    current_scope,
     require_historical_scope,
 )
 from app.services.infrastructure.rollout_context.storage.primitives import (
@@ -59,31 +60,51 @@ def read_activation_refs_for_turns(
     connection: sqlite3.Connection,
     *,
     session_id: str,
+    thread_id: str,
     turn_ids: tuple[str, ...],
 ) -> tuple[dict[str, object], ...]:
     """在同一事务内读取指定 Turn 的 sealed activation 引用摘要。
 
     rewind/compaction 边界用它把「旧 assembly 的精确 activation identity」写进
-    control payload；这里只读已提交事实，不解析当前 URI、不访问 Registry。schema
-    当前 schema 的空 rows 表示无引用；schema 缺失或陈旧必须显式失败。
+    control payload；按 Turn 原 owner 校验目标本地冻结 scope，不重属化复制的行，
+    不解析当前 URI、不访问 Registry。空 rows 表示无引用，schema 异常显式失败。
     """
 
     require_resource_activation_schema(connection)
+    storage_owner = (session_id, thread_id)
+    if current_scope(connection) != storage_owner:
+        raise ValueError("source-mismatch: activation ref 读取方与目标 rollout owner 不一致")
     if not turn_ids:
         return ()
     placeholders = ",".join("?" for _ in turn_ids)
+    turn_owners = {
+        strict_text(row[0], field="activation_ref.turn_id"): (
+            strict_text(row[1], field="turn_records.session_id"),
+            strict_text(row[2], field="turn_records.thread_id"),
+        )
+        for row in connection.execute(
+            f"SELECT turn_id, session_id, thread_id FROM turn_records WHERE turn_id IN ({placeholders})",
+            turn_ids,
+        )
+    }
+    if set(turn_owners) != set(turn_ids):
+        raise ValueError("source-mismatch: activation ref 缺少 view Turn 的真实 owner")
+    for owner in set(turn_owners.values()):
+        require_historical_scope(connection, *owner, current_owner=storage_owner)
     rows = connection.execute(
         "SELECT b.assembly_id, a.turn_id, b.activation_snapshot_id, "
         "b.plan_hash, b.request_hash, b.bindings_hash, "
-        "b.activation_provenance_hash "
+        "b.activation_provenance_hash, a.session_id, a.thread_id, b.session_id, b.thread_id "
         "FROM resource_activation_assembly_bindings b "
         "JOIN context_assemblies a ON a.assembly_id = b.assembly_id "
-        "AND a.session_id = b.session_id "
-        f"WHERE b.session_id = ? AND a.turn_id IN ({placeholders}) "
+        f"WHERE a.turn_id IN ({placeholders}) "
         "AND a.status IN ('sealed','terminal') "
         "ORDER BY a.turn_id, b.assembly_id",
-        (session_id, *turn_ids),
+        turn_ids,
     ).fetchall()
+    for row in rows:
+        if tuple(row[7:9]) != turn_owners[row[1]] or tuple(row[9:11]) != turn_owners[row[1]]:
+            raise ValueError("source-mismatch: activation ref 的 assembly/binding 与 Turn owner 不一致")
     return tuple(
         {
             "assembly_id": strict_text(row[0], field="activation_ref.assembly_id"),

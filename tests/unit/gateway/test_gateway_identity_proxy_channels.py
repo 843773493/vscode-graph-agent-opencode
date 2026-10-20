@@ -22,6 +22,7 @@ from app.core.path_utils import get_gateway_root
 from app.core.trace_middleware import reset_current_request_id, set_current_request_id
 from app.gateway.auth import get_gateway_local_token
 from app.gateway.auxiliary_proxy import _proxy_auxiliary_websocket
+from app.gateway.credentials import load_or_create_gateway_id
 from app.gateway.federation import workspace_port as workspace_port_module
 from app.gateway.federation.workspace_port import WorkspaceCatalogPort
 from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceTarget
@@ -34,6 +35,19 @@ def _gateway_id(tmp_path: Path) -> str:
 
     identity = get_gateway_root() / "identity.json"
     return json.loads(identity.read_text(encoding="utf-8"))["gateway_id"]
+
+
+@pytest.mark.parametrize("value", [
+    "local", "8014", "127.0.0.1:8014", "gateway_short",
+    "gateway_" + "A" * 32, "gateway_" + "g" * 32, None,
+])
+def test_invalid_persisted_gateway_identity_is_not_replaced(tmp_path: Path, value: object) -> None:
+    path = tmp_path / "identity.json"
+    original = json.dumps({"gateway_id": value}).encode()
+    path.write_bytes(original)
+    with pytest.raises(ValueError, match="Gateway 身份文件非法"):
+        load_or_create_gateway_id(path)
+    assert path.read_bytes() == original
 
 
 def test_backend_headers_inject_authoritative_gateway_id(tmp_path: Path) -> None:

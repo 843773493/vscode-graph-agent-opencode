@@ -32,17 +32,25 @@ from app.core.turn_execution_scope import (
 from app.domain.itemized.execution_admission import ExecutionAdmission
 from app.domain.itemized.mutation_intents import MutationIntentOwner
 from app.services.infrastructure.browser_manager_client import BrowserManagerClient
-from tests.support.browser_owner import BrowserBundle, build_browser_bundle
-from tests.support.terminal_owner import CHILD, SESSION_A, THREAD_A, WORKSPACE_ID
+from tests.support.resource_owners.browser import (
+    BrowserOwnerFixture,
+    build_browser_owner_fixture,
+)
+from tests.support.resource_owners.sessions import (
+    CHILD_THREAD_A,
+    SESSION_A,
+    THREAD_A,
+    WORKSPACE_ID,
+)
 
 
 @pytest.fixture
-def bundle(tmp_path: Path) -> BrowserBundle:
-    return build_browser_bundle(tmp_path)
+def bundle(tmp_path: Path) -> BrowserOwnerFixture:
+    return build_browser_owner_fixture(tmp_path)
 
 
 @pytest.fixture
-def context(bundle: BrowserBundle) -> Iterator[SimpleNamespace]:
+def context(bundle: BrowserOwnerFixture) -> Iterator[SimpleNamespace]:
     invocation = ToolInvocationContext(thread_binding=ThreadRuntimeBinding(SESSION_A, THREAD_A))
     token = invocation.set_tool_call_id("tool-browser-test")
     scope_token = set_current_turn_execution_scope(TurnExecutionScope("execution-browser-test"))
@@ -71,7 +79,7 @@ def test_browser_schema_keeps_default_timeout_and_explicit_retention_scope() -> 
 
 
 @pytest.mark.asyncio
-async def test_run_playwright_code_forwards_default_timeout_with_real_owner_lease(bundle: BrowserBundle, context: SimpleNamespace) -> None:
+async def test_run_playwright_code_forwards_default_timeout_with_real_owner_lease(bundle: BrowserOwnerFixture, context: SimpleNamespace) -> None:
     browser = await bundle.create()
     tool = create_run_playwright_code_tool(context)
     result = json.loads(await tool.ainvoke({"pageId": browser["resource_id"], "code": "return 'ok';"}))
@@ -88,7 +96,7 @@ async def test_run_playwright_code_forwards_default_timeout_with_real_owner_leas
     (create_read_page_tool, {}),
 ])
 async def test_page_results_separate_browser_identity_from_internal_tabs(
-    bundle: BrowserBundle, context: SimpleNamespace, factory, payload: dict[str, object],
+    bundle: BrowserOwnerFixture, context: SimpleNamespace, factory, payload: dict[str, object],
 ) -> None:
     browser = await bundle.create()
     rid = browser["resource_id"]
@@ -112,7 +120,7 @@ async def test_page_results_separate_browser_identity_from_internal_tabs(
     (create_screenshot_page_tool, {}, "screenshot"),
 ])
 async def test_retryable_timeout_remains_structured_and_owner_unknown_is_visible(
-    bundle: BrowserBundle, context: SimpleNamespace, factory, arguments: dict[str, object], action: str,
+    bundle: BrowserOwnerFixture, context: SimpleNamespace, factory, arguments: dict[str, object], action: str,
 ) -> None:
     browser = await bundle.create()
     bundle.transport.failure = BrowserRequestError(method="POST", path=f"/{action}", status=408, payload={
@@ -128,7 +136,7 @@ async def test_retryable_timeout_remains_structured_and_owner_unknown_is_visible
 
 
 @pytest.mark.asyncio
-async def test_transport_timeout_uses_real_client_error_contract(bundle: BrowserBundle, context: SimpleNamespace, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_transport_timeout_uses_real_client_error_contract(bundle: BrowserOwnerFixture, context: SimpleNamespace, monkeypatch: pytest.MonkeyPatch) -> None:
     browser = await bundle.create()
     client = BrowserManagerClient(workspace_id=WORKSPACE_ID, backend_url="http://browser.test")
     def timeout(*args: object) -> dict[str, object]:
@@ -142,9 +150,9 @@ async def test_transport_timeout_uses_real_client_error_contract(bundle: Browser
 
 
 @pytest.mark.asyncio
-async def test_list_is_exact_thread_read_only_and_summary_contains_no_paths(bundle: BrowserBundle, context: SimpleNamespace) -> None:
+async def test_list_is_exact_thread_read_only_and_summary_contains_no_paths(bundle: BrowserOwnerFixture, context: SimpleNamespace) -> None:
     browser = await bundle.create()
-    await bundle.create(thread=CHILD)
+    await bundle.create(thread=CHILD_THREAD_A)
     result = json.loads(await create_list_browser_page_tool(context).ainvoke({}))
     assert result["count"] == 1
     assert result["pages"][0]["pageId"] == browser["resource_id"]
@@ -155,9 +163,9 @@ async def test_list_is_exact_thread_read_only_and_summary_contains_no_paths(bund
 
 
 @pytest.mark.asyncio
-async def test_open_reuses_only_current_thread_and_explicit_workspace_promotes(bundle: BrowserBundle, context: SimpleNamespace) -> None:
+async def test_open_reuses_only_current_thread_and_explicit_workspace_promotes(bundle: BrowserOwnerFixture, context: SimpleNamespace) -> None:
     browser = await bundle.create()
-    await bundle.create(thread=CHILD)
+    await bundle.create(thread=CHILD_THREAD_A)
     result = json.loads(await create_open_browser_page_tool(context).ainvoke({
         "url": "https://example.test", "retention_scope": "workspace",
     }))
@@ -169,7 +177,7 @@ async def test_open_reuses_only_current_thread_and_explicit_workspace_promotes(b
 
 
 @pytest.mark.asyncio
-async def test_tool_rejects_missing_runtime_binding_before_any_side_effect(bundle: BrowserBundle) -> None:
+async def test_tool_rejects_missing_runtime_binding_before_any_side_effect(bundle: BrowserOwnerFixture) -> None:
     context = SimpleNamespace(session_id=SESSION_A, browser_resource_owner=bundle.owner,
                               invocation_context=ToolInvocationContext())
     with pytest.raises(RuntimeError, match="真实 ThreadRuntimeBinding"):

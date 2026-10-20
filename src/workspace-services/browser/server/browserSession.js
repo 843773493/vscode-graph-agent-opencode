@@ -2,7 +2,7 @@ import { EventEmitter } from "node:events";
 import { randomUUID } from "node:crypto";
 import { stripVTControlCharacters } from "node:util";
 import { normalizeBrowserUrl, nowIso } from "./url.js";
-import { BrowserPointerController, dispatchKey, insertText } from "./browserInput.js";
+import { BrowserPointerController, dispatchKey, insertText } from "./operations/browserInput.js";
 import {
   clickElement,
   dragElement,
@@ -14,7 +14,7 @@ import {
   runPlaywrightCode,
   screenshotPage,
   typeInPage,
-} from "./browserPageActions.js";
+} from "./operations/browserPageActions.js";
 import {
   DEFAULT_VIEWPORT,
   NAVIGATION_TIMEOUT_MS,
@@ -32,15 +32,15 @@ import {
   listBrowserNetworkProfiles,
   resolveBrowserDeviceState,
 } from "./browserDeviceProfiles.js";
-import { BrowserOperationQueue } from "./browserOperationQueue.js";
+import { BrowserOperationQueue } from "./operations/browserOperationQueue.js";
+import { BrowserPageDiagnostics } from "./diagnostics/pageDiagnostics.js";
+import { summarizeBrowserStreamMetrics } from "./diagnostics/streamMetrics.js";
 import {
   captureBrowserCheckpoint,
   restoreBrowserCheckpoint,
 } from "./resources/browserCheckpoint.js";
 
 const BROWSER_MODAL_DETECTION_MS = 1000;
-const MAX_DEBUG_BUFFER_ENTRIES = 200;
-const MAX_NETWORK_FAILURE_TEXT_LENGTH = 512;
 const AGENT_LOCK_LEASE_MS = 45_000;
 const SOFT_PROTECTION_LEASE_MS = 5 * 60_000;
 const PROTECTION_INSPECTION_RETRY_MS = 5_000;
@@ -123,8 +123,8 @@ export class BrowserSession extends EventEmitter {
     this.refSelectors = new Map();
     this.documentRevision = Number(this.record.document_revision || 0);
     this.operationQueue = new BrowserOperationQueue({
-      owner: this,
-      revision: this.record.operation_revision,
+      browserSession: this,
+      operationRevision: this.record.operation_revision,
     });
     this.lastFrame = null;
     this.pageEntries = new Map();
@@ -134,7 +134,8 @@ export class BrowserSession extends EventEmitter {
     this.baseUserAgent = null;
     this.basePlatform = null;
     this.deviceEmulationApplied = false;
-    this.runtimeGeneration = null;
+    /** @type {number|null} 最近取得 context 所属的池内 Chromium 实例代际，首次取得前为 null。 */
+    this.chromiumInstanceGeneration = null;
     this.inFlightOperations = 0;
     this.pendingOperations = 0;
     this.pendingAttachRequests = 0;
@@ -142,19 +143,24 @@ export class BrowserSession extends EventEmitter {
     this.cachedProtectionReasons = [];
     this.cachedHardProtectionReasons = [];
     this.cachedSoftProtectionReasons = [];
-    this.softProtectionObservedAtMs = new Map();
-    this.protectionInspectionFailureUntilMs = 0;
-    this.lastNetworkActivityAtMs = Date.parse(this.record.last_network_activity_at || "") || 0;
-    this.lastWebSocketActivityAtMs = Date.parse(this.record.last_websocket_activity_at || "") || 0;
+    /** @type {Map<string, number>} 保护码到最近一次成功页面检查的Unix毫秒观察时刻。 */
+    this.softProtectionObservedAtUnixMsByReason = new Map();
+    // 检查失败所产生硬保护的过期时刻；不是重试间隔，也不持有定时任务。
+    this.protectionInspectionFailureExpiresAtUnixMs = 0;
+    // Node观察时刻，由持久ISO字段恢复；网络记录按一秒节流，WebSocket活动逐次记录。
+    this.lastNetworkActivityAtUnixMs = Date.parse(this.record.last_network_activity_at || "") || 0;
+    this.lastWebSocketActivityAtUnixMs = Date.parse(this.record.last_websocket_activity_at || "") || 0;
     this.resourceTransition = Promise.resolve();
     this.streamProfile = null;
     this.streamTransition = Promise.resolve();
     this.streamRequestedProfile = null;
     this.streamTransitionActiveProfile = null;
     this.streamRelaxTimer = null;
-    this.streamSamples = [];
+    /** @type {import("./diagnostics/streamMetrics.js").BrowserFrameObservation[]} */
+    this.frameObservations = [];
     this.frameSequence = 0;
-    this.attachRequestedAtMs = null;
+    // 最近一次 attach 开始到下一次帧观察的计时起点，不表示客户端已收到或绘制。
+    this.attachRequestedAtUnixMs = null;
     this.closingRequested = false;
     this.recoveringTimedOutPageIds = new Set();
     this.timeoutRecovery = Promise.resolve();
@@ -199,16 +205,16 @@ export class BrowserSession extends EventEmitter {
   }
 
   noteNetworkActivity() {
-    const nowMs = Date.now();
-    if (nowMs - this.lastNetworkActivityAtMs < 1_000) return;
-    this.lastNetworkActivityAtMs = nowMs;
-    this.record.last_network_activity_at = new Date(nowMs).toISOString();
+    const nowUnixMs = Date.now();
+    if (nowUnixMs - this.lastNetworkActivityAtUnixMs < 1_000) return;
+    this.lastNetworkActivityAtUnixMs = nowUnixMs;
+    this.record.last_network_activity_at = new Date(nowUnixMs).toISOString();
   }
 
   noteWebSocketActivity() {
-    const nowMs = Date.now();
-    this.lastWebSocketActivityAtMs = nowMs;
-    this.record.last_websocket_activity_at = new Date(nowMs).toISOString();
+    const nowUnixMs = Date.now();
+    this.lastWebSocketActivityAtUnixMs = nowUnixMs;
+    this.record.last_websocket_activity_at = new Date(nowUnixMs).toISOString();
     this.noteNetworkActivity();
   }
 
@@ -314,10 +320,10 @@ export class BrowserSession extends EventEmitter {
     if (this.pendingDialog) reasons.push("dialog_pending");
     if (this.pendingFileChooser) reasons.push("file_chooser_pending");
     if (this.activeDownloads > 0) reasons.push("download_active");
-    const lockExpiresAt = Date.parse(this.record.agent_lock_expires_at || "");
+    const agentLockExpiresAtUnixMs = Date.parse(this.record.agent_lock_expires_at || "");
     if (this.record.agent_access_locked === true
-      && Number.isFinite(lockExpiresAt)
-      && lockExpiresAt > Date.now()) {
+      && Number.isFinite(agentLockExpiresAtUnixMs)
+      && agentLockExpiresAtUnixMs > Date.now()) {
       reasons.push("user_agent_lock");
     }
     return reasons;
@@ -329,7 +335,7 @@ export class BrowserSession extends EventEmitter {
     const hasOpenWebSocket = [...this.pageEntries.values()]
       .some((entry) => (entry.webSockets?.size || 0) > 0);
     if (hasOpenWebSocket
-      && Date.now() - this.lastWebSocketActivityAtMs <= SOFT_PROTECTION_LEASE_MS) {
+      && Date.now() - this.lastWebSocketActivityAtUnixMs <= SOFT_PROTECTION_LEASE_MS) {
       reasons.push("websocket_recent_activity");
     }
     return reasons;
@@ -343,31 +349,31 @@ export class BrowserSession extends EventEmitter {
   }
 
   validCachedSoftProtectionReasons() {
-    const nowMs = Date.now();
+    const nowUnixMs = Date.now();
     return this.cachedSoftProtectionReasons.filter((reason) => {
       if (reason === "keep_alive") return true;
       if (reason === "websocket_recent_activity") {
-        return nowMs - this.lastWebSocketActivityAtMs <= SOFT_PROTECTION_LEASE_MS;
+        return nowUnixMs - this.lastWebSocketActivityAtUnixMs <= SOFT_PROTECTION_LEASE_MS;
       }
-      const observedAtMs = this.softProtectionObservedAtMs.get(reason) || 0;
-      return observedAtMs > 0 && nowMs - observedAtMs <= SOFT_PROTECTION_LEASE_MS;
+      const observedAtUnixMs = this.softProtectionObservedAtUnixMsByReason.get(reason) || 0;
+      return observedAtUnixMs > 0 && nowUnixMs - observedAtUnixMs <= SOFT_PROTECTION_LEASE_MS;
     });
   }
 
   activeInspectionFailureReasons() {
-    if (Date.now() >= this.protectionInspectionFailureUntilMs) return [];
+    if (Date.now() >= this.protectionInspectionFailureExpiresAtUnixMs) return [];
     return this.cachedHardProtectionReasons.filter((reason) => (
       String(reason).startsWith("protection_inspection_failed:")
     ));
   }
 
   protectionEntries(hardReasons, softReasons) {
-    const nowMs = Date.now();
+    const nowUnixMs = Date.now();
     return [
       ...hardReasons.map((code) => ({
         code,
         class: "hard",
-        observed_at: new Date(nowMs).toISOString(),
+        observed_at: new Date(nowUnixMs).toISOString(),
         expires_at: null,
       })),
       ...softReasons.map((code) => ({
@@ -375,15 +381,15 @@ export class BrowserSession extends EventEmitter {
         class: "soft",
         observed_at: new Date(
           code === "websocket_recent_activity"
-            ? this.lastWebSocketActivityAtMs
-            : (this.softProtectionObservedAtMs.get(code) || nowMs),
+            ? this.lastWebSocketActivityAtUnixMs
+            : (this.softProtectionObservedAtUnixMsByReason.get(code) || nowUnixMs),
         ).toISOString(),
         expires_at: code === "keep_alive"
           ? null
           : new Date(
               (code === "websocket_recent_activity"
-                ? this.lastWebSocketActivityAtMs
-                : (this.softProtectionObservedAtMs.get(code) || nowMs))
+                ? this.lastWebSocketActivityAtUnixMs
+                : (this.softProtectionObservedAtUnixMsByReason.get(code) || nowUnixMs))
               + SOFT_PROTECTION_LEASE_MS,
             ).toISOString(),
       })),
@@ -458,21 +464,21 @@ export class BrowserSession extends EventEmitter {
       && this.context) {
       try {
         const inspectedSoftReasons = await this.inspectPageProtectionReasons();
-        for (const reason of [...this.softProtectionObservedAtMs.keys()]) {
+        for (const reason of [...this.softProtectionObservedAtUnixMsByReason.keys()]) {
           if (reason !== "keep_alive" && reason !== "websocket_recent_activity") {
-            this.softProtectionObservedAtMs.delete(reason);
+            this.softProtectionObservedAtUnixMsByReason.delete(reason);
           }
         }
-        const observedAtMs = Date.now();
+        const observedAtUnixMs = Date.now();
         for (const reason of inspectedSoftReasons) {
-          this.softProtectionObservedAtMs.set(reason, observedAtMs);
+          this.softProtectionObservedAtUnixMsByReason.set(reason, observedAtUnixMs);
         }
         softReasons.push(...inspectedSoftReasons);
-        this.protectionInspectionFailureUntilMs = 0;
+        this.protectionInspectionFailureExpiresAtUnixMs = 0;
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         hardReasons.push(`protection_inspection_failed:${message}`);
-        this.protectionInspectionFailureUntilMs = Date.now() + PROTECTION_INSPECTION_RETRY_MS;
+        this.protectionInspectionFailureExpiresAtUnixMs = Date.now() + PROTECTION_INSPECTION_RETRY_MS;
       }
     } else if (this.record.resource_state === "frozen") {
       hardReasons.push(...this.cachedHardProtectionReasons);
@@ -665,7 +671,7 @@ export class BrowserSession extends EventEmitter {
           }
           await restoreBrowserCheckpoint(this, checkpoint);
           this.record.discarded_pages = null;
-          this.record.runtime_generation = this.runtimeGeneration;
+          this.record.runtime_generation = this.chromiumInstanceGeneration;
         } else {
           for (const entry of this.pageEntries.values()) {
             await this.resumePageRendering(entry);
@@ -689,7 +695,7 @@ export class BrowserSession extends EventEmitter {
       this.cachedProtectionReasons = [];
       this.cachedHardProtectionReasons = [];
       this.cachedSoftProtectionReasons = [];
-      this.softProtectionObservedAtMs.clear();
+      this.softProtectionObservedAtUnixMsByReason.clear();
       this.record.resource_state = this.clients.size > 0 || this.inFlightOperations > 0
         ? "active"
         : "background";
@@ -769,7 +775,7 @@ export class BrowserSession extends EventEmitter {
       this.cachedProtectionReasons = [];
       this.cachedHardProtectionReasons = [];
       this.cachedSoftProtectionReasons = [];
-      this.softProtectionObservedAtMs.clear();
+      this.softProtectionObservedAtUnixMsByReason.clear();
       await this.manager.persist();
       this.emit("state", this.snapshot());
       return this.snapshot();
@@ -784,7 +790,7 @@ export class BrowserSession extends EventEmitter {
     const deadline = Date.now() + operationDrainTimeoutMs;
     let drainTimer = null;
     const queuedOperationsDrained = await Promise.race([
-      this.operationQueue.tail.then(() => true),
+      this.operationQueue.serialOperationTail.then(() => true),
       new Promise((resolve) => {
         drainTimer = setTimeout(resolve, operationDrainTimeoutMs, false);
       }),
@@ -880,8 +886,8 @@ export class BrowserSession extends EventEmitter {
     }
   }
 
-  async handleRuntimeDisconnect(generation) {
-    if (generation !== this.runtimeGeneration
+  async handleChromiumDisconnect(chromiumInstanceGeneration) {
+    if (chromiumInstanceGeneration !== this.chromiumInstanceGeneration
       || this.record.status !== "running"
       || this.record.resource_state === "discarded"
       || !this.context) return;
@@ -896,7 +902,7 @@ export class BrowserSession extends EventEmitter {
     this.record.status = "lost";
     this.record.resource_state = "lost";
     this.record.release_reason = "shared_browser_runtime_disconnected";
-    this.record.error_message = `共享 Chromium 运行时意外断开: generation=${generation}`;
+    this.record.error_message = `共享 Chromium 运行时意外断开: generation=${chromiumInstanceGeneration}`;
     this.record.ended_at = nowIso();
     this.record.updated_at = this.record.ended_at;
     await this.manager.persist();
@@ -934,7 +940,7 @@ export class BrowserSession extends EventEmitter {
       this.bindContextPageEvents();
       this.record.status = "running";
       this.record.resource_state = "background";
-      this.record.runtime_generation = this.runtimeGeneration;
+      this.record.runtime_generation = this.chromiumInstanceGeneration;
       this.record.started_at = this.record.started_at || nowIso();
       await this.goto(this.record.url || "about:blank");
       return this.snapshot();
@@ -949,7 +955,7 @@ export class BrowserSession extends EventEmitter {
     this.browser = runtime.browser;
     this.browserHandle = runtime.browserHandle;
     this.context = runtime.context;
-    this.runtimeGeneration = runtime.runtimeGeneration;
+    this.chromiumInstanceGeneration = runtime.chromiumInstanceGeneration;
   }
 
   bindContextPageEvents() {
@@ -982,7 +988,7 @@ export class BrowserSession extends EventEmitter {
     if (this.streamRelaxTimer) clearTimeout(this.streamRelaxTimer);
     this.streamRelaxTimer = null;
     this.streamProfile = null;
-    this.streamSamples = [];
+    this.frameObservations = [];
     try {
       await this.pointerController.reset();
       if (context) await this.manager.runtimePool.releaseContext(context);
@@ -1044,12 +1050,11 @@ export class BrowserSession extends EventEmitter {
       createdAt: nowIso(),
       webSockets: new Set(),
       freezeStyleSheetId: null,
-      consoleMessages: [],
-      networkRequests: [],
     };
     if (this.deviceEmulationApplied) {
       await this.applyDeviceEmulation(entry);
     }
+    entry.diagnostics = new BrowserPageDiagnostics(page);
     this.pageEntries.set(pageId, entry);
     cdpSession.on("Page.screencastFrame", (event) => {
       void this.handleScreencastFrame(event, entry);
@@ -1078,40 +1083,11 @@ export class BrowserSession extends EventEmitter {
     });
     page.on("request", (request) => {
       this.noteNetworkActivity();
-      entry.networkRequests.push({
-        id: `${Date.now()}_${entry.networkRequests.length}`,
-        method: request.method(),
-        url: request.url(),
-        resource_type: request.resourceType(),
-        status: null,
-        failed: false,
-        started_at: nowIso(),
-      });
-      if (entry.networkRequests.length > MAX_DEBUG_BUFFER_ENTRIES) entry.networkRequests.shift();
       if (!request.isNavigationRequest() || request.frame() !== page.mainFrame()) {
         return;
       }
       entry.requestedUrl = request.url();
       entry.navigationError = null;
-    });
-    page.on("response", (response) => {
-      const request = response.request();
-      const matchingRequest = [...entry.networkRequests].reverse().find((item) => item.url === request.url()
-        && item.status === null);
-      if (matchingRequest) {
-        matchingRequest.status = response.status();
-        matchingRequest.finished_at = nowIso();
-      }
-    });
-    page.on("requestfailed", (request) => {
-      const matchingRequest = [...entry.networkRequests].reverse().find((item) => item.url === request.url()
-        && item.status === null);
-      if (matchingRequest) {
-        matchingRequest.failed = true;
-        matchingRequest.failure_text = (request.failure()?.errorText || "请求失败")
-          .slice(0, MAX_NETWORK_FAILURE_TEXT_LENGTH);
-        matchingRequest.finished_at = nowIso();
-      }
     });
     page.on("requestfailed", (request) => {
       if (!request.isNavigationRequest() || request.frame() !== page.mainFrame()) {
@@ -1132,24 +1108,6 @@ export class BrowserSession extends EventEmitter {
       if (this.activePageId === pageId) {
         void this.syncAndEmitState({ persist: false }).then(() => this.manager.schedulePersist());
       }
-    });
-    page.on("console", (message) => {
-      entry.consoleMessages.push({
-        level: message.type(),
-        text: message.text(),
-        location: message.location(),
-        occurred_at: nowIso(),
-      });
-      if (entry.consoleMessages.length > MAX_DEBUG_BUFFER_ENTRIES) entry.consoleMessages.shift();
-    });
-    page.on("pageerror", (error) => {
-      entry.consoleMessages.push({
-        level: "error",
-        text: error instanceof Error ? error.message : String(error),
-        location: null,
-        occurred_at: nowIso(),
-      });
-      if (entry.consoleMessages.length > MAX_DEBUG_BUFFER_ENTRIES) entry.consoleMessages.shift();
     });
     page.on("domcontentloaded", () => {
       if (this.activePageId === pageId) {
@@ -1331,10 +1289,10 @@ export class BrowserSession extends EventEmitter {
   }
 
   snapshot() {
-    const lockExpiresAt = Date.parse(this.record.agent_lock_expires_at || "");
+    const agentLockExpiresAtUnixMs = Date.parse(this.record.agent_lock_expires_at || "");
     const agentLockActive = this.record.agent_access_locked === true
-      && Number.isFinite(lockExpiresAt)
-      && lockExpiresAt > Date.now();
+      && Number.isFinite(agentLockExpiresAtUnixMs)
+      && agentLockExpiresAtUnixMs > Date.now();
     const frozen = this.record.resource_state === "frozen";
     const hardProtectionReasons = [...new Set([
       ...(frozen ? this.cachedHardProtectionReasons : this.activeInspectionFailureReasons()),
@@ -1375,7 +1333,7 @@ export class BrowserSession extends EventEmitter {
       reconciliation_status: this.record.status === "lost" ? "unknown" : this.record.reconciliation_status,
       client_count: this.clients.size,
       document_revision: this.documentRevision,
-      operation_revision: this.operationQueue.revision,
+      operation_revision: this.operationQueue.operationRevision,
       resource_state: this.record.resource_state,
       resource_policy: this.record.resource_policy,
       resource_hard_protection_reasons: hardProtectionReasons,
@@ -1383,8 +1341,13 @@ export class BrowserSession extends EventEmitter {
       resource_protections: this.protectionEntries(hardProtectionReasons, softProtectionReasons),
       resource_protection_reasons: [...new Set([...hardProtectionReasons, ...softProtectionReasons])],
       active_operation_count: this.inFlightOperations,
-      stream_metrics: this.streamMetrics(),
-      runtime_generation: this.runtimeGeneration ?? this.record.runtime_generation ?? null,
+      stream_metrics: summarizeBrowserStreamMetrics({
+        observations: this.frameObservations,
+        deliveryClients: [...this.clients].map((client) => client.frameFlowSnapshot?.()).filter(Boolean),
+        profile: this.streamProfile,
+        lastAttachFirstFrameMs: this.record.last_attach_first_frame_ms,
+      }),
+      runtime_generation: this.chromiumInstanceGeneration ?? this.record.runtime_generation ?? null,
       active_page_id: this.activePageId || this.record.discarded_pages?.find((page) => page.active)?.page_id || null,
       pages: this.record.resource_state === "discarded"
         ? (this.record.discarded_pages || [])
@@ -1414,9 +1377,9 @@ export class BrowserSession extends EventEmitter {
   }
 
   assertAgentAccessAllowed() {
-    const lockExpiresAt = Date.parse(this.record.agent_lock_expires_at || "");
+    const agentLockExpiresAtUnixMs = Date.parse(this.record.agent_lock_expires_at || "");
     if (this.record.agent_access_locked === true
-      && (!Number.isFinite(lockExpiresAt) || lockExpiresAt <= Date.now())) {
+      && (!Number.isFinite(agentLockExpiresAtUnixMs) || agentLockExpiresAtUnixMs <= Date.now())) {
       this.record.agent_access_locked = false;
       this.record.agent_lock_owner_id = null;
       this.record.agent_lock_expires_at = null;
@@ -1468,8 +1431,8 @@ export class BrowserSession extends EventEmitter {
     if (this.record.agent_access_locked !== true) {
       return;
     }
-    const lockExpiresAt = Date.parse(this.record.agent_lock_expires_at || "");
-    if (!Number.isFinite(lockExpiresAt) || lockExpiresAt <= Date.now()) {
+    const agentLockExpiresAtUnixMs = Date.parse(this.record.agent_lock_expires_at || "");
+    if (!Number.isFinite(agentLockExpiresAtUnixMs) || agentLockExpiresAtUnixMs <= Date.now()) {
       return;
     }
     if (this.record.agent_lock_owner_id !== ownerId) {
@@ -1479,13 +1442,13 @@ export class BrowserSession extends EventEmitter {
     }
   }
 
-  syncOwnerRevision(revision) {
-    if (!Number.isSafeInteger(revision) || revision < this.transportOwnerRevision) {
+  syncOwnerRevision(transportOwnerRevision) {
+    if (!Number.isSafeInteger(transportOwnerRevision) || transportOwnerRevision < this.transportOwnerRevision) {
       throw new Error("Browser 传输 owner revision 过期或无效");
     }
-    if (revision !== this.transportOwnerRevision) {
-      this.transportOwnerRevision = revision;
-      this.record.transport_owner_revision = revision;
+    if (transportOwnerRevision !== this.transportOwnerRevision) {
+      this.transportOwnerRevision = transportOwnerRevision;
+      this.record.transport_owner_revision = transportOwnerRevision;
       for (const client of this.transports.keys()) client.close(4009, "browser owner changed");
       this.transports.clear();
       this.record.updated_at = nowIso();
@@ -1493,7 +1456,7 @@ export class BrowserSession extends EventEmitter {
   }
 
   transportAuthorized(client) {
-    return this.transports.get(client)?.revision === this.transportOwnerRevision;
+    return this.transports.get(client)?.transportOwnerRevision === this.transportOwnerRevision;
   }
 
   assertReconciled() {
@@ -1513,13 +1476,13 @@ export class BrowserSession extends EventEmitter {
     this.assertReconciled();
   }
 
-  async enqueueOperation({ actor, action, visible = true, revision = this.transportOwnerRevision }, callback) {
-    return await this.operationQueue.enqueue({ actor, action, visible, revision }, callback);
+  async enqueueOperation({ actor, action, visible = true, transportOwnerRevision = this.transportOwnerRevision }, callback) {
+    return await this.operationQueue.enqueue({ actor, action, visible, transportOwnerRevision }, callback);
   }
 
-  async runInteractiveOperation({ actor, action, revision = this.transportOwnerRevision }, callback) {
+  async runInteractiveOperation({ actor, action, transportOwnerRevision = this.transportOwnerRevision }, callback) {
     return await this.operationQueue.runConcurrent(
-      { actor, action, revision, visible: false, interactive: true }, callback,
+      { actor, action, transportOwnerRevision, visible: false, interactive: true }, callback,
     );
   }
 
@@ -1676,7 +1639,7 @@ export class BrowserSession extends EventEmitter {
       error.code = "browser_closing";
       throw error;
     }
-    this.attachRequestedAtMs = Date.now();
+    this.attachRequestedAtUnixMs = Date.now();
     this.pendingAttachRequests += 1;
     try {
       this.assertTransport(client);
@@ -1796,59 +1759,19 @@ export class BrowserSession extends EventEmitter {
     return await execution;
   }
 
-  recordStreamFrame(byteLength) {
-    const timestampMs = Date.now();
-    this.streamSamples.push({ timestampMs, byteLength });
-    const cutoff = timestampMs - 5_000;
-    while (this.streamSamples[0]?.timestampMs < cutoff) this.streamSamples.shift();
-    if (this.attachRequestedAtMs !== null) {
-      this.record.last_attach_first_frame_ms = timestampMs - this.attachRequestedAtMs;
-      this.attachRequestedAtMs = null;
+  /**
+   * 只在观察到帧时更新窗口，保留距最新样本约五秒内的记录；静默期间不会刷新。
+   * 首帧耗时止于 Node 观察，不等待连接流控、客户端解码或绘制 ACK。
+   */
+  recordFrameObservation(jpegPayloadBytes) {
+    const observedAtUnixMs = Date.now();
+    this.frameObservations.push({ observedAtUnixMs, jpegPayloadBytes });
+    const observationCutoffUnixMs = observedAtUnixMs - 5_000;
+    while (this.frameObservations[0]?.observedAtUnixMs < observationCutoffUnixMs) this.frameObservations.shift();
+    if (this.attachRequestedAtUnixMs !== null) {
+      this.record.last_attach_first_frame_ms = observedAtUnixMs - this.attachRequestedAtUnixMs;
+      this.attachRequestedAtUnixMs = null;
     }
-  }
-
-  streamMetrics() {
-    const samples = this.streamSamples;
-    const deliveryClients = [...this.clients]
-      .map((client) => client.frameFlowSnapshot?.())
-      .filter(Boolean);
-    const delivery = {
-      client_count: deliveryClients.length,
-      frames_sent: deliveryClients.reduce((total, item) => total + item.frames_sent, 0),
-      frames_superseded: deliveryClients.reduce(
-        (total, item) => total + item.frames_superseded,
-        0,
-      ),
-      ack_timeouts: deliveryClients.reduce((total, item) => total + item.ack_timeouts, 0),
-      max_ack_rtt_ms: deliveryClients.reduce(
-        (maximum, item) => Math.max(maximum, item.max_ack_rtt_ms),
-        0,
-      ),
-      clients: deliveryClients,
-    };
-    if (samples.length < 2) {
-      return {
-        profile: this.streamProfile,
-        fps: 0,
-        bitrate_bps: 0,
-        sample_frames: samples.length,
-        last_attach_first_frame_ms: this.record.last_attach_first_frame_ms ?? null,
-        delivery,
-      };
-    }
-    const durationSeconds = Math.max(
-      0.001,
-      (samples.at(-1).timestampMs - samples[0].timestampMs) / 1_000,
-    );
-    const bytes = samples.reduce((total, sample) => total + sample.byteLength, 0);
-    return {
-      profile: this.streamProfile,
-      fps: Number(((samples.length - 1) / durationSeconds).toFixed(2)),
-      bitrate_bps: Math.round((bytes * 8) / durationSeconds),
-      sample_frames: samples.length,
-      last_attach_first_frame_ms: this.record.last_attach_first_frame_ms ?? null,
-      delivery,
-    };
   }
 
   async captureCurrentPageFrame(entry, client = null) {
@@ -1867,11 +1790,12 @@ export class BrowserSession extends EventEmitter {
       pixelWidth: screenshot.pixelWidth,
       pixelHeight: screenshot.pixelHeight,
       pageScaleFactor: 1,
+      // 手动截图使用 Node 观察时刻，线格式单位为 Unix 秒。
       timestamp: Date.now() / 1000,
     };
     entry.lastFrame = frame;
     this.lastFrame = frame;
-    this.recordStreamFrame(frame.jpeg.byteLength);
+    this.recordFrameObservation(frame.jpeg.byteLength);
     if (client) {
       client.sendFrame(frame);
       return;
@@ -1901,6 +1825,7 @@ export class BrowserSession extends EventEmitter {
       pixelWidth: screenshot.pixelWidth,
       pixelHeight: screenshot.pixelHeight,
       pageScaleFactor: event.metadata.pageScaleFactor || 1,
+      // CDP 给出的是帧交换时刻（Unix 秒）；缺失时才使用 Node 观察时刻。
       timestamp: event.metadata.timestamp || Date.now() / 1000,
     };
     if (entry.pageId !== this.activePageId) {
@@ -1910,7 +1835,7 @@ export class BrowserSession extends EventEmitter {
       return;
     }
     this.lastFrame = entry.lastFrame;
-    this.recordStreamFrame(this.lastFrame.jpeg.byteLength);
+    this.recordFrameObservation(this.lastFrame.jpeg.byteLength);
     this.emit("frame", this.lastFrame);
     await entry.cdpSession.send("Page.screencastFrameAck", {
       sessionId: event.sessionId,
@@ -2485,8 +2410,7 @@ export class BrowserSession extends EventEmitter {
       url: entry.url || this.page.url(),
       elements,
       sources,
-      console: [...(entry.consoleMessages || [])],
-      network: [...(entry.networkRequests || [])],
+      ...entry.diagnostics.snapshot(),
       captured_at: nowIso(),
     };
   }
@@ -2495,7 +2419,7 @@ export class BrowserSession extends EventEmitter {
     this.assertRunning();
     const activeEntry = this.pageEntries.get(this.activePageId);
     if (activeEntry) {
-      activeEntry.networkRequests.length = 0;
+      activeEntry.diagnostics.clearNetworkRequests();
     }
     return await this.syncAndEmitState({ persist: false });
   }

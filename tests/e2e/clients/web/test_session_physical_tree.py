@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from app.gateway.workspace_ids import build_managed_local_workspace_id
+
 import asyncio
 import json
 import os
@@ -102,7 +104,7 @@ async def test_session_tree_context_menus_drive_physical_hierarchy(
             child_workspace = next(
                 item
                 for item in add_workspace_response.json()["data"]["items"]
-                if Path(item["root_path"]).resolve() == secondary_workspace
+                if item["workspace_id"] == build_managed_local_workspace_id(str(secondary_workspace))
             )
             assert child_workspace["managed"] is True
             child_workspace_id = child_workspace["workspace_id"]

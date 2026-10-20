@@ -6,6 +6,7 @@ from datetime import datetime
 from typing import Protocol
 
 from app.abstractions.job_executor import JobInputOwnerProtocol
+from app.core.shielded_cleanup import run_sync_shielded
 from app.domain.itemized.execution_admission import (
     ExecutionBinding,
     InternalExecutionIntent,
@@ -75,7 +76,7 @@ class JobPendingRequestController:
                 return job
         raise ValueError(f"Session {session_id} 中不存在待处理消息 {message_id}")
 
-    def _dto(self, job: PendingJob, position: int, *, display: bool) -> PendingRequestDTO:
+    async def _dto(self, job: PendingJob, position: int, *, display: bool) -> PendingRequestDTO:
         entry = self._queue.entry(job.job_id)
         if job.delivery_policy is None:
             raise RuntimeError(f"待处理 Job 缺少 delivery_policy: job_id={job.job_id}")
@@ -119,7 +120,7 @@ class JobPendingRequestController:
         reference = PendingRequestControl.model_validate(result.model_dump(exclude={
             "content", "attachments", "message_created_at", "message_metadata",
         }))
-        message = self._input_owner.accepted_job_message(reference, display=display)
+        message = await run_sync_shielded(self._input_owner.accepted_job_message, reference, display=display)
         return result.model_copy(update={
             "content": message.content, "attachments": message.attachments,
             "message_created_at": message.created_at.isoformat(),
@@ -137,7 +138,7 @@ class JobPendingRequestController:
         self, session_id: str, *, display: bool = True, thread_id: str | None = None,
     ) -> PendingRequestListDTO:
         async with self._lock:
-            return self._snapshot_unlocked(session_id, display=display, thread_id=thread_id)
+            return await self._snapshot_unlocked(session_id, display=display, thread_id=thread_id)
 
     async def list_summaries(
         self,
@@ -178,7 +179,7 @@ class JobPendingRequestController:
                 truncated=len(summaries) < len(job_ids),
             )
 
-    def _snapshot_unlocked(
+    async def _snapshot_unlocked(
         self, session_id: str, *, display: bool = True, thread_id: str | None = None,
     ) -> PendingRequestListDTO:
         jobs = self._get_jobs()
@@ -189,7 +190,7 @@ class JobPendingRequestController:
                 raise RuntimeError(
                     f"FIFO 队列引用不存在的 Job: session_id={session_id}, job_id={job_id}"
                 )
-            requests.append(self._dto(job, position, display=display))
+            requests.append(await self._dto(job, position, display=display))
         return PendingRequestListDTO(
             session_id=session_id,
             thread_id=thread_id,

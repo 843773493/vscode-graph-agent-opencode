@@ -25,7 +25,7 @@ describe("浏览器资源调度器", () => {
       manager,
       memoryMonitor: { sample: async () => ({ level: "warning" }) },
       now: () => Date.parse("2026-01-01T01:00:00.000Z"),
-      postActionDelayMs: 0,
+      backlogIntervalMs: 0,
     });
 
     await governor.runCycle();
@@ -57,7 +57,7 @@ describe("浏览器资源调度器", () => {
       },
       memoryMonitor: { sample: async () => ({ level: "critical" }) },
       now: () => Date.parse("2026-01-01T01:00:00.000Z"),
-      postActionDelayMs: 0,
+      backlogIntervalMs: 0,
     });
 
     await governor.runCycle();
@@ -92,7 +92,7 @@ describe("浏览器资源调度器", () => {
       },
       memoryMonitor: { sample: async () => ({ level: "warning" }) },
       now: () => Date.parse("2026-01-01T01:00:00.000Z"),
-      postActionDelayMs: 0,
+      backlogIntervalMs: 0,
     });
     governor.running = true;
     governor.state.running = true;
@@ -108,7 +108,7 @@ describe("浏览器资源调度器", () => {
 
   test("配额失败资源进入一分钟退避而不会每秒重复命中", async () => {
     let freezeCalls = 0;
-    let nowMs = Date.parse("2026-01-01T01:00:00.000Z");
+    let nowUnixMs = Date.parse("2026-01-01T01:00:00.000Z");
     const session = {
       id: "browser_quota_failed",
       resourcePolicySnapshot: () => ({
@@ -130,11 +130,11 @@ describe("浏览器资源调度器", () => {
     const governor = new BrowserResourceGovernor({
       manager: { runningSessions: () => [session], get: () => session },
       memoryMonitor: { sample: async () => ({ level: "critical" }) },
-      now: () => nowMs,
+      now: () => nowUnixMs,
     });
 
     await governor.runCycle();
-    nowMs += 1_000;
+    nowUnixMs += 1_000;
     const second = await governor.runCycle();
 
     expect(freezeCalls).toBe(1);
@@ -189,7 +189,7 @@ describe("浏览器资源调度器", () => {
   });
 
   test("500个过载资源在正常压力下多轮收敛到8热16冻结24常驻", async () => {
-    let nowMs = Date.parse("2026-01-01T01:00:00.000Z");
+    let nowUnixMs = Date.parse("2026-01-01T01:00:00.000Z");
     const oldActivity = "2026-01-01T00:00:00.000Z";
     const sessions = Array.from({ length: 500 }, (_, index) => {
       const session = {
@@ -208,7 +208,7 @@ describe("浏览器资源调度器", () => {
         }),
         freeze: async () => {
           session.state = "frozen";
-          session.frozenAt = new Date(nowMs).toISOString();
+          session.frozenAt = new Date(nowUnixMs).toISOString();
           return { resource_state: "frozen" };
         },
         discard: async () => {
@@ -224,7 +224,7 @@ describe("浏览器资源调度器", () => {
         get: (browserId) => sessions.find((session) => session.id === browserId),
       },
       memoryMonitor: { sample: async () => ({ level: "normal" }) },
-      now: () => nowMs,
+      now: () => nowUnixMs,
     });
     let nextDelayMs = 0;
     governor.schedule = (delayMs) => {
@@ -239,7 +239,7 @@ describe("浏览器资源调度器", () => {
         && capacity.frozen === 16
         && capacity.resident === 24
         && finalState.last_actions.length === 0) break;
-      nowMs += nextDelayMs;
+      nowUnixMs += nextDelayMs;
     }
 
     expect(finalState.capacity.actual_after_execution).toEqual({ hot: 8, frozen: 16, resident: 24 });
@@ -282,16 +282,88 @@ describe("浏览器资源调度器", () => {
       memoryMonitor: { sample: async () => ({ level: "normal" }) },
       now: () => Date.parse("2026-01-01T01:00:00.000Z"),
     });
-    const durations = [];
+    const scanDurationsMs = [];
     for (let index = 0; index < 50; index += 1) {
-      const startedAt = performance.now();
+      const scanStartedAtPerformanceMs = performance.now();
       const state = await governor.runCycle();
-      durations.push(performance.now() - startedAt);
+      scanDurationsMs.push(performance.now() - scanStartedAtPerformanceMs);
       expect(state.capacity.before).toEqual({ hot: 8, frozen: 16, resident: 24 });
       expect(state.last_actions).toEqual([]);
     }
-    durations.sort((left, right) => left - right);
+    scanDurationsMs.sort((left, right) => left - right);
 
-    expect(durations[Math.floor(durations.length * 0.95)]).toBeLessThan(100);
+    expect(scanDurationsMs[Math.floor(scanDurationsMs.length * 0.95)]).toBeLessThan(100);
+  });
+
+  test("资源持续退出治理列表时退避数量不积累，失败历史仍按上限保留", async () => {
+    const nowUnixMs = Date.parse("2026-01-01T01:00:00.000Z");
+    let sessions = [];
+    let freezeCalls = 0;
+    const governor = new BrowserResourceGovernor({
+      manager: {
+        runningSessions: () => sessions,
+        get: (browserId) => sessions.find((session) => session.id === browserId),
+      },
+      memoryMonitor: { sample: async () => ({ level: "warning" }) },
+      now: () => nowUnixMs,
+    });
+    for (let index = 0; index < 32; index += 1) {
+      const browserId = `browser_retired_${index}`;
+      sessions = [{
+        id: browserId,
+        resourcePolicySnapshot: () => ({
+          browser_id: browserId, resource_state: "background", resource_policy: "automatic",
+          resource_protections: [], client_count: 0, created_at: "2026-01-01T00:00:00.000Z",
+        }),
+        freeze: async () => { freezeCalls += 1; throw new Error("本轮资源冻结失败"); },
+      }];
+
+      const state = await governor.runCycle();
+
+      expect(state.last_cycle.action_backoff_count).toBe(1);
+      expect(state.last_cycle.failed_action_count).toBe(1);
+    }
+    sessions = [];
+    const finalState = await governor.runCycle();
+
+    expect(freezeCalls).toBe(32);
+    expect(finalState.last_cycle.action_backoff_count).toBe(0);
+    expect(finalState.recent_action_errors).toHaveLength(20);
+    expect(finalState.recent_action_errors.at(-1).browser_id).toBe("browser_retired_31");
+  });
+
+  test("退避到期后即使资源快照失败，也清除期限且保留快照错误", async () => {
+    let nowUnixMs = Date.parse("2026-01-01T01:00:00.000Z");
+    let snapshotFails = false;
+    const session = {
+      id: "browser_expired_snapshot",
+      record: { resource_state: "background", resource_policy: "automatic" },
+      resourcePolicySnapshot: () => {
+        if (snapshotFails) throw new Error("到期后快照读取失败");
+        return {
+          browser_id: "browser_expired_snapshot", resource_state: "background", resource_policy: "automatic",
+          resource_protections: [], client_count: 0, created_at: "2026-01-01T00:00:00.000Z",
+        };
+      },
+      freeze: async () => { throw new Error("建立五秒动作退避"); },
+    };
+    const governor = new BrowserResourceGovernor({
+      manager: { runningSessions: () => [session], get: () => session },
+      memoryMonitor: { sample: async () => ({ level: "warning" }) },
+      now: () => nowUnixMs,
+    });
+    const first = await governor.runCycle();
+    expect(first.last_cycle.action_backoff_count).toBe(1);
+    nowUnixMs += 5_000;
+    snapshotFails = true;
+
+    const expired = await governor.runCycle();
+
+    expect(expired.last_cycle.action_backoff_count).toBe(0);
+    expect(expired.last_cycle.snapshot_failure_count).toBe(1);
+    expect(expired.last_actions).toEqual([]);
+    expect(expired.recent_action_errors.at(-1)).toMatchObject({
+      browser_id: session.id, action: "snapshot", message: "到期后快照读取失败",
+    });
   });
 });

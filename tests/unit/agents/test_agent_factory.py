@@ -198,7 +198,7 @@ def test_agent_factory_omits_all_csm_ports_without_durable_owner(
         patch.object(agent_factory, "create_model_call_agent", return_value=built_agent),
         patch.object(agent_factory.GRAPH_FACTORY_REGISTRY, "resolve"),
     ):
-        gateway_token = set_current_gateway_id("gateway_tools_inspection")
+        gateway_token = set_current_gateway_id("gateway_ed824856cf39565635b0e5a6bf8e08da")
         try:
             agent_factory.create_my_deep_agent(**required)
         finally:

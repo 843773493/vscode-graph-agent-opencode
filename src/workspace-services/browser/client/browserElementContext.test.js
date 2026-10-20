@@ -47,4 +47,27 @@ describe("浏览器元素剪贴板上下文", () => {
       .toBe(false);
     expect(output).not.toContain("browser_id");
   });
+
+  test("无路径时显示标签使用选择字段及空白分隔的类名", () => {
+    const cases = [
+      [{}, "element"],
+      [{ tag: "DIV", id: "正文", classes: "  card\tactive\n " }, "div#正文.card.active"],
+      [{ tag: "SPAN", classes: [] }, "span"],
+    ];
+    for (const [selection, label] of cases) {
+      expect(createBrowserElementContextValue(selection).split("\n\n")[1]).toBe(`Element: ${label}`);
+    }
+  });
+
+  test("路径末项决定标签，伪元素附在所属元素后且不混用选择字段", () => {
+    const cases = [
+      [[{ tagName: "BUTTON", id: "owner", classNames: ["primary", "active"] }], "button#owner.primary.active"],
+      [[{ tagName: "DIV", id: "owner", classNames: ["card"] }, { tagName: "::before" }], "div#owner.card::before"],
+      [[{ id: "owner" }], "span#owner"],
+    ];
+    for (const [ancestors, label] of cases) {
+      const selection = { tag: "SPAN", id: "selection", classes: "ignored", ancestors };
+      expect(createBrowserElementContextValue(selection).split("\n\n")[1]).toBe(`Element: ${label}`);
+    }
+  });
 });

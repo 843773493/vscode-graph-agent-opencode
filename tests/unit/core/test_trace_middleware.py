@@ -197,10 +197,10 @@ def test_gateway_id_header_is_read_into_request_scope() -> None:
     client = _build_gateway_client()
 
     with_header = client.get(
-        "/gateway-id", headers={GATEWAY_ID_HEADER: "gateway_abc"}
+        "/gateway-id", headers={GATEWAY_ID_HEADER: "gateway_0123456789abcdef0123456789abcdef"}
     )
     assert with_header.status_code == 200
-    assert with_header.json()["data"]["gateway_id"] == "gateway_abc"
+    assert with_header.json()["data"]["gateway_id"] == "gateway_0123456789abcdef0123456789abcdef"
     assert with_header.headers["X-Request-ID"]
 
     without_header = client.get("/gateway-id")
@@ -218,10 +218,10 @@ def test_require_gateway_id_fails_closed_without_header() -> None:
     assert client.get("/require-gateway-id").status_code == 500
 
     ok = client.get(
-        "/require-gateway-id", headers={GATEWAY_ID_HEADER: "gateway_abc"}
+        "/require-gateway-id", headers={GATEWAY_ID_HEADER: "gateway_0123456789abcdef0123456789abcdef"}
     )
     assert ok.status_code == 200
-    assert ok.json() == {"gateway_id": "gateway_abc"}
+    assert ok.json() == {"gateway_id": "gateway_0123456789abcdef0123456789abcdef"}
 
 
 def test_gateway_id_does_not_leak_across_requests() -> None:
@@ -229,12 +229,27 @@ def test_gateway_id_does_not_leak_across_requests() -> None:
     client = _build_gateway_client()
 
     first = client.get(
-        "/gateway-id", headers={GATEWAY_ID_HEADER: "gateway_one"}
+        "/gateway-id", headers={GATEWAY_ID_HEADER: "gateway_11111111111111111111111111111111"}
     )
-    assert first.json()["data"]["gateway_id"] == "gateway_one"
+    assert first.json()["data"]["gateway_id"] == "gateway_11111111111111111111111111111111"
 
     second = client.get("/gateway-id")
     assert second.json()["data"]["gateway_id"] is None
+
+
+@pytest.mark.parametrize("gateway_id", [
+    "local", "8014", "127.0.0.1:8014", "localhost", "gateway_abc",
+    "gateway_" + "a" * 31, "gateway_" + "g" * 32, "gateway_" + "A" * 32,
+    "channel_epoch_1",
+])
+def test_gateway_identity_consumers_reject_invalid_header(gateway_id: str) -> None:
+    client = _build_gateway_client()
+    for path in ("/gateway-id", "/require-gateway-id"):
+        response = client.get(path, headers={GATEWAY_ID_HEADER: gateway_id, "X-Request-ID": "invalid-gateway"})
+        assert response.status_code == 500
+        assert "非法 gateway_id" in response.json()["message"]
+        assert response.headers["X-Request-ID"] == response.json()["request_id"] == "invalid-gateway"
+    assert get_current_gateway_id() is None
 
 
 @pytest.mark.asyncio
@@ -250,7 +265,7 @@ async def test_cancelled_request_resets_trace_contextvars() -> None:
         "query_string": b"",
         "headers": [
             (b"x-request-id", b"req_cancel"),
-            (GATEWAY_ID_HEADER.lower().encode(), b"gateway_cancel"),
+            (GATEWAY_ID_HEADER.lower().encode(), b"gateway_cccccccccccccccccccccccccccccccc"),
             (b"x-boxteam-navigation-actor", b"actor_cancel"),
         ],
         "client": ("127.0.0.1", 1234),
@@ -259,7 +274,7 @@ async def test_cancelled_request_resets_trace_contextvars() -> None:
 
     async def app(_: Scope, __: Receive, ___: Send) -> None:
         assert get_current_request_id() == "req_cancel"
-        assert get_current_gateway_id() == "gateway_cancel"
+        assert get_current_gateway_id() == "gateway_cccccccccccccccccccccccccccccccc"
         assert get_current_navigation_actor() == "actor_cancel"
         raise asyncio.CancelledError("请求取消")
 

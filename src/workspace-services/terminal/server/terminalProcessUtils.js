@@ -3,8 +3,23 @@ import { readFile, readdir } from "node:fs/promises";
 import { promisify } from "node:util";
 
 const TERMINATION_GRACE_MS = 1500;
+const PROCESS_SCAN_BATCH_SIZE = 64;
 const execFileAsync = promisify(execFile);
 
+/**
+ * 操作系统进程身份快照；与业务会话、终端资源的创建时间分开。
+ * @typedef {Object} TerminalProcessStat
+ * @property {number} pid 被查询的操作系统进程 PID。
+ * @property {string} [state] Linux 进程状态码；其他 POSIX 查询不提供。
+ * @property {number} ppid 父进程 PID。
+ * @property {number} processGroupId 操作系统进程组 PGID。
+ * @property {number|string} processSessionId 数字 SID；Darwin 为 ps sess 的不透明文本，不是业务 Session ID。
+ * @property {number|string} processStartTime 进程创建标记，只与同平台身份联合比较。
+ * Linux 为自系统启动至进程创建的时钟滴答数（/proc stat 第22字段）；其他 POSIX 为 ps lstart 原文。
+ * 该标记不是秒、毫秒或 UTC 时间。
+ */
+
+/** @returns {TerminalProcessStat} */
 export function parseLinuxProcStat(raw) {
   const endOfCommand = raw.lastIndexOf(")");
   if (endOfCommand === -1) {
@@ -14,6 +29,7 @@ export function parseLinuxProcStat(raw) {
   const fields = raw.slice(endOfCommand + 2).trim().split(/\s+/);
   return {
     pid,
+    state: fields[0],
     ppid: Number(fields[1]),
     processGroupId: Number(fields[2]),
     processSessionId: Number(fields[3]),
@@ -21,6 +37,7 @@ export function parseLinuxProcStat(raw) {
   };
 }
 
+/** @returns {TerminalProcessStat|null} */
 export function parsePosixPsStat(raw, { numericSession = true } = {}) {
   const fields = raw.trim().split(/\s+/);
   if (fields.length < 9) {
@@ -53,7 +70,7 @@ export function parsePosixSessionProcesses(raw, processSessionId) {
     .sort((left, right) => right - left);
 }
 
-function isValidSessionId(processSessionId) {
+function isValidProcessSessionId(processSessionId) {
   return (
     (Number.isInteger(processSessionId) && processSessionId > 0)
     || (
@@ -90,6 +107,7 @@ async function readPosixProcessStat(pid) {
   }
 }
 
+/** @returns {Promise<TerminalProcessStat|null>} Windows 或进程已消失时返回 null。 */
 export async function readProcessStat(pid) {
   if (!Number.isInteger(pid) || pid <= 0) {
     return null;
@@ -152,12 +170,12 @@ async function currentProcessSessionId() {
   return (await readProcessStat(process.pid))?.processSessionId ?? null;
 }
 
-async function processIdsInSession(processSessionId) {
-  if (!isValidSessionId(processSessionId)) {
+async function processIdsInOsSession(processSessionId) {
+  if (!isValidProcessSessionId(processSessionId)) {
     return [];
   }
-  const currentSessionId = await currentProcessSessionId();
-  if (currentSessionId === processSessionId) {
+  const callerProcessSessionId = await currentProcessSessionId();
+  if (callerProcessSessionId === processSessionId) {
     return [];
   }
   if (process.platform !== "linux") {
@@ -170,33 +188,47 @@ async function processIdsInSession(processSessionId) {
     );
     return parsePosixSessionProcesses(stdout, processSessionId);
   }
-  const entries = await readdir("/proc", { withFileTypes: true });
+  const entries = (await readdir("/proc", { withFileTypes: true }))
+    .filter((entry) => entry.isDirectory() && /^\d+$/.test(entry.name))
+    .map((entry) => Number(entry.name))
+    .filter((pid) => pid !== process.pid);
   const pids = [];
-  for (const entry of entries) {
-    if (!entry.isDirectory() || !/^\d+$/.test(entry.name)) {
-      continue;
-    }
-    const pid = Number(entry.name);
-    if (pid === process.pid) {
-      continue;
-    }
-    const stat = await readProcessStat(pid);
-    if (stat?.processSessionId === processSessionId) {
-      pids.push(pid);
+  for (let offset = 0; offset < entries.length; offset += PROCESS_SCAN_BATCH_SIZE) {
+    const stats = await Promise.all(
+      entries.slice(offset, offset + PROCESS_SCAN_BATCH_SIZE).map(readProcessStat),
+    );
+    for (const stat of stats) {
+      if (isLiveProcess(stat) && stat.processSessionId === processSessionId) {
+        pids.push(stat.pid);
+      }
     }
   }
   return pids.sort((left, right) => right - left);
 }
 
+function isLiveProcess(stat) {
+  // 僵尸和死亡进程已停止执行，等待父进程回收不属于终端的停止职责。
+  return stat !== null && !["Z", "X", "x"].includes(stat.state);
+}
+
+async function hasLiveProcesses(pids) {
+  for (const pid of pids) {
+    if (isLiveProcess(await readProcessStat(pid))) {
+      return true;
+    }
+  }
+  return false;
+}
+
 async function waitForProcessesExit(pids, timeoutMs) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    if (pids.every((pid) => !processExists(pid))) {
+    if (!await hasLiveProcesses(pids)) {
       return true;
     }
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
-  return pids.every((pid) => !processExists(pid));
+  return !await hasLiveProcesses(pids);
 }
 
 async function terminalProcessIds({
@@ -208,12 +240,12 @@ async function terminalProcessIds({
   if (processStartTime && stat?.processStartTime && stat.processStartTime !== processStartTime) {
     return [];
   }
-  const effectiveSessionId = processSessionId || stat?.processSessionId || null;
-  const sessionPids = await processIdsInSession(effectiveSessionId);
+  const effectiveProcessSessionId = processSessionId || stat?.processSessionId || null;
+  const sessionPids = await processIdsInOsSession(effectiveProcessSessionId);
   if (sessionPids.length > 0) {
     return sessionPids;
   }
-  return processExists(pid) ? [pid] : [];
+  return isLiveProcess(stat) ? [pid] : [];
 }
 
 export async function terminateTerminalProcessTree({
@@ -242,7 +274,7 @@ export async function terminateTerminalProcessTree({
     signalProcess(targetPid, "SIGKILL");
   }
   await waitForProcessesExit(killTargets, TERMINATION_GRACE_MS);
-  return killTargets.some((targetPid) => processExists(targetPid))
+  return await hasLiveProcesses(killTargets)
     ? "still_running"
     : "force_killed";
 }

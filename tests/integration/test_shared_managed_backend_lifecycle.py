@@ -24,7 +24,11 @@ from app.core.mounted_workspaces import (
 )
 from app.core.trace_middleware import TraceMiddleware
 from app.gateway.auth import get_gateway_local_token
-from app.gateway.credentials import FederationCredential, FederationCredentialStore
+from app.gateway.credentials import (
+    FederationCredential,
+    FederationCredentialStore,
+    load_or_create_gateway_id,
+)
 from app.gateway.federation import RemoteGatewayConnection
 from app.gateway.federation.policy import FederationPolicyStore
 from app.gateway.federation.ports import principal_ref_for_gateway
@@ -40,6 +44,7 @@ from tests.harness.python.run_context import TestRunContext
 from tests.integration.stubs.http_stubs import HTTPStubState, openai_chat_stub
 from tests.support.gateway_processes import (
     LOCAL_TOKEN_HEADERS,
+    GatewayProcess,
     acquire_gateway_guest,
     close_gateway_process,
     start_gateway_process,
@@ -58,6 +63,7 @@ class SharedBackendCase:
     roots: tuple[Path, Path]
     boxteam_home: Path
     provider: HTTPStubState
+    gateway: GatewayProcess
 
     async def data(self, method: str, path: str, **kwargs):
         response = await self.client.request(method, path, **kwargs)
@@ -102,14 +108,15 @@ async def shared_backend_case(request: pytest.FixtureRequest) -> AsyncIterator[S
             start_gateway_process, workspace_root=roots[0], default_backend_url=None, port=ports.port(20),
             boxteam_home=boxteam_home, artifacts_dir=context.artifacts_dir / "gateway",
         )
-        try:
-            async with httpx.AsyncClient(
-                base_url=f"http://127.0.0.1:{ports.port(20)}", headers=LOCAL_TOKEN_HEADERS, timeout=180,
-            ) as client:
+        async with httpx.AsyncClient(
+            base_url=f"http://127.0.0.1:{ports.port(20)}", headers=LOCAL_TOKEN_HEADERS, timeout=180,
+        ) as client:
+            case = SharedBackendCase(client, context, roots, boxteam_home, provider, gateway)
+            try:
                 await acquire_gateway_guest(client)
-                yield SharedBackendCase(client, context, roots, boxteam_home, provider)
-        finally:
-            await asyncio.to_thread(close_gateway_process, gateway)
+                yield case
+            finally:
+                await asyncio.to_thread(close_gateway_process, case.gateway)
 
 
 async def _join_group(case: SharedBackendCase):
@@ -142,7 +149,7 @@ async def _join_group(case: SharedBackendCase):
 def root_binding_peer_credential(shared_backend_case: SharedBackendCase) -> FederationCredential:
     return FederationCredentialStore(
         storage_path=shared_backend_case.boxteam_home / "state/gateway/credentials/federation.json",
-    ).issue(connection_id="root-binding-peer", peer_gateway_id="root-binding-source")
+    ).issue(connection_id="root-binding-peer", peer_gateway_id="gateway_0123456789abcdef0123456789abcdef")
 
 
 @pytest.fixture
@@ -159,7 +166,8 @@ async def root_binding_relay_client(
     registry.upsert_remote_gateway(RemoteGatewayConnection(
         connection_id="root-binding-peer", name="Target", host="127.0.0.1", port=22,
         username="integration", private_key_path=None, ssh_config_host=None,
-        remote_gateway_port=case.client.base_url.port, remote_gateway_id="root-binding-target",
+        remote_gateway_port=case.client.base_url.port,
+        remote_gateway_id=load_or_create_gateway_id(case.boxteam_home / "state/gateway/identity.json"),
         protocol_version=1, source_owner="manual",
     ), runtime=WorkspaceRuntime(service_urls={"workspace_api": str(case.client.base_url)}))
     FederationCredentialStore(storage_path=source_root / "credentials/federation.json").put(root_binding_peer_credential)
@@ -268,6 +276,99 @@ async def test_real_gateway_denies_ungranted_peer_before_directory_registry_or_p
     (case.context.artifacts_dir / "root-binding-peer-denied.json").write_text(json.dumps({
         "receipts": receipts, "relay_statuses": relay_statuses,
         "registry_unchanged": True, "backend_before": backend_before, "backend_after": backend_after,
+    }, ensure_ascii=False, indent=2) + "\n")
+
+
+@pytest.mark.asyncio
+async def test_real_peer_admin_root_binding_survives_restart_and_revocation(
+    shared_backend_case: SharedBackendCase, root_binding_peer_credential: FederationCredential,
+    root_binding_relay_client: httpx.AsyncClient,
+) -> None:
+    case = shared_backend_case
+    config_path = case.boxteam_home / "config/gateway.jsonc"
+    config = commentjson.loads(config_path.read_text())
+    rules = [{
+        "capability": "managed_workspace_admin", "effect": "allow",
+        "principal_ref": principal_ref_for_gateway(root_binding_peer_credential.peer_gateway_id),
+    }]
+
+    async def publish_policy(value: list[dict[str, str]]) -> None:
+        before = await case.data("GET", "/api/gateway/config/reload-status")
+        config.setdefault("permissions", {})["federation"] = {"rules": value}
+        config_path.write_text(json.dumps(config, ensure_ascii=False, indent=2) + "\n")
+        async with asyncio.timeout(30):
+            while True:
+                status = await case.data("GET", "/api/gateway/config/reload-status")
+                assert status["last_error"] is None, status
+                if status["active_revision"] != before["active_revision"]:
+                    assert not status["restart_required"], status
+                    assert any(path == "/permissions" or path.startswith("/permissions/federation")
+                               for path in status["applied_paths"]), status
+                    return
+                await asyncio.sleep(0.1)
+
+    await publish_policy(rules)
+    probe = case.roots[1] / "root-binding-probe.txt"
+    probe.write_text("原生 owner 的固定根\n")
+    registered = await root_binding_relay_client.post("/api/gateway/managed-workspaces", json={
+        "gateway_connection_id": root_binding_peer_credential.connection_id,
+        "root_path": str(case.roots[1]), "name": "Peer managed root",
+    })
+    assert registered.status_code == 200, registered.text
+    target_id = build_managed_local_workspace_id(str(case.roots[1]))
+    native = await case.data("GET", "/api/gateway/workspaces")
+    target = next(item for item in native["items"] if item["workspace_id"] == target_id)
+    backend_id = target["backend_workspace_id"]
+    assert target["status"] == "ready"
+    for forbidden in (str(case.roots[1]), root_binding_peer_credential.token):
+        assert forbidden not in registered.text
+
+    async def read_bound_root() -> dict:
+        response = await case.client.post(f"/api/v1/workspaces/{backend_id}/resources/navigation", json={
+            "uri": f"boxteam://workspace/{backend_id}/resources/files/root/{probe.name}", "operation": "read",
+        })
+        assert response.status_code == 200, response.text
+        assert response.headers["X-Request-ID"] == response.json()["request_id"]
+        assert response.json()["data"]["content"] == "原生 owner 的固定根\n"
+        assert str(case.roots[1]) not in response.text
+        return response.json()
+
+    await read_bound_root()
+    gateway_pid = case.gateway.process.pid
+    port = case.gateway.port
+    await asyncio.to_thread(close_gateway_process, case.gateway)
+    case.gateway = await asyncio.to_thread(
+        start_gateway_process, workspace_root=case.roots[0], default_backend_url=None, port=port,
+        boxteam_home=case.boxteam_home, artifacts_dir=case.context.artifacts_dir / "gateway-restarted",
+    )
+    assert case.gateway.process.pid != gateway_pid
+    await acquire_gateway_guest(case.client)
+    restored = await case.data("GET", "/api/gateway/workspaces")
+    restored_target = next(item for item in restored["items"] if item["workspace_id"] == target_id)
+    assert restored_target["backend_workspace_id"] == backend_id
+    await read_bound_root()
+
+    # 撤权在实际调用前生效；目标注册和物理根不得被源端 allow 覆盖。
+    await publish_policy([])
+    denied = await root_binding_relay_client.delete(
+        f"/api/gateway/managed-workspaces/{target_id}",
+        params={"gateway_connection_id": root_binding_peer_credential.connection_id},
+    )
+    assert denied.status_code == 403, denied.text
+    assert any(item["workspace_id"] == target_id for item in (await case.data("GET", "/api/gateway/workspaces"))["items"])
+    await read_bound_root()
+    await publish_policy(rules)
+    removed = await root_binding_relay_client.delete(
+        f"/api/gateway/managed-workspaces/{target_id}",
+        params={"gateway_connection_id": root_binding_peer_credential.connection_id},
+    )
+    assert removed.status_code == 200, removed.text
+    assert all(item["workspace_id"] != target_id for item in (await case.data("GET", "/api/gateway/workspaces"))["items"])
+    assert probe.read_text() == "原生 owner 的固定根\n"
+    assert not case.provider.requests
+    (case.context.artifacts_dir / "root-binding-peer-granted.json").write_text(json.dumps({
+        "target_id": target_id, "backend_id": backend_id, "gateway_restarted": True,
+        "denied_status": denied.status_code, "removed_status": removed.status_code,
     }, ensure_ascii=False, indent=2) + "\n")
 
 
@@ -593,10 +694,19 @@ async def test_real_stopped_shared_delete_persists_remaining_contract_then_start
     health = response.json()
     published_owner = next(owner for owner in _managed_owner_snapshot(case) if any(member["workspace_id"] == remaining_id for member in owner["members"]))
     assert [member["workspace_id"] for member in published_owner["members"]] == [remaining_id]
-    mount_payload = published_owner["members"][0]["mount"]
+    assert published_owner["members"] == [{
+        "workspace_id": remaining_id, "backend_workspace_id": third["backend_workspace_id"],
+    }]
+    with sqlite3.connect(f"file:{path}?mode=ro", uri=True) as connection:
+        binding = json.loads(connection.execute(
+            "SELECT payload_json FROM gateway_workspace_registry WHERE workspace_id=?", (remaining_id,),
+        ).fetchone()[0])
+    assert binding["backend_workspace_id"] == third["backend_workspace_id"]
+    assert Path(binding["root_path"]) == nondefault_third_root.resolve()
+    assert str(nondefault_third_root.resolve()) not in json.dumps(published_owner)
     mount = MountedWorkspace(
-        mount_payload["workspace_id"], Path(mount_payload["workspace_root"]),
-        mount_payload["terminal_backend_url"], mount_payload["browser_backend_url"],
+        binding["backend_workspace_id"], Path(binding["root_path"]),
+        binding["local_service_urls"]["terminal_manager"], binding["local_service_urls"]["browser_manager"],
     )
     assert health["workspace_id"] == third["backend_workspace_id"] == mount.workspace_id
     assert mount.workspace_root == nondefault_third_root.resolve()

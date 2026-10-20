@@ -12,15 +12,18 @@ const OUTPUT_LOW_WATERMARK_BYTES = 256 * 1024;
 const STARTUP_CONFIRM_DELAY_MS = 25;
 
 let ptyProcess = null;
-let nextMessageId = 0;
-let unacknowledgedBytes = 0;
-let paused = false;
+// 已分配的最后一个IPC输出包编号；每个worker从1开始，与终端sequence无关。
+let lastOutputPacketId = 0;
+let unacknowledgedOutputBytes = 0;
+// 只暂停node-pty输出读取，不代表OS进程或聊天Job进入暂停态。
+let ptyOutputPaused = false;
 let shellProcessMetadata = null;
 let shuttingDown = false;
 let readySent = false;
 let exitCleanupPromise = null;
 let spawnContext = null;
-const pendingOutputBytes = new Map();
+/** @type {Map<number, number>} IPC输出包编号→尚未由宿主确认的UTF-8字节数，不是聊天消息ID。 */
+const unacknowledgedBytesByOutputPacketId = new Map();
 
 function send(message) {
   if (!process.connected || !process.send) {
@@ -108,13 +111,13 @@ function handleStart(message) {
     if (shuttingDown) {
       return;
     }
-    const messageId = ++nextMessageId;
+    const outputPacketId = ++lastOutputPacketId;
     const byteCount = Buffer.byteLength(data, "utf8");
-    pendingOutputBytes.set(messageId, byteCount);
-    unacknowledgedBytes += byteCount;
-    send({ type: "output", messageId, data });
-    if (!paused && unacknowledgedBytes > OUTPUT_HIGH_WATERMARK_BYTES) {
-      paused = true;
+    unacknowledgedBytesByOutputPacketId.set(outputPacketId, byteCount);
+    unacknowledgedOutputBytes += byteCount;
+    send({ type: "output", messageId: outputPacketId, data });
+    if (!ptyOutputPaused && unacknowledgedOutputBytes > OUTPUT_HIGH_WATERMARK_BYTES) {
+      ptyOutputPaused = true;
       ptyProcess.pause();
     }
   });
@@ -145,15 +148,16 @@ function handleStart(message) {
   }, STARTUP_CONFIRM_DELAY_MS);
 }
 
-function handleAck(messageId) {
-  const byteCount = pendingOutputBytes.get(messageId);
+// 宿主按单个包回执；重复或未知编号不改变背压计费，不是UI的累计sequence ACK。
+function acknowledgeOutputPacket(outputPacketId) {
+  const byteCount = unacknowledgedBytesByOutputPacketId.get(outputPacketId);
   if (byteCount === undefined) {
     return;
   }
-  pendingOutputBytes.delete(messageId);
-  unacknowledgedBytes = Math.max(unacknowledgedBytes - byteCount, 0);
-  if (paused && unacknowledgedBytes < OUTPUT_LOW_WATERMARK_BYTES) {
-    paused = false;
+  unacknowledgedBytesByOutputPacketId.delete(outputPacketId);
+  unacknowledgedOutputBytes = Math.max(unacknowledgedOutputBytes - byteCount, 0);
+  if (ptyOutputPaused && unacknowledgedOutputBytes < OUTPUT_LOW_WATERMARK_BYTES) {
+    ptyOutputPaused = false;
     ptyProcess?.resume();
   }
 }
@@ -168,7 +172,7 @@ process.on("message", (message) => {
       return;
     }
     if (message.type === "ack") {
-      handleAck(message.messageId);
+      acknowledgeOutputPacket(message.messageId);
       return;
     }
     if (message.type === "input") {

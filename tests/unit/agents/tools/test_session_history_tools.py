@@ -125,10 +125,10 @@ async def test_local_search_keeps_current_workspace_query(history_context):
 
 
 async def test_gateway_inventory_requires_current_gateway_identity(history_context):
-    token = set_current_gateway_id("gw-history")
+    token = set_current_gateway_id("gateway_4d6aaa9a55e0dcf999456634e90e0f67")
     try:
-        arguments = {"resource_identity": str(gateway_session_inventory_identity("gw-history")),
-                     "uri": gateway_session_inventory_uri("gw-history"), "scope": "gateway", "view": "inventory"}
+        arguments = {"resource_identity": str(gateway_session_inventory_identity("gateway_4d6aaa9a55e0dcf999456634e90e0f67")),
+                     "uri": gateway_session_inventory_uri("gateway_4d6aaa9a55e0dcf999456634e90e0f67"), "scope": "gateway", "view": "inventory"}
         result = json.loads(await create_read_context_tool(history_context).ainvoke(arguments))
         assert result["revision"] == "gateway-read"
         assert history_context.workspace_session_context_client.calls[0][0] == "gateway-read"

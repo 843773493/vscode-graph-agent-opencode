@@ -77,14 +77,12 @@ from app.services.infrastructure.rollout_context.runtime.detail_manifest import 
 from app.services.orchestration.initial_execution_binding_worker import (
     InitialExecutionBindingWorker,
 )
-from tests.e2e.system.workspace_services.terminal.terminal_process_helpers import (
-    start_terminal_backend,
-)
 from tests.harness.python.browser_manager import (
     close_browser_manager_processes,
     start_browser_manager_processes,
 )
 from tests.harness.python.run_context import TestRunContext
+from tests.harness.python.terminal_backend import start_terminal_backend
 from tests.integration.stubs.http_stubs import HTTPStubState, openai_chat_stub
 from tests.support.api_helpers import create_session
 from tests.support.e2e_test_control import E2ETestControlHarness, control_request
@@ -244,13 +242,14 @@ async def source_case(
             if options.get("terminal"):
                 terminal_port = integration_port_block_for_file(Path(request.node.path)).port(40)
                 mount_payload["terminal_backend_url"] = f"http://127.0.0.1:{terminal_port}"
-                process = start_terminal_backend(backend_port=terminal_port, workspace_root=str(workspace))
+                process = start_terminal_backend(backend_port=terminal_port, workspace_root=str(workspace), artifacts_dir=TestRunContext.from_test_file(Path(__file__)).artifacts_dir)
                 services.callback(terminate_process, process)
             if options.get("browser"):
                 browser_port = integration_port_block_for_file(Path(request.node.path)).port(42)
                 mount_payload["browser_backend_url"] = f"http://127.0.0.1:{browser_port}"
                 browser = start_browser_manager_processes(
                     workspace_root=workspace, backend_port=browser_port,
+                    artifacts_dir=TestRunContext.from_test_file(Path(__file__)).artifacts_dir,
                     frontend_port=integration_port_block_for_file(Path(request.node.path)).port(43),
                     backend_host="127.0.0.1",
                 )

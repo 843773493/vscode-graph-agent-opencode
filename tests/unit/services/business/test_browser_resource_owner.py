@@ -11,29 +11,38 @@ import pytest
 from app.abstractions.browser_resources import BrowserRequestError
 from app.services.business.workspace_resources.owner import ResourceConflict
 from app.services.business.workspace_resources.records import ThreadRef
-from tests.support.browser_owner import BrowserBundle, build_browser_bundle
-from tests.support.terminal_owner import CHILD, SESSION_A, SESSION_B, THREAD_A, THREAD_B
+from tests.support.resource_owners.browser import (
+    BrowserOwnerFixture,
+    build_browser_owner_fixture,
+)
+from tests.support.resource_owners.sessions import (
+    CHILD_THREAD_A,
+    SESSION_A,
+    SESSION_B,
+    THREAD_A,
+    THREAD_B,
+)
 
 
 @pytest.fixture
-def bundle(tmp_path: Path) -> BrowserBundle:
-    return build_browser_bundle(tmp_path)
+def bundle(tmp_path: Path) -> BrowserOwnerFixture:
+    return build_browser_owner_fixture(tmp_path)
 
 
 @pytest.mark.asyncio
-async def test_precise_thread_filter_and_unload_remove_detached_temporary_browser(bundle: BrowserBundle) -> None:
+async def test_precise_thread_filter_and_unload_remove_detached_temporary_browser(bundle: BrowserOwnerFixture) -> None:
     main = await bundle.create()
-    child = await bundle.create(thread=CHILD)
+    child = await bundle.create(thread=CHILD_THREAD_A)
     await bundle.command(main["resource_id"], action="detach", expected_revision=1, thread=ThreadRef(SESSION_A, THREAD_A))
     assert [item["resource_id"] for item in await bundle.owner.list_resources(thread_id=THREAD_A)] == [main["resource_id"]]
-    assert [item["resource_id"] for item in await bundle.owner.list_resources(session_id=SESSION_A, thread_id=CHILD)] == [child["resource_id"]]
+    assert [item["resource_id"] for item in await bundle.owner.list_resources(session_id=SESSION_A, thread_id=CHILD_THREAD_A)] == [child["resource_id"]]
     await bundle.owner.release_thread(SESSION_A, THREAD_A, 1)
     await bundle.owner.release_thread(SESSION_A, THREAD_A, 1)
     assert bundle.transport.deleted == [main["resource_id"]]
 
 
 @pytest.mark.asyncio
-async def test_delete_is_unavailable_until_thread_association_is_detached(bundle: BrowserBundle) -> None:
+async def test_delete_is_unavailable_until_thread_association_is_detached(bundle: BrowserOwnerFixture) -> None:
     browser = await bundle.create()
     rid = str(browser["resource_id"])
     ref = ThreadRef(SESSION_A, THREAD_A)
@@ -59,7 +68,7 @@ async def test_delete_is_unavailable_until_thread_association_is_detached(bundle
 
 
 @pytest.mark.asyncio
-async def test_workspace_browser_keeps_identity_after_session_cleanup_and_new_association(bundle: BrowserBundle) -> None:
+async def test_workspace_browser_keeps_identity_after_session_cleanup_and_new_association(bundle: BrowserOwnerFixture) -> None:
     browser = await bundle.create(scope="workspace")
     source = browser["source_thread"]
     await bundle.command(browser["resource_id"], action="attach", expected_revision=1, thread=ThreadRef(SESSION_B, THREAD_B))
@@ -74,7 +83,7 @@ async def test_workspace_browser_keeps_identity_after_session_cleanup_and_new_as
 
 
 @pytest.mark.asyncio
-async def test_orphan_deadline_survives_restart_and_2959_reattach_then_3000_reclaims(bundle: BrowserBundle) -> None:
+async def test_orphan_deadline_survives_restart_and_2959_reattach_then_3000_reclaims(bundle: BrowserOwnerFixture) -> None:
     browser = await bundle.create()
     rid = browser["resource_id"]
     ref = ThreadRef(SESSION_A, THREAD_A)
@@ -94,7 +103,7 @@ async def test_orphan_deadline_survives_restart_and_2959_reattach_then_3000_recl
 
 
 @pytest.mark.asyncio
-async def test_create_read_use_one_real_lease_and_block_concurrent_detach(bundle: BrowserBundle, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_create_read_use_one_real_lease_and_block_concurrent_detach(bundle: BrowserOwnerFixture, monkeypatch: pytest.MonkeyPatch) -> None:
     seen: list[str] = []
     perform = bundle.transport.perform
 
@@ -116,7 +125,7 @@ async def test_create_read_use_one_real_lease_and_block_concurrent_detach(bundle
 
 
 @pytest.mark.asyncio
-async def test_promotion_cancels_due_reclaim_and_version_conflict_is_atomic(bundle: BrowserBundle) -> None:
+async def test_promotion_cancels_due_reclaim_and_version_conflict_is_atomic(bundle: BrowserOwnerFixture) -> None:
     browser = await bundle.create()
     await bundle.command(browser["resource_id"], action="detach", expected_revision=1, thread=ThreadRef(SESSION_A, THREAD_A))
     bundle.now += timedelta(seconds=1800)
@@ -127,7 +136,7 @@ async def test_promotion_cancels_due_reclaim_and_version_conflict_is_atomic(bund
 
 
 @pytest.mark.asyncio
-async def test_failed_receipt_keeps_verified_but_lost_receipt_survives_restart_unknown(bundle: BrowserBundle) -> None:
+async def test_failed_receipt_keeps_verified_but_lost_receipt_survives_restart_unknown(bundle: BrowserOwnerFixture) -> None:
     browser = await bundle.create()
     rid = browser["resource_id"]
     bundle.transport.failure = BrowserRequestError(method="POST", path="/run", status=408, payload={
@@ -149,7 +158,7 @@ async def test_failed_receipt_keeps_verified_but_lost_receipt_survives_restart_u
 
 
 @pytest.mark.asyncio
-async def test_cancelled_call_releases_lease_and_delete_unknown_blocks_session_cleanup(bundle: BrowserBundle, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_cancelled_call_releases_lease_and_delete_unknown_blocks_session_cleanup(bundle: BrowserOwnerFixture, monkeypatch: pytest.MonkeyPatch) -> None:
     browser = await bundle.create()
     started = asyncio.Event()
     async def blocked(*args: object, **kwargs: object) -> dict[str, object]:
@@ -173,7 +182,7 @@ async def test_cancelled_call_releases_lease_and_delete_unknown_blocks_session_c
 
 @pytest.fixture
 def revision_barrier(
-    bundle: BrowserBundle, monkeypatch: pytest.MonkeyPatch,
+    bundle: BrowserOwnerFixture, monkeypatch: pytest.MonkeyPatch,
 ) -> Callable[[], tuple[asyncio.Event, asyncio.Event]]:
     def arm() -> tuple[asyncio.Event, asyncio.Event]:
         entered, release = asyncio.Event(), asyncio.Event()
@@ -194,7 +203,7 @@ def revision_barrier(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("first", ["promote", "unload"])
 async def test_promotion_and_unload_race_at_real_owner_revision_barrier(
-    bundle: BrowserBundle,
+    bundle: BrowserOwnerFixture,
     revision_barrier: Callable[[], tuple[asyncio.Event, asyncio.Event]],
     first: str,
 ) -> None:
@@ -249,7 +258,7 @@ async def test_promotion_and_unload_race_at_real_owner_revision_barrier(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("first", ["attach", "reclaim"])
 async def test_reattach_and_due_orphan_reclaim_race_at_real_owner_revision_barrier(
-    bundle: BrowserBundle,
+    bundle: BrowserOwnerFixture,
     revision_barrier: Callable[[], tuple[asyncio.Event, asyncio.Event]],
     first: str,
 ) -> None:
@@ -305,7 +314,7 @@ async def test_reattach_and_due_orphan_reclaim_race_at_real_owner_revision_barri
 
 @pytest.mark.asyncio
 async def test_due_orphan_reclaim_waits_for_real_active_lease_then_converges(
-    bundle: BrowserBundle,
+    bundle: BrowserOwnerFixture,
 ) -> None:
     resource = await bundle.create()
     rid = str(resource["resource_id"])
@@ -337,7 +346,7 @@ async def test_due_orphan_reclaim_waits_for_real_active_lease_then_converges(
 
 @pytest.mark.asyncio
 async def test_verified_deleted_grant_rejects_before_network_and_keeps_terminal_fact(
-    bundle: BrowserBundle, monkeypatch: pytest.MonkeyPatch,
+    bundle: BrowserOwnerFixture, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     browser = await bundle.create(scope="workspace")
     rid = browser["resource_id"]
@@ -367,7 +376,7 @@ async def test_verified_deleted_grant_rejects_before_network_and_keeps_terminal_
 
 @pytest.mark.asyncio
 async def test_lost_grant_receipt_still_blocks_resource_as_unknown(
-    bundle: BrowserBundle, monkeypatch: pytest.MonkeyPatch,
+    bundle: BrowserOwnerFixture, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     browser = await bundle.create(scope="workspace")
     rid = browser["resource_id"]

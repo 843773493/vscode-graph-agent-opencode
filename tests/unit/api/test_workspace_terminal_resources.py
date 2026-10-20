@@ -15,23 +15,28 @@ from app.api.deps import (
 from app.api.resources import router
 from app.core.path_utils import workspace_context
 from app.core.trace_middleware import TraceMiddleware
-from tests.support.browser_owner import BrowserBundle, build_browser_bundle
-from tests.support.terminal_owner import (
+from tests.support.resource_owners.browser import (
+    BrowserOwnerFixture,
+    build_browser_owner_fixture,
+)
+from tests.support.resource_owners.sessions import (
     SESSION_A,
     THREAD_A,
     WORKSPACE_ID,
-    Bundle,
-    build_terminal_bundle,
+)
+from tests.support.resource_owners.terminal import (
+    TerminalOwnerFixture,
+    build_terminal_owner_fixture,
 )
 
 
 @pytest.fixture
-def bundle(tmp_path: Path) -> Bundle:
-    return build_terminal_bundle(tmp_path)
+def bundle(tmp_path: Path) -> TerminalOwnerFixture:
+    return build_terminal_owner_fixture(tmp_path)
 
 
 @pytest.fixture
-def client(bundle: Bundle, browser_bundle: BrowserBundle) -> Iterator[TestClient]:
+def client(bundle: TerminalOwnerFixture, browser_bundle: BrowserOwnerFixture) -> Iterator[TestClient]:
     app = FastAPI()
     app.add_middleware(TraceMiddleware)
     app.include_router(router, prefix="/api/v1")
@@ -52,10 +57,10 @@ def client(bundle: Bundle, browser_bundle: BrowserBundle) -> Iterator[TestClient
 
 
 @pytest.fixture
-def browser_bundle(tmp_path: Path) -> BrowserBundle:
+def browser_bundle(tmp_path: Path) -> BrowserOwnerFixture:
     root = tmp_path / "browser-owner"
     root.mkdir()
-    return build_browser_bundle(root)
+    return build_browser_owner_fixture(root)
 
 
 def _create(client: TestClient, *, scope: str = "thread") -> dict[str, object]:
@@ -69,7 +74,7 @@ def _create(client: TestClient, *, scope: str = "thread") -> dict[str, object]:
 
 
 def test_create_and_control_use_trace_request_identity_for_actual_lease(
-    client: TestClient, bundle: Bundle, monkeypatch: pytest.MonkeyPatch,
+    client: TestClient, bundle: TerminalOwnerFixture, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     observed: list[tuple[str, str]] = []
     create = bundle.transport.create_terminal
@@ -102,7 +107,7 @@ def test_create_and_control_use_trace_request_identity_for_actual_lease(
     assert bundle.leases.leases_for_resource(rid) == []
 
 
-def test_api_conflict_keeps_owner_record_and_exact_associations(client: TestClient, bundle: Bundle) -> None:
+def test_api_conflict_keeps_owner_record_and_exact_associations(client: TestClient, bundle: TerminalOwnerFixture) -> None:
     resource = _create(client)
     rid = resource["resource_id"]
     conflict = client.post(f"/api/v1/resources/{rid}/promote", json={"expected_revision": 99})
@@ -122,7 +127,7 @@ def test_api_conflict_keeps_owner_record_and_exact_associations(client: TestClie
 
 
 def test_api_unknown_delete_reports_503_without_leaking_path_or_disappearing(
-    client: TestClient, bundle: Bundle, monkeypatch: pytest.MonkeyPatch,
+    client: TestClient, bundle: TerminalOwnerFixture, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     resource = _create(client)
     rid = resource["resource_id"]
@@ -145,7 +150,7 @@ def test_api_unknown_delete_reports_503_without_leaking_path_or_disappearing(
 
 
 def test_terminal_api_delete_rejects_thread_association_without_side_effects(
-    client: TestClient, bundle: Bundle, monkeypatch: pytest.MonkeyPatch,
+    client: TestClient, bundle: TerminalOwnerFixture, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     created = _create(client)
     resource_id = created["resource_id"]

@@ -77,13 +77,12 @@ from app.services.infrastructure.rollout_context.checkpoint.saver import (
 )
 from app.services.infrastructure.trace_event_store import TraceEventStore
 from app.services.orchestration.communication.service import SessionCommunicationService
-from tests.e2e.system.workspace_services.terminal.terminal_process_helpers import (
-    start_terminal_backend,
-)
 from tests.harness.python.browser_manager import (
     close_browser_manager_processes,
     start_browser_manager_processes,
 )
+from tests.harness.python.run_context import TestRunContext
+from tests.harness.python.terminal_backend import start_terminal_backend
 from tests.support.api_helpers import checkpoint_fixture
 from tests.support.gateway_processes import (
     LOCAL_TOKEN_HEADERS,
@@ -277,11 +276,13 @@ def context_auxiliary_services(
             for port in (terminal_port, browser_port, browser_frontend_port):
                 ensure_local_port_available(port, service_name="context 测试辅助服务")
             terminal = start_terminal_backend(
-                backend_port=terminal_port, workspace_root=str(workspace_root)
+                backend_port=terminal_port, workspace_root=str(workspace_root),
+                artifacts_dir=TestRunContext.from_test_file(Path(__file__)).artifacts_dir,
             )
             lifetime.callback(terminate_process, terminal)
             browser = start_browser_manager_processes(
                 workspace_root=workspace_root,
+                artifacts_dir=TestRunContext.from_test_file(Path(__file__)).artifacts_dir,
                 backend_port=browser_port,
                 frontend_port=browser_frontend_port,
                 backend_host="127.0.0.1",
@@ -309,6 +310,7 @@ def local_context_session_service(
         config_service=ConfigService(workspace_root=workspace_root),
         trace_event_store=TraceEventStore(sessions_root), workspace_id=workspace_id,
         path_resolver=catalog.resolver, creation_service=catalog.creation_service,
+
     )
 
 

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from app.gateway.workspace_ids import build_managed_local_workspace_id
+
 import json
 import os
 from collections.abc import Callable
@@ -137,7 +139,7 @@ async def test_gateway_federates_complete_remote_gateway_through_docker(
             assert len(workspace_list["items"]) >= 2
             assert any(
                 item["connection_kind"] == "local"
-                and Path(item["root_path"]).resolve() == local_workspace
+                and item["workspace_id"] == build_managed_local_workspace_id(str(local_workspace))
                 and item["status"] == "ready"
                 for item in workspace_list["items"]
             )

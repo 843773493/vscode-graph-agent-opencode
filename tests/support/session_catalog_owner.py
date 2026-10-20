@@ -22,6 +22,7 @@ class FixtureCatalogOwner:
     def get_catalog_components(
         self, sessions_root: Path, workspace_id: str
     ) -> SessionCatalogComponents:
+        sessions_root = sessions_root.expanduser().resolve()
         key = (sessions_root, workspace_id)
         components = self._components.get(key)
         if components is None:
@@ -30,18 +31,21 @@ class FixtureCatalogOwner:
         return components.get_catalog_components(sessions_root, workspace_id)
 
     def release(self, sessions_root: Path | None = None) -> None:
-        errors: list[Exception] = []
+        errors: list[BaseException] = []
+        resolved_root = (
+            sessions_root.expanduser().resolve() if sessions_root is not None else None
+        )
         keys = [
             key for key in self._components
-            if sessions_root is None or key[0] == sessions_root.resolve()
+            if resolved_root is None or key[0] == resolved_root
         ]
         for key in keys:
             try:
                 self._components.pop(key).close()
-            except Exception as error:  # noqa: BLE001 - 全量释放后聚合失败。
+            except BaseException as error:  # noqa: BLE001 - 中断也先释放其余连接，再汇总原始异常。
                 errors.append(error)
         if errors:
-            raise ExceptionGroup("fixture catalog 关闭失败", errors)
+            raise BaseExceptionGroup("fixture catalog 关闭失败", errors)
 
 
 @contextmanager
@@ -54,7 +58,7 @@ def fixture_catalog_scope() -> Iterator[FixtureCatalogOwner]:
         except BaseException as error:
             try:
                 owner.release()
-            except Exception as close_error:  # noqa: BLE001 - 保留装配和关闭两个失败。
+            except BaseException as close_error:  # noqa: BLE001 - 保留装配和关闭两个失败，包括中断。
                 raise BaseExceptionGroup(
                     "fixture 装配失败且 catalog 关闭失败", [error, close_error]
                 ) from None

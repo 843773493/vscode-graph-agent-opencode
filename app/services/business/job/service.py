@@ -14,9 +14,10 @@ from app.abstractions.pending_request_store import PendingRequestStoreProtocol
 from app.abstractions.turn_terminal_status import TurnTerminalStatusWriter
 from app.core.identifier import create_prefixed_id
 from app.core.job_event_bus import EventType
+from app.core.key_lock_pool import KeyLockPool
 from app.core.session_interrupt_state import SessionInterruptState
 from app.core.session_lifecycle_gate import SessionDeletionPendingError
-from app.core.shielded_cleanup import run_cleanup_shielded
+from app.core.shielded_cleanup import run_cleanup_shielded, run_sync_shielded
 from app.core.trace_middleware import (
     get_current_gateway_id,
     get_current_request_id,
@@ -162,6 +163,7 @@ class JobService:
         self._thread_current_job: dict[tuple[str, str], str] = {}
         self._pending_queue = JobPendingQueue()
         self._dispatch_lock = asyncio.Lock()
+        self._job_creation_locks = KeyLockPool()
         self._pending_restore_lock = asyncio.Lock()
         self._session_preparations: dict[str, int] = {}
         self._deleting_sessions: set[str] = set()
@@ -796,109 +798,110 @@ class JobService:
             resolved_job_id,
         )
 
-        existing_job = self._jobs.get(resolved_job_id)
-        if existing_job is not None:
-            if (
-                existing_job.session_id != session_id
-                or existing_job.thread_id != thread_id
-                or existing_job.message_id != message_id
-                or existing_job.execution_binding != execution_binding
-            ):
-                raise RuntimeError(
-                    "预留 Job ID 已被其它消息占用: "
-                    f"job_id={resolved_job_id}, session_id={session_id}, "
-                    f"message_id={message_id}"
-                )
-            return self._existing_dispatch_snapshot(existing_job)
+        async with self._job_creation_locks.lock_for(resolved_job_id):
+            existing_job = self._jobs.get(resolved_job_id)
+            if existing_job is not None:
+                if (
+                    existing_job.session_id != session_id
+                    or existing_job.thread_id != thread_id
+                    or existing_job.message_id != message_id
+                    or existing_job.execution_binding != execution_binding
+                ):
+                    raise RuntimeError(
+                        "预留 Job ID 已被其它消息占用: "
+                        f"job_id={resolved_job_id}, session_id={session_id}, "
+                        f"message_id={message_id}"
+                    )
+                return self._existing_dispatch_snapshot(existing_job)
 
-        job = JobState(
-            job_id=resolved_job_id,
-            session_id=session_id,
-            thread_id=thread_id,
-            message=message,
-            message_id=message_id,
-            attachments=list(attachments or []),
-            message_created_at=message_created_at,
-            execution_binding=execution_binding,
-            agent_id=agent_id,
-            status=JobStatus.queued,
-            message_metadata=dict(message_metadata or {}),
-            # job 创建发生在请求作用域内，此时读取 Gateway 按请求注入的真实
-            # gateway_id；job 是独立执行根，必须显式随 job 携带，不能依赖
-            # ContextVar 自动传播。
-            gateway_id=get_current_gateway_id(),
-            # 同一请求作用域内读取 TraceMiddleware 注入的权威 request_id；
-            # job 是独立执行根，必须显式随 job 携带，MUST NOT 在 job 内部补造。
-            # 本创建点还会被启动恢复（resume_active_goals）与事件驱动后台任务调用，
-            # 那些执行根没有请求上下文，故此处刻意用宽容版：无绑定即 None，属显式
-            # nullable 设计而非静默缺陷（这些 Job 本无「创建请求的权威 request_id」
-            # 可言，补造一个反而违反「任何一层不得补造第二个请求 ID」）。用户请求
-            # 链路必须已由 TraceMiddleware 在请求作用域内绑定；需要在请求作用域入口
-            # fail-closed 的消费方，改用 require_current_request_id。
-            request_id=get_current_request_id(),
-        )
+            job = JobState(
+                job_id=resolved_job_id,
+                session_id=session_id,
+                thread_id=thread_id,
+                message=message,
+                message_id=message_id,
+                attachments=list(attachments or []),
+                message_created_at=message_created_at,
+                execution_binding=execution_binding,
+                agent_id=agent_id,
+                status=JobStatus.queued,
+                message_metadata=dict(message_metadata or {}),
+                # job 创建发生在请求作用域内，此时读取 Gateway 按请求注入的真实
+                # gateway_id；job 是独立执行根，必须显式随 job 携带，不能依赖
+                # ContextVar 自动传播。
+                gateway_id=get_current_gateway_id(),
+                # 同一请求作用域内读取 TraceMiddleware 注入的权威 request_id；
+                # job 是独立执行根，必须显式随 job 携带，MUST NOT 在 job 内部补造。
+                # 本创建点还会被启动恢复（resume_active_goals）与事件驱动后台任务调用，
+                # 那些执行根没有请求上下文，故此处刻意用宽容版：无绑定即 None，属显式
+                # nullable 设计而非静默缺陷（这些 Job 本无「创建请求的权威 request_id」
+                # 可言，补造一个反而违反「任何一层不得补造第二个请求 ID」）。用户请求
+                # 链路必须已由 TraceMiddleware 在请求作用域内绑定；需要在请求作用域入口
+                # fail-closed 的消费方，改用 require_current_request_id。
+                request_id=get_current_request_id(),
+            )
 
-        if self._input_owner is not None:
-            self._input_owner.accept_job_input(job)
-        self._jobs[resolved_job_id] = job
+            if self._input_owner is not None:
+                await run_sync_shielded(self._input_owner.accept_job_input, job)
+            self._jobs[resolved_job_id] = job
 
-        if self._bus is None:
-            raise RuntimeError("JobService 未绑定 JobEventBus")
+            if self._bus is None:
+                raise RuntimeError("JobService 未绑定 JobEventBus")
 
-        dispatch = await self._enqueue_or_dispatch(
-            job,
-            delivery_policy=delivery_policy,
-        )
-        logger.info(
-            "[job_service] enqueue_or_dispatch result: job_id=%s status=%s "
-            "blocked_by=%s queued_ahead=%s pending=%s",
-            resolved_job_id,
-            dispatch.job_status,
-            dispatch.blocked_by_job_id,
-            dispatch.queued_jobs_ahead,
-            dispatch.pending_job_count,
-        )
-        snapshot = await self._pending_requests.list(session_id)
-        await self._pending_requests.persist(snapshot)
+            dispatch = await self._enqueue_or_dispatch(
+                job,
+                delivery_policy=delivery_policy,
+            )
+            logger.info(
+                "[job_service] enqueue_or_dispatch result: job_id=%s status=%s "
+                "blocked_by=%s queued_ahead=%s pending=%s",
+                resolved_job_id,
+                dispatch.job_status,
+                dispatch.blocked_by_job_id,
+                dispatch.queued_jobs_ahead,
+                dispatch.pending_job_count,
+            )
+            snapshot = await self._pending_requests.list(session_id)
+            await self._pending_requests.persist(snapshot)
 
-        await self._bus.publish(
-            job_id=resolved_job_id,
-            event_type=EventType.JOB_CREATED,
-            payload={
-                "session_id": session_id,
-                "thread_id": thread_id,
-                "message": message,
-                "agent_id": agent_id,
-                "message_id": message_id,
-                "message_created_at": message_created_at,
-                "message_metadata": dict(message_metadata or {}),
-                "execution_binding": asdict(job.execution_binding),
-                "gateway_id": job.gateway_id,
-                "request_id": job.request_id,
-                "attachments": [
-                    attachment.model_dump(mode="json", exclude={"data_url"})
-                    for attachment in job.attachments
-                ],
-                "delivery_policy": delivery_policy,
-                "enqueue_sequence": dispatch.enqueue_sequence,
-                "queue_snapshot_version": dispatch.queue_snapshot_version,
-            },
-            agent_id="job_service",
-        )
-        logger.info(
-            "[job_service] JOB_CREATED published after queue commit: job_id=%s session_id=%s",
-            resolved_job_id,
-            session_id,
-        )
+            await self._bus.publish(
+                job_id=resolved_job_id,
+                event_type=EventType.JOB_CREATED,
+                payload={
+                    "session_id": session_id,
+                    "thread_id": thread_id,
+                    "message": message,
+                    "agent_id": agent_id,
+                    "message_id": message_id,
+                    "message_created_at": message_created_at,
+                    "message_metadata": dict(message_metadata or {}),
+                    "execution_binding": asdict(job.execution_binding),
+                    "gateway_id": job.gateway_id,
+                    "request_id": job.request_id,
+                    "attachments": [
+                        attachment.model_dump(mode="json", exclude={"data_url"})
+                        for attachment in job.attachments
+                    ],
+                    "delivery_policy": delivery_policy,
+                    "enqueue_sequence": dispatch.enqueue_sequence,
+                    "queue_snapshot_version": dispatch.queue_snapshot_version,
+                },
+                agent_id="job_service",
+            )
+            logger.info(
+                "[job_service] JOB_CREATED published after queue commit: job_id=%s session_id=%s",
+                resolved_job_id,
+                session_id,
+            )
 
-        if dispatch.job_status == JobStatus.queued.value and dispatch.active_job_id is None:
-            await self._start_next_pending(session_id, thread_id=thread_id, boundary="idle")
-            dispatch = self._existing_dispatch_snapshot(job)
-        await self._publish_pending(
-            await self._pending_requests.list(session_id),
-            "pending_request_enqueued",
-        )
-        return dispatch
+            if dispatch.job_status == JobStatus.queued.value and dispatch.active_job_id is None:
+                await self._start_next_pending(session_id, thread_id=thread_id, boundary="idle")
+                dispatch = self._existing_dispatch_snapshot(job)
+            await self._publish_pending(
+                await self._pending_requests.list(session_id),
+                "pending_request_enqueued",
+            )
+            return dispatch
 
     def _existing_dispatch_snapshot(
         self,

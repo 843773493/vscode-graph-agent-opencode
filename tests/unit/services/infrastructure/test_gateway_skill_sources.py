@@ -342,7 +342,7 @@ async def test_observer_uses_empty_context_and_gateway_generated_request_ids(
 ):
     owner, source, _skill, _channel = source_case
     extra_context: ContextVar[str | None] = ContextVar("skill_observer_probe", default=None)
-    gateway_token = set_current_gateway_id("inherited-gateway")
+    gateway_token = set_current_gateway_id("gateway_e1d881d48d86e50c01f49e43069fc7d1")
     actor_token = set_current_navigation_actor("inherited-actor")
     extra_token = extra_context.set("inherited-value")
     observer_requests: list[httpx.Request] = []
@@ -387,7 +387,7 @@ async def test_observer_uses_empty_context_and_gateway_generated_request_ids(
 
         assert request_id == request_identity
         assert get_current_request_id() == request_identity
-        assert get_current_gateway_id() == "inherited-gateway"
+        assert get_current_gateway_id() == "gateway_e1d881d48d86e50c01f49e43069fc7d1"
         assert get_current_navigation_actor() == "inherited-actor"
         assert extra_context.get() == "inherited-value"
         return httpx.Response(

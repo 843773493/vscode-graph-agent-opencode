@@ -2,9 +2,25 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  parseLinuxProcStat,
   parsePosixPsStat,
   parsePosixSessionProcesses,
 } from "./terminalProcessUtils.js";
+
+test("Linux stat 保留退出状态与身份，命令名中的空格和右括号不改变字段位置", () => {
+  const fields = ["Z", "1", "4312", "4312", ...Array(15).fill("0"), "1000"];
+  assert.deepEqual(
+    parseLinuxProcStat(`4312 (worker ) name) ${fields.join(" ")}`),
+    {
+      pid: 4312,
+      state: "Z",
+      ppid: 1,
+      processGroupId: 4312,
+      processSessionId: 4312,
+      processStartTime: 1000,
+    },
+  );
+});
 
 test("解析 BSD ps 的进程组、session 和启动身份", () => {
   assert.deepEqual(

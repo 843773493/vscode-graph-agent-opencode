@@ -26,9 +26,10 @@ from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
 from tests.e2e.system.workspace_services.terminal.terminal_process_helpers import (
-    start_terminal_backend,
     terminal_ports,
 )
+from tests.harness.python.run_context import TestRunContext
+from tests.harness.python.terminal_backend import start_terminal_backend
 from tests.support.api_waiters import wait_for_job_done
 from tests.support.messages import last_assistant_message
 from tests.support.processes import (
@@ -74,6 +75,7 @@ def e2e_terminal_backend(
         backend_port=terminal_port,
         frontend_port=frontend_port,
         workspace_root=e2e_workspace_root_path,
+        artifacts_dir=TestRunContext.from_test_file(Path(__file__)).artifacts_dir,
     )
     try:
         yield process

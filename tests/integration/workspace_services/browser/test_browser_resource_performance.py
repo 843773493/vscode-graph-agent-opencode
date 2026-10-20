@@ -7,6 +7,7 @@ import subprocess
 import threading
 import time
 from collections.abc import Generator
+from contextlib import ExitStack
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from uuid import uuid4
@@ -18,7 +19,7 @@ import websockets
 from app.core.workspace_identity import load_or_create_workspace_id
 from tests.support.ports import integration_port_block_for_file
 from tests.support.processes import (
-    kill_process_on_port,
+    ensure_local_port_available,
     terminate_process,
     wait_for_http_ok,
 )
@@ -33,7 +34,7 @@ MIN_INTERACTIVE_STREAM_FPS = 15.0
 MAX_INTERACTIVE_STREAM_BITRATE_BPS = 2_200_000
 MAX_ATTACH_FIRST_FRAME_MS = 700
 MAX_LATEST_FRAME_AFTER_ACK_MS = 250
-MIN_SUPERSEDED_FRAME_AGE_SECONDS = 0.2
+MIN_LATEST_FRAME_CAPTURE_INTERVAL_SECONDS = 0.2
 
 
 class _DynamicPageHandler(BaseHTTPRequestHandler):
@@ -64,35 +65,45 @@ def _browser_backend_process(
     backend_port: int,
     log_path: Path,
 ) -> subprocess.Popen[str]:
+    ensure_local_port_available(backend_port, service_name="Browser 性能测试后端")
     project_root = Path.cwd().resolve()
-    log_file = log_path.open("a", encoding="utf-8")
-    process = subprocess.Popen(
-        [
-            "node",
-            "backend.js",
-            "--host",
-            "127.0.0.1",
-            "--port",
-            str(backend_port),
-            "--frontend-url",
-            "http://127.0.0.1:1",
-            "--workspace-root",
-            str(workspace_root),
-        ],
-        cwd=project_root / "src" / "workspace-services" / "browser" / "server",
-        env={
-            **os.environ,
-            "WORKSPACE_ROOT": str(workspace_root),
-            "BOXTEAM_BROWSER_WORKSPACE_ROOT": str(workspace_root),
-            "BOXTEAM_WORKSPACE_ID": load_or_create_workspace_id(workspace_root),
-        },
-        stdout=log_file,
-        stderr=subprocess.STDOUT,
-        text=True,
-        start_new_session=True,
-    )
-    log_file.close()
-    wait_for_http_ok(f"http://127.0.0.1:{backend_port}/health", process)
+    with log_path.open("a", encoding="utf-8") as log_file:
+        process = subprocess.Popen(
+            [
+                "node",
+                "backend.js",
+                "--host",
+                "127.0.0.1",
+                "--port",
+                str(backend_port),
+                "--frontend-url",
+                "http://127.0.0.1:1",
+                "--workspace-root",
+                str(workspace_root),
+            ],
+            cwd=project_root / "src" / "workspace-services" / "browser" / "server",
+            env={
+                **os.environ,
+                "WORKSPACE_ROOT": str(workspace_root),
+                "BOXTEAM_BROWSER_WORKSPACE_ROOT": str(workspace_root),
+                "BOXTEAM_WORKSPACE_ID": load_or_create_workspace_id(workspace_root),
+            },
+            stdout=log_file,
+            stderr=subprocess.STDOUT,
+            text=True,
+            start_new_session=True,
+        )
+    try:
+        wait_for_http_ok(f"http://127.0.0.1:{backend_port}/health", process)
+    except BaseException as startup_error:
+        try:
+            terminate_process(process)
+        except BaseException as cleanup_error:  # noqa: BLE001 - 启动和清理错误一并保留
+            raise BaseExceptionGroup(
+                "Browser 性能测试后端就绪检查失败且进程清理失败",
+                [startup_error, cleanup_error],
+            ) from None
+        raise
     return process
 
 
@@ -335,7 +346,6 @@ async def _measure_latest_frame_delivery(backend_port: int, browser_id: str, wor
             assert delivery["frames_superseded"] > 0, delivery
         ack_started_at = time.monotonic()
         await _ack_browser_frame(websocket, first_frame)
-        await asyncio.sleep(0.05)
         next_frame: bytes | None = None
         while next_frame is None:
             message = await asyncio.wait_for(websocket.recv(), timeout=2)
@@ -346,7 +356,8 @@ async def _measure_latest_frame_delivery(backend_port: int, browser_id: str, wor
         await websocket.send(json.dumps({"type": "detach"}))
     return {
         "next_frame_after_ack_ms": received_after_ack_ms,
-        "captured_frame_age_seconds": (
+        # 两帧捕获时间之差，证明待发帧已更新；不是捕获到接收之间的帧龄。
+        "capture_interval_seconds": (
             float(next_metadata["timestamp"]) - float(first_metadata["timestamp"])
         ),
     }
@@ -380,16 +391,17 @@ def test_browser_resource_governance_meets_first_ci_budget(
     result_path.unlink(missing_ok=True)
     log_path.unlink(missing_ok=True)
     port = integration_port_block_for_file(Path(request.node.fspath)).port(60)
-    kill_process_on_port(port)
-    process = _browser_backend_process(
-        workspace_root=workspace_root,
-        backend_port=port,
-        log_path=log_path,
-    )
     measurements: dict[str, object] = {}
     workspace_id = load_or_create_workspace_id(workspace_root)
-    client = httpx.Client(base_url=f"http://127.0.0.1:{port}", headers=_owner_headers(workspace_id), timeout=30)
-    try:
+    with ExitStack() as lifetime:
+        process = _browser_backend_process(
+            workspace_root=workspace_root,
+            backend_port=port,
+            log_path=log_path,
+        )
+        lifetime.callback(terminate_process, process)
+        client = httpx.Client(base_url=f"http://127.0.0.1:{port}", headers=_owner_headers(workspace_id), timeout=30)
+        lifetime.callback(client.close)
         first = _data(client.post(
             "/api/browsers",
             json=_create_options(workspace_id, dynamic_page_server),
@@ -470,8 +482,10 @@ def test_browser_resource_governance_meets_first_ci_budget(
             backend_port=port,
             log_path=log_path,
         )
+        lifetime.callback(terminate_process, process)
         client.close()
         client = httpx.Client(base_url=f"http://127.0.0.1:{port}", headers=_owner_headers(workspace_id), timeout=30)
+        lifetime.callback(client.close)
         restored_record = _data(client.get(f"/api/browsers/{first_id}"))
         assert restored_record["resource_state"] == "discarded"
         shutdown_checkpoint = _data(client.get(f"/api/browsers/{shutdown_hot_id}"))
@@ -518,7 +532,7 @@ def test_browser_resource_governance_meets_first_ci_budget(
 
         latest_frame = asyncio.run(_measure_latest_frame_delivery(port, first_id, workspace_id))
         assert latest_frame["next_frame_after_ack_ms"] <= MAX_LATEST_FRAME_AFTER_ACK_MS
-        assert latest_frame["captured_frame_age_seconds"] >= MIN_SUPERSEDED_FRAME_AGE_SECONDS
+        assert latest_frame["capture_interval_seconds"] >= MIN_LATEST_FRAME_CAPTURE_INTERVAL_SECONDS
 
         static_browser = _data(client.post(
             "/api/browsers",
@@ -565,16 +579,12 @@ def test_browser_resource_governance_meets_first_ci_budget(
                 "max_interactive_stream_bitrate_bps": MAX_INTERACTIVE_STREAM_BITRATE_BPS,
                 "max_attach_first_frame_ms": MAX_ATTACH_FIRST_FRAME_MS,
                 "max_latest_frame_after_ack_ms": MAX_LATEST_FRAME_AFTER_ACK_MS,
-                "min_superseded_frame_age_seconds": MIN_SUPERSEDED_FRAME_AGE_SECONDS,
+                "min_latest_frame_capture_interval_seconds": MIN_LATEST_FRAME_CAPTURE_INTERVAL_SECONDS,
             },
         }
         result_path.write_text(
             json.dumps(measurements, ensure_ascii=False, indent=2) + "\n",
             encoding="utf-8",
         )
-    finally:
-        client.close()
-        terminate_process(process)
-        kill_process_on_port(port)
 
     assert result_path.is_file(), measurements

@@ -6,7 +6,6 @@ import shutil
 from collections.abc import Callable, Iterator
 from pathlib import Path
 
-import commentjson
 import pytest
 from dotenv import load_dotenv
 
@@ -17,6 +16,7 @@ from tests.support.session_catalog_owner import (
     FixtureCatalogOwner,
     fixture_catalog_scope,
 )
+from tests.support.workspaces import render_test_workspace_config
 
 # 测试进程显式加载仓库环境；产品运行时只读取 BOXTEAM_HOME/config/.env。
 load_dotenv(Path.cwd() / ".env", override=False)
@@ -139,11 +139,10 @@ def setup_test_config(
     config_root = boxteam_home / "config"
     config_root.mkdir(parents=True)
     if os.path.exists(test_config_path):
-        payload = commentjson.loads(Path(test_config_path).read_text(encoding="utf-8"))
-        payload["$schema"] = "./workspace_schema.jsonc"
-        payload["config_version"] = 1
         (config_root / "workspace.jsonc").write_text(
-            json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+            render_test_workspace_config(
+                Path(test_config_path).read_text(encoding="utf-8"),
+            ),
             encoding="utf-8",
         )
         (config_root / "workspace_schema.jsonc").write_bytes(

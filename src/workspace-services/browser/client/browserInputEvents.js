@@ -21,7 +21,9 @@ export function bindBrowserInputEvents({
   let composing = false;
   const composingKeys = new Set();
   const consumedShortcutKeys = new Set();
-  const clickState = new Map();
+  // 仅在当前 attach 页面内比较连续点击；performance 时钟毫秒不是 Unix 时间。
+  /** @type {Map<string, {count: number, clickedAtPerformanceMs: number, x: number, y: number}>} */
+  const recentClickByButton = new Map();
   const activeClickCounts = new Map();
   let activeButtons = 0;
   let activeButton = "none";
@@ -63,14 +65,14 @@ export function bindBrowserInputEvents({
 
   function clickCountFor(event, point) {
     const button = pointerButtonName(event.button);
-    const previous = clickState.get(button);
+    const previous = recentClickByButton.get(button);
     const closeToPrevious = previous
-      && performance.now() - previous.timestamp <= 500
+      && performance.now() - previous.clickedAtPerformanceMs <= 500
       && Math.hypot(previous.x - point.x, previous.y - point.y) <= 5;
     const count = closeToPrevious ? Math.min(previous.count + 1, 3) : 1;
-    clickState.set(button, {
+    recentClickByButton.set(button, {
       count,
-      timestamp: performance.now(),
+      clickedAtPerformanceMs: performance.now(),
       x: point.x,
       y: point.y,
     });

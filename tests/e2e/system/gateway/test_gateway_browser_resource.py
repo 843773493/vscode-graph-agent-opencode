@@ -34,7 +34,7 @@ from tests.harness.python.browser_manager import (
     close_browser_frontend_process,
     start_browser_frontend_process,
 )
-from tests.harness.python.terminal_manager import (
+from tests.harness.python.terminal_frontend import (
     TerminalFrontendProcess,
     close_terminal_frontend_process,
     start_terminal_frontend_process,
@@ -619,10 +619,12 @@ async def test_gateway_routes_remote_browser_and_terminal_services(
         remote_gateway_declared = True
         terminal_frontend = start_terminal_frontend_process(
             workspace_root=local_workspace,
+            artifacts_dir=local_workspace.parent / "artifacts",
             frontend_port=terminal_frontend_port,
         )
         browser_frontend = start_browser_frontend_process(
             workspace_root=local_workspace,
+            artifacts_dir=local_workspace.parent / "artifacts",
             frontend_port=browser_frontend_port,
         )
         gateway_env = {

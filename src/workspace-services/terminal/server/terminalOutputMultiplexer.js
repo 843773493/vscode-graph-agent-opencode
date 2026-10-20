@@ -1,3 +1,5 @@
+import { encodeTerminalServerMessage } from "../protocol/messages.js";
+
 const MAX_REPLAY_BYTES = 512 * 1024;
 const MAX_CLIENT_UNACKNOWLEDGED_BYTES = 256 * 1024;
 const MAX_CONTROL_QUEUE_BYTES = 256 * 1024;
@@ -16,7 +18,9 @@ export class TerminalOutputMultiplexer {
     this.getSequence = getSequence;
     this.getSnapshot = getSnapshot;
     this.clients = new Map();
+    // Session逐一递增sequence；淘汰只推进头游标，避免逐事件搬移整个数组。
     this.outputEvents = [];
+    this.outputEventStartIndex = 0;
     this.outputEventBytes = 0;
     this.maxClientUnacknowledgedBytes = maxClientUnacknowledgedBytes;
     this.maxControlQueueBytes = maxControlQueueBytes;
@@ -48,14 +52,18 @@ export class TerminalOutputMultiplexer {
       };
     }
 
-    const earliestSequence = this.outputEvents[0]?.sequence ?? currentSequence + 1;
+    const earliestSequence = this.outputEvents[this.outputEventStartIndex]?.sequence
+      ?? currentSequence + 1;
     const canReplay = afterSequence >= earliestSequence - 1;
     if (canReplay) {
+      // 从已定位的后缀直接拼接，不再复制事件数组并分配正文数组。
+      let output = "";
+      for (let index = this.outputEventStartIndex + afterSequence - earliestSequence + 1;
+        index < this.outputEvents.length; index += 1) {
+        output += this.outputEvents[index].data;
+      }
       return {
-        output: this.outputEvents
-          .filter((event) => event.sequence > afterSequence)
-          .map((event) => event.data)
-          .join(""),
+        output,
         sequence: currentSequence,
         replayMode: "incremental",
         omittedBeforeSequence: null,
@@ -76,6 +84,7 @@ export class TerminalOutputMultiplexer {
       acknowledgedSequence: 0,
       sentSequence: 0,
       inFlightEvents: [],
+      inFlightEventStartIndex: 0,
       unacknowledgedBytes: 0,
       ready: false,
       blocked: null,
@@ -96,7 +105,8 @@ export class TerminalOutputMultiplexer {
     const requestedSequence = Number.isInteger(afterSequence) && afterSequence >= 0
       ? afterSequence
       : null;
-    const earliestSequence = this.outputEvents[0]?.sequence ?? currentSequence + 1;
+    const earliestSequence = this.outputEvents[this.outputEventStartIndex]?.sequence
+      ?? currentSequence + 1;
     const canReplay = requestedSequence !== null
       && requestedSequence <= currentSequence
       && requestedSequence >= earliestSequence - 1;
@@ -157,19 +167,34 @@ export class TerminalOutputMultiplexer {
     }
     state.acknowledgedSequence = Math.max(state.acknowledgedSequence, sequence);
     while (
-      state.inFlightEvents.length > 0
-      && state.inFlightEvents[0].sequence <= state.acknowledgedSequence
+      state.inFlightEventStartIndex < state.inFlightEvents.length
+      && state.inFlightEvents[state.inFlightEventStartIndex].sequence <= state.acknowledgedSequence
     ) {
-      const acknowledged = state.inFlightEvents.shift();
+      const acknowledged = state.inFlightEvents[state.inFlightEventStartIndex];
+      state.inFlightEvents[state.inFlightEventStartIndex] = null;
+      state.inFlightEventStartIndex += 1;
       state.unacknowledgedBytes = Math.max(
         state.unacknowledgedBytes - acknowledged.byteCount,
         0,
       );
     }
+    // ACK可能逐条到达；和重放缓冲一样，集中压缩以避免反复搬移未确认事件。
+    if (
+      state.inFlightEventStartIndex > 0
+      && state.inFlightEventStartIndex * 2 >= state.inFlightEvents.length
+    ) {
+      state.inFlightEvents = state.inFlightEvents.slice(state.inFlightEventStartIndex);
+      state.inFlightEventStartIndex = 0;
+    }
     state.blocked = null;
     this.flushClientReplay(client, state);
   }
 
+  /**
+   * timestamp 是 Session 收到本次 PTY 输出消息的 UTC ISO 时间，同次切块共享该值。
+   * 重放保留原时间；输出顺序以 sequence 为准，不按墙上时钟排序。
+   * @param {{type: "output", terminalId: string, sequence: number, data: string, timestamp: string}} event
+   */
   recordAndBroadcast(event) {
     const byteCount = Buffer.byteLength(event.data, "utf8");
     if (byteCount > this.maxClientUnacknowledgedBytes) {
@@ -179,15 +204,27 @@ export class TerminalOutputMultiplexer {
     }
     this.outputEvents.push({ ...event, byteCount });
     this.outputEventBytes += byteCount;
-    while (this.outputEventBytes > MAX_REPLAY_BYTES && this.outputEvents.length > 1) {
-      const removed = this.outputEvents.shift();
+    while (
+      this.outputEventBytes > MAX_REPLAY_BYTES
+      && this.outputEvents.length - this.outputEventStartIndex > 1
+    ) {
+      const removed = this.outputEvents[this.outputEventStartIndex];
+      this.outputEvents[this.outputEventStartIndex] = null;
+      this.outputEventStartIndex += 1;
       this.outputEventBytes -= removed.byteCount;
     }
+    // 立即释放淘汰正文；空前缀占到一半时再批量压缩，均摊搬移成本。
+    if (this.outputEventStartIndex * 2 >= this.outputEvents.length) {
+      this.outputEvents = this.outputEvents.slice(this.outputEventStartIndex);
+      this.outputEventStartIndex = 0;
+    }
+    // 只在本次同步广播内共享封包，不把编码正文留在重放缓冲中。
+    const encodedOutputs = this.clients.size > 1 ? new Map() : null;
     for (const [client, state] of this.clients) {
       if (!state.ready || state.blocked !== null) {
         continue;
       }
-      this.flushClientReplay(client, state);
+      this.flushClientReplay(client, state, encodedOutputs);
     }
   }
 
@@ -207,9 +244,10 @@ export class TerminalOutputMultiplexer {
     }
   }
 
-  flushClientReplay(client, state) {
+  flushClientReplay(client, state, encodedOutputs = null) {
     const currentSequence = this.getSequence();
-    const earliestSequence = this.outputEvents[0]?.sequence ?? currentSequence + 1;
+    const earliestSequence = this.outputEvents[this.outputEventStartIndex]?.sequence
+      ?? currentSequence + 1;
     if (state.sentSequence < earliestSequence - 1) {
       const snapshot = this.getSnapshot();
       const sent = client.sendJson({
@@ -226,27 +264,35 @@ export class TerminalOutputMultiplexer {
         sequence: currentSequence,
         byteCount: Buffer.byteLength(snapshot.buffer || "", "utf8"),
       }];
+      state.inFlightEventStartIndex = 0;
       state.unacknowledgedBytes = state.inFlightEvents[0].byteCount;
       state.blocked = "ack";
       return;
     }
-    for (const event of this.outputEvents) {
-      if (event.sequence <= state.sentSequence) {
-        continue;
-      }
+    for (
+      let index = this.outputEventStartIndex + state.sentSequence - earliestSequence + 1;
+      index < this.outputEvents.length;
+      index += 1
+    ) {
+      const event = this.outputEvents[index];
       if (!this.flushControlsThrough(client, state, event.sequence - 1)) {
         return;
       }
       if (
-        state.inFlightEvents.length > 0
+        state.inFlightEventStartIndex < state.inFlightEvents.length
         && state.unacknowledgedBytes + event.byteCount
           > this.maxClientUnacknowledgedBytes
       ) {
         state.blocked = "ack";
         return;
       }
-      const { byteCount: _byteCount, ...message } = event;
-      if (!client.sendJson(message)) {
+      let encoded = encodedOutputs?.get(event);
+      if (encoded === undefined) {
+        const { byteCount: _byteCount, ...message } = event;
+        encoded = encodeTerminalServerMessage(message);
+        encodedOutputs?.set(event, encoded);
+      }
+      if (!client.sendRaw(encoded)) {
         this.scheduleSocketRetry(client, state);
         return;
       }

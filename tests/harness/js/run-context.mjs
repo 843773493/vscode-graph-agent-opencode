@@ -10,7 +10,10 @@ export const TEST_RESULT_STATUSES = Object.freeze([
 
 function assertInside(parent, child, label) {
   const relative = path.relative(parent, child);
-  if (relative === "" || relative.startsWith("..") || path.isAbsolute(relative)) {
+  if (
+    relative === "" || relative === ".." ||
+    relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)
+  ) {
     throw new Error(`${label}必须位于 ${parent} 内，实际为 ${child}`);
   }
   return relative;
@@ -23,7 +26,8 @@ function withoutFinalExtension(filePath) {
 
 export class TestRunContext {
   #cleanups = [];
-  #closed = false;
+  #cleanupStarted = false;
+  #closePromise = null;
 
   constructor({ projectRoot, testFile }) {
     this.projectRoot = path.resolve(projectRoot);
@@ -56,7 +60,7 @@ export class TestRunContext {
   }
 
   addCleanup(label, cleanup) {
-    if (this.#closed) throw new Error("测试运行上下文已经关闭，不能再注册清理动作");
+    if (this.#cleanupStarted) throw new Error("测试运行上下文已经关闭，不能再注册清理动作");
     if (typeof cleanup !== "function") {
       throw new TypeError(`清理动作 ${label} 必须是函数`);
     }
@@ -84,18 +88,27 @@ export class TestRunContext {
   }
 
   async close() {
-    if (this.#closed) return;
-    this.#closed = true;
-    const failures = [];
-    for (const item of this.#cleanups.reverse()) {
-      try {
-        await item.cleanup();
-      } catch (error) {
-        failures.push(new Error(`清理 ${item.label} 失败`, { cause: error }));
+    if (this.#closePromise) return await this.#closePromise;
+    if (this.#cleanupStarted) return;
+    this.#cleanupStarted = true;
+    const cleanups = this.#cleanups;
+    this.#cleanups = [];
+    // 先登记唯一在途清理，再执行回调；并发关闭不能把“停止登记”当成“资源已释放”。
+    this.#closePromise = Promise.resolve().then(async () => {
+      const failures = [];
+      for (const item of cleanups.reverse()) {
+        try {
+          await item.cleanup();
+        } catch (error) {
+          failures.push(new Error(`清理 ${item.label} 失败`, { cause: error }));
+        }
       }
-    }
-    if (failures.length > 0) {
-      throw new AggregateError(failures, "测试资源清理失败");
-    }
+      if (failures.length > 0) {
+        throw new AggregateError(failures, "测试资源清理失败");
+      }
+    }).finally(() => {
+      this.#closePromise = null;
+    });
+    await this.#closePromise;
   }
 }

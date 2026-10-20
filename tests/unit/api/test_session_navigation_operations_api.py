@@ -95,7 +95,7 @@ class _StubService:
 
 @pytest.fixture(autouse=True)
 def _gateway_authenticated_scope():
-    gateway_token = set_current_gateway_id("gateway_test")
+    gateway_token = set_current_gateway_id("gateway_789f146c159aa74461af8dacca7341ca")
     actor_token = set_current_navigation_actor("user:test-user")
     try:
         yield
@@ -118,7 +118,7 @@ async def test_enqueue_maps_backpressure_to_retryable_503() -> None:
         )
 
     assert captured.value.status_code == 503
-    assert service.scopes[0].gateway_id == "gateway_test"
+    assert service.scopes[0].gateway_id == "gateway_789f146c159aa74461af8dacca7341ca"
     assert service.scopes[0].actor == "user:test-user"
 
 
@@ -151,7 +151,7 @@ async def test_enqueue_maps_conflict_to_409() -> None:
         )
 
     assert captured.value.status_code == 409
-    assert service.scopes[0].gateway_id == "gateway_test"
+    assert service.scopes[0].gateway_id == "gateway_789f146c159aa74461af8dacca7341ca"
     assert service.scopes[0].actor == "user:test-user"
 
 
@@ -170,7 +170,7 @@ async def test_operation_status_reports_unknown_ids_without_error() -> None:
     assert response.data is not None
     assert response.data.unknown_operation_ids == ["op_" + "b" * 32]
     assert response.request_id == "req_status"
-    assert service.scopes[0].gateway_id == "gateway_test"
+    assert service.scopes[0].gateway_id == "gateway_789f146c159aa74461af8dacca7341ca"
     assert service.scopes[0].actor == "user:test-user"
 
 

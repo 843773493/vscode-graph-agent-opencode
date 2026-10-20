@@ -4,9 +4,9 @@ import asyncio
 import json
 import os
 import shutil
-import subprocess
 import time
 from collections.abc import Generator
+from contextlib import ExitStack
 from pathlib import Path
 
 import httpx
@@ -15,13 +15,20 @@ import websockets
 
 from app.core.mounted_workspaces import MountedWorkspace
 from app.core.workspace_identity import load_or_create_workspace_id
-from tests.e2e.system.workspace_services.terminal.terminal_process_helpers import (
+from tests.e2e.system.workspace_services.terminal.terminal_history_fixture import (
     seed_historical_terminal_checkpoint,
-    start_terminal_backend,
+)
+from tests.e2e.system.workspace_services.terminal.terminal_process_helpers import (
     terminal_ports,
+)
+from tests.harness.python.process_output import spawn_logged_process
+from tests.harness.python.run_context import TestRunContext
+from tests.harness.python.terminal_backend import start_terminal_backend
+from tests.support.processes import (
+    ensure_local_port_available,
+    terminate_process,
     wait_for_http_ok,
 )
-from tests.support.processes import kill_process_on_port, terminate_process
 from tests.support.session_navigation_http import submit_navigation_operation
 
 
@@ -78,40 +85,45 @@ def terminal_manager_processes(
     terminal_manager_env: tuple[int, int], e2e_workspace_root_path: str
 ) -> Generator[tuple[int, int], None, None]:
     backend_port, frontend_port = terminal_manager_env
-    kill_process_on_port(backend_port)
-    kill_process_on_port(frontend_port)
+    ensure_local_port_available(frontend_port, service_name="终端管理器前端")
     project_root = Path.cwd().resolve()
     node_bin = shutil.which("node")
     if node_bin is None:
         raise RuntimeError("未找到 node，无法启动终端 e2e 进程")
-    backend_process = start_terminal_backend(
-        backend_port=backend_port, workspace_root=e2e_workspace_root_path
-    )
-    frontend_process = subprocess.Popen(
-        [
-            node_bin,
-            "server.js",
-            "--host",
-            "127.0.0.1",
-            "--port",
-            str(frontend_port),
-            "--backend-url",
-            f"http://127.0.0.1:{backend_port}",
-        ],
-        cwd=project_root / "src/workspace-services/terminal/client",
-        env=os.environ.copy(),
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-    )
-    try:
-        wait_for_http_ok(f"http://127.0.0.1:{frontend_port}/health", frontend_process)
+    artifacts_dir = TestRunContext.from_test_file(Path(__file__)).artifacts_dir
+    with ExitStack() as lifetime:
+        backend_process = start_terminal_backend(
+            backend_port=backend_port, workspace_root=e2e_workspace_root_path,
+            artifacts_dir=artifacts_dir,
+        )
+        lifetime.callback(terminate_process, backend_process)
+        frontend_process, frontend_logs = spawn_logged_process(
+            [
+                node_bin,
+                "server.js",
+                "--host",
+                "127.0.0.1",
+                "--port",
+                str(frontend_port),
+                "--backend-url",
+                f"http://127.0.0.1:{backend_port}",
+            ],
+            cwd=project_root / "src/workspace-services/terminal/client",
+            env=os.environ.copy(),
+            artifacts_dir=artifacts_dir,
+            log_name="terminal-frontend",
+        )
+        lifetime.callback(terminate_process, frontend_process)
+        try:
+            wait_for_http_ok(
+                f"http://127.0.0.1:{frontend_port}/health", frontend_process,
+                timeout_seconds=30,
+            )
+        except BaseException as error:
+            for path in frontend_logs:
+                error.add_note(f"Terminal 测试进程日志：{path}")
+            raise
         yield backend_port, frontend_port
-    finally:
-        terminate_process(frontend_process)
-        terminate_process(backend_process)
-        kill_process_on_port(frontend_port)
-        kill_process_on_port(backend_port)
 
 
 async def _create_resource(
@@ -411,7 +423,7 @@ async def test_workspace_terminal_survives_source_session_delete(
     terminal_id = resource["resource_id"]
     client.headers.update(
         {
-            "X-BoxTeam-Gateway-Id": "terminal-e2e",
+            "X-BoxTeam-Gateway-Id": "gateway_0123456789abcdef0123456789abcdef",
             "X-BoxTeam-Navigation-Actor": "guest:terminal-e2e",
         }
     )

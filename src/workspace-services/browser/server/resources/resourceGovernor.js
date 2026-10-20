@@ -1,6 +1,14 @@
 import { BrowserMemoryPressureMonitor } from "./memoryPressure.js";
 import { chooseResourcePlan, DEFAULT_RESOURCE_POLICY } from "./resourcePolicy.js";
 
+/**
+ * @typedef {object} ResourceBatchLimits
+ * @property {number} maxActions 单轮计划的动作数量上限。
+ * @property {number} maxDurationMs 动作块之间检查的软耗时预算；不打断在途动作。
+ * @property {number} freezeConcurrency 同一动作块最多并发冻结的资源数。
+ * @property {number} discardConcurrency 同一动作块最多并发冷回收的资源数。
+ */
+
 export const DEFAULT_RESOURCE_BATCH_POLICY = Object.freeze({
   normal: Object.freeze({ maxActions: 4, maxDurationMs: 250, freezeConcurrency: 1, discardConcurrency: 4 }),
   warning: Object.freeze({ maxActions: 8, maxDurationMs: 500, freezeConcurrency: 1, discardConcurrency: 4 }),
@@ -10,14 +18,14 @@ export const DEFAULT_RESOURCE_BATCH_POLICY = Object.freeze({
 
 const RECENT_ACTION_ERROR_LIMIT = 20;
 
-function errorRecord(error, decision, occurredAt) {
+function errorRecord(error, decision, occurredAtUnixMs) {
   return {
     browser_id: decision.browserId,
     action: decision.action,
     reason: decision.reason,
     error_code: error?.code || "browser_resource_action_failed",
     message: error instanceof Error ? error.message : String(error),
-    occurred_at: new Date(occurredAt).toISOString(),
+    occurred_at: new Date(occurredAtUnixMs).toISOString(),
   };
 }
 
@@ -46,7 +54,6 @@ export class BrowserResourceGovernor {
     pressureIntervalMs = 1_000,
     backlogIntervalMs = 100,
     failedBatchBackoffMs = 1_000,
-    postActionDelayMs = null,
     allowDiscard = true,
     now = () => Date.now(),
   }) {
@@ -56,13 +63,15 @@ export class BrowserResourceGovernor {
     this.batchPolicy = batchPolicy;
     this.normalIntervalMs = normalIntervalMs;
     this.pressureIntervalMs = pressureIntervalMs;
-    this.backlogIntervalMs = postActionDelayMs ?? backlogIntervalMs;
+    this.backlogIntervalMs = backlogIntervalMs;
     this.failedBatchBackoffMs = failedBatchBackoffMs;
     this.allowDiscard = allowDiscard;
+    /** @type {() => number} 注入时钟返回Unix毫秒绝对时刻，ISO回执与时差预算共用它。 */
     this.now = now;
     this.timer = null;
     this.running = false;
-    this.actionRetryAfterMs = new Map();
+    /** @type {Map<string, number>} 资源下次允许动作的Unix毫秒期限，不是退避时长。 */
+    this.actionRetryAfterUnixMs = new Map();
     this.state = {
       running: false,
       last_sample: null,
@@ -107,6 +116,16 @@ export class BrowserResourceGovernor {
 
   async collectPolicySnapshots() {
     const sessions = this.manager.runningSessions();
+    if (this.actionRetryAfterUnixMs.size > 0) {
+      const currentBrowserIds = new Set(sessions.map((session) => session.id));
+      const nowUnixMs = this.now();
+      // 退避只属于当前治理对象；离开列表或已到期的期限不依赖快照成功才能清理。
+      for (const [browserId, retryAfterUnixMs] of this.actionRetryAfterUnixMs) {
+        if (!currentBrowserIds.has(browserId) || retryAfterUnixMs <= nowUnixMs) {
+          this.actionRetryAfterUnixMs.delete(browserId);
+        }
+      }
+    }
     const settled = await Promise.allSettled(sessions.map(async (session) => {
       if (typeof session.resourcePolicySnapshot === "function") return session.resourcePolicySnapshot();
       return await session.resourceSnapshot({ inspectPage: false });
@@ -117,9 +136,9 @@ export class BrowserResourceGovernor {
       const result = settled[index];
       const session = sessions[index];
       if (result.status === "fulfilled") {
-        const retryAfterMs = this.actionRetryAfterMs.get(session.id) || 0;
-        if (retryAfterMs <= this.now()) {
-          this.actionRetryAfterMs.delete(session.id);
+        const retryAfterUnixMs = this.actionRetryAfterUnixMs.get(session.id) || 0;
+        if (retryAfterUnixMs <= this.now()) {
+          this.actionRetryAfterUnixMs.delete(session.id);
           snapshots.push(result.value);
         } else {
           snapshots.push({
@@ -130,7 +149,7 @@ export class BrowserResourceGovernor {
                 code: "resource_action_backoff",
                 class: "hard",
                 observed_at: new Date(this.now()).toISOString(),
-                expires_at: new Date(retryAfterMs).toISOString(),
+                expires_at: new Date(retryAfterUnixMs).toISOString(),
               },
             ],
           });
@@ -162,7 +181,7 @@ export class BrowserResourceGovernor {
 
   async executeDecision(decision, pressureLevel) {
     const session = this.manager.get(decision.browserId);
-    const startedAt = this.now();
+    const actionStartedAtUnixMs = this.now();
     const allowSoftProtection = ["critical", "emergency"].includes(pressureLevel);
     let finalSnapshot;
     if (decision.action === "freeze") {
@@ -173,20 +192,21 @@ export class BrowserResourceGovernor {
     return {
       ...decision,
       pressure_level: pressureLevel,
-      started_at: new Date(startedAt).toISOString(),
-      duration_ms: this.now() - startedAt,
+      started_at: new Date(actionStartedAtUnixMs).toISOString(),
+      duration_ms: this.now() - actionStartedAtUnixMs,
       final_resource_state: finalSnapshot?.resource_state
         || (decision.action === "freeze" ? "frozen" : "discarded"),
     };
   }
 
+  /** @param {ResourceBatchLimits} limits */
   async executePlan(actions, pressureLevel, limits) {
-    const startedAt = this.now();
+    const batchStartedAtUnixMs = this.now();
     const completed = [];
     const errors = [];
     let cursor = 0;
     while (cursor < actions.length) {
-      if (completed.length + errors.length > 0 && this.now() - startedAt >= limits.maxDurationMs) {
+      if (completed.length + errors.length > 0 && this.now() - batchStartedAtUnixMs >= limits.maxDurationMs) {
         break;
       }
       const actionName = actions[cursor].action;
@@ -216,12 +236,12 @@ export class BrowserResourceGovernor {
       completed,
       errors,
       unexecuted: actions.slice(cursor),
-      duration_ms: this.now() - startedAt,
+      duration_ms: this.now() - batchStartedAtUnixMs,
     };
   }
 
   async runCycle() {
-    const cycleStartedAt = this.now();
+    const cycleStartedAtUnixMs = this.now();
     const sample = await this.memoryMonitor.sample();
     this.state.last_sample = sample;
     this.state.error = null;
@@ -229,11 +249,11 @@ export class BrowserResourceGovernor {
     if (!limits) {
       throw new Error(`未知浏览器资源压力等级: ${sample.level}`);
     }
-    const nowMs = this.now();
+    const nowUnixMs = this.now();
     const collection = await this.collectPolicySnapshots();
     const plan = chooseResourcePlan(collection.snapshots, {
       pressureLevel: sample.level,
-      nowMs,
+      nowUnixMs,
       policy: this.policy,
       allowDiscard: this.allowDiscard,
       maxActions: limits.maxActions,
@@ -247,14 +267,14 @@ export class BrowserResourceGovernor {
     this.state.last_action = execution.completed.at(-1) || null;
     const cycleErrors = [...collection.errors, ...execution.errors];
     for (const completed of execution.completed) {
-      this.actionRetryAfterMs.delete(completed.browserId);
+      this.actionRetryAfterUnixMs.delete(completed.browserId);
     }
     for (const error of execution.errors) {
       const backoffMs = [
         "browser_checkpoint_too_large",
         "browser_checkpoint_workspace_quota_exceeded",
       ].includes(error.error_code) ? 60_000 : 5_000;
-      this.actionRetryAfterMs.set(error.browser_id, this.now() + backoffMs);
+      this.actionRetryAfterUnixMs.set(error.browser_id, this.now() + backoffMs);
     }
     if (cycleErrors.length > 0) {
       for (const error of cycleErrors) {
@@ -271,24 +291,24 @@ export class BrowserResourceGovernor {
     const allAttemptedActionsFailed = plan.actions.length > 0
       && execution.completed.length === 0
       && execution.errors.length > 0;
-    const interval = allAttemptedActionsFailed
+    const nextCycleDelayMs = allAttemptedActionsFailed
       ? this.failedBatchBackoffMs
       : (hasBacklog
           ? this.backlogIntervalMs
           : (sample.level === "normal" ? this.normalIntervalMs : this.pressureIntervalMs));
     this.state.last_cycle = {
-      started_at: new Date(cycleStartedAt).toISOString(),
-      duration_ms: this.now() - cycleStartedAt,
+      started_at: new Date(cycleStartedAtUnixMs).toISOString(),
+      duration_ms: this.now() - cycleStartedAtUnixMs,
       snapshot_count: collection.snapshots.length,
       planned_action_count: plan.actions.length,
       completed_action_count: execution.completed.length,
       failed_action_count: execution.errors.length,
       snapshot_failure_count: collection.errors.length,
       total_failure_count: cycleErrors.length,
-      action_backoff_count: this.actionRetryAfterMs.size,
+      action_backoff_count: this.actionRetryAfterUnixMs.size,
       soft_action_budget_ms: limits.maxDurationMs,
     };
-    this.schedule(interval);
+    this.schedule(nextCycleDelayMs);
     return this.snapshot();
   }
 

@@ -26,30 +26,26 @@ function classNamesFromSelection(element) {
   return element.classes.trim().split(/\s+/).filter(Boolean);
 }
 
-function elementDisplayNames(element) {
+// 上下文中的CSS形状显示标签，不是可执行selector或稳定元素身份。
+function elementContextLabel(element) {
   const tagName = typeof element.tag === "string" ? element.tag.toLowerCase() : "element";
+  if (Array.isArray(element.ancestors) && element.ancestors.length > 0) {
+    let contextElement = element.ancestors[element.ancestors.length - 1];
+    let pseudoElementSuffix = "";
+    if (typeof contextElement.tagName === "string" && contextElement.tagName.startsWith("::") && element.ancestors.length > 1) {
+      pseudoElementSuffix = contextElement.tagName;
+      contextElement = element.ancestors[element.ancestors.length - 2];
+    }
+    const contextTagName = typeof contextElement.tagName === "string" ? contextElement.tagName.toLowerCase() : tagName;
+    const contextId = contextElement.id ? `#${contextElement.id}` : "";
+    const contextClasses = Array.isArray(contextElement.classNames) && contextElement.classNames.length > 0
+      ? `.${contextElement.classNames.join(".")}`
+      : "";
+    return `${contextTagName}${contextId}${contextClasses}${pseudoElementSuffix}`;
+  }
   const id = element.id ? `#${element.id}` : "";
   const classes = classNamesFromSelection(element);
-  let shortName = `${tagName}${id}`;
-  let fullName = `${shortName}${classes.length > 0 ? `.${classes.join(".")}` : ""}`;
-
-  if (Array.isArray(element.ancestors) && element.ancestors.length > 0) {
-    let last = element.ancestors[element.ancestors.length - 1];
-    let pseudo = "";
-    if (typeof last.tagName === "string" && last.tagName.startsWith("::") && element.ancestors.length > 1) {
-      pseudo = last.tagName;
-      last = element.ancestors[element.ancestors.length - 2];
-    }
-    const ancestorTagName = typeof last.tagName === "string" ? last.tagName.toLowerCase() : tagName;
-    const ancestorId = last.id ? `#${last.id}` : "";
-    const ancestorClasses = Array.isArray(last.classNames) && last.classNames.length > 0
-      ? `.${last.classNames.join(".")}`
-      : "";
-    shortName = `${ancestorTagName}${ancestorId}${pseudo}`;
-    fullName = `${ancestorTagName}${ancestorId}${ancestorClasses}${pseudo}`;
-  }
-
-  return { fullName };
+  return `${tagName}${id}${classes.length > 0 ? `.${classes.join(".")}` : ""}`;
 }
 
 /**
@@ -59,9 +55,8 @@ function elementDisplayNames(element) {
  */
 export function createBrowserElementContextValue(element) {
   const sections = [];
-  const { fullName } = elementDisplayNames(element);
   sections.push("Attached Element Context from Integrated Browser");
-  sections.push(`Element: ${fullName}`);
+  sections.push(`Element: ${elementContextLabel(element)}`);
 
   if (element.url) {
     sections.push(`URL: ${element.url}`);

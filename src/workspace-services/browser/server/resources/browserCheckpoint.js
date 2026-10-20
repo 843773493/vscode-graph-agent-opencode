@@ -2,16 +2,28 @@ const CHECKPOINT_VERSION = 1;
 
 async function capturePageState(entry) {
   const pageState = await entry.page.evaluate(() => {
+    // 本次同步采集内按父节点索引一次兄弟顺序；后一次采集必须重新读取DOM。
+    const siblingIndexesByParent = new WeakMap();
     function selectorFor(element) {
       if (element.id) return `#${CSS.escape(element.id)}`;
       const segments = [];
       let current = element;
       while (current instanceof Element && current !== document.documentElement) {
         const tag = current.tagName.toLowerCase();
-        const siblings = current.parentElement
-          ? [...current.parentElement.children].filter((item) => item.tagName === current.tagName)
-          : [];
-        const suffix = siblings.length > 1 ? `:nth-of-type(${siblings.indexOf(current) + 1})` : "";
+        const parent = current.parentElement;
+        let siblings = parent ? siblingIndexesByParent.get(parent) : null;
+        if (parent && !siblings) {
+          siblings = { counts: new Map(), positions: new Map() };
+          for (const child of parent.children) {
+            const position = (siblings.counts.get(child.tagName) || 0) + 1;
+            siblings.counts.set(child.tagName, position);
+            siblings.positions.set(child, position);
+          }
+          siblingIndexesByParent.set(parent, siblings);
+        }
+        const suffix = siblings && siblings.counts.get(current.tagName) > 1
+          ? `:nth-of-type(${siblings.positions.get(current)})`
+          : "";
         segments.unshift(`${tag}${suffix}`);
         current = current.parentElement;
       }

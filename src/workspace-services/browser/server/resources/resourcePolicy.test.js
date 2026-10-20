@@ -16,25 +16,25 @@ function snapshot(overrides = {}) {
 
 describe("浏览器资源候选策略", () => {
   test("普通状态冻结最早空闲且无保护的资源", () => {
-    const nowMs = Date.parse("2026-01-01T00:20:00.000Z");
+    const nowUnixMs = Date.parse("2026-01-01T00:20:00.000Z");
     const decision = chooseResourceAction([
       snapshot({ browser_id: "browser_new", last_user_interaction_at: "2026-01-01T00:15:00.000Z" }),
       snapshot({ browser_id: "browser_old" }),
-    ], { nowMs });
+    ], { nowUnixMs });
     expect(decision).toMatchObject({ action: "freeze", browserId: "browser_old" });
   });
 
   test("紧急压力仍保护 hard 资源但允许回收 soft keep-alive", () => {
-    const nowMs = Date.parse("2026-01-01T01:00:00.000Z");
+    const nowUnixMs = Date.parse("2026-01-01T01:00:00.000Z");
     const decision = chooseResourceAction([
       snapshot({ resource_protection_reasons: ["operation_in_flight"] }),
       snapshot({ browser_id: "browser_keep", resource_policy: "keep_alive" }),
-    ], { nowMs, pressureLevel: "emergency" });
+    ], { nowUnixMs, pressureLevel: "emergency" });
     expect(decision).toMatchObject({ action: "freeze", browserId: "browser_keep" });
   });
 
   test("严重压力下优先回收已冻结资源", () => {
-    const nowMs = Date.parse("2026-01-01T01:00:00.000Z");
+    const nowUnixMs = Date.parse("2026-01-01T01:00:00.000Z");
     const decision = chooseResourceAction([
       snapshot({
         browser_id: "browser_frozen",
@@ -42,12 +42,12 @@ describe("浏览器资源候选策略", () => {
         frozen_at: "2026-01-01T00:30:00.000Z",
       }),
       snapshot({ browser_id: "browser_background" }),
-    ], { nowMs, pressureLevel: "critical" });
+    ], { nowUnixMs, pressureLevel: "critical" });
     expect(decision).toMatchObject({ action: "discard", browserId: "browser_frozen" });
   });
 
   test("正常压力的容量回压只等待冻结稳定期而不等待十分钟空闲", () => {
-    const nowMs = Date.parse("2026-01-01T01:00:31.000Z");
+    const nowUnixMs = Date.parse("2026-01-01T01:00:31.000Z");
     const snapshots = [
       ...Array.from({ length: 9 }, (_, index) => snapshot({
         browser_id: `browser_hot_${index}`,
@@ -61,15 +61,15 @@ describe("浏览器资源候选策略", () => {
       })),
     ];
 
-    expect(chooseResourcePlan(snapshots, { nowMs, maxActions: 1 }).actions[0])
+    expect(chooseResourcePlan(snapshots, { nowUnixMs, maxActions: 1 }).actions[0])
       .toMatchObject({ action: "discard", reason: "resident_capacity" });
   });
 
   test("一次生成去重批量计划并遵守热与冻结容量", () => {
-    const nowMs = Date.parse("2026-01-01T01:00:00.000Z");
+    const nowUnixMs = Date.parse("2026-01-01T01:00:00.000Z");
     const plan = chooseResourcePlan(
       Array.from({ length: 100 }, (_, index) => snapshot({ browser_id: `browser_${index}` })),
-      { nowMs, maxActions: 100 },
+      { nowUnixMs, maxActions: 100 },
     );
 
     expect(plan.actions).toHaveLength(16);
@@ -81,7 +81,7 @@ describe("浏览器资源候选策略", () => {
   });
 
   test("转换中资源计入常驻容量且 hard 保护不会被强制回收", () => {
-    const nowMs = Date.parse("2026-01-01T01:00:00.000Z");
+    const nowUnixMs = Date.parse("2026-01-01T01:00:00.000Z");
     const snapshots = [
       ...Array.from({ length: 24 }, (_, index) => snapshot({
         browser_id: `browser_transition_${index}`,
@@ -92,7 +92,7 @@ describe("浏览器资源候选策略", () => {
         resource_protections: [{ code: "user_attached", class: "hard" }],
       }),
     ];
-    const plan = chooseResourcePlan(snapshots, { nowMs, pressureLevel: "emergency", maxActions: 32 });
+    const plan = chooseResourcePlan(snapshots, { nowUnixMs, pressureLevel: "emergency", maxActions: 32 });
 
     expect(plan.actions).toEqual([]);
     expect(plan.capacity.before.resident).toBe(25);
@@ -101,12 +101,12 @@ describe("浏览器资源候选策略", () => {
   });
 
   test("容量仅被hard保护资源占满时明确归因保护溢出", () => {
-    const nowMs = Date.parse("2026-01-01T01:00:00.000Z");
+    const nowUnixMs = Date.parse("2026-01-01T01:00:00.000Z");
     const snapshots = Array.from({ length: 25 }, (_, index) => snapshot({
       browser_id: `browser_protected_${index}`,
       resource_protections: [{ code: "user_attached", class: "hard" }],
     }));
-    const plan = chooseResourcePlan(snapshots, { nowMs, pressureLevel: "emergency", maxActions: 32 });
+    const plan = chooseResourcePlan(snapshots, { nowUnixMs, pressureLevel: "emergency", maxActions: 32 });
 
     expect(plan.actions).toEqual([]);
     expect(plan.capacity.protected_capacity_overflow).toBe(true);
@@ -114,28 +114,28 @@ describe("浏览器资源候选策略", () => {
   });
 
   test("100个空闲资源在持续critical压力下经多轮批处理全部冷回收", () => {
-    let nowMs = Date.parse("2026-01-01T01:00:00.000Z");
+    let nowUnixMs = Date.parse("2026-01-01T01:00:00.000Z");
     const snapshots = Array.from({ length: 100 }, (_, index) => snapshot({
       browser_id: `browser_${index}`,
     }));
 
     for (let round = 0; round < 20; round += 1) {
       const plan = chooseResourcePlan(snapshots, {
-        nowMs,
+        nowUnixMs,
         maxActions: 32,
         pressureLevel: "critical",
       });
       for (const action of plan.actions) {
         const current = snapshots.find((item) => item.browser_id === action.browserId);
         current.resource_state = action.action === "freeze" ? "frozen" : "discarded";
-        if (action.action === "freeze") current.frozen_at = new Date(nowMs).toISOString();
+        if (action.action === "freeze") current.frozen_at = new Date(nowUnixMs).toISOString();
       }
-      nowMs += 31_000;
+      nowUnixMs += 31_000;
       if (plan.actions.length === 0) break;
     }
 
     const finalPlan = chooseResourcePlan(snapshots, {
-      nowMs,
+      nowUnixMs,
       maxActions: 32,
       pressureLevel: "critical",
     });
@@ -144,7 +144,7 @@ describe("浏览器资源候选策略", () => {
   });
 
   test("500个逻辑资源在8热16冻结预算下保持固定常驻量", () => {
-    const nowMs = Date.parse("2026-01-01T01:00:00.000Z");
+    const nowUnixMs = Date.parse("2026-01-01T01:00:00.000Z");
     const snapshots = [
       ...Array.from({ length: 8 }, (_, index) => snapshot({ browser_id: `browser_hot_${index}` })),
       ...Array.from({ length: 16 }, (_, index) => snapshot({
@@ -159,7 +159,7 @@ describe("浏览器资源候选策略", () => {
     ];
     const durations = Array.from({ length: 50 }, () => {
       const startedAt = performance.now();
-      const plan = chooseResourcePlan(snapshots, { nowMs, maxActions: 32 });
+      const plan = chooseResourcePlan(snapshots, { nowUnixMs, maxActions: 32 });
       expect(plan.actions).toEqual([]);
       expect(plan.capacity.before).toEqual({ hot: 8, frozen: 16, resident: 24 });
       return performance.now() - startedAt;

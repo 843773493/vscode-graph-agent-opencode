@@ -4,6 +4,17 @@
 
 `src/workspace-services/terminal/` 存放独立的持久终端管理进程及其浏览器 attach 页面。该目录服务于本地开发运行时，由 `scripts/launch/dev.mjs` 启动，不属于 `src/clients/web` 主前端，也不属于 Python FastAPI 后端。
 
+```text
+terminal/
+├── server/      PTY、终端状态、输出顺序和持久化
+├── client/      attach网页及静态HTTP服务
+├── protocol/    HTTP/WebSocket消息的线格式适配
+└── shared/      Node与浏览器共用的无状态命令文本处理
+    └── commandText.js  标记、退出码、输入标签与展示行过滤
+```
+
+先按资源生命周期和运行面分层；只有已有跨运行面消费者的纯逻辑才进入shared。命令标记过滤在后端快照和浏览器增量输出中共用实现，不能各保留一份算法。真实PTY缓冲与输出sequence仍只由server持有，派生展示文本不成为新的状态来源。
+
 ## 可修改内容
 
 - 可以新增或修改终端后端、终端网页前端、终端协议与本地运行脚本。

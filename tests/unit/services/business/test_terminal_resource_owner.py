@@ -10,39 +10,41 @@ import pytest
 
 from app.services.business.workspace_resources.owner import ResourceConflict
 from app.services.business.workspace_resources.records import ThreadRef
-from tests.support.terminal_owner import (
-    CHILD,
+from tests.support.resource_owners.sessions import (
+    CHILD_THREAD_A,
     SESSION_A,
     SESSION_B,
     THREAD_A,
     THREAD_B,
-    Bundle,
-    build_terminal_bundle,
+)
+from tests.support.resource_owners.terminal import (
+    TerminalOwnerFixture,
+    build_terminal_owner_fixture,
 )
 
 
 @pytest.fixture
-def bundle(tmp_path: Path) -> Bundle:
-    return build_terminal_bundle(tmp_path)
+def bundle(tmp_path: Path) -> TerminalOwnerFixture:
+    return build_terminal_owner_fixture(tmp_path)
 
 
 @pytest.mark.asyncio
-async def test_thread_filters_find_exact_associations_and_source_orphans(bundle: Bundle) -> None:
+async def test_thread_filters_find_exact_associations_and_source_orphans(bundle: TerminalOwnerFixture) -> None:
     main = await bundle.create()
-    child = await bundle.create(thread=CHILD)
+    child = await bundle.create(thread=CHILD_THREAD_A)
     await bundle.command(str(main["resource_id"]), action="detach", expected_revision=1, thread=ThreadRef(SESSION_A, THREAD_A))
     assert [item["resource_id"] for item in await bundle.owner.list_resources(thread_id=THREAD_A)] == [main["resource_id"]]
-    assert [item["resource_id"] for item in await bundle.owner.list_resources(session_id=SESSION_A, thread_id=CHILD)] == [child["resource_id"]]
+    assert [item["resource_id"] for item in await bundle.owner.list_resources(session_id=SESSION_A, thread_id=CHILD_THREAD_A)] == [child["resource_id"]]
     assert await bundle.owner.list_resources(session_id=SESSION_B, thread_id=THREAD_A) == []
     assert [item["resource_id"] for item in await bundle.owner.list_resources(source_thread_id=THREAD_A)] == [main["resource_id"]]
 
 
 @pytest.mark.asyncio
-async def test_creation_uses_catalog_main_or_real_child_and_one_owner(bundle: Bundle) -> None:
+async def test_creation_uses_catalog_main_or_real_child_and_one_owner(bundle: TerminalOwnerFixture) -> None:
     main = await bundle.create()
-    child = await bundle.create(thread=CHILD)
+    child = await bundle.create(thread=CHILD_THREAD_A)
     assert main["source_thread"] == {"session_id": SESSION_A, "thread_id": THREAD_A}
-    assert child["source_thread_id"] == CHILD
+    assert child["source_thread_id"] == CHILD_THREAD_A
     assert bundle.leases.leases_for_resource(str(main["resource_id"])) == []
     saved = json.loads((bundle.root / ".boxteam" / "terminal-resources.json").read_text())
     assert str(bundle.root) not in json.dumps(saved)
@@ -53,7 +55,7 @@ async def test_creation_uses_catalog_main_or_real_child_and_one_owner(bundle: Bu
 
 
 @pytest.mark.asyncio
-async def test_workspace_resource_outlives_source_session_and_supports_cross_session_association(bundle: Bundle) -> None:
+async def test_workspace_resource_outlives_source_session_and_supports_cross_session_association(bundle: TerminalOwnerFixture) -> None:
     resource = await bundle.create()
     rid = str(resource["resource_id"])
     resource = await bundle.command(rid, action="promote", expected_revision=1)
@@ -71,7 +73,7 @@ async def test_workspace_resource_outlives_source_session_and_supports_cross_ses
 
 
 @pytest.mark.asyncio
-async def test_thread_unload_immediately_deletes_detached_temporary_resource(bundle: Bundle) -> None:
+async def test_thread_unload_immediately_deletes_detached_temporary_resource(bundle: TerminalOwnerFixture) -> None:
     resource = await bundle.create()
     rid = str(resource["resource_id"])
     await bundle.command(rid, action="detach", expected_revision=1, thread=ThreadRef(SESSION_A, THREAD_A))
@@ -82,7 +84,7 @@ async def test_thread_unload_immediately_deletes_detached_temporary_resource(bun
 
 
 @pytest.mark.asyncio
-async def test_delete_is_unavailable_until_thread_association_is_detached(bundle: Bundle) -> None:
+async def test_delete_is_unavailable_until_thread_association_is_detached(bundle: TerminalOwnerFixture) -> None:
     resource = await bundle.create()
     rid = str(resource["resource_id"])
     ref = ThreadRef(SESSION_A, THREAD_A)
@@ -108,7 +110,7 @@ async def test_delete_is_unavailable_until_thread_association_is_detached(bundle
 
 
 @pytest.mark.asyncio
-async def test_lease_blocks_own_detach_but_not_other_thread_and_is_released_on_failure(bundle: Bundle) -> None:
+async def test_lease_blocks_own_detach_but_not_other_thread_and_is_released_on_failure(bundle: TerminalOwnerFixture) -> None:
     resource = await bundle.create(scope="workspace")
     rid = str(resource["resource_id"])
     await bundle.command(rid, action="attach", expected_revision=1, thread=ThreadRef(SESSION_B, THREAD_B))
@@ -125,7 +127,7 @@ async def test_lease_blocks_own_detach_but_not_other_thread_and_is_released_on_f
 
 
 @pytest.mark.asyncio
-async def test_orphan_reattach_at_2959_then_restart_and_reclaim_at_3000(bundle: Bundle) -> None:
+async def test_orphan_reattach_at_2959_then_restart_and_reclaim_at_3000(bundle: TerminalOwnerFixture) -> None:
     resource = await bundle.create()
     rid = str(resource["resource_id"])
     ref = ThreadRef(SESSION_A, THREAD_A)
@@ -144,7 +146,7 @@ async def test_orphan_reattach_at_2959_then_restart_and_reclaim_at_3000(bundle: 
 
 
 @pytest.mark.asyncio
-async def test_promotion_wins_against_due_reclaim_and_version_conflict_is_atomic(bundle: Bundle) -> None:
+async def test_promotion_wins_against_due_reclaim_and_version_conflict_is_atomic(bundle: TerminalOwnerFixture) -> None:
     resource = await bundle.create()
     rid = str(resource["resource_id"])
     await bundle.command(rid, action="detach", expected_revision=1, thread=ThreadRef(SESSION_A, THREAD_A))
@@ -157,7 +159,7 @@ async def test_promotion_wins_against_due_reclaim_and_version_conflict_is_atomic
 
 
 @pytest.mark.asyncio
-async def test_unknown_delete_retains_discoverable_record_and_no_false_success(bundle: Bundle) -> None:
+async def test_unknown_delete_retains_discoverable_record_and_no_false_success(bundle: TerminalOwnerFixture) -> None:
     resource = await bundle.create()
     rid = str(resource["resource_id"])
     await bundle.command(rid, action="detach", expected_revision=1, thread=ThreadRef(SESSION_A, THREAD_A))
@@ -172,7 +174,7 @@ async def test_unknown_delete_retains_discoverable_record_and_no_false_success(b
 
 
 @pytest.mark.asyncio
-async def test_recovery_marks_only_terminal_lease_unknown_without_replay(bundle: Bundle) -> None:
+async def test_recovery_marks_only_terminal_lease_unknown_without_replay(bundle: TerminalOwnerFixture) -> None:
     resource = await bundle.create(scope="workspace")
     rid = str(resource["resource_id"])
     bundle.leases.register_external(resource_id="browser-sentinel", kind="browser_context")
@@ -188,7 +190,7 @@ async def test_recovery_marks_only_terminal_lease_unknown_without_replay(bundle:
 
 
 @pytest.mark.asyncio
-async def test_operation_cancellation_releases_lease_and_keeps_workspace_pty(bundle: Bundle) -> None:
+async def test_operation_cancellation_releases_lease_and_keeps_workspace_pty(bundle: TerminalOwnerFixture) -> None:
     resource = await bundle.create(scope="workspace")
     rid = str(resource["resource_id"])
     entered = asyncio.Event()
@@ -210,7 +212,7 @@ async def test_operation_cancellation_releases_lease_and_keeps_workspace_pty(bun
 
 @pytest.mark.asyncio
 async def test_creation_read_and_final_receipt_share_one_continuous_lease(
-    bundle: Bundle, monkeypatch: pytest.MonkeyPatch,
+    bundle: TerminalOwnerFixture, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     observed: list[str] = []
     create = bundle.transport.create_terminal
@@ -256,7 +258,7 @@ async def test_creation_read_and_final_receipt_share_one_continuous_lease(
 
 @pytest.mark.asyncio
 async def test_management_and_grant_have_real_request_leases_and_do_not_add_associations(
-    bundle: Bundle, monkeypatch: pytest.MonkeyPatch,
+    bundle: TerminalOwnerFixture, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     resource = await bundle.create()
     rid = str(resource["resource_id"])
@@ -294,7 +296,7 @@ async def test_management_and_grant_have_real_request_leases_and_do_not_add_asso
 
 
 @pytest.mark.asyncio
-async def test_restart_advances_shadow_revision_revokes_grants_and_preserves_deleted_pruned_receipts(bundle: Bundle) -> None:
+async def test_restart_advances_shadow_revision_revokes_grants_and_preserves_deleted_pruned_receipts(bundle: TerminalOwnerFixture) -> None:
     resource = await bundle.create(scope="workspace")
     rid = str(resource["resource_id"])
     grant = await bundle.owner.transport_grant(
@@ -314,7 +316,7 @@ async def test_restart_advances_shadow_revision_revokes_grants_and_preserves_del
 
 
 @pytest.mark.asyncio
-async def test_stale_release_generation_is_rejected_without_touching_new_runtime_resources(bundle: Bundle) -> None:
+async def test_stale_release_generation_is_rejected_without_touching_new_runtime_resources(bundle: TerminalOwnerFixture) -> None:
     resource = await bundle.create()
     rid = str(resource["resource_id"])
     bundle.sessions.unloading_generation = 2
@@ -327,7 +329,7 @@ async def test_stale_release_generation_is_rejected_without_touching_new_runtime
 
 
 @pytest.mark.asyncio
-async def test_session_cleanup_checks_entire_lease_set_before_detaching_any_resource(bundle: Bundle) -> None:
+async def test_session_cleanup_checks_entire_lease_set_before_detaching_any_resource(bundle: TerminalOwnerFixture) -> None:
     first = await bundle.create(scope="workspace")
     second = await bundle.create(scope="workspace")
     async with bundle.owner.operation(
@@ -341,7 +343,7 @@ async def test_session_cleanup_checks_entire_lease_set_before_detaching_any_reso
 
 
 @pytest.mark.asyncio
-async def test_stopped_workspace_terminal_remains_readable_with_operation_lease(bundle: Bundle) -> None:
+async def test_stopped_workspace_terminal_remains_readable_with_operation_lease(bundle: TerminalOwnerFixture) -> None:
     resource = await bundle.create(scope="workspace")
     rid = str(resource["resource_id"])
     await bundle.command(rid, action="stop", expected_revision=1)
@@ -356,7 +358,7 @@ async def test_stopped_workspace_terminal_remains_readable_with_operation_lease(
 
 @pytest.mark.asyncio
 async def test_unknown_error_preserves_record_without_persisting_absolute_error_path(
-    bundle: Bundle, monkeypatch: pytest.MonkeyPatch,
+    bundle: TerminalOwnerFixture, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     resource = await bundle.create()
     rid = str(resource["resource_id"])
@@ -374,7 +376,7 @@ async def test_unknown_error_preserves_record_without_persisting_absolute_error_
     assert str(bundle.root) not in (bundle.root / ".boxteam" / "terminal-resources.json").read_text()
 
 @pytest.mark.asyncio
-async def test_lost_transport_grant_receipt_is_discoverable_unknown(bundle: Bundle, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_lost_transport_grant_receipt_is_discoverable_unknown(bundle: TerminalOwnerFixture, monkeypatch: pytest.MonkeyPatch) -> None:
     resource = await bundle.create()
     rid = str(resource["resource_id"])
 
@@ -396,7 +398,7 @@ async def test_lost_transport_grant_receipt_is_discoverable_unknown(bundle: Bund
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("status", ["terminated", "exited", "deleted"])
-async def test_restart_settles_crashed_operation_only_after_verified_stopped_identity(bundle: Bundle, status: str) -> None:
+async def test_restart_settles_crashed_operation_only_after_verified_stopped_identity(bundle: TerminalOwnerFixture, status: str) -> None:
     resource = await bundle.create()
     rid = str(resource["resource_id"])
     lease = bundle.leases.acquire_operation(
@@ -415,7 +417,7 @@ async def test_restart_settles_crashed_operation_only_after_verified_stopped_ide
 
 
 @pytest.mark.asyncio
-async def test_running_crashed_operation_stays_pending_until_verified_stopped_readback(bundle: Bundle) -> None:
+async def test_running_crashed_operation_stays_pending_until_verified_stopped_readback(bundle: TerminalOwnerFixture) -> None:
     resource = await bundle.create()
     rid = str(resource["resource_id"])
     bundle.leases.acquire_operation(
@@ -436,7 +438,7 @@ async def test_running_crashed_operation_stays_pending_until_verified_stopped_re
 
 
 @pytest.mark.asyncio
-async def test_stopped_unknown_identity_never_settles_crashed_operation(bundle: Bundle) -> None:
+async def test_stopped_unknown_identity_never_settles_crashed_operation(bundle: TerminalOwnerFixture) -> None:
     resource = await bundle.create()
     rid = str(resource["resource_id"])
     bundle.leases.acquire_operation(
@@ -453,7 +455,7 @@ async def test_stopped_unknown_identity_never_settles_crashed_operation(bundle: 
 
 
 @pytest.mark.asyncio
-async def test_same_generation_cleanup_recovers_lost_delete_receipt_without_replaying(bundle: Bundle, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_same_generation_cleanup_recovers_lost_delete_receipt_without_replaying(bundle: TerminalOwnerFixture, monkeypatch: pytest.MonkeyPatch) -> None:
     resource = await bundle.create()
     rid = str(resource["resource_id"])
     original = bundle.transport.delete_resource
@@ -473,7 +475,7 @@ async def test_same_generation_cleanup_recovers_lost_delete_receipt_without_repl
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("status,reconciliation,revision_delta", [("running", "verified", 0), ("deleted", "unknown", 0), ("deleted", "verified", -1)])
-async def test_same_generation_cleanup_never_replays_unconfirmed_or_stale_delete(bundle: Bundle, monkeypatch: pytest.MonkeyPatch, status: str, reconciliation: str, revision_delta: int) -> None:
+async def test_same_generation_cleanup_never_replays_unconfirmed_or_stale_delete(bundle: TerminalOwnerFixture, monkeypatch: pytest.MonkeyPatch, status: str, reconciliation: str, revision_delta: int) -> None:
     resource = await bundle.create()
     rid = str(resource["resource_id"])
     calls = []
@@ -494,7 +496,7 @@ async def test_same_generation_cleanup_never_replays_unconfirmed_or_stale_delete
 
 @pytest.fixture
 def revision_barrier(
-    bundle: Bundle, monkeypatch: pytest.MonkeyPatch,
+    bundle: TerminalOwnerFixture, monkeypatch: pytest.MonkeyPatch,
 ) -> Callable[[], tuple[asyncio.Event, asyncio.Event]]:
     def arm() -> tuple[asyncio.Event, asyncio.Event]:
         entered, release = asyncio.Event(), asyncio.Event()
@@ -515,7 +517,7 @@ def revision_barrier(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("first", ["promote", "unload"])
 async def test_promotion_and_unload_race_at_real_owner_revision_barrier(
-    bundle: Bundle,
+    bundle: TerminalOwnerFixture,
     revision_barrier: Callable[[], tuple[asyncio.Event, asyncio.Event]],
     first: str,
 ) -> None:
@@ -570,7 +572,7 @@ async def test_promotion_and_unload_race_at_real_owner_revision_barrier(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("first", ["attach", "reclaim"])
 async def test_reattach_and_due_orphan_reclaim_race_at_real_owner_revision_barrier(
-    bundle: Bundle,
+    bundle: TerminalOwnerFixture,
     revision_barrier: Callable[[], tuple[asyncio.Event, asyncio.Event]],
     first: str,
 ) -> None:
@@ -626,7 +628,7 @@ async def test_reattach_and_due_orphan_reclaim_race_at_real_owner_revision_barri
 
 @pytest.mark.asyncio
 async def test_due_orphan_reclaim_waits_for_real_active_lease_then_converges(
-    bundle: Bundle,
+    bundle: TerminalOwnerFixture,
 ) -> None:
     resource = await bundle.create()
     rid = str(resource["resource_id"])
@@ -657,7 +659,7 @@ async def test_due_orphan_reclaim_waits_for_real_active_lease_then_converges(
 
 
 @pytest.mark.asyncio
-async def test_fork_commit_receipt_survives_recover_and_later_detach_without_second_attach(bundle: Bundle) -> None:
+async def test_fork_commit_receipt_survives_recover_and_later_detach_without_second_attach(bundle: TerminalOwnerFixture) -> None:
     resource = await bundle.create(scope="workspace")
     rid = resource["resource_id"]
     target = ThreadRef(SESSION_B, THREAD_B)
@@ -676,7 +678,7 @@ async def test_fork_commit_receipt_survives_recover_and_later_detach_without_sec
 
 @pytest.mark.asyncio
 async def test_fork_dispatching_marker_does_not_replay_after_lost_transport_receipt(
-    bundle: Bundle, monkeypatch: pytest.MonkeyPatch,
+    bundle: TerminalOwnerFixture, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     resource = await bundle.create(scope="workspace")
     rid = resource["resource_id"]

@@ -10,6 +10,7 @@ from app.core.resource_uri import (
     skill_display_uri,
 )
 from app.services.infrastructure.resource_platform.virtual_resources.resolver import (
+    RESOURCE_URI_RESOLVE_REASON_CODES,
     CatalogBinding,
     ResourceUriCatalog,
     ResourceUriResolveError,
@@ -26,6 +27,25 @@ from app.services.infrastructure.resource_platform.virtual_resources.values impo
 )
 
 _CAPS = frozenset({OPERATION_ACTIVATE, OPERATION_READ_CONTENT})
+
+
+def test_resolve_error_codes_remain_closed() -> None:
+    expected = {
+        "scope_mismatch", "unknown_resource", "unknown_operation", "capability_denied",
+        "snapshot_unavailable", "historical_snapshot_missing", "unsupported_view",
+    }
+    assert RESOURCE_URI_RESOLVE_REASON_CODES == expected
+    for code in expected:
+        assert ResourceUriResolveError(code, "解析拒绝").reason_code == code
+
+
+@pytest.mark.parametrize("code", [
+    "unregistered_reason", "unknown_scope", "invalid_path_encoding",
+    "federation-unknown-peer", "target_not_resolvable", "federation-capability-denied",
+])
+def test_resolve_error_rejects_unregistered_and_other_domain_codes(code: str) -> None:
+    with pytest.raises(ValueError, match="未知 ResourceUriResolveError reason_code"):
+        ResourceUriResolveError(code, "不得把语法或联邦错误码用于 resolver")
 
 
 class _RecordingBindings(dict):

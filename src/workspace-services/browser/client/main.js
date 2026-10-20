@@ -126,7 +126,8 @@ let reconnectTimer = null;
 let reconnectAttempt = 0;
 let currentStatus = null;
 let statusPollTimer = null;
-let frameSerial = 0;
+// 当前 attach 页面的解码序号；切页也递增以废弃旧结果，不是后端 frameId。
+let frameDecodeSequence = 0;
 let pendingFrame = null;
 let renderingFrame = false;
 let pickingElement = false;
@@ -793,7 +794,7 @@ function applyState(snapshot) {
     }
     waitingForFramePageId = nextActivePageId;
     pendingFrame = null;
-    frameSerial += 1;
+    frameDecodeSequence += 1;
     clearCanvas();
   }
   currentToolPageUrl = snapshot.url || null;
@@ -1117,18 +1118,18 @@ async function renderLatestFrame() {
     while (pendingFrame) {
       const message = pendingFrame;
       pendingFrame = null;
-      const serial = ++frameSerial;
-      const decodeStartedAt = performance.now();
+      const decodeSequence = ++frameDecodeSequence;
+      const decodeStartedAtPerformanceMs = performance.now();
       let bitmap;
       try {
         bitmap = await createImageBitmap(message.jpeg);
       } catch (error) {
-        acknowledgeFrame(message, { decodeMs: performance.now() - decodeStartedAt });
+        acknowledgeFrame(message, { decodeMs: performance.now() - decodeStartedAtPerformanceMs });
         throw error;
       }
-      const decodeMs = performance.now() - decodeStartedAt;
+      const decodeMs = performance.now() - decodeStartedAtPerformanceMs;
       if (pendingFrame
-        || serial !== frameSerial
+        || decodeSequence !== frameDecodeSequence
         || (message.pageId && currentActivePageId && message.pageId !== currentActivePageId)) {
         bitmap.close();
         acknowledgeFrame(message, { decodeMs });
@@ -1153,9 +1154,9 @@ async function renderLatestFrame() {
         canvas.width = pixelWidth;
         canvas.height = pixelHeight;
       }
-      const drawStartedAt = performance.now();
+      const drawStartedAtPerformanceMs = performance.now();
       context.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
-      const drawMs = performance.now() - drawStartedAt;
+      const drawMs = performance.now() - drawStartedAtPerformanceMs;
       bitmap.close();
       acknowledgeFrame(message, { decodeMs, drawMs });
       waitingForFramePageId = null;

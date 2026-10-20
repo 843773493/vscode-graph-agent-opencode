@@ -34,8 +34,11 @@ export class BrowserStateStore {
     this.checkpointDir = path.join(this.stateDir, "checkpoints");
     this.stateFile = path.join(this.stateDir, "browsers.json");
     this.checkpointLimits = { ...DEFAULT_CHECKPOINT_LIMITS, ...checkpointLimits };
-    this.checkpointSizes = null;
-    this.checkpointWriteTail = Promise.resolve();
+    // 配额索引记录序列化文件的字节数（含末尾换行），不是内容hash或检查点版本。
+    /** @type {Map<string, number> | null} */
+    this.checkpointSizeBytesByBrowserId = null;
+    // 读、写、删除及配额查询共用串行尾部；失败不阻断下一次显式操作。
+    this.checkpointOperationTail = Promise.resolve();
   }
 
   checkpointPath(browserId) {
@@ -47,7 +50,7 @@ export class BrowserStateStore {
 
   async readCheckpoint(browserId) {
     const filePath = this.checkpointPath(browserId);
-    const execution = this.checkpointWriteTail.then(async () => {
+    const execution = this.checkpointOperationTail.then(async () => {
       try {
         await this.verifyCheckpointSizes();
         const metadata = await stat(filePath);
@@ -65,7 +68,7 @@ export class BrowserStateStore {
         return JSON.parse(await readFile(filePath, "utf8"));
       } catch (error) {
         if (error?.code === "ENOENT") {
-          this.checkpointSizes?.delete(browserId);
+          this.checkpointSizeBytesByBrowserId?.delete(browserId);
           return null;
         }
         if ([
@@ -80,7 +83,7 @@ export class BrowserStateStore {
         throw wrapped;
       }
     });
-    this.checkpointWriteTail = execution.then(() => undefined, () => undefined);
+    this.checkpointOperationTail = execution.then(() => undefined, () => undefined);
     return await execution;
   }
 
@@ -99,10 +102,10 @@ export class BrowserStateStore {
       );
     }
     const filePath = this.checkpointPath(browserId);
-    const execution = this.checkpointWriteTail.then(async () => {
+    const execution = this.checkpointOperationTail.then(async () => {
       await this.verifyCheckpointSizes();
-      const previousBytes = this.checkpointSizes.get(browserId) || 0;
-      const totalBytes = [...this.checkpointSizes.values()].reduce((total, size) => total + size, 0);
+      const previousBytes = this.checkpointSizeBytesByBrowserId.get(browserId) || 0;
+      const totalBytes = [...this.checkpointSizeBytesByBrowserId.values()].reduce((total, size) => total + size, 0);
       const projectedBytes = totalBytes - previousBytes + sizeBytes;
       if (projectedBytes > this.checkpointLimits.workspaceCheckpointMaxBytes) {
         throw checkpointQuotaError(
@@ -129,54 +132,54 @@ export class BrowserStateStore {
         wrapped.code = error?.code || "browser_checkpoint_write_failed";
         throw wrapped;
       }
-      this.checkpointSizes.set(browserId, sizeBytes);
+      this.checkpointSizeBytesByBrowserId.set(browserId, sizeBytes);
       return { path: filePath, size_bytes: sizeBytes, workspace_bytes: projectedBytes };
     });
-    this.checkpointWriteTail = execution.then(() => undefined, () => undefined);
+    this.checkpointOperationTail = execution.then(() => undefined, () => undefined);
     return await execution;
   }
 
   async deleteCheckpoint(browserId) {
-    const execution = this.checkpointWriteTail.then(async () => {
+    const execution = this.checkpointOperationTail.then(async () => {
       await this.verifyCheckpointSizes();
       await rm(this.checkpointPath(browserId), { force: true });
-      this.checkpointSizes.delete(browserId);
+      this.checkpointSizeBytesByBrowserId.delete(browserId);
     });
-    this.checkpointWriteTail = execution.then(() => undefined, () => undefined);
+    this.checkpointOperationTail = execution.then(() => undefined, () => undefined);
     await execution;
   }
 
   async checkpointBudgetSnapshot() {
-    const execution = this.checkpointWriteTail.then(async () => {
+    const execution = this.checkpointOperationTail.then(async () => {
       await this.verifyCheckpointSizes();
-      const usedBytes = [...this.checkpointSizes.values()].reduce((total, size) => total + size, 0);
+      const usedBytes = [...this.checkpointSizeBytesByBrowserId.values()].reduce((total, size) => total + size, 0);
       return {
         used_bytes: usedBytes,
         max_bytes: this.checkpointLimits.workspaceCheckpointMaxBytes,
         remaining_bytes: this.checkpointLimits.workspaceCheckpointMaxBytes - usedBytes,
       };
     });
-    this.checkpointWriteTail = execution.then(() => undefined, () => undefined);
+    this.checkpointOperationTail = execution.then(() => undefined, () => undefined);
     return await execution;
   }
 
   async ensureCheckpointSizes() {
-    if (this.checkpointSizes !== null) return;
-    this.checkpointSizes = await this.scanCheckpointSizes({ cleanupTemporaryFiles: true });
+    if (this.checkpointSizeBytesByBrowserId !== null) return;
+    this.checkpointSizeBytesByBrowserId = await this.scanCheckpointSizes({ cleanupTemporaryFiles: true });
   }
 
   async verifyCheckpointSizes() {
-    if (this.checkpointSizes === null) {
+    if (this.checkpointSizeBytesByBrowserId === null) {
       await this.ensureCheckpointSizes();
       return;
     }
     const actual = await this.scanCheckpointSizes({ cleanupTemporaryFiles: false });
-    if (!sameCheckpointSizes(this.checkpointSizes, actual)) {
+    if (!sameCheckpointSizes(this.checkpointSizeBytesByBrowserId, actual)) {
       throw checkpointQuotaError(
         "browser_checkpoint_index_changed_externally",
         "浏览器检查点目录绕过软件发生变化",
         {
-          indexed_count: this.checkpointSizes.size,
+          indexed_count: this.checkpointSizeBytesByBrowserId.size,
           actual_count: actual.size,
         },
       );

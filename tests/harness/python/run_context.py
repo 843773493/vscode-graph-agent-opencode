@@ -110,14 +110,16 @@ class TestRunContext:
         if self._closed:
             return
         self._closed = True
+        cleanups, self._cleanups = self._cleanups, []
         failures: list[BaseException] = []
-        for label, cleanup in reversed(self._cleanups):
+        for label, cleanup in reversed(cleanups):
             try:
                 cleanup()
             except BaseException as exc:  # noqa: BLE001
-                failures.append(RuntimeError(f"清理 {label} 失败: {exc}"))
+                exc.add_note(f"清理 {label} 失败")
+                failures.append(exc)
         if failures:
-            raise ExceptionGroup("测试资源清理失败", failures)
+            raise BaseExceptionGroup("测试资源清理失败", failures)
 
     def __enter__(self) -> Self:
         return self.prepare()

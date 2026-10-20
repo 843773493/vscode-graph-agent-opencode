@@ -73,7 +73,7 @@ async def generation_client(
         headers={
             "X-Local-Token": "local-dev-token",
             "X-BoxTeam-Workspace-Id": workspace_backend_id_for_root(str(generation_backend[1])),
-            "X-BoxTeam-Gateway-Id": "0197d9a3-7d2a-7c29-8d76-58b3cf3f8a21",
+            "X-BoxTeam-Gateway-Id": "gateway_0123456789abcdef0123456789abcdef",
             "X-BoxTeam-Navigation-Actor": "guest",
         },
         timeout=30,

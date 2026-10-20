@@ -38,7 +38,7 @@ from app.services.infrastructure.resource_platform.virtual_resources.resolver im
     ResourceUriResolveError,
 )
 
-GATEWAY_ID = "gateway_control_1"
+GATEWAY_ID = "gateway_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 
 
 @pytest.fixture(autouse=True)
@@ -410,10 +410,10 @@ async def test_gateway_search_partial_errors_obey_total_character_budget() -> No
     service = GatewayContextQueryService(transport=transport)
 
     result = await service.search_gateway_context(
-        _gateway_search_request(query="marker", max_chars=1_024)
+        _gateway_search_request(query="marker", max_chars=1_200)
     )
 
-    assert result.returned_chars <= 1_024
+    assert result.returned_chars <= 1_200
     assert result.returned_chars == len(result.model_dump_json())
     assert result.truncated is True
     assert 0 < len(result.partial_errors) < len(workspace_ids)

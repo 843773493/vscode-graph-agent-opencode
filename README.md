@@ -19,6 +19,9 @@
 | 构建当前纯 Web 客户端 | `bun run build:web` |
 | 查看测试套件矩阵 | `bun run test:matrix -- --list` |
 | 运行指定测试套件 | `bun run test:matrix -- --suite=contracts-python` |
+| 按 Node/Bun 测试框架运行 Browser、Terminal 的 JS 单测 | `bun run test:matrix -- --suite=unit-workspace-services` |
+| 验证 Browser 动态元素引用与点击（真实 Chromium） | `bun run test:matrix -- --suite=integration-browser-element-references` |
+| 验证 Browser 表单检查点捕获与恢复（真实 Chromium） | `bun run test:matrix -- --suite=integration-browser-checkpoint-form-state` |
 | 运行 Web E2E 全目录（Section 8 默认场景） | `BOXTEAM_E2E_SECTION8_FOCUS=default bun run test:matrix -- --suite=e2e-web` |
 | 运行 Web Section 8 默认场景集 | `BOXTEAM_E2E_SECTION8_FOCUS=default bun run test:matrix -- --suite=e2e-web-basic-chat-tool-loop` |
 | 聚焦附件复制 Web 场景 | `BOXTEAM_E2E_SECTION8_FOCUS=copy_missing_attachment bun run test:matrix -- --suite=e2e-web-basic-chat-tool-loop` |

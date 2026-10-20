@@ -37,13 +37,13 @@ from app.services.business.terminal_resources.owner import TerminalResourceOwner
 from app.services.infrastructure.external_resource_leases import (
     ExternalResourceLeaseLedger,
 )
-from tests.support.terminal_owner import (
+from tests.support.resource_owners.sessions import (
     SESSION_A,
     SESSION_B,
     THREAD_A,
     THREAD_B,
     WORKSPACE_ID,
-    Sessions,
+    ResourceOwnerSessionsFake,
 )
 
 SOURCE_THREAD_ID = THREAD_A
@@ -257,7 +257,7 @@ class TerminalEnvironment:
 
 @pytest.fixture
 def terminal_env(tmp_path: Path) -> Iterator[TerminalEnvironment]:
-    sessions = Sessions(tmp_path)
+    sessions = ResourceOwnerSessionsFake(tmp_path)
     client = _FakeTerminalClient(tmp_path)
     owner = TerminalResourceOwner(
         workspace_root=tmp_path, workspace_id=WORKSPACE_ID, sessions=sessions,

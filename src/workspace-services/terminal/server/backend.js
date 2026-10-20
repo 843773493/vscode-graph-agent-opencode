@@ -6,7 +6,8 @@ import {
   encodeTerminalServerMessage,
   parseTerminalClientMessage,
 } from "../protocol/messages.js";
-import { TerminalManager, resolveWorkspaceRoot, validateWorkspaceId } from "./terminalManager.js";
+import { TerminalManager, resolveWorkspaceRoot } from "./terminalManager.js";
+import { validateWorkspaceId } from "./workspaceIdentity.js";
 
 const DEFAULT_HOST = "127.0.0.1";
 const DEFAULT_PORT = 8012;
@@ -387,7 +388,7 @@ async function main() {
             parsePositiveInt(message.rows, "rows"),
           );
         }
-        if (grant.revision !== targetTerminal.transportOwnerRevision) {
+        if (grant.transportOwnerRevision !== targetTerminal.transportOwnerRevision) {
           throw new Error(`终端连接授权已过期: terminal_id=${targetTerminal.id}`);
         }
         await targetTerminal.attach(client, {

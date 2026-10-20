@@ -8,6 +8,8 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+from app.core.identifier import validate_gateway_id
+
 
 @dataclass(frozen=True, slots=True)
 class FederationCredential:
@@ -141,7 +143,10 @@ def load_or_create_gateway_id(storage_path: Path) -> str:
         gateway_id = payload.get("gateway_id") if isinstance(payload, dict) else None
         if not isinstance(gateway_id, str) or not gateway_id:
             raise ValueError(f"Gateway 身份文件非法: {storage_path}")
-        return gateway_id
+        try:
+            return validate_gateway_id(gateway_id)
+        except ValueError as error:
+            raise ValueError(f"Gateway 身份文件非法: {storage_path}: {error}") from error
     storage_path.parent.mkdir(parents=True, exist_ok=True)
     gateway_id = f"gateway_{secrets.token_hex(16)}"
     descriptor = os.open(

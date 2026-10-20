@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import shutil
-import subprocess
 from collections.abc import Iterator
+from contextlib import ExitStack
 from pathlib import Path
 
 import httpx
@@ -17,13 +18,13 @@ from websockets.exceptions import InvalidStatus
 from app.core.identifier import create_uuid_hex
 from app.core.workspace_identity import load_or_create_workspace_id
 from tests.e2e.system.workspace_services.terminal.terminal_process_helpers import (
-    start_terminal_backend,
     terminal_ports_with_offset,
-    wait_for_http_ok,
     wait_process_gone,
 )
+from tests.harness.python.process_output import spawn_logged_process
 from tests.harness.python.run_context import TestRunContext
-from tests.support.processes import terminate_process
+from tests.harness.python.terminal_backend import start_terminal_backend
+from tests.support.processes import terminate_process, wait_for_http_ok
 from tests.support.workspaces import prepare_default_test_workspace
 
 
@@ -32,9 +33,8 @@ def terminal_mounts(
     request: pytest.FixtureRequest, e2e_backend_port: int
 ) -> Iterator[list[tuple[str, int, Path]]]:
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
-    processes = []
     mounts = []
-    try:
+    with ExitStack() as lifetime:
         for index, name in enumerate(("a", "b")):
             root = context.workspace_root / name
             prepare_default_test_workspace(
@@ -48,12 +48,13 @@ def terminal_mounts(
                 e2e_backend_port, 40 + index * 2
             )
             process = start_terminal_backend(
-                backend_port=backend_port, workspace_root=str(root)
+                backend_port=backend_port, workspace_root=str(root),
+                artifacts_dir=context.artifacts_dir,
             )
-            processes.append((name, process))
+            lifetime.callback(terminate_process, process)
             node = shutil.which("node")
             assert node is not None
-            frontend = subprocess.Popen(
+            frontend, frontend_logs = spawn_logged_process(
                 [
                     node,
                     "server.js",
@@ -71,24 +72,22 @@ def terminal_mounts(
                     str(Path.cwd()),
                 ],
                 cwd=Path.cwd() / "src/workspace-services/terminal/client",
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
+                env=os.environ.copy(),
+                artifacts_dir=context.artifacts_dir,
+                log_name=f"terminal-{name}-frontend",
             )
-            processes.append((f"{name}-frontend", frontend))
-            wait_for_http_ok(f"http://127.0.0.1:{frontend_port}/health", frontend)
+            lifetime.callback(terminate_process, frontend)
+            try:
+                wait_for_http_ok(
+                    f"http://127.0.0.1:{frontend_port}/health", frontend,
+                    timeout_seconds=30,
+                )
+            except BaseException as error:
+                for path in frontend_logs:
+                    error.add_note(f"Terminal 测试进程日志：{path}")
+                raise
             mounts.append((workspace_id, backend_port, root))
         yield mounts
-    finally:
-        for name, process in reversed(processes):
-            terminate_process(process)
-            stdout, stderr = process.communicate(timeout=5)
-            (context.artifacts_dir / f"terminal-{name}.stdout.log").write_text(
-                stdout, encoding="utf-8"
-            )
-            (context.artifacts_dir / f"terminal-{name}.stderr.log").write_text(
-                stderr, encoding="utf-8"
-            )
 
 
 @pytest.mark.asyncio

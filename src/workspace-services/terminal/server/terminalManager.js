@@ -1,6 +1,6 @@
 import path from "node:path";
 import { randomBytes } from "node:crypto";
-import { readFile } from "node:fs/promises";
+import { validateWorkspaceId, verifyWorkspaceIdentity } from "./workspaceIdentity.js";
 import { readProcessStat } from "./terminalProcessUtils.js";
 import {
   nowIso,
@@ -14,23 +14,6 @@ import { TerminalStateStore } from "./terminalStateStore.js";
 
 export const MAX_ACTIVE_EXECUTIONS_PER_WORKSPACE = 64;
 export const MAX_RETAINED_TERMINAL_HISTORY = 256;
-const WORKSPACE_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
-
-export function validateWorkspaceId(workspaceId) {
-  if (typeof workspaceId !== "string" || !WORKSPACE_ID_PATTERN.test(workspaceId)) {
-    throw new Error("TerminalManager 必须显式提供标准 UUID workspace_id");
-  }
-  return workspaceId;
-}
-
-export async function verifyWorkspaceIdentity(workspaceRoot, workspaceId) {
-  const identityPath = path.join(workspaceRoot, ".boxteam", "workspace-identity.json");
-  const identity = JSON.parse(await readFile(identityPath, "utf8"));
-  const actual = validateWorkspaceId(identity.workspace_id);
-  if (actual !== workspaceId) {
-    throw new Error(`Terminal 工作区 UUID 与权威身份文件不一致: expected=${workspaceId}, actual=${actual}, identity=${identityPath}`);
-  }
-}
 
 export function matchesTerminalProcessIdentity(record, stat) {
   return Boolean(
@@ -58,6 +41,15 @@ export function resolveWorkspaceRoot() {
   );
 }
 
+/**
+ * Node持有的一次性终端传输授权；领域关联的合法性由工作区owner核实。
+ * @typedef {object} TerminalTransportGrant
+ * @property {string} terminalId 被授权连接的稳定终端ID，不是PTY进程ID。
+ * @property {number} transportOwnerRevision 发放时冻结的owner版本影子，仅用于连接撤权。
+ * @property {unknown} association 领域owner传入的不透明关联，Node不据此决定资源生命周期。
+ * @property {number} expiresAtUnixMs 授权过期的Unix毫秒时刻，不是存活时长。
+ */
+
 export class TerminalManager {
   constructor({
     workspaceRoot = resolveWorkspaceRoot(),
@@ -75,6 +67,7 @@ export class TerminalManager {
     this.capacityLock = Promise.resolve();
     this.persistRequested = false;
     this.persistPromise = null;
+    /** @type {Map<string, TerminalTransportGrant>} */
     this.transportGrants = new Map();
   }
 
@@ -130,7 +123,8 @@ export class TerminalManager {
   async persist() {
     this.persistRequested = true;
     if (!this.persistPromise) {
-      this.persistPromise = this.drainPersistRequests();
+      // 先登记共享Promise再取快照，同轮请求合并；同步异常也能释放本次保存。
+      this.persistPromise = Promise.resolve().then(() => this.drainPersistRequests());
     }
     await this.persistPromise;
   }
@@ -267,10 +261,10 @@ export class TerminalManager {
     return session.snapshot();
   }
 
-  async syncOwnerRevision(id, revision) {
-    this.get(id).syncOwnerRevision(revision);
+  async syncOwnerRevision(id, transportOwnerRevision) {
+    this.get(id).syncOwnerRevision(transportOwnerRevision);
     for (const [token, grant] of this.transportGrants) {
-      if (grant.terminalId === id && grant.revision !== revision) {
+      if (grant.terminalId === id && grant.transportOwnerRevision !== transportOwnerRevision) {
         this.transportGrants.delete(token);
       }
     }
@@ -285,24 +279,24 @@ export class TerminalManager {
     }
     // 只保存短期传输授权，Thread 关联的合法性已由 Python owner 核实。
     const token = randomBytes(32).toString("base64url");
-    const expiresAt = Date.now() + 30_000;
+    const expiresAtUnixMs = Date.now() + 30_000;
     for (const [existing, grant] of this.transportGrants) {
-      if (grant.expiresAt <= Date.now()) this.transportGrants.delete(existing);
+      if (grant.expiresAtUnixMs <= Date.now()) this.transportGrants.delete(existing);
     }
     this.transportGrants.set(token, {
-      terminalId: id, revision: ownerRevision, association, expiresAt,
+      terminalId: id, transportOwnerRevision: ownerRevision, association, expiresAtUnixMs,
     });
     return {
       resource_id: id, owner_revision: ownerRevision,
-      grant_token: token, expires_at: new Date(expiresAt).toISOString(),
+      grant_token: token, expires_at: new Date(expiresAtUnixMs).toISOString(),
     };
   }
 
   consumeTransportGrant(id, token) {
     const grant = this.transportGrants.get(token);
     this.transportGrants.delete(token);
-    if (!grant || grant.terminalId !== id || grant.expiresAt <= Date.now()
-      || this.get(id).transportOwnerRevision !== grant.revision) {
+    if (!grant || grant.terminalId !== id || grant.expiresAtUnixMs <= Date.now()
+      || this.get(id).transportOwnerRevision !== grant.transportOwnerRevision) {
       throw new Error("Terminal 一次传输授权无效、过期或已消费");
     }
     return grant;

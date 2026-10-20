@@ -1,6 +1,10 @@
-import { writeFile } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
+import path from "node:path";
 import process from "node:process";
+import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
+
+import { TestRunContext } from "../../../harness/js/run-context.mjs";
 
 function requiredEnvironment(name) {
   const value = process.env[name];
@@ -18,26 +22,16 @@ const resultPath = requiredEnvironment("BOXTEAM_E2E_RESULT_PATH");
 const screenshotPath = requiredEnvironment("BOXTEAM_E2E_SCREENSHOT_PATH");
 const executablePath = process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH || undefined;
 
-const browser = await chromium.launch({ executablePath, headless: true });
-const context = await browser.newContext({ viewport: { width: 1600, height: 1000 } });
-const page = await context.newPage();
-// 控制台错误、页面异常与失败请求留档，失败时随结果输出，便于定位 attach 链路问题。
+const runContext = TestRunContext.fromTestFile(fileURLToPath(import.meta.url));
+const runtimeDirectory = path.join(runContext.outputRoot, "runtime");
+await mkdir(runtimeDirectory, { recursive: true });
+for (const name of ["TMPDIR", "TMP", "TEMP"]) process.env[name] = runtimeDirectory;
+let context;
+let page;
+let executionError;
 const consoleErrors = [];
 const pageErrors = [];
 const requestFailures = [];
-context.on("console", (message) => {
-  if (message.type() === "error") {
-    consoleErrors.push(`${Date.now()} ${message.text()}`);
-  }
-});
-context.on("pageerror", (error) => {
-  pageErrors.push(`${Date.now()} ${error.message}`);
-});
-context.on("requestfailed", (request) => {
-  requestFailures.push(
-    `${Date.now()} ${request.method()} ${request.url()} ${request.failure()?.errorText ?? ""}`,
-  );
-});
 let delayedInitialSnapshot = false;
 let delayedClientModule = false;
 let clientModuleCacheControl = null;
@@ -53,11 +47,6 @@ const result = {
   recovery: null,
   tab_and_navigation_failure: null,
 };
-context.on("response", (response) => {
-  if (response.url().includes("/api/gateway/attach/browser/main.js")) {
-    clientModuleCacheControl = response.headers()["cache-control"] || null;
-  }
-});
 
 // 共享宿主机上其他项目的 Docker 网络变更会触发 Chromium 网络变更通知，
 // 批量中断在飞的 loopback 请求（ERR_NETWORK_CHANGED，attach 模块图加载失败）。
@@ -67,38 +56,63 @@ async function fetchThroughRoute(route) {
   await route.fulfill({ response });
 }
 
-await context.route("**/api/v1/resources/*", async (route) => {
-  const request = route.request();
-  if (!delayedInitialSnapshot && request.method() === "GET") {
-    delayedInitialSnapshot = true;
-    await new Promise((resolve) => setTimeout(resolve, 600));
-  }
-  await fetchThroughRoute(route);
-});
-await context.route("**/api/gateway/attach/**", async (route) => {
-  const request = route.request();
-  const url = new URL(request.url());
-  if (/^\/api\/gateway\/attach\/(browser|terminal)\/?$/.test(url.pathname)) {
-    // 文档必须直连加载：CDP fulfill 会让文档失去本地地址归属，
-    // 触发 Chrome Local Network Access 检查阻断后续 WebSocket（ERR_BLOCKED_BY_LOCAL_NETWORK_ACCESS_CHECKS）。
-    await route.continue();
-    return;
-  }
-  if (url.pathname === "/api/gateway/attach/browser/main.js") {
-    if (abortClientModuleOnce) {
-      abortClientModuleOnce = false;
-      await route.abort("failed");
-      return;
+try {
+  const browser = await chromium.launch({ executablePath, headless: true });
+  runContext.addCleanup("手动连接 Chromium", () => browser.close());
+  context = await browser.newContext({ viewport: { width: 1600, height: 1000 } });
+  runContext.addCleanup("手动连接 context", () => context.close());
+  page = await context.newPage();
+  // 控制台错误、页面异常与失败请求留档，失败时随结果输出，便于定位 attach 链路问题。
+  context.on("console", (message) => {
+    if (message.type() === "error") {
+      consoleErrors.push(`${Date.now()} ${message.text()}`);
     }
-    if (!delayedClientModule) {
-      delayedClientModule = true;
+  });
+  context.on("pageerror", (error) => {
+    pageErrors.push(`${Date.now()} ${error.message}`);
+  });
+  context.on("requestfailed", (request) => {
+    requestFailures.push(
+      `${Date.now()} ${request.method()} ${request.url()} ${request.failure()?.errorText ?? ""}`,
+    );
+  });
+  context.on("response", (response) => {
+    if (response.url().includes("/api/gateway/attach/browser/main.js")) {
+      clientModuleCacheControl = response.headers()["cache-control"] || null;
+    }
+  });
+
+  await context.route("**/api/v1/resources/*", async (route) => {
+    const request = route.request();
+    if (!delayedInitialSnapshot && request.method() === "GET") {
+      delayedInitialSnapshot = true;
       await new Promise((resolve) => setTimeout(resolve, 600));
     }
-  }
-  await fetchThroughRoute(route);
-});
+    await fetchThroughRoute(route);
+  });
+  await context.route("**/api/gateway/attach/**", async (route) => {
+    const request = route.request();
+    const url = new URL(request.url());
+    if (/^\/api\/gateway\/attach\/(browser|terminal)\/?$/.test(url.pathname)) {
+      // 文档必须直连加载：CDP fulfill 会让文档失去本地地址归属，
+      // 触发 Chrome Local Network Access 检查阻断后续 WebSocket（ERR_BLOCKED_BY_LOCAL_NETWORK_ACCESS_CHECKS）。
+      await route.continue();
+      return;
+    }
+    if (url.pathname === "/api/gateway/attach/browser/main.js") {
+      if (abortClientModuleOnce) {
+        abortClientModuleOnce = false;
+        await route.abort("failed");
+        return;
+      }
+      if (!delayedClientModule) {
+        delayedClientModule = true;
+        await new Promise((resolve) => setTimeout(resolve, 600));
+      }
+    }
+    await fetchThroughRoute(route);
+  });
 
-try {
   await page.goto(baseUrl, { waitUntil: "domcontentloaded", timeout: 30_000 });
   // 会话按钮的可访问名包含标题之外的时间/活动文本，不能用 exact 角色名匹配；
   // 按仓库既有模式（gateway_auth 同款）用 data-session-id + hasText 定位。
@@ -394,12 +408,13 @@ try {
   await recoveryPage.close();
   await writeFile(resultPath, `${JSON.stringify(result, null, 2)}\n`, "utf8");
 } catch (error) {
-  await page.screenshot({ path: screenshotPath, fullPage: true }).catch(() => undefined);
+  executionError = error;
+  if (page) await page.screenshot({ path: screenshotPath, fullPage: true }).catch(() => undefined);
   result.console_errors = consoleErrors;
   result.page_errors = pageErrors;
   result.request_failures = requestFailures;
   const pageStates = [];
-  for (const candidate of context.pages()) {
+  for (const candidate of context?.pages() ?? []) {
     const entry = { url: candidate.url() };
     try {
       entry.iframes = await candidate.evaluate(() => [
@@ -422,5 +437,12 @@ try {
   await writeFile(resultPath, `${JSON.stringify(result, null, 2)}\n`, "utf8");
   throw error;
 } finally {
-  await browser.close();
+  try {
+    await runContext.close();
+  } catch (cleanupError) {
+    if (executionError) {
+      throw new AggregateError([executionError, cleanupError], "手动浏览器连接执行与清理均失败");
+    }
+    throw cleanupError;
+  }
 }

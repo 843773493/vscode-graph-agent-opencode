@@ -10,7 +10,7 @@
 - [x] 1.6 登记两处既存硬编码违反点并定界：`gateway` 与 `inline`（原 `builtin`）的 scope_id 硬编码违反点**均已修复**：`inline` 由 `298ef599`+`f3bd8213` 装配、`gateway` 由 `64ba30c8`/`53befbfc`/`9881a3b2` 装配，原 `skill_runtime.py` 的 `else "local"` 分支已物理删除；`distribution_id` 来源为发行包 runtime manifest（`packages/launcher/runtime-manifest.schema.json`）的 `distribution` + `version`（编码规则与缺失 fail-closed 见「统一资源寻址」change 的 requirement「inline scope 的 scope_id 由 manifest 的 distribution 与 version 定稿推导」），装配提交 `298ef599`+`f3bd8213`。**2026-10-01 第八轮复核更正**。
 - [x] 1.7 全仓 `rg` 复核「当前激活工作区 / active workspace / WORKSPACE_ROOT / 进程级单根」全部调用方，形成平移清单，确认无遗留悬空调用。
   - 2026-10-15 静态闭包：`out/tests/temp/2026/10/13/fork-contract-implementation/luna_context_owner_cleanup/artifacts/r1891-a05-caller-coverage-closure.json` 对原146路径精确分区为后端/配置/工具33、测试71、前端42，missing/extra/duplicates均为空；归类区分合法Gateway激活选路与Backend显式身份，不把关键字命中等同隐式回退。`r1893-a05-current-caller-delta.json` 沿原rg表达式及排除项核当前集合仍为146路径，新增3、移出3；新增均为Gateway控制面或显式身份测试，无Backend隐式身份，移出的旧fork测试已删除。非src旧路径沿用具名静态分类，本轮不声称其当前源码全部重新语义复核；R1898独审核此边界可支撑清单子项。此项只完成调用方清单与语义复核，复用已接受隔离动态证据，不表示4.3真实路径合同、其它任务或整个change完成。
-- [ ] 1.8 将物理工作区根绑定归入唯一原生 Gateway control-plane registry，键为 Gateway target ID 与 Backend `workspace_id`；managed Backend group 的持久化启动合同只保存成员身份与 generation，Backend runtime registry 仅作为 generation 内存视图，不作为根来源。根绑定的本机变更使用本 Gateway 既有 managed token；远端变更按 capability requirement「工作区物理根必须绑定到唯一原生 Gateway」由目标 Gateway 的 federation `managed_workspace_admin` policy 授权。
+- [x] 1.8 将物理工作区根绑定归入唯一原生 Gateway control-plane registry，键为 Gateway target ID 与 Backend `workspace_id`；managed Backend group 的持久化启动合同只保存成员身份与 generation，Backend runtime registry 仅作为 generation 内存视图，不作为根来源。根绑定的本机变更使用本 Gateway 既有 managed token；远端变更按 capability requirement「工作区物理根必须绑定到唯一原生 Gateway」由目标 Gateway 的 federation `managed_workspace_admin` policy 授权。
 
 ## 2. 服务图按 workspace_id 分区
 
@@ -50,7 +50,7 @@
 - [ ] 6.1 「只需加 workspace 参数」层：为受影响的服务层/API 单测显式传入 `workspace_id`（优先复用 `tests/unit/core/catalog_workspace_helper.py` 的 `build_catalog_workspace(tmp_path, workspace_id=...)`），不做语义重写。
 - [ ] 6.2 「必须重写」层：重写断言单一工作区/直接读 `WORKSPACE_ROOT`/跨工作区复用解析器实例的用例。
 - [ ] 6.3 「不受影响」层：确认纯算法/值对象/语法单测无需改动，避免无谓改动。
-- [ ] 6.4 新增接口契约层负向断言：`gateway`/`inline` 的 `scope_id` MUST NOT 为硬编码字面量，`workspace` scope 的 `scope_id` 与 HTTP 显式寻址的 workspace_id 同源。
+- [x] 6.4 新增接口契约层负向断言：`gateway`/`inline` 的 `scope_id` MUST NOT 为硬编码字面量，`workspace` scope 的 `scope_id` 与 HTTP 显式寻址的 workspace_id 同源。
   - 2026-10-15 workspace 子项：`test_mounted_workspace_lifespan.py::test_real_double_mount_requests_compilation_and_reverse_cleanup` 经正式显式路径读取两个真实工作区的消息，核对 DTO 身份回显及正文隔离；把 B 的完整引用提交给 A 的路径明确返回 `400/scope_mismatch`，不返回 B 的数据或资源身份。R2231 单节点通过，原件在 `out/tests/temp/2026/10/13/fork-contract-implementation/luna_remaining_acceptance_focus/artifacts/runs/r2231-mounted-messages-runtime-01/`，主核收据为 `coordinator/artifacts/mounted-and-skill-original-verification-1797.json`。本证据不单独完成 gateway/inline 子项，不勾整个 6.4。
 
 ## 7. 收口手续（具名、对称）与命名一致性
@@ -136,5 +136,7 @@
 同一闭包还须验停机共享组的非末成员DELETE：无Backend启动、剩余全组offline/停止意图/无runtime lease、新generation使旧请求陈旧、后续完整start验证剩余启动合同；清理或发布失败保旧owner/generation/成员/登记。停机safe/force沿原路由引用owner执行。非managed远程DELETE须在SSH转发清理成功后移除登记，502时保target和未清理转发，修复后可重试清理。上述增量已完成固定增审，仅本闭包勾选完成；原 change 其余任务保持各自验收范围。
 
 2026-10-08 A05验收：169源码＋7主文档完整候选继承已验基线，严格补丁重建通过；L2停机成员退出35核心＋21相关边界＋1真实Gateway通过，L3远程转发1唯一失败/重试用例通过。固定独审确认L1/L2/L3与C1/C2已关闭，复用未变动态与批末Webbuild/strict；原643Gateway结果晚于多数改动、早于最后HTTPError catch，catch由最终7精准例补验，不称643最终重跑。报告和完整候选见 `out/tests/temp/2026/10/04/024121-team-execution/coordinator/artifacts/sol-efficiency-trial/mounting-lifecycle-dto-source-bulk-dispatch/ROOT-full-final-candidate/revision3/`，L2独审见同run的 `wire_contract_reviewer/artifacts/a05-stopped-member-exit-revision3-review/`。9.2/9.3及第10节完成不代表3.3/8.2等整个change收口，真实Provider403和原goal剩余验收保留。
+
+2026-10-19 根绑定与接口身份具名复核：1.8 的唯一根来源为 Gateway registry 的 `local_workspace_root` / `resolve_backend_mounts` / `validate_local_root_bindings`，group持久化只含成员身份与generation。`out/tests/temp/openspec_takeover/artifacts/runs/root-binding-admin-native-003/` 真实peer显式授权注册、固定URI读取、Gateway重启后同UUID原根、撤权403零删除、恢复授权后删除且文件保留全部通过（1 passed，exit 0）；无授权真实Gateway负例见 `uri-mount-native-root-001/` 中对应具名单节点。该组合另有一项Goal shutdown超时，未据此声称整组合通过。6.4复用已通过的 `test_real_double_mount_requests_compilation_and_reverse_cleanup` 对A显式HTTP目标读B URI返回scope_mismatch，以及真实Gateway/inline identity与Skill矩阵；1.8只关闭实现归属，4.5仍按完整权限矩阵独立验收。
 
 4.3 的未注册目录路径边界只引用统一寻址 owner「原生目录根绑定必须由目标 Gateway 唯一持有」；该控制面绑定不是工作区注册，不复制到 mount/业务记录或普通输出。

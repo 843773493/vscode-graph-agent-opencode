@@ -4,38 +4,18 @@ import { createReadStream } from "node:fs";
 import { stat } from "node:fs/promises";
 import { stripVTControlCharacters } from "node:util";
 import { WebSocket, WebSocketServer } from "ws";
-import { BrowserFrameFlow } from "./browserFrameFlow.js";
+import { BrowserFrameFlow } from "./transport/browserFrameFlow.js";
 import {
   BrowserManager,
   BrowserTransportGrantRejected,
   resolveRequiredWorkspaceRoot,
-  validateWorkspaceId,
 } from "./browserManager.js";
-import { LatestPointerMoveDispatcher } from "./latestPointerMoveDispatcher.js";
-import { encodeServerMessage, parseClientMessage } from "./protocol.js";
+import { validateWorkspaceId } from "./workspaceIdentity.js";
+import { LatestPointerMoveDispatcher } from "./operations/latestPointerMoveDispatcher.js";
+import { encodeBinaryFrame, encodeServerMessage, parseClientMessage } from "./transport/protocol.js";
 
 const DEFAULT_HOST = "127.0.0.1";
 const DEFAULT_PORT = 8015;
-const encodedFrames = new WeakMap();
-
-function encodeBinaryFrame(frame) {
-  const metadata = Buffer.from(JSON.stringify({
-    type: "frame",
-    frameId: frame.frameId,
-    browserId: frame.browserId,
-    pageId: frame.pageId,
-    width: frame.width,
-    height: frame.height,
-    pixelWidth: frame.pixelWidth || frame.width,
-    pixelHeight: frame.pixelHeight || frame.height,
-    pageScaleFactor: frame.pageScaleFactor,
-    timestamp: frame.timestamp,
-  }), "utf8");
-  const header = Buffer.allocUnsafe(4);
-  header.writeUInt32BE(metadata.byteLength, 0);
-  return Buffer.concat([header, metadata, frame.jpeg]);
-}
-
 function parseArgs(argv) {
   const args = new Map();
   for (let index = 0; index < argv.length; index += 1) {
@@ -180,14 +160,7 @@ function requireOwner(request) {
 function wsClient(socket) {
   const frameFlow = new BrowserFrameFlow({
     socket,
-    encodeFrame(frame) {
-      let encoded = encodedFrames.get(frame);
-      if (!encoded) {
-        encoded = encodeBinaryFrame(frame);
-        encodedFrames.set(frame, encoded);
-      }
-      return encoded;
-    },
+    encodeFrame: encodeBinaryFrame,
   });
   return {
     close(code, reason) { socket.close(code, reason); },
@@ -633,7 +606,7 @@ async function main() {
       browser.assertTransport(client);
       const operation = {
         actor: `user:${client.participantId}`, action, visible,
-        revision: browser.transports.get(client).revision,
+        transportOwnerRevision: browser.transports.get(client).transportOwnerRevision,
       };
       const result = interactive
         ? await browser.runInteractiveOperation(operation, callback)
@@ -661,7 +634,7 @@ async function main() {
         browser.on("state", onState);
         browser.on("participant-pointer", onParticipantPointer);
         const output = await browser.runInteractiveOperation({
-          actor: `user:${client.participantId}`, action: "attach", revision: grant.revision,
+          actor: `user:${client.participantId}`, action: "attach", transportOwnerRevision: grant.transportOwnerRevision,
         }, () => browser.attachClient(client));
         browser.assertTransport(client);
         client.sendJson({ type: "attached", browserId: browser.id, state: output });

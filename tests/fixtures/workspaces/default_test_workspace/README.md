@@ -1,6 +1,6 @@
 # 统一测试工作区
 
-这个目录是 `example/agent-mode.mjs` 的统一测试模板。
+这个目录是仓库测试共用的只读 TypeScript 工作区模板，由 `tests/support/workspaces.py` 复制到各测试的 `out/tests/` 目录后使用。
 
 它用于演示一条完整的 agent 工作流：
 

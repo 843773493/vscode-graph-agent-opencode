@@ -48,7 +48,7 @@ from tests.support.communication import (
 )
 from tests.support.graph_binding import TEST_THREAD_GRAPH_BINDING
 
-GATEWAY = "gateway_observation_test"
+GATEWAY = "gateway_99f502c636a98dbcc80959cefae48c16"
 SOURCE = GlobalThreadAddress(GATEWAY, WORKSPACE_ID, SOURCE_SESSION, SOURCE_THREAD)
 TARGET = GlobalThreadAddress(GATEWAY, WORKSPACE_ID, TARGET_SESSION, TARGET_THREAD)
 

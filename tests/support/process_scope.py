@@ -27,14 +27,14 @@ class TestProcessScope:
             return
         self._closed = True
         cleanups, self._cleanups = self._cleanups, []
-        failures: list[Exception] = []
+        failures: list[BaseException] = []
         for _, cleanup in reversed(cleanups):
             try:
                 cleanup()
-            except Exception as error:  # noqa: BLE001 — 必须回收全部已登记进程并统一报告清理失败。
+            except BaseException as error:  # noqa: BLE001 — 中断也须回收其余已登记进程，随后保留原始错误。
                 failures.append(error)
         if failures:
-            raise ExceptionGroup("测试进程回收失败", failures)
+            raise BaseExceptionGroup("测试进程回收失败", failures)
 
 
 _ACTIVE_TEST_PROCESS_SCOPE: ContextVar[TestProcessScope | None] = ContextVar(

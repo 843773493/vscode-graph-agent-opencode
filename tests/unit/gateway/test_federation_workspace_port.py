@@ -84,10 +84,10 @@ async def http_context(monkeypatch: pytest.MonkeyPatch):
     context = _HTTPContext(port, catalog)
     monkeypatch.setattr(
         "app.gateway.federation.workspace_port.load_proxy_gateway_id",
-        lambda: "gateway_local",
+        lambda: "gateway_3097a8378d6e2c98a52a687e4a004769",
     )
     token = set_current_request_id(REQUEST_ID)
-    gateway_token = set_current_gateway_id("gateway_local")
+    gateway_token = set_current_gateway_id("gateway_3097a8378d6e2c98a52a687e4a004769")
     try:
         yield context
     finally:
@@ -112,7 +112,7 @@ def read_body() -> dict[str, object]:
             "thread_id": SOURCE_THREAD,
         },
         "target": {
-            "gateway_id": "gateway_local",
+            "gateway_id": "gateway_3097a8378d6e2c98a52a687e4a004769",
             "workspace_id": WORKSPACE_ID,
             "session_id": TARGET_SESSION,
             "thread_id": TARGET_THREAD,
@@ -134,13 +134,13 @@ async def test_main_http_uses_backend_uuid_and_preserves_request_identity(
     http_context: _HTTPContext,
 ) -> None:
     main = await http_context.port.resolve_main_thread(
-        gateway_id="gateway_local", workspace_id=WORKSPACE_ID, session_id=TARGET_SESSION
+        gateway_id="gateway_3097a8378d6e2c98a52a687e4a004769", workspace_id=WORKSPACE_ID, session_id=TARGET_SESSION
     )
     assert main == TARGET_THREAD
     request = http_context.requests[0]
     assert request.url.path == f"/api/v1/sessions/{TARGET_SESSION}/main-thread"
     assert request.headers["X-BoxTeam-Workspace-Id"] == WORKSPACE_ID
-    assert request.headers["X-BoxTeam-Gateway-Id"] == "gateway_local"
+    assert request.headers["X-BoxTeam-Gateway-Id"] == "gateway_3097a8378d6e2c98a52a687e4a004769"
     assert request.headers["X-Request-ID"] == REQUEST_ID
     assert request.extensions["timeout"] == {
         "connect": 5, "read": 5, "write": 5, "pool": 5,
@@ -176,7 +176,7 @@ async def test_main_http_rejects_untrusted_response(
         http_context.status = 503
     with pytest.raises(FederationError) as error:
         await http_context.port.resolve_main_thread(
-            gateway_id="gateway_local",
+            gateway_id="gateway_3097a8378d6e2c98a52a687e4a004769",
             workspace_id=WORKSPACE_ID,
             session_id=TARGET_SESSION,
         )
@@ -233,7 +233,7 @@ async def test_main_http_pool_keeps_concurrent_identity_and_current_projection(
 
     monkeypatch.setattr(
         "app.gateway.federation.workspace_port.load_proxy_gateway_id",
-        lambda: "gateway_local",
+        lambda: "gateway_3097a8378d6e2c98a52a687e4a004769",
     )
     async with httpx.AsyncClient(transport=httpx.MockTransport(response), trust_env=False) as client:
         port = WorkspaceSessionMainPort(http_client=client, request_timeout=3)
@@ -313,9 +313,9 @@ async def test_cold_catalog_rejects_non_json(http_context: _HTTPContext) -> None
 
 @pytest.fixture
 def context_read_body() -> dict[str, object]:
-    uri = session_resource_uri(WORKSPACE_ID, TARGET_SESSION, gateway_authority="gateway_local")
+    uri = session_resource_uri(WORKSPACE_ID, TARGET_SESSION, gateway_authority="gateway_3097a8378d6e2c98a52a687e4a004769")
     target = {
-        "gateway_id": "gateway_local", "resource_identity": str(session_resource_identity(WORKSPACE_ID, TARGET_SESSION)),
+        "gateway_id": "gateway_3097a8378d6e2c98a52a687e4a004769", "resource_identity": str(session_resource_identity(WORKSPACE_ID, TARGET_SESSION)),
         "uri": uri, "scope": "workspace",
     }
     return {

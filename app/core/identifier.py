@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from typing import Literal, Protocol
@@ -7,10 +8,7 @@ from typing import Literal, Protocol
 IdentifierPrefix = Literal[
     "adm",
     "attempt",
-    "bgm",
-    "bgt",
     "chan",
-    "comm",
     "dbgcfg",
     "evt",
     "gen",
@@ -31,7 +29,6 @@ IdentifierPrefix = Literal[
     "robs",
     "ses",
     "snapshot",
-    "src",
     "strm",
     "sub",
     "team",
@@ -41,6 +38,15 @@ IdentifierPrefix = Literal[
     "tooltest",
     "ttask",
 ]
+
+_GATEWAY_ID_PATTERN = re.compile(r"gateway_[0-9a-f]{32}")
+
+
+def validate_gateway_id(value: str) -> str:
+    """Gateway 持久身份只接受随机不透明 ID，不接受地址、端口或通道标识。"""
+    if not isinstance(value, str) or _GATEWAY_ID_PATTERN.fullmatch(value) is None:
+        raise ValueError(f"非法 gateway_id（要求 gateway_<32位小写hex>）: {value!r}")
+    return value
 
 
 def _resolve_uuid7() -> Callable[[], object]:

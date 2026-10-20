@@ -6,14 +6,14 @@ from pathlib import Path
 import pytest
 
 from tests.support.ports import (
-    E2E_PORT_BLOCK_SIZE,
     E2E_PORT_END,
     E2E_PORT_MAX_FILES,
     E2E_PORT_START,
     INTEGRATION_PORT_END,
     INTEGRATION_PORT_MAX_FILES,
     INTEGRATION_PORT_START,
-    E2EPortBlock,
+    TEST_FILE_PORT_BLOCK_SIZE,
+    TestFilePortBlock,
     e2e_port_block_for_file,
     integration_port_block_for_file,
 )
@@ -27,8 +27,8 @@ def test_integration_port_block_supports_indices_above_99() -> None:
     assert len(test_files) > 100
     assert block.index == len(test_files) - 1
     assert block.index > 99
-    assert block.start == INTEGRATION_PORT_START + block.index * E2E_PORT_BLOCK_SIZE
-    assert block.end == block.start + E2E_PORT_BLOCK_SIZE - 1
+    assert block.start == INTEGRATION_PORT_START + block.index * TEST_FILE_PORT_BLOCK_SIZE
+    assert block.end == block.start + TEST_FILE_PORT_BLOCK_SIZE - 1
     assert block.end <= INTEGRATION_PORT_END
 
 
@@ -38,7 +38,7 @@ def test_integration_and_e2e_port_ranges_are_adjacent_and_disjoint() -> None:
     assert INTEGRATION_PORT_END < E2E_PORT_START
     assert (
         E2E_PORT_END
-        == E2E_PORT_START + E2E_PORT_BLOCK_SIZE * E2E_PORT_MAX_FILES - 1
+        == E2E_PORT_START + TEST_FILE_PORT_BLOCK_SIZE * E2E_PORT_MAX_FILES - 1
     )
 
 
@@ -65,7 +65,7 @@ def test_last_file_in_layer_capacity_ends_at_configured_boundary(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     layer: str,
-    block_for_file: Callable[[Path], E2EPortBlock],
+    block_for_file: Callable[[Path], TestFilePortBlock],
     max_files: int,
     port_start: int,
     port_end: int,
@@ -82,7 +82,7 @@ def test_last_file_in_layer_capacity_ends_at_configured_boundary(
     block = block_for_file(test_files[-1])
 
     assert block.index == max_files - 1
-    assert block.start == port_end - E2E_PORT_BLOCK_SIZE + 1
+    assert block.start == port_end - TEST_FILE_PORT_BLOCK_SIZE + 1
     assert block.end == port_end
     assert block.start >= port_start
 
@@ -102,7 +102,7 @@ def test_file_beyond_layer_capacity_fails_explicitly(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     layer: str,
-    block_for_file: Callable[[Path], E2EPortBlock],
+    block_for_file: Callable[[Path], TestFilePortBlock],
     max_files: int,
 ) -> None:
     monkeypatch.chdir(tmp_path)
@@ -121,11 +121,11 @@ def test_file_beyond_layer_capacity_fails_explicitly(
 
 
 def test_port_block_keeps_offsets_in_zero_through_99() -> None:
-    block = E2EPortBlock(
+    block = TestFilePortBlock(
         test_file=Path("test_ports.py"),
         index=0,
         start=INTEGRATION_PORT_START,
-        end=INTEGRATION_PORT_START + E2E_PORT_BLOCK_SIZE - 1,
+        end=INTEGRATION_PORT_START + TEST_FILE_PORT_BLOCK_SIZE - 1,
     )
 
     assert block.port(0) == block.start

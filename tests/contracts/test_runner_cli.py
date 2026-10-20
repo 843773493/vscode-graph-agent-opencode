@@ -7,6 +7,7 @@ import commentjson
 import pytest
 
 RUNNER = Path.cwd() / "tests" / "runner" / "run-tests.mjs"
+WORKSPACE_SERVICES_RUNNER = RUNNER.with_name("run-workspace-services.mjs")
 VALID_SUITE_ID = "unit-synthetic"
 VALID_SUITE_COMMAND = [
     "bun",
@@ -142,3 +143,63 @@ def test_web_matrix_suites_keep_full_and_focused_pytest_scopes() -> None:
         "pytest",
         "tests/e2e/clients/web/test_basic_chat_tool_loop.py::test_basic_chat_tool_loop_through_real_web_surface",
     ]
+
+
+@pytest.fixture
+def workspace_services_project(tmp_path: Path) -> tuple[Path, Path]:
+    source = tmp_path / "src" / "workspace-services"
+    source.mkdir(parents=True)
+    (tmp_path / "package.json").write_text('{"type":"module"}', encoding="utf-8")
+    marker = tmp_path / "runtimes.jsonl"
+    for framework, runtime in [("node:test", "node"), ("bun:test", "bun")]:
+        (source / f"{runtime}.test.js").write_text(
+            'import { test } from ' + json.dumps(framework) + ';\n'
+            'import assert from "node:assert/strict";\n'
+            'import { appendFileSync } from "node:fs";\n'
+            f'test("{runtime}运行时", () => {{\n'
+            '  appendFileSync(process.env.RUNTIME_MARKER, JSON.stringify({\n'
+            f'    declared: "{runtime}", actual: process.versions.bun ? "bun" : "node"\n'
+            '  }) + "\\n");\n'
+            f'  assert.notEqual(process.env.FAIL_RUNTIME, "{runtime}");\n'
+            + ('  assert.equal(Buffer.byteLength("\\ud800", "utf8"), 3);\n' if runtime == "node" else '')
+            + '});\n',
+            encoding="utf-8",
+        )
+    return tmp_path, marker
+
+
+def run_workspace_services(project: Path, marker: Path, *, fail_runtime: str = "") -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["bun", str(WORKSPACE_SERVICES_RUNNER)], cwd=project,
+        env={**os.environ, "BOXTEAM_PROJECT_ROOT": str(project), "RUNTIME_MARKER": str(marker), "FAIL_RUNTIME": fail_runtime},
+        capture_output=True, text=True, timeout=10, check=False,
+    )
+
+
+@pytest.mark.parametrize("fail_runtime", ["", "node", "bun"])
+def test_workspace_services_use_declared_runtimes_and_keep_all_failures(
+    workspace_services_project: tuple[Path, Path], fail_runtime: str,
+) -> None:
+    project, marker = workspace_services_project
+
+    result = run_workspace_services(project, marker, fail_runtime=fail_runtime)
+
+    assert (result.returncode == 0) == (not fail_runtime), result.stdout + result.stderr
+    assert [json.loads(line) for line in marker.read_text().splitlines()] == [
+        {"declared": "node", "actual": "node"},
+        {"declared": "bun", "actual": "bun"},
+    ]
+
+
+@pytest.mark.parametrize("imports", ["", 'import "node:test"; import "bun:test";'])
+def test_workspace_services_reject_missing_or_mixed_framework_before_start(
+    workspace_services_project: tuple[Path, Path], imports: str,
+) -> None:
+    project, marker = workspace_services_project
+    (project / "src/workspace-services/invalid.test.js").write_text(imports, encoding="utf-8")
+
+    result = run_workspace_services(project, marker)
+
+    assert result.returncode != 0
+    assert "必须且只能导入" in result.stderr
+    assert not marker.exists()

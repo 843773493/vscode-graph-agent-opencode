@@ -2,6 +2,7 @@ import path from "node:path";
 import { randomBytes } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { existsSync, statSync } from "node:fs";
+import { validateWorkspaceId } from "./workspaceIdentity.js";
 import { BrowserSession } from "./browserSession.js";
 import { BrowserStateStore } from "./browserStateStore.js";
 import { normalizeBrowserUrl, nowIso } from "./url.js";
@@ -13,7 +14,6 @@ import {
   resolveBrowserDeviceState,
 } from "./browserDeviceProfiles.js";
 
-const WORKSPACE_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 export const DEFAULT_MAX_LOGICAL_BROWSERS_PER_WORKSPACE = 500;
 
 export class BrowserTransportGrantRejected extends Error {
@@ -24,13 +24,6 @@ export class BrowserTransportGrantRejected extends Error {
     this.operationOutcome = "rejected";
     this.browser = snapshot;
   }
-}
-
-export function validateWorkspaceId(value) {
-  if (typeof value !== "string" || !WORKSPACE_ID_PATTERN.test(value)) {
-    throw new Error("BrowserManager 必须显式提供标准 UUID workspace_id");
-  }
-  return value;
 }
 
 const DEFAULT_CHECKPOINT_RESERVATION_BYTES = 4 * 1024 * 1024;
@@ -74,6 +67,15 @@ export function resolveRequiredWorkspaceRoot(args) {
   return resolved;
 }
 
+/**
+ * Node 持有的一次性浏览器传输授权；领域关联的合法性由工作区 owner 核实。
+ * @typedef {object} BrowserTransportGrant
+ * @property {string} browserId 被授权连接的稳定浏览器资源 ID，不是内部标签页 ID。
+ * @property {number} transportOwnerRevision 发放时冻结的 owner 版本影子，仅用于连接撤权。
+ * @property {unknown} association 领域 owner 传入的不透明关联，Node 不据此决定资源生命周期。
+ * @property {number} expiresAtUnixMs 授权过期的 Unix 毫秒时刻，不是存活时长或 ISO 字符串。
+ */
+
 export class BrowserManager {
   constructor({
     workspaceRoot = resolveWorkspaceRoot(),
@@ -86,13 +88,15 @@ export class BrowserManager {
     this.workspaceId = validateWorkspaceId(workspaceId);
     this.stateStore = new BrowserStateStore({ workspaceRoot: this.workspaceRoot, workspaceId: this.workspaceId });
     this.sessions = new Map();
+    /** @type {Map<string, BrowserTransportGrant>} */
     this.transportGrants = new Map();
-    this.persistTail = Promise.resolve();
+    this.stateWriteRequested = false;
+    this.stateWritePromise = null;
     this.persistTimer = null;
     this.createAdmissionTail = Promise.resolve();
     this.checkpointCaptureTail = Promise.resolve();
     this.runtimePool = runtimePool || new BrowserRuntimePool({
-      onDisconnect: (generation) => this.handleRuntimeDisconnect(generation),
+      onDisconnect: (chromiumInstanceGeneration) => this.handleChromiumDisconnect(chromiumInstanceGeneration),
     });
     this.resourceGovernor = null;
     this.maxLogicalBrowsersPerWorkspace = maxLogicalBrowsersPerWorkspace;
@@ -129,10 +133,10 @@ export class BrowserManager {
     return await execution;
   }
 
-  handleRuntimeDisconnect(generation) {
+  handleChromiumDisconnect(chromiumInstanceGeneration) {
     for (const session of this.runningSessions()) {
-      if (session.runtimeGeneration === generation) {
-        void session.handleRuntimeDisconnect(generation);
+      if (session.chromiumInstanceGeneration === chromiumInstanceGeneration) {
+        void session.handleChromiumDisconnect(chromiumInstanceGeneration);
       }
     }
   }
@@ -152,9 +156,9 @@ export class BrowserManager {
         throw new Error(`浏览器状态文件包含非对象记录: ${this.stateStore.stateFile}`);
       }
       const record = { ...rawRecord };
-      const lockExpiresAt = Date.parse(record.agent_lock_expires_at || "");
+      const agentLockExpiresAtUnixMs = Date.parse(record.agent_lock_expires_at || "");
       if (record.agent_access_locked === true
-        && (!Number.isFinite(lockExpiresAt) || lockExpiresAt <= Date.now())) {
+        && (!Number.isFinite(agentLockExpiresAtUnixMs) || agentLockExpiresAtUnixMs <= Date.now())) {
         record.agent_access_locked = false;
         record.agent_lock_owner_id = null;
         record.agent_lock_expires_at = null;
@@ -236,14 +240,26 @@ export class BrowserManager {
       clearTimeout(this.persistTimer);
       this.persistTimer = null;
     }
-    const execution = this.persistTail.then(async () => {
-      await this.stateStore.write({
-        updated_at: nowIso(),
-        browsers: [...this.sessions.values()].map((session) => session.snapshot()),
-      });
-    });
-    this.persistTail = execution.catch(() => undefined);
-    await execution;
+    this.stateWriteRequested = true;
+    if (!this.stateWritePromise) {
+      // 先登记共享Promise再取快照；同步异常也必须经过同一清理入口。
+      this.stateWritePromise = Promise.resolve().then(() => this.drainStateWrites());
+    }
+    await this.stateWritePromise;
+  }
+
+  async drainStateWrites() {
+    try {
+      while (this.stateWriteRequested) {
+        this.stateWriteRequested = false;
+        await this.stateStore.write({
+          updated_at: nowIso(),
+          browsers: [...this.sessions.values()].map((session) => session.snapshot()),
+        });
+      }
+    } finally {
+      this.stateWritePromise = null;
+    }
   }
 
   schedulePersist(delayMs = 150) {
@@ -268,10 +284,10 @@ export class BrowserManager {
     return session;
   }
 
-  async syncOwnerRevision(id, revision) {
-    this.get(id).syncOwnerRevision(revision);
+  async syncOwnerRevision(id, transportOwnerRevision) {
+    this.get(id).syncOwnerRevision(transportOwnerRevision);
     for (const [token, grant] of this.transportGrants) {
-      if (grant.browserId === id && grant.revision !== revision) this.transportGrants.delete(token);
+      if (grant.browserId === id && grant.transportOwnerRevision !== transportOwnerRevision) this.transportGrants.delete(token);
     }
     await this.get(id).operationQueue.drain();
     await this.persist();
@@ -285,22 +301,22 @@ export class BrowserManager {
       throw new BrowserTransportGrantRejected(browser.snapshot());
     }
     const token = randomBytes(32).toString("base64url");
-    const expiresAt = Date.now() + 30_000;
+    const expiresAtUnixMs = Date.now() + 30_000;
     for (const [existing, grant] of this.transportGrants) {
-      if (grant.expiresAt <= Date.now()) this.transportGrants.delete(existing);
+      if (grant.expiresAtUnixMs <= Date.now()) this.transportGrants.delete(existing);
     }
-    this.transportGrants.set(token, { browserId: id, revision: ownerRevision, association, expiresAt });
+    this.transportGrants.set(token, { browserId: id, transportOwnerRevision: ownerRevision, association, expiresAtUnixMs });
     return {
       resource_id: id, owner_revision: ownerRevision,
-      grant_token: token, expires_at: new Date(expiresAt).toISOString(),
+      grant_token: token, expires_at: new Date(expiresAtUnixMs).toISOString(),
     };
   }
 
   consumeTransportGrant(id, token) {
     const grant = this.transportGrants.get(token);
     this.transportGrants.delete(token);
-    if (!grant || grant.browserId !== id || grant.expiresAt <= Date.now()
-      || this.get(id).transportOwnerRevision !== grant.revision) {
+    if (!grant || grant.browserId !== id || grant.expiresAtUnixMs <= Date.now()
+      || this.get(id).transportOwnerRevision !== grant.transportOwnerRevision) {
       throw new Error("Browser 一次传输授权无效、过期或已消费");
     }
     return grant;

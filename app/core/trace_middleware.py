@@ -7,6 +7,8 @@ from fastapi import Request
 from fastapi.responses import JSONResponse
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
+from app.core.identifier import validate_gateway_id
+
 logger = logging.getLogger(__name__)
 
 # Gateway 身份头：由 Gateway 侧按请求注入（见「统一资源寻址」change 的
@@ -90,7 +92,8 @@ def get_current_gateway_id() -> str | None:
     请求作用域由 TraceMiddleware 写入；请求级之外（例如独立执行根的后台任务）
     必须由创建方显式随任务传递，MUST NOT 依赖任何进程级「当前 gateway」单例。
     """
-    return _CURRENT_GATEWAY_ID.get()
+    gateway_id = _CURRENT_GATEWAY_ID.get()
+    return validate_gateway_id(gateway_id) if gateway_id is not None else None
 
 
 def require_current_gateway_id(consumer: str) -> str:
@@ -98,7 +101,7 @@ def require_current_gateway_id(consumer: str) -> str:
 
     MUST NOT 回退 ``local`` 或任何虚假默认值（AGENTS.md「永不返回虚假的默认值」）。
     """
-    gateway_id = _CURRENT_GATEWAY_ID.get()
+    gateway_id = get_current_gateway_id()
     if not isinstance(gateway_id, str) or not gateway_id:
         raise RuntimeError(
             f"{consumer} 需要真实的 gateway_id，但当前作用域未绑定：请求未携带 "

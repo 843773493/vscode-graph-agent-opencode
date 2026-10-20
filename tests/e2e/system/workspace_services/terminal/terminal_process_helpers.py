@@ -3,32 +3,20 @@ from __future__ import annotations
 import json
 import os
 import shutil
-import subprocess
 import time
-import uuid
 from pathlib import Path
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
-from langchain_core.messages import HumanMessage, ToolMessage
-
-from app.core.checkpoint_config import build_checkpoint_config
-from app.core.execution_admission_context import execution_admission_scope
-from app.core.identifier import create_prefixed_id, create_uuid_hex
-from app.core.path_utils import get_session_path_resolver
-from app.core.session_thread_context import session_thread_owner_scope
+from app.core.identifier import create_uuid_hex
 from app.core.workspace_identity import load_or_create_workspace_id
-from app.domain.itemized.mutation_intents import MutationIntentOwner
-from app.services.infrastructure.rollout_context.checkpoint.saver import (
-    RolloutCheckpointSaver,
-)
-from tests.support.ports import E2E_PORT_BLOCK_SIZE
+from tests.support.ports import TEST_FILE_PORT_BLOCK_SIZE
 
 
 def _terminal_port_pair(e2e_backend_port: int, offset: int) -> tuple[int, int]:
-    if offset < 0 or offset + 1 >= E2E_PORT_BLOCK_SIZE:
+    if offset < 0 or offset + 1 >= TEST_FILE_PORT_BLOCK_SIZE:
         raise ValueError(
-            f"终端 e2e 端口偏移超出当前测试文件端口块: offset={offset}, block_size={E2E_PORT_BLOCK_SIZE}"
+            f"终端 e2e 端口偏移超出当前测试文件端口块: offset={offset}, block_size={TEST_FILE_PORT_BLOCK_SIZE}"
         )
     return e2e_backend_port + offset, e2e_backend_port + offset + 1
 
@@ -39,108 +27,6 @@ def terminal_ports(e2e_backend_port: int) -> tuple[int, int]:
 
 def terminal_ports_with_offset(e2e_backend_port: int, offset: int) -> tuple[int, int]:
     return _terminal_port_pair(e2e_backend_port, offset)
-
-
-def seed_historical_terminal_checkpoint(
-    *,
-    workspace_root: str,
-    session_id: str,
-    terminal_id: str,
-) -> None:
-    saver = RolloutCheckpointSaver(
-        sessions_dir=Path(workspace_root) / ".boxteam" / "sessions"
-    )
-    terminal_payload = {
-        "chunk_id": terminal_id,
-        "session_id": terminal_id,
-        "wall_time_seconds": 1.0,
-        "output": "HISTORICAL_TERMINAL",
-    }
-    thread_id = get_session_path_resolver(Path(workspace_root) / ".boxteam/sessions").main_thread_id(session_id)
-    message_id = create_prefixed_id("msg")
-    messages_version = saver.get_next_version(None, None)
-    checkpoint = {
-        "id": str(uuid.uuid4()),
-        "channel_values": {
-            "messages": [
-                HumanMessage(content="请启动一个历史终端", id=message_id),
-                ToolMessage(
-                    content=(
-                        "Tool call exec_command with id call_cancelled "
-                        "was cancelled - another message came in before it could be completed."
-                    ),
-                    tool_call_id="call_cancelled",
-                    name="exec_command",
-                ),
-                ToolMessage(
-                    content=json.dumps(terminal_payload),
-                    tool_call_id="call_historical_terminal",
-                    name="exec_command",
-                ),
-            ]
-        },
-        "channel_versions": {"messages": messages_version},
-        "updated_channels": ["messages"],
-    }
-    with session_thread_owner_scope(MutationIntentOwner(session_id, thread_id), langgraph_thread_id=thread_id):
-        accepted = saver.accept_turn(session_id, thread_id=thread_id, accepted_ingress_id=message_id, acceptance_idempotency_key=f"terminal-history:{message_id}", job_id=create_prefixed_id("job"), admission_idempotency_key=create_prefixed_id("adm"), payload="请启动一个历史终端", payload_kind="text", turn_id=create_prefixed_id("turn"), root_item_id=f"item-{message_id}")
-        admission = saver.execution_admission(session_id, thread_id=thread_id, execution_id=accepted["execution_id"])
-        with execution_admission_scope(admission, langgraph_thread_id=thread_id):
-            saver.put(build_checkpoint_config(thread_id), checkpoint, metadata={"source": "e2e_seed", "step": -1, "writes": {}}, new_versions={"messages": messages_version})
-
-
-def wait_for_http_ok(url: str, process: subprocess.Popen[str]) -> None:
-    deadline = time.monotonic() + 30
-    while time.monotonic() < deadline:
-        if process.poll() is not None:
-            stdout, stderr = process.communicate(timeout=1)
-            raise RuntimeError(
-                f"终端测试进程提前退出: {url}\nSTDOUT:\n{stdout}\nSTDERR:\n{stderr}"
-            )
-        try:
-            with urlopen(url, timeout=1) as response:
-                if response.status == 200:
-                    return
-        except OSError:
-            time.sleep(0.5)
-    raise TimeoutError(f"终端测试进程未就绪: {url}")
-
-
-def start_terminal_backend(
-    *,
-    backend_port: int,
-    workspace_root: str,
-) -> subprocess.Popen[str]:
-    project_root = Path.cwd().resolve()
-    node_bin = shutil.which("node")
-    if node_bin is None:
-        raise RuntimeError("未找到 node，无法启动终端 e2e 进程")
-
-    env = os.environ.copy()
-    env["WORKSPACE_ROOT"] = workspace_root
-    env["BOXTEAM_TERMINAL_WORKSPACE_ROOT"] = workspace_root
-    workspace_id = load_or_create_workspace_id(Path(workspace_root))
-    process = subprocess.Popen(
-        [
-            node_bin,
-            "backend.js",
-            "--host",
-            "127.0.0.1",
-            "--port",
-            str(backend_port),
-            "--workspace-root",
-            workspace_root,
-            "--workspace-id",
-            workspace_id,
-        ],
-        cwd=project_root / "src" / "workspace-services" / "terminal" / "server",
-        env=env,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-    )
-    wait_for_http_ok(f"http://127.0.0.1:{backend_port}/health", process)
-    return process
 
 
 def lifecycle_workspace(base_workspace_root: str, name: str) -> str:

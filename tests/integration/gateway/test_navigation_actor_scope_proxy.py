@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
-from app.gateway.workspace_ids import build_managed_local_workspace_id
-
 import os
 import subprocess
 from collections.abc import Iterator, Sequence
+from contextlib import ExitStack
 from dataclasses import dataclass
 from pathlib import Path
 from typing import IO
@@ -20,6 +19,7 @@ from app.core.workspace_identity import load_or_create_workspace_id
 from app.gateway.control.user_access import USER_ACCESS_COOKIE_NAME
 from app.gateway.credentials import FederationCredential, FederationCredentialStore
 from app.gateway.proxy_upstream import load_proxy_gateway_id
+from app.gateway.workspace_ids import build_managed_local_workspace_id
 from app.services.business.session_context_resource import (
     workspace_session_inventory_identity,
     workspace_session_inventory_uri,
@@ -34,7 +34,7 @@ from tests.support.gateway_processes import (
 )
 from tests.support.ports import integration_port_block_for_file
 from tests.support.processes import (
-    kill_process_on_port,
+    ensure_local_port_available,
     resolve_workspace_python_executable,
     terminate_process,
     wait_for_http_ok,
@@ -64,12 +64,18 @@ class _NavigationScopeProxyRuntime:
 def _close_navigation_scope_backend(
     handle: _NavigationScopeBackendProcess,
 ) -> None:
-    try:
-        terminate_process(handle.process)
-        kill_process_on_port(handle.port)
-    finally:
-        handle.stdout_file.close()
-        handle.stderr_file.close()
+    errors: list[BaseException] = []
+    for cleanup in (
+        lambda: terminate_process(handle.process),
+        handle.stdout_file.close,
+        handle.stderr_file.close,
+    ):
+        try:
+            cleanup()
+        except BaseException as error:  # noqa: BLE001 - 中断也须释放其余资源，再报告全部错误。
+            errors.append(error)
+    if errors:
+        raise BaseExceptionGroup("导航 scope 测试进程及日志清理失败", errors)
 
 
 def _start_navigation_scope_backend(
@@ -77,7 +83,7 @@ def _start_navigation_scope_backend(
     workspace_root: Path,
     port: int,
 ) -> _NavigationScopeBackendProcess:
-    kill_process_on_port(port)
+    ensure_local_port_available(port, service_name="导航 scope 下游后端")
     project_root = Path.cwd().resolve()
     python_executable = resolve_workspace_python_executable(project_root)
     boxteam_home = workspace_root.resolve().parent / "boxteam-home"
@@ -85,14 +91,14 @@ def _start_navigation_scope_backend(
     log_dir.mkdir(parents=True, exist_ok=True)
     stdout_path = log_dir / "navigation-scope-backend.stdout.log"
     stderr_path = log_dir / "navigation-scope-backend.stderr.log"
-    stdout_file = open(stdout_path, "a", encoding="utf-8")  # noqa: SIM115
-    stderr_file = open(stderr_path, "a", encoding="utf-8")  # noqa: SIM115
     environment = os.environ.copy()
     environment["WORKSPACE_ROOT"] = str(workspace_root.resolve())
     environment["BOXTEAM_HOME"] = str(boxteam_home.resolve())
     environment.pop("BOXTEAM_GATEWAY_ROOT", None)
     environment["PYTHONUNBUFFERED"] = "1"
-    try:
+    with ExitStack() as log_files:
+        stdout_file = log_files.enter_context(open(stdout_path, "a", encoding="utf-8"))
+        stderr_file = log_files.enter_context(open(stderr_path, "a", encoding="utf-8"))
         process = subprocess.Popen(
             [
                 str(python_executable),
@@ -112,29 +118,26 @@ def _start_navigation_scope_backend(
             stdout=stdout_file,
             stderr=stderr_file,
         )
-    except Exception:
-        stdout_file.close()
-        stderr_file.close()
-        raise
-
-    handle = _NavigationScopeBackendProcess(
-        process=process,
-        stdout_file=stdout_file,
-        stderr_file=stderr_file,
-        port=port,
-    )
+        handle = _NavigationScopeBackendProcess(
+            process=process,
+            stdout_file=stdout_file,
+            stderr_file=stderr_file,
+            port=port,
+        )
+        log_files.pop_all()
     try:
         wait_for_http_ok(f"http://127.0.0.1:{port}/api/v1/health", process)
-    except Exception as error:
-        stdout_file.flush()
-        stderr_file.flush()
-        stdout = stdout_path.read_text(encoding="utf-8")
-        stderr = stderr_path.read_text(encoding="utf-8")
-        _close_navigation_scope_backend(handle)
-        raise RuntimeError(
-            "导航 scope 下游 FastAPI 启动失败: "
-            f"{error}\nstdout:\n{stdout}\nstderr:\n{stderr}"
-        ) from error
+    except BaseException as startup_error:
+        startup_error.add_note(
+            f"导航 scope 下游 FastAPI 启动日志: stdout={stdout_path}, stderr={stderr_path}"
+        )
+        try:
+            _close_navigation_scope_backend(handle)
+        except BaseException as cleanup_error:  # noqa: BLE001 - 同时保留启动与清理错误。
+            raise BaseExceptionGroup(
+                "导航 scope 测试后端启动失败且清理失败", [startup_error, cleanup_error],
+            ) from None
+        raise
     return handle
 
 

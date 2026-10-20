@@ -7,6 +7,7 @@ import shutil
 import subprocess
 import time
 from collections.abc import Callable, Generator
+from contextlib import ExitStack
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.request import urlopen
@@ -19,7 +20,7 @@ from app.agents.tools.terminal import create_exec_command_tool
 from app.core.identifier import create_uuid_hex
 from app.core.mounted_workspaces import MountedWorkspace
 from app.core.workspace_identity import load_or_create_workspace_id
-from tests.support.processes import kill_process_on_port, terminate_process
+from tests.support.processes import ensure_local_port_available, terminate_process
 from tests.support.workspace_tool_runtime import workspace_tool_runtime
 
 
@@ -75,8 +76,8 @@ def windows_terminal_backend(
     port = e2e_backend_port + 40
     frontend_port = port + 1
     frontend_url = f"http://127.0.0.1:{frontend_port}"
-    kill_process_on_port(port)
-    kill_process_on_port(frontend_port)
+    ensure_local_port_available(port, service_name="Windows 终端后端")
+    ensure_local_port_available(frontend_port, service_name="Windows 终端前端")
     workspace_root = str(Path(e2e_workspace_root_path).resolve())
     workspace_id = load_or_create_workspace_id(Path(workspace_root))
     project_root = Path.cwd().resolve()
@@ -87,56 +88,58 @@ def windows_terminal_backend(
     stderr_path = log_dir / "terminal-backend.stderr.log"
     frontend_stdout_path = log_dir / "terminal-frontend.stdout.log"
     frontend_stderr_path = log_dir / "terminal-frontend.stderr.log"
-    stdout_file = stdout_path.open("w", encoding="utf-8")
-    stderr_file = stderr_path.open("w", encoding="utf-8")
-    frontend_stdout_file = frontend_stdout_path.open("w", encoding="utf-8")
-    frontend_stderr_file = frontend_stderr_path.open("w", encoding="utf-8")
-    env = os.environ.copy()
-    env["BOXTEAM_WORKSPACE_ID"] = workspace_id
-    env["WORKSPACE_ROOT"] = workspace_root
-    env["BOXTEAM_TERMINAL_WORKSPACE_ROOT"] = workspace_root
+    with ExitStack() as lifetime:
+        stdout_file = lifetime.enter_context(stdout_path.open("w", encoding="utf-8"))
+        stderr_file = lifetime.enter_context(stderr_path.open("w", encoding="utf-8"))
+        frontend_stdout_file = lifetime.enter_context(frontend_stdout_path.open("w", encoding="utf-8"))
+        frontend_stderr_file = lifetime.enter_context(frontend_stderr_path.open("w", encoding="utf-8"))
+        env = os.environ.copy()
+        env["BOXTEAM_WORKSPACE_ID"] = workspace_id
+        env["WORKSPACE_ROOT"] = workspace_root
+        env["BOXTEAM_TERMINAL_WORKSPACE_ROOT"] = workspace_root
 
-    process = subprocess.Popen(
-        [
-            node,
-            "backend.js",
-            "--host",
-            "127.0.0.1",
-            "--port",
-            str(port),
-            "--workspace-root",
-            workspace_root,
-            "--workspace-id",
-            workspace_id,
-        ],
-        cwd=server_root,
-        env=env,
-        stdout=stdout_file,
-        stderr=stderr_file,
-        text=True,
-    )
-    frontend_process = subprocess.Popen(
-        [
-            node,
-            "server.js",
-            "--host",
-            "127.0.0.1",
-            "--port",
-            str(frontend_port),
-            "--backend-url",
-            f"http://127.0.0.1:{port}",
-            "--workspace-root",
-            workspace_root,
-            "--asset-root",
-            str(project_root),
-        ],
-        cwd=project_root / "src" / "workspace-services" / "terminal" / "client",
-        env=env,
-        stdout=frontend_stdout_file,
-        stderr=frontend_stderr_file,
-        text=True,
-    )
-    try:
+        process = subprocess.Popen(
+            [
+                node,
+                "backend.js",
+                "--host",
+                "127.0.0.1",
+                "--port",
+                str(port),
+                "--workspace-root",
+                workspace_root,
+                "--workspace-id",
+                workspace_id,
+            ],
+            cwd=server_root,
+            env=env,
+            stdout=stdout_file,
+            stderr=stderr_file,
+            text=True,
+        )
+        lifetime.callback(terminate_process, process)
+        frontend_process = subprocess.Popen(
+            [
+                node,
+                "server.js",
+                "--host",
+                "127.0.0.1",
+                "--port",
+                str(frontend_port),
+                "--backend-url",
+                f"http://127.0.0.1:{port}",
+                "--workspace-root",
+                workspace_root,
+                "--asset-root",
+                str(project_root),
+            ],
+            cwd=project_root / "src" / "workspace-services" / "terminal" / "client",
+            env=env,
+            stdout=frontend_stdout_file,
+            stderr=frontend_stderr_file,
+            text=True,
+        )
+        lifetime.callback(terminate_process, frontend_process)
         _wait_for_health(
             url=f"http://127.0.0.1:{port}/health",
             process=process,
@@ -159,20 +162,12 @@ def windows_terminal_backend(
             )
         yield WindowsTerminalBackend(
             port=port,
+            frontend_port=frontend_port,
             frontend_url=frontend_url,
             workspace_root=workspace_root,
             powershell=powershell,
             workspace_id=actual_workspace_id,
         )
-    finally:
-        terminate_process(frontend_process)
-        terminate_process(process)
-        kill_process_on_port(frontend_port)
-        kill_process_on_port(port)
-        stdout_file.close()
-        stderr_file.close()
-        frontend_stdout_file.close()
-        frontend_stderr_file.close()
 
 
 async def _create_terminal(

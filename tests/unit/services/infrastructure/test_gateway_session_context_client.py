@@ -75,7 +75,7 @@ def gateway_local_token_supplier() -> Callable[[], str]:
 
 @pytest.fixture
 async def gateway_clients() -> AsyncIterator[list[GatewaySessionContextClient]]:
-    gateway_token = set_current_gateway_id("gateway_local")
+    gateway_token = set_current_gateway_id("gateway_3097a8378d6e2c98a52a687e4a004769")
     request_token = set_current_request_id("req_gateway_context")
     clients: list[GatewaySessionContextClient] = []
     yield clients
@@ -87,13 +87,13 @@ async def gateway_clients() -> AsyncIterator[list[GatewaySessionContextClient]]:
 
 @pytest.fixture
 def gateway_fork_request() -> Iterator[SessionForkTransferRequest]:
-    gateway_token = set_current_gateway_id("gateway_local")
+    gateway_token = set_current_gateway_id("gateway_3097a8378d6e2c98a52a687e4a004769")
     request_token = set_current_request_id("req_gateway_fork")
-    source_uri = thread_resource_uri("ws_source", f"ses_{create_uuid_hex()}", f"thr_{create_uuid_hex()}", gateway_authority="gateway_local")
+    source_uri = thread_resource_uri("ws_source", f"ses_{create_uuid_hex()}", f"thr_{create_uuid_hex()}", gateway_authority="gateway_3097a8378d6e2c98a52a687e4a004769")
     try:
         yield SessionForkTransferRequest(
-            source_gateway_id="gateway_local", action="intent",
-            fork_target=ForkGrantTarget(gateway_id="gateway_local", uri=source_uri, fork_role="source"),
+            source_gateway_id="gateway_3097a8378d6e2c98a52a687e4a004769", action="intent",
+            fork_target=ForkGrantTarget(gateway_id="gateway_3097a8378d6e2c98a52a687e4a004769", uri=source_uri, fork_role="source"),
             request=SessionForkRequest(
                 idempotency_key="gateway-fork", source_uri=source_uri,
                 target_container_uri=workspace_session_inventory_uri("ws_target", gateway_authority="gateway_target"),
@@ -394,7 +394,7 @@ async def test_gateway_pool_keeps_concurrent_relay_request_identities(
 
     async def query(index: int):
         request_token = set_current_request_id(f"req_gateway_pool_{index}")
-        gateway_token = set_current_gateway_id("gateway_local")
+        gateway_token = set_current_gateway_id("gateway_3097a8378d6e2c98a52a687e4a004769")
         try:
             return await client.read_resource_context(reads[index])
         finally:

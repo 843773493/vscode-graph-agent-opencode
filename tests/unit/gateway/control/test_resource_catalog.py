@@ -5,7 +5,11 @@ import pytest
 
 from app.gateway.control.resource_catalog import GatewayResourceCatalogService
 from app.gateway.registry import WorkspaceTarget
-from tests.support.terminal_owner import SESSION_A, THREAD_A, WORKSPACE_ID
+from tests.support.resource_owners.sessions import (
+    SESSION_A,
+    THREAD_A,
+    WORKSPACE_ID,
+)
 
 
 @pytest.fixture

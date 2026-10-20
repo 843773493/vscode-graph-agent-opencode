@@ -2,6 +2,10 @@
 
 `src/workspace-services/terminal/client/` 存放独立终端 attach 网页。用户从主前端资源视图打开该页面后，可以连接指定终端、断开连接、输入命令并查看实时输出。
 
+`server.js`是Node静态资源入口；工作区UUID与权威身份文件核对只依赖`../server/workspaceIdentity.js`，不为校验加载TerminalManager、Session或PTY管理链。网页main.js不导入这个Node模块。
+
+`main.js`从`./shared/commandText.js`读取唯一的命令文本过滤器；静态服务只公开该明确模块，不开放shared目录的任意文件。页面在输入边界沿用空值到空串的转换，原始输出、sequence及ACK合同不因展示过滤改变；后端提供display_buffer时直接消费该字段。
+
 ## 可修改内容
 
 - 可以新增或修改 HTML、CSS、浏览器端 JavaScript。

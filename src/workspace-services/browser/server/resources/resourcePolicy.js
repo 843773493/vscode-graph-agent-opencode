@@ -39,17 +39,19 @@ const SOFT_REASON_PREFIXES = [
   "picture_in_picture:",
 ];
 
-function timestampMs(value) {
+// 输入是ISO时刻，结果是Unix毫秒；缺失或非法值沿用0，不在这里推导当前时间。
+function parseTimestampUnixMs(value) {
   const parsed = Date.parse(value || "");
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
-export function latestActivityMs(snapshot) {
+// 最近活动取各观察时刻与创建时刻的最大值，不是空闲持续时间。
+export function latestActivityUnixMs(snapshot) {
   return Math.max(
-    timestampMs(snapshot.last_user_interaction_at),
-    timestampMs(snapshot.last_agent_operation_at),
-    timestampMs(snapshot.last_attach_at),
-    timestampMs(snapshot.created_at),
+    parseTimestampUnixMs(snapshot.last_user_interaction_at),
+    parseTimestampUnixMs(snapshot.last_agent_operation_at),
+    parseTimestampUnixMs(snapshot.last_attach_at),
+    parseTimestampUnixMs(snapshot.created_at),
   );
 }
 
@@ -88,8 +90,8 @@ function softProtectionReasons(snapshot) {
 }
 
 function compareCandidates(left, right) {
-  if (left.lastActivityMs !== right.lastActivityMs) {
-    return left.lastActivityMs - right.lastActivityMs;
+  if (left.lastActivityUnixMs !== right.lastActivityUnixMs) {
+    return left.lastActivityUnixMs - right.lastActivityUnixMs;
   }
   return String(left.browserId).localeCompare(String(right.browserId));
 }
@@ -116,9 +118,9 @@ function hasOverflow(overflow) {
   return overflow.hot > 0 || overflow.frozen > 0 || overflow.resident > 0;
 }
 
-function candidateProtection(candidate, allowSoftProtection) {
-  const hard = hardProtectionReasons(candidate.snapshot);
-  const soft = softProtectionReasons(candidate.snapshot);
+function candidateProtection(snapshot, allowSoftProtection) {
+  const hard = hardProtectionReasons(snapshot);
+  const soft = softProtectionReasons(snapshot);
   return {
     hard,
     soft,
@@ -128,7 +130,7 @@ function candidateProtection(candidate, allowSoftProtection) {
 
 export function chooseResourcePlan(snapshots, {
   pressureLevel = "normal",
-  nowMs = Date.now(),
+  nowUnixMs = Date.now(),
   policy = DEFAULT_RESOURCE_POLICY,
   allowDiscard = true,
   maxActions = Number.POSITIVE_INFINITY,
@@ -143,16 +145,19 @@ export function chooseResourcePlan(snapshots, {
         critical: effective.criticalFreezeMs,
         emergency: effective.emergencyFreezeMs,
       }[pressureLevel];
-  const candidates = snapshots.map((snapshot) => {
-    const activityMs = latestActivityMs(snapshot);
-    const candidate = {
-      snapshot,
-      browserId: snapshot.browser_id,
-      lastActivityMs: activityMs,
-      idleMs: Math.max(0, nowMs - activityMs),
-    };
-    return { ...candidate, protection: candidateProtection(candidate, allowSoftProtection) };
-  });
+  // 非常驻资源不参与动作、容量或阻塞归因；先排除，避免为大量冷记录反复解析时间。
+  const candidates = snapshots
+    .filter((snapshot) => RESIDENT_STATES.has(snapshot.resource_state))
+    .map((snapshot) => {
+      const activityUnixMs = latestActivityUnixMs(snapshot);
+      return {
+        snapshot,
+        browserId: snapshot.browser_id,
+        lastActivityUnixMs: activityUnixMs,
+        idleMs: Math.max(0, nowUnixMs - activityUnixMs),
+        protection: candidateProtection(snapshot, allowSoftProtection),
+      };
+    });
   const initialCounts = capacityCounts(candidates);
   const simulatedCounts = { ...initialCounts };
   const actions = [];
@@ -170,7 +175,7 @@ export function chooseResourcePlan(snapshots, {
     .filter(({ snapshot, protection }) => snapshot.resource_state === "frozen"
       && snapshot.client_count === 0
       && !protection.protected
-      && nowMs - timestampMs(snapshot.frozen_at) >= frozenBeforeDiscardMs)
+      && nowUnixMs - parseTimestampUnixMs(snapshot.frozen_at) >= frozenBeforeDiscardMs)
     .sort(compareCandidates);
   let planTruncated = false;
   if (allowDiscard) {
@@ -237,7 +242,7 @@ export function chooseResourcePlan(snapshots, {
     }
     if (snapshot.resource_state === "frozen") {
       return idleMs < discardIdleMs
-        || nowMs - timestampMs(snapshot.frozen_at) < frozenBeforeDiscardMs;
+        || nowUnixMs - parseTimestampUnixMs(snapshot.frozen_at) < frozenBeforeDiscardMs;
     }
     return false;
   }).length;

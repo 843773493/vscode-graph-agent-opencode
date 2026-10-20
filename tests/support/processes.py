@@ -6,11 +6,12 @@ import socket
 import subprocess
 import time
 from collections.abc import Sequence
+from contextlib import ExitStack
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import IO
-from urllib.error import HTTPError, URLError
+from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 from uuid import uuid4
 
@@ -62,48 +63,6 @@ def terminate_process(process: subprocess.Popen[str]) -> None:
         ) from error
 
 
-def kill_process_on_port(port: int) -> None:
-    if os.name == "nt":
-        powershell_command = (
-            "$connections = Get-NetTCPConnection "
-            f"-LocalPort {port} -State Listen -ErrorAction SilentlyContinue; "
-            "$connections | Select-Object -ExpandProperty OwningProcess | "
-            "Sort-Object -Unique | ForEach-Object { "
-            "Stop-Process -Id $_ -Force -ErrorAction Stop }"
-        )
-        try:
-            subprocess.run(
-                [
-                    "powershell",
-                    "-NoProfile",
-                    "-Command",
-                    powershell_command,
-                ],
-                capture_output=True,
-                check=True,
-            )
-        except subprocess.CalledProcessError as error:
-            stderr = error.stderr.decode("utf-8", errors="ignore")
-            raise RuntimeError(
-                "清理监听端口失败: "
-                f"port={port}, returncode={error.returncode}, stderr={stderr}"
-            ) from error
-        return
-
-    try:
-        subprocess.run(
-            ["sh", "-c", f"lsof -tiTCP:{port} -sTCP:LISTEN | xargs -r kill -9"],
-            capture_output=True,
-            check=True,
-        )
-    except subprocess.CalledProcessError as error:
-        stderr = error.stderr.decode("utf-8", errors="ignore")
-        raise RuntimeError(
-            "清理监听端口失败: "
-            f"port={port}, returncode={error.returncode}, stderr={stderr}"
-        ) from error
-
-
 def ensure_local_port_available(port: int, *, service_name: str) -> None:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
         listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -139,70 +98,115 @@ def wait_for_backend_ready(
     process: subprocess.Popen[str],
     workspace_id: str,
 ) -> None:
+    """在总等待预算内取得 200 健康响应，并核对实际后端的工作区身份。"""
     started = time.monotonic()
     deadline = started + TEST_READY_TIMEOUT_SECONDS
     url = f"http://127.0.0.1:{port}/api/v1/health"
-    last_status: int | None = None
-    last_error: str | None = None
+    request = Request(url, headers={"X-BoxTeam-Workspace-Id": workspace_id})
+    last_error: OSError | None = None
 
-    while time.monotonic() < deadline:
+    while (remaining := deadline - time.monotonic()) > 0:
         if process.poll() is not None:
             raise RuntimeError(
                 "后端进程提前退出: "
                 f"pid={process.pid}, returncode={process.returncode}, port={port}"
-        )
-        try:
-            request = Request(
-                url,
-                headers={"X-BoxTeam-Workspace-Id": workspace_id},
             )
-            with urlopen(request, timeout=1) as response:
-                last_status = response.status
-                last_error = None
-                if response.status == 200:
-                    payload = json.loads(response.read())
-                    if not isinstance(payload, dict):
-                        raise TypeError("Workspace 健康响应必须是 JSON 对象")
-                    if payload.get("workspace_id") != workspace_id:
-                        raise RuntimeError(
-                            "Workspace 测试后端 UUID 不匹配: "
-                            f"expected={workspace_id}, "
-                            f"actual={payload.get('workspace_id')!r}"
-                        )
-                    return
+        try:
+            with urlopen(request, timeout=min(1, remaining)) as response:
+                if response.status != 200:
+                    raise RuntimeError(
+                        "Workspace 健康响应不是 200: "
+                        f"status={response.status}, workspace_id={workspace_id}, url={url}"
+                    )
+                payload = json.loads(response.read())
+                if not isinstance(payload, dict):
+                    raise TypeError("Workspace 健康响应必须是 JSON 对象")
+                if payload.get("workspace_id") != workspace_id:
+                    raise RuntimeError(
+                        "Workspace 测试后端 UUID 不匹配: "
+                        f"expected={workspace_id}, "
+                        f"actual={payload.get('workspace_id')!r}"
+                    )
+                return
         except HTTPError as error:
-            detail = error.read().decode("utf-8", errors="replace")
+            with error:
+                detail = error.read(1200).decode("utf-8", errors="replace")[:300]
             raise RuntimeError(
                 "Workspace 健康探针被拒绝: "
-                f"status={error.code}, workspace_id={workspace_id}, body={detail[:300]}"
+                f"status={error.code}, workspace_id={workspace_id}, body={detail}"
             ) from error
-        except (URLError, OSError) as error:
-            last_error = f"{type(error).__name__}: {error}"
-            time.sleep(1)
+        except OSError as error:
+            last_error = error
+        remaining = deadline - time.monotonic()
+        if remaining > 0:
+            time.sleep(min(0.05, remaining))
 
     raise TimeoutError(
         f"后端在 {TEST_READY_TIMEOUT_SECONDS} 秒内未就绪，端口: {port}; "
         f"pid={process.pid}, returncode={process.poll()}, elapsed={time.monotonic() - started:.3f}s, "
-        f"health={url}, last_status={last_status}, last_error={last_error}"
-    )
+        f"health={url}, last_error={last_error!r}"
+    ) from last_error
 
 
-def wait_for_http_ok(url: str, process: subprocess.Popen[str]) -> None:
-    deadline = time.monotonic() + TEST_READY_TIMEOUT_SECONDS
-    while time.monotonic() < deadline:
-        if process.poll() is not None:
-            raise RuntimeError(
-                "测试进程提前退出: "
-                f"pid={process.pid}, returncode={process.returncode}, url={url}"
+def wait_for_http_ok(
+    url: str,
+    process: subprocess.Popen[str],
+    *,
+    timeout_seconds: float = TEST_READY_TIMEOUT_SECONDS,
+    headers: dict[str, str] | None = None,
+) -> None:
+    """等待本地进程开始提供 200 健康响应；HTTP 拒绝直接暴露，不当作尚未监听。"""
+    if timeout_seconds <= 0:
+        raise ValueError("HTTP 就绪期限必须大于零")
+    started = time.monotonic()
+    deadline = started + timeout_seconds
+    request = Request(url, headers=headers) if headers is not None else url
+    last_error: OSError | None = None
+    while (remaining := deadline - time.monotonic()) > 0:
+        returncode = process.poll()
+        if returncode is not None:
+            capture_error: subprocess.TimeoutExpired | None = None
+            try:
+                stdout, stderr = process.communicate(timeout=min(1, remaining))
+            except subprocess.TimeoutExpired as error:
+                # 进程已退出不代表派生进程也关闭了管道；诊断超时不能覆盖退出事实。
+                capture_error = error
+                stdout, stderr = error.output, error.stderr
+            stdout, stderr = (
+                value.decode("utf-8", errors="replace") if isinstance(value, bytes) else value or ""
+                for value in (stdout, stderr)
             )
+            failure = RuntimeError(
+                "测试进程提前退出: "
+                f"pid={process.pid}, returncode={returncode}, url={url}\n"
+                f"STDOUT:\n{stdout}\nSTDERR:\n{stderr}"
+            )
+            if capture_error is not None:
+                failure.add_note("输出采集超时；以上仅包含当前已捕获的输出，进程退出码来自 poll()。")
+            raise failure from capture_error
         try:
-            with urlopen(url, timeout=1) as response:
+            with urlopen(request, timeout=min(1, remaining)) as response:
                 if response.status == 200:
                     return
-        except OSError:
-            time.sleep(1)
+                raise RuntimeError(
+                    f"测试健康响应不是 200: status={response.status}, url={url}"
+                )
+        except HTTPError as error:
+            error.close()
+            raise RuntimeError(
+                f"测试健康探针被拒绝: status={error.code}, url={url}"
+            ) from error
+        except OSError as error:
+            last_error = error
+        remaining = deadline - time.monotonic()
+        if remaining > 0:
+            time.sleep(min(0.05, remaining))
 
-    raise TimeoutError(f"测试服务在 {TEST_READY_TIMEOUT_SECONDS} 秒内未就绪: {url}")
+    raise TimeoutError(
+        f"测试服务在 {timeout_seconds} 秒内未就绪: {url}; "
+        f"pid={process.pid}, elapsed={time.monotonic() - started:.3f}s, "
+        f"last_error={last_error}"
+    ) from last_error
 
 
 def start_backend_process(
@@ -286,31 +290,32 @@ def start_backend_process(
 
     log_dir = Path(workspace_root) / ".boxteam" / "logs"
     log_dir.mkdir(parents=True, exist_ok=True)
-    # 文件句柄由 BackendProcess 持有，并在 close_backend_process 中统一关闭。
-    stdout_file = open(  # noqa: SIM115
-        log_dir / f"{log_name}.stdout.log", "a", encoding="utf-8"
-    )
-    stderr_file = open(  # noqa: SIM115
-        log_dir / f"{log_name}.stderr.log", "a", encoding="utf-8"
-    )
-
-    popen_at = datetime.now(UTC).isoformat()
-    popen_started = time.monotonic()
-    process = subprocess.Popen(
-        cmd,
-        cwd=project_root,
-        env=env,
-        stdout=stdout_file,
-        stderr=stderr_file,
-    )
-    handle = BackendProcess(
-        process=process,
-        stdout_file=stdout_file,
-        stderr_file=stderr_file,
-        port=port,
-        workspace_root=workspace_root,
-        workspace_id=backend_workspace_id,
-    )
+    # 创建失败时回收已打开的日志；成功后交给 BackendProcess 持有。
+    with ExitStack() as log_files:
+        stdout_file = log_files.enter_context(open(
+            log_dir / f"{log_name}.stdout.log", "a", encoding="utf-8",
+        ))
+        stderr_file = log_files.enter_context(open(
+            log_dir / f"{log_name}.stderr.log", "a", encoding="utf-8",
+        ))
+        popen_at = datetime.now(UTC).isoformat()
+        popen_started = time.monotonic()
+        process = subprocess.Popen(
+            cmd,
+            cwd=project_root,
+            env=env,
+            stdout=stdout_file,
+            stderr=stderr_file,
+        )
+        handle = BackendProcess(
+            process=process,
+            stdout_file=stdout_file,
+            stderr_file=stderr_file,
+            port=port,
+            workspace_root=workspace_root,
+            workspace_id=backend_workspace_id,
+        )
+        log_files.pop_all()
     try:
         wait_for_backend_ready(port, process, backend_workspace_id)
     except BaseException as startup_error:
@@ -336,9 +341,16 @@ def start_backend_process(
 
 
 def close_backend_process(handle: BackendProcess) -> None:
-    try:
-        terminate_process(handle.process)
-    finally:
-        handle.stdout_file.close()
-        handle.stderr_file.close()
+    errors: list[BaseException] = []
+    for cleanup in (
+        lambda: terminate_process(handle.process),
+        handle.stdout_file.close,
+        handle.stderr_file.close,
+    ):
+        try:
+            cleanup()
+        except BaseException as error:  # noqa: BLE001 - 中断也须释放其余资源，再报告全部错误。
+            errors.append(error)
+    if errors:
+        raise BaseExceptionGroup("Workspace 测试进程及日志清理失败", errors)
     unregister_test_process(handle)

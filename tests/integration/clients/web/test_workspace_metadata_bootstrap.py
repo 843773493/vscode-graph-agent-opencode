@@ -25,7 +25,7 @@ from tests.support.gateway_processes import (
     close_gateway_process,
     start_gateway_process,
 )
-from tests.support.ports import E2EPortBlock, integration_port_block_for_file
+from tests.support.ports import TestFilePortBlock, integration_port_block_for_file
 from tests.support.workspaces import (
     install_test_workspace_config,
     prepare_default_test_workspace,
@@ -33,7 +33,7 @@ from tests.support.workspaces import (
 
 
 def _select_free_port(
-    port_block: E2EPortBlock,
+    port_block: TestFilePortBlock,
     *,
     excluded: frozenset[int] = frozenset(),
 ) -> tuple[int, list[tuple[int, bool]]]:

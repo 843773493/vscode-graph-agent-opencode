@@ -1,5 +1,7 @@
+import { EventEmitter } from "node:events";
 import { describe, expect, test } from "bun:test";
 import { BrowserSession } from "./browserSession.js";
+import { BrowserPageDiagnostics } from "./diagnostics/pageDiagnostics.js";
 import { BrowserRuntimePool } from "./resources/browserRuntimePool.js";
 
 function session() {
@@ -22,13 +24,13 @@ function liveSession() {
   const browser = session();
   const cdpCalls = [];
   let navigationCount = 0;
-  const page = {
+  const page = Object.assign(new EventEmitter(), {
     setViewportSize: async () => undefined,
     goto: async () => {
       navigationCount += 1;
     },
     evaluate: async () => undefined,
-  };
+  });
   const cdpSession = {
     send: async (method, params) => {
       cdpCalls.push({ method, params });
@@ -44,6 +46,7 @@ function liveSession() {
     page,
     cdpSession,
     webSockets: new Set(),
+    diagnostics: new BrowserPageDiagnostics(page),
   });
   browser.syncAndEmitState = async () => browser.snapshot();
   return { browser, cdpCalls, getNavigationCount: () => navigationCount };
@@ -110,7 +113,7 @@ describe("浏览器统一操作队列", () => {
     await expect(browser.enqueueOperation({ actor: "agent", action: "read" }, () => { calls += 1; }))
       .rejects.toMatchObject({ code: "browser_resource_unknown" });
     const client = {};
-    browser.transports.set(client, { revision: 1 });
+    browser.transports.set(client, { transportOwnerRevision: 1 });
     expect(() => browser.assertTransport(client)).toThrow("尚未核实");
     expect(calls).toBe(0);
     expect(browser.pendingOperations).toBe(0);
@@ -219,7 +222,7 @@ describe("浏览器统一操作队列", () => {
     browser.wake = async () => { prepared(); await barrier; };
     let calls = 0;
     const method = mode === "queued" ? "enqueueOperation" : "runInteractiveOperation";
-    const result = browser[method]({ actor: "agent", action: "read", revision: 1 }, async () => { calls += 1; })
+    const result = browser[method]({ actor: "agent", action: "read", transportOwnerRevision: 1 }, async () => { calls += 1; })
       .catch((error) => error);
     await preparation;
     expect(browser.pendingOperations).toBe(1);
@@ -230,7 +233,7 @@ describe("浏览器统一操作队列", () => {
     expect(calls).toBe(0);
     expect(browser.pendingOperations).toBe(0);
     expect(browser.inFlightOperations).toBe(0);
-    expect(browser.operationQueue.executions.size).toBe(0);
+    expect(browser.operationQueue.acceptedOperationExecutions.size).toBe(0);
   });
 
   test("撤销等待已开始的动作结束，队列中旧版本动作不执行", async () => {
@@ -239,14 +242,14 @@ describe("浏览器统一操作队列", () => {
     let started;
     const entered = new Promise((resolve) => { started = resolve; });
     const barrier = new Promise((resolve) => { release = resolve; });
-    const first = browser.enqueueOperation({ actor: "agent", action: "run", revision: 1 }, async () => {
+    const first = browser.enqueueOperation({ actor: "agent", action: "run", transportOwnerRevision: 1 }, async () => {
       started();
       await barrier;
       return { value: "旧回执" };
     }).catch((error) => error);
     await entered;
     let queuedCalls = 0;
-    const second = browser.enqueueOperation({ actor: "agent", action: "read", revision: 1 }, async () => { queuedCalls += 1; })
+    const second = browser.enqueueOperation({ actor: "agent", action: "read", transportOwnerRevision: 1 }, async () => { queuedCalls += 1; })
       .catch((error) => error);
     browser.syncOwnerRevision(2);
     let drained = false;
@@ -270,7 +273,7 @@ describe("浏览器统一操作队列", () => {
     const barrier = new Promise((resolve) => { release = resolve; });
     const closed = [];
     const client = { close: (...arguments_) => closed.push(arguments_) };
-    browser.transports.set(client, { revision: 1 });
+    browser.transports.set(client, { transportOwnerRevision: 1 });
     browser.wake = async () => { waking(); await barrier; };
     const attach = browser.attachClient(client).catch((error) => error);
     await entered;
@@ -381,17 +384,19 @@ describe("浏览器统一操作队列", () => {
   test("清空网络记录会释放当前页面的轻量缓冲区", async () => {
     const { browser } = liveSession();
     const entry = browser.pageEntries.get("page_device");
-    entry.networkRequests = [
-      { url: "https://example.com/one", status: 200 },
-      { url: "https://example.com/two", status: null },
-    ];
+    for (const url of ["https://example.com/one", "https://example.com/two"]) {
+      entry.page.emit("request", {
+        method: () => "GET", url: () => url, resourceType: () => "fetch",
+      });
+    }
+    expect(entry.diagnostics.snapshot().network).toHaveLength(2);
 
     await browser.clearNetworkRequests();
 
-    expect(entry.networkRequests).toEqual([]);
+    expect(entry.diagnostics.snapshot().network).toEqual([]);
   });
 
-  test("用户和模型操作按入队顺序执行并获得单调 revision", async () => {
+  test("用户和模型操作按入队顺序执行并获得单调操作序号", async () => {
     const browser = session();
     const order = [];
     const first = browser.enqueueOperation({ actor: "user:1", action: "click" }, async () => {
@@ -803,9 +808,9 @@ describe("浏览器统一操作队列", () => {
   test("冷回收会话不再依赖已释放的共享运行时", async () => {
     const browser = session();
     browser.record.resource_state = "discarded";
-    browser.runtimeGeneration = 3;
+    browser.chromiumInstanceGeneration = 3;
 
-    await browser.handleRuntimeDisconnect(3);
+    await browser.handleChromiumDisconnect(3);
 
     expect(browser.record.status).toBe("running");
     expect(browser.record.resource_state).toBe("discarded");
@@ -815,7 +820,7 @@ describe("浏览器统一操作队列", () => {
     const browser = session();
     browser.record.resource_state = "frozen";
     browser.cachedSoftProtectionReasons = ["media_playing:page_test"];
-    browser.softProtectionObservedAtMs.set("media_playing:page_test", Date.now());
+    browser.softProtectionObservedAtUnixMsByReason.set("media_playing:page_test", Date.now());
     browser.pageEntries.set("page_test", {
       pageId: "page_test",
       page: {
@@ -841,10 +846,10 @@ describe("浏览器统一操作队列", () => {
       pageId: "page_socket",
       webSockets: new Set(["socket_1"]),
     });
-    browser.lastWebSocketActivityAtMs = Date.now();
+    browser.lastWebSocketActivityAtUnixMs = Date.now();
 
     const recent = browser.resourcePolicySnapshot();
-    browser.lastWebSocketActivityAtMs = Date.now() - 6 * 60_000;
+    browser.lastWebSocketActivityAtUnixMs = Date.now() - 6 * 60_000;
     const expired = browser.resourcePolicySnapshot();
 
     expect(recent.resource_soft_protection_reasons).toContain("websocket_recent_activity");
@@ -857,7 +862,7 @@ describe("浏览器统一操作队列", () => {
     const browser = session();
     browser.record.resource_state = "frozen";
     browser.cachedSoftProtectionReasons = ["websocket_recent_activity"];
-    browser.lastWebSocketActivityAtMs = Date.now() - 6 * 60_000;
+    browser.lastWebSocketActivityAtUnixMs = Date.now() - 6 * 60_000;
     browser.pageEntries.set("page_socket", {
       pageId: "page_socket",
       webSockets: new Set(["socket_1"]),
@@ -871,7 +876,7 @@ describe("浏览器统一操作队列", () => {
     const browser = session();
     browser.record.resource_state = "frozen";
     browser.cachedSoftProtectionReasons = ["media_playing:page_media"];
-    browser.softProtectionObservedAtMs.set("media_playing:page_media", Date.now());
+    browser.softProtectionObservedAtUnixMsByReason.set("media_playing:page_media", Date.now());
     browser.manager.stateStore.readCheckpoint = async () => ({
       pages: [{ page_id: "page_media", title: "Media", url: "about:blank" }],
       active_page_id: "page_media",
@@ -888,7 +893,7 @@ describe("浏览器统一操作队列", () => {
     const browser = session();
     browser.record.resource_state = "frozen";
     browser.cachedSoftProtectionReasons = ["media_playing:page_media"];
-    browser.softProtectionObservedAtMs.set("media_playing:page_media", Date.now() - 6 * 60_000);
+    browser.softProtectionObservedAtUnixMsByReason.set("media_playing:page_media", Date.now() - 6 * 60_000);
 
     expect(browser.resourcePolicySnapshot().resource_soft_protection_reasons)
       .not.toContain("media_playing:page_media");
@@ -1003,7 +1008,7 @@ describe("浏览器统一操作队列", () => {
 
   test("管理器关闭时队列无法排空会明确失败而不无限等待", async () => {
     const browser = session();
-    browser.operationQueue.tail = new Promise(() => undefined);
+    browser.operationQueue.serialOperationTail = new Promise(() => undefined);
 
     await expect(
       browser.checkpointForManagerShutdown("browser_manager_shutdown", {

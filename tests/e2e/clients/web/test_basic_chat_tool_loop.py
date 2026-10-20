@@ -336,7 +336,8 @@ async def test_basic_chat_tool_loop_through_real_web_surface(
             browser_process = ManagedProcess(process=process, log_file=browser_stdout)
             register_test_process(browser_process, browser_process.close)
             print(f"{datetime.now(UTC).isoformat()} browser_driver_process_begin pid={process.pid}", file=phase_output, flush=True)
-            returncode = await asyncio.to_thread(process.wait, timeout=1200)
+            # 默认场景合并了基础聊天和完整 fork 矩阵；单项业务 deadline 仍由各 owner 约束。
+            returncode = await asyncio.to_thread(process.wait, timeout=3600)
             print(f"{datetime.now(UTC).isoformat()} browser_driver_end returncode={returncode}", file=phase_output, flush=True)
         assert returncode == 0, (
             "基础聊天工具循环 Web E2E 失败:\n"
@@ -354,6 +355,7 @@ async def test_basic_chat_tool_loop_through_real_web_surface(
             + diagnostics["handledLifecycleErrors"]
             + diagnostics["handledTurnNavigationErrors"]
             + diagnostics["handledMessageStreamErrors"]
+            + diagnostics["handledControlledRestartErrors"]
         )
         assert sorted(fact["consoleIndex"] for fact in handled) == list(
             range(len(diagnostics["consoleErrors"])),
@@ -385,7 +387,7 @@ async def test_basic_chat_tool_loop_through_real_web_surface(
         assert isinstance(selected, list)
         assert result["focusedScenarios"] == requested
         assert set(result["section8"]) == set(selected)
-        if section8_selection_contract["mode"] == "focus":
+        if "basic_chat" not in selected:
             return
         assert result["firstJob"]["status"] in {"completed", "succeeded"}
         assert result["secondJob"]["status"] in {"completed", "succeeded"}
@@ -411,6 +413,23 @@ async def test_basic_chat_tool_loop_through_real_web_surface(
         assert result["secondTurn"]["finalText"] == "第二轮工具调用也已完成。"
         assert "已运行 read_file" in result["secondTurn"]["toolText"]
         assert result["streams"] == {"trace": 2, "message": 2}
+        trace_connections = result["basicStreamConnections"]["trace"]
+        assert len({connection["documentId"] for connection in trace_connections}) == 2
+        for connection in trace_connections:
+            assert connection["status"] == 200
+            assert connection["requestId"] and connection["cdpRequestId"]
+            assert connection["workspaceHeader"] == workspace_id
+            subscription, = (
+                item for item in connection["subscriptions"]
+                if item["subscription_id"] == connection["subscriptionId"]
+            )
+            assert subscription["kind"] == "session_trace"
+            assert subscription["session_id"] == result["sessionId"]
+            assert subscription["subscription_id"] in connection["connectedSubscriptions"]
+        for connection in result["basicStreamConnections"]["message"]:
+            assert connection["sessionId"] == result["sessionId"]
+            assert connection["threadId"] == result["threadId"]
+            assert connection["workspaceHeader"] == workspace_id
         assert result["persisted"]["llmRequestCount"] == 4
     except subprocess.TimeoutExpired as error:
         error.add_note(f"浏览器实时输出: {browser_stdout_path}; {browser_stderr_path}; 阶段: {phase_path}")

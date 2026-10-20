@@ -1,5 +1,5 @@
 {
-  // 当前只实现纯 Web 客户端。其他客户端保留 disabled TODO，不能被报告为通过。
+  // 客户端 E2E 当前只实现纯 Web。其他客户端保留 disabled TODO，不能被报告为通过。
   // 每个已启用 suite 默认带数据段内存上限与硬超时，防止无界增长的用例吃满整机内存。
   "schemaVersion": 1,
   "suites": [
@@ -18,6 +18,15 @@
       "command": ["bun", "test", "src/clients/web/src"]
     },
     {
+      "id": "unit-workspace-services",
+      "layer": "unit",
+      "client": null,
+      "enabled": true,
+      "timeoutMs": 60000,
+      "dataLimitKb": 4194304,
+      "command": ["bun", "tests/runner/run-workspace-services.mjs"]
+    },
+    {
       "id": "contracts-python",
       "layer": "contracts",
       "client": null,
@@ -32,11 +41,29 @@
       "command": ["uv", "run", "pytest", "tests/integration"]
     },
     {
+      "id": "integration-browser-element-references",
+      "layer": "integration",
+      "client": null,
+      "enabled": true,
+      "timeoutMs": 60000,
+      "dataLimitKb": 4194304,
+      "command": ["bun", "tests/integration/workspace_services/browser/browser_element_references.mjs"]
+    },
+    {
+      "id": "integration-browser-checkpoint-form-state",
+      "layer": "integration",
+      "client": null,
+      "enabled": true,
+      "timeoutMs": 60000,
+      "dataLimitKb": 4194304,
+      "command": ["bun", "tests/integration/workspace_services/browser/browser_checkpoint_form_state.mjs"]
+    },
+    {
       "id": "integration-web-anchored-overlay",
       "layer": "integration",
       "client": "web",
       "enabled": true,
-      "command": ["bun", "tests/integration/clients/web/anchored_overlay_positioning.mjs"]
+      "command": ["bun", "tests/integration/clients/web/components/anchored_overlay_positioning.mjs"]
     },
     {
       "id": "integration-web-session-catalog-outbox-idb",

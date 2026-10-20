@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+import ast
 import asyncio
+import re
+from pathlib import Path
 
 import pytest
 
+from app.core.resource_uri import _GRAMMAR_REASON_CODES, ResourceUriGrammarError
 from app.gateway.federation import errors
 from app.gateway.federation.channel import (
     ChannelHandshake,
@@ -23,6 +27,71 @@ from app.gateway.federation.errors import (
 )
 from app.gateway.federation.identity import FederationPeerIdentity
 from app.gateway.federation.protocol import FRAME_RESPONSE, FederationFrame
+from app.services.infrastructure.resource_platform.virtual_resources.resolver import (
+    RESOURCE_URI_RESOLVE_REASON_CODES,
+    ResourceUriResolveError,
+)
+
+
+def test_addressing_error_domains_are_disjoint_and_reject_each_others_codes() -> None:
+    domains = (
+        (ResourceUriGrammarError, _GRAMMAR_REASON_CODES),
+        (ResourceUriResolveError, RESOURCE_URI_RESOLVE_REASON_CODES),
+        (FederationError, errors.FEDERATION_ERROR_CODES),
+    )
+    for constructor, codes in domains:
+        for other_constructor, other_codes in domains:
+            if constructor is other_constructor:
+                continue
+            assert codes.isdisjoint(other_codes)
+            for code in other_codes:
+                with pytest.raises(ValueError):
+                    constructor(code, "跨 owner 拒绝码不得混用")
+
+
+def test_federation_resolution_codes_match_the_normative_owner_table() -> None:
+    spec = (Path.cwd() / "openspec/changes/add-unified-virtual-resource-addressing/specs/virtual-resource-addressing/spec.md").read_text()
+    table = spec.split("- **联邦解析期拒绝码（第三套，独立闭集）**：", 1)[1].split("\n\n", 1)[0]
+    assert set(re.findall(r"`((?:federation-[a-z-]+)|target_[a-z_]+)`", table)) == {
+        errors.FEDERATION_UNKNOWN_PEER, errors.FEDERATION_CHANNEL_CLOSED,
+        errors.FEDERATION_TARGET_NOT_RESOLVABLE, errors.FEDERATION_TARGET_AMBIGUOUS,
+        errors.FEDERATION_DEADLINE_EXCEEDED, errors.FEDERATION_TRANSIT_LIMIT_EXCEEDED,
+    }
+
+
+def test_production_error_constructors_use_registered_owner_codes() -> None:
+    """遍历实际调用点；新增同义码或跨域字面量必须在构造前被审计发现。"""
+    domains = {
+        "ResourceUriGrammarError": _GRAMMAR_REASON_CODES,
+        "ResourceUriResolveError": RESOURCE_URI_RESOLVE_REASON_CODES,
+        "FederationError": errors.FEDERATION_ERROR_CODES,
+    }
+    dynamic_sites = {
+        ("app/gateway/federation/channel.py", "FederationError", "code"),
+        ("app/gateway/federation/rpc.py", "FederationError", "code"),
+        ("app/services/infrastructure/resource_platform/sources/gateway_skill_sources.py",
+         "ResourceUriResolveError", "detail['code']"),
+    }
+    observed_dynamic_sites = set()
+    for path in sorted((Path.cwd() / "app").rglob("*.py")):
+        relative = path.relative_to(Path.cwd()).as_posix()
+        tree = ast.parse(path.read_text())
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Name) or node.func.id not in domains:
+                continue
+            code = node.args[0] if node.args else next(arg.value for arg in node.keywords if arg.arg in {"code", "reason_code"})
+            choices = (code.body, code.orelse) if isinstance(code, ast.IfExp) else (code,)
+            for choice in choices:
+                if isinstance(choice, ast.Constant):
+                    assert choice.value in domains[node.func.id], (relative, node.lineno, choice.value)
+                elif isinstance(choice, ast.Name) and choice.id.startswith("FEDERATION_"):
+                    assert node.func.id == "FederationError"
+                    assert getattr(errors, choice.id) in errors.FEDERATION_ERROR_CODES
+                else:
+                    site = (relative, node.func.id, ast.unparse(choice))
+                    assert site in dynamic_sites, (site, node.lineno)
+                    observed_dynamic_sites.add(site)
+    assert observed_dynamic_sites == dynamic_sites
 
 
 class _Transport:
