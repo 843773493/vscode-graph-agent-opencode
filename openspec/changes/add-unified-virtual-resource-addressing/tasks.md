@@ -23,6 +23,7 @@
 - [ ] 2.4 落实 **「locator 是输入，不是输出」**不变量：解析命中（含跨 gateway）只返回稳定身份与内容，返回值 MUST NOT 携带 locator；给出可机械检查点。
 - [ ] 2.5 落实 requirement「「位置」必须有可机械判定的统一判据」（`spec.md:42`，5 条 Scenario）：把「能不能经确定性推导直接用于 fs/sqlite 访问」与「是否属 owner 自身运行态字段」判据做成唯一判定来源，覆盖「可由 owner 身份推导的位置不落盘」「不可推导但需寻址时用既有 API 端点」「owner 运行态字段以工作区内相对路径持久化」「判据可机械判定」「配置应用事件的路径字段不是位置」五条。**该 requirement 被 `add-workspace-persistent-resource-management` 强引用**（其 `specs/workspace-persistent-resources/spec.md:35` 与 D-A2/D-A3 明写「引用本 requirement、MUST NOT 另立一套判据」），故本 change 作为 owner MUST 有可机械判定验收；门槛：五条 Scenario 各至少一条断言，且 D-A2/D-A3 消费方按本判据接线。
 - [ ] 2.6 落实「普通文件入口必须保留原生路径输入并统一目标解析」的公共边界：登记相对/绝对/URI 三种输入、明确目标目录与目标平台、工作区外既有能力/授权及具名请求输入例外，保持 URI 输出/持久引用不变量；消费者引用同一定义，不自行增 kind、parser 或独立执行链。普通文件工具实现仍由 `add-unified-resource-file-tools` 承接。
+- [ ] 2.7 由本 owner 补齐未注册目录的规范寻址，再同批迁移文件树响应、编辑、快捷目录持久引用及重开消费者；保留原浏览/编辑能力，不伪造工作区身份、不自动或强制注册。验收真实目录内容与编辑结果、快捷目录重开、工作区注册表不变及 URI 输出/持久化不变量，不能以模板缺失为由删功能。
 
 ## 3. scope、scope_id 与 gateway authority
 

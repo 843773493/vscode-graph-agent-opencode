@@ -16,6 +16,8 @@ read/write 的文件目标、ls/glob/grep 的根目标和 apply_patch 的根目�
 
 原生路径是具名请求输入，不能因此进入内部持久资源引用、普通响应或跨 Gateway 资源投影；无已有 URI 模板的外部目标沿既有 owner/API，不自造 kind 或第二操作链。拒绝万能目录映射：领域对象不暴露磁盘树，Skill 目录读取不调用 CSM。终端/shell 保留原生路径语义，Gateway 原生目录选择/注册的管理边界不限制普通文件绝对路径输入。
 
+未注册目录的文件树浏览、编辑与快捷目录保留，由统一寻址 owner 先补齐规范引用，消费者同批迁响应、持久化与重开，不私建模板、不借用工作区身份、不以注册为访问前提。真实 UI 验收需核指定目录内容、编辑实际文件、重开快捷目录和工作区注册表不变，不能用改为只读或删除目录入口来消除真实路径字段。
+
 当前 `workspace_tool_paths.py::_absolute_to_workspace_relative()` 在绝对路径不属于工作区时使用 `path.lstrip("/")`，把 `/etc/hosts` 错投工作区的 `etc/hosts`。实施先全仓清点 `WorkspaceToolPathResolver`、filesystem tools、debugging、apply_patch 及 backend 输出转换和测试，分离用户原生绝对路径与 DeepAgents 内部虚拟路径入口，再删除该歧义回退与重复执行链。`backend_virtual_to_workspace_relative` 等内部转换不得成为猜测用户路径的兜底；既有把 `/src/main.mjs` 当虚拟根的测试须转为明确的 backend 输入测试，并补真实用户绝对路径的相反断言。
 
 ### 2. 实际 owner 就地执行，路由不是持有数据

@@ -27,6 +27,7 @@
 - 固化**默认寻址政策**：配置/skill/状态/资源引用默认用 URI 传递；新增持久化字段若需定位资源，一律用 `identity + URI(+ 独立 revision 字段)`，不得存 real path。唯一例外是 `add-multi-workspace-backend-mounting` 定义的原生 Gateway workspace-root binding；它不是资源引用，不得复制到 managed group、普通 DTO 或业务记录。
 - 建立**可机械检查的 real path 不变量**：唯一持久化例外仍是上述 workspace-root binding；具名请求输入边界包括原生目录选择/注册和普通文件的原生路径输入。real path 不得作为资源引用进入业务持久化、普通 API 响应、联邦资源投影、解析结果或系统生成的模型载荷；路径输入只交固定目标解析与执行，中继不将其保存或转为资源数据。
 - **普通文件路径输入合同（2026-10-20 用户裁定）**：相对路径、绝对路径、资源 URI 均为合法入口，内部统一解析后复用同一文件 owner。相对路径基于明确目标工作区/目录；绝对路径按目标机器原生语义解释，工作区外访问遵守既有能力和授权，不得重定向到工作区内或因 URI 化强制先注册工作区。Windows 盘符同样由目标平台解释；终端/shell 保留原生语义。该输入合同不放宽 URI 输出/持久引用政策，Gateway 管理目录入口也不限制普通文件绝对路径输入。
+- **未注册目录能力保留（2026-10-20 用户确认）**：文件树继续浏览、编辑未注册目录，保留快捷目录能力；不强制或暗中注册工作区，不伪造 workspace_id。本 owner 须补齐其规范寻址后迁移响应和快捷方式持久引用，不能靠删功能消除真实路径字段。
 - **真实路径外泄（已消除，保留为可机械复核的不变量）**：配置来源层记录曾以 `ConfigSourceLayerRecord.source_path`/`backup_path` 把真实路径落进 SQLite，配置来源列表 API 曾以 `ConfigSourceDTO.path`/`ConfigSourcesDTO.schema_path` 把真实路径写进响应体；两处已分别由 `50bffa45`（持久化改 URI）与 `76ed0089`（响应体改 URI）消除，详见 requirement「既有配置来源持久化必须按同一模式迁移为 URI 兄弟字段」。
 - **迁移面为新写入与消费切换，不迁旧开发数据**：历史基线取证为157 live + 44 dev/temp库中 `boxteam://` 零命中；当时挂点为来源控制状态与activation display_uri。该盘点只描述当时状态，不作为实施后仍零落盘的条件。当前字段、生产writer和读侧按各自唯一owner核对并接通；必要时按授权清理开发中间数据，不扫描或升级旧URI实例。新增附件/工具结果旧scheme的源码消费迁移在文件工具change验收。
 - **收口四个 change**：在途 `add-context-injection-lifecycle`、并行 `migrate-session-context-resource-uri` 与 `add-multi-workspace-backend-mounting`，以及第四个 `add-workspace-persistent-resource-management`；术语、scope、scope_id 语义、kind 与拒绝码写法一致，无同义异名。
