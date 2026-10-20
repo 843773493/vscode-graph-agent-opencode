@@ -40,12 +40,10 @@ class SourceSealCase:
     def manager(
         self, *,
         lifecycle_event_sink: Callable[[ContextSourceEvent], None] | None = None,
-        mutation_intent_port: object | None = None,
     ) -> ContextSourceManager:
         return ContextSourceManager(
             owner=self.owner, control_state_port=self.saver,
             lifecycle_event_sink=lifecycle_event_sink,
-            mutation_intent_port=mutation_intent_port,
         )
 
     def seal(

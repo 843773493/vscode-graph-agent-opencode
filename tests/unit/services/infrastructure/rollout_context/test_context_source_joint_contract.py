@@ -837,7 +837,6 @@ class TestSealedTypedFieldConsumption:
         manager = ContextSourceManager(
             owner=owner,
             control_state_port=saver,
-            mutation_intent_port=saver,
         )
         manager.register(
             ContextSourceDescriptor(

@@ -240,7 +240,6 @@ def guidance_prepare(catalog_runtime, registry_db, frozen_provider_activation, f
     )
     manager = ContextSourceManager(
         owner=ContextSourceOwnerKey(session, thread), control_state_port=saver,
-        mutation_intent_port=saver,
     )
     envelope = create_extension_tool_invoker_tool(
         owner.get_tools(), catalog_binding_resolver=owner.binding_snapshot,
@@ -262,7 +261,6 @@ def guidance_prepare(catalog_runtime, registry_db, frozen_provider_activation, f
         target = saver if context_owner is None else context_owner
         source_manager = manager if target is saver else ContextSourceManager(
             owner=ContextSourceOwnerKey(session, thread), control_state_port=target,
-            mutation_intent_port=target,
         )
         with (
             session_thread_owner_scope(MutationIntentOwner(session, thread), langgraph_thread_id=thread),

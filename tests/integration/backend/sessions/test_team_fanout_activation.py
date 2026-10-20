@@ -245,7 +245,7 @@ def coordinator(case, registry):
 
 
 def prepare(case, active, frozen, key, wire):
-    manager = ContextSourceManager(owner=ContextSourceOwnerKey(SESSION, case.main), control_state_port=case.saver, mutation_intent_port=case.saver)
+    manager = ContextSourceManager(owner=ContextSourceOwnerKey(SESSION, case.main), control_state_port=case.saver)
     with session_thread_owner_scope(MutationIntentOwner(SESSION, case.main), langgraph_thread_id=case.main), execution_admission_scope(active, langgraph_thread_id=case.main):
         return case.saver.prepare_context_for_provider(SESSION, case.main, turn_id=active.turn_id, execution_id=active.execution_id,
             plan_creation_idempotency_key=key, seal_idempotency_key="seal:" + key,

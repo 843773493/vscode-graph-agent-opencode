@@ -11,6 +11,10 @@ import pytest
 from app.domain.itemized.epoch.tool_set import ToolSetSnapshot
 from app.domain.itemized.hashing import content_hash, sha256_jcs
 from app.domain.itemized.identity.item_projection import ItemSourceManifest
+from app.domain.itemized.mutation_intents import (
+    ApplySourceLifecycleDecision,
+    ContextMutationIntent,
+)
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
@@ -24,16 +28,6 @@ from app.services.infrastructure.rollout_context.runtime.context_sources.source_
     SourceObservation,
     build_source_lifecycle_decision,
 )
-
-
-class RecordingMutationIntentPort:
-    """确认 CSM acknowledgment 不再消费第二条 source lifecycle 写入链。"""
-
-    def __init__(self) -> None:
-        self.intents: list[object] = []
-
-    def consume_mutation_intent(self, intent: object) -> None:
-        self.intents.append(intent)
 
 
 def _descriptor(source_id: str, name: str) -> ContextSourceDescriptor:
@@ -114,9 +108,18 @@ def test_failed_real_seal_never_advances_memory_applied_or_events(source_seal_ca
     assert stored.latest_visible_committed_revision == stored.latest_revision
 
 
-def test_activation_is_applied_by_one_seal_without_source_mutation_intent(source_seal_case):
-    mutation_port = RecordingMutationIntentPort()
-    manager = source_seal_case.manager(mutation_intent_port=mutation_port)
+def test_activation_is_applied_by_one_seal_without_source_mutation_intent(source_seal_case, monkeypatch):
+    consume = source_seal_case.saver.consume_mutation_intent
+
+    def refuse_source_intent(
+        intent: ContextMutationIntent, connection: sqlite3.Connection | None = None,
+    ) -> None:
+        if isinstance(intent, ApplySourceLifecycleDecision):
+            pytest.fail("model-call 来源只能由 seal 原子应用，不能再提交 source intent")
+        consume(intent, connection)
+
+    monkeypatch.setattr(source_seal_case.saver, "consume_mutation_intent", refuse_source_intent)
+    manager = source_seal_case.manager()
     _activate(manager, "src_a", "a", "alpha")
     batch = manager.prepare_pending()
     assert batch.deltas[0].kind == "activation"
@@ -125,7 +128,6 @@ def test_activation_is_applied_by_one_seal_without_source_mutation_intent(source
     assert applied.source_id == "src_a"
     assert applied.revision == batch.deltas[0].revision
     assert applied.previous_revision is None
-    assert mutation_port.intents == []
 
 
 @pytest.mark.parametrize(
@@ -401,8 +403,7 @@ def test_pure_memory_acknowledgment_reuses_real_seal_receipt(source_seal_case):
 
 
 def test_acknowledgment_reads_real_port_without_writing_or_consuming_intent(source_seal_case, monkeypatch):
-    mutation_port = RecordingMutationIntentPort()
-    manager = source_seal_case.manager(mutation_intent_port=mutation_port)
+    manager = source_seal_case.manager()
     _activate(manager, "src_a", "a", "alpha")
     batch = manager.prepare_pending()
     sealing_manager = source_seal_case.manager()
@@ -414,7 +415,7 @@ def test_acknowledgment_reads_real_port_without_writing_or_consuming_intent(sour
         raise AssertionError("receipt 确认不得调用 source control writer")
 
     monkeypatch.setattr(source_seal_case.saver, "apply_context_source_control_mutation", refuse_write)
+    monkeypatch.setattr(source_seal_case.saver, "consume_mutation_intent", refuse_write)
     receipt = manager.acknowledge_sealed_pending(batch, binding)
     assert receipt.deltas == batch.deltas
     assert source_seal_case.saver.load_context_source_control_states(source_seal_case.owner) == before
-    assert mutation_port.intents == []

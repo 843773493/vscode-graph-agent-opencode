@@ -84,6 +84,7 @@ def test_agent_factory_keeps_empty_extension_envelope_after_tool_filter(
         "resource_registry": ResourceRegistry(),
         "resource_activation": None,
         "resource_navigation": MagicMock(),
+        "text_mutations": MagicMock(),
         "workspace_root": tmp_path,
         "skill_catalog": MagicMock(),
         "middleware": [],
@@ -129,7 +130,7 @@ def test_agent_factory_omits_all_csm_ports_without_durable_owner(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """合成 session 没有 durable owner 时 CSM 三个端口必须全部为空。"""
+    """合成 session 没有 durable owner 时不装配 CSM 持久端口或事件发布。"""
 
     config_service = MagicMock()
     config_service.get_tool_policy_resolver.return_value = ToolPolicyResolver(
@@ -175,6 +176,7 @@ def test_agent_factory_omits_all_csm_ports_without_durable_owner(
         "resource_registry": resource_registry,
         "resource_activation": None,
         "resource_navigation": MagicMock(),
+        "text_mutations": MagicMock(),
         "workspace_root": tmp_path,
         "workspace_file_resource_registry": file_registry,
         "middleware": [],
@@ -209,7 +211,6 @@ def test_agent_factory_omits_all_csm_ports_without_durable_owner(
     call = context_manager.call_args.kwargs
     assert call["owner"] is None
     assert call["control_state_port"] is None
-    assert call["mutation_intent_port"] is None
     assert call["lifecycle_event_sink"] is None
     reactor.assert_not_called()
     build_catalog.assert_not_called()

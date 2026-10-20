@@ -68,7 +68,6 @@ class ContextSourceManager(
         *,
         owner: ContextSourceOwnerKey | None = None,
         control_state_port: ContextSourceControlStatePort | None = None,
-        mutation_intent_port: object | None = None,
         lifecycle_event_sink: Callable[[ContextSourceEvent], None] | None = None,
     ) -> None:
         if (owner is None) != (control_state_port is None):
@@ -77,11 +76,6 @@ class ContextSourceManager(
             )
         self._owner = owner
         self._control_state_port = control_state_port
-        if mutation_intent_port is not None and owner is None:
-            raise ValueError(
-                "ContextSourceManager 的 mutation_intent_port 需要 owner"
-            )
-        self._mutation_intent_port = mutation_intent_port
         self._lifecycle_event_sink = lifecycle_event_sink
         self._last_model_call_receipt: CommittedContextSourceBatch | None = None
         self._sources: dict[str, SourceState] = {}
