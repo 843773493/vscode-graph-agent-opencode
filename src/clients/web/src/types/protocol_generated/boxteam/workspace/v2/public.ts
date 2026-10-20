@@ -2090,7 +2090,7 @@ export interface InternalExecutionHistoryDTO {
   session_id: string;
   /** 持久 execution/admission 的历史 thread scope；fork 保留原值，可不同于本页请求 thread，仅由目标本地冻结 namespace binding 校验，不用于重新寻址来源。 */
   thread_id: string;
-  /** 对应 executions 持久记录的 UTC ISO8601 更新时刻；fork 保留已终态来源值，未终态目标取消使用目标收敛时刻。 */
+  /** 对应 executions.updated_at 的来源更新时刻，接口按 ISO8601 表达；fork 保留全部历史行的原始时间，不用目标安装、发布或取消时间覆盖。 */
   updated_at: string | undefined;
 }
 

@@ -452,7 +452,7 @@ class InternalExecutionHistoryDTO(BaseModel):
         "unknown",
     ] = Field(description="对应 executions.outcome 的独立 internal execution 历史结果，不是 Job 或 Turn 状态。")
     created_at: datetime = Field(description="对应 executions 持久记录不可变的 UTC 创建时刻，接口按 ISO8601 表达，复制保留源值。")
-    updated_at: datetime = Field(description="对应 executions 持久记录的 UTC ISO8601 更新时刻；fork 保留已终态来源值，未终态目标取消使用目标收敛时刻。")
+    updated_at: datetime = Field(description="对应 executions.updated_at 的来源更新时刻，接口按 ISO8601 表达；fork 保留全部历史行的原始时间，不用目标安装、发布或取消时间覆盖。")
     display_parts: list[InternalExecutionDisplayPartDTO] = Field(
         max_length=256,
     )
