@@ -163,14 +163,14 @@ class WorkspaceFileResourceRegistry:
             resolved_path = path.resolve()
 
         if not resolved_path.is_file() and resolved_path.exists():
-            raise RuntimeError(f"工作区资源路径不是文件: {resolved_path}")
+            raise RuntimeError(f"工作区资源路径不是文件: uri={uri}")
         if any(
             registered_uri != uri
             and handle.descriptor.entry_identity == entry_identity
             for registered_uri, handle in self._file_handles_by_uri.items()
         ):
             raise ValueError(f"文件来源 entry_identity 冲突: entry_identity={entry_identity}")
-        allowed_root = self._allowed_root_for(resolved_path)
+        allowed_root = self._allowed_root_for(resolved_path, reference=uri)
         handle = ObservedSourceHandle(
             descriptor=ObservedSourceDescriptor(
                 source_id=source_id,
@@ -251,7 +251,7 @@ class WorkspaceFileResourceRegistry:
         )
         expected_root = expected_roots.get(scope)
         if expected_root is None or root.absolute() != expected_root.absolute():
-            raise ValueError(f"Skill 目录必须是已知固定根: scope={scope} root={root}")
+            raise ValueError(f"Skill 目录必须是已知固定根: scope={scope}")
         identity = json.dumps(
             [scope, scope_id, declared_entries], ensure_ascii=False, separators=(",", ":"),
         )
@@ -282,34 +282,36 @@ class WorkspaceFileResourceRegistry:
         error = None
         try:
             root = handle.root
+            reference = f"scope={handle.scope}, scope_id={handle.scope_id}"
             if root.is_symlink():
-                raise RuntimeError(f"Skill 根目录不允许 symlink: {root}")
+                raise RuntimeError(f"Skill 根目录不允许 symlink: {reference}")
             # 枚举前复用文件 owner 的域边界；中间段的内部链接可用，越界链接禁止跟随。
-            allowed_root = self._allowed_root_for(root)
+            allowed_root = self._allowed_root_for(root, reference=reference)
             if not root.resolve().is_relative_to(allowed_root):
-                raise ValueError(f"Skill 固定根越出已知允许根: {root}")
+                raise ValueError(f"Skill 固定根越出已知允许根: {reference}")
             if root.exists() and not root.is_dir():
-                raise RuntimeError(f"Skill 根路径不是目录: {root}")
+                raise RuntimeError(f"Skill 根路径不是目录: {reference}")
             if handle.declared_entries is not None:
                 if not root.is_dir():
-                    raise FileNotFoundError(f"发行包内置 Skill 根目录不存在: {root}")
+                    raise RuntimeError(f"发行包内置 Skill 根目录不存在: {reference}")
                 candidates = tuple(root / name for name in handle.declared_entries)
             else:
                 candidates = tuple(sorted(root.iterdir())) if root.is_dir() else ()
             for entry_dir in candidates:
+                entry_reference = f"{reference}, skill={entry_dir.name}"
                 if entry_dir.is_symlink():
-                    raise RuntimeError(f"Skill entry 不允许 symlink: {entry_dir}")
+                    raise RuntimeError(f"Skill entry 不允许 symlink: {entry_reference}")
                 if not entry_dir.is_dir():
                     if handle.declared_entries is not None:
-                        raise FileNotFoundError(f"发行包内置 Skill 组目录不存在: {entry_dir}")
+                        raise RuntimeError(f"发行包内置 Skill 组目录不存在: {entry_reference}")
                     continue
                 entry_watch_roots.append(entry_dir.absolute())
                 path = entry_dir / "SKILL.md"
                 if path.is_symlink():
-                    raise RuntimeError(f"SKILL.md 不允许 symlink: {path}")
+                    raise RuntimeError(f"SKILL.md 不允许 symlink: {entry_reference}")
                 if not path.is_file():
                     if handle.declared_entries is not None:
-                        raise FileNotFoundError(f"发行包内置 Skill 组缺少 SKILL.md: {entry_dir}")
+                        raise RuntimeError(f"发行包内置 Skill 组缺少 SKILL.md: {entry_reference}")
                     continue
                 if handle.scope_id is None:
                     raise RuntimeError("gateway scope 的 scope_id 需要真实的 gateway_id，当前来源 owner 尚未绑定")
@@ -333,7 +335,13 @@ class WorkspaceFileResourceRegistry:
                 entries.append(WorkspaceSkillDirectoryEntry(
                     entry_dir.name, path, uri, source_id, entry_identity,
                 ))
-        except (OSError, RuntimeError, ValueError) as failure:
+        except OSError as failure:
+            error = (
+                f"Skill 固定目录读取失败: scope={handle.scope}, scope_id={handle.scope_id}, "
+                f"error={type(failure).__name__}, errno={failure.errno}"
+            )
+            logger.exception("Skill 固定目录读取失败: directory_id=%s", directory_id)
+        except (RuntimeError, ValueError) as failure:
             error = str(failure)
             logger.error("Skill 固定目录对账失败: directory_id=%s error=%s", directory_id, error)
         self._skill_entry_watch_roots[directory_id] = tuple(entry_watch_roots)
@@ -394,7 +402,7 @@ class WorkspaceFileResourceRegistry:
             )
         )
 
-    def _allowed_root_for(self, resolved_path: Path) -> Path:
+    def _allowed_root_for(self, resolved_path: Path, *, reference: str) -> Path:
         """解析来源所属的配置允许根;越出全部已知根的来源拒绝登记。
 
         允许根由配置域决定,不要求目录在 registry 构造时已存在。
@@ -403,7 +411,7 @@ class WorkspaceFileResourceRegistry:
             if resolved_path.is_relative_to(root):
                 return root
         raise ValueError(
-            f"工作区文件来源必须位于已知允许根内: {resolved_path}"
+            f"工作区文件来源必须位于已知允许根内: {reference}"
         )
 
     def _publish_observation(

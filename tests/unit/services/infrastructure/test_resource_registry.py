@@ -340,7 +340,9 @@ def test_source_unavailable_retains_last_valid(tmp_path: Path) -> None:
     assert str(source) not in repr(unavailable)
     source_failure = reconciler.observed_revision("src-skill")
     assert source_failure.error_code == "invalid_utf8"
-    assert source_failure.error is not None and str(source) in source_failure.error
+    assert source_failure.error is not None
+    assert "boxteam://workspace/test/resources/skills/demo/SKILL.md" in source_failure.error
+    assert str(tmp_path) not in source_failure.error
     # 旧 valid 快照仍可审计,不冒充新版本。
     assert registry.last_valid_snapshot("skill:demo:metadata") is valid
     repeated = graph.publish("skill:demo:metadata")

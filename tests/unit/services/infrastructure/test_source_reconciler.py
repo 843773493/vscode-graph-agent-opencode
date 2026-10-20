@@ -8,7 +8,10 @@
 from __future__ import annotations
 
 import ast
+import errno
 import hashlib
+import json
+from dataclasses import asdict
 from pathlib import Path
 
 import pytest
@@ -58,6 +61,8 @@ def test_handle_rejects_path_outside_allowed_root(tmp_path: Path) -> None:
     with pytest.raises(StableSourceReadError) as info:
         _file_handle(outside, tmp_path / "skills")
     assert info.value.reason_code == "outside_allowed_root"
+    assert "boxteam://workspace/test/resources/skills/demo/SKILL.md" in str(info.value)
+    assert str(tmp_path) not in str(info.value)
 
 
 def test_reader_rejects_symlink_without_following(tmp_path: Path) -> None:
@@ -100,6 +105,79 @@ def test_reader_reports_missing_file(tmp_path: Path) -> None:
     assert info.value.reason_code == "missing"
 
 
+@pytest.mark.parametrize("failure", ["missing", "invalid_utf8", "symlink_rejected", "not_regular_file", "oversize"])
+def test_failed_observation_references_uri_and_retains_previous_revision(
+    tmp_path: Path, failure: str,
+) -> None:
+    source = tmp_path / "SKILL.md"
+    source.write_text("accepted\n", encoding="utf-8")
+    handle = _file_handle(source, tmp_path)
+    reconciler = SourceReconciler(handles={"src-1": handle})
+    accepted = reconciler.reconcile("src-1")
+    source.unlink()
+    if failure == "invalid_utf8":
+        source.write_bytes(b"\xff")
+    elif failure == "symlink_rejected":
+        target = tmp_path / "private-target.md"
+        target.write_text("not accepted\n", encoding="utf-8")
+        source.symlink_to(target)
+    elif failure == "not_regular_file":
+        source.mkdir()
+    elif failure == "oversize":
+        source.write_bytes(b"x" * (MAX_STABLE_READ_BYTES + 1))
+
+    failed = reconciler.reconcile("src-1")
+    assert not failed.available
+    assert failed.error_code == failure
+    assert failed.revision == failed.retained_revision == accepted.revision
+    assert failed.content == accepted.content
+    assert handle.descriptor.display_uri in failed.error
+    assert str(tmp_path) not in json.dumps(asdict(failed), ensure_ascii=False)
+
+
+@pytest.mark.parametrize("stage", ["open", "pread"])
+def test_source_io_failure_preserves_reason_without_publishing_locator(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, stage: str,
+) -> None:
+    source = tmp_path / "SKILL.md"
+    source.write_text("accepted\n", encoding="utf-8")
+    handle = _file_handle(source, tmp_path)
+    reconciler = SourceReconciler(handles={"src-1": handle})
+    accepted = reconciler.reconcile("src-1")
+
+    def fail_io(*_args):
+        raise PermissionError(errno.EACCES, "private OS diagnostic", str(source))
+
+    with monkeypatch.context() as patch:
+        patch.setattr(f"os.{stage}", fail_io)
+        failed = reconciler.reconcile("src-1")
+    assert not failed.available and failed.error_code == "read_failed"
+    assert failed.revision == failed.retained_revision == accepted.revision
+    assert failed.content == accepted.content
+    assert "PermissionError" in failed.error and f"errno={errno.EACCES}" in failed.error
+    assert handle.descriptor.display_uri in failed.error
+    assert str(tmp_path) not in json.dumps(asdict(failed), ensure_ascii=False)
+    assert reconciler.reconcile("src-1").available
+
+
+def test_open_symlink_race_keeps_symlink_reason(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "SKILL.md"
+    source.write_text("accepted\n", encoding="utf-8")
+    handle = _file_handle(source, tmp_path)
+
+    def fail_open(*_args):
+        raise OSError(errno.ELOOP, "private symlink diagnostic", str(source))
+
+    monkeypatch.setattr("os.open", fail_open)
+    with pytest.raises(StableSourceReadError) as caught:
+        StableSourceReader().read(handle)
+    assert caught.value.reason_code == "symlink_rejected"
+    assert handle.descriptor.display_uri in str(caught.value)
+    assert str(tmp_path) not in str(caught.value)
+
+
 def test_unstable_read_exhausts_attempts_and_reconciler_retains_previous(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -124,6 +202,8 @@ def test_unstable_read_exhausts_attempts_and_reconciler_retains_previous(
     unavailable = reconciler.reconcile("src-1")
     assert unavailable.available is False
     assert unavailable.error_code == "unstable_read"
+    assert "boxteam://workspace/test/resources/skills/demo/SKILL.md" in unavailable.error
+    assert str(tmp_path) not in unavailable.error
     # 失败保旧:revision/content 保持上一份 valid 事实,并显式保留引用。
     assert unavailable.revision == first.revision
     assert unavailable.revision_kind == "file_byte_hash"

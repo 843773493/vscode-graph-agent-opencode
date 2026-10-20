@@ -13,6 +13,7 @@ preparation 不得直接调用 reader,只消费 Registry published revision。
 
 from __future__ import annotations
 
+import errno
 import hashlib
 import os
 import stat as stat_module
@@ -38,6 +39,7 @@ _REASON_CODES = frozenset(
         "invalid_utf8",
         "missing",
         "unstable_read",
+        "read_failed",
     }
 )
 
@@ -107,7 +109,7 @@ class ObservedSourceHandle:
         if not resolved_path.is_relative_to(resolved_root):
             raise StableSourceReadError(
                 "outside_allowed_root",
-                f"来源路径越过允许根目录: {self.file_path}",
+                f"来源路径越过允许根目录: uri={self.descriptor.display_uri}",
             )
 
 
@@ -180,9 +182,10 @@ class StableSourceReader:
 
     def read(self, handle: ObservedSourceHandle) -> ObservedSourceRevision:
         file_path = Path(handle.file_path or "")
+        uri = handle.descriptor.display_uri
         if os.path.islink(file_path):
             raise StableSourceReadError(
-            "symlink_rejected", f"来源路径是符号链接，拒绝跟随: {handle.file_path}"
+            "symlink_rejected", f"来源路径是符号链接，拒绝跟随: uri={uri}"
         )
         open_flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
         try:
@@ -198,25 +201,28 @@ class StableSourceReader:
                     revision_kind="file_absence", content="", byte_length=0, exists=False,
                 )
             raise StableSourceReadError(
-            "missing", f"来源文件不存在: {handle.file_path}"
+            "missing", f"来源文件不存在: uri={uri}"
             ) from error
         except OSError as error:
-            if getattr(error, "errno", None) == getattr(os, "ELOOP", None):
+            if error.errno == errno.ELOOP:
                 raise StableSourceReadError(
                 "symlink_rejected",
-                f"打开时检测到符号链接(O_NOFOLLOW): {handle.file_path}",
+                f"打开时检测到符号链接(O_NOFOLLOW): uri={uri}",
                 ) from error
-            raise
+            raise StableSourceReadError(
+                "read_failed",
+                f"来源文件打开失败: uri={uri}, error={type(error).__name__}, errno={error.errno}",
+            ) from error
         try:
             st_first = os.fstat(fd)
             if not stat_module.S_ISREG(st_first.st_mode):
                 raise StableSourceReadError(
-                "not_regular_file", f"来源不是普通文件: {handle.file_path}"
+                "not_regular_file", f"来源不是普通文件: uri={uri}"
                 )
             if st_first.st_size > MAX_STABLE_READ_BYTES:
                 raise StableSourceReadError(
                 "oversize",
-                f"来源文件 {st_first.st_size} 字节超过固定上限 {MAX_STABLE_READ_BYTES}",
+                f"来源文件 {st_first.st_size} 字节超过固定上限 {MAX_STABLE_READ_BYTES}: uri={uri}",
                 )
             last_error: StableSourceReadError | None = None
             for _attempt in range(STABLE_READ_ATTEMPTS):
@@ -239,19 +245,19 @@ class StableSourceReader:
                 ):
                     last_error = StableSourceReadError(
                     "unstable_read",
-                    f"来源文件在读取期间持续变化: {handle.file_path}",
+                    f"来源文件在读取期间持续变化: uri={uri}",
                     )
                     continue
                 if first != second:
                     last_error = StableSourceReadError(
-                    "unstable_read", f"双读内容不一致: {handle.file_path}"
+                    "unstable_read", f"双读内容不一致: uri={uri}"
                     )
                     continue
                 try:
                     content = first.decode("utf-8")
                 except UnicodeDecodeError as error:
                     raise StableSourceReadError(
-                    "invalid_utf8", f"来源文件不是有效 UTF-8: {handle.file_path}"
+                    "invalid_utf8", f"来源文件不是有效 UTF-8: uri={uri}"
                     ) from error
                 digest = hashlib.sha256(first).hexdigest()
                 return ObservedSourceRevision(
@@ -263,6 +269,11 @@ class StableSourceReader:
                 )
             assert last_error is not None
             raise last_error
+        except OSError as error:
+            raise StableSourceReadError(
+                "read_failed",
+                f"来源文件读取失败: uri={uri}, error={type(error).__name__}, errno={error.errno}",
+            ) from error
         finally:
             os.close(fd)
 

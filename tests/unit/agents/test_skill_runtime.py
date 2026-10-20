@@ -449,8 +449,47 @@ def test_build_workspace_skill_catalog_rejects_symlink_entry(tmp_path, monkeypat
     monkeypatch.setenv("BOXTEAM_HOME", str(tmp_path / "boxteam-home"))
     monkeypatch.delenv("BOXTEAM_DEFAULT_SKILL_GROUPS", raising=False)
 
-    with pytest.raises(RuntimeError, match="symlink"):
+    with pytest.raises(RuntimeError, match="symlink") as caught:
         _build_catalog(tmp_path, registry=ResourceRegistry())
+    assert str(tmp_path) not in str(caught.value)
+    assert "evil" in str(caught.value)
+
+
+@pytest.mark.parametrize("failure", ["invalid_utf8", "skill_symlink", "directory_io"])
+def test_skill_catalog_failure_exposes_logical_source_without_native_locator(
+    tmp_path, monkeypatch, failure,
+):
+    skill_dir = tmp_path / ".boxteam" / "skills" / "demo"
+    skill_dir.mkdir(parents=True)
+    skill = skill_dir / "SKILL.md"
+    skill.write_bytes(b"\xff")
+    monkeypatch.setenv("BOXTEAM_HOME", str(tmp_path / "boxteam-home"))
+    monkeypatch.delenv("BOXTEAM_DEFAULT_SKILL_GROUPS", raising=False)
+    if failure == "skill_symlink":
+        skill.unlink()
+        target = tmp_path / "private-target.md"
+        target.write_text("private content", encoding="utf-8")
+        skill.symlink_to(target)
+    elif failure == "directory_io":
+        original_iterdir = Path.iterdir
+
+        def fail_directory(path):
+            if path == skill_dir.parent:
+                raise PermissionError(13, "private diagnostic", str(path))
+            return original_iterdir(path)
+
+        monkeypatch.setattr(Path, "iterdir", fail_directory)
+    with pytest.raises(RuntimeError) as caught:
+        _build_catalog(tmp_path, registry=ResourceRegistry())
+    message = str(caught.value)
+    assert str(tmp_path) not in message
+    if failure == "invalid_utf8":
+        assert "invalid_utf8" in message
+        assert "/resources/skills/demo/SKILL.md" in message
+    elif failure == "skill_symlink":
+        assert "symlink" in message and "demo" in message
+    else:
+        assert "PermissionError" in message and "errno=13" in message
 
 
 def test_build_workspace_skill_catalog_rejects_name_dir_mismatch(

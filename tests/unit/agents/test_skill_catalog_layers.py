@@ -541,7 +541,8 @@ def test_graph_failure_preserves_audit_and_recovers_identical_skill_revision(
             _build(layered_workspace, registry, file_registry)
         if invalid == b"\xff\xfe":
             assert "invalid_utf8" in str(caught.value)
-            assert str(source) in str(caught.value)
+            assert entry.display_uri in str(caught.value)
+            assert str(layered_workspace) not in str(caught.value)
             raw_error = file_registry.snapshot(entry.display_uri).error
             assert raw_error is not None and raw_error in str(caught.value)
         elif b"private-invalid-frontmatter" in invalid:

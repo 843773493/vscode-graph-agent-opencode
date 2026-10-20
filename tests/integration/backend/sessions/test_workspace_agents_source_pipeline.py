@@ -197,7 +197,11 @@ async def test_agents_invalid_or_unregistered_source_blocks_chain_and_preserves_
     file_owner.refresh(file_uris[0])
     invalid = publish_workspace_agents(registry=registry, file_registry=file_owner, file_uris=file_uris)
     assert not invalid.available and invalid.error_code == "dependency-unavailable"
-    assert file_owner.observed_revision(file_owner.source_id_for_uri(file_uris[0])).error_code == "invalid_utf8"
+    failed = file_owner.observed_revision(file_owner.source_id_for_uri(file_uris[0]))
+    assert failed.error_code == "invalid_utf8" and not failed.available
+    assert file_uris[0] in failed.error and str(file_owner.workspace_root) not in failed.error
+    assert failed.retained_revision is not None and failed.content == "有效指令\n"
+    assert str(file_owner.workspace_root) not in repr(invalid)
     assert registry.last_valid_snapshot(WORKSPACE_AGENTS_RESOURCE_ID) == first
     assert len(registry.descriptors()) == 2
 
