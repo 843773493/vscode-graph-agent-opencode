@@ -192,6 +192,7 @@ class SessionForkResultDTO(BaseModel):
     session: SessionDTO = Field(description="实际目标 Thread 所属的完整目标 Session；不表示应切换主会话。")
     thread_id: str = Field(description="实际新目标 Thread 的稳定身份。")
     thread_uri: str = Field(description="实际新目标 Thread URI，区别于请求的创建容器 URI。")
+    target_gateway_id: str = Field(min_length=1, description="实际发布目标的稳定 Gateway 身份；客户端据此匹配已登记路由，不自行解析 URI。")
     creation_kind: SessionForkCreationKind
     source_uri: str
     source_view_id: str

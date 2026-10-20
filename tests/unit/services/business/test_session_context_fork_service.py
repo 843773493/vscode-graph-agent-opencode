@@ -111,6 +111,7 @@ def fork_request() -> SessionForkRequest:
 def fork_result(fork_request: SessionForkRequest) -> SessionForkResultDTO:
     now = datetime.now(UTC)
     return SessionForkResultDTO(
+        target_gateway_id="gateway_target",
         session=SessionDTO(
             session_id=TARGET_SESSION_ID, workspace_id=TARGET_WORKSPACE_ID,
             resource_identity=session_resource_identity(TARGET_WORKSPACE_ID, TARGET_SESSION_ID),
@@ -324,6 +325,50 @@ async def test_remote_fork_rejects_changed_nested_session_identity(
     fork_boundary.transport.reply = SessionForkTransferResultDTO(result=published)
 
     with pytest.raises(RuntimeError, match=error):
+        await fork_boundary.service.fork(fork_request)
+    assert len(fork_boundary.transport.calls) == 1
+    fork_boundary.main_owner.assert_not_awaited()
+    fork_boundary.child_owner.assert_not_awaited()
+
+
+@pytest.mark.parametrize("gateway_id", ["gateway_other", "gateway_ce27c875d842690955440795c9de8a35"])
+async def test_remote_fork_rejects_changed_target_gateway(
+    fork_boundary: _ForkBoundary, fork_request: SessionForkRequest, fork_result: SessionForkResultDTO,
+    gateway_id: str,
+) -> None:
+    fork_boundary.transport.reply = SessionForkTransferResultDTO(
+        result=fork_result.model_copy(update={"target_gateway_id": gateway_id}),
+    )
+    with pytest.raises(RuntimeError, match="Gateway 身份与固定目标不一致"):
+        await fork_boundary.service.fork(fork_request)
+    assert len(fork_boundary.transport.calls) == 1
+    fork_boundary.main_owner.assert_not_awaited()
+    fork_boundary.child_owner.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    "thread_uri",
+    [
+        thread_resource_uri(TARGET_WORKSPACE_ID, TARGET_SESSION_ID, TARGET_THREAD_ID, gateway_authority="gateway_other"),
+        thread_resource_uri(SOURCE_WORKSPACE_ID, TARGET_SESSION_ID, TARGET_THREAD_ID, gateway_authority="gateway_target"),
+        thread_resource_uri(TARGET_WORKSPACE_ID, OTHER_SESSION_ID, TARGET_THREAD_ID, gateway_authority="gateway_target"),
+        thread_resource_uri(TARGET_WORKSPACE_ID, TARGET_SESSION_ID, OTHER_THREAD_ID, gateway_authority="gateway_target"),
+        thread_resource_uri(TARGET_WORKSPACE_ID, TARGET_SESSION_ID, TARGET_THREAD_ID),
+        thread_resource_uri(TARGET_WORKSPACE_ID, TARGET_SESSION_ID, TARGET_THREAD_ID, gateway_authority="gateway_target").replace(TARGET_THREAD_ID, "%74" + TARGET_THREAD_ID[1:]),
+        thread_resource_uri(TARGET_WORKSPACE_ID, TARGET_SESSION_ID, TARGET_THREAD_ID, gateway_authority="gateway_target") + "?view=1",
+        thread_resource_uri(TARGET_WORKSPACE_ID, TARGET_SESSION_ID, TARGET_THREAD_ID, gateway_authority="gateway_target") + "#frame",
+        thread_resource_uri(TARGET_WORKSPACE_ID, TARGET_SESSION_ID, TARGET_THREAD_ID, gateway_authority="gateway_target") + "/extra",
+    ],
+    ids=["gateway", "workspace", "session", "thread", "unqualified", "percent-encoded", "query", "fragment", "extra-path"],
+)
+async def test_remote_fork_rejects_target_thread_uri_inconsistent_with_published_identity(
+    fork_boundary: _ForkBoundary, fork_request: SessionForkRequest, fork_result: SessionForkResultDTO,
+    thread_uri: str,
+) -> None:
+    fork_boundary.transport.reply = SessionForkTransferResultDTO(
+        result=fork_result.model_copy(update={"thread_uri": thread_uri}),
+    )
+    with pytest.raises(RuntimeError, match="Thread URI 与固定目标身份不一致"):
         await fork_boundary.service.fork(fork_request)
     assert len(fork_boundary.transport.calls) == 1
     fork_boundary.main_owner.assert_not_awaited()

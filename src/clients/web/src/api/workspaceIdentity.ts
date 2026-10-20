@@ -32,20 +32,17 @@ export function requireGatewayWorkspaceRequestTarget(
 export function requireForkTargetWorkspace(
   workspaces: readonly GatewayWorkspaceForkRoute[],
   localGatewayId: string | null | undefined,
-  result: Pick<SessionForkResult, "thread_uri" | "thread_id"> & {
-    session: Pick<SessionForkResult["session"], "workspace_id" | "session_id">;
+  result: Pick<SessionForkResult, "target_gateway_id"> & {
+    session: Pick<SessionForkResult["session"], "workspace_id">;
   },
 ): GatewayWorkspaceRequestTarget {
   if (!localGatewayId?.trim()) {
     throw new Error("分支已创建，但 Gateway 健康回执缺少身份，无法解析目标路由");
   }
-  const address = /^boxteam:\/\/([^\s/\\%?#]+)\/workspace\/([^\s/\\%?#]+)\/resources\/session\/([^\s/\\%?#]+)\/threads\/([^\s/\\%?#]+)$/.exec(result.thread_uri);
-  if (!address) {
-    throw new Error("分支已创建，但目标 Thread URI 缺少完整 Gateway／工作区身份");
-  }
-  const [, gatewayId, workspaceId, sessionId, threadId] = address;
-  if (workspaceId !== result.session.workspace_id || sessionId !== result.session.session_id || threadId !== result.thread_id) {
-    throw new Error("分支已创建，但目标 Thread URI 与发布回执中的会话／线程不一致");
+  const gatewayId = result.target_gateway_id;
+  const workspaceId = result.session.workspace_id;
+  if (!gatewayId?.trim() || !workspaceId?.trim()) {
+    throw new Error("分支已创建，但发布回执缺少目标 Gateway／工作区身份");
   }
   const targets = workspaces.filter((workspace) => workspace.connection_kind === "local"
     ? gatewayId === localGatewayId && workspace.backend_workspace_id === workspaceId

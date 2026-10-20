@@ -1154,6 +1154,8 @@ message SessionForkResultDTO {
   repeated SessionForkResourceResult resources = 10;
   optional string goal_id = 11;
   optional SessionForkExportReleaseDTO export_release = 12;
+  // 由实际发布 owner 冻结的 Gateway 身份，客户端不拆解 URI 推导路由。
+  string target_gateway_id = 13;
 }
 
 message SessionForkResourceSourceDTO {

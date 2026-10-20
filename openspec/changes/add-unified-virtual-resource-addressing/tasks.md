@@ -92,7 +92,8 @@
 - [x] 7.5 增加拒绝码登记测试：grammar、resolve 与联邦解析期三套闭集各自独立、未登记码构造即失败、三套不混用、其它模块无自造同义码。
 - [x] 7.6 增加配置来源契约测试：校验 source URI/`layer`/`precedence` 继续为平级字段，逻辑来源映射符合 owner requirement；读侧 runtime override 报逻辑 layer 与原 precedence，物理 SQLite carrier 不外露，`active_snapshot` / `pending_snapshot` 不进入 `sources[]`；无可寻址来源文件时 URI 为空且不伪造地址；持久化与 API 不泄漏 real path。
   - 2026-10-19 `uri-config-source-contracts-001` 对 config API、workspace config source storage、ConfigService 三个完整文件验证通过（97 passed，94.91s，exit 0，源码前后指纹一致）。具名断言覆盖平级 URI/layer/precedence、runtime override 逻辑层及原 precedence、无稳定来源时 URI null、拒绝 active_snapshot/pending_snapshot 伪来源、持久化与 API 无 real path、冷读恢复层级一致；命令及原始输出见 `out/tests/temp/openspec_takeover/artifacts/runs/uri-config-source-contracts-001/`。
-- [ ] 7.7 运行仓库既有校验并记录证据：`openspec validate --strict --all` 必须 0 failed，且本 change 与其它四个 change 之间均无残留的第二套 URI 语法、自造 kind 或自造拒绝码。
+- [x] 7.7 运行仓库既有校验并记录证据：`openspec validate --strict --all` 必须 0 failed，且本 change 与其它四个 change 之间均无残留的第二套 URI 语法、自造 kind 或自造拒绝码。
+  - 2026-10-20 最终语法核查：`uri-strict-all-20261020-001` 与 `fork-identity-openspec-strict-001` 均为41 passed/0 failed；中央grammar/resolver闭集、拒绝码与访问前校验 `uri-final-owner-contracts-001` 为220 passed/1.02秒。全仓复核生产URI构造/解析调用，领域适配均调用 `app/core/resource_uri.py`，旧虚拟资源grammar模块已物理删除。最终发现并删除Web fork目标路由专属正则：发布owner从冻结intent返回target_gateway_id，后端核目标身份与规范URI一致，Web仅按结构化身份唯一匹配已登记路由；错误Gateway、Workspace、Session、Thread、未限定/编码/query/fragment/追加路径等负例迁到权威后端边界，未降低拒绝能力。该切片56项Python与67项Web/协议测试通过，真实类型检查及Buf格式/生成/真实提交breaking均exit0，独立只读审查无阻塞。检索中的scheme分派、文档字符串及独立测试oracle不定义生产语法；未引入kind、scope或URI拒绝码。准确命令、源码指纹、原始输出与退出码均在 `out/tests/temp/openspec_takeover/artifacts/runs/`；本项不替代仍未完成的real path不变量验收。
 
 ## 8. 可导航资源根与轻量文件寻址（2026-10-05 新增，部分实施）
 

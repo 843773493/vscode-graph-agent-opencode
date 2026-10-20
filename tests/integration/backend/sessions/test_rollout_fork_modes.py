@@ -6146,6 +6146,7 @@ async def test_qualified_local_fork_lifespan_recovers_without_http_context(
             result = await recovered.forks._result(
                 intent, await recovered.sessions.get(session_id), thread_id, key, creation=durable,
             )
+            assert result.target_gateway_id == "gateway_bc453186347b952303da1c0634d46150"
             assert result.thread_uri == resource_display_uri(
                 scope="workspace", scope_id=source.workspace_id, kind="session",
                 tail_segments=(session_id, "threads", thread_id), gateway_authority="gateway_bc453186347b952303da1c0634d46150",

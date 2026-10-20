@@ -196,6 +196,7 @@ async def test_debug_configuration_choice_uses_source_owner_thread_across_gatewa
         )
         assert response.status_code == 200, response.text
         result = response.json()["data"]
+        assert result["target_gateway_id"] == target.gateway_id
         assert result["export_release"] == ({"state": "confirmed", "error": None} if target is not source else None)
         assert result["source_uri"] == source_uri_owner
         target_thread_uri = result["thread_uri"]

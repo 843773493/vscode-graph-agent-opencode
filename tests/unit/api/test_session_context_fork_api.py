@@ -52,6 +52,7 @@ class _ForkService:
         )
         return SessionForkResultDTO(
             session=session, thread_id=TARGET_THREAD_ID,
+            target_gateway_id="gateway_test",
             thread_uri=thread_resource_uri(WORKSPACE_ID, session_id, TARGET_THREAD_ID),
             creation_kind=request.creation_kind, source_uri=request.source_uri,
             source_view_id=request.source_view_id, source_view_revision=request.source_view_revision,

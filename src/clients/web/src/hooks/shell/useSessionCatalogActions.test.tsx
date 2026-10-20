@@ -471,6 +471,7 @@ describe("上下文分支候选与冻结重试", () => {
       session: { session_id: "ses-source", workspace_id: "ws-source", resource_identity: "session:ws-source:ses-source",
         uri: point().child_container_uri, scope: "workspace", title: "来源", current_agent_id: "default", created_at: "2026-10-15T00:00:00Z", updated_at: "2026-10-15T00:00:00Z", title_source: "default", kind: "normal" },
       thread_id: "tid-published", thread_uri: "boxteam://workspace/ws-source/resources/session/ses-source/threads/tid-published",
+      target_gateway_id: "gateway_test",
       creation_kind: "new_child_thread", source_uri: point().source_uri, source_view_id: "view-source", source_view_revision: 9,
       anchor_item_id: "item-source", mode: "view_prefix_fork", goal_id: null, resources: [{
         owner_reference: { kind: "terminal", resource_id: "term-live", workspace_id: "ws-source", expected_revision: 7 },

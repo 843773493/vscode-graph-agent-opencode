@@ -380,6 +380,8 @@ fork SHALL 用资源 URI 定位 source thread 及 target 容器，用并列结�
 
 URI 的 kind/模板及规范化只由统一寻址 owner 登记；Session/Thread/Workspace 容器均为领域目标，不伪装为文件目录。目标固定 Gateway、Workspace 和目标 Session，不依赖当前激活工作区。当 `new_child_thread` 的目标 URI 是某个已存在 Thread 时，owner 必须核验该 Thread 属于 URI 中的 Session；该 Thread 只用于定位目标 Session，不建立新 Thread 的 parent-thread 关系。source URI 独立保留来源 Thread 与 fork context lineage；不得从目标 URI 推导 source lineage 或目标 parent-thread。跨端操作要求 source 读取/导出和 target 创建/导入的对应授权；send/read/wait grant 不能升级为 fork 授权。不可达、不支持或目标 fence 已关闭时明确失败，无本地同名回退。
 
+发布回执 MUST 返回由创建 intent 冻结的 `target_gateway_id`，以及 `session.workspace_id`、`session.session_id`、`thread_id` 和对应 URI。接收方后端使用统一 URI grammar 核验 URI 与固定目标和发布身份一致；客户端消费结构化身份匹配已登记的 Gateway/Workspace 路由，不自行拆解 URI 推导路由。缺少身份、目标未登记或登记不唯一时明确报错，不使用当前激活目标补全。
+
 #### Scenario: 同 Session 默认目标是新 subthread
 
 - **WHEN** 用户未修改目标，从当前 main 或 child 的消息底部发起 fork

@@ -45,8 +45,7 @@ describe("Gateway workspace 请求身份", () => {
 
 const forkResult = {
   session: { workspace_id: localWorkspace.backend_workspace_id, session_id: "ses_target" },
-  thread_id: "thr_target",
-  thread_uri: `boxteam://gateway_c/workspace/${localWorkspace.backend_workspace_id}/resources/session/ses_target/threads/thr_target`,
+  target_gateway_id: "gateway_c",
 };
 const remoteForkWorkspace = {
   workspace_id: "gateway-c-route",
@@ -67,36 +66,27 @@ describe("fork 发布结果的完整目标路由", () => {
   });
 
   test("本地目标同时匹配实际 Gateway 身份和 backend UUID", () => {
-    const localResult = { ...forkResult, thread_uri: forkResult.thread_uri.replace("gateway_c", "gateway_a") };
+    const localResult = { ...forkResult, target_gateway_id: "gateway_a" };
     expect(requireForkTargetWorkspace(
       [remoteForkWorkspace, localWorkspace], "gateway_a", localResult,
     )).toBe(localWorkspace);
   });
 
   test("未知 Gateway 不借用同 UUID 的已登记工作区", () => {
-    const unknown = { ...forkResult, thread_uri: forkResult.thread_uri.replace("gateway_c", "gateway_unknown") };
+    const unknown = { ...forkResult, target_gateway_id: "gateway_unknown" };
     expect(() => requireForkTargetWorkspace([localWorkspace, remoteForkWorkspace], "gateway_a", unknown))
       .toThrow("缺少唯一的已登记路由");
   });
 
-  test.each([
-    forkResult.thread_uri.replace(localWorkspace.backend_workspace_id, "other-workspace"),
-    forkResult.thread_uri.replace("ses_target", "ses_other"),
-    forkResult.thread_uri.replace("thr_target", "thr_other"),
-  ])("URI 与发布回执的 Workspace/Session/Thread 不符时拒绝：%s", (thread_uri) => {
-    expect(() => requireForkTargetWorkspace([remoteForkWorkspace], "gateway_a", { ...forkResult, thread_uri }))
-      .toThrow("与发布回执中的会话／线程不一致");
+  test.each(["", " "])("回执缺少目标 Gateway 身份时不补默认路由：%s", (target_gateway_id) => {
+    expect(() => requireForkTargetWorkspace([remoteForkWorkspace], "gateway_a", { ...forkResult, target_gateway_id }))
+      .toThrow("发布回执缺少目标 Gateway／工作区身份");
   });
 
-  test.each([
-    forkResult.thread_uri.replace("gateway_c/", ""),
-    forkResult.thread_uri.replace("ses_target", "ses_%74arget"),
-    `${forkResult.thread_uri}?other=1`,
-    `${forkResult.thread_uri}#other`,
-    `${forkResult.thread_uri}/other`,
-  ])("相对或非 canonical Thread URI 不补充默认路由：%s", (thread_uri) => {
-    expect(() => requireForkTargetWorkspace([remoteForkWorkspace], "gateway_a", { ...forkResult, thread_uri }))
-      .toThrow("缺少完整 Gateway／工作区身份");
+  test("发布的目标工作区未登记时不借用其它同 Gateway 路由", () => {
+    expect(() => requireForkTargetWorkspace([remoteForkWorkspace], "gateway_a", {
+      ...forkResult, session: { workspace_id: "other-workspace" },
+    })).toThrow("缺少唯一的已登记路由");
   });
 
   test("相同完整目标存在重复登记时明确失败", () => {

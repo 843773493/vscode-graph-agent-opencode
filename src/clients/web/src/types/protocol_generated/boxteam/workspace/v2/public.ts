@@ -1144,7 +1144,11 @@ export interface SessionForkResultDTO {
   mode: string;
   resources: SessionForkResourceResult[];
   goal_id?: string | undefined;
-  export_release?: SessionForkExportReleaseDTO | undefined;
+  export_release?:
+    | SessionForkExportReleaseDTO
+    | undefined;
+  /** 由实际发布 owner 冻结的 Gateway 身份，客户端不拆解 URI 推导路由。 */
+  target_gateway_id: string;
 }
 
 export interface SessionForkResourceSourceDTO {
@@ -9901,6 +9905,7 @@ function createBaseSessionForkResultDTO(): SessionForkResultDTO {
     resources: [],
     goal_id: undefined,
     export_release: undefined,
+    target_gateway_id: "",
   };
 }
 
@@ -9923,6 +9928,7 @@ export const SessionForkResultDTO: MessageFns<SessionForkResultDTO> = {
       export_release: isSet(object.export_release)
         ? SessionForkExportReleaseDTO.fromJSON(object.export_release)
         : undefined,
+      target_gateway_id: isSet(object.target_gateway_id) ? globalThis.String(object.target_gateway_id) : "",
     };
   },
 
@@ -9964,6 +9970,9 @@ export const SessionForkResultDTO: MessageFns<SessionForkResultDTO> = {
     if (message.export_release !== undefined) {
       obj.export_release = SessionForkExportReleaseDTO.toJSON(message.export_release);
     }
+    if (message.target_gateway_id !== "") {
+      obj.target_gateway_id = message.target_gateway_id;
+    }
     return obj;
   },
 
@@ -9988,6 +9997,7 @@ export const SessionForkResultDTO: MessageFns<SessionForkResultDTO> = {
     message.export_release = (object.export_release !== undefined && object.export_release !== null)
       ? SessionForkExportReleaseDTO.fromPartial(object.export_release)
       : undefined;
+    message.target_gateway_id = object.target_gateway_id ?? "";
     return message;
   },
 };

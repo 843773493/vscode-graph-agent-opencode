@@ -355,6 +355,8 @@ class SessionContextForkService:
             try:
                 if reply.result is None or reply.result.session.workspace_id != target.scope_id:
                     raise RuntimeError("fork target owner 未返回固定目标 Workspace 的真实发布结果")
+                if reply.result.target_gateway_id != audience:
+                    raise RuntimeError("fork target owner 返回的 Gateway 身份与固定目标不一致")
                 if reply.result.creation_kind != request.creation_kind:
                     raise RuntimeError("fork target owner 返回的创建意图与固定请求不一致")
                 if reply.result.mode != qualified.mode:
@@ -960,6 +962,7 @@ class SessionContextForkService:
         release_state, release_error = self._session_service.path_resolver.catalog_store.get_fork_export_release(key)
         return SessionForkResultDTO(
             session=session, thread_id=thread_id,
+            target_gateway_id=intent["target_gateway_id"],
             thread_uri=target_thread_uri,
             creation_kind=request.creation_kind, source_uri=intent["source_uri"],
             source_view_id=point["source_view_id"], source_view_revision=point["source_view_revision"],

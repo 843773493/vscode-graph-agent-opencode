@@ -89,6 +89,17 @@ test("公开诊断字段没有真实定位，通信目标的三种 destination �
     expect(decodedFork.destination.value.forkRole).toBe("source");
   }
 
+  const published = create(workspaceBinding.SessionForkResultDTOSchema, {
+    targetGatewayId: "gateway-published-target",
+    session: { workspaceId: "workspace-published", sessionId: "session-published" },
+    threadId: "thread-published",
+  });
+  const decodedPublished = fromBinary(webBinding.SessionForkResultDTOSchema,
+    toBinary(workspaceBinding.SessionForkResultDTOSchema, published));
+  expect(decodedPublished.targetGatewayId).toBe("gateway-published-target");
+  expect(decodedPublished.session.workspaceId).toBe("workspace-published");
+  expect(decodedPublished.threadId).toBe("thread-published");
+
   const workspaceSchema = workspaceBinding.CommunicationGatewayRequestSchema;
   const webSchema = webBinding.CommunicationGatewayRequestSchema;
   const workspaceFork = create(workspaceSchema, {

@@ -235,6 +235,7 @@ describe("会话生命周期写动作的竞态与失败补偿", () => {
     release(apiResponse({
       session: target, thread_id: "thr_target_child",
       thread_uri: `boxteam://gateway_test/workspace/ws_target/resources/session/${target.session_id}/threads/thr_target_child`,
+      target_gateway_id: "gateway_test",
       creation_kind: "new_child_thread", source_uri: source.uri,
       source_view_id: "view-selected", source_view_revision: 1, anchor_item_id: "item-selected",
       mode: "view_prefix_fork", resources: [], goal_id: null,
@@ -251,6 +252,7 @@ describe("会话生命周期写动作的竞态与失败补偿", () => {
     let abortCount = 0;
     installGatewayFetch(({ path }) => path.endsWith("/fork-context") ? apiResponse({
       session: current, thread_id: "tid_fork_child", thread_uri: `boxteam://gateway_test/workspace/ws_local/resources/session/${current.session_id}/threads/tid_fork_child`,
+      target_gateway_id: "gateway_test",
       creation_kind: "new_child_thread", source_uri: `${current.uri}/thread/tid_source`,
       source_view_id: "view-selected", source_view_revision: 1, anchor_item_id: "item-selected",
       mode: "view_prefix_fork", resources: [], goal_id: null,

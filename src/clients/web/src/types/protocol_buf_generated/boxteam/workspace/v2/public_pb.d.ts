@@ -5039,6 +5039,13 @@ export declare type SessionForkResultDTO = Message<"boxteam.workspace.v2.Session
    * @generated from field: optional boxteam.workspace.v2.SessionForkExportReleaseDTO export_release = 12;
    */
   exportRelease?: SessionForkExportReleaseDTO | undefined;
+
+  /**
+   * 由实际发布 owner 冻结的 Gateway 身份，客户端不拆解 URI 推导路由。
+   *
+   * @generated from field: string target_gateway_id = 13;
+   */
+  targetGatewayId: string;
 };
 
 /**
