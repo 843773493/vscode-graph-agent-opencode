@@ -1,3 +1,4 @@
+import errno
 import json
 from datetime import UTC, datetime
 from functools import partial
@@ -19,6 +20,7 @@ from app.schemas.internal_v2.pending_request import (
     PendingRequestDTO,
 )
 from app.services.business.message_service import MessageService
+from app.services.infrastructure import pending_request_store as pending_store_module
 from app.services.infrastructure.pending_request_store import PendingRequestStore
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
@@ -213,8 +215,10 @@ async def test_store_validates_canonical_reference_and_ignores_display_body(
     await store.save(session_id, [request.model_copy(update={"content": "伪造展示镜像"})])
     assert (await store.load(session_id))[0].content == "已接受的不可变正文"
     original = (session_dir / "pending_requests.json").read_bytes()
-    with pytest.raises((KeyError, ValueError), match="admission|identity|一致"):
+    with pytest.raises((KeyError, ValueError), match="stage=project_input") as caught:
         await store.save(session_id, [request.model_copy(update={"message_id": "msg_unaccepted"})])
+    assert isinstance(caught.value.__cause__, (KeyError, ValueError))
+    assert any(term in str(caught.value.__cause__) for term in ("admission", "identity", "一致"))
     assert (session_dir / "pending_requests.json").read_bytes() == original
 
 
@@ -450,8 +454,10 @@ async def test_legacy_pending_schema_is_rejected_without_compatibility_migration
     ) + "\n"
     path.write_text(legacy, encoding="utf-8")
 
-    with pytest.raises(RuntimeError, match="旧 pending kind"):
+    with pytest.raises(RuntimeError, match="旧 pending kind") as caught:
         await store.migrate_schema(session_id)
+    assert str(path) not in str(caught.value)
+    assert "artifact=pending_requests, stage=migrate" in str(caught.value)
     assert path.read_text(encoding="utf-8") == legacy
 
 
@@ -471,3 +477,154 @@ async def test_store_rejects_duplicate_queue_sequences(
             session_id,
             [request_factory(session_id, sequence=1), request_factory(session_id, sequence=1)],
         )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ["stat", "read", "mkdir", "temporary", "fsync", "replace", "delete", "migrate"])
+@pytest.mark.parametrize("error_number", [errno.EACCES, errno.EIO])
+async def test_pending_io_errors_keep_class_errno_and_internal_cause(
+    tmp_path, session_bundle_factory, request_factory, store_factory, monkeypatch,
+    operation, error_number,
+) -> None:
+    session_id = "ses_019c71c26c4f7859827c53d8b2f17d9b"
+    sessions_dir = tmp_path / "sessions"
+    session_dir = session_bundle_factory(sessions_dir, session_id)
+    path = session_dir / "pending_requests.json"
+    store = store_factory(sessions_dir)
+    request = request_factory(session_id, sequence=1)
+    await store.save(session_id, [request])
+    original = path.read_bytes()
+    source = OSError(error_number, f"native-storage={path}", str(path))
+
+    def fail(*_args, **_kwargs):
+        raise source
+
+    if operation in {"stat", "read", "migrate", "mkdir", "delete"}:
+        method = {"stat": "stat", "read": "open", "migrate": "open", "mkdir": "mkdir", "delete": "unlink"}[operation]
+        original_method = getattr(Path, method)
+
+        def access(target, *args, **kwargs):
+            if target == (session_dir if operation == "mkdir" else path):
+                raise source
+            return original_method(target, *args, **kwargs)
+
+        monkeypatch.setattr(Path, method, access)
+    else:
+        owner = pending_store_module.tempfile if operation == "temporary" else pending_store_module.os
+        monkeypatch.setattr(owner, "mkstemp" if operation == "temporary" else operation, fail)
+    stage = {"stat": "resolve", "read": "read_control", "delete": "delete", "migrate": "migrate"}.get(operation, "write_control")
+    failure_type = RuntimeError if operation == "read" else type(source)
+    with pytest.raises(failure_type) as caught:
+        if operation in {"stat", "read"}:
+            await store.load(session_id)
+        elif operation == "delete":
+            await store.delete(session_id)
+        elif operation == "migrate":
+            await store.migrate_schema(session_id)
+        else:
+            await store.save(session_id, [request])
+    message = str(caught.value)
+    assert session_id in message and "artifact=pending_requests" in message
+    assert f"stage={stage}" in message and f"errno={error_number}" in message
+    assert str(tmp_path) not in message and "native-storage=" not in message
+    native_error = caught.value.__cause__ if operation == "read" else caught.value
+    assert type(native_error) is type(source)
+    assert native_error.errno == error_number
+    assert native_error.filename is None and native_error.filename2 is None
+    assert native_error.__cause__ is source
+    monkeypatch.undo()
+    assert path.read_bytes() == original
+    assert list(session_dir.glob(".pending_requests.json.*")) == []
+    assert await store.load(session_id) == [request]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("reader", ["load", "summary", "thread_summary"])
+@pytest.mark.parametrize("part", ["header", "detail", "json", "utf8", "detail_json", "detail_utf8"])
+async def test_pending_decode_errors_do_not_echo_input_or_field_locations(
+    tmp_path, session_bundle_factory, request_factory, store_factory, reader, part,
+) -> None:
+    session_id = "ses_019c71c26c4f7859827c53d8b2f17d9b"
+    sessions_dir = tmp_path / "sessions"
+    session_dir = session_bundle_factory(sessions_dir, session_id)
+    store = store_factory(sessions_dir)
+    request = request_factory(session_id, sequence=1)
+    await store.save(session_id, [request])
+    path = session_dir / "pending_requests.json"
+    original = path.read_bytes()
+    header, detail = original.split(b"\n", 1)
+    sentinel = str(tmp_path / "private-input-marker")
+    if part == "header":
+        payload = json.loads(header)
+        payload["request_count"] = sentinel
+        corrupted = json.dumps(payload).encode() + b"\n" + detail
+    elif part == "detail":
+        payload = json.loads(detail)
+        payload[0][sentinel] = sentinel
+        corrupted = header + b"\n" + json.dumps(payload).encode() + b"\n"
+    elif part == "json":
+        corrupted = b'{"request_count":\n' + detail
+    elif part == "utf8":
+        corrupted = b'{"request_count":"\xff"}\n' + detail
+    elif part == "detail_json":
+        corrupted = header + b"\n[\n"
+    else:
+        corrupted = header + b'\n["\xff"]\n'
+    path.write_bytes(corrupted)
+    if part.startswith("detail") and reader == "summary":
+        # 聚合冷摘要只读 header，不能为诊断偷偷读取 detail。
+        assert (await store.load_summaries(session_id, limit=8)).request_count == 1
+    else:
+        with pytest.raises((RuntimeError, ValueError)) as caught:
+            if reader == "load":
+                await store.load(session_id)
+            else:
+                await store.load_summaries(session_id, limit=8, thread_id=
+                    request.thread_id if reader == "thread_summary" else None)
+        message = str(caught.value)
+        assert session_id in message and "artifact=pending_requests" in message
+        assert str(tmp_path) not in message and "private-input-marker" not in message
+        assert "input_value" not in message and "input_type" not in message
+        assert caught.value.__cause__ is not None
+        if part in {"header", "detail", "json", "utf8"}:
+            assert "rules=" in message
+        elif part == "detail_json":
+            assert "line=" in message and "column=" in message
+        else:
+            assert "start=" in message and "end=" in message
+    assert path.read_bytes() == corrupted
+    path.write_bytes(original)
+    assert await store.load(session_id) == [request]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("rule", [
+    "header_incomplete_or_oversized", "header_version_unsupported",
+    "header_summary_limit_exceeded", "detail_incomplete",
+])
+async def test_pending_format_errors_identify_rule_and_preserve_file(
+    tmp_path, session_bundle_factory, request_factory, store_factory, rule,
+) -> None:
+    session_id = "ses_019c71c26c4f7859827c53d8b2f17d9b"
+    sessions_dir = tmp_path / "sessions"
+    session_dir = session_bundle_factory(sessions_dir, session_id)
+    store = store_factory(sessions_dir)
+    await store.save(session_id, [request_factory(session_id, sequence=1)])
+    path = session_dir / "pending_requests.json"
+    header_line, detail = path.read_bytes().split(b"\n", 1)
+    header = json.loads(header_line)
+    if rule == "header_incomplete_or_oversized":
+        corrupted = b"incomplete"
+    elif rule == "detail_incomplete":
+        corrupted = header_line + b"\n" + detail.rstrip(b"\n")
+    else:
+        if rule == "header_version_unsupported":
+            header["version"] = 4
+        else:
+            header["summaries"] *= 9
+        corrupted = json.dumps(header).encode() + b"\n" + detail
+    path.write_bytes(corrupted)
+    with pytest.raises(RuntimeError, match=f"rule={rule}") as caught:
+        await store.load(session_id)
+    assert str(tmp_path) not in str(caught.value)
+    assert path.read_bytes() == corrupted

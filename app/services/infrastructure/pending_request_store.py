@@ -4,10 +4,11 @@ import asyncio
 import json
 import os
 import tempfile
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterator, Sequence
+from contextlib import contextmanager
 from pathlib import Path
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 
 from app.core.path_utils import get_session_path_resolver
 from app.schemas.internal_v2.message import MessageDTO
@@ -35,6 +36,14 @@ class _StoredPendingRequest(PendingRequestControl):
     provider_id: str | None = None
 
 
+class _PendingControlError(RuntimeError):
+    """本 owner 格式检查的固定规则，不携带磁盘位置或未校验输入。"""
+
+    def __init__(self, rule: str) -> None:
+        self.rule = rule
+        super().__init__(rule)
+
+
 class PendingRequestStore:
     """在会话目录内持久化 FIFO 调度控制，正文只读 canonical owner。"""
 
@@ -53,16 +62,16 @@ class PendingRequestStore:
         )
 
     async def load(self, session_id: str) -> list[PendingRequestDTO]:
-        path = self._path(session_id)
-        if not path.exists():
+        path = self._existing_path(session_id)
+        if path is None:
             return []
         try:
-            _header, references = await asyncio.to_thread(self._read_control_snapshot, session_id, path)
-            requests = [self._project_request(reference) for reference in references]
+            with self._access(session_id, "read_control"):
+                _header, references = await asyncio.to_thread(self._read_control_snapshot, session_id, path)
+            with self._access(session_id, "project_input"):
+                requests = [self._project_request(reference) for reference in references]
         except Exception as error:
-            raise RuntimeError(
-                f"待处理队列恢复失败: session_id={session_id}, path={path}, reason={error}"
-            ) from error
+            raise RuntimeError(f"待处理队列恢复失败: {error}") from error
         return requests
 
     def _project_request(self, reference: _StoredPendingRequest) -> PendingRequestDTO:
@@ -79,14 +88,16 @@ class PendingRequestStore:
         )
 
     async def migrate_schema(self, session_id: str) -> None:
-        path = self._path(session_id)
-        if not path.exists():
+        path = self._existing_path(session_id)
+        if path is None:
             return
-        if await asyncio.to_thread(self._is_current_schema, path):
-            return
+        with self._access(session_id, "migrate"):
+            if await asyncio.to_thread(self._is_current_schema, path):
+                return
         raise RuntimeError(
             "检测到旧 pending kind 元数据；新 FIFO 实现不提供兼容迁移，"
-            f"请在启用新实现前清理该队列文件: session_id={session_id}, path={path}"
+            f"请在启用新实现前清理该队列文件: session_id={session_id}, "
+            "artifact=pending_requests, stage=migrate"
         )
 
     async def migrate_all(self) -> int:
@@ -94,12 +105,12 @@ class PendingRequestStore:
         for node in self._path_resolver.list_nodes():
             if node.kind != "session":
                 continue
-            path = self._path(node.node_id)
-            if not path.exists() or await asyncio.to_thread(
-                self._is_current_schema,
-                path,
-            ):
+            path = self._existing_path(node.node_id)
+            if path is None:
                 continue
+            with self._access(node.node_id, "migrate"):
+                if await asyncio.to_thread(self._is_current_schema, path):
+                    continue
             await self.migrate_schema(node.node_id)
             migrated += 1
         return migrated
@@ -115,20 +126,22 @@ class PendingRequestStore:
             raise ValueError(
                 f"待处理摘要 limit 必须在 1..{_PENDING_SUMMARY_LIMIT} 范围内"
             )
-        path = self._path(session_id)
-        if not path.exists():
+        path = self._existing_path(session_id)
+        if path is None:
             return PendingRequestSummaryListDTO(
                 session_id=session_id,
                 thread_id=thread_id,
                 request_count=0,
             )
         if thread_id is None:
-            header = await asyncio.to_thread(self._read_header, path)
+            with self._access(session_id, "read_header"):
+                header = await asyncio.to_thread(self._read_header, path)
             items = header.summaries[:limit]
             request_count = header.request_count
         else:
             # 精确 thread 的冷摘要只读控制引用，不读取 canonical 正文或恢复 Job。
-            header, references = await asyncio.to_thread(self._read_control_snapshot, session_id, path)
+            with self._access(session_id, "read_control"):
+                header, references = await asyncio.to_thread(self._read_control_snapshot, session_id, path)
             scoped = [item for item in references if item.thread_id == thread_id]
             request_count = len(scoped)
             items = [PendingRequestSummaryDTO(
@@ -150,14 +163,18 @@ class PendingRequestStore:
         session_id: str,
         requests: list[PendingRequestDTO],
     ) -> None:
-        path = self._path(session_id)
-        path.parent.mkdir(parents=True, exist_ok=True)
+        with self._access(session_id, "resolve"):
+            path = self._path(session_id)
         self._validate_records(session_id, requests)
-        references = [self._control_reference(item) for item in requests]
-        for reference in references:
-            await asyncio.to_thread(self._project_request, reference)
+        with self._access(session_id, "validate_control"):
+            references = [self._control_reference(item) for item in requests]
+        with self._access(session_id, "project_input"):
+            for reference in references:
+                await asyncio.to_thread(self._project_request, reference)
         content = self._serialize_current(references)
-        await asyncio.to_thread(self._atomic_write, path, content)
+        with self._access(session_id, "write_control"):
+            path.parent.mkdir(parents=True, exist_ok=True)
+            await asyncio.to_thread(self._atomic_write, path, content)
 
     @staticmethod
     def _control_reference(item: PendingRequestDTO) -> _StoredPendingRequest:
@@ -220,27 +237,58 @@ class PendingRequestStore:
             )
 
     async def delete(self, session_id: str) -> None:
-        path = self._path(session_id)
-        if path.exists():
-            await asyncio.to_thread(path.unlink)
+        path = self._existing_path(session_id)
+        if path is not None:
+            with self._access(session_id, "delete"):
+                await asyncio.to_thread(path.unlink)
+
+    def _existing_path(self, session_id: str) -> Path | None:
+        with self._access(session_id, "resolve"):
+            path = self._path(session_id)
+            return path if path.exists() else None
+
+    @staticmethod
+    @contextmanager
+    def _access(session_id: str, stage: str) -> Iterator[None]:
+        """存储诊断按 owner 身份定位，原生位置与校验输入只留在内部原因链。"""
+        try:
+            yield
+        except Exception as error:
+            detail = (
+                f"session_id={session_id}, artifact=pending_requests, "
+                f"stage={stage}, error={type(error).__name__}"
+            )
+            if isinstance(error, OSError):
+                raise type(error)(error.errno, f"{detail}, errno={error.errno}") from error
+            if isinstance(error, ValidationError):
+                rules = sorted({item["type"] for item in error.errors(include_input=False)})
+                detail += f", error_count={error.error_count()}, rules={','.join(rules)}"
+            elif isinstance(error, json.JSONDecodeError):
+                detail += f", line={error.lineno}, column={error.colno}"
+            elif isinstance(error, UnicodeDecodeError):
+                detail += f", start={error.start}, end={error.end}"
+            elif isinstance(error, _PendingControlError):
+                detail += f", rule={error.rule}"
+            for category in (KeyError, ValueError, TypeError):
+                if isinstance(error, category):
+                    raise category(detail) from error
+            raise RuntimeError(detail) from error
 
     @classmethod
     def _read_header(cls, path: Path) -> _PendingRequestHeader:
         with path.open("rb") as stream:
             line = stream.readline(_PENDING_HEADER_MAX_BYTES + 1)
-        return cls._parse_header(line, path)
+        return cls._parse_header(line)
 
     @staticmethod
-    def _parse_header(line: bytes, path: Path) -> _PendingRequestHeader:
+    def _parse_header(line: bytes) -> _PendingRequestHeader:
         if not line.endswith(b"\n") or len(line) > _PENDING_HEADER_MAX_BYTES:
-            raise RuntimeError(f"待处理摘要 header 损坏或超过上限: {path}")
+            raise _PendingControlError("header_incomplete_or_oversized")
         header = _PendingRequestHeader.model_validate_json(line)
         if header.version != _PENDING_HEADER_VERSION:
-            raise RuntimeError(
-                f"待处理摘要 header 版本不支持: {path}, version={header.version}"
-            )
+            raise _PendingControlError("header_version_unsupported")
         if len(header.summaries) > _PENDING_SUMMARY_LIMIT:
-            raise RuntimeError(f"待处理摘要 header 条目超过上限: {path}")
+            raise _PendingControlError("header_summary_limit_exceeded")
         return header
 
     @classmethod
@@ -257,13 +305,13 @@ class PendingRequestStore:
     ) -> tuple[_PendingRequestHeader, list[_StoredPendingRequest]]:
         # 同一个文件 handle 冻结原子发布版本，避免旧 header 与新 detail 混版。
         with path.open("rb") as stream:
-            header = cls._parse_header(stream.readline(_PENDING_HEADER_MAX_BYTES + 1), path)
+            header = cls._parse_header(stream.readline(_PENDING_HEADER_MAX_BYTES + 1))
             raw = stream.read()
         if not raw.endswith(b"\n"):
-            raise RuntimeError(f"待处理消息 detail 不完整: {path}")
+            raise _PendingControlError("detail_incomplete")
         payload = json.loads(raw)
         if not isinstance(payload, list):
-            raise TypeError(f"待处理消息文件必须是 JSON 数组: {path}")
+            raise TypeError("待处理消息文件必须是 JSON 数组")
         references = [_StoredPendingRequest.model_validate(item) for item in payload]
         cls._validate_records(session_id, references)
         return header, references
