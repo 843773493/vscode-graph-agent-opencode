@@ -3,7 +3,7 @@ import { writeFile } from "node:fs/promises";
 import process from "node:process";
 import { chromium } from "playwright";
 import { beginForkSubmissionDeadline, bindForkOperationDeadline, closeForkDeadlineWatchdog,
-  waitForForkOperation } from "../../../support/e2e-test-control.mjs";
+  waitForForkOperation } from "../../../support/e2e_control/browser_client.mjs";
 
 const FORK_OPERATION_TIMEOUT_MS = 60_000;
 const FORK_POST_RESPONSE_VALIDATION_TIMEOUT_MS = 60_000;

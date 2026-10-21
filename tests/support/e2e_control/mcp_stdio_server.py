@@ -15,7 +15,7 @@ from mcp.server.session import ServerSession
 from mcp.server.stdio import stdio_server
 from pydantic import BaseModel
 
-from tests.support.e2e_test_control import control_request
+from tests.support.e2e_control.harness import control_request
 
 
 class Catalog(BaseModel):

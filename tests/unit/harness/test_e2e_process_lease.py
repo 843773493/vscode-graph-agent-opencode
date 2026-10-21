@@ -6,12 +6,12 @@ from pathlib import Path
 import psutil
 import pytest
 
-from tests.support import e2e_test_control
-from tests.support.e2e_test_control import E2EProcessLease
+from tests.support.e2e_control import harness
+from tests.support.e2e_control.harness import E2EProcessLease
 
 
 def test_process_start_time_uses_cross_platform_process_api() -> None:
-    start_time = e2e_test_control._process_start_time(os.getpid())
+    start_time = harness._process_start_time(os.getpid())
 
     assert start_time is not None
     assert isinstance(start_time, float)
@@ -23,9 +23,9 @@ def test_process_start_time_returns_none_when_process_is_gone(
     def missing_process(pid: int) -> psutil.Process:
         raise psutil.NoSuchProcess(pid)
 
-    monkeypatch.setattr(e2e_test_control.psutil, "Process", missing_process)
+    monkeypatch.setattr(harness.psutil, "Process", missing_process)
 
-    assert e2e_test_control._process_start_time(987654321) is None
+    assert harness._process_start_time(987654321) is None
 
 
 def test_e2e_process_lease_rejects_live_owner_and_reclaims_reused_pid(
@@ -36,12 +36,12 @@ def test_e2e_process_lease_rejects_live_owner_and_reclaims_reused_pid(
     start_times = {owner_pid: 100.25}
     checked_ports: list[tuple[int, str]] = []
     monkeypatch.setattr(
-        e2e_test_control,
+        harness,
         "_process_start_time",
         lambda pid: start_times.get(pid),
     )
     monkeypatch.setattr(
-        e2e_test_control,
+        harness,
         "ensure_local_port_available",
         lambda port, *, service_name: checked_ports.append((port, service_name)),
     )

@@ -6,6 +6,12 @@
 
 ```text
 support/
+├── e2e_control/          pytest 外置控制面与受控真实 E2E 服务组合
+│   ├── harness.py        时钟、phase、identity、进程租约与回放计划
+│   ├── backend_app.py    使用受控 RuntimeClockPorts/identity 的真实 Backend
+│   ├── gateway_app.py    启动上述 Backend 的真实 Gateway
+│   ├── mcp_stdio_server.py 真实 stdio MCP 服务
+│   └── browser_client.mjs 浏览器控制客户端与 fork deadline watcher
 ├── resource_owners/      资源 owner 测试装具与显式传输/准入替身
 │   ├── sessions.py      Terminal/Browser 共用会话前提
 │   ├── terminal.py      Terminal owner 装具

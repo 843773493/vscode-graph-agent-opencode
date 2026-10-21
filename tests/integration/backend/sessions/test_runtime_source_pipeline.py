@@ -86,7 +86,7 @@ from tests.harness.python.run_context import TestRunContext
 from tests.harness.python.terminal_backend import start_terminal_backend
 from tests.integration.stubs.http_stubs import HTTPStubState, openai_chat_stub
 from tests.support.api_helpers import create_session
-from tests.support.e2e_test_control import E2ETestControlHarness, control_request
+from tests.support.e2e_control.harness import E2ETestControlHarness, control_request
 from tests.support.fork_deadline import ForkDeadlineRegistry
 from tests.support.ports import integration_port_block_for_file
 from tests.support.processes import (
@@ -1670,7 +1670,7 @@ class RestartRuntimeSourceCase:
         backend = await asyncio.to_thread(
             start_backend_process, workspace_root=str(self.workspace), port=previous.port,
             log_name=f"runtime-source-restart-{len(self.backends)}",
-            asgi_app="tests.support.section8_backend:app" if self.control is not None else "app.main:app",
+            asgi_app="tests.support.e2e_control.backend_app:app" if self.control is not None else "app.main:app",
             env_overrides=self.control.environment if self.control is not None else None,
         )
         assert backend.process.pid != previous.process.pid
@@ -1745,7 +1745,7 @@ async def restart_source_case(request: pytest.FixtureRequest) -> AsyncIterator[R
         backend = await asyncio.to_thread(
             start_backend_process, workspace_root=str(workspace), port=ports.port(0),
             log_name="runtime-source-restart-0",
-            asgi_app="tests.support.section8_backend:app" if control is not None else "app.main:app",
+            asgi_app="tests.support.e2e_control.backend_app:app" if control is not None else "app.main:app",
             env_overrides=control.environment if control is not None else None,
         )
         backends = [backend]

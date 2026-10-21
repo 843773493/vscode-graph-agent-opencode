@@ -5,6 +5,9 @@ from functools import partial
 from app.gateway.runtime import local_workspace
 from app.gateway.runtime.workspace_process import start_local_backend_process
 
-local_workspace.start_local_backend_process = partial(start_local_backend_process, asgi_app="tests.support.section8_backend:app")
+local_workspace.start_local_backend_process = partial(
+    start_local_backend_process,
+    asgi_app="tests.support.e2e_control.backend_app:app",
+)
 
 from app.gateway.main import app  # noqa: F401
