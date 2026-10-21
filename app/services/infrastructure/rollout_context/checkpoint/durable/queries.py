@@ -18,12 +18,14 @@ from langgraph.checkpoint.base import (
 )
 
 from app.core.execution_admission_context import current_execution_admission
-from app.core.hashing import sha256_hex as _hash_bytes
 from app.domain.itemized.enums import ControlOutcome
 from app.domain.itemized.identity.refs import ContextRef
 from app.domain.itemized.records import CanonicalItemRecord
 from app.services.infrastructure.rollout_context.storage.catalog.history_scope import (
     require_historical_scope,
+)
+from app.services.infrastructure.rollout_context.storage.checkpoint_state_values import (
+    read_state_value,
 )
 from app.services.infrastructure.rollout_context.storage.primitives import (
     RolloutNotMaterializedError,
@@ -521,7 +523,7 @@ class RolloutCheckpointQueriesMixin:
                 channel_filter = f" AND channel_name IN ({','.join('?' for _ in selected)})"
                 parameters += tuple(selected)
             rows = connection.execute(
-                "SELECT channel_name, storage_kind, value_state, serializer_name, value_blob, value_length, value_hash, context_view_id FROM checkpoint_channels WHERE checkpoint_id = ?" + channel_filter,
+                "SELECT channel_name, storage_kind, value_state, value_id, value_session_id, value_thread_id, channel_version, context_view_id FROM checkpoint_channels WHERE checkpoint_id = ?" + channel_filter,
                 parameters,
             ).fetchall()
             values: dict[str, object] = {}
@@ -529,7 +531,7 @@ class RolloutCheckpointQueriesMixin:
             for raw_row in rows:
                 if len(raw_row) != 8:
                     raise RuntimeError("checkpoint_channels 行字段数非法")
-                channel, storage_kind, state, serializer, blob, length, digest, view_id = (
+                channel, storage_kind, state, value_id, value_session_id, value_thread_id, version, view_id = (
                     raw_row
                 )
                 channel = strict_text(channel, field="checkpoint_channels.channel_name")
@@ -537,12 +539,6 @@ class RolloutCheckpointQueriesMixin:
                     storage_kind, field="checkpoint_channels.storage_kind"
                 )
                 state = strict_text(state, field="checkpoint_channels.value_state")
-                serializer = strict_optional_text(
-                    serializer, field="checkpoint_channels.serializer_name"
-                )
-                digest = strict_optional_text(
-                    digest, field="checkpoint_channels.value_hash"
-                )
                 view_id = strict_optional_text(
                     view_id, field="checkpoint_channels.context_view_id"
                 )
@@ -552,6 +548,7 @@ class RolloutCheckpointQueriesMixin:
                         storage_kind != "rollout_view"
                         or state != "view"
                         or view_id is None
+                        or any(value is not None for value in (value_id, value_session_id, value_thread_id))
                     ):
                         raise RuntimeError(
                             f"checkpoint messages view 指针非法: {index.checkpoint_id}"
@@ -626,21 +623,21 @@ class RolloutCheckpointQueriesMixin:
                             current_execution_admission(langgraph_thread_id=thread_id) is not None),
                     )
                 elif state == "present":
-                    if (
-                        storage_kind != "sqlite_value"
-                        or not isinstance(blob, bytes)
-                        or serializer is None
-                        or digest is None
-                        or strict_non_negative_int(length, field="checkpoint_channels.value_length") != len(blob)
-                        or _hash_bytes(blob) != digest
-                    ):
+                    if storage_kind != "sqlite_value" or view_id is not None:
                         raise RuntimeError(
                             f"checkpoint channel BLOB 校验失败: {index.checkpoint_id}/{channel}"
                         )
-                    values[channel] = self._storage.decode_value((serializer, blob))
+                    frozen = read_state_value(
+                        connection, value_id, channel=channel,
+                        version=strict_text(version, field="checkpoint_channels.channel_version"),
+                        checkpoint_ns=checkpoint_ns,
+                        session_id=strict_text(value_session_id, field="checkpoint_channels.value_session_id"),
+                        thread_id=strict_text(value_thread_id, field="checkpoint_channels.value_thread_id"),
+                    )
+                    values[channel] = self._storage.decode_value(frozen)
                 elif state == "absent":
                     if storage_kind != "sqlite_value" or any(
-                        value is not None for value in (serializer, blob, length, digest, view_id)
+                        value is not None for value in (value_id, value_session_id, value_thread_id, view_id)
                     ):
                         raise RuntimeError(
                             f"checkpoint absent channel 存储状态非法: {index.checkpoint_id}/{channel}"

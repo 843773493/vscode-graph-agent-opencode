@@ -11,7 +11,7 @@ import sqlite3
 from collections.abc import Callable, Mapping
 from uuid import uuid4
 
-from langgraph.checkpoint.base import Checkpoint, CheckpointMetadata
+from langgraph.checkpoint.base import ChannelVersions, Checkpoint, CheckpointMetadata
 
 from app.core.execution_admission_context import current_execution_admission
 from app.core.hashing import sha256_hex as _hash_bytes
@@ -54,6 +54,7 @@ class RolloutCheckpointPersistenceMixin:
         metadata: CheckpointMetadata,
         parent_checkpoint_id: str | None,
         current_messages: list[object],
+        new_versions: ChannelVersions,
         branch_id: str | None = None,
         consume_epoch_intent: Callable[[RebuildContextEpochIntent, sqlite3.Connection], None] | None = None,
     ) -> None:
@@ -475,7 +476,10 @@ class RolloutCheckpointPersistenceMixin:
                     ),
                 )
                 self._storage._insert_checkpoint_channels(
-                    connection, checkpoint_id, checkpoint, messages_view_id, timestamp
+                    connection, checkpoint_id, checkpoint, messages_view_id, timestamp,
+                    session_id=owner.session_id, thread_id=owner.thread_id,
+                    checkpoint_ns=checkpoint_ns, parent_checkpoint_id=parent_checkpoint_id,
+                    new_versions=new_versions,
                 )
                 self._capture_checkpoint_context_sources(
                     connection,

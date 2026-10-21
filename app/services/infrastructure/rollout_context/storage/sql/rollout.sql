@@ -135,13 +135,6 @@
             pending_sends_type TEXT NOT NULL, pending_sends_blob BLOB NOT NULL,
             pending_sends_length INTEGER NOT NULL, pending_sends_hash TEXT NOT NULL
         );
-        CREATE TABLE IF NOT EXISTS checkpoint_channels (
-            checkpoint_id TEXT NOT NULL, channel_name TEXT NOT NULL,
-            storage_kind TEXT NOT NULL, value_state TEXT NOT NULL, channel_version TEXT,
-            serializer_name TEXT, value_blob BLOB, value_length INTEGER, value_hash TEXT,
-            context_view_id TEXT, updated_index INTEGER, created_at TEXT NOT NULL,
-            PRIMARY KEY(checkpoint_id, channel_name)
-        );
         CREATE TABLE IF NOT EXISTS pending_writes (
             checkpoint_id TEXT NOT NULL, task_id TEXT NOT NULL, task_path TEXT NOT NULL,
             write_index INTEGER NOT NULL, channel TEXT NOT NULL, serializer_name TEXT NOT NULL,

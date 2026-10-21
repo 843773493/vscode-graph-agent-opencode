@@ -143,8 +143,9 @@ def test_custom_tool_fixture_asset_contract(
         assert str(messages_version).split(".", 1)[0].isdigit()
 
         serializer, blob, length, digest = connection.execute(
-            "SELECT serializer_name, value_blob, value_length, value_hash "
-            "FROM checkpoint_channels WHERE checkpoint_id=? AND channel_name='_summarization_event'",
+            "SELECT value.serializer_name, value.value_blob, value.value_length, value.value_hash "
+            "FROM checkpoint_channels channel JOIN checkpoint_state_values value ON value.value_id=channel.value_id "
+            "WHERE channel.checkpoint_id=? AND channel.channel_name='_summarization_event'",
             (checkpoint_id,),
         ).fetchone()
         import hashlib

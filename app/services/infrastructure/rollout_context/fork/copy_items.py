@@ -432,6 +432,10 @@ def _prune_prefix_facts(connection: sqlite3.Connection) -> None:
         connection.execute(
             f"DELETE FROM {table} WHERE checkpoint_id NOT IN (SELECT checkpoint_id FROM fork_selected_checkpoints)",
         )
+    connection.execute(
+        "DELETE FROM checkpoint_state_values WHERE value_id NOT IN "
+        "(SELECT value_id FROM checkpoint_channels WHERE value_id IS NOT NULL)",
+    )
     for table in ("checkpoint_context_source_snapshots", "checkpoint_context_source_states"):
         connection.execute(
             f"DELETE FROM {table} WHERE checkpoint_id NOT IN "

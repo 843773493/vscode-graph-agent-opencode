@@ -197,7 +197,7 @@ def _checkpoint(
     checkpoint["id"] = checkpoint_id
     checkpoint["channel_values"] = {"messages": messages, **channels}
     checkpoint["channel_versions"] = {
-        name: str(index + 1) for index, name in enumerate(checkpoint["channel_values"])
+        name: checkpoint_id for name in checkpoint["channel_values"]
     }
     checkpoint["updated_channels"] = list(checkpoint["channel_values"])
     return checkpoint
@@ -1694,7 +1694,7 @@ def test_checkpoint_envelope_and_channels_are_authoritative_sqlite(
             build_checkpoint_config(thread_id),
             _checkpoint("cp-1", messages, counter=3, task_state=None),
             {"source": "unit", "step": 1},
-            {"messages": "1", "counter": "1", "task_state": "1"},
+            {"messages": "1", "counter": "cp-1", "task_state": "cp-1"},
         )
 
         restored = saver.get_tuple(checkpoint_config)
@@ -2461,7 +2461,7 @@ def test_pending_writes_and_all_checkpoint_channels_round_trip(
             build_checkpoint_config(thread_id),
             _checkpoint("cp-1", [user], counter=0, optional=None),
             {"source": "unit"},
-            {"messages": "1", "counter": "1", "optional": "1"},
+            {"messages": "1", "counter": "cp-1", "optional": "cp-1"},
         )
         saver.put_writes(config, [("counter", 1)], "task-1", "node-a")
         restored = saver.get_tuple(config)
@@ -2592,10 +2592,10 @@ async def test_delta_channel_history_rejects_corrupt_requested_history_without_w
     saver, admission, target, index_path = delta_history_case
     statements = {
         "pending_length": "UPDATE pending_writes SET value_length=value_length+1 WHERE checkpoint_id='delta-middle' AND channel='files'",
-        "channel_hash": "UPDATE checkpoint_channels SET value_hash='damaged' WHERE checkpoint_id='delta-root' AND channel_name='files'",
-        "channel_length": "UPDATE checkpoint_channels SET value_length=value_length+1 WHERE checkpoint_id='delta-root' AND channel_name='files'",
+        "channel_hash": "UPDATE checkpoint_state_values SET value_hash='damaged' WHERE value_id=(SELECT value_id FROM checkpoint_channels WHERE checkpoint_id='delta-root' AND channel_name='files')",
+        "channel_length": "UPDATE checkpoint_state_values SET value_length=value_length+1 WHERE value_id=(SELECT value_id FROM checkpoint_channels WHERE checkpoint_id='delta-root' AND channel_name='files')",
         "absent_storage_kind": "UPDATE checkpoint_channels SET storage_kind='rollout_view' WHERE checkpoint_id='delta-middle' AND channel_name='files'",
-        "absent_payload": "UPDATE checkpoint_channels SET value_blob=x'00' WHERE checkpoint_id='delta-middle' AND channel_name='files'",
+        "absent_payload": "UPDATE checkpoint_channels SET value_id=1 WHERE checkpoint_id='delta-middle' AND channel_name='files'",
         "missing_parent": "UPDATE checkpoints SET parent_checkpoint_id='missing-parent' WHERE checkpoint_id='delta-middle'",
         "cycle": "UPDATE checkpoints SET parent_checkpoint_id='delta-target' WHERE checkpoint_id='delta-middle'",
         "messages_pointer": "UPDATE checkpoint_channels SET context_view_id=(SELECT view_id FROM checkpoints WHERE checkpoint_id='delta-root') WHERE checkpoint_id='delta-middle' AND channel_name='messages'",
@@ -3293,7 +3293,7 @@ def test_sqlite_backup_restores_authoritative_checkpoint_state(
             build_checkpoint_config(thread_id),
             _checkpoint("cp-1", [user], counter=1),
             {"source": "backup-test"},
-            {"messages": "1", "counter": "1"},
+            {"messages": "1", "counter": "cp-1"},
         )
         storage = _storage(sessions_dir)
         backup = storage.storage.backup_index(
@@ -3408,17 +3408,15 @@ def test_schema_migration_runs_transactionally_and_keeps_backup(
         target_version,
     )
 
-    snapshot = storage.storage.migrate_schema(
+    storage.storage.migrate_schema(
         storage.storage.main_thread_id(SESSION_ID),
         session_id=SESSION_ID,
         to_version=target_version,
         migration_name="add_migration_probe_index",
         migration_sql="CREATE INDEX migration_probe ON messages(message_id)",
     )
-    try:
+    with storage.storage.validate_index(SESSION_ID, thread_id) as snapshot:
         assert snapshot.manifest.rollout_id.startswith("rollout-")
-    finally:
-        snapshot.close()
     root = _main_thread_node(sessions_dir, SESSION_ID)
     with sqlite3.connect(root / "rollout" / "index.sqlite") as connection:
         assert (

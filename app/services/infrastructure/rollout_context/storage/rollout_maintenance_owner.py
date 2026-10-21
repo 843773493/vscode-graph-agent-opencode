@@ -30,7 +30,6 @@ from app.services.infrastructure.rollout_context.storage.maintenance_fs_safety i
 )
 from app.services.infrastructure.rollout_context.storage.primitives import (
     RolloutManifest,
-    RolloutReadSnapshot,
 )
 from app.services.infrastructure.rollout_context.storage.rollout_index_reads import (
     RolloutIndexMixin,
@@ -43,6 +42,10 @@ from app.services.infrastructure.rollout_context.storage.rollout_schema_introspe
 )
 from app.services.infrastructure.rollout_context.storage.schema import (
     initialize_rollout_schema,
+)
+from app.services.infrastructure.rollout_context.storage.schema_channel_versions import (
+    CHANNEL_VALUES_MIGRATION_SQL,
+    validate_legacy_channel_values,
 )
 from app.services.infrastructure.rollout_context.storage.schema_upgrade import (
     execute_atomic_schema_sql,
@@ -133,7 +136,7 @@ class RolloutMaintenanceOwner(
         migration_name: str,
         migration_sql: str,
         checkpoint_ns: str = "",
-    ) -> RolloutReadSnapshot:
+    ) -> None:
         """执行一个事务性的 SQLite schema migration。"""
         thread_id = strict_text(thread_id, field="thread_id")
         checkpoint_ns = strict_text(
@@ -152,7 +155,6 @@ class RolloutMaintenanceOwner(
                 checkpoint_ns=checkpoint_ns, to_version=to_version,
                 migration_name=migration_name, migration_sql=migration_sql,
             )
-        return self.validate_index(session_id, thread_id, checkpoint_ns)
 
     def _migrate_schema_locked(
         self, thread_id: str, *, session_id: str,
@@ -185,7 +187,9 @@ class RolloutMaintenanceOwner(
                         "SQLite migration 必须按版本顺序执行: "
                         f"current={current_version}, target={to_version}"
                     )
-                if to_version != storage_version.ROLLOUT_SCHEMA_VERSION:
+                if (to_version > storage_version.ROLLOUT_SCHEMA_VERSION
+                        or (to_version != storage_version.ROLLOUT_SCHEMA_VERSION
+                            and (current_version, to_version) not in {(18, 19), (19, 20)})):
                     raise RuntimeError(
                         "当前程序尚未声明目标 SQLite schema 版本: "
                         f"target={to_version}, supported={storage_version.ROLLOUT_SCHEMA_VERSION}"
@@ -231,6 +235,10 @@ class RolloutMaintenanceOwner(
                         migration_cursor.lastrowid,
                         field="schema_migrations.migration_id",
                     )
+                    if (current_version, to_version) == (19, 20):
+                        if migration_sql != CHANNEL_VALUES_MIGRATION_SQL:
+                            raise ValueError("schema migration 19→20 必须使用登记的状态版本 SQL")
+                        validate_legacy_channel_values(connection)
                     execute_atomic_schema_sql(connection, migration_sql)
                     meta_result = connection.execute(
                         "UPDATE database_meta SET schema_version = ?, updated_at = ? "
@@ -263,7 +271,7 @@ class RolloutMaintenanceOwner(
                     )
                     if control_result.rowcount != 1:
                         raise RuntimeError("SQLite migration control sequence 更新失败")
-                    self._validate_schema_state(connection)
+                    self._validate_schema_state(connection, expected_version=to_version)
                     self._validate_v2_commit_offsets(
                         connection,
                         self._host.jsonl_path(

@@ -6,7 +6,7 @@ import sqlite3
 from collections.abc import Callable, Iterable
 from pathlib import Path
 
-from langgraph.checkpoint.base import Checkpoint, CheckpointMetadata
+from langgraph.checkpoint.base import ChannelVersions, Checkpoint, CheckpointMetadata
 
 from app.domain.itemized.mutation_intents import RebuildContextEpochIntent
 from app.services.infrastructure.rollout_context.store import RolloutContextStore
@@ -37,6 +37,7 @@ class RolloutAppendWriter:
         metadata: CheckpointMetadata,
         parent_checkpoint_id: str | None,
         current_messages: list[object],
+        new_versions: ChannelVersions,
         branch_id: str | None = None,
         consume_epoch_intent: Callable[[RebuildContextEpochIntent, sqlite3.Connection], None] | None = None,
     ) -> None:
@@ -49,6 +50,7 @@ class RolloutAppendWriter:
             current_messages=current_messages,
             branch_id=branch_id,
             consume_epoch_intent=consume_epoch_intent,
+            new_versions=new_versions,
         )
 
     def append_writes(

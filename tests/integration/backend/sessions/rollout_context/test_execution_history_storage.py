@@ -149,9 +149,10 @@ def _storage_metrics(index: Path) -> dict[str, object]:
                      "SELECT name,sum(pgsize),sum(payload),sum(unused) FROM dbstat GROUP BY name"
                  )}
         channels = connection.execute(
-            "SELECT channel_name,count(*),count(DISTINCT channel_version),"
+            "SELECT channel.channel_name,count(*),count(DISTINCT channel.channel_version),"
             "count(DISTINCT value_hash),coalesce(sum(value_length),0) "
-            "FROM checkpoint_channels GROUP BY channel_name ORDER BY channel_name"
+            "FROM checkpoint_channels channel LEFT JOIN checkpoint_state_values value ON value.value_id=channel.value_id "
+            "GROUP BY channel.channel_name ORDER BY channel.channel_name"
         ).fetchall()
     root = index.parent
     return {"tables": tables, "pages": pages, "channels": channels,

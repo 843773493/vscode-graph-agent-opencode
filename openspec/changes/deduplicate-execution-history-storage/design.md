@@ -40,4 +40,12 @@
 
 每片先固定现有产品工作负载与原始结果，迁齐声明、唯一writer、全部reader、fork/恢复与测试后集中验证并独立提交。依赖升级片不提升schema；状态版本、消息delta、assembly/view共享如改变结构分别按有序迁移登记，不预先占用schema号。切换前创建原有备份，失败维持既有recovery_required/恢复边界；不支持用旧程序直接打开新schema，应成套回退应用与备份。最后迁齐回收并移除原重复实现。
 
+非messages版本片采用schema20：`checkpoint_state_values`以原owner/namespace/channel/version唯一保存正文；`checkpoint_channels`只保存`value_id + value_session_id + value_thread_id`的明确引用。读取同时核对这三个字段、namespace/channel/version和历史scope授权，不仅判断引用指向任一获准owner。沿父checkpoint复用时保留原正文owner，fork复制引用不重新归属；每次恢复独立解码。
+
+显式支持19→20，以及既有18→19后再19→20。18→19登记SQL的原字节与checksum不改。19→20在备份后、同一升级事务内先核对旧正文hash/长度/owner/namespace与版本碰撞，再转为不可变正文和引用，删除旧表；冲突回滚并恢复备份，旧库标为recovery_required，原数据保留。升级协调入口不返回可被正常reader误用的中间版本snapshot，完成全链升级后显式validate_index；正常reader仅接受20，不双读旧表。
+
+未变化版本通过new_versions和确切父引用跳过dumps，但仍与冻结值作严格结构比较，拒绝可变对象原地修改。普通内置值、容器和无自定义serializer的Pydantic模型可直接比较；扩展serializer类型继续作字节校验并留TODO。非messages的new_versions声明与快照版本不一致直接拒绝。messages旧声明入口在后续Delta切片迁齐并消除例外。
+
+性能TODO（结构正确性门不放宽）：同负载schema19→20的`summary_restart_continue`阶段，非messages正文364696→51297字节，字典序列化23次/192606字节→12次/11348字节；该进程阶段解码128次/263659字节→181次/444959字节。整体工作负载218.21→220.26秒，单次样本不足以认定耗时改善。沿用版本的冻结解码/比较仍有成本；先保留碰撞检测，待其余结构去重完成后再优化，不能改为无条件信任对象地址或忽略候选。原始测量、前后对照、SQLite一致备份及wire冻结在`out/tests/temp/openspec_takeover/artifacts/history-dedup-state-frozen-001/`与对应baseline目录，计数只比较同一进程阶段，跨重启不累加。
+
 验收主场景通过真实Gateway/目标workspace/产品API生成关键状态；普通业务和Web模型统一model_stream，真实HTTP/SDK/同步transport专项保留并共用协议资产。手工数据仅用于碰撞、损坏和迁移边界局部验证，不能代替产品生成的执行、fork和重启状态。

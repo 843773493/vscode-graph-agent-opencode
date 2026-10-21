@@ -1,6 +1,6 @@
 # 目录用途
 
-保存rollout 当前结构及显式 assembly refs 18→19 迁移。
+保存rollout 当前结构及显式 assembly refs 18→19、状态版本引用19→20迁移。
 
 # 可修改内容
 

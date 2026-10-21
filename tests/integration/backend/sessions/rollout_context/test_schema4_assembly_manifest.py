@@ -87,11 +87,17 @@ from app.services.infrastructure.rollout_context.storage.schema_assembly_refs im
     ASSEMBLY_REF_SCHEMA_SQL,
     ASSEMBLY_REF_THREAD_MIGRATION_SQL,
 )
+from app.services.infrastructure.rollout_context.storage.schema_channel_versions import (
+    CHANNEL_VALUES_MIGRATION_SQL,
+)
 from app.services.mapping.itemized.prefix_frames import (
     project_canonical_prefix_frames,
     project_sealed_prefix,
 )
 from tests.harness.python.run_context import TestRunContext
+from tests.integration.backend.sessions.rollout_context._channel_version_fixtures import (
+    restore_schema19,
+)
 
 
 @dataclass(frozen=True)
@@ -678,6 +684,7 @@ def test_cold_read_checks_manifest_ref_thread_field(assembly_case, sibling_assem
 
 def _restore_schema18(case: AssemblyCase) -> None:
     """真实旧表：旧的内联二元 UNIQUE，所有已封存行和 ordinal 原样保留。"""
+    restore_schema19(case.connection)
     captured = {}
     for table in ("assembly_item_refs", "context_assembly_selections"):
         columns = [row[1] for row in case.connection.execute(f"PRAGMA table_info({table})") if row[1] != "ref_thread_id"]
@@ -700,11 +707,14 @@ def _restore_schema18(case: AssemblyCase) -> None:
 
 
 def _migrate_ref_threads(case: AssemblyCase) -> None:
-    snapshot = case.saver._storage.storage.migrate_schema(
+    case.saver._storage.storage.migrate_schema(
         case.thread_id, session_id=case.session_id, to_version=19,
         migration_name="thread_qualified_assembly_refs", migration_sql=ASSEMBLY_REF_THREAD_MIGRATION_SQL,
     )
-    snapshot.close()
+    case.saver._storage.storage.migrate_schema(
+        case.thread_id, session_id=case.session_id, to_version=20,
+        migration_name="checkpoint_state_versions", migration_sql=CHANNEL_VALUES_MIGRATION_SQL,
+    )
 
 
 def test_schema18_migration_rebuilds_unique_keys_and_backfills_snapshot_threads(assembly_case):
@@ -719,7 +729,7 @@ def test_schema18_migration_rebuilds_unique_keys_and_backfills_snapshot_threads(
                           for index in case.connection.execute(f"PRAGMA index_list({table})") if index[2]]
         assert ("assembly_id", "ref_type", "ref_id", "ref_thread_id") in unique_columns
         assert ("assembly_id", "ref_type", "ref_id") not in unique_columns
-    assert case.connection.execute("SELECT schema_version,database_state FROM database_meta").fetchone() == (19, "active")
+    assert case.connection.execute("SELECT schema_version,database_state FROM database_meta").fetchone() == (20, "active")
 
 
 def test_schema18_migration_preserves_foreign_ref_thread_from_frozen_snapshot(assembly_case):

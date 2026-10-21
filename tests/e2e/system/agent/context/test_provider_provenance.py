@@ -315,7 +315,12 @@ def _checkpoint_state(thread_node: Path) -> dict:
     with sqlite3.connect(f"file:{thread_node / 'rollout' / 'index.sqlite'}?mode=ro", uri=True) as connection:
         return {
             "checkpoints": connection.execute("SELECT checkpoint_id, view_id, checkpoint_json, metadata_json FROM checkpoints ORDER BY rowid").fetchall(),
-            "channels": connection.execute("SELECT checkpoint_id, channel_name, storage_kind, value_state, value_hash, context_view_id FROM checkpoint_channels ORDER BY checkpoint_id, channel_name").fetchall(),
+            "channels": connection.execute(
+                "SELECT channel.checkpoint_id, channel.channel_name, channel.storage_kind, channel.value_state, "
+                "channel.value_id, channel.value_session_id, channel.value_thread_id, value.value_hash, channel.context_view_id "
+                "FROM checkpoint_channels channel LEFT JOIN checkpoint_state_values value ON value.value_id=channel.value_id "
+                "ORDER BY channel.checkpoint_id, channel.channel_name"
+            ).fetchall(),
             "assemblies": connection.execute("SELECT assembly_id, snapshot_json FROM context_assemblies ORDER BY rowid").fetchall(),
         }
 

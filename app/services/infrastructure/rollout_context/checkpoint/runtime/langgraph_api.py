@@ -280,6 +280,9 @@ class RolloutLangGraphCheckpointMixin:
             raise TypeError("checkpoint.channel_versions 必须是 dict")
         merged_channel_versions = dict(channel_versions)
         for channel_name, version in new_versions.items():
+            # TODO：messages 在官方增量消息切片迁齐调用方后统一校验；本片只改变其它通道的版本合同。
+            if channel_name != "messages" and channel_name in channel_versions and channel_versions[channel_name] != version:
+                raise ValueError(f"checkpoint new_versions 与 channel_versions 不一致: {channel_name}")
             merged_channel_versions.setdefault(channel_name, version)
         parent_channel_versions = (
             parent_checkpoint.checkpoint.get("channel_versions", {})
@@ -312,6 +315,7 @@ class RolloutLangGraphCheckpointMixin:
             parent_checkpoint_id=parent_checkpoint_id,
             current_messages=current_messages,
             consume_epoch_intent=self.consume_mutation_intent,
+            new_versions=new_versions,
         )
         return {
             "configurable": {

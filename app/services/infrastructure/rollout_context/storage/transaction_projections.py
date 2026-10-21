@@ -7,6 +7,9 @@ from collections.abc import Mapping
 from uuid import uuid4
 
 from app.core.hashing import sha256_hex as _hash_bytes
+from app.services.infrastructure.rollout_context.storage.checkpoint_state_values import (
+    persist_state_value,
+)
 from app.services.infrastructure.rollout_context.storage.serialization import (
     canonical_json_text as _json,
 )
@@ -27,6 +30,8 @@ class RolloutTransactionProjectionMixin:
         checkpoint: Mapping[str, object],
         view_id: str,
         timestamp: str,
+        *, session_id: str, thread_id: str, checkpoint_ns: str,
+        parent_checkpoint_id: str | None, new_versions: Mapping[str, object],
     ) -> None:
         checkpoint_id = strict_text(
             checkpoint_id, field="checkpoint_channels.checkpoint_id"
@@ -80,17 +85,21 @@ class RolloutTransactionProjectionMixin:
                         f"checkpoint channels.messages 写入失败: {checkpoint_id}"
                     )
             elif name in values:
-                serializer, blob, length, digest = self._encode(values[name])
+                value_id, value_session_id, value_thread_id = persist_state_value(
+                    self, connection, session_id=session_id, thread_id=thread_id,
+                    checkpoint_ns=checkpoint_ns, channel=name, version=version,
+                    candidate=values[name], parent_checkpoint_id=parent_checkpoint_id,
+                    is_new_version=name in new_versions,
+                )
                 result = connection.execute(
-                    "INSERT INTO checkpoint_channels(checkpoint_id, channel_name, storage_kind, value_state, channel_version, serializer_name, value_blob, value_length, value_hash, updated_index, created_at) VALUES (?, ?, 'sqlite_value', 'present', ?, ?, ?, ?, ?, ?, ?)",
+                    "INSERT INTO checkpoint_channels(checkpoint_id, channel_name, storage_kind, value_state, channel_version, value_id, value_session_id, value_thread_id, updated_index, created_at) VALUES (?, ?, 'sqlite_value', 'present', ?, ?, ?, ?, ?, ?)",
                     (
                         checkpoint_id,
                         name,
                         version,
-                        serializer,
-                        blob,
-                        length,
-                        digest,
+                        value_id,
+                        value_session_id,
+                        value_thread_id,
                         updated_index,
                         timestamp,
                     ),

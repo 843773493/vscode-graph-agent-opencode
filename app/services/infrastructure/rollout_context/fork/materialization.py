@@ -186,13 +186,16 @@ class ForkMaterializationMixin:
             if seed_checkpoint_id is None:
                 self._storage._insert_checkpoint_channels(
                     connection, checkpoint_id, checkpoint, message_view, copy_recorded_at,
+                    session_id=target_session_id, thread_id=target_thread_id,
+                    checkpoint_ns=checkpoint_ns, parent_checkpoint_id=None,
+                    new_versions=checkpoint["channel_versions"],
                 )
             else:
                 connection.execute(
                     "INSERT INTO checkpoint_channels(checkpoint_id,channel_name,storage_kind,value_state,"
-                    "channel_version,serializer_name,value_blob,value_length,value_hash,context_view_id,"
+                    "channel_version,value_id,value_session_id,value_thread_id,context_view_id,"
                     "updated_index,created_at) SELECT ?,channel_name,storage_kind,value_state,channel_version,"
-                    "serializer_name,value_blob,value_length,value_hash,"
+                    "value_id,value_session_id,value_thread_id,"
                     "CASE WHEN channel_name='messages' THEN ? ELSE context_view_id END,updated_index,? "
                     "FROM checkpoint_channels WHERE checkpoint_id=? "
                     "AND channel_name NOT IN ('_summarization_event','_force_cache_compaction','_compaction_continuation')",

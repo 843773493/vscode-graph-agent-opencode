@@ -225,7 +225,9 @@ class RolloutSchemaIntrospectionMixin:
     @staticmethod
     def _validate_schema_state(
         connection: sqlite3.Connection,
+        *, expected_version: int | None = None,
     ) -> None:
+        expected_version = storage_version.ROLLOUT_SCHEMA_VERSION if expected_version is None else expected_version
         for table in ("item_catalog", "context_contributions", "context_assembly_contributions"):
             columns = {
                 str(row[1])
@@ -264,16 +266,16 @@ class RolloutSchemaIntrospectionMixin:
         message_format_version = strict_non_negative_int(
             row[1], field="database_meta.message_format_version"
         )
-        if schema_version > storage_version.ROLLOUT_SCHEMA_VERSION:
+        if schema_version > expected_version:
             raise RuntimeError(
                 "rollout SQLite schema 版本高于当前程序支持范围: "
-                f"database={row[0]}, supported={storage_version.ROLLOUT_SCHEMA_VERSION}"
+                f"database={row[0]}, supported={expected_version}"
             )
-        if schema_version < storage_version.ROLLOUT_SCHEMA_VERSION:
+        if schema_version < expected_version:
             raise RuntimeError(
                 "schema-incompatible: rollout SQLite 不符合当前 typed item/source binding 合同；"
-                "旧实验 v2 不支持自动兼容或就地转换，原始 JSONL/SQLite 保留；"
-                f"current={schema_version}, target={storage_version.ROLLOUT_SCHEMA_VERSION}"
+                "18/19版须通过显式 migrate_schema 顺序升级18→19→20；其余旧实验库不支持转换，原始数据保留；"
+                f"current={schema_version}, target={expected_version}"
             )
         if message_format_version != storage_version.MESSAGE_FORMAT_VERSION:
             raise RuntimeError(

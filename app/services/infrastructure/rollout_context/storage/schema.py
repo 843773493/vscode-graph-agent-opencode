@@ -9,6 +9,9 @@ from app.core.sqlite_state import load_sql
 from app.services.infrastructure.rollout_context.storage.schema_assembly_refs import (
     ASSEMBLY_REF_SCHEMA_SQL,
 )
+from app.services.infrastructure.rollout_context.storage.schema_channel_versions import (
+    CHANNEL_VALUES_SCHEMA_SQL,
+)
 from app.services.infrastructure.rollout_context.storage.schema_plans import (
     PLAN_REGISTRY_SCHEMA_SQL,
     TOOL_SET_SNAPSHOT_SCHEMA_SQL,
@@ -17,7 +20,7 @@ from app.services.infrastructure.rollout_context.storage.schema_wakeup import (
     RUNTIME_WAKEUP_SCHEMA_SQL,
 )
 
-ROLLOUT_SCHEMA_VERSION = 19
+ROLLOUT_SCHEMA_VERSION = 20
 MESSAGE_FORMAT_VERSION = 1
 ROLLOUT_FORMAT_VERSION = 2
 
@@ -57,6 +60,7 @@ def initialize_rollout_schema(
         + HISTORY_NAMESPACE_SCHEMA_SQL
         + ITEM_RESOURCE_REFERENCES_SCHEMA_SQL
         + ASSEMBLY_REF_SCHEMA_SQL
+        + CHANNEL_VALUES_SCHEMA_SQL
         + load_sql(__package__, "sql/rollout.sql")
     )
 

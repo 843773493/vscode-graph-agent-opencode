@@ -6,11 +6,11 @@
 
 ## 2. P0 非 messages 通道版本复用
 
-- [ ] 2.1 冻结本片schema变更和明确支持的旧库范围；实现owner/namespace/channel/version不可变正文及checkpoint引用SQL、有序升级/备份/失败恢复，检测旧同版本异内容而不强行合并。
-- [ ] 2.2 将new_versions从put/aput贯穿唯一writer/持久层；在变更边界冻结/序列化新版本，区分明确沿用引用与同版本新候选，拒绝内容碰撞及原地修改冒充未变化。
-- [ ] 2.3 迁齐读取、列表、历史checkpoint、pending state和同步/异步；保持None/absent、updated顺序、serializer/hash及独立解码对象，不隐式借用parent/latest值。
-- [ ] 2.4 迁齐fork捕获/安装/恢复闭包和历史scope引用；验证同version异Thread/namespace隔离、冷重启、故障原子性，并删除逐checkpoint正文旧读写实现。
-- [ ] 2.5 以产品执行和定向碰撞/迁移验证证明未变化大channel不重复序列化/写正文，保留前后指标、静态与独立审查，提交并push。
+- [x] 2.1 冻结本片schema变更和明确支持的旧库范围；实现owner/namespace/channel/version不可变正文及checkpoint引用SQL、有序升级/备份/失败恢复，检测旧同版本异内容而不强行合并。
+- [x] 2.2 将new_versions从put/aput贯穿唯一writer/持久层；在变更边界冻结/序列化新版本，区分明确沿用引用与同版本新候选，拒绝内容碰撞及原地修改冒充未变化。
+- [x] 2.3 迁齐读取、列表、历史checkpoint、pending state和同步/异步；保持None/absent、updated顺序、serializer/hash及独立解码对象，不隐式借用parent/latest值。
+- [x] 2.4 迁齐fork捕获/安装/恢复闭包和历史scope引用；验证同version异Thread/namespace隔离、冷重启、故障原子性，并删除逐checkpoint正文旧读写实现。
+- [x] 2.5 以产品执行和定向碰撞/迁移验证证明未变化大channel不重复序列化/写正文，保留前后指标、静态与独立审查，提交并push。
 
 ## 3. P1 官方消息增量与基准恢复
 
@@ -43,6 +43,10 @@
 
 2026-10-21 依赖合同片：LangGraph1.2.16/checkpoint4.3.0、SDK0.4.8已安装并锁定；源码和全部直接消费者指纹见 `out/tests/temp/openspec_takeover/artifacts/history-dedup-contract-audit-001.json`。模型节点同步/异步2例、官方Delta图及Saver恢复合同12例、升级后的Gateway四轮工具循环/并发结果/重启/历史request_hash均通过。集成矩阵89例通过，另外2条锁mock原本误拦截fcntl而实现使用portalocker，恢复正确mock后与真实HTTP/SDK同步异步专项一起通过，原失败保留。独审无升级阻断。升级不等于去重完成。
 
-1.2仍待补齐摘要、深fork与回退同负载；已保存优化前和升级后的四轮工具/重启工作负载，分表正文/索引字节、serializer计数及耗时。旧依赖基线冻结在 `out/tests/temp/openspec_takeover/artifacts/history-dedup-baseline-frozen-001/`；正式原始测量在 `out/tests/integration/backend/sessions/rollout_context/test_execution_history_storage/artifacts/run-*/measurements.json`。不得以这些局部场景冒称全部验收。
+早期局部基线保存了优化前和升级后的四轮工具/重启工作负载，分表正文/索引字节、serializer计数及耗时。旧依赖基线冻结在 `out/tests/temp/openspec_takeover/artifacts/history-dedup-baseline-frozen-001/`；正式原始测量在 `out/tests/integration/backend/sessions/rollout_context/test_execution_history_storage/artifacts/run-*/measurements.json`。摘要、深fork与回退已由下述完整优化前基线补齐，局部基线不替代完整验收。
 
 2026-10-21 完整优化前基线：`history-dedup-complete-baseline-product-011` 通过（1例/218.21秒），经Gateway产生20次模型调用，涵盖多轮/并发read_file、真实摘要及重启继续、点击最终响应item的深历史A→B→C、源删除后的冷恢复和正式regenerate入口。每个保留assembly按model_call_id关联实际wire，完整规范化正文相等后校验request_hash。分阶段表/正文/索引、serializer和读写计数原件冻结于 `out/tests/temp/openspec_takeover/artifacts/history-dedup-complete-baseline-frozen-001/`；计数在每次后端重启后重置，只在同一进程阶段比较。早前失败与主动终止的原件保留，未计为通过。
+
+2026-10-21 非messages版本片：schema20的writer/read/fork与19→20、18→19→20迁齐，旧逐checkpoint正文列移除。`history-dedup-state-product-final-002`同一完整产品负载通过（1例/221.54秒），此前同负载001也通过（220.26秒）；最终原件另冻于`history-dedup-state-frozen-002/`。版本/碰撞/同步异步声明/原地变异/冷复用/跨namespace13例通过，Saver与该组84例通过，迁移/assembly原132例中131例通过后，剩余旧版本号断言改为实际20并单独通过；正式matrix下fork/protected20例通过。全部改动模块Ruff与strict OpenSpec通过，独审核对typed owner和迁移闭包；版本声明检查前移至公开put，幂等重入也不能绕过。
+
+该片扩展验证的限制如实保留：`test_real_rollout_fixture`完整装具首次生成180秒超时；随后一次导入被另一组正在修改的Trace模块缩进错误打断，恢复后的带阶段计时运行另保留，不把未完成计为通过。`test_context_view_filters_control_records_and_keeps_business_messages`原有internal steering选择断言失败，独审确认其messages选择路径未由本片改变；不为本片通过放宽断言。两次matrix启动因包装形式触发重复内存上限，在测试前exit97；改用正式`bun run test:matrix`后，初次全目录收集被同一临时Trace语法错误阻断，再按python_files精确选定后20例通过。全部原始退出码与阶段均保留；不以这些失败替代本片产品正确性或性能结论。性能长尾和准确指标见design中的TODO。
