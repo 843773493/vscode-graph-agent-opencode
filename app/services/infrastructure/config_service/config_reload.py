@@ -5,8 +5,6 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Mapping
 
-import jsonschema
-
 from app.core.lifecycle import LifetimeScope
 from app.services.infrastructure.config import (
     ConfigFileWatcher,
@@ -34,6 +32,7 @@ from app.services.infrastructure.config_service.config_service_common import (
 from app.services.infrastructure.config_service.config_snapshot import (
     ConfigSnapshotMixin,
 )
+from configs.runtime import validate_config_payload
 
 
 class ConfigReloadMixin:
@@ -56,7 +55,7 @@ class ConfigReloadMixin:
         禁止重读磁盘，否则 bootstrap 会把尚未构建的坏 candidate 误算成旧
         active generation 的失败。
         """
-        jsonschema.validate(dict(config), self._load_schema())
+        validate_config_payload(dict(config), schema=self._load_schema())
 
     @staticmethod
     async def _reconcile_shadow_config(

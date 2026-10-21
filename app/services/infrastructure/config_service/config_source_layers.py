@@ -73,10 +73,13 @@ class ConfigSourceLayersMixin:
         installed_schema = get_user_workspace_schema_path()
         if installed_schema.is_file():
             return installed_schema
-        raise FileNotFoundError(
+        error = FileNotFoundError(
             "Workspace 配置 schema 不存在: "
             f"config={config_path} expected={configured_schema}"
         )
+        raise FileNotFoundError(
+            "Workspace 配置 schema 不存在: 工作区引用、发行包引用、配置目录及用户安装目录均无可用文件"
+        ) from error
 
     def _load_schema(self) -> dict[str, Any]:
         if self._schema is None:

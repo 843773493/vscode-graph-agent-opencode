@@ -334,11 +334,13 @@ def test_config_rejects_provider_without_api_key_or_oauth(tmp_path: Path):
     del config["llm"]["providers"][0]["api_key"]
     config_path = _write_workspace_config(tmp_path, config)
 
-    with pytest.raises(jsonschema.ValidationError, match="api_key"):
+    with pytest.raises(ValueError, match="配置验证失败") as failure:
         ConfigService(
             config_dir=Path.cwd() / "configs",
             config_path=config_path,
         ).validate_workspace_config()
+    assert isinstance(failure.value.__cause__, jsonschema.ValidationError)
+    assert "api_key" in str(failure.value.__cause__)
 
 
 def test_tool_policy_resolver_merges_workspace_and_agent_rules(tmp_path: Path):
@@ -1420,8 +1422,10 @@ def test_provider_request_override_schema_rejects_legacy_extra_body(
     config_path = _write_workspace_config(tmp_path, config)
     service = ConfigService(config_dir=Path.cwd() / "configs", config_path=config_path)
 
-    with pytest.raises(jsonschema.ValidationError):
+    with pytest.raises(ValueError, match="配置验证失败") as failure:
         service.validate_workspace_config()
+    assert isinstance(failure.value.__cause__, jsonschema.ValidationError)
+    assert "extra_body" in str(failure.value.__cause__)
 
 
 def test_workspace_schema_rejects_gateway_section(tmp_path: Path):
@@ -1443,10 +1447,13 @@ def test_workspace_schema_rejects_gateway_section(tmp_path: Path):
     config_path = _write_workspace_config(tmp_path, config)
     service = ConfigService(config_dir=Path.cwd() / "configs", config_path=config_path)
 
-    with pytest.raises(jsonschema.ValidationError) as error_info:
+    with pytest.raises(ValueError, match="配置验证失败") as error_info:
         service.validate_workspace_config()
 
-    assert list(error_info.value.absolute_path) == []
+    cause = error_info.value.__cause__
+    assert isinstance(cause, jsonschema.ValidationError)
+    assert list(cause.absolute_path) == []
+    assert cause.validator == "additionalProperties"
 
 
 @pytest.mark.asyncio

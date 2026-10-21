@@ -336,27 +336,29 @@ def test_gateway_shutdown_preserves_old_generation_for_pending_handoff(
 
 
 @pytest.mark.parametrize(
-    "workspace",
+    ("workspace", "rule", "path"),
     [
-        {
+        ({
             "kind": "remote_gateway",
             "host": "remote.example.com",
             "username": "developer",
             "private_key_path": "keys/id_ed25519",
             "remote_workspace_path": "/workspace/project",
-        },
-        {
+        }, "additionalProperties", ["workspaces", 0]),
+        ({
             "kind": "remote_gateway",
             "host": "remote.example.com",
             "username": "developer",
             "private_key_path": "keys/id_ed25519",
             "port": 70000,
-        },
+        }, "maximum", ["workspaces", 0, "port"]),
     ],
 )
 def test_load_gateway_config_rejects_schema_violation(
     tmp_path: Path,
     workspace: dict[str, object],
+    rule: str,
+    path: list[str | int],
 ) -> None:
     config_path, schema_path = _write_gateway_config(tmp_path, [workspace])
 
@@ -364,8 +366,11 @@ def test_load_gateway_config_rejects_schema_violation(
         load_gateway_config(config_path=config_path, schema_path=schema_path)
     cause = failure.value.__cause__
     assert isinstance(cause, ValidationError)
-    location = ".".join(str(part) for part in cause.absolute_path) or "<root>"
-    assert str(failure.value) == f"配置验证失败: location={location}: {cause.message}"
+    assert list(cause.absolute_path) == path
+    assert cause.validator == rule
+    assert "stage=config" in str(failure.value)
+    assert f"rule={rule}" in str(failure.value)
+    assert "location=<root>.property[" in str(failure.value)
     assert str(config_path) not in str(failure.value)
     assert str(schema_path) not in str(failure.value)
 

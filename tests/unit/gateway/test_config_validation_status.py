@@ -14,6 +14,7 @@ from app.gateway.auth import verify_gateway_token
 from app.gateway.config import GatewayConfigReloadService, load_gateway_config
 from app.gateway.control.gateway_state import GatewayStateStore
 from app.gateway.routes.health_config import router
+from configs.runtime import read_jsonc_object
 
 
 @pytest.fixture
@@ -60,7 +61,9 @@ async def test_invalid_reload_exposes_schema_reason_without_native_source_paths(
         await service.reload()
     cause = failure.value.__cause__
     assert isinstance(cause, jsonschema.ValidationError)
-    expected = f"配置验证失败: location={location}: {cause.message}"
+    assert list(cause.absolute_path) == location.split(".")
+    assert "stage=config" in str(failure.value)
+    assert "rule=type" in str(failure.value)
 
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=application), base_url="http://test",
@@ -73,15 +76,15 @@ async def test_invalid_reload_exposes_schema_reason_without_native_source_paths(
         status = response.json()["data"]
         assert status["healthy"] is False
         assert status["reason"] == "invalid_config"
-        assert status["last_error"] == f"ValueError: {expected}"
+        assert status["last_error"] == f"ValueError: {failure.value}"
         assert str(config_path) not in response.text
         assert str(schema_path) not in response.text
         assert str(config_path.parent) not in response.text
         assert service.config is initial_config
         assert store.get_active_config_snapshot("gateway") == active
+
         assert store.get_pending_config_candidate(config_domain="gateway") is None
         assert service.list_events() == ()
-
         # 修正源文件后走同一 reload，错误必须清除，原 active 不被坏候选覆盖。
         config_path.write_text(original, encoding="utf-8")
         await service.reload()
@@ -90,6 +93,59 @@ async def test_invalid_reload_exposes_schema_reason_without_native_source_paths(
         assert recovered.json()["data"]["healthy"] is True
         assert recovered.json()["data"]["last_error"] is None
         assert recovered.json()["data"]["reason"] is None
+        assert store.get_active_config_snapshot("gateway") == active
+
+
+@pytest.mark.parametrize("damage", ["value", "key", "schema", "policy", "ref_fragment", "ref_file"])
+async def test_schema_failure_status_never_echoes_values_or_dynamic_keys(
+    validation_owner, damage: str,
+) -> None:
+    application, service, store, config_path, schema_path, original = validation_owner
+    schema_bytes = schema_path.read_bytes()
+    initial_config = service.config
+    active = store.get_active_config_snapshot("gateway")
+    marker = str(config_path.parent / "secret-marker")
+    payload = json.loads(original)
+    if damage == "value":
+        payload["workspaces"] = marker
+    elif damage == "key":
+        payload[marker] = "unexpected"
+    else:
+        schema = read_jsonc_object(schema_path)
+        if damage == "schema":
+            schema["type"] = marker
+        elif damage.startswith("ref_"):
+            schema["$ref"] = "#/$defs/secret-marker" if damage == "ref_fragment" else (config_path.parent / "secret-marker.json").as_uri()
+        else:
+            schema["x-boxteam-policy-manifest"] = [marker]
+        schema_path.write_text(json.dumps(schema), encoding="utf-8")
+    config_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="配置.*失败") as failure:
+        await service.reload()
+    assert failure.value.__cause__ is not None
+    assert "secret-marker" in str(failure.value.__cause__)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=application), base_url="http://test",
+    ) as client:
+        response = await client.get("/api/gateway/config/reload-status")
+        assert response.status_code == 200, response.text
+        status = response.json()["data"]
+        assert status["healthy"] is False
+        assert status["reason"] == "invalid_config"
+        assert status["last_error"] == f"ValueError: {failure.value}"
+        assert "secret-marker" not in response.text
+        assert str(config_path.parent) not in response.text
+        assert service.config is initial_config
+        assert store.get_active_config_snapshot("gateway") == active
+        assert store.get_pending_config_candidate(config_domain="gateway") is None
+        assert service.list_events() == ()
+        schema_path.write_bytes(schema_bytes)
+        config_path.write_text(original, encoding="utf-8")
+        await service.reload()
+        recovered = (await client.get("/api/gateway/config/reload-status")).json()["data"]
+        assert recovered["healthy"] is True
+        assert recovered["last_error"] is None
         assert store.get_active_config_snapshot("gateway") == active
 
 

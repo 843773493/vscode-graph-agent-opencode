@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 import httpx
+import jsonschema
 import pytest
 from fastapi import FastAPI
 
@@ -223,10 +224,11 @@ def test_configuration_diagnostics_redact_pending_payload_and_keep_secret_refere
 
 
 @pytest.fixture
-async def pointer_event_owner(tmp_path: Path, test_config_path: str):
+async def pointer_event_owner(tmp_path: Path, test_config_path: str, request: pytest.FixtureRequest):
     config = read_jsonc_object(Path(test_config_path))
     config.pop("$schema", None)
     config["config_version"] = 1
+    config["logger"]["level"] = "info"
     config["mcp"] = {"servers": {"pointer_probe": {
         "transport": "stdio", "enabled": False, "command": "unused-pointer-probe",
         "env": {"ROOT/~": "before"},
@@ -234,8 +236,22 @@ async def pointer_event_owner(tmp_path: Path, test_config_path: str):
     config_path = tmp_path / "workspace.jsonc"
     config_path.write_text(json.dumps(config), encoding="utf-8")
     workspace_root = tmp_path / "workspace"
+    config_dir = Path.cwd() / "configs"
+    inline_config_path = None
+    reference_kind = getattr(request, "param", None)
+    if reference_kind is not None:
+        reference = "#/$defs/secret-marker" if reference_kind == "fragment" else (tmp_path / "secret-marker.json").as_uri()
+        schema = read_jsonc_object(config_dir / "workspace_schema.jsonc")
+        schema["allOf"] = [{
+            "if": {"properties": {"logger": {"properties": {"level": {"const": "debug"}}}}},
+            "then": {"$ref": reference},
+        }]
+        (tmp_path / "workspace_schema.jsonc").write_text(json.dumps(schema), encoding="utf-8")
+        inline_config_path = tmp_path / "workspace_inline.jsonc"
+        inline_config_path.write_bytes((config_dir / "workspace_inline.jsonc").read_bytes())
+        config_dir = tmp_path
     store = WorkspaceStateStore(workspace_root=workspace_root)
-    service = ConfigService(config_dir=Path.cwd() / "configs", config_path=config_path,
+    service = ConfigService(config_dir=config_dir, inline_config_path=inline_config_path, config_path=config_path,
         workspace_root=workspace_root, workspace_state_store=store)
     service.validate_workspace_config()
     application = FastAPI()
@@ -284,3 +300,82 @@ async def test_real_config_diff_persists_and_serializes_json_pointers(pointer_ev
         assert persisted.changed_paths == tuple(expected)
         assert persisted.applied_paths == tuple(event["applied_paths"])
         assert persisted.deferred_paths == tuple(event["deferred_paths"])
+
+
+@pytest.mark.parametrize("damage", ["value", "key", "dynamic"])
+async def test_workspace_reload_status_rejects_without_echoing_config(
+    pointer_event_owner, damage: str,
+) -> None:
+    service, store, client, config_path, config, _workspace_root = pointer_event_owner
+    snapshot = service.get_snapshot()
+    active = store.get_active_config_snapshot("workspace")
+    events = service.list_config_events()
+    marker = str(config_path.parent / "secret-marker")
+    original = config_path.read_bytes()
+    if damage == "value":
+        config["logger"]["level"] = marker
+    elif damage == "key":
+        config[marker] = "unknown"
+    else:
+        config["mcp"]["servers"]["pointer_probe"]["env"] = {marker: 7}
+    config_path.write_text(json.dumps(config), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="配置验证失败") as failure:
+        await service.reload()
+    assert isinstance(failure.value.__cause__, jsonschema.ValidationError)
+    assert "secret-marker" in str(failure.value.__cause__)
+    response = await client.get("/api/v1/config/reload-status", headers={"X-Request-ID": "invalid-workspace"})
+    assert response.status_code == 200, response.text
+    assert response.headers["X-Request-ID"] == response.json()["request_id"] == "invalid-workspace"
+    status = response.json()["data"]
+    assert status["healthy"] is False
+    assert status["reason"] == "invalid_config"
+    assert status["last_error"] == f"ValueError: {failure.value}"
+    assert "secret-marker" not in response.text
+    assert str(config_path.parent) not in response.text
+    public_config = await client.get("/api/v1/config")
+    assert public_config.status_code == 200, public_config.text
+    assert "secret-marker" not in public_config.text
+    assert str(config_path.parent) not in public_config.text
+    assert service.get_snapshot() is snapshot
+    assert store.get_active_config_snapshot("workspace") == active
+    assert store.get_pending_config_candidate(config_domain="workspace") is None
+    assert service.list_config_events() == events
+
+    config_path.write_bytes(original)
+    await service.reload()
+    recovered = (await client.get("/api/v1/config/reload-status")).json()["data"]
+    assert recovered["healthy"] is True
+    assert recovered["last_error"] is None
+    assert store.get_active_config_snapshot("workspace") == active
+
+
+@pytest.mark.parametrize("pointer_event_owner", ["fragment", "file"], indirect=True)
+async def test_workspace_reload_status_never_echoes_unresolved_schema_reference(pointer_event_owner) -> None:
+    service, store, client, config_path, config, _workspace_root = pointer_event_owner
+    active = store.get_active_config_snapshot("workspace")
+    events = service.list_config_events()
+    original = config_path.read_bytes()
+    config["logger"]["level"] = "debug"
+    config_path.write_text(json.dumps(config), encoding="utf-8")
+    with pytest.raises(ValueError, match="stage=schema_reference") as failure:
+        await service.reload()
+    assert failure.value.__cause__ is not None
+    assert "secret-marker" in str(failure.value.__cause__)
+    response = await client.get("/api/v1/config/reload-status")
+    assert response.status_code == 200, response.text
+    status = response.json()["data"]
+    assert status["healthy"] is False
+    assert status["reason"] == "invalid_config"
+    assert status["last_error"] == f"ValueError: {failure.value}"
+    assert "secret-marker" not in response.text
+    assert str(config_path.parent) not in response.text
+    assert store.get_active_config_snapshot("workspace") == active
+    assert store.get_pending_config_candidate(config_domain="workspace") is None
+    assert service.list_config_events() == events
+    config_path.write_bytes(original)
+    await service.reload()
+    recovered = (await client.get("/api/v1/config/reload-status")).json()["data"]
+    assert recovered["healthy"] is True
+    assert recovered["last_error"] is None
+    assert store.get_active_config_snapshot("workspace") == active

@@ -9,8 +9,6 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
-import jsonschema
-
 from app.core.config_sources import (
     ConfigSource,
     ConfigSourceLayer,
@@ -35,6 +33,7 @@ from app.services.infrastructure.config.state import (
 from app.services.infrastructure.config_service.config_service_common import (
     _SOURCE_LAYER_AUTHORITY,
 )
+from configs.runtime import validate_config_payload
 
 
 class ConfigSnapshotMixin:
@@ -46,7 +45,7 @@ class ConfigSnapshotMixin:
         config, source_paths, source_details = self._read_effective_config()
         schema_path = self._resolve_schema_path()
         if validate_schema:
-            jsonschema.validate(config, self._load_schema())
+            validate_config_payload(config, schema=self._load_schema())
         snapshot = build_config_snapshot(
             config,
             source_paths=source_paths,
@@ -57,7 +56,7 @@ class ConfigSnapshotMixin:
 
     def validate_workspace_config(self) -> None:
         snapshot = self._require_snapshot()
-        jsonschema.validate(snapshot.to_dict(), self._load_schema())
+        validate_config_payload(snapshot.to_dict(), schema=self._load_schema())
         self._validate_agent_tool_policies(snapshot.to_dict())
         if self._workspace_state_store is None:
             return
@@ -154,7 +153,7 @@ class ConfigSnapshotMixin:
         restored = restore_environment_secret_references(record.payload)
         if not isinstance(restored, dict):
             raise TypeError("持久化配置恢复结果必须是对象")
-        jsonschema.validate(restored, self._load_schema())
+        validate_config_payload(restored, schema=self._load_schema())
         self._validate_agent_tool_policies(restored)
         source_details, source_paths = self._persisted_source_details(
             record.source_baseline

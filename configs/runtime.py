@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+from collections.abc import Iterable
 from pathlib import Path
 
 import jsonschema
+from referencing.exceptions import Unresolvable
 
 from app.core.config_sources import parse_stable_config_file, read_stable_config_file
 from app.services.infrastructure.config.policy import (
@@ -40,18 +42,46 @@ def validate_config(
     *,
     schema_path: Path,
 ) -> dict[str, object]:
-    schema = read_jsonc_object(schema_path)
+    return validate_config_payload(config, schema=read_jsonc_object(schema_path))
+
+
+def _structural_location(document: object, path: Iterable[str | int]) -> str:
+    """按零基对象成员序号和数组下标定位，绝不把用户键名当作诊断文本。"""
+    location = "<root>"
+    for part in path:
+        if isinstance(document, dict):
+            ordinal = next(index for index, key in enumerate(document) if key == part)
+            location += f".property[{ordinal}]"
+        else:
+            location += f".item[{part}]"
+        document = document[part]
+    return location
+
+
+def validate_config_payload(
+    config: dict[str, object], *, schema: dict[str, object],
+) -> dict[str, object]:
+    """运行时唯一校验入口；公开诊断不复制源文，完整细节留在原始异常链。"""
     schema_domain = schema.get("x-boxteam-config-domain")
-    if schema_domain == "workspace":
-        validate_policy_manifest(schema, workspace_config_policy())
-    elif schema_domain == "gateway":
-        validate_policy_manifest(schema, gateway_config_policy())
+    try:
+        if schema_domain == "workspace":
+            validate_policy_manifest(schema, workspace_config_policy())
+        elif schema_domain == "gateway":
+            validate_policy_manifest(schema, gateway_config_policy())
+    except (TypeError, ValueError) as error:
+        raise ValueError(f"配置策略验证失败: domain={schema_domain}") from error
     try:
         jsonschema.validate(config, schema)
-    except jsonschema.ValidationError as error:
-        location = ".".join(str(item) for item in error.absolute_path) or "<root>"
+    except Unresolvable as error:
+        # 引用可能是含原生路径或凭据的 URI，不复制到普通配置状态。
+        raise ValueError("配置验证失败: stage=schema_reference") from error
+    except (jsonschema.ValidationError, jsonschema.SchemaError) as error:
+        schema_error = isinstance(error, jsonschema.SchemaError)
+        stage = "schema" if schema_error else "config"
+        location = _structural_location(schema if schema_error else config, error.absolute_path)
+        # validator 是 jsonschema 内置规则名；message/instance/path 可能含秘密和原生路径。
         raise ValueError(
-            f"配置验证失败: location={location}: {error.message}"
+            f"配置验证失败: stage={stage}, location={location}, rule={error.validator}"
         ) from error
     return config
 
