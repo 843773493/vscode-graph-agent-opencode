@@ -5,11 +5,17 @@ import json
 import os
 import threading
 import time
-from collections.abc import Callable, Iterator
-from contextlib import contextmanager
+from collections.abc import Callable, Iterator, Sequence
+from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
+
+from app.testing.model_stream import (
+    StreamFrame,
+    chat_completion_frames,
+    get_protocol_codec,
+)
 
 
 @dataclass(slots=True)
@@ -39,12 +45,45 @@ def _json_response(
     handler.wfile.write(encoded)
 
 
+def _sse_response(handler: BaseHTTPRequestHandler, frames: Sequence[StreamFrame]) -> None:
+    codec = get_protocol_codec("openai_chat_sse")
+    codec.validate_stream(frames, label="HTTP Chat 替身")
+    encoded = b"".join(codec.encode(frame) for frame in frames)
+    handler.send_response(200)
+    handler.send_header("Content-Type", "text/event-stream")
+    handler.send_header("Cache-Control", "no-cache")
+    handler.send_header("Content-Length", str(len(encoded)))
+    handler.end_headers()
+    handler.wfile.write(encoded)
+    handler.wfile.flush()
+
+
 def _request_json(handler: BaseHTTPRequestHandler) -> dict[str, Any]:
     length = int(handler.headers.get("Content-Length", "0"))
     payload = json.loads(handler.rfile.read(length).decode("utf-8"))
     if not isinstance(payload, dict):
         raise TypeError("集成测试 stub 只接受 JSON object 请求")
     return payload
+
+
+@contextmanager
+def _running_http_stub_server(
+    handler: type[BaseHTTPRequestHandler], port: int,
+) -> Iterator[None]:
+    with ExitStack() as cleanup:
+        server = ThreadingHTTPServer(("127.0.0.1", port), handler)
+        cleanup.callback(server.server_close)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+
+        def join_thread() -> None:
+            thread.join(timeout=5)
+            assert not thread.is_alive(), "HTTP替身服务线程未停止"
+
+        # 仅在线程启动后登记停机，按 shutdown、join、关闭 socket 的顺序释放。
+        cleanup.callback(join_thread)
+        cleanup.callback(server.shutdown)
+        yield
 
 
 @contextmanager
@@ -232,15 +271,8 @@ def generation_target_stub(
                 },
             )
 
-    server = ThreadingHTTPServer(("127.0.0.1", port), Handler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    try:
+    with _running_http_stub_server(Handler, port):
         yield state
-    finally:
-        server.shutdown()
-        server.server_close()
-        thread.join(timeout=5)
 
 
 @contextmanager
@@ -289,53 +321,14 @@ def openai_chat_stub(
                 if state.response_callback is not None
                 else {"content": "E2E 生成器替身回复"}
             )
-            finish_reason = str(reply.pop("finish_reason", "tool_calls" if reply.get("tool_calls") else "stop"))
+            finish_reason = str(reply.get("finish_reason", "tool_calls" if reply.get("tool_calls") else "stop"))
+            reply = {key: value for key, value in reply.items() if key != "finish_reason"}
             if payload.get("stream") is True:
-                chunks = [
-                    {
-                        "id": "chatcmpl-e2e",
-                        "object": "chat.completion.chunk",
-                        "created": int(time.time()),
-                        "model": "e2e-stub-model",
-                        "choices": [
-                            {
-                                "index": 0,
-                                "delta": {
-                                    "role": "assistant",
-                                    **reply,
-                                },
-                                "finish_reason": None,
-                            }
-                        ],
-                    },
-                    {
-                        "id": "chatcmpl-e2e",
-                        "object": "chat.completion.chunk",
-                        "created": int(time.time()),
-                        "model": "e2e-stub-model",
-                        "choices": [
-                            {
-                                "index": 0,
-                                "delta": {},
-                                "finish_reason": finish_reason,
-                            }
-                        ],
-                        "usage": {
-                            "prompt_tokens": 8,
-                            "completion_tokens": 4,
-                            "total_tokens": 12,
-                        },
-                    },
-                ]
-                encoded = b"".join(
-                    f"data: {json.dumps(chunk)}\n\n".encode()
-                    for chunk in chunks
-                ) + b"data: [DONE]\n\n"
-                self.send_response(200)
-                self.send_header("Content-Type", "text/event-stream")
-                self.send_header("Content-Length", str(len(encoded)))
-                self.end_headers()
-                self.wfile.write(encoded)
+                _sse_response(self, chat_completion_frames(
+                    response_id="chatcmpl-e2e", model="e2e-stub-model",
+                    deltas=({"role": "assistant", **reply},), finish_reason=finish_reason,
+                    usage={"prompt_tokens": 8, "completion_tokens": 4, "total_tokens": 12},
+                ))
                 return
             _json_response(
                 self,
@@ -362,15 +355,8 @@ def openai_chat_stub(
                 },
             )
 
-    server = ThreadingHTTPServer(("127.0.0.1", port), Handler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    try:
+    with _running_http_stub_server(Handler, port):
         yield state
-    finally:
-        server.shutdown()
-        server.server_close()
-        thread.join(timeout=5)
 
 
 @contextmanager
@@ -378,39 +364,6 @@ def openai_chat_tool_loop_stub(port: int) -> Iterator[HTTPStubState]:
     """提供一个确定性的 Chat Completions 工具循环 SSE 替身。"""
 
     state = HTTPStubState()
-
-    def sse_response(handler: BaseHTTPRequestHandler, chunks: list[dict[str, object]]) -> None:
-        encoded = b"".join(
-            f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n".encode()
-            for chunk in chunks
-        ) + b"data: [DONE]\n\n"
-        handler.send_response(200)
-        handler.send_header("Content-Type", "text/event-stream")
-        handler.send_header("Cache-Control", "no-cache")
-        handler.send_header("Content-Length", str(len(encoded)))
-        handler.end_headers()
-        handler.wfile.write(encoded)
-        handler.wfile.flush()
-
-    def chunk(
-        *,
-        request_number: int,
-        delta: dict[str, object],
-        finish_reason: str | None = None,
-    ) -> dict[str, object]:
-        return {
-            "id": f"chatcmpl-browser-tool-loop-{request_number}",
-            "object": "chat.completion.chunk",
-            "created": int(time.time()),
-            "model": "browser-chat-tool-loop-stub",
-            "choices": [
-                {
-                    "index": 0,
-                    "delta": delta,
-                    "finish_reason": finish_reason,
-                }
-            ],
-        }
 
     class Handler(BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.1"
@@ -446,64 +399,25 @@ def openai_chat_tool_loop_stub(port: int) -> Iterator[HTTPStubState]:
             ] if isinstance(messages, list) else []
             request_number = len(state.requests)
             if roles == ["system", "user"]:
-                sse_response(
-                    self,
-                    [
-                        chunk(
-                            request_number=request_number,
-                            delta={
-                                "role": "assistant",
-                                "tool_calls": [
-                                    {
-                                        "index": 0,
-                                        "id": "call_browser_chat_tool_loop",
-                                        "type": "function",
-                                        "function": {
-                                            "name": "read_file",
-                                            "arguments": '{"path":"',
-                                        },
-                                    }
-                                ]
-                            },
-                        ),
-                        chunk(
-                            request_number=request_number,
-                            delta={
-                                "tool_calls": [
-                                    {
-                                        "index": 0,
-                                        "function": {"arguments": "README.md\"}"},
-                                    }
-                                ]
-                            },
-                        ),
-                        chunk(
-                            request_number=request_number,
-                            delta={},
-                            finish_reason="tool_calls",
-                        ),
-                    ],
-                )
+                _sse_response(self, chat_completion_frames(
+                    response_id=f"chatcmpl-browser-tool-loop-{request_number}",
+                    model="browser-chat-tool-loop-stub", finish_reason="tool_calls",
+                    deltas=(
+                        {"role": "assistant", "tool_calls": [{
+                            "index": 0, "id": "call_browser_chat_tool_loop", "type": "function",
+                            "function": {"name": "read_file", "arguments": '{"path":"'},
+                        }]},
+                        {"tool_calls": [{"index": 0, "function": {"arguments": 'README.md"}'}}]},
+                    ),
+                ))
                 return
 
             if roles == ["system", "user", "assistant", "tool"]:
-                sse_response(
-                    self,
-                    [
-                        chunk(
-                            request_number=request_number,
-                            delta={
-                                "role": "assistant",
-                                "content": "浏览器 SSE 工具调用已完成。",
-                            },
-                        ),
-                        chunk(
-                            request_number=request_number,
-                            delta={},
-                            finish_reason="stop",
-                        ),
-                    ],
-                )
+                _sse_response(self, chat_completion_frames(
+                    response_id=f"chatcmpl-browser-tool-loop-{request_number}",
+                    model="browser-chat-tool-loop-stub", finish_reason="stop",
+                    deltas=({"role": "assistant", "content": "浏览器 SSE 工具调用已完成。"},),
+                ))
                 return
 
             _json_response(
@@ -516,12 +430,5 @@ def openai_chat_tool_loop_stub(port: int) -> Iterator[HTTPStubState]:
                 status=400,
             )
 
-    server = ThreadingHTTPServer(("127.0.0.1", port), Handler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    try:
+    with _running_http_stub_server(Handler, port):
         yield state
-    finally:
-        server.shutdown()
-        server.server_close()
-        thread.join(timeout=5)

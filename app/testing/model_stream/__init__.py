@@ -8,11 +8,13 @@ from .assets import (
     StreamFrame,
     StreamScenario,
     build_cassette,
+    chat_completion_frames,
     data_frame,
     done_frame,
     load_cassette,
     load_cassette_from_object,
     load_scenario,
+    responses_frames,
 )
 from .config import (
     MODEL_STREAM_CONFIG_ENV,
@@ -67,6 +69,7 @@ __all__ = [
     "StreamProtocolCodec",
     "StreamScenario",
     "build_cassette",
+    "chat_completion_frames",
     "current_model_call_identity",
     "data_frame",
     "done_frame",
@@ -78,4 +81,5 @@ __all__ = [
     "load_scenario",
     "promote_recorded_cassette",
     "replay_model_call",
+    "responses_frames",
 ]

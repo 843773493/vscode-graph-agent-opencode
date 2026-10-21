@@ -31,26 +31,6 @@ class StreamFrame:
     payload: object
     event: str | None = None
 
-    def to_wire_bytes(self) -> bytes:
-        if self.encoding == "json":
-            data = json.dumps(
-                self.payload,
-                ensure_ascii=False,
-                separators=(",", ":"),
-            )
-        else:
-            if not isinstance(self.payload, str):
-                raise ModelStreamAssetError(
-                    "text data frame payload 必须是字符串"
-                )
-            data = self.payload
-        lines = []
-        if self.event is not None:
-            lines.append(f"event: {self.event}")
-        lines.extend(f"data: {line}" for line in data.split("\n"))
-        return ("\n".join(lines) + "\n\n").encode()
-
-
 @dataclass(frozen=True, slots=True)
 class RequestSpec:
     method: str
@@ -393,6 +373,77 @@ def done_frame(
         payload=payload,
         event=event,
     )
+
+
+def chat_completion_frames(
+    *, response_id: str, model: str, deltas: Sequence[Mapping[str, object]],
+    finish_reason: str, usage: Mapping[str, int] | None = None,
+) -> tuple[StreamFrame, ...]:
+    """共享手写上游响应资产；SDK 对象仍由真实协议解析器产生。"""
+    common = {"id": response_id, "object": "chat.completion.chunk", "created": 1, "model": model}
+    frames = [data_frame({**common, "choices": [{
+        "index": 0, "delta": copy.deepcopy(dict(delta)), "finish_reason": None,
+    }]}) for delta in deltas]
+    frames.append(data_frame({**common, "choices": [{
+        "index": 0, "delta": {}, "finish_reason": finish_reason,
+    }]}))
+    if usage is not None:
+        frames.append(data_frame({**common, "choices": [], "usage": dict(usage)}))
+    return (*frames, done_frame())
+
+
+def responses_frames(
+    *, response_id: str, model: str, output: Sequence[Mapping[str, object]],
+    usage: Mapping[str, int] | None = None,
+) -> tuple[StreamFrame, ...]:
+    """从原始 Responses 输出资产生成事件；回放与真实 HTTP 共用相同协议输入。"""
+    response = {
+        "id": response_id, "object": "response", "created_at": 1, "model": model,
+        "status": "completed", "output": copy.deepcopy([dict(item) for item in output]),
+        **({"usage": dict(usage)} if usage is not None else {}),
+    }
+    events: list[dict[str, object]] = [{
+        "type": "response.created",
+        "response": {**response, "status": "in_progress", "output": []},
+    }]
+    for index, original in enumerate(output):
+        item = copy.deepcopy(dict(original))
+        kind = item["type"]
+        added = {**item, "status": "in_progress"}
+        if kind == "message":
+            added["content"] = []
+        elif kind == "function_call":
+            added["arguments"] = ""
+        elif kind == "reasoning":
+            added.update(summary=[], content=[], encrypted_content=None)
+        else:
+            raise ValueError(f"Responses 测试输出类型不受支持: {kind!r}")
+        events.append({"type": "response.output_item.added", "output_index": index, "item": added})
+        if kind == "message":
+            for content_index, part in enumerate(cast(list[dict[str, object]], item["content"])):
+                if part["type"] != "output_text":
+                    raise ValueError(f"Responses 测试正文类型不受支持: {part['type']!r}")
+                identity = {"item_id": item["id"], "output_index": index, "content_index": content_index}
+                events.extend([
+                    {"type": "response.content_part.added", **identity, "part": {**part, "text": ""}},
+                    {"type": "response.output_text.delta", **identity, "delta": part["text"]},
+                    {"type": "response.output_text.done", **identity, "text": part["text"]},
+                    {"type": "response.content_part.done", **identity, "part": part},
+                ])
+        elif kind == "function_call":
+            identity = {"item_id": item["id"], "output_index": index}
+            events.extend([
+                {"type": "response.function_call_arguments.delta", **identity, "delta": item["arguments"]},
+                {"type": "response.function_call_arguments.done", **identity, "arguments": item["arguments"]},
+            ])
+        events.append({"type": "response.output_item.done", "output_index": index,
+                       "item": {**item, "status": "completed"}})
+    events.append({"type": "response.completed", "response": response})
+    return tuple(StreamFrame(
+        kind="done" if event["type"] == "response.completed" else "data",
+        encoding="json", event=cast(str, event["type"]),
+        payload={**event, "sequence_number": index},
+    ) for index, event in enumerate(events))
 
 
 def build_cassette(

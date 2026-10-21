@@ -9,12 +9,14 @@ import shutil
 import threading
 import time
 from collections.abc import Iterator
+from contextlib import ExitStack
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import httpx
 import pytest
 
+from app.testing.model_stream import get_protocol_codec, load_cassette
 from configs.runtime import read_jsonc_object, validate_config
 from tests.support.gateway_processes import (
     LOCAL_TOKEN_HEADERS,
@@ -68,6 +70,12 @@ def integration_workspace_root_path(
 @pytest.fixture
 def model_replay(integration_workspace_root_path: str, model_protocol: str) -> Iterator[tuple[str, list[dict[str, object]]]]:
     requests: list[dict[str, object]] = []
+    protocol_directory = "openai_responses" if model_protocol == "responses" else "openai_chat"
+    fixture = Path.cwd() / "tests/fixtures/model_stream/handwritten" / protocol_directory / "basic-text.json"
+    response = load_cassette(fixture).interactions[0]
+    codec = get_protocol_codec(response.protocol)
+    codec.validate_stream(response.response.frames, label="关闭验收模型响应")
+    body = b"".join(codec.encode(frame) for frame in response.response.frames)
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, _format: str, *args: object) -> None:
@@ -78,35 +86,31 @@ def model_replay(integration_workspace_root_path: str, model_protocol: str) -> I
             requests.append(payload)
             expected_path = "/v1/responses" if model_protocol == "responses" else "/v1/chat/completions"
             assert self.path == expected_path
-            protocol_directory = "openai_responses" if model_protocol == "responses" else "openai_chat"
-            fixture = Path.cwd() / "tests/fixtures/model_stream/handwritten" / protocol_directory / "basic-text.json"
-            frames = json.loads(fixture.read_text())["interactions"][0]["response"]["frames"]
-            body = "".join(
-                (f"event: {frame['event']}\n" if "event" in frame else "")
-                + "data: "
-                + (json.dumps(frame["payload"], ensure_ascii=False) if frame["encoding"] == "json" else frame["payload"])
-                + "\n\n"
-                for frame in frames
-            ).encode()
             self.send_response(200)
             self.send_header("Content-Type", "text/event-stream")
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
 
-    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    try:
+    with ExitStack() as lifetime:
+        def save_replay_requests() -> None:
+            output = Path(integration_workspace_root_path).parent / "artifacts"
+            output.mkdir(exist_ok=True)
+            (output / "model-replay-requests.json").write_text(json.dumps(requests, ensure_ascii=False, indent=2))
+
+        lifetime.callback(save_replay_requests)
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        lifetime.callback(server.server_close)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+
+        def join_server_thread() -> None:
+            thread.join(timeout=5)
+            assert not thread.is_alive()
+
+        lifetime.callback(join_server_thread)
+        lifetime.callback(server.shutdown)
         yield f"http://127.0.0.1:{server.server_port}/v1", requests
-    finally:
-        server.shutdown()
-        server.server_close()
-        thread.join(timeout=5)
-        assert not thread.is_alive()
-        output = Path(integration_workspace_root_path).parent / "artifacts"
-        output.mkdir(exist_ok=True)
-        (output / "model-replay-requests.json").write_text(json.dumps(requests, ensure_ascii=False, indent=2))
 
 
 @pytest.fixture
@@ -127,17 +131,16 @@ def shutdown_environment(
     })
     config["agents"]["default"]["model"]["fallback_providers"] = []
     validate_config(config, schema_path=Path.cwd() / "configs/workspace_schema.jsonc")
-    config_path.write_text(json.dumps(config, ensure_ascii=False, indent=2))
-    temporary = Path(integration_workspace_root_path).parent / "runtime/tmp"
-    temporary.mkdir(parents=True, exist_ok=True)
-    descriptor = os.open(temporary, os.O_RDONLY | os.O_DIRECTORY)
-    short_path = f"/proc/{os.getpid()}/fd/{descriptor}"
-    assert Path(short_path).resolve() == temporary
-    try:
+    with ExitStack() as lifetime:
+        lifetime.callback(config_path.write_bytes, before)
+        config_path.write_text(json.dumps(config, ensure_ascii=False, indent=2))
+        temporary = Path(integration_workspace_root_path).parent / "runtime/tmp"
+        temporary.mkdir(parents=True, exist_ok=True)
+        descriptor = os.open(temporary, os.O_RDONLY | os.O_DIRECTORY)
+        lifetime.callback(os.close, descriptor)
+        short_path = f"/proc/{os.getpid()}/fd/{descriptor}"
+        assert Path(short_path).resolve() == temporary
         yield {"TMPDIR": short_path, "TMP": short_path, "TEMP": short_path}
-    finally:
-        os.close(descriptor)
-        config_path.write_bytes(before)
 
 
 @pytest.mark.skipif(os.name != "posix", reason="该集成验收使用 Linux 精确 PID 与目录 fd")
