@@ -5,6 +5,8 @@ from __future__ import annotations
 import os
 import stat
 import tempfile
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -42,7 +44,8 @@ class FilePreimage:
 
 
 def read_file_preimage(path: Path, *, reference: str, max_bytes: int | None = None) -> FilePreimage:
-    before = path.lstat()
+    with _file_access(reference, "read"):
+        before = path.lstat()
     if stat.S_ISLNK(before.st_mode):
         raise ValueError(f"不允许编辑符号链接: {reference}")
     if stat.S_ISDIR(before.st_mode):
@@ -51,9 +54,10 @@ def read_file_preimage(path: Path, *, reference: str, max_bytes: int | None = No
         raise ValueError(f"目标不是普通文件: {reference}")
     if max_bytes is not None and before.st_size > max_bytes:
         raise ValueError(f"文件过大，暂不预览: {reference} ({before.st_size} bytes)")
-    with path.open("rb") as stream:
-        content = stream.read() if max_bytes is None else stream.read(max_bytes + 1)
-    after = path.lstat()
+    with _file_access(reference, "read"):
+        with path.open("rb") as stream:
+            content = stream.read() if max_bytes is None else stream.read(max_bytes + 1)
+        after = path.lstat()
     if (before.st_dev, before.st_ino, before.st_mode, before.st_size, before.st_mtime_ns, before.st_ctime_ns) != (
         after.st_dev, after.st_ino, after.st_mode, after.st_size, after.st_mtime_ns, after.st_ctime_ns,
     ):
@@ -65,7 +69,9 @@ def read_file_preimage(path: Path, *, reference: str, max_bytes: int | None = No
 
 def require_file_preimage(path: Path, *, before: FilePreimage | None, reference: str) -> None:
     if before is None:
-        if path.exists() or path.is_symlink():
+        with _file_access(reference, "verify"):
+            exists = path.exists() or path.is_symlink()
+        if exists:
             raise WorkspaceFileConflictError(f"目标不满足 expected_absent: {reference}")
         return
     try:
@@ -79,40 +85,55 @@ def require_file_preimage(path: Path, *, before: FilePreimage | None, reference:
 def publish_file_content(path: Path, content: bytes, *, before: FilePreimage | None,
                          reference: str, mode: int | None = None) -> FilePreimage:
     """调用者持有同一 Workspace mutation lock；外部 writer 仍可在核对后竞争。"""
-    temporary_path: Path | None = None
-    try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        descriptor, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
-        temporary_path = Path(temporary_name)
-        with os.fdopen(descriptor, "wb") as stream:
-            stream.write(content)
-            stream.flush()
-            os.fsync(stream.fileno())
-        # TODO：Windows 使用继承 ACL；不要把 POSIX mode bits 当作安全边界。
-        publish_mode = before.mode if before is not None else mode
-        if os.name != "nt" and publish_mode is not None:
-            os.chmod(temporary_path, publish_mode)
-        require_file_preimage(path, before=before, reference=reference)
-        if before is None:
-            rename_entry_exclusive(temporary_path, path)
-        else:
-            os.replace(temporary_path, path)
-        temporary_path = None
-        # 发布后不恢复旧内容；外部 writer 的新内容不能被自动回滚覆盖。
+    with _file_access(reference, "publish"):
+        temporary_path: Path | None = None
         try:
-            observed = read_file_preimage(path, reference=reference, max_bytes=len(content))
-        except (OSError, ValueError, WorkspaceFileConflictError) as error:
-            raise FilePublicationUnverifiedError(reference, "sha256:" + sha256_hex(content), None) from error
-        if observed.content != content:
-            raise FilePublicationUnverifiedError(reference, "sha256:" + sha256_hex(content), observed.content_hash)
-        return observed
-    finally:
-        if temporary_path is not None:
-            temporary_path.unlink(missing_ok=True)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            descriptor, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
+            temporary_path = Path(temporary_name)
+            with os.fdopen(descriptor, "wb") as stream:
+                stream.write(content)
+                stream.flush()
+                os.fsync(stream.fileno())
+            # TODO：Windows 使用继承 ACL；不要把 POSIX mode bits 当作安全边界。
+            publish_mode = before.mode if before is not None else mode
+            if os.name != "nt" and publish_mode is not None:
+                os.chmod(temporary_path, publish_mode)
+            require_file_preimage(path, before=before, reference=reference)
+            if before is None:
+                rename_entry_exclusive(temporary_path, path)
+            else:
+                os.replace(temporary_path, path)
+            temporary_path = None
+            # 发布后不恢复旧内容；外部 writer 的新内容不能被自动回滚覆盖。
+            try:
+                observed = read_file_preimage(path, reference=reference, max_bytes=len(content))
+            except (OSError, ValueError, WorkspaceFileConflictError) as error:
+                raise FilePublicationUnverifiedError(reference, "sha256:" + sha256_hex(content), None) from error
+            if observed.content != content:
+                raise FilePublicationUnverifiedError(reference, "sha256:" + sha256_hex(content), observed.content_hash)
+            return observed
+        finally:
+            if temporary_path is not None:
+                temporary_path.unlink(missing_ok=True)
 
 
 def delete_file_content(path: Path, *, before: FilePreimage, reference: str) -> None:
-    require_file_preimage(path, before=before, reference=reference)
-    path.unlink()
-    if path.exists() or path.is_symlink():
-        raise FilePublicationUnverifiedError(reference, "absent", None)
+    with _file_access(reference, "delete"):
+        require_file_preimage(path, before=before, reference=reference)
+        path.unlink()
+        if path.exists() or path.is_symlink():
+            raise FilePublicationUnverifiedError(reference, "absent", None)
+
+
+@contextmanager
+def _file_access(reference: str, operation: str) -> Iterator[None]:
+    """原生位置只交给 OS；公开异常保类别、errno 和完整内部原因。"""
+    try:
+        yield
+    except OSError as error:
+        raise type(error)(
+            error.errno,
+            f"文本文件 {operation} 失败: uri={reference}, "
+            f"error={type(error).__name__}, errno={error.errno}",
+        ) from error
