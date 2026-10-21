@@ -51,15 +51,29 @@ def test_posix_process_group_members_enumerate_only_matching_processes(
         raise psutil.NoSuchProcess(103)
 
     processes = [
-        SimpleNamespace(pid=100, status=lambda: psutil.STATUS_ZOMBIE),
-        SimpleNamespace(
-            pid=101,
-            status=lambda: pytest.fail("非目标进程组不读取状态"),
-        ),
-        SimpleNamespace(pid=102, status=lambda: psutil.STATUS_SLEEPING),
-        SimpleNamespace(pid=103, status=vanished_process_status),
+        100,
+        101,
+        102,
+        103,
     ]
-    monkeypatch.setattr(psutil, "process_iter", lambda _attrs: processes)
+
+    def process_status(member_pid: int) -> str:
+        if member_pid == 100:
+            return psutil.STATUS_ZOMBIE
+        if member_pid == 102:
+            return psutil.STATUS_SLEEPING
+        if member_pid == 103:
+            return vanished_process_status()
+        raise AssertionError(f"非目标进程组不读取状态: pid={member_pid}")
+
+    monkeypatch.setattr(psutil, "pids", lambda: processes)
+    monkeypatch.setattr(
+        psutil,
+        "Process",
+        lambda member_pid: SimpleNamespace(
+            status=lambda: process_status(member_pid)
+        ),
+    )
 
     def process_group(member_pid: int) -> int:
         if member_pid == 103:
@@ -80,11 +94,12 @@ def test_posix_process_group_member_query_errors_are_explicit(
     def denied_status() -> str:
         raise psutil.AccessDenied(100)
 
-    process = SimpleNamespace(
-        pid=100,
-        status=denied_status,
+    monkeypatch.setattr(psutil, "pids", lambda: [100])
+    monkeypatch.setattr(
+        psutil,
+        "Process",
+        lambda _pid: SimpleNamespace(status=denied_status),
     )
-    monkeypatch.setattr(psutil, "process_iter", lambda _attrs: [process])
     monkeypatch.setattr(process_groups.os, "getpgid", lambda _pid: 4321)
 
     with pytest.raises(RuntimeError, match="读取 POSIX 进程组成员状态失败"):

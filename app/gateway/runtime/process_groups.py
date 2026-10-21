@@ -53,8 +53,7 @@ def _posix_process_group_members(pid: int) -> list[tuple[int, str]]:
     import psutil
 
     members: list[tuple[int, str]] = []
-    for process in psutil.process_iter(["pid"]):
-        member_pid = process.pid
+    for member_pid in psutil.pids():
         try:
             if os.getpgid(member_pid) != pid:
                 continue
@@ -66,7 +65,7 @@ def _posix_process_group_members(pid: int) -> list[tuple[int, str]]:
             ) from error
 
         try:
-            status = process.status()
+            status = psutil.Process(member_pid).status()
         except psutil.ZombieProcess:
             state = "Z"
         except psutil.NoSuchProcess:
