@@ -486,6 +486,8 @@ async def invoke_provider_dispatch(
     *,
     target_format: str,
     mode: Literal["sync", "async"] = "async",
+    activation_policy: ResourceActivationPolicySnapshot | None = None,
+    registry: ResourceRegistry | None = None,
 ) -> dict[str, object]:
     """父进程和重启子进程调用同一真实 LangChain/Provider 入口。"""
     model_type = {
@@ -526,7 +528,7 @@ async def invoke_provider_dispatch(
         tools=(), metadata={},
     )
     coordinator = ResourceActivationCoordinator(
-        registry=ResourceRegistry(), saver=saver,
+        registry=registry if registry is not None else ResourceRegistry(), saver=saver,
         body_store=ResourceActivationBodyStore(saver._storage, saver._detail_store),
     )
     agent = create_dispatch_agent(
@@ -544,7 +546,9 @@ async def invoke_provider_dispatch(
         checkpointer=saver,
         middleware=[LLMLoggingMiddleware(sessions_dir=saver._storage.storage.sessions_dir)],
     )
-    with dispatch_execution_scope(saver, session_id, turn_id):
+    with dispatch_execution_scope(
+        saver, session_id, turn_id, activation_policy=activation_policy, registry=registry,
+    ):
         if mode == "sync":
             return await asyncio.to_thread(agent.invoke, {"messages": []}, build_checkpoint_config(thread))
         return await agent.ainvoke({"messages": []}, build_checkpoint_config(thread))
