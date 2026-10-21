@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import os
-import subprocess
 import sys
 import time
 from collections.abc import Callable
@@ -51,24 +50,40 @@ def _posix_process_stat(pid: int) -> tuple[str, int, int, float] | None:
 
 
 def _posix_process_group_members(pid: int) -> list[tuple[int, str]]:
-    result = subprocess.run(
-        ["ps", "-ax", "-o", "pid=", "-o", "pgid=", "-o", "stat="],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    if result.returncode != 0:
-        raise RuntimeError(
-            f"读取 POSIX 进程组成员失败: pgid={pid}, stderr={result.stderr.strip()}"
-        )
+    import psutil
+
     members: list[tuple[int, str]] = []
-    for line in result.stdout.splitlines():
-        fields = line.split()
-        if len(fields) < 3:
-            raise RuntimeError(f"POSIX ps 进程组成员字段不足: {line!r}")
-        member_pid, group_id = int(fields[0]), int(fields[1])
-        if group_id == pid:
-            members.append((member_pid, fields[2][0]))
+    for process in psutil.process_iter(["pid"]):
+        member_pid = process.pid
+        try:
+            if os.getpgid(member_pid) != pid:
+                continue
+        except ProcessLookupError:
+            continue
+        except OSError as error:
+            raise RuntimeError(
+                f"读取 POSIX 进程组成员身份失败: pgid={pid}, pid={member_pid}: {error}"
+            ) from error
+
+        try:
+            status = process.status()
+        except psutil.ZombieProcess:
+            state = "Z"
+        except psutil.NoSuchProcess:
+            continue
+        except psutil.Error as error:
+            raise RuntimeError(
+                f"读取 POSIX 进程组成员状态失败: pgid={pid}, pid={member_pid}: {error}"
+            ) from error
+        else:
+            state = (
+                "Z"
+                if status == psutil.STATUS_ZOMBIE
+                else "X"
+                if status == psutil.STATUS_DEAD
+                else "S"
+            )
+        members.append((member_pid, state))
     return members
 
 
