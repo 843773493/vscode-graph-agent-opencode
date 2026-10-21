@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import errno
 import sqlite3
 import subprocess
 import sys
@@ -8,6 +7,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from textwrap import dedent
 
+import portalocker
 import pytest
 
 from app.core import sqlite_state
@@ -114,35 +114,41 @@ def test_sqlite_state_rejects_owner_in_separate_process(tmp_path):
     assert "SQLite 状态库已被另一个进程占用" in result.stderr
 
 
-def test_sqlite_process_ownership_uses_windows_byte_range_lock(monkeypatch, tmp_path):
-    class WindowsLockApi:
-        LK_NBLCK = 1
-        LK_UNLCK = 2
+def test_sqlite_process_ownership_uses_portable_nonblocking_exclusive_lock(
+    monkeypatch,
+    tmp_path,
+):
+    lock_calls = []
+    unlock_calls = []
 
-        def __init__(self):
-            self.calls = []
-            self.error = None
+    def record_lock(handle, flags):
+        lock_calls.append((handle, flags))
 
-        def locking(self, file_descriptor, mode, byte_count):
-            self.calls.append((file_descriptor, mode, byte_count))
-            if self.error is not None:
-                raise self.error
+    def record_unlock(handle):
+        unlock_calls.append(handle)
 
-    windows_lock_api = WindowsLockApi()
-    monkeypatch.setattr(sqlite_state, "_IS_WINDOWS", True)
-    monkeypatch.setattr(sqlite_state, "msvcrt", windows_lock_api, raising=False)
-
+    monkeypatch.setattr(sqlite_state.portalocker, "lock", record_lock)
+    monkeypatch.setattr(sqlite_state.portalocker, "unlock", record_unlock)
     ownership = sqlite_state.SQLiteProcessOwnership(tmp_path / "state.sqlite")
     ownership.acquire()
     assert (tmp_path / ".state.sqlite.lock").read_bytes() == b"\0"
     ownership.release()
 
-    assert windows_lock_api.calls[0][1:] == (WindowsLockApi.LK_NBLCK, 1)
-    assert windows_lock_api.calls[1][1:] == (WindowsLockApi.LK_UNLCK, 1)
+    assert lock_calls[0][0].name == str(tmp_path / ".state.sqlite.lock")
+    assert lock_calls[0][1] == portalocker.LOCK_EX | portalocker.LOCK_NB
+    assert unlock_calls == [lock_calls[0][0]]
+    assert lock_calls[0][0].closed
 
-    windows_lock_api.error = PermissionError(errno.EACCES, "锁区已占用")
+    failed_handles = []
+
+    def reject_contended_lock(handle, _flags):
+        failed_handles.append(handle)
+        raise portalocker.AlreadyLocked("锁区已占用")
+
+    monkeypatch.setattr(sqlite_state.portalocker, "lock", reject_contended_lock)
     with pytest.raises(RuntimeError, match="已被另一个进程占用"):
         sqlite_state.SQLiteProcessOwnership(tmp_path / "state.sqlite").acquire()
+    assert failed_handles[0].closed
 
 
 def test_sqlite_state_allows_explicit_shared_processes(tmp_path):

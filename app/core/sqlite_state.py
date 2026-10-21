@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import _sqlite3
 import ctypes
-import errno
 import os
 import re
 import sqlite3
@@ -12,13 +11,9 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import BinaryIO, Final, Self
 
-SQLITE_BUSY_TIMEOUT_MS: Final = 5000
-_IS_WINDOWS = os.name == "nt"
+import portalocker
 
-if _IS_WINDOWS:
-    import msvcrt
-else:
-    import fcntl
+SQLITE_BUSY_TIMEOUT_MS: Final = 5000
 
 
 class _SQLiteVFSHeader(ctypes.Structure):
@@ -154,31 +149,23 @@ class SQLiteProcessOwnership:
     def acquire(self) -> None:
         self._lock_path.parent.mkdir(parents=True, exist_ok=True)
         handle = self._lock_path.open("a+b")
-        lock_attempted = False
         try:
-            if _IS_WINDOWS:
-                handle.seek(0, os.SEEK_END)
-                if handle.tell() == 0:
-                    handle.write(b"\0")
-                    handle.flush()
-                handle.seek(0)
-                lock_attempted = True
-                msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
-            else:
-                lock_attempted = True
-                fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except OSError as error:
-            handle.close()
-            contended = lock_attempted and (
-                error.errno in (errno.EACCES, errno.EDEADLK)
-                if _IS_WINDOWS
-                else isinstance(error, BlockingIOError)
+            handle.seek(0, os.SEEK_END)
+            if handle.tell() == 0:
+                handle.write(b"\0")
+                handle.flush()
+            handle.seek(0)
+            portalocker.lock(
+                handle, portalocker.LOCK_EX | portalocker.LOCK_NB
             )
-            if not contended:
-                raise
+        except portalocker.AlreadyLocked as error:
+            handle.close()
             raise RuntimeError(
                 f"SQLite 状态库已被另一个进程占用: {self._lock_path}"
             ) from error
+        except BaseException:
+            handle.close()
+            raise
         self._lock_handle = handle
 
     def release(self) -> None:
@@ -187,11 +174,7 @@ class SQLiteProcessOwnership:
             return
         self._lock_handle = None
         try:
-            if _IS_WINDOWS:
-                handle.seek(0)
-                msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
-            else:
-                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+            portalocker.unlock(handle)
         finally:
             handle.close()
 
