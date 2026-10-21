@@ -8,6 +8,7 @@ import sqlite3
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from app.core.sqlite_state import load_sql
 from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
 from app.domain.itemized.identity.detail_ref import DetailRef
 from app.domain.itemized.identity.refs import ContextRef
@@ -104,27 +105,22 @@ def select_view_prefix(
         if empty is not None:
             raise ValueError("fork_source_not_completed: source view 没有可复制的安全锚点")
     connection.execute(
-        "CREATE TEMP TABLE fork_selected_items(item_id TEXT PRIMARY KEY,"
-        "visited INTEGER NOT NULL DEFAULT 0,visible_ordinal INTEGER)",
+        load_sql(__package__, "sql/fork_selected_items.sql"),
     )
     connection.execute(
-        "CREATE TEMP TABLE fork_selected_assemblies(assembly_id TEXT PRIMARY KEY,"
-        "visited INTEGER NOT NULL DEFAULT 0,expand_body INTEGER NOT NULL DEFAULT -1)",
+        load_sql(__package__, "sql/fork_selected_assemblies.sql"),
     )
     connection.execute(
-        "CREATE TEMP TABLE fork_selected_details(detail_ref TEXT PRIMARY KEY,"
-        "visited INTEGER NOT NULL DEFAULT 0)",
+        load_sql(__package__, "sql/fork_selected_details.sql"),
     )
     connection.execute(
-        "CREATE TEMP TABLE fork_selected_model_calls(model_call_id TEXT PRIMARY KEY)",
+        load_sql(__package__, "sql/fork_selected_model_calls.sql"),
     )
     connection.execute(
-        "CREATE TEMP TABLE fork_selected_source_checkpoints(checkpoint_id TEXT PRIMARY KEY)",
+        load_sql(__package__, "sql/fork_selected_source_checkpoints.sql"),
     )
     connection.execute(
-        "CREATE TEMP TABLE fork_selected_activations(session_id TEXT,thread_id TEXT,"
-        "activation_snapshot_id TEXT,visited INTEGER NOT NULL DEFAULT 0,"
-        "PRIMARY KEY(session_id,thread_id,activation_snapshot_id))",
+        load_sql(__package__, "sql/fork_selected_activations.sql"),
     )
     connection.execute(
         "INSERT INTO fork_selected_items(item_id,visible_ordinal) "
@@ -342,13 +338,7 @@ def select_view_prefix(
     ).fetchone():
         raise ValueError("source-mismatch: 前缀正文闭包存在缺失 canonical item")
     connection.execute(
-        "CREATE TEMP TABLE fork_visible_messages AS SELECT DISTINCT message.message_sequence "
-        "FROM messages message JOIN item_catalog anchor ON anchor.jsonl_offset=message.jsonl_offset "
-        "AND anchor.jsonl_length=message.jsonl_length JOIN fork_selected_items selected "
-        "ON selected.item_id=anchor.item_id WHERE selected.visible_ordinal IS NOT NULL "
-        "AND NOT EXISTS(SELECT 1 FROM item_catalog member "
-        "LEFT JOIN fork_selected_items included ON included.item_id=member.item_id "
-        "WHERE member.message_group_id=anchor.message_group_id AND included.visible_ordinal IS NULL)",
+        load_sql(__package__, "sql/fork_visible_messages.sql"),
     )
 
 
@@ -383,36 +373,16 @@ def _detail_file_owner(connection: sqlite3.Connection, assembly_id: str, detail_
 def _prune_prefix_facts(connection: sqlite3.Connection) -> None:
     """保留关系由各事实 owner 明确列出，不凭同名列推断业务依赖。"""
     connection.execute(
-        "CREATE TEMP TABLE fork_selected_turns AS SELECT DISTINCT turn_id FROM item_catalog "
-        "WHERE item_id IN (SELECT item_id FROM fork_selected_items) AND turn_id IS NOT NULL",
+        load_sql(__package__, "sql/fork_selected_turns.sql"),
     )
     connection.execute(
-        "CREATE TEMP TABLE fork_selected_executions AS SELECT execution_id FROM item_catalog "
-        "WHERE item_id IN (SELECT item_id FROM fork_selected_items) AND execution_id IS NOT NULL "
-        "UNION SELECT execution_id FROM context_assemblies "
-        "WHERE assembly_id IN (SELECT assembly_id FROM fork_selected_assemblies) "
-        "UNION SELECT snapshot.execution_id FROM resource_activation_snapshots snapshot "
-        "JOIN fork_selected_activations selected ON selected.session_id=snapshot.session_id "
-        "AND selected.thread_id=snapshot.thread_id "
-        "AND selected.activation_snapshot_id=snapshot.activation_snapshot_id "
-        "UNION SELECT initial_execution_id FROM turn_records WHERE turn_id IN "
-        "(SELECT turn_id FROM fork_selected_turns) UNION SELECT last_execution_id FROM turn_records "
-        "WHERE turn_id IN (SELECT turn_id FROM fork_selected_turns) AND last_execution_id IS NOT NULL",
+        load_sql(__package__, "sql/fork_selected_executions.sql"),
     )
     connection.execute(
-        "CREATE TEMP TABLE fork_selected_plans AS SELECT plan_id FROM context_assemblies "
-        "WHERE assembly_id IN (SELECT assembly_id FROM fork_selected_assemblies)",
+        load_sql(__package__, "sql/fork_selected_plans.sql"),
     )
     connection.execute(
-        "CREATE TEMP TABLE fork_selected_checkpoints AS SELECT checkpoint_id FROM checkpoints cp "
-        "WHERE NOT EXISTS (SELECT 1 FROM context_view_items member WHERE member.view_id=cp.view_id "
-        "AND NOT EXISTS(SELECT 1 FROM fork_selected_items selected WHERE selected.item_id=member.item_id)) "
-        "AND NOT EXISTS(SELECT 1 FROM checkpoint_channels channel JOIN context_view_items member "
-        "ON member.view_id=channel.context_view_id WHERE channel.checkpoint_id=cp.checkpoint_id "
-        "AND NOT EXISTS(SELECT 1 FROM fork_selected_items selected WHERE selected.item_id=member.item_id)) "
-        "AND (json_type(cp.metadata_json,'$.boxteam_execution_binding') IS NULL OR "
-        "json_extract(cp.metadata_json,'$.boxteam_execution_binding.execution_id') IN "
-        "(SELECT execution_id FROM fork_selected_executions))",
+        load_sql(__package__, "sql/fork_selected_checkpoints.sql"),
     )
     connection.execute(
         "DELETE FROM messages WHERE NOT EXISTS(SELECT 1 FROM item_catalog item "
@@ -481,8 +451,7 @@ def _copy_selected_jsonl(connection: sqlite3.Connection, stage: Path) -> None:
     source = stage / "rollout.jsonl"
     destination = stage / ".prefix.jsonl"
     connection.execute(
-        "CREATE TEMP TABLE fork_item_offsets(old_offset INTEGER PRIMARY KEY,old_end INTEGER,"
-        "new_offset INTEGER,new_end INTEGER)",
+        load_sql(__package__, "sql/fork_item_offsets.sql"),
     )
     cursor = connection.execute(
         "SELECT jsonl_offset,jsonl_length FROM item_catalog ORDER BY item_sequence",

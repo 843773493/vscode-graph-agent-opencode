@@ -1,0 +1,1 @@
+CREATE INDEX IF NOT EXISTS item_catalog_background_result_identity ON item_catalog(tool_call_id, json_extract(projection_manifest_json,'$.projection_identity.model_call_id')) WHERE semantic_kind='tool_result' AND status='completed'

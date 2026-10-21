@@ -1,0 +1,1 @@
+DROP INDEX IF EXISTS context_epoch_pending_namespace

@@ -31,6 +31,7 @@ def test_release_copy_loads_sql_initializes_reopens_and_missing_asset_fails(
 ):
     script = '''
 import json
+import sqlite3
 from contextlib import closing
 from pathlib import Path
 import app.core.sqlite_state as core
@@ -43,6 +44,10 @@ from app.services.infrastructure.workspace_state_store import WorkspaceStateStor
 from app.services.infrastructure.workspace_files.store import WorkspaceFileStore
 from app.services.infrastructure.config.source_owner import WorkspaceSourceOwner
 from app.services.infrastructure.attachment_blob_catalog.catalog import AttachmentBlobCatalog
+from app.services.infrastructure.rollout_context.storage.schema import initialize_rollout_schema
+from app.services.infrastructure.rollout_context.activation.schema import (
+    create_resource_activation_schema, require_resource_activation_schema,
+)
 assert Path(core.__file__).is_relative_to(Path.cwd())
 for _ in range(2):
     with GatewayStateStore(path=Path("state/gateway.sqlite")) as store:
@@ -68,6 +73,15 @@ for _ in range(2):
         assert source.high_water_mark() == 0
     with closing(AttachmentBlobCatalog(Path("state/attachments/catalog.sqlite"))) as attachments:
         assert attachments.connection.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+    rollout_path = Path("state/rollout.sqlite")
+    fresh_rollout = not rollout_path.exists()
+    with closing(sqlite3.connect(rollout_path)) as rollout:
+        if fresh_rollout:
+            initialize_rollout_schema(rollout, initialize_activation=create_resource_activation_schema)
+            rollout.commit()
+        require_resource_activation_schema(rollout)
+        assert rollout.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+        assert rollout.execute("SELECT count(*) FROM context_assemblies").fetchone()[0] == 0
 print(json.dumps({"loaded": core.__file__, "schema": 17}))
 '''
     environment = {**os.environ, "PYTHONPATH": str(staged_application)}

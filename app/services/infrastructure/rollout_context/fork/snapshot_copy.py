@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING
 from uuid import uuid4
 
 from app.core.resource_uri import parse_resource_uri
-from app.core.sqlite_state import utc_now_text
+from app.core.sqlite_state import load_sql, utc_now_text
 from app.services.infrastructure.rollout_context.fork.copy_items import (
     prune_view_prefix,
     select_view_prefix,
@@ -108,10 +108,9 @@ def prepare_target_snapshot(
         connection.execute("PRAGMA journal_mode=DELETE")
         connection.execute(HISTORY_NAMESPACE_SCHEMA_SQL)
         connection.execute("BEGIN IMMEDIATE")
-        connection.execute("DROP INDEX IF EXISTS context_epoch_pending_namespace")
+        connection.execute(load_sql(__package__, "sql/drop_context_epoch_pending_namespace.sql"))
         connection.execute(
-            "CREATE UNIQUE INDEX context_epoch_pending_namespace ON context_epoch_transitions"
-            "(checkpoint_ns,target_view_id) WHERE status='pending' AND reason IN ('rewind','compaction')",
+            load_sql(__package__, "sql/context_epoch_pending_namespace.sql"),
         )
         if current_scope(connection) != (snapshot.source_session_id, snapshot.source_thread_id):
             raise ValueError("source-mismatch: captured SQLite 与精确 source Thread 不一致")
