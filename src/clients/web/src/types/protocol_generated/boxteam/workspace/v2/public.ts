@@ -842,6 +842,23 @@ export interface SessionCompletedExecutionEventDTO {
   payload: JobProgressDTO | undefined;
 }
 
+/** 仅标识封存来源，不是当前资源定位器或访问凭据。 */
+export interface SessionContextProvenanceRefDTO {
+  kind: string;
+  token: string;
+}
+
+export interface SessionContextResourceDTO {
+  display_uri?: string | undefined;
+  resource_kind: string;
+  owner_scope: string;
+  facet: string;
+  /** 固定语义哈希；不回显来源任意格式的 revision。 */
+  revision: string;
+  availability: string;
+  provenance_ref: SessionContextProvenanceRefDTO | undefined;
+}
+
 export interface SessionContextItemDTO {
   kind: string;
   role?: string | undefined;
@@ -858,6 +875,7 @@ export interface SessionContextItemDTO {
   uri?: string | undefined;
   scope?: string | undefined;
   assembly_ref?: string | undefined;
+  resource_refs: SessionContextResourceDTO[];
 }
 
 export interface SessionContextPartialErrorDTO {
@@ -8164,6 +8182,113 @@ export const SessionCompletedExecutionEventDTO: MessageFns<SessionCompletedExecu
   },
 };
 
+function createBaseSessionContextProvenanceRefDTO(): SessionContextProvenanceRefDTO {
+  return { kind: "", token: "" };
+}
+
+export const SessionContextProvenanceRefDTO: MessageFns<SessionContextProvenanceRefDTO> = {
+  fromJSON(object: any): SessionContextProvenanceRefDTO {
+    return {
+      kind: isSet(object.kind) ? globalThis.String(object.kind) : "",
+      token: isSet(object.token) ? globalThis.String(object.token) : "",
+    };
+  },
+
+  toJSON(message: SessionContextProvenanceRefDTO): unknown {
+    const obj: any = {};
+    if (message.kind !== "") {
+      obj.kind = message.kind;
+    }
+    if (message.token !== "") {
+      obj.token = message.token;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<SessionContextProvenanceRefDTO>, I>>(base?: I): SessionContextProvenanceRefDTO {
+    return SessionContextProvenanceRefDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<SessionContextProvenanceRefDTO>, I>>(
+    object: I,
+  ): SessionContextProvenanceRefDTO {
+    const message = createBaseSessionContextProvenanceRefDTO();
+    message.kind = object.kind ?? "";
+    message.token = object.token ?? "";
+    return message;
+  },
+};
+
+function createBaseSessionContextResourceDTO(): SessionContextResourceDTO {
+  return {
+    display_uri: undefined,
+    resource_kind: "",
+    owner_scope: "",
+    facet: "",
+    revision: "",
+    availability: "",
+    provenance_ref: undefined,
+  };
+}
+
+export const SessionContextResourceDTO: MessageFns<SessionContextResourceDTO> = {
+  fromJSON(object: any): SessionContextResourceDTO {
+    return {
+      display_uri: isSet(object.display_uri) ? globalThis.String(object.display_uri) : undefined,
+      resource_kind: isSet(object.resource_kind) ? globalThis.String(object.resource_kind) : "",
+      owner_scope: isSet(object.owner_scope) ? globalThis.String(object.owner_scope) : "",
+      facet: isSet(object.facet) ? globalThis.String(object.facet) : "",
+      revision: isSet(object.revision) ? globalThis.String(object.revision) : "",
+      availability: isSet(object.availability) ? globalThis.String(object.availability) : "",
+      provenance_ref: isSet(object.provenance_ref)
+        ? SessionContextProvenanceRefDTO.fromJSON(object.provenance_ref)
+        : undefined,
+    };
+  },
+
+  toJSON(message: SessionContextResourceDTO): unknown {
+    const obj: any = {};
+    if (message.display_uri !== undefined) {
+      obj.display_uri = message.display_uri;
+    }
+    if (message.resource_kind !== "") {
+      obj.resource_kind = message.resource_kind;
+    }
+    if (message.owner_scope !== "") {
+      obj.owner_scope = message.owner_scope;
+    }
+    if (message.facet !== "") {
+      obj.facet = message.facet;
+    }
+    if (message.revision !== "") {
+      obj.revision = message.revision;
+    }
+    if (message.availability !== "") {
+      obj.availability = message.availability;
+    }
+    if (message.provenance_ref !== undefined) {
+      obj.provenance_ref = SessionContextProvenanceRefDTO.toJSON(message.provenance_ref);
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<SessionContextResourceDTO>, I>>(base?: I): SessionContextResourceDTO {
+    return SessionContextResourceDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<SessionContextResourceDTO>, I>>(object: I): SessionContextResourceDTO {
+    const message = createBaseSessionContextResourceDTO();
+    message.display_uri = object.display_uri ?? undefined;
+    message.resource_kind = object.resource_kind ?? "";
+    message.owner_scope = object.owner_scope ?? "";
+    message.facet = object.facet ?? "";
+    message.revision = object.revision ?? "";
+    message.availability = object.availability ?? "";
+    message.provenance_ref = (object.provenance_ref !== undefined && object.provenance_ref !== null)
+      ? SessionContextProvenanceRefDTO.fromPartial(object.provenance_ref)
+      : undefined;
+    return message;
+  },
+};
+
 function createBaseSessionContextItemDTO(): SessionContextItemDTO {
   return {
     kind: "",
@@ -8181,6 +8306,7 @@ function createBaseSessionContextItemDTO(): SessionContextItemDTO {
     uri: undefined,
     scope: undefined,
     assembly_ref: undefined,
+    resource_refs: [],
   };
 }
 
@@ -8204,6 +8330,9 @@ export const SessionContextItemDTO: MessageFns<SessionContextItemDTO> = {
       uri: isSet(object.uri) ? globalThis.String(object.uri) : undefined,
       scope: isSet(object.scope) ? globalThis.String(object.scope) : undefined,
       assembly_ref: isSet(object.assembly_ref) ? globalThis.String(object.assembly_ref) : undefined,
+      resource_refs: globalThis.Array.isArray(object?.resource_refs)
+        ? object.resource_refs.map((e: any) => SessionContextResourceDTO.fromJSON(e))
+        : [],
     };
   },
 
@@ -8254,6 +8383,9 @@ export const SessionContextItemDTO: MessageFns<SessionContextItemDTO> = {
     if (message.assembly_ref !== undefined) {
       obj.assembly_ref = message.assembly_ref;
     }
+    if (message.resource_refs?.length) {
+      obj.resource_refs = message.resource_refs.map((e) => SessionContextResourceDTO.toJSON(e));
+    }
     return obj;
   },
 
@@ -8277,6 +8409,7 @@ export const SessionContextItemDTO: MessageFns<SessionContextItemDTO> = {
     message.uri = object.uri ?? undefined;
     message.scope = object.scope ?? undefined;
     message.assembly_ref = object.assembly_ref ?? undefined;
+    message.resource_refs = object.resource_refs?.map((e) => SessionContextResourceDTO.fromPartial(e)) || [];
     return message;
   },
 };

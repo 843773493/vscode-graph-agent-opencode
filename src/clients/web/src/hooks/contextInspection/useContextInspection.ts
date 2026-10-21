@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   readSessionContext,
   type SessionContextSession,
@@ -18,7 +18,11 @@ export interface InspectionOwner {
   active: boolean;
 }
 
-export function useContextInspection({ port, gatewayWorkspaceId, session, active }: InspectionOwner) {
+export function useContextInspection({ port, gatewayWorkspaceId, session: currentSession, active }: InspectionOwner) {
+  // Session 状态镜像刷新不改变资源身份，不能因此取消分页或重置用户的选择。
+  const session = useMemo(() => currentSession, [
+    currentSession?.session_id, currentSession?.resource_identity, currentSession?.uri, currentSession?.scope,
+  ]);
   const [catalog, setCatalog] = useState(emptyInspectionPage);
   const [projection, setProjection] = useState(emptyInspectionPage);
   const [selectedAssembly, setSelectedAssembly] = useState<ContextItem | null>(null);

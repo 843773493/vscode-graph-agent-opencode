@@ -846,6 +846,23 @@ message SessionCompletedExecutionEventDTO {
   JobProgressDTO payload = 6;
 }
 
+// 仅标识封存来源，不是当前资源定位器或访问凭据。
+message SessionContextProvenanceRefDTO {
+  string kind = 1;
+  string token = 2;
+}
+
+message SessionContextResourceDTO {
+  optional string display_uri = 1;
+  string resource_kind = 2;
+  string owner_scope = 3;
+  string facet = 4;
+  // 固定语义哈希；不回显来源任意格式的 revision。
+  string revision = 5;
+  string availability = 6;
+  SessionContextProvenanceRefDTO provenance_ref = 7;
+}
+
 message SessionContextItemDTO {
   string kind = 1;
   reserved 2;
@@ -864,6 +881,7 @@ message SessionContextItemDTO {
   optional string uri = 14;
   optional string scope = 15;
   optional string assembly_ref = 16;
+  repeated SessionContextResourceDTO resource_refs = 17;
 }
 
 message SessionContextPartialErrorDTO {

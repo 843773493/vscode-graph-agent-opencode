@@ -27,6 +27,7 @@ from app.services.infrastructure.rollout_context.checkpoint.owner.context_dispat
     ContextDispatchOwnerMixin,
 )
 from app.services.infrastructure.rollout_context.checkpoint.owner.context_projection import (
+    CommittedContextSnapshot,
     ContextProjectionOwnerMixin,
 )
 from app.services.infrastructure.rollout_context.checkpoint.owner.resource_activation import (
@@ -199,7 +200,7 @@ class ContextOwnerMixin(
                 thread_id,
                 plan,
                 checkpoint_ns=self.context_owner_namespace(checkpoint_ns),
-            ).as_sealed_plan(),
+            ).assembly.as_sealed_plan(),
             projection="langchain",
             losses=losses,
         )
@@ -233,7 +234,7 @@ class ContextOwnerMixin(
                 thread_id,
                 plan,
                 checkpoint_ns=normalized_ns,
-            ).as_sealed_plan(),
+            ).assembly.as_sealed_plan(),
             projection="web_history",
             losses=losses,
         )
@@ -260,7 +261,7 @@ class ContextOwnerMixin(
                 thread_id,
                 plan,
                 checkpoint_ns=self.context_owner_namespace(checkpoint_ns),
-            ).as_sealed_plan(),
+            ).assembly.as_sealed_plan(),
             projection="native",
             losses=native.get("losses", ()),
         )
@@ -299,7 +300,7 @@ class ContextOwnerMixin(
                 thread_id,
                 plan,
                 checkpoint_ns=self.context_owner_namespace(checkpoint_ns),
-            ).as_sealed_plan(),
+            ).assembly.as_sealed_plan(),
             projection="provider",
             losses=losses,
         )
@@ -332,7 +333,7 @@ class ContextOwnerMixin(
             request_only_content=request_only_content, include_request_only=include_request_only,
         )
         return self._project_context_projection(
-            session_id, thread_id, committed_snapshot, items, resolved_request_content,
+            session_id, thread_id, committed_snapshot.assembly, items, resolved_request_content,
             include_runtime_notices=include_runtime_notices, include_summaries=include_summaries,
             target_format=target_format, collect_capability_losses=collect_capability_losses,
             include_request_only=include_request_only, include_native=include_native,
@@ -417,7 +418,7 @@ class ContextOwnerMixin(
         *,
         checkpoint_ns: str,
         snapshot: RolloutReadSnapshot | None = None,
-    ) -> ContextAssemblySnapshot:
+    ) -> CommittedContextSnapshot:
         """只允许投影 Saver 已提交的 assembly plan。
 
         ``ContextRequestPlan`` 是不可变值对象，但调用方仍可能自行构造一个
@@ -454,11 +455,12 @@ class ContextOwnerMixin(
                 raise ValueError(
                     "plan-order-integrity: projector plan 与已提交 assembly 不一致"
                 )
+            activation = None
             # 正式 wire v2 投影必须复用 sealed activation；纯 plan v1 保持自身合同。
             if (persisted.projector_id, persisted.projector_version) == (
                 WIRE_PROJECTOR_ID, WIRE_PROJECTOR_VERSION,
             ):
-                self.load_sealed_resource_activation(
+                activation = self.load_sealed_resource_activation(
                     session_id,
                     thread_id=thread_id,
                     assembly_id=persisted.assembly_id,
@@ -467,7 +469,7 @@ class ContextOwnerMixin(
                     checkpoint_ns=checkpoint_ns,
                     snapshot=read_snapshot,
                 )
-        return persisted
+        return CommittedContextSnapshot(persisted, activation)
 
     def get_canonical_item(
         self,

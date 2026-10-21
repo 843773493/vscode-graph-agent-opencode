@@ -12,6 +12,7 @@ import pytest
 
 from app.abstractions.session_context import (
     SessionContextAssemblySourceProtocol,
+    SessionContextHistoryProjection,
     SessionContextRevisionChangedError,
 )
 from app.domain.itemized.hashing import (
@@ -328,9 +329,8 @@ async def test_assembly_history_projection_uses_session_thread_pair():
     plan = object()
     snapshot.as_sealed_plan.return_value = plan
     assembly_source.list_context_assemblies.return_value = (snapshot,)
-    assembly_source.project_context_plan_to_history_with_diagnostics.return_value = (
-        [],
-        (),
+    assembly_source.project_context_plan_to_history_with_diagnostics.return_value = SessionContextHistoryProjection(
+        assembly=snapshot, messages=[], losses=(), resource_activation=None,
     )
     service = SessionContextQueryService(
         message_source=_FakeMessageSource(),
@@ -415,7 +415,9 @@ def _assembly_selection_query():
     )
     assembly_source = create_autospec(SessionContextAssemblySourceProtocol, spec_set=True)
     assembly_source.list_context_assemblies.return_value = (snapshot,)
-    assembly_source.project_context_plan_to_history_with_diagnostics.return_value = ([], ())
+    assembly_source.project_context_plan_to_history_with_diagnostics.return_value = SessionContextHistoryProjection(
+        assembly=snapshot, messages=[], losses=(), resource_activation=None,
+    )
     service = SessionContextQueryService(
         message_source=_FakeMessageSource(), session_lookup=_FakeSessionLookup(),
         assembly_source=assembly_source, workspace_id=BACKEND_WORKSPACE_ID,

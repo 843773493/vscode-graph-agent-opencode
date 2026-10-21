@@ -271,7 +271,8 @@ def _largest_fitting_chunk(
     raw_message_count: int,
     effective_record_count: int,
 ) -> tuple[SessionContextItemDTO | None, int | None]:
-    serialized = item.model_dump_json(exclude_none=True, exclude_defaults=True)
+    # 分片必须与完整DTO同形，保留nullable来源URI与空集合，消费者无需补字段。
+    serialized = item.model_dump_json()
     if char_offset >= len(serialized):
         raise ValueError(
             f"context cursor 字符偏移越界: offset={char_offset}, "

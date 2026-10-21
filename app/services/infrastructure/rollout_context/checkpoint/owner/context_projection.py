@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from dataclasses import dataclass
 
-from langchain_core.messages import BaseMessage
-
+from app.abstractions.session_context import SessionContextHistoryProjection
 from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
 from app.domain.itemized.hashing import (
     contribution_content_hash,
@@ -19,6 +19,7 @@ from app.domain.itemized.request_plan import (
     ContextRequestPlan,
     resolve_contribution_for_ref,
 )
+from app.domain.itemized.resource_activation import ResourceActivationSnapshotRef
 from app.services.infrastructure.rollout_context.runtime.detail_store import (
     DetailRecord,
     DetailUnavailableError,
@@ -32,6 +33,14 @@ from app.services.infrastructure.rollout_context.storage.primitives import (
     RolloutNotMaterializedError,
     RolloutReadSnapshot,
 )
+
+
+@dataclass(frozen=True, slots=True)
+class CommittedContextSnapshot:
+    """同一读取事务校验的 assembly 与 activation，禁止再读当前 Registry。"""
+
+    assembly: ContextAssemblySnapshot
+    resource_activation: ResourceActivationSnapshotRef | None
 
 
 class ContextProjectionOwnerMixin:
@@ -112,7 +121,7 @@ class ContextProjectionOwnerMixin:
             checkpoint_ns=self.context_owner_namespace(checkpoint_ns),
         )
         return self._project_native_context(
-            session_id, thread_id, snapshot, items, request_content,
+            session_id, thread_id, snapshot.assembly, items, request_content,
         )
 
     def _read_committed_context_projection(
@@ -124,7 +133,7 @@ class ContextProjectionOwnerMixin:
         checkpoint_ns: str,
         request_only_content: Mapping[str, object] | None = None,
         include_request_only: bool = True,
-    ) -> tuple[ContextAssemblySnapshot, dict[tuple[str, str, str], CanonicalItemRecord], dict[str, object]]:
+    ) -> tuple[CommittedContextSnapshot, dict[tuple[str, str, str], CanonicalItemRecord], dict[str, object]]:
         """一次 fresh authority 读取冻结投影材料，关闭连接后才运行各 projector。"""
         if plan.plan_state != "sealed" or plan.assembly_id is None:
             self._require_context_plan_owner(session_id, thread_id, plan)
@@ -142,7 +151,7 @@ class ContextProjectionOwnerMixin:
                 checkpoint_ns=checkpoint_ns,
                 snapshot=read_snapshot,
             )
-            committed = committed_snapshot.as_sealed_plan()
+            committed = committed_snapshot.assembly.as_sealed_plan()
             refs = [
                 entry.ref
                 for entry in committed.selection
@@ -189,18 +198,22 @@ class ContextProjectionOwnerMixin:
         plan: ContextRequestPlan,
         *,
         checkpoint_ns: str = "",
-    ) -> tuple[list[BaseMessage], tuple[str, ...]]:
-        """history 保留 selection loss，同时避免读取 request-only 正文。"""
-        checkpoint_ns = self.context_owner_namespace(checkpoint_ns)
-        messages, _, losses, _ = self._project_committed_context_plan(
-            session_id,
-            thread_id,
-            plan,
-            checkpoint_ns=checkpoint_ns,
+    ) -> SessionContextHistoryProjection:
+        """从一次权威读取返回 history、loss 与封存资源，不读取 request-only 正文。"""
+        committed, items, content = self._read_committed_context_projection(
+            session_id, thread_id, plan,
+            checkpoint_ns=self.context_owner_namespace(checkpoint_ns),
             include_request_only=False,
-            collect_capability_losses=True,
         )
-        return messages, losses
+        messages, _, losses, _ = self._project_context_projection(
+            session_id, thread_id, committed.assembly, items, content,
+            include_runtime_notices=False, include_summaries=False, target_format=None,
+            include_request_only=False, collect_capability_losses=True,
+        )
+        return SessionContextHistoryProjection(
+            assembly=committed.assembly, messages=messages, losses=losses,
+            resource_activation=committed.resource_activation,
+        )
 
     def _request_content_for_plan(
         self,

@@ -79,14 +79,15 @@ async function chooseView(name) {
   await page.getByRole("menuitemradio", { name: new RegExp(`^${name}`) }).click();
 }
 
-async function openFrozen(sessionId) {
+async function openFrozen(sessionId, expectedError = null) {
   await chooseView("上下文状态");
   await page.getByRole("button", { name: "冻结请求", exact: true }).click();
   const inspector = page.getByRole("region", { name: "冻结请求上下文" });
   await inspector.waitFor({ state: "visible" });
   await waitUntil(async () => await inspector.getAttribute("data-owner-session-id") === sessionId, "检查面 session owner");
   await waitUntil(async () => !(await inspector.getByText("正在读取封存请求…", { exact: true }).count()), "请求列表");
-  assert.equal(await inspector.getByRole("alert").count(), 0);
+  assert.equal(await inspector.getByRole("alert").count(), expectedError ? 1 : 0);
+  if (expectedError) assert.ok((await inspector.getByRole("alert").innerText()).includes(expectedError));
   return inspector;
 }
 
@@ -121,13 +122,23 @@ async function inspectAssembly(inspector, expected, label) {
     ordinal: Number(element.dataset.planOrdinal), ref: element.dataset.refId, included: element.dataset.included === "true",
   })));
   assert.deepEqual(rows, expected.selection.map((entry) => ({ ordinal: entry.plan_ordinal, ref: entry.ref.ref_id, included: entry.included })));
+  const resources = await projection.locator('[aria-label="封存资源来源"] > li').evaluateAll((elements) => elements.map((element) => ({
+    ref: element.dataset.provenanceRef, text: element.textContent,
+  })));
+  assert.deepEqual(resources.map((row) => row.ref), expected.resource_refs.map((resource) => resource.provenance_ref.token));
+  for (const [index, resource] of expected.resource_refs.entries()) {
+    assert.ok(resources[index].text.includes(resource.display_uri ?? "内部语义资源"));
+    for (const field of ["resource_kind", "owner_scope", "facet", "availability", "revision"]) {
+      assert.ok(resources[index].text.includes(resource[field]));
+    }
+  }
   const history = await projection.locator(".context-history-message").evaluateAll((elements) => elements.map((element) => ({
     id: element.dataset.messageId, text: element.querySelector("p")?.textContent ?? "",
   })));
   assert.deepEqual(history, expected.history);
   assert.deepEqual(await projection.locator(".context-capability-loss p").allTextContents(), expected.losses);
   const visibleText = await inspector.innerText();
-  for (const secret of ["BROWSER_PRIVATE_REQUEST_BODY", "c2VjcmV0", "HTTP overlay base", "HTTP overlay delta"]) {
+  for (const secret of ["BROWSER_PRIVATE_REQUEST_BODY", "c2VjcmV0", "HTTP overlay base", "HTTP overlay delta", "INSPECTION_PRIVATE_REVISION", "INSPECTION_PRIVATE_RESOURCE_BODY", "INSPECTION_PRIVATE_LINEAGE"]) {
     assert.ok(!visibleText.includes(secret), `检查面泄漏 ${secret}`);
   }
   assert.equal(await inspector.evaluate((element) => getComputedStyle(element).overflowY), "auto");
@@ -180,8 +191,8 @@ try {
   assert.deepEqual(restored.history, rich.history);
 
   await selectSession(fixture.other_session_id);
-  await openFrozen(fixture.other_session_id);
-  await page.getByText("当前会话没有已封存请求。", { exact: true }).waitFor({ state: "visible" });
+  // 尚未写入的会话明确报告未物化，不能伪装成已经读取过的空列表。
+  await openFrozen(fixture.other_session_id, "rollout 尚未物化");
   assert.equal(await page.locator(".context-selection-entry").count(), 0);
   assert.equal(await page.locator(".context-projection").count(), 0);
   await page.screenshot({ path: path.join(artifacts, "session-isolation.png") });
@@ -192,7 +203,8 @@ try {
   for (const entry of contextRequests) {
     assert.equal(new URL(entry.url).origin, new URL(baseUrl).origin);
     assert.equal(entry.workspace_id, fixture.workspace_id);
-    assert.equal(entry.status, 200);
+    const unmaterialized = entry.request.resource_identity === fixture.other_session_resource.resource_identity;
+    assert.equal(entry.status, unmaterialized ? 404 : 200);
     assert.ok(entry.request_id);
     assert.equal(entry.request_id, entry.response.request_id);
     const resource = [fixture.session_resource, fixture.other_session_resource].find(
@@ -201,6 +213,13 @@ try {
     assert.ok(resource, "请求必须使用 Session API 返回的资源身份");
     assert.equal(entry.request.uri, resource.uri);
     assert.equal(entry.request.scope, resource.scope);
+    if (unmaterialized) {
+      assert.equal(entry.request.view, "assemblies");
+      assert.ok(entry.response.detail.includes("rollout 尚未物化"));
+      assert.ok(entry.response.detail.includes(fixture.other_session_id));
+      assert.ok(!entry.response.detail.includes(".boxteam/"));
+      continue;
+    }
     for (const key of ["resource_identity", "uri", "scope"]) {
       assert.equal(entry.response.data[key], resource[key]);
     }

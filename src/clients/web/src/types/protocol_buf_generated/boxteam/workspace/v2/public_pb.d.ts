@@ -3765,6 +3765,77 @@ export declare type SessionCompletedExecutionEventDTO = Message<"boxteam.workspa
 export declare const SessionCompletedExecutionEventDTOSchema: GenMessage<SessionCompletedExecutionEventDTO>;
 
 /**
+ * 仅标识封存来源，不是当前资源定位器或访问凭据。
+ *
+ * @generated from message boxteam.workspace.v2.SessionContextProvenanceRefDTO
+ */
+export declare type SessionContextProvenanceRefDTO = Message<"boxteam.workspace.v2.SessionContextProvenanceRefDTO"> & {
+  /**
+   * @generated from field: string kind = 1;
+   */
+  kind: string;
+
+  /**
+   * @generated from field: string token = 2;
+   */
+  token: string;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.SessionContextProvenanceRefDTO.
+ * Use `create(SessionContextProvenanceRefDTOSchema)` to create a new message.
+ */
+export declare const SessionContextProvenanceRefDTOSchema: GenMessage<SessionContextProvenanceRefDTO>;
+
+/**
+ * @generated from message boxteam.workspace.v2.SessionContextResourceDTO
+ */
+export declare type SessionContextResourceDTO = Message<"boxteam.workspace.v2.SessionContextResourceDTO"> & {
+  /**
+   * @generated from field: optional string display_uri = 1;
+   */
+  displayUri?: string | undefined;
+
+  /**
+   * @generated from field: string resource_kind = 2;
+   */
+  resourceKind: string;
+
+  /**
+   * @generated from field: string owner_scope = 3;
+   */
+  ownerScope: string;
+
+  /**
+   * @generated from field: string facet = 4;
+   */
+  facet: string;
+
+  /**
+   * 固定语义哈希；不回显来源任意格式的 revision。
+   *
+   * @generated from field: string revision = 5;
+   */
+  revision: string;
+
+  /**
+   * @generated from field: string availability = 6;
+   */
+  availability: string;
+
+  /**
+   * @generated from field: boxteam.workspace.v2.SessionContextProvenanceRefDTO provenance_ref = 7;
+   */
+  provenanceRef?: SessionContextProvenanceRefDTO | undefined;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.SessionContextResourceDTO.
+ * Use `create(SessionContextResourceDTOSchema)` to create a new message.
+ */
+export declare const SessionContextResourceDTOSchema: GenMessage<SessionContextResourceDTO>;
+
+/**
  * @generated from message boxteam.workspace.v2.SessionContextItemDTO
  */
 export declare type SessionContextItemDTO = Message<"boxteam.workspace.v2.SessionContextItemDTO"> & {
@@ -3842,6 +3913,11 @@ export declare type SessionContextItemDTO = Message<"boxteam.workspace.v2.Sessio
    * @generated from field: optional string assembly_ref = 16;
    */
   assemblyRef?: string | undefined;
+
+  /**
+   * @generated from field: repeated boxteam.workspace.v2.SessionContextResourceDTO resource_refs = 17;
+   */
+  resourceRefs: SessionContextResourceDTO[];
 };
 
 /**

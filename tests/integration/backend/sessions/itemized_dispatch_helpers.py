@@ -36,6 +36,9 @@ from app.domain.itemized.epoch.tool_set import ToolSetSnapshot
 from app.domain.itemized.hashing import sha256_jcs
 from app.domain.itemized.mutation_intents import MutationIntentOwner
 from app.domain.itemized.resource_activation import ResourceActivationPolicySnapshot
+from app.services.infrastructure.resource_platform.derivation.types import (
+    ResourceSnapshot,
+)
 from app.services.infrastructure.resource_platform.registry.semantic_registry import (
     ResourceRegistry,
 )
@@ -68,6 +71,7 @@ EMPTY_TOOL_SET = ToolSetSnapshot(selection_revision=sha256_jcs({}), tools=())
 def dispatch_execution_scope(
     saver: RolloutCheckpointSaver, session_id: str, turn_id: str,
     *, activation_policy: ResourceActivationPolicySnapshot | None = None,
+    registry: ResourceRegistry | None = None,
 ) -> Iterator[str]:
     """真实测试 fixture 与 native dispatch 共用当前执行授权，不伪造 owner。"""
     thread = saver._storage.storage.main_thread_id(session_id)
@@ -87,7 +91,7 @@ def dispatch_execution_scope(
             execution_admission_scope(admission, langgraph_thread_id=thread),
         ):
             coordinator = ResourceActivationCoordinator(
-                registry=ResourceRegistry(), saver=saver,
+                registry=registry if registry is not None else ResourceRegistry(), saver=saver,
                 body_store=ResourceActivationBodyStore(saver._storage, saver._detail_store),
             )
             # 同步 scope 在独立线程运行真实 async freeze，并保留当前执行授权。
@@ -111,6 +115,7 @@ def dispatch_execution_scope(
 def seed_dispatch_history(
     saver: RolloutCheckpointSaver, session_id: str,
     *, activation_policy: ResourceActivationPolicySnapshot | None = None,
+    registry: ResourceRegistry | None = None,
 ) -> str:
     """正式 Saver ingress 创建 canonical history，不手工构造 sealed plan。"""
     thread = saver._storage.storage.main_thread_id(session_id)
@@ -137,7 +142,7 @@ def seed_dispatch_history(
         ]
     }
     checkpoint["channel_versions"] = {"messages": "1"}
-    with dispatch_execution_scope(saver, session_id, "http-turn", activation_policy=activation_policy):
+    with dispatch_execution_scope(saver, session_id, "http-turn", activation_policy=activation_policy, registry=registry):
         saver.put(
             build_checkpoint_config(thread),
             checkpoint,
@@ -175,6 +180,24 @@ def seed_dispatch_overlay(saver: RolloutCheckpointSaver, session_id: str) -> Non
         base_content=base,
         delta_content=delta,
     )
+
+
+@pytest.fixture
+def inspection_resource_registry() -> ResourceRegistry:
+    """检查面通过真实 Registry→coordinator→Saver 冻结，包含nullable URI资源。"""
+    registry = ResourceRegistry()
+    for resource_id, kind, uri in (
+        ("skill:inspection", "skills", "boxteam://workspace/test/resources/skills/inspection/SKILL.md"),
+        ("catalog:inspection", "mcp_tool_catalog", None),
+    ):
+        registry.publish(ResourceSnapshot(
+            resource_id=resource_id, resource_kind=kind, facet="activation",
+            display_uri=uri, revision="private-revision:/abs/INSPECTION_PRIVATE_REVISION",
+            payload={"instruction": "INSPECTION_PRIVATE_RESOURCE_BODY"},
+            source_lineage=(("source:inspection", "INSPECTION_PRIVATE_LINEAGE"),),
+            generation=7,
+        ))
+    return registry
 
 
 @pytest.fixture(scope="module")

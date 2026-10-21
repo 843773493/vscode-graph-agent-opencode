@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from contextlib import AbstractAsyncContextManager
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Protocol, TypedDict
 
 from app.schemas.internal_v2.session_fork_transfer import (
@@ -13,6 +14,7 @@ if TYPE_CHECKING:
 
     from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
     from app.domain.itemized.request_plan import ContextRequestPlan
+    from app.domain.itemized.resource_activation import ResourceActivationSnapshotRef
 
 from app.schemas.gateway.workspaces import GatewayWorkspaceListDTO
 from app.schemas.internal_v2.session import (
@@ -65,6 +67,16 @@ class SessionContextMessageSourceProtocol(Protocol):
     ) -> AgentContextState: ...
 
 
+@dataclass(frozen=True, slots=True)
+class SessionContextHistoryProjection:
+    """同一权威读快照取得的 assembly、历史及资源来源。"""
+
+    assembly: ContextAssemblySnapshot
+    messages: list[BaseMessage]
+    losses: tuple[str, ...]
+    resource_activation: ResourceActivationSnapshotRef | None
+
+
 class SessionContextAssemblySourceProtocol(Protocol):
     """上下文检查面只消费 Saver 冻结的 assembly 和 history diagnostics。"""
 
@@ -91,7 +103,7 @@ class SessionContextAssemblySourceProtocol(Protocol):
         plan: ContextRequestPlan,
         *,
         checkpoint_ns: str = "",
-    ) -> tuple[list[BaseMessage], tuple[str, ...]]: ...
+    ) -> SessionContextHistoryProjection: ...
 
 
 class SessionLookupProtocol(Protocol):

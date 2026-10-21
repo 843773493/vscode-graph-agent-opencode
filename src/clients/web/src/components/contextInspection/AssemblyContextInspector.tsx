@@ -20,6 +20,17 @@ function ProjectionItem({ item }: { item: ContextItem }) {
   }
   if (item.kind === "assembly") return <li className="context-assembly-header">
     <strong>冻结 assembly：{textField(item.data, "assembly_id")}</strong>
+    {item.resource_refs.length ? <ul aria-label="封存资源来源">
+      {item.resource_refs.map((resource) => {
+        const provenance = resource.provenance_ref;
+        if (!provenance) throw new Error("封存资源缺少类型化 provenance ref");
+        return <li key={provenance.token} data-provenance-ref={provenance.token}>
+          <div>{resource.display_uri ?? "内部语义资源"}</div>
+          <div>{resource.resource_kind} · {resource.owner_scope} · {resource.facet} · {resource.availability}</div>
+          <div>版本标识：{resource.revision}</div>
+        </li>;
+      })}
+    </ul> : null}
     <details><summary>快照元数据</summary><pre>{JSON.stringify(item.data, null, 2)}</pre></details>
   </li>;
   if (item.kind === "message") return <li className="context-history-message" data-message-id={textField(item.data, "message_id")}>

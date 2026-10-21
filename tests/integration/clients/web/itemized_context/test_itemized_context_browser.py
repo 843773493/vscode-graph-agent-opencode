@@ -30,10 +30,14 @@ from app.services.business.session_context_resource import context_assembly_iden
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
+from app.services.mapping.itemized.resource_activation import (
+    project_sealed_resource_refs,
+)
 from tests.harness.python.run_context import TestRunContext
 from tests.integration.backend.sessions.itemized_dispatch_helpers import (
     EMPTY_TOOL_SET,
     dispatch_execution_scope,
+    inspection_resource_registry,
     invoke_provider_dispatch,
     native_http_server,
     seed_dispatch_history,
@@ -50,7 +54,7 @@ from tests.support.gateway_processes import (
 from tests.support.ports import integration_port_block_for_file
 from tests.support.processes import close_backend_process, start_backend_process
 
-__all__ = ["native_http_server"]
+__all__ = ["inspection_resource_registry", "native_http_server"]
 
 
 def _require_free_port(port: int) -> None:
@@ -127,9 +131,10 @@ def browser_runtime(
 
 def _projection_evidence(saver, session_id, snapshot):
     plan = snapshot.as_sealed_plan()
-    history, history_loss = saver.project_context_plan_to_history_with_diagnostics(
+    projection = saver.project_context_plan_to_history_with_diagnostics(
         session_id, saver._storage.storage.main_thread_id(session_id), plan
     )
+    history, history_loss = projection.messages, projection.losses
     _, langchain_loss = saver.project_context_plan_with_diagnostics(
         session_id, saver._storage.storage.main_thread_id(session_id), plan
     )
@@ -141,6 +146,7 @@ def _projection_evidence(saver, session_id, snapshot):
     assert tuple(native["losses"]) == langchain_loss == history_loss
     return {
         "assembly_id": snapshot.assembly_id,
+        "resource_refs": [resource.model_dump(mode="json") for resource in project_sealed_resource_refs(projection.resource_activation)] if projection.resource_activation is not None else [],
         "selection": selection,
         "history": [
             {"id": message.id, "text": str(message.text)} for message in history
@@ -151,7 +157,7 @@ def _projection_evidence(saver, session_id, snapshot):
 
 
 @pytest.fixture
-async def browser_source(browser_runtime, native_http_server):
+async def browser_source(browser_runtime, native_http_server, inspection_resource_registry):
     context, base_url = browser_runtime
     state, endpoint = native_http_server
     async with httpx.AsyncClient(
@@ -179,12 +185,23 @@ async def browser_source(browser_runtime, native_http_server):
         other_session = other.json()["data"]
         other_id = other_session["session_id"]
     with RolloutCheckpointSaver(context.workspace_root / ".boxteam/sessions") as saver:
-        turn_id = seed_dispatch_history(saver, session_id)
+        turn_id = seed_dispatch_history(saver, session_id, registry=inspection_resource_registry)
         seed_dispatch_overlay(saver, session_id)
         await invoke_provider_dispatch(saver, session_id, turn_id, endpoint, state.api_key, target_format="responses")
         with dispatch_execution_scope(saver, session_id, turn_id):
             (first,) = saver.list_context_assemblies(
                 session_id, saver._storage.storage.main_thread_id(session_id)
+            )
+            # 本装具直接调用模型图，没有产品event adapter；按真实已封存call登记控制事实。
+            assert first.model_call_id is not None
+            saver.register_model_call(
+                session_id, thread_id=first.thread_id, execution_id=first.execution_id,
+                model_call_id=first.model_call_id, attempt=1, provider="openai",
+                assembly_id=first.assembly_id, dispatch_state="dispatched",
+            )
+            saver.update_model_call_outcome(
+                session_id, thread_id=first.thread_id,
+                model_call_id=first.model_call_id, outcome="completed", dispatch_state="completed",
             )
             first_evidence = _projection_evidence(saver, session_id, first)
             assert (

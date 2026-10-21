@@ -4,6 +4,7 @@ import path from "node:path";
 import Ajv from "ajv";
 import {
   SessionContextReadRequest,
+  SessionContextItemDTO,
   SessionContextReadResultDTO,
 } from "../../../src/clients/web/src/types/protocol_generated/boxteam/workspace/v2/public";
 
@@ -49,3 +50,16 @@ for (const model of ["SessionContextReadRequest", "SessionContextReadResultDTO"]
     });
   });
 }
+
+
+test("Proto JSON绑定保留typed封存来源与nullable URI", () => {
+  const refs = [null, "boxteam://workspace/test/resources/skills/demo/SKILL.md"].map((uri, index) => ({
+    ...(uri === null ? {} : { display_uri: uri }),
+    resource_kind: "skills", owner_scope: "session", facet: "activation",
+    revision: `sha256:jcs:v1:${"a".repeat(64)}`, availability: "available",
+    provenance_ref: { kind: "sealed_resource", token: `sha256:jcs:v1:${String(index).repeat(64)}` },
+  }));
+  const wire = { kind: "assembly", resource_refs: refs };
+  const rebuilt = SessionContextItemDTO.toJSON(SessionContextItemDTO.fromJSON(wire));
+  expect(rebuilt).toMatchObject(wire);
+});

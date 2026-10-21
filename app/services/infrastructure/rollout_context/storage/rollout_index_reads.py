@@ -46,10 +46,13 @@ class RolloutIndexMixin:
             and not lock_path.exists() and not lock_path.is_symlink()
         ):
             raise RolloutNotMaterializedError(
-                f"rollout 尚未物化: session_id={session_id}, thread_id={thread_id}, root={root}"
+                f"rollout 尚未物化: session_id={session_id}, thread_id={thread_id}"
             )
         if not lock_path.is_file() or lock_path.is_symlink():
-            raise RuntimeError(f"recovery_required: rollout 缺少既有普通写锁文件: {lock_path}")
+            raise RuntimeError(
+                "recovery_required: rollout 缺少既有普通写锁文件: "
+                f"session_id={session_id}, thread_id={thread_id}"
+            )
         return _RolloutFileLock(lock_path, exclusive=False)
 
     def open_read_snapshot(
@@ -74,7 +77,8 @@ class RolloutIndexMixin:
                 or not index_path.is_file() or index_path.is_symlink()
             ):
                 raise RuntimeError(
-                    f"recovery_required: rollout 权威文件缺失或路径非法；禁止读取时重建: {root}"
+                    "recovery_required: rollout 权威文件缺失或路径非法；禁止读取时重建: "
+                    f"session_id={session_id}, thread_id={thread_id}"
                 )
             connection = self._host._connect(
                 thread_id,
@@ -125,7 +129,7 @@ class RolloutIndexMixin:
             if integrity != "ok":
                 raise RuntimeError(
                     "recovery_required: rollout SQLite integrity_check 失败: "
-                    f"{index_path}: {integrity}"
+                    f"session_id={session_id}, thread_id={thread_id}: {integrity}"
                 )
             manifest = self._manifest_from_connection(connection, checkpoint_ns)
         except sqlite3.DatabaseError as error:
@@ -135,7 +139,7 @@ class RolloutIndexMixin:
             raise RuntimeError(
                 "recovery_required: rollout SQLite 无法读取；"
                 "必须从已验证的 SQLite backup 执行显式恢复，禁止从 JSONL 重建: "
-                f"{index_path}"
+                f"session_id={session_id}, thread_id={thread_id}"
             ) from error
         except Exception:
             if connection is not None:
@@ -277,13 +281,8 @@ class RolloutIndexMixin:
             ) as connection:
                 yield connection
         except sqlite3.DatabaseError as error:
-            index_path = self._host.index_path(
-                thread_id if session_id is None else session_id,
-                checkpoint_ns,
-                thread_id=thread_id if session_id is not None else None,
-            )
             raise RuntimeError(
                 "recovery_required: rollout SQLite 无法读取；"
                 "必须从已验证的 SQLite backup 执行显式恢复，禁止从 JSONL 重建: "
-                f"{index_path}"
+                f"session_id={session_id}, thread_id={thread_id}"
             ) from error

@@ -78,6 +78,29 @@ class SessionContextSearchRequest(BaseModel):
     revision: str | None = None
 
 
+class SessionContextProvenanceRefDTO(BaseModel):
+    """封存来源的 opaque 身份，不能解析当前资源或授权访问。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["sealed_resource"] = "sealed_resource"
+    token: str = Field(pattern=r"^sha256:jcs:v1:[0-9a-f]{64}$")
+
+
+class SessionContextResourceDTO(BaseModel):
+    """普通检查面允许的资源来源字段闭集。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    display_uri: str | None
+    resource_kind: str
+    owner_scope: str
+    facet: str
+    revision: str = Field(pattern=r"^sha256:jcs:v1:[0-9a-f]{64}$")
+    availability: str
+    provenance_ref: SessionContextProvenanceRefDTO
+
+
 class SessionContextItemDTO(BaseModel):
     kind: str
     resource_identity: SessionResourceIdentity | None = None
@@ -94,6 +117,7 @@ class SessionContextItemDTO(BaseModel):
     data: dict[str, object] | None = None
     raw_record: dict[str, object] | None = None
     truncated: bool = False
+    resource_refs: list[SessionContextResourceDTO] = Field(default_factory=list)
 
 
 class SessionContextPartialErrorDTO(BaseModel):

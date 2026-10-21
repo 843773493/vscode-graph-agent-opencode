@@ -50,6 +50,7 @@ function assemblyItem(pending: Pending, assemblyId: string, assemblyRef: string)
     tool_summary: [],
     tool_calls: [],
     tool_results: [],
+    resource_refs: [],
   };
 }
 
@@ -132,5 +133,21 @@ test("隐藏中断请求后再打开会重新读取，不残留 loading 或吞�
   });
   expect(state.projectionError).toContain("source-mismatch");
   expect(state.projection.items).toEqual([]);
+  expect(state.projectionLoading).toBe(false);
+});
+
+test("同一资源的 Session 对象刷新不取消正在读取的冻结请求", async () => {
+  const pending = controlledReader();
+  let state!: ReturnType<typeof useContextInspection>;
+  function Probe(props: InspectionOwner) { state = useContextInspection(props); return null; }
+  await act(async () => { root = create(<Probe {...owner} />); });
+  await act(async () => finish(pending[0], [assemblyItem(pending[0], "assembly-a", "api-ref-a")]));
+  await act(async () => { void state.loadProjection(state.catalog.items[0]!, true); });
+  expect(pending).toHaveLength(2);
+  await act(async () => { root!.update(<Probe {...owner} session={{ ...owner.session! }} />); });
+  expect(pending[1].signal.aborted).toBe(false);
+  expect(pending).toHaveLength(2);
+  await act(async () => finish(pending[1]));
+  expect(state.assemblyRef).toBe("api-ref-a");
   expect(state.projectionLoading).toBe(false);
 });

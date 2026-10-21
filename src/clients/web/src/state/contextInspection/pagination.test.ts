@@ -5,7 +5,7 @@ import { appendInspectionPage, emptyInspectionPage, type ContextItem } from "./p
 const resource = { session_id: "ses_test", resource_identity: "test-session-identity",
   uri: "boxteam://workspace/00000000-0000-0000-0000-000000000001/resources/session/ses_test", scope: "workspace" };
 function item(text: string): ContextItem {
-  return { kind: "message", resource_identity: resource.resource_identity, uri: resource.uri, scope: resource.scope, text, tool_summary: [], tool_calls: [], tool_results: [] };
+  return { kind: "message", resource_identity: resource.resource_identity, uri: resource.uri, scope: resource.scope, text, tool_summary: [], tool_calls: [], tool_results: [], resource_refs: [] };
 }
 function page(items: ContextItem[], changes: Partial<SessionContextReadResultDTO> = {}): SessionContextReadResultDTO {
   return { resource_identity: resource.resource_identity, uri: resource.uri, scope: resource.scope, view: "assembly", revision: "sealed", items, partial_errors: [], has_more: false, ...changes };

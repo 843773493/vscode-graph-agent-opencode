@@ -20,6 +20,9 @@ from app.services.business.session_context_resource import (
     ParsedSessionContextResource,
     context_assembly_identity,
 )
+from app.services.mapping.itemized.resource_activation import (
+    project_sealed_resource_refs,
+)
 
 
 def _project_selection(entry: ContextSelectionEntry) -> dict[str, object]:
@@ -134,11 +137,17 @@ class SessionContextAssemblyQueryService:
         ).hexdigest()
         # assembly 不可变；检查面 revision 只绑定结构身份和 projection 参数。
         revision = f"assembly:{snapshot.assembly_id}:{include_hash}"
-        messages, losses = await asyncio.to_thread(
+        projection = await asyncio.to_thread(
             self._assembly_source.project_context_plan_to_history_with_diagnostics,
             session.session_id,
             thread_id,
             plan,
+        )
+        snapshot = projection.assembly
+        messages, losses = projection.messages, projection.losses
+        resources = (
+            project_sealed_resource_refs(projection.resource_activation)
+            if projection.resource_activation is not None else ()
         )
         records = [message.model_dump(mode="json") for message in messages]
         items = [
@@ -148,6 +157,7 @@ class SessionContextAssemblyQueryService:
                 uri=resource.uri,
                 scope=resource.scope,
                 assembly_ref=request.assembly_ref,
+                resource_refs=list(resources),
                 data={
                     "session_id": snapshot.session_id,
                     "assembly_id": snapshot.assembly_id,

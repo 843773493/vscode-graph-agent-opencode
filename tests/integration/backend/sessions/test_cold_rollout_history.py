@@ -179,12 +179,20 @@ async def test_idle_child_public_history_does_not_materialize_rollout(
     session_id, _main = await _session(runtime_case.runner)
     child = await _child(runtime_case, session_id)
     storage = runtime_case.runner.saver._storage.storage
+    runtime_case.runner.saver.accept_turn(
+        session_id, thread_id=_main, accepted_ingress_id="main-ingress",
+        acceptance_idempotency_key="main-acceptance", job_id="main-job",
+        admission_idempotency_key="main-admission", payload="主线程已有的权威历史",
+        turn_id="main-turn", root_item_id="main-root",
+    )
     main_root = storage.root(session_id, thread_id=_main)
     main_lock = main_root.parent / ".rollout.write.lock"
-    # Session 创建 owner 已初始化 main；只读入口必须保留这份权威数据。
+    # 由真实 acceptance 初始化 main；child 只读入口必须保留这份权威数据。
     assert main_root.is_dir() and main_lock.is_file()
     main_authority = (main_root / "index.sqlite", main_root / "rollout.jsonl", main_lock)
     main_before = {path: hashlib.sha256(path.read_bytes()).hexdigest() for path in main_authority}
+    main_projections = storage.read_item_projections(session_id)
+    assert main_projections
     root = storage.root(session_id, thread_id=child)
     lock = root.parent / ".rollout.write.lock"
     assert not root.exists() and not lock.exists()
@@ -213,7 +221,7 @@ async def test_idle_child_public_history_does_not_materialize_rollout(
     assert saver._storage.checkpoints.read_context_source_rebuild_rows(session_id, child, checkpoint_ns="") is None
     with pytest.raises(RolloutNotMaterializedError):
         saver._storage.checkpoints.pending_writes(session_id, child, "", "checkpoint-missing")
-    assert storage.read_item_projections(session_id) == []
+    assert storage.read_item_projections(session_id) == main_projections
     with pytest.raises(KeyError, match="item projection 缺少请求的 canonical item: item-missing"):
         storage.read_item_projections(session_id, item_ids=("item-missing",))
     assert {path: hashlib.sha256(path.read_bytes()).hexdigest() for path in main_authority} == main_before
@@ -257,6 +265,8 @@ async def test_idle_child_history_rejects_dangling_rollout_path_without_writes(
 
     assert response.status_code == 500, response.text
     assert "recovery_required" in response.json()["detail"]["message"]
+    assert str(root) not in response.text
+    assert str(root.parent) not in response.text
     assert root.is_symlink() and str(root.readlink()) == "missing-rollout"
     assert not root.exists() and not (root.parent / ".rollout.write.lock").exists()
     assert runtime_case.compiled == []
@@ -296,6 +306,8 @@ async def test_child_history_missing_authority_preserves_remaining_bytes(
 
     assert response.status_code == 500, response.text
     assert "recovery_required" in response.json()["detail"]["message"]
+    assert str(root) not in response.text
+    assert str(root.parent) not in response.text
     with pytest.raises(RuntimeError, match="recovery_required"):
         saver._storage.checkpoints.read_context_source_control_states(session_id, thread_id=child)
     with pytest.raises(RuntimeError, match="recovery_required"):

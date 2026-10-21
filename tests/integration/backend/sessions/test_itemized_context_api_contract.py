@@ -27,9 +27,16 @@ from app.services.infrastructure.rollout_context.runtime.detail_manifest import 
     DetailUnavailableError,
     detail_relative_path,
 )
+from app.services.infrastructure.rollout_context.storage.primitives import (
+    RolloutNotMaterializedError,
+)
+from app.services.mapping.itemized.resource_activation import (
+    project_sealed_resource_refs,
+)
 from tests.integration.backend.sessions.itemized_dispatch_helpers import (
     EMPTY_TOOL_SET,
     dispatch_execution_scope,
+    inspection_resource_registry,
     invoke_provider_dispatch,
     native_http_server,
     seed_dispatch_history,
@@ -41,7 +48,7 @@ from tests.integration.backend.sessions.itemized_projection_helpers import (
 from tests.support.process_scope import unregister_test_process
 from tests.support.processes import close_backend_process, start_backend_process
 
-__all__ = ["native_http_server"]
+__all__ = ["inspection_resource_registry", "native_http_server"]
 
 
 @pytest.fixture(scope="module")
@@ -71,7 +78,7 @@ def integration_backend_process(context_backend):
 
 
 @pytest.fixture
-async def context_source(integration_client, integration_workspace_root_path):
+async def context_source(integration_client, integration_workspace_root_path, inspection_resource_registry):
     response = await integration_client.post(
         "/api/v1/sessions", json={"title": "assembly inspection contract"}
     )
@@ -80,7 +87,7 @@ async def context_source(integration_client, integration_workspace_root_path):
     session_id = session["session_id"]
     sessions = Path(integration_workspace_root_path) / ".boxteam/sessions"
     with RolloutCheckpointSaver(sessions) as saver:
-        turn_id = seed_dispatch_history(saver, session_id)
+        turn_id = seed_dispatch_history(saver, session_id, registry=inspection_resource_registry)
         seed_dispatch_overlay(saver, session_id)
         with dispatch_execution_scope(saver, session_id, turn_id):
             yield saver, session, turn_id
@@ -155,9 +162,22 @@ def _assert_snapshot(items, snapshot, saver, session_id):
     selection = [item["data"] for item in items if item["kind"] == "selection"]
     assert selection == [entry.to_dict() for entry in snapshot.selection]
     assert [entry["plan_ordinal"] for entry in selection] == list(range(len(selection)))
-    history, loss = saver.project_context_plan_to_history_with_diagnostics(
+    projection = saver.project_context_plan_to_history_with_diagnostics(
         session_id, saver._storage.storage.main_thread_id(session_id), snapshot.as_sealed_plan()
     )
+    history, loss = projection.messages, projection.losses
+    expected_resources = (
+        [resource.model_dump(mode="json") for resource in project_sealed_resource_refs(projection.resource_activation)]
+        if projection.resource_activation is not None else []
+    )
+    assert items[0]["resource_refs"] == expected_resources
+    assert all(not item["resource_refs"] for item in items[1:])
+    for resource in expected_resources:
+        assert set(resource) == {"display_uri", "resource_kind", "owner_scope", "facet", "revision", "availability", "provenance_ref"}
+        assert set(resource["provenance_ref"]) == {"kind", "token"}
+        assert resource["provenance_ref"]["kind"] == "sealed_resource"
+    for private in ("INSPECTION_PRIVATE_REVISION", "INSPECTION_PRIVATE_RESOURCE_BODY", "INSPECTION_PRIVATE_LINEAGE"):
+        assert private not in json.dumps(items)
     messages = [item for item in items if item["kind"] == "message"]
     assert [item["data"]["message_id"] for item in messages] == [
         message.id for message in history
@@ -186,6 +206,8 @@ async def test_frozen_selection_http_and_active_history_survive_backend_restart(
     integration_client,
     native_http_server,
     context_backend,
+    inspection_resource_registry,
+    monkeypatch,
 ):
     saver, session, turn_id = context_source
     session_id = session["session_id"]
@@ -195,9 +217,56 @@ async def test_frozen_selection_http_and_active_history_survive_backend_restart(
         session_id, saver._storage.storage.main_thread_id(session_id)
     )
     resource = _resource(session, snapshot)
+    # 真实读取只开一个权威快照，assembly/activation/items均消费同一对象。
+    reads = []
+    activation_reads = []
+    item_reads = []
+    storage = saver._storage.storage
+    open_snapshot = storage.open_read_snapshot
+    load_activation = saver.load_sealed_resource_activation
+    read_ref_items = storage.read_ref_items
+    def observe_open(*args, **kwargs):
+        value = open_snapshot(*args, **kwargs)
+        reads.append(value)
+        return value
+    def observe_activation(*args, **kwargs):
+        activation_reads.append(kwargs["snapshot"])
+        return load_activation(*args, **kwargs)
+    def observe_items(*args, **kwargs):
+        item_reads.append(kwargs["snapshot"])
+        return read_ref_items(*args, **kwargs)
+    with monkeypatch.context() as patch:
+        patch.setattr(storage, "open_read_snapshot", observe_open)
+        patch.setattr(saver, "load_sealed_resource_activation", observe_activation)
+        patch.setattr(storage, "read_ref_items", observe_items)
+        projected = saver.project_context_plan_to_history_with_diagnostics(
+            session_id, saver._storage.storage.main_thread_id(session_id), snapshot.as_sealed_plan()
+        )
+    assert len(reads) == len(activation_reads) == len(item_reads) == 1
+    assert activation_reads[0] is item_reads[0]
+    assert projected.assembly == snapshot
+    assert len(projected.resource_activation.bindings) == 2
+    canonical_before = saver.read_canonical_items(session_id)
+    # 当前发布内容前进，旧assembly仍使用冻结值；重启后也不能读当前来源回填。
+    for current in inspection_resource_registry.snapshots():
+        inspection_resource_registry.publish(replace(
+            current, revision="CURRENT_RESOURCE_REVISION", payload={"instruction": "CURRENT_RESOURCE_BODY"}, generation=8,
+        ))
     items, pages = await _read_pages(integration_client, resource, state.artifacts)
     messages = _assert_snapshot(items, snapshot, saver, session_id)
     assert len(pages) > 1
+    assert saver.read_canonical_items(session_id) == canonical_before
+    assert {ref["display_uri"] for ref in items[0]["resource_refs"]} == {
+        "boxteam://workspace/test/resources/skills/inspection/SKILL.md", None,
+    }
+    assert len({ref["provenance_ref"]["token"] for ref in items[0]["resource_refs"]}) == 2
+    assert "CURRENT_RESOURCE" not in json.dumps(items)
+    chunked, chunk_pages = await _read_pages(
+        integration_client, resource, state.artifacts, max_chars=2400, limit=1,
+    )
+    assert any(item["kind"] == "assembly_chunk" for page in chunk_pages for item in page["items"])
+    assert chunked == items
+    assert any(ref["display_uri"] is None for ref in chunked[0]["resource_refs"])
     assert "native-http-result" not in json.dumps(messages)
     native = saver.project_context_plan_to_native(
         session_id, saver._storage.storage.main_thread_id(session_id), snapshot.as_sealed_plan()
@@ -461,10 +530,22 @@ async def test_context_http_rejects_invalid_selectors_and_cross_owner_cursors(
     assert saver.list_context_assemblies(
         session_id, saver._storage.storage.main_thread_id(session_id)
     ) == tuple(snapshots)
-    assert (
-        saver.list_context_assemblies(other_id, saver._storage.storage.main_thread_id(other_id))
-        == ()
+    other_thread = saver._storage.storage.main_thread_id(other_id)
+    other_rollout = saver._storage.storage.root(other_id, thread_id=other_thread)
+    assert not other_rollout.exists()
+    with pytest.raises(RolloutNotMaterializedError):
+        saver.list_context_assemblies(other_id, other_thread)
+    response = await integration_client.post(
+        "/api/v1/context/read",
+        json={**_resource(other.json()["data"]), "view": "assemblies"},
     )
+    assert response.status_code == 404, response.text
+    assert "rollout 尚未物化" in response.json()["detail"]
+    assert other_id in response.json()["detail"]
+    assert other_thread in response.json()["detail"]
+    assert str(other_rollout) not in response.text
+    assert str(saver._storage.storage.sessions_dir) not in response.text
+    assert not other_rollout.exists()
 
 
 @pytest.mark.asyncio

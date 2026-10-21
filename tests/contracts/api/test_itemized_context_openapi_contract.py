@@ -84,3 +84,14 @@ def test_builtin_gateway_context_skill_matches_real_tool_input_contract(
 ) -> None:
     # 模型读到的发行包参数合同必须与真实工具保持一致，防止旧字段诱发错误调用。
     assert _schema_constraints(gateway_context_skill_schemas[tool_name]) == _schema_constraints(input_type.model_json_schema())
+
+
+def test_sealed_resource_projection_schema_is_closed(openapi_document) -> None:
+    schemas = openapi_document["components"]["schemas"]
+    resource = schemas["SessionContextResourceDTO"]
+    assert resource["additionalProperties"] is False
+    assert set(resource["properties"]) == {"display_uri", "resource_kind", "owner_scope", "facet", "revision", "availability", "provenance_ref"}
+    assert set(resource["required"]) == set(resource["properties"])
+    assert {"type": "null"} in resource["properties"]["display_uri"]["anyOf"]
+    assert schemas["SessionContextItemDTO"]["properties"]["resource_refs"]["items"] == {"$ref": "#/components/schemas/SessionContextResourceDTO"}
+    assert schemas["SessionContextProvenanceRefDTO"]["additionalProperties"] is False

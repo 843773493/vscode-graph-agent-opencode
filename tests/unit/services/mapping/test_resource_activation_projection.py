@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 
 import pytest
 
@@ -15,11 +16,7 @@ from app.domain.itemized.resource_activation import (
     SourceLineageRef,
 )
 from app.services.mapping.itemized.resource_activation import (
-    SAFE_RESOURCE_PROJECTION_FIELDS,
-    ResourceActivationProjectionError,
-    assert_resource_bindings_not_counted_as_items,
     project_sealed_resource_refs,
-    resource_projection_order_key,
 )
 
 POLICY = ResourceActivationPolicySnapshot.from_dict({"default_boundary": "turn", "overrides": {}})
@@ -81,113 +78,51 @@ def _execution_snapshot(*, extra_ordinals: bool = False) -> ResourceActivationSn
     )
 
 
-def test_projection_exposes_only_safe_fields() -> None:
+@pytest.mark.parametrize("display_uri", [None, "boxteam://workspace/test/resources/skills/demo/SKILL.md"])
+def test_projection_exposes_only_safe_fields(display_uri) -> None:
     snapshot = _execution_snapshot(extra_ordinals=True)
+    private_revision = "/abs/private/config?credential=secret"
+    snapshot = replace(snapshot, bindings=tuple(
+        replace(binding, display_uri=display_uri, revision=private_revision)
+        for binding in snapshot.bindings
+    ))
     projections = project_sealed_resource_refs(snapshot)
-
     assert len(projections) == 2
     for projection in projections:
-        payload = projection.to_dict()
-        assert set(payload) == SAFE_RESOURCE_PROJECTION_FIELDS
-        assert payload["execution_id"] == snapshot.execution_id
-        assert payload["turn_id"] == snapshot.turn_id
-        assert payload["parent_execution_snapshot_id"] is None
-        assert payload["display_uri"].startswith("boxteam://")
-        # opaque provenance ref 不外泄 raw resource_id，且是合法 hash token。
-        assert "skill:" not in payload["provenance_ref"]
-        assert payload["provenance_ref"].startswith("sha256:jcs:v1:")
-    # opaque ref 必须由 owner/snapshot/binding 关系确定性导出，而不是自由常量。
-    binding = snapshot.bindings[0]
-    assert projections[0].provenance_ref == sha256_jcs(
-        {
-            "schema": "resource-provenance-ref:v1",
-            "owner_session_id": SESSION_ID,
-            "owner_thread_id": "main",
-            "activation_snapshot_id": snapshot.activation_snapshot_id,
-            "resource_id": binding.resource_id,
-            "revision": binding.revision,
-        }
-    )
-    # 不同 binding 必须得到不同 opaque ref，不能退化成同一个常量。
+        payload = projection.model_dump(mode="json")
+        assert set(payload) == {"display_uri", "resource_kind", "owner_scope", "facet", "revision", "availability", "provenance_ref"}
+        assert payload["display_uri"] == display_uri
+        assert payload["owner_scope"] == "session"
+        assert payload["revision"] == sha256_jcs({
+            "schema": "resource-display-revision:v1", "revision": private_revision,
+        })
+        assert set(payload["provenance_ref"]) == {"kind", "token"}
+        assert payload["provenance_ref"]["kind"] == "sealed_resource"
+        for private in (private_revision, "snapshot_ref", "detail_ref", "source_lineage", "resource_id", "content_hash", "members", "activation_snapshot_id"):
+            assert private not in json.dumps(payload)
+    # 同URI仍是两条不同身份，不按display_uri合并。
     assert projections[0].provenance_ref != projections[1].provenance_ref
-    # 同一 binding 跨 snapshot 重建保持同一 ref。
+    binding = snapshot.bindings[0]
+    assert projections[0].provenance_ref.token == sha256_jcs({
+        "schema": "resource-provenance-ref:v1",
+        "owner_session_id": SESSION_ID,
+        "owner_thread_id": "main",
+        "activation_snapshot_id": snapshot.activation_snapshot_id,
+        "resource_id": binding.resource_id,
+        "revision": binding.revision,
+    })
     rebuilt = ResourceActivationSnapshotRef.from_dict(snapshot.to_dict())
-    assert project_sealed_resource_refs(rebuilt)[0].provenance_ref == (
-        projections[0].provenance_ref
-    )
+    assert project_sealed_resource_refs(rebuilt) == projections
 
 
-def test_projection_never_leaks_locator_credential_or_body() -> None:
-    snapshot = _execution_snapshot()
-    encoded = json.dumps(
-        [projection.to_dict() for projection in project_sealed_resource_refs(snapshot)]
-    )
-    for forbidden in (
-        "provider_locator",
-        "credential",
-        "api_key",
-        "access_token",
-        ".boxteam",
-        "/abs/",
-        "file://",
-        "detail_id",
-        "payload",
-    ):
-        assert forbidden not in encoded
-
-
-def test_identity_and_order_are_stable_across_projection_calls() -> None:
-    """live/刷新/重启/跨端读取必须得到同一 identity/order。"""
-
+def test_projection_preserves_sealed_order_and_revision_identity() -> None:
     snapshot = _execution_snapshot(extra_ordinals=True)
-    first = project_sealed_resource_refs(snapshot)
-    # 模拟重启后从 SQLite/受保护 body 重建出的同一 snapshot。
-    rebuilt = ResourceActivationSnapshotRef.from_dict(snapshot.to_dict())
-    second = project_sealed_resource_refs(rebuilt)
-
-    assert [item.to_dict() for item in first] == [item.to_dict() for item in second]
-    assert resource_projection_order_key(first) == resource_projection_order_key(second)
-    assert [item.activation_ordinal for item in first] == [0, 1]
-
-
-def test_projection_order_key_is_monotonic_in_ordinal() -> None:
-    projections = project_sealed_resource_refs(_execution_snapshot(extra_ordinals=True))
-    keys = resource_projection_order_key(projections)
-    assert [key[0] for key in keys] == sorted(key[0] for key in keys)
-
-
-def test_request_only_binding_not_counted_as_turn_item() -> None:
-    projections = project_sealed_resource_refs(_execution_snapshot())
-    # 零 Item Turn 仍可携带 resource binding。
-    assert_resource_bindings_not_counted_as_items(
-        projections, {"item_count": 0}
-    )
-    assert_resource_bindings_not_counted_as_items(
-        projections,
-        {"item_count": 2, "first_item_sequence": 1, "last_item_sequence": 2},
-    )
-
-
-@pytest.mark.parametrize(
-    "forbidden_key",
-    ["resource_count", "resource_item_count", "binding_count", "resource_elapsed_ms"],
-)
-def test_resource_count_keys_are_rejected(forbidden_key: str) -> None:
-    projections = project_sealed_resource_refs(_execution_snapshot())
-    with pytest.raises(ResourceActivationProjectionError) as error:
-        assert_resource_bindings_not_counted_as_items(
-            projections, {"item_count": 0, forbidden_key: 1}
-        )
-    assert error.value.code == "resource-activation-projection-invalid"
-
-
-def test_zero_item_turn_must_not_gain_sequence_range() -> None:
-    with pytest.raises(ResourceActivationProjectionError):
-        assert_resource_bindings_not_counted_as_items(
-            (), {"item_count": 0, "first_item_sequence": 1, "last_item_sequence": 1}
-        )
-
-
-def test_projection_rejects_non_domain_input() -> None:
-    with pytest.raises(TypeError, match="ResourceActivationSnapshotRef"):
-        project_sealed_resource_refs({"bindings": []})  # type: ignore[arg-type]
+    projected = project_sealed_resource_refs(snapshot)
+    assert [row.display_uri for row in projected] == [row.display_uri for row in snapshot.bindings]
+    changed = replace(snapshot, bindings=(
+        replace(snapshot.bindings[0], revision="different-revision"), snapshot.bindings[1],
+    ))
+    next_rows = project_sealed_resource_refs(changed)
+    assert next_rows[0].revision != projected[0].revision
+    assert next_rows[0].provenance_ref != projected[0].provenance_ref
+    assert next_rows[1] == projected[1]
