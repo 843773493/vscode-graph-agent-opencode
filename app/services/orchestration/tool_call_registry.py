@@ -12,6 +12,7 @@ from app.abstractions.turn_terminal_status import (
     ToolResultCompletion,
     tool_result_content_text,
 )
+from app.agents.tool_result_text import tool_output_status
 from app.core.identifier import create_prefixed_id
 from app.domain.itemized.identity.item_projection import ItemProjectionIdentity
 from app.domain.itemized.identity.tool_call_identity import provider_tool_call_id
@@ -454,7 +455,7 @@ class StreamToolRegistryMixin:
             return
         execution_id, tool_name = await self._require_tool_attempt(tool_call_id)
         result = tool_result_content_text(message.content)
-        status = "succeeded" if message.status == "success" else "failed"
+        status = "succeeded" if tool_output_status(message) == "success" else "failed"
         await self.complete_tool(
             tool_execution_id=execution_id, tool_call_id=tool_call_id, tool_name=tool_name,
             status=status, result=result, error=result if status == "failed" else None,

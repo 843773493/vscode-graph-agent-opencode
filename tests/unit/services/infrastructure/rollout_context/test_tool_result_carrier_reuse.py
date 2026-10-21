@@ -436,16 +436,22 @@ def test_tool_result_owner_retries_only_exact_original_attempt(
 
 
 @pytest.mark.parametrize("result_order", ["request_first", "live_first"])
+@pytest.mark.parametrize("result_content,tool_outcome", [
+    (RESULT_CONTENT, "success"),
+    ('{"status":"error","effect":"not_executed","code":"capability_denied"}', "failure"),
+    ('{"ok":false,"error":{"code":"DEBUG_TOOL_FAILED"}}', "failure"),
+])
 def test_tool_result_owner_keeps_request_projection_and_original_attempt(
     storage: RolloutContextStore, carrier_saver: RolloutCheckpointSaver, tool_result_owner,
-    result_order: str,
+    result_order: str, result_content: str, tool_outcome: str,
 ) -> None:
     """两个合法到达顺序都保 P/A，后继真实请求复用不引入第三个结果。"""
     thread_id, completion = tool_result_owner
+    completion = replace(completion, content=result_content, tool_outcome=tool_outcome)
     messages = [
         AIMessage(content="", id="request-call", response_metadata={"model_call_id": MODEL_CALL_ID},
                   tool_calls=[{"id": PROVIDER_TOOL_CALL_ID, "name": "task", "args": {}}]),
-        ToolMessage(content=RESULT_CONTENT, id="request-owner-result", name="task", tool_call_id=PROVIDER_TOOL_CALL_ID),
+        ToolMessage(content=result_content, id="request-owner-result", name="task", tool_call_id=PROVIDER_TOOL_CALL_ID),
     ]
 
     def prepare_request() -> None:
@@ -461,6 +467,7 @@ def test_tool_result_owner_keeps_request_projection_and_original_attempt(
     prepare_request()
     results = [item for item in storage.storage.read_items(SESSION_ID, thread_id) if item.semantic_kind == "tool_result"]
     assert {item.item_id for item in results} == {completion.item_id, "item-request-owner-result"}
+    assert {item.payload["tool_outcome"] for item in results} == {tool_outcome}
     carrier, = [item for item in results if item.item_id != completion.item_id]
     assert carrier.projection_identity == ItemProjectionIdentity(projection_message_id=messages[-1].id, model_call_id=MODEL_CALL_ID)
     assert "tool_attempt_id" not in carrier.payload

@@ -8,6 +8,7 @@ from langgraph.prebuilt.tool_node import ToolCallRequest
 from langgraph.types import Command
 
 from app.agents.tool_identity import EXTENSION_TOOL_INVOKER_NAME
+from app.agents.tool_result_text import tool_output_status
 from app.services.infrastructure.tool_output_store import ToolOutputStore
 
 
@@ -39,7 +40,7 @@ class ToolOutputMiddleware(AgentMiddleware):
         result = await handler(request)
         if isinstance(result, Command) or not isinstance(result, ToolMessage):
             return result
-        if result.status == "error":
+        if tool_output_status(result) == "error":
             return result
         tool_name, tool_call_id = _tool_identity(request)
         return await self._store.abound(
@@ -56,7 +57,7 @@ class ToolOutputMiddleware(AgentMiddleware):
     ) -> ToolMessage | Command[object]:
         if isinstance(result, Command) or not isinstance(result, ToolMessage):
             return result
-        if result.status == "error":
+        if tool_output_status(result) == "error":
             return result
         tool_name, tool_call_id = _tool_identity(request)
         return self._store.bound(

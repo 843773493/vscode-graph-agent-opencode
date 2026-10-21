@@ -3,6 +3,8 @@ from __future__ import annotations
 import hashlib
 import json
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import Mock
 
 import pytest
 from langchain_core.messages import ToolMessage
@@ -211,6 +213,25 @@ def test_tool_output_middleware_uses_custom_target_name(
     reference = extract_tool_output_reference(result)
     assert reference is not None
     assert reference["tool_name"] == "large_custom_tool"
+
+
+@pytest.mark.parametrize("mode", ["sync", "async"])
+@pytest.mark.parametrize("declaration", [{"status": "error"}, {"ok": False}])
+async def test_declared_failure_bypasses_output_preview(mode, declaration):
+    # 失败正文必须与实时工具结果相同，不能只在模型链路替换成成功预览。
+    store = Mock(spec=ToolOutputStore)
+    middleware = ToolOutputMiddleware(session_id="ses_failure", store=store)
+    request = SimpleNamespace(tool_call={"id": "call_failure", "name": "apply_patch", "args": {}})
+    source = ToolMessage(content=json.dumps({**declaration, "error": "失败详情" * 2000}), tool_call_id="call_failure")
+    if mode == "sync":
+        result = middleware.wrap_tool_call(request, lambda _: source)
+    else:
+        async def completed(_request):
+            return source
+        result = await middleware.awrap_tool_call(request, completed)
+    assert result is source
+    store.bound.assert_not_called()
+    store.abound.assert_not_called()
 
 
 def test_tool_output_uri_reopens_after_owner_restart_and_rejects_other_session(tmp_path, session_bundle_factory):

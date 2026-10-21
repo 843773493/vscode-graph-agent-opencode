@@ -20,6 +20,7 @@ from langchain_core.messages import (
     messages_from_dict,
 )
 
+from app.agents.tool_result_text import tool_output_status
 from app.domain.itemized.enums import (
     CanonicalItemStatus,
     PayloadKind,
@@ -429,11 +430,9 @@ class LangChainMessageCodec:
             tool_call_id = data_mapping.get("tool_call_id")
             if not isinstance(tool_call_id, str) or not tool_call_id:
                 raise ValueError("ToolMessage 缺少真实 tool_call_id")
-            tool_status = data_mapping.get("status")
-            tool_outcome = response_metadata.get("tool_outcome", {
-                "success": "success",
-                "error": "failure",
-            }.get(tool_status, "unknown"))
+            tool_outcome = response_metadata.get(
+                "tool_outcome", "success" if tool_output_status(message) == "success" else "failure",
+            )
             confirmed = response_metadata.get("execution_confirmed", tool_outcome != "unknown")
             item_status = response_metadata.get("canonical_item_status", CanonicalItemStatus.COMPLETED)
             payload = {

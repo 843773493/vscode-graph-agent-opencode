@@ -18,6 +18,7 @@ from app.agents.graph_tool_adapter import extract_agent_tools_by_name
 from app.agents.model_capability_routing import MODEL_FAILED_CUSTOM_EVENT
 from app.agents.model_tool_schema import filter_tool_event_injected_arguments
 from app.agents.tool_identity import EXTENSION_TOOL_INVOKER_NAME
+from app.agents.tool_result_text import tool_output_status
 from app.core.job_context import set_active_tool_name, set_interruptible_phase
 from app.core.job_event_bus import EventType
 from app.core.model_delta_context import AgentRunLifecycleCallbackHandler
@@ -73,8 +74,6 @@ from app.services.orchestration.event_stream.tool_events import (
     text_mutation_has_file_effects,
     text_mutation_snapshots_from_result,
     tool_message_from_output,
-    tool_output_status,
-    tool_output_succeeded,
 )
 from app.services.orchestration.message_stream_runtime import MessageStreamRuntime
 
@@ -660,7 +659,7 @@ async def process_agent_event_stream(
                 stored_edits: list[StoredFileEdit] = []
                 if run_id:
                     snapshots = None
-                    has_file_effects = tool_output_succeeded(raw_output) or (
+                    has_file_effects = effective_tool_status == "success" or (
                         display_context.tool_name in FILE_EDIT_TOOL_NAMES and text_mutation_has_file_effects(raw_result_text)
                     )
                     if (
