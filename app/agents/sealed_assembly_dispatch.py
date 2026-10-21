@@ -26,6 +26,7 @@ from app.domain.itemized.errors import ItemSchemaError
 from app.domain.itemized.hash.request_hash import context_request_hash
 from app.domain.itemized.hashing import canonical_json_bytes
 from app.domain.itemized.serialization import normalize_wire_request
+from app.schemas.internal_v2.session_context import SessionContextResourceDTO
 
 ProviderInvocationPurpose = Literal["agent", "tool_test"]
 
@@ -36,6 +37,7 @@ class SealedAssemblyDispatch:
 
     reference: SealedContextDispatchRef
     snapshot: ContextAssemblySnapshot
+    resource_refs: tuple[SessionContextResourceDTO, ...]
     native_projection: dict[str, object] | None = None
 
     @property
@@ -53,6 +55,7 @@ def sealed_assembly_dispatch_scope(
     reference: SealedContextDispatchRef,
     snapshot: ContextAssemblySnapshot,
     *,
+    resource_refs: tuple[SessionContextResourceDTO, ...],
     native_projection: Mapping[str, object] | None = None,
 ) -> Iterator[None]:
     """仅在本次 handler 内绑定 Saver snapshot；两协议都必须有真实封存。"""
@@ -60,6 +63,10 @@ def sealed_assembly_dispatch_scope(
         raise TypeError("sealed-assembly binding violation: 缺少 Saver dispatch reference")
     if not isinstance(snapshot, ContextAssemblySnapshot):
         raise TypeError("source-mismatch: dispatch 需要已提交 ContextAssemblySnapshot")
+    if not isinstance(resource_refs, tuple) or any(
+        not isinstance(ref, SessionContextResourceDTO) for ref in resource_refs
+    ):
+        raise TypeError("source-mismatch: dispatch 需要 Saver 安全资源摘要")
     if not isinstance(snapshot.request_hash_preimage, Mapping):
         raise TypeError("source-mismatch: sealed assembly 缺少完整 wire preimage")
     try:
@@ -87,8 +94,12 @@ def sealed_assembly_dispatch_scope(
             raise TypeError("source-mismatch: native request 缺少 sealed input/tools")
     elif snapshot.target_format != "chat_completions" or native_projection is not None:
         raise ValueError("source-mismatch: sealed dispatch protocol/native projection 不一致")
+    if native_projection is not None and native_projection.get("resource_refs") != [
+        ref.model_dump(mode="json") for ref in resource_refs
+    ]:
+        raise ValueError("source-mismatch: native projection 安全资源摘要不一致")
     binding = SealedAssemblyDispatch(
-        reference=reference, snapshot=snapshot,
+        reference=reference, snapshot=snapshot, resource_refs=resource_refs,
         native_projection=dict(native_projection) if native_projection is not None else None,
     )
     token = _SEALED_ASSEMBLY_DISPATCH.set(copy.deepcopy(binding))

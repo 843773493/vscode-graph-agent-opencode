@@ -39,6 +39,7 @@ from app.domain.itemized.hashing import sha256_jcs
 from app.domain.itemized.identity.item_projection import ItemProjectionIdentity
 from app.domain.itemized.identity.tool_call_identity import matches_tool_call_id
 from app.domain.itemized.resource_activation import ResourceActivationSnapshotRef
+from app.schemas.internal_v2.session_context import SessionContextResourceDTO
 from app.services.infrastructure.rollout_context.assembly.plans.types import (
     ContextPlanRegistration,
 )
@@ -221,6 +222,7 @@ class _PreparedModelCall(TypedDict):
     messages: list[BaseMessage]
     tools: list[dict[str, object]]
     losses: tuple[str, ...]
+    resource_refs: tuple[SessionContextResourceDTO, ...]
     native_projection: NotRequired[Mapping[str, object]]
 
 
@@ -623,6 +625,7 @@ class ModelCallExecution:
         # execution 的返回路径提前清理。
         with sealed_assembly_dispatch_scope(
             prepared["dispatch_ref"], prepared["snapshot"],
+            resource_refs=prepared["resource_refs"],
             native_projection=prepared.get("native_projection"),
         ):
             response = self._invoke(prepared, messages, tools)
@@ -659,6 +662,7 @@ class ModelCallExecution:
         # 得删除 Saver-owned prepared handle。
         with sealed_assembly_dispatch_scope(
             prepared["dispatch_ref"], prepared["snapshot"],
+            resource_refs=prepared["resource_refs"],
             native_projection=prepared.get("native_projection"),
         ):
             response = await self._ainvoke(prepared, messages, tools)

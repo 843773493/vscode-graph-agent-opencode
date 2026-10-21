@@ -168,7 +168,7 @@ class SealedTransportOwner:
                 self.owner.session_id, self.owner.thread_id, prepared["plan"],
             ) if responses else None
             with sealed_assembly_dispatch_scope(
-                prepared["dispatch_ref"], snapshot, native_projection=native,
+                prepared["dispatch_ref"], snapshot, resource_refs=prepared["resource_refs"], native_projection=native,
             ):
                 yield prepared["messages"]
 

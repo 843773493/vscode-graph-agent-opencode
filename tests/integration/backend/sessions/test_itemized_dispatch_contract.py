@@ -1622,14 +1622,14 @@ async def test_typed_dispatch_reference_blocks_each_binding_mismatch_before_http
         with (
             dispatch_execution_scope(case.saver, case.session, case.turn),
             pytest.raises(ValueError, match="sealed-assembly binding violation"),
-            sealed_assembly_dispatch_scope(replace(reference, **{field: value}), snapshot, native_projection=native),
+            sealed_assembly_dispatch_scope(replace(reference, **{field: value}), snapshot, resource_refs=(), native_projection=native),
         ):
             await case.model.ainvoke([])
         assert len(case.state.requests) == 1, field
     with (
         pytest.raises(TypeError, match="dispatch reference"),
         # 有意向类型边界注入缺失引用，证明真实发送前拒绝。
-        sealed_assembly_dispatch_scope(None, snapshot, native_projection=native),  # pyright: ignore[reportArgumentType]
+        sealed_assembly_dispatch_scope(None, snapshot, resource_refs=(), native_projection=native),  # pyright: ignore[reportArgumentType]
     ):
         await case.model.ainvoke([])
     assert len(case.state.requests) == 1
@@ -1657,7 +1657,7 @@ async def test_cold_dispatch_reference_reads_exact_payload_without_preparation(
         assert restarted._prepared_dispatches == {}
         with (
             dispatch_execution_scope(restarted, case.session, case.turn),
-            sealed_assembly_dispatch_scope(reference, payload["snapshot"], native_projection=payload.get("native_projection")),
+            sealed_assembly_dispatch_scope(reference, payload["snapshot"], resource_refs=payload["resource_refs"], native_projection=payload.get("native_projection")),
         ):
             await case.model.bind_tools(payload["tools"]).ainvoke(payload["messages"])
         assert restarted.get_context_assembly(case.session, case.thread, assembly_id=snapshot.assembly_id) == snapshot

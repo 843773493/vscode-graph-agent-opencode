@@ -201,6 +201,8 @@ def _assert_snapshot(items, snapshot, saver, session_id):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("target_format", ["responses", "chat_completions"])
+@pytest.mark.parametrize("mode", ["sync", "async"])
 async def test_frozen_selection_http_and_active_history_survive_backend_restart(
     context_source,
     integration_client,
@@ -208,11 +210,28 @@ async def test_frozen_selection_http_and_active_history_survive_backend_restart(
     context_backend,
     inspection_resource_registry,
     monkeypatch,
+    target_format,
+    mode,
 ):
     saver, session, turn_id = context_source
     session_id = session["session_id"]
     state, endpoint = native_http_server
-    await invoke_provider_dispatch(saver, session_id, turn_id, endpoint, state.api_key, target_format="responses")
+    prepared = []
+    prepare = saver.prepare_context_for_provider
+    def observe_prepare(*args, **kwargs):
+        result = prepare(*args, **kwargs)
+        prepared.append(result)
+        return result
+    with monkeypatch.context() as patch:
+        patch.setattr(saver, "prepare_context_for_provider", observe_prepare)
+        await invoke_provider_dispatch(
+            saver, session_id, turn_id, endpoint, state.api_key,
+            target_format=target_format, mode=mode,
+        )
+    session_node = get_session_path_resolver(saver._storage.storage.sessions_dir).resolve_session_node(session_id)
+    logs = [json.loads(path.read_text(encoding="utf-8")) for path in (session_node / "logs/llm_requests").glob("*.json")]
+    assert len(logs) == 1
+    attempts = logs[0]["upstream"]["attempts"]
     (snapshot,) = saver.list_context_assemblies(
         session_id, saver._storage.storage.main_thread_id(session_id)
     )
@@ -246,6 +265,37 @@ async def test_frozen_selection_http_and_active_history_survive_backend_restart(
     assert activation_reads[0] is item_reads[0]
     assert projected.assembly == snapshot
     assert len(projected.resource_activation.bindings) == 2
+    expected_resources = project_sealed_resource_refs(projected.resource_activation)
+    assert len(prepared) == 1 and prepared[0]["resource_refs"] == expected_resources
+    expected_wire_refs = [ref.model_dump(mode="json") for ref in expected_resources]
+    assert attempts and all(attempt["resource_refs"] == expected_wire_refs for attempt in attempts)
+    assert all(attempt["sealed_dispatch"]["assembly_id"] == snapshot.assembly_id for attempt in attempts)
+    assert all(attempt["error"] is None for attempt in attempts)
+    assert "INSPECTION_PRIVATE" not in json.dumps(attempts)
+    if target_format == "responses":
+        assert prepared[0]["native_projection"]["resource_refs"] == expected_wire_refs
+    for surface in ("messages", "history", "native", "provider"):
+        reads.clear()
+        activation_reads.clear()
+        item_reads.clear()
+        with monkeypatch.context() as patch:
+            patch.setattr(storage, "open_read_snapshot", observe_open)
+            patch.setattr(saver, "load_sealed_resource_activation", observe_activation)
+            patch.setattr(storage, "read_ref_items", observe_items)
+            method = getattr(saver, f"project_context_plan_to_{surface}_with_evidence")
+            result = method(
+                session_id, snapshot.thread_id, snapshot.as_sealed_plan(),
+                **({"target_format": "chat_completions"} if surface == "provider" else {}),
+            )
+        assert len(reads) == 1, surface
+        assert activation_reads == item_reads == reads
+        assert result[-1].resource_refs == expected_resources
+        if surface == "native":
+            assert result[0]["resource_refs"] == expected_wire_refs
+            if target_format == "responses":
+                assert result[0]["request"] == prepared[0]["native_projection"]["request"]
+    for request in state.requests:
+        assert "resource_refs" not in json.dumps(request["body"])
     canonical_before = saver.read_canonical_items(session_id)
     # 当前发布内容前进，旧assembly仍使用冻结值；重启后也不能读当前来源回填。
     for current in inspection_resource_registry.snapshots():
@@ -271,10 +321,14 @@ async def test_frozen_selection_http_and_active_history_survive_backend_restart(
     native = saver.project_context_plan_to_native(
         session_id, saver._storage.storage.main_thread_id(session_id), snapshot.as_sealed_plan()
     )
-    assert state.requests[0]["body"]["input"] == native["request"]["input"]
+    body = state.requests[0]["body"]
+    for field in ("input", "tools") if target_format == "responses" else ("messages",):
+        assert body[field] == snapshot.request_hash_preimage[field]
+    if target_format == "responses":
+        assert body["input"] == native["request"]["input"]
     assert native["selection"] == [entry.to_dict() for entry in snapshot.selection]
     assert state.requests[0]["authorization"] == f"Bearer {state.api_key}"
-    assert state.requests[0]["path"] == "/v1/responses"
+    assert state.requests[0]["path"] == ("/v1/responses" if target_format == "responses" else "/v1/chat/completions")
 
     # 普通消息/聊天 history 继续覆盖 active view，包括 seal 之后新生成的输出。
     for path, payload in (
@@ -325,7 +379,10 @@ async def test_frozen_selection_http_and_active_history_survive_backend_restart(
     assert restored_pages[0]["revision"] == pages[0]["revision"]
 
     # 新 request 使 history revision 前进，旧 assembly 的分页游标仍绑定旧快照。
-    await invoke_provider_dispatch(saver, session_id, turn_id, endpoint, state.api_key, target_format="responses")
+    await invoke_provider_dispatch(
+        saver, session_id, turn_id, endpoint, state.api_key,
+        target_format=target_format, mode=mode,
+    )
     second = next(
         value
         for value in saver.list_context_assemblies(

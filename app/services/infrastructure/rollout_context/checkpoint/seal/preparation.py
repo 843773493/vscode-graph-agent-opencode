@@ -453,19 +453,21 @@ def prepare_registered_context(
             if summary_candidate is None:
                 context_source_manager.acknowledge_sealed_pending(csm_batch, snapshot.seal_binding)
         plan = snapshot.as_sealed_plan()
-        messages, tools, losses, native = projection
         preimage = normalize_wire_request(finalize_provider_wire(
-            messages=messages, tools=tools, native_request=None if native is None else native["request"],
+            messages=projection.messages, tools=projection.tools,
+            native_request=None if projection.native is None else projection.native["request"],
             profile=wire_profile, params=wire_params,
         ))
         if canonical_json_bytes(snapshot.request_hash_preimage) != canonical_json_bytes(preimage):
             raise ValueError("source-mismatch: 最终 Provider request 与封存 request hash preimage 不一致")
         pending = {
             "assembly_id": snapshot.assembly_id, "execution_id": snapshot.execution_id,
-            "snapshot": snapshot, "plan": plan, "messages": messages, "tools": tools, "losses": losses,
+            "snapshot": snapshot, "plan": plan, "messages": projection.messages,
+            "tools": projection.tools, "losses": projection.losses,
+            "resource_refs": projection.resource_refs,
         }
-        if native is not None:
-            pending["native_projection"] = native
+        if projection.native is not None:
+            pending["native_projection"] = projection.native
         return pending
 
 

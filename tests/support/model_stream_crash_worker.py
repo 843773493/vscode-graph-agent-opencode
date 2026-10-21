@@ -241,7 +241,7 @@ async def _run_with_catalog_owner(args: argparse.Namespace) -> None:
                     execution_admission_scope(admission, langgraph_thread_id=thread_id),
                     sealed_assembly_dispatch_scope(
                         prepared["dispatch_ref"], snapshot,
-                        native_projection=native_projection,
+                        resource_refs=prepared["resource_refs"], native_projection=native_projection,
                     ),
                 ):
                     async for _chunk in model.astream(

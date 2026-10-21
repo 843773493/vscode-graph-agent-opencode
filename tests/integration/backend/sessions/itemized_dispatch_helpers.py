@@ -13,12 +13,14 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from threading import Event, Lock, Thread
 from types import SimpleNamespace
+from typing import Literal
 from uuid import uuid4
 
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage
 from langgraph.checkpoint.base import empty_checkpoint
 
+from app.agents.llm_logging_middleware import LLMLoggingMiddleware
 from app.agents.model_call_execution import ModelCallExecution
 from app.agents.model_call_graph import create_model_call_agent
 from app.agents.policy import ToolPolicyResolver
@@ -483,6 +485,7 @@ async def invoke_provider_dispatch(
     api_key: str,
     *,
     target_format: str,
+    mode: Literal["sync", "async"] = "async",
 ) -> dict[str, object]:
     """父进程和重启子进程调用同一真实 LangChain/Provider 入口。"""
     model_type = {
@@ -539,6 +542,9 @@ async def invoke_provider_dispatch(
                 resource_activation=coordinator,
             ),
         checkpointer=saver,
+        middleware=[LLMLoggingMiddleware(sessions_dir=saver._storage.storage.sessions_dir)],
     )
     with dispatch_execution_scope(saver, session_id, turn_id):
+        if mode == "sync":
+            return await asyncio.to_thread(agent.invoke, {"messages": []}, build_checkpoint_config(thread))
         return await agent.ainvoke({"messages": []}, build_checkpoint_config(thread))

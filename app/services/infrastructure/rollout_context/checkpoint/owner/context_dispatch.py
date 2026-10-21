@@ -21,6 +21,7 @@ from app.domain.itemized.identity.tool_call_identity import (
 from app.domain.itemized.records import parse_item_projection_manifest
 from app.domain.itemized.request_plan import ContextRequestPlan
 from app.domain.itemized.resource_activation import ResourceActivationSnapshotRef
+from app.schemas.internal_v2.session_context import SessionContextResourceDTO
 from app.services.infrastructure.rollout_context.assembly.plans.registry import (
     read_registration,
 )
@@ -38,6 +39,9 @@ from app.services.infrastructure.rollout_context.runtime.context_sources.context
 if TYPE_CHECKING:
     from _thread import RLock
 
+    from app.services.infrastructure.rollout_context.checkpoint.owner.context_projection import (
+        ContextProjectionResult,
+    )
     from app.services.infrastructure.rollout_context.store import RolloutContextStore
 
 
@@ -52,6 +56,7 @@ class ContextDispatchPayload(TypedDict):
     messages: list[BaseMessage]
     tools: list[dict[str, object]]
     losses: tuple[str, ...]
+    resource_refs: tuple[SessionContextResourceDTO, ...]
     native_projection: NotRequired[dict[str, object]]
 
 
@@ -70,7 +75,7 @@ class ContextDispatchOwnerMixin:
         def project_context_plan_for_dispatch(
             self, session_id: str, thread_id: str, plan: ContextRequestPlan, *,
             target_format: str, checkpoint_ns: str = "",
-        ) -> tuple[list[BaseMessage], list[dict[str, object]], tuple[str, ...], dict[str, object] | None]: ...
+        ) -> ContextProjectionResult: ...
 
     def issue_context_dispatch_ref(
         self, snapshot: ContextAssemblySnapshot, *, checkpoint_ns: str = "",
@@ -95,16 +100,17 @@ class ContextDispatchOwnerMixin:
                 assembly_id=reference.assembly_id, checkpoint_ns=namespace,
             )
             reference.validate_snapshot(snapshot)
-            messages, tools, losses, native = self.project_context_plan_for_dispatch(
+            projection = self.project_context_plan_for_dispatch(
                 reference.session_id, reference.thread_id, snapshot.as_sealed_plan(),
                 target_format=reference.target_format, checkpoint_ns=namespace,
             )
         result: ContextDispatchPayload = {"snapshot": snapshot, "dispatch_ref": reference,
                   "assembly_id": snapshot.assembly_id, "plan": snapshot.as_sealed_plan(),
                   "execution_id": snapshot.execution_id,
-                  "messages": messages, "tools": tools, "losses": losses}
-        if native is not None:
-            result["native_projection"] = native
+                  "messages": projection.messages, "tools": projection.tools,
+                  "losses": projection.losses, "resource_refs": projection.resource_refs}
+        if projection.native is not None:
+            result["native_projection"] = projection.native
         return result
 
     def load_tool_call_context_assembly(

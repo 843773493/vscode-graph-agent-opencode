@@ -23,8 +23,10 @@ from app.services.infrastructure.rollout_context.assembly.plans.registry import 
 from app.services.infrastructure.rollout_context.assembly.plans.types import (
     ContextPlanRegistration,
 )
+from app.services.infrastructure.rollout_context.checkpoint.owner.context_projection import (
+    ContextProjectionResult,
+)
 from app.services.infrastructure.rollout_context.checkpoint.seal.assembly import (
-    ContextProjection,
     seal_snapshot,
 )
 from app.services.infrastructure.rollout_context.checkpoint.seal.cleanup import (
@@ -43,7 +45,7 @@ class ContextPlanSealResult:
     """本次 seal 的提交结果；投影只随当前调用返回，不进入跨请求缓存。"""
 
     snapshot: ContextAssemblySnapshot
-    projection: ContextProjection | None
+    projection: ContextProjectionResult | None
 
 
 def seal_registered_plan(

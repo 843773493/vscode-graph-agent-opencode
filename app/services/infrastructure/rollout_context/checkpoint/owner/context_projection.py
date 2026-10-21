@@ -5,6 +5,8 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 
+from langchain_core.messages import BaseMessage
+
 from app.abstractions.session_context import SessionContextHistoryProjection
 from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
 from app.domain.itemized.hashing import (
@@ -20,6 +22,7 @@ from app.domain.itemized.request_plan import (
     resolve_contribution_for_ref,
 )
 from app.domain.itemized.resource_activation import ResourceActivationSnapshotRef
+from app.schemas.internal_v2.session_context import SessionContextResourceDTO
 from app.services.infrastructure.rollout_context.runtime.detail_store import (
     DetailRecord,
     DetailUnavailableError,
@@ -33,6 +36,13 @@ from app.services.infrastructure.rollout_context.storage.primitives import (
     RolloutNotMaterializedError,
     RolloutReadSnapshot,
 )
+from app.services.mapping.itemized.projection import (
+    ProjectionEvidence,
+    build_projection_evidence,
+)
+from app.services.mapping.itemized.resource_activation import (
+    project_sealed_resource_refs,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -41,6 +51,24 @@ class CommittedContextSnapshot:
 
     assembly: ContextAssemblySnapshot
     resource_activation: ResourceActivationSnapshotRef | None
+
+
+@dataclass(frozen=True, slots=True)
+class ContextProjectionResult:
+    """同一封存材料生成的请求、诊断和安全资源摘要；不新增历史成员。"""
+
+    assembly: ContextAssemblySnapshot
+    messages: list[BaseMessage]
+    tools: list[dict[str, object]]
+    losses: tuple[str, ...]
+    native: dict[str, object] | None
+    resource_refs: tuple[SessionContextResourceDTO, ...]
+
+    def evidence(self, projection: str) -> ProjectionEvidence:
+        return build_projection_evidence(
+            self.assembly.as_sealed_plan(), projection=projection,
+            losses=self.losses, resource_refs=self.resource_refs,
+        )
 
 
 class ContextProjectionOwnerMixin:
@@ -122,6 +150,8 @@ class ContextProjectionOwnerMixin:
         )
         return self._project_native_context(
             session_id, thread_id, snapshot.assembly, items, request_content,
+            resource_refs=(project_sealed_resource_refs(snapshot.resource_activation)
+                           if snapshot.resource_activation is not None else ()),
         )
 
     def _read_committed_context_projection(
@@ -179,17 +209,20 @@ class ContextProjectionOwnerMixin:
         snapshot: ContextAssemblySnapshot,
         items: Mapping[tuple[str, str, str], CanonicalItemRecord],
         request_content: Mapping[str, object],
+        *, resource_refs: tuple[SessionContextResourceDTO, ...],
     ) -> dict[str, object]:
         """只消费本次读取的材料，不自行重读或重新选择 context。"""
         from app.services.infrastructure.rollout_context.provider.native_request import (
             project_native_request,
         )
 
-        return project_native_request(
+        native = project_native_request(
             snapshot.as_sealed_plan(), items, request_content,
             seal_binding=snapshot.seal_binding,
             attachment_projector=lambda payload: self._storage.storage.project_attachment_payload(session_id, thread_id, payload),
         )
+        native["resource_refs"] = [ref.model_dump(mode="json") for ref in resource_refs]
+        return native
 
     def project_context_plan_to_history_with_diagnostics(
         self,
@@ -205,13 +238,14 @@ class ContextProjectionOwnerMixin:
             checkpoint_ns=self.context_owner_namespace(checkpoint_ns),
             include_request_only=False,
         )
-        messages, _, losses, _ = self._project_context_projection(
+        projection = self._project_context_projection(
             session_id, thread_id, committed.assembly, items, content,
+            resource_activation=committed.resource_activation,
             include_runtime_notices=False, include_summaries=False, target_format=None,
             include_request_only=False, collect_capability_losses=True,
         )
         return SessionContextHistoryProjection(
-            assembly=committed.assembly, messages=messages, losses=losses,
+            assembly=committed.assembly, messages=projection.messages, losses=projection.losses,
             resource_activation=committed.resource_activation,
         )
 
@@ -617,4 +651,4 @@ class ContextProjectionOwnerMixin:
         return plan, tuple(prepared_details), detail_by_ref
 
 
-__all__ = ["ContextProjectionOwnerMixin"]
+__all__ = ["CommittedContextSnapshot", "ContextProjectionOwnerMixin", "ContextProjectionResult"]

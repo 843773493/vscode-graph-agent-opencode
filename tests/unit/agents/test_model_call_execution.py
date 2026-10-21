@@ -44,7 +44,7 @@ def bridge(registered_tool_set_producer_factory):
 @pytest.fixture
 def response_dispatch(bridge, monkeypatch):
     model_call_id = "00000000-0000-4000-8000-000000000001"
-    prepared = {"dispatch_ref": object(), "snapshot": object(), "callback_model_call_id": model_call_id}
+    prepared = {"dispatch_ref": object(), "snapshot": object(), "resource_refs": (), "callback_model_call_id": model_call_id}
     bridge._prepare_projection = MagicMock(return_value=(prepared, [], []))
     bridge._aprepare = AsyncMock(return_value=prepared)
     bridge._invoke = MagicMock(return_value=ModelResponse(result=[]))

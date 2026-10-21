@@ -655,6 +655,7 @@ async def _consume_model(
         execution_admission_scope(admission, langgraph_thread_id=thread_id),
         sealed_assembly_dispatch_scope(
             prepared["dispatch_ref"], snapshot,
+            resource_refs=prepared["resource_refs"],
             native_projection=native_projection,
         ),
     ):
@@ -1027,6 +1028,7 @@ async def test_handwritten_provider_tool_execution_interrupt_projects_unknown_re
                     ),
                     sealed_assembly_dispatch_scope(
                         prepared["dispatch_ref"], sealed_snapshot,
+                        resource_refs=prepared["resource_refs"],
                         native_projection=native_projection,
                     ),
                 ):

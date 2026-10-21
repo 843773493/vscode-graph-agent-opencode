@@ -1422,6 +1422,8 @@ assembly snapshot metadata MUST 在 provider dispatch 前通过 `RolloutCheckpoi
 
 ### Requirement: Context plan 必须绑定精确资源激活快照和安全来源
 
+LangChain、native、history 和 Provider 诊断投影 MUST 复用同一 authority read snapshot 中已校验的 assembly、activation 和选中正文，并通过唯一 mapper 产生安全资源摘要。Chat Completions 与 Responses 的同步、异步发送日志 SHALL 将同一摘要保存为 `upstream.attempts[].resource_refs`，与 `request` 并列；native 投影的摘要也 MUST 位于 `request` 外。prepare/seal 已取得的摘要 MUST 直接随 dispatch 传递，不能为记录日志重读当前 Registry 或来源。摘要 MUST NOT 进入 SDK payload、wire hash、selection、canonical item 或 Turn 活动统计。
+
 每个`ContextRequestPlan`和`ContextAssemblySnapshot` SHALL引用一个由上下文生命周期owner冻结的`ResourceActivationSnapshotRef`，并为每个实际选择的管理型资源保存有序`ResourceProvenanceRef`。activation snapshot MUST记录`activation_snapshot_id`、`snapshot_kind=execution|model_call`、model-call snapshot的`parent_execution_snapshot_id`、activation policy revision/hash及完整规范化`activation_policy={default_boundary, overrides}`、Registry generation、owner SessionThread、真实execution identity、按admission kind可空的Turn及按kind要求的model-call identity、`bindings_hash`和`activation_provenance_hash`；resource provenance MUST记录内部resource identity、模型安全display URI、resource kind/scope/facet、已发布语义revision、effective boundary、captured Registry generation、语义payload content length、恰一个content hash或redacted stable digest、typed snapshot/detail reference、availability、activation ordinal，以及受保护typed `source_lineage_ref`和覆盖source_id/revision向量与derivation版本的`source_lineage_digest`。该lineage不得包含provider locator/credential，不得被用于当前源重读；原始来源revision与语义resource revision不得混用。
 
 `ResourceProvenanceRef.display_uri` MUST为必填 nullable 字段，地址与内部聚合的选择及校验只引用统一寻址owner requirement「内部语义聚合资源不得伪造 URI」。serde、activation持久化、detail manifest、hash和restore/fork保持相同值；NULL不等于字段缺失或来源不可用，不能从当前catalog补造URI，也不能作为非法地址的fallback。

@@ -571,6 +571,7 @@ class BoxteamOpenAIResponsesModel(BoxteamLiteLLMChatModel):
             api_base=self.api_base,
             call_type="responses",
             dispatch_ref=binding.reference if binding is not None else None,
+            resource_refs=binding.resource_refs if binding is not None else (),
         )
         try:
             stream = litellm.responses(**payload)
@@ -710,6 +711,7 @@ class BoxteamOpenAIResponsesModel(BoxteamLiteLLMChatModel):
             api_base=self.api_base,
             call_type="aresponses",
             dispatch_ref=binding.reference if binding is not None else None,
+            resource_refs=binding.resource_refs if binding is not None else (),
         )
         try:
             async with open_timeout:

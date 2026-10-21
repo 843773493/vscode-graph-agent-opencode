@@ -272,7 +272,7 @@ def _invoke_fixture_model(
         asyncio.run(adapter.register(model_call_id, attempt, provider_id))
         try:
             with sealed_assembly_dispatch_scope(
-                prepared["dispatch_ref"], prepared["snapshot"],
+                prepared["dispatch_ref"], prepared["snapshot"], resource_refs=prepared["resource_refs"],
                 native_projection=prepared.get("native_projection"),
             ):
                 options = {"tools": prepared["tools"]} if prepared["tools"] else {}

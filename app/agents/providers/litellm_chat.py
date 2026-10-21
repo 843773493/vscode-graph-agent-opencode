@@ -347,6 +347,7 @@ class BoxteamLiteLLMChatModel(LiteLLMHistoryProjectionMixin, ChatLiteLLM):
                 api_base=self.api_base,
                 call_type="completion",
                 dispatch_ref=binding.reference if binding is not None else None,
+                resource_refs=binding.resource_refs if binding is not None else (),
             )
         if client is not None:
             kwargs.setdefault("client", client)
@@ -376,6 +377,7 @@ class BoxteamLiteLLMChatModel(LiteLLMHistoryProjectionMixin, ChatLiteLLM):
                 api_base=self.api_base,
                 call_type="acompletion",
                 dispatch_ref=binding.reference if binding is not None else None,
+                resource_refs=binding.resource_refs if binding is not None else (),
             )
         if client is not None:
             kwargs.setdefault("client", client)

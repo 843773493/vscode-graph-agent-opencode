@@ -45,6 +45,9 @@ from app.services.infrastructure.rollout_context.checkpoint.boundary.tool_protoc
     ToolProtocolBoundaryConflict,
 )
 from app.services.infrastructure.rollout_context.checkpoint.owner import context_owner
+from app.services.infrastructure.rollout_context.checkpoint.owner.context_projection import (
+    ContextProjectionResult,
+)
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
@@ -576,7 +579,7 @@ def test_new_prepare_reuses_seal_validation_and_cold_projection_revalidates(
     phase = "cold-projection"
     assert saver.project_context_plan_for_dispatch(
         session, thread, result["plan"], target_format="chat_completions",
-    ) == (result["messages"], result["tools"], result["losses"], None)
+    ) == ContextProjectionResult(result["snapshot"], result["messages"], result["tools"], result["losses"], None, result["resource_refs"])
     assert validated == [
         ("seal", result["assembly_id"]), ("dispatch-reference", result["assembly_id"]),
         ("cold-projection", result["assembly_id"]),
@@ -694,8 +697,9 @@ def test_seal_projection_is_reused_and_independent_cold_projection_maps_after_cl
     assert observed["snapshots"] == []
     assert len(sealed) == 1
     assert sealed[0].snapshot == result["snapshot"]
-    assert sealed[0].projection == (
-        result["messages"], result["tools"], result["losses"], result.get("native_projection"),
+    assert sealed[0].projection == ContextProjectionResult(
+        result["snapshot"], result["messages"], result["tools"], result["losses"],
+        result.get("native_projection"), result["resource_refs"],
     )
     assert len(prepare_callbacks) > 1
     phase["name"] = "cold"
@@ -1081,7 +1085,7 @@ async def test_prepare_source_cut_uses_owner_view_with_same_id_sibling(
         restored = cold.get_context_assembly(session, thread, assembly_id=second["assembly_id"])
         assert cold.project_context_plan_for_dispatch(
             session, thread, restored.as_sealed_plan(), target_format=target_format,
-        ) == (second["messages"], second["tools"], second["losses"], second.get("native_projection"))
+        ) == ContextProjectionResult(second["snapshot"], second["messages"], second["tools"], second["losses"], second.get("native_projection"), second["resource_refs"])
 
 
 @pytest.mark.parametrize("target_format", ["chat_completions", "responses"])
@@ -1118,7 +1122,7 @@ def test_prefix_preserves_same_id_canonical_and_request_only_on_inheritance_and_
         assert tuple(selection_ref_identity(ref) for ref in restored.refs if ref.ref_id == item.item_id) == expected_keys
         assert cold.project_context_plan_for_dispatch(
             session, thread, restored.as_sealed_plan(), target_format=target_format,
-        ) == (second["messages"], second["tools"], second["losses"], second.get("native_projection"))
+        ) == ContextProjectionResult(second["snapshot"], second["messages"], second["tools"], second["losses"], second.get("native_projection"), second["resource_refs"])
 
 
 def test_failed_seal_never_acknowledges_source(production_context):
@@ -1209,14 +1213,16 @@ def test_final_request_is_rechecked_against_sealed_wire(
 
     def drifted_projection(*args, **kwargs):
         receipt = original(*args, **kwargs)
-        messages, tools, losses, native = receipt.projection
+        projected = receipt.projection
+        assert projected is not None
+        messages, native = projected.messages, projected.native
         if damage == "messages":
             messages = [*messages, HumanMessage(content="未封存的额外正文")]
         elif damage == "input":
             native["request"]["input"].append({"role": "user", "content": "未封存的额外正文"})
         else:
             native["request"]["tools"].append({"type": "function", "name": "unsealed_tool", "parameters": {}})
-        return replace(receipt, projection=(messages, tools, losses, native))
+        return replace(receipt, projection=replace(projected, messages=messages, native=native))
 
     monkeypatch.setattr(preparation, "seal_registered_plan", drifted_projection)
     with pytest.raises(ValueError, match="最终 Provider request"):

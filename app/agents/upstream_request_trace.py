@@ -10,6 +10,7 @@ from typing import Any
 from pydantic import SecretStr
 
 from app.domain.itemized.dispatch_ref import SealedContextDispatchRef
+from app.schemas.internal_v2.session_context import SessionContextResourceDTO
 
 _REDACTED_KEYS = {
     "api_key",
@@ -95,6 +96,7 @@ def record_upstream_request(
     api_base: str | None,
     call_type: str,
     dispatch_ref: SealedContextDispatchRef | None,
+    resource_refs: tuple[SessionContextResourceDTO, ...] = (),
 ) -> None:
     """在本地 preflight 完成、Provider 发起 SDK 调用前登记本次 attempt。
 
@@ -112,6 +114,7 @@ def record_upstream_request(
             "api_base": api_base,
             # 直接保留 Saver 签发的引用；日志不从 Provider payload 重建封存事实。
             "sealed_dispatch": _safe_value(asdict(dispatch_ref)) if dispatch_ref is not None else None,
+            "resource_refs": [ref.model_dump(mode="json") for ref in resource_refs],
             "request": _safe_value(request),
             "response": None,
             "error": None,

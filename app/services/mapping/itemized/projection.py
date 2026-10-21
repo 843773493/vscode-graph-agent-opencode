@@ -11,6 +11,7 @@ from dataclasses import dataclass
 
 from app.domain.itemized.hashing import sha256_jcs
 from app.domain.itemized.request_plan import ContextRequestPlan
+from app.schemas.internal_v2.session_context import SessionContextResourceDTO
 from app.services.mapping.itemized.selection import validate_projection_selection
 
 
@@ -28,6 +29,7 @@ class ProjectionEvidence:
     selection: tuple[Mapping[str, object], ...]
     selection_manifest_hash: str
     losses: tuple[str, ...] = ()
+    resource_refs: tuple[SessionContextResourceDTO, ...] = ()
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -42,6 +44,7 @@ class ProjectionEvidence:
             "selection": [dict(entry) for entry in self.selection],
             "selection_manifest_hash": self.selection_manifest_hash,
             "losses": list(self.losses),
+            "resource_refs": [ref.model_dump(mode="json") for ref in self.resource_refs],
         }
 
 
@@ -50,6 +53,7 @@ def build_projection_evidence(
     *,
     projection: str,
     losses: Iterable[str] = (),
+    resource_refs: tuple[SessionContextResourceDTO, ...] = (),
 ) -> ProjectionEvidence:
     """从同一个 sealed plan 建立可跨 projection 比较的证据。
 
@@ -104,6 +108,7 @@ def build_projection_evidence(
         selection=selection,
         selection_manifest_hash=selection_manifest_hash,
         losses=combined_losses,
+        resource_refs=resource_refs,
     )
 
 

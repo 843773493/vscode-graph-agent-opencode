@@ -13,6 +13,7 @@ from app.agents.providers import wire_finalize
 from app.agents.sealed_assembly_dispatch import sealed_assembly_dispatch_scope
 from app.core.execution_admission_context import execution_admission_scope
 from app.core.session_thread_context import session_thread_owner_scope
+from app.core.trace_middleware import reset_current_gateway_id, set_current_gateway_id
 from app.domain.itemized.hashing import sha256_jcs
 from app.domain.itemized.mutation_intents import MutationIntentOwner
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
@@ -37,6 +38,11 @@ class _HTTPBoundaryReached(BaseException):
 @pytest.fixture(autouse=True)
 def runtime_identity_workspace(request: pytest.FixtureRequest) -> None:
     prepare_rollout_workspace(request)
+
+
+@pytest.fixture
+def runtime_gateway_id() -> str:
+    return "gateway_0123456789abcdef0123456789abcdef"
 
 
 @pytest.fixture
@@ -80,13 +86,13 @@ def _restore_and_send(saver, session, thread, model):
     with (
         session_thread_owner_scope(MutationIntentOwner(session, thread), langgraph_thread_id=thread),
         execution_admission_scope(admission, langgraph_thread_id=thread),
-        sealed_assembly_dispatch_scope(reference, restored, native_projection=native),
+        sealed_assembly_dispatch_scope(reference, restored, resource_refs=payload["resource_refs"], native_projection=native),
     ):
         next(model.bind_tools(tools).stream(messages))
 
 
 @pytest.mark.parametrize("factory_context", ["chat_completions", "responses"], indirect=True)
-def test_runtime_scope_reaches_serialized_http_and_restores_without_host_root(factory_context, outgoing_http):
+def test_runtime_scope_reaches_serialized_http_and_restores_without_host_root(factory_context, outgoing_http, runtime_gateway_id):
     saver, session, thread, _connection, _selection, _manager, captured, tools, dispatch, files = factory_context
     with pytest.raises(_HTTPBoundaryReached):
         dispatch("r02-native", provider_handler=_provider_handler)
@@ -98,12 +104,21 @@ def test_runtime_scope_reaches_serialized_http_and_restores_without_host_root(fa
     assert str(files.workspace_root) not in serialized
     assert "cwd）：`.`" in serialized
     runtime = SimpleNamespace(tool_call_id="call-r02-files", state={"files": {}}, store=None)
-    result = tools["write_file"].invoke({"file_path": "r02-proof.txt", "content": "R02 工作区文件工具证据\n", "runtime": runtime})
-    assert result.status == "success"
-    assert (files.workspace_root / "r02-proof.txt").read_text() == "R02 工作区文件工具证据\n"
-    read = tools["read_file"].invoke({"path": "r02-proof.txt", "runtime": runtime})
-    assert read.status == "success" and "R02 工作区文件工具证据" in read.content
-    assert str(files.workspace_root) not in str(read.content)
+    # 文件入口显式传递 Gateway 身份；不能让它改变上方 Agent 构造的来源范围。
+    token = set_current_gateway_id(runtime_gateway_id)
+    try:
+        result = tools["write_file"].invoke({
+            "file_path": "r02-proof.txt", "content": "R02 工作区文件工具证据\n",
+            "expected_version": "absent", "runtime": runtime,
+        })
+        assert result.status == "success", result.content
+        assert (files.workspace_root / "r02-proof.txt").read_text() == "R02 工作区文件工具证据\n"
+        read = tools["read_file"].invoke({"path": "r02-proof.txt", "runtime": runtime})
+        assert read.status == "success", read.content
+        assert "R02 工作区文件工具证据" in read.content
+        assert str(files.workspace_root) not in str(read.content)
+    finally:
+        reset_current_gateway_id(token)
 
 
 @pytest.mark.parametrize("factory_context", ["chat_completions", "responses"], indirect=True)

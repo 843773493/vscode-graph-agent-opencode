@@ -215,6 +215,9 @@ from app.services.infrastructure.rollout_context.storage.primitives import (
     RolloutNotMaterializedError,
 )
 from app.services.infrastructure.rollout_history_reader import RolloutHistoryReader
+from app.services.mapping.itemized.resource_activation import (
+    project_sealed_resource_refs,
+)
 from tests.harness.python.run_context import TestRunContext
 from tests.integration.backend.sessions.rollout_test_workspace import (
     prepare_rollout_workspace,
@@ -9099,6 +9102,20 @@ async def test_fork_of_imported_internal_lineage_uses_local_committed_proof(
             plan_hash=final_assembly[1], request_hash=final_assembly[2],
         )
         assert activation == model_call
+        sealed = cold.get_context_assembly(
+            second.session_id, second_thread, assembly_id=final_assembly[0],
+        )
+        expected_resources = project_sealed_resource_refs(model_call)
+        for surface in ("messages", "history", "native", "provider"):
+            project = getattr(cold, f"project_context_plan_to_{surface}_with_evidence")
+            result = project(
+                second.session_id, second_thread, sealed.as_sealed_plan(),
+                **({"target_format": sealed.target_format} if surface == "provider" else {}),
+            )
+            assert result[-1].resource_refs == expected_resources, surface
+            assert result[-1].assembly_id == sealed.assembly_id
+            if surface == "native":
+                assert result[0]["resource_refs"] == [ref.model_dump(mode="json") for ref in expected_resources]
         assert cold.read_resource_activation_payload(
             activation, activation.bindings[0], storage_owner=(second.session_id, second_thread),
         ) == payload

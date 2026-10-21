@@ -17,6 +17,7 @@ from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
 from app.domain.itemized.identity.refs import ToolSetRef
 from app.domain.itemized.records import CanonicalItemRecord
 from app.domain.itemized.request_plan import ContextRequestPlan
+from app.domain.itemized.resource_activation import ResourceActivationSnapshotRef
 from app.services.infrastructure.rollout_context.checkpoint.owner.composition import (
     ContextPlanCompositionMixin,
 )
@@ -29,6 +30,7 @@ from app.services.infrastructure.rollout_context.checkpoint.owner.context_dispat
 from app.services.infrastructure.rollout_context.checkpoint.owner.context_projection import (
     CommittedContextSnapshot,
     ContextProjectionOwnerMixin,
+    ContextProjectionResult,
 )
 from app.services.infrastructure.rollout_context.checkpoint.owner.resource_activation import (
     ResourceActivationOwnerMixin,
@@ -44,6 +46,9 @@ from app.services.mapping.itemized.langchain import project_context_plan
 from app.services.mapping.itemized.projection import (
     ProjectionEvidence,
     build_projection_evidence,
+)
+from app.services.mapping.itemized.resource_activation import (
+    project_sealed_resource_refs,
 )
 
 
@@ -66,7 +71,7 @@ class ContextOwnerMixin(
         request_only_content: Mapping[str, object] | None = None,
     ) -> list[BaseMessage]:
         """把 Saver 提供的已提交 plan 临时投影成 LangChain messages。"""
-        messages, _, _, _ = self._project_committed_context_plan(
+        projection = self._project_committed_context_plan(
             session_id,
             thread_id,
             plan,
@@ -75,7 +80,7 @@ class ContextOwnerMixin(
             include_summaries=include_summaries,
             request_only_content=request_only_content,
         )
-        return messages
+        return projection.messages
 
     def project_context_plan_to_history(
         self,
@@ -94,7 +99,7 @@ class ContextOwnerMixin(
         校验 plan/selection，并只读取 selection 中的 canonical item；因此
         Web/诊断历史与 provider/LangChain 请求不会各自重排一套 item。
         """
-        messages, _, _, _ = self._project_committed_context_plan(
+        projection = self._project_committed_context_plan(
             session_id,
             thread_id,
             plan,
@@ -103,7 +108,7 @@ class ContextOwnerMixin(
             include_summaries=include_summaries,
             include_request_only=False,
         )
-        return messages
+        return projection.messages
 
     def project_context_plan_with_diagnostics(
         self,
@@ -117,7 +122,7 @@ class ContextOwnerMixin(
         request_only_content: Mapping[str, object] | None = None,
     ) -> tuple[list[BaseMessage], tuple[str, ...]]:
         """投影消息并显式返回 provider 不支持的 item capability loss。"""
-        messages, _, losses, _ = self._project_committed_context_plan(
+        projection = self._project_committed_context_plan(
             session_id,
             thread_id,
             plan,
@@ -127,7 +132,7 @@ class ContextOwnerMixin(
             request_only_content=request_only_content,
             collect_capability_losses=True,
         )
-        return messages, losses
+        return projection.messages, projection.losses
 
     def project_context_plan_to_provider(
         self,
@@ -142,7 +147,7 @@ class ContextOwnerMixin(
         request_only_content: Mapping[str, object] | None = None,
     ) -> tuple[list[BaseMessage], list[dict[str, object]], tuple[str, ...]]:
         """以同一 sealed selection 同时生成消息与独立 provider tools。"""
-        messages, tools, losses, _ = self._project_committed_context_plan(
+        projection = self._project_committed_context_plan(
             session_id,
             thread_id,
             plan,
@@ -153,7 +158,7 @@ class ContextOwnerMixin(
             target_format=target_format,
             collect_capability_losses=True,
         )
-        return messages, tools, losses
+        return projection.messages, projection.tools, projection.losses
 
     def project_context_plan_for_dispatch(
         self,
@@ -163,7 +168,7 @@ class ContextOwnerMixin(
         *,
         target_format: str,
         checkpoint_ns: str = "",
-    ) -> tuple[list[BaseMessage], list[dict[str, object]], tuple[str, ...], dict[str, object] | None]:
+    ) -> ContextProjectionResult:
         """从一次已提交读取生成本次 dispatch 的 provider 与 native 投影。"""
         return self._project_committed_context_plan(
             session_id, thread_id, plan, checkpoint_ns=checkpoint_ns,
@@ -184,7 +189,7 @@ class ContextOwnerMixin(
         request_only_content: Mapping[str, object] | None = None,
     ) -> tuple[list[BaseMessage], ProjectionEvidence]:
         """返回 LangChain message 与同一 Saver selection 的完整证据。"""
-        messages, _, losses, _ = self._project_committed_context_plan(
+        projection = self._project_committed_context_plan(
             session_id,
             thread_id,
             plan,
@@ -194,17 +199,7 @@ class ContextOwnerMixin(
             request_only_content=request_only_content,
             collect_capability_losses=True,
         )
-        evidence = build_projection_evidence(
-            self._committed_context_snapshot(
-                session_id,
-                thread_id,
-                plan,
-                checkpoint_ns=self.context_owner_namespace(checkpoint_ns),
-            ).assembly.as_sealed_plan(),
-            projection="langchain",
-            losses=losses,
-        )
-        return messages, evidence
+        return projection.messages, projection.evidence("langchain")
 
     def project_context_plan_to_history_with_evidence(
         self,
@@ -218,7 +213,7 @@ class ContextOwnerMixin(
     ) -> tuple[list[BaseMessage], ProjectionEvidence]:
         """返回 Web/history message 与同一 Saver selection 的完整证据。"""
         normalized_ns = self.context_owner_namespace(checkpoint_ns)
-        messages, _, losses, _ = self._project_committed_context_plan(
+        projection = self._project_committed_context_plan(
             session_id,
             thread_id,
             plan,
@@ -228,17 +223,7 @@ class ContextOwnerMixin(
             include_request_only=False,
             collect_capability_losses=True,
         )
-        evidence = build_projection_evidence(
-            self._committed_context_snapshot(
-                session_id,
-                thread_id,
-                plan,
-                checkpoint_ns=normalized_ns,
-            ).assembly.as_sealed_plan(),
-            projection="web_history",
-            losses=losses,
-        )
-        return messages, evidence
+        return projection.messages, projection.evidence("web_history")
 
     def project_context_plan_to_native_with_evidence(
         self,
@@ -249,26 +234,22 @@ class ContextOwnerMixin(
         checkpoint_ns: str = "",
     ) -> tuple[dict[str, object], ProjectionEvidence]:
         """返回 native request 与同一 Saver selection 的完整证据。"""
-        native = self.project_context_plan_to_native(
-            session_id,
-            thread_id,
-            plan,
-            checkpoint_ns=checkpoint_ns,
+        committed, items, content = self._read_committed_context_projection(
+            session_id, thread_id, plan,
+            checkpoint_ns=self.context_owner_namespace(checkpoint_ns),
+        )
+        resources = (project_sealed_resource_refs(committed.resource_activation)
+                     if committed.resource_activation is not None else ())
+        native = self._project_native_context(
+            session_id, thread_id, committed.assembly, items, content,
+            resource_refs=resources,
         )
         evidence = build_projection_evidence(
-            self._committed_context_snapshot(
-                session_id,
-                thread_id,
-                plan,
-                checkpoint_ns=self.context_owner_namespace(checkpoint_ns),
-            ).assembly.as_sealed_plan(),
-            projection="native",
-            losses=native.get("losses", ()),
+            committed.assembly.as_sealed_plan(), projection="native",
+            losses=native["losses"], resource_refs=resources,
         )
-        if native.get("selection") != list(evidence.selection):
-            raise ValueError(
-                "plan-order-integrity: native projection selection evidence 不一致"
-            )
+        if native["selection"] != list(evidence.selection):
+            raise ValueError("plan-order-integrity: native projection selection evidence 不一致")
         return native, evidence
 
     def project_context_plan_to_provider_with_evidence(
@@ -284,27 +265,15 @@ class ContextOwnerMixin(
         request_only_content: Mapping[str, object] | None = None,
     ) -> tuple[list[BaseMessage], list[dict[str, object]], ProjectionEvidence]:
         """返回 provider/LangChain 双 wire 与同一 selection 证据。"""
-        messages, tools, losses = self.project_context_plan_to_provider(
-            session_id,
-            thread_id,
-            plan,
-            target_format=target_format,
-            checkpoint_ns=checkpoint_ns,
+        projection = self._project_committed_context_plan(
+            session_id, thread_id, plan, target_format=target_format,
+            checkpoint_ns=self.context_owner_namespace(checkpoint_ns),
             include_runtime_notices=include_runtime_notices,
             include_summaries=include_summaries,
             request_only_content=request_only_content,
+            collect_capability_losses=True,
         )
-        evidence = build_projection_evidence(
-            self._committed_context_snapshot(
-                session_id,
-                thread_id,
-                plan,
-                checkpoint_ns=self.context_owner_namespace(checkpoint_ns),
-            ).assembly.as_sealed_plan(),
-            projection="provider",
-            losses=losses,
-        )
-        return messages, tools, evidence
+        return projection.messages, projection.tools, projection.evidence("provider")
 
     def _project_committed_context_plan(
         self,
@@ -320,7 +289,7 @@ class ContextOwnerMixin(
         collect_capability_losses: bool = False,
         include_request_only: bool = True,
         include_native: bool = False,
-    ) -> tuple[list[BaseMessage], list[dict[str, object]], tuple[str, ...], dict[str, object] | None]:
+    ) -> ContextProjectionResult:
         """从同一个已提交 selection 生成所有外部 context projection。
 
         LangChain history、诊断 view 和 provider dispatch 必须共享同一份
@@ -334,6 +303,7 @@ class ContextOwnerMixin(
         )
         return self._project_context_projection(
             session_id, thread_id, committed_snapshot.assembly, items, resolved_request_content,
+            resource_activation=committed_snapshot.resource_activation,
             include_runtime_notices=include_runtime_notices, include_summaries=include_summaries,
             target_format=target_format, collect_capability_losses=collect_capability_losses,
             include_request_only=include_request_only, include_native=include_native,
@@ -347,13 +317,14 @@ class ContextOwnerMixin(
         items: Mapping[tuple[str, str, str], CanonicalItemRecord],
         resolved_request_content: Mapping[str, object],
         *,
+        resource_activation: ResourceActivationSnapshotRef | None,
         include_runtime_notices: bool,
         include_summaries: bool,
         target_format: str | None,
         collect_capability_losses: bool = True,
         include_request_only: bool = True,
         include_native: bool = False,
-    ) -> tuple[list[BaseMessage], list[dict[str, object]], tuple[str, ...], dict[str, object] | None]:
+    ) -> ContextProjectionResult:
         """只映射当前 seal owner 或冷读取 owner 已验证的材料，不读取持久化。"""
         committed_plan = committed_snapshot.as_sealed_plan()
         losses: list[str] = []
@@ -384,10 +355,16 @@ class ContextOwnerMixin(
                     tools.extend(
                         project_tool_set_ref(entry.ref, target_format=target_format)
                     )
+        resources = (project_sealed_resource_refs(resource_activation)
+                     if resource_activation is not None else ())
         native = self._project_native_context(
             session_id, thread_id, committed_snapshot, items, resolved_request_content,
+            resource_refs=resources,
         ) if include_native else None
-        return messages, tools, tuple(losses), native
+        return ContextProjectionResult(
+            assembly=committed_snapshot, messages=messages, tools=tools,
+            losses=tuple(losses), native=native, resource_refs=resources,
+        )
 
     def project_message_attachment_refs(self, session_id: str, thread_id: str, messages: list[BaseMessage]) -> list[BaseMessage]:
         """所有派生请求/历史复用 storage 的 target-local mapping，canonical 不改写。"""

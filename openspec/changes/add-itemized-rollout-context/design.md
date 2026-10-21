@@ -567,6 +567,8 @@ SQLite至少建立activation snapshot catalog、snapshot-to-resource binding和a
 
 history/live projection只能返回策略允许的`display_uri`、resource kind/scope、facet、revision安全标识、availability和typed provenance ref；不得返回resource id（除非受信诊断明确需要）、provider locator、路径、endpoint、credential或受保护正文。Skill的source URI属于context/resource envelope，不扩展只含name/description的Skill metadata。live、terminal history和刷新恢复必须投影同一已提交provenance，不能从DOM、tool result字符串、middleware prompt或当前catalog重算。
 
+LangChain、native、history 与 Provider 的诊断结果从同一次 authority read snapshot 取得 assembly、activation 和选中正文，再复用唯一安全摘要 mapper。Provider prepare/seal 直接返回本次材料生成的摘要，dispatch 不为日志重读资源。Chat Completions 与 Responses 的同步、异步发送日志在 `upstream.attempts[].resource_refs` 保存同一摘要；该字段与 `request` 并列，native 投影也把它放在 `request` 外。摘要不进入 SDK payload、wire hash、selection 或 canonical item，不增加 Turn 活动数量或耗时。
+
 旧`.boxteam/.../SKILL.md`、`read_file_path`、middleware location字符串、`_workspace_agents_snapshot`和其它路径型字段不进入新schema，也不设置deprecated alias。迁移实现启用新writer/projector后必须删除旧读写和反向推断路径；遇到仍携带旧字段的正常v2 runtime记录直接返回schema/provenance错误，不能双写或fallback。
 
 middleware 的统一输出类型为 `ContextContribution`，按用途分为：

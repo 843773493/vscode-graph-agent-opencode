@@ -6,8 +6,6 @@ from collections.abc import Mapping
 from dataclasses import replace
 from typing import Protocol
 
-from langchain_core.messages import BaseMessage
-
 from app.agents.providers.wire_finalize import (
     WIRE_PROJECTOR_ID,
     WIRE_PROJECTOR_VERSION,
@@ -22,6 +20,7 @@ from app.domain.itemized.hashing import canonical_json_bytes, sha256_jcs
 from app.domain.itemized.identity.refs import ref_identity
 from app.domain.itemized.records import CanonicalItemRecord
 from app.domain.itemized.request_plan import ContextRequestPlan
+from app.domain.itemized.resource_activation import ResourceActivationSnapshotRef
 from app.domain.itemized.serialization import normalize_wire_request
 from app.services.infrastructure.rollout_context.assembly.plans.registry import (
     _ValidatedPredecessors,
@@ -33,6 +32,9 @@ from app.services.infrastructure.rollout_context.assembly.plans.types import (
 from app.services.infrastructure.rollout_context.assembly.seal_preflight import (
     canonical_tool_pairings,
     validate_seal_dispatch_invariants,
+)
+from app.services.infrastructure.rollout_context.checkpoint.owner.context_projection import (
+    ContextProjectionResult,
 )
 from app.services.infrastructure.rollout_context.checkpoint.seal.cleanup import (
     record_failed_seal,
@@ -47,10 +49,6 @@ from app.services.infrastructure.rollout_context.runtime.detail_store import (
 )
 from app.services.mapping.itemized.projection import build_projection_evidence
 
-ContextProjection = tuple[
-    list[BaseMessage], list[dict[str, object]], tuple[str, ...], dict[str, object] | None,
-]
-
 
 class ActivationSealBinding(Protocol):
     """assembly 事务内的 activation 绑定参与者（唯一 Saver 提供）。
@@ -58,6 +56,9 @@ class ActivationSealBinding(Protocol):
     只在既有 ``assembly_sealed`` 事务内写 activation snapshot/binding 行；
     不读取当前资源、不做源 I/O。
     """
+
+    @property
+    def snapshot(self) -> ResourceActivationSnapshotRef: ...
 
     def bind_assembly(
         self,
@@ -80,7 +81,8 @@ def _project_wire_snapshot(
     wire_profile: ChatWireProfile | ResponsesWireProfile,
     wire_params: Mapping[str, object],
     checkpoint_ns: str,
-) -> tuple[ContextAssemblySnapshot, ContextProjection]:
+    activation: ResourceActivationSnapshotRef | None,
+) -> tuple[ContextAssemblySnapshot, ContextProjectionResult]:
     """在 authority 读取已关闭后生成本次 wire；不重读 canonical 正文。"""
     bodies = owner._request_content_for_plan(
         snapshot.session_id, snapshot.thread_id, checkpoint_ns, sealed_plan, None,
@@ -88,13 +90,14 @@ def _project_wire_snapshot(
     )
     projection = owner._project_context_projection(
         snapshot.session_id, snapshot.thread_id, snapshot, items, bodies,
+        resource_activation=activation,
         include_runtime_notices=True, include_summaries=True,
         target_format=snapshot.target_format,
         include_native=isinstance(wire_profile, ResponsesWireProfile),
     )
-    messages, tools, _losses, native = projection
     preimage = normalize_wire_request(finalize_provider_wire(
-        messages=messages, tools=tools, native_request=None if native is None else native["request"],
+        messages=projection.messages, tools=projection.tools,
+        native_request=None if projection.native is None else projection.native["request"],
         profile=wire_profile, params=wire_params,
     ))
     # snapshot 来自本次 composer，只替换 wire；冷读仍独立验证所有 hash。
@@ -107,7 +110,7 @@ def _project_wire_snapshot(
             recomputed_plan_hash=snapshot.plan_hash,
         )),
     )
-    return snapshot, projection
+    return snapshot, replace(projection, assembly=snapshot)
 
 
 def _activation_binding_callable(
@@ -155,7 +158,7 @@ def seal_snapshot(
     activation_binding: ActivationSealBinding | None = None,
     prepared_details: tuple[PreparedDetail, ...] = (),
     validated_predecessors: _ValidatedPredecessors | None = None,
-) -> tuple[ContextAssemblySealReceipt, ContextProjection | None]:
+) -> tuple[ContextAssemblySealReceipt, ContextProjectionResult | None]:
     source_refs = tuple(
         entry.ref for entry in snapshot.selection
         if entry.ref.ref_type == "canonical_item" and (
@@ -182,6 +185,7 @@ def seal_snapshot(
             )
             snapshot, projection = _project_wire_snapshot(
                 owner, snapshot, sealed_plan, items, prepared_details, wire[0], wire[1], checkpoint_ns,
+                activation_binding.snapshot if activation_binding is not None else None,
             )
         except BaseException as error:
             record_failed_seal(
