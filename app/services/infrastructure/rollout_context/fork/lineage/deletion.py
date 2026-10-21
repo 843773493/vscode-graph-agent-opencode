@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import shutil
 import sqlite3
+from contextlib import AsyncExitStack
 from hashlib import sha256
 from typing import TYPE_CHECKING
 
@@ -97,10 +98,14 @@ class RolloutForkDeletionMixin:
             for key in tuple(self._storage._active_fork_materializations)
             if key[:2] == (session_id, thread_id)
         )
-        async with SessionLifecycleGate(self._storage.sessions_dir).exclusive(session_id):
+        async with AsyncExitStack() as cleanup:
+            # 上传按 holder → Session gate 发布；删除必须按同一锁序先排空正文 I/O。
             if attachment_store is not None:
-                attachment_store.release_thread_references(session_id, thread_id)
-            rollout = self._storage.root(session_id, thread_id=thread_id)
-            with self._storage._lock(thread_id, "", session_id=session_id):
-                if rollout.exists():
-                    shutil.rmtree(rollout)
+                await cleanup.enter_async_context(attachment_store.deletion_holder.lock_for(session_id))
+            async with SessionLifecycleGate(self._storage.sessions_dir).exclusive(session_id):
+                if attachment_store is not None:
+                    attachment_store.release_thread_references(session_id, thread_id)
+                rollout = self._storage.root(session_id, thread_id=thread_id)
+                with self._storage._lock(thread_id, "", session_id=session_id):
+                    if rollout.exists():
+                        shutil.rmtree(rollout)

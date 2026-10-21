@@ -1128,14 +1128,21 @@ async def test_recover_session_cleans_orphan_staging_from_record(
     assert store.recover_session(SESSION_A) == ()
     assert orphan.is_file()
 
+    thread_id = store._path_resolver.main_thread_id(SESSION_A)
+    control = store._open_control_store(SESSION_A)
+    pin = await store._acquire_pin(
+        session_id=SESSION_A, thread_id=thread_id, control=control,
+        operation_identity="attkey_orphan", preimage_hash="d" * 64,
+    )
+    control.close()
     store._catalog.create_or_get_ingest_record(
         ingest_idempotency_key="attkey_orphan",
         ingest_id="ing_88f6811ab5d8fc6d3177f9b7609ae0fc",
         owner_session_id=SESSION_A,
-        owner_thread_id="thr_" + "a" * 32,
-        pin_lease_id="lease_orphan",
-        pin_fencing_token=1,
-        pin_captured_generation=1,
+        owner_thread_id=thread_id,
+        pin_lease_id=pin.lease_id,
+        pin_fencing_token=pin.fencing_token,
+        pin_captured_generation=pin.captured_lifecycle_generation,
         preimage_hash="d" * 64,
         staging_relative_locator=ingest_staging_relative_locator("ing_88f6811ab5d8fc6d3177f9b7609ae0fc"),
         max_bytes=1024,

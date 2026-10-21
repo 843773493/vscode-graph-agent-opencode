@@ -241,9 +241,7 @@ class IngestMixin:
     def get_ingest_record(self, ingest_idempotency_key: str) -> AttachmentIngestRecord:
         """按 key 读取 record；缺失抛 KeyError。"""
         connection = self._connected()
-        return _ingest_record_from_row(
-            self._require_ingest_row(connection, ingest_idempotency_key)
-        )
+        return self._require_ingest_row(connection, ingest_idempotency_key)
 
     def list_non_terminal_ingest_records(
         self, *, owner_session_id: str | None = None

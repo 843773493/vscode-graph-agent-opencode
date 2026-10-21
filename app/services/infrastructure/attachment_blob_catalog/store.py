@@ -46,8 +46,10 @@ from app.core.session_control_store.copy_attachment_settlement import (
     transition_copy_attachment_settlement,
 )
 from app.core.session_lifecycle_gate import (
+    OperationHolderGate,
     SessionDeletionPendingError,
     SessionLifecycleGate,
+    SessionOperationLease,
 )
 from app.core.trace_middleware import get_current_gateway_id
 from app.core.workspace_identity import read_workspace_id
@@ -118,6 +120,7 @@ class AttachmentBlobStore(ForkAttachmentStoreMixin):
             self._sessions_root
         )
         self._gate = SessionLifecycleGate(self._sessions_root)
+        self.deletion_holder = OperationHolderGate(self._sessions_root, namespace="attachment_ingest")
 
     def reference(self, session_id: str, attachment_id: str) -> str:
         return session_artifact_uri(read_workspace_id(self._workspace_root), session_id, "attachments", attachment_id,
@@ -151,11 +154,13 @@ class AttachmentBlobStore(ForkAttachmentStoreMixin):
         if not attachments:
             return []
         persisted: list[AttachmentRef] = []
-        for attachment in attachments:
-            if not attachment.data_url:
-                persisted.append(attachment)
-                continue
-            persisted.append(await self._persist_one(session_id, thread_id, attachment))
+        # 正文 I/O 只持长操作 holder；恢复和删除在 Session gate 外等待它退出。
+        async with self.deletion_holder.lock_for(session_id, exclusive=False):
+            for attachment in attachments:
+                if not attachment.data_url:
+                    persisted.append(attachment)
+                    continue
+                persisted.append(await self._persist_one(session_id, thread_id, attachment))
         return persisted
 
     async def _persist_one(
@@ -204,9 +209,12 @@ class AttachmentBlobStore(ForkAttachmentStoreMixin):
                 max_bytes=MAX_ATTACHMENT_BYTES,
             )
             if record.state == "published":
-                return self._attachment_ref_for_record(
+                ref = self._attachment_ref_for_record(
                     session_id, thread_id, record.blob_id, attachment, content_type
                 )
+                self._resolve_published(session_id, ref.file_id, owner_thread_id=thread_id)
+                self._settle_pin(control, pin, outcome="completed")
+                return ref
             if record.state == "aborted":
                 raise RuntimeError(
                     "ingest record 已 aborted，拒绝复用: "
@@ -244,12 +252,16 @@ class AttachmentBlobStore(ForkAttachmentStoreMixin):
                     content_type=content_type,
                 )
             except BaseException:
+                # catalog 是 durable 主体；发布后的结算失败不能倒写为 failed。
+                if self._catalog.get_ingest_record(idempotency_key).state == "published":
+                    raise
                 _remove_file(staging_path)
                 self._catalog.abort_ingest_record(
                     ingest_idempotency_key=idempotency_key,
                     reason="附件写入或发布失败，清理 staging",
                 )
-                self._settle_pin_quietly(control, pin, outcome="failed")
+                if control.verify_lease_token(lease_id=pin.lease_id, fencing_token=pin.fencing_token):
+                    self._settle_pin(control, pin, outcome="failed")
                 raise
             return self._attachment_ref_for_record(
                 session_id, thread_id, identity.blob_id, attachment, content_type
@@ -265,7 +277,7 @@ class AttachmentBlobStore(ForkAttachmentStoreMixin):
         control: SessionControlStore,
         operation_identity: str,
         preimage_hash: str,
-    ):
+    ) -> SessionOperationLease:
         """gate 内 fresh 校验 + create-or-get durable `AttachmentOperationPin`。"""
         async with self._gate.exclusive(session_id):
             generation = self._assert_session_active(session_id, thread_id)
@@ -283,7 +295,7 @@ class AttachmentBlobStore(ForkAttachmentStoreMixin):
         session_id: str,
         thread_id: str,
         control: SessionControlStore,
-        pin,
+        pin: SessionOperationLease,
         identity: BlobIdentity,
         claim,
         record_key: str,
@@ -323,15 +335,9 @@ class AttachmentBlobStore(ForkAttachmentStoreMixin):
                 mime_type=content_type,
                 max_bytes=MAX_ATTACHMENT_BYTES,
             )
-            control.mark_lease_settling(
-                lease_id=pin.lease_id, expected_fencing_token=pin.fencing_token
-            )
-        # 主体（catalog）已 durable commit，跨库顺序要求此后才把 pin 推进终态。
-        control.settle_lease(
-            lease_id=pin.lease_id,
-            expected_fencing_token=pin.fencing_token,
-            outcome="completed",
-        )
+            # TODO: 把 pin 的成功终态延后到消息 acceptance durable；当前只覆盖上传主体。
+            # 主体已经 durable；两步结算任一失败均保留原 published 事实供恢复。
+            self._settle_pin(control, pin, outcome="completed")
         return ref
 
     # ------------------------------------------------------------------
@@ -451,28 +457,62 @@ class AttachmentBlobStore(ForkAttachmentStoreMixin):
         self._verified_blob_signatures[key] = signature
 
     def recover_session(self, session_id: str) -> tuple[str, ...]:
-        """按持久 record 定点收敛某 session 的非终态 ingest 与 claim（不扫盘）。"""
+        """holder 已退出且持有 Session gate 的 owner 按持久记录定点恢复。"""
         actions: list[str] = []
-        for record in self._catalog.list_non_terminal_ingest_records(
-            owner_session_id=session_id
-        ):
-            staging = resolve_staging_path(
-                self._attachments_root, record.staging_relative_locator
-            )
-            if staging.is_file():
-                _remove_file(staging)
-                actions.append("removed-staging")
-            self._catalog.abort_ingest_record(
-                ingest_idempotency_key=record.ingest_idempotency_key,
-                reason="恢复：未发布的 ingest record 定点清理",
-            )
-            actions.append("aborted-ingest")
-        for claim in self._catalog.list_non_terminal_claims():
-            # rename 后但 catalog 发布前的正文保持不可见；这里只按非终态 claim
-            # 复验冻结 locator，由原 claim 继续或清理，绝不扫盘吸收。
-            resolve_blob_path(self._attachments_root, claim.final_relative_locator)
-            actions.append("claim-resumable")
+        control = self._open_control_store(session_id)
+        try:
+            # copy 附件 lease 由唯一 fork settlement owner 处理，不能混入上传。
+            pins = tuple(pin for pin in control.list_non_terminal_leases()
+                         if pin.operation_kind == "attachment" and pin.operation_identity.startswith("attkey_"))
+            pending = self._catalog.list_non_terminal_ingest_records(owner_session_id=session_id)
+            if {record.ingest_idempotency_key for record in pending} - {pin.operation_identity for pin in pins}:
+                raise RuntimeError(f"非终态附件 ingest 缺少对应有效 pin: session_id={session_id}")
+            for pin in pins:
+                try:
+                    record = self._catalog.get_ingest_record(pin.operation_identity)
+                except KeyError:
+                    record = None
+                if record is not None and (
+                    record.owner_session_id != session_id or record.pin_lease_id != pin.lease_id
+                    or record.preimage_hash != pin.preimage_hash
+                    or record.pin_captured_generation != pin.captured_lifecycle_generation
+                    or record.pin_fencing_token > pin.fencing_token
+                    or pin.recovery_ref != f"attachment:{session_id}:{record.owner_thread_id}"
+                ):
+                    raise RuntimeError(f"附件 pin 与 ingest 冻结身份不一致: lease_id={pin.lease_id}")
+                outcome = "completed" if record is not None and record.state == "published" else "failed"
+                if record is not None and record.state not in {"published", "aborted"}:
+                    _remove_file(resolve_staging_path(self._attachments_root, record.staging_relative_locator))
+                    self._catalog.abort_ingest_record(
+                        ingest_idempotency_key=record.ingest_idempotency_key,
+                        reason="恢复：上传 holder 已停止，未发布 ingest 明确终止",
+                    )
+                    actions.append("aborted-ingest")
+                recovered_pin = control.takeover_lease(
+                    lease_id=pin.lease_id, expected_fencing_token=pin.fencing_token,
+                )
+                self._settle_pin(control, recovered_pin, outcome=outcome)
+                actions.append("settled-pin")
+        finally:
+            control.close()
+        # TODO: 按唯一 claim 协调未发布正文的回收与同 digest 后续上传，不能扫盘或误删其它 owner。
         return tuple(actions)
+
+    async def recover_pending_ingests(self) -> int:
+        """启动时以权威 Session catalog 枚举，绝不抢占仍持 holder 的上传。"""
+        _, nodes = self._path_resolver.catalog_store.read_nodes_snapshot()
+        count = 0
+        for node in nodes:
+            if node.kind != "session" or node.state != "active":
+                continue
+            async with self.deletion_holder.lock_for(node.node_id, wait=False) as holder:
+                if not holder.acquired:
+                    continue
+                async with self._gate.exclusive(node.node_id):
+                    # 等 gate 期间删除可能已关闭准入，由删除 owner 收敛其 pin。
+                    if self._path_resolver.catalog_store.get_node(node.node_id).state == "active":
+                        count += self.recover_session(node.node_id).count("settled-pin")
+        return count
 
     def release_session_references(self, session_id: str) -> tuple[str, ...]:
         """删除 drain：释放该 session 的 owner reference 并收敛其 ingest（定点）。"""
@@ -615,21 +655,20 @@ class AttachmentBlobStore(ForkAttachmentStoreMixin):
         _fsync_directory(final_path.parent)
         self._verify_blob_content(final_path, identity.digest, identity.length, identity.blob_id)
 
-    def _settle_pin_quietly(self, control, pin, *, outcome: str) -> None:
-        try:
-            control.mark_lease_settling(
+    def _settle_pin(self, control: SessionControlStore, pin: SessionOperationLease, *, outcome: str) -> None:
+        """只结算当前 token；已完成可幂等确认，冲突与数据库故障必须暴露。"""
+        current = control.get_lease(pin.lease_id)
+        if current.fencing_token != pin.fencing_token:
+            raise RuntimeError(f"附件 pin 结算 token 已失效: lease_id={pin.lease_id}")
+        if current.state == outcome:
+            return
+        if current.state == "active":
+            current = control.mark_lease_settling(
                 lease_id=pin.lease_id, expected_fencing_token=pin.fencing_token
             )
-        except RuntimeError:
-            return
-        try:
-            control.settle_lease(
-                lease_id=pin.lease_id,
-                expected_fencing_token=pin.fencing_token,
-                outcome=outcome,
-            )
-        except RuntimeError:
-            return
+        control.settle_lease(
+            lease_id=pin.lease_id, expected_fencing_token=pin.fencing_token, outcome=outcome,
+        )
 
 
 def _verify_content(data: bytes | Path, digest: str, length: int, blob_id: str) -> None:
