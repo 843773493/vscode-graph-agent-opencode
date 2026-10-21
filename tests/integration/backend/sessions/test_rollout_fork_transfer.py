@@ -10,6 +10,7 @@ import sqlite3
 from collections.abc import AsyncIterator
 from pathlib import Path
 
+import commentjson
 import httpx
 import pytest
 
@@ -39,7 +40,6 @@ from tests.support.communication_federation import (
 from tests.support.e2e_control.harness import E2ETestControlHarness
 from tests.support.fork_deadline import ForkDeadlineRegistry, ForkOperationDeadline
 from tests.support.model_stream_config import ModelStreamReplay, model_stream_replay
-from tests.support.ports import integration_port_block_for_file
 from tests.support.processes.gateway import close_gateway_process
 from tests.support.session_navigation_http import submit_navigation_operation
 
@@ -103,10 +103,11 @@ async def _plan_replies(
         main = await node.client.get(f"/api/v1/sessions/{session_id}/main-thread")
         assert main.status_code == 200, main.text
         thread_id = main.json()["data"]["thread_id"]
-    ports = integration_port_block_for_file(Path(__file__))
+    config = commentjson.loads((node.workspace / ".boxteam/workspace.jsonc").read_text())
+    endpoint = next(provider["endpoint"] for provider in config["llm"]["providers"] if provider["id"] == "primary")
     interactions = [build_cassette(
         asset_id="fork-transfer", model="e2e-stub-model",
-        url=f"http://127.0.0.1:{ports.port(10)}/v1/chat/completions",
+        url=endpoint + "/chat/completions",
         frames=chat_completion_frames(
             response_id="chatcmpl-fork-transfer", model="e2e-stub-model",
             deltas=({"role": "assistant", **response},),

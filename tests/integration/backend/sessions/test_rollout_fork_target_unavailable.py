@@ -34,9 +34,11 @@ def _catalog_facts(node: CommunicationNode) -> dict[str, object]:
 async def test_authorized_remote_target_disconnect_has_no_local_fallback(transfer_triad):
     nodes, model, artifacts, _control, deadlines = transfer_triad
     source, target = nodes["b"], nodes["c"]
-    model.response_callback = lambda payload: {"content": "用于验证固定远端目标的真实历史"}
     source_session = await create_session(source.client, "远端目标不可达来源")
-    await transfer._send(source, source_session, "目标断连后不能复制到本地工作区")
+    await transfer._send(
+        source, source_session, "目标断连后不能复制到本地工作区",
+        model=model, reply="用于验证固定远端目标的真实历史",
+    )
     point_response = await source.client.get(
         f"/api/v1/sessions/{source_session}/fork-source-point", params={"mode": "full_rollout_copy"},
     )
@@ -69,7 +71,7 @@ async def test_authorized_remote_target_disconnect_has_no_local_fallback(transfe
     before = {name: _catalog_facts(node) for name, node in nodes.items()}
     source_inventory = await source.client.get("/api/v1/session-catalog/export")
     assert source_inventory.status_code == 200, source_inventory.text
-    provider_requests = len(model.requests)
+    provider_requests = transfer._provider_call_count(model)
     assert target.gateway is not None
     await asyncio.to_thread(close_gateway_process, target.gateway)
     assert target.gateway.process.poll() is not None
@@ -98,7 +100,7 @@ async def test_authorized_remote_target_disconnect_has_no_local_fallback(transfe
     after_inventory = await source.client.get("/api/v1/session-catalog/export")
     assert after_inventory.status_code == 200, after_inventory.text
     assert after_inventory.json()["data"] == source_inventory.json()["data"]
-    assert len(model.requests) == provider_requests
+    assert transfer._provider_call_count(model) == provider_requests
     (artifacts / "disconnected-target-owner-facts.json").write_text(json.dumps({
         "request": request, "before": before, "after": after,
         "target_gateway_exit": target.gateway.process.returncode,
@@ -131,9 +133,11 @@ async def _publish_fork_policy(node: CommunicationNode, policy: dict[str, object
 async def test_remote_fork_rechecks_both_owner_permissions_without_business_side_effects(transfer_triad):
     nodes, model, artifacts, _control, deadlines = transfer_triad
     source, target = nodes["b"], nodes["c"]
-    model.response_callback = lambda payload: {"content": "两端授权验收来源"}
     source_session = await create_session(source.client, "两端 fork 权限")
-    await transfer._send(source, source_session, "仅有 read 权限不能授权 fork")
+    await transfer._send(
+        source, source_session, "仅有 read 权限不能授权 fork",
+        model=model, reply="两端授权验收来源",
+    )
     point_response = await source.client.get(
         f"/api/v1/sessions/{source_session}/fork-source-point", params={"mode": "full_rollout_copy"},
     )
@@ -175,7 +179,7 @@ async def test_remote_fork_rechecks_both_owner_permissions_without_business_side
         frozen = request | {"idempotency_key": f"reject-and-retry-{capability}"}
         key = "fork-" + hashlib.sha256(frozen["idempotency_key"].encode()).hexdigest()
         before = {name: _catalog_facts(node) for name, node in nodes.items()}
-        provider_requests = len(model.requests)
+        provider_requests = transfer._provider_call_count(model)
         channels = {name: node.channels() for name, node in nodes.items()}
         deadline = transfer._fork_deadline(target, frozen, deadlines)
         denied = await transfer._post_fork(
@@ -187,7 +191,7 @@ async def test_remote_fork_rechecks_both_owner_permissions_without_business_side
         assert denied.headers["X-Request-ID"] == denied.json()["request_id"]
         after = {name: _catalog_facts(node) for name, node in nodes.items()}
         assert after == before
-        assert len(model.requests) == provider_requests
+        assert transfer._provider_call_count(model) == provider_requests
         for node in nodes.values():
             assert transfer._capture_record(node, key) is None
             assert transfer._attachment_claims(node, key) == []
@@ -204,7 +208,7 @@ async def test_remote_fork_rechecks_both_owner_permissions_without_business_side
         assert result["target_gateway_id"] == target.gateway_id
         assert result["session"]["workspace_id"] == target.workspace_id
         assert result["export_release"] == {"state": "confirmed", "error": None}
-        assert len(model.requests) == provider_requests
+        assert transfer._provider_call_count(model) == provider_requests
         receipts[-1].update({"before": before, "after": after, "restored_result": result})
     (artifacts / "fork-both-owner-permissions.json").write_text(
         json.dumps(receipts, ensure_ascii=False, indent=2) + "\n",
