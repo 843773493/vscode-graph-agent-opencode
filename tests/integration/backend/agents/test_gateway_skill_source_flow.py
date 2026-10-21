@@ -1,4 +1,4 @@
-"""真实 Gateway→受管 Workspace→Provider→skill_load；模型由本地协议桩驱动。"""
+"""真实 Gateway→受管 Workspace→Provider→skill_load；模型由共享 model_stream 精确回放驱动。"""
 
 from __future__ import annotations
 
@@ -7,12 +7,10 @@ import json
 import os
 import signal
 import sqlite3
-import threading
 import time
-from collections.abc import Callable
+from collections.abc import Iterator
 from contextlib import closing
 from dataclasses import dataclass, field
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from uuid import uuid4
 
@@ -22,6 +20,7 @@ import pytest
 
 from app.core.path_utils import get_session_path_resolver
 from app.services.orchestration.session_subagent_service import _derive_delegation_id
+from app.testing.model_stream import build_cassette, chat_completion_frames
 from tests.support.e2e_test_control import E2ETestControlHarness
 from tests.support.gateway_processes import (
     LOCAL_TOKEN_HEADERS,
@@ -29,6 +28,7 @@ from tests.support.gateway_processes import (
     close_gateway_process,
     start_gateway_process,
 )
+from tests.support.model_stream_config import model_stream_replay
 from tests.support.ports import integration_port_block_for_file
 
 SKILL_NAME = "gateway-frozen-proof"
@@ -37,69 +37,58 @@ NEW_BODY = "Gateway 新版正文 Ω 002  \r\n"
 FRONTMATTER = f"---\r\nname: {SKILL_NAME}\r\ndescription: Gateway raw snapshot proof\r\n---\r\n"
 
 
+MODEL = "gateway-skill-test-model"
+ENDPOINT = "https://opencode.ai/zen/v1"
+
+
 @dataclass
 class ModelState:
-    requests: list[dict] = field(default_factory=list)
-    before_first_reply: Callable[[], None] | None = None
-    respond: Callable[[dict], tuple[dict, str]] | None = None
+    control: E2ETestControlHarness
+    config_path: Path
+    artifacts: Path
+    call_ids: list[str] = field(default_factory=list)
+
+    @property
+    def requests(self) -> list[dict]:
+        return [json.loads(path.read_text())["request"] for call_id in self.call_ids
+                if (path := self.artifacts / f"{call_id}.json").is_file()]
+
+    @property
+    def environment(self) -> dict[str, str]:
+        return {**self.control.environment, "BOXTEAM_TEST_MODEL_STREAM_CONFIG": str(self.config_path)}
+
+    def plan(self, session_id: str, thread_id: str, *replies: tuple[dict, str]) -> list[str]:
+        interactions = [build_cassette(
+            asset_id="gateway-skill-response", model=MODEL,
+            url=f"{ENDPOINT}/chat/completions",
+            frames=chat_completion_frames(response_id="chatcmpl-gateway-skill", model=MODEL,
+                                          deltas=(delta,), finish_reason=reason),
+        ).raw["interactions"][0] for delta, reason in replies]
+        calls = self.control.plan_model_calls(session_id, thread_id, interactions)
+        self.call_ids.extend(calls)
+        return calls
 
 
-@pytest.fixture(scope="module")
-def model_server():
-    state = ModelState()
+def _skill_reply(call_id: str, *, tracked: bool = False) -> tuple[dict, str]:
+    arguments = {"name": SKILL_NAME, **({"mode": "tracked"} if tracked else {})}
+    return {"role": "assistant", "tool_calls": [{
+        "index": 0, "id": call_id, "type": "function",
+        "function": {"name": "skill_load", "arguments": json.dumps(arguments)},
+    }]}, "tool_calls"
 
-    class Handler(BaseHTTPRequestHandler):
-        def log_message(self, _format: str, *_args: object) -> None:
-            pass
 
-        def do_POST(self) -> None:
-            assert self.path == "/v1/chat/completions"
-            assert self.headers["Authorization"] == "Bearer gateway-skill-test-key"
-            payload = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
-            state.requests.append(payload)
-            if state.respond is not None:
-                delta, reason = state.respond(payload)
-            elif len(state.requests) == 1:
-                assert state.before_first_reply is not None
-                state.before_first_reply()
-                delta = {"role": "assistant", "tool_calls": [{
-                    "index": 0, "id": "call_gateway_skill", "type": "function",
-                    "function": {"name": "skill_load", "arguments": json.dumps({"name": SKILL_NAME, "mode": "tracked"})},
-                }]}
-                reason = "tool_calls"
-            else:
-                delta, reason = {"role": "assistant", "content": "GATEWAY_SKILL_OK"}, "stop"
-            chunks = [
-                {"id": "chatcmpl-gateway-skill", "object": "chat.completion.chunk", "created": int(time.time()),
-                 "model": "gateway-skill-test-model", "choices": [{"index": 0, "delta": delta, "finish_reason": None}]},
-                {"id": "chatcmpl-gateway-skill", "object": "chat.completion.chunk", "created": int(time.time()),
-                 "model": "gateway-skill-test-model", "choices": [{"index": 0, "delta": {}, "finish_reason": reason}]},
-            ]
-            body = b"".join(f"data: {json.dumps(chunk)}\n\n".encode() for chunk in chunks) + b"data: [DONE]\n\n"
-            self.send_response(200)
-            self.send_header("Content-Type", "text/event-stream")
-            self.send_header("Content-Length", str(len(body)))
-            self.end_headers()
-            self.wfile.write(body)
-
-    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    try:
-        yield state, f"http://127.0.0.1:{server.server_port}/v1"
-    finally:
-        server.shutdown()
-        server.server_close()
-        thread.join(timeout=5)
+def _text_reply(text: str) -> tuple[dict, str]:
+    return {"role": "assistant", "content": text}, "stop"
 
 
 @pytest.fixture
-def scripted_model(model_server):
-    state, endpoint = model_server
-    state.requests.clear()
-    state.before_first_reply = None
-    state.respond = None
-    return state, endpoint
+def scripted_model(request: pytest.FixtureRequest, integration_workspace_root_path: str) -> Iterator[ModelState]:
+    output = Path(integration_workspace_root_path).parent
+    with model_stream_replay(
+        output, runtime_root=output / "runtime" / request.node.name,
+        business_assertion="gateway-skill-source-flow",
+    ) as replay:
+        yield ModelState(replay.control, replay.config_path, replay.artifacts)
 
 
 async def _job(client: httpx.AsyncClient, session_id: str) -> dict:
@@ -161,7 +150,7 @@ async def test_gateway_authenticated_raw_sources_drive_frozen_skill_and_restart(
     request: pytest.FixtureRequest, integration_workspace_root_path: str,
     integration_workspace_config_path: str, scripted_model,
 ):
-    state, endpoint = scripted_model
+    state = scripted_model
     workspace = Path(integration_workspace_root_path)
     output = workspace.parent
     artifacts = output / "artifacts"
@@ -169,13 +158,14 @@ async def test_gateway_authenticated_raw_sources_drive_frozen_skill_and_restart(
     home = output / "boxteam-home"
     port = integration_port_block_for_file(Path(request.node.fspath)).port(11)
     config_path = Path(integration_workspace_config_path)
-    _configure_model(config_path, endpoint)
+    _configure_model(config_path, ENDPOINT)
     skill_file = home / "skills" / SKILL_NAME / "SKILL.md"
     skill_file.parent.mkdir(parents=True)
     skill_file.write_bytes((FRONTMATTER + OLD_BODY).encode())
     gateway = start_gateway_process(
         workspace_root=workspace, default_backend_url=None, port=port,
-        boxteam_home=home, artifacts_dir=artifacts / "gateway-first",
+        boxteam_home=home, artifacts_dir=artifacts / "gateway-first", asgi_app="tests.support.section8_gateway:app",
+        extra_env=state.environment,
     )
     base_url = f"http://127.0.0.1:{port}"
     try:
@@ -217,13 +207,25 @@ async def test_gateway_authenticated_raw_sources_drive_frozen_skill_and_restart(
                         time.sleep(0.05)
                 raise AssertionError("Gateway watcher 未接受新 raw revision")
 
-            state.before_first_reply = change_after_model_capture
             created = await client.post("/api/v1/sessions", json={"title": "Gateway frozen Skill"})
             assert created.status_code == 200, created.text
             session_id = created.json()["data"]["session_id"]
             thread_reply = await client.get(f"/api/v1/sessions/{session_id}/main-thread")
             thread_id = thread_reply.json()["data"]["thread_id"]
-            job = await _job(client, session_id)
+            calls = state.plan(session_id, thread_id, _skill_reply("call_gateway_skill", tracked=True),
+                               _text_reply("GATEWAY_SKILL_OK"))
+            state.control.arm(calls[0], "model.response_ready")
+            accepted = await client.post(f"/api/v1/sessions/{session_id}/messages", json={
+                "message": {"content": "继续验证已登记的 Skill 来源"},
+                "run": {"mode": "single_agent", "agent_id": "default"},
+            })
+            assert accepted.status_code == 200, accepted.text
+            try:
+                await asyncio.to_thread(state.control.acknowledged, calls[0], "model.response_ready")
+                await asyncio.to_thread(change_after_model_capture)
+            finally:
+                state.control.release(calls[0], "model.response_ready")
+            job = await _wait_job(client, accepted.json()["data"]["job_id"])
             assert job["status"] in {"completed", "succeeded"}, job
             assert len(state.requests) == 2
             first_text = json.dumps(state.requests[0], ensure_ascii=False)
@@ -233,6 +235,7 @@ async def test_gateway_authenticated_raw_sources_drive_frozen_skill_and_restart(
             assert OLD_BODY.strip() in second_text and NEW_BODY.strip() not in second_text
             tool_messages = [item for item in state.requests[1]["messages"] if item["role"] == "tool"]
             assert tool_messages and "loaded" in json.dumps(tool_messages)
+            state.plan(session_id, thread_id, _text_reply("GATEWAY_SKILL_OK"))
             job = await _job(client, session_id)
             assert job["status"] in {"completed", "succeeded"}, job
             assert NEW_BODY.strip() in json.dumps(state.requests[-1], ensure_ascii=False)
@@ -262,7 +265,8 @@ async def test_gateway_authenticated_raw_sources_drive_frozen_skill_and_restart(
         close_gateway_process(gateway)
         gateway = start_gateway_process(
             workspace_root=workspace, default_backend_url=None, port=port, boxteam_home=home,
-            artifacts_dir=artifacts / "gateway-restarted",
+            artifacts_dir=artifacts / "gateway-restarted", asgi_app="tests.support.section8_gateway:app",
+            extra_env=state.environment,
         )
         async with httpx.AsyncClient(base_url=base_url, headers=LOCAL_TOKEN_HEADERS, timeout=60, trust_env=False) as client:
             await acquire_gateway_guest(client)
@@ -271,9 +275,12 @@ async def test_gateway_authenticated_raw_sources_drive_frozen_skill_and_restart(
             rebuilt = (await client.get(raw_path)).json()["data"]
             assert rebuilt["revision"] == refreshed["revision"]
             assert rebuilt["entries"] == refreshed["entries"]
+            state.plan(session_id, thread_id, _text_reply("GATEWAY_SKILL_OK"))
+            # TODO: 冷启动 runtime 曾耗时约25秒并触发原30秒 Job期限；保留期限，后续定位性能。
             restored = await _job(client, session_id)
             assert restored["status"] in {"completed", "succeeded"}, restored
             assert NEW_BODY.strip() in json.dumps(state.requests[-1], ensure_ascii=False)
+            assert len(state.requests) == len(state.call_ids) == 4
             receipt = await client.post(f"/api/v1/sessions/{session_id}/threads/{thread_id}/skills/untrack", json={"name": SKILL_NAME})
             assert receipt.status_code == 200, receipt.text
             assert receipt.json()["data"]["tracked"] is False
@@ -293,44 +300,18 @@ async def test_cold_child_dispatch_and_result_keep_creation_gateway_source(
     integration_workspace_config_path: str, scripted_model,
 ):
     """真实 task 发布后硬杀；冷恢复 child 与结果 reply 保留原 HTTP 请求身份及 Skill 来源。"""
-    state, endpoint = scripted_model
+    state = scripted_model
     workspace = Path(integration_workspace_root_path)
     output = workspace.parent
     artifacts = output / "artifacts" / "cold-child"
     artifacts.mkdir(parents=True, exist_ok=True)
     home = output / "boxteam-home"
     port = integration_port_block_for_file(Path(request.node.fspath)).port(12)
-    _configure_model(Path(integration_workspace_config_path), endpoint)
+    _configure_model(Path(integration_workspace_config_path), ENDPOINT)
     skill_file = home / "skills" / SKILL_NAME / "SKILL.md"
     skill_file.parent.mkdir(parents=True, exist_ok=True)
     skill_file.write_bytes((FRONTMATTER + OLD_BODY).encode())
-    release_task_call = threading.Event()
-
-    def respond(payload: dict) -> tuple[dict, str]:
-        contents = "\n".join(str(item.get("content", "")) for item in payload["messages"])
-        skill_results = [item for item in payload["messages"] if item["role"] == "tool" and item.get("name") == "skill_load"]
-        if "<delegated_task " in contents or "<generated_session_result " in contents:
-            child = "<delegated_task " in contents
-            if skill_results:
-                assert "loaded" in json.dumps(skill_results)
-                assert OLD_BODY.strip() in contents
-                return {"role": "assistant", "content": "COLD_CHILD_DONE" if child else "COLD_REPLY_DONE"}, "stop"
-            assert "Gateway raw snapshot proof" in contents
-            return {"role": "assistant", "tool_calls": [{
-                "index": 0, "id": "call_child_skill" if child else "call_reply_skill", "type": "function",
-                "function": {"name": "skill_load", "arguments": json.dumps({"name": SKILL_NAME})},
-            }]}, "tool_calls"
-        if any(item["role"] == "tool" and item.get("name") == "task" for item in payload["messages"]):
-            return {"role": "assistant", "content": "PARENT_WAITING_FOR_CHILD"}, "stop"
-        assert release_task_call.wait(20), "pytest 未为真实 task 发布屏障绑定 operation identity"
-        return {"role": "assistant", "tool_calls": [{
-            "index": 0, "id": "call_cold_child", "type": "function",
-            "function": {"name": "task", "arguments": json.dumps({"description": "COLD_CHILD_SKILL_TASK：显式加载 Gateway Skill 并返回结果。"})},
-        }]}, "tool_calls"
-
-    state.respond = respond
-    control = E2ETestControlHarness(artifacts / "control")
-    control.start()
+    control = state.control
     gateway = None
     phase = "thread.creation.published"
     delegation_id = None
@@ -338,7 +319,7 @@ async def test_cold_child_dispatch_and_result_keep_creation_gateway_source(
         gateway = start_gateway_process(
             workspace_root=workspace, default_backend_url=None, port=port, boxteam_home=home,
             artifacts_dir=artifacts / "gateway-first", asgi_app="tests.support.section8_gateway:app",
-            extra_env=control.environment,
+            extra_env=state.environment,
         )
         base_url = f"http://127.0.0.1:{port}"
         async with httpx.AsyncClient(base_url=base_url, headers=LOCAL_TOKEN_HEADERS, timeout=60, trust_env=False) as client:
@@ -350,6 +331,11 @@ async def test_cold_child_dispatch_and_result_keep_creation_gateway_source(
             assert created.status_code == 200, created.text
             session_id = created.json()["data"]["session_id"]
             main_thread_id = (await client.get(f"/api/v1/sessions/{session_id}/main-thread")).json()["data"]["thread_id"]
+            first_call = state.plan(session_id, main_thread_id, ({"role": "assistant", "tool_calls": [{
+                "index": 0, "id": "call_cold_child", "type": "function",
+                "function": {"name": "task", "arguments": json.dumps({"description": "COLD_CHILD_SKILL_TASK：显式加载 Gateway Skill 并返回结果。"})},
+            }]}, "tool_calls"))[0]
+            control.arm(first_call, "model.response_ready")
             accepted = await client.post(f"/api/v1/sessions/{session_id}/messages", json={
                 "message": {"content": "创建独立子线程并验证 Gateway Skill 来源"},
                 "run": {"mode": "single_agent", "agent_id": "default"},
@@ -363,7 +349,7 @@ async def test_cold_child_dispatch_and_result_keep_creation_gateway_source(
                 parent_tool_call_id="call_cold_child", subagent_type="general-purpose",
             )
             control.arm(delegation_id, phase)
-            release_task_call.set()
+            control.release(first_call, "model.response_ready")
             await asyncio.to_thread(control.acknowledged, delegation_id, phase)
             published_event = next(event for event in control.events if event["operation_id"] == delegation_id and event["phase"] == phase)
             crashed_pid = published_event["pid"]
@@ -380,6 +366,11 @@ async def test_cold_child_dispatch_and_result_keep_creation_gateway_source(
             assert json.loads(record["task_seed"])["request_id"] == request_id
             assert len(state.requests) == 1, "初次 child 只能在冷启动后进入真实 Runner"
             (artifacts / "published-before-crash.json").write_text(json.dumps({"record": record, "intent": intent, "phase": published_event}, ensure_ascii=False, indent=2) + "\n")
+            # 关键 child/intent 由真实 task 发布；只在观察到 owner 后计划后续模型响应。
+            state.plan(session_id, record["child_thread_id"], _skill_reply("call_child_skill"),
+                       _text_reply("COLD_CHILD_DONE"))
+            state.plan(session_id, main_thread_id, _skill_reply("call_reply_skill"),
+                       _text_reply("COLD_REPLY_DONE"))
             os.kill(crashed_pid, signal.SIGKILL)
         close_gateway_process(gateway)
         gateway = None
@@ -388,7 +379,7 @@ async def test_cold_child_dispatch_and_result_keep_creation_gateway_source(
         gateway = start_gateway_process(
             workspace_root=workspace, default_backend_url=None, port=port, boxteam_home=home,
             artifacts_dir=artifacts / "gateway-restarted", asgi_app="tests.support.section8_gateway:app",
-            extra_env=control.environment,
+            extra_env=state.environment,
         )
         async with httpx.AsyncClient(base_url=base_url, headers=LOCAL_TOKEN_HEADERS, timeout=60, trust_env=False) as client:
             await acquire_gateway_guest(client)
@@ -402,7 +393,11 @@ async def test_cold_child_dispatch_and_result_keep_creation_gateway_source(
                     thread_node = resolver.resolve_thread_node(session_id, main_thread_id)
                     wakeups = _rows(thread_node / "rollout" / "index.sqlite", "SELECT * FROM runtime_execution_wakeups WHERE source_id = ?", (f"subagent:{delegation_id}:result",))
                     if wakeups:
-                        break
+                        assert len(wakeups) == 1
+                        assert wakeups[0]["last_error"] is None, wakeups[0]
+                        # 持久唤醒先于 Job 创建；仅派发收据提交后才查询原 Job。
+                        if wakeups[0]["state"] == "dispatched":
+                            break
                     await asyncio.sleep(0.05)
             assert len(wakeups) == 1 and wakeups[0]["gateway_id"] == gateway_id
             assert wakeups[0]["request_id"] == request_id
@@ -424,13 +419,12 @@ async def test_cold_child_dispatch_and_result_keep_creation_gateway_source(
             assert len(child_requests) == 2 and OLD_BODY.strip() in child_requests[1]
             assert len(reply_requests) == 2 and "COLD_CHILD_DONE" in reply_requests[0]
             assert OLD_BODY.strip() in reply_requests[1]
+            assert len(state.requests) == len(state.call_ids) == 5
             assert all(request_id not in payload for payload in requests), "请求身份不得进入 Provider 正文"
             (artifacts / "restored-dispatch-and-reply.json").write_text(json.dumps({"child_job": child_job, "reply_job": reply, "wakeup": wakeups[0], "job_created": jobs, "compiled_child": compiled_child}, ensure_ascii=False, indent=2) + "\n")
     finally:
-        release_task_call.set()
         if delegation_id is not None:
             control.release(delegation_id, phase)
         if gateway is not None:
             close_gateway_process(gateway)
-        control.close()
         (artifacts / "model-requests.json").write_text(json.dumps(state.requests, ensure_ascii=False, indent=2) + "\n")
