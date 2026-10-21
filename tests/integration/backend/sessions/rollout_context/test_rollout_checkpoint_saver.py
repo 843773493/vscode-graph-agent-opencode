@@ -16,6 +16,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import BinaryIO
 
+import portalocker
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langchain_core.runnables import RunnableConfig
@@ -229,17 +230,15 @@ def test_rollout_file_lock_times_out_instead_of_waiting_forever(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    import fcntl
-
     lock_path = tmp_path / ".rollout.write.lock"
-    original_flock = fcntl.flock
+    original_lock = rollout_primitives.portalocker.lock
 
-    def reject_nonblocking_lock(fd: int, operation: int) -> None:
-        if operation & fcntl.LOCK_NB:
-            raise BlockingIOError("test lock is held")
-        original_flock(fd, operation)
+    def reject_nonblocking_lock(file: int, flags: int) -> None:
+        if flags & portalocker.LOCK_NB:
+            raise portalocker.AlreadyLocked("test lock is held")
+        original_lock(file, flags)
 
-    monkeypatch.setattr(fcntl, "flock", reject_nonblocking_lock)
+    monkeypatch.setattr(rollout_primitives.portalocker, "lock", reject_nonblocking_lock)
     lock = _RolloutFileLock(
         lock_path,
         exclusive=True,
@@ -250,7 +249,6 @@ def test_rollout_file_lock_times_out_instead_of_waiting_forever(
         lock.acquire()
 
 
-@pytest.mark.skipif(os.name != "posix", reason="POSIX rollout 文件锁准入公平性")
 def test_rollout_file_lock_writer_precedes_later_reader(tmp_path: Path) -> None:
     """已有 reader 释放后，排队 writer 必须先于新 reader 获准。"""
     lock_path = tmp_path / ".rollout.write.lock"
@@ -437,7 +435,6 @@ def test_rollout_file_lock_facades_coordinate_normalized_paths(tmp_path: Path) -
         assert not reader.is_alive(), "跨 facade reader 测试线程未退出"
 
 
-@pytest.mark.skipif(os.name != "posix", reason="POSIX rollout 文件锁读者 FIFO 准入")
 def test_rollout_file_lock_queued_reader_precedes_later_writer(tmp_path: Path) -> None:
     """独占 holder 释放后，先排队的 shared reader 应先于后到 writer。"""
     lock_path = tmp_path / ".rollout.write.lock"
@@ -538,7 +535,6 @@ async def _wait_for_rollout_lock_queue(lock: _RolloutFileLock, size: int) -> Non
             await asyncio.sleep(0)
 
 
-@pytest.mark.skipif(os.name != "posix", reason="POSIX rollout 共享锁的 Task 公平性")
 async def test_rollout_async_reader_waits_behind_queued_thread_writer(tmp_path: Path) -> None:
     """同 loop 的不同 Task 不能借用前一 reader 的 hold 越过排队 writer。"""
     path = tmp_path / ".rollout.write.lock"
@@ -606,12 +602,9 @@ async def test_rollout_async_local_cancellation_removes_fifo_ticket(tmp_path: Pa
     assert not admission._holders
 
 
-@pytest.mark.skipif(os.name != "posix", reason="真实 flock 等待与文件句柄取消清理")
 async def test_rollout_async_file_cancellation_closes_fd_and_releases_admission(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    import fcntl
-
     path = tmp_path / ".rollout.write.lock"
     path.touch()
     opened = asyncio.Event()
@@ -625,8 +618,10 @@ async def test_rollout_async_file_cancellation_closes_fd_and_releases_admission(
         return handle
 
     monkeypatch.setattr(_RolloutFileLock, "_open_handle", record_open)
-    with path.open("rb") as external:
-        fcntl.flock(external.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    with path.open("a+b") as external:
+        portalocker.lock(
+            external.fileno(), portalocker.LOCK_EX | portalocker.LOCK_NB
+        )
         waiting = _RolloutFileLock(path, exclusive=False, timeout_seconds=2)
         task = asyncio.create_task(waiting.acquire_async())
         try:
@@ -680,12 +675,9 @@ async def test_rollout_lock_reentry_is_bound_to_current_task(tmp_path: Path) -> 
             await operation.acquire_async()
 
 
-@pytest.mark.skipif(os.name != "posix", reason="POSIX 本地排队与 flock 共用超时预算")
 def test_rollout_local_and_file_wait_share_one_deadline(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    import fcntl
-
     class Clock:
         now = 100.0
 
@@ -711,8 +703,10 @@ def test_rollout_local_and_file_wait_share_one_deadline(
 
     monkeypatch.setattr(admission._condition, "wait", signal_wait)
     monkeypatch.setattr(rollout_primitives, "time", clock)
-    with path.open("rb") as external, ThreadPoolExecutor(max_workers=1) as executor:
-        fcntl.flock(external.fileno(), fcntl.LOCK_SH | fcntl.LOCK_NB)
+    with path.open("a+b") as external, ThreadPoolExecutor(max_workers=1) as executor:
+        portalocker.lock(
+            external.fileno(), portalocker.LOCK_SH | portalocker.LOCK_NB
+        )
         waiter = _RolloutFileLock(path, exclusive=True, timeout_seconds=1)
         future = executor.submit(waiter.acquire)
         try:
@@ -802,28 +796,25 @@ def test_rollout_operation_lock_times_out_when_same_process_writer_is_busy(
             assert lock._held is not None
 
 
-@pytest.mark.skipif(os.name != "posix", reason="POSIX 文件解锁失败的真实句柄验证")
 def test_rollout_operation_lock_releases_admission_when_file_unlock_fails(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    import fcntl
-
     lock_path = tmp_path / ".rollout.write.lock"
     lock = _RolloutOperationLock(lock_path, timeout_seconds=0.1)
     lock.acquire()
     assert lock._held is not None
     handle = lock._held.handle
     assert handle is not None
-    original_flock = fcntl.flock
+    original_unlock = rollout_primitives.portalocker.unlock
 
-    def fail_unlock(fd: int, operation: int) -> None:
-        if fd == handle.fileno() and operation == fcntl.LOCK_UN:
+    def fail_unlock(file: int) -> None:
+        if file == handle.fileno():
             raise OSError("模拟解锁失败")
-        original_flock(fd, operation)
+        original_unlock(file)
 
     with monkeypatch.context() as patch:
-        patch.setattr(fcntl, "flock", fail_unlock)
+        patch.setattr(rollout_primitives.portalocker, "unlock", fail_unlock)
         with pytest.raises(OSError, match="模拟解锁失败"):
             lock.__exit__(None, None, None)
     assert handle.closed
@@ -1253,13 +1244,10 @@ async def test_checkpoint_alist_awaits_holder_and_cleans_cancelled_admission(
         await asyncio.gather(operation, return_exceptions=True)
 
 
-@pytest.mark.skipif(os.name != "posix", reason="真实 flock 竞争时 alist 必须让出事件循环")
 async def test_checkpoint_alist_awaits_external_file_lock(
     checkpoint_listing: tuple[RolloutCheckpointSaver, MutationIntentOwner, RunnableConfig],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    import fcntl
-
     saver, owner, config = checkpoint_listing
     lock_path = saver._storage.storage.root(owner.session_id, thread_id=owner.thread_id).parent / ".rollout.write.lock"
     waiting = asyncio.Event()
@@ -1276,13 +1264,15 @@ async def test_checkpoint_alist_awaits_external_file_lock(
             return [item async for item in saver.alist(config, limit=1)]
 
     monkeypatch.setattr(_RolloutFileLock, "_file_lock_delay", observe_file_wait)
-    with lock_path.open("rb") as external:
-        fcntl.flock(external.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    with lock_path.open("a+b") as external:
+        portalocker.lock(
+            external.fileno(), portalocker.LOCK_EX | portalocker.LOCK_NB
+        )
         operation = asyncio.create_task(collect())
         try:
             await asyncio.wait_for(waiting.wait(), timeout=1)
             assert not operation.done(), "alist 在外部锁释放前不应同步阻塞至超时"
-            fcntl.flock(external.fileno(), fcntl.LOCK_UN)
+            portalocker.unlock(external.fileno())
             items = await asyncio.wait_for(operation, timeout=2)
             assert [item.checkpoint["id"] for item in items] == ["cp-alist-2"]
         finally:

@@ -7,7 +7,6 @@
 from __future__ import annotations
 
 import asyncio
-import errno
 import os
 import sqlite3
 import threading
@@ -18,6 +17,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import BinaryIO, Protocol, Self
 from weakref import WeakValueDictionary
+
+import portalocker
 
 from app.domain.itemized.records import CanonicalItemRecord
 from app.services.infrastructure.rollout_context.storage import (
@@ -340,15 +341,7 @@ class _RolloutPathLock:
         handle = held.handle
         try:
             if handle is not None:
-                if os.name == "nt":
-                    import msvcrt
-
-                    handle.seek(0)
-                    msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
-                else:
-                    import fcntl
-
-                    fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+                portalocker.unlock(handle.fileno())
         finally:
             try:
                 if handle is not None:
@@ -440,7 +433,7 @@ class _RolloutFileLock:
         handle = self._path.open("a+b" if self._exclusive else "rb")
         try:
             if os.name == "nt":
-                # TODO: Windows CI 覆盖共享读锁；Windows 当前使用独占锁保证跨文件一致性。
+                # msvcrt 独占锁需要可锁定的首字节；portalocker 为共享锁使用 Win32 LockFileEx。
                 handle.seek(0, os.SEEK_END)
                 if self._exclusive and handle.tell() == 0:
                     handle.write(b" ")
@@ -460,28 +453,20 @@ class _RolloutFileLock:
                 "rollout 文件锁获取超时: "
                 f"path={self._path} timeout_seconds={self._timeout_seconds:g}"
             )
+        mode = portalocker.LOCK_EX if self._exclusive else portalocker.LOCK_SH
         try:
-            if os.name == "nt":
-                import msvcrt
-
-                try:
-                    msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
-                except OSError as error:
-                    if error.errno not in (errno.EACCES, errno.EAGAIN, errno.EDEADLK):
-                        raise
-                    raise BlockingIOError from error
-            else:
-                import fcntl
-
-                mode = fcntl.LOCK_EX if self._exclusive else fcntl.LOCK_SH
-                fcntl.flock(handle.fileno(), mode | fcntl.LOCK_NB)
-        except BlockingIOError:
+            portalocker.lock(
+                handle.fileno(), mode | portalocker.LOCK_NB
+            )
+        except portalocker.AlreadyLocked:
             return min(
                 _ROLLOUT_FILE_LOCK_POLL_INTERVAL_SECONDS,
                 max(0, deadline - time.monotonic()),
             )
-        except OSError as error:
-            raise RuntimeError(f"rollout 文件锁获取失败: {self._path}") from error
+        except portalocker.LockException as error:
+            raise RuntimeError(
+                f"rollout 文件锁获取失败: path={self._path}, error={error}"
+            ) from error
         return None
 
     def _acquire_handle(self, deadline: float) -> BinaryIO:
