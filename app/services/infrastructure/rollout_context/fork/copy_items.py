@@ -48,6 +48,7 @@ from app.services.infrastructure.rollout_context.storage.catalog.view_items.stor
 )
 from app.services.infrastructure.rollout_context.storage.checkpoint_lineage import (
     delta_history_path,
+    delta_recovery_channels,
 )
 
 if TYPE_CHECKING:
@@ -395,21 +396,20 @@ def _include_delta_history(connection: sqlite3.Connection) -> None:
     while pending:
         checkpoint_id = pending.pop()
         expanded.add(checkpoint_id)
-        for checkpoint_ns, channel in connection.execute(
-            "SELECT checkpoint_ns,channel_name FROM checkpoints JOIN checkpoint_channels USING(checkpoint_id) "
-            "WHERE checkpoint_id=? AND (value_state='delta' "
-            "OR (value_state='absent' AND channel_version IS NOT NULL))", (checkpoint_id,),
-        ).fetchall():
-            for ancestor in delta_history_path(
-                connection, checkpoint_id, checkpoint_ns=checkpoint_ns, channels=(channel,),
-            ):
-                connection.execute(
-                    "INSERT INTO fork_selected_checkpoints(checkpoint_id) "
-                    "SELECT ? WHERE NOT EXISTS(SELECT 1 FROM fork_selected_checkpoints WHERE checkpoint_id=?)",
-                    (ancestor, ancestor),
-                )
-                if ancestor not in expanded:
-                    pending.add(ancestor)
+        checkpoint_ns = connection.execute(
+            "SELECT checkpoint_ns FROM checkpoints WHERE checkpoint_id=?", (checkpoint_id,),
+        ).fetchone()[0]
+        for ancestor in delta_history_path(
+            connection, checkpoint_id, checkpoint_ns=checkpoint_ns,
+            channels=delta_recovery_channels(connection, checkpoint_id),
+        ):
+            connection.execute(
+                "INSERT INTO fork_selected_checkpoints(checkpoint_id) "
+                "SELECT ? WHERE NOT EXISTS(SELECT 1 FROM fork_selected_checkpoints WHERE checkpoint_id=?)",
+                (ancestor, ancestor),
+            )
+            if ancestor not in expanded:
+                pending.add(ancestor)
     # 冻结 view 的全部成员是恢复支撑，原 selection 坐标保持不变。
     connection.execute(
         "INSERT OR IGNORE INTO fork_selected_items(item_id) "
@@ -535,10 +535,6 @@ def _prune_prefix_facts(connection: sqlite3.Connection) -> None:
         connection.execute(
             f"DELETE FROM {table} WHERE checkpoint_id NOT IN (SELECT checkpoint_id FROM fork_selected_checkpoints)",
         )
-    connection.execute(
-        "DELETE FROM checkpoint_state_values WHERE value_id NOT IN "
-        "(SELECT value_id FROM checkpoint_channels WHERE value_id IS NOT NULL)",
-    )
     for table in ("checkpoint_context_source_snapshots", "checkpoint_context_source_states"):
         connection.execute(
             f"DELETE FROM {table} WHERE checkpoint_id NOT IN "

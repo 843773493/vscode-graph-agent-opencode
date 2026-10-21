@@ -9,6 +9,14 @@ from time import perf_counter_ns
 from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 
 from app.services.infrastructure import rollout_checkpoint_runtime as runtime
+from app.services.infrastructure.rollout_context.checkpoint.durable import (
+    operations,
+    persistence,
+)
+from app.services.infrastructure.rollout_context.fork import snapshot_copy
+from app.services.infrastructure.rollout_context.storage.catalog.unreferenced_content import (
+    collect_unreferenced_content,
+)
 from tests.support.e2e_control.backend_app import app
 
 _metrics: dict[str, dict[str, int]] = defaultdict(lambda: {"calls": 0, "bytes": 0, "ns": 0})
@@ -58,6 +66,22 @@ class MeasuredSaver(runtime.RolloutCheckpointSaver):
 runtime.JsonPlusSerializer = MeasuredSerializer
 runtime.RolloutAppendWriter = MeasuredWriter
 runtime.RolloutCheckpointSaver = MeasuredSaver
+
+
+def measured_collect(connection):
+    started = perf_counter_ns()
+    removed = collect_unreferenced_content(connection)
+    _record("collect_unreferenced_content", started)
+    with _lock:
+        counts = _metrics["collect_unreferenced_content"]
+        for family, count in removed.items():
+            key = f"removed_{family}"
+            counts[key] = counts.get(key, 0) + count
+    return removed
+
+
+for owner in (operations, persistence, snapshot_copy):
+    owner.collect_unreferenced_content = measured_collect
 
 
 @app.get("/__test__/history-storage-metrics")

@@ -38,6 +38,9 @@ from app.services.infrastructure.rollout_context.checkpoint.message_commit.compa
 from app.services.infrastructure.rollout_context.checkpoint.message_commit.prepare import (
     prepare_messages,
 )
+from app.services.infrastructure.rollout_context.storage.catalog.unreferenced_content import (
+    collect_unreferenced_content,
+)
 from app.services.infrastructure.rollout_context.storage.serialization import (
     canonical_json_text as _json,
 )
@@ -595,6 +598,7 @@ class RolloutCheckpointPersistenceMixin:
                     )
                     consumer = self.consume_context_epoch_rebuild_intent if consume_epoch_intent is None else consume_epoch_intent
                     consumer(intent, connection)
+                    collect_unreferenced_content(connection)
                 self._storage._commit_connection(connection)
 
     @staticmethod

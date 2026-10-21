@@ -29,15 +29,15 @@
 
 ## 5. P2 引用保护回收
 
-- [ ] 5.1 由retained checkpoint、assembly、resource snapshot、fork/claim与既有retention根构造状态版本、prefix/view、增量基准和中间writes依赖闭包，避免第二套可变权威状态。
-- [ ] 5.2 先回收无引用冗余；需要换基准时在原事务内建立/验证等价基准并切换引用再删除，保留用户原有历史期限及可回退/fork点。
-- [ ] 5.3 用产品生成的历史在清理前后执行重启、恢复、深fork、回退和继续，验证身份、顺序、工具配对、owner与request_hash不变，失败中断不破坏依赖；移除旧清理路径并提交。
+- [x] 5.1 由retained checkpoint、assembly、resource snapshot、fork/claim与既有retention根构造状态版本、prefix/view、增量基准和中间writes依赖闭包，避免第二套可变权威状态。
+- [x] 5.2 先回收无引用冗余；需要换基准时在原事务内建立/验证等价基准并切换引用再删除，保留用户原有历史期限及可回退/fork点。
+- [x] 5.3 用产品生成的历史在清理前后执行重启、恢复、深fork、回退和继续，验证身份、顺序、工具配对、owner与request_hash不变，失败中断不破坏依赖；移除旧清理路径并提交。
 
 ## 6. 最终验收与证据
 
-- [ ] 6.1 在相同版本标记/工作负载下通过Gateway和真实目标workspace执行多轮工具循环、并发工具结果、摘要、进程重启、深历史fork和回退；保留同步/异步及真实HTTP/SDK专项证据，普通业务/Web复用model_stream与共享协议资产。
-- [ ] 6.2 对照优化前后各表体积、正文/索引增长、序列化次数/字节、写入/恢复时间，分别证明channel版本复用、assembly共享、回收后恢复/fork，不以总库体积或升级成功代替证明。
-- [ ] 6.3 复核无第二事实源/双读双写/过时接口、无历史版本改写；相关静态、类型/构建（若涉及Web）、严格OpenSpec及独审通过，按片提交并push。无法短期解决的性能长尾以测量证据和原目标登记TODO。
+- [x] 6.1 在相同版本标记/工作负载下通过Gateway和真实目标workspace执行多轮工具循环、并发工具结果、摘要、进程重启、深历史fork和回退；保留同步/异步及真实HTTP/SDK专项证据，普通业务/Web复用model_stream与共享协议资产。
+- [x] 6.2 对照优化前后各表体积、正文/索引增长、序列化次数/字节、写入/恢复时间，分别证明channel版本复用、assembly共享、回收后恢复/fork，不以总库体积或升级成功代替证明。
+- [x] 6.3 复核无第二事实源/双读双写/过时接口、无历史版本改写；相关静态、类型/构建（若涉及Web）、严格OpenSpec及独审通过，按片提交并push。无法短期解决的性能长尾以测量证据和原目标登记TODO。
 
 优先级裁定：本变更1/2组影响后续全部执行恢复存储，优先于已完成fork核心的纯性能长尾；3/4组依赖它们的合同，但不能借Delta接入遗漏assembly/view去重；5组最后，避免清理早于引用关系。现有正确性缺陷仍先处理。`extract-sqlite-schema-assets`只做独立纯重构，已有验证批次继续收口，不列为本变更前置依赖。
 
@@ -79,3 +79,5 @@
 Assembly子片最终Ruff与strict OpenSpec通过；辅助独审检查运行时读取、迁移事务、canonical依赖和模块职责，未发现明确阻断。新增内容codec保持单一assembly职责，纯静态DDL位于SQL。
 
 View共享验收：结构/迁移24通过；assembly/view/恢复合同195通过（另1项未经matrix触发装具setup拒绝，后由正式matrix覆盖）；projection127通过后发现的4个事务装具错误，已在181项正式matrix通过中覆盖；matrix另外两项旧new_versions装具修正后定向2通过/16.40秒。定向003/004的exit143已由faulthandler归因到通过后的watchdog装具终态遗漏，补齐本地无创建事实的ToolProtocolBoundaryConflict识别，未修改60秒期限。Gateway完整20调用负载1通过/255.49秒，最终回收片仍将对完整最终源码复验。Ruff/strict OpenSpec通过，独立只读审查无阻断。测量原件及全部索引口径见design，冻结`history-dedup-view-frozen-001/`。
+
+2026-10-21 第5组及最终验收：唯一事务collector与fork/compaction/rewind迁齐，保留全部历史根且只删无引用不可变内容；产品、结构、同步/异步真实图、HTTP/SDK、损坏/回滚和测量证据见design最终段。GC产品002为1 passed/261.00秒、正式fork矩阵002为187 passed，源指纹前后一致；HTTP/SDK9 passed。首轮深fork失败已保留现场并修复EphemeralValue/Delta识别，后续正式矩阵及完整产品均通过。性能长尾仍按原负载保留TODO，不以勾选表示原长历史规模门已通过。

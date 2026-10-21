@@ -6,6 +6,17 @@ import sqlite3
 from collections.abc import Sequence
 
 
+def delta_recovery_channels(connection: sqlite3.Connection, checkpoint_id: str) -> tuple[str, ...]:
+    """官方计数标识省略正文的Delta；已消费的EphemeralValue不依赖父链。"""
+    return tuple(row[0] for row in connection.execute(
+        "SELECT channel.channel_name FROM checkpoint_channels channel "
+        "JOIN checkpoints checkpoint USING(checkpoint_id) WHERE checkpoint_id=? AND "
+        "(channel.value_state='delta' OR (channel.value_state='absent' AND channel.channel_version IS NOT NULL "
+        "AND EXISTS (SELECT 1 FROM json_each(checkpoint.metadata_json,'$.counters_since_delta_snapshot') counter "
+        "WHERE counter.key=channel.channel_name)))", (checkpoint_id,),
+    ))
+
+
 def delta_history_path(
     connection: sqlite3.Connection, checkpoint_id: str, *,
     checkpoint_ns: str, channels: Sequence[str],

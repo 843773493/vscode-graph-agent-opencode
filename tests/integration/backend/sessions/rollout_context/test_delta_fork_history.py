@@ -40,14 +40,17 @@ def _append(state, writes):
     return [*state, *(value for batch in writes for value in batch)]
 
 
-class ForkDeltaState(TypedDict):
+class ForkMessageState(TypedDict):
     messages: Annotated[list[AnyMessage], MessagesDeltaChannel()]
+
+
+class ForkDeltaState(ForkMessageState):
     events: Annotated[list[str], DeltaChannel(_append)]
 
 
-def _graph(saver, admission=None):
-    graph = StateGraph(ForkDeltaState)
-    graph.add_node("first", lambda _: {"events": ["第一步"]})
+def _graph(saver, admission=None, *, generic_delta=True):
+    graph = StateGraph(ForkDeltaState if generic_delta else ForkMessageState)
+    graph.add_node("first", lambda _: {"events": ["第一步"]} if generic_delta else {})
 
     def second(_):
         answer = AIMessage(id="fork-answer", content="图生成回答")
@@ -56,7 +59,7 @@ def _graph(saver, admission=None):
             StepModelCallAdapter(checkpointer=saver, session_id=admission.session_id,
                                  thread_id=admission.thread_id, job_id=admission.job_id,
                                  checkpoint_ns="").converge_final_message(answer)
-        return {"events": ["第二步"], "messages": [answer]}
+        return {"messages": [answer], **({"events": ["第二步"]} if generic_delta else {})}
 
     graph.add_node("second", second)
     graph.add_edge(START, "first")
@@ -67,8 +70,9 @@ def _graph(saver, admission=None):
 
 @pytest.mark.parametrize("mode", ["view_prefix_fork", "full_rollout_copy"])
 @pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.parametrize("generic_delta", [False, True])
 async def test_fork_keeps_generic_delta_parent_writes_and_excludes_seed_pending(
-    fork_context, start_model_call, mode, asynchronous,
+    fork_context, start_model_call, mode, asynchronous, generic_delta,
 ):
     context = fork_context
     source = await context.sessions.create(SessionCreateRequest(title="Delta fork 源"))
@@ -79,11 +83,13 @@ async def test_fork_keeps_generic_delta_parent_writes_and_excludes_seed_pending(
     config = build_checkpoint_config(thread)
     with _execution_scope(admission):
         start_model_call(saver, admission, user)
-        graph = _graph(saver, admission)
-        actual = await graph.ainvoke({"messages": [user], "events": ["原输入"]}, config) if asynchronous else graph.invoke({"messages": [user], "events": ["原输入"]}, config)
+        graph = _graph(saver, admission, generic_delta=generic_delta)
+        inputs = {"messages": [user], **({"events": ["原输入"]} if generic_delta else {})}
+        actual = await graph.ainvoke(inputs, config) if asynchronous else graph.invoke(inputs, config)
         frozen = saver.get_tuple(config)
         assert "events" not in frozen.checkpoint["channel_values"]
-        saver.put_writes(frozen.config, [("events", ["尚未应用的源写入"])], "unapplied-source", "unapplied-source")
+        if generic_delta:
+            saver.put_writes(frozen.config, [("events", ["尚未应用的源写入"])], "unapplied-source", "unapplied-source")
     request = await _fork_request(context, source.session_id, creation_kind="new_session_main", mode=mode)
     target = await context.forks.fork(request)
     await context.sessions.path_resolver.delete_subtree(idempotency_key="delta-source-delete", root_node_id=source.session_id)
@@ -91,12 +97,20 @@ async def test_fork_keeps_generic_delta_parent_writes_and_excludes_seed_pending(
     owner = MutationIntentOwner(target.session.session_id, target.thread_id)
     with session_thread_owner_scope(owner, langgraph_thread_id=target.thread_id):
         target_config = build_checkpoint_config(target.thread_id)
-        restored = await _graph(cold).aget_state(target_config) if asynchronous else _graph(cold).get_state(target_config)
-        assert restored.values["events"] == actual["events"] == ["原输入", "第一步", "第二步"]
+        cold_graph = _graph(cold, generic_delta=generic_delta)
+        restored = await cold_graph.aget_state(target_config) if asynchronous else cold_graph.get_state(target_config)
+        if generic_delta:
+            assert restored.values["events"] == actual["events"] == ["原输入", "第一步", "第二步"]
         assert [(message.id, message.content) for message in restored.values["messages"]] == [(message.id, message.content) for message in actual["messages"]]
         target_head = cold.get_tuple(target_config)
-        assert target_head.metadata["counters_since_delta_snapshot"]["events"] == frozen.metadata["counters_since_delta_snapshot"]["events"]
+        if generic_delta:
+            assert target_head.metadata["counters_since_delta_snapshot"]["events"] == frozen.metadata["counters_since_delta_snapshot"]["events"]
         assert "messages" not in target_head.metadata["counters_since_delta_snapshot"]
         index = cold._storage.storage.root(target.session.session_id, thread_id=target.thread_id) / "index.sqlite"
         with sqlite3.connect(index) as connection:
-            assert connection.execute("SELECT parent_checkpoint_id FROM checkpoints WHERE checkpoint_id=?", (target_head.config["configurable"]["checkpoint_id"],)).fetchone()[0] == frozen.parent_config["configurable"]["checkpoint_id"]
+            parent, = connection.execute("SELECT parent_checkpoint_id FROM checkpoints WHERE checkpoint_id=?", (target_head.config["configurable"]["checkpoint_id"],)).fetchone()
+            assert parent == (frozen.parent_config["configurable"]["checkpoint_id"] if generic_delta else None)
+            if not generic_delta:
+                # 真实图的调度通道已经消费，版本仍在也不能被误判为Delta依赖。
+                assert connection.execute("SELECT 1 FROM checkpoint_channels WHERE value_state='absent' "
+                                          "AND channel_version IS NOT NULL AND channel_name LIKE 'branch:%' LIMIT 1").fetchone()

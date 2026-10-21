@@ -181,15 +181,57 @@ def store_snapshot(connection: sqlite3.Connection, snapshot: dict[str, object]) 
     return canonical_json_bytes(manifest).decode("utf-8")
 
 
-def load_snapshot(
-    connection: sqlite3.Connection, raw: str, *, canonical_item_ids: set[str] | None = None,
-) -> dict[str, object]:
-    """schema22仅接受引用manifest；重建依赖历史内容，不访问当前文件或配置。"""
+def _manifest(raw: str) -> dict[str, object]:
     manifest = json.loads(raw)
     if canonical_json_bytes(manifest).decode("utf-8") != raw:
         raise ValueError("source-mismatch: assembly content manifest 非canonical JSON")
     if manifest.pop("_storage_format", None) != _FORMAT:
         raise ValueError("source-mismatch: assembly content manifest 格式不受支持")
+    return manifest
+
+
+def snapshot_node_references(
+    connection: sqlite3.Connection, raw: str, *, owner: tuple[str, str],
+) -> set[tuple[str, str, str]]:
+    """只遍历冻结DAG；fork的header证据不承诺能展开未捕获的canonical正文。"""
+    manifest = _manifest(raw)
+    if (manifest["session_id"], manifest["thread_id"]) != owner:
+        raise ValueError("source-mismatch: assembly content manifest owner不一致")
+    store = _ContentStore(connection, manifest["session_id"], manifest["thread_id"])
+    pending = [manifest[field] for field in _FIELDS]
+    retained: set[tuple[str, str, str]] = set()
+    while pending:
+        reference = pending.pop()
+        if not isinstance(reference, dict):
+            raise TypeError("source-mismatch: assembly content 引用非法")
+        if set(reference) == {"literal"}:
+            continue
+        if set(reference) != {"node"} or not isinstance(reference["node"], str):
+            raise ValueError("source-mismatch: assembly content 引用非法")
+        identity = (*store.owner, reference["node"])
+        if identity in retained:
+            continue
+        node = store._node(reference["node"])
+        kind = node.get("kind")
+        if kind == "object" and set(node) == {"kind", "entries"} and isinstance(node["entries"], dict):
+            pending.extend(node["entries"].values())
+        elif kind == "prefix" and set(node) == {"kind", "parent", "value"}:
+            pending.append(node["value"])
+            if node["parent"] is not None:
+                pending.append(node["parent"])
+        elif kind == "canonical" and set(node) == {"kind", "item_id", "session_id", "thread_id", "path", "value_hash"}:
+            require_historical_scope(connection, node["session_id"], node["thread_id"])
+        elif kind != "value" or set(node) != {"kind", "value"}:
+            raise ValueError(f"source-mismatch: assembly content kind 非法: {kind!r}")
+        retained.add(identity)
+    return retained
+
+
+def load_snapshot(
+    connection: sqlite3.Connection, raw: str, *, canonical_item_ids: set[str] | None = None,
+) -> dict[str, object]:
+    """schema22仅接受引用manifest；重建依赖历史内容，不访问当前文件或配置。"""
+    manifest = _manifest(raw)
     store = _ContentStore(connection, manifest["session_id"], manifest["thread_id"])
     for field in _FIELDS:
         manifest[field] = store.decode(manifest[field])

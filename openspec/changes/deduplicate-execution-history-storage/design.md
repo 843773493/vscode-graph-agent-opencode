@@ -79,3 +79,17 @@ View子片冻结schema23：逻辑`context_view_items`改为只读SQL view，连�
 所有生产INSERT/DELETE迁到共享writer，原SQL查询从唯一SQL view读取；正常存储不保留旧完整成员表或触发器兼容写入。局部查询/损坏测试使用明确的测试专用注入器，在临时关系执行原变更后发布私有损坏块，防止修改共享块误伤其它view；完整执行、fork和恢复仍由产品入口产生关键历史。22→23在原备份/事务边界内暂时重命名旧表、创建共享结构、逐view迁移并核对全部坐标，然后删除旧表并发布版本。失败回滚到22并保留备份；18起的旧库继续显式逐版升级，正常reader只接受23。
 
 View在线同负载测量（schema22→23，原件`history-dedup-view-comparison-001.json`）：summary_restart_continue阶段旧9276成员行变为1033共享成员行、114个块及712条view引用。成员表及全部相关索引页4366336→344064字节（包含membership_items_identity/ordinal与view_item_blocks_source）；总表/索引页16449536→12308480字节。assembly manifest/node正文未变。产品整体253.14→255.49秒，未观察到耗时改善；运行中两处遗漏显式事务的写入口已修，最终回收验收会在完整最终源码重跑。该证据不承诺固定压缩率或全链路线性增长。
+
+回收子片不改变schema23：唯一`collect_unreferenced_content`要求调用方已有事务，先验证全部保留checkpoint的精确状态引用、官方Delta依赖、全部assembly内容DAG与view成员块，再删除无引用state value、assembly node及membership block/item。checkpoint、pending writes、assembly、view、资源snapshot及claim本身不由本片删除，因此原历史点和保留期限不变，也无需压缩增量基准。捕获副本独立于源库，目标fork只在自己的staging事务裁剪后调用；源compaction/rewind仍保留历史根，不会提前清掉并发capture所需内容。普通append不增加全库回收扫描。
+
+Assembly的canonical内容节点是依赖图叶子；回收验证其历史scope与节点hash，不展开正文。前缀fork保留的header-only assembly不承诺持有全部被排除canonical正文；强行完整load会误拒合法fork。正常历史请求重建和可执行selection继续由原reader校验正文，不增加第二事实源或回源补齐路径。
+
+首轮GC产品验收`history-dedup-gc-product-001`在深历史fork返回500：把所有absent且有version的通道误当Delta，synthetic head继承了无需保留的已消费调度通道父链。冻结失败现场`history-dedup-gc-failure-frozen-001/`。修复统一按显式messages delta状态或官方`counters_since_delta_snapshot`识别省略正文的通用Delta；已消费EphemeralValue不再伪造恢复依赖。fork闭包、synthetic parent与GC共享此判断，真实图同步/异步、两种fork模式同时覆盖message-only和generic Delta，删源后冷恢复核对消息、counter与精确parent。
+
+2026-10-21 回收最终产品验收：`history-dedup-gc-product-002`为1 passed/261.00秒，真实Gateway同一20调用负载完整通过，关键状态全部经产品入口创建；保留原消息身份/顺序、工具配对、历史owner及逐assembly实际wire/request_hash核对。深fork后只读观察确认state values、DAG nodes、membership blocks恰等于保留引用闭包，未由装具替产品清理。两次fork累计回收71个state value、180个assembly node、478个membership item与51个block；child/leaf继续冷恢复、删源后执行和正式regenerate均通过。源compaction与回退保留历史根，未采用latest-only或改变期限。
+
+最终`history-dedup-gc-fork-matrix-002`正式矩阵187项通过/192.99秒，包含真实图同步/异步、Delta/revision/Saver与protected fork；新结构/损坏/事务专项此前27项通过，修复后同组17项通过。`history-dedup-final-http-sdk-001`9项通过/6.94秒，以同一model_stream资产及codec覆盖真实本地HTTP与OpenAI同步/异步SDK的Chat/Responses协议，未因统一丢弃网络验证。误用直接pytest触发fork watchdog setup拒绝的8项原件`history-dedup-gc-lineage-002`保留，随后由正式矩阵覆盖，不冒充业务失败或通过。辅助非作者只读独审未发现阻断；没有独立重跑长产品测试。
+
+最终同负载对照`history-dedup-final-comparison-001.json`完整保留每阶段各表行数/列正文bytes、全部dbstat表/索引页、serializer/读写计数及耗时。优化前schema19与最终schema23的依赖都为LangGraph1.2.16/checkpoint4.3.0，因此不把版本升级计入去重收益。summary_restart_continue总表/索引页18534400→12320768字节；非messages正文364696→51297字节。Assembly共享的独立证明沿用schema21→22同负载逐份JCS/hash及前述manifest/node指标，view共享沿用22→23全部索引口径，不把不同阶段相加或给固定压缩率承诺。GC片deep_fork_chain的目标DAG正文183711→124073字节、成员874→395行，总表/索引页5488640→5300224字节；回退后目标总页8384512→8208384字节。源库summary阶段12308480→12320768字节略增，不称GC使每阶段库文件都变小，未执行VACUUM。
+
+TODO（耗时长尾，保持原规模）：view片255.49秒→最终GC片261.00秒，deep_fork_chain4.51→5.12秒，GC累计2次约674ms；最后冷恢复/执行/回退46.34→46.28秒，其中回收1次约365ms。这些单次样本只证结构去重与正确性，不证耗时改善或完整瓶颈归因。原有600秒长历史生成超时、assembly冷解码及冻结候选比较成本TODO继续保留。最终成功measurements按运行起止时间唯一匹配`run-b50d2f6bb462`，SHA、SQLite一致备份、wire和源码冻结于`history-dedup-gc-frozen-001/`，修复后矩阵与产品源码前后指纹无变化。

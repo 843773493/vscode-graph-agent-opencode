@@ -209,3 +209,31 @@ def test_equal_channel_version_remains_isolated_between_namespaces(version_case)
             assert cold.get_tuple(config).checkpoint["channel_values"]["state"] == expected[namespace]
     with sqlite3.connect(index) as connection:
         assert connection.execute("SELECT checkpoint_ns,channel_version FROM checkpoint_state_values WHERE channel_name='state' ORDER BY checkpoint_ns").fetchall() == [("left", "v1"), ("right", "v1")]
+
+
+def test_gc_preserves_every_checkpoint_version_and_rejects_corrupt_reference(version_case):
+    from app.services.infrastructure.rollout_context.storage.catalog.unreferenced_content import (
+        collect_unreferenced_content,
+    )
+
+    saver, _serde, admission, _user, index = version_case
+    first = {"large_version_probe": ["历史版本一" * 100]}
+    second = {"large_version_probe": ["历史版本二" * 100]}
+    with _execution_scope(admission):
+        root = _put(version_case, build_checkpoint_config(admission.thread_id), "gc-root", first, changed=True)
+        child = _put(version_case, root, "gc-child", second, version="v2", changed=True)
+    with sqlite3.connect(index) as connection:
+        with connection:
+            connection.execute("BEGIN IMMEDIATE")
+            assert collect_unreferenced_content(connection)["state_values"] == 0
+        assert connection.execute("SELECT count(*) FROM checkpoint_state_values WHERE channel_name='state'").fetchone() == (2,)
+        with _execution_scope(admission):
+            assert saver.get_tuple(root).checkpoint["channel_values"]["state"] == first
+            assert saver.get_tuple(child).checkpoint["channel_values"]["state"] == second
+        with connection:
+            connection.execute("UPDATE checkpoint_state_values SET value_hash='corrupt' WHERE channel_name='state' AND channel_version='v1'")
+        before = connection.execute("SELECT * FROM checkpoint_state_values ORDER BY value_id").fetchall()
+        with pytest.raises(RuntimeError, match="BLOB 校验失败"), connection:
+            connection.execute("BEGIN IMMEDIATE")
+            collect_unreferenced_content(connection)
+        assert connection.execute("SELECT * FROM checkpoint_state_values ORDER BY value_id").fetchall() == before

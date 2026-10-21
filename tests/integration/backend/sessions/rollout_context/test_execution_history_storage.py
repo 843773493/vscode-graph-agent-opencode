@@ -24,6 +24,7 @@ from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
 from app.domain.itemized.serialization import normalize_wire_request
 from app.services.infrastructure.rollout_context.assembly.content_store import (
     load_snapshot,
+    snapshot_node_references,
 )
 from app.testing.model_stream import build_cassette, chat_completion_frames
 from tests.harness.python.browser_manager import (
@@ -203,6 +204,20 @@ async def _complete(client: httpx.AsyncClient, session: str, content: str) -> di
     return data
 
 
+def _verify_collected_content(index: Path) -> dict[str, int]:
+    """只观察产品fork提交后的本地闭包，不替产品执行清理。"""
+    with sqlite3.connect(index.as_uri() + "?mode=ro", uri=True) as connection:
+        nodes = set()
+        for session, thread, raw in connection.execute("SELECT session_id,thread_id,snapshot_json FROM context_assemblies"):
+            nodes.update(snapshot_node_references(connection, raw, owner=(session, thread)))
+        assert set(connection.execute("SELECT session_id,thread_id,node_id FROM assembly_content_nodes")) == nodes
+        assert set(connection.execute("SELECT value_id FROM checkpoint_state_values")) == set(connection.execute(
+            "SELECT DISTINCT value_id FROM checkpoint_channels WHERE value_id IS NOT NULL"))
+        assert set(connection.execute("SELECT block_id FROM context_membership_blocks")) == set(connection.execute(
+            "SELECT DISTINCT block_id FROM context_view_item_blocks"))
+        return {"retained_assembly_nodes": len(nodes), "retained_checkpoints": connection.execute("SELECT count(*) FROM checkpoints").fetchone()[0]}
+
+
 async def _send(target: HistoryTarget, client: httpx.AsyncClient, session: str, thread: str, turn: int) -> dict[str, object]:
     def calls(count: int, cycle: int) -> list[dict[str, object]]:
         return [{"index": i, "id": f"history-{turn}-{cycle}-{i}", "type": "function", "function": {
@@ -308,7 +323,10 @@ async def test_same_workload_tools_restart_and_storage_measurements(
         leaf_thread = grandchild["thread_id"]
         leaf_index = resolver.resolve_thread_node(leaf_session, leaf_thread) / "rollout/index.sqlite"
         measurements["stages"].append({"phase": "deep_fork_chain", "elapsed_ns": perf_counter_ns() - started,
-                                        "storage": _storage_metrics(child_index), "leaf_storage": _storage_metrics(leaf_index)})
+                                        "storage": _storage_metrics(child_index), "leaf_storage": _storage_metrics(leaf_index),
+                                        "operations": (await observer.get("/__test__/history-storage-metrics")).json(),
+                                        "child_collected": _verify_collected_content(child_index),
+                                        "leaf_collected": _verify_collected_content(leaf_index)})
         selected = await client.post(f"/api/v1/sessions/{leaf_session}/history", json={"direction": "head", "turns": 10})
         assert selected.status_code == 200, selected.text
         frozen_items = selected.json()["data"]["items"]

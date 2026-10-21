@@ -22,6 +22,9 @@ from app.services.infrastructure.rollout_context.storage.catalog.history_scope i
     bind_captured_namespace,
     current_scope,
 )
+from app.services.infrastructure.rollout_context.storage.catalog.unreferenced_content import (
+    collect_unreferenced_content,
+)
 from app.services.infrastructure.rollout_context.storage.catalog.view_items.store import (
     clone_members,
     replace_members,
@@ -187,6 +190,7 @@ def prepare_target_snapshot(
                     (target_checkpoint_id,),
                 )
             prune_view_prefix(connection, stage=stage)
+        collect_unreferenced_content(connection)
         connection.commit()
     _fsync_tree(stage)
     return requested_view

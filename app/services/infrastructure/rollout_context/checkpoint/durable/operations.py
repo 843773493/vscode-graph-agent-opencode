@@ -25,6 +25,9 @@ from app.services.infrastructure.rollout_context.checkpoint.boundary.tool_protoc
 from app.services.infrastructure.rollout_context.storage.catalog.message_groups import (
     find_message_locator,
 )
+from app.services.infrastructure.rollout_context.storage.catalog.unreferenced_content import (
+    collect_unreferenced_content,
+)
 from app.services.infrastructure.rollout_context.storage.transaction import (
     strict_non_negative_int,
     strict_optional_text,
@@ -274,6 +277,7 @@ class RolloutCheckpointOperationsMixin:
                     )
                     consumer = self.consume_context_epoch_rebuild_intent if consume_epoch_intent is None else consume_epoch_intent
                     consumer(intent, connection)
+                    collect_unreferenced_content(connection)
                 connection.commit()
                 return self._storage._manifest_from_connection(connection, checkpoint_ns), view_id
 

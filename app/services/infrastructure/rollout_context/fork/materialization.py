@@ -23,6 +23,9 @@ from app.services.infrastructure.rollout_context.storage.catalog.history_scope i
 from app.services.infrastructure.rollout_context.storage.catalog.view_items.store import (
     replace_members,
 )
+from app.services.infrastructure.rollout_context.storage.checkpoint_lineage import (
+    delta_recovery_channels,
+)
 from app.services.infrastructure.rollout_context.storage.serialization import (
     canonical_json_text as _json,
 )
@@ -146,11 +149,7 @@ class ForkMaterializationMixin:
                 metadata["counters_since_delta_snapshot"] = {
                     channel: value for channel, value in counters.items() if channel != "messages"
                 }
-                if connection.execute(
-                    "SELECT 1 FROM checkpoint_channels WHERE checkpoint_id=? AND channel_name!='messages' "
-                    "AND value_state='absent' AND channel_version IS NOT NULL LIMIT 1",
-                    (seed_checkpoint_id,),
-                ).fetchone() is not None:
+                if any(channel != "messages" for channel in delta_recovery_channels(connection, seed_checkpoint_id)):
                     # 新 head 复用 seed 已提交值；沿 seed 的父链重放，排除 seed 自己尚未应用的 writes。
                     parent_checkpoint_id = seed[6]
             connection.execute(
