@@ -37,7 +37,7 @@ import {
   buildVisibleFileTreeRows,
   createFileTreeSearchMatcher,
   FILE_TREE_VIRTUALIZATION_THRESHOLD,
-  fileTreeNodeMatchesQuery,
+  fileTreeNodeTextMatchesQuery,
   isExpandableFileTreeNode,
   type WorkspaceFileTreeRow,
 } from "./workspaceFileTreeRows";
@@ -680,7 +680,7 @@ export default function WorkspaceFileTree({
     let hasUnloadedDirectory = false;
     for (const directory of loadedDirectories) {
       for (const node of directory.items) {
-        if (fileTreeNodeMatchesQuery(node, normalizedQuery)) {
+        if (fileTreeNodeTextMatchesQuery(node, normalizedQuery)) {
           hasDirectMatch = true;
           break;
         }

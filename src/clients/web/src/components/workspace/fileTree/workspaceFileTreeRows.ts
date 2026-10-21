@@ -20,7 +20,7 @@ export function isExpandableFileTreeNode(node: WorkspaceFileNode): boolean {
  * 一个字符串再 includes：那样「名字尾 + 路径头」会跨边界拼出假命中（例如名字
  * 含换行时 `` ${name}\n${path} `` 里两行会被当成一个连续串）。
  */
-export function fileTreeNodeMatchesQuery(
+export function fileTreeNodeTextMatchesQuery(
   node: WorkspaceFileNode,
   normalizedQuery: string,
 ): boolean {
@@ -51,7 +51,7 @@ export function createFileTreeSearchMatcher(
     if (cached !== undefined) {
       return cached;
     }
-    const directMatch = fileTreeNodeMatchesQuery(node, normalizedQuery);
+    const directMatch = fileTreeNodeTextMatchesQuery(node, normalizedQuery);
     if (directMatch || !isExpandableFileTreeNode(node)) {
       matchCache.set(node.path, directMatch);
       return directMatch;
