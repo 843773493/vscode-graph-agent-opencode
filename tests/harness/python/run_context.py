@@ -38,7 +38,7 @@ class TestRunContext:
         project_root: Path | None = None,
     ) -> TestRunContext:
         root = (project_root or Path.cwd()).resolve()
-        resolved_test_file = test_file.resolve()
+        resolved_test_file = (root / test_file).resolve()
         tests_root = root / "tests"
         try:
             relative_test_file = resolved_test_file.relative_to(tests_root)

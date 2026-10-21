@@ -159,3 +159,22 @@ def test_context_exit_preserves_body_failure_alongside_original_cleanup_error(
 
     assert failure.value.exceptions == (cleanup_error,)
     assert failure.value.__context__ is body_error
+
+
+@pytest.mark.parametrize("relative_file", [
+    "tests/unit/test_relative.py",
+    "./tests/unit/../unit/nested/test_relative.py",
+])
+def test_relative_test_path_uses_explicit_project_root_instead_of_cwd(
+    tmp_path: Path, relative_file: str,
+) -> None:
+    project_root = tmp_path / "project with 中文"
+    context = TestRunContext.from_test_file(Path(relative_file), project_root=project_root)
+
+    expected_file = (project_root / relative_file).resolve()
+    expected_output = project_root / "out/tests" / expected_file.relative_to(project_root / "tests").with_suffix("")
+    assert context.project_root == project_root
+    assert context.test_file == expected_file
+    assert context.output_root == expected_output
+    assert context.workspace_root == expected_output / "workspace"
+    assert context.artifacts_dir == expected_output / "artifacts"
