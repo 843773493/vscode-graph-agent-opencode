@@ -1273,10 +1273,10 @@ async def test_configuration_mutation_blocked_by_unsettled_claim(
         )
 
 
-def test_linux_proc_identity_handles_vanishing_entry_between_probe_steps(
+def test_linux_proc_identity_reports_vanishing_entry_as_terminated(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """P2.4：/proc 条目在探测两步之间消失 → 按已核实终结收口（None），其余错误显式抛出。"""
+    """P2.4：读取 /proc 时条目消失按已核实终结收口，其余错误显式抛出。"""
 
     class _VanishingStatPath:
         def read_text(
@@ -1307,7 +1307,7 @@ def test_linux_proc_identity_handles_vanishing_entry_between_probe_steps(
             return _DeniedPidDir()
 
     monkeypatch.setattr(node_debug_process_identity, "_PROC_ROOT", _VanishingProcRoot())
-    # 进程在 is_file 与 read_text 之间消失：与"条目不存在"同一事实 ⇒ 已核实终结。
+    # 进程在 read_text 期间消失：与"条目不存在"同一事实 ⇒ 已核实终结。
     assert _probe_linux_proc_identity(4242) is None
 
     monkeypatch.setattr(node_debug_process_identity, "_PROC_ROOT", _DeniedProcRoot())

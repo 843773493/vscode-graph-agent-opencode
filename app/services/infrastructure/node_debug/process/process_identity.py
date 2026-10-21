@@ -12,6 +12,7 @@
 
 from __future__ import annotations
 
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
@@ -67,10 +68,9 @@ def probe_process_identity(pid: int) -> NodeDebugProcessIdentity | None:
     """返回 PID 当前实例的身份；``None`` 表示该 PID 当前不存在（或已终结）。"""
     if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
         raise ValueError(f"进程 PID 必须是正整数: {pid!r}")
-    if (_PROC_ROOT / str(pid) / "stat").is_file():
-        # /proc 里有该条目时它就是权威来源，其结论（含 zombie＝已终结只剩退出码待回收）
-        # 不得再回落到 psutil 或 kill(0) 存在性兜底：否则刚被我们停止、尚未被 reap 的
-        # 子进程会被判成"存活但不可核实"，让已成功的停止永远卡在 reconcile_required。
+    if sys.platform == "linux":
+        # Linux 的 /proc 是权威来源：读取时发现 PID 消失或状态为 zombie 都表示已终结。
+        # 不得回落到 psutil 或 kill(0)，否则刚停止但尚未 reap 的子进程会被误判为存活。
         return _probe_linux_proc_identity(pid)
     return _probe_psutil_identity(pid)
 
