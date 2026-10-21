@@ -17,7 +17,8 @@ from tests.integration.backend.sessions.test_session_communication_pipeline impo
 
 
 async def test_remote_file_api_resolves_native_and_uri_targets_on_target_machine(communication_triad):
-    nodes, model, artifacts = communication_triad
+    case = communication_triad
+    nodes, artifacts = case.nodes, case.artifacts
     source, target = nodes["a"], nodes["c"]
     relative = "src/原生 目标%.txt"
     originals = {}
@@ -89,5 +90,5 @@ async def test_remote_file_api_resolves_native_and_uri_targets_on_target_machine
     for path, content in originals.items():
         if path != native:
             assert path.read_bytes() == content
-    assert not model.requests
+    assert not case.requests()
     (artifacts / "native-file-target-routing.json").write_text(json.dumps(evidence, ensure_ascii=False, indent=2), encoding="utf-8")

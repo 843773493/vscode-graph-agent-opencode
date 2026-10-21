@@ -5,7 +5,6 @@ import json
 import sqlite3
 from contextlib import closing
 from dataclasses import asdict
-from threading import Event
 
 import pytest
 
@@ -48,7 +47,8 @@ def cold_materialization_counts(thread_node):
 @pytest.mark.asyncio
 @pytest.mark.parametrize("communication_triad", [{"resource_service_nodes":("c",)}], indirect=True)
 async def test_a04_remote_session_inventory_search_and_durable_read(communication_triad) -> None:
-    nodes, model, artifacts = communication_triad
+    case = communication_triad
+    nodes, artifacts = case.nodes, case.artifacts
     source, target = nodes["b"], nodes["c"]
     target_session = await create_session(target.client, "a04-uri-target")
     source_session = await create_session(source.client, "a04-uri-source")
@@ -120,21 +120,18 @@ async def test_a04_remote_session_inventory_search_and_durable_read(communicatio
         assert response.headers["X-Request-ID"] == response.json()["request_id"]
         evidence.append({"rejected":query, "code":code})
 
-    tool_result = {}
-    def reply(payload):
-        tools = [message for message in payload["messages"] if message["role"] == "tool"]
-        if not tools:
-            return _tool("invoke_extension_tool", {"tool_name":"read_context", "arguments":{
-                "resource_identity":str(refs[0][0]), "uri":session_uri, "scope":"workspace", "view":"information",
-            }}, "call_a04_remote_read")
-        tool_result.update(json.loads(tools[-1]["content"]))
-        return {"content":"a04-uri-completed"}
-    model.response_callback = reply
+    calls = await case.plan(source, source_session, [
+        _tool("invoke_extension_tool", {"tool_name": "read_context", "arguments": {
+            "resource_identity": str(refs[0][0]), "uri": session_uri, "scope": "workspace", "view": "information",
+        }}, "call_a04_remote_read"), {"content": "a04-uri-completed"},
+    ])
     response = await source.client.post(f"/api/v1/sessions/{source_session}/messages", json={
         "message":{"content":"a04-uri-source"}, "run":{"mode":"single_agent","agent_id":"default"},
     })
     assert response.status_code == 200, response.text
     await _completed(source.client, response.json()["data"]["job_id"])
+    tool_message, = [message for message in case.request(calls[-1])["messages"] if message["role"] == "tool"]
+    tool_result = json.loads(tool_message["content"])
     assert tool_result["uri"] == session_uri and tool_result["items"]
     source_node = await source.session_node(source_session)
     with closing(SessionControlStore(source_node / CONTROL_DATABASE_NAME)) as store:
@@ -173,7 +170,8 @@ async def test_a04_remote_session_inventory_search_and_durable_read(communicatio
 @pytest.mark.parametrize("communication_triad", [{"resource_service_nodes": ("c",),
     "shared_session_ids": (AMBIGUOUS_SESSION,)}], indirect=True)
 async def test_a06_bare_and_uri_send_wait_read_share_frozen_target_across_activation_reconnect(communication_triad):
-    nodes, model, artifacts = communication_triad
+    case = communication_triad
+    nodes, artifacts = case.nodes, case.artifacts
     source, target, hub = nodes["b"], nodes["c"], nodes["a"]
     # 全部业务请求固定 Gateway workspace ID，不能依赖 active target。
     inventories = {}
@@ -199,7 +197,7 @@ async def test_a06_bare_and_uri_send_wait_read_share_frozen_target_across_activa
     with workspace_context(target.workspace_id, target.workspace):
         resolver = get_session_path_resolver(target.workspace / ".boxteam/sessions")
         cold_thread_node = resolver.resolve_thread_node(cold_session, cold_main)
-        assert cold_thread_node == resolver.resolve_session_node(cold_session)
+        assert cold_thread_node == resolver.resolve_session_node(cold_session) / "threads" / cold_main
     assert cold_thread_node.is_dir()
     before = cold_materialization_counts(cold_thread_node)
     assert not any(before.values())
@@ -221,56 +219,67 @@ async def test_a06_bare_and_uri_send_wait_read_share_frozen_target_across_activa
     })
     assert unreachable.status_code == 409, unreachable.text
     assert unreachable.json()["detail"]["code"] in {"federation-unknown-peer", "target_not_resolvable"}
-    results = {}
-    accepted = Event()
-    release = Event()
-
-    def reply(payload):
-        messages = payload["messages"]
-        if any(message["role"] == "user" and "<session_message" in str(message["content"])
-               and "a06-message-" in str(message["content"]) for message in messages):
-            return {"content": "a06-target-completed"}
-        if not any(message["role"] == "user" and "a06-joint-trigger" in str(message["content"]) for message in messages):
-            return {"content": "a06联合验证"}
-        for message in messages:
-            if message["role"] == "tool":
-                results[message["tool_call_id"]] = json.loads(message["content"])
-        for index, target_ref in enumerate((target_session, uri)):
-            send_key, wait_key = f"call_a06_send_{index}", f"call_a06_wait_{index}"
-            if send_key not in results:
-                return _tool("send_message_to_session", {"target_session_id": target_ref,
-                    "content": f"a06-message-{index}", "kind": "result"}, send_key)
-            if index == 0 and not release.is_set():
-                accepted.set()
-                if not release.wait(45):
-                    raise RuntimeError("原通信受理后的activate/reconnect屏障未释放")
-            if wait_key not in results:
-                return _tool("wait_for_session", {"target_session_id": target_ref,
-                    "communication_id": results[send_key]["communication_id"], "timeout_seconds": 30}, wait_key)
-        if "call_a06_read" not in results:
-            return _tool("invoke_extension_tool", {"tool_name": "read_context", "arguments": {
-                "resource_identity": str(session_resource_identity(target.workspace_id, target_session)),
-                "uri": uri, "scope": "workspace", "view": "messages"}}, "call_a06_read")
-        return {"content": "a06-source-completed"}
-
-    model.response_callback = reply
+    control = case.replay.control
+    await case.plan(target, target_session, [{"content": "a06-target-completed"}, {"content": "a06-target-completed"}])
+    first_call, = await case.plan(source, source_session, [
+        _tool("send_message_to_session", {"target_session_id": target_session,
+              "content": "a06-message-0", "kind": "result"}, "call_a06_send_0"),
+    ])
+    send_call = first_call + ":tool-call:call_a06_send_0"
+    control.arm(send_call, "test.tool_result.committed")
     response = await source.client.post(f"/api/v1/sessions/{source_session}/messages", json={
         "message": {"content": "a06-joint-trigger"}, "run": {"mode": "single_agent", "agent_id": "default"},
     })
     assert response.status_code == 200, response.text
     try:
-        assert await asyncio.to_thread(accepted.wait, 40), "原send必须先durable accepted"
-        remote_b = next(item for item in inventories["a"]["items"]
-                        if (item.get("remote") or {}).get("gateway_id") == source.gateway_id)
-        remote_c = next(item for item in inventories["a"]["items"]
-                        if (item.get("remote") or {}).get("gateway_id") == target.gateway_id)
-        activation = await hub.client.post(f"/api/gateway/workspaces/{remote_b['workspace_id']}/activate")
-        assert activation.status_code == 200, activation.text
-        reconnection = await hub.client.post(f"/api/gateway/workspaces/{remote_c['workspace_id']}/reconnect")
-        assert reconnection.status_code == 200, reconnection.text
+        await asyncio.to_thread(control.acknowledged, send_call, "test.tool_result.committed", 40)
+        accepted_event, = [event for event in control.events if event["operation_id"] == send_call
+                           and event["phase"] == "test.tool_result.committed"]
+        # 与原模型屏障一致：durable accepted后只允许45秒完成activate/reconnect并释放。
+        async with asyncio.timeout_at(accepted_event["at"] + 45):
+            receipt = json.loads(case.tool_result(source_session, send_call)["content"])
+            remote_b = next(item for item in inventories["a"]["items"]
+                            if (item.get("remote") or {}).get("gateway_id") == source.gateway_id)
+            remote_c = next(item for item in inventories["a"]["items"]
+                            if (item.get("remote") or {}).get("gateway_id") == target.gateway_id)
+            activation = await hub.client.post(f"/api/gateway/workspaces/{remote_b['workspace_id']}/activate")
+            assert activation.status_code == 200, activation.text
+            reconnection = await hub.client.post(f"/api/gateway/workspaces/{remote_c['workspace_id']}/reconnect")
+            assert reconnection.status_code == 200, reconnection.text
+            middle = await case.plan(source, source_session, [
+                _tool("wait_for_session", {"target_session_id": target_session,
+                      "communication_id": receipt["communication_id"], "timeout_seconds": 30}, "call_a06_wait_0"),
+                _tool("send_message_to_session", {"target_session_id": uri,
+                      "content": "a06-message-1", "kind": "result"}, "call_a06_send_1"),
+            ])
+            second_send = middle[-1] + ":tool-call:call_a06_send_1"
+            control.arm(second_send, "test.tool_result.committed")
     finally:
-        release.set()
-    await _completed(source.client, response.json()["data"]["job_id"])
+        control.release(send_call, "test.tool_result.committed")
+    async with asyncio.timeout(60):
+        try:
+            await asyncio.to_thread(control.acknowledged, second_send, "test.tool_result.committed", 30)
+            second_receipt = json.loads(case.tool_result(source_session, second_send)["content"])
+            following = await case.plan(source, source_session, [
+                _tool("wait_for_session", {"target_session_id": uri,
+                      "communication_id": second_receipt["communication_id"], "timeout_seconds": 30}, "call_a06_wait_1"),
+                _tool("invoke_extension_tool", {"tool_name": "read_context", "arguments": {
+                    "resource_identity": str(session_resource_identity(target.workspace_id, target_session)),
+                    "uri": uri, "scope": "workspace", "view": "messages"}}, "call_a06_read"),
+                {"content": "a06-source-completed"},
+            ])
+        finally:
+            control.release(second_send, "test.tool_result.committed")
+        await _completed(source.client, response.json()["data"]["job_id"])
+    tools = [message for message in case.request(following[-1])["messages"] if message["role"] == "tool"]
+    assert len(tools) == 5
+    keys = ("call_a06_send_0", "call_a06_wait_0", "call_a06_send_1", "call_a06_wait_1", "call_a06_read")
+    result_calls = (first_call, middle[0], middle[1], following[0], following[1])
+    assert [message["tool_call_id"] for message in tools] == list(keys)
+    for call, key, message in zip(result_calls, keys, tools, strict=True):
+        committed = case.tool_result(source_session, call + ":tool-call:" + key)
+        assert json.loads(committed["content"]) == json.loads(message["content"])
+    results = {key: json.loads(message["content"]) for key, message in zip(keys, tools, strict=True)}
     for index in range(2):
         assert results[f"call_a06_send_{index}"]["target"] == address
         assert results[f"call_a06_wait_{index}"]["target"] == address

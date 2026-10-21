@@ -29,10 +29,12 @@ from tests.integration.backend.sessions.test_session_communication_pipeline impo
     communication_triad as communication_triad,  # noqa: PLC0414 - 正式 fixture 按当前测试文件隔离
 )
 from tests.support.api_helpers import create_session
+from tests.support.e2e_control.harness import control_request
 
 
 async def test_navigation_uses_original_star_channels_and_fixed_owner(communication_triad) -> None:
-    nodes, model, artifacts = communication_triad
+    case = communication_triad
+    nodes, artifacts = case.nodes, case.artifacts
     source, hub, target = nodes["b"], nodes["a"], nodes["c"]
     external = target.workspace.parent / "unregistered-native"
     external.mkdir(exist_ok=True)
@@ -167,14 +169,15 @@ async def test_navigation_uses_original_star_channels_and_fixed_owner(communicat
         missing_codes.append(response.json()["detail"])
     assert missing_codes[0] == missing_codes[1] == missing_codes[2]
     assert _tracking_counts(target.workspace / ".boxteam") == before
-    assert not model.requests
+    assert not case.requests()
     assert {(peer, direction) for peer, direction in source.channels()} == {(hub.gateway_id, "inbound")}
     assert {(peer, direction) for peer, direction in target.channels()} == {(hub.gateway_id, "inbound")}
     (artifacts / "navigation-federation.json").write_text(json.dumps({"requests": evidence, "rejected": missing_codes}, ensure_ascii=False, indent=2) + "\n")
 
 
 async def test_model_file_tools_execute_on_fixed_federated_owner(communication_triad) -> None:
-    nodes, model, artifacts = communication_triad
+    case = communication_triad
+    nodes, artifacts = case.nodes, case.artifacts
     source, target = nodes["b"], nodes["c"]
     (target.workspace / "src/remote-model.txt").write_text("needle TARGET OWNER\n")
     (source.workspace / "src/remote-model.txt").write_text("SOURCE DECOY\n")
@@ -184,44 +187,33 @@ async def test_model_file_tools_execute_on_fixed_federated_owner(communication_t
     file_uri, missing_uri = root + "/remote-model.txt", root + "/missing-remote.txt"
     session = await create_session(source.client, "模型远端文件导航")
     before = _tracking_counts(target.workspace / ".boxteam")
-    tool_results = []
-
-    def reply(payload):
-        messages = payload["messages"]
-        if not any(message["role"] == "user" and "federated-file-trigger" in str(message["content"]) for message in messages):
-            return {"content": "远端文件导航"}
-        results = [message for message in messages if message["role"] == "tool"]
-        if not results:
-            return _tool("ls", {"path": root}, "call_remote_ls")
-        listed = json.loads(results[0]["content"])
-        assert file_uri in {entry["uri"] for entry in listed["entries"]}
-        if len(results) == 1:
-            return _tool("glob", {"path": root, "pattern": "remote-model.txt"}, "call_remote_glob")
-        assert [entry["uri"] for entry in json.loads(results[1]["content"])["entries"]] == [file_uri]
-        if len(results) == 2:
-            return _tool("grep", {"path": file_uri, "pattern": "needle", "output_mode": "content"}, "call_remote_grep")
-        assert file_uri in results[2]["content"] and "TARGET OWNER" in results[2]["content"]
-        if len(results) == 3:
-            return _tool("read_file", {"path": file_uri}, "call_remote_read")
-        assert "1\tneedle TARGET OWNER" in results[3]["content"]
-        assert "sha256:" + hashlib.sha256(b"needle TARGET OWNER\n").hexdigest() in results[3]["content"]
-        if len(results) == 4:
-            return _tool("read_file", {"path": missing_uri}, "call_remote_missing")
-        assert json.loads(results[4]["content"])["code"] == "target_not_resolvable"
-        assert "SOURCE DECOY" not in json.dumps(results) and "LOCAL FALLBACK" not in json.dumps(results)
-        tool_results[:] = results
-        return {"content": "远端文件工具完成"}
-
-    model.response_callback = reply
+    calls = await case.plan(source, session, [
+        _tool("ls", {"path": root}, "call_remote_ls"),
+        _tool("glob", {"path": root, "pattern": "remote-model.txt"}, "call_remote_glob"),
+        _tool("grep", {"path": file_uri, "pattern": "needle", "output_mode": "content"}, "call_remote_grep"),
+        _tool("read_file", {"path": file_uri}, "call_remote_read"),
+        _tool("read_file", {"path": missing_uri}, "call_remote_missing"),
+        {"content": "远端文件工具完成"},
+    ])
     accepted = await source.client.post(f"/api/v1/sessions/{session}/messages", json={
         "message": {"content": "federated-file-trigger"}, "run": {"mode": "single_agent", "agent_id": "default"},
     }, headers={"X-Request-ID": "req-model-federated-files"})
     assert accepted.status_code == 200, accepted.text
     await _completed(source.client, accepted.json()["data"]["job_id"])
+    wire_messages = case.request(calls[-1])["messages"]
+    assert any(message["role"] == "user" and "federated-file-trigger" in str(message["content"]) for message in wire_messages)
+    tool_results = [message for message in wire_messages if message["role"] == "tool"]
     assert len(tool_results) == 5
+    assert file_uri in {entry["uri"] for entry in json.loads(tool_results[0]["content"])["entries"]}
+    assert [entry["uri"] for entry in json.loads(tool_results[1]["content"])["entries"]] == [file_uri]
+    assert file_uri in tool_results[2]["content"] and "TARGET OWNER" in tool_results[2]["content"]
+    assert "1\tneedle TARGET OWNER" in tool_results[3]["content"]
+    assert "sha256:" + hashlib.sha256(b"needle TARGET OWNER\n").hexdigest() in tool_results[3]["content"]
+    assert json.loads(tool_results[4]["content"])["code"] == "target_not_resolvable"
+    assert "SOURCE DECOY" not in json.dumps(tool_results) and "LOCAL FALLBACK" not in json.dumps(tool_results)
     assert (source.workspace / "src/remote-model.txt").read_text() == "SOURCE DECOY\n"
     assert _tracking_counts(target.workspace / ".boxteam") == before
-    wire = json.dumps(model.requests, ensure_ascii=False)
+    wire = json.dumps(case.requests(), ensure_ascii=False)
     assert all(str(node.workspace) not in wire for node in nodes.values())
     (artifacts / "model-federated-files.json").write_text(json.dumps({"results": tool_results,
         "target_tracking_before": before, "target_tracking_after": _tracking_counts(target.workspace / ".boxteam")},
@@ -229,59 +221,67 @@ async def test_model_file_tools_execute_on_fixed_federated_owner(communication_t
 
 
 async def test_model_conditional_patch_preserves_file_operations_and_changesets(communication_triad):
-    nodes, model, artifacts = communication_triad
+    case = communication_triad
+    nodes, artifacts = case.nodes, case.artifacts
     source = nodes["b"]
     (source.workspace / "src/patch-source.txt").write_bytes(b"old\n")
     (source.workspace / "src/patch-delete.txt").write_bytes(b"delete\n")
     root = resource_display_uri(scope="workspace", scope_id=source.workspace_id, kind="files", tail_segments=("root", "src"))
     session = await create_session(source.client, "模型条件补丁")
-    receipt = None
     patch = "*** Begin Patch\n*** Update File: patch-source.txt\n*** Move to: patch-destination.txt\n@@\n-old\n+new\n*** Delete File: patch-delete.txt\n*** Add File: patch-created.txt\n+created\n*** End Patch"
 
-    def reply(payload):
-        nonlocal receipt
-        messages = payload["messages"]
-        if not any(message["role"] == "user" and "conditional-patch-trigger" in str(message["content"]) for message in messages):
-            return {"content": "条件补丁"}
-        results = [message for message in messages if message["role"] == "tool"]
-        if not results:
-            return _tool("read_file", {"path": root + "/patch-source.txt"}, "call_patch_read_source")
-        if len(results) == 1:
-            return _tool("read_file", {"path": root + "/patch-delete.txt"}, "call_patch_read_delete")
-        if len(results) == 2:
-            versions = {name: re.search(r"sha256:[0-9a-f]{64}", message["content"]).group()
-                        for name, message in zip(("patch-source.txt", "patch-delete.txt"), results, strict=True)}
-            assert versions == {"patch-source.txt": "sha256:" + hashlib.sha256(b"old\n").hexdigest(),
-                                "patch-delete.txt": "sha256:" + hashlib.sha256(b"delete\n").hexdigest()}
-            versions.update({"patch-destination.txt": "absent", "patch-created.txt": "absent"})
-            return _tool("apply_patch", {"input": patch, "explanation": "新增、删除和同根移动", "target": root,
-                                        "expected_versions": versions}, "call_conditional_patch")
-        receipt = json.loads(results[2]["content"])
-        assert receipt["status"] == "success" and receipt["effect"] == "completed", receipt
-        assert all(item["state"] == "published" for item in receipt["files"])
-        assert receipt["target"] == root
-        if len(results) == 3:
-            assert (source.workspace / "src/patch-created.txt").read_bytes() == b"created"
-            return _tool("read_file", {"path": root + "/patch-created.txt"}, "call_edit_read")
-        if len(results) == 4:
-            version = re.search(r"sha256:[0-9a-f]{64}", results[3]["content"]).group()
-            assert version == "sha256:" + hashlib.sha256(b"created").hexdigest()
-            return _tool("edit_file", {"file_path": root + "/patch-created.txt", "old_string": "created", "new_string": "edited",
-                                      "expected_version": version}, "call_conditional_edit")
-        edited = json.loads(results[4]["content"])
-        assert edited["status"] == "success" and edited["effect"] == "completed", edited
-        if len(results) == 5:
-            return _tool("write_file", {"file_path": root + "/written.txt", "content": "written\r\n", "expected_version": "absent"}, "call_conditional_write")
-        written = json.loads(results[5]["content"])
-        assert written["status"] == "success" and written["files"][0]["state"] == "published", written
-        return {"content": "已核实条件补丁、精确编辑和创建的统一发布回执"}
-
-    model.response_callback = reply
+    read_calls = await case.plan(source, session, [
+        _tool("read_file", {"path": root + "/patch-source.txt"}, "call_patch_read_source"),
+        _tool("read_file", {"path": root + "/patch-delete.txt"}, "call_patch_read_delete"),
+    ])
+    control = case.replay.control
+    read_delete = read_calls[-1] + ":tool-call:call_patch_read_delete"
+    control.arm(read_delete, "test.tool_result.committed")
     accepted = await source.client.post(f"/api/v1/sessions/{session}/messages", json={
         "message": {"content": "conditional-patch-trigger"}, "run": {"mode": "single_agent", "agent_id": "default"},
     }, headers={"X-Request-ID": "req-model-conditional-patch"})
     assert accepted.status_code == 200, accepted.text
-    await _completed(source.client, accepted.json()["data"]["job_id"])
+    async with asyncio.timeout(60):
+        try:
+            await asyncio.to_thread(control.acknowledged, read_delete, "test.tool_result.committed", 30)
+            versions = {name: re.search(r"sha256:[0-9a-f]{64}", case.tool_result(session, call + ":tool-call:" + tool)["content"]).group()
+                        for name, call, tool in zip(("patch-source.txt", "patch-delete.txt"), read_calls,
+                                                   ("call_patch_read_source", "call_patch_read_delete"), strict=True)}
+            assert versions == {"patch-source.txt": "sha256:" + hashlib.sha256(b"old\n").hexdigest(),
+                                "patch-delete.txt": "sha256:" + hashlib.sha256(b"delete\n").hexdigest()}
+            versions.update({"patch-destination.txt": "absent", "patch-created.txt": "absent"})
+            patch_calls = await case.plan(source, session, [
+                _tool("apply_patch", {"input": patch, "explanation": "新增、删除和同根移动", "target": root,
+                                      "expected_versions": versions}, "call_conditional_patch"),
+                _tool("read_file", {"path": root + "/patch-created.txt"}, "call_edit_read"),
+            ])
+            edit_read = patch_calls[-1] + ":tool-call:call_edit_read"
+            control.arm(edit_read, "test.tool_result.committed")
+        finally:
+            control.release(read_delete, "test.tool_result.committed")
+        try:
+            await asyncio.to_thread(control.acknowledged, edit_read, "test.tool_result.committed", 30)
+            receipt = json.loads(case.tool_result(session, patch_calls[0] + ":tool-call:call_conditional_patch")["content"])
+            assert receipt["status"] == "success" and receipt["effect"] == "completed", receipt
+            assert all(item["state"] == "published" for item in receipt["files"])
+            assert receipt["target"] == root
+            assert (source.workspace / "src/patch-created.txt").read_bytes() == b"created"
+            version = re.search(r"sha256:[0-9a-f]{64}", case.tool_result(session, edit_read)["content"]).group()
+            assert version == "sha256:" + hashlib.sha256(b"created").hexdigest()
+            following = await case.plan(source, session, [
+                _tool("edit_file", {"file_path": root + "/patch-created.txt", "old_string": "created", "new_string": "edited",
+                                    "expected_version": version}, "call_conditional_edit"),
+                _tool("write_file", {"file_path": root + "/written.txt", "content": "written\r\n", "expected_version": "absent"}, "call_conditional_write"),
+                {"content": "已核实条件补丁、精确编辑和创建的统一发布回执"},
+            ])
+        finally:
+            control.release(edit_read, "test.tool_result.committed")
+        await _completed(source.client, accepted.json()["data"]["job_id"])
+    results = [message for message in case.request(following[-1])["messages"] if message["role"] == "tool"]
+    assert len(results) == 6
+    edited, written = (json.loads(message["content"]) for message in results[4:])
+    assert edited["status"] == "success" and edited["effect"] == "completed", edited
+    assert written["status"] == "success" and written["files"][0]["state"] == "published", written
     assert receipt is not None
     assert (source.workspace / "src/patch-destination.txt").read_bytes() == b"new\n"
     assert (source.workspace / "src/patch-created.txt").read_bytes() == b"edited"
@@ -329,14 +329,15 @@ async def test_model_conditional_patch_preserves_file_operations_and_changesets(
     assert cold.json()["data"]["files"] == refreshed.json()["data"]["files"]
     assert cold.json()["request_id"] == cold.headers["X-Request-ID"]
     assert (session_path / "changes/index.jsonl").read_bytes() == original_index
-    wire = json.dumps(model.requests)
+    wire = json.dumps(case.requests())
     assert all(str(node.workspace) not in wire for node in nodes.values())
     (artifacts / "model-conditional-patch.json").write_text(json.dumps({"receipt": receipt,
         "changeset": response.json(), "events": events.json(), "cold_changeset": cold.json()}, ensure_ascii=False, indent=2) + "\n")
 
 
 async def test_model_remote_text_mutations_preserve_owner_versions_and_source_changes(communication_triad):
-    nodes, model, artifacts = communication_triad
+    case = communication_triad
+    nodes, artifacts = case.nodes, case.artifacts
     source, target = nodes["b"], nodes["c"]
     raw = b"\xef\xbb\xbfTARGET old\r\n"
     (target.workspace / "src/remote-edit.txt").write_bytes(raw)
@@ -347,52 +348,57 @@ async def test_model_remote_text_mutations_preserve_owner_versions_and_source_ch
     root = resource_display_uri(scope="workspace", scope_id=target.workspace_id, kind="files",
         tail_segments=("root", "src"), gateway_authority=target.gateway_id)
     session = await create_session(source.client, "模型远端条件写入")
-    results = []
     patch = "*** Begin Patch\n*** Update File: remote-edit.txt\n*** Move to: remote-moved.txt\n@@\n-\ufeffTARGET edited\n+\ufeffTARGET patched\n*** Delete File: remote-delete.txt\n*** Add File: remote-added.txt\n+target added\n*** End Patch"
 
-    def reply(payload):
-        messages = payload["messages"]
-        if not any(message["role"] == "user" and "remote-text-mutation-trigger" in str(message["content"]) for message in messages):
-            return {"content": "远端条件写入"}
-        tools = [message for message in messages if message["role"] == "tool"]
-        if not tools:
-            return _tool("read_file", {"path": root + "/remote-edit.txt"}, "call_remote_text_read")
-        if len(tools) == 1:
-            version = re.search(r"sha256:[0-9a-f]{64}", tools[0]["content"]).group()
-            assert version == "sha256:" + hashlib.sha256(raw).hexdigest()
-            return _tool("edit_file", {"file_path": root + "/remote-edit.txt", "old_string": "old", "new_string": "edited",
-                                      "expected_version": version}, "call_remote_text_edit")
-        edited = json.loads(tools[1]["content"])
-        assert edited["status"] == "success" and edited["effect"] == "completed", edited
-        if len(tools) == 2:
-            assert edited["files"][0]["path"] == root + "/remote-edit.txt"
-            assert edited["files"][0]["content_hash"] == "sha256:" + hashlib.sha256(raw.replace(b"old", b"edited")).hexdigest()
-            return _tool("read_file", {"path": root + "/remote-delete.txt"}, "call_remote_text_delete_read")
-        if len(tools) == 3:
-            deleted_version = re.search(r"sha256:[0-9a-f]{64}", tools[2]["content"]).group()
-            return _tool("apply_patch", {"input": patch, "target": root, "explanation": "在固定远端新增、删除和移动文本",
-                "expected_versions": {"remote-edit.txt": edited["files"][0]["content_hash"], "remote-moved.txt": "absent",
-                                      "remote-delete.txt": deleted_version, "remote-added.txt": "absent"}}, "call_remote_text_patch")
-        patched = json.loads(tools[3]["content"])
-        assert patched["status"] == "success" and patched["effect"] == "completed", patched
-        if len(tools) == 4:
-            assert [item["state"] for item in patched["files"]] == ["published"] * 4
-            return _tool("write_file", {"file_path": root + "/remote-written.txt", "content": "target written\r\n",
-                                       "expected_version": "absent"}, "call_remote_text_write")
-        written = json.loads(tools[4]["content"])
-        assert written["status"] == "success" and written["effect"] == "completed", written
-        if len(tools) == 5:
-            return _tool("read_file", {"path": root + "/remote-moved.txt"}, "call_remote_text_verify")
-        assert "TARGET patched" in tools[5]["content"]
-        results[:] = tools
-        return {"content": "远端条件写入完成"}
-
-    model.response_callback = reply
+    first_call, = await case.plan(source, session, [
+        _tool("read_file", {"path": root + "/remote-edit.txt"}, "call_remote_text_read"),
+    ])
+    control = case.replay.control
+    read_call = first_call + ":tool-call:call_remote_text_read"
+    control.arm(read_call, "test.tool_result.committed")
     accepted = await source.client.post(f"/api/v1/sessions/{session}/messages", json={
         "message": {"content": "remote-text-mutation-trigger"}, "run": {"mode": "single_agent", "agent_id": "default"},
     }, headers={"X-Request-ID": "req-model-remote-text"})
     assert accepted.status_code == 200, accepted.text
-    await _completed(source.client, accepted.json()["data"]["job_id"])
+    async with asyncio.timeout(60):
+        try:
+            await asyncio.to_thread(control.acknowledged, read_call, "test.tool_result.committed", 30)
+            version = re.search(r"sha256:[0-9a-f]{64}", case.tool_result(session, read_call)["content"]).group()
+            assert version == "sha256:" + hashlib.sha256(raw).hexdigest()
+            edit_calls = await case.plan(source, session, [
+                _tool("edit_file", {"file_path": root + "/remote-edit.txt", "old_string": "old", "new_string": "edited",
+                                    "expected_version": version}, "call_remote_text_edit"),
+                _tool("read_file", {"path": root + "/remote-delete.txt"}, "call_remote_text_delete_read"),
+            ])
+            delete_read = edit_calls[-1] + ":tool-call:call_remote_text_delete_read"
+            control.arm(delete_read, "test.tool_result.committed")
+        finally:
+            control.release(read_call, "test.tool_result.committed")
+        try:
+            await asyncio.to_thread(control.acknowledged, delete_read, "test.tool_result.committed", 30)
+            edited = json.loads(case.tool_result(session, edit_calls[0] + ":tool-call:call_remote_text_edit")["content"])
+            assert edited["status"] == "success" and edited["effect"] == "completed", edited
+            assert edited["files"][0]["path"] == root + "/remote-edit.txt"
+            assert edited["files"][0]["content_hash"] == "sha256:" + hashlib.sha256(raw.replace(b"old", b"edited")).hexdigest()
+            deleted_version = re.search(r"sha256:[0-9a-f]{64}", case.tool_result(session, delete_read)["content"]).group()
+            following = await case.plan(source, session, [
+                _tool("apply_patch", {"input": patch, "target": root, "explanation": "在固定远端新增、删除和移动文本",
+                    "expected_versions": {"remote-edit.txt": edited["files"][0]["content_hash"], "remote-moved.txt": "absent",
+                                          "remote-delete.txt": deleted_version, "remote-added.txt": "absent"}}, "call_remote_text_patch"),
+                _tool("write_file", {"file_path": root + "/remote-written.txt", "content": "target written\r\n",
+                                     "expected_version": "absent"}, "call_remote_text_write"),
+                _tool("read_file", {"path": root + "/remote-moved.txt"}, "call_remote_text_verify"),
+                {"content": "远端条件写入完成"},
+            ])
+        finally:
+            control.release(delete_read, "test.tool_result.committed")
+        await _completed(source.client, accepted.json()["data"]["job_id"])
+    results = [message for message in case.request(following[-1])["messages"] if message["role"] == "tool"]
+    patched, written = (json.loads(message["content"]) for message in results[3:5])
+    assert patched["status"] == "success" and patched["effect"] == "completed", patched
+    assert [item["state"] for item in patched["files"]] == ["published"] * 4
+    assert written["status"] == "success" and written["effect"] == "completed", written
+    assert "TARGET patched" in results[5]["content"]
     assert len(results) == 6
     assert not (target.workspace / "src/remote-edit.txt").exists()
     assert not (target.workspace / "src/remote-delete.txt").exists()
@@ -419,7 +425,7 @@ async def test_model_remote_text_mutations_preserve_owner_versions_and_source_ch
         journal = json.loads(path.read_text())
         assert journal["snapshots"] and all(item["uri"].startswith(root + "/") for item in journal["snapshots"])
         assert all("after_content" in item for item in journal["snapshots"])
-    wire = json.dumps(model.requests, ensure_ascii=False)
+    wire = json.dumps(case.requests(), ensure_ascii=False)
     assert all(str(node.workspace) not in wire for node in nodes.values())
     credential = FederationCredentialStore(storage_path=nodes["a"].gateway_root / "credentials/federation.json").get("rgw_c3_c")
     for path in ("/api/v1/resources/text-mutations", f"/api/v1/workspaces/{target.workspace_id}/resources/text-mutations"):
@@ -484,36 +490,15 @@ async def test_model_attachment_uri_reads_media_through_original_owner(communica
     from app.core.resource_uri import parse_session_artifact_uri
     from tests.support.session_navigation_http import submit_navigation_operation
 
-    nodes, model, artifacts = communication_triad
+    case = communication_triad
+    nodes, artifacts = case.nodes, case.artifacts
     source = nodes["b"]
     session = await create_session(source.client, "附件 URI 媒体读取")
     image = BytesIO()
     Image.new("RGB", (900, 600), color="navy").save(image, format="PNG")
     original = image.getvalue()
-    references, replies = [], []
-
-    def reply(payload):
-        messages = payload["messages"]
-        user = "\n".join(str(message["content"]) for message in messages if message["role"] == "user")
-        if "artifact-media-trigger" not in user:
-            return {"content": "附件 URI 媒体读取"}
-        results = [message for message in messages if message["role"] == "tool"]
-        if not results:
-            file_id = re.search(r'<attachment [^>]*path="([^"]+)"', user).group(1)
-            parsed = parse_session_artifact_uri(file_id)
-            assert (parsed.scope_id, parsed.tail_segments[:2], parsed.gateway_authority) == (
-                source.workspace_id, (session, "attachments"), source.gateway_id,
-            )
-            references.append(file_id)
-            return _tool("read_file", {"path": file_id}, "call_attachment_media")
-        assert len(results) == 1
-        wire = json.dumps(results, ensure_ascii=False)
-        assert base64.b64encode(original).decode() in wire and "image/png" in wire, wire
-        assert "invalid_encoding" not in wire
-        replies[:] = results
-        return {"content": "附件原件经原 owner 读取并完整投影给支持图像的 Provider。"}
-
-    model.response_callback = reply
+    control = case.replay.control
+    control.arm_match("attachment-ready", "thread.runtime.acquired", {"session_id": session})
     accepted = await source.client.post(f"/api/v1/sessions/{session}/messages", json={
         "message": {"content": "artifact-media-trigger", "attachments": [{
             "file_id": "inline:media.png", "name": "media.png", "content_type": "image/png",
@@ -521,9 +506,36 @@ async def test_model_attachment_uri_reads_media_through_original_owner(communica
         }]}, "run": {"mode": "single_agent", "agent_id": "default"},
     })
     assert accepted.status_code == 200, accepted.text
-    await _completed(source.client, accepted.json()["data"]["job_id"])
-    assert len(references) == len(replies) == 1
-    file_id = references[0]
+    async with asyncio.timeout(60):
+        try:
+            await asyncio.to_thread(control.acknowledged_match, "attachment-ready")
+            history = await source.client.post(f"/api/v1/sessions/{session}/history", json={
+                "turn_ids": [accepted.json()["data"]["turn_id"]],
+            })
+            assert history.status_code == 200, history.text
+            accepted_turn, = history.json()["data"]["items"]
+            assert accepted_turn["turn_id"] == accepted.json()["data"]["turn_id"]
+            accepted_message, = accepted_turn["user_messages"]
+            attachment, = accepted_message["attachments"]
+            file_id = attachment["file_id"]
+            parsed = parse_session_artifact_uri(file_id)
+            assert (parsed.scope_id, parsed.tail_segments[:2], parsed.gateway_authority) == (
+                source.workspace_id, (session, "attachments"), source.gateway_id,
+            )
+            calls = await case.plan(source, session, [
+                _tool("read_file", {"path": file_id}, "call_attachment_media"),
+                {"content": "附件原件经原 owner 读取并完整投影给支持图像的 Provider。"},
+            ])
+        finally:
+            control_request(json.loads(control.environment["BOXTEAM_E2E_TEST_CONTROL"]), {"action": "release_match", "barrier_id": "attachment-ready"})
+        await _completed(source.client, accepted.json()["data"]["job_id"])
+    first_wire = json.dumps(case.request(calls[0])["messages"], ensure_ascii=False)
+    assert "artifact-media-trigger" in first_wire and file_id in first_wire
+    replies = [message for message in case.request(calls[-1])["messages"] if message["role"] == "tool"]
+    assert len(replies) == 1
+    wire = json.dumps(replies, ensure_ascii=False)
+    assert base64.b64encode(original).decode() in wire and "image/png" in wire, wire
+    assert "invalid_encoding" not in wire
     await asyncio.to_thread(source.restart_backend)
     receipts = []
     for variant in ("original", "thumbnail"):
@@ -545,7 +557,7 @@ async def test_model_attachment_uri_reads_media_through_original_owner(communica
     assert base64.b64decode(navigation.json()["data"]["content"]) == original
     assert navigation.json()["data"]["content_hash"] == "sha256:" + hashlib.sha256(original).hexdigest()
     assert navigation.headers["X-Request-ID"] == navigation.json()["request_id"]
-    assert all(str(node.workspace) not in json.dumps(model.requests) for node in nodes.values())
+    assert all(str(node.workspace) not in json.dumps(case.requests()) for node in nodes.values())
     deleted = await submit_navigation_operation(source.client, "delete_session", target_node_id=session, wait_for_settlement=True)
     assert deleted["state"] == "committed" and deleted["settlement"] == "settled"
     missing = await source.client.get(f"/api/v1/sessions/{session}/attachments/content", params={"file_id": file_id, "variant": "original"})

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import re
 import sqlite3
 from collections.abc import AsyncIterator
 from contextlib import closing
@@ -24,12 +23,12 @@ from app.services.business.session_context_resource import (
 )
 from app.testing.model_stream import build_cassette, chat_completion_frames
 from tests.harness.python.run_context import TestRunContext
-from tests.integration.stubs.http_stubs import HTTPStubState, openai_chat_stub
 from tests.support.api_helpers import create_session
 from tests.support.communication_federation import (
     CommunicationNode,
     open_communication_triad,
 )
+from tests.support.e2e_control.harness import control_request
 from tests.support.model_stream_config import ModelStreamReplay, model_stream_replay
 from tests.support.ports import integration_port_block_for_file
 from tests.support.processes.gateway import (
@@ -49,6 +48,44 @@ from tests.support.workspaces import (
     install_test_workspace_config,
     prepare_default_test_workspace,
 )
+
+
+async def _plan_communication_calls(
+    replay: ModelStreamReplay, client: httpx.AsyncClient, workspace: Path,
+    session_id: str, responses: list[dict[str, object]],
+) -> tuple[list[str], str]:
+    main = await client.get(f"/api/v1/sessions/{session_id}/main-thread")
+    assert main.status_code == 200, main.text
+    thread_id = main.json()["data"]["thread_id"]
+    config = commentjson.loads((workspace / ".boxteam/workspace.jsonc").read_text())
+    endpoint = next(provider["endpoint"] for provider in config["llm"]["providers"] if provider["id"] == "primary")
+    interactions = [build_cassette(
+        asset_id="session-communication", model="e2e-stub-model", url=endpoint + "/chat/completions",
+        frames=chat_completion_frames(
+            response_id=f"chatcmpl-communication-{index}", model="e2e-stub-model",
+            deltas=({"role": "assistant", **response},),
+            finish_reason="tool_calls" if "tool_calls" in response else "stop",
+        ),
+    ).raw["interactions"][0] for index, response in enumerate(responses)]
+    return replay.control.plan_model_calls(session_id, thread_id, interactions), thread_id
+
+
+def _communication_request(
+    replay: ModelStreamReplay, planned_calls: dict[str, dict[str, str]], call: str,
+) -> dict[str, object]:
+    artifact = json.loads((replay.artifacts / (call + ".json")).read_text())
+    assert artifact["identity"] == planned_calls[call]
+    assert artifact["request"]["stream"] is True
+    return artifact["request"]
+
+
+def _committed_tool_result(replay: ModelStreamReplay, session_id: str, call_id: str) -> dict[str, object]:
+    events = [event["details"] for event in replay.control.events
+              if event["phase"] == "test.tool_result.committed" and event["operation_id"] == call_id]
+    result, = events
+    assert result["session_id"] == session_id
+    assert result["item"]["payload"]["tool_call_id"] == call_id
+    return result["item"]["payload"]
 
 
 @dataclass
@@ -79,36 +116,15 @@ class CommunicationCase:
         return resolver.resolve_thread_node(session_id, resolver.main_thread_id(session_id))
 
     async def plan(self, session_id: str, responses: list[dict[str, object]]) -> list[str]:
-        main = await self.client.get(f"/api/v1/sessions/{session_id}/main-thread")
-        assert main.status_code == 200, main.text
-        thread_id = main.json()["data"]["thread_id"]
-        config = commentjson.loads((self.workspace / ".boxteam/workspace.jsonc").read_text())
-        endpoint = next(provider["endpoint"] for provider in config["llm"]["providers"] if provider["id"] == "primary")
-        interactions = [build_cassette(
-            asset_id="session-communication", model="e2e-stub-model", url=endpoint + "/chat/completions",
-            frames=chat_completion_frames(
-                response_id=f"chatcmpl-communication-{index}", model="e2e-stub-model",
-                deltas=({"role": "assistant", **response},),
-                finish_reason="tool_calls" if "tool_calls" in response else "stop",
-            ),
-        ).raw["interactions"][0] for index, response in enumerate(responses)]
-        calls = self.replay.control.plan_model_calls(session_id, thread_id, interactions)
+        calls, thread_id = await _plan_communication_calls(self.replay, self.client, self.workspace, session_id, responses)
         self.planned_calls.update({call: {"session_id": session_id, "thread_id": thread_id, "model_call_id": call} for call in calls})
         return calls
 
     def request(self, call: str) -> dict[str, object]:
-        artifact = json.loads((self.replay.artifacts / (call + ".json")).read_text())
-        assert artifact["identity"] == self.planned_calls[call]
-        assert artifact["request"]["stream"] is True
-        return artifact["request"]
+        return _communication_request(self.replay, self.planned_calls, call)
 
     def tool_result(self, session_id: str, call_id: str) -> dict[str, object]:
-        events = [event["details"] for event in self.replay.control.events
-                  if event["phase"] == "test.tool_result.committed" and event["operation_id"] == call_id]
-        result, = events
-        assert result["session_id"] == session_id
-        assert result["item"]["payload"]["tool_call_id"] == call_id
-        return result["item"]["payload"]
+        return _committed_tool_result(self.replay, session_id, call_id)
 
     async def hard_restart(self) -> None:
         previous = self.backend
@@ -497,69 +513,98 @@ async def test_communication_crash_windows_keep_original_identity(communication_
     case.record("crash-window", {"stage": case.barrier_stage, "marker": marker, "source_before": asdict(outbox), "source_after": asdict(recovered_outbox), "target_after": asdict(recovered_inbox), "target_execution_outcome": outcome})
 
 
+@dataclass
+class FederatedCommunicationCase:
+    nodes: dict[str, CommunicationNode]
+    replay: ModelStreamReplay
+    artifacts: Path
+    planned_calls: dict[str, dict[str, str]] = field(default_factory=dict)
+
+    async def plan(self, node: CommunicationNode, session_id: str, responses: list[dict[str, object]]) -> list[str]:
+        calls, thread_id = await _plan_communication_calls(self.replay, node.client, node.workspace, session_id, responses)
+        self.planned_calls.update({call: {"session_id": session_id, "thread_id": thread_id, "model_call_id": call} for call in calls})
+        return calls
+
+    def request(self, call: str) -> dict[str, object]:
+        return _communication_request(self.replay, self.planned_calls, call)
+
+    def requests(self) -> list[dict[str, object]]:
+        assert {path.stem for path in self.replay.artifacts.glob("*.json")} == set(self.planned_calls)
+        return [self.request(call) for call in self.planned_calls]
+
+    def tool_result(self, session_id: str, call_id: str) -> dict[str, object]:
+        return _committed_tool_result(self.replay, session_id, call_id)
+
+
 @pytest.fixture
-async def communication_triad(request: pytest.FixtureRequest) -> AsyncIterator[tuple[dict[str, CommunicationNode], HTTPStubState, Path]]:
+async def communication_triad(request: pytest.FixtureRequest) -> AsyncIterator[FederatedCommunicationCase]:
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
-    artifacts = context.artifacts_dir / request.node.name
+    runtime_root = context.runtime_root_for_node(request.node.nodeid)
+    artifacts = context.artifacts_dir / runtime_root.parent.name / request.node.name
     artifacts.mkdir(parents=True, exist_ok=True)
-    ports = integration_port_block_for_file(Path(request.node.path))
-    with openai_chat_stub(ports.port(10)) as model:
+    with model_stream_replay(
+        artifacts, runtime_root=runtime_root,
+        business_assertion="three-gateway-communication-and-resource-owner-contracts",
+    ) as replay:
         async with open_communication_triad(
             context, getattr(request, "param", {}).get("prepare_workspace", _prepare_workspace),
             resource_service_nodes=getattr(request, "param", {}).get("resource_service_nodes", ()),
             shared_session_ids=getattr(request, "param", {}).get("shared_session_ids", ()),
+            backend_asgi_app="tests.support.e2e_control.communication_backend_app:app",
+            backend_environment={**replay.environment, "LITELLM_LOCAL_MODEL_COST_MAP": "true"},
         ) as nodes:
+            case = FederatedCommunicationCase(nodes, replay, artifacts)
             try:
-                yield nodes, model, artifacts
+                yield case
             finally:
-                (artifacts / "provider-wire.json").write_text(json.dumps(model.requests, ensure_ascii=False, indent=2) + "\n")
+                (artifacts / "provider-wire.json").write_text(json.dumps(case.requests(), ensure_ascii=False, indent=2) + "\n")
 
 
 @pytest.mark.asyncio
 async def test_c3_real_reverse_channel_question_and_reply(communication_triad) -> None:
-    nodes, model, artifacts = communication_triad
+    case = communication_triad
+    nodes, artifacts = case.nodes, case.artifacts
     source, target = nodes["b"], nodes["c"]
     source_session = await create_session(source.client, "C3 B source")
     target_session = await create_session(target.client, "C3 C target")
-    results: dict[str, object] = {}
-
-    def reply(payload: dict[str, object]) -> dict[str, object]:
-        messages = payload["messages"]
-        human = next((str(m["content"]) for m in reversed(messages) if m["role"] == "user" and m["content"]), "")
-        tools = {m.get("name"): json.loads(m["content"]) for m in messages if m["role"] == "tool"}
-        # reply 可能在 wait 后注入同一次请求，先保存已经完成的工具结果。
-        if "send_message_to_session" in tools:
-            receipt = tools["send_message_to_session"]
-            results[receipt["kind"]] = receipt
-        if "wait_for_session" in tools:
-            results["wait"] = tools["wait_for_session"]
-        if "<session_message" in human and "c3-question" in human:
-            if "send_message_to_session" not in tools:
-                correlation = re.search(r'"communication_id"\s*:\s*"([^"]+)"', human)
-                assert correlation is not None, human
-                return _tool("send_message_to_session", {
-                    "target_session_id": session_resource_uri(source.workspace_id, source_session, gateway_authority=source.gateway_id), "kind": "reply",
-                    "reply_to_communication_id": correlation[1], "content": "c3-reply-from-C",
-                }, "call_c3_reply")
-            return {"content": "c3-C-completed"}
-        if "<session_message" in human and "c3-reply-from-C" in human:
-            return {"content": "c3-B-reply-seen"}
-        if "c3-source-trigger" in human:
-            if "send_message_to_session" not in tools:
-                return _tool("send_message_to_session", {
-                    "target_session_id": session_resource_uri(target.workspace_id, target_session, gateway_authority=target.gateway_id), "kind": "question", "content": "c3-question",
-                }, "call_c3_question")
-            if "wait_for_session" not in tools:
-                return _tool("wait_for_session", {"target_session_id": target_session, "communication_id": results["question"]["communication_id"], "timeout_seconds": 30}, "call_c3_wait")
-            return {"content": "c3-B-source-completed"}
-        return {"content": "C3 通信验证会话"}
-
-    model.response_callback = reply
+    control = case.replay.control
+    control.arm_match("c3-target", "thread.runtime.acquired", {"session_id": target_session})
+    first_call, = await case.plan(source, source_session, [_tool("send_message_to_session", {
+        "target_session_id": session_resource_uri(target.workspace_id, target_session, gateway_authority=target.gateway_id),
+        "kind": "question", "content": "c3-question",
+    }, "call_c3_question")])
+    question_call = first_call + ":tool-call:call_c3_question"
+    control.arm(question_call, "test.tool_result.committed")
     accepted = await source.client.post(f"/api/v1/sessions/{source_session}/messages", json={
         "message": {"content": "c3-source-trigger"}, "run": {"mode": "single_agent", "agent_id": "default"},
     })
     assert accepted.status_code == 200, accepted.text
+    try:
+        await asyncio.to_thread(control.acknowledged, question_call, "test.tool_result.committed", 30)
+        question_receipt = json.loads(case.tool_result(source_session, question_call)["content"])
+        target_calls = await case.plan(target, target_session, [
+            _tool("send_message_to_session", {
+                "target_session_id": session_resource_uri(source.workspace_id, source_session, gateway_authority=source.gateway_id),
+                "kind": "reply", "reply_to_communication_id": question_receipt["communication_id"],
+                "content": "c3-reply-from-C",
+            }, "call_c3_reply"), {"content": "c3-C-completed"},
+        ])
+        source_calls = await case.plan(source, source_session, [
+            _tool("wait_for_session", {"target_session_id": target_session,
+                  "communication_id": question_receipt["communication_id"], "timeout_seconds": 30}, "call_c3_wait"),
+            {"content": "c3-B-source-completed"}, {"content": "c3-B-reply-seen"},
+        ])
+    finally:
+        control_request(json.loads(control.environment["BOXTEAM_E2E_TEST_CONTROL"]), {"action": "release_match", "barrier_id": "c3-target"})
+        control.release(question_call, "test.tool_result.committed")
     source_job = await _completed(source.client, accepted.json()["data"]["job_id"])
+    results = {
+        "question": question_receipt,
+        "reply": json.loads(case.tool_result(target_session, target_calls[0] + ":tool-call:call_c3_reply")["content"]),
+        "wait": json.loads(case.tool_result(source_session, source_calls[0] + ":tool-call:call_c3_wait")["content"]),
+    }
+    target_wire = json.dumps(case.request(target_calls[0])["messages"], ensure_ascii=False)
+    assert "c3-question" in target_wire and question_receipt["communication_id"] in target_wire
     assert results["wait"]["status"] == "completed", results
     source_node = await source.session_node(source_session)
     target_node = await target.session_node(target_session)

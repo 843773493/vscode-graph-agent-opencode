@@ -293,7 +293,8 @@ async def test_gateway_directory_selector_registers_uri_after_native_input_and_r
 
 @pytest.mark.asyncio
 async def test_remote_directory_selection_resolves_only_on_fixed_gateway(communication_triad):
-    nodes, _, artifacts = communication_triad
+    case = communication_triad
+    nodes, artifacts = case.nodes, case.artifacts
     source, target = nodes["a"], nodes["b"]
     directory = target.workspace / "remote 目录% Ω"
     directory.mkdir()
