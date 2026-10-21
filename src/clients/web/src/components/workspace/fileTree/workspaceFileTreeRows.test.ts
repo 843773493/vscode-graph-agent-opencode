@@ -4,6 +4,7 @@ import type { WorkspaceFileNode } from "../../../types/backend";
 import type { DirectoryCacheEntry } from "./workspaceFileTreeCache";
 import {
   buildVisibleFileTreeRows,
+  createFileTreeSearchMatcher,
   fileTreeNodeMatchesQuery,
 } from "./workspaceFileTreeRows";
 
@@ -49,6 +50,34 @@ function directory(items: WorkspaceFileNode[]): DirectoryCacheEntry {
     lastAccessedAt: 1,
   };
 }
+
+test("共享搜索匹配器复用已加载目录并保留未加载目录", () => {
+  const sourceUri = `${workspaceRootUri}/src`;
+  const sourceDirectory: WorkspaceFileNode = {
+    name: "src",
+    path: sourceUri,
+    kind: "directory",
+    has_children: true,
+    size: null,
+    modified_at: null,
+  };
+  const unloadedDirectory: WorkspaceFileNode = {
+    name: "vendor",
+    path: `${workspaceRootUri}/vendor`,
+    kind: "directory",
+    has_children: true,
+    size: null,
+    modified_at: null,
+  };
+  const matchesNode = createFileTreeSearchMatcher({
+    [workspaceRootUri]: directory([sourceDirectory, unloadedDirectory]),
+    [sourceUri]: directory([node("needle.ts", `${sourceUri}/needle.ts`)]),
+  }, " NEEDLE ");
+
+  expect(matchesNode(sourceDirectory)).toBe(true);
+  expect(matchesNode(unloadedDirectory)).toBe(true);
+  expect(matchesNode(node("plain.ts", `${sourceUri}/plain.ts`))).toBe(false);
+});
 
 function rowOptions(
   overrides: Partial<Parameters<typeof buildVisibleFileTreeRows>[0]> = {},

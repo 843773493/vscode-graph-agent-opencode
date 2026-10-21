@@ -31,6 +31,48 @@ export function fileTreeNodeMatchesQuery(
     || node.path.toLowerCase().includes(normalizedQuery);
 }
 
+export type WorkspaceFileTreeSearchMatcher = (
+  node: WorkspaceFileNode,
+) => boolean;
+
+export function createFileTreeSearchMatcher(
+  directories: Readonly<Record<string, DirectoryCacheEntry>>,
+  searchQuery: string,
+): WorkspaceFileTreeSearchMatcher {
+  const normalizedQuery = searchQuery.trim().toLowerCase();
+  const matchCache = new Map<string, boolean>();
+  const activeSearchChain = new Set<string>();
+
+  const matchesNode = (node: WorkspaceFileNode): boolean => {
+    if (!normalizedQuery) {
+      return true;
+    }
+    const cached = matchCache.get(node.path);
+    if (cached !== undefined) {
+      return cached;
+    }
+    const directMatch = fileTreeNodeMatchesQuery(node, normalizedQuery);
+    if (directMatch || !isExpandableFileTreeNode(node)) {
+      matchCache.set(node.path, directMatch);
+      return directMatch;
+    }
+    if (activeSearchChain.has(node.path)) {
+      return true;
+    }
+    activeSearchChain.add(node.path);
+    let matchesLoadedDescendant: boolean;
+    try {
+      matchesLoadedDescendant = directories[node.path]?.items.some(matchesNode) ?? true;
+    } finally {
+      activeSearchChain.delete(node.path);
+    }
+    matchCache.set(node.path, matchesLoadedDescendant);
+    return matchesLoadedDescendant;
+  };
+
+  return matchesNode;
+}
+
 export type WorkspaceFileTreeRow =
   | {
       key: string;
@@ -63,6 +105,7 @@ interface BuildVisibleFileTreeRowsOptions {
   expandedPaths: ReadonlySet<string>;
   shortcuts: readonly FileTreeShortcut[];
   searchQuery: string;
+  searchMatcher?: WorkspaceFileTreeSearchMatcher;
   workspaceLabel: string;
   workspaceTitle: string;
   workspaceRootPath: string;
@@ -75,6 +118,7 @@ export function buildVisibleFileTreeRows({
   expandedPaths,
   shortcuts,
   searchQuery,
+  searchMatcher,
   workspaceLabel,
   workspaceTitle,
   workspaceRootPath,
@@ -82,43 +126,13 @@ export function buildVisibleFileTreeRows({
   filesystemLabel,
 }: BuildVisibleFileTreeRowsOptions): WorkspaceFileTreeRow[] {
   const rows: WorkspaceFileTreeRow[] = [];
-  const normalizedQuery = searchQuery.trim().toLowerCase();
-  const searchMatchCache = new Map<string, boolean>();
+  const nodeMatchesSearch = searchMatcher
+    ?? createFileTreeSearchMatcher(directories, searchQuery);
   // 展开是深度优先树遍历：后端构造子路径时始终是 `父路径/子项名`，子路径必然
   // 严格长于父路径，因此合法数据不可能成环。但损坏载荷可能给出自引用目录，
   // 使递归无限深入。这里只对**当前递归链**去重：合法数据中同一目录可在多个根下
   // 重复出现（例如多条快捷路径指向同一目录），那种重复必须照常渲染，不能全局去重。
   const activeDirectoryChain = new Set<string>();
-
-  const searchMatchChain = new Set<string>();
-
-  const nodeMatchesSearch = (node: WorkspaceFileNode): boolean => {
-    if (!normalizedQuery) {
-      return true;
-    }
-    const cached = searchMatchCache.get(node.path);
-    if (cached !== undefined) {
-      return cached;
-    }
-    const matches = fileTreeNodeMatchesQuery(node, normalizedQuery);
-    if (matches || !isExpandableFileTreeNode(node)) {
-      searchMatchCache.set(node.path, matches);
-      return matches;
-    }
-    // 与展开遍历同理：搜索递归也要对当前链去重，避免损坏载荷导致栈溢出。
-    if (searchMatchChain.has(node.path)) {
-      return true;
-    }
-    searchMatchChain.add(node.path);
-    let result: boolean;
-    try {
-      result = directories[node.path]?.items.some(nodeMatchesSearch) ?? true;
-    } finally {
-      searchMatchChain.delete(node.path);
-    }
-    searchMatchCache.set(node.path, result);
-    return result;
-  };
 
   const appendDirectory = (directoryPath: string, depth: number) => {
     if (activeDirectoryChain.has(directoryPath)) {

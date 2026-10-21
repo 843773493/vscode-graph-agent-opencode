@@ -11,7 +11,7 @@
 - `useWorkspaceFileTreeDirectories.ts`：目录缓存与懒加载的唯一所有者（并发请求去重、分页合并、失败登记、LRU 保护集、精确子树失效 `invalidateDirectoriesUnder` 与基于它的全树重同步 `reloadExpandedDirectories`）。目录失效只有精确子树这一种语义，不存在第二套 stale 标记；全树重同步也必须复用同一原语。展开态与活动文件夹在外部，经 ref 传入以读取最新值。
 - `workspaceFileTreePaths.ts`：已解析文件 URI 的父子关系、根内判断和剪贴板输入处理；根 URI 由固定目标后端提供，原生路径交目标机器解析，不在浏览器拼接真实路径。
 - `workspaceFileTreeCache.ts`：目录缓存条目结构与唯一构造入口（加载中/成功/失败/过期四种形态）、LRU 淘汰与按层恢复的并发控制。任何目录条目字面量都必须复用这里的工厂函数。
-- `workspaceFileTreeRows.ts`：把目录缓存与展开状态编译成可渲染的扁平行。
+- `workspaceFileTreeRows.ts`：唯一搜索匹配器和扁平行构建；组件的虚拟行和递归 DOM 共用同一个目录递归命中缓存。
 
 本目录与相邻子包的边界：
 
