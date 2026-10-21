@@ -3,7 +3,11 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
+
+from pydantic import ValidationError
 
 from app.core.resource_uri import parse_resource_uri
 from app.core.session_catalog_resolver import SessionCatalogPathResolver
@@ -60,8 +64,8 @@ class FileTreeSettingsService:
 
     def initialize_session(self, session_id: str) -> None:
         settings_path = self._session_settings_path(session_id)
-        if settings_path.exists():
-            raise FileExistsError(f"新会话快捷路径快照已存在: {settings_path}")
+        if self._exists(settings_path):
+            raise FileExistsError(f"新会话快捷路径快照已存在: session_id={session_id}, artifact=file_tree_shortcuts")
         defaults = self._read_shortcuts(
             self._workspace_settings_path, source="workspace"
         )
@@ -171,12 +175,12 @@ class FileTreeSettingsService:
                 / "ui"
                 / "file-tree-shortcuts.json"
             )
-            if settings_path.exists():
+            if self._exists(settings_path):
                 raw = self._read_settings_payload(settings_path)
                 if raw.get("version") == 2:
                     continue
                 shortcuts = self._parse_shortcuts(
-                    raw.get("shortcuts"), source="session", path=settings_path
+                    raw.get("shortcuts"), source="session"
                 )
             else:
                 shortcuts = []
@@ -195,9 +199,12 @@ class FileTreeSettingsService:
     def _normalize_directory(self, path: str) -> str:
         normalized = self._normalize_path(path)
         candidate = self._file_paths.native(normalized)
-        if not candidate.exists():
+        with self._access("directory_stat", uri=normalized):
+            exists = candidate.exists()
+            is_directory = candidate.is_dir() if exists else False
+        if not exists:
             raise FileNotFoundError(f"快捷路径不存在: {normalized}")
-        if not candidate.is_dir():
+        if not is_directory:
             raise NotADirectoryError(f"快捷路径不是目录: {normalized}")
         return normalized
 
@@ -226,62 +233,62 @@ class FileTreeSettingsService:
         )
         return updated
 
-    @staticmethod
     def _read_shortcuts(
+        self,
         path: Path,
         *,
         source: FileTreeShortcutSource,
     ) -> list[FileTreeShortcutDTO]:
-        if not path.exists():
+        if not self._exists(path):
             return []
-        raw = FileTreeSettingsService._read_settings_payload(path)
-        return FileTreeSettingsService._parse_shortcuts(
-            raw.get("shortcuts"), source=source, path=path
+        raw = self._read_settings_payload(path)
+        return self._parse_shortcuts(
+            raw.get("shortcuts"), source=source
         )
 
-    @staticmethod
     def _read_session_settings(
+        self,
         path: Path,
     ) -> tuple[list[FileTreeShortcutDTO], list[FileTreeShortcutDTO]]:
-        if not path.exists():
-            raise FileNotFoundError(f"会话快捷路径快照不存在: {path}")
-        raw = FileTreeSettingsService._read_settings_payload(path)
+        if not self._exists(path):
+            raise FileNotFoundError("会话快捷路径快照不存在: artifact=file_tree_shortcuts")
+        raw = self._read_settings_payload(path)
         if raw.get("version") != 2:
-            raise ValueError(f"会话快捷路径快照版本错误: {path}")
+            raise ValueError("会话快捷路径快照版本错误: artifact=file_tree_shortcuts")
         return (
-            FileTreeSettingsService._parse_shortcuts(
-                raw.get("shortcuts"), source="session", path=path
+            self._parse_shortcuts(
+                raw.get("shortcuts"), source="session"
             ),
-            FileTreeSettingsService._parse_shortcuts(
-                raw.get("workspace_shortcuts"), source="workspace", path=path
+            self._parse_shortcuts(
+                raw.get("workspace_shortcuts"), source="workspace"
             ),
         )
 
-    @staticmethod
-    def _read_settings_payload(path: Path) -> dict[str, object]:
-        raw = json.loads(path.read_text(encoding="utf-8"))
+    def _read_settings_payload(self, path: Path) -> dict[str, object]:
+        with self._access("read"):
+            raw = json.loads(path.read_text(encoding="utf-8"))
         if not isinstance(raw, dict):
-            raise TypeError(f"文件树快捷路径配置格式错误: {path}")
+            raise TypeError("文件树快捷路径配置必须为对象: artifact=file_tree_shortcuts")
         return raw
 
-    @staticmethod
     def _parse_shortcuts(
+        self,
         raw: object,
         *,
         source: FileTreeShortcutSource,
-        path: Path,
     ) -> list[FileTreeShortcutDTO]:
         if not isinstance(raw, list):
-            raise TypeError(f"文件树快捷路径配置格式错误: {path}")
+            raise TypeError("文件树快捷路径配置必须为列表: artifact=file_tree_shortcuts")
         if any(not isinstance(item, dict) for item in raw):
-            raise TypeError(f"文件树快捷路径配置项格式错误: {path}")
-        return [
-            FileTreeShortcutDTO.model_validate({**item, "source": source})
-            for item in raw
-        ]
+            raise TypeError("文件树快捷路径配置项必须为对象: artifact=file_tree_shortcuts")
+        with self._access("validate"):
+            return [
+                FileTreeShortcutDTO.model_validate({**item, "source": source})
+                for item in raw
+            ]
 
-    @staticmethod
     def _write_shortcuts(
+        self,
         path: Path,
         shortcuts: list[FileTreeShortcutDTO],
     ) -> None:
@@ -291,15 +298,14 @@ class FileTreeSettingsService:
                 {"path": item.path, "label": item.label} for item in shortcuts
             ],
         }
-        FileTreeSettingsService._write_payload(path, payload)
+        self._write_payload(path, payload)
 
-    @staticmethod
     def _write_session_settings(
+        self,
         path: Path,
         session_shortcuts: list[FileTreeShortcutDTO],
         workspace_shortcuts: list[FileTreeShortcutDTO],
     ) -> None:
-        path.parent.mkdir(parents=True, exist_ok=True)
         payload = {
             "version": 2,
             "shortcuts": [
@@ -309,28 +315,55 @@ class FileTreeSettingsService:
                 {"path": item.path, "label": item.label} for item in workspace_shortcuts
             ],
         }
-        FileTreeSettingsService._write_payload(path, payload)
+        self._write_payload(path, payload)
 
-    @staticmethod
-    def _write_payload(path: Path, payload: dict[str, object]) -> None:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        temporary_path: str | None = None
+    def _write_payload(self, path: Path, payload: dict[str, object]) -> None:
+        with self._access("write"):
+            path.parent.mkdir(parents=True, exist_ok=True)
+            temporary_path: str | None = None
+            try:
+                with tempfile.NamedTemporaryFile(
+                    mode="w",
+                    encoding="utf-8",
+                    dir=path.parent,
+                    prefix=f".{path.name}.",
+                    suffix=".tmp",
+                    delete=False,
+                ) as temporary:
+                    temporary_path = temporary.name
+                    json.dump(payload, temporary, ensure_ascii=False, indent=2)
+                    temporary.write("\n")
+                    temporary.flush()
+                    os.fsync(temporary.fileno())
+                os.replace(temporary_path, path)
+                temporary_path = None
+            finally:
+                if temporary_path is not None and os.path.exists(temporary_path):
+                    os.unlink(temporary_path)
+
+    def _exists(self, path: Path) -> bool:
+        with self._access("stat"):
+            return path.exists()
+
+    @contextmanager
+    def _access(self, stage: str, *, uri: str | None = None) -> Iterator[None]:
+        """仅在存储边界发布稳定诊断，物理位置和原始校验值保留在原因链。"""
         try:
-            with tempfile.NamedTemporaryFile(
-                mode="w",
-                encoding="utf-8",
-                dir=path.parent,
-                prefix=f".{path.name}.",
-                suffix=".tmp",
-                delete=False,
-            ) as temporary:
-                temporary_path = temporary.name
-                json.dump(payload, temporary, ensure_ascii=False, indent=2)
-                temporary.write("\n")
-                temporary.flush()
-                os.fsync(temporary.fileno())
-            os.replace(temporary_path, path)
-            temporary_path = None
-        finally:
-            if temporary_path is not None and os.path.exists(temporary_path):
-                os.unlink(temporary_path)
+            yield
+        except (OSError, ValidationError, json.JSONDecodeError, UnicodeDecodeError) as error:
+            detail = (
+                f"workspace_id={self._file_paths.workspace_id}, artifact=file_tree_shortcuts, "
+                f"stage={stage}, error={type(error).__name__}"
+            )
+            if uri is not None:
+                detail += f", uri={uri}"
+            if isinstance(error, OSError):
+                raise type(error)(error.errno, f"{detail}, errno={error.errno}") from error
+            if isinstance(error, ValidationError):
+                rules = sorted({item["type"] for item in error.errors(include_input=False)})
+                detail += f", error_count={error.error_count()}, rules={','.join(rules)}"
+            elif isinstance(error, json.JSONDecodeError):
+                detail += f", line={error.lineno}, column={error.colno}"
+            else:
+                detail += f", start={error.start}, end={error.end}"
+            raise ValueError(detail) from error
