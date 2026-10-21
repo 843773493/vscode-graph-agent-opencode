@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from collections.abc import AsyncIterator, Generator
+from collections.abc import AsyncIterator, Generator, Iterator
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -11,16 +11,26 @@ import httpx
 import pytest
 
 from app.core.path_utils import get_session_path_resolver
-from tests.integration.stubs.http_stubs import HTTPStubState, openai_chat_stub
+from app.testing.model_stream import build_cassette, chat_completion_frames
 from tests.support.api_helpers import create_session
 from tests.support.api_waiters import wait_for_job_done
-from tests.support.ports import integration_port_block_for_file
-from tests.support.processes import (
-    close_backend_process,
-    start_backend_process,
-    workspace_backend_id_for_root,
+from tests.support.fork_deadline import ForkDeadlineRegistry
+from tests.support.gateway_processes import (
+    LOCAL_TOKEN_HEADERS,
+    acquire_gateway_guest,
+    close_gateway_process,
+    start_gateway_process,
 )
+from tests.support.model_stream_config import ModelStreamReplay, model_stream_replay
+from tests.support.ports import integration_port_block_for_file
 from tests.support.session_navigation_http import submit_navigation_operation
+
+
+@pytest.fixture(scope="module")
+def generation_replay(integration_workspace_root_path: str) -> Iterator[ModelStreamReplay]:
+    output = Path(integration_workspace_root_path).parent
+    with model_stream_replay(output, runtime_root=output / "runtime", business_assertion="session-generation") as replay:
+        yield replay
 
 
 @pytest.fixture(scope="module")
@@ -28,7 +38,8 @@ def generation_backend(
     request: pytest.FixtureRequest,
     integration_workspace_root_path: str,
     integration_workspace_config_path: str,
-) -> Generator[tuple[str, Path, HTTPStubState], None, None]:
+    generation_replay: ModelStreamReplay,
+) -> Generator[tuple[str, Path], None, None]:
     port_block = integration_port_block_for_file(Path(request.node.fspath))
     workspace_root = Path(integration_workspace_root_path).resolve()
     config_path = Path(integration_workspace_config_path)
@@ -48,47 +59,83 @@ def generation_backend(
         json.dumps(config, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
     )
-    with openai_chat_stub(port_block.port(10)) as model_state:
-        backend = start_backend_process(
-            workspace_root=str(workspace_root),
-            port=port_block.port(0),
-            log_name="session-generation-backend",
-        )
-        try:
-            yield (
-                f"http://127.0.0.1:{backend.port}",
-                workspace_root,
-                model_state,
-            )
-        finally:
-            close_backend_process(backend)
+    gateway = start_gateway_process(
+        workspace_root=workspace_root,
+        default_backend_url=None,
+        port=port_block.port(0),
+        asgi_app="tests.support.section8_gateway:app",
+        extra_env=generation_replay.environment,
+        artifacts_dir=workspace_root.parent / "artifacts/gateway",
+    )
+    try:
+        yield f"http://127.0.0.1:{gateway.port}", workspace_root
+    finally:
+        close_gateway_process(gateway)
 
 
 @pytest.fixture
 async def generation_client(
-    generation_backend: tuple[str, Path, HTTPStubState],
+    generation_backend: tuple[str, Path],
 ) -> AsyncIterator[httpx.AsyncClient]:
     async with httpx.AsyncClient(
         base_url=generation_backend[0],
-        headers={
-            "X-Local-Token": "local-dev-token",
-            "X-BoxTeam-Workspace-Id": workspace_backend_id_for_root(str(generation_backend[1])),
-            "X-BoxTeam-Gateway-Id": "gateway_0123456789abcdef0123456789abcdef",
-            "X-BoxTeam-Navigation-Actor": "guest",
-        },
+        headers=LOCAL_TOKEN_HEADERS,
         timeout=30,
     ) as client:
+        await acquire_gateway_guest(client)
+        workspaces = await client.get("/api/gateway/workspaces")
+        assert workspaces.status_code == 200, workspaces.text
+        workspace_id = workspaces.json()["data"]["active_workspace_id"]
+        assert isinstance(workspace_id, str) and workspace_id
+        client.headers["X-BoxTeam-Workspace-Id"] = workspace_id
         yield client
+
+
+async def _plan_reply(client: httpx.AsyncClient, replay: ModelStreamReplay, session_id: str) -> str:
+    main = await client.get(f"/api/v1/sessions/{session_id}/main-thread")
+    assert main.status_code == 200, main.text
+    thread_id = main.json()["data"]["thread_id"]
+    ports = integration_port_block_for_file(Path(__file__))
+    cassette = build_cassette(
+        asset_id="session-generation", model="e2e-stub-model",
+        url=f"http://127.0.0.1:{ports.port(10)}/v1/chat/completions",
+        frames=chat_completion_frames(
+            response_id="chatcmpl-generation", model="e2e-stub-model",
+            deltas=({"role": "assistant", "content": "E2E 生成器替身回复"},),
+            finish_reason="stop",
+        ),
+    )
+    (call_id,) = replay.control.plan_model_calls(session_id, thread_id, cassette.raw["interactions"])
+    return call_id
+
+
+async def _execute_new_owner(
+    client: httpx.AsyncClient, replay: ModelStreamReplay, payload: dict[str, object],
+) -> tuple[httpx.Response, str]:
+    # 生成目标只能由真实入口创建。先挡住本次 user execution，在响应公开 owner 后精确规划。
+    # 不等 runtime 冷启动、不改原 Job 等待预算；本文件的生成入口串行且先前 Job 已终态。
+    barrier = str(payload["run_id"])
+    replay.control.arm_match(barrier, "thread.runtime.acquired", {"execution_origin": "user_turn"})
+    try:
+        response = await client.post("/api/v1/session-generations/execute", json=payload)
+        assert response.status_code == 200, response.text
+        session_id = response.json()["data"]["outputs"][0]["session_id"]
+        call_id = await _plan_reply(client, replay, session_id)
+        return response, call_id
+    finally:
+        replay.control._dispatch({"action": "release_match", "barrier_id": barrier})
 
 
 @pytest.mark.asyncio
 async def test_literal_reminder_markup_is_visible_but_internal_metadata_is_rejected(
     generation_client: httpx.AsyncClient,
+    generation_replay: ModelStreamReplay,
 ):
     session_id = await create_session(
         generation_client,
         "literal structured markup",
     )
+    await _plan_reply(generation_client, generation_replay, session_id)
     literal = "请解释这个字面标签：<system_reminder>示例</system_reminder>"
     response = await generation_client.post(
         f"/api/v1/sessions/{session_id}/messages",
@@ -98,6 +145,7 @@ async def test_literal_reminder_markup_is_visible_but_internal_metadata_is_rejec
         },
     )
     assert response.status_code == 200, response.text
+    # TODO：冷启动实测约26秒，仍超出原20次Job等待窗口；优化运行时初始化后补齐本项验收。
     await wait_for_job_done(
         generation_client,
         response.json()["data"]["job_id"],
@@ -267,7 +315,8 @@ def _execute_payload(
 @pytest.mark.asyncio
 async def test_new_per_run_is_idempotent_and_creates_cataloged_session(
     generation_client: httpx.AsyncClient,
-    generation_backend: tuple[str, Path, HTTPStubState],
+    generation_backend: tuple[str, Path],
+    generation_replay: ModelStreamReplay,
 ) -> None:
     anchor_session_id, _anchor_folder_id = await _create_nested_anchor(
         generation_client,
@@ -290,10 +339,7 @@ async def test_new_per_run_is_idempotent_and_creates_cataloged_session(
         placement_session_id=anchor_session_id,
     )
     manifest_count_before = _session_manifest_count(generation_backend[1])
-    first_response = await generation_client.post(
-        "/api/v1/session-generations/execute",
-        json=payload,
-    )
+    first_response, _ = await _execute_new_owner(generation_client, generation_replay, payload)
     assert first_response.status_code == 200, first_response.text
     first = first_response.json()["data"]
     assert first["status"] == "queued"
@@ -349,7 +395,8 @@ async def test_new_per_run_is_idempotent_and_creates_cataloged_session(
 @pytest.mark.asyncio
 async def test_continue_existing_reuses_target_session(
     generation_client: httpx.AsyncClient,
-    generation_backend: tuple[str, Path, HTTPStubState],
+    generation_backend: tuple[str, Path],
+    generation_replay: ModelStreamReplay,
 ) -> None:
     target_session_id, target_folder_id = await _create_nested_anchor(
         generation_client,
@@ -372,6 +419,7 @@ async def test_continue_existing_reuses_target_session(
         target_session_id=target_session_id,
         target_thread_id=(await generation_client.get(f"/api/v1/sessions/{target_session_id}/main-thread")).json()["data"]["thread_id"],
     )
+    await _plan_reply(generation_client, generation_replay, target_session_id)
     execute_response = await generation_client.post(
         "/api/v1/session-generations/execute",
         json=payload,
@@ -425,7 +473,9 @@ async def test_continue_existing_reuses_target_session(
 @pytest.mark.asyncio
 async def test_fork_new_and_report_back_creates_child_with_origin(
     generation_client: httpx.AsyncClient,
-    generation_backend: tuple[str, Path, HTTPStubState],
+    generation_backend: tuple[str, Path],
+    generation_replay: ModelStreamReplay,
+    fork_deadlines: ForkDeadlineRegistry,
 ) -> None:
     target_session_id, _target_folder_id = await _create_nested_anchor(
         generation_client,
@@ -434,6 +484,7 @@ async def test_fork_new_and_report_back_creates_child_with_origin(
         child_name="Fork 二级目录",
     )
     # fork 必须继承真实已提交的 source checkpoint，空会话不是合法分支源。
+    seed_call = await _plan_reply(generation_client, generation_replay, target_session_id)
     seed_response = await generation_client.post(
         f"/api/v1/sessions/{target_session_id}/messages",
         json={
@@ -457,9 +508,12 @@ async def test_fork_new_and_report_back_creates_child_with_origin(
         target_thread_id=(await generation_client.get(f"/api/v1/sessions/{target_session_id}/main-thread")).json()["data"]["thread_id"],
         report_back="summary_and_link",
     )
-    execute_response = await generation_client.post(
-        "/api/v1/session-generations/execute",
-        json=payload,
+    report_call = await _plan_reply(generation_client, generation_replay, target_session_id)
+    deadline = fork_deadlines.for_operation(
+        generation_client.headers["X-BoxTeam-Workspace-Id"], str(payload["idempotency_key"]),
+    )
+    execute_response, child_call = await deadline.wait(
+        _execute_new_owner(generation_client, generation_replay, payload), "generation_fork_publish",
     )
     assert execute_response.status_code == 200, execute_response.text
     result = execute_response.json()["data"]
@@ -468,16 +522,18 @@ async def test_fork_new_and_report_back_creates_child_with_origin(
     assert generated_session_id != target_session_id
     manifest_count_after_first = _session_manifest_count(generation_backend[1])
     assert manifest_count_after_first == manifest_count_before + 1
-    child_response = await generation_client.get(
-        f"/api/v1/sessions/{generated_session_id}"
+    child_response = await deadline.wait(
+        generation_client.get(f"/api/v1/sessions/{generated_session_id}"), "verify_published_child",
     )
     assert child_response.status_code == 200, child_response.text
     child = child_response.json()["data"]
     assert child["parent_session_id"] == target_session_id
     assert child["generation_origin"]["run_id"] == "grun_fork_report_e2e"
     assert child["title"] == "Generated fork_new_and_report_back"
+    deadline.complete()
     await wait_for_job_done(generation_client, result["job_id"], max_attempts=20)
     final_status: dict[str, object] | None = None
+    # TODO：真实汇报实测约6秒，原40×0.1秒窗口内仍可能reporting；保持期限，待后续优化。
     for _ in range(40):
         status_response = await generation_client.get(
             "/api/v1/session-generations/status",
@@ -500,12 +556,16 @@ async def test_fork_new_and_report_back_creates_child_with_origin(
         str(final_status["report_back_job_id"]),
         max_attempts=20,
     )
-    repeated_response = await generation_client.post(
-        "/api/v1/session-generations/execute",
-        json=payload,
+    replay_deadline = fork_deadlines.for_operation(
+        generation_client.headers["X-BoxTeam-Workspace-Id"], str(payload["idempotency_key"]),
+    )
+    repeated_response = await replay_deadline.wait(
+        generation_client.post("/api/v1/session-generations/execute", json=payload),
+        "generation_fork_idempotent_replay",
     )
     assert repeated_response.status_code == 200, repeated_response.text
     assert repeated_response.json()["data"] == final_status
+    replay_deadline.complete()
     assert _session_manifest_count(generation_backend[1]) == manifest_count_after_first
     await _assert_generated_storage(
         generation_client,
@@ -558,14 +618,12 @@ async def test_fork_new_and_report_back_creates_child_with_origin(
     assert "boxteam_generation_run_id" not in report_message["metadata"]
     assert "<generated_session_result>" not in report_message["content"]
     assert "不要猜测文件路径" not in report_message["content"]
-    model_requests = [
-        request
-        for request in generation_backend[2].requests
-        if request["method"] == "POST"
-        and str(request["path"]).endswith("/chat/completions")
+    recorded = [json.loads((generation_replay.artifacts / f"{call_id}.json").read_text(encoding="utf-8"))
+                for call_id in (seed_call, child_call, report_call)]
+    assert [call["identity"]["session_id"] for call in recorded] == [
+        target_session_id, generated_session_id, target_session_id,
     ]
-    assert len(model_requests) >= 2
-    final_messages = model_requests[-1]["json"]["messages"]
+    final_messages = recorded[-1]["request"]["messages"]
     final_request_text = "\n".join(
         str(message.get("content", "")) for message in final_messages
     )
