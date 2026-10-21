@@ -26,7 +26,7 @@ from app.services.infrastructure.node_debug.session.session_store import (
 from app.services.infrastructure.workspace_files.paths import WorkspaceFilePaths
 from app.testing.model_stream import build_cassette, chat_completion_frames
 from tests.support.api_waiters import wait_for_job_done
-from tests.support.e2e_test_control import E2ETestControlHarness
+from tests.support.e2e_control.harness import E2ETestControlHarness
 from tests.support.messages import last_assistant_message
 from tests.support.model_stream_config import model_stream_replay
 from tests.support.ports import integration_port_block_for_file
@@ -231,7 +231,7 @@ def scripted_backend_process(
         workspace_root=integration_workspace_root_path,
         port=scripted_debug_backend_port,
         log_name="debug-prompt-e2e",
-        asgi_app="tests.support.section8_backend:app",
+        asgi_app="tests.support.e2e_control.backend_app:app",
         env_overrides={
             "BOXTEAM_DEFAULT_SKILL_GROUPS": '["debugging"]',
             "BOXTEAM_TEST_MODEL_STREAM_CONFIG": str(state.config_path),

@@ -454,19 +454,32 @@ export async function testControl(payload) {
   return new Promise((resolve, reject) => {
     const connection = createConnection(address.port, address.host);
     connection.setEncoding("utf8");
-    let buffer = "";
+    const responseChunks = [];
+    let receivedReply = false;
     connection.on("connect", () => connection.write(JSON.stringify({ ...payload, token: address.token, pid: process.pid }) + "\n"));
     connection.on("data", (chunk) => {
-      buffer += chunk;
-      const newline = buffer.indexOf("\n");
-      if (newline < 0) return;
+      if (receivedReply) return;
+      const newline = chunk.indexOf("\n");
+      if (newline < 0) {
+        responseChunks.push(chunk);
+        return;
+      }
+      receivedReply = true;
+      responseChunks.push(chunk.slice(0, newline));
       connection.end();
-      const result = JSON.parse(buffer.slice(0, newline));
-      if (result.error) reject(new Error(result.error));
-      else resolve(result.value);
+      const responseText = responseChunks.join("");
+      responseChunks.length = 0;
+      try {
+        const result = JSON.parse(responseText);
+        if (result.error) reject(new Error(result.error));
+        else resolve(result.value);
+      } catch (error) {
+        connection.destroy();
+        reject(error);
+      }
     });
     connection.on("error", reject);
-    connection.on("end", () => { if (!buffer.includes("\n")) reject(new Error("外置 test control 未返回完整回执")); });
+    connection.on("end", () => { if (!receivedReply) reject(new Error("外置 test control 未返回完整回执")); });
   });
 }
 
@@ -483,34 +496,21 @@ export async function planGoldenLoop(sessionId, threadId) {
   return testControl({ action: "plan_model", session_id: sessionId, thread_id: threadId, interactions });
 }
 
-/** 原始 Provider SSE fixture；产品 parser、工具与存储仍由真实应用执行。 */
-export function chatInteraction({ label, reasoning = "", text = "", calls = [], usage }) {
-  const frames = [];
-  const push = (delta, finishReason = null) => frames.push({
-    kind: "data", encoding: "json", payload: {
-      id: label, object: "chat.completion.chunk", created: 1, model: "big-pickle",
-      choices: [{ index: 0, delta, finish_reason: finishReason }],
-    },
-  });
-  push({ role: "assistant", ...(reasoning ? { reasoning_content: reasoning } : {}) });
-  for (const [index, call] of calls.entries()) {
-    push({ tool_calls: [{ index, id: call.id, type: "function", function: { name: call.name, arguments: JSON.stringify(call.arguments ?? {}) } }] });
-  }
-  if (text) push({ content: text });
-  push({}, calls.length ? "tool_calls" : "stop");
-  if (usage) frames.push({ kind: "data", encoding: "json", payload: {
-    id: label, object: "chat.completion.chunk", created: 1, model: "big-pickle", choices: [],
-    usage: { prompt_tokens: usage.input, completion_tokens: usage.output, total_tokens: usage.input + usage.output },
-  } });
-  frames.push({ kind: "done", encoding: "text", payload: "[DONE]" });
-  return {
-    request: { method: "POST", url: "https://opencode.ai/zen/v1/chat/completions", match: { model: "big-pickle", stream: true } },
-    response: { status: 200, headers: { "content-type": "text/event-stream" }, frames },
-  };
-}
-
+/** Web 只声明响应内容；原始 stream 资产由 Python model_stream 统一生成。 */
 export async function planChatCalls(sessionId, threadId, responses) {
-  return testControl({ action: "plan_model", session_id: sessionId, thread_id: threadId, interactions: responses.map(chatInteraction) });
+  const planned = responses.map(({ label, reasoning = "", text = "", calls = [], usage }) => ({
+    response_id: label,
+    deltas: [
+      { role: "assistant", ...(reasoning ? { reasoning_content: reasoning } : {}) },
+      ...calls.map((call, index) => ({ tool_calls: [{ index, id: call.id, type: "function",
+        function: { name: call.name, arguments: JSON.stringify(call.arguments ?? {}) } }] })),
+      ...(text ? [{ content: text }] : []),
+    ],
+    finish_reason: calls.length ? "tool_calls" : "stop",
+    ...(usage ? { usage: { prompt_tokens: usage.input, completion_tokens: usage.output,
+      total_tokens: usage.input + usage.output } } : {}),
+  }));
+  return testControl({ action: "plan_chat", session_id: sessionId, thread_id: threadId, responses: planned });
 }
 
 export function uuidText(hex) {

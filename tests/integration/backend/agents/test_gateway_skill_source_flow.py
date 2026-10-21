@@ -22,14 +22,14 @@ from app.core.path_utils import get_session_path_resolver
 from app.services.orchestration.session_subagent_service import _derive_delegation_id
 from app.testing.model_stream import build_cassette, chat_completion_frames
 from tests.support.e2e_control.harness import E2ETestControlHarness
+from tests.support.model_stream_config import model_stream_replay
+from tests.support.ports import integration_port_block_for_file
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
     acquire_gateway_guest,
     close_gateway_process,
     start_gateway_process,
 )
-from tests.support.model_stream_config import model_stream_replay
-from tests.support.ports import integration_port_block_for_file
 
 SKILL_NAME = "gateway-frozen-proof"
 OLD_BODY = "Gateway 冻结正文 Ω 001  \r\n"
@@ -164,7 +164,7 @@ async def test_gateway_authenticated_raw_sources_drive_frozen_skill_and_restart(
     skill_file.write_bytes((FRONTMATTER + OLD_BODY).encode())
     gateway = start_gateway_process(
         workspace_root=workspace, default_backend_url=None, port=port,
-        boxteam_home=home, artifacts_dir=artifacts / "gateway-first", asgi_app="tests.support.section8_gateway:app",
+        boxteam_home=home, artifacts_dir=artifacts / "gateway-first", asgi_app="tests.support.e2e_control.gateway_app:app",
         extra_env=state.environment,
     )
     base_url = f"http://127.0.0.1:{port}"
@@ -265,7 +265,7 @@ async def test_gateway_authenticated_raw_sources_drive_frozen_skill_and_restart(
         close_gateway_process(gateway)
         gateway = start_gateway_process(
             workspace_root=workspace, default_backend_url=None, port=port, boxteam_home=home,
-            artifacts_dir=artifacts / "gateway-restarted", asgi_app="tests.support.section8_gateway:app",
+            artifacts_dir=artifacts / "gateway-restarted", asgi_app="tests.support.e2e_control.gateway_app:app",
             extra_env=state.environment,
         )
         async with httpx.AsyncClient(base_url=base_url, headers=LOCAL_TOKEN_HEADERS, timeout=60, trust_env=False) as client:

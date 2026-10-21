@@ -11,7 +11,7 @@ from app.services.infrastructure.workspace_files import text_mutation
 from app.services.infrastructure.workspace_files.text_owner import (
     WorkspaceTextMutationOwner,
 )
-from tests.support.section8_backend import app
+from tests.support.e2e_control.backend_app import app
 
 __all__ = ["app"]
 

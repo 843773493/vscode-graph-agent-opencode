@@ -15,19 +15,14 @@ from app.testing.model_stream import build_cassette, chat_completion_frames
 from tests.support.api_helpers import create_session
 from tests.support.api_waiters import wait_for_job_done
 from tests.support.fork_deadline import ForkDeadlineRegistry
-from tests.support.processes.workspace import (
-    close_backend_process,
-    start_backend_process,
-    workspace_backend_id_for_root,
-)
+from tests.support.model_stream_config import ModelStreamReplay, model_stream_replay
+from tests.support.ports import integration_port_block_for_file
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
     acquire_gateway_guest,
     close_gateway_process,
     start_gateway_process,
 )
-from tests.support.model_stream_config import ModelStreamReplay, model_stream_replay
-from tests.support.ports import integration_port_block_for_file
 from tests.support.session_navigation_http import submit_navigation_operation
 
 
@@ -68,7 +63,7 @@ def generation_backend(
         workspace_root=workspace_root,
         default_backend_url=None,
         port=port_block.port(0),
-        asgi_app="tests.support.section8_gateway:app",
+        asgi_app="tests.support.e2e_control.gateway_app:app",
         extra_env=generation_replay.environment,
         artifacts_dir=workspace_root.parent / "artifacts/gateway",
     )

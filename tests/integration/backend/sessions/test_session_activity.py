@@ -58,7 +58,7 @@ def activity_backend(
         workspace_root=str(workspace_root),
         port=port_block.port(0),
         log_name="session-activity-backend",
-        asgi_app="tests.support.section8_backend:app",
+        asgi_app="tests.support.e2e_control.backend_app:app",
         env_overrides=activity_replay.environment,
     )
     try:

@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Literal, cast
 
 from configs.runtime import read_jsonc_object
-from tests.support.e2e_test_control import E2ETestControlHarness
+from tests.support.e2e_control.harness import E2ETestControlHarness
 
 ModelStreamMode = Literal["off", "record", "replay"]
 _MODEL_STREAM_MODES = frozenset({"off", "record", "replay"})

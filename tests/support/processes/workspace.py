@@ -4,6 +4,7 @@ import json
 import os
 import socket
 import subprocess
+import sys
 import time
 from collections.abc import Sequence
 from contextlib import ExitStack
@@ -63,28 +64,38 @@ def terminate_process(process: subprocess.Popen[str]) -> None:
         ) from error
 
 
-def ensure_local_port_available(port: int, *, service_name: str) -> None:
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
-        listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        try:
-            listener.bind(("127.0.0.1", port))
-        except OSError as error:
-            raise RuntimeError(
-                f"{service_name} 测试端口已被占用，拒绝终止未知进程: port={port}"
-            ) from error
+def ensure_local_port_available(
+    port: int, *, service_name: str, host: str = "127.0.0.1",
+) -> None:
+    # 只解析主机；原始端口交给bind校验，避免getaddrinfo将越界端口截断为其他端口。
+    for family, _, _, _, address in socket.getaddrinfo(host, None, type=socket.SOCK_STREAM):
+        with socket.socket(family, socket.SOCK_STREAM) as listener:
+            # Windows的REUSEADDR允许重复绑定，空闲检查必须使用独占地址语义。
+            port_binding_option = (
+                socket.SO_EXCLUSIVEADDRUSE if sys.platform == "win32" else socket.SO_REUSEADDR
+            )
+            listener.setsockopt(socket.SOL_SOCKET, port_binding_option, 1)
+            if family == socket.AF_INET6:
+                # 与Node默认双栈监听一致，通配IPv6也须检查IPv4端口冲突。
+                listener.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)
+            try:
+                listener.bind((address[0], port, *address[2:]))
+            except OSError as error:
+                raise RuntimeError(
+                    f"{service_name} 测试端口已被占用，拒绝终止未知进程: host={host}, port={port}"
+                ) from error
 
 
 def resolve_workspace_python_executable(project_root: Path) -> Path:
-    windows_python = project_root / ".venv" / "Scripts" / "python.exe"
-    if windows_python.exists():
-        return windows_python
-
-    posix_python = project_root / ".venv" / "bin" / "python"
-    if posix_python.exists():
-        return posix_python
+    """只选择当前平台的虚拟环境文件，不回退到其他平台残留的解释器。"""
+    executable = project_root / ".venv" / (
+        "Scripts/python.exe" if sys.platform == "win32" else "bin/python"
+    )
+    if executable.is_file():
+        return executable
 
     raise FileNotFoundError(
-        f"未找到工作区虚拟环境 Python，可尝试路径: {windows_python} 或 {posix_python}"
+        f"未找到当前平台的工作区虚拟环境 Python: platform={sys.platform}, expected={executable}"
     )
 
 
