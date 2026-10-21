@@ -1,14 +1,16 @@
-"""Saver 的已接受 request/input 唯一端口；调度事实归 execution owner。"""
+"""Saver 的执行准入、冻结输入与终态端口；持久事实归 execution owner。"""
 
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping, Sequence
 from contextlib import closing
 from dataclasses import asdict
 
 from langchain_core.messages import HumanMessage
 
 from app.abstractions.internal_message import PreparedInternalMessage
+from app.abstractions.turn_terminal_status import ToolResultCompletion
 from app.core.session_control_primitives import CONTROL_DATABASE_NAME
 from app.core.session_control_store import SessionControlStore
 from app.domain.itemized.enums import SemanticKind, TurnScope
@@ -17,11 +19,13 @@ from app.domain.itemized.execution_admission import (
     InternalExecutionIntent,
 )
 from app.domain.itemized.hashing import sha256_jcs
+from app.domain.itemized.identity.item_projection import ItemProvenanceRelation
 from app.domain.itemized.mutation_intents import (
     ApplySourceLifecycleDecision,
     MutationIntentOwner,
 )
 from app.domain.itemized.records import CanonicalItemRecord, InternalDisplayProvenance
+from app.domain.itemized.runtime import ModelCallRecord
 from app.domain.itemized.runtime_wakeup import RuntimeExecutionWakeup
 from app.prompting import internal_message_factory
 from app.services.infrastructure.rollout_context.runtime.context_sources.models import (
@@ -341,4 +345,248 @@ class RuntimeExecutionOwnerMixin:
     ) -> None:
         self._storage.executions.finish_runtime_wakeup(
             wakeup, dispatch_generation=dispatch_generation, receipt=receipt, error=error,
+        )
+
+    def accept_turn(
+        self,
+        session_id: str,
+        *,
+        thread_id: str,
+        accepted_ingress_id: str,
+        acceptance_idempotency_key: str,
+        job_id: str,
+        admission_idempotency_key: str,
+        payload: object,
+        payload_kind: str = "text",
+        checkpoint_ns: str = "",
+        branch_id: str | None = None,
+        turn_id: str | None = None,
+        turn_ordinal: int | None = None,
+        root_item_id: str | None = None,
+        initial_execution_id: str | None = None,
+        extensions: Mapping[str, object] | None = None,
+        source_session_id: str | None = None,
+        source_accepted_ingress_id: str | None = None,
+        source_acceptance_idempotency_key: str | None = None,
+        provenance_relations: tuple[ItemProvenanceRelation, ...] = (),
+        replay_of_turn_id: str | None = None,
+        identity_origin: str = "runtime",
+    ) -> dict[str, object]:
+        """在 checkpoint owner 内接受一个真实用户 Turn。"""
+        return self._storage.executions.accept_turn(
+            session_id,
+            thread_id=thread_id,
+            accepted_ingress_id=accepted_ingress_id,
+            acceptance_idempotency_key=acceptance_idempotency_key,
+            job_id=job_id,
+            admission_idempotency_key=admission_idempotency_key,
+            payload=payload,
+            payload_kind=payload_kind,
+            checkpoint_ns=checkpoint_ns,
+            branch_id=branch_id,
+            turn_id=turn_id,
+            turn_ordinal=turn_ordinal,
+            root_item_id=root_item_id,
+            initial_execution_id=initial_execution_id,
+            extensions=extensions,
+            source_session_id=source_session_id,
+            source_accepted_ingress_id=source_accepted_ingress_id,
+            source_acceptance_idempotency_key=source_acceptance_idempotency_key,
+            provenance_relations=provenance_relations,
+            replay_of_turn_id=replay_of_turn_id,
+            identity_origin=identity_origin,
+        )
+
+    def commit_tool_result(
+        self, *, session_id: str, thread_id: str, job_id: str,
+        completion: ToolResultCompletion, recovery: bool = False,
+        checkpoint_ns: str = "",
+    ) -> CanonicalItemRecord:
+        """工具终态始终解析原 Job 的 durable admission，不借用后继请求上下文。"""
+        if checkpoint_ns:
+            raise ValueError(f"canonical 工具终态不接受非空 checkpoint_ns: {checkpoint_ns!r}")
+        admission = self.execution_admission_for_job(
+            session_id, thread_id=thread_id, job_id=job_id, checkpoint_ns=checkpoint_ns,
+        )
+        return self._storage.executions.commit_tool_result(
+            admission, completion, recovery=recovery, checkpoint_ns=checkpoint_ns,
+        )
+
+    def execution_for_turn(
+        self,
+        session_id: str,
+        *,
+        turn_id: str,
+        thread_id: str,
+        checkpoint_ns: str = "",
+    ) -> str:
+        return self._storage.executions.execution_for_turn(
+            session_id,
+            turn_id=turn_id,
+            thread_id=thread_id,
+            checkpoint_ns=checkpoint_ns,
+        )
+
+    def execution_admission_for_job(
+        self,
+        session_id: str,
+        *,
+        thread_id: str,
+        job_id: str,
+        checkpoint_ns: str = "",
+    ) -> ExecutionAdmission:
+        return self._storage.executions.execution_admission_for_job(
+            session_id,
+            thread_id=thread_id,
+            job_id=job_id,
+            checkpoint_ns=checkpoint_ns,
+        )
+
+    def read_resumable_model_call(self, admission: ExecutionAdmission, model_call_id: str, *, carrier_items: tuple[CanonicalItemRecord, ...]) -> tuple[ModelCallRecord, str] | None:
+        return self._storage.executions.read_resumable_model_call(admission, model_call_id, carrier_items=carrier_items)
+
+    def execution_admission(
+        self,
+        session_id: str,
+        *,
+        thread_id: str,
+        execution_id: str,
+        checkpoint_ns: str = "",
+    ) -> ExecutionAdmission:
+        return self._storage.executions.execution_admission(
+            session_id,
+            thread_id=thread_id,
+            execution_id=execution_id,
+            checkpoint_ns=checkpoint_ns,
+        )
+
+    def dispatch_replay(
+        self,
+        session_id: str,
+        *,
+        thread_id: str,
+        turn_id: str,
+        checkpoint_ns: str = "",
+    ) -> str:
+        """通过 Saver 绑定原 Turn dispatch，不创建新的 Turn。"""
+        return self._storage.executions.dispatch_replay(
+            session_id,
+            thread_id=thread_id,
+            turn_id=turn_id,
+            checkpoint_ns=checkpoint_ns,
+        )
+
+    def register_model_call(
+        self,
+        session_id: str,
+        *,
+        thread_id: str,
+        execution_id: str,
+        model_call_id: str,
+        attempt: int,
+        provider: str,
+        provider_request_id: str | None = None,
+        retry_of_model_call_id: str | None = None,
+        assembly_id: str | None = None,
+        dispatch_state: str = "ready",
+        checkpoint_ns: str = "",
+    ) -> None:
+        self._storage.executions.register_model_call(
+            session_id,
+            thread_id=thread_id,
+            execution_id=execution_id,
+            model_call_id=model_call_id,
+            attempt=attempt,
+            provider=provider,
+            provider_request_id=provider_request_id,
+            retry_of_model_call_id=retry_of_model_call_id,
+            assembly_id=assembly_id,
+            dispatch_state=dispatch_state,
+            checkpoint_ns=checkpoint_ns,
+        )
+
+    def update_model_call_outcome(
+        self,
+        session_id: str,
+        *,
+        thread_id: str,
+        model_call_id: str,
+        outcome: str,
+        dispatch_state: str | None = None,
+        checkpoint_ns: str = "",
+    ) -> None:
+        self._storage.executions.update_model_call_outcome(
+            session_id,
+            thread_id=thread_id,
+            model_call_id=model_call_id,
+            outcome=outcome,
+            dispatch_state=dispatch_state,
+            checkpoint_ns=checkpoint_ns,
+        )
+
+    def converge_execution(
+        self,
+        session_id: str,
+        *,
+        thread_id: str,
+        turn_id: str | None,
+        execution_id: str,
+        outcome: str,
+        turn_status: str | None,
+        items: Sequence[CanonicalItemRecord] = (),
+        final_item_id: str | None = None,
+        assembly_id: str | None = None,
+        checkpoint_ns: str = "",
+        loss_reason: str | None = None,
+    ) -> int:
+        """通过 Saver 原子收敛 execution、output item、assembly 与 Turn。"""
+        return self._storage.executions.converge_execution(
+            session_id,
+            thread_id=thread_id,
+            turn_id=turn_id,
+            execution_id=execution_id,
+            outcome=outcome,
+            turn_status=turn_status,
+            items=items,
+            final_item_id=final_item_id,
+            assembly_id=assembly_id,
+            checkpoint_ns=checkpoint_ns,
+            loss_reason=loss_reason,
+        )
+
+    def resume_turn(
+        self,
+        session_id: str,
+        *,
+        turn_id: str,
+        thread_id: str,
+        job_id: str,
+        checkpoint_ns: str = "",
+    ) -> dict[str, object]:
+        return self._storage.executions.resume_turn(
+            session_id,
+            turn_id=turn_id,
+            thread_id=thread_id,
+            job_id=job_id,
+            checkpoint_ns=checkpoint_ns,
+        )
+
+    def mark_execution_lost(
+        self,
+        session_id: str,
+        *,
+        turn_id: str | None,
+        thread_id: str,
+        execution_id: str | None = None,
+        checkpoint_ns: str = "",
+        reason: str = "provider_result_commit_missing",
+    ) -> dict[str, object]:
+        """通过 Saver 记录 provider dispatch 后丢失的 execution。"""
+        return self._storage.executions.mark_execution_lost(
+            session_id,
+            turn_id=turn_id,
+            thread_id=thread_id,
+            execution_id=execution_id,
+            checkpoint_ns=checkpoint_ns,
+            reason=reason,
         )

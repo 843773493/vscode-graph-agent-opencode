@@ -1,4 +1,4 @@
-"""Provider dispatch 前的 context plan seal 与短生命周期 handle。"""
+"""Provider dispatch 的封存边界、短生命周期 handle 与工具资源读取。"""
 
 from __future__ import annotations
 
@@ -8,12 +8,18 @@ from typing import TYPE_CHECKING, NotRequired, TypedDict, cast
 
 from langchain_core.messages import BaseMessage
 
+from app.abstractions.resource_file_content import ResourceFileContent
 from app.agents.providers.wire_finalize import ChatWireProfile, ResponsesWireProfile
+from app.core.execution_admission_context import require_current_execution_admission
 from app.core.model_request_context import SummaryCandidateScope
+from app.core.resource_uri import parse_session_artifact_uri
+from app.core.sqlite_state import utc_now_text
+from app.core.trace_middleware import get_current_gateway_id
 from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
 from app.domain.itemized.dispatch_ref import SealedContextDispatchRef
 from app.domain.itemized.epoch.tool_set import ToolSetSnapshot
 from app.domain.itemized.identity.item_projection import ItemProjectionIdentity
+from app.domain.itemized.identity.refs import ContextRef
 from app.domain.itemized.identity.tool_call_identity import (
     matches_tool_call_id,
     provider_tool_call_id,
@@ -23,10 +29,15 @@ from app.domain.itemized.request_plan import ContextRequestPlan
 from app.domain.itemized.resource_activation import ResourceActivationSnapshotRef
 from app.schemas.internal_v2.session_context import SessionContextResourceDTO
 from app.services.infrastructure.rollout_context.assembly.plans.registry import (
+    _ValidatedPredecessors,
     read_registration,
 )
 from app.services.infrastructure.rollout_context.assembly.plans.types import (
     ContextPlanRegistration,
+)
+from app.services.infrastructure.rollout_context.checkpoint.boundary.tool_protocol_boundary import (
+    ToolProtocolBoundaryConflict,
+    validate_tool_protocol_closure,
 )
 from app.services.infrastructure.rollout_context.checkpoint.seal.preparation import (
     prepare_registered_context,
@@ -35,12 +46,19 @@ from app.services.infrastructure.rollout_context.checkpoint.seal.preparation imp
 from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_manager import (
     ContextSourceManager,
 )
+from app.services.mapping.itemized.selection import resolve_selected_item
 
 if TYPE_CHECKING:
     from _thread import RLock
 
+    from app.services.infrastructure.attachment_blob_catalog.store import (
+        AttachmentBlobStore,
+    )
     from app.services.infrastructure.rollout_context.checkpoint.owner.context_projection import (
         ContextProjectionResult,
+    )
+    from app.services.infrastructure.rollout_context.checkpoint.reader import (
+        RolloutContextReader,
     )
     from app.services.infrastructure.rollout_context.store import RolloutContextStore
 
@@ -61,12 +79,14 @@ class ContextDispatchPayload(TypedDict):
 
 
 class ContextDispatchOwnerMixin:
-    """只负责 provider dispatch 的 plan seal、投影和 pending handle。"""
+    """统一管理 dispatch 准备与发起工具调用的封存资源权限。"""
 
     if TYPE_CHECKING:
         # 这些端口由组合后的 Saver 提供；这里只声明 mixin 的实际依赖。
         _storage: RolloutContextStore
         _lock: RLock
+        _attachment_store: AttachmentBlobStore | None
+        _context_reader: RolloutContextReader
         _prepared_dispatches: dict[tuple[str, str, str, str], list[dict[str, object]]]
 
         @staticmethod
@@ -319,6 +339,128 @@ class ContextDispatchOwnerMixin:
             ]
             if not pending:
                 del self._prepared_dispatches[key]
+
+
+    def ensure_request_items(
+        self, session_id: str, thread_id: str, *, turn_id: str | None,
+        execution_id: str, messages: Sequence[object], checkpoint_ns: str = "",
+    ) -> tuple[str, ...]:
+        """模型请求先映射完整 canonical group，再交唯一 storage owner 原子提交。"""
+        codec = self._storage.storage._codec()
+        eligible = []
+        for index, message in enumerate(messages):
+            role = codec.message_role(message)
+            if role == "tool" or codec.tool_calls(message):
+                eligible.append((index, message, codec.message_id(message, index), role))
+        with self._storage.storage._lock(thread_id, checkpoint_ns, session_id=session_id):
+            with self._storage.storage._connect(
+                thread_id, checkpoint_ns, session_id=session_id, read_only=True,
+            ) as connection:
+                existing_groups = self._storage.storage.read_request_groups(
+                    session_id, thread_id, turn_id=turn_id, execution_id=execution_id,
+                    message_ids=tuple(value[2] for value in eligible), checkpoint_ns=checkpoint_ns,
+                    writer_connection=connection,
+                )
+            pending = []
+            for (index, message, message_id, role), stored in zip(eligible, existing_groups, strict=True):
+                model_call_id = (
+                    codec.tool_message_model_call_id(message, messages[:index]) if role == "tool"
+                    else codec.model_call_id(message) if role == "assistant" else None
+                )
+                group = tuple(codec.items_for_message(
+                    message, item_sequence=stored.items[0].item_sequence if stored.items else 1, message_id=message_id,
+                    turn_id=stored.turn_id, execution_id=stored.execution_id,
+                    timestamp=utc_now_text(), model_call_id=model_call_id,
+                    canonical_items=stored.items,
+                ))
+                if stored.items:
+                    if (
+                        len(group) != len(stored.items)
+                        or codec.project_message(group) != codec.project_message(stored.items)
+                        or any(
+                            item.item_id != saved.item_id or item.semantic_kind != saved.semantic_kind
+                            or item.content_hash != saved.content_hash or item.turn_id != saved.turn_id
+                            or item.turn_scope != saved.turn_scope
+                            for item, saved in zip(group, stored.items, strict=True)
+                        )
+                    ):
+                        raise RuntimeError(f"request 与既有 canonical message group 不一致: {message_id}")
+                else:
+                    pending.append(group)
+            return self._storage.executions.append_request_groups(
+                session_id, thread_id, groups=pending, execution_id=execution_id, checkpoint_ns=checkpoint_ns,
+            )
+
+    def prepare_model_call_boundary(
+        self, session_id: str, thread_id: str, *, turn_id: str | None,
+        execution_id: str, messages: Sequence[object], checkpoint_ns: str = "",
+        validated_predecessors: _ValidatedPredecessors,
+    ) -> tuple[ToolProtocolBoundaryConflict | None, ContextAssemblySnapshot | None]:
+        """先提交 canonical group 并检查闭合；预期冲突不撤销已提交事实。"""
+        admission = require_current_execution_admission(langgraph_thread_id=thread_id)
+        if (admission.session_id, admission.thread_id, admission.execution_id, admission.turn_id) != (
+            session_id, thread_id, execution_id, turn_id,
+        ):
+            raise RuntimeError("model-call boundary 与当前 execution admission 不一致")
+        checkpoint_ns = self.context_owner_namespace(checkpoint_ns)
+        # Provider prepare 已持有请求级校验作用域，不能在 boundary 内重置它。
+        # TODO：独立 boundary 准入的校验复用留待后续性能优化。
+        with self._lock:
+            if turn_id is not None:
+                self._storage.checkpoints.ensure_active_view_contains_turn_root(
+                    session_id, thread_id, turn_id=turn_id, checkpoint_ns=checkpoint_ns,
+                )
+            self.ensure_request_items(
+                session_id, thread_id, turn_id=turn_id, execution_id=execution_id,
+                messages=messages, checkpoint_ns=checkpoint_ns,
+            )
+            with self._context_reader.open_snapshot(session_id, thread_id, checkpoint_ns) as snapshot:
+                predecessor = self._storage.assemblies.latest_context_assembly(
+                    snapshot, validated_predecessors=validated_predecessors,
+                )
+                items = self._storage.checkpoints.committed_context_items(
+                    snapshot, predecessor=predecessor,
+                )
+                sequences = self._storage.checkpoints.selected_context_message_sequences(snapshot, items=items)
+                try:
+                    validate_tool_protocol_closure(snapshot.connection, sequences, len(sequences))
+                except ToolProtocolBoundaryConflict as conflict:
+                    return conflict, predecessor
+        return None, predecessor
+
+    def read_tool_call_attachment(
+        self, session_id: str, *, thread_id: str, tool_call_id: str,
+        model_call_id: str, file_id: str, checkpoint_ns: str = "",
+    ) -> ResourceFileContent:
+        """附件 capability 只来自 emitting model-call 的已封存 selection。"""
+        if self._attachment_store is None:
+            raise RuntimeError("附件工具未装配唯一 AttachmentBlobStore")
+        target = parse_session_artifact_uri(file_id, local_gateway_id=get_current_gateway_id()).display_uri
+        assembly = self.load_tool_call_context_assembly(
+            session_id, thread_id=thread_id, tool_call_id=tool_call_id,
+            model_call_id=model_call_id, checkpoint_ns=checkpoint_ns,
+        )
+        entries = tuple(
+            entry for entry in assembly.selection
+            if entry.included and isinstance(entry.ref, ContextRef)
+            and entry.ref.ref_type == "canonical_item"
+        )
+        items = self._storage.storage.read_ref_items(
+            session_id, thread_id, checkpoint_ns=self.context_owner_namespace(checkpoint_ns),
+            refs=tuple(entry.ref for entry in entries),
+        )
+        for entry in entries:
+            item = resolve_selected_item(entry, items)
+            payload = self._storage.storage.project_attachment_payload(session_id, thread_id, item.payload)
+            if not isinstance(payload, Mapping):
+                continue
+            attachments = payload.get("attachments", ())
+            if any(isinstance(ref, Mapping) and isinstance(ref.get("file_id"), str)
+                   and "://" in ref["file_id"]
+                   and parse_session_artifact_uri(ref["file_id"], local_gateway_id=get_current_gateway_id()).display_uri == target
+                   for ref in attachments):
+                return self._attachment_store.read(session_id, file_id, owner_thread_id=thread_id)
+        raise PermissionError("附件未属于当前工具原始 assembly 的 item/view membership")
 
 
 __all__ = ["ContextDispatchOwnerMixin", "ContextDispatchPayload"]
