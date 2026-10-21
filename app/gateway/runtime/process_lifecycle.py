@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Protocol, TextIO
 
 from app.gateway.runtime.process_groups import (
+    ProcessStartTime,
     _capture_posix_group_starttime,
     _posix_group_is_alive,
     _wait_until_closed,
@@ -60,7 +61,7 @@ class ManagedProcess:
     process: subprocess.Popen[str]
     log_file: object
     close_failure: TimeoutError | None = field(default=None, init=False, repr=False)
-    _leader_starttime: int | None = field(default=None, init=False, repr=False)
+    _leader_starttime: ProcessStartTime | None = field(default=None, init=False, repr=False)
     _group_closed: bool = field(default=False, init=False, repr=False)
 
     def __post_init__(self) -> None:
@@ -147,7 +148,7 @@ class AdoptedManagedProcess:
 
     pid: int
     close_failure: TimeoutError | None = field(default=None, init=False, repr=False)
-    _leader_starttime: int | None = field(default=None, init=False, repr=False)
+    _leader_starttime: ProcessStartTime | None = field(default=None, init=False, repr=False)
     _group_closed: bool = field(default=False, init=False, repr=False)
 
     def __post_init__(self) -> None:

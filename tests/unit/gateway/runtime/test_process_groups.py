@@ -2,10 +2,173 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
+import psutil
 import pytest
 
 from app.gateway.runtime import process_groups
+
+
+def test_posix_process_snapshot_uses_creation_identity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    process = SimpleNamespace(
+        create_time=lambda: 1234.5,
+        status=lambda: psutil.STATUS_SLEEPING,
+        is_running=lambda: True,
+    )
+    monkeypatch.setattr(psutil, "Process", lambda _pid: process)
+    monkeypatch.setattr(process_groups.os, "getpgid", lambda _pid: 4321)
+    monkeypatch.setattr(process_groups.os, "getsid", lambda _pid: 4321)
+
+    assert process_groups._posix_process_stat(4321) == ("S", 4321, 4321, 1234.5)
+
+
+def test_posix_missing_process_has_no_snapshot(monkeypatch: pytest.MonkeyPatch) -> None:
+    def missing_process(pid: int) -> None:
+        raise psutil.NoSuchProcess(pid)
+
+    monkeypatch.setattr(psutil, "Process", missing_process)
+
+    assert process_groups._posix_process_stat(4321) is None
+
+
+def test_posix_process_query_errors_are_explicit(monkeypatch: pytest.MonkeyPatch) -> None:
+    def denied_process(pid: int) -> None:
+        raise psutil.AccessDenied(pid)
+
+    monkeypatch.setattr(psutil, "Process", denied_process)
+
+    with pytest.raises(RuntimeError, match="读取 POSIX 进程身份失败"):
+        process_groups._posix_process_stat(4321)
+
+
+def test_posix_capture_requires_a_new_session_leader(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(process_groups.sys, "platform", "darwin")
+    monkeypatch.setattr(
+        process_groups,
+        "_posix_process_stat",
+        lambda _pid: ("S", 4321, 4321, 1234.5),
+    )
+    assert process_groups._capture_posix_group_starttime(4321) == 1234.5
+
+
+def test_live_posix_leader_proves_group_alive_without_member_scan(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(process_groups.sys, "platform", "darwin")
+    monkeypatch.setattr(
+        process_groups,
+        "_posix_process_stat",
+        lambda _pid: ("S", 4321, 4321, 1234.5),
+    )
+    monkeypatch.setattr(process_groups.os, "getsid", lambda _pid: 4321)
+    monkeypatch.setattr(process_groups.os, "getpgid", lambda _pid: 4321)
+    monkeypatch.setattr(
+        process_groups,
+        "_posix_process_group_members",
+        lambda _pid: pytest.fail("存活 leader 已证明进程组状态"),
+    )
+
+    assert process_groups._posix_group_is_alive(4321, 1234.5) is True
+
+
+def test_zombie_posix_group_with_only_zombie_members_is_closed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(process_groups.sys, "platform", "darwin")
+    monkeypatch.setattr(
+        process_groups,
+        "_posix_process_stat",
+        lambda _pid: ("Z", 4321, 4321, 1234.5),
+    )
+    monkeypatch.setattr(process_groups.os, "getsid", lambda _pid: 4321)
+    monkeypatch.setattr(process_groups.os, "getpgid", lambda _pid: 4321)
+    monkeypatch.setattr(process_groups.os, "killpg", lambda *_args: None)
+    monkeypatch.setattr(
+        process_groups,
+        "_posix_process_group_members",
+        lambda _pid: [(4321, "Z"), (9000, "Z")],
+    )
+
+    assert process_groups._posix_group_is_alive(4321, 1234.5) is False
+
+
+def test_zombie_posix_leader_keeps_group_alive_for_active_session_member(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(process_groups.sys, "platform", "darwin")
+    monkeypatch.setattr(
+        process_groups,
+        "_posix_process_stat",
+        lambda _pid: ("Z", 4321, 4321, 1234.5),
+    )
+    monkeypatch.setattr(process_groups.os, "getsid", lambda _pid: 4321)
+    monkeypatch.setattr(process_groups.os, "getpgid", lambda _pid: 4321)
+    monkeypatch.setattr(process_groups.os, "killpg", lambda *_args: None)
+    monkeypatch.setattr(
+        process_groups,
+        "_posix_process_group_members",
+        lambda _pid: [(4321, "Z"), (9000, "S")],
+    )
+
+    assert process_groups._posix_group_is_alive(4321, 1234.5) is True
+
+
+def test_replaced_posix_leader_is_rejected_before_group_probe(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(process_groups.sys, "platform", "darwin")
+    monkeypatch.setattr(
+        process_groups,
+        "_posix_process_stat",
+        lambda _pid: ("S", 4321, 4321, 2345.6),
+    )
+    monkeypatch.setattr(
+        process_groups.os,
+        "killpg",
+        lambda *_args: pytest.fail("不得探测已被替换 leader 的进程组"),
+    )
+
+    with pytest.raises(RuntimeError, match="leader 已被替换"):
+        process_groups._posix_group_is_alive(4321, 1234.5)
+
+
+def test_posix_group_member_from_another_session_is_rejected(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(process_groups.sys, "platform", "darwin")
+    monkeypatch.setattr(process_groups, "_posix_process_stat", lambda _pid: None)
+    monkeypatch.setattr(process_groups.os, "killpg", lambda *_args: None)
+    monkeypatch.setattr(process_groups.os, "getsid", lambda _pid: 9999)
+    monkeypatch.setattr(process_groups.os, "getpgid", lambda _pid: 4321)
+    monkeypatch.setattr(
+        process_groups,
+        "_posix_process_group_members",
+        lambda _pid: [(9000, "S")],
+    )
+
+    with pytest.raises(RuntimeError, match="无法证明进程属于原 owned group"):
+        process_groups._posix_group_is_alive(4321, 1234.5)
+
+
+def test_posix_group_member_that_moves_during_scan_is_ignored(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(process_groups.sys, "platform", "darwin")
+    monkeypatch.setattr(process_groups, "_posix_process_stat", lambda _pid: None)
+    monkeypatch.setattr(process_groups.os, "killpg", lambda *_args: None)
+    monkeypatch.setattr(process_groups.os, "getpgid", lambda _pid: 9999)
+    monkeypatch.setattr(
+        process_groups,
+        "_posix_process_group_members",
+        lambda _pid: [(9000, "S")],
+    )
+
+    assert process_groups._posix_group_is_alive(4321, 1234.5) is False
 
 
 @pytest.mark.skipif(sys.platform != "linux", reason="Linux /proc 进程组快速路径")
