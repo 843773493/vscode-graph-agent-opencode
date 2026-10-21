@@ -687,7 +687,6 @@ export interface SessionCatalogNode {
   has_children: boolean;
   node_revision: number;
   state: "active" | "deleting";
-  storage_relative_path?: string | null;
   created_at?: string | null;
   updated_at?: string | null;
   /** 会话节点携带完整会话元数据；消息历史不属于目录节点。 */

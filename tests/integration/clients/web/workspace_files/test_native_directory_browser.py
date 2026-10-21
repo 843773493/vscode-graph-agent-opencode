@@ -121,7 +121,8 @@ async def test_unregistered_directory_browser_edit_and_shortcut_reopen(communica
     node = await case.client.get("/api/v1/session-catalog/export")
     assert node.status_code == 200, node.text
     row = next(item for item in node.json()["data"]["items"] if item["node_id"] == session_id)
-    persisted = case.workspace / ".boxteam/sessions" / row["storage_relative_path"] / "ui/file-tree-shortcuts.json"
+    assert "storage_relative_path" not in row
+    persisted = (await case.session_node(session_id)) / "ui/file-tree-shortcuts.json"
     saved = json.loads(persisted.read_text())
     assert saved["shortcuts"] == [{"path": uri, "label": external.name}]
     assert str(external) not in persisted.read_text()

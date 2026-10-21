@@ -218,13 +218,12 @@ async def _create_nested_anchor(
 
 
 def _storage_path(workspace_root: Path, node: dict[str, object]) -> Path:
-    relative_path = node["storage_relative_path"]
-    assert isinstance(relative_path, str) and relative_path
+    assert "storage_relative_path" not in node
     sessions_root = workspace_root / ".boxteam" / "sessions"
     path = get_session_path_resolver(sessions_root).resolve_session_node(
         str(node["node_id"])
     )
-    assert path.relative_to(sessions_root) == Path(relative_path)
+    assert path.is_relative_to(sessions_root)
     return path
 
 
@@ -247,7 +246,7 @@ async def _assert_generated_storage(
     generated_node = nodes[generated_session_id]
     anchor_path = _storage_path(workspace_root, anchor_node)
     generated_path = _storage_path(workspace_root, generated_node)
-    generated_relative = Path(str(generated_node["storage_relative_path"]))
+    generated_relative = generated_path.relative_to(workspace_root / ".boxteam/sessions")
     generated_at = datetime.fromisoformat(str(generated_node["created_at"])).astimezone(UTC)
     assert generated_relative == Path(
         f"{generated_at:%Y/%m/%d}/{generated_session_id}"
@@ -327,7 +326,7 @@ async def test_new_per_run_is_idempotent_and_creates_cataloged_session(
         child_name="New Per Run 二级目录",
     )
     anchor_before = (await _catalog_nodes(generation_client))[anchor_session_id]
-    anchor_storage_before = anchor_before["storage_relative_path"]
+    anchor_storage_before = _storage_path(generation_backend[1], anchor_before)
     before_response = await generation_client.get("/api/v1/sessions")
     assert before_response.status_code == 200
     before_ids = {
@@ -370,6 +369,7 @@ async def test_new_per_run_is_idempotent_and_creates_cataloged_session(
     assert origin["generator_id"] == "gen_generation_e2e"
     assert origin["run_id"] == "grun_new_per_run_e2e"
     assert detail_response.json()["data"]["parent_session_id"] == anchor_session_id
+    # TODO：首次生成 Job 仍可能超过原20次等待窗口；本轮账本最终完成，保留期限待优化冷启动。
     await wait_for_job_done(generation_client, first["job_id"], max_attempts=20)
     await _assert_generated_storage(
         generation_client,
@@ -386,7 +386,7 @@ async def test_new_per_run_is_idempotent_and_creates_cataloged_session(
         ],
     )
     anchor_after = (await _catalog_nodes(generation_client))[anchor_session_id]
-    assert anchor_after["storage_relative_path"] == anchor_storage_before
+    assert _storage_path(generation_backend[1], anchor_after) == anchor_storage_before
 
     ledger_files = list(
         (generation_backend[1] / ".boxteam" / "generation-runs").glob("*/*.json")
@@ -423,7 +423,7 @@ async def test_continue_existing_reuses_target_session(
         child_name="Continue 二级目录",
     )
     target_before = (await _catalog_nodes(generation_client))[target_session_id]
-    target_storage_before = target_before["storage_relative_path"]
+    target_storage_before = _storage_path(generation_backend[1], target_before)
     manifest_count_before = _session_manifest_count(generation_backend[1])
     before_response = await generation_client.get("/api/v1/sessions")
     before_ids = {
@@ -472,7 +472,7 @@ async def test_continue_existing_reuses_target_session(
     )
     nodes_after = await _catalog_nodes(generation_client)
     target_after = nodes_after[target_session_id]
-    assert target_after["storage_relative_path"] == target_storage_before
+    assert _storage_path(generation_backend[1], target_after) == target_storage_before
     assert target_after["parent_node_id"] == target_folder_id
     assert target_after["has_children"] is False
     target_path = _storage_path(generation_backend[1], target_after)
@@ -515,7 +515,7 @@ async def test_fork_new_and_report_back_creates_child_with_origin(
         generation_client, seed_response.json()["data"]["job_id"], max_attempts=20
     )
     target_before = (await _catalog_nodes(generation_client))[target_session_id]
-    target_storage_before = target_before["storage_relative_path"]
+    target_storage_before = _storage_path(generation_backend[1], target_before)
     manifest_count_before = _session_manifest_count(generation_backend[1])
     payload = _execute_payload(
         workspace_id=generation_client.headers["X-BoxTeam-Workspace-Id"],
@@ -600,9 +600,7 @@ async def test_fork_new_and_report_back_creates_child_with_origin(
         ],
     )
     nodes_after = await _catalog_nodes(generation_client)
-    assert nodes_after[target_session_id]["storage_relative_path"] == (
-        target_storage_before
-    )
+    assert _storage_path(generation_backend[1], nodes_after[target_session_id]) == target_storage_before
     assert nodes_after[target_session_id]["has_children"] is True
     child_after_response = await generation_client.get(
         f"/api/v1/sessions/{generated_session_id}"

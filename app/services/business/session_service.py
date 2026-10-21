@@ -308,7 +308,7 @@ class SessionService:
         if not path.is_dir() or path.is_symlink():
             raise RuntimeError(
                 "会话物理目录缺失或不是普通目录，拒绝解析（fail closed）: "
-                f"session_id={session_id}, path={path}"
+                f"session_id={session_id}"
             )
         if not (path / "session.json").is_file():
             raise NotFoundError(f"Session {session_id} not found")

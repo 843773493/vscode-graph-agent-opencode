@@ -373,7 +373,6 @@ class GatewaySessionSearchMatchDTO(BaseModel):
     name: str
     session_id: str | None = None
     relative_path: str
-    storage_relative_path: str | None = None
     breadcrumb_names: list[str] = Field(default_factory=list)
     breadcrumb_node_ids: list[str] = Field(default_factory=list)
 

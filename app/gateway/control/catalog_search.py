@@ -415,15 +415,14 @@ class GatewaySessionCatalogSearchService:
         *,
         limit: int,
     ) -> list[GatewaySessionSearchMatchDTO]:
-        matching_nodes = [
-            node
-            for node in snapshot.nodes_by_id.values()
-            if query
-            in (
-                f"{node.name} {node.node_id} {node.session_id or ''} "
-                f"{node.storage_relative_path or ''}"
-            ).casefold()
-        ]
+        matching_nodes = []
+        for node in snapshot.nodes_by_id.values():
+            text = f"{node.name} {node.node_id} {node.session_id or ''}"
+            # 日期查询只消费已有创建时间，不缓存或输出物理 locator。
+            if node.created_at is not None and node.session_id is not None:
+                text += f" {node.created_at.astimezone(UTC):%Y/%m/%d}/{node.session_id}"
+            if query in text.casefold():
+                matching_nodes.append(node)
         matching_nodes.sort(key=lambda node: (node.name.casefold(), node.node_id))
         return [
             GatewaySessionCatalogSearchService._map_match(
@@ -472,7 +471,6 @@ class GatewaySessionCatalogSearchService:
             name=node.name,
             session_id=node.session_id,
             relative_path="/".join(names),
-            storage_relative_path=node.storage_relative_path,
             breadcrumb_names=names,
             breadcrumb_node_ids=node_ids,
         )
@@ -482,8 +480,10 @@ class GatewaySessionCatalogSearchService:
         if not path.exists():
             return None
         payload = read_json_object(path, default={})
+        if payload.get("schema_version") != 2:
+            raise RuntimeError(f"Gateway 会话目录缓存版本不兼容，请移除派生缓存后重建: workspace_id={workspace_id}")
         if payload.get("workspace_id") != workspace_id:
-            raise RuntimeError(f"Gateway 会话目录索引 workspace_id 不匹配: {path}")
+            raise RuntimeError(f"Gateway 会话目录索引 workspace_id 不匹配: workspace_id={workspace_id}")
         revision = payload.get("revision")
         updated_at = payload.get("updated_at")
         raw_items = payload.get("items")
@@ -492,11 +492,11 @@ class GatewaySessionCatalogSearchService:
             or not isinstance(updated_at, str)
             or not isinstance(raw_items, list)
         ):
-            raise RuntimeError(f"Gateway 会话目录索引格式无效: {path}")
+            raise RuntimeError(f"Gateway 会话目录索引格式无效: workspace_id={workspace_id}")
         nodes = [SessionCatalogNodeDTO.model_validate(item) for item in raw_items]
         nodes_by_id = {node.node_id: node for node in nodes}
         if len(nodes_by_id) != len(nodes):
-            raise RuntimeError(f"Gateway 会话目录索引包含重复 node_id: {path}")
+            raise RuntimeError(f"Gateway 会话目录索引包含重复 node_id: workspace_id={workspace_id}")
         return _CatalogSnapshot(
             revision=revision,
             updated_at=datetime.fromisoformat(updated_at),
@@ -507,7 +507,7 @@ class GatewaySessionCatalogSearchService:
         atomic_write_json(
             self._cache_path(workspace_id),
             {
-                "schema_version": 1,
+                "schema_version": 2,
                 "workspace_id": workspace_id,
                 "revision": snapshot.revision,
                 "updated_at": snapshot.updated_at.isoformat(),

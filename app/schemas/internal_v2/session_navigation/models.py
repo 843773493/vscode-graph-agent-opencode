@@ -9,6 +9,8 @@ from app.schemas.internal_v2.session import SessionDTO
 
 
 class SessionCatalogNodeDTO(BaseModel):
+    model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
+
     node_id: str
     kind: Literal["folder", "session"]
     name: str
@@ -20,7 +22,6 @@ class SessionCatalogNodeDTO(BaseModel):
     # catalog 权威 state：active=已提交可见；deleting=逻辑删除中（pending）。
     # 前端据此区分 confirmed 与 pending，不把 deleting 子树当正常节点渲染。
     state: Literal["active", "deleting"] = "active"
-    storage_relative_path: str | None = None
     created_at: datetime | None = None
     updated_at: datetime | None = None
     # 会话目录节点同时携带菜单和导航所需的完整会话元数据；消息历史不属于此字段。

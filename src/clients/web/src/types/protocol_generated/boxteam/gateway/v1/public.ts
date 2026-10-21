@@ -342,7 +342,6 @@ export interface GatewaySessionSearchMatchDTO {
   name: string;
   session_id?: string | undefined;
   relative_path: string;
-  storage_relative_path?: string | undefined;
   breadcrumb_names: string[];
   breadcrumb_node_ids: string[];
 }
@@ -3014,7 +3013,6 @@ function createBaseGatewaySessionSearchMatchDTO(): GatewaySessionSearchMatchDTO 
     name: "",
     session_id: undefined,
     relative_path: "",
-    storage_relative_path: undefined,
     breadcrumb_names: [],
     breadcrumb_node_ids: [],
   };
@@ -3030,9 +3028,6 @@ export const GatewaySessionSearchMatchDTO: MessageFns<GatewaySessionSearchMatchD
       name: isSet(object.name) ? globalThis.String(object.name) : "",
       session_id: isSet(object.session_id) ? globalThis.String(object.session_id) : undefined,
       relative_path: isSet(object.relative_path) ? globalThis.String(object.relative_path) : "",
-      storage_relative_path: isSet(object.storage_relative_path)
-        ? globalThis.String(object.storage_relative_path)
-        : undefined,
       breadcrumb_names: globalThis.Array.isArray(object?.breadcrumb_names)
         ? object.breadcrumb_names.map((e: any) => globalThis.String(e))
         : [],
@@ -3065,9 +3060,6 @@ export const GatewaySessionSearchMatchDTO: MessageFns<GatewaySessionSearchMatchD
     if (message.relative_path !== "") {
       obj.relative_path = message.relative_path;
     }
-    if (message.storage_relative_path !== undefined) {
-      obj.storage_relative_path = message.storage_relative_path;
-    }
     if (message.breadcrumb_names?.length) {
       obj.breadcrumb_names = message.breadcrumb_names;
     }
@@ -3089,7 +3081,6 @@ export const GatewaySessionSearchMatchDTO: MessageFns<GatewaySessionSearchMatchD
     message.name = object.name ?? "";
     message.session_id = object.session_id ?? undefined;
     message.relative_path = object.relative_path ?? "";
-    message.storage_relative_path = object.storage_relative_path ?? undefined;
     message.breadcrumb_names = object.breadcrumb_names?.map((e) => e) || [];
     message.breadcrumb_node_ids = object.breadcrumb_node_ids?.map((e) => e) || [];
     return message;

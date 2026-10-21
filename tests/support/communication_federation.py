@@ -18,6 +18,7 @@ import commentjson
 import httpx
 
 from app.core.mounted_workspaces import MountedWorkspace
+from app.core.path_utils import get_session_path_resolver
 from app.core.workspace_identity import (
     load_or_create_workspace_id,
     workspace_identity_path,
@@ -32,6 +33,7 @@ from tests.harness.python.browser_manager import (
 from tests.harness.python.run_context import TestRunContext
 from tests.harness.python.terminal_backend import start_terminal_backend
 from tests.support.catalog_session_bundle import seed_catalog_session_bundle
+from tests.support.ports import TestFilePortBlock, integration_port_block_for_file
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
     GatewayProcess,
@@ -40,7 +42,6 @@ from tests.support.processes.gateway import (
     reset_gateway_persistent_state,
     start_gateway_process,
 )
-from tests.support.ports import TestFilePortBlock, integration_port_block_for_file
 from tests.support.processes.scope import register_test_process, unregister_test_process
 from tests.support.processes.workspace import (
     BackendProcess,
@@ -96,8 +97,8 @@ class CommunicationNode:
     async def session_node(self, session_id: str) -> Path:
         response = await self.client.get("/api/v1/session-catalog/export")
         assert response.status_code == 200, response.text
-        node = next(item for item in response.json()["data"]["items"] if item["node_id"] == session_id)
-        return self.workspace / ".boxteam/sessions" / node["storage_relative_path"]
+        assert any(item["node_id"] == session_id for item in response.json()["data"]["items"])
+        return get_session_path_resolver(self.workspace / ".boxteam/sessions").resolve_session_node(session_id)
 
 
 def _close_ssh(owner: ManagedProcess) -> None:

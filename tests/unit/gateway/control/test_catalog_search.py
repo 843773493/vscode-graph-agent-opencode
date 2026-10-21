@@ -1,13 +1,158 @@
 from __future__ import annotations
 
+import json
+from dataclasses import replace
+from datetime import UTC, datetime
 from pathlib import Path
 
+import httpx
 import pytest
+from pydantic import ValidationError
 
-from app.gateway.control.catalog_search import GatewaySessionCatalogSearchService
+from app.gateway.control.catalog_search import (
+    GatewaySessionCatalogSearchService,
+    _CatalogSnapshot,
+)
 from app.gateway.control.gateway_state import GatewayStateStore
 from app.gateway.control.navigation import WorkspaceNavigationStore
 from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceTarget
+from app.schemas.internal_v2.session_navigation import SessionCatalogNodeDTO
+
+
+@pytest.fixture
+def catalog_service(tmp_path: Path) -> GatewaySessionCatalogSearchService:
+    return GatewaySessionCatalogSearchService(
+        registry=GatewayWorkspaceRegistry(
+            storage_path=tmp_path / "workspaces.json",
+            state_store=GatewayStateStore(path=tmp_path / "gateway.sqlite"),
+        ),
+        http_client=_FailingHttpClient(),  # type: ignore[arg-type]
+        cache_dir=tmp_path / "indexes",
+        navigation_store=WorkspaceNavigationStore(
+            storage_path=tmp_path / "navigation.json"
+        ),
+    )
+
+
+@pytest.fixture
+def catalog_snapshot() -> _CatalogSnapshot:
+    folder = SessionCatalogNodeDTO(
+        node_id="folder-needle",
+        kind="folder",
+        name="报告",
+        node_revision=1,
+        folder_id="folder-needle",
+        has_children=True,
+    )
+    session = SessionCatalogNodeDTO(
+        node_id="session-needle",
+        kind="session",
+        name="目标 Needle",
+        node_revision=1,
+        session_id="session-needle",
+        parent_node_id=folder.node_id,
+        created_at=datetime.fromisoformat("2026-10-21T00:30:00+08:00"),
+    )
+    return _CatalogSnapshot(
+        revision="revision-one",
+        updated_at=datetime.now(UTC),
+        nodes_by_id={node.node_id: node for node in (folder, session)},
+    )
+
+
+def test_catalog_cache_round_trip_preserves_logical_search_without_locators(
+    catalog_service: GatewaySessionCatalogSearchService,
+    catalog_snapshot: _CatalogSnapshot,
+) -> None:
+    target = _offline_target()
+    catalog_service._save_snapshot(target.workspace_id, catalog_snapshot)
+    path = catalog_service._cache_path(target.workspace_id)
+    raw = path.read_text()
+    assert json.loads(raw)["schema_version"] == 2
+    assert "storage_relative_path" not in raw
+    assert target.root_path not in raw
+    loaded = catalog_service._load_snapshot(target.workspace_id)
+    assert loaded == catalog_snapshot
+    assert loaded is not None
+    for query in (
+        "needle",
+        "session-needle",
+        "2026/10/20",
+        "2026/10/20/session-needle",
+    ):
+        matches = catalog_service._search_snapshot(target, loaded, query, limit=10)
+        expected_ids = (
+            ["folder-needle", "session-needle"]
+            if query == "needle"
+            else ["session-needle"]
+        )
+        assert [item.node_id for item in matches] == expected_ids
+        for item in matches:
+            assert "storage_relative_path" not in item.model_dump()
+        session = next(item for item in matches if item.node_id == "session-needle")
+        assert session.relative_path == "报告/目标 Needle"
+        assert session.breadcrumb_node_ids == ["folder-needle", "session-needle"]
+        assert "2026/10/20" not in session.model_dump_json()
+    assert (
+        catalog_service._search_snapshot(target, loaded, "2026/10/21", limit=10) == []
+    )
+
+
+@pytest.mark.parametrize("schema_version", [1, 2])
+def test_catalog_cache_rejects_old_locator_without_rewriting_or_echoing_it(
+    catalog_service: GatewaySessionCatalogSearchService,
+    catalog_snapshot: _CatalogSnapshot,
+    schema_version: int,
+) -> None:
+    target = _offline_target()
+    catalog_service._save_snapshot(target.workspace_id, catalog_snapshot)
+    path = catalog_service._cache_path(target.workspace_id)
+    payload = json.loads(path.read_text())
+    payload["schema_version"] = schema_version
+    locator = "2026/10/20/private-legacy-session"
+    payload["items"][1]["storage_relative_path"] = locator
+    path.write_text(json.dumps(payload))
+    before = path.read_bytes()
+    with pytest.raises((RuntimeError, ValidationError)) as caught:
+        catalog_service._load_snapshot(target.workspace_id)
+    assert locator not in str(caught.value)
+    assert str(path) not in str(caught.value)
+    if schema_version == 1:
+        assert "版本不兼容" in str(caught.value)
+    else:
+        assert "storage_relative_path" in str(caught.value)
+    assert path.read_bytes() == before
+
+
+@pytest.mark.asyncio
+async def test_catalog_sync_rejects_legacy_export_and_preserves_existing_snapshot(
+    catalog_service: GatewaySessionCatalogSearchService,
+    catalog_snapshot: _CatalogSnapshot,
+) -> None:
+    target = replace(_offline_target(), backend_url="http://workspace.invalid")
+    catalog_service._save_snapshot(target.workspace_id, catalog_snapshot)
+    catalog_service._snapshots[target.workspace_id] = catalog_snapshot
+    path = catalog_service._cache_path(target.workspace_id)
+    before = path.read_bytes()
+    nodes = [
+        node.model_dump(mode="json") for node in catalog_snapshot.nodes_by_id.values()
+    ]
+    locator = "2026/10/20/private-backend-session"
+    nodes[1]["storage_relative_path"] = locator
+    transport = httpx.MockTransport(
+        lambda request: httpx.Response(
+            200,
+            json={"data": {"revision": "bad-revision", "items": nodes}},
+        )
+    )
+    async with httpx.AsyncClient(transport=transport) as client:
+        catalog_service._http_client = client
+        with pytest.raises(ValidationError) as caught:
+            await catalog_service._sync_workspace(target, request_id="req-test")
+    assert locator not in str(caught.value)
+    assert path.read_bytes() == before
+    assert catalog_service._snapshots[target.workspace_id] is catalog_snapshot
+    assert target.workspace_id not in catalog_service._fresh_workspace_ids
 
 
 class _FailingHttpClient:
@@ -15,7 +160,9 @@ class _FailingHttpClient:
         raise AssertionError("backend_url 为空时不应发出 HTTP 请求")
 
 
-def test_catalog_runtime_config_updates_next_sync_and_wakes_loop(tmp_path: Path) -> None:
+def test_catalog_runtime_config_updates_next_sync_and_wakes_loop(
+    tmp_path: Path,
+) -> None:
     registry = GatewayWorkspaceRegistry(
         storage_path=tmp_path / "workspaces.json",
         state_store=GatewayStateStore(path=tmp_path / "gateway.sqlite"),

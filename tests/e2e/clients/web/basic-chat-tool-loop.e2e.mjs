@@ -3053,7 +3053,8 @@ async function sessionCatalogNode(owner) {
   assert.equal(publicNode.state, node.state);
   assert.equal(publicNode.parent_node_id, node.parent_node_id);
   assert.equal(publicNode.node_revision, node.revision);
-  assert.equal(publicNode.storage_relative_path, node.storage_relative_locator.slice("sessions/".length));
+  assert.equal(Object.hasOwn(publicNode, "storage_relative_path"), false);
+  assert.equal(JSON.stringify(publicNode).includes(node.storage_relative_locator), false);
   assert.equal(publicNode.session.session_id, node.node_id);
   assert.equal(publicNode.session.workspace_id, node.workspace_id);
   assert.equal(publicNode.session.thread_id, node.main_thread_id);

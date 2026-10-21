@@ -108,8 +108,8 @@ class CommunicationCase:
     async def session_node(self, session_id: str) -> Path:
         response = await self.client.get("/api/v1/session-catalog/export")
         assert response.status_code == 200, response.text
-        node = next(node for node in response.json()["data"]["items"] if node["node_id"] == session_id)
-        return self.workspace / ".boxteam/sessions" / node["storage_relative_path"]
+        assert any(node["node_id"] == session_id for node in response.json()["data"]["items"])
+        return get_session_path_resolver(self.workspace / ".boxteam/sessions").resolve_session_node(session_id)
 
     def main_thread_node(self, session_id: str) -> Path:
         resolver = get_session_path_resolver(self.workspace / ".boxteam/sessions")

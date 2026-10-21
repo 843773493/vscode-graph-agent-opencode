@@ -399,7 +399,8 @@ async def test_cold_agents_restart_reconciles_before_second_provider(
     node = next(item for item in catalog.json()["data"]["items"] if item["node_id"] == session_id)
     resolver = get_session_path_resolver(case.workspace / ".boxteam/sessions")
     thread_node = resolver.resolve_thread_node(session_id, resolver.main_thread_id(session_id))
-    assert resolver.resolve_session_node(session_id) == case.workspace / ".boxteam/sessions" / node["storage_relative_path"]
+    assert "storage_relative_path" not in node
+    assert resolver.resolve_session_node(session_id).name == session_id
     sessions = case.workspace / ".boxteam/sessions"
     with RolloutCheckpointSaver(sessions) as cold:
         owner = cold.forks.source.resolve_main_thread_owner(session_id)

@@ -1835,7 +1835,8 @@ async def test_initial_binding_durable_admission_crash_before_bound_recovers_sam
     catalog = await case.client.get("/api/v1/session-catalog/export")
     assert catalog.status_code == 200, catalog.text
     node = next(node for node in catalog.json()["data"]["items"] if node["node_id"] == session_id)
-    session_dir = case.workspace / ".boxteam/sessions" / node["storage_relative_path"]
+    assert "storage_relative_path" not in node
+    session_dir = get_session_path_resolver(case.workspace / ".boxteam/sessions").resolve_session_node(session_id)
     case.control.arm_match("initial-admission", "thread.initial.admitted_before_bound", {"session_id": session_id})
     await _send(case, session_id, "binding-crash-team-trigger：创建团队并启动成员。")
     try:
@@ -1940,7 +1941,8 @@ async def test_h6_backend_hard_restart_keeps_child_and_runtime_report_identity(
     catalog = await case.client.get("/api/v1/session-catalog/export")
     assert catalog.status_code == 200, catalog.text
     node = next(node for node in catalog.json()["data"]["items"] if node["node_id"] == session_id)
-    session_dir = case.workspace / ".boxteam/sessions" / node["storage_relative_path"]
+    assert "storage_relative_path" not in node
+    session_dir = get_session_path_resolver(case.workspace / ".boxteam/sessions").resolve_session_node(session_id)
     before = case.snapshot(session_dir)
     assert before["intent"]["state"] == "bound"
     assert "h6-private-seed" in before["frozen_seed"]

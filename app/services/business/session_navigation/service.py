@@ -85,6 +85,7 @@ class _SessionCatalogReadSnapshot:
     nodes: list[SessionCatalogNodeDTO]
     nodes_by_id: dict[str, SessionCatalogNodeDTO]
     default_provider_nodes: list[SessionCatalogSessionProjection]
+    search_paths: dict[str, str]
 
 
 @dataclass(frozen=True, slots=True)
@@ -315,7 +316,7 @@ class SessionCatalogService:
         scope = f"search\n{normalized_query}"
         matches: list[SessionCatalogNodeDTO] = []
         for node in snapshot.nodes:
-            physical_path = node.storage_relative_path or ""
+            physical_path = snapshot.search_paths.get(node.node_id, "")
             if (
                 normalized_query not in node.name.casefold()
                 and normalized_query not in node.node_id.casefold()
@@ -326,7 +327,7 @@ class SessionCatalogService:
         matches.sort(
             key=lambda item: (
                 item.name.casefold(),
-                (item.storage_relative_path or "").casefold(),
+                snapshot.search_paths.get(item.node_id, "").casefold(),
                 item.node_id,
             )
         )
@@ -633,6 +634,11 @@ class SessionCatalogService:
                 node for node in physical_nodes
                 if isinstance(node, SessionCatalogSessionProjection) and node.current_provider_id is None
             ],
+            search_paths={
+                node.node_id: node.storage_relative_path
+                for node in physical_nodes
+                if isinstance(node, SessionCatalogSessionProjection)
+            },
         )
         self._cached_snapshot = snapshot
         return snapshot
@@ -679,11 +685,6 @@ class SessionCatalogService:
             has_children=node.node_id in visible_parent_ids_with_children,
             node_revision=node.node_revision,
             state=node.state,
-            storage_relative_path=(
-                session_projection.storage_relative_path
-                if session_projection is not None
-                else None
-            ),
             created_at=(
                 session_projection.created_at if session_projection is not None else None
             ),
@@ -702,7 +703,7 @@ class SessionCatalogService:
 
         目标可能处于 deleting，也可能位于 deleting 祖先之下。它们从普通目录
         枚举隐藏，且 session 元数据不可按正常路径读取，因此这里只给出节点身份
-        与权威 node revision，不伪造 session 元数据或 storage_relative_path。
+        与权威 node revision，不伪造 session 元数据。
         """
         session_projection = (
             node if isinstance(node, SessionCatalogSessionProjection) else None
@@ -717,11 +718,6 @@ class SessionCatalogService:
             has_children=node.node_id in visible_parent_ids_with_children,
             node_revision=node.node_revision,
             state=node.state,
-            storage_relative_path=(
-                session_projection.storage_relative_path
-                if session_projection is not None
-                else None
-            ),
             created_at=(
                 session_projection.created_at if session_projection is not None else None
             ),

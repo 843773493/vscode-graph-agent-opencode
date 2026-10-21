@@ -344,6 +344,9 @@ message GatewayServiceStatusDTO {
 }
 
 message GatewaySessionSearchMatchDTO {
+  reserved 8;
+  reserved "storage_relative_path";
+
   string workspace_id = 1;
   string workspace_name = 2;
   string node_id = 3;
@@ -351,7 +354,6 @@ message GatewaySessionSearchMatchDTO {
   string name = 5;
   optional string session_id = 6;
   string relative_path = 7;
-  optional string storage_relative_path = 8;
   repeated string breadcrumb_names = 9;
   repeated string breadcrumb_node_ids = 10;
 }

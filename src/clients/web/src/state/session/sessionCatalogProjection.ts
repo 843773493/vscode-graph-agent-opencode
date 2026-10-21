@@ -31,7 +31,6 @@ export interface CatalogProjectedNode {
   has_children: boolean;
   node_revision: number | null;
   state: "active" | "deleting" | null;
-  storage_relative_path: string | null;
   created_at: string | null;
   updated_at: string | null;
   session: Session | null;
@@ -90,7 +89,6 @@ function confirmedNodeToProjected(node: SessionCatalogNode): CatalogProjectedNod
     has_children: node.has_children,
     node_revision: node.node_revision,
     state: node.state,
-    storage_relative_path: node.storage_relative_path ?? null,
     created_at: node.created_at ?? null,
     updated_at: node.updated_at ?? null,
     session: node.session ?? null,
@@ -171,7 +169,6 @@ function buildEffectiveNodes(input: CatalogProjectionInput): Map<string, Effecti
           has_children: false,
           node_revision: null,
           state: null,
-          storage_relative_path: null,
           created_at: null,
           updated_at: null,
           session: null,

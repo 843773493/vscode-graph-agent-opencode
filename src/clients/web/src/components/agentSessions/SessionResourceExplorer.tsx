@@ -507,7 +507,7 @@ export default function SessionResourceExplorer({
             type="button"
             className="session-resource-main-action"
             data-session-id={!isFolder ? node.session_id : undefined}
-            title={node.storage_relative_path || node.name}
+            title={node.name}
             aria-busy={opening || undefined}
             disabled={node.state === "deleting"}
             onClick={openNode}
@@ -796,7 +796,7 @@ export default function SessionResourceExplorer({
             }}
           >
             <strong>{item.name}</strong>
-            <span title={item.storage_relative_path || item.relative_path}>{item.workspace_name} / {item.relative_path}</span>
+            <span title={item.relative_path}>{item.workspace_name} / {item.relative_path}</span>
             {item.node_kind === "session" && item.session_id ? (
               <SessionActivityIndicator
                 running={activeJobIdsBySession.has(

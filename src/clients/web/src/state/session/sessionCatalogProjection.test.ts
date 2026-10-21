@@ -34,7 +34,6 @@ function node(overrides: Partial<SessionCatalogNode> & { node_id: string }): Ses
     has_children: false,
     node_revision: 1,
     state: "active",
-    storage_relative_path: null,
     created_at: null,
     updated_at: null,
     session: null,

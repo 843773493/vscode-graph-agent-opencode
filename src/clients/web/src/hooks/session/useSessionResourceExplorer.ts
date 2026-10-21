@@ -182,7 +182,6 @@ function projectConfirmedNode(node: SessionCatalogNode): CatalogProjectedNode {
     has_children: node.has_children,
     node_revision: node.node_revision,
     state: node.state,
-    storage_relative_path: node.storage_relative_path ?? null,
     created_at: node.created_at ?? null,
     updated_at: node.updated_at ?? null,
     session: node.session ?? null,

@@ -9,14 +9,14 @@ import httpx
 import pytest
 
 from app.core.identifier import create_prefixed_id
-from app.gateway.workspace_ids import build_managed_local_workspace_id
+from app.core.path_utils import get_session_path_resolver
 from tests.integration.stubs.http_stubs import generation_target_stub
+from tests.support.ports import integration_port_block_for_file
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
     close_gateway_process,
     start_gateway_process,
 )
-from tests.support.ports import integration_port_block_for_file
 from tests.support.processes.workspace import (
     close_backend_process,
     start_backend_process,
@@ -81,8 +81,14 @@ async def test_gateway_aggregates_catalog_breadcrumbs_and_reports_offline_worksp
                 for item in export_response.json()["data"]["items"]
                 if item["node_id"] == primary_session_id
             )
-            primary_storage_relative_path = str(
-                primary_session["storage_relative_path"]
+            assert "storage_relative_path" not in primary_session
+            resolver = get_session_path_resolver(
+                primary_workspace / ".boxteam/sessions"
+            )
+            primary_storage_relative_path = (
+                resolver.resolve_session_node(primary_session_id)
+                .relative_to(primary_workspace / ".boxteam/sessions")
+                .as_posix()
             )
     finally:
         close_backend_process(primary_backend)
@@ -90,12 +96,11 @@ async def test_gateway_aggregates_catalog_breadcrumbs_and_reports_offline_worksp
     secondary_port = port_block.port(1)
     secondary_folder_id = create_prefixed_id("ses")
     secondary_session_id = create_prefixed_id("ses")
+    secondary_created_at = datetime.now(UTC).replace(microsecond=0)
     secondary_session_storage = (
-        f"{datetime.now(UTC):%Y/%m/%d}/{secondary_session_id}"
+        f"{secondary_created_at:%Y/%m/%d}/{secondary_session_id}"
     )
-    secondary_backend_workspace_id = workspace_backend_id_for_root(
-        secondary_workspace
-    )
+    secondary_backend_workspace_id = workspace_backend_id_for_root(secondary_workspace)
     secondary_catalog_items = [
         {
             "node_id": secondary_folder_id,
@@ -107,7 +112,6 @@ async def test_gateway_aggregates_catalog_breadcrumbs_and_reports_offline_worksp
             "has_children": True,
             "node_revision": 1,
             "state": "active",
-            "storage_relative_path": None,
             "created_at": None,
             "updated_at": None,
             "session": None,
@@ -122,8 +126,7 @@ async def test_gateway_aggregates_catalog_breadcrumbs_and_reports_offline_worksp
             "has_children": False,
             "node_revision": 1,
             "state": "active",
-            "storage_relative_path": secondary_session_storage,
-            "created_at": None,
+            "created_at": secondary_created_at.isoformat().replace("+00:00", "Z"),
             "updated_at": None,
             "session": None,
         },
@@ -160,12 +163,16 @@ async def test_gateway_aggregates_catalog_breadcrumbs_and_reports_offline_worksp
                     },
                 )
                 assert add_response.status_code == 200, add_response.text
-                secondary_workspace_id = next(
-                    item["workspace_id"]
+                registered = [
+                    item
                     for item in add_response.json()["data"]["items"]
-                    if item["workspace_id"] == build_managed_local_workspace_id(str(secondary_workspace))
+                    if item["backend_workspace_id"] == secondary_backend_workspace_id
+                ]
+                assert len(registered) == 1, add_response.text
+                assert (
+                    registered[0]["backend_url"] == f"http://127.0.0.1:{secondary_port}"
                 )
-                assert secondary_workspace_id != secondary_backend_workspace_id
+                secondary_workspace_id = registered[0]["workspace_id"]
 
                 aggregate_response = await client.get(
                     "/api/gateway/session-catalog/search",
@@ -185,15 +192,41 @@ async def test_gateway_aggregates_catalog_breadcrumbs_and_reports_offline_worksp
                     "主工作区报告/Shared Catalog Needle Primary",
                     "次工作区报告/Shared Catalog Needle Secondary",
                 }
-                storage_by_workspace = {
-                    item["workspace_id"]: item["storage_relative_path"]
-                    for item in aggregate["items"]
+                assert {item["session_id"] for item in aggregate["items"]} == {
+                    primary_session_id,
+                    secondary_session_id,
                 }
-                assert storage_by_workspace == {
-                    primary_workspace_id: primary_storage_relative_path,
-                    secondary_workspace_id: secondary_session_storage,
-                }
-                assert primary_storage_relative_path != (f"{primary_session_id}")
+                assert "storage_relative_path" not in aggregate_response.text
+                for hidden in (
+                    str(primary_workspace),
+                    str(secondary_workspace),
+                    primary_storage_relative_path,
+                    secondary_session_storage,
+                ):
+                    assert hidden not in aggregate_response.text
+                for workspace_id, session_id, query in (
+                    (
+                        primary_workspace_id,
+                        primary_session_id,
+                        primary_storage_relative_path,
+                    ),
+                    (
+                        secondary_workspace_id,
+                        secondary_session_id,
+                        secondary_session_storage,
+                    ),
+                ):
+                    response = await client.get(
+                        "/api/gateway/session-catalog/search",
+                        params={"query": query, "limit_per_workspace": 10},
+                    )
+                    assert response.status_code == 200, response.text
+                    assert [
+                        (item["workspace_id"], item["session_id"])
+                        for item in response.json()["data"]["items"]
+                    ] == [(workspace_id, session_id)]
+                    assert query not in response.text
+                    assert "storage_relative_path" not in response.text
                 assert all(
                     status["status"] == "available"
                     for status in aggregate["workspaces"]
@@ -229,6 +262,16 @@ async def test_gateway_aggregates_catalog_breadcrumbs_and_reports_offline_worksp
                     primary_workspace_id,
                     secondary_workspace_id,
                 }
+                assert all(item["schema_version"] == 2 for item in cached_indexes)
+                cache_json = json.dumps(cached_indexes)
+                assert "storage_relative_path" not in cache_json
+                for hidden in (
+                    str(primary_workspace),
+                    str(secondary_workspace),
+                    primary_storage_relative_path,
+                    secondary_session_storage,
+                ):
+                    assert hidden not in cache_json
                 assert cached_by_workspace[secondary_workspace_id]["revision"] == (
                     "rev_secondary_export_e2e"
                 )
@@ -271,13 +314,13 @@ async def test_gateway_aggregates_catalog_breadcrumbs_and_reports_offline_worksp
                 primary_workspace_id,
                 secondary_workspace_id,
             }
-            assert {
-                item["workspace_id"]: item["storage_relative_path"]
-                for item in offline["items"]
-            } == {
-                primary_workspace_id: primary_storage_relative_path,
-                secondary_workspace_id: secondary_session_storage,
+            assert {item["session_id"] for item in offline["items"]} == {
+                primary_session_id,
+                secondary_session_id,
             }
+            assert "storage_relative_path" not in offline_response.text
+            assert primary_storage_relative_path not in offline_response.text
+            assert secondary_session_storage not in offline_response.text
             status_by_workspace = {
                 item["workspace_id"]: item for item in offline["workspaces"]
             }

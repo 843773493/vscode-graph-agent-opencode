@@ -1474,11 +1474,6 @@ export declare type GatewaySessionSearchMatchDTO = Message<"boxteam.gateway.v1.G
   relativePath: string;
 
   /**
-   * @generated from field: optional string storage_relative_path = 8;
-   */
-  storageRelativePath?: string | undefined;
-
-  /**
    * @generated from field: repeated string breadcrumb_names = 9;
    */
   breadcrumbNames: string[];

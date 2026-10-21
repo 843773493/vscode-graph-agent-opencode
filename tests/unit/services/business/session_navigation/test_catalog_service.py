@@ -1,17 +1,20 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal, TypeVar
 
 import pytest
+from pydantic import ValidationError
 
 from app.core.identifier import create_prefixed_id
 from app.core.path_utils import get_session_creation_service, get_session_path_resolver
 from app.core.session_catalog_resolver import SessionCatalogPathResolver
 from app.schemas.internal_v2.session import SessionDTO
+from app.schemas.internal_v2.session_navigation import SessionCatalogNodeDTO
 from app.services.business.session_navigation import SessionCatalogService
 from app.services.business.session_service import SessionService
 from app.services.infrastructure.trace_event_store import TraceEventStore
@@ -25,6 +28,51 @@ from tests.unit.services.business.session_service_test_support import (
 )
 
 T = TypeVar("T")
+
+
+@pytest.mark.asyncio
+async def test_catalog_public_projections_hide_locator_but_keep_path_search(
+    tmp_path: Path, session_bundle_factory,
+) -> None:
+    sessions_root = tmp_path / "sessions"
+    service = _SessionService(sessions_root)
+    resolver = service.path_resolver
+    session_id = canonical("公开位置边界")
+    session_bundle_factory(sessions_root, session_id)
+    folder = resolver.catalog_store.create_folder(
+        create_prefixed_id("ses"), resolver.workspace_id, None, "逻辑目录",
+    )
+    _relocate(resolver, session_id, folder.node_id)
+    catalog = SessionCatalogService(session_service=service)
+    locator = resolver.resolve_session_node(session_id).relative_to(sessions_root).as_posix()
+    results = [
+        await catalog.export_index(),
+        await catalog.list_children(parent_node_id=folder.node_id, limit=10, cursor=None),
+        await catalog.breadcrumb(session_id),
+    ]
+    for query in (session_id, locator, locator.split("/")[0]):
+        search = await catalog.search(query=query, limit=10, cursor=None)
+        assert [item.node.node_id for item in search.items] == [session_id]
+        assert search.items[0].relative_path.startswith("逻辑目录/")
+        results.append(search)
+    for result in results:
+        raw = result.model_dump_json()
+        assert "storage_relative_path" not in raw
+        assert locator not in raw
+        assert str(sessions_root) not in raw
+    node = next(node for node in results[0].items if node.node_id == session_id)
+    legacy = json.loads(node.model_dump_json())
+    legacy["storage_relative_path"] = locator
+    with pytest.raises(ValidationError) as caught:
+        SessionCatalogNodeDTO.model_validate(legacy)
+    assert locator not in str(caught.value)
+
+    resolver.catalog_store.set_node_state(session_id, "deleting")
+    pending = await catalog.breadcrumb(session_id)
+    assert pending.items[-1].state == "deleting"
+    assert pending.items[-1].session is None
+    assert "storage_relative_path" not in pending.model_dump_json()
+    assert locator not in pending.model_dump_json()
 
 
 def canonical(name: str) -> str:
@@ -294,9 +342,8 @@ async def test_catalog_read_keeps_authoritative_nodes_when_physical_tree_has_orp
 
     assert [node.node_id for node in page.items] == [session_id]
     # 目录读模型不扫盘；未登记的孤立目录不影响 catalog 投影。
-    locator = page.items[0].storage_relative_path
-    assert locator is not None
-    assert locator.split("/")[-1] == session_id
+    assert "storage_relative_path" not in page.items[0].model_dump()
+    assert resolver.resolve_session_node(session_id).name == session_id
     assert page.consistency_warning is None
     assert (sessions_root / session_id).is_dir()
     await catalog.refresh()
