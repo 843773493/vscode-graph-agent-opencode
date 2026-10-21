@@ -327,15 +327,18 @@ GenerationRunStatus = Literal[
 
 
 class GenerationOutputDTO(BaseModel):
+    model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
+
     kind: Literal["session"] = "session"
     workspace_id: str
     session_id: str
     title: str | None = None
     navigation_path: list[str] = Field(default_factory=list)
-    storage_relative_path: str | None = None
 
 
 class GenerationRunDTO(BaseModel):
+    model_config = ConfigDict(hide_input_in_errors=True)
+
     run_id: str
     generator_id: str
     idempotency_key: str

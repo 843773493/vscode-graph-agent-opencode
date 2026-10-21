@@ -493,11 +493,6 @@ class SessionGenerationReportingSupport:
                     session_id=session.session_id,
                     title=session.title,
                     navigation_path=payload.navigation_path,
-                    storage_relative_path=(
-                        self._session_catalog_service.path_resolver.relative_path(
-                            session.session_id
-                        )
-                    ),
                 )
             ],
             message_id=message_id,

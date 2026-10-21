@@ -7,6 +7,7 @@ from types import SimpleNamespace
 from typing import ClassVar
 
 import pytest
+from pydantic import ValidationError
 
 from app.core.session_catalog_store.contracts import SessionGenerationOriginDTO
 from app.domain.itemized.execution_admission import (
@@ -14,6 +15,7 @@ from app.domain.itemized.execution_admission import (
 )
 from app.domain.itemized.records import InternalDisplayProvenance
 from app.schemas.event import Event, JobCompletedEvent, JobFailedEvent
+from app.schemas.gateway_control import GenerationOutputDTO
 from app.schemas.internal_v2.common import MessageRole
 from app.schemas.internal_v2.message import MessageDTO
 from app.schemas.internal_v2.session import SessionDTO
@@ -36,6 +38,17 @@ class _UnusedDependency:
     pass
 
 
+@pytest.mark.parametrize("output_type", [SessionGenerationOutputDTO, GenerationOutputDTO])
+def test_generation_output_rejects_physical_locator(output_type) -> None:
+    with pytest.raises(ValidationError, match="storage_relative_path") as captured:
+        output_type.model_validate({
+            "workspace_id": "ws_output",
+            "session_id": "ses_output",
+            "storage_relative_path": "2026/10/21/ses_output",
+        })
+    assert "2026/10/21/ses_output" not in str(captured.value)
+
+
 def _test_catalog(tmp_path: Path):
     sessions_root = tmp_path / "physical-sessions"
 
@@ -47,7 +60,6 @@ def _test_catalog(tmp_path: Path):
     return SimpleNamespace(
         path_resolver=SimpleNamespace(
             resolve_session_node=resolve_session_node,
-            relative_path=lambda session_id: f"会话--{session_id[-8:]}",
         )
     )
 
@@ -275,6 +287,34 @@ def _new_per_run_request() -> SessionGenerationExecuteRequest:
             "navigation_path": ["恢复任务"],
         }
     )
+
+
+@pytest.mark.asyncio
+async def test_generation_ledger_cold_read_rejects_physical_locator(tmp_path: Path) -> None:
+    payload = _new_per_run_request()
+    service = SessionGenerationService(
+        workspace_root=tmp_path,
+        session_service=_UnusedDependency(),  # type: ignore[arg-type]
+        session_catalog_service=_test_catalog(tmp_path),  # type: ignore[arg-type]
+        session_context_fork_service=_UnusedDependency(),  # type: ignore[arg-type]
+        session_orchestrator=_UnusedDependency(),  # type: ignore[arg-type]
+        job_event_bus=_EmptyEventBus(),  # type: ignore[arg-type]
+        message_service=_UnusedDependency(),  # type: ignore[arg-type]
+        trace_event_store=_EmptyTraceStore(),  # type: ignore[arg-type]
+        providers=[],
+    )
+    path = service._ledger_path(payload.generator_id, payload.idempotency_key)
+    result = SessionGenerationExecuteResultDTO(
+        run_id=payload.run_id, status="completed",
+        outputs=[SessionGenerationOutputDTO(workspace_id="gw_restart", session_id="ses_old")],
+    ).model_dump(mode="json")
+    result["outputs"][0]["storage_relative_path"] = "2026/10/21/ses_old"
+    service._write_ledger(path, {"generator_id": payload.generator_id, "status": "completed", "result": result})
+    before = path.read_bytes()
+    with pytest.raises(ValidationError, match="storage_relative_path") as captured:
+        await service.execute(payload)
+    assert "2026/10/21/ses_old" not in str(captured.value)
+    assert path.read_bytes() == before
 
 
 def test_report_back_prompt_escapes_structural_tag_in_branch_result() -> None:

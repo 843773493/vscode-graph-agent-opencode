@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from app.gateway.workspace_ids import build_managed_local_workspace_id
-
 import asyncio
 import json
 from pathlib import Path
@@ -10,13 +8,13 @@ import httpx
 import pytest
 
 from tests.integration.stubs.http_stubs import generation_target_stub
+from tests.support.ports import integration_port_block_for_file
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
     close_gateway_process,
     reset_gateway_persistent_state,
     start_gateway_process,
 )
-from tests.support.ports import integration_port_block_for_file
 from tests.support.processes.workspace import workspace_backend_id_for_root
 
 
@@ -139,11 +137,14 @@ async def test_generator_crud_preview_and_idempotent_manual_run(
                     },
                 )
                 assert add_target_response.status_code == 200, add_target_response.text
-                workspace_id = next(
-                    item["workspace_id"]
+                registered = [
+                    item
                     for item in add_target_response.json()["data"]["items"]
-                    if item["workspace_id"] == build_managed_local_workspace_id(str(target_workspace))
-                )
+                    if item["backend_workspace_id"] == workspace_backend_id_for_root(target_workspace)
+                ]
+                assert len(registered) == 1, add_target_response.text
+                workspace_id = registered[0]["workspace_id"]
+                assert registered[0]["backend_url"] == f"http://127.0.0.1:{target_port}"
 
                 preview_response = await client.post(
                     "/api/gateway/session-generators/preview-placement",
@@ -220,6 +221,9 @@ async def test_generator_crud_preview_and_idempotent_manual_run(
                 first_run = run_response.json()["data"]
                 assert first_run["status"] in {"running", "completed"}
                 assert len(first_run["outputs"]) == 1
+                assert set(first_run["outputs"][0]) == {
+                    "kind", "workspace_id", "session_id", "title", "navigation_path",
+                }
                 completed_run = await _wait_for_completed_run(
                     client,
                     generator_id,
@@ -271,6 +275,10 @@ async def test_generator_crud_preview_and_idempotent_manual_run(
                 assert json.loads(run_path.read_text(encoding="utf-8"))[
                     "idempotency_key"
                 ] == "generator-control-e2e-key"
+                assert json.loads(run_path.read_text(encoding="utf-8"))["outputs"] == (
+                    completed_run["outputs"]
+                )
+                assert "storage_relative_path" not in run_path.read_text(encoding="utf-8")
 
                 delete_response = await client.delete(
                     f"/api/gateway/session-generators/{generator_id}"
@@ -376,11 +384,14 @@ async def test_generator_rejects_split_execution_then_runs_on_cross_workspace_mo
                     },
                 )
                 assert add_response.status_code == 200, add_response.text
-                secondary_workspace_id = next(
-                    item["workspace_id"]
+                registered = [
+                    item
                     for item in add_response.json()["data"]["items"]
-                    if item["workspace_id"] == build_managed_local_workspace_id(str(secondary_workspace))
-                )
+                    if item["backend_workspace_id"] == workspace_backend_id_for_root(secondary_workspace)
+                ]
+                assert len(registered) == 1, add_response.text
+                secondary_workspace_id = registered[0]["workspace_id"]
+                assert registered[0]["backend_url"] == f"http://127.0.0.1:{secondary_port}"
                 create_response = await client.post(
                     "/api/gateway/session-generators",
                     json=_definition_payload(

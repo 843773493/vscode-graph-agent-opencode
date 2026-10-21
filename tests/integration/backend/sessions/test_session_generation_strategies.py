@@ -119,7 +119,9 @@ async def _execute_new_owner(
     try:
         response = await client.post("/api/v1/session-generations/execute", json=payload)
         assert response.status_code == 200, response.text
-        session_id = response.json()["data"]["outputs"][0]["session_id"]
+        output = response.json()["data"]["outputs"][0]
+        assert set(output) == {"kind", "workspace_id", "session_id", "title", "navigation_path"}
+        session_id = output["session_id"]
         call_id = await _plan_reply(client, replay, session_id)
         return response, call_id
     finally:
@@ -390,6 +392,22 @@ async def test_new_per_run_is_idempotent_and_creates_cataloged_session(
         (generation_backend[1] / ".boxteam" / "generation-runs").glob("*/*.json")
     )
     assert len(ledger_files) == 1
+    ledger = json.loads(ledger_files[0].read_text(encoding="utf-8"))
+    assert ledger["result"]["outputs"] == first["outputs"]
+    assert "storage_relative_path" not in ledger_files[0].read_text(encoding="utf-8")
+    original = ledger_files[0].read_bytes()
+    ledger["result"]["outputs"][0]["storage_relative_path"] = "2026/10/21/private-generation-locator"
+    ledger_files[0].write_text(json.dumps(ledger), encoding="utf-8")
+    rejected_bytes = ledger_files[0].read_bytes()
+    try:
+        rejected = await generation_client.post("/api/v1/session-generations/execute", json=payload)
+        assert rejected.status_code == 400, rejected.text
+        assert "storage_relative_path" in rejected.text
+        assert "2026/10/21/private-generation-locator" not in rejected.text
+        assert rejected.headers["x-request-id"] == rejected.json()["request_id"]
+        assert ledger_files[0].read_bytes() == rejected_bytes
+    finally:
+        ledger_files[0].write_bytes(original)
 
 
 @pytest.mark.asyncio

@@ -495,12 +495,14 @@ message GatewayWorkspaceListDTO {
 }
 
 message GenerationOutputDTO {
+  reserved 6;
+  reserved "storage_relative_path";
+
   optional string kind = 1;
   string workspace_id = 2;
   string session_id = 3;
   optional string title = 4;
   repeated string navigation_path = 5;
-  optional string storage_relative_path = 6;
 }
 
 message GenerationRunDTO {

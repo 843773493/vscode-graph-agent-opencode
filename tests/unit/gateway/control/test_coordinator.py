@@ -1,11 +1,44 @@
 from __future__ import annotations
 
+import json
+from datetime import UTC, datetime
+from pathlib import Path
+
 import httpx
 import pytest
+from pydantic import ValidationError
 
 from app.gateway.control.coordinator import SessionGeneratorCoordinator
+from app.gateway.control.generators import SessionGeneratorStore
 from app.gateway.registry import WorkspaceTarget
-from app.schemas.gateway_control import GeneratorDefinitionCreateRequest
+from app.schemas.gateway_control import (
+    GenerationOutputDTO,
+    GenerationRunDTO,
+    GeneratorDefinitionCreateRequest,
+)
+
+
+@pytest.mark.parametrize("read_method", ["get", "list"])
+def test_gateway_generation_run_cold_read_rejects_physical_locator(tmp_path: Path, read_method: str) -> None:
+    run = GenerationRunDTO(
+        run_id="grun_old", generator_id="gen_old", idempotency_key="old",
+        status="completed", trigger_type="manual", scheduled_for=datetime.now(UTC),
+        outputs=[GenerationOutputDTO(workspace_id="gw_old", session_id="ses_old")],
+    )
+    store = SessionGeneratorStore(root=tmp_path)
+    store.write_run(run)
+    path = tmp_path / "generation-runs/gen_old/grun_old.json"
+    record = json.loads(path.read_text(encoding="utf-8"))
+    record["outputs"][0]["storage_relative_path"] = "2026/10/21/ses_old"
+    path.write_text(json.dumps(record), encoding="utf-8")
+    before = path.read_bytes()
+    with pytest.raises(ValidationError, match="storage_relative_path") as captured:
+        if read_method == "get":
+            store.get_run(run.generator_id, run.run_id)
+        else:
+            store.list_runs(run.generator_id)
+    assert "2026/10/21/ses_old" not in str(captured.value)
+    assert path.read_bytes() == before
 
 
 class _Registry:

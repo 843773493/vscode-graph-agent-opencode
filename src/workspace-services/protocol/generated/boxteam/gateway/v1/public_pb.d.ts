@@ -2115,11 +2115,6 @@ export declare type GenerationOutputDTO = Message<"boxteam.gateway.v1.Generation
    * @generated from field: repeated string navigation_path = 5;
    */
   navigationPath: string[];
-
-  /**
-   * @generated from field: optional string storage_relative_path = 6;
-   */
-  storageRelativePath?: string | undefined;
 };
 
 /**

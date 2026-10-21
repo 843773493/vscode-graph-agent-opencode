@@ -497,7 +497,6 @@ export interface GenerationOutputDTO {
   session_id: string;
   title?: string | undefined;
   navigation_path: string[];
-  storage_relative_path?: string | undefined;
 }
 
 export interface GenerationRunDTO {
@@ -3966,14 +3965,7 @@ export const GatewayWorkspaceListDTO: MessageFns<GatewayWorkspaceListDTO> = {
 };
 
 function createBaseGenerationOutputDTO(): GenerationOutputDTO {
-  return {
-    kind: undefined,
-    workspace_id: "",
-    session_id: "",
-    title: undefined,
-    navigation_path: [],
-    storage_relative_path: undefined,
-  };
+  return { kind: undefined, workspace_id: "", session_id: "", title: undefined, navigation_path: [] };
 }
 
 export const GenerationOutputDTO: MessageFns<GenerationOutputDTO> = {
@@ -3986,9 +3978,6 @@ export const GenerationOutputDTO: MessageFns<GenerationOutputDTO> = {
       navigation_path: globalThis.Array.isArray(object?.navigation_path)
         ? object.navigation_path.map((e: any) => globalThis.String(e))
         : [],
-      storage_relative_path: isSet(object.storage_relative_path)
-        ? globalThis.String(object.storage_relative_path)
-        : undefined,
     };
   },
 
@@ -4009,9 +3998,6 @@ export const GenerationOutputDTO: MessageFns<GenerationOutputDTO> = {
     if (message.navigation_path?.length) {
       obj.navigation_path = message.navigation_path;
     }
-    if (message.storage_relative_path !== undefined) {
-      obj.storage_relative_path = message.storage_relative_path;
-    }
     return obj;
   },
 
@@ -4025,7 +4011,6 @@ export const GenerationOutputDTO: MessageFns<GenerationOutputDTO> = {
     message.session_id = object.session_id ?? "";
     message.title = object.title ?? undefined;
     message.navigation_path = object.navigation_path?.map((e) => e) || [];
-    message.storage_relative_path = object.storage_relative_path ?? undefined;
     return message;
   },
 };

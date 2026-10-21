@@ -339,7 +339,7 @@ export default function SessionGeneratorManager({
                       <span><strong>{run.status}</strong> · {run.run_id}</span>
                       {run.outputs.map((output) => (
                         <small key={`${output.workspace_id}:${output.session_id}`}>
-                          {output.title || output.session_id} · {output.storage_relative_path || output.navigation_path.join("/") || "工作区根"}
+                          {output.title || output.session_id} · {output.navigation_path.join("/") || "工作区根"}
                         </small>
                       ))}
                       {run.error ? <small className="session-resource-error">{run.error}</small> : null}
