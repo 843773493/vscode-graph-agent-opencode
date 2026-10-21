@@ -634,28 +634,36 @@ export function pruneReconciledCatalogOutbox(
   const selectedOperationIds = operationIds === undefined
     ? null
     : new Set(operationIds);
+  const retained = outbox.operations.filter((operation) => {
+    if (selectedOperationIds && !selectedOperationIds.has(operation.client_operation_id)) {
+      return true;
+    }
+    if (!catalogOutboxOperationIsTerminal(operation)) return true;
+    if (operation.settlement === "pending" || operation.settlement === "repair_required") return true;
+    if (operation.committed_catalog_revision === null) {
+      return operation.state !== "rejected"
+        && operation.state !== "cancelled"
+        && operation.state !== "dependency_failed";
+    }
+    return operation.committed_catalog_revision > reconciledCatalogRevision;
+  });
+  // 已终态的后继也可能尚未对账，或不在本次清理范围；它保留时，整条前置链必须保留。
+  const byId = new Map(outbox.operations.map((operation) => [operation.client_operation_id, operation]));
+  const retainedIds = new Set(retained.map((operation) => operation.client_operation_id));
+  for (let index = 0; index < retained.length; index += 1) {
+    const operation = retained[index]!;
+    const dependencies = operation.created_by_operation_id === null
+      ? operation.depends_on : [...operation.depends_on, operation.created_by_operation_id];
+    for (const dependency of dependencies) {
+      const parent = byId.get(dependency);
+      if (parent && !retainedIds.has(dependency)) {
+        retainedIds.add(dependency);
+        retained.push(parent);
+      }
+    }
+  }
   return {
     ...outbox,
-    operations: outbox.operations.filter((operation) => {
-      if (selectedOperationIds && !selectedOperationIds.has(operation.client_operation_id)) {
-        return true;
-      }
-      if (!catalogOutboxOperationIsTerminal(operation)) return true;
-      if (operation.settlement === "pending" || operation.settlement === "repair_required") return true;
-      // committed Folder 是后继跨批依赖的 durable 前置；即使 catalog revision 已追上，
-      // 也要保留到所有引用者进入终态，否则 prune 会删掉 planner 唯一可见的 acceptance。
-      const hasUnsettledDependent = outbox.operations.some((dependent) =>
-        !catalogOutboxOperationIsTerminal(dependent)
-        && (dependent.depends_on.includes(operation.client_operation_id)
-          || dependent.created_by_operation_id === operation.client_operation_id),
-      );
-      if (hasUnsettledDependent) return true;
-      if (operation.committed_catalog_revision === null) {
-        return operation.state !== "rejected"
-          && operation.state !== "cancelled"
-          && operation.state !== "dependency_failed";
-      }
-      return operation.committed_catalog_revision > reconciledCatalogRevision;
-    }),
+    operations: outbox.operations.filter((operation) => retainedIds.has(operation.client_operation_id)),
   };
 }

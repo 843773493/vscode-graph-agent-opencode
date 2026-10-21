@@ -463,6 +463,33 @@ describe("会话目录 outbox 对账", () => {
       .map((item) => item.client_operation_id)).toEqual([opId("a")]);
   });
 
+  test.each([
+    { revision: 10, selected: undefined },
+    { revision: 11, selected: [opId("parent"), opId("child"), opId("a")] },
+  ])("保留已提交命令的传递前置，revision=$revision selected=$selected", ({ revision, selected }) => {
+    let outbox = outboxWithRename();
+    outbox = addCatalogOutboxIntent(outbox, opId("parent"), {
+      kind: "create_folder", name: "父目录", parentNodeId: null,
+    }, { baseCatalogRevision: 7 });
+    outbox = addCatalogOutboxIntent(outbox, opId("child"), {
+      kind: "create_folder", name: "子目录", parentCreatedByOperationId: opId("parent"),
+    }, { baseCatalogRevision: 7 });
+    outbox = addCatalogOutboxIntent(outbox, opId("move"), {
+      kind: "move_node", targetNodeId: "session-1", parentCreatedByOperationId: opId("child"),
+    }, { baseCatalogRevision: 7, expectedRevision: 1, dependsOn: [opId("child")] });
+    outbox = applyCatalogOutboxReceipts(outbox, [
+      receipt(opId("a"), { state: "committed", committed_catalog_revision: 8 }),
+      receipt(opId("parent"), { kind: "create_folder", state: "committed", created_node_id: "folder-parent", committed_catalog_revision: 9 }),
+      receipt(opId("child"), { kind: "create_folder", state: "committed", created_node_id: "folder-child", committed_catalog_revision: 10 }),
+      receipt(opId("move"), { kind: "move_node", state: "committed", committed_catalog_revision: 11 }),
+    ]);
+
+    const pruned = pruneReconciledCatalogOutbox(outbox, revision, selected);
+    expect(pruned.operations.map((item) => item.client_operation_id))
+      .toEqual([opId("parent"), opId("child"), opId("move")]);
+    expect(pruneReconciledCatalogOutbox(pruned, 11).operations).toEqual([]);
+  });
+
   test("逻辑删除保留到晚到 settled，旧回执不能覆盖 repair 或撤销 committed", () => {
     let outbox = addCatalogOutboxIntent(createCatalogOutbox(LOCAL_PARTITION), opId("delete"),
       { kind: "delete_folder", targetNodeId: "node-1", recursive: true },

@@ -3894,6 +3894,8 @@ async function runNavigationOptimism(surfaces) {
   let peerContext;
   let restoreDirectoryPermissions;
   let eventTransport;
+  const transportReads = new Set();
+  let scenarioError;
   const settledDeletionDom = async (deletedIds) => {
     const catalog = (await ownerApi(surface, "/api/v1/session-catalog/export")).data;
     const deleted = new Set(deletedIds);
@@ -4194,7 +4196,6 @@ async function runNavigationOptimism(surfaces) {
     await peerPage.goto("about:blank", { waitUntil: "load" });
     const eventWire = { activitySseDropped: [], pages: [], transportErrors: [] };
     facts.eventRecovery = { eventWire };
-    const transportReads = new Set();
     let holdEventPage = false;
     let heldEventPage;
     let queryAfter;
@@ -4326,8 +4327,10 @@ async function runNavigationOptimism(surfaces) {
     assert.equal(await catalogRow(peer, independent.nodeId).count(), 1);
     assert.ifError(transportError);
     facts.eventRecovery = { withoutSse, withoutSseReceipt, delayedPage, newer, newerReceipt, newerSnapshot, eventWire };
-    await eventTransport.send("Fetch.disable");
+    // 先停止接收新拦截并排空已接收回调；Fetch 关闭会让尚在读正文的回调失败。
+    eventTransport.removeAllListeners("Fetch.requestPaused");
     await Promise.all([...transportReads]);
+    await eventTransport.send("Fetch.disable");
     await eventTransport.detach();
     eventTransport = null;
     await peerContext.close();
@@ -4448,7 +4451,6 @@ async function runNavigationOptimism(surfaces) {
     await waitUntil(async () => !(await browserCatalogOutbox(surface)).some((record) => record.operation.client_operation_id === repairDelete.operationId), "同一删除已修复并确认后清除 outbox");
     const repairDom = await settledDeletionDom(JSON.parse(repairJournal.frozen_node_ids).map((node) => node.node_id));
     facts.repair = { repairDelete, repairJournal, repairPendingReceipt, repairReceipt, repairDisk, repairKilled, repairRestarted, repairedReceipt, repairedJournal, repairDom };
-    // TODO: 本场景的新增传输、分页与 repair driver 仍须通过真实产品运行。
     await Promise.all([...wireReads]);
     for (const receipt of facts.receipts.filter((entry) => entry.body)) {
       assert.equal(receipt.status, 202);
@@ -4457,19 +4459,36 @@ async function runNavigationOptimism(surfaces) {
     }
     assert.ok(facts.requests.every((request) => request.workspaceId === surface.gatewayWorkspaceId));
     return facts;
+  } catch (error) {
+    scenarioError = error;
+    throw error;
   } finally {
-    if (restoreDirectoryPermissions) await restoreDirectoryPermissions();
+    const cleanupErrors = [];
+    const cleanup = async (releaseResource) => {
+      try {
+        await releaseResource();
+      } catch (error) {
+        cleanupErrors.push(error);
+      }
+    };
+    if (restoreDirectoryPermissions) await cleanup(restoreDirectoryPermissions);
     if (eventTransport) {
-      await eventTransport.send("Fetch.disable");
-      await eventTransport.detach();
+      eventTransport.removeAllListeners("Fetch.requestPaused");
+      await cleanup(() => Promise.all([...transportReads]));
+      await cleanup(() => eventTransport.send("Fetch.disable"));
+      await cleanup(() => eventTransport.detach());
     }
-    for (const barrier of held) await release(barrier);
-    for (const barrier of exactHeld) await testControl({ action: "release", ...barrier });
+    for (const barrier of held) await cleanup(() => release(barrier));
+    for (const barrier of exactHeld) await cleanup(() => testControl({ action: "release", ...barrier }));
     for (const { page, request, response } of wirePages) {
       page.off("request", request);
       page.off("response", response);
     }
-    if (peerContext) await peerContext.close();
+    if (peerContext) await cleanup(() => peerContext.close());
+    if (cleanupErrors.length > 0) {
+      throw new AggregateError(scenarioError === undefined ? cleanupErrors : [scenarioError, ...cleanupErrors],
+        "导航验收清理失败；保留场景和全部资源释放错误");
+    }
   }
 }
 

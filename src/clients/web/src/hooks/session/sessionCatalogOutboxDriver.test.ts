@@ -1195,6 +1195,39 @@ describe("会话目录 outbox 驱动：未知结果与对账", () => {
     expect(deleted).toEqual([[opId("a")]]);
   });
 
+  test.each([10, 11])("部分对账后重开仍保留 terminal 移动的父创建记录，revision=%s", async (revision) => {
+    const persistence = recordingPort();
+    let pending = addCatalogOutboxIntent(createCatalogOutbox(PARTITION), opId("parent"), {
+      kind: "create_folder", name: "父目录", parentNodeId: null,
+    }, { baseCatalogRevision: 7 });
+    pending = addCatalogOutboxIntent(pending, opId("move"), {
+      kind: "move_node", targetNodeId: "session-1", parentCreatedByOperationId: opId("parent"),
+    }, { baseCatalogRevision: 7, expectedRevision: 1 });
+    for (const operation of pending.operations) await persistence.insert(PARTITION_KEY, operation);
+    await persistence.applyReceipts(PARTITION_KEY, [
+      receipt(opId("parent"), { kind: "create_folder", state: "committed", created_node_id: "folder-parent", committed_catalog_revision: 9 }),
+      receipt(opId("move"), { kind: "move_node", state: "committed", committed_catalog_revision: 11 }),
+    ]);
+    const makeDriver = () => createSessionCatalogOutboxDriver({
+      port: PORT, gatewayWorkspaceId: GATEWAY_WORKSPACE_ID, workspaceTarget: WORKSPACE_TARGET,
+      partition: PARTITION, persistence,
+      adapter: {
+        async enqueue() { throw new Error("重开不应创建新的导航命令"); },
+        async queryStatus() { throw new Error("本次只核已落盘的 terminal 记录"); },
+      },
+    });
+    const driver = makeDriver();
+    await driver.restore();
+    await driver.prune(revision, revision === 11 ? [opId("parent")] : undefined);
+    const reopened = makeDriver();
+    const restored = await reopened.restore();
+    expect(restored.operations.map((operation) => operation.client_operation_id))
+      .toEqual([opId("parent"), opId("move")]);
+    expect(restored.operations[1]!.created_by_operation_id).toBe(opId("parent"));
+    await reopened.prune(11);
+    expect(await persistence.load(PARTITION_KEY)).toEqual([]);
+  });
+
   test("剪枝等待持久删除时保留并发新增的命令", async () => {
     const base = recordingPort();
     const deleteStarted = deferred<void>();
