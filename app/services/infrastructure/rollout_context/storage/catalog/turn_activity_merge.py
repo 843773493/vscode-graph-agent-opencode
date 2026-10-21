@@ -31,7 +31,7 @@ def _merge_activity_items(
 ) -> tuple[dict[str, set[int]], dict[str, set[tuple[str | None, str]]]]:
     """归并 canonical activity item，返回 shadow 索引与 reasoning 源引用表。"""
 
-    tool_by_message: dict[tuple[str, str], list[dict[str, object]]] = {}
+    tool_by_item: dict[tuple[str, str], list[dict[str, object]]] = {}
     tool_by_call_id: dict[tuple[str, str | None, str], dict[str, object]] = {}
     tool_by_model_call_index: dict[tuple[str, str, int], dict[str, object]] = {}
     canonical_tools_by_model_call: dict[
@@ -39,7 +39,7 @@ def _merge_activity_items(
     ] = {}
     for (
         turn_id,
-        message_id,
+        anchor_item_id,
         call_id,
         name,
         status,
@@ -49,7 +49,7 @@ def _merge_activity_items(
         tool_projection_manifest_json,
     ) in tool_rows:
         turn_id = strict_text(turn_id, field="messages.turn_id")
-        message_id = strict_text(message_id, field="messages.message_id")
+        anchor_item_id = strict_text(anchor_item_id, field="item_catalog.item_id")
         call_id = strict_text(call_id, field=f"tool_calls.tool_call_id:{turn_id}")
         tool = {
             "tool_call_id": call_id,
@@ -70,7 +70,7 @@ def _merge_activity_items(
         tool_manifest = parse_item_projection_manifest(_json_object(tool_projection_manifest_json, field="item_catalog.projection_manifest_json:tool"))
         tool_identity = ItemProjectionIdentity.from_dict(tool_manifest["projection_identity"]) if tool_manifest["projection_identity"] is not None else None
         model_call_id = tool_identity.model_call_id if tool_identity is not None else None
-        tool_by_message.setdefault((turn_id, message_id), []).append(tool)
+        tool_by_item.setdefault((turn_id, anchor_item_id), []).append(tool)
         tool_by_call_id[(turn_id, model_call_id, call_id)] = tool
         tool_by_model_call_index[
             (turn_id, model_call_id, tool["call_index"])
@@ -169,7 +169,7 @@ def _merge_activity_items(
         projection_message_id = identity.projection_message_id if identity is not None else None
         activity_model_call_id = identity.model_call_id if identity is not None else None
         matching_tools = (
-            tool_by_message.get((turn_id, projection_message_id), [])
+            tool_by_item.get((turn_id, item_id), [])
             if isinstance(projection_message_id, str)
             else []
         )

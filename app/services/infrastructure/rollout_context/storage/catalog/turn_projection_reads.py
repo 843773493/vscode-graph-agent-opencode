@@ -90,7 +90,7 @@ class TurnProjectionReadMixin:
             ids,
         ).fetchall()
         tool_rows = connection.execute(
-            "SELECT m.turn_id, m.message_id, tc.tool_call_id, tc.tool_name, tc.status, "
+            "SELECT m.turn_id, ic.item_id, tc.tool_call_id, tc.tool_name, tc.status, "
             "tc.result_message_sequence, tc.assistant_message_sequence, tc.call_index, "
             "ic.projection_manifest_json FROM tool_calls tc "
             "JOIN messages m ON m.message_sequence = tc.assistant_message_sequence "

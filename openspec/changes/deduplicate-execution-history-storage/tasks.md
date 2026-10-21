@@ -56,3 +56,5 @@
 最终typed协议103条Saver/state测试通过（43.00秒），独立正文/身份patch损坏及全部pending边界18例通过；正式fork/protected矩阵20例通过；完整Gateway产品负载通过（222.79秒），原件冻结于`history-dedup-message-frozen-001/`，Ruff通过。优化前同负载源A35条messages pending正文60404字节，转换后35661字节；另两个owner分别28490→15126、51196→24454，行数均未改变。按summary_restart_continue相同阶段，全部pending正文78228→53485字节；不是assembly/view收益，也不能据单次耗时宣称性能改善。早期产品失败由新冻结集合遗漏目标synthetic checkpoint导致，精确补入后连续产品复验通过，未放宽业务断言。
 
 2026-10-21 精确消息定位前置片：request、pending、projection、final pointer、rewind和compaction统一用canonical anchor或冻结view解析消息；无坐标遇到多个版本必须报错，不猜latest。schema仍20、尚未开放同ID多版本，3.2不勾选。`history-dedup-exact-locators-001`157例通过（57.05秒），最终缺失canonical guard及compaction单测24例通过（4.60秒），Ruff及只读独审通过。完整Gateway负载`history-dedup-exact-locators-product-001`通过（225.45秒）；运行中仅将定位查询改为LEFT JOIN并增加悬空投影拒绝，健康路径相同，最终错误分支由24例补验，不冒充全程单一源码指纹。扩展compaction检查80例通过、1例因旧fixture声明scratchpad版本2却提供new_versions版本1失败，未进入本片定位代码；原件保留，不放宽版本合同。
+
+工具活动索引前置片：SQL与归并消费者统一按canonical anchor关联工具坐标，不再按logical message ID合并两个正文版本。`history-dedup-activity-version-001`17例通过（2.45秒），包含同logical ID不同anchor的局部投影；carrier专项及Ruff结果见同前缀原件。本片不开放多版本写入、不勾3.2。

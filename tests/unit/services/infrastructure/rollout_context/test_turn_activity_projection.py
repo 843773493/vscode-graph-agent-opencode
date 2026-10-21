@@ -559,3 +559,48 @@ def test_internal_content_cold_history_and_provider_keep_one_final_with_reasonin
     assert final.projection_identity.content_part_refs[1].index == 1
     assert final.provenance_relations[0].target_id == "lc_run--internal-content-model"
     assert len([item for item in raw if item.semantic_kind == "assistant_output" and item.item_id not in {entry.item_id for entry in independent}]) == 3
+
+
+@pytest.fixture
+def versioned_activity_rows():
+    """局部投影装具：相同 logical ID 的正文由不同 canonical anchor 标识。"""
+    import json
+
+    items = tuple(CanonicalItemRecord.create(
+        item_sequence=index, item_id=f"version-{index}", semantic_kind="tool_call",
+        payload_kind="tool_call", status="completed",
+        producer_ref={"producer_kind": "provider", "producer_id": f"producer-{index}"},
+        payload={"tool_calls": [{"id": f"call-{index}", "name": name, "args": {}}]},
+        created_at="2026-10-21T00:00:00+00:00", turn_id="turn", turn_scope="turn_member",
+        projection_identity=ItemProjectionIdentity(
+            projection_message_id="same-logical-id", model_call_id=f"model-{index}",
+        ),
+    ) for index, name in ((1, "read_file"), (2, "write_file")))
+    tools = [(
+        "turn", item.item_id, f"call-{index}", name, status, None, index, 0,
+        json.dumps(item.projection_manifest()),
+    ) for index, (item, name, status) in enumerate(zip(
+        items, ("read_file", "write_file"), ("completed", "running"), strict=True,
+    ), 1)]
+    activity = [(
+        "turn", item.item_sequence, item.item_id, item.semantic_kind, item.payload_kind,
+        item.status, item.created_at, json.dumps(dict(item.producer_ref)),
+        json.dumps(item.projection_manifest()), "工具调用", 0, None, index,
+    ) for index, item in enumerate(items)]
+    return tools, activity
+
+
+def test_tool_activity_uses_exact_canonical_version(versioned_activity_rows):
+    from app.services.infrastructure.rollout_context.storage.catalog.turn_activity_merge import (
+        _merge_activity_items,
+    )
+
+    tools, activity = versioned_activity_rows
+    result = {"turn": {"activity_items": []}}
+    _merge_activity_items(result, tools, activity)
+    assert [(
+        item["item_id"], item["tool_name"], item["status"], item["assistant_message_sequence"],
+    ) for item in result["turn"]["activity_items"]] == [
+        ("version-1", "read_file", "completed", 1),
+        ("version-2", "write_file", "running", 2),
+    ]
