@@ -42,6 +42,7 @@ async def stream_workspace_observations(
     queue: asyncio.Queue[WorkspaceObservationFrameDTO] = asyncio.Queue(maxsize=100)
 
     async def pump(source: WorkspaceObservationSource) -> None:
+        stage = "open"
         try:
             opened = await source.open()
             async with aclosing(opened.stream) as stream:
@@ -50,6 +51,7 @@ async def stream_workspace_observations(
                     state="connected",
                     cursor=opened.cursor,
                 ))
+                stage = "stream"
                 async for frame in stream:
                     await queue.put(WorkspaceObservationFrameDTO(
                         subscription_id=source.subscription_id,
@@ -60,8 +62,12 @@ async def stream_workspace_observations(
             if isinstance(error, WorkspaceObservationError):
                 status, detail = error.status, error.detail
             else:
-                logger.exception("Workspace 观察者失败: %s", source.subscription_id)
-                status, detail = 500, f"{type(error).__name__}: {error}"
+                logger.exception("Workspace 观察者失败: subscription=%s stage=%s", source.subscription_id, stage)
+                # 未声明的异常文本可能携带物理 locator；错误信封保留诊断字段，完整原因留在日志。
+                status, detail = 500, {
+                    "owner": "workspace_observation", "stage": stage,
+                    "type": type(error).__name__, "errno": error.errno if isinstance(error, OSError) else None,
+                }
             await queue.put(WorkspaceObservationFrameDTO(
                 subscription_id=source.subscription_id,
                 state="error",

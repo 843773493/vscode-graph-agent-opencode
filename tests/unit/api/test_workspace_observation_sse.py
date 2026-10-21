@@ -142,7 +142,9 @@ async def test_owner_runtime_error_is_visible_and_other_owner_keeps_streaming(
         await observation_sources.queues["files"].put(RuntimeError("watcher 失败"))
         error = await read_envelope(stream)
         assert error["subscription_id"] == "files" and error["status"] == 500
-        assert "watcher 失败" in json.loads(error["detail_json"])
+        assert json.loads(error["detail_json"]) == {
+            "owner": "workspace_observation", "stage": "stream", "type": "RuntimeError", "errno": None,
+        }
         await observation_sources.queues["activity"].put(": ping\n\n")
         assert (await read_envelope(stream))["frame"] == ": ping\n\n"
     finally:

@@ -7,18 +7,32 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from pathlib import Path
 from unittest.mock import Mock
 
+import httpx
 import pytest
+from fastapi import FastAPI
 
 from app.api import workspace as workspace_api
+from app.api import workspace_observation as observation_api
+from app.api.deps import (
+    get_config_service,
+    get_session_service,
+    get_workspace_activity_service,
+    get_workspace_file_watch_service,
+    get_workspace_service,
+    verify_local_token,
+)
 from app.api.workspace import stream_workspace_file_events
+from app.core.trace_middleware import TraceMiddleware
 from app.schemas.internal_v2.workspace import WorkspaceFileWatchRequest
 from app.services.infrastructure.config_service import ConfigService
 from app.services.infrastructure.workspace_file_watch_service import (
     WorkspaceFileChange,
     WorkspaceFileChangeBatch,
+    WorkspaceFileWatchService,
 )
 from app.services.infrastructure.workspace_service import WorkspaceService
 from tests.support.workspaces import prepare_default_test_workspace
@@ -221,3 +235,60 @@ async def test_real_watch_failure_keeps_native_path_in_log_only(
     finally:
         await response.body_iterator.aclose()
         await watcher.shutdown()
+
+
+@pytest.fixture
+async def file_observation_client(workspace_service: WorkspaceService):
+    watcher = WorkspaceFileWatchService(workspace_root=Path(workspace_service.root_path))
+    app = FastAPI()
+    app.add_middleware(TraceMiddleware)
+    app.include_router(observation_api.router, prefix="/api/v1")
+    app.dependency_overrides[get_workspace_service] = lambda: workspace_service
+    app.dependency_overrides[get_workspace_file_watch_service] = lambda: watcher
+    app.dependency_overrides[get_config_service] = lambda: object()
+    app.dependency_overrides[get_session_service] = lambda: object()
+    app.dependency_overrides[get_workspace_activity_service] = lambda: object()
+    app.dependency_overrides[verify_local_token] = lambda: "local-test"
+    try:
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://files.test") as client:
+            yield client
+    finally:
+        await watcher.shutdown()
+
+
+@pytest.mark.parametrize("stage", ["open", "stream"])
+@pytest.mark.parametrize("failure_kind", ["filesystem", "unexpected"])
+async def test_file_observation_failure_serialization_preserves_diagnostic_without_native_locator(
+    file_observation_client: httpx.AsyncClient, workspace_service: WorkspaceService,
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
+    stage: str, failure_kind: str,
+) -> None:
+    root = Path(workspace_service.root_path)
+    filename = str(root / "private-observer-sentinel.sqlite")
+    error = OSError(5, "Input/output error", filename) if failure_kind == "filesystem" else RuntimeError(
+        "损坏的文件观察状态: " + filename,
+    )
+
+    def fail(*_args, **_kwargs):
+        raise error
+
+    store = workspace_service.file_operations.store
+    monkeypatch.setattr(store, "latest_event_id" if stage == "open" else "events", fail)
+    response = await file_observation_client.post(
+        "/api/v1/workspace/observations/stream",
+        json={"subscriptions": [{"subscription_id": "files", "kind": "workspace_files"}]},
+        headers={"X-Request-ID": "file-observation-failure"},
+    )
+    assert response.status_code == 200
+    assert response.headers["X-Request-ID"] == "file-observation-failure"
+    frames = [json.loads(line[6:]) for line in response.text.splitlines() if line.startswith("data: ")]
+    assert [frame["state"] for frame in frames] == (["error"] if stage == "open" else ["connected", "error"])
+    failed = frames[-1]
+    assert (failed["subscription_id"], failed["status"]) == ("files", 500)
+    assert json.loads(failed["detail_json"]) == {
+        "owner": "workspace_observation", "stage": stage, "type": type(error).__name__,
+        "errno": error.errno if isinstance(error, OSError) else None,
+    }
+    assert str(root) not in response.text and filename not in response.text
+    assert filename in caplog.text
+    assert any(record.exc_info and record.exc_info[1] is error for record in caplog.records)
