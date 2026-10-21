@@ -45,9 +45,6 @@ from app.schemas.internal_v2.node_debug import (
 from app.services.infrastructure.external_resource_leases import (
     ExternalResourceLeaseLedger,
 )
-from app.services.infrastructure.node_debug.process import (
-    process_identity as node_debug_process_identity,
-)
 from app.services.infrastructure.node_debug.process.claim_runtime import (
     NodeDebugClaimRuntime,
 )
@@ -60,7 +57,6 @@ from app.services.infrastructure.node_debug.process.launch_claim import (
 from app.services.infrastructure.node_debug.process.process_identity import (
     IDENTITY_SOURCE_LINUX_PROC,
     NodeDebugProcessIdentity,
-    _probe_linux_proc_identity,
     probe_process_identity,
 )
 from app.services.infrastructure.node_debug.service import NodeDebugService
@@ -1271,46 +1267,3 @@ async def test_configuration_mutation_blocked_by_unsettled_claim(
             configuration_id,
             thread_id=_THREAD_ID,
         )
-
-
-def test_linux_proc_identity_reports_vanishing_entry_as_terminated(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """P2.4：读取 /proc 时条目消失按已核实终结收口，其余错误显式抛出。"""
-
-    class _VanishingStatPath:
-        def read_text(
-            self, encoding: str | None = None, errors: str | None = None
-        ) -> str:
-            raise FileNotFoundError(2, "No such file or directory")
-
-    class _VanishingPidDir:
-        def __truediv__(self, name: str) -> _VanishingStatPath:
-            return _VanishingStatPath()
-
-    class _VanishingProcRoot:
-        def __truediv__(self, name: str) -> _VanishingPidDir:
-            return _VanishingPidDir()
-
-    class _DeniedStatPath:
-        def read_text(
-            self, encoding: str | None = None, errors: str | None = None
-        ) -> str:
-            raise PermissionError(13, "Permission denied")
-
-    class _DeniedPidDir:
-        def __truediv__(self, name: str) -> _DeniedStatPath:
-            return _DeniedStatPath()
-
-    class _DeniedProcRoot:
-        def __truediv__(self, name: str) -> _DeniedPidDir:
-            return _DeniedPidDir()
-
-    monkeypatch.setattr(node_debug_process_identity, "_PROC_ROOT", _VanishingProcRoot())
-    # 进程在 read_text 期间消失：与"条目不存在"同一事实 ⇒ 已核实终结。
-    assert _probe_linux_proc_identity(4242) is None
-
-    monkeypatch.setattr(node_debug_process_identity, "_PROC_ROOT", _DeniedProcRoot())
-    # 非消失类读取错误仍然显式抛出，绝不默默吞掉。
-    with pytest.raises(PermissionError):
-        _probe_linux_proc_identity(4242)

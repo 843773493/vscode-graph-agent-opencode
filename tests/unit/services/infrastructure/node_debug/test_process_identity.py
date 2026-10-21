@@ -52,3 +52,46 @@ def test_linux_missing_proc_entry_is_authoritative(
     )
 
     assert probe_process_identity(4242) is None
+
+
+def test_linux_proc_identity_reports_vanishing_entry_as_terminated(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """读取 /proc 时条目消失按已核实终结收口，其余错误显式抛出。"""
+
+    class VanishingStatFile:
+        def read_text(
+            self, encoding: str | None = None, errors: str | None = None
+        ) -> str:
+            raise FileNotFoundError(2, "No such file or directory")
+
+    class VanishingProcessDirectory:
+        def __truediv__(self, name: str) -> VanishingStatFile:
+            return VanishingStatFile()
+
+    class VanishingProcRoot:
+        def __truediv__(self, name: str) -> VanishingProcessDirectory:
+            return VanishingProcessDirectory()
+
+    class DeniedStatFile:
+        def read_text(
+            self, encoding: str | None = None, errors: str | None = None
+        ) -> str:
+            raise PermissionError(13, "Permission denied")
+
+    class DeniedProcessDirectory:
+        def __truediv__(self, name: str) -> DeniedStatFile:
+            return DeniedStatFile()
+
+    class DeniedProcRoot:
+        def __truediv__(self, name: str) -> DeniedProcessDirectory:
+            return DeniedProcessDirectory()
+
+    monkeypatch.setattr(process_identity, "_PROC_ROOT", VanishingProcRoot())
+    # 进程在 read_text 期间消失：与"条目不存在"同一事实 ⇒ 已核实终结。
+    assert process_identity._probe_linux_proc_identity(4242) is None
+
+    monkeypatch.setattr(process_identity, "_PROC_ROOT", DeniedProcRoot())
+    # 非消失类读取错误仍然显式抛出，绝不默默吞掉。
+    with pytest.raises(PermissionError):
+        process_identity._probe_linux_proc_identity(4242)
