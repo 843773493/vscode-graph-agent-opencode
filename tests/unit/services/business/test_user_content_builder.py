@@ -10,6 +10,9 @@ import pytest
 from app.agents.provider_capabilities import (
     detect_required_capabilities,
 )
+from app.core.resource_uri import resource_display_uri
+from app.core.trace_middleware import get_current_gateway_id
+from app.core.workspace_identity import read_workspace_id
 from app.schemas.internal_v2.message import AttachmentRef
 from app.services.business.user_content_builder import UserContentBuilder
 
@@ -34,18 +37,31 @@ def _build_user_content(
     ).content
 
 
-def test_user_content_builder_converts_workspace_image_attachment(workspace_scope):
+def _file_uri(root: Path, *parts: str) -> str:
+    return resource_display_uri(
+        scope="workspace", scope_id=read_workspace_id(root), kind="files",
+        tail_segments=("root", *parts), gateway_authority=get_current_gateway_id(),
+    )
+
+
+@pytest.mark.parametrize("entry", ["relative", "absolute", "uri"])
+def test_user_content_builder_converts_workspace_image_attachment(
+    empty_workspace_scope: tuple[str, Path],
+    entry: str,
+):
     """图片附件应被转换成 OpenAI-compatible image_url content block。"""
-    workspace_root = workspace_scope[1]
+    workspace_root = empty_workspace_scope[1]
     image_path = workspace_root / "assets" / "test.jpg"
     image_path.parent.mkdir(parents=True, exist_ok=True)
     image_path.write_bytes(_image_bytes("JPEG", (1600, 900)))
+    uri = _file_uri(workspace_root, "assets", "test.jpg")
+    value = {"relative": "assets/test.jpg", "absolute": str(image_path), "uri": uri}[entry]
 
     content = _build_user_content(
         "请描述图片",
         [
             AttachmentRef(
-                file_id="assets/test.jpg",
+                file_id=value,
                 name="test.jpg",
                 content_type="image/jpeg",
             )
@@ -55,9 +71,11 @@ def test_user_content_builder_converts_workspace_image_attachment(workspace_scop
     assert isinstance(content, list)
     assert content[0] == {"type": "text", "text": "请描述图片"}
     assert content[1]["type"] == "text"
-    assert "path=\"assets/test.jpg\"" in str(content[1]["text"])
+    assert f'path="{_file_uri(workspace_root, "assets", "test.jpg")}"' in str(content[1]["text"])
     assert "preview_status=\"available\"" in str(content[1]["text"])
     assert content[1]["metadata"]["kind"] == "attachment_manifest"
+    assert content[1]["metadata"]["file_id"] == uri
+    assert str(workspace_root) not in str(content)
     assert content[2]["type"] == "image_url"
     assert content[2]["metadata"]["kind"] == "attachment_preview"
     image_url = content[2]["image_url"]
@@ -72,7 +90,9 @@ def test_user_content_builder_converts_workspace_image_attachment(workspace_scop
     assert len(preview_bytes) < len(image_path.read_bytes())
 
 
-def test_user_content_builder_rejects_unpersisted_inline_image(workspace_scope):
+def test_user_content_builder_rejects_unpersisted_inline_image(
+    empty_workspace_scope: tuple[str, Path],
+):
     """Agent 运行时只接受已经持久化的附件定位符。"""
     data_url = "data:image/jpeg;base64,/9j/2Q=="
 
@@ -87,12 +107,12 @@ def test_user_content_builder_rejects_unpersisted_inline_image(workspace_scope):
                     data_url=data_url,
                 )
             ],
-            workspace_root=workspace_scope[1],
+            workspace_root=empty_workspace_scope[1],
         )
 
 
 def test_user_content_builder_converts_workspace_video_attachment_to_frames(
-    workspace_scope,
+    empty_workspace_scope: tuple[str, Path],
 ):
     """视频附件应被转换成按时间顺序排列的 image_url 关键帧块。"""
     if shutil.which("ffmpeg") is None:
@@ -108,7 +128,7 @@ def test_user_content_builder_converts_workspace_video_attachment_to_frames(
         / "assets"
         / "multimodal-test.mp4"
     )
-    workspace_root = workspace_scope[1]
+    workspace_root = empty_workspace_scope[1]
     assets = workspace_root / "assets"
     assets.mkdir(exist_ok=True)
     shutil.copy2(video_source, assets / "multimodal-test.mp4")
@@ -127,7 +147,7 @@ def test_user_content_builder_converts_workspace_video_attachment_to_frames(
     assert isinstance(content, list)
     assert content[0] == {"type": "text", "text": "请描述视频"}
     assert content[1]["type"] == "text"
-    assert "path=\"assets/multimodal-test.mp4\"" in str(content[1]["text"])
+    assert f'path="{_file_uri(workspace_root, "assets", "multimodal-test.mp4")}"' in str(content[1]["text"])
     assert content[1]["metadata"]["kind"] == "attachment_manifest"
     image_blocks = [
         block
@@ -142,10 +162,11 @@ def test_user_content_builder_converts_workspace_video_attachment_to_frames(
     )
 
 
-def test_user_content_builder_labels_multiple_attachments_in_order(tmp_path):
+def test_user_content_builder_labels_multiple_attachments_in_order(empty_workspace_scope):
     """多附件应向模型显式标注序号和文件名，避免最终回复把附件合并理解。"""
-    assets = tmp_path / "assets"
-    assets.mkdir()
+    workspace_root = empty_workspace_scope[1]
+    assets = workspace_root / "assets"
+    assets.mkdir(exist_ok=True)
     (assets / "first.jpg").write_bytes(_image_bytes("JPEG"))
     (assets / "second.png").write_bytes(_image_bytes("PNG"))
     content = _build_user_content(
@@ -162,7 +183,7 @@ def test_user_content_builder_labels_multiple_attachments_in_order(tmp_path):
                 content_type="image/png",
             ),
         ],
-        workspace_root=tmp_path,
+        workspace_root=workspace_root,
     )
 
     assert isinstance(content, list)
@@ -179,8 +200,8 @@ def test_user_content_builder_labels_multiple_attachments_in_order(tmp_path):
         "second.png",
     ]
     assert [block["metadata"]["path"] for block in manifest_blocks] == [
-        "assets/first.jpg",
-        "assets/second.png",
+        _file_uri(workspace_root, "assets", "first.jpg"),
+        _file_uri(workspace_root, "assets", "second.png"),
     ]
 
 
@@ -212,8 +233,9 @@ def test_generated_attachment_preview_is_optional_for_capability_routing():
     ) == {"text_input"}
 
 
-def test_user_content_builder_keeps_generic_file_as_manifest_only(tmp_path):
-    document = tmp_path / "report.pdf"
+def test_user_content_builder_keeps_generic_file_as_manifest_only(empty_workspace_scope):
+    workspace_root = empty_workspace_scope[1]
+    document = workspace_root / "report.pdf"
     document.write_bytes(b"%PDF-1.7")
 
     content = _build_user_content(
@@ -225,7 +247,7 @@ def test_user_content_builder_keeps_generic_file_as_manifest_only(tmp_path):
                 content_type="application/pdf",
             )
         ],
-        workspace_root=tmp_path,
+        workspace_root=workspace_root,
     )
 
     assert isinstance(content, list)
@@ -235,20 +257,21 @@ def test_user_content_builder_keeps_generic_file_as_manifest_only(tmp_path):
     assert not any(block.get("type") == "image_url" for block in content)
 
 
-def test_user_content_builder_reports_preview_failure_without_losing_path(tmp_path):
-    image_path = tmp_path / "broken.png"
+def test_user_content_builder_reports_preview_failure_without_losing_path(empty_workspace_scope):
+    workspace_root = empty_workspace_scope[1]
+    image_path = workspace_root / "broken.png"
     image_path.write_bytes(b"not-an-image")
 
     content = _build_user_content(
         "请检查附件",
         [
             AttachmentRef(
-                file_id="broken.png",
+                file_id=str(image_path),
                 name='危险"文件.png',
                 content_type="image/png",
             )
         ],
-        workspace_root=tmp_path,
+        workspace_root=workspace_root,
     )
 
     assert isinstance(content, list)
@@ -257,3 +280,4 @@ def test_user_content_builder_reports_preview_failure_without_losing_path(tmp_pa
     assert manifest["metadata"]["preview_status"] == "failed"
     assert 'name="危险&quot;文件.png"' in str(manifest["text"])
     assert not any(block.get("type") == "image_url" for block in content)
+    assert str(workspace_root) not in str(content)

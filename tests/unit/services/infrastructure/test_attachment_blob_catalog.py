@@ -87,7 +87,6 @@ from app.services.infrastructure.rollout_context.runtime.context_sources.context
 from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_manager import (
     ContextSourceManager,
 )
-
 from tests.support.rollout_view_mutations import mutate_view_members
 
 SESSION_A = "ses_019b781159d47374805bc4427d081a14"
@@ -1237,3 +1236,38 @@ async def test_model_attachment_capability_normalizes_only_current_gateway(attac
                 case.saver.read_tool_call_attachment(SESSION_A, file_id=foreign, **read)
     finally:
         reset_current_gateway_id(token)
+
+
+@pytest.mark.asyncio
+async def test_preview_cache_io_error_keeps_uri_and_errno_in_generated_diagnostics(
+    tmp_path, session_bundle_factory, monkeypatch,
+) -> None:
+    import errno
+
+    from app.services.infrastructure.attachment_blob_catalog import (
+        store as store_module,
+    )
+
+    store = _store(tmp_path, session_bundle_factory, SESSION_A)
+    buffer = BytesIO()
+    Image.new("RGB", (64, 64)).save(buffer, format="PNG")
+    attachment = (await store.persist_inline(
+        SESSION_A, [_attach("preview.png", "image/png", buffer.getvalue())],
+        thread_id=store._path_resolver.main_thread_id(SESSION_A),
+    ))[0]
+
+    def denied_write(target, data):
+        raise PermissionError(errno.EACCES, "Permission denied", str(target))
+
+    monkeypatch.setattr(store_module, "_write_once", denied_write)
+    try:
+        built = UserContentBuilder(attachment_service=AttachmentContentService(
+            workspace_root=tmp_path, attachment_store=store,
+        )).build("读取附件", [attachment])
+        assert built.diagnostics[0]["file_id"] == attachment.file_id
+        assert "Errno 13" in built.diagnostics[0]["detail"]
+        assert attachment.file_id in built.diagnostics[0]["detail"]
+        assert str(tmp_path) not in str(built)
+        assert built.content[1]["metadata"]["preview_status"] == "failed"
+    finally:
+        store.close()

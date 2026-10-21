@@ -348,7 +348,10 @@ class AttachmentBlobStore(ForkAttachmentStoreMixin):
         """按逻辑引用读取正文；逐字节复验 digest/length。"""
         ref, blob = self._resolve_published(session_id, file_id, owner_thread_id=owner_thread_id)
         path = self._verified_blob_path(blob.blob_id, blob.relative_locator)
-        data = path.read_bytes()
+        try:
+            data = path.read_bytes()
+        except OSError as error:
+            raise OSError(error.errno, error.strerror, file_id) from error
         _verify_content(data, blob.digest, blob.length, blob.blob_id)
         content_type = ref.mime_type or _guess_content_type(path)
         return ResourceFileContent(data=data, content_type=content_type)
@@ -364,7 +367,6 @@ class AttachmentBlobStore(ForkAttachmentStoreMixin):
             raise ValueError(f"附件不是图片，无法生成缩略图: {file_id}")
         attachment_id = self._parse_logical_file_id(session_id, file_id)
         derived_root = self._attachments_root / DERIVED_DIRECTORY_NAME
-        derived_root.mkdir(parents=True, exist_ok=True)
         target = derived_root / f"{attachment_id}-{max_edge}.webp"
         if not target.is_file():
             try:
@@ -385,10 +387,15 @@ class AttachmentBlobStore(ForkAttachmentStoreMixin):
                 raise ValueError(
                     f"附件图片已损坏或不是有效图片，无法生成缩略图: {file_id}"
                 ) from error
-            _write_once(target, output.getvalue())
-        return ResourceFileContent(
-            data=target.read_bytes(), content_type="image/webp"
-        )
+            try:
+                derived_root.mkdir(parents=True, exist_ok=True)
+                _write_once(target, output.getvalue())
+            except OSError as error:
+                raise OSError(error.errno, error.strerror, file_id) from error
+        try:
+            return ResourceFileContent(data=target.read_bytes(), content_type="image/webp")
+        except OSError as error:
+            raise OSError(error.errno, error.strerror, file_id) from error
 
     def relative_path(self, session_id: str, file_id: str) -> str:
         """返回供模型/canonical content 使用的逻辑引用（绝不暴露物理 locator）。
@@ -435,7 +442,7 @@ class AttachmentBlobStore(ForkAttachmentStoreMixin):
         if not path.is_file() or path.is_symlink():
             raise FileNotFoundError(
                 "附件正文缺失或不是普通文件（fail closed）: "
-                f"blob_id={blob_id}, path={path}"
+                f"blob_id={blob_id}"
             )
         return path
 

@@ -76,17 +76,14 @@ class UserContentBuilder:
         if message:
             blocks.append({"type": "text", "text": message})
         diagnostics: list[dict[str, object]] = []
-        resolved: list[tuple[AttachmentRef, str, str]] = []
-        for attachment in attachments:
-            resolved.append(
-                (
-                    attachment,
-                    self._attachment_service.resolve_content_type(attachment),
-                    self._attachment_service.relative_path(attachment),
-                )
-            )
+        resolved = [
+            self._attachment_service.resolve_reference(attachment)
+            for attachment in attachments
+        ]
 
-        for attachment, content_type, path in resolved:
+        for attachment in resolved:
+            content_type, path = attachment.content_type, attachment.file_id
+            assert content_type is not None
             preview_status = "not_applicable"
             preview_error: str | None = None
             preview_blocks: list[dict[str, object]] = []
@@ -185,7 +182,7 @@ class UserContentBuilder:
             )
             blocks.extend(preview_blocks)
 
-        return UserContentBuildResult(blocks, list(attachments), diagnostics)
+        return UserContentBuildResult(blocks, resolved, diagnostics)
 
     @staticmethod
     def _block_metadata(

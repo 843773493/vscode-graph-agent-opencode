@@ -215,6 +215,8 @@ MCP/Skill catalog 聚合是 Registry/activation 内部语义资源，当前没�
 
 普通列目录/搜索/读取只需要可解析URI和内容，不要求子文件都持久注册ResourceIdentity/快照；显式追踪与历史恢复仍走来源owner。文件hash按需要计算，分页不依赖逐文件快照。本owner登记session/{session_id}/attachments/{attachment_id}和session/{session_id}/tool-results/{result_id}单文件模板；该处各段均是业务身份，不用文件编码放宽。attachments现有二进制接口仍归原owner。跨端普通文件读取/patch在目标端执行，联邦寻址不扩权，执行错误/部分或未知效果归文件操作合同。
 
+工作区文件附件复用 `WorkspaceFilePaths` 解析相对路径、绝对路径及 files URI，在 `MessageService.create` 返回 DTO 前统一引用、默认文件名和 MIME；Job、SSE 与 canonical 消费同一对象。`UserContentBuilder` 的直接入口也复用同一归一方法，删除附件自带的原生路径解析器及旧相对路径输出。Session 附件仍调用 blob owner 的发布校验与预览端口，不复制正文、不改写既有历史。用户正文保持原字节；视频抽帧以临时目录为 cwd、仅传相对文件名，文件 I/O 错误在最终访问边界使用 URI 和 errno，原始异常保留为 cause。
+
 ### Fork容器模板与资源目标检查
 
 统一owner登记session集合根/Session/Thread三种domain_object模板；使用既有session kind，不新增thread或workspace URI kind，不将领域对象转成文件树。source Thread精确归属，target用容器URI和创建意图；view/revision/anchor仍是兄弟字段。登记后必须同批迁构造器、parser、scope路由和消费者，当前只支持非空Session尾段的实现不构成对新模板已交付的证据。

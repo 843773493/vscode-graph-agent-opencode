@@ -3,8 +3,8 @@
 Session/thread 附件正文统一走 workspace 内容寻址 blob store
 （:class:`AttachmentBlobStore`）：逻辑引用是
 统一的 Workspace Session 单文件资源 URI，物理 locator
-只由 catalog 冻结，调用方不得拼路径。非 session 的工作区文件附件仍按显式
-工作区相对/绝对路径解析。
+只由 catalog 冻结，调用方不得拼路径。工作区文件附件接受原生路径或 files URI，
+经同一文件 owner 解析后，只向模型和持久化层提供 URI。
 
 旧「按 session 目录拼 `attachments/{sha256}{suffix}`」的物理定位已物理下线。
 """
@@ -21,16 +21,19 @@ from pathlib import Path
 
 from PIL import Image, ImageOps
 
-from app.core.path_utils import (
-    get_workspace_root,
-    safe_join,
-    validate_workspace_path,
+from app.core.path_utils import get_workspace_root
+from app.core.resource_uri import (
+    parse_resource_uri,
+    parse_session_artifact_uri,
+    resource_display_uri,
 )
-from app.core.resource_uri import parse_session_artifact_uri
+from app.core.trace_middleware import get_current_gateway_id
+from app.core.workspace_identity import read_workspace_id
 from app.schemas.internal_v2.message import AttachmentRef
 from app.services.infrastructure.attachment_blob_catalog.store import (
     AttachmentBlobStore,
 )
+from app.services.infrastructure.workspace_files.paths import WorkspaceFilePaths
 
 SUPPORTED_VIDEO_MIME_TYPES = {
     "video/mp4",
@@ -56,31 +59,18 @@ def _session_id_from_file_id(file_id: str) -> str:
     return parsed.tail_segments[0]
 
 
-def _resolve_workspace_file(file_id: str, workspace_root: Path | None) -> Path:
-    """解析非 session 的工作区文件附件路径。"""
-    if workspace_root is not None:
-        resolved_workspace_root = workspace_root.resolve()
-        candidate = Path(file_id)
-        if not candidate.is_absolute():
-            return safe_join(resolved_workspace_root, file_id)
-        resolved_candidate = candidate.resolve()
-        if not resolved_candidate.is_relative_to(resolved_workspace_root):
-            raise ValueError(
-                "附件路径越出显式工作区: "
-                f"workspace={resolved_workspace_root}, path={resolved_candidate}"
-            )
-        return resolved_candidate
-    return validate_workspace_path(file_id)
+def _is_session_attachment(file_id: str) -> bool:
+    return "://" in file_id and parse_resource_uri(file_id).session_artifact_kind == "attachments"
 
 
-def _attachment_content_type(attachment: AttachmentRef, file_path: Path) -> str:
+def _attachment_content_type(attachment: AttachmentRef, file_path: Path, uri: str) -> str:
     if attachment.content_type:
         return attachment.content_type
     guessed_type, _ = mimetypes.guess_type(str(file_path))
     if guessed_type:
         return guessed_type
     raise ValueError(
-        f"无法识别附件 MIME 类型: file_id={attachment.file_id!r}。"
+        f"无法识别附件 MIME 类型: file_id={uri!r}。"
         "请在 attachments[].content_type 中显式传入 MIME 类型。"
     )
 
@@ -113,35 +103,52 @@ class AttachmentContentService:
             self._workspace_root
         )
 
-    def resolve_content_type(self, attachment: AttachmentRef) -> str:
-        content_type = attachment.content_type
-        if content_type is not None:
-            return content_type
-        if "://" in attachment.file_id:
-            return self._read_session_attachment(attachment).content_type
-        file_path = _resolve_workspace_file(
-            attachment.file_id, self._workspace_root
-        )
-        return _attachment_content_type(attachment, file_path)
-
-    def relative_path(self, attachment: AttachmentRef) -> str:
+    def resolve_reference(self, attachment: AttachmentRef) -> AttachmentRef:
+        """新输入在进入 DTO、Job 和 canonical 前冻结为同一逻辑引用。"""
         if attachment.data_url:
             raise ValueError(
                 "Agent 运行阶段不接受 data_url 附件；浏览器上传内容必须先持久化为 "
-                f"资源 URI: file_id={attachment.file_id!r}"
+                "资源 URI"
             )
-        if "://" in attachment.file_id:
+        if _is_session_attachment(attachment.file_id):
             session_id = _session_id_from_file_id(attachment.file_id)
-            return self._attachment_store.relative_path(
-                session_id, attachment.file_id
-            )
-        file_path = _resolve_workspace_file(attachment.file_id, self._workspace_root)
+            uri = self._attachment_store.relative_path(session_id, attachment.file_id)
+            content_type = attachment.content_type or self._read_session_attachment(attachment).content_type
+            name = attachment.name
+        else:
+            file_path, uri = self._workspace_file(attachment.file_id)
+            content_type = _attachment_content_type(attachment, file_path, uri)
+            name = attachment.name or file_path.name
+        return attachment.model_copy(
+            update={"file_id": uri, "name": name, "content_type": content_type}
+        )
+
+    def _workspace_file(self, file_id: str) -> tuple[Path, str]:
+        paths = WorkspaceFilePaths(
+            workspace=self._workspace_root,
+            workspace_id=read_workspace_id(self._workspace_root),
+            bindings=None,
+        )
+        file_path, uri = paths.resolve(file_id, allow_empty=False, allow_external=False)
         if not file_path.is_file():
-            raise FileNotFoundError(f"附件不存在: {file_path}")
-        return file_path.relative_to(self._workspace_root).as_posix()
+            raise FileNotFoundError(f"附件不存在或不是文件: {uri}")
+        parsed = parse_resource_uri(uri)
+        return file_path, resource_display_uri(
+            scope=parsed.scope, scope_id=parsed.scope_id, kind=parsed.kind,
+            tail_segments=parsed.tail_segments,
+            gateway_authority=get_current_gateway_id(),
+        )
+
+    def _read_workspace_attachment(self, attachment: AttachmentRef) -> bytes:
+        file_path, uri = self._workspace_file(attachment.file_id)
+        try:
+            return file_path.read_bytes()
+        except OSError as error:
+            # 对外用精确资源身份和 errno 报错；原异常保留在服务端因果链中。
+            raise OSError(error.errno, error.strerror, uri) from error
 
     def image_preview_data_url(self, attachment: AttachmentRef) -> str:
-        if "://" in attachment.file_id:
+        if _is_session_attachment(attachment.file_id):
             session_id = _session_id_from_file_id(attachment.file_id)
             preview = self._attachment_store.read_thumbnail(
                 session_id,
@@ -182,31 +189,17 @@ class AttachmentContentService:
             attachment_name=attachment.name or attachment.file_id,
         )
 
-    def _read_workspace_attachment(self, attachment: AttachmentRef) -> bytes:
-        file_path = _resolve_workspace_file(
-            attachment.file_id, self._workspace_root
-        )
-        if not file_path.is_file():
-            raise FileNotFoundError(f"附件不存在: {file_path}")
-        return file_path.read_bytes()
-
     def _read_session_attachment(self, attachment: AttachmentRef):
         session_id = _session_id_from_file_id(attachment.file_id)
         return self._attachment_store.read(session_id, attachment.file_id)
 
     def _read_attachment(self, attachment: AttachmentRef) -> tuple[str, bytes]:
-        if "://" in attachment.file_id:
+        if _is_session_attachment(attachment.file_id):
             stored = self._read_session_attachment(attachment)
             return stored.content_type, stored.data
-        file_path = _resolve_workspace_file(
-            attachment.file_id, self._workspace_root
-        )
-        if not file_path.exists():
-            raise FileNotFoundError(f"附件不存在: {file_path}")
-        if not file_path.is_file():
-            raise ValueError(f"附件必须是文件: {file_path}")
-        content_type = _attachment_content_type(attachment, file_path)
-        return content_type, file_path.read_bytes()
+        resolved = self.resolve_reference(attachment)
+        assert resolved.content_type is not None
+        return resolved.content_type, self._read_workspace_attachment(resolved)
 
 
 def _extract_video_frame_data_urls(
@@ -231,14 +224,14 @@ def _extract_video_frame_data_urls(
             "error",
             "-y",
             "-i",
-            str(input_path),
+            input_path.name,
             "-vf",
             f"fps={VIDEO_FRAME_FPS},scale={VIDEO_FRAME_WIDTH}:-2",
             "-frames:v",
             str(VIDEO_FRAME_COUNT),
             "-q:v",
             "3",
-            str(frame_pattern),
+            frame_pattern.name,
         ]
         try:
             result = subprocess.run(
@@ -247,6 +240,7 @@ def _extract_video_frame_data_urls(
                 capture_output=True,
                 text=True,
                 timeout=VIDEO_FRAME_TIMEOUT_SECONDS,
+                cwd=temp_path,
             )
         except subprocess.TimeoutExpired as error:
             raise RuntimeError(

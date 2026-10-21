@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import json
 from dataclasses import dataclass
 from pathlib import Path
 from threading import Event
@@ -13,7 +14,14 @@ import pytest
 
 from app.core.identifier import create_prefixed_id
 from app.core.job_event_bus import JobEventBus
+from app.core.resource_uri import resource_display_uri
 from app.core.session_thread_context import session_thread_owner_scope
+from app.core.trace_middleware import (
+    get_current_gateway_id,
+    reset_current_gateway_id,
+    set_current_gateway_id,
+)
+from app.core.workspace_identity import read_workspace_id
 from app.domain.itemized.execution_admission import UserExecutionIdentity
 from app.domain.itemized.mutation_intents import MutationIntentOwner
 from app.runtime.session_orchestrator import SessionOrchestrator
@@ -75,6 +83,10 @@ def message_lifetime_case(integration_workspace_root_path, session_bundle_factor
         return await operation()
 
     async def start_job(_session_id, _content, **kwargs):
+        messages.accept_job_input(SimpleNamespace(
+            session_id=_session_id, message=_content, job_id=identity.job_id,
+            **kwargs,
+        ))
         started_jobs.append(kwargs["message_id"])
         return JobDispatchSnapshotDTO(
             session_id=session_id, thread_id=thread_id, job_id=identity.job_id,
@@ -209,3 +221,61 @@ async def test_thread_delete_drains_message_before_releasing_real_attachment(
     finally:
         release.set()
         await asyncio.gather(dispatch, *([deletion] if deletion is not None else []), return_exceptions=True)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("entry", ["relative", "absolute", "uri"])
+async def test_native_attachment_ingress_freezes_one_uri_for_dispatch_and_cold_history(
+    message_lifetime_case, integration_workspace_root_path, entry,
+):
+    """真实创建和派发取得统一引用；Job 校验、canonical 和冷读消费同一事实。"""
+    case = message_lifetime_case
+    root = Path(integration_workspace_root_path)
+    asset = root / "assets" / "报告 #1.pdf"
+    asset.parent.mkdir(exist_ok=True)
+    asset.write_bytes(BODY)
+    gateway_id = "gateway_332f92ee6191880e797569a47e22922b"
+    token = set_current_gateway_id(gateway_id)
+    try:
+        expected_uri = resource_display_uri(
+            scope="workspace", scope_id=read_workspace_id(root), kind="files",
+            tail_segments=("root", "assets", asset.name), gateway_authority=get_current_gateway_id(),
+        )
+        value = {"relative": f"assets/{asset.name}", "absolute": str(asset), "uri": expected_uri}[entry]
+        # 用户正文保留原字节，只有系统生成的资源字段归一。
+        text = f"请阅读 {asset}"
+        prepared = await case.messages.create(
+            case.owner.session_id,
+            MessageCreateRequest(content=text, attachments=[AttachmentRef(file_id=value)]),
+        )
+        expected = AttachmentRef(file_id=expected_uri, name=asset.name, content_type="application/pdf")
+        assert prepared.attachments == [expected]
+        accepted = await case.orchestrator.dispatch_prepared_message(
+            case.owner.session_id, prepared, requested_agent_id="default", execution_binding=case.identity,
+        )
+        assert case.started_jobs == [prepared.message_id]
+        events = await case.orchestrator._job_event_bus.list_events(accepted.job_id)
+        event = next(event for event in events if event.type == "message_created")
+        event_attachments = event.model_dump(mode="json")["payload"]["attachments"]
+        assert event_attachments == [expected.model_dump(exclude={"data_url"})]
+        assert str(root) not in json.dumps(event_attachments, ensure_ascii=False)
+        frozen = case.saver.accepted_user_message(
+            case.owner.session_id, thread_id=case.owner.thread_id,
+            job_id=accepted.job_id, message_id=prepared.message_id,
+        )
+        assert frozen.content[0] == {"type": "text", "text": text}
+        generated = frozen.content[1:]
+        assert generated[0]["metadata"]["file_id"] == expected_uri
+        assert generated[0]["metadata"]["path"] == expected_uri
+        assert str(root) not in json.dumps(generated, ensure_ascii=False)
+        assert frozen.response_metadata["attachments"] == [expected.model_dump(exclude={"data_url"})]
+        assert str(root) not in json.dumps(frozen.response_metadata, ensure_ascii=False)
+        # 新建 Saver，排除 MessageService DTO 或热消息缓存替持久化作证。
+        with RolloutCheckpointSaver(root / ".boxteam" / "sessions", attachment_store=case.store) as cold:
+            restored = cold.accepted_user_message(
+                case.owner.session_id, thread_id=case.owner.thread_id,
+                job_id=accepted.job_id, message_id=prepared.message_id,
+            )
+            assert restored == frozen
+    finally:
+        reset_current_gateway_id(token)

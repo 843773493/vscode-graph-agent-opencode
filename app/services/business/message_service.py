@@ -148,6 +148,11 @@ class MessageService(MessageContentProjectionMixin):
             attachments = await self._attachment_store.persist_inline(
                 session_id, attachments, thread_id=thread_id,
             )
+        if attachments:
+            content_service = AttachmentContentService(
+                workspace_root=self._workspace_root, attachment_store=self._attachment_store,
+            )
+            attachments = [content_service.resolve_reference(attachment) for attachment in attachments]
         now = datetime.now(UTC)
         return MessageDTO(
             message_id=create_prefixed_id("msg"),

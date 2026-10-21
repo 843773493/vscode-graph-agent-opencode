@@ -52,6 +52,12 @@
 - **WHEN** 系统持久化已注册工作区的物理根
 - **THEN** 该根 MUST 只保存在负责原生 target 的 Gateway 控制面 registry，并按 target ID 与 Backend `workspace_id` 绑定；用户提供的注册根只可经身份认证且通过 `add-multi-workspace-backend-mounting` 目标 Gateway 授权的请求送达该 owner。managed group、业务记录、普通 DTO、解析结果、模型载荷和联邦资源投影均 MUST NOT 复制或输出该根
 
+#### Scenario: 原生文件附件在消息创建时取得统一引用
+
+- **WHEN** 用户以工作区内相对路径、绝对路径或 files URI 添加同一文件附件
+- **THEN** 消息创建先经同一文件 owner 取得规范 URI，返回 DTO、Job 输入、SSE、canonical 附件字段及系统生成的模型标记使用同一引用；默认显示名取文件名，不复制原生输入路径。工作区外绝对路径沿附件既有能力明确拒绝，不改投工作区内同名文件；Session 附件继续由原 blob owner 校验和读取，不重建其正文或归属
+- **AND** 用户主动写在消息正文中的路径字面量原样保留；预览失败继续明确报告资源身份与错误原因，最终文件访问的系统异常保留 errno 和服务端 cause，不把物理 locator 复制进持久化诊断
+
 #### Scenario: URI 允许悬空
 
 - **WHEN** 一条持久化的 URI 指向的资源配置已被删除
