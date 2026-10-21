@@ -33,6 +33,7 @@ from app.services.infrastructure.rollout_context.storage.primitives import (
 from app.services.mapping.itemized.resource_activation import (
     project_sealed_resource_refs,
 )
+from tests.harness.python.run_context import TestRunContext
 from tests.integration.backend.sessions.itemized_dispatch_helpers import (
     EMPTY_TOOL_SET,
     dispatch_execution_scope,
@@ -91,6 +92,15 @@ async def context_source(integration_client, integration_workspace_root_path, in
         seed_dispatch_overlay(saver, session_id)
         with dispatch_execution_scope(saver, session_id, turn_id):
             yield saver, session, turn_id
+
+
+@pytest.fixture
+def context_artifacts(request: pytest.FixtureRequest) -> Path:
+    """查询用例只需产物目录，无需启动没有请求的模型服务。"""
+    context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
+    artifacts = context.artifacts_dir / f"context-{uuid4().hex}"
+    artifacts.mkdir()
+    return artifacts
 
 
 def _resource(session, snapshot=None):
@@ -419,12 +429,11 @@ async def test_frozen_selection_http_and_active_history_survive_backend_restart(
 async def test_http_selection_preserves_order_omission_toolset_and_typed_details(
     context_source,
     integration_client,
-    native_http_server,
+    context_artifacts,
     omission,
 ):
     saver, session, turn_id = context_source
     session_id = session["session_id"]
-    state, _ = native_http_server
     draft = saver.compose_committed_context_plan(
         session_id,
         saver._storage.storage.main_thread_id(session_id),
@@ -476,7 +485,7 @@ async def test_http_selection_preserves_order_omission_toolset_and_typed_details
         request_only_content={"plain-api": plain_body},
     )
     items, _ = await _read_pages(
-        integration_client, _resource(session, snapshot), state.artifacts
+        integration_client, _resource(session, snapshot), context_artifacts
     )
     _assert_snapshot(items, snapshot, saver, session_id)
     assert [
@@ -509,11 +518,10 @@ async def test_http_selection_preserves_order_omission_toolset_and_typed_details
 async def test_context_http_rejects_invalid_selectors_and_cross_owner_cursors(
     context_source,
     integration_client,
-    native_http_server,
+    context_artifacts,
 ):
     saver, session, turn_id = context_source
     session_id = session["session_id"]
-    state, _ = native_http_server
     snapshots = []
     for _ in range(2):
         plan = saver.compose_committed_context_plan(
@@ -539,7 +547,7 @@ async def test_context_http_rejects_invalid_selectors_and_cross_owner_cursors(
             )
         )
     resource = _resource(session, snapshots[0])
-    _, pages = await _read_pages(integration_client, resource, state.artifacts)
+    _, pages = await _read_pages(integration_client, resource, context_artifacts)
     other = await integration_client.post(
         "/api/v1/sessions", json={"title": "other owner"}
     )
@@ -581,7 +589,7 @@ async def test_context_http_rejects_invalid_selectors_and_cross_owner_cursors(
                 "response": response.json(),
             }
         )
-    (state.artifacts / "context-errors.json").write_text(
+    (context_artifacts / "context-errors.json").write_text(
         json.dumps(errors, ensure_ascii=False, indent=2), encoding="utf-8"
     )
     assert saver.list_context_assemblies(
@@ -609,11 +617,10 @@ async def test_context_http_rejects_invalid_selectors_and_cross_owner_cursors(
 async def test_context_http_selection_chunks_are_bounded_and_lossless(
     context_source,
     integration_client,
-    native_http_server,
+    context_artifacts,
 ):
     saver, session, turn_id = context_source
     session_id = session["session_id"]
-    state, _ = native_http_server
     plan = saver.compose_committed_context_plan(
         session_id,
         saver._storage.storage.main_thread_id(session_id),
@@ -637,7 +644,7 @@ async def test_context_http_selection_chunks_are_bounded_and_lossless(
     items, pages = await _read_pages(
         integration_client,
         _resource(session, snapshot),
-        state.artifacts,
+        context_artifacts,
         max_chars=2400,
         limit=1,
     )
@@ -651,11 +658,10 @@ async def test_context_http_selection_chunks_are_bounded_and_lossless(
 async def test_context_http_reports_protected_reasoning_capability_loss(
     context_source,
     integration_client,
-    native_http_server,
+    context_artifacts,
 ):
     saver, session, turn_id = context_source
     session_id = session["session_id"]
-    state, _ = native_http_server
     opaque = CanonicalItemRecord.create(
         item_id="api-opaque",
         item_sequence=3,
@@ -697,7 +703,7 @@ async def test_context_http_reports_protected_reasoning_capability_loss(
         provider_version="api-contract",
     )
     items, _ = await _read_pages(
-        integration_client, _resource(session, snapshot), state.artifacts
+        integration_client, _resource(session, snapshot), context_artifacts
     )
     _assert_snapshot(items, snapshot, saver, session_id)
     _, langchain_losses = saver.project_context_plan_with_diagnostics(
@@ -737,11 +743,10 @@ async def test_context_http_reads_selection_without_request_source_body(
     context_source,
     integration_client,
     integration_workspace_root_path,
-    native_http_server,
+    context_artifacts,
 ):
     saver, session, turn_id = context_source
     session_id = session["session_id"]
-    state, _ = native_http_server
     plan = saver.compose_committed_context_plan(
         session_id,
         saver._storage.storage.main_thread_id(session_id),
@@ -770,11 +775,11 @@ async def test_context_http_reads_selection_without_request_source_body(
         session_id, source.detail_ref.thread_id
     )
     path = thread_root / detail_relative_path(source.detail_ref)
-    retained = state.artifacts / f"retained-{source.detail_ref.detail_id}"
+    retained = context_artifacts / f"retained-{source.detail_ref.detail_id}"
     path.rename(retained)
     try:
         items, _ = await _read_pages(
-            integration_client, _resource(session, snapshot), state.artifacts
+            integration_client, _resource(session, snapshot), context_artifacts
         )
         _assert_snapshot(items, snapshot, saver, session_id)
         with pytest.raises(DetailUnavailableError) as failure:
