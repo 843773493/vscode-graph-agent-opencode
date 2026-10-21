@@ -1,7 +1,8 @@
-"""真实模型工具装配访问未注册目录；Provider 由本地协议桩驱动。"""
+"""真实模型工具装配访问未注册目录；Provider 复用共享精确回放。"""
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import sqlite3
@@ -46,59 +47,49 @@ async def test_model_tools_reopen_native_directory_without_registration(communic
 
     before = registry()
     session = await create_session(case.client, "模型读取未注册目录")
-    tool_results = []
-
-    def reply(payload):
-        if not any(message["role"] == "user" and "native-directory-trigger" in str(message["content"])
-                   for message in payload["messages"]):
-            return {"content": "未注册目录验证"}
-        results = [message for message in payload["messages"] if message["role"] == "tool"]
-        if not results:
-            return _tool("ls", {"path": str(external)}, "call_native_ls")
-        listing = json.loads(results[0]["content"])
-        entry, = listing["entries"]
-        root = parse_resource_uri(listing["node"]["uri"])
-        assert root.scope == "gateway" and root.scope_id == case.gateway_id and root.kind == "files"
-        assert entry["uri"].startswith(root.display_uri + "/")
-        if len(results) == 1:
-            return _tool("glob", {"path": root.display_uri, "pattern": "*.txt"}, "call_native_glob")
-        assert json.loads(results[1]["content"])["entries"] == [entry]
-        if len(results) == 2:
-            return _tool("read_file", {"path": str(file)}, "call_native_absolute_read")
-        if len(results) == 3:
-            return _tool("read_file", {"path": entry["uri"]}, "call_native_uri_read")
-        assert results[2]["content"] == results[3]["content"]
-        assert "1\tnative-directory-needle Ω" in results[3]["content"]
-        assert version in results[3]["content"]
-        if len(results) == 4:
-            return _tool("grep", {"path": root.display_uri, "pattern": "native-directory-needle",
-                                  "output_mode": "content"}, "call_native_grep")
-        assert entry["uri"] in results[4]["content"] and "native-directory-needle Ω" in results[4]["content"]
-        if len(results) == 5:
-            return _tool("edit_file", {"file_path": str(file), "old_string": "needle", "new_string": "changed",
-                                      "expected_version": version}, "call_native_edit_denied")
-        if len(results) == 6:
-            return _tool("write_file", {"file_path": str(blocked), "content": "blocked", "expected_version": "absent"},
-                         "call_native_write_denied")
-        if len(results) == 7:
-            return _tool("apply_patch", {"target": str(external), "explanation": "核实工作区外写入能力拒绝",
-                "input": f"*** Begin Patch\n*** Update File: {file.name}\n@@\n-native-directory-needle Ω\n+changed\n*** End Patch",
-                "expected_versions": {file.name: version}}, "call_native_patch_denied")
-        for message in results[5:]:
-            denied = json.loads(message["content"])
-            assert (denied["status"], denied["effect"], denied["owner"], denied["code"], denied["retryable"]) == (
-                "error", "not_executed", "resource_uri_resolver", "capability_denied", False), denied
-        wire = json.dumps(results, ensure_ascii=False)
-        assert str(external) not in wire and "WORKSPACE REDIRECT DECOY" not in wire
-        tool_results[:] = results
-        return {"content": "未注册目录文件工具验证完成"}
-
-    case.model.response_callback = reply
+    first_call, = await case.plan(session, [_tool("ls", {"path": str(external)}, "call_native_ls")])
+    listing_call = first_call + ":tool-call:call_native_ls"
+    case.replay.control.arm(listing_call, "test.tool_result.committed")
     accepted = await case.client.post(f"/api/v1/sessions/{session}/messages", json={
         "message": {"content": "native-directory-trigger"}, "run": {"mode": "single_agent", "agent_id": "default"},
     })
     assert accepted.status_code == 200, accepted.text
+    try:
+        await asyncio.to_thread(case.replay.control.acknowledged, listing_call, "test.tool_result.committed", 30)
+        observed = case.tool_result(session, listing_call)
+        listing = json.loads(observed["content"])
+        entry, = listing["entries"]
+        root = parse_resource_uri(listing["node"]["uri"])
+        assert root.scope == "gateway" and root.scope_id == case.gateway_id and root.kind == "files"
+        assert entry["uri"].startswith(root.display_uri + "/")
+        calls = await case.plan(session, [
+            _tool("glob", {"path": root.display_uri, "pattern": "*.txt"}, "call_native_glob"),
+            _tool("read_file", {"path": str(file)}, "call_native_absolute_read"),
+            _tool("read_file", {"path": entry["uri"]}, "call_native_uri_read"),
+            _tool("grep", {"path": root.display_uri, "pattern": "native-directory-needle", "output_mode": "content"}, "call_native_grep"),
+            _tool("edit_file", {"file_path": str(file), "old_string": "needle", "new_string": "changed", "expected_version": version}, "call_native_edit_denied"),
+            _tool("write_file", {"file_path": str(blocked), "content": "blocked", "expected_version": "absent"}, "call_native_write_denied"),
+            _tool("apply_patch", {"target": str(external), "explanation": "核实工作区外写入能力拒绝",
+                "input": f"*** Begin Patch\n*** Update File: {file.name}\n@@\n-native-directory-needle Ω\n+changed\n*** End Patch",
+                "expected_versions": {file.name: version}}, "call_native_patch_denied"),
+            {"content": "未注册目录文件工具验证完成"},
+        ])
+    finally:
+        case.replay.control.release(listing_call, "test.tool_result.committed")
     await _completed(case.client, accepted.json()["data"]["job_id"])
+    tool_results = [message for message in case.request(calls[-1])["messages"] if message["role"] == "tool"]
+    assert json.loads(tool_results[0]["content"]) == listing
+    assert json.loads(tool_results[1]["content"])["entries"] == [entry]
+    assert tool_results[2]["content"] == tool_results[3]["content"]
+    assert "1\tnative-directory-needle Ω" in tool_results[3]["content"]
+    assert version in tool_results[3]["content"]
+    assert entry["uri"] in tool_results[4]["content"] and "native-directory-needle Ω" in tool_results[4]["content"]
+    for message in tool_results[5:]:
+        denied = json.loads(message["content"])
+        assert (denied["status"], denied["effect"], denied["owner"], denied["code"], denied["retryable"]) == (
+            "error", "not_executed", "resource_uri_resolver", "capability_denied", False), denied
+    wire = json.dumps(tool_results, ensure_ascii=False)
+    assert str(external) not in wire and "WORKSPACE REDIRECT DECOY" not in wire
     assert len(tool_results) == 8
     assert file.read_text() == "native-directory-needle Ω\n" and decoy.read_text() == "WORKSPACE REDIRECT DECOY\n"
     assert not blocked.exists() and not (decoy.parent / blocked.name).exists()

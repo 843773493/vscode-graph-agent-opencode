@@ -8,7 +8,7 @@ import re
 import sqlite3
 from collections.abc import AsyncIterator
 from contextlib import closing
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 import commentjson
@@ -22,6 +22,7 @@ from app.services.business.session_context_resource import (
     session_resource_identity,
     session_resource_uri,
 )
+from app.testing.model_stream import build_cassette, chat_completion_frames
 from tests.harness.python.run_context import TestRunContext
 from tests.integration.stubs.http_stubs import HTTPStubState, openai_chat_stub
 from tests.support.api_helpers import create_session
@@ -29,6 +30,8 @@ from tests.support.communication_federation import (
     CommunicationNode,
     open_communication_triad,
 )
+from tests.support.model_stream_config import ModelStreamReplay, model_stream_replay
+from tests.support.ports import integration_port_block_for_file
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
     GatewayProcess,
@@ -37,7 +40,6 @@ from tests.support.processes.gateway import (
     reset_gateway_persistent_state,
     start_gateway_process,
 )
-from tests.support.ports import integration_port_block_for_file
 from tests.support.processes.workspace import (
     BackendProcess,
     close_backend_process,
@@ -52,13 +54,14 @@ from tests.support.workspaces import (
 @dataclass
 class CommunicationCase:
     client: httpx.AsyncClient
-    model: HTTPStubState
+    replay: ModelStreamReplay
     workspace: Path
     artifacts: Path
     backend: BackendProcess
     gateway: GatewayProcess
     gateway_id: str
     barrier_stage: str | None = None
+    planned_calls: dict[str, dict[str, str]] = field(default_factory=dict)
 
     def record(self, name: str, value: object) -> None:
         (self.artifacts / (name + ".json")).write_text(
@@ -75,6 +78,38 @@ class CommunicationCase:
         resolver = get_session_path_resolver(self.workspace / ".boxteam/sessions")
         return resolver.resolve_thread_node(session_id, resolver.main_thread_id(session_id))
 
+    async def plan(self, session_id: str, responses: list[dict[str, object]]) -> list[str]:
+        main = await self.client.get(f"/api/v1/sessions/{session_id}/main-thread")
+        assert main.status_code == 200, main.text
+        thread_id = main.json()["data"]["thread_id"]
+        config = commentjson.loads((self.workspace / ".boxteam/workspace.jsonc").read_text())
+        endpoint = next(provider["endpoint"] for provider in config["llm"]["providers"] if provider["id"] == "primary")
+        interactions = [build_cassette(
+            asset_id="session-communication", model="e2e-stub-model", url=endpoint + "/chat/completions",
+            frames=chat_completion_frames(
+                response_id=f"chatcmpl-communication-{index}", model="e2e-stub-model",
+                deltas=({"role": "assistant", **response},),
+                finish_reason="tool_calls" if "tool_calls" in response else "stop",
+            ),
+        ).raw["interactions"][0] for index, response in enumerate(responses)]
+        calls = self.replay.control.plan_model_calls(session_id, thread_id, interactions)
+        self.planned_calls.update({call: {"session_id": session_id, "thread_id": thread_id, "model_call_id": call} for call in calls})
+        return calls
+
+    def request(self, call: str) -> dict[str, object]:
+        artifact = json.loads((self.replay.artifacts / (call + ".json")).read_text())
+        assert artifact["identity"] == self.planned_calls[call]
+        assert artifact["request"]["stream"] is True
+        return artifact["request"]
+
+    def tool_result(self, session_id: str, call_id: str) -> dict[str, object]:
+        events = [event["details"] for event in self.replay.control.events
+                  if event["phase"] == "test.tool_result.committed" and event["operation_id"] == call_id]
+        result, = events
+        assert result["session_id"] == session_id
+        assert result["item"]["payload"]["tool_call_id"] == call_id
+        return result["item"]["payload"]
+
     async def hard_restart(self) -> None:
         previous = self.backend
         previous.process.kill()
@@ -82,7 +117,8 @@ class CommunicationCase:
         await asyncio.to_thread(close_backend_process, previous)
         self.backend = await asyncio.to_thread(
             start_backend_process, workspace_root=str(self.workspace), port=previous.port,
-            log_name="communication-restarted", env_overrides={"BOXTEAM_GATEWAY_URL": f"http://127.0.0.1:{self.gateway.port}"},
+            log_name="communication-restarted", asgi_app="tests.support.e2e_control.backend_app:app",
+            env_overrides={**self.replay.environment, "LITELLM_LOCAL_MODEL_COST_MAP": "true", "BOXTEAM_GATEWAY_URL": f"http://127.0.0.1:{self.gateway.port}"},
         )
         assert self.backend.process.pid != previous.process.pid
 
@@ -136,11 +172,15 @@ async def communication_case(request: pytest.FixtureRequest) -> AsyncIterator[Co
         environment["BOXTEAM_TEST_COMMUNICATION_TRACE_DIR"] = str(artifacts)
         (artifacts / "carrier-observations.jsonl").unlink(missing_ok=True)
         (artifacts / "carrier-failure.json").unlink(missing_ok=True)
-    with openai_chat_stub(ports.port(10)) as model:
+    with model_stream_replay(
+        artifacts, runtime_root=context.runtime_root_for_node(request.node.nodeid),
+        business_assertion="session-communication-and-direct-file-tool-consumers",
+    ) as replay:
+        environment.update({**replay.environment, "LITELLM_LOCAL_MODEL_COST_MAP": "true"})
         backend = await asyncio.to_thread(
             start_backend_process, workspace_root=str(workspace), port=ports.port(0),
             log_name="communication-backend", env_overrides=environment,
-            asgi_app="tests.support.communication_fault_backend:app" if barrier or trace else "app.main:app",
+            asgi_app="tests.support.e2e_control.communication_backend_app:app",
         )
         gateway = None
         case = None
@@ -156,11 +196,11 @@ async def communication_case(request: pytest.FixtureRequest) -> AsyncIterator[Co
                 await acquire_gateway_guest(client)
                 health = await client.get("/api/gateway/health")
                 assert health.status_code == 200, health.text
-                case = CommunicationCase(client, model, workspace, artifacts, backend, gateway, health.json()["data"]["gateway_id"], environment.get("BOXTEAM_TEST_COMMUNICATION_BARRIER_STAGE"))
+                case = CommunicationCase(client, replay, workspace, artifacts, backend, gateway, health.json()["data"]["gateway_id"], environment.get("BOXTEAM_TEST_COMMUNICATION_BARRIER_STAGE"))
                 try:
                     yield case
                 finally:
-                    case.record("provider-wire", model.requests)
+                    case.record("provider-wire", [case.request(call) for call in case.planned_calls if (replay.artifacts / (call + ".json")).exists()])
         finally:
             if gateway is not None:
                 await asyncio.to_thread(close_gateway_process, case.gateway if case is not None else gateway)
@@ -193,43 +233,36 @@ async def test_c1_real_send_worker_wait_read(communication_case: CommunicationCa
     target_session = await create_session(case.client, "C1 target")
     source_main = (await case.client.get(f"/api/v1/sessions/{source_session}/main-thread")).json()["data"]["thread_id"]
     target_main = (await case.client.get(f"/api/v1/sessions/{target_session}/main-thread")).json()["data"]["thread_id"]
-    results: dict[str, object] = {}
-
-    def reply(payload: dict[str, object]) -> dict[str, object]:
-        messages = payload["messages"]
-        human = next((str(m["content"]) for m in reversed(messages) if m["role"] == "user" and m["content"]), "")
-        if "<session_message" in human and "c1-private-message" in human:
-            return {"content": "c1-target-result"}
-        if "c1-source-trigger" not in human:
-            return {"content": "通信验证会话"}
-        tools = {m.get("name"): json.loads(m["content"]) for m in messages if m["role"] == "tool"}
-        if "send_message_to_session" not in tools:
-            return _tool("send_message_to_session", {
-                "target_session_id": target_session, "content": "c1-private-message", "kind": "result",
-            }, "call_c1_send")
-        results["receipt"] = tools["send_message_to_session"]
-        if "wait_for_session" not in tools:
-            return _tool("wait_for_session", {
-                "target_session_id": target_session, "communication_id": tools["send_message_to_session"]["communication_id"],
-                "timeout_seconds": 30,
-            }, "call_c1_wait")
-        results["wait"] = tools["wait_for_session"]
-        if "invoke_extension_tool" not in tools:
-            return _tool("invoke_extension_tool", {"tool_name": "read_context", "arguments": {
-                "resource_identity": str(session_resource_identity(case.backend.workspace_id, target_session)),
-                "uri": session_resource_uri(case.backend.workspace_id, target_session), "scope": "workspace", "view": "messages",
-            }}, "call_c1_read")
-        results["read"] = tools["invoke_extension_tool"]
-        return {"content": "c1-source-completed"}
-
-    case.model.response_callback = reply
+    await case.plan(target_session, [{"content": "c1-target-result"}])
+    first_call, = await case.plan(source_session, [_tool("send_message_to_session", {
+        "target_session_id": target_session, "content": "c1-private-message", "kind": "result",
+    }, "call_c1_send")])
+    send_call = first_call + ":tool-call:call_c1_send"
+    case.replay.control.arm(send_call, "test.tool_result.committed")
     response = await case.client.post(f"/api/v1/sessions/{source_session}/messages", json={
         "message": {"content": "c1-source-trigger，发送后等待并冷读目标。"},
         "run": {"mode": "single_agent", "agent_id": "default"},
     })
     assert response.status_code == 200, response.text
     assert response.headers["X-Request-ID"] == response.json()["request_id"]
+    try:
+        await asyncio.to_thread(case.replay.control.acknowledged, send_call, "test.tool_result.committed", 30)
+        sent = case.tool_result(source_session, send_call)
+        receipt = json.loads(sent["content"])
+        following = await case.plan(source_session, [
+            _tool("wait_for_session", {"target_session_id": target_session,
+                  "communication_id": receipt["communication_id"], "timeout_seconds": 30}, "call_c1_wait"),
+            _tool("invoke_extension_tool", {"tool_name": "read_context", "arguments": {
+                "resource_identity": str(session_resource_identity(case.backend.workspace_id, target_session)),
+                "uri": session_resource_uri(case.backend.workspace_id, target_session), "scope": "workspace", "view": "messages",
+            }}, "call_c1_read"), {"content": "c1-source-completed"},
+        ])
+    finally:
+        case.replay.control.release(send_call, "test.tool_result.committed")
     source_job = await _completed(case.client, response.json()["data"]["job_id"])
+    tools = {message["name"]: json.loads(message["content"]) for message in case.request(following[-1])["messages"] if message["role"] == "tool"}
+    results = {"receipt": tools["send_message_to_session"], "wait": tools["wait_for_session"], "read": tools["invoke_extension_tool"]}
+    assert results["receipt"] == receipt
     case.record("c1-tool-results", results)
     assert results["wait"]["status"] == "completed", results
     assert "c1-target-result" in json.dumps(results["read"], ensure_ascii=False), results
@@ -281,32 +314,18 @@ async def test_c2_hard_restart_proactively_binds_accepted_inbox(communication_ca
     case = communication_case
     source_session = await create_session(case.client, "C2 source")
     target_session = await create_session(case.client, "C2 target")
-    results: dict[str, object] = {}
-
-    def reply(payload: dict[str, object]) -> dict[str, object]:
-        messages = payload["messages"]
-        human = next((str(m["content"]) for m in reversed(messages) if m["role"] == "user" and m["content"]), "")
-        if "<session_message" in human and "c2-private-message" in human:
-            return {"content": "c2-target-recovered"}
-        tools = {m.get("name"): json.loads(m["content"]) for m in messages if m["role"] == "tool"}
-        if "c2-source-trigger" in human:
-            if "send_message_to_session" not in tools:
-                return _tool("send_message_to_session", {"target_session_id": target_session, "content": "c2-private-message"}, "call_c2_send")
-            results["receipt"] = tools["send_message_to_session"]
-            return {"content": "c2-source-accepted"}
-        if "c2-resume-trigger" in human:
-            if "wait_for_session" not in tools:
-                return _tool("wait_for_session", {"target_session_id": target_session, "communication_id": results["receipt"]["communication_id"], "timeout_seconds": 20}, "call_c2_wait")
-            results["wait"] = tools["wait_for_session"]
-            return {"content": "c2-observation-completed"}
-        return {"content": "C2 验证会话"}
-
-    case.model.response_callback = reply
+    source_calls = await case.plan(source_session, [
+        _tool("send_message_to_session", {"target_session_id": target_session, "content": "c2-private-message"}, "call_c2_send"),
+        {"content": "c2-source-accepted"},
+    ])
+    await case.plan(target_session, [{"content": "c2-target-recovered"}])
     response = await case.client.post(f"/api/v1/sessions/{source_session}/messages", json={
         "message": {"content": "c2-source-trigger"}, "run": {"mode": "single_agent", "agent_id": "default"},
     })
     assert response.status_code == 200, response.text
     await _completed(case.client, response.json()["data"]["job_id"])
+    receipt, = [json.loads(message["content"]) for message in case.request(source_calls[-1])["messages"] if message["role"] == "tool" and message["name"] == "send_message_to_session"]
+    results = {"receipt": receipt}
     async with asyncio.timeout(20):
         while not (case.artifacts / "before-source.json").exists():
             await asyncio.sleep(0.02)
@@ -328,11 +347,16 @@ async def test_c2_hard_restart_proactively_binds_accepted_inbox(communication_ca
         assert inbox.state == "execution_bound" and inbox.admission_id == barrier["admission_id"]
         assert inbox.admission_claim_generation > claimed.admission_claim_generation
     target_job = await _completed(case.client, inbox.job_id)
+    resumed_calls = await case.plan(source_session, [
+        _tool("wait_for_session", {"target_session_id": target_session, "communication_id": receipt["communication_id"], "timeout_seconds": 20}, "call_c2_wait"),
+        {"content": "c2-observation-completed"},
+    ])
     resumed = await case.client.post(f"/api/v1/sessions/{source_session}/messages", json={
         "message": {"content": "c2-resume-trigger"}, "run": {"mode": "single_agent", "agent_id": "default"},
     })
     assert resumed.status_code == 200, resumed.text
     await _completed(case.client, resumed.json()["data"]["job_id"])
+    results["wait"], = [json.loads(message["content"]) for message in case.request(resumed_calls[-1])["messages"] if message["role"] == "tool" and message["name"] == "wait_for_session"]
     assert results["wait"]["status"] == "completed", results
     with sqlite3.connect(before.as_uri() + "?mode=ro", uri=True) as connection:
         assert connection.execute("SELECT execution_id,execution_origin,turn_id FROM executions").fetchall() == [(inbox.execution_id, "internal", None)]
@@ -367,22 +391,11 @@ async def test_communication_crash_windows_keep_original_identity(communication_
         with sqlite3.connect(database.as_uri() + "?mode=ro", uri=True) as connection:
             for table in ("executions", "turn_records", "runtime_execution_wakeups", "model_calls", "item_catalog"):
                 assert connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] == 0, table
-    tools: dict[str, object] = {}
-
-    def reply(payload: dict[str, object]) -> dict[str, object]:
-        messages = payload["messages"]
-        human = next((str(m["content"]) for m in reversed(messages) if m["role"] == "user" and m["content"]), "")
-        if "<session_message" in human and "matrix-private-message" in human:
-            return {"content": "matrix-target-completed"}
-        if "matrix-source-trigger" not in human:
-            return {"content": "通信崩溃矩阵"}
-        results = {m.get("name"): json.loads(m["content"]) for m in messages if m["role"] == "tool"}
-        if "send_message_to_session" not in results:
-            return _tool("send_message_to_session", {"target_session_id": target_session, "content": "matrix-private-message"}, "call_matrix_send")
-        tools["receipt"] = results["send_message_to_session"]
-        return {"content": "matrix-source-completed"}
-
-    case.model.response_callback = reply
+    await case.plan(source_session, [
+        _tool("send_message_to_session", {"target_session_id": target_session, "content": "matrix-private-message"}, "call_matrix_send"),
+        {"content": "matrix-source-completed"},
+    ])
+    target_calls = await case.plan(target_session, [{"content": "matrix-target-completed"}])
     response = await case.client.post(f"/api/v1/sessions/{source_session}/messages", json={
         "message": {"content": "matrix-source-trigger"}, "run": {"mode": "single_agent", "agent_id": "default"},
     })
@@ -480,6 +493,7 @@ async def test_communication_crash_windows_keep_original_identity(communication_
         assert connection.execute("SELECT execution_id,execution_origin,turn_id FROM executions").fetchall() == [(recovered_inbox.execution_id, "internal", None)]
         assert connection.execute("SELECT COUNT(*) FROM turn_records").fetchone()[0] == 0
         assert connection.execute("SELECT source_id,job_id FROM runtime_execution_wakeups").fetchall() == [(communication_id, recovered_inbox.job_id)]
+    assert "matrix-private-message" in json.dumps(case.request(target_calls[-1])["messages"], ensure_ascii=False)
     case.record("crash-window", {"stage": case.barrier_stage, "marker": marker, "source_before": asdict(outbox), "source_after": asdict(recovered_outbox), "target_after": asdict(recovered_inbox), "target_execution_outcome": outcome})
 
 

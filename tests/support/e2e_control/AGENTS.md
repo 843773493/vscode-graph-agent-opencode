@@ -6,6 +6,7 @@
 e2e_control/
 ├── harness.py             控制服务、进程租约、phase、时钟和精确回放计划
 ├── backend_app.py         绑定受控 ID、phase 与时钟的真实 Backend ASGI app
+├── communication_backend_app.py  在同一受控Backend安装通信故障及真实工具提交观测
 ├── gateway_app.py         连接受控 Backend ASGI app 的真实 Gateway app
 ├── mcp_stdio_server.py    接受测试 catalog 的真实 MCP stdio server
 └── browser_client.mjs     浏览器端控制客户端与 fork deadline watchdog
@@ -28,4 +29,5 @@ e2e_control/
 - `harness.py` 是控制状态的唯一权威来源；Backend 和 Gateway 只能通过显式控制协议读取或报告状态。
 - 进程租约必须验证 PID 与进程创建时间，端口和输出根由调用测试明确传入。
 - E2E 服务组合继续使用真实应用 lifespan、真实传输和独立进程；控制协议只提供确定性时钟、identity 与同步屏障。
+- 工具提交观测通过测试专用 sink 子类接入构造点，只在真实 owner 完成后报告原结果，不变异生产类方法或补写业务事实。
 - 新文件按运行角色命名，并同步更新 `tests/support/AGENTS.md` 中的树形索引。

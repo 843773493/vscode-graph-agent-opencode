@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import hashlib
+import json
 import shutil
 import sqlite3
 from collections.abc import AsyncIterator
@@ -65,6 +66,7 @@ from tests.integration.backend.sessions.test_session_communication_pipeline impo
     _completed,
 )
 from tests.support.api_helpers import create_session
+from tests.support.e2e_control.harness import control_request
 from tests.support.processes.gateway import LOCAL_TOKEN_HEADERS
 from tests.support.session_navigation_http import submit_navigation_operation
 from tests.unit.core.catalog_workspace_helper import (
@@ -535,9 +537,16 @@ async def test_real_http_cursor_errors_gateway_source_and_deleted_page(
 ) -> None:
     """真实 Workspace/Gateway HTTP；只用受控 Provider 写入目标可读记录。"""
     case = communication_case
-    case.model.response_callback = lambda _payload: {"content": "冻结的目标回答"}
+    clock = control_request(
+        json.loads(case.replay.control.environment["BOXTEAM_E2E_TEST_CONTROL"]),
+        {"action": "clock"},
+    )
+    assert isinstance(clock, dict)
+    # HTTP 请求期限与真实 Backend 共用控制时钟，避免启动耗时改变“已过期”的含义。
+    now = datetime.fromisoformat(clock["wait_utc"])
     source_id = await create_session(case.client, "HTTP observation source")
     target_id = await create_session(case.client, "HTTP observation target")
+    await case.plan(target_id, [{"content": "冻结的目标回答"}])
     seeded = await case.client.post(f"/api/v1/sessions/{target_id}/messages", json={
         "message": {"content": "目标原始问题"}, "run": {"mode": "single_agent", "agent_id": "default"},
     })
@@ -548,7 +557,7 @@ async def test_real_http_cursor_errors_gateway_source_and_deleted_page(
     source = GlobalThreadAddress(case.gateway_id, case.backend.workspace_id, source_id, source_thread)
     target = GlobalThreadAddress(case.gateway_id, case.backend.workspace_id, target_id, target_thread)
     read = SessionContextReadRequest(resource_identity=session_resource_identity(target.workspace_id, target.session_id), uri=session_resource_uri(target.workspace_id, target.session_id), scope="workspace", view="messages", limit=1)
-    request = CommunicationObservationRequest(observation_id="obs_http_lifecycle", source_call_id="cop_http_first", page_identity=_page_identity(source, "cop_http_first"), page_ordinal=0, expires_at=datetime.now(UTC) + timedelta(days=1), source=source, target=target, operation="read", query={"read": read.model_dump(mode="json")})
+    request = CommunicationObservationRequest(observation_id="obs_http_lifecycle", source_call_id="cop_http_first", page_identity=_page_identity(source, "cop_http_first"), page_ordinal=0, expires_at=now + timedelta(days=1), source=source, target=target, operation="read", query={"read": read.model_dump(mode="json")})
     relay = {"operation": "read", "target": request.model_dump(mode="json")["target"], "body": request.model_dump(mode="json")}
     first_response = await case.client.post("/api/gateway/federation/relay", json=relay)
     assert first_response.status_code == 200, first_response.text
@@ -589,7 +598,7 @@ async def test_real_http_cursor_errors_gateway_source_and_deleted_page(
         source_call_id=missing_call_id,
         page_identity=_page_identity(source, missing_call_id),
         page_ordinal=0,
-        expires_at=datetime.now(UTC) + timedelta(days=1),
+        expires_at=now + timedelta(days=1),
         source=source,
         target=target,
         operation="wait",
@@ -599,7 +608,7 @@ async def test_real_http_cursor_errors_gateway_source_and_deleted_page(
             "timeout_seconds": 1,
             "deadline": asdict(
                 freeze_wait_deadline(
-                    clock=_Clock(datetime.now(UTC)), timeout_seconds=1
+                    clock=_Clock(now), timeout_seconds=1
                 )
             ),
         },
@@ -665,7 +674,7 @@ async def test_real_http_cursor_errors_gateway_source_and_deleted_page(
         "owner": "communication_observation",
         "code": "read-snapshot-mismatch",
     }
-    expired = request.model_copy(update={"expires_at": datetime.now(UTC) - timedelta(seconds=1)})
+    expired = request.model_copy(update={"expires_at": now - timedelta(seconds=1)})
     expired_response = await case.client.post("/api/gateway/federation/relay", json={**relay, "body": expired.model_dump(mode="json")})
     assert expired_response.status_code == 409
     assert expired_response.json()["detail"]["code"] == FEDERATION_TARGET_OWNER_REJECTED

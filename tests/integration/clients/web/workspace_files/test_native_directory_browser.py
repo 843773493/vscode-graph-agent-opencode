@@ -234,7 +234,7 @@ async def test_chat_file_references_preserve_native_and_uri_targets(communicatio
     title = "文件链接统一目标"
     session_id = await create_session(case.client, title)
     # 受控 Provider 回显用户给定目标以验证 Markdown 文件入口；不代表系统引用生成策略。
-    case.model.response_callback = lambda _payload: {"content": markdown}
+    await case.plan(session_id, [{"content": markdown}])
     response = await case.client.post(f"/api/v1/sessions/{session_id}/messages", json={
         "message": {"content": markdown}, "run": {"mode": "single_agent", "agent_id": "default"},
     })

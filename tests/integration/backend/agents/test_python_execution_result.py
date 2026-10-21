@@ -27,27 +27,13 @@ async def test_python_tool_result_preserves_streams_without_interpreter_locator(
 ) -> None:
     case = communication_case
     session = await create_session(case.client, "Python 结果位置边界")
-    tool_results = []
-
-    def reply(payload):
-        if not any(message["role"] == "user" and "python-result-trigger" in str(message["content"])
-                   for message in payload["messages"]):
-            return {"content": "Python 工具结果验证"}
-        assert "python_exec" in {entry["function"]["name"] for entry in payload["tools"]}
-        results = [message for message in payload["messages"] if message["role"] == "tool"]
-        if not results:
-            return _tool("python_exec", {"code": (
-                "import sys\nfrom pathlib import Path\n"
-                "Path('python-result-proof.txt').write_text('target workspace\\n')\n"
-                "print('python stdout Ω')\nprint('python stderr Ω', file=sys.stderr)"
-            )}, "call_python_result")
-        result = json.loads(results[0]["content"])
-        assert result == {"returncode": 0, "stdout": "python stdout Ω\n", "stderr": "python stderr Ω\n"}
-        assert str(case.workspace) not in json.dumps(result, ensure_ascii=False)
-        tool_results[:] = results
-        return {"content": "Python 结果验证完成"}
-
-    case.model.response_callback = reply
+    calls = await case.plan(session, [
+        _tool("python_exec", {"code": (
+            "import sys\nfrom pathlib import Path\n"
+            "Path('python-result-proof.txt').write_text('target workspace\\n')\n"
+            "print('python stdout Ω')\nprint('python stderr Ω', file=sys.stderr)"
+        )}, "call_python_result"), {"content": "Python 结果验证完成"},
+    ])
     accepted = await case.client.post(f"/api/v1/sessions/{session}/messages", json={
         "message": {"content": "python-result-trigger"}, "run": {"mode": "single_agent", "agent_id": "default"},
     })
@@ -56,6 +42,11 @@ async def test_python_tool_result_preserves_streams_without_interpreter_locator(
     job_id = accepted_data["job_id"]
     turn_id = accepted_data["turn_id"]
     await _completed(case.client, job_id)
+    assert "python_exec" in {entry["function"]["name"] for entry in case.request(calls[0])["tools"]}
+    tool_results = [message for message in case.request(calls[-1])["messages"] if message["role"] == "tool"]
+    result, = [json.loads(message["content"]) for message in tool_results]
+    assert result == {"returncode": 0, "stdout": "python stdout Ω\n", "stderr": "python stderr Ω\n"}
+    assert str(case.workspace) not in json.dumps(result, ensure_ascii=False)
     assert len(tool_results) == 1
     assert (case.workspace / "python-result-proof.txt").read_text() == "target workspace\n"
 
