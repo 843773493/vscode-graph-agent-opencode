@@ -8,29 +8,29 @@ import json
 import sqlite3
 from collections.abc import Callable
 from contextlib import closing
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from hashlib import sha256
 from pathlib import Path
-from threading import Event
 
 import pytest
 
 from app.core.path_utils import get_session_path_resolver
 from app.core.resource_uri import parse_resource_uri, resource_display_uri
 from app.services.business.session_context_resource import session_resource_uri
+from app.testing.model_stream import build_cassette, chat_completion_frames
 from tests.harness.python.run_context import TestRunContext
 from tests.integration.backend.agents.test_resource_navigation import _tracking_counts
 from tests.integration.backend.sessions.test_session_communication_pipeline import (
     _completed,
     _prepare_workspace,
 )
-from tests.integration.stubs.http_stubs import HTTPStubState, openai_chat_stub
 from tests.support import communication_federation
 from tests.support.api_helpers import create_session
 from tests.support.communication_federation import (
     CommunicationNode,
     open_communication_triad,
 )
+from tests.support.model_stream_config import ModelStreamReplay, model_stream_replay
 from tests.support.ports import integration_port_block_for_file
 from tests.support.processes.workspace import start_backend_process
 
@@ -53,9 +53,10 @@ async def _until(predicate: Callable[[], bool], seconds: float = 30) -> None:
 @dataclass
 class SkillGatewayCase:
     nodes: dict[str, CommunicationNode]
-    model: HTTPStubState
+    replay: ModelStreamReplay
     context: TestRunContext
     snapshots: dict[str, dict[str, object]]
+    planned_owners: dict[str, dict[str, str]] = field(default_factory=dict)
 
     def record(self, name: str, data: object) -> None:
         (self.context.artifacts_dir / (name + ".json")).write_text(
@@ -136,6 +137,8 @@ class SkillGatewayCase:
             log_name="skill-owner-cold-recovery", refresh_user_configuration=False,
             env_unset=("BOXTEAM_TEST_COMMUNICATION_BARRIER_DIR", "BOXTEAM_TEST_COMMUNICATION_BARRIER_STAGE"),
             env_overrides={
+                **self.replay.environment,
+                "LITELLM_LOCAL_MODEL_COST_MAP": "true",
                 "BOXTEAM_GATEWAY_URL": f"http://127.0.0.1:{source.gateway.port}",
                 "BOXTEAM_TEST_SKILL_OBSERVATION_DIR": str(self.context.artifacts_dir / "skill-request-identity"),
                 "BOXTEAM_TEST_SKILL_OBSERVATION_ROLE": "backend",
@@ -145,26 +148,48 @@ class SkillGatewayCase:
         assert backend.process.pid != previous.process.pid
         return {"before_pid": previous.process.pid, "after_pid": backend.process.pid}
 
-    def skill_reply(
-        self, payload: dict[str, object], gateway: str, call_id: str, *, allow_history: bool = False,
-    ) -> dict[str, object]:
-        wire = json.dumps(payload, ensure_ascii=False)
+    async def plan(self, gateway: str, session_id: str, responses: list[dict[str, object]]) -> list[str]:
+        main = await self.nodes[gateway].client.get(f"/api/v1/sessions/{session_id}/main-thread")
+        assert main.status_code == 200, main.text
+        thread_id = main.json()["data"]["thread_id"]
+        port = integration_port_block_for_file(self.context.test_file).port(10)
+        interactions = [build_cassette(
+            asset_id="skill-gateway-owner", model="e2e-stub-model",
+            url=f"http://127.0.0.1:{port}/v1/chat/completions",
+            frames=chat_completion_frames(
+                response_id=f"chatcmpl-skill-owner-{index}", model="e2e-stub-model",
+                deltas=({"role": "assistant", **response},),
+                finish_reason="tool_calls" if "tool_calls" in response else "stop",
+            ),
+        ).raw["interactions"][0] for index, response in enumerate(responses)]
+        calls = self.replay.control.plan_model_calls(session_id, thread_id, interactions)
+        self.planned_owners.update({call: {"session_id": session_id, "thread_id": thread_id, "model_call_id": call} for call in calls})
+        return calls
+
+    def request(self, call: str) -> dict[str, object]:
+        artifact = json.loads((self.replay.artifacts / (call + ".json")).read_text())
+        assert artifact["identity"] == self.planned_owners[call]
+        assert artifact["request"]["stream"] is True
+        return artifact["request"]
+
+    def assert_skill_calls(self, gateway: str, calls: list[str], *, allow_history: bool = False) -> None:
+        first, continuation = (self.request(call) for call in calls)
         other = "b" if gateway == "a" else "a"
-        assert f"skill-gateway-owner-{gateway}" in wire
-        if not allow_history:
-            assert f"skill-gateway-owner-{other}" not in wire
-        results = [json.loads(message["content"]) for message in payload["messages"]
+        for payload in (first, continuation):
+            wire = json.dumps(payload, ensure_ascii=False)
+            assert f"skill-gateway-owner-{gateway}" in wire
+            if not allow_history:
+                assert f"skill-gateway-owner-{other}" not in wire
+        results = [json.loads(message["content"]) for message in continuation["messages"]
                    if message["role"] == "tool" and message.get("name") == "skill_load"]
-        if not results:
-            return _tool("skill_load", {"name": SKILL_NAME, "mode": "snapshot"}, call_id)
-        result = results[-1]
+        result, = results
         assert result["error"] is None, result
         assert result["display_uri"] == (
             f"boxteam://gateway/{self.nodes[gateway].gateway_id}/resources/skills/{SKILL_NAME}/SKILL.md"
         )
+        wire = json.dumps(continuation, ensure_ascii=False)
         assert f"private-skill-owner-{gateway}" in wire
         assert f"private-skill-owner-{other}" not in wire
-        return {"content": "Skill owner " + gateway + " 已验证"}
 
 
 @pytest.fixture
@@ -185,7 +210,11 @@ async def skill_gateways(request: pytest.FixtureRequest, monkeypatch: pytest.Mon
         return start_gateway(**kwargs, asgi_app=OBSERVATION_APP)
 
     monkeypatch.setattr(communication_federation, "start_gateway_process", observed_gateway)
-    with openai_chat_stub(ports.port(10)) as model:
+    with model_stream_replay(
+        context.artifacts_dir, runtime_root=base.runtime_root_for_node(request.node.nodeid),
+        business_assertion="gateway-skill-owner-routing-and-cold-recovery",
+    ) as replay:
+        environment.update({**replay.environment, "LITELLM_LOCAL_MODEL_COST_MAP": "true"})
         async with open_communication_triad(
             context, _prepare_workspace, ports=ports, same_backend_routes=True,
             backend_asgi_app=OBSERVATION_APP,
@@ -209,11 +238,12 @@ async def skill_gateways(request: pytest.FixtureRequest, monkeypatch: pytest.Mon
                             snapshots[name] = snapshot
                             break
                         await asyncio.sleep(0.02)
-            case = SkillGatewayCase(nodes, model, context, snapshots)
+            case = SkillGatewayCase(nodes, replay, context, snapshots)
             try:
                 yield case
+                assert {path.stem for path in replay.artifacts.glob("*.json")} == set(case.planned_owners), "真实模型调用必须逐个匹配 owner 计划，不能漏调或额外调用"
             finally:
-                case.record("provider-requests", model.requests)
+                case.record("provider-requests", [json.loads(path.read_text()) for path in sorted(replay.artifacts.glob("*.json"))])
                 case.record("topology", {name: {
                     "gateway_id": node.gateway_id, "gateway_pid": node.gateway.process.pid,
                     "backend_pid": node.backend.process.pid, "workspace_id": node.workspace_id,
@@ -269,19 +299,16 @@ async def test_shared_backend_routes_snapshot_navigation_and_concurrent_messages
     unknown = await source.client.get(connected_path.replace(target.gateway_id, "gateway_" + "0" * 32))
     assert unknown.status_code == 409
 
-    def reply(payload):
-        wire = json.dumps(payload, ensure_ascii=False)
-        for name in case.nodes:
-            if "owner-run-" + name in wire:
-                return case.skill_reply(payload, name, "call_owner_" + name)
-        return {"content": "Skill 来源验证"}
-
-    case.model.response_callback = reply
     sessions = {name: await create_session(node.client, "独立 owner " + name) for name, node in case.nodes.items()}
+    calls = {name: await case.plan(name, session, [
+        _tool("skill_load", {"name": SKILL_NAME, "mode": "snapshot"}, "call_owner_" + name),
+        {"content": "Skill owner " + name + " 已验证"},
+    ]) for name, session in sessions.items()}
     accepted = await asyncio.gather(*(case.send(name, sessions[name], "owner-run-" + name, "req-owner-run-" + name) for name in case.nodes))
     completed = await asyncio.gather(*(_completed(case.nodes[name].client, job["job_id"]) for name, job in zip(case.nodes, accepted, strict=True)))
     assert len({job["job_id"] for job in completed}) == 2
     for name, job in zip(case.nodes, accepted, strict=True):
+        case.assert_skill_calls(name, calls[name])
         await case.assert_created_owner(sessions[name], job["job_id"], name, "req-owner-run-" + name)
         await case.assert_first_snapshot(name, "req-owner-run-" + name)
 
@@ -397,7 +424,12 @@ async def test_remote_skill_navigation_is_lightweight_encoded_and_fixed_to_owner
         listed = await navigate(root_uri, "list", route=route)
         entries = {node["uri"].rsplit("/", 1)[1]: node for node in listed["entries"]}
         skill_uri = entries["SKILL.md"]["uri"]
-        assert entries["SKILL.md"]["operations"] == ["describe", "read"] and entries["SKILL.md"]["child_path"] is None
+        assert entries["SKILL.md"]["operations"] == ["describe", "read", "search"] and entries["SKILL.md"]["child_path"] is None
+        searched = await navigate(skill_uri, "search", route=route, search_mode="content", query="private-skill-owner-b")
+        assert searched["matches"] == [{
+            "uri": skill_uri, "line": 5, "column": 1, "text": "private-skill-owner-b",
+            "snippet_start_column": 1, "truncated": False,
+        }]
         assert (await navigate(skill_uri, "read", route=route))["content"] == case.snapshots["b"]["entries"][0]["content"]
         explicit = resource_display_uri(scope="gateway", scope_id=target.gateway_id, kind="skills",
                                         tail_segments=(SKILL_NAME, "SKILL.md"), gateway_authority=target.gateway_id)
@@ -460,7 +492,7 @@ async def test_remote_skill_navigation_is_lightweight_encoded_and_fixed_to_owner
     current = await source.client.get(connected_path)
     assert current.status_code == 200 and current.json()["data"] == publication.json()["data"]
     assert current.headers["ETag"] == publication.headers["ETag"]
-    assert not case.model.requests
+    assert not list(case.replay.artifacts.glob("*.json"))
     assert not case.source_responses("a") and not case.source_responses("b")
     case.record("remote-navigation-lightweight", {"before": before, "after": after, "publication": current.json(),
                                                   "backend_pid": target.backend.process.pid, "owner_pid": target.gateway.process.pid})
@@ -499,56 +531,54 @@ async def test_model_ls_read_and_search_gateway_skill_children_without_activatio
             assembly_owners[str(database.relative_to(case.context.workspace_root))] = owners
         return {"counts": counts, "assembly_owners": assembly_owners, "control_states": control_states}
 
-    def reply(payload):
-        nonlocal before
-        results = [json.loads(message["content"]) for message in payload["messages"]
-                   if message["role"] == "tool" and message.get("name") == "ls"]
-        if not results:
-            # 本轮指令来源已由真实 preparation 登记；只比较普通工具执行前后。
-            assert before is None
-            before = tracking_facts()
-            return _tool("ls", {"path": root_uri}, "call_model_ls_root")
-        result = results[-1]
-        if not listed or listed[-1] != result:
-            listed.append(result)
-        assert result["node"]["uri"].startswith(root_uri)
-        assert not result["truncated"] and result["view"] == "live"
-        skill_reads = [message for message in payload["messages"] if message["role"] == "tool"
-                       and message.get("tool_call_id") == "call_model_read_skill"]
-        if not skill_reads:
-            skill, = [entry for entry in results[0]["entries"] if entry["uri"].endswith("/SKILL.md")]
-            return _tool("read_file", {"path": skill["uri"]}, "call_model_read_skill")
-        assert "5\tprivate-skill-owner-b" in skill_reads[0]["content"]
-        if len(results) < 3:
-            directory = "references" if len(results) == 1 else "scripts"
-            child, = [entry for entry in result["entries"] if entry["uri"].endswith("/" + directory)]
-            return _tool("ls", {"path": child["uri"]}, "call_model_ls_" + directory)
-        child, = [entry for entry in result["entries"] if entry["resource_shape"] == "file"]
-        assert child["uri"] == root_uri + "/references/scripts/owner-b-%E4%B8%AD%E6%96%87%20%25.txt"
-        globs = [json.loads(message["content"]) for message in payload["messages"]
-                 if message["role"] == "tool" and message.get("name") == "glob"]
-        if not globs:
-            return _tool("glob", {"path": result["node"]["uri"], "pattern": "owner-b-*.txt"}, "call_model_glob")
-        assert [entry["uri"] for entry in globs[-1]["entries"]] == [child["uri"]]
-        greps = [message["content"] for message in payload["messages"]
-                 if message["role"] == "tool" and message.get("name") == "grep"]
-        if not greps:
-            return _tool("grep", {"path": child["uri"], "pattern": "read-body-owner-b", "output_mode": "content"}, "call_model_grep")
-        assert child["uri"] in greps[-1] and "read-body-owner-b" in greps[-1] and "read-body-owner-a" not in greps[-1]
-        reads = [message for message in payload["messages"] if message["role"] == "tool"
-                 and message.get("tool_call_id") == "call_model_read_child"]
-        if not reads:
-            return _tool("read_file", {"path": child["uri"]}, "call_model_read_child")
-        read, = reads
-        assert "1\tread-body-owner-b" in read["content"] and "read-body-owner-a" not in read["content"]
-        wire = json.dumps(payload, ensure_ascii=False)
-        assert "owner-a-" not in wire and "private-skill-owner-a" not in wire
-        return {"content": "已验证目标 Gateway 的多层目录和实际文件正文"}
-
-    case.model.response_callback = reply
-    accepted = await case.send("b", session, "浏览目标 Skill 目录", "req-model-ls-navigation")
+    scripts_uri = root_uri + "/references/scripts"
+    child_uri = scripts_uri + "/owner-b-%E4%B8%AD%E6%96%87%20%25.txt"
+    calls = await case.plan("b", session, [
+        _tool("ls", {"path": root_uri}, "call_model_ls_root"),
+        _tool("read_file", {"path": root_uri + "/SKILL.md"}, "call_model_read_skill"),
+        _tool("ls", {"path": root_uri + "/references"}, "call_model_ls_references"),
+        _tool("ls", {"path": scripts_uri}, "call_model_ls_scripts"),
+        _tool("glob", {"path": scripts_uri, "pattern": "owner-b-*.txt"}, "call_model_glob"),
+        _tool("grep", {"path": child_uri, "pattern": "read-body-owner-b", "output_mode": "content"}, "call_model_grep"),
+        _tool("read_file", {"path": child_uri}, "call_model_read_child"),
+        {"content": "已验证目标 Gateway 的多层目录和实际文件正文"},
+    ])
+    phase = "model.response_ready"
+    case.replay.control.arm(calls[0], phase)
+    try:
+        accepted = await case.send("b", session, "浏览目标 Skill 目录", "req-model-ls-navigation")
+        await asyncio.to_thread(case.replay.control.acknowledged, calls[0], phase)
+        # 请求已封存、工具尚未执行；保留原测试对真实 preparation 后状态的观察点。
+        before = tracking_facts()
+    finally:
+        case.replay.control.release(calls[0], phase)
     await _completed(target.client, accepted["job_id"])
-    assert len(listed) == 3
+    for call in calls:
+        case.request(call)
+    payload = case.request(calls[-1])
+    tools = {message["tool_call_id"]: message for message in payload["messages"] if message["role"] == "tool"}
+    assert set(tools) == {
+        "call_model_ls_root", "call_model_read_skill", "call_model_ls_references", "call_model_ls_scripts",
+        "call_model_glob", "call_model_grep", "call_model_read_child",
+    }
+    listed = [json.loads(tools[name]["content"]) for name in (
+        "call_model_ls_root", "call_model_ls_references", "call_model_ls_scripts",
+    )]
+    assert [result["node"]["uri"] for result in listed] == [root_uri, root_uri + "/references", scripts_uri]
+    for result in listed:
+        assert not result["truncated"] and result["view"] == "live"
+    assert root_uri + "/SKILL.md" in {entry["uri"] for entry in listed[0]["entries"]}
+    assert root_uri + "/references" in {entry["uri"] for entry in listed[0]["entries"]}
+    assert scripts_uri in {entry["uri"] for entry in listed[1]["entries"]}
+    child, = [entry for entry in listed[-1]["entries"] if entry["resource_shape"] == "file"]
+    assert child["uri"] == child_uri
+    assert "5\tprivate-skill-owner-b" in tools["call_model_read_skill"]["content"]
+    assert [entry["uri"] for entry in json.loads(tools["call_model_glob"]["content"])["entries"]] == [child_uri]
+    assert child_uri in tools["call_model_grep"]["content"]
+    assert "read-body-owner-b" in tools["call_model_grep"]["content"] and "read-body-owner-a" not in tools["call_model_grep"]["content"]
+    assert "1\tread-body-owner-b" in tools["call_model_read_child"]["content"] and "read-body-owner-a" not in tools["call_model_read_child"]["content"]
+    wire = json.dumps(payload, ensure_ascii=False)
+    assert "owner-a-" not in wire and "private-skill-owner-a" not in wire
     rows = [row for row in case.observations() if row["event"] == "workspace_response"
             and row["method"] == "POST" and row["sent_request_id"] == "req-model-ls-navigation"]
     assert len(rows) == 7
@@ -581,83 +611,75 @@ async def test_read_skill_does_not_replace_call_frozen_activation(skill_gateways
     updated = original["content"].replace(body, "changed-after-read-owner-b Ω\n")
     skill_uri = resource_display_uri(scope="gateway", scope_id=target.gateway_id,
         kind="skills", tail_segments=(SKILL_NAME, "SKILL.md"))
-    captured, release = Event(), Event()
-    receipts = []
-
-    def reply(payload):
-        results = [message for message in payload["messages"] if message["role"] == "tool"]
-        if not results:
-            return _tool("read_file", {"path": skill_uri}, "call_frozen_skill_read")
-        assert "5\tprivate-skill-owner-b" in results[0]["content"]
-        if len(results) == 1:
-            # Provider 已收到发起 skill_load 的封存请求；由进程外测试先推进真实来源。
-            captured.set()
-            assert release.wait(15), "测试未接受新版 Skill 来源"
-            return _tool("skill_load", {"name": SKILL_NAME}, "call_frozen_skill_load")
-        receipt = json.loads(results[-1]["content"])
-        assert receipt["status"] == "loaded" and receipt["tracked"] is False, receipt
-        assert receipt["display_uri"] == skill_uri
-        assert receipt["content_hash"] == "sha256:" + sha256(body.encode()).hexdigest()
-        assert "changed-after-read-owner-b" not in json.dumps(payload, ensure_ascii=False)
-        receipts.append(receipt)
-        return {"content": "普通读取和冻结激活保持独立"}
-
-    case.model.response_callback = reply
     session = await create_session(target.client, "读取后冻结激活")
+    calls = await case.plan("b", session, [
+        _tool("read_file", {"path": skill_uri}, "call_frozen_skill_read"),
+        _tool("skill_load", {"name": SKILL_NAME}, "call_frozen_skill_load"),
+        {"content": "普通读取和冻结激活保持独立"},
+    ])
+    phase = "model.response_ready"
+    case.replay.control.arm(calls[1], phase)
     try:
         accepted = await case.send("b", session, "先读取再激活 Skill", "req-read-then-frozen-load")
-        await _until(captured.is_set)
-        skill_file.write_text(updated)
-        raw_path = f"/api/gateway/skill-sources/{target.gateway_id}/workspaces/{target.workspace_id}"
-        async with asyncio.timeout(10):
-            while True:
-                response = await target.client.get(raw_path)
-                assert response.status_code == 200, response.text
-                current = response.json()["data"]
-                if current["revision"] != case.snapshots["b"]["revision"]:
-                    assert current["entries"][0]["content"] == updated
-                    assert current["entries"][0]["entry_identity"] == original["entry_identity"]
-                    break
-                await asyncio.sleep(0.02)
-        release.set()
-        await _completed(target.client, accepted["job_id"])
-        assert len(receipts) == 1 and skill_file.read_text() == updated
-        assert receipts[0]["revision"] != current["entries"][0]["revision"]
-        case.record("read-then-frozen-load", {"receipt": receipts[0], "original": original, "current": current})
+        await asyncio.to_thread(case.replay.control.acknowledged, calls[1], phase)
+        reached, = [event for event in case.replay.control.events if event["operation_id"] == calls[1] and event["phase"] == phase]
+        async with asyncio.timeout_at(reached["at"] + 15):
+            frozen_request = case.request(calls[1])
+            read, = [message for message in frozen_request["messages"] if message["role"] == "tool"]
+            assert "5\tprivate-skill-owner-b" in read["content"]
+            # 发起 skill_load 的请求已封存；仍由真实 Gateway watcher 发布新版来源。
+            skill_file.write_text(updated)
+            raw_path = f"/api/gateway/skill-sources/{target.gateway_id}/workspaces/{target.workspace_id}"
+            async with asyncio.timeout(10):
+                while True:
+                    response = await target.client.get(raw_path)
+                    assert response.status_code == 200, response.text
+                    current = response.json()["data"]
+                    if current["revision"] != case.snapshots["b"]["revision"]:
+                        assert current["entries"][0]["content"] == updated
+                        assert current["entries"][0]["entry_identity"] == original["entry_identity"]
+                        break
+                    await asyncio.sleep(0.02)
     finally:
-        release.set()
+        case.replay.control.release(calls[1], phase)
+    await _completed(target.client, accepted["job_id"])
+    payload = case.request(calls[-1])
+    receipts = [json.loads(message["content"]) for message in payload["messages"]
+                if message["role"] == "tool" and message.get("name") == "skill_load"]
+    receipt, = receipts
+    assert receipt["status"] == "loaded" and receipt["tracked"] is False, receipt
+    assert receipt["display_uri"] == skill_uri
+    assert receipt["content_hash"] == "sha256:" + sha256(body.encode()).hexdigest()
+    assert "changed-after-read-owner-b" not in json.dumps(payload, ensure_ascii=False)
+    assert skill_file.read_text() == updated and receipt["revision"] != current["entries"][0]["revision"]
+    case.record("read-then-frozen-load", {"receipt": receipt, "original": original, "current": current})
 
 
 async def test_queued_job_cold_restore_keeps_frozen_gateway_and_request_id(skill_gateways):
     case = skill_gateways
-    started, release = Event(), Event()
-    first_request = True
-
-    def reply(payload):
-        nonlocal first_request
-        wire = json.dumps(payload, ensure_ascii=False)
-        if "owner-pending-b" in wire:
-            return case.skill_reply(payload, "b", "call_pending_owner_b", allow_history=True)
-        if "owner-active-hold" in wire and first_request:
-            first_request = False
-            started.set()
-            assert release.wait(45), "测试未解除 Provider 屏障"
-        return {"content": "原活跃执行结束"}
-
-    case.model.response_callback = reply
     session_id = await create_session(case.nodes["a"].client, "冷恢复 owner 队列")
+    active, = await case.plan("a", session_id, [{"content": "原活跃执行结束"}])
+    phase = "model.response_ready"
+    case.replay.control.arm(active, phase)
     try:
         await case.send("a", session_id, "owner-active-hold", "req-owner-active-a")
-        await _until(started.is_set)
-        pending = await case.send("b", session_id, "owner-pending-b", "req-owner-pending-b")
-        queued = await case.nodes["a"].client.get(f"/api/v1/sessions/{session_id}/pending-requests")
-        assert queued.status_code == 200, queued.text
-        entry, = queued.json()["data"]["requests"]
-        assert entry["job_id"] == pending["job_id"]
-        assert (entry["gateway_id"], entry["request_id"]) == (case.nodes["b"].gateway_id, "req-owner-pending-b")
-        # 原 active 在后端停止后才解除；待处理输入仍由真实队列 owner 恢复。
-        await asyncio.to_thread(case.nodes["a"].restart_backend, "kill")
-        release.set()
+        await asyncio.to_thread(case.replay.control.acknowledged, active, phase)
+        reached, = [event for event in case.replay.control.events if event["operation_id"] == active and event["phase"] == phase]
+        async with asyncio.timeout_at(reached["at"] + 45):
+            case.request(active)
+            calls = await case.plan("b", session_id, [
+                _tool("skill_load", {"name": SKILL_NAME, "mode": "snapshot"}, "call_pending_owner_b"),
+                {"content": "Skill owner b 已验证"},
+            ])
+            pending = await case.send("b", session_id, "owner-pending-b", "req-owner-pending-b")
+            queued = await case.nodes["a"].client.get(f"/api/v1/sessions/{session_id}/pending-requests")
+            assert queued.status_code == 200, queued.text
+            entry, = queued.json()["data"]["requests"]
+            assert entry["job_id"] == pending["job_id"]
+            assert (entry["gateway_id"], entry["request_id"]) == (case.nodes["b"].gateway_id, "req-owner-pending-b")
+            # 原 active 在后端停止后才解除；待处理输入仍由真实队列 owner 恢复。
+            await asyncio.to_thread(case.nodes["a"].restart_backend, "kill")
+        case.replay.control.release(active, phase)
         previous = case.nodes["a"].backend
         backend = await asyncio.to_thread(case.nodes["a"].backend_start)
         case.nodes["a"].backend = case.nodes["b"].backend = backend
@@ -665,11 +687,12 @@ async def test_queued_job_cold_restore_keeps_frozen_gateway_and_request_id(skill
         restored = await case.nodes["a"].client.get(f"/api/v1/sessions/{session_id}/pending-requests")
         assert restored.status_code == 200, restored.text
         job = await _completed(case.nodes["a"].client, pending["job_id"])
+        case.assert_skill_calls("b", calls, allow_history=True)
         await case.assert_created_owner(session_id, pending["job_id"], "b", "req-owner-pending-b")
         await case.assert_first_snapshot("b", "req-owner-pending-b", backend_pid=backend.process.pid)
         case.record("pending-cold-owner", {"queued": queued.json(), "job": job, "old_pid": previous.process.pid, "new_pid": backend.process.pid})
     finally:
-        release.set()
+        case.replay.control.release(active, phase)
 
 
 @pytest.mark.parametrize("skill_gateways", ["after_wakeup"], indirect=True)
@@ -679,19 +702,17 @@ async def test_runtime_wakeup_cold_restore_uses_frozen_owner_without_request_con
     source_session = await create_session(source.client, "来源 A")
     target_session = await create_session(target.client, "目标 B 冷恢复")
 
-    def reply(payload):
-        human = next((str(message["content"]) for message in reversed(payload["messages"])
-                      if message["role"] == "user" and message["content"]), "")
-        if "owner-wakeup-b" in human:
-            return case.skill_reply(payload, "b", "call_wakeup_owner_b")
-        if "owner-send-to-b" in human and not any(message.get("name") == "send_message_to_session" for message in payload["messages"]):
-            return _tool("send_message_to_session", {
-                "target_session_id": session_resource_uri(target.workspace_id, target_session, gateway_authority=target.gateway_id),
-                "content": "owner-wakeup-b",
-            }, "call_owner_source_send")
-        return {"content": "来源发送已接受"}
-
-    case.model.response_callback = reply
+    source_calls = await case.plan("a", source_session, [
+        _tool("send_message_to_session", {
+            "target_session_id": session_resource_uri(target.workspace_id, target_session, gateway_authority=target.gateway_id),
+            "content": "owner-wakeup-b",
+        }, "call_owner_source_send"),
+        {"content": "来源发送已接受"},
+    ])
+    target_calls = await case.plan("b", target_session, [
+        _tool("skill_load", {"name": SKILL_NAME, "mode": "snapshot"}, "call_wakeup_owner_b"),
+        {"content": "Skill owner b 已验证"},
+    ])
     source_job = await case.send("a", source_session, "owner-send-to-b", "req-owner-wakeup-source")
     marker = case.context.artifacts_dir / "barrier-after_wakeup.json"
     await _until(marker.exists)
@@ -710,8 +731,11 @@ async def test_runtime_wakeup_cold_restore_uses_frozen_owner_without_request_con
 
     assert row() == (frozen["job_id"], target.gateway_id, frozen["request_id"], "pending")
     await _completed(source.client, source_job["job_id"])
+    for call in source_calls:
+        case.request(call)
     restart = await case.restart_backend()
     completed = await _completed(source.client, frozen["job_id"])
+    case.assert_skill_calls("b", target_calls)
     await case.assert_created_owner(target_session, frozen["job_id"], "b", frozen["request_id"])
     await case.assert_first_snapshot("b", frozen["request_id"], backend_pid=restart["after_pid"])
     assert row() == (frozen["job_id"], target.gateway_id, frozen["request_id"], "dispatched")
