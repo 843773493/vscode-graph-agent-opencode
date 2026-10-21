@@ -23,6 +23,21 @@ CANONICAL_SESSION_IDS = frozenset(
 )
 
 
+def custom_tool_workspace_template_items(template_root: Path) -> tuple[str, ...]:
+    """列出需要复制的模板输入；fixture/ 由 canonical 生成器完整重建。"""
+
+    return tuple(
+        sorted(
+            [
+                item.name
+                for item in template_root.iterdir()
+                if item.name not in {".boxteam", "fixture"}
+            ]
+            + [".boxteam/AGENTS.md", ".boxteam/skills"]
+        )
+    )
+
+
 class FixtureStageObserver:
     """仅供显式 profile 使用的标量 JSONL 计时记录器。"""
 
@@ -136,12 +151,7 @@ def prepare_custom_tool_test_workspace(
 ) -> Path:
     """复制只读模板，并在测试副本重建完整 canonical rollout 历史。"""
 
-    template_items = tuple(
-        sorted(
-            [item.name for item in template_root.iterdir() if item.name != ".boxteam"]
-            + [".boxteam/AGENTS.md", ".boxteam/skills"]
-        )
-    )
+    template_items = custom_tool_workspace_template_items(template_root)
     with timed_fixture_stage(observer, "workspace.template_copy"):
         workspace_root = prepare_test_workspace(
             workspace_root=workspace_root,
