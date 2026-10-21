@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import errno
 import os
 import shlex
 import shutil
@@ -10,13 +9,9 @@ from contextlib import contextmanager
 from pathlib import Path
 from time import sleep
 
-from tests.e2e.system.gateway.gateway_target import GatewaySshTarget, wait_for_ssh_ready
+import portalocker
 
-_IS_WINDOWS = os.name == "nt"
-if _IS_WINDOWS:
-    import msvcrt
-else:
-    import fcntl
+from tests.e2e.system.gateway.gateway_target import GatewaySshTarget, wait_for_ssh_ready
 
 TARGET_ID = "docker-debian"
 TARGET_REPOSITORY = "/opt/boxteam-dev/repository"
@@ -79,35 +74,27 @@ def ensure_gateway_ssh_container(*, known_hosts_path: Path) -> GatewaySshTarget:
 
 @contextmanager
 def _docker_target_provision_lock(lock_path: Path) -> Iterator[None]:
-    """串行准备共享 Docker 目标，并按宿主系统释放文件锁。"""
+    """串行准备共享 Docker 目标，并在所有宿主系统释放文件锁。"""
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     with lock_path.open("a+b") as lock_file:
-        if _IS_WINDOWS:
-            lock_file.seek(0, os.SEEK_END)
-            if lock_file.tell() == 0:
-                lock_file.write(b"\0")
-                lock_file.flush()
-            lock_file.seek(0)
-            while True:
-                try:
-                    msvcrt.locking(lock_file.fileno(), msvcrt.LK_NBLCK, 1)
-                except OSError as error:
-                    if error.errno not in (errno.EACCES, errno.EDEADLK):
-                        raise
-                    sleep(0.05)
-                else:
-                    break
-        else:
-            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
-
+        lock_file.seek(0, os.SEEK_END)
+        if lock_file.tell() == 0:
+            lock_file.write(b"\0")
+            lock_file.flush()
+        lock_file.seek(0)
+        while True:
+            try:
+                portalocker.lock(
+                    lock_file, portalocker.LOCK_EX | portalocker.LOCK_NB
+                )
+            except portalocker.AlreadyLocked:
+                sleep(0.05)
+            else:
+                break
         try:
             yield
         finally:
-            if _IS_WINDOWS:
-                lock_file.seek(0)
-                msvcrt.locking(lock_file.fileno(), msvcrt.LK_UNLCK, 1)
-            else:
-                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+            portalocker.unlock(lock_file)
 
 
 def docker_command_prefix() -> list[str]:

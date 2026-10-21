@@ -1,33 +1,30 @@
 from __future__ import annotations
 
-import errno
+import portalocker
 
 from tests.e2e.system.gateway import gateway_docker
 
 
-def test_docker_target_setup_uses_windows_lock_before_provisioning(
+def test_docker_target_setup_holds_portable_lock_during_provisioning(
     monkeypatch, tmp_path
 ):
-    class WindowsLockApi:
-        LK_NBLCK = 1
-        LK_UNLCK = 2
-
-        def __init__(self, events):
-            self.events = events
-            self.errors = [PermissionError(errno.EACCES, "锁区已占用")]
-            self.calls = []
-
-        def locking(self, file_descriptor, mode, byte_count):
-            self.calls.append((file_descriptor, mode, byte_count))
-            self.events.append(("lock", mode))
-            if self.errors:
-                raise self.errors.pop(0)
-
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(gateway_docker, "_IS_WINDOWS", True)
     events = []
-    lock_api = WindowsLockApi(events)
-    monkeypatch.setattr(gateway_docker, "msvcrt", lock_api, raising=False)
+    lock_attempts = 0
+
+    def acquire(_lock_file, flags):
+        nonlocal lock_attempts
+        assert flags == portalocker.LOCK_EX | portalocker.LOCK_NB
+        lock_attempts += 1
+        events.append(("lock", flags))
+        if lock_attempts == 1:
+            raise portalocker.AlreadyLocked("test lock is held")
+
+    def release(lock_file):
+        events.append(("unlock", lock_file.name))
+
+    monkeypatch.setattr(gateway_docker.portalocker, "lock", acquire)
+    monkeypatch.setattr(gateway_docker.portalocker, "unlock", release)
     monkeypatch.setattr(gateway_docker, "sleep", lambda _: None)
 
     configured_known_hosts = (
@@ -62,17 +59,12 @@ def test_docker_target_setup_uses_windows_lock_before_provisioning(
     )
     assert lock_path.read_bytes() == b"\0"
     assert events == [
-        ("lock", WindowsLockApi.LK_NBLCK),
-        ("lock", WindowsLockApi.LK_NBLCK),
+        ("lock", portalocker.LOCK_EX | portalocker.LOCK_NB),
+        ("lock", portalocker.LOCK_EX | portalocker.LOCK_NB),
         ("command", "provision", ()),
         ("command", "sync", ("--activate",)),
         ("command", "bootstrap", ()),
-        ("lock", WindowsLockApi.LK_UNLCK),
-    ]
-    assert [mode for _, mode, _ in lock_api.calls] == [
-        WindowsLockApi.LK_NBLCK,
-        WindowsLockApi.LK_NBLCK,
-        WindowsLockApi.LK_UNLCK,
+        ("unlock", str(lock_path)),
     ]
     assert known_hosts_path.read_text(encoding="utf-8") == "docker target\n"
     assert target.platform == "linux"
