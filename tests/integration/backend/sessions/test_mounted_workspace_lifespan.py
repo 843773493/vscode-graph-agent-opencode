@@ -7,10 +7,8 @@ import json
 import threading
 from dataclasses import dataclass, field
 from pathlib import Path
-from types import SimpleNamespace
 
 import httpx
-import litellm
 import pytest
 
 from app import container as container_module
@@ -35,44 +33,39 @@ from app.services.infrastructure.config_service import ConfigService
 from app.services.infrastructure.message_stream_store import MessageStreamNotFoundError
 from app.services.infrastructure.resource_platform.bootstrap import ResourcePlatform
 from app.services.infrastructure.workspace_state_store import WorkspaceStateStore
-from app.testing.model_stream import load_model_stream_config
+from app.testing.model_stream import (
+    build_cassette,
+    chat_completion_frames,
+    load_model_stream_config,
+)
 from tests.harness.python.run_context import TestRunContext
 from tests.integration.backend.sessions.test_runner_cancellation import (
     RunnerCase,
     _session,
     _start_job,
 )
+from tests.support.model_stream_config import ModelStreamReplay
 from tests.support.workspaces import prepare_default_test_workspace
 
 
-class _ModelProtocolStream:
-    received_finish_reason = False
-
-    def __init__(self, text: str, request: dict[str, object]) -> None:
-        self.text = text
-        self.logging_obj = SimpleNamespace(model_call_details={
-            "call_type": "acompletion", "custom_llm_provider": request["custom_llm_provider"],
-            "model": request["model"],
-            "additional_args": {
-                "api_base": request.get("api_base"), "complete_input_dict": request,
-            },
-        })
-
-    async def __aiter__(self):
-        yield {"choices": [{"index": 0, "delta": {"role": "assistant"}, "finish_reason": None}]}
-        yield {"choices": [{"index": 0, "delta": {"content": self.text}, "finish_reason": None}]}
-        self.received_finish_reason = True
-        yield {"choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]}
-
-    async def aclose(self) -> None:
-        pass
-
-
-class _ModelProtocol:
-    async def completion(self, *_args, **kwargs):
-        assert kwargs["stream"] is True
-        assert isinstance(kwargs["messages"], list) and kwargs["messages"]
-        return _ModelProtocolStream(f"工作区 {get_workspace_id()} 的真实编译图", kwargs)
+def _plan_model_call(
+    replay: ModelStreamReplay, container: AppContainer, session_id: str, thread_id: str,
+    *, response_status: int = 200,
+) -> str:
+    provider_id = container.config_service.get_workspace_default_provider_id("default")
+    provider = container.config_service.get_llm_provider(provider_id)
+    interaction = build_cassette(
+        asset_id="mounted-workspace", model=provider["model"],
+        url=provider["endpoint"].rstrip("/") + "/chat/completions",
+        status=response_status,
+        frames=chat_completion_frames(
+            response_id="mounted-workspace", model=provider["model"],
+            deltas=({"role": "assistant", "content": f"工作区 {container.workspace_id} 的真实编译图"},),
+            finish_reason="stop",
+        ),
+    ).raw["interactions"][0]
+    call_id, = replay.control.plan_model_calls(session_id, thread_id, [interaction])
+    return call_id
 
 
 @dataclass
@@ -135,14 +128,6 @@ def mounted_case(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch
     monkeypatch.setattr(container_module, "build_app_container", build)
 
     model_builder = agent_factory.build_model_from_provider
-    protocol = _ModelProtocol()
-
-    async def completion_stub(*args, **kwargs):
-        return await protocol.completion(*args, **kwargs)
-
-    monkeypatch.setattr(litellm, "acompletion", completion_stub)
-    monkeypatch.setattr(litellm, "aresponses", completion_stub)
-
     def model_runtime(*args, **kwargs):
         owner = current_session_thread_owner()
         assert owner is not None
@@ -151,7 +136,7 @@ def mounted_case(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch
         case.compiled.append((identity, root, owner.session_id, owner.thread_id))
         return model_builder(*args, **kwargs)
 
-    # 只在外部模型传输边界返回协议桩；真实 model binding、说明来源和 sealed dispatch 保留。
+    # 只观察真实编译绑定；模型请求沿共用 model_stream 和实际 SDK 流转。
     monkeypatch.setattr(agent_factory, "build_model_from_provider", model_runtime)
     yield case
 
@@ -169,8 +154,12 @@ def assert_closed(case: MountedCase):
 
 
 @pytest.mark.asyncio
-async def test_real_double_mount_requests_compilation_and_reverse_cleanup(mounted_case: MountedCase):
+async def test_real_double_mount_requests_compilation_and_reverse_cleanup(
+    mounted_case: MountedCase, inprocess_model_replay,
+):
     case = mounted_case
+    replay, controller = inprocess_model_replay
+    planned = {}
     async with main.lifespan(main.app):
         registry = main.app.state.workspace_container_registry
         assert registry is not None
@@ -192,11 +181,20 @@ async def test_real_double_mount_requests_compilation_and_reverse_cleanup(mounte
             ):
                 runner = RunnerCase(container, container.workspace_root)
                 session_id, thread_id = await _session(runner)
+                planned[session_id, thread_id] = _plan_model_call(replay, container, session_id, thread_id)
                 job = await _start_job(runner, "user", session_id, thread_id)
-                await asyncio.wait_for(asyncio.shield(job.task), 10)
+                # TODO: 双挂载冷执行实测 10.8/11.2 秒（mounted-model-stream-core-001）；
+                # 性能另行优化。这里给真实 SDK 留有界预算，隔离和完成状态仍逐项验证。
+                await asyncio.wait_for(asyncio.shield(job.task), 30)
                 assert job.status == JobStatus.completed, job.error_message
                 return session_id, thread_id
         pairs = await asyncio.gather(*(run(container) for container in containers))
+        assert controller.transport.call_count == len(containers)
+        assert list(controller.transport.hit_counts.values()) == [1] * len(containers)
+        for owner, call_id in planned.items():
+            capture = json.loads((replay.artifacts / (call_id + ".json")).read_text(encoding="utf-8"))
+            assert capture["identity"] == {"session_id": owner[0], "thread_id": owner[1], "model_call_id": call_id}
+            assert capture["request"]["stream"] is True and capture["request"]["messages"]
         assert {(identity, root, *pair) for (identity, root), pair in zip(case.roots.items(), pairs, strict=True)} == set(case.compiled)
         mounted_sessions = [
             await container.session_service.get(pair[0])
@@ -348,28 +346,33 @@ async def test_registry_failure_closes_configured_transport(
 )
 async def test_shutdown_waits_for_real_goal_terminal_state_before_catalog_close(
     mounted_case: MountedCase,
+    inprocess_model_replay,
     monkeypatch: pytest.MonkeyPatch,
     terminal_status: JobStatus,
     user_status: GoalStatus,
     expected_status: GoalStatus,
 ) -> None:
     ready, close_requested = asyncio.Event(), asyncio.Event()
+    lifespan_ready = asyncio.Event()
     model_entered, model_release = asyncio.Event(), asyncio.Event()
     goal_entered, goal_captured = asyncio.Event(), asyncio.Event()
     containers: list[AppContainer] = []
     jobs: list[JobState] = []
     goal_paths: list[Path] = []
     locks: list[asyncio.Lock] = []
+    replay, controller = inprocess_model_replay
+    planned = []
 
-    async def blocked_model(_model, *_args, **_kwargs):
+    async def blocked_response(call_id, phase):
+        assert phase == "model.response_ready" and call_id in planned
         model_entered.set()
         await model_release.wait()
-        raise RuntimeError("受控模型失败")
 
-    monkeypatch.setattr(_ModelProtocol, "completion", blocked_model)
+    monkeypatch.setattr("app.testing.model_stream.transport.observe_phase", blocked_response)
 
     async def run_lifespan() -> None:
         async with main.lifespan(main.app):
+            lifespan_ready.set()
             container = mounted_case.containers[0]
             containers.append(container)
             with workspace_context(
@@ -379,6 +382,10 @@ async def test_shutdown_waits_for_real_goal_terminal_state_before_catalog_close(
             ):
                 case = RunnerCase(container, container.workspace_root)
                 session_id, thread_id = await _session(case)
+                # 400 经真实 SDK 终结失败，不把可重试的传输异常当成一次模型调用。
+                planned.append(_plan_model_call(
+                    replay, container, session_id, thread_id, response_status=400,
+                ))
                 goals, runtime = container.goal_service, container.goal_runtime_service
                 await goals.set(session_id, objective="关闭时必须保存真实 Goal 状态")
                 real_capture = runtime._capture_started_job
@@ -416,6 +423,7 @@ async def test_shutdown_waits_for_real_goal_terminal_state_before_catalog_close(
 
     task = asyncio.create_task(run_lifespan())
     try:
+        await asyncio.wait_for(lifespan_ready.wait(), 8)
         await asyncio.wait_for(ready.wait(), 8)
         close_requested.set()
         await asyncio.wait_for(goal_entered.wait(), 5)
@@ -426,14 +434,22 @@ async def test_shutdown_waits_for_real_goal_terminal_state_before_catalog_close(
         assert jobs[0].status == terminal_status
         assert containers[0].session_catalog.resolver.catalog_store.connection is not None
     finally:
+        # 屏障建立前失败时先阻止迟到的协程获取锁，避免清理掩盖原失败。
+        if not ready.is_set():
+            task.cancel()
         for lock in locks:
             lock.release()
         close_requested.set()
         model_release.set()
-        await asyncio.wait_for(task, 8)
+        if ready.is_set():
+            await asyncio.wait_for(task, 8)
+        else:
+            await asyncio.wait_for(asyncio.gather(task, return_exceptions=True), 8)
     assert json.loads(goal_paths[0].read_text(encoding="utf-8"))["status"] == expected_status.value
     assert not containers[0].goal_runtime_service._tasks
     assert not containers[0].job_service._finalization_tasks
+    assert controller.transport.call_count == 1
+    assert list(controller.transport.hit_counts.values()) == [1]
     assert_closed(mounted_case)
 
 
