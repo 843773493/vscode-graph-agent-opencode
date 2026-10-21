@@ -22,6 +22,7 @@ from app.schemas.internal_v2.session_context import (
 from app.services.business.session_context_resource import (
     ParsedSessionContextResource,
     SessionContextCursorCodec,
+    exact_returned_chars_with_appended_json,
     gateway_session_inventory_identity,
     parse_session_context_ref,
     require_cursor_offset_in_range,
@@ -113,29 +114,40 @@ class GatewayContextQueryService:
             for item in inventory.items[offset : offset + request.limit]
         ]
         accepted: list[SessionContextItemDTO] = []
-        result = _build_gateway_read_result(
-            request=request,
-            revision=revision,
-            items=accepted,
-            offset=offset,
-            total_items=len(inventory.items),
-        )
+        accepted_item_json_chars = 0
         for item in candidates:
-            candidate = _build_gateway_read_result(
+            serialized_item = item.model_dump_json()
+            candidate_returned_item_count = len(accepted) + 1
+            empty_candidate = _build_gateway_read_result(
                 request=request,
                 revision=revision,
-                items=[*accepted, item],
+                items=[],
+                returned_item_count=candidate_returned_item_count,
                 offset=offset,
                 total_items=len(inventory.items),
             )
-            if candidate.returned_chars > request.max_chars:
+            candidate_returned_chars = exact_returned_chars_with_appended_json(
+                empty_result_returned_chars=empty_candidate.returned_chars,
+                appended_json_chars=(
+                    accepted_item_json_chars + len(serialized_item) + len(accepted)
+                ),
+            )
+            if candidate_returned_chars > request.max_chars:
                 break
             accepted.append(item)
-            result = candidate
+            accepted_item_json_chars += len(serialized_item)
         if candidates and not accepted:
             raise ValueError(
                 "max_chars 太小，无法容纳 Gateway workspace inventory 的首个 item"
             )
+        result = _build_gateway_read_result(
+            request=request,
+            revision=revision,
+            items=accepted,
+            returned_item_count=len(accepted),
+            offset=offset,
+            total_items=len(inventory.items),
+        )
         _require_within_budget(result.returned_chars, request.max_chars)
         return result
 
@@ -248,51 +260,84 @@ class GatewayContextQueryService:
         selected = matches[offset : offset + request.max_results]
         accepted_matches: list[SessionContextSearchMatchDTO] = []
         accepted_errors: list[SessionContextPartialErrorDTO] = []
+        accepted_match_json_chars = 0
+        for match in selected:
+            serialized_match = match.model_dump_json()
+            candidate_returned_match_count = len(accepted_matches) + 1
+            empty_candidate = _build_gateway_search_result(
+                request=request,
+                revision=revision,
+                query_hash=query_hash,
+                matches=[],
+                errors=[],
+                returned_match_count=candidate_returned_match_count,
+                returned_error_count=0,
+                total_error_count=len(errors),
+                total_matches=total_matches,
+                available_match_count=len(matches),
+                offset=offset,
+                upstream_truncated=upstream_truncated,
+            )
+            candidate_returned_chars = exact_returned_chars_with_appended_json(
+                empty_result_returned_chars=empty_candidate.returned_chars,
+                appended_json_chars=(
+                    accepted_match_json_chars
+                    + len(serialized_match)
+                    + len(accepted_matches)
+                ),
+            )
+            if candidate_returned_chars > request.max_chars:
+                break
+            accepted_matches.append(match)
+            accepted_match_json_chars += len(serialized_match)
+        if selected and not accepted_matches:
+            raise ValueError("max_chars 太小，无法容纳 Gateway search 的首个 match")
+        accepted_error_json_chars = 0
+        for error in errors:
+            serialized_error = error.model_dump_json()
+            candidate_returned_error_count = len(accepted_errors) + 1
+            empty_candidate = _build_gateway_search_result(
+                request=request,
+                revision=revision,
+                query_hash=query_hash,
+                matches=[],
+                errors=[],
+                returned_match_count=len(accepted_matches),
+                returned_error_count=candidate_returned_error_count,
+                total_error_count=len(errors),
+                total_matches=total_matches,
+                available_match_count=len(matches),
+                offset=offset,
+                upstream_truncated=upstream_truncated,
+            )
+            candidate_returned_chars = exact_returned_chars_with_appended_json(
+                empty_result_returned_chars=empty_candidate.returned_chars,
+                appended_json_chars=(
+                    accepted_match_json_chars
+                    + len(accepted_matches)
+                    + accepted_error_json_chars
+                    + len(serialized_error)
+                    + len(accepted_errors)
+                ),
+            )
+            if candidate_returned_chars > request.max_chars:
+                break
+            accepted_errors.append(error)
+            accepted_error_json_chars += len(serialized_error)
         result = _build_gateway_search_result(
             request=request,
             revision=revision,
+            query_hash=query_hash,
             matches=accepted_matches,
             errors=accepted_errors,
+            returned_match_count=len(accepted_matches),
+            returned_error_count=len(accepted_errors),
             total_error_count=len(errors),
             total_matches=total_matches,
             available_match_count=len(matches),
             offset=offset,
             upstream_truncated=upstream_truncated,
         )
-        for match in selected:
-            candidate = _build_gateway_search_result(
-                request=request,
-                revision=revision,
-                matches=[*accepted_matches, match],
-                errors=accepted_errors,
-                total_error_count=len(errors),
-                total_matches=total_matches,
-                available_match_count=len(matches),
-                offset=offset,
-                upstream_truncated=upstream_truncated,
-            )
-            if candidate.returned_chars > request.max_chars:
-                break
-            accepted_matches.append(match)
-            result = candidate
-        if selected and not accepted_matches:
-            raise ValueError("max_chars 太小，无法容纳 Gateway search 的首个 match")
-        for error in errors:
-            candidate = _build_gateway_search_result(
-                request=request,
-                revision=revision,
-                matches=accepted_matches,
-                errors=[*accepted_errors, error],
-                total_error_count=len(errors),
-                total_matches=total_matches,
-                available_match_count=len(matches),
-                offset=offset,
-                upstream_truncated=upstream_truncated,
-            )
-            if candidate.returned_chars > request.max_chars:
-                break
-            accepted_errors.append(error)
-            result = candidate
         _require_within_budget(result.returned_chars, request.max_chars)
         return result
 
@@ -302,10 +347,11 @@ def _build_gateway_read_result(
     request: SessionContextReadRequest,
     revision: str,
     items: list[SessionContextItemDTO],
+    returned_item_count: int,
     offset: int,
     total_items: int,
 ) -> SessionContextReadResultDTO:
-    has_more = offset + len(items) < total_items
+    has_more = offset + returned_item_count < total_items
     result = SessionContextReadResultDTO(
         resource_identity=request.resource_identity,
         uri=request.uri,
@@ -330,7 +376,7 @@ def _build_gateway_read_result(
                 ),
                 record_index=request.record_index,
                 assembly_ref=request.assembly_ref,
-                offset=offset + len(items),
+                offset=offset + returned_item_count,
             )
             if has_more
             else None
@@ -344,16 +390,19 @@ def _build_gateway_search_result(
     *,
     request: SessionContextSearchRequest,
     revision: str,
+    query_hash: str,
     matches: list[SessionContextSearchMatchDTO],
     errors: list[SessionContextPartialErrorDTO],
+    returned_match_count: int,
+    returned_error_count: int,
     total_error_count: int,
     total_matches: int,
     available_match_count: int,
     offset: int,
     upstream_truncated: bool,
 ) -> SessionContextSearchResultDTO:
-    has_more = offset + len(matches) < available_match_count
-    omitted_error_count = total_error_count - len(errors)
+    has_more = offset + returned_match_count < available_match_count
+    omitted_error_count = total_error_count - returned_error_count
     result = SessionContextSearchResultDTO(
         resource_identity=request.resource_identity,
         uri=request.uri,
@@ -369,8 +418,8 @@ def _build_gateway_search_result(
                 uri=request.uri,
                 scope=request.scope,
                 revision=revision,
-                operation=f"search:{_search_query_hash(request)}",
-                offset=offset + len(matches),
+                operation=f"search:{query_hash}",
+                offset=offset + returned_match_count,
             )
             if has_more
             else None

@@ -256,6 +256,27 @@ def set_exact_returned_chars(
     raise RuntimeError(f"无法稳定计算 {operation} 响应字符数")
 
 
+def exact_returned_chars_with_appended_json(
+    *,
+    empty_result_returned_chars: int,
+    appended_json_chars: int,
+) -> int:
+    """加上条目 JSON 与数组逗号，计算空集合响应的精确 returned_chars。"""
+    base_returned_chars = empty_result_returned_chars + appended_json_chars
+    candidate_returned_chars = base_returned_chars
+    empty_returned_chars_digits = len(str(empty_result_returned_chars))
+    for _ in range(8):
+        exact_returned_chars = (
+            base_returned_chars
+            + len(str(candidate_returned_chars))
+            - empty_returned_chars_digits
+        )
+        if exact_returned_chars == candidate_returned_chars:
+            return exact_returned_chars
+        candidate_returned_chars = exact_returned_chars
+    raise RuntimeError("无法稳定计算 session context 响应字符数")
+
+
 class SessionContextCursorCodec:
     """绑定身份、URI、scope、修订、视图与结构化选择的分页游标。"""
 

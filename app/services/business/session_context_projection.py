@@ -15,6 +15,7 @@ from app.schemas.internal_v2.session_context import (
 )
 from app.services.business.session_context_resource import (
     SessionContextCursorCodec,
+    exact_returned_chars_with_appended_json,
     require_cursor_offset_in_range,
     require_session_context_revision,
     session_context_read_operation,
@@ -192,16 +193,18 @@ def paginate_read_items(
     returned: list[SessionContextItemDTO] = []
     budget_truncated = False
     completed_items = 0
+    returned_item_json_chars = 0
     next_item_char_offset: int | None = None
     for selected_index, item in enumerate(selected):
         item_char_offset = char_offset if selected_index == 0 else 0
+        serialized_item: str | None = None
         if item_char_offset == 0:
-            candidate_items = [*returned, item]
+            serialized_item = item.model_dump_json()
             candidate_completed = completed_items + 1
-            candidate = _build_read_result(
+            empty_candidate = _build_read_result(
                 request=request,
                 revision=revision,
-                items=candidate_items,
+                items=[],
                 offset=offset,
                 completed_items=candidate_completed,
                 total_items=len(items),
@@ -212,17 +215,27 @@ def paginate_read_items(
                 effective_record_count=effective_record_count,
                 budget_truncated=budget_truncated,
             )
-            if candidate.returned_chars <= request.max_chars:
-                returned = candidate_items
+            candidate_returned_chars = exact_returned_chars_with_appended_json(
+                empty_result_returned_chars=empty_candidate.returned_chars,
+                appended_json_chars=(
+                    returned_item_json_chars + len(serialized_item) + len(returned)
+                ),
+            )
+            if candidate_returned_chars <= request.max_chars:
+                returned.append(item)
+                returned_item_json_chars += len(serialized_item)
                 completed_items = candidate_completed
                 continue
         if returned:
             budget_truncated = True
             break
+        if serialized_item is None:
+            serialized_item = item.model_dump_json()
         fitted, remaining_item_offset = _largest_fitting_chunk(
             request=request,
             revision=revision,
             item=item,
+            serialized=serialized_item,
             item_offset=offset,
             total_items=len(items),
             char_offset=item_char_offset,
@@ -239,6 +252,7 @@ def paginate_read_items(
             next_item_char_offset = remaining_item_offset
             break
         completed_items += 1
+        returned_item_json_chars += len(fitted.model_dump_json())
     result = _build_read_result(
         request=request,
         revision=revision,
@@ -263,6 +277,7 @@ def _largest_fitting_chunk(
     request: SessionContextReadRequest,
     revision: str,
     item: SessionContextItemDTO,
+    serialized: str,
     item_offset: int,
     total_items: int,
     char_offset: int,
@@ -272,7 +287,6 @@ def _largest_fitting_chunk(
     effective_record_count: int,
 ) -> tuple[SessionContextItemDTO | None, int | None]:
     # 分片必须与完整DTO同形，保留nullable来源URI与空集合，消费者无需补字段。
-    serialized = item.model_dump_json()
     if char_offset >= len(serialized):
         raise ValueError(
             f"context cursor 字符偏移越界: offset={char_offset}, "
