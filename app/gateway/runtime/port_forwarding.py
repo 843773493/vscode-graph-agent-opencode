@@ -605,7 +605,13 @@ class SshPortForwardManager:
     def _read_log_tail(log_path: Path | None) -> str:
         if log_path is None or not log_path.exists():
             return ""
-        content = log_path.read_text(encoding="utf-8", errors="replace")
+        # UTF-8 字符最多占 4 字节；额外读取 3 字节，覆盖尾部起点切入字符的情况。
+        max_tail_bytes = _LOG_TAIL_LIMIT * 4 + 3
+        with log_path.open("rb") as stream:
+            stream.seek(0, 2)
+            file_size = stream.tell()
+            stream.seek(max(0, file_size - max_tail_bytes))
+            content = stream.read(max_tail_bytes).decode("utf-8", errors="replace")
         return content[-_LOG_TAIL_LIMIT:].strip()
 
     def _load(self) -> None:

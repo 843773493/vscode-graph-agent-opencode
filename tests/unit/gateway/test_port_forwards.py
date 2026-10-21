@@ -12,6 +12,7 @@ from app.gateway.auth import verify_gateway_token
 from app.gateway.federation import RemoteGatewayConnection
 from app.gateway.main import app
 from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceTarget
+from app.gateway.runtime import port_forwarding
 from app.gateway.runtime.port_forwarding import SshPortForwardManager
 from app.gateway.server.port_forwarding import get_port_forward_manager
 from app.schemas.gateway.port_forwarding import CreatePortForwardRequest
@@ -296,6 +297,52 @@ async def test_restore_failure_remains_visible_on_workspace_list(
     assert "绑定的远程 Gateway 已变化" in (restored[0].error or "")
     with pytest.raises(RuntimeError, match="SSH 端口转发健康检查失败"):
         manager.assert_healthy()
+
+
+def test_log_tail_reads_bounded_utf8_suffix(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    log_path = tmp_path / "large-ssh.log"
+    content = "旧日志🚀\n" * 20_000 + "末尾错误🧭\n" * 1_000
+    log_path.write_text(content, encoding="utf-8")
+    max_tail_bytes = port_forwarding._LOG_TAIL_LIMIT * 4 + 3
+    read_sizes: list[int] = []
+    real_open = Path.open
+
+    class ReadProbe:
+        def __init__(self, stream) -> None:
+            self._stream = stream
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args) -> None:
+            self._stream.close()
+
+        def seek(self, *args):
+            return self._stream.seek(*args)
+
+        def tell(self) -> int:
+            return self._stream.tell()
+
+        def read(self, size: int) -> bytes:
+            read_sizes.append(size)
+            return self._stream.read(size)
+
+    def open_probe(path: Path, *args, **kwargs):
+        return ReadProbe(real_open(path, *args, **kwargs))
+
+    def reject_full_read(*_args, **_kwargs):
+        pytest.fail("日志尾部读取不得调用完整 read_text")
+
+    monkeypatch.setattr(Path, "open", open_probe)
+    monkeypatch.setattr(Path, "read_text", reject_full_read)
+
+    actual = SshPortForwardManager._read_log_tail(log_path)
+
+    assert actual == content[-port_forwarding._LOG_TAIL_LIMIT :].strip()
+    assert read_sizes == [max_tail_bytes]
 
 
 def test_port_forward_runtime_generation_protocol_is_reversible(
