@@ -1,7 +1,7 @@
 ## 1. P0 依赖与恢复合同（先于结构改动）
 
 - [x] 1.1 固定当前锁定/安装版本、官方发布及源码指纹；核对模型节点、DeltaChannel、消息reducer、serializer、new_versions、writes_sort_key和同步/异步增量历史合同，并登记全部实际产品调用方。
-- [ ] 1.2 用相同真实产品工作负载保存优化前的各表/正文/索引增量、serializer调用/字节、写入/恢复时间，区分既有canonical消息复用与仍重复的channel、assembly、view成本。
+- [x] 1.2 用相同真实产品工作负载保存优化前的各表/正文/索引增量、serializer调用/字节、写入/恢复时间，区分既有canonical消息复用与仍重复的channel、assembly、view成本。
 - [x] 1.3 将低于目标的依赖更新至LangGraph1.2.16/checkpoint4.3.0或当前更高版本，不回退；迁齐模型节点适配，验证真实图同步/异步执行、消息合并与checkpoint冷恢复，独立提交，不宣称去重完成。
 
 ## 2. P0 非 messages 通道版本复用
@@ -44,3 +44,5 @@
 2026-10-21 依赖合同片：LangGraph1.2.16/checkpoint4.3.0、SDK0.4.8已安装并锁定；源码和全部直接消费者指纹见 `out/tests/temp/openspec_takeover/artifacts/history-dedup-contract-audit-001.json`。模型节点同步/异步2例、官方Delta图及Saver恢复合同12例、升级后的Gateway四轮工具循环/并发结果/重启/历史request_hash均通过。集成矩阵89例通过，另外2条锁mock原本误拦截fcntl而实现使用portalocker，恢复正确mock后与真实HTTP/SDK同步异步专项一起通过，原失败保留。独审无升级阻断。升级不等于去重完成。
 
 1.2仍待补齐摘要、深fork与回退同负载；已保存优化前和升级后的四轮工具/重启工作负载，分表正文/索引字节、serializer计数及耗时。旧依赖基线冻结在 `out/tests/temp/openspec_takeover/artifacts/history-dedup-baseline-frozen-001/`；正式原始测量在 `out/tests/integration/backend/sessions/rollout_context/test_execution_history_storage/artifacts/run-*/measurements.json`。不得以这些局部场景冒称全部验收。
+
+2026-10-21 完整优化前基线：`history-dedup-complete-baseline-product-011` 通过（1例/218.21秒），经Gateway产生20次模型调用，涵盖多轮/并发read_file、真实摘要及重启继续、点击最终响应item的深历史A→B→C、源删除后的冷恢复和正式regenerate入口。每个保留assembly按model_call_id关联实际wire，完整规范化正文相等后校验request_hash。分阶段表/正文/索引、serializer和读写计数原件冻结于 `out/tests/temp/openspec_takeover/artifacts/history-dedup-complete-baseline-frozen-001/`；计数在每次后端重启后重置，只在同一进程阶段比较。早前失败与主动终止的原件保留，未计为通过。
