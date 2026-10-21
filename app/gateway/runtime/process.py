@@ -12,7 +12,7 @@ import subprocess
 import sys
 import time
 from dataclasses import dataclass, field
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from typing import Protocol, TextIO
 from uuid import UUID
 
@@ -352,12 +352,16 @@ def allocate_ssh_tunnel_port() -> int:
     return allocate_local_port_in_range(start, end)
 
 
-def resolve_python_executable(_: Path) -> Path:
+def resolve_python_executable() -> Path:
     configured = os.environ.get("BOXTEAM_PYTHON_BIN")
     if configured:
         executable = Path(configured).expanduser()
-        # TODO: Windows 将无盘符根路径（如 /workspace）表示为 rooted path，不能只依赖 pathlib.is_absolute。
-        if not os.path.isabs(str(executable)):
+        is_absolute = (
+            PureWindowsPath(executable).is_absolute()
+            if os.name == "nt"
+            else executable.is_absolute()
+        )
+        if not is_absolute:
             raise ValueError(f"BOXTEAM_PYTHON_BIN 必须是绝对路径: {configured}")
         # 不解引用 venv 的 python 符号链接；真实路径会丢失 pyvenv.cfg 上下文。
         return executable
@@ -373,7 +377,7 @@ def resolve_backend_workspace_id(project_root: Path, workspace_root: Path, *, in
         raise NotADirectoryError(f"工作区根不是目录: {resolved_workspace_root}")
     result = subprocess.run(
         [
-            str(resolve_python_executable(resolved_project_root)),
+            str(resolve_python_executable()),
             "-m",
             "app.core.workspace_identity",
             "--workspace-root",
@@ -472,7 +476,7 @@ def start_local_backend_process(
     mounted = MountedWorkspaceRegistry(list(mounts))
     if not backend_generation.strip():
         raise ValueError("启动 Backend 必须提供 generation")
-    python_executable = resolve_python_executable(project_root)
+    python_executable = resolve_python_executable()
     env = _local_child_environment()
     env["BOXTEAM_PROJECT_ROOT"] = str(project_root)
     env["BOXTEAM_BACKEND_GENERATION"] = backend_generation

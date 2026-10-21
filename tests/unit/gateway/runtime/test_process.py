@@ -57,7 +57,7 @@ def test_resolve_python_executable_preserves_venv_symlink(
 ) -> None:
     monkeypatch.setenv("BOXTEAM_PYTHON_BIN", "/workspace/.venv/bin/python")
 
-    assert resolve_python_executable(Path("/workspace")) == Path(
+    assert resolve_python_executable() == Path(
         "/workspace/.venv/bin/python"
     )
 
@@ -68,7 +68,27 @@ def test_resolve_python_executable_rejects_relative_path(
     monkeypatch.setenv("BOXTEAM_PYTHON_BIN", ".venv/bin/python")
 
     with pytest.raises(ValueError, match="必须是绝对路径"):
-        resolve_python_executable(Path("/workspace"))
+        resolve_python_executable()
+
+
+def test_resolve_python_executable_rejects_windows_rooted_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(os, "name", "nt")
+    monkeypatch.setenv("BOXTEAM_PYTHON_BIN", "/workspace/python.exe")
+
+    with pytest.raises(ValueError, match="必须是绝对路径"):
+        resolve_python_executable()
+
+
+def test_resolve_python_executable_accepts_windows_drive_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    configured = r"C:\workspace\.venv\Scripts\python.exe"
+    monkeypatch.setattr(os, "name", "nt")
+    monkeypatch.setenv("BOXTEAM_PYTHON_BIN", configured)
+
+    assert str(resolve_python_executable()) == configured
 
 
 def test_resolve_backend_workspace_id_consumes_canonical_single_line_cli_output(
@@ -84,7 +104,7 @@ def test_resolve_backend_workspace_id_consumes_canonical_single_line_cli_output(
 
     monkeypatch.setattr(
         "app.gateway.runtime.process.resolve_python_executable",
-        lambda _: Path("/project/.venv/bin/python"),
+        lambda: Path("/project/.venv/bin/python"),
     )
     monkeypatch.setattr("app.gateway.runtime.process.subprocess.run", fake_run)
 
@@ -120,7 +140,7 @@ def test_resolve_backend_workspace_id_rejects_invalid_cli_output(
 ) -> None:
     monkeypatch.setattr(
         "app.gateway.runtime.process.resolve_python_executable",
-        lambda _: Path("/project/.venv/bin/python"),
+        lambda: Path("/project/.venv/bin/python"),
     )
     monkeypatch.setattr(
         "app.gateway.runtime.process.subprocess.run",
