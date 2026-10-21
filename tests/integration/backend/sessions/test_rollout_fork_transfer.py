@@ -1,4 +1,4 @@
-"""真实三端 Gateway/SSH fork；仅外部模型使用受控协议桩。"""
+"""真实三端 Gateway/SSH fork；模型使用按产品 owner 精确匹配的共享回放。"""
 
 from __future__ import annotations
 
@@ -25,12 +25,12 @@ from app.schemas.internal_v2.session_fork_transfer import FORK_TRANSFER_CHUNK_BY
 from app.services.business.session_context_resource import (
     workspace_session_inventory_uri,
 )
+from app.testing.model_stream import build_cassette, chat_completion_frames
 from tests.harness.python.run_context import TestRunContext
 from tests.integration.backend.sessions.test_session_communication_pipeline import (
     _completed,
     _prepare_workspace,
 )
-from tests.integration.stubs.http_stubs import HTTPStubState, openai_chat_stub
 from tests.support.api_helpers import create_session
 from tests.support.communication_federation import (
     CommunicationNode,
@@ -38,28 +38,30 @@ from tests.support.communication_federation import (
 )
 from tests.support.e2e_control.harness import E2ETestControlHarness
 from tests.support.fork_deadline import ForkDeadlineRegistry, ForkOperationDeadline
-from tests.support.processes.gateway import close_gateway_process
+from tests.support.model_stream_config import ModelStreamReplay, model_stream_replay
 from tests.support.ports import integration_port_block_for_file
+from tests.support.processes.gateway import close_gateway_process
 from tests.support.session_navigation_http import submit_navigation_operation
 
 
 @pytest.fixture
 async def transfer_triad(request: pytest.FixtureRequest) -> AsyncIterator[
-    tuple[dict[str, CommunicationNode], HTTPStubState, Path, E2ETestControlHarness, ForkDeadlineRegistry]
+    tuple[dict[str, CommunicationNode], ModelStreamReplay, Path, E2ETestControlHarness, ForkDeadlineRegistry]
 ]:
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
     run_partition = context.runtime_root_for_node(request.node.nodeid).parent.name
     artifacts = context.artifacts_dir / run_partition / request.node.name
     artifacts.mkdir(parents=True, exist_ok=True)
-    ports = integration_port_block_for_file(Path(request.node.path))
     same_backend_routes = bool(getattr(request, "param", {}).get("same_backend_routes"))
-    control = E2ETestControlHarness(artifacts)
     fork_deadlines = ForkDeadlineRegistry(artifacts)
-    control.start()
     try:
-        with openai_chat_stub(ports.port(10)) as model:
+        with model_stream_replay(
+            context.artifacts_dir.parent, runtime_root=context.runtime_root_for_node(request.node.nodeid),
+            business_assertion="cross-gateway-fork-transfer",
+        ) as model:
+            control = model.control
             async with open_communication_triad(
-                context, _prepare_workspace, backend_environment=control.environment,
+                context, _prepare_workspace, backend_environment=model.environment,
                 backend_asgi_app="tests.support.e2e_control.backend_app:app",
                 # 共享 Backend 时真实 owner 是 A，辅助服务必须跟随该 owner 启动。
                 resource_service_nodes=("a" if same_backend_routes else "b",),
@@ -69,14 +71,55 @@ async def transfer_triad(request: pytest.FixtureRequest) -> AsyncIterator[
                 try:
                     yield nodes, model, artifacts, control, fork_deadlines
                 finally:
-                    (artifacts / "provider-wire.json").write_text(json.dumps(model.requests, ensure_ascii=False, indent=2) + "\n")
+                    (artifacts / "provider-wire.json").write_text(json.dumps({"provider_call_count": _provider_call_count(model), "recordings": _provider_requests(model)}, ensure_ascii=False, indent=2) + "\n")
     finally:
         fork_deadlines.close()
-        control.close()
+
+
+def _provider_call_count(model: ModelStreamReplay) -> int:
+    # 在 transport 前创建的真实 ModelCall 也计入，未匹配回放不能伪装成零请求。
+    with model.control._condition:
+        return sum(count for namespace, count in model.control._counters.items() if namespace.startswith("model_call/"))
+
+
+def _provider_requests(model: ModelStreamReplay) -> list[dict[str, object]]:
+    events = model.control._dispatch({"action": "events"})
+    records = []
+    for event in events:
+        if event["phase"] != "model.response_ready":
+            continue
+        call_id = event["operation_id"]
+        record = json.loads((model.artifacts / f"{call_id}.json").read_text(encoding="utf-8"))
+        assert record["identity"]["model_call_id"] == call_id
+        records.append(record["request"])
+    return records
+
+
+async def _plan_replies(
+    node: CommunicationNode, model: ModelStreamReplay, session_id: str,
+    responses: list[dict[str, object]], *, thread_id: str | None = None,
+) -> None:
+    if thread_id is None:
+        main = await node.client.get(f"/api/v1/sessions/{session_id}/main-thread")
+        assert main.status_code == 200, main.text
+        thread_id = main.json()["data"]["thread_id"]
+    ports = integration_port_block_for_file(Path(__file__))
+    interactions = [build_cassette(
+        asset_id="fork-transfer", model="e2e-stub-model",
+        url=f"http://127.0.0.1:{ports.port(10)}/v1/chat/completions",
+        frames=chat_completion_frames(
+            response_id="chatcmpl-fork-transfer", model="e2e-stub-model",
+            deltas=({"role": "assistant", **response},),
+            finish_reason="tool_calls" if "tool_calls" in response else "stop",
+            usage={"prompt_tokens": 8, "completion_tokens": 4, "total_tokens": 12},
+        ),
+    ).raw["interactions"][0] for response in responses]
+    model.control.plan_model_calls(session_id, thread_id, interactions)
 
 
 async def _send(
-    node: CommunicationNode, session_id: str, content: str, *, thread_id: str | None = None,
+    node: CommunicationNode, session_id: str, content: str, *, model: ModelStreamReplay,
+    reply: str, thread_id: str | None = None,
     attachments: list[dict[str, object]] | None = None,
 ) -> dict[str, object]:
     address = f"/api/v1/sessions/{session_id}"
@@ -85,6 +128,7 @@ async def _send(
     message: dict[str, object] = {"content": content}
     if attachments is not None:
         message["attachments"] = attachments
+    await _plan_replies(node, model, session_id, [{"content": reply}], thread_id=thread_id)
     response = await node.client.post(
         address + "/messages",
         json={"message": message, "run": {"mode": "single_agent", "agent_id": "default"}},
@@ -135,9 +179,9 @@ async def test_debug_configuration_choice_uses_source_owner_thread_across_gatewa
     for node in nodes.values():
         (node.workspace / "app.mjs").write_text("console.log('fork debug');\n", encoding="utf-8")
 
-    model.response_callback = lambda payload: {"content": "来源会话已准备"}
+    reply_text = "来源会话已准备"
     source_session_id = await create_session(source.client, "调试方案 fork 来源")
-    await _send(source, source_session_id, "建立真实来源历史")
+    await _send(source, source_session_id, "建立真实来源历史", model=model, reply=reply_text)
     created = await source.client.post("/api/v1/debug/node/configurations", json={
         "session_id": source_session_id,
         "name": "跨 Gateway 调试方案",
@@ -406,8 +450,13 @@ def _attachment_claims(node: CommunicationNode, key: str) -> list[dict[str, obje
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("transfer_triad", [{"same_backend_routes": True}], indirect=True)
-@pytest.mark.parametrize("creation_kind", ["new_child_thread", "new_session_main"])
-async def test_same_backend_two_gateway_routes_fork_and_cold_replay(transfer_triad, creation_kind: str):
+@pytest.mark.parametrize(("creation_kind", "source_reference"), [
+    ("new_child_thread", "qualified"), ("new_session_main", "qualified"),
+    ("new_child_thread", "local"), ("new_session_main", "local"),
+])
+async def test_same_backend_two_gateway_routes_fork_and_cold_replay(
+    transfer_triad, creation_kind: str, source_reference: str,
+):
     nodes, model, artifacts, control, fork_deadlines = transfer_triad
     target, source = nodes["a"], nodes["b"]
     assert target.backend.process is source.backend.process
@@ -430,17 +479,20 @@ async def test_same_backend_two_gateway_routes_fork_and_cold_replay(transfer_tri
         topology[name] = {"health": health.json(), "inventory": inventory.json(), "workspace": workspace.json(),
                           "backend_pid": node.backend.process.pid, "gateway_pid": node.gateway.process.pid, "gateway_home": str(node.gateway_home)}
     (artifacts / "same-owner-topology.json").write_text(json.dumps(topology, ensure_ascii=False, indent=2) + "\n")
-    model.response_callback = lambda payload: {"content": "同 owner 来源已准备"}
-    session_id = await create_session(source.client, "同 Backend 双 Gateway")
+    reply_text = "同 owner 来源已准备"
+    # 本地来源 URI 仍可能引用上传时带 Gateway authority 的附件。
+    history_node = target if source_reference == "local" else source
+    session_id = await create_session(history_node.client, "同 Backend 双 Gateway")
     body = b"same-owner-attachment" * 4096
-    await _send(source, session_id, "同 owner 主线程附件历史", attachments=_inline_attachment(body))
-    point_response = await source.client.get(f"/api/v1/sessions/{session_id}/fork-source-point", params={"mode": "full_rollout_copy"})
+    await _send(history_node, session_id, "同 owner 主线程附件历史", attachments=_inline_attachment(body), model=model, reply=reply_text)
+    point_response = await history_node.client.get(f"/api/v1/sessions/{session_id}/fork-source-point", params={"mode": "full_rollout_copy"})
     assert point_response.status_code == 200, point_response.text
     point = point_response.json()["data"]
     _, _, main_thread_id = parse_session_thread_uri(point["source_uri"])
     request = {
         "idempotency_key": "same-backend-two-gateway-" + creation_kind,
-        "source_uri": thread_resource_uri(source.workspace_id, session_id, main_thread_id, gateway_authority=source.gateway_id),
+        "source_uri": thread_resource_uri(source.workspace_id, session_id, main_thread_id,
+            gateway_authority=source.gateway_id if source_reference == "qualified" else None),
         "target_container_uri": resource_display_uri(scope="workspace", scope_id=target.workspace_id, kind="session",
             tail_segments=(session_id,) if creation_kind == "new_child_thread" else (), gateway_authority=target.gateway_id),
         "creation_kind": creation_kind, "mode": "full_rollout_copy",
@@ -496,7 +548,9 @@ async def test_same_backend_two_gateway_routes_fork_and_cold_replay(transfer_tri
     target_session_id = published["session"]["session_id"]
     assert target_thread_id != main_thread_id
     assert (target_session_id == session_id) == (creation_kind == "new_child_thread")
-    assert published["source_uri"] == request["source_uri"]
+    assert published["source_uri"] == thread_resource_uri(
+        history_node.workspace_id, session_id, main_thread_id, gateway_authority=history_node.gateway_id,
+    )
     assert published["export_release"] is None
     assert len(published["resources"]) == 1
     resource = published["resources"][0]
@@ -505,6 +559,7 @@ async def test_same_backend_two_gateway_routes_fork_and_cold_replay(transfer_tri
     capture = _capture_record(target, key)
     assert capture is not None and capture["state"] == "materialized"
     frozen = json.loads(capture["request_json"])
+    assert frozen["source_uri"] == published["source_uri"]
     assert frozen["source_storage_domain_id"] == frozen["target_storage_domain_id"] == target.workspace_id
     assert "source_owner_instance_id" not in capture["request_json"]
     assert "source_target_creation_preimage_hash" not in capture["request_json"]
@@ -536,11 +591,11 @@ async def test_same_backend_two_gateway_routes_fork_and_cold_replay(transfer_tri
     local_phases = [event for event in phases if event["phase"] == "copy.source.local_capture_authorized"]
     assert len(local_phases) == 1
     assert local_phases[0]["details"] == {
-        "gateway_id": target.gateway_id, "source_gateway_id": source.gateway_id, "same_storage_owner": True,
+        "gateway_id": target.gateway_id, "source_gateway_id": history_node.gateway_id, "same_storage_owner": True,
     }
     assert all(event["details"]["gateway_id"] == target.gateway_id for event in phases if event["phase"] == "copy.target.prepared")
     (artifacts / "same-owner-capture.json").write_text(json.dumps({"capture": capture, "creation": creation, "phases": phases}, ensure_ascii=False, indent=2) + "\n")
-    before_requests = len(model.requests)
+    before_requests = _provider_call_count(model)
     assert source.gateway.process.poll() is not None
     lifecycle["cold_restart"] = target.restart_backend()
     (artifacts / "same-owner-backend-restart.json").write_text(json.dumps(lifecycle, indent=2) + "\n")
@@ -552,8 +607,8 @@ async def test_same_backend_two_gateway_routes_fork_and_cold_replay(transfer_tri
     attachment = await target.client.get(f"/api/v1/sessions/{target_session_id}/attachments/content", params={"file_id": resource["target_uri"], "variant": "original"})
     assert attachment.status_code == 200 and attachment.content == body
     (artifacts / "same-owner-cold-history.json").write_text(history.text)
-    await _send(target, target_session_id, "同 owner 目标后继输入", thread_id=target_thread_id)
-    wire = json.dumps(model.requests[before_requests:], ensure_ascii=False)
+    await _send(target, target_session_id, "同 owner 目标后继输入", thread_id=target_thread_id, model=model, reply=reply_text)
+    wire = json.dumps(_provider_requests(model)[before_requests:], ensure_ascii=False)
     assert "同 owner 主线程附件历史" in wire and "同 owner 目标后继输入" in wire
     assert _capture_record(target, key) == capture and _attachment_claims(target, key) == claims
     (artifacts / "same-owner-successor-wire.json").write_text(wire)
@@ -565,22 +620,19 @@ async def test_real_b_to_c_full_copy_cold_read_and_new_input_with_source_offline
     source, target = nodes["b"], nodes["c"]
     original = "来源 B 冻结正文：跨 Gateway 原字节历史必须独立保留。"
     successor = "目标 C 首次新输入：继续使用已经导入的本地历史。"
-    model.response_callback = lambda payload: {"content": "确定性生产 Provider 回应"}
+    reply_text = "确定性生产 Provider 回应"
     source_session_id = await create_session(source.client, "跨端来源 B")
     attachment_body = b"b" * FORK_TRANSFER_CHUNK_BYTES + b"c"
-    await _send(source, source_session_id, original, attachments=_inline_attachment(attachment_body))
+    await _send(source, source_session_id, original, attachments=_inline_attachment(attachment_body), model=model, reply=reply_text)
     source_objective = "跨端来源 Goal：验证实际用量清零后由用户决定继续。"
 
-    def goal_reply(payload: dict[str, object]) -> dict[str, object]:
-        messages = payload["messages"]
-        if not any(message.get("role") == "tool" and message.get("name") == "update_goal" for message in messages):
-            return {"tool_calls": [{
-                "index": 0, "id": "call_fork_source_goal_complete", "type": "function",
-                "function": {"name": "update_goal", "arguments": json.dumps({"status": "complete"})},
-            }]}
-        return {"content": "来源 Goal 已完成，保留真实计量。"}
-
-    model.response_callback = goal_reply
+    await _plan_replies(source, model, source_session_id, [
+        {"tool_calls": [{
+            "index": 0, "id": "call_fork_source_goal_complete", "type": "function",
+            "function": {"name": "update_goal", "arguments": json.dumps({"status": "complete"})},
+        }]},
+        {"content": "来源 Goal 已完成，保留真实计量。"},
+    ])
     goal_response = await source.client.put(f"/api/v1/sessions/{source_session_id}/goal", json={
         "objective": source_objective, "token_budget": 500,
     })
@@ -600,7 +652,6 @@ async def test_real_b_to_c_full_copy_cold_read_and_new_input_with_source_offline
     assert source_goal["tokens_used"] > 0 and source_goal["accounted_jobs"]
     assert source_goal["status"] == "paused"
     (artifacts / "source-goal.json").write_text(goal_response.text)
-    model.response_callback = lambda payload: {"content": "确定性生产 Provider 回应"}
     point_response = await source.client.get(
         f"/api/v1/sessions/{source_session_id}/fork-source-point", params={"mode": "full_rollout_copy"},
     )
@@ -628,7 +679,7 @@ async def test_real_b_to_c_full_copy_cold_read_and_new_input_with_source_offline
         "goal": {"token_budget": 123},
     }
     (artifacts / "fork-request.json").write_text(json.dumps(request, ensure_ascii=False, indent=2) + "\n")
-    provider_requests_before_fork = len(model.requests)
+    provider_requests_before_fork = _provider_call_count(model)
     child_request = {
         **request, "idempotency_key": "real-triad-child-goal-must-reject",
         "creation_kind": "new_child_thread",
@@ -651,7 +702,7 @@ async def test_real_b_to_c_full_copy_cold_read_and_new_input_with_source_offline
     unchanged_source_goal = await source.client.get(f"/api/v1/sessions/{source_session_id}/goal")
     assert unchanged_source_goal.status_code == 200, unchanged_source_goal.text
     assert unchanged_source_goal.json()["data"] == source_goal
-    assert len(model.requests) == provider_requests_before_fork
+    assert _provider_call_count(model) == provider_requests_before_fork
     response = await _post_fork(
         source, source_session_id, request, _fork_deadline(target, request, fork_deadlines),
         stage="fork_http_response",
@@ -667,7 +718,7 @@ async def test_real_b_to_c_full_copy_cold_read_and_new_input_with_source_offline
     assert target_uri.scope_id == target.workspace_id
     assert target_uri.tail_segments == (target_session_id, "threads", published["thread_id"])
     assert published["export_release"] == {"state": "confirmed", "error": None}
-    assert len(model.requests) == provider_requests_before_fork
+    assert _provider_call_count(model) == provider_requests_before_fork
     assert len(published["resources"]) == 1
     attachment_result = published["resources"][0]
     assert attachment_result["resource_uri"] == attachment_source["resource_uri"]
@@ -742,11 +793,11 @@ async def test_real_b_to_c_full_copy_cold_read_and_new_input_with_source_offline
     assert goal_response.status_code == 200, goal_response.text
     assert goal_response.json()["data"] == edited_goal
     assert _attachment_claims(target, key) == target_claims
-    assert len(model.requests) == provider_requests_before_fork
+    assert _provider_call_count(model) == provider_requests_before_fork
 
-    await _send(target, target_session_id, successor)
-    assert len(model.requests) == provider_requests_before_fork + 1
-    successor_wire = json.dumps(model.requests[provider_requests_before_fork:], ensure_ascii=False)
+    await _send(target, target_session_id, successor, model=model, reply=reply_text)
+    assert _provider_call_count(model) == provider_requests_before_fork + 1
+    successor_wire = json.dumps(_provider_requests(model)[provider_requests_before_fork:], ensure_ascii=False)
     assert original in successor_wire
     assert successor in successor_wire
     target_session_node = await target.session_node(target_session_id)
@@ -794,9 +845,9 @@ async def test_real_source_child_fork_cold_history_attachment_and_successor(
     child_only = "来源 B child 独有输入：目标必须继承这个 thread。"
     main_only = "来源 B main 后来的独有输入：不能混入 child 分支。"
     successor = "目标 C 沿来源 child 历史继续一次。"
-    model.response_callback = lambda _payload: {"content": "来源 child 验收固定回答"}
+    reply_text = "来源 child 验收固定回答"
     source_session_id = await create_session(source.client, "来源 B child 验收")
-    await _send(source, source_session_id, inherited)
+    await _send(source, source_session_id, inherited, model=model, reply=reply_text)
     main_response = await source.client.get(
         f"/api/v1/sessions/{source_session_id}/fork-source-point", params={"mode": "full_rollout_copy"},
     )
@@ -818,8 +869,8 @@ async def test_real_source_child_fork_cold_history_attachment_and_successor(
     assert source_child["session"]["session_id"] == source_session_id
     assert parse_resource_uri(source_child["thread_uri"]).tail_segments == (source_session_id, "threads", source_thread_id)
     attachment_body = b"c" * FORK_TRANSFER_CHUNK_BYTES + b"d"
-    await _send(source, source_session_id, child_only, thread_id=source_thread_id, attachments=_inline_attachment(attachment_body))
-    await _send(source, source_session_id, main_only)
+    await _send(source, source_session_id, child_only, thread_id=source_thread_id, attachments=_inline_attachment(attachment_body), model=model, reply=reply_text)
+    await _send(source, source_session_id, main_only, model=model, reply=reply_text)
     point_response = await source.client.get(
         f"/api/v1/sessions/{source_session_id}/fork-source-point",
         params={"mode": "full_rollout_copy", "thread_id": source_thread_id},
@@ -898,7 +949,7 @@ async def test_real_source_child_fork_cold_history_attachment_and_successor(
         assert _capture_record(source, rejected_operation) is None
         assert _capture_record(target, rejected_operation) is None
     (artifacts / "source-child-rejections.json").write_text(json.dumps(rejections, ensure_ascii=False, indent=2) + "\n")
-    provider_requests_before_fork = len(model.requests)
+    provider_requests_before_fork = _provider_call_count(model)
     key = "fork-" + hashlib.sha256(request["idempotency_key"].encode()).hexdigest()
     phase = "copy.target.prepared"
     activation = await hub.client.post(f"/api/gateway/workspaces/{source_route['workspace_id']}/activate")
@@ -944,7 +995,7 @@ async def test_real_source_child_fork_cold_history_attachment_and_successor(
     (artifacts / "source-child-fork-response.json").write_text(response.text)
     assert response.status_code == 200, response.text
     published = response.json()["data"]
-    assert len(model.requests) == provider_requests_before_fork
+    assert _provider_call_count(model) == provider_requests_before_fork
     assert published["export_release"] == {"state": "confirmed", "error": None}
     fork_deadlines.complete(deadline)
     assert published["source_uri"] == request["source_uri"]
@@ -1008,10 +1059,10 @@ async def test_real_source_child_fork_cold_history_attachment_and_successor(
     assert replay.json()["data"] == published
     assert _creation_record(target, key, child_session_node) == frozen
     assert _attachment_claims(target, key) == claims
-    assert len(model.requests) == provider_requests_before_fork
-    await _send(target, target_session_id, successor, thread_id=target_thread_id)
-    assert len(model.requests) == provider_requests_before_fork + 1
-    successor_wire = json.dumps(model.requests[provider_requests_before_fork:], ensure_ascii=False)
+    assert _provider_call_count(model) == provider_requests_before_fork
+    await _send(target, target_session_id, successor, thread_id=target_thread_id, model=model, reply=reply_text)
+    assert _provider_call_count(model) == provider_requests_before_fork + 1
+    successor_wire = json.dumps(_provider_requests(model)[provider_requests_before_fork:], ensure_ascii=False)
     (artifacts / "source-child-successor-wire.json").write_text(successor_wire)
     assert inherited in successor_wire and child_only in successor_wire and successor in successor_wire
     assert main_only not in successor_wire
@@ -1050,9 +1101,9 @@ async def test_real_partial_source_capture_recovery_preserves_owner_error(
 ):
     nodes, model, artifacts, control, fork_deadlines = transfer_triad
     source, target = nodes["b"], nodes["c"]
-    model.response_callback = lambda payload: {"content": "来源已持久化，等待真实跨 Gateway fork"}
+    reply_text = "来源已持久化，等待真实跨 Gateway fork"
     source_session_id = await create_session(source.client, "未完成来源 capture")
-    await _send(source, source_session_id, "来源正文必须保持可读", attachments=_inline_attachment(b"partial-source"))
+    await _send(source, source_session_id, "来源正文必须保持可读", attachments=_inline_attachment(b"partial-source"), model=model, reply=reply_text)
     point_response = await source.client.get(
         f"/api/v1/sessions/{source_session_id}/fork-source-point", params={"mode": "full_rollout_copy"},
     )
@@ -1084,7 +1135,7 @@ async def test_real_partial_source_capture_recovery_preserves_owner_error(
     phase = "copy.source.partial"
     control.arm(key, phase)
     deadline = _fork_deadline(target, request, fork_deadlines)
-    provider_requests = len(model.requests)
+    provider_requests = _provider_call_count(model)
     fork_call = asyncio.create_task(target.client.post(
         f"/api/v1/sessions/{source_session_id}/fork-context", json=request, headers={"X-Request-ID": first_request_id},
     ))
@@ -1183,7 +1234,7 @@ async def test_real_partial_source_capture_recovery_preserves_owner_error(
         lifecycle["target_second_start"] = await deadline.wait(asyncio.to_thread(target.restart_backend), "idempotent_aborted_startup_source_offline")
         assert _creation_record(target, key, child_session_node) == aborted
         assert _capture_record(target, key) == target_after and _capture_record(source, key) == source_after
-        assert len(model.requests) == provider_requests
+        assert _provider_call_count(model) == provider_requests
         (artifacts / "terminal-owner-records.json").write_text(json.dumps({
             "creation": aborted, "source": source_after, "target": target_after,
         }, ensure_ascii=False, indent=2) + "\n")
@@ -1207,10 +1258,10 @@ async def test_real_fork_delivery_trace_survives_owner_failure(
     source, target = nodes["b"], nodes["c"]
     original = "来源 B 的真实输入：恢复后正文必须继续由 C 本地读取。"
     successor = "目标 C 的新输入：使用原分支 thread 的继承历史。"
-    model.response_callback = lambda payload: {"content": "确定性恢复验收回应"}
+    reply_text = "确定性恢复验收回应"
     source_session_id = await create_session(source.client, "故障验收来源 B")
     attachment_body = b"x" * FORK_TRANSFER_CHUNK_BYTES + b"y"
-    await _send(source, source_session_id, original, attachments=_inline_attachment(attachment_body))
+    await _send(source, source_session_id, original, attachments=_inline_attachment(attachment_body), model=model, reply=reply_text)
     point_response = await source.client.get(
         f"/api/v1/sessions/{source_session_id}/fork-source-point", params={"mode": "full_rollout_copy"},
     )
@@ -1248,7 +1299,7 @@ async def test_real_fork_delivery_trace_survives_owner_failure(
     phase = "copy.target.prepared" if failure_window == "prepared_before_capture" else "copy.source.released"
     control.arm(key, phase)
     deadline = _fork_deadline(target, request, fork_deadlines)
-    provider_requests_before_fork = len(model.requests)
+    provider_requests_before_fork = _provider_call_count(model)
     fork_call = asyncio.create_task(target.client.post(
         f"/api/v1/sessions/{source_session_id}/fork-context", json=request,
         headers={"X-Request-ID": first_request_id},
@@ -1334,7 +1385,7 @@ async def test_real_fork_delivery_trace_survives_owner_failure(
     recovered = _creation_record(target, key, child_session_node)
     assert recovered["state"] == "published"
     assert {name: recovered[name] for name in identity_fields} == {name: frozen[name] for name in identity_fields}
-    assert len(model.requests) == provider_requests_before_fork
+    assert _provider_call_count(model) == provider_requests_before_fork
     assert len(published["resources"]) == 1
     attachment_result = published["resources"][0]
     assert attachment_result["resource_uri"] == attachment_source["resource_uri"]
@@ -1388,9 +1439,9 @@ async def test_real_fork_delivery_trace_survives_owner_failure(
     assert _attachment_claims(target, key) == target_claims
     cold_record = _creation_record(target, key, child_session_node)
     assert {name: cold_record[name] for name in identity_fields} == {name: frozen[name] for name in identity_fields}
-    assert len(model.requests) == provider_requests_before_fork
-    await _send(target, target_session_id, successor, thread_id=published["thread_id"])
-    assert len(model.requests) == provider_requests_before_fork + 1
-    successor_wire = json.dumps(model.requests[provider_requests_before_fork:], ensure_ascii=False)
+    assert _provider_call_count(model) == provider_requests_before_fork
+    await _send(target, target_session_id, successor, thread_id=published["thread_id"], model=model, reply=reply_text)
+    assert _provider_call_count(model) == provider_requests_before_fork + 1
+    successor_wire = json.dumps(_provider_requests(model)[provider_requests_before_fork:], ensure_ascii=False)
     assert original in successor_wire
     assert successor in successor_wire

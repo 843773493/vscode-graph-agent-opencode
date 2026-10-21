@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from app.core.phase_observer import observe_phase
-from app.core.resource_uri import parse_session_artifact_uri
+from app.core.resource_uri import parse_resource_uri, parse_session_artifact_uri
 from app.core.session_catalog_store import SessionCreationRecord
 from app.core.session_catalog_store.contracts import ForkSourceCaptureRecord
 from app.core.session_control_primitives import CONTROL_DATABASE_NAME
@@ -25,6 +25,7 @@ from app.core.session_lifecycle_gate import (
     SessionDeletionPendingError,
     SessionLifecycleGate,
 )
+from app.core.trace_middleware import reset_current_gateway_id, set_current_gateway_id
 from app.domain.itemized.mutation_intents import MutationIntentOwner
 from app.schemas.internal_v2.session import SessionForkResourceSourceDTO
 from app.services.infrastructure.attachment_blob_catalog.store import (
@@ -180,9 +181,12 @@ class CheckpointForkSource:
         self, *, source_session_id: str, source_owner: MutationIntentOwner,
         mode: str, checkpoint_ns: str, snapshot_root: Path,
         capture_record: ForkSourceCaptureRecord, same_storage_owner: bool,
+        source_gateway_id: str | None,
     ) -> ForkSourceSnapshot:
         """持有 source 生命周期和共享写锁，只捕获原文件及附件 ref metadata。"""
         request = json.loads(capture_record.request_json)
+        if parse_resource_uri(request["source_uri"]).gateway_authority not in {None, source_gateway_id}:
+            raise ValueError("fork_owner_overlap: 来源 URI 与已授权来源 Gateway 不一致")
         source_domain = request["source_storage_domain_id"]
         target_domain = request["target_storage_domain_id"]
         actual_domain = self._storage.storage._path_resolver.catalog_store.get_node(source_session_id).workspace_id
@@ -277,9 +281,14 @@ class CheckpointForkSource:
                     )
             if references and self.attachment_store is None:
                 raise RuntimeError("fork source 含附件，但 Saver 未注入唯一 AttachmentBlobStore")
-            attachments = self.attachment_store.capture_fork_attachments(
-                capture_record, references=references, same_storage_owner=same_storage_owner,
-            ) if references else ()
+            # 来源和目标可以经不同 Gateway 指向同一存储；恢复只消费已授权、冻结的来源 authority。
+            gateway_token = set_current_gateway_id(source_gateway_id)
+            try:
+                attachments = self.attachment_store.capture_fork_attachments(
+                    capture_record, references=references, same_storage_owner=same_storage_owner,
+                ) if references else ()
+            finally:
+                reset_current_gateway_id(gateway_token)
             debug_prefix = request["source_uri"] + "/debug/node/configurations/"
             debug_choices = {uri: action for uri, action in choices.items() if uri.startswith(debug_prefix)}
             selected_debug = []

@@ -491,6 +491,7 @@ class CheckpointForkOwner:
                         source_session_id=source_session_id, source_owner=source_owner, mode=mode,
                         checkpoint_ns=checkpoint_ns, snapshot_root=root, capture_record=capture,
                         same_storage_owner=True,
+                        source_gateway_id=creation_intent["source_gateway_id"] if creation_intent is not None else get_current_gateway_id(),
                     )
                 source_snapshot, marker_hash = read_captured_snapshot(self._storage.storage.sessions_dir, capture)
             if source_external and source_snapshot.attachments:
@@ -583,6 +584,7 @@ class CheckpointForkOwner:
                     source_owner=MutationIntentOwner(session_id=capture.source_session_id, thread_id=capture.source_thread_id),
                     mode=request["mode"], checkpoint_ns=request["checkpoint_ns"], snapshot_root=root, capture_record=capture,
                     same_storage_owner=False,
+                    source_gateway_id=get_current_gateway_id(),
                 )
             except Exception:
                 catalog.finish_fork_source_capture(capture.copy_operation_id, state="aborted", reason="source export capture failed")
