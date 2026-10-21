@@ -3,17 +3,29 @@ from __future__ import annotations
 import asyncio
 import json
 import sqlite3
-from collections.abc import AsyncIterator, Generator
+from collections.abc import AsyncIterator, Generator, Iterator
 from pathlib import Path
 
 import commentjson
 import httpx
 import pytest
 
-from tests.integration.stubs.http_stubs import openai_chat_stub
+from app.testing.model_stream import build_cassette, chat_completion_frames
 from tests.support.api_helpers import create_session
+from tests.support.model_stream_config import ModelStreamReplay, model_stream_replay
 from tests.support.ports import integration_port_block_for_file
-from tests.support.processes import close_backend_process, start_backend_process
+from tests.support.processes import (
+    close_backend_process,
+    start_backend_process,
+    workspace_backend_id_for_root,
+)
+
+
+@pytest.fixture(scope="module")
+def activity_replay(integration_workspace_root_path: str) -> Iterator[ModelStreamReplay]:
+    output = Path(integration_workspace_root_path).parent
+    with model_stream_replay(output, runtime_root=output / "runtime", business_assertion="session-activity") as replay:
+        yield replay
 
 
 @pytest.fixture(scope="module")
@@ -21,6 +33,7 @@ def activity_backend(
     request: pytest.FixtureRequest,
     integration_workspace_root_path: str,
     integration_workspace_config_path: str,
+    activity_replay: ModelStreamReplay,
 ) -> Generator[tuple[str, Path], None, None]:
     port_block = integration_port_block_for_file(Path(request.node.fspath))
     workspace_root = Path(integration_workspace_root_path).resolve()
@@ -31,7 +44,7 @@ def activity_backend(
     )
     primary_provider.update(
         {
-            "endpoint": f"http://127.0.0.1:{port_block.port(10)}/v1",
+            "endpoint": "https://opencode.ai/zen/v1",
             "model": "e2e-stub-model",
             "api_key": "e2e-local-model-key",
             "custom_llm_provider": "openai",
@@ -41,16 +54,17 @@ def activity_backend(
         json.dumps(config, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
     )
-    with openai_chat_stub(port_block.port(10)):
-        backend = start_backend_process(
-            workspace_root=str(workspace_root),
-            port=port_block.port(0),
-            log_name="session-activity-backend",
-        )
-        try:
-            yield f"http://127.0.0.1:{backend.port}", workspace_root
-        finally:
-            close_backend_process(backend)
+    backend = start_backend_process(
+        workspace_root=str(workspace_root),
+        port=port_block.port(0),
+        log_name="session-activity-backend",
+        asgi_app="tests.support.section8_backend:app",
+        env_overrides=activity_replay.environment,
+    )
+    try:
+        yield f"http://127.0.0.1:{backend.port}", workspace_root
+    finally:
+        close_backend_process(backend)
 
 
 @pytest.fixture
@@ -59,7 +73,7 @@ async def activity_client(
 ) -> AsyncIterator[httpx.AsyncClient]:
     async with httpx.AsyncClient(
         base_url=activity_backend[0],
-        headers={"X-Local-Token": "local-dev-token"},
+        headers={"X-Local-Token": "local-dev-token", "X-BoxTeam-Workspace-Id": workspace_backend_id_for_root(str(activity_backend[1]))},
         timeout=30,
     ) as client:
         yield client
@@ -105,15 +119,32 @@ async def _wait_for_job_terminal(
 async def test_unopened_session_activity_is_recoverable_and_does_not_leak_content(
     activity_client: httpx.AsyncClient,
     activity_backend: tuple[str, Path],
+    activity_replay: ModelStreamReplay,
 ) -> None:
     completed_session_id = await create_session(activity_client, "未打开会话完成")
     failed_session_id = await create_session(activity_client, "未打开会话失败")
+    session = await activity_client.get(f"/api/v1/sessions/{completed_session_id}/main-thread")
+    assert session.status_code == 200, session.text
+    thread_id = session.json()["data"]["thread_id"]
+    cassette = build_cassette(
+        asset_id="session-activity", model="e2e-stub-model",
+        url="https://opencode.ai/zen/v1/chat/completions",
+        frames=chat_completion_frames(
+            response_id="chatcmpl-activity", model="e2e-stub-model",
+            deltas=({"role": "assistant", "content": "activity completed"},),
+            finish_reason="stop",
+        ),
+    )
+    (call_id,) = activity_replay.control.plan_model_calls(completed_session_id, thread_id, cassette.raw["interactions"])
     completed_job = await _run_message(
         activity_client,
         completed_session_id,
         "ACTIVITY_COMPLETE_PRIVATE_MESSAGE",
     )
     assert completed_job["status"] in {"completed", "succeeded"}
+    recorded = json.loads((activity_replay.artifacts / f"{call_id}.json").read_text(encoding="utf-8"))
+    assert recorded["identity"]["session_id"] == completed_session_id
+    assert recorded["identity"]["thread_id"] == thread_id
 
     state_db = activity_backend[1] / ".boxteam" / "state" / "workspace.sqlite"
     connection = sqlite3.connect(state_db, timeout=10)
