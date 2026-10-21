@@ -19,7 +19,9 @@ const temporaryRoots = [];
 const detachedPids = [];
 
 function temporaryRoot() {
-  const root = mkdtempSync(path.join(os.tmpdir(), "boxteam-detached-"));
+  const root = path.resolve(
+    mkdtempSync(path.join(os.tmpdir(), "boxteam-detached-")),
+  );
   temporaryRoots.push(root);
   return root;
 }

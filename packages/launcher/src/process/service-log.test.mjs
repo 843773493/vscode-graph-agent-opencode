@@ -22,7 +22,9 @@ import {
 const temporaryRoots = [];
 
 function temporaryRoot() {
-  const root = mkdtempSync(path.join(os.tmpdir(), "boxteam-service-log-"));
+  const root = path.resolve(
+    mkdtempSync(path.join(os.tmpdir(), "boxteam-service-log-")),
+  );
   temporaryRoots.push(root);
   return root;
 }

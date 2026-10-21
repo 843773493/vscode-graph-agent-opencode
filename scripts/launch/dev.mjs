@@ -13,12 +13,12 @@ import {
   spawnDetachedProcess,
   terminateDetachedProcess,
   terminateProcessWithEscalation,
-} from "../../packages/launcher/src/detached-process.mjs";
+} from "../../packages/launcher/src/process/detached-process.mjs";
 import {
   resolveServiceLogPath,
   SERVICE_LOG_CAPTURED_ENV,
-} from "../../packages/launcher/src/service-log.mjs";
-import { requestGatewayHandoff } from "../../packages/launcher/src/gateway-supervisor.mjs";
+} from "../../packages/launcher/src/process/service-log.mjs";
+import { requestGatewayHandoff } from "../../packages/launcher/src/process/gateway-supervisor.mjs";
 import { BOXTEAM_VERSION } from "../../packaging/runtime/versions.mjs";
 import {
   remainingOccupiedPorts,

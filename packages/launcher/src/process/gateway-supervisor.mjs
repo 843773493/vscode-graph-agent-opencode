@@ -366,7 +366,7 @@ export function createGatewayPublicListener({ host, port }) {
   };
 }
 
-function gatewaySupervisorSocketPath(boxteamHome) {
+export function resolveGatewaySupervisorSocketPath(boxteamHome) {
   if (typeof boxteamHome !== "string" || boxteamHome.trim() === "") {
     return null;
   }
@@ -476,7 +476,7 @@ export function requestGatewayHandoff({
   environment = process.env,
   timeoutMs = 120_000,
 }) {
-  const socketPath = gatewaySupervisorSocketPath(boxteamHome);
+  const socketPath = resolveGatewaySupervisorSocketPath(boxteamHome);
   if (socketPath === null) {
     return Promise.resolve({ handled: false });
   }
@@ -797,7 +797,7 @@ export async function superviseGateway({
 
     const socketPath = gatewayOwnsPublicPort
       ? null
-      : gatewaySupervisorSocketPath(environment.BOXTEAM_HOME);
+      : resolveGatewaySupervisorSocketPath(environment.BOXTEAM_HOME);
     control =
       socketPath === null
         ? null

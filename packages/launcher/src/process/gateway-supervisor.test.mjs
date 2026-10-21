@@ -12,6 +12,7 @@ import {
   createGatewaySupervisorControl,
   gatewayEndpoint,
   gatewayEnvironment,
+  resolveGatewaySupervisorSocketPath,
   gatewayStartupContract,
   installSignalForwarding,
   requestGatewayHandoff,
@@ -404,10 +405,12 @@ describe("gateway supervisor", () => {
   });
 
   test("Gateway supervisor control socket 返回 handoff 结果", async () => {
-    const boxteamHome = mkdtempSync(path.join(tmpdir(), "boxteam-launcher-"));
+    const boxteamHome = path.resolve(
+      mkdtempSync(path.join(tmpdir(), "boxteam-launcher-")),
+    );
     const calls = [];
     const control = createGatewaySupervisorControl({
-      socketPath: path.join(boxteamHome, "state", "gateway-supervisor.sock"),
+      socketPath: resolveGatewaySupervisorSocketPath(boxteamHome),
       onHandoff: async (payload) => {
         calls.push(payload);
         return { accepted: true, target_generation: payload.target_generation };
@@ -442,7 +445,9 @@ describe("gateway supervisor", () => {
   });
 
   test("pending listener handoff 失败时保留旧 public generation", async () => {
-    const boxteamHome = mkdtempSync(path.join(tmpdir(), "boxteam-launcher-"));
+    const boxteamHome = path.resolve(
+      mkdtempSync(path.join(tmpdir(), "boxteam-launcher-")),
+    );
     const children = [];
     const processObject = new EventEmitter();
     const closeableChild = () => {
@@ -532,7 +537,9 @@ describe("gateway supervisor", () => {
   });
 
   test("supervisor 在旧 generation 仍运行时完成 pending listener handoff", async () => {
-    const boxteamHome = mkdtempSync(path.join(tmpdir(), "boxteam-launcher-"));
+    const boxteamHome = path.resolve(
+      mkdtempSync(path.join(tmpdir(), "boxteam-launcher-")),
+    );
     const children = [];
     const processObject = new EventEmitter();
     const closeableChild = () => {
