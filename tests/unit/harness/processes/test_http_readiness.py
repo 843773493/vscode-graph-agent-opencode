@@ -12,7 +12,10 @@ from urllib.request import Request
 
 import pytest
 
-from tests.support import gateway_processes, processes
+from tests.support.processes import (
+    gateway as gateway_processes,
+    workspace as workspace_processes,
+)
 
 
 @dataclass
@@ -31,7 +34,7 @@ class ManualClock:
 @pytest.fixture
 def clock(monkeypatch: pytest.MonkeyPatch) -> ManualClock:
     value = ManualClock()
-    monkeypatch.setattr(processes, "time", value)
+    monkeypatch.setattr(workspace_processes, "time", value)
     return value
 
 
@@ -60,8 +63,8 @@ def test_ready_service_is_not_delayed_by_one_second_polling(
             raise URLError(ConnectionRefusedError("监听尚未建立"))
         return health_response()
 
-    monkeypatch.setattr(processes, "urlopen", connect)
-    processes.wait_for_http_ok("http://fixture/health", process)
+    monkeypatch.setattr(workspace_processes, "urlopen", connect)
+    workspace_processes.wait_for_http_ok("http://fixture/health", process)
 
     assert 0.15 <= clock.now <= 0.25
 
@@ -73,10 +76,10 @@ def test_http_rejection_fails_immediately_with_target_and_status(
 ) -> None:
     body = BytesIO(b"wrong owner")
     error = HTTPError("http://fixture/health", 403, "Forbidden", {}, body)
-    monkeypatch.setattr(processes, "urlopen", Mock(side_effect=error))
+    monkeypatch.setattr(workspace_processes, "urlopen", Mock(side_effect=error))
 
     with pytest.raises(RuntimeError, match=r"status=403.*http://fixture/health") as failure:
-        processes.wait_for_http_ok("http://fixture/health", process)
+        workspace_processes.wait_for_http_ok("http://fixture/health", process)
 
     assert failure.value.__cause__ is error
     assert clock.now == 0
@@ -95,9 +98,9 @@ def test_connect_timeout_consumes_only_remaining_readiness_budget(
         clock.sleep(timeout)
         raise TimeoutError("连接未完成")
 
-    monkeypatch.setattr(processes, "urlopen", connect)
+    monkeypatch.setattr(workspace_processes, "urlopen", connect)
     with pytest.raises(TimeoutError, match="http://fixture/health") as failure:
-        processes.wait_for_http_ok("http://fixture/health", process, timeout_seconds=0.12)
+        workspace_processes.wait_for_http_ok("http://fixture/health", process, timeout_seconds=0.12)
 
     assert observed_timeouts == pytest.approx([0.12])
     assert clock.now == pytest.approx(0.12)
@@ -110,10 +113,10 @@ def test_refused_connection_reports_last_error_without_oversleep(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     error = URLError(ConnectionRefusedError("连接被拒绝"))
-    monkeypatch.setattr(processes, "urlopen", Mock(side_effect=error))
+    monkeypatch.setattr(workspace_processes, "urlopen", Mock(side_effect=error))
 
     with pytest.raises(TimeoutError, match="连接被拒绝") as failure:
-        processes.wait_for_http_ok("http://fixture/health", process, timeout_seconds=0.12)
+        workspace_processes.wait_for_http_ok("http://fixture/health", process, timeout_seconds=0.12)
 
     assert clock.now == pytest.approx(0.12)
     assert failure.value.__cause__ is error
@@ -126,10 +129,10 @@ def test_early_exit_keeps_return_code_and_captured_process_output(
     process.returncode = 7
     process.poll.return_value = 7
     connect = Mock()
-    monkeypatch.setattr(processes, "urlopen", connect)
+    monkeypatch.setattr(workspace_processes, "urlopen", connect)
 
     with pytest.raises(RuntimeError, match="returncode=7") as failure:
-        processes.wait_for_http_ok("http://fixture/health", process)
+        workspace_processes.wait_for_http_ok("http://fixture/health", process)
 
     assert "启动标准输出" in str(failure.value)
     assert "启动错误详情" in str(failure.value)
@@ -154,10 +157,10 @@ def test_early_exit_remains_primary_when_output_capture_times_out(
     process.poll.return_value = 7
     process.communicate.side_effect = output_error
     connect = Mock()
-    monkeypatch.setattr(processes, "urlopen", connect)
+    monkeypatch.setattr(workspace_processes, "urlopen", connect)
 
     with pytest.raises(RuntimeError, match=r"returncode=7.*http://fixture/health") as failure:
-        processes.wait_for_http_ok("http://fixture/health", process, timeout_seconds=0.12)
+        workspace_processes.wait_for_http_ok("http://fixture/health", process, timeout_seconds=0.12)
 
     assert failure.value.__cause__ is output_error
     assert any("输出采集" in note for note in failure.value.__notes__)
@@ -173,9 +176,9 @@ def test_successful_http_status_other_than_200_is_an_explicit_error(
     process: Mock,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(processes, "urlopen", lambda *_args, **_kwargs: health_response(202))
+    monkeypatch.setattr(workspace_processes, "urlopen", lambda *_args, **_kwargs: health_response(202))
     with pytest.raises(RuntimeError, match="status=202"):
-        processes.wait_for_http_ok("http://fixture/health", process)
+        workspace_processes.wait_for_http_ok("http://fixture/health", process)
 
 
 def test_readiness_cancellation_is_not_translated_to_connection_failure(
@@ -184,9 +187,9 @@ def test_readiness_cancellation_is_not_translated_to_connection_failure(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     error = KeyboardInterrupt("停止等待")
-    monkeypatch.setattr(processes, "urlopen", Mock(side_effect=error))
+    monkeypatch.setattr(workspace_processes, "urlopen", Mock(side_effect=error))
     with pytest.raises(KeyboardInterrupt) as failure:
-        processes.wait_for_http_ok("http://fixture/health", process)
+        workspace_processes.wait_for_http_ok("http://fixture/health", process)
     assert failure.value is error
     assert not clock.sleeps
 
@@ -204,7 +207,7 @@ def test_gateway_retries_promptly_and_keeps_authentication_header(
             raise URLError(ConnectionRefusedError("监听尚未建立"))
         return health_response()
 
-    monkeypatch.setattr(processes, "urlopen", connect)
+    monkeypatch.setattr(workspace_processes, "urlopen", connect)
     gateway_processes.wait_for_gateway_ready(4312, process)
 
     assert 0.15 <= clock.now <= 0.25
@@ -227,7 +230,7 @@ def test_gateway_http_rejection_is_not_retried_as_startup(
     body = BytesIO(b"gateway refusal")
     error = HTTPError(url, status, "refused", {}, body)
     connect = Mock(side_effect=error)
-    monkeypatch.setattr(processes, "urlopen", connect)
+    monkeypatch.setattr(workspace_processes, "urlopen", connect)
 
     with pytest.raises(RuntimeError, match=rf"status={status}.*{url}") as failure:
         gateway_processes.wait_for_gateway_ready(4312, process)
@@ -257,8 +260,8 @@ def test_workspace_ready_keeps_identity_header_without_one_second_polling(
             raise URLError(ConnectionRefusedError("监听尚未建立"))
         return workspace_health_response({"workspace_id": "workspace-expected"})
 
-    monkeypatch.setattr(processes, "urlopen", connect)
-    processes.wait_for_backend_ready(4312, process, "workspace-expected")
+    monkeypatch.setattr(workspace_processes, "urlopen", connect)
+    workspace_processes.wait_for_backend_ready(4312, process, "workspace-expected")
 
     assert 0.15 <= clock.now <= 0.25
     assert all(
@@ -275,7 +278,7 @@ def test_workspace_readiness_obeys_remaining_budget(
     process: Mock,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(processes, "TEST_READY_TIMEOUT_SECONDS", 0.12)
+    monkeypatch.setattr(workspace_processes, "TEST_READY_TIMEOUT_SECONDS", 0.12)
     timeouts: list[float] = []
     error = TimeoutError("连接未完成")
 
@@ -285,9 +288,9 @@ def test_workspace_readiness_obeys_remaining_budget(
             clock.sleep(timeout)
         raise error
 
-    monkeypatch.setattr(processes, "urlopen", connect)
+    monkeypatch.setattr(workspace_processes, "urlopen", connect)
     with pytest.raises(TimeoutError, match="后端在 0.12 秒内未就绪") as failure:
-        processes.wait_for_backend_ready(4312, process, "workspace-expected")
+        workspace_processes.wait_for_backend_ready(4312, process, "workspace-expected")
 
     assert clock.now == pytest.approx(0.12)
     assert all(0 < timeout <= 0.12 for timeout in timeouts)
@@ -303,10 +306,10 @@ def test_workspace_http_error_closes_response_and_reads_only_bounded_diagnostics
     read = Mock(wraps=body.read)
     monkeypatch.setattr(body, "read", read)
     error = HTTPError("http://fixture/health", 403, "Forbidden", {}, body)
-    monkeypatch.setattr(processes, "urlopen", Mock(side_effect=error))
+    monkeypatch.setattr(workspace_processes, "urlopen", Mock(side_effect=error))
 
     with pytest.raises(RuntimeError, match="status=403.*workspace-expected.*wrong workspace") as failure:
-        processes.wait_for_backend_ready(4312, process, "workspace-expected")
+        workspace_processes.wait_for_backend_ready(4312, process, "workspace-expected")
 
     assert failure.value.__cause__ is error
     assert clock.now == 0
@@ -328,9 +331,9 @@ def test_workspace_http_status_other_than_200_is_not_retried(
         clock.now += 1
         return workspace_health_response({"workspace_id": "workspace-expected"}, status=202)
 
-    monkeypatch.setattr(processes, "urlopen", connect)
+    monkeypatch.setattr(workspace_processes, "urlopen", connect)
     with pytest.raises(RuntimeError, match="status=202"):
-        processes.wait_for_backend_ready(4312, process, "workspace-expected")
+        workspace_processes.wait_for_backend_ready(4312, process, "workspace-expected")
 
     assert calls == 1
 
@@ -342,9 +345,9 @@ def test_workspace_success_status_still_rejects_another_or_missing_owner(
     process: Mock,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(processes, "urlopen", lambda *_args, **_kwargs: workspace_health_response(payload))
+    monkeypatch.setattr(workspace_processes, "urlopen", lambda *_args, **_kwargs: workspace_health_response(payload))
     with pytest.raises(RuntimeError, match="UUID 不匹配.*expected=workspace-expected"):
-        processes.wait_for_backend_ready(4312, process, "workspace-expected")
+        workspace_processes.wait_for_backend_ready(4312, process, "workspace-expected")
     assert not clock.sleeps
 
 
@@ -354,9 +357,9 @@ def test_workspace_success_requires_a_json_object(
     process: Mock,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(processes, "urlopen", lambda *_args, **_kwargs: workspace_health_response(payload))
+    monkeypatch.setattr(workspace_processes, "urlopen", lambda *_args, **_kwargs: workspace_health_response(payload))
     with pytest.raises(TypeError, match="必须是 JSON 对象"):
-        processes.wait_for_backend_ready(4312, process, "workspace-expected")
+        workspace_processes.wait_for_backend_ready(4312, process, "workspace-expected")
 
 
 def test_workspace_early_exit_keeps_existing_error_contract(
@@ -366,7 +369,7 @@ def test_workspace_early_exit_keeps_existing_error_contract(
     process.poll.return_value = 7
     process.returncode = 7
     connect = Mock()
-    monkeypatch.setattr(processes, "urlopen", connect)
+    monkeypatch.setattr(workspace_processes, "urlopen", connect)
     with pytest.raises(RuntimeError, match="后端进程提前退出.*returncode=7"):
-        processes.wait_for_backend_ready(4312, process, "workspace-expected")
+        workspace_processes.wait_for_backend_ready(4312, process, "workspace-expected")
     connect.assert_not_called()

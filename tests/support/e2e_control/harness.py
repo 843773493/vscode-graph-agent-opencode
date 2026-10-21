@@ -21,7 +21,9 @@ from pathlib import Path
 from typing import cast
 from uuid import UUID
 
-from tests.support.processes import ensure_local_port_available
+import psutil
+
+from tests.support.processes.workspace import ensure_local_port_available
 
 
 def deterministic_uuid7(namespace: str, ordinal: int, epoch_ms: int) -> str:
@@ -31,50 +33,65 @@ def deterministic_uuid7(namespace: str, ordinal: int, epoch_ms: int) -> str:
     return UUID(int=value).hex
 
 
-def _linux_process_start_ticks(pid: int) -> str:
-    """返回 /proc stat 第22字段原文：自系统启动至进程创建的时钟滴答数。
-
-    它不是Unix时间或秒数，只与PID联合校验进程身份，防止PID复用继承旧租约。
-    """
-    return Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()[19]
+def _process_start_time(pid: int) -> float | None:
+    """读取跨平台进程创建时间，避免 PID 重用继承旧租约。"""
+    try:
+        return psutil.Process(pid).create_time()
+    except psutil.NoSuchProcess:
+        return None
 
 
 @dataclass(slots=True)
 class E2EProcessLease:
     """当前pytest进程的服务端口使用声明，不持有监听socket或操作系统文件锁。"""
 
-    # JSON租约文件；start_time沿用字段名，但值是Linux进程启动滴答数的字符串。
+    # JSON 租约文件；start_time 保存跨平台进程创建时间。
     path: Path
     # acquire/release检查这些服务端口空闲；端口块分配仍归ports.py。
     ports: tuple[int, ...]
-    # release用本次凭据与当前PID、启动滴答数联合校验，再删除本次记录。
+    # release 用本次凭据和进程创建时间校验 owner，再删除本次记录。
     token: str = field(default_factory=lambda: secrets.token_hex(16))
 
     def acquire(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        lease_record = {"pid": os.getpid(), "start_time": _linux_process_start_ticks(os.getpid()), "token": self.token, "ports": self.ports}
+        owner_pid = os.getpid()
+        owner_start_time = _process_start_time(owner_pid)
+        if owner_start_time is None:
+            raise RuntimeError(f"无法读取当前 E2E owner 的进程创建时间: pid={owner_pid}")
+        record = {
+            "pid": owner_pid,
+            "start_time": owner_start_time,
+            "token": self.token,
+            "ports": self.ports,
+        }
         if self.path.exists():
-            previous_lease_record = json.loads(self.path.read_text(encoding="utf-8"))
-            lease_owner_pid = previous_lease_record["pid"]
-            lease_owner_stat_path = Path(f"/proc/{lease_owner_pid}/stat")
-            if lease_owner_stat_path.exists() and _linux_process_start_ticks(lease_owner_pid) == previous_lease_record["start_time"]:
-                raise RuntimeError(f"E2E 独占租约仍有效，禁止抢占: {previous_lease_record}")
+            previous = json.loads(self.path.read_text(encoding="utf-8"))
+            previous_pid = previous["pid"]
+            previous_start_time = _process_start_time(previous_pid)
+            if previous_start_time is not None and previous_start_time == previous["start_time"]:
+                raise RuntimeError(f"E2E 独占租约仍有效，禁止抢占: {previous}")
             self.path.unlink()
         for port in self.ports:
             if 8010 <= port <= 8016:
                 raise ValueError(f"正式 E2E 不得租用开发端口: {port}")
-            ensure_local_port_available(port, service_name="Section8 owner")
+            ensure_local_port_available(port, service_name="E2E process lease owner")
         with ExitStack() as cleanup:
             with self.path.open("x", encoding="utf-8") as stream:
                 cleanup.callback(self.path.unlink)
-                json.dump(lease_record, stream)
+                json.dump(record, stream)
             cleanup.pop_all()
 
     def release(self) -> None:
         for port in self.ports:
-            ensure_local_port_available(port, service_name="Section8 teardown")
-        lease_record = json.loads(self.path.read_text(encoding="utf-8"))
-        if (lease_record["pid"], lease_record["start_time"], lease_record["token"]) != (os.getpid(), _linux_process_start_ticks(os.getpid()), self.token):
+            ensure_local_port_available(port, service_name="E2E process lease teardown")
+        record = json.loads(self.path.read_text(encoding="utf-8"))
+        owner_pid = os.getpid()
+        owner_start_time = _process_start_time(owner_pid)
+        if owner_start_time is None:
+            raise RuntimeError(f"无法读取当前 E2E owner 的进程创建时间: pid={owner_pid}")
+        record_owner = (record["pid"], record["start_time"], record["token"])
+        current_owner = (owner_pid, owner_start_time, self.token)
+        if record_owner != current_owner:
             raise RuntimeError("E2EProcessLease owner 变化，拒绝删除其它 owner 的租约")
         self.path.unlink()
 

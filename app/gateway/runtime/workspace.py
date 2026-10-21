@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from app.gateway.runtime.managed_backend import ManagedBackendOwner
-from app.gateway.runtime.process import ManagedProcessHandle
+from app.gateway.runtime.process_lifecycle import ManagedProcessHandle
 from app.gateway.service_types import GatewayServiceName
 
 

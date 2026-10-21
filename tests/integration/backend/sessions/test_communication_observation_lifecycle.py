@@ -65,7 +65,7 @@ from tests.integration.backend.sessions.test_session_communication_pipeline impo
     _completed,
 )
 from tests.support.api_helpers import create_session
-from tests.support.gateway_processes import LOCAL_TOKEN_HEADERS
+from tests.support.processes.gateway import LOCAL_TOKEN_HEADERS
 from tests.support.session_navigation_http import submit_navigation_operation
 from tests.unit.core.catalog_workspace_helper import (
     CatalogWorkspaceContext,

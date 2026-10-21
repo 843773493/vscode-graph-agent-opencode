@@ -1,18 +1,13 @@
 from __future__ import annotations
 
 import json
-import os
 import time
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from pathlib import Path
 from typing import BinaryIO
 
-if os.name == "nt":
-    import msvcrt
-else:
-    import fcntl
-
+import portalocker
 
 from app.abstractions.tool_selection import ToolSelectionSnapshot
 
@@ -123,7 +118,7 @@ class ToolSelectionStore:
     @contextmanager
     def _file_lock(self, *, shared: bool) -> Iterator[None]:
         self._lock_path.parent.mkdir(parents=True, exist_ok=True)
-        with self._lock_path.open("a+", encoding="utf-8") as lock_file:
+        with self._lock_path.open("a+b") as lock_file:
             acquired = False
             try:
                 _acquire_file_lock(lock_file, shared=shared, path=self._lock_path)
@@ -142,33 +137,16 @@ def _acquire_file_lock(
 ) -> None:
     """有界获取配置锁，避免 Agent 初始化无限等待一个失联写者。"""
     deadline = time.monotonic() + _TOOL_SELECTION_LOCK_TIMEOUT_SECONDS
-    if os.name == "nt":
-        lock_file.seek(0, os.SEEK_END)
-        if lock_file.tell() == 0:
-            lock_file.write(" ")
-            lock_file.flush()
-        lock_file.seek(0)
-        mode = msvcrt.LK_NBLCK
-        while True:
-            try:
-                msvcrt.locking(lock_file.fileno(), mode, 1)
-            except OSError as error:
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    raise TimeoutError(
-                        "工具选择配置锁获取超时: "
-                        f"path={path} "
-                        f"timeout_seconds={_TOOL_SELECTION_LOCK_TIMEOUT_SECONDS:g}"
-                    ) from error
-                time.sleep(min(_TOOL_SELECTION_LOCK_POLL_INTERVAL_SECONDS, remaining))
-            else:
-                return
-
-    mode = fcntl.LOCK_SH if shared else fcntl.LOCK_EX
+    lock_file.seek(0, 2)
+    if lock_file.tell() == 0:
+        lock_file.write(b" ")
+        lock_file.flush()
+    lock_file.seek(0)
+    mode = portalocker.LOCK_SH if shared else portalocker.LOCK_EX
     while True:
         try:
-            fcntl.flock(lock_file.fileno(), mode | fcntl.LOCK_NB)
-        except BlockingIOError as error:
+            portalocker.lock(lock_file, mode | portalocker.LOCK_NB)
+        except portalocker.AlreadyLocked as error:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 raise TimeoutError(
@@ -182,9 +160,4 @@ def _acquire_file_lock(
 
 
 def _release_file_lock(lock_file: BinaryIO) -> None:
-    if os.name == "nt":
-        lock_file.seek(0)
-        msvcrt.locking(lock_file.fileno(), msvcrt.LK_UNLCK, 1)
-        return
-
-    fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+    portalocker.unlock(lock_file)

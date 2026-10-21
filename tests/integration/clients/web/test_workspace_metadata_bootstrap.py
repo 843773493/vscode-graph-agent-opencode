@@ -19,7 +19,7 @@ import pytest
 
 from tests.harness.python.run_context import TestRunContext
 from tests.integration.stubs.http_stubs import HTTPStubState, openai_chat_stub
-from tests.support.gateway_processes import (
+from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
     acquire_gateway_guest,
     close_gateway_process,

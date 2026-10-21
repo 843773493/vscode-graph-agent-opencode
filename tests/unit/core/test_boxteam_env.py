@@ -1,9 +1,31 @@
 from __future__ import annotations
 
 import os
+from io import BytesIO, TextIOWrapper
 from pathlib import Path
 
 from app.core.env import load_boxteam_env
+
+
+def test_load_boxteam_env_keeps_cp1252_console_streams_writable(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("BOXTEAM_HOME", str(tmp_path / "boxteam-home"))
+    stdout_bytes = BytesIO()
+    stderr_bytes = BytesIO()
+    stdout = TextIOWrapper(stdout_bytes, encoding="cp1252")
+    stderr = TextIOWrapper(stderr_bytes, encoding="cp1252")
+    monkeypatch.setattr("app.core.env.sys.stdout", stdout)
+    monkeypatch.setattr("app.core.env.sys.stderr", stderr)
+
+    assert load_boxteam_env() is None
+    print("中文日志", file=stderr)
+    stdout.flush()
+    stderr.flush()
+
+    assert b"\\u" in stdout_bytes.getvalue()
+    assert b"\\u" in stderr_bytes.getvalue()
 
 
 def test_load_boxteam_env_reads_only_boxteam_home(

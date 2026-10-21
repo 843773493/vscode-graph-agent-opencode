@@ -14,7 +14,7 @@ import pytest
 
 from app.core.workspace_identity import workspace_identity_path
 from tests.support.api_waiters import wait_for_job_done
-from tests.support.gateway_processes import (
+from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
     acquire_gateway_guest,
     close_gateway_process,

@@ -19,7 +19,7 @@ from tests.harness.python.terminal_frontend import (
     close_terminal_frontend_process,
     start_terminal_frontend_process,
 )
-from tests.support.gateway_processes import (
+from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
     acquire_gateway_guest,
     close_gateway_process,

@@ -16,9 +16,9 @@ from urllib.request import Request, urlopen
 from uuid import uuid4
 
 from app.core.mounted_workspaces import MountedWorkspace
-from app.gateway.runtime.process import resolve_backend_workspace_id
+from app.gateway.runtime.workspace_process import resolve_backend_workspace_id
 from configs.installer import install_user_configuration
-from tests.support.process_scope import (
+from tests.support.processes.scope import (
     register_test_process,
     unregister_test_process,
 )

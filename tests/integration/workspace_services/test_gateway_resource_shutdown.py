@@ -18,7 +18,7 @@ import pytest
 
 from app.testing.model_stream import get_protocol_codec, load_cassette
 from configs.runtime import read_jsonc_object, validate_config
-from tests.support.gateway_processes import (
+from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
     acquire_gateway_guest,
     close_gateway_process,

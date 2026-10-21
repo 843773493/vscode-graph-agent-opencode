@@ -16,7 +16,7 @@ faulthandler.dump_traceback_later(55, repeat=False)
 from app.core.identifier import bind_identifier_factory
 from app.core.phase_observer import bind_phase_observer
 from app.runtime.runtime_ports import RuntimeClockPorts
-from tests.support.e2e_test_control import control_request
+from tests.support.e2e_control.harness import control_request
 
 _address = json.loads(os.environ["BOXTEAM_E2E_TEST_CONTROL"])
 

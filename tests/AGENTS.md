@@ -4,6 +4,7 @@
 
 ```text
 tests/
+├── conftest.py   共享配置、工作区路径与进程生命周期 fixture
 ├── unit/          单模块行为；业务测试镜像被测模块，harness/ 验证测试设施本身
 ├── contracts/     公开协议、schema 与跨语言契约
 ├── integration/   多模块或真实进程组合，允许明确的外部服务替身

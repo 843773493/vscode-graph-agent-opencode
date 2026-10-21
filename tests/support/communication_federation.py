@@ -22,7 +22,7 @@ from app.core.workspace_identity import (
     load_or_create_workspace_id,
     workspace_identity_path,
 )
-from app.gateway.runtime.process import ManagedProcess
+from app.gateway.runtime.process_lifecycle import ManagedProcess
 from configs.installer import install_user_configuration
 from tests.e2e.system.gateway.gateway_target import GatewaySshTarget, wait_for_ssh_ready
 from tests.harness.python.browser_manager import (
@@ -32,7 +32,7 @@ from tests.harness.python.browser_manager import (
 from tests.harness.python.run_context import TestRunContext
 from tests.harness.python.terminal_backend import start_terminal_backend
 from tests.support.catalog_session_bundle import seed_catalog_session_bundle
-from tests.support.gateway_processes import (
+from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
     GatewayProcess,
     acquire_gateway_guest,
@@ -41,8 +41,8 @@ from tests.support.gateway_processes import (
     start_gateway_process,
 )
 from tests.support.ports import TestFilePortBlock, integration_port_block_for_file
-from tests.support.process_scope import register_test_process, unregister_test_process
-from tests.support.processes import (
+from tests.support.processes.scope import register_test_process, unregister_test_process
+from tests.support.processes.workspace import (
     BackendProcess,
     close_backend_process,
     ensure_local_port_available,

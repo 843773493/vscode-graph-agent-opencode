@@ -21,8 +21,8 @@ import pytest
 from app.core.path_utils import get_session_path_resolver
 from app.services.orchestration.session_subagent_service import _derive_delegation_id
 from app.testing.model_stream import build_cassette, chat_completion_frames
-from tests.support.e2e_test_control import E2ETestControlHarness
-from tests.support.gateway_processes import (
+from tests.support.e2e_control.harness import E2ETestControlHarness
+from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
     acquire_gateway_guest,
     close_gateway_process,
@@ -318,7 +318,7 @@ async def test_cold_child_dispatch_and_result_keep_creation_gateway_source(
     try:
         gateway = start_gateway_process(
             workspace_root=workspace, default_backend_url=None, port=port, boxteam_home=home,
-            artifacts_dir=artifacts / "gateway-first", asgi_app="tests.support.section8_gateway:app",
+            artifacts_dir=artifacts / "gateway-first", asgi_app="tests.support.e2e_control.gateway_app:app",
             extra_env=state.environment,
         )
         base_url = f"http://127.0.0.1:{port}"
@@ -378,7 +378,7 @@ async def test_cold_child_dispatch_and_result_keep_creation_gateway_source(
 
         gateway = start_gateway_process(
             workspace_root=workspace, default_backend_url=None, port=port, boxteam_home=home,
-            artifacts_dir=artifacts / "gateway-restarted", asgi_app="tests.support.section8_gateway:app",
+            artifacts_dir=artifacts / "gateway-restarted", asgi_app="tests.support.e2e_control.gateway_app:app",
             extra_env=state.environment,
         )
         async with httpx.AsyncClient(base_url=base_url, headers=LOCAL_TOKEN_HEADERS, timeout=60, trust_env=False) as client:

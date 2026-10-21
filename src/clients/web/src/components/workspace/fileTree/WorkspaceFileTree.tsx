@@ -35,8 +35,9 @@ import {
 import WorkspaceFileTreeContextMenu from "./WorkspaceFileTreeContextMenu";
 import {
   buildVisibleFileTreeRows,
+  createFileTreeSearchMatcher,
   FILE_TREE_VIRTUALIZATION_THRESHOLD,
-  fileTreeNodeMatchesQuery,
+  fileTreeNodeTextMatchesQuery,
   isExpandableFileTreeNode,
   type WorkspaceFileTreeRow,
 } from "./workspaceFileTreeRows";
@@ -121,8 +122,6 @@ export default function WorkspaceFileTree({
   const lastCollapseVersionRef = useRef(collapseVersion);
   const restoredExpandedPathsRef = useRef(restoredExpandedPaths);
   const shortcutTreePathsRef = useRef<Set<string>>(new Set());
-  // 搜索递归的当前递归链去重集合，避免损坏载荷造成无限递归。
-  const searchMatchChainRef = useRef<Set<string>>(new Set());
   const activeFilePathRef = useRef(activeFilePath);
   const activeRef = useRef(active);
   const previousActiveRef = useRef(active);
@@ -521,31 +520,11 @@ export default function WorkspaceFileTree({
     toggleDirectory(node.path, referenceForPath(node.path));
   };
 
-  // 与 buildVisibleFileTreeRows 的搜索判定保持同一语义：目录才向下递归，
-  // 并对当前递归链去重，避免损坏载荷造成栈溢出。
-  const nodeMatchesSearch = (node: WorkspaceFileNode): boolean => {
-    const normalizedQuery = searchQuery.trim().toLowerCase();
-    if (!normalizedQuery) {
-      return true;
-    }
-    const nodeTextMatches = fileTreeNodeMatchesQuery(node, normalizedQuery);
-    if (nodeTextMatches || !isExpandableFileTreeNode(node)) {
-      return nodeTextMatches;
-    }
-    if (searchMatchChainRef.current.has(node.path)) {
-      return true;
-    }
-    const loadedDirectory = directories[node.path];
-    if (!loadedDirectory) {
-      return true;
-    }
-    searchMatchChainRef.current.add(node.path);
-    try {
-      return loadedDirectory.items.some(nodeMatchesSearch);
-    } finally {
-      searchMatchChainRef.current.delete(node.path);
-    }
-  };
+  // 扁平行构建和递归 DOM 渲染共用匹配缓存，避免分别深搜相同的已加载目录。
+  const nodeMatchesSearch = useMemo(
+    () => createFileTreeSearchMatcher(directories, searchQuery),
+    [directories, searchQuery],
+  );
 
   const renderDirectory = (path: string, depth: number) => {
     const directory = directories[path];
@@ -670,6 +649,7 @@ export default function WorkspaceFileTree({
     expandedPaths,
     shortcuts,
     searchQuery,
+    searchMatcher: nodeMatchesSearch,
     workspaceLabel: rootLabel,
     workspaceTitle: workspaceRoot || rootLabel,
     workspaceRootPath: ROOT_PATH,
@@ -679,6 +659,7 @@ export default function WorkspaceFileTree({
     expandedPaths,
     rootLabel,
     searchQuery,
+    nodeMatchesSearch,
     shortcuts,
     workspaceRoot, ROOT_PATH, FILESYSTEM_ROOT_PATH, roots?.filesystem_label,
   ]);
@@ -699,7 +680,7 @@ export default function WorkspaceFileTree({
     let hasUnloadedDirectory = false;
     for (const directory of loadedDirectories) {
       for (const node of directory.items) {
-        if (fileTreeNodeMatchesQuery(node, normalizedQuery)) {
+        if (fileTreeNodeTextMatchesQuery(node, normalizedQuery)) {
           hasDirectMatch = true;
           break;
         }

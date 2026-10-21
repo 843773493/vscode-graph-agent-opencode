@@ -12,6 +12,7 @@ harness/
 │   ├── test_navigation_fixture_lifetime.py 导航下游的进程与日志
 │   └── test_http_readiness.py          HTTP 就绪预算、身份与退出诊断
 ├── test_run_context.py                测试运行上下文
+├── test_custom_tool_workspace_copy.py canonical 生成器负责的工作区 fixture 复制计划
 ├── test_catalog_fixture_lifetime.py   SQLite catalog 装具归属
 ├── test_workspace_tool_fixture_lifetime.py  资源工具装具的多资源清理及错误链
 ├── test_ports.py                      测试文件端口分配

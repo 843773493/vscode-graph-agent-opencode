@@ -12,12 +12,11 @@ class SpaStaticFiles(StaticFiles):
     """提供静态资源，并把非 API 的前端路由回退到 index.html。"""
 
     async def get_response(self, path: str, scope):
-        # TODO: Windows 的 normpath 会把 Mount 路径分隔符转换为反斜杠。
         normalized_path = path.replace("\\", "/")
         if normalized_path == "api" or normalized_path.startswith("api/"):
             raise HTTPException(status_code=404, detail="API route not found")
         try:
-            return await super().get_response(path, scope)
+            return await super().get_response(normalized_path, scope)
         except HTTPException as error:
             if error.status_code != 404:
                 raise

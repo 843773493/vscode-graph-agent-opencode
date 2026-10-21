@@ -1,11 +1,15 @@
 from __future__ import annotations
 
-import fcntl
 import os
 import shlex
 import shutil
 import subprocess
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
+from time import sleep
+
+import portalocker
 
 from tests.e2e.system.gateway.gateway_target import GatewaySshTarget, wait_for_ssh_ready
 
@@ -35,9 +39,7 @@ def ensure_gateway_ssh_container(*, known_hosts_path: Path) -> GatewaySshTarget:
         / TARGET_ID
         / ".e2e-provision.lock"
     )
-    lock_path.parent.mkdir(parents=True, exist_ok=True)
-    with lock_path.open("w", encoding="utf-8") as lock_file:
-        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+    with _docker_target_provision_lock(lock_path):
         _run_target_command(project_root, "provision")
         _run_target_command(project_root, "sync", "--activate")
         _run_target_command(project_root, "bootstrap")
@@ -68,6 +70,31 @@ def ensure_gateway_ssh_container(*, known_hosts_path: Path) -> GatewaySshTarget:
     )
     wait_for_ssh_ready(target)
     return target
+
+
+@contextmanager
+def _docker_target_provision_lock(lock_path: Path) -> Iterator[None]:
+    """串行准备共享 Docker 目标，并在所有宿主系统释放文件锁。"""
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with lock_path.open("a+b") as lock_file:
+        lock_file.seek(0, os.SEEK_END)
+        if lock_file.tell() == 0:
+            lock_file.write(b"\0")
+            lock_file.flush()
+        lock_file.seek(0)
+        while True:
+            try:
+                portalocker.lock(
+                    lock_file, portalocker.LOCK_EX | portalocker.LOCK_NB
+                )
+            except portalocker.AlreadyLocked:
+                sleep(0.05)
+            else:
+                break
+        try:
+            yield
+        finally:
+            portalocker.unlock(lock_file)
 
 
 def docker_command_prefix() -> list[str]:

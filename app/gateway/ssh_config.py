@@ -16,6 +16,16 @@ class UserSshHost:
     username: str
 
 
+def _split_config_line(raw_line: str) -> list[str]:
+    lexer = shlex.shlex(raw_line, posix=True)
+    lexer.whitespace_split = True
+    lexer.commenters = "#"
+    if os.name == "nt":
+        # Windows Include 路径中的反斜杠是路径分隔符，不作为 shell 转义符消费。
+        lexer.escape = ""
+    return list(lexer)
+
+
 def _included_config_paths(raw_pattern: str) -> list[Path]:
     expanded = Path(raw_pattern).expanduser()
     if not expanded.is_absolute():
@@ -30,8 +40,7 @@ def _collect_host_aliases(config_path: Path, visited: set[Path]) -> list[str]:
     visited.add(resolved_path)
     aliases: list[str] = []
     for raw_line in resolved_path.read_text(encoding="utf-8").splitlines():
-        # TODO: Windows SSH Include 路径含反斜杠，不能用 POSIX shlex 解释转义。
-        tokens = shlex.split(raw_line, comments=True, posix=os.name != "nt")
+        tokens = _split_config_line(raw_line)
         if not tokens:
             continue
         keyword = tokens[0].lower()

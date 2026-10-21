@@ -21,7 +21,7 @@ from app.gateway.runtime.managed_backend import (
     ManagedBackendMember,
     ManagedBackendOwner,
 )
-from app.gateway.runtime.process import resolve_backend_workspace_id
+from app.gateway.runtime.workspace_process import resolve_backend_workspace_id
 from app.schemas.gateway.lifecycle import (
     GatewayRuntimeBlockerDTO,
     GatewayRuntimeGroupRequest,

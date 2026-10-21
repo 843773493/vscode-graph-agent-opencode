@@ -39,7 +39,7 @@ from tests.harness.python.terminal_frontend import (
     close_terminal_frontend_process,
     start_terminal_frontend_process,
 )
-from tests.support.gateway_processes import (
+from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
     GatewayProcess,
     acquire_gateway_guest,
@@ -50,8 +50,8 @@ from tests.support.gateway_processes import (
     write_gateway_remote_gateway_config,
 )
 from tests.support.ports import e2e_port_block_for_file
-from tests.support.process_scope import register_test_process, unregister_test_process
-from tests.support.processes import (
+from tests.support.processes.scope import register_test_process, unregister_test_process
+from tests.support.processes.workspace import (
     ensure_local_port_available,
     resolve_workspace_python_executable,
 )

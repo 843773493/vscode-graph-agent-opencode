@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from app.gateway.runtime.process import _spawn_logged_process
+from app.gateway.runtime.process_lifecycle import _spawn_logged_process
 from app.gateway.runtime.process_logs import (
     PROCESS_LOG_MAX_BYTES,
     ProcessLogStore,
@@ -104,7 +104,7 @@ def test_spawn_logged_process_closes_log_when_spawn_fails(
         raise OSError("测试进程创建失败")
 
     monkeypatch.setattr(
-        "app.gateway.runtime.process.subprocess.Popen",
+        "app.gateway.runtime.process_lifecycle.subprocess.Popen",
         fail_spawn,
     )
 

@@ -12,7 +12,7 @@ import pytest
 
 from app.core.path_utils import get_session_path_resolver
 from tests.support.api_waiters import wait_for_job_done
-from tests.support.processes import (
+from tests.support.processes.workspace import (
     close_backend_process,
     start_backend_process,
     terminate_process,

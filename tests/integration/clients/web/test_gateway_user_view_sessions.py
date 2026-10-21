@@ -22,13 +22,13 @@ from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
 from tests.integration.stubs.http_stubs import openai_chat_stub
-from tests.support.gateway_processes import (
+from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
     close_gateway_process,
     start_gateway_process,
 )
 from tests.support.ports import integration_port_block_for_file
-from tests.support.processes import close_backend_process, start_backend_process
+from tests.support.processes.workspace import close_backend_process, start_backend_process
 
 
 def _checkpoint(

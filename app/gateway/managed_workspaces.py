@@ -5,7 +5,7 @@ from pathlib import Path
 
 from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceTarget
 from app.gateway.runtime.controller import GatewayWorkspaceRuntimeController
-from app.gateway.runtime.process import resolve_backend_workspace_id
+from app.gateway.runtime.workspace_process import resolve_backend_workspace_id
 from app.gateway.workspace_ids import build_managed_local_workspace_id
 from app.schemas.gateway.lifecycle import (
     GatewayRuntimeGroupRequest,

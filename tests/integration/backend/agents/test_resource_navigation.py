@@ -13,7 +13,7 @@ import httpx
 import pytest
 
 from app.core.resource_uri import parse_resource_uri, resource_display_uri
-from tests.support.gateway_processes import (
+from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
     acquire_gateway_guest,
     close_gateway_process,

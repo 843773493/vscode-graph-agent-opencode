@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from pathlib import Path
 
 import pytest
@@ -16,6 +16,7 @@ from tests.support.ports import (
     TestFilePortBlock,
     e2e_port_block_for_file,
     integration_port_block_for_file,
+    port_block_for_file,
 )
 
 
@@ -40,6 +41,47 @@ def test_integration_and_e2e_port_ranges_are_adjacent_and_disjoint() -> None:
         E2E_PORT_END
         == E2E_PORT_START + TEST_FILE_PORT_BLOCK_SIZE * E2E_PORT_MAX_FILES - 1
     )
+
+
+def test_port_file_tree_is_scanned_once_for_repeated_lookups(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    tests_root = tmp_path / "tests"
+    tests_root.mkdir()
+    first_file = tests_root / "test_first.py"
+    second_file = tests_root / "test_second.py"
+    first_file.touch()
+    second_file.touch()
+
+    scans = 0
+    original_rglob = Path.rglob
+
+    def count_scans(path: Path, pattern: str) -> Iterator[Path]:
+        nonlocal scans
+        scans += 1
+        return original_rglob(path, pattern)
+
+    monkeypatch.setattr(Path, "rglob", count_scans)
+
+    first = port_block_for_file(
+        first_file,
+        test_layer="integration",
+        port_start=1000,
+        max_files=10,
+        tests_root=tests_root,
+    )
+    second = port_block_for_file(
+        second_file,
+        test_layer="integration",
+        port_start=1000,
+        max_files=10,
+        tests_root=tests_root,
+    )
+
+    assert first.index == 0
+    assert second.index == 1
+    assert scans == 1
 
 
 @pytest.mark.parametrize(

@@ -5,7 +5,7 @@
     NavigationTopologyGate → 至多一个 SessionLifecycleGate / SessionReadGuard
     → 至多一个 SQLite 写事务
 
-拓扑/Session gate 均为跨进程短时 fcntl.flock OS 锁：
+拓扑/Session gate 均为跨平台跨进程短时共享/独占文件锁：
 
 - topology 锁文件：<workspace .boxteam>/navigation/topology.lock；
 - session gate 锁文件：
@@ -26,12 +26,13 @@ lease 没有墙钟自动到期；恢复 owner 验证旧 holder 失效并 CAS 新
 from __future__ import annotations
 
 import asyncio
-import fcntl
 import os
 import zlib
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Self
+
+import portalocker
 
 from app.core.key_lock_pool import KEY_LOCK_SHARDS
 from app.core.session_catalog_store.validators import validate_session_id
@@ -140,7 +141,7 @@ def _navigation_root(sessions_root: Path) -> Path:
 
 
 class _CrossProcessFileLock:
-    """基于 fcntl.flock 的跨进程文件锁。
+    """基于 portalocker 的跨平台跨进程文件锁。
 
     每次获取独立 open 一个 fd：同进程两次获取经两个不同 fd 同样按
     OS 语义互斥（不可重入，无双 gate）；进程退出时 OS 关闭全部 fd 并
@@ -166,12 +167,12 @@ class _CrossProcessFileLock:
     async def __aenter__(self) -> Self:
         self._path.parent.mkdir(parents=True, exist_ok=True)
         fd = os.open(self._path, os.O_RDWR | os.O_CREAT, 0o600)
-        mode = fcntl.LOCK_EX if self._exclusive else fcntl.LOCK_SH
+        mode = portalocker.LOCK_EX if self._exclusive else portalocker.LOCK_SH
         try:
             while True:
                 try:
-                    fcntl.flock(fd, mode | fcntl.LOCK_NB)
-                except BlockingIOError:
+                    portalocker.lock(fd, mode | portalocker.LOCK_NB)
+                except portalocker.AlreadyLocked:
                     if not self._wait:
                         os.close(fd)
                         return self
@@ -188,8 +189,10 @@ class _CrossProcessFileLock:
         fd = self._fd
         self._fd = None
         if fd is not None:
-            fcntl.flock(fd, fcntl.LOCK_UN)
-            os.close(fd)
+            try:
+                portalocker.unlock(fd)
+            finally:
+                os.close(fd)
 
 
 class SessionReadGuard(_CrossProcessFileLock):

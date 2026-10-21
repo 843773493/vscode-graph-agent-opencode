@@ -4,7 +4,8 @@ import type { WorkspaceFileNode } from "../../../types/backend";
 import type { DirectoryCacheEntry } from "./workspaceFileTreeCache";
 import {
   buildVisibleFileTreeRows,
-  fileTreeNodeMatchesQuery,
+  createFileTreeSearchMatcher,
+  fileTreeNodeTextMatchesQuery,
 } from "./workspaceFileTreeRows";
 
 const workspaceRootUri = "boxteam://workspace/ws-1/resources/files/root";
@@ -17,24 +18,24 @@ function node(name: string, path: string): WorkspaceFileNode {
 
 describe("文件树搜索命中判定", () => {
   test("名称与 URI 分别匹配，不跨分隔符拼出假命中", () => {
-    expect(fileTreeNodeMatchesQuery(node("b", `${workspaceRootUri}/a/b`), "b")).toBe(true);
-    expect(fileTreeNodeMatchesQuery(node("b", `${workspaceRootUri}/a/b`), "a/b")).toBe(true);
+    expect(fileTreeNodeTextMatchesQuery(node("b", `${workspaceRootUri}/a/b`), "b")).toBe(true);
+    expect(fileTreeNodeTextMatchesQuery(node("b", `${workspaceRootUri}/a/b`), "a/b")).toBe(true);
     // 旧实现用 `${name}\n${path}` 拼接：URI 里的换行会被当成真实换行，
     // 使名字尾和路径头跨边界拼成并不存在的连续串。
     const tricky = node("b", `${workspaceRootUri}/see/b`);
-    expect(fileTreeNodeMatchesQuery(tricky, "b\nsee")).toBe(false);
+    expect(fileTreeNodeTextMatchesQuery(tricky, "b\nsee")).toBe(false);
   });
 
   test("名字本身含换行时按子串语义正常匹配", () => {
     const multiline = node("x\ny", `${workspaceRootUri}/dir/x\ny`);
-    expect(fileTreeNodeMatchesQuery(multiline, "x")).toBe(true);
-    expect(fileTreeNodeMatchesQuery(multiline, "y")).toBe(true);
-    expect(fileTreeNodeMatchesQuery(multiline, "dir/x")).toBe(true);
-    expect(fileTreeNodeMatchesQuery(multiline, "y\ndir")).toBe(false);
+    expect(fileTreeNodeTextMatchesQuery(multiline, "x")).toBe(true);
+    expect(fileTreeNodeTextMatchesQuery(multiline, "y")).toBe(true);
+    expect(fileTreeNodeTextMatchesQuery(multiline, "dir/x")).toBe(true);
+    expect(fileTreeNodeTextMatchesQuery(multiline, "y\ndir")).toBe(false);
   });
 
   test("空查询不过滤任何节点", () => {
-    expect(fileTreeNodeMatchesQuery(node("a", `${workspaceRootUri}/a`), "")).toBe(true);
+    expect(fileTreeNodeTextMatchesQuery(node("a", `${workspaceRootUri}/a`), "")).toBe(true);
   });
 });
 
@@ -49,6 +50,34 @@ function directory(items: WorkspaceFileNode[]): DirectoryCacheEntry {
     lastAccessedAt: 1,
   };
 }
+
+test("共享搜索匹配器复用已加载目录并保留未加载目录", () => {
+  const sourceUri = `${workspaceRootUri}/src`;
+  const sourceDirectory: WorkspaceFileNode = {
+    name: "src",
+    path: sourceUri,
+    kind: "directory",
+    has_children: true,
+    size: null,
+    modified_at: null,
+  };
+  const unloadedDirectory: WorkspaceFileNode = {
+    name: "vendor",
+    path: `${workspaceRootUri}/vendor`,
+    kind: "directory",
+    has_children: true,
+    size: null,
+    modified_at: null,
+  };
+  const matchesNode = createFileTreeSearchMatcher({
+    [workspaceRootUri]: directory([sourceDirectory, unloadedDirectory]),
+    [sourceUri]: directory([node("needle.ts", `${sourceUri}/needle.ts`)]),
+  }, " NEEDLE ");
+
+  expect(matchesNode(sourceDirectory)).toBe(true);
+  expect(matchesNode(unloadedDirectory)).toBe(true);
+  expect(matchesNode(node("plain.ts", `${sourceUri}/plain.ts`))).toBe(false);
+});
 
 function rowOptions(
   overrides: Partial<Parameters<typeof buildVisibleFileTreeRows>[0]> = {},

@@ -7,6 +7,7 @@ from unittest.mock import Mock
 import pytest
 from pydantic import ValidationError
 
+from app.gateway import ssh_config
 from app.gateway.config import ConfiguredRemoteGateway, GatewayConfig
 from app.gateway.registry import GatewayWorkspaceRegistry
 from app.gateway.ssh_command import build_ssh_command
@@ -70,6 +71,18 @@ def test_user_ssh_config_lists_concrete_hosts_and_includes(
     assert resolve_user_ssh_host("dev", ssh_config_files).hostname == "dev.example.com"
     with pytest.raises(ValueError, match="不存在 Host"):
         resolve_user_ssh_host("missing", ssh_config_files)
+
+
+def test_windows_ssh_include_keeps_backslashes_and_removes_quotes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("app.gateway.ssh_config.os.name", "nt")
+
+    tokens = ssh_config._split_config_line(
+        r'Include "C:\Users\Jöhn Doe\.ssh\config.d\*.conf" # nested config'
+    )
+
+    assert tokens == ["Include", r"C:\Users\Jöhn Doe\.ssh\config.d\*.conf"]
 
 
 def test_ssh_command_preserves_config_alias_and_explicit_connection(

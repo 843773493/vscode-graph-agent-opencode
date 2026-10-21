@@ -11,11 +11,13 @@ from app.gateway.control.storage import atomic_write_json, read_json_object
 from app.gateway.federation import RemoteGatewayConnection
 from app.gateway.registry import GatewayWorkspaceRegistry
 from app.gateway.runtime.consumer_protocol import GatewayRuntimeHealthProof
-from app.gateway.runtime.process import (
-    ManagedProcess,
-    SshLocalForwardSpec,
+from app.gateway.runtime.process_lifecycle import ManagedProcess
+from app.gateway.runtime.process_ports import (
     allocate_ssh_tunnel_port,
     is_local_port_available,
+)
+from app.gateway.runtime.ssh_process import (
+    SshLocalForwardSpec,
     start_workspace_ssh_port_forward_process,
 )
 from app.schemas.gateway.port_forwarding import (

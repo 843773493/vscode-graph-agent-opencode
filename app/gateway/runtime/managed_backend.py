@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING
 from urllib.parse import urlparse
 
 from app.core.workspace_identity import validate_workspace_id
-from app.gateway.runtime.process import ManagedProcessHandle
+from app.gateway.runtime.process_lifecycle import ManagedProcessHandle
 
 if TYPE_CHECKING:
     from app.gateway.runtime.workspace import WorkspaceRuntime

@@ -42,7 +42,7 @@ from app.gateway.workspace_ids import build_managed_local_workspace_id
 from app.services.infrastructure.trace_event_store import TraceEventStore
 from tests.harness.python.run_context import TestRunContext
 from tests.integration.stubs.http_stubs import HTTPStubState, openai_chat_stub
-from tests.support.gateway_processes import (
+from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
     GatewayProcess,
     acquire_gateway_guest,

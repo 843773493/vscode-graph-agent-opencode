@@ -5,8 +5,11 @@ from __future__ import annotations
 import json
 import os
 import signal
+import subprocess
+import sys
 import time
 from pathlib import Path
+from typing import NamedTuple
 
 import pytest
 
@@ -14,6 +17,7 @@ from app.core.workspace_identity import load_or_create_workspace_id
 from tests.e2e.system.workspace_services.terminal.terminal_process_helpers import (
     create_long_running_terminal,
     lifecycle_workspace,
+    process_exists,
     terminal_ports_with_offset,
     terminal_state_record,
     wait_terminal_process_metadata,
@@ -21,28 +25,78 @@ from tests.e2e.system.workspace_services.terminal.terminal_process_helpers impor
 )
 from tests.harness.python.run_context import TestRunContext
 from tests.harness.python.terminal_backend import start_terminal_backend
-from tests.support.processes import terminate_process
+from tests.support.processes.workspace import terminate_process
 
 
-def _registered_process_stat(record: dict[str, object]) -> list[str] | None:
-    path = Path(f"/proc/{record['os_pid']}/stat")
-    if not path.exists():
-        return None
-    fields = path.read_text().rsplit(")", 1)[1].split()
-    assert int(fields[2]) == record["process_group_id"]
-    assert int(fields[3]) == record["process_session_id"]
-    assert int(fields[19]) == record["process_start_time"]
-    return fields
+class ProcessSnapshot(NamedTuple):
+    state: str
+    group_id: int
+    session_id: int | str
+    start_time: int | str
+
+
+def _registered_process_snapshot(record: dict[str, object]) -> ProcessSnapshot | None:
+    pid = int(record["os_pid"])
+    if sys.platform == "linux":
+        path = Path(f"/proc/{pid}/stat")
+        if not path.exists():
+            return None
+        fields = path.read_text(encoding="utf-8").rsplit(")", 1)[1].split()
+        if len(fields) < 20:
+            raise RuntimeError(f"Linux 进程 stat 字段不足: pid={pid}")
+        snapshot = ProcessSnapshot(
+            fields[0], int(fields[2]), int(fields[3]), int(fields[19]),
+        )
+    elif os.name == "posix":
+        result = subprocess.run(
+            [
+                "ps", "-o", "stat=", "-o", "pgid=", "-o", "sess=", "-o",
+                "lstart=", "-p", str(pid),
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if result.returncode != 0:
+            no_matching_process = result.returncode == 1 and not result.stdout.strip()
+            if no_matching_process and not process_exists(pid):
+                return None
+            raise RuntimeError(
+                f"读取 POSIX 进程快照失败: pid={pid}, stderr={result.stderr.strip()}"
+            )
+        fields = result.stdout.split()
+        if not fields:
+            return None
+        if len(fields) < 8:
+            raise RuntimeError(
+                f"POSIX ps 进程快照字段不足: pid={pid}, output={result.stdout!r}"
+            )
+        snapshot = ProcessSnapshot(
+            fields[0][0], int(fields[1]), fields[2], " ".join(fields[3:]),
+        )
+    else:
+        raise RuntimeError(f"不支持读取进程组快照的平台: {sys.platform}")
+
+    for actual, expected, field in (
+        (snapshot.group_id, record["process_group_id"], "process_group_id"),
+        (snapshot.session_id, record["process_session_id"], "process_session_id"),
+        (snapshot.start_time, record["process_start_time"], "process_start_time"),
+    ):
+        if actual != expected:
+            raise AssertionError(
+                f"进程身份不匹配: pid={pid}, field={field}, expected={expected!r}, actual={actual!r}"
+            )
+    return snapshot
 
 
 def _reap_registered_process(record: dict[str, object]) -> None:
-    fields = _registered_process_stat(record)
-    if fields is not None and fields[0] != "Z":
+    snapshot = _registered_process_snapshot(record)
+    if snapshot is not None and snapshot.state not in {"Z", "X", "x"}:
         os.killpg(int(record["process_group_id"]), signal.SIGKILL)
     deadline = time.monotonic() + 5
     while time.monotonic() < deadline:
-        fields = _registered_process_stat(record)
-        if fields is None or fields[0] == "Z":
+        snapshot = _registered_process_snapshot(record)
+        if snapshot is None or snapshot.state in {"Z", "X", "x"}:
             return
         time.sleep(0.05)
     raise AssertionError(f"测试登记的进程组仍在执行: {record}")
@@ -82,7 +136,7 @@ def _assert_preserved_transport(
     return record
 
 
-@pytest.mark.skipif(os.name == "nt", reason="该用例核验 Linux /proc 与持久进程组")
+@pytest.mark.skipif(os.name != "posix", reason="该用例核验 POSIX 持久进程组")
 def test_terminal_manager_sigterm_preserves_registered_owner_for_reconciliation(
     e2e_workspace_root_path: str, e2e_backend_port: int
 ):
@@ -102,14 +156,14 @@ def test_terminal_manager_sigterm_preserves_registered_owner_for_reconciliation(
         assert process.wait(timeout=10) == 128 + signal.SIGTERM
         record = _assert_preserved_transport(root, original, workspace_id)
         assert record["release_reason"] == "terminal_manager_sigterm"
-        assert _registered_process_stat(original) is not None
+        assert _registered_process_snapshot(original) is not None
     finally:
         terminate_process(process)
         if original is not None:
             _reap_registered_process(original)
 
 
-@pytest.mark.skipif(os.name == "nt", reason="该用例核验 Linux /proc 与持久进程组")
+@pytest.mark.skipif(os.name != "posix", reason="该用例核验 POSIX 持久进程组")
 def test_terminal_manager_restart_preserves_identity_without_claiming_pty_recovered(
     e2e_workspace_root_path: str, e2e_backend_port: int
 ):

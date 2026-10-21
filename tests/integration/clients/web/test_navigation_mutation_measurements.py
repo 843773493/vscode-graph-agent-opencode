@@ -14,14 +14,14 @@ import httpx
 import pytest
 
 from tests.harness.python.run_context import TestRunContext
-from tests.support.gateway_processes import (
+from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
     acquire_gateway_guest,
     close_gateway_process,
     start_gateway_process,
 )
 from tests.support.ports import integration_port_block_for_file
-from tests.support.processes import close_backend_process, start_backend_process
+from tests.support.processes.workspace import close_backend_process, start_backend_process
 
 
 @pytest.fixture

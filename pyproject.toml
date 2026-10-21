@@ -27,6 +27,7 @@ dependencies = [
     "deepagents==0.6.2",
     "pytest-xdist>=3.8.0",
     "protobuf>=7.36.2,<8",
+    "psutil>=5.9.0",
     "langchain-litellm==0.7.0",
     "litellm>=1.100.0",
     "langchain-community>=0.4.2",
@@ -39,6 +40,7 @@ dependencies = [
     "croniter>=6.0.0",
     "uuid-utils>=0.16",
     "tzdata>=2024.1; sys_platform == 'win32'",
+    "portalocker[win32]>=4.4.1",
 ]
 
 [project.optional-dependencies]

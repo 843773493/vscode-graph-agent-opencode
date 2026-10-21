@@ -11,13 +11,19 @@ from unittest.mock import Mock
 
 import pytest
 
-from tests.support import gateway_processes, processes
+from tests.support.processes import (
+    gateway as gateway_processes,
+    workspace as workspace_processes,
+)
 
 
 @dataclass
 class ProcessStartup:
     module: ModuleType
-    start: Callable[[], processes.BackendProcess | gateway_processes.GatewayProcess]
+    start: Callable[
+        [],
+        workspace_processes.BackendProcess | gateway_processes.GatewayProcess,
+    ]
     close: Callable[..., None]
     spawn: Mock
     ready: Mock
@@ -34,7 +40,7 @@ def startup(
     config = workspace / ".boxteam" / "workspace.jsonc"
     config.parent.mkdir(parents=True)
     config.write_text("{}", encoding="utf-8")
-    module = processes if request.param == "workspace" else gateway_processes
+    module = workspace_processes if request.param == "workspace" else gateway_processes
     process = Mock(spec=subprocess.Popen)
     process.pid = 4312
     spawn = Mock(return_value=process)
@@ -50,10 +56,10 @@ def startup(
         monkeypatch.setattr(module, "install_user_configuration", Mock())
         monkeypatch.setattr(module, "resolve_backend_workspace_id", lambda *_args: "00000000-0000-4000-8000-000000000001")
         monkeypatch.setattr(module, "wait_for_backend_ready", ready)
-        start = partial(processes.start_backend_process,
+        start = partial(workspace_processes.start_backend_process,
             workspace_root=str(workspace), port=18040, log_name="startup",
         )
-        close = processes.close_backend_process
+        close = workspace_processes.close_backend_process
     else:
         monkeypatch.setattr(module, "_install_current_user_configuration", Mock())
         monkeypatch.setattr(module.shutil, "which", lambda _name: "node")

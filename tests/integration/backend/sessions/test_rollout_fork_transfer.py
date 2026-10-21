@@ -36,9 +36,9 @@ from tests.support.communication_federation import (
     CommunicationNode,
     open_communication_triad,
 )
-from tests.support.e2e_test_control import E2ETestControlHarness
+from tests.support.e2e_control.harness import E2ETestControlHarness
 from tests.support.fork_deadline import ForkDeadlineRegistry, ForkOperationDeadline
-from tests.support.gateway_processes import close_gateway_process
+from tests.support.processes.gateway import close_gateway_process
 from tests.support.ports import integration_port_block_for_file
 from tests.support.session_navigation_http import submit_navigation_operation
 
@@ -60,7 +60,7 @@ async def transfer_triad(request: pytest.FixtureRequest) -> AsyncIterator[
         with openai_chat_stub(ports.port(10)) as model:
             async with open_communication_triad(
                 context, _prepare_workspace, backend_environment=control.environment,
-                backend_asgi_app="tests.support.section8_backend:app",
+                backend_asgi_app="tests.support.e2e_control.backend_app:app",
                 # 共享 Backend 时真实 owner 是 A，辅助服务必须跟随该 owner 启动。
                 resource_service_nodes=("a" if same_backend_routes else "b",),
                 on_sshd_started=fork_deadlines.watchdog.register_c3_sshd,

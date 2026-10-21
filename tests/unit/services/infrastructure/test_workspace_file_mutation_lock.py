@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
+import portalocker
 import pytest
 
 from app.services.infrastructure.workspace_files import mutation_lock
@@ -32,21 +32,23 @@ def test_apply_patch_lock_times_out_when_same_process_writer_is_busy(
         lock.release()
 
 
-@pytest.mark.skipif(os.name == "nt", reason="仅在 POSIX 上覆盖 fcntl 文件锁")
 def test_apply_patch_file_lock_times_out_when_cross_process_lock_is_busy(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    import fcntl
+    attempts = 0
 
-    original_flock = fcntl.flock
+    def reject_nonblocking_lock(_lock_file, flags: int) -> None:
+        nonlocal attempts
+        attempts += 1
+        assert flags & portalocker.LOCK_NB
+        raise portalocker.AlreadyLocked("test lock is held")
 
-    def reject_nonblocking_lock(fd: int, operation: int) -> None:
-        if operation & fcntl.LOCK_NB:
-            raise BlockingIOError("test lock is held")
-        original_flock(fd, operation)
-
-    monkeypatch.setattr(fcntl, "flock", reject_nonblocking_lock)
+    monkeypatch.setattr(
+        mutation_lock.portalocker,
+        "lock",
+        reject_nonblocking_lock,
+    )
     monkeypatch.setattr(
         mutation_lock,
         "MUTATION_LOCK_TIMEOUT_SECONDS",
@@ -58,3 +60,4 @@ def test_apply_patch_file_lock_times_out_when_cross_process_lock_is_busy(
         match="文件写入跨进程锁获取超时",
     ), mutation_lock.workspace_file_mutation_lock(tmp_path.resolve()):
         pass
+    assert attempts > 1

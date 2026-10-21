@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import sqlite3
 from pathlib import Path
@@ -103,11 +104,40 @@ def real_generator_case(
             return {"providers": providers}
 
     monkeypatch.setattr(generator, "ConfigService", FixtureConfig)
-    monkeypatch.setattr(generator, "_load_running_provider_keys", lambda _names: None)
+    config_paths = (
+        Path.cwd() / "configs" / "workspace_dev.jsonc",
+        workspace / ".boxteam" / "workspace_real_model_override.jsonc",
+    )
+    environment_names = generator._configured_environment_names(config_paths)
+    assert environment_names
+    provider_environment = {
+        name: f"fixture-{name.lower()}" for name in environment_names
+    }
+    for name in environment_names:
+        monkeypatch.delenv(name, raising=False)
+
+    class RunningBackendProcess:
+        def __init__(self) -> None:
+            self.pid = 4321
+            self.info = {
+                "cmdline": ["python", "-m", "app.main"],
+            }
+
+        def cwd(self) -> str:
+            return str(generator.PROJECT_ROOT)
+
+        def environ(self) -> dict[str, str]:
+            return provider_environment
+
+    monkeypatch.setattr(
+        generator.psutil,
+        "process_iter",
+        lambda **_kwargs: [RunningBackendProcess()],
+    )
     tool_every = request.param[2]
     if tool_every:
         http_state.output_tool_name = "inspect_fixture"
-    return workspace, bundle, http_state, tool_every
+    return workspace, bundle, http_state, tool_every, provider_environment
 
 
 @pytest.mark.parametrize("real_generator_case", [
@@ -119,8 +149,12 @@ def real_generator_case(
 def test_provider_stub_generator_writes_real_canonical_owner_and_admissions(
     real_generator_case,
 ) -> None:
-    workspace, bundle, http_state, tool_every = real_generator_case
+    workspace, bundle, http_state, tool_every, provider_environment = real_generator_case
     generator.generate(workspace, end_turn=2, tool_every=tool_every, strict_provider_sequence=True)
+    assert all(
+        os.environ[name] == value
+        for name, value in provider_environment.items()
+    )
     expected_calls = 3 if tool_every else 2
     manifest = json.loads((bundle.directory / "session.json").read_text(encoding="utf-8"))
     assert manifest["workspace_id"] == bundle.node.workspace_id

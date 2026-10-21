@@ -1,10 +1,16 @@
 from __future__ import annotations
 
 import sqlite3
+import subprocess
+import sys
 from datetime import UTC, datetime
+from pathlib import Path
+from textwrap import dedent
 
+import portalocker
 import pytest
 
+from app.core import sqlite_state
 from app.core.sqlite_state import SQLiteStateDatabase, utc_now_text
 
 
@@ -52,7 +58,7 @@ def test_sqlite_state_initializes_wal_and_migrations(tmp_path):
         database.close()
 
 
-def test_sqlite_state_rejects_second_process_owner(tmp_path):
+def test_sqlite_state_rejects_second_owner_in_same_process(tmp_path):
     first = SQLiteStateDatabase(
         path=tmp_path / "state.sqlite",
         schema_version=1,
@@ -67,6 +73,82 @@ def test_sqlite_state_rejects_second_process_owner(tmp_path):
             )
     finally:
         first.close()
+
+
+def test_sqlite_state_rejects_owner_in_separate_process(tmp_path):
+    database_path = tmp_path / "state.sqlite"
+    first = SQLiteStateDatabase(
+        path=database_path,
+        schema_version=1,
+        migrations=("CREATE TABLE sample (value TEXT NOT NULL);",),
+    )
+    try:
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                dedent(
+                    """\
+                    import sys
+                    from pathlib import Path
+                    from app.core.sqlite_state import SQLiteStateDatabase
+                    SQLiteStateDatabase(
+                        path=Path(sys.argv[1]),
+                        schema_version=1,
+                        migrations=("CREATE TABLE sample (value TEXT NOT NULL);",),
+                    )
+                    """
+                ),
+                str(database_path),
+            ],
+            cwd=Path.cwd(),
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+    finally:
+        first.close()
+
+    assert result.returncode != 0
+    assert "SQLite 状态库已被另一个进程占用" in result.stderr
+
+
+def test_sqlite_process_ownership_uses_portable_nonblocking_exclusive_lock(
+    monkeypatch,
+    tmp_path,
+):
+    lock_calls = []
+    unlock_calls = []
+
+    def record_lock(handle, flags):
+        lock_calls.append((handle, flags))
+
+    def record_unlock(handle):
+        unlock_calls.append(handle)
+
+    monkeypatch.setattr(sqlite_state.portalocker, "lock", record_lock)
+    monkeypatch.setattr(sqlite_state.portalocker, "unlock", record_unlock)
+    ownership = sqlite_state.SQLiteProcessOwnership(tmp_path / "state.sqlite")
+    ownership.acquire()
+    assert (tmp_path / ".state.sqlite.lock").read_bytes() == b"\0"
+    ownership.release()
+
+    assert lock_calls[0][0].name == str(tmp_path / ".state.sqlite.lock")
+    assert lock_calls[0][1] == portalocker.LOCK_EX | portalocker.LOCK_NB
+    assert unlock_calls == [lock_calls[0][0]]
+    assert lock_calls[0][0].closed
+
+    failed_handles = []
+
+    def reject_contended_lock(handle, _flags):
+        failed_handles.append(handle)
+        raise portalocker.AlreadyLocked("锁区已占用")
+
+    monkeypatch.setattr(sqlite_state.portalocker, "lock", reject_contended_lock)
+    with pytest.raises(RuntimeError, match="已被另一个进程占用"):
+        sqlite_state.SQLiteProcessOwnership(tmp_path / "state.sqlite").acquire()
+    assert failed_handles[0].closed
 
 
 def test_sqlite_state_allows_explicit_shared_processes(tmp_path):

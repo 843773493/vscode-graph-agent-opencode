@@ -14,7 +14,7 @@ from app.testing.model_stream import build_cassette, chat_completion_frames
 from tests.support.api_helpers import create_session
 from tests.support.model_stream_config import ModelStreamReplay, model_stream_replay
 from tests.support.ports import integration_port_block_for_file
-from tests.support.processes import (
+from tests.support.processes.workspace import (
     close_backend_process,
     start_backend_process,
     workspace_backend_id_for_root,

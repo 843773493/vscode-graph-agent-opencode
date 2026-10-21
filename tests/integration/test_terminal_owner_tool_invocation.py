@@ -15,7 +15,7 @@ from app.core.workspace_identity import load_or_create_workspace_id
 from tests.harness.python.run_context import TestRunContext
 from tests.harness.python.terminal_backend import start_terminal_backend
 from tests.support.ports import integration_port_block_for_file
-from tests.support.processes import terminate_process
+from tests.support.processes.workspace import terminate_process
 from tests.support.workspace_tool_runtime import (
     WorkspaceToolRuntime,
     workspace_tool_runtime,

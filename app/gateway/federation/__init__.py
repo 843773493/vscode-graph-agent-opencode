@@ -17,12 +17,10 @@ from app.gateway.federation.errors import (
     FEDERATION_DEADLINE_EXCEEDED,
     FederationError,
 )
-from app.gateway.runtime.process import (
-    allocate_ssh_tunnel_port,
-    start_ssh_tunnel_process,
-    wait_for_http_ok,
-)
+from app.gateway.runtime.process_ports import allocate_ssh_tunnel_port
+from app.gateway.runtime.ssh_process import start_ssh_tunnel_process
 from app.gateway.runtime.workspace import WorkspaceRuntime
+from app.gateway.runtime.workspace_process import wait_for_http_ok
 from app.gateway.service_types import LocalForwardSpec
 from app.gateway.ssh_command import build_ssh_command
 from app.schemas.gateway.federation import FederationWorkspaceDTO

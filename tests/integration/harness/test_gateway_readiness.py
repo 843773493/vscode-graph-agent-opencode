@@ -10,7 +10,7 @@ from unittest.mock import Mock
 
 import pytest
 
-from tests.support.gateway_processes import wait_for_gateway_ready
+from tests.support.processes.gateway import wait_for_gateway_ready
 
 
 @pytest.fixture

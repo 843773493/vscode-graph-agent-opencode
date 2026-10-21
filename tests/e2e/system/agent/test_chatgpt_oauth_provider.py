@@ -12,7 +12,7 @@ import pytest
 
 from tests.support.api_waiters import wait_for_job_done
 from tests.support.paths import output_root_for_test
-from tests.support.processes import close_backend_process, start_backend_process
+from tests.support.processes.workspace import close_backend_process, start_backend_process
 from tests.support.trace import get_trace_payload
 
 

@@ -1,5 +1,7 @@
+from collections.abc import Iterator
 from pathlib import Path
 
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -15,23 +17,35 @@ def write_assets(root: Path) -> None:
     )
 
 
-def test_static_ui_serves_assets_and_spa_fallback(tmp_path: Path) -> None:
+@pytest.fixture
+def static_ui_client(tmp_path: Path) -> Iterator[TestClient]:
     write_assets(tmp_path)
     app = FastAPI()
     install_static_web_ui(app, assets_root=tmp_path)
-    client = TestClient(app)
-
-    assert client.get("/").text == "<main>BoxTeam UI</main>"
-    assert client.get("/assets/main.js").text == "globalThis.boxteam=true;"
-    assert client.get("/sessions/ses_test").text == "<main>BoxTeam UI</main>"
+    with TestClient(app) as client:
+        yield client
 
 
-def test_static_ui_does_not_turn_unknown_api_into_spa(tmp_path: Path) -> None:
-    write_assets(tmp_path)
-    app = FastAPI()
-    install_static_web_ui(app, assets_root=tmp_path)
+def test_static_ui_serves_assets_and_spa_fallback(
+    static_ui_client: TestClient,
+) -> None:
+    assert static_ui_client.get("/").text == "<main>BoxTeam UI</main>"
+    assert static_ui_client.get("/assets/main.js").text == "globalThis.boxteam=true;"
+    assert static_ui_client.get("/sessions/ses_test").text == "<main>BoxTeam UI</main>"
 
-    response = TestClient(app).get("/api/unknown")
+
+def test_static_ui_normalizes_backslash_mount_paths(
+    static_ui_client: TestClient,
+) -> None:
+    response = static_ui_client.get("/assets%5Cmain.js")
+
+    assert response.text == "globalThis.boxteam=true;"
+
+
+def test_static_ui_does_not_turn_unknown_api_into_spa(
+    static_ui_client: TestClient,
+) -> None:
+    response = static_ui_client.get("/api/unknown")
 
     assert response.status_code == 404
     assert "BoxTeam UI" not in response.text

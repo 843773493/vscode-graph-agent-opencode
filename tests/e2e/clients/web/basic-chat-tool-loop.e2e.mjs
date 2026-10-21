@@ -6,7 +6,7 @@ import process from "node:process";
 import { chromium } from "playwright";
 import { beginForkOperationDeadline, beginForkSubmissionDeadline, bindForkOperationDeadline,
   assertForkDeadlineCloseSemanticsForTest, closeForkDeadlineWatchdog, planGoldenLoop, planChatCalls, testControl,
-  uuidText, waitForForkOperation } from "../../../support/e2e-test-control.mjs";
+  uuidText, waitForForkOperation } from "../../../support/e2e_control/browser_client.mjs";
 import { expectedTypedInternalHistoryMembership } from "./generated-internal-history-oracle.mjs";
 
 function requiredEnvironment(name) {

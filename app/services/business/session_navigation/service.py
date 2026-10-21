@@ -602,11 +602,11 @@ class SessionCatalogService:
 
         catalog_revision, all_physical_nodes = self._path_resolver.catalog_snapshot()
         physical_nodes = self._visible_catalog_nodes(all_physical_nodes)
-        child_parent_ids = {
+        visible_parent_ids_with_children = {
             node.parent_node_id for node in physical_nodes if node.parent_node_id is not None
         }
         nodes = [
-            self._to_catalog_node(node, child_parent_ids)
+            self._to_catalog_node(node, visible_parent_ids_with_children)
             for node in physical_nodes
         ]
         nodes_by_id = {node.node_id: node for node in nodes}
@@ -614,7 +614,7 @@ class SessionCatalogService:
         all_nodes_by_id.update(
             {
                 physical_node.node_id: self._to_pending_catalog_node(
-                    physical_node, nodes_by_id
+                    physical_node, visible_parent_ids_with_children
                 )
                 for physical_node in all_physical_nodes
                 if physical_node.node_id not in nodes_by_id
@@ -660,7 +660,7 @@ class SessionCatalogService:
     def _to_catalog_node(
         self,
         node: SessionCatalogNodeProjection,
-        child_parent_ids: set[str],
+        visible_parent_ids_with_children: set[str],
     ) -> SessionCatalogNodeDTO:
         session = (
             self._session_service.project_catalog_session(node)
@@ -676,7 +676,7 @@ class SessionCatalogService:
             parent_node_id=node.parent_node_id,
             session_id=node.node_id if node.kind == "session" else None,
             folder_id=node.node_id if node.kind == "folder" else None,
-            has_children=node.node_id in child_parent_ids,
+            has_children=node.node_id in visible_parent_ids_with_children,
             node_revision=node.node_revision,
             state=node.state,
             storage_relative_path=(
@@ -696,7 +696,7 @@ class SessionCatalogService:
     def _to_pending_catalog_node(
         self,
         node: SessionCatalogNodeProjection,
-        nodes_by_id: dict[str, SessionCatalogNodeDTO],
+        visible_parent_ids_with_children: set[str],
     ) -> SessionCatalogNodeDTO:
         """把未进入 active 树的节点投影成可解析 breadcrumb 节点。
 
@@ -714,9 +714,7 @@ class SessionCatalogService:
             parent_node_id=node.parent_node_id,
             session_id=node.node_id if node.kind == "session" else None,
             folder_id=node.node_id if node.kind == "folder" else None,
-            has_children=any(
-                item.parent_node_id == node.node_id for item in nodes_by_id.values()
-            ),
+            has_children=node.node_id in visible_parent_ids_with_children,
             node_revision=node.node_revision,
             state=node.state,
             storage_relative_path=(

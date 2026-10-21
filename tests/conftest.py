@@ -11,7 +11,7 @@ from dotenv import load_dotenv
 
 from tests.harness.python.run_context import TestRunContext
 from tests.support.fork_deadline import ForkDeadlineRegistry
-from tests.support.process_scope import capture_test_processes
+from tests.support.processes.scope import capture_test_processes
 from tests.support.session_catalog_owner import (
     FixtureCatalogOwner,
     fixture_catalog_scope,
@@ -143,6 +143,7 @@ def session_bundle_factory() -> Callable[[Path, str], Path]:
 @pytest.fixture(autouse=True)
 def setup_test_config(
     test_config_path: str,
+    test_config_source_bytes: tuple[bytes, bytes, bytes],
     request: pytest.FixtureRequest,
     monkeypatch: pytest.MonkeyPatch,
     test_process_lifetime: None,
@@ -162,16 +163,22 @@ def setup_test_config(
             ),
             encoding="utf-8",
         )
-        (config_root / "workspace_schema.jsonc").write_bytes(
-            (Path(CONFIGS_DIR) / "workspace_schema.jsonc").read_bytes()
-        )
-        (config_root / "gateway.jsonc").write_bytes(
-            (Path(CONFIGS_DIR) / "gateway_inline.jsonc").read_bytes()
-        )
-        (config_root / "gateway_schema.jsonc").write_bytes(
-            (Path(CONFIGS_DIR) / "gateway_schema.jsonc").read_bytes()
-        )
+        workspace_schema, gateway_inline, gateway_schema = test_config_source_bytes
+        (config_root / "workspace_schema.jsonc").write_bytes(workspace_schema)
+        (config_root / "gateway.jsonc").write_bytes(gateway_inline)
+        (config_root / "gateway_schema.jsonc").write_bytes(gateway_schema)
     monkeypatch.setenv("BOXTEAM_HOME", str(boxteam_home))
+
+
+@pytest.fixture(scope="session")
+def test_config_source_bytes() -> tuple[bytes, bytes, bytes]:
+    """进程内复用只读模板字节；每个测试仍写入自己的配置副本。"""
+    config_root = Path(CONFIGS_DIR)
+    return (
+        (config_root / "workspace_schema.jsonc").read_bytes(),
+        (config_root / "gateway_inline.jsonc").read_bytes(),
+        (config_root / "gateway_schema.jsonc").read_bytes(),
+    )
 
 
 @pytest.fixture

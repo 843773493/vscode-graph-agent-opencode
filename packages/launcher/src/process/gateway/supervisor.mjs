@@ -1,14 +1,17 @@
 import { spawn } from "node:child_process";
-import { createHash } from "node:crypto";
 import { once } from "node:events";
-import { chmodSync, mkdirSync, rmSync } from "node:fs";
-import {
-  request as httpRequest,
-  createServer as createHttpServer,
-} from "node:http";
 import net from "node:net";
-import { tmpdir } from "node:os";
-import path from "node:path";
+
+import {
+  buildGatewayPendingEnvironment,
+  gatewayStartupContract,
+} from "./startup-contract.mjs";
+import { createGatewayPublicListener } from "./public-listener.mjs";
+import { closeServer, listenServer } from "./server-lifecycle.mjs";
+import {
+  createGatewaySupervisorControl,
+  resolveGatewaySupervisorSocketPath,
+} from "./handoff-control.mjs";
 
 const GATEWAY_HOST = "127.0.0.1";
 const GATEWAY_PORT = 8014;
@@ -107,65 +110,6 @@ export function gatewayEnvironment(runtime, baseEnvironment) {
   };
 }
 
-function requiredStartupValue(value, label) {
-  if (typeof value !== "string" || value.trim() === "") {
-    throw new TypeError(`${label} 必须是非空字符串`);
-  }
-  return value.trim();
-}
-
-export function gatewayStartupContract(environment = process.env) {
-  const candidateRef = environment.BOXTEAM_CONFIG_CANDIDATE_REF?.trim() ?? "";
-  const generation = environment.BOXTEAM_CONFIG_GENERATION?.trim() ?? "";
-  const fencingToken = environment.BOXTEAM_CONFIG_FENCING_TOKEN?.trim() ?? "";
-  if (candidateRef === "") {
-    if (generation !== "" || fencingToken !== "") {
-      throw new Error(
-        "Gateway 普通恢复不能携带不完整的 pending candidate 启动契约",
-      );
-    }
-    return Object.freeze({
-      loadedSource: "active",
-      candidateRef: null,
-      generation: null,
-      fencingToken: null,
-      environment: Object.freeze({}),
-    });
-  }
-  return Object.freeze({
-    loadedSource: "pending",
-    candidateRef: requiredStartupValue(candidateRef, "Gateway candidate_ref"),
-    generation: requiredStartupValue(generation, "Gateway generation"),
-    fencingToken: requiredStartupValue(fencingToken, "Gateway fencing token"),
-    environment: Object.freeze({
-      BOXTEAM_CONFIG_CANDIDATE_REF: candidateRef,
-      BOXTEAM_CONFIG_GENERATION: generation,
-      BOXTEAM_CONFIG_FENCING_TOKEN: fencingToken,
-    }),
-  });
-}
-
-export function buildGatewayPendingEnvironment(baseEnvironment, intent) {
-  if (intent === null || typeof intent !== "object" || Array.isArray(intent)) {
-    throw new TypeError("Gateway pending restart intent 必须是对象");
-  }
-  return {
-    ...baseEnvironment,
-    BOXTEAM_CONFIG_CANDIDATE_REF: requiredStartupValue(
-      intent.candidate_ref,
-      "Gateway candidate_ref",
-    ),
-    BOXTEAM_CONFIG_GENERATION: requiredStartupValue(
-      intent.target_generation,
-      "Gateway generation",
-    ),
-    BOXTEAM_CONFIG_FENCING_TOKEN: requiredStartupValue(
-      intent.fencing_token,
-      "Gateway fencing token",
-    ),
-  };
-}
-
 export function spawnGateway({
   runtime,
   environment,
@@ -199,32 +143,6 @@ export function spawnGateway({
   );
 }
 
-function listenServer(server, options) {
-  return new Promise((resolve, reject) => {
-    const onError = (error) => {
-      server.off("listening", onListening);
-      reject(error);
-    };
-    const onListening = () => {
-      server.off("error", onError);
-      resolve(server);
-    };
-    server.once("error", onError);
-    server.once("listening", onListening);
-    server.listen(options);
-  });
-}
-
-function closeServer(server) {
-  if (!server.listening) return Promise.resolve();
-  return new Promise((resolve, reject) => {
-    server.close((error) => {
-      if (error) reject(error);
-      else resolve();
-    });
-  });
-}
-
 async function allocateGatewayChildPort(host) {
   const probe = net.createServer();
   await listenServer(probe, { host, port: 0 });
@@ -236,154 +154,6 @@ async function allocateGatewayChildPort(host) {
   const port = address.port;
   await closeServer(probe);
   return port;
-}
-
-function gatewayTargetUrl(target) {
-  return `http://${target.host}:${target.port}`;
-}
-
-function writeUnavailableResponse(response) {
-  response.writeHead(503, {
-    "cache-control": "no-store",
-    "content-type": "text/plain; charset=utf-8",
-  });
-  response.end("Gateway supervisor 尚未绑定 active generation\n");
-}
-
-function proxyHttpRequest(request, response, target) {
-  if (target === null) {
-    writeUnavailableResponse(response);
-    return;
-  }
-  const upstream = httpRequest(
-    {
-      hostname: target.host,
-      port: target.port,
-      method: request.method,
-      path: request.url,
-      headers: request.headers,
-      agent: false,
-    },
-    (upstreamResponse) => {
-      response.writeHead(
-        upstreamResponse.statusCode ?? 502,
-        upstreamResponse.headers,
-      );
-      upstreamResponse.pipe(response);
-    },
-  );
-  upstream.once("error", (error) => {
-    if (!response.headersSent) {
-      response.writeHead(502, {
-        "content-type": "text/plain; charset=utf-8",
-      });
-    }
-    response.end(`Gateway generation 代理失败: ${error.message}\n`);
-  });
-  request.pipe(upstream);
-}
-
-function proxyGatewayUpgrade(request, clientSocket, head, target) {
-  if (target === null) {
-    clientSocket.end(
-      "HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\n\r\n",
-    );
-    return;
-  }
-  const upstream = httpRequest({
-    hostname: target.host,
-    port: target.port,
-    method: request.method,
-    path: request.url,
-    headers: request.headers,
-    agent: false,
-  });
-  const closeSockets = () => {
-    clientSocket.destroy();
-    upstream.destroy();
-  };
-  upstream.once("upgrade", (upstreamResponse, upstreamSocket, upstreamHead) => {
-    const responseLines = [
-      `HTTP/1.1 ${upstreamResponse.statusCode ?? 101} ${upstreamResponse.statusMessage ?? "Switching Protocols"}`,
-    ];
-    for (
-      let index = 0;
-      index < upstreamResponse.rawHeaders.length;
-      index += 2
-    ) {
-      responseLines.push(
-        `${upstreamResponse.rawHeaders[index]}: ${upstreamResponse.rawHeaders[index + 1]}`,
-      );
-    }
-    clientSocket.write(`${responseLines.join("\r\n")}\r\n\r\n`);
-    if (upstreamHead.length > 0) clientSocket.write(upstreamHead);
-    clientSocket.pipe(upstreamSocket);
-    upstreamSocket.pipe(clientSocket);
-    clientSocket.once("error", closeSockets);
-    upstreamSocket.once("error", closeSockets);
-  });
-  upstream.once("response", (upstreamResponse) => {
-    upstreamResponse.resume();
-    clientSocket.destroy();
-  });
-  upstream.once("error", closeSockets);
-  upstream.end(head);
-}
-
-export function createGatewayPublicListener({ host, port }) {
-  let target = null;
-  const server = createHttpServer((request, response) => {
-    proxyHttpRequest(request, response, target);
-  });
-  server.on("upgrade", (request, clientSocket, head) => {
-    proxyGatewayUpgrade(request, clientSocket, head, target);
-  });
-  return {
-    async listen() {
-      await listenServer(server, { host, port });
-    },
-    setTarget(nextTarget) {
-      if (
-        nextTarget !== null &&
-        (typeof nextTarget.host !== "string" ||
-          !Number.isSafeInteger(nextTarget.port) ||
-          nextTarget.port < 1 ||
-          nextTarget.port > 65535)
-      ) {
-        throw new TypeError("Gateway supervisor target 无效");
-      }
-      target = nextTarget;
-    },
-    address() {
-      return server.address();
-    },
-    targetUrl() {
-      return target === null ? null : gatewayTargetUrl(target);
-    },
-    async close() {
-      await closeServer(server);
-    },
-  };
-}
-
-function gatewaySupervisorSocketPath(boxteamHome) {
-  if (typeof boxteamHome !== "string" || boxteamHome.trim() === "") {
-    return null;
-  }
-  const resolvedHome = path.resolve(boxteamHome);
-  const socketPath = path.join(
-    resolvedHome,
-    "state",
-    "gateway-supervisor.sock",
-  );
-  // Unix domain socket 的路径有系统上限；长测试输出目录或用户目录不能
-  // 让 supervisor 在 listen 后因 chmod 找不到实际 socket 而失败。
-  if (Buffer.byteLength(socketPath) <= 100) return socketPath;
-  const homeDigest = createHash("sha256")
-    .update(resolvedHome)
-    .digest("hex")
-    .slice(0, 32);
-  return path.join(tmpdir(), `boxteam-gateway-supervisor-${homeDigest}.sock`);
 }
 
 async function stopGatewayChild(childState) {
@@ -409,135 +179,6 @@ async function stopGatewayChild(childState) {
   }
   childState.removeOutputForwarding();
   childState.removeSignalHandlers();
-}
-
-export function createGatewaySupervisorControl({ socketPath, onHandoff }) {
-  if (typeof socketPath !== "string" || socketPath.length === 0) {
-    throw new TypeError("Gateway supervisor control socket 路径无效");
-  }
-  if (typeof onHandoff !== "function") {
-    throw new TypeError("Gateway supervisor control handler 无效");
-  }
-  const server = net.createServer((socket) => {
-    let buffer = "";
-    let handled = false;
-    socket.on("error", () => {
-      // 控制请求方断开时只结束当前请求，不得让 supervisor 进程崩溃。
-    });
-    socket.on("data", (chunk) => {
-      if (handled) return;
-      buffer += chunk.toString("utf8");
-      if (buffer.length > 64 * 1024) {
-        socket.destroy(new Error("Gateway supervisor control 请求过大"));
-        return;
-      }
-      const newlineIndex = buffer.indexOf("\n");
-      if (newlineIndex === -1) return;
-      handled = true;
-      const line = buffer.slice(0, newlineIndex).trim();
-      let payload;
-      try {
-        payload = JSON.parse(line);
-      } catch (error) {
-        socket.end(`${JSON.stringify({ ok: false, error: String(error) })}\n`);
-        return;
-      }
-      Promise.resolve()
-        .then(() => onHandoff(payload))
-        .then((data) => {
-          socket.end(`${JSON.stringify({ ok: true, data })}\n`);
-        })
-        .catch((error) => {
-          socket.end(
-            `${JSON.stringify({
-              ok: false,
-              error: error instanceof Error ? error.message : String(error),
-            })}\n`,
-          );
-        });
-    });
-  });
-  return {
-    async listen() {
-      mkdirSync(path.dirname(socketPath), { recursive: true, mode: 0o700 });
-      rmSync(socketPath, { force: true });
-      await listenServer(server, socketPath);
-      if (process.platform !== "win32") chmodSync(socketPath, 0o600);
-    },
-    async close() {
-      await closeServer(server);
-      rmSync(socketPath, { force: true });
-    },
-  };
-}
-
-export function requestGatewayHandoff({
-  boxteamHome,
-  environment = process.env,
-  timeoutMs = 120_000,
-}) {
-  const socketPath = gatewaySupervisorSocketPath(boxteamHome);
-  if (socketPath === null) {
-    return Promise.resolve({ handled: false });
-  }
-  const startup = gatewayStartupContract(environment);
-  if (startup.loadedSource !== "pending") {
-    throw new Error("Gateway handoff 请求必须携带 pending 启动契约");
-  }
-  return new Promise((resolve, reject) => {
-    const socket = net.createConnection(socketPath);
-    let buffer = "";
-    let settled = false;
-    const timer = setTimeout(() => {
-      socket.destroy();
-      reject(
-        new Error(`Gateway supervisor handoff 在 ${timeoutMs}ms 内未响应`),
-      );
-    }, timeoutMs);
-    timer.unref?.();
-    const finish = (callback) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      callback();
-    };
-    socket.on("connect", () => {
-      socket.write(
-        `${JSON.stringify({
-          type: "gateway_pending_handoff",
-          candidate_ref: startup.candidateRef,
-          target_generation: startup.generation,
-          fencing_token: startup.fencingToken,
-        })}\n`,
-      );
-    });
-    socket.on("data", (chunk) => {
-      buffer += chunk.toString("utf8");
-      const newlineIndex = buffer.indexOf("\n");
-      if (newlineIndex === -1) return;
-      let response;
-      try {
-        response = JSON.parse(buffer.slice(0, newlineIndex));
-      } catch (error) {
-        finish(() => reject(error));
-        return;
-      }
-      finish(() => {
-        if (!response.ok) {
-          reject(new Error(String(response.error ?? "Gateway handoff 失败")));
-          return;
-        }
-        resolve({ handled: true, data: response.data ?? null });
-      });
-    });
-    socket.on("error", (error) => {
-      if (error.code === "ENOENT" || error.code === "ECONNREFUSED") {
-        finish(() => resolve({ handled: false }));
-        return;
-      }
-      finish(() => reject(error));
-    });
-  });
 }
 
 function activeGatewayEnvironment(environment) {
@@ -797,7 +438,7 @@ export async function superviseGateway({
 
     const socketPath = gatewayOwnsPublicPort
       ? null
-      : gatewaySupervisorSocketPath(environment.BOXTEAM_HOME);
+      : resolveGatewaySupervisorSocketPath(environment.BOXTEAM_HOME);
     control =
       socketPath === null
         ? null

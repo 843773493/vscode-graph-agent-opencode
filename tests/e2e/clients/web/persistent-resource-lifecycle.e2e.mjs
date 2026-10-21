@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile, writeFile } from "node:fs/promises";
 import { chromium } from "playwright";
-import { planChatCalls, testControl } from "../../../support/e2e-test-control.mjs";
+import { planChatCalls, testControl } from "../../../support/e2e_control/browser_client.mjs";
 
 const phase = process.argv[2];
 assert.ok(["before-unload", "after-unload"].includes(phase));

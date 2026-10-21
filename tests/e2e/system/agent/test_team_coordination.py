@@ -12,7 +12,7 @@ import pytest
 
 from app.core.path_utils import get_session_path_resolver
 from tests.support.api_waiters import wait_for_job_done
-from tests.support.gateway_processes import (
+from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
     GatewayProcess,
     acquire_gateway_guest,

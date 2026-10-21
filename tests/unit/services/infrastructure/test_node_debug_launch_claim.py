@@ -37,7 +37,9 @@ from app.schemas.internal_v2.node_debug import (
 from app.services.infrastructure.external_resource_leases import (
     ExternalResourceLeaseLedger,
 )
-from app.services.infrastructure.node_debug.process import process_lifecycle
+from app.services.infrastructure.node_debug.process import (
+    process_lifecycle,
+)
 from app.services.infrastructure.node_debug.process.launch_claim import (
     claim_marked,
     claim_running,
@@ -238,7 +240,12 @@ def test_process_identity_reports_real_start_marker_and_detects_pid_reuse() -> N
     identity = probe_process_identity(os.getpid())
     assert identity is not None
     assert identity.verifiable
-    assert identity.source == IDENTITY_SOURCE_LINUX_PROC
+    expected_source = (
+        IDENTITY_SOURCE_LINUX_PROC
+        if Path(f"/proc/{os.getpid()}/stat").is_file()
+        else IDENTITY_SOURCE_PSUTIL
+    )
+    assert identity.source == expected_source
     assert (
         identity.compare(
             recorded_source=identity.source,
@@ -1288,7 +1295,7 @@ async def test_cross_source_identity_cannot_report_termination(
             process_instance_id=claim.process_instance_id,
             process=_UnstoppableProcess(child),
         )
-        # 登记时宿主用的是另一套来源（例如当时 psutil 可用，现在只剩 /proc）。
+        # 登记身份采用 psutil 来源，而当前 Linux 宿主以 /proc 为权威来源。
         runtime.process_identity_source = IDENTITY_SOURCE_PSUTIL
         runtime.process_start_marker = real_identity.start_marker
         service._runtimes[(_PARENT_SESSION_ID, _PARENT_MAIN_THREAD_ID)] = runtime

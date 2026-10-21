@@ -84,7 +84,7 @@ from tests.harness.python.browser_manager import (
 from tests.harness.python.run_context import TestRunContext
 from tests.harness.python.terminal_backend import start_terminal_backend
 from tests.support.api_helpers import checkpoint_fixture
-from tests.support.gateway_processes import (
+from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
     acquire_gateway_guest,
     close_gateway_process,
@@ -93,7 +93,7 @@ from tests.support.gateway_processes import (
     workspace_id_from_response,
 )
 from tests.support.ports import integration_port_block_for_file
-from tests.support.processes import (
+from tests.support.processes.workspace import (
     close_backend_process,
     ensure_local_port_available,
     start_backend_process,

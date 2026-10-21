@@ -9,13 +9,13 @@ import httpx
 import pytest
 
 from tests.integration.stubs.http_stubs import generation_target_stub
-from tests.support.gateway_processes import (
+from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
     close_gateway_process,
     start_gateway_process,
 )
 from tests.support.ports import integration_port_block_for_file
-from tests.support.processes import workspace_backend_id_for_root
+from tests.support.processes.workspace import workspace_backend_id_for_root
 
 
 def _node_for_workspace(nodes: list[dict[str, object]], workspace_id: str) -> dict[str, object]:

@@ -16,15 +16,15 @@ import commentjson
 import httpx
 import pytest
 
-from app.gateway.runtime.process import ManagedProcess
+from app.gateway.runtime.process_lifecycle import ManagedProcess
 from app.services.business.session_context_resource import session_resource_uri
 from tests.harness.python.run_context import TestRunContext
 from tests.support.communication_federation import (
     CommunicationNode,
     open_communication_triad,
 )
-from tests.support.e2e_test_control import E2EProcessLease, E2ETestControlHarness
-from tests.support.gateway_processes import (
+from tests.support.e2e_control.harness import E2EProcessLease, E2ETestControlHarness
+from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
     acquire_gateway_guest,
     close_gateway_process,
@@ -34,8 +34,8 @@ from tests.support.gateway_processes import (
 from tests.support.model_stream_config import prepare_e2e_model_stream_config
 from tests.support.paths import output_root_for_test
 from tests.support.ports import e2e_port_block_for_file
-from tests.support.process_scope import capture_test_processes, register_test_process
-from tests.support.processes import (
+from tests.support.processes.scope import capture_test_processes, register_test_process
+from tests.support.processes.workspace import (
     ensure_local_port_available,
     terminate_process,
     wait_for_http_ok,
@@ -128,7 +128,7 @@ def e2e_workspace_root_path(section8_output_root: Path) -> str:
 
 @pytest.fixture(scope="module")
 def e2e_backend_composition(section8_control: E2ETestControlHarness) -> tuple[str, dict[str, str]]:
-    return "tests.support.section8_backend:app", section8_control.environment
+    return "tests.support.e2e_control.backend_app:app", section8_control.environment
 
 
 @pytest.fixture(scope="module")
@@ -223,7 +223,7 @@ async def section8_product_nodes(
         if node in section8_mcp_catalogs:
             config["mcp"] = {"servers": {
                 server: {"enabled": True, "transport": "stdio", "command": sys.executable,
-                         "args": ["-m", "tests.support.section8_mcp_server", "--catalog", str(path),
+                         "args": ["-m", "tests.support.e2e_control.mcp_stdio_server", "--catalog", str(path),
                                   *(["--notifications"] if server == "notify" else [])],
                          "cwd": str(project), "env": section8_control.environment}
                 for server, path in section8_mcp_catalogs[node].items()
@@ -234,7 +234,7 @@ async def section8_product_nodes(
     async with open_communication_triad(
         context, prepare, ports=e2e_port_block_for_file(Path(request.node.path)),
         resource_service_nodes=("a", "b", "c"),
-        backend_asgi_app="tests.support.section8_backend:app",
+        backend_asgi_app="tests.support.e2e_control.backend_app:app",
         backend_environment=section8_control.environment | {
             "BOXTEAM_TEST_MODEL_STREAM_CONFIG": e2e_model_stream_runtime_config_path,
             "PYTHONPROFILEIMPORTTIME": "1",
@@ -527,7 +527,7 @@ async def test_persistent_resources_survive_real_thread_unload_and_session_delet
                 "BOXTEAM_WEB_ASSETS": str(project / "src/clients/web/dist"),
                 "BOXTEAM_DEFAULT_BACKEND_PORT": str(ports.port(10)),
             },
-            asgi_app="tests.support.section8_gateway:app",
+            asgi_app="tests.support.e2e_control.gateway_app:app",
         )
         async with httpx.AsyncClient(
             base_url=f"http://127.0.0.1:{gateway.port}", headers=LOCAL_TOKEN_HEADERS, timeout=60,

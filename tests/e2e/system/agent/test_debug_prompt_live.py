@@ -19,7 +19,7 @@ from tests.integration.backend.agents.test_debug_prompt_flow import (
 )
 from tests.support.api_waiters import wait_for_job_done
 from tests.support.messages import last_assistant_message
-from tests.support.processes import close_backend_process, start_backend_process
+from tests.support.processes.workspace import close_backend_process, start_backend_process
 from tests.support.trace import get_trace_payload
 
 

@@ -11,7 +11,7 @@ import pytest
 from app.core.path_utils import get_session_path_resolver
 from app.schemas.event import JobStartedEvent, JobStartedPayload
 from app.services.infrastructure.trace_event_store import TraceEventStore
-from tests.support.gateway_processes import (
+from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
     acquire_gateway_guest,
     close_gateway_process,

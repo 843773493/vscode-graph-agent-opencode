@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from tests.support import process_scope
+from tests.support.processes import scope as process_scope
 
 
 @pytest.mark.parametrize("interruption", [KeyboardInterrupt("停止"), SystemExit(3)])

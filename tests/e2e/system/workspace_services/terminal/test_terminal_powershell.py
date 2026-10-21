@@ -20,7 +20,7 @@ from app.agents.tools.terminal import create_exec_command_tool
 from app.core.identifier import create_uuid_hex
 from app.core.mounted_workspaces import MountedWorkspace
 from app.core.workspace_identity import load_or_create_workspace_id
-from tests.support.processes import ensure_local_port_available, terminate_process
+from tests.support.processes.workspace import ensure_local_port_available, terminate_process
 from tests.support.workspace_tool_runtime import workspace_tool_runtime
 
 
