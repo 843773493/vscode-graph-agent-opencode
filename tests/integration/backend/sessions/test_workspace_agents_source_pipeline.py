@@ -1,4 +1,4 @@
-"""AGENTS 真实文件 owner、语义派生、冻结与 HTTP Provider 冷恢复闭环。"""
+"""AGENTS 真实文件 owner、语义派生、冻结与后端冷恢复闭环。"""
 
 from __future__ import annotations
 
@@ -394,8 +394,8 @@ async def test_cold_agents_restart_reconciles_before_second_provider(
         "" if agents_after in {"empty", "absent"} else first_body
     )
     first_prompt, second_prompt = "cil-first-private", "cil-second-private"
-    case.model.response_callback = lambda _payload: {"content": "CIL 同 owner 回复"}
     session_id = await create_session(case.client, "CIL 冷 AGENTS 首次绑定")
+    await case.plan(session_id, [{"content": "CIL 同 owner 回复"}])
     first = await _send(case, session_id, first_prompt)
     assert isinstance(first["job_id"], str)
     await _job(case, first["job_id"])
@@ -429,8 +429,8 @@ async def test_cold_agents_restart_reconciles_before_second_provider(
         assert first_body in first_assembly.seal_binding.root.content
         root_bytes = canonical_json_bytes(first_assembly.seal_binding.root.frame_manifest())
         first_bytes = canonical_json_bytes(first_assembly.to_dict())
-    first_requests = [_request_json(request) for request in case.model.requests
-                      if first_prompt in _wire_text(_request_json(request)["messages"])]
+    first_requests = [request for request in case.requests()
+                      if first_prompt in _wire_text(request["messages"])]
     assert len(first_requests) == 1
     assert normalize_wire_request(first_requests[0]) == first_assembly.request_hash_preimage
 
@@ -451,13 +451,14 @@ async def test_cold_agents_restart_reconciles_before_second_provider(
         restored_first = cold.get_context_assembly(session_id, owner.thread_id, assembly_id=first_assembly.assembly_id)
         assert canonical_json_bytes(restored_first.to_dict()) == first_bytes
         _assert_sealed_agents_facets(cold, restored_first, first_body)
-    request_boundary = len(case.model.requests)
+    request_boundary = len(case.requests())
+    await case.plan(session_id, [{"content": "CIL 同 owner 回复"}])
     second = await _send(case, session_id, second_prompt)
     assert isinstance(second["job_id"], str)
     assert second["thread_id"] == owner.thread_id
     await _job(case, second["job_id"])
-    second_requests = [_request_json(request) for request in case.model.requests[request_boundary:]
-                       if second_prompt in _wire_text(_request_json(request)["messages"])]
+    second_requests = [request for request in case.requests()[request_boundary:]
+                       if second_prompt in _wire_text(request["messages"])]
     assert len(second_requests) == 1
     with RolloutCheckpointSaver(sessions) as cold:
         assert cold.forks.source.resolve_main_thread_owner(session_id) == owner
