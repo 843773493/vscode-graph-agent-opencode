@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import errno
 import os
 from pathlib import Path
 from typing import cast
@@ -309,3 +310,45 @@ def test_external_debug_working_directory_error_does_not_echo_native_input(tmp_p
         factory.resolve_working_directory(str(outside))
     assert str(outside) not in str(failure.value)
     assert isinstance(failure.value.__cause__, ForbiddenError)
+
+
+@pytest.mark.parametrize("input_kind", ["relative", "absolute", "uri"])
+def test_breakpoint_decode_error_identifies_resource_without_native_path(
+    tmp_path: Path, input_kind: str,
+) -> None:
+    factory = _factory(tmp_path)
+    source = tmp_path / "workspace" / "invalid.mjs"
+    source.write_bytes(b"const value = '\xff';\n")
+    uri = factory.resolve_workspace_path(str(source))[1]
+    value = {"relative": source.name, "absolute": str(source), "uri": uri}[input_kind]
+    with pytest.raises(RuntimeError, match="不是 UTF-8 文本") as failure:
+        factory.create_breakpoint(path=value, line=1, column=1, condition=None)
+    assert uri in str(failure.value)
+    assert str(tmp_path) not in str(failure.value)
+    assert isinstance(failure.value.__cause__, UnicodeDecodeError)
+    assert source.read_bytes() == b"const value = '\xff';\n"
+
+
+@pytest.mark.parametrize("error_code", [errno.ENOENT, errno.EACCES, errno.EIO])
+def test_breakpoint_read_failure_preserves_errno_and_cause_without_native_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, error_code: int,
+) -> None:
+    factory = _factory(tmp_path)
+    source = tmp_path / "workspace" / "unreadable.mjs"
+    source.write_text("export {};\n", encoding="utf-8")
+    uri = factory.resolve_workspace_path(str(source))[1]
+    original = OSError(error_code, "read failed", str(source))
+    read_bytes = Path.read_bytes
+
+    def fail_source_read(path: Path) -> bytes:
+        if path == source:
+            raise original
+        return read_bytes(path)
+
+    monkeypatch.setattr(Path, "read_bytes", fail_source_read)
+    with pytest.raises(type(original)) as failure:
+        factory.create_breakpoint(path=str(source), line=1, column=1, condition=None)
+    assert failure.value.errno == error_code
+    assert failure.value.__cause__ is original
+    assert uri in str(failure.value)
+    assert str(tmp_path) not in str(failure.value)

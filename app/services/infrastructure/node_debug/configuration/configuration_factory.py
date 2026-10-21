@@ -92,6 +92,7 @@ class NodeDebugConfigurationFactory:
                             breakpoint.model_copy(update={"path": relative_path})
                         ),
                         breakpoint_path,
+                        uri=self._file_paths.reference(breakpoint_path),
                     )
                 )
             )
@@ -175,7 +176,9 @@ class NodeDebugConfigurationFactory:
             hit_condition=breakpoint.hit_condition,
             log_message=breakpoint.log_message,
         )
-        return anchor_breakpoint(breakpoint, script_path)
+        return anchor_breakpoint(
+            breakpoint, script_path, uri=self._file_paths.reference(script_path)
+        )
 
     def resolve_script_path(self, raw_path: str) -> tuple[Path, str]:
         if not raw_path.strip():

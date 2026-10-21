@@ -1,8 +1,5 @@
 from __future__ import annotations
 
-from pathlib import Path
-
-from app.core.path_utils import safe_join
 from app.schemas.internal_v2.node_debug import NodeDebugBreakpointDTO
 from app.services.infrastructure.node_debug.breakpoint.breakpoints import (
     reconcile_breakpoint,
@@ -17,6 +14,7 @@ from app.services.infrastructure.node_debug.runtime_state import (
 from app.services.infrastructure.node_debug.session.session_state import (
     NodeDebugSessionState,
 )
+from app.services.infrastructure.workspace_files.paths import WorkspaceFilePaths
 
 
 class NodeDebugSourceReconciliation:
@@ -25,12 +23,12 @@ class NodeDebugSourceReconciliation:
     def __init__(
         self,
         *,
-        workspace_root: Path,
+        file_paths: WorkspaceFilePaths,
         session_state: NodeDebugSessionState,
         command: NodeDebugCommandSender,
         append_action: NodeDebugActionAppender,
     ) -> None:
-        self._workspace_root = workspace_root
+        self._file_paths = file_paths
         self._session_state = session_state
         self._command = command
         self._append_action = append_action
@@ -41,10 +39,11 @@ class NodeDebugSourceReconciliation:
             runtime.relative_script_path,
             *(breakpoint.path for breakpoint in runtime.breakpoints.values()),
         }
-        return {
-            path: source_digest(safe_join(runtime.workspace_root, path))
-            for path in paths
-        }
+        digests = {}
+        for path in paths:
+            source, uri = self._file_paths.resolve(path, allow_external=False)
+            digests[path] = source_digest(source, uri=uri)
+        return digests
 
     async def reconcile(
         self,
@@ -64,9 +63,9 @@ class NodeDebugSourceReconciliation:
         relocation_messages: list[str] = []
         invalidated_inspector_ids: list[tuple[str, str]] = []
         for breakpoint in breakpoints:
+            source, uri = self._file_paths.resolve(breakpoint.path, allow_external=False)
             next_breakpoint = reconcile_breakpoint(
-                breakpoint,
-                safe_join(self._workspace_root, breakpoint.path),
+                breakpoint, source, uri=uri,
             )
             reconciled.append(next_breakpoint)
             if next_breakpoint != breakpoint:
@@ -87,12 +86,11 @@ class NodeDebugSourceReconciliation:
 
         if runtime is not None:
             active = runtime.status in LIVE_NODE_DEBUG_RUNTIME_STATUSES
-            changed_paths = {
-                path
-                for path, loaded_digest in runtime.loaded_source_digests.items()
-                if source_digest(safe_join(runtime.workspace_root, path))
-                != loaded_digest
-            }
+            changed_paths = set()
+            for path, loaded_digest in runtime.loaded_source_digests.items():
+                source, uri = self._file_paths.resolve(path, allow_external=False)
+                if source_digest(source, uri=uri) != loaded_digest:
+                    changed_paths.add(path)
             if active and changed_paths:
                 newly_changed_paths = changed_paths - runtime.source_changed_paths
                 runtime.requires_restart = True

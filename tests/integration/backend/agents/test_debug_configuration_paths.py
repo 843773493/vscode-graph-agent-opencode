@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 
@@ -97,5 +98,75 @@ async def test_debug_path_errors_keep_uri_and_leave_configuration_unchanged(
     assert str(root) not in repaired.text
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
     (context.artifacts_dir / f"{entrypoint}-path-errors.json").write_text(
+        json.dumps(receipts, ensure_ascii=False, indent=2) + "\n", encoding="utf-8",
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("entrypoint", ["configurations", "action"])
+async def test_breakpoint_source_read_error_uses_uri_and_recovers_after_repair(
+    integration_client: httpx.AsyncClient,
+    debug_path_targets: tuple[Path, Path, Path],
+    request: pytest.FixtureRequest,
+    entrypoint: str,
+) -> None:
+    root, source, _outside = debug_path_targets
+    client = integration_client
+    created = await client.post("/api/v1/sessions", json={"title": "断点源码读取合同"})
+    assert created.status_code == 200, created.text
+    session_id = created.json()["data"]["session_id"]
+    main = await client.get(f"/api/v1/sessions/{session_id}/main-thread")
+    assert main.status_code == 200, main.text
+    params = {"session_id": session_id, "thread_id": main.json()["data"]["thread_id"]}
+    initial = await client.post("/api/v1/debug/node/configurations", json={
+        **params, "name": "有效入口", "script_path": str(source),
+    })
+    assert initial.status_code == 200, initial.text
+    state = initial.json()["data"]
+    invalid = source.with_name(f"invalid-{entrypoint}.mjs")
+    body = b"const value = '\xff';\n"
+    invalid.write_bytes(body)
+    references = await client.post("/api/v1/workspace/files/references", json={"paths": [str(invalid)]})
+    assert references.status_code == 200, references.text
+    uri = references.json()["data"]["uris"][0]
+    receipts = []
+
+    for index, value in enumerate((invalid.relative_to(root).as_posix(), str(invalid), uri)):
+        breakpoint = {"path": value, "line": 1}
+        payload = (
+            {**params, "name": "断点源码检查", "script_path": str(source), "breakpoints": [breakpoint]}
+            if entrypoint == "configurations"
+            else {**params, "action": "set_breakpoint", "params": breakpoint}
+        )
+        request_id = f"req_debug_source_{entrypoint}_{index}"
+        response = await client.post(
+            f"/api/v1/debug/node/{entrypoint}", json=payload,
+            headers={"X-Request-ID": request_id},
+        )
+        assert response.status_code == 409, response.text
+        assert response.headers["X-Request-ID"] == response.json()["request_id"] == request_id
+        assert uri in response.json()["detail"]
+        assert "不是 UTF-8 文本" in response.json()["detail"]
+        assert str(root) not in response.text
+        after = await client.get("/api/v1/debug/node", params=params)
+        assert after.status_code == 200, after.text
+        assert after.json()["data"] == state
+        assert invalid.read_bytes() == body
+        receipts.append(response.json())
+
+    # 修复同一源码后重试原请求，由产品入口生成真实锚点和摘要。
+    repaired = b"const value = 42;\r\nconsole.log(value);\r\n"
+    invalid.write_bytes(repaired)
+    response = await client.post(f"/api/v1/debug/node/{entrypoint}", json=payload)
+    assert response.status_code == 200, response.text
+    breakpoint = response.json()["data"]["breakpoints"][0]
+    assert breakpoint["path"] == invalid.relative_to(root).as_posix()
+    assert breakpoint["source_line"] == "const value = 42;"
+    assert breakpoint["source_digest"] == hashlib.sha256(repaired).hexdigest()
+    assert breakpoint["relocation_status"] == "current"
+    assert response.json()["data"]["pid"] is None
+    assert str(root) not in response.text
+    context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
+    (context.artifacts_dir / f"{entrypoint}-source-errors.json").write_text(
         json.dumps(receipts, ensure_ascii=False, indent=2) + "\n", encoding="utf-8",
     )

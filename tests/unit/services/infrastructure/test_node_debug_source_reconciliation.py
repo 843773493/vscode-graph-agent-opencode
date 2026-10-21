@@ -243,7 +243,7 @@ def reconciler(
     appender: RecordingActionAppender,
 ) -> NodeDebugSourceReconciliation:
     return NodeDebugSourceReconciliation(
-        workspace_root=workspace_root,
+        file_paths=node_debug_file_paths(workspace_root),
         session_state=session_state,
         command=command,
         append_action=appender,

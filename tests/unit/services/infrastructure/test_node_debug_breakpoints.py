@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import errno
+import hashlib
 import shutil
 from datetime import UTC, datetime
 from pathlib import Path
@@ -22,6 +24,7 @@ from app.services.infrastructure.external_resource_leases import (
 from app.services.infrastructure.node_debug.breakpoint.breakpoints import (
     anchor_breakpoint,
     reconcile_breakpoint,
+    source_digest,
 )
 from app.services.infrastructure.node_debug.runtime_state import NodeDebugRuntime
 from app.services.infrastructure.node_debug.service import NodeDebugService
@@ -93,13 +96,13 @@ def test_breakpoint_becomes_invalid_after_lines_are_inserted(tmp_path: Path) -> 
         "export function compute(value) {\n  const doubled = value * 2;\n  return doubled;\n}\n",
         encoding="utf-8",
     )
-    anchored = anchor_breakpoint(_breakpoint("worker.mjs", 2), source)
+    anchored = anchor_breakpoint(_breakpoint("worker.mjs", 2), source, uri=node_debug_file_paths(tmp_path).reference(source))
 
     source.write_text(
         "// 新增说明\nconst offset = 0;\nexport function compute(value) {\n  const doubled = value * 2;\n  return doubled + offset;\n}\n",
         encoding="utf-8",
     )
-    invalidated = reconcile_breakpoint(anchored, source)
+    invalidated = reconcile_breakpoint(anchored, source, uri=node_debug_file_paths(tmp_path).reference(source))
 
     assert invalidated.line == 2
     assert invalidated.original_line == 2
@@ -112,11 +115,11 @@ def test_breakpoint_becomes_invalid_after_lines_are_inserted(tmp_path: Path) -> 
 def test_invalidated_breakpoint_does_not_auto_recover(tmp_path: Path) -> None:
     source = tmp_path / "worker.mjs"
     source.write_text("const value = 1;\nrun(value);\n", encoding="utf-8")
-    anchored = anchor_breakpoint(_breakpoint("worker.mjs", 2), source)
+    anchored = anchor_breakpoint(_breakpoint("worker.mjs", 2), source, uri=node_debug_file_paths(tmp_path).reference(source))
 
     source.write_text("// changed\nconst value = 1;\nrun(value);\n", encoding="utf-8")
-    invalidated = reconcile_breakpoint(anchored, source)
-    restored = reconcile_breakpoint(invalidated, source)
+    invalidated = reconcile_breakpoint(anchored, source, uri=node_debug_file_paths(tmp_path).reference(source))
+    restored = reconcile_breakpoint(invalidated, source, uri=node_debug_file_paths(tmp_path).reference(source))
 
     assert restored == invalidated
     assert restored.line == 2
@@ -126,15 +129,86 @@ def test_invalidated_breakpoint_does_not_auto_recover(tmp_path: Path) -> None:
 def test_breakpoint_marks_ambiguous_and_deleted_source(tmp_path: Path) -> None:
     source = tmp_path / "worker.mjs"
     source.write_text("const value = 1;\nrun(value);\n", encoding="utf-8")
-    anchored = anchor_breakpoint(_breakpoint("worker.mjs", 2), source)
+    anchored = anchor_breakpoint(_breakpoint("worker.mjs", 2), source, uri=node_debug_file_paths(tmp_path).reference(source))
 
     source.write_text("run(value);\nrun(value);\n", encoding="utf-8")
-    ambiguous = reconcile_breakpoint(anchored, source)
+    ambiguous = reconcile_breakpoint(anchored, source, uri=node_debug_file_paths(tmp_path).reference(source))
     assert ambiguous.relocation_status == "pending_update"
 
     source.unlink()
-    deleted = reconcile_breakpoint(ambiguous, source)
+    deleted = reconcile_breakpoint(ambiguous, source, uri=node_debug_file_paths(tmp_path).reference(source))
     assert deleted.relocation_status == "source_deleted"
+
+
+@pytest.mark.parametrize("entrypoint", ["anchor", "reconcile"])
+def test_breakpoint_anchor_and_digest_use_one_source_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, entrypoint: str,
+) -> None:
+    source = tmp_path / "worker.mjs"
+    first = b"const value = 1;\r\nrun(value);\r\n"
+    source.write_bytes(first)
+    uri = node_debug_file_paths(tmp_path).reference(source)
+    calls = []
+    read_bytes = Path.read_bytes
+
+    def changing_source_read(path: Path) -> bytes:
+        if path != source:
+            return read_bytes(path)
+        calls.append(path)
+        return first if len(calls) == 1 else b"changed();\n"
+
+    monkeypatch.setattr(Path, "read_bytes", changing_source_read)
+    operation = anchor_breakpoint if entrypoint == "anchor" else reconcile_breakpoint
+    anchored = operation(_breakpoint(source.name, 2), source, uri=uri)
+    assert calls == [source]
+    assert anchored.source_line == "run(value);"
+    assert anchored.previous_line == "const value = 1;"
+    assert anchored.source_digest == hashlib.sha256(first).hexdigest()
+
+
+def test_source_digest_keeps_missing_and_binary_source_semantics(tmp_path: Path) -> None:
+    source = tmp_path / "worker.mjs"
+    uri = node_debug_file_paths(tmp_path).reference(source)
+    assert source_digest(source, uri=uri) is None
+    source.write_bytes(b"\xff\x00")
+    digest = hashlib.sha256(b"\xff\x00").hexdigest()
+    assert source_digest(source, uri=uri) == digest
+    anchored = _breakpoint(source.name, 1).model_copy(update={
+        "source_digest": digest, "source_line": "previous source",
+    })
+    assert reconcile_breakpoint(anchored, source, uri=uri) == anchored
+    source.write_bytes(b"\xfe\x00")
+    assert reconcile_breakpoint(anchored, source, uri=uri).relocation_status == "pending_update"
+    source.unlink()
+    assert reconcile_breakpoint(anchored, source, uri=uri).relocation_status == "source_deleted"
+
+
+@pytest.mark.parametrize("stage", ["stat", "read_bytes"])
+@pytest.mark.parametrize("error_code", [errno.EACCES, errno.EIO, errno.ELOOP])
+def test_source_io_failure_is_not_treated_as_deleted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, stage: str, error_code: int,
+) -> None:
+    source = tmp_path / "worker.mjs"
+    source.write_text("run();\n", encoding="utf-8")
+    uri = node_debug_file_paths(tmp_path).reference(source)
+    breakpoint = _breakpoint(source.name, 1)
+    original = OSError(error_code, "native failure", str(source))
+    operation = getattr(Path, stage)
+
+    def fail_source_io(path: Path, *args: object, **kwargs: object):
+        if path == source:
+            raise original
+        return operation(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, stage, fail_source_io)
+    for read in (source_digest, lambda path, **kw: reconcile_breakpoint(breakpoint, path, **kw)):
+        with pytest.raises(type(original)) as failure:
+            read(source, uri=uri)
+        assert failure.value.errno == error_code
+        assert failure.value.__cause__ is original
+        assert uri in str(failure.value)
+        assert str(tmp_path) not in str(failure.value)
+        assert failure.value.filename is None
 
 
 @pytest.mark.asyncio

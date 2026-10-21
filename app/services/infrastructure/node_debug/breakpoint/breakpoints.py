@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import stat
 from pathlib import Path
 
 from app.schemas.internal_v2.node_debug import (
@@ -9,21 +10,42 @@ from app.schemas.internal_v2.node_debug import (
 )
 
 
-def source_digest(path: Path) -> str | None:
-    if not path.is_file():
-        return None
-    return hashlib.sha256(path.read_bytes()).hexdigest()
+def source_digest(path: Path, *, uri: str) -> str | None:
+    source = _source_bytes(path, uri)
+    return hashlib.sha256(source).hexdigest() if source is not None else None
 
 
 def anchor_breakpoint(
     breakpoint: NodeDebugBreakpointDTO,
     path: Path,
     *,
+    uri: str,
     line: int | None = None,
     relocation_status: str = "current",
     relocation_message: str | None = None,
 ) -> NodeDebugBreakpointDTO:
-    source_lines = _source_lines(path)
+    source = _source_bytes(path, uri)
+    if source is None:
+        raise FileNotFoundError(f"源码断点文件不存在: {uri}")
+    return _anchor_source(
+        breakpoint, source, uri=uri, line=line,
+        relocation_status=relocation_status, relocation_message=relocation_message,
+    )
+
+
+def _anchor_source(
+    breakpoint: NodeDebugBreakpointDTO,
+    source: bytes,
+    *,
+    uri: str,
+    line: int | None = None,
+    relocation_status: str = "current",
+    relocation_message: str | None = None,
+) -> NodeDebugBreakpointDTO:
+    try:
+        source_lines = source.decode("utf-8").splitlines()
+    except UnicodeDecodeError as error:
+        raise RuntimeError(f"源码断点文件不是 UTF-8 文本: {uri}") from error
     anchored_line = line or breakpoint.line
     if anchored_line > len(source_lines):
         raise ValueError(
@@ -43,7 +65,7 @@ def anchor_breakpoint(
                 if anchored_line < len(source_lines)
                 else None
             ),
-            "source_digest": source_digest(path),
+            "source_digest": hashlib.sha256(source).hexdigest(),
             "relocation_status": relocation_status,
             "relocation_message": relocation_message,
         }
@@ -53,9 +75,11 @@ def anchor_breakpoint(
 def reconcile_breakpoint(
     breakpoint: NodeDebugBreakpointDTO,
     path: Path,
+    *,
+    uri: str,
 ) -> NodeDebugBreakpointDTO:
-    current_digest = source_digest(path)
-    if current_digest is None:
+    source = _source_bytes(path, uri)
+    if source is None:
         return breakpoint.model_copy(
             update={
                 "verified": False,
@@ -70,7 +94,8 @@ def reconcile_breakpoint(
         # 也不能根据旧锚点自动恢复，避免把断点悄悄绑定到错误代码。
         return breakpoint
     if breakpoint.source_digest is None or breakpoint.source_line is None:
-        return anchor_breakpoint(breakpoint, path)
+        return _anchor_source(breakpoint, source, uri=uri)
+    current_digest = hashlib.sha256(source).hexdigest()
     if current_digest == breakpoint.source_digest:
         return breakpoint
 
@@ -149,13 +174,21 @@ def runtime_breakpoint(
     )
 
 
-def _source_lines(path: Path) -> list[str]:
-    if not path.is_file():
-        raise FileNotFoundError(f"源码断点文件不存在: {path}")
+def _source_bytes(path: Path, uri: str) -> bytes | None:
+    """只读取一次源码；初始缺失与检查后的读取失败保持不同语义。"""
     try:
-        return path.read_text(encoding="utf-8").splitlines()
-    except UnicodeDecodeError as error:
-        raise RuntimeError(f"源码断点文件不是 UTF-8 文本: {path}") from error
+        try:
+            mode = path.stat().st_mode
+        except (FileNotFoundError, NotADirectoryError):
+            return None
+        if not stat.S_ISREG(mode):
+            return None
+        return path.read_bytes()
+    except OSError as error:
+        raise type(error)(
+            error.errno,
+            f"断点源码读取失败: {uri}, error={type(error).__name__}, errno={error.errno}",
+        ) from error
 
 
 __all__ = [

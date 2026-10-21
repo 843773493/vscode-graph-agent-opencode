@@ -178,7 +178,7 @@ class NodeDebugService(
             append_pending_action=self._session_state.append_pending_action,
         )
         self._source_reconciliation = NodeDebugSourceReconciliation(
-            workspace_root=self._workspace_root,
+            file_paths=file_paths,
             session_state=self._session_state,
             command=self._inspector.command,
             append_action=self._append_action,
