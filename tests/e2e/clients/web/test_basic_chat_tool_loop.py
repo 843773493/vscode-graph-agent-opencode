@@ -389,6 +389,69 @@ async def test_basic_chat_tool_loop_through_real_web_surface(
         assert isinstance(selected, list)
         assert result["focusedScenarios"] == requested
         assert set(result["section8"]) == set(selected)
+        if "child" in selected:
+            child = result["section8"]["child"]
+            assert child["startupHistory"]["thread_id"] == child["mainThreadId"]
+            assert child["mainThreadId"] != child["threadId"]
+            for name in ("initialHistory", "pending", "terminalHistory", "coldHistory", "coldDetail"):
+                assert child[name]["thread_id"] == child["threadId"]
+            assert child["startupHistory"]["items"] == []
+            assert child["initialHistory"]["items"] == []
+            (initial,) = child["initialHistory"]["internal_executions"]
+            assert initial["session_id"] == child["sessionId"] and initial["thread_id"] == child["threadId"]
+            first, second = child["first"], child["second"]
+            pending, terminal = child["pending"]["items"], child["terminalHistory"]["items"]
+            assert len(pending) == len(terminal) == len(child["interleaved"]["turns"]) == 2
+            assert pending[1]["status"] == "accepted"
+            assert pending[0]["root_logical_item_ordinal"] < pending[1]["root_logical_item_ordinal"]
+            for sent, queued, turn, displayed in zip((first, second), pending, terminal, child["interleaved"]["turns"], strict=True):
+                assert sent["accepted"]["thread_id"] == child["threadId"]
+                for actual in (queued, turn):
+                    assert actual["session_id"] == child["sessionId"]
+                    assert actual["turn_id"] == sent["turnId"] and actual["job_id"] == sent["jobId"]
+                    assert actual["source_message_ids"] == [sent["accepted"]["message_id"]]
+                    assert [item["message_id"] for item in actual["user_messages"]] == actual["source_message_ids"]
+                    assert [item["content"] for item in actual["user_messages"]] == [sent["prompt"]]
+                assert turn["status"] == "completed" and turn["activity_stats"]["item_count"] == 4
+                assert displayed["turnId"] == turn["turn_id"] and displayed["rootOrdinal"] == turn["root_logical_item_ordinal"]
+                assert displayed["activity"] == turn["activity_stats"]
+                assert displayed["userMessages"] == [{"messageId": sent["accepted"]["message_id"], "content": sent["prompt"]}]
+                coordinates = [{"part_id": part["part_id"], "kind": part["kind"], **part["source"]} for part in turn["response_parts"]]
+                assert displayed["parts"] == [{key: part[key] for key in ("part_id", "kind", "item_id", "item_sequence", "logical_item_ordinal", "part_ordinal", "created_at", "elapsed_ms")} for part in coordinates]
+                ordering = [(part["logical_item_ordinal"], part["part_ordinal"]) for part in displayed["parts"]]
+                assert ordering == sorted(ordering)
+            assert child["queuedDom"] == [{
+                "stage": stage, "turnId": second["turnId"], "rootOrdinal": str(pending[1]["root_logical_item_ordinal"]),
+                "content": second["prompt"],
+            } for stage in ("queued live", "queued refresh")]
+            parts = child["interleaved"]["turns"][0]["parts"]
+            assert any(part["item_sequence"] < child["secondRoot"] for part in parts)
+            assert any(part["item_sequence"] > child["secondRoot"] for part in parts)
+            assert all(part["item_sequence"] != child["secondRoot"] for part in parts)
+            requests = child["requests"]
+            assert len(requests["successors"]) == 2
+            for request in [requests["firstContinuation"], *requests["successors"]]:
+                assert request["identity"]["session_id"] == child["sessionId"] and request["identity"]["thread_id"] == child["threadId"]
+            old_messages = json.dumps(requests["firstContinuation"]["request"]["messages"], ensure_ascii=False)
+            assert first["prompt"] in old_messages and second["prompt"] not in old_messages
+            assert all(second["prompt"] in json.dumps(request["request"]["messages"], ensure_ascii=False) for request in requests["successors"])
+            assert child["coldHistory"]["items"] == terminal and child["coldDetail"]["items"] == terminal[:1]
+            assert child["bindingBefore"] == child["bindingAfter"]
+            runtime, graph = child["runtime"], child["graph"]
+            assert runtime["withBlocker"]["execution_state"] == "active" and runtime["withBlocker"]["cold_eligible"] is False
+            assert all(runtime[key]["residency"] == "resident" for key in ("withBlocker", "stillActive", "beforeDeadline"))
+            assert runtime["coldRuntime"]["residency"] == "cold"
+            assert [len(graph[key]["compiled"]) for key in ("initiallyResident", "reused", "released", "rebuilt")] == [1, 1, 1, 2]
+            (closed,) = graph["released"]["closed"]
+            generation = graph["initiallyResident"]["acquired"][0]["details"]["generation"]
+            assert closed["details"]["generation"] == generation
+            for sent in (first, second):
+                (acquired,) = [event for event in graph["reused"]["acquired"] if event["details"]["job_id"] == sent["jobId"]]
+                assert acquired["details"]["generation"] == generation
+            (rebuilt,) = [event for event in graph["rebuilt"]["acquired"] if event["details"]["job_id"] == child["rehydrated"]["sent"]["jobId"]]
+            assert rebuilt["details"]["generation"] > generation
+            own, sibling = graph["initiallyResident"]["compiled"][0], graph["siblingGraph"]["compiled"][0]
+            assert own["pid"] == sibling["pid"] and own["details"]["compiled_graph_object_id"] != sibling["details"]["compiled_graph_object_id"]
         if "skill_untrack" in selected:
             skill = result["section8"]["skill_untrack"]
             assert set(skill["skillLoadSummaries"]) == {"agent", "events", "requests"}

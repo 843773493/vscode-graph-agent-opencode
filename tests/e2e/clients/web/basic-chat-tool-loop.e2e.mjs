@@ -7756,15 +7756,19 @@ async function runChildFifoAndResidency(surface) {
   assert.equal(pending.items[1].status, "accepted");
   assert.deepEqual(pending.items[1].user_messages.map((message) => message.content), [secondPrompt], "queued history 正文必须等于已接受的第二条 root");
   assert.ok(pending.items[0].root_logical_item_ordinal < pending.items[1].root_logical_item_ordinal);
+  const queuedDom = [];
   for (const stage of ["queued live", "queued refresh"]) {
     if (stage === "queued refresh") await openOwner(child);
     await assertTranscriptDom(child, pending, stage);
     const queued = child.page.locator(`.child-thread-conversation[data-thread-id="${child.threadId}"] .chat-turn[data-turn-id="${second.turnId}"]`);
     await queued.waitFor({ state: "visible", timeout: 60_000 });
-    assert.equal(await queued.getAttribute("data-root-logical-item-ordinal"), String(pending.items[1].root_logical_item_ordinal));
+    const rootOrdinal = await queued.getAttribute("data-root-logical-item-ordinal");
+    assert.equal(rootOrdinal, String(pending.items[1].root_logical_item_ordinal));
     const queuedContent = queued.locator(".child-thread-user .chat-markdown");
     assert.equal(await queuedContent.count(), 1);
-    assert.equal(await queuedContent.textContent(), pending.items[1].user_messages[0].content, `${stage}: queued 正文必须来自已接受 root`);
+    const content = await queuedContent.textContent();
+    assert.equal(content, pending.items[1].user_messages[0].content, `${stage}: queued 正文必须来自已接受 root`);
+    queuedDom.push({ stage, turnId: second.turnId, rootOrdinal, content });
   }
   const withBlocker = (await ownerApi(child, `/api/v1/sessions/${child.sessionId}/child-threads`)).data.items.find((item) => item.thread_id === child.threadId);
   assert.equal(withBlocker.runtime.residency, "resident");
@@ -7780,8 +7784,10 @@ async function runChildFifoAndResidency(surface) {
   const request = await modelRequest(calls[1]);
   assert.ok(JSON.stringify(request.request.messages).includes(firstPrompt));
   assert.ok(!JSON.stringify(request.request.messages).includes(secondPrompt), "旧 execution fence 泄露 queued root");
+  const successors = [];
   for (const call of calls.slice(2)) {
     const successor = await modelRequest(call);
+    successors.push(successor);
     assert.ok(JSON.stringify(successor.request.messages).includes(secondPrompt), "后继 execution 必须消费同一冻结 queued 正文");
   }
   const terminalHistory = await loadThreadHistory(child);
@@ -7808,7 +7814,8 @@ async function runChildFifoAndResidency(surface) {
   assert.deepEqual(coldHistory.items, terminalHistory.items);
   const coldDetail = await loadThreadHistory(child, { turn_ids: [first.turnId] });
   assert.deepEqual(coldDetail.items, [terminalHistory.items[0]], "cold detail 必须沿权威 history 读取同一 Turn");
-  assert.equal((await ownerApi(child, `/api/v1/sessions/${child.sessionId}/child-threads`)).data.items.find((item) => item.thread_id === child.threadId).runtime.residency, "cold", "cold history 不能唤醒 graph");
+  const coldRuntime = (await ownerApi(child, `/api/v1/sessions/${child.sessionId}/child-threads`)).data.items.find((item) => item.thread_id === child.threadId).runtime;
+  assert.equal(coldRuntime.residency, "cold", "cold history 不能唤醒 graph");
   assert.deepEqual(await graphBinding(child), bindingBefore);
   const released = await graphLifecycle(child);
   assert.equal(released.compiled.length, 1, "cold history/detail 不得再次编译 graph");
@@ -7817,11 +7824,15 @@ async function runChildFifoAndResidency(surface) {
   const rehydrated = await completeOwnerTurn(child, "cold 后再次读取 README.md。", [
     toolResponse("child-rehydrated-tool", "read_file", { path: "README.md" }), finalResponse("child-rehydrated-final", "原 GraphBinding 已重新驻留。"),
   ]);
-  assert.deepEqual(await graphBinding(child), bindingBefore);
+  const bindingAfter = await graphBinding(child);
+  assert.deepEqual(bindingAfter, bindingBefore);
   const rebuilt = await graphLifecycle(child);
   assert.equal(rebuilt.compiled.length, 2, "cold 后首次可执行 admission 必须沿原 binding 重建一次");
   assert.ok(graphAdmission(rebuilt, rehydrated.sent.jobId).details.generation > reused.acquired[0].details.generation);
-  return { creation, startupHistory, initialHistory, first, second, interleaved, bindingBefore, coldHistory, coldDetail, rehydrated,
+  return { sessionId: child.sessionId, mainThreadId: owner.threadId, threadId: child.threadId, creation, startupHistory, initialHistory, first, second,
+    pending, queuedDom, terminalHistory, secondRoot, requests: { firstContinuation: request, successors },
+    runtime: { withBlocker: withBlocker.runtime, stillActive: stillActive.runtime, beforeDeadline: beforeDeadline.runtime, coldRuntime },
+    interleaved, bindingBefore, bindingAfter, coldHistory, coldDetail, rehydrated,
     graph: { initiallyResident, reused, siblingGraph, mainGraph, released, rebuilt, idleRuntime }, siblingCreation, siblingHistory };
 }
 
