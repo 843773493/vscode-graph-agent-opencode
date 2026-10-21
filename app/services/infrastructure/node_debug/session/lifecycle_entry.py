@@ -49,7 +49,8 @@ class NodeDebugLifecycleEntryMixin:
             raise RuntimeError(
                 "删除 Session 前 session control catalog 缺失或不是普通文件，"
                 "无法核实全部 thread owners: "
-                f"session_id={session_id}, path={control_path}"
+                f"session_id={session_id}, main_thread_id={main_thread_id}, "
+                "artifact=session-control"
             )
         control = SessionControlStore(control_path)
         try:

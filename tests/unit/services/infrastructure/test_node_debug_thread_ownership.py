@@ -773,17 +773,40 @@ async def test_drain_session_blocks_when_child_claim_cannot_be_verified(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("catalog_state", ["missing", "directory", "symlink"])
 async def test_drain_session_fails_closed_when_control_catalog_is_missing(
     tmp_path: Path,
+    catalog_state: str,
 ) -> None:
     resolver = get_session_path_resolver(tmp_path / "sessions")
     resolver.initialize()
     session_node = _create_session(resolver, _PARENT_SESSION_ID)
     control_path = session_node / CONTROL_DATABASE_NAME
     control_path.unlink()
+    original_bytes = b"unrelated catalog bytes"
+    target_path = tmp_path / "unrelated-catalog"
+    if catalog_state == "directory":
+        control_path.mkdir()
+    elif catalog_state == "symlink":
+        target_path.write_bytes(original_bytes)
+        control_path.symlink_to(target_path)
     service = _service(tmp_path, resolver)
 
-    with pytest.raises(RuntimeError, match="无法核实全部 thread owners"):
+    with pytest.raises(RuntimeError, match="无法核实全部 thread owners") as caught:
         await service.drain_session(_PARENT_SESSION_ID)
 
-    assert not control_path.exists()
+    diagnostic = str(caught.value)
+    assert f"session_id={_PARENT_SESSION_ID}" in diagnostic
+    assert f"main_thread_id={resolver.main_thread_id(_PARENT_SESSION_ID)}" in diagnostic
+    assert "artifact=session-control" in diagnostic
+    assert str(tmp_path) not in diagnostic
+    assert str(control_path) not in diagnostic
+    assert session_node.is_dir()
+    if catalog_state == "missing":
+        assert not control_path.exists()
+    elif catalog_state == "directory":
+        assert control_path.is_dir()
+        assert list(control_path.iterdir()) == []
+    else:
+        assert control_path.is_symlink()
+        assert target_path.read_bytes() == original_bytes
