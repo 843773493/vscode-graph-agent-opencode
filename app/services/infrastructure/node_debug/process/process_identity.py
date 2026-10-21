@@ -6,16 +6,12 @@
 
 身份来源优先级：
 1. Linux ``/proc/<pid>/stat`` 的 ``starttime`` 字段 + ``/proc/sys/kernel/random/boot_id``；
-   ``/proc`` 条目存在时它是权威来源，``Z``（zombie）视为已终结，不再回落下一级探测；
-2. 环境已自带 ``psutil`` 时使用 ``Process.create_time()``（未声明为项目依赖，仅兜底）；
-3. 两者都不可用时只能做存在性探测，``start_marker`` 为 ``None``，调用方必须按
-   “不可核实”处理（fail-closed），不得据此认领或停止进程。
+   ``/proc`` 条目存在时它是权威来源，``Z``（zombie）视为已终结，不再回落；
+2. 其它平台通过必需依赖 ``psutil.Process.create_time()`` 取得进程创建时间。
 """
 
 from __future__ import annotations
 
-import importlib.util
-import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
@@ -26,8 +22,6 @@ IdentityComparison = Literal["match", "mismatch", "incomparable"]
 
 IDENTITY_SOURCE_LINUX_PROC = "linux_proc_stat"
 IDENTITY_SOURCE_PSUTIL = "psutil_create_time"
-#: 只能证明“存在/不存在”，无法证明是不是同一实例。
-IDENTITY_SOURCE_UNAVAILABLE = "unavailable"
 
 _PROC_ROOT = Path("/proc")
 
@@ -78,18 +72,7 @@ def probe_process_identity(pid: int) -> NodeDebugProcessIdentity | None:
         # 不得再回落到 psutil 或 kill(0) 存在性兜底：否则刚被我们停止、尚未被 reap 的
         # 子进程会被判成"存活但不可核实"，让已成功的停止永远卡在 reconcile_required。
         return _probe_linux_proc_identity(pid)
-    psutil_identity = _probe_psutil_identity(pid)
-    if psutil_identity is not None:
-        return psutil_identity
-    if _pid_exists(pid):
-        # TODO: 非 Linux 且无 psutil 的宿主缺少起始身份来源；接入跨平台身份库后
-        # 删除该分支，让所有平台都能核实“同一实例”。
-        return NodeDebugProcessIdentity(
-            pid=pid,
-            source=IDENTITY_SOURCE_UNAVAILABLE,
-            start_marker=None,
-        )
-    return None
+    return _probe_psutil_identity(pid)
 
 
 def _probe_linux_proc_identity(pid: int) -> NodeDebugProcessIdentity | None:
@@ -129,8 +112,6 @@ def _probe_linux_proc_identity(pid: int) -> NodeDebugProcessIdentity | None:
 
 
 def _probe_psutil_identity(pid: int) -> NodeDebugProcessIdentity | None:
-    if importlib.util.find_spec("psutil") is None:
-        return None
     import psutil
 
     try:
@@ -147,23 +128,9 @@ def _probe_psutil_identity(pid: int) -> NodeDebugProcessIdentity | None:
     )
 
 
-def _pid_exists(pid: int) -> bool:
-    """不带信号的存在性探测；仅用于缺少起始身份来源的宿主。"""
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-    except OSError as error:
-        raise RuntimeError(f"进程存在性探测失败: pid={pid}: {error}") from error
-    return True
-
-
 __all__ = [
     "IDENTITY_SOURCE_LINUX_PROC",
     "IDENTITY_SOURCE_PSUTIL",
-    "IDENTITY_SOURCE_UNAVAILABLE",
     "IdentityComparison",
     "NodeDebugProcessIdentity",
     "probe_process_identity",
