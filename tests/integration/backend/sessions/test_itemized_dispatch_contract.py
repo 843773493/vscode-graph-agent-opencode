@@ -13,7 +13,7 @@ from pathlib import Path
 from threading import Event, get_ident
 from types import SimpleNamespace
 from typing import cast
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from langchain.agents import create_agent
@@ -100,18 +100,21 @@ from app.services.infrastructure.trace_event_store import TraceEventStore
 from app.services.orchestration.execution_step.model_call import StepModelCallAdapter
 from app.services.orchestration.execution_step.stream_bindings import CanonicalItemSink
 from app.services.orchestration.resource_activation import ResourceActivationCoordinator
+from app.testing.model_stream import build_cassette
 from app.tool_testing.definitions import PreparedToolTest, ToolTestEvaluation
 from app.tool_testing.registry import ToolTestRegistry
 from app.tool_testing.service import ToolTestService
 from app.tool_testing.store import ToolTestStore
 from tests.integration.backend.sessions.itemized_dispatch_helpers import (
     EMPTY_TOOL_SET,
+    chat_reply_frames,
     create_dispatch_agent,
     dispatch_execution_scope,
     dispatch_saver,
     invoke_provider_dispatch,
     native_dispatch_workspace,
     native_http_server,
+    responses_reply_frames,
     seed_dispatch_history,
     seed_dispatch_overlay,
 )
@@ -1528,11 +1531,11 @@ def search_notes(query: str) -> str:
     return f"notes:{query}"
 
 
-@pytest.fixture
-def toolset_dispatch_case(dispatch_saver, native_http_server, dispatch_bridge, target_format, monkeypatch):
-    """ToolSelectionStore→正式 producer→实际 Bridge/Saver/HTTP，响应仍是协议桩。"""
+def _build_toolset_dispatch_case(
+    dispatch_saver, dispatch_bridge, target_format, monkeypatch, *, endpoint, api_key,
+):
+    """两种传输共用真实 ToolSelectionStore、producer 与 Bridge/Saver 设置。"""
     saver, session, turn, sessions = dispatch_saver
-    state, endpoint = native_http_server
     thread = saver._storage.storage.main_thread_id(session)
     checkpoint_id = saver.get_tuple(build_checkpoint_config(thread)).checkpoint["id"]
     tools = (inspect_file, inspect_folder, search_notes)
@@ -1541,7 +1544,7 @@ def toolset_dispatch_case(dispatch_saver, native_http_server, dispatch_bridge, t
         "chat_completions": BoxteamLiteLLMChatModel,
     }[target_format]
     model = model_type(
-        model="openai/gpt-4.1", api_key=state.api_key, api_base=endpoint,
+        model="openai/gpt-4.1", api_key=api_key, api_base=endpoint,
         custom_llm_provider="openai", streaming=True, max_retries=0,
     )
     bridge = dispatch_bridge(
@@ -1588,16 +1591,89 @@ def toolset_dispatch_case(dispatch_saver, native_http_server, dispatch_bridge, t
             dispatch_patch.setattr(bridge, "_ainvoke", send_actual)
             await bridge.aexecute(incoming)
         assert len(outbound) == 1
-        assert outbound[0].request_hash_preimage == normalize_wire_request(state.requests[-1]["body"])
         return outbound[0]
 
     return SimpleNamespace(
         saver=saver, session=session, turn=turn, thread=thread, sessions=sessions,
-        state=state, target_format=target_format, bridge=bridge, producer=producer,
+        target_format=target_format, bridge=bridge, producer=producer,
         selection=selection, manager=bridge._context_source_manager,
         tools=tools, dispatch=dispatch, dispatches=dispatches,
         model=model,
     )
+
+
+@pytest.fixture
+def native_toolset_dispatch_case(
+    dispatch_saver, native_http_server, dispatch_bridge, target_format, monkeypatch,
+):
+    """真实网络的失败重试与 in-flight 专项保留 socket 和原始请求记录。"""
+    state, endpoint = native_http_server
+    case = _build_toolset_dispatch_case(
+        dispatch_saver, dispatch_bridge, target_format, monkeypatch,
+        endpoint=endpoint, api_key=state.api_key,
+    )
+    actual_dispatch = case.dispatch
+
+    async def dispatch(task_id, *, messages=()):
+        snapshot = await actual_dispatch(task_id, messages=messages)
+        assert snapshot.request_hash_preimage == normalize_wire_request(state.requests[-1]["body"])
+        return snapshot
+
+    case.state, case.dispatch = state, dispatch
+    return case
+
+
+@pytest.fixture
+async def toolset_dispatch_case(
+    dispatch_saver, inprocess_model_replay, dispatch_bridge, target_format, monkeypatch,
+):
+    """普通封存/控制面集成使用共享精确回放；不伪造 HTTP 请求状态。"""
+    replay, controller = inprocess_model_replay
+    endpoint = "https://toolset-replay.invalid/v1"
+    protocol = "openai_responses_sse" if target_format == "responses" else "openai_chat_sse"
+    suffix = "/responses" if target_format == "responses" else "/chat/completions"
+    frames = responses_reply_frames if target_format == "responses" else chat_reply_frames
+    cassette = build_cassette(
+        asset_id="toolset-reply", url=endpoint + suffix, model="gpt-4.1",
+        protocol=protocol, frames=frames(1),
+    )
+    interaction = {**cassette.raw["interactions"][0], "protocol": protocol}
+    case = _build_toolset_dispatch_case(
+        dispatch_saver, dispatch_bridge, target_format, monkeypatch,
+        endpoint=endpoint, api_key="toolset-replay-key",
+    )
+    planned = set()
+    actual_dispatch = case.dispatch
+
+    def read_request(snapshot):
+        # Bridge 重试保留 sealed ID，传输身份来自本次真实 callback，不能读到旧产物。
+        reference = next(handle.reference for handle in reversed(case.dispatches)
+                         if handle.snapshot.assembly_id == snapshot.assembly_id)
+        reference.validate_snapshot(snapshot)
+        artifact = json.loads((replay.artifacts / f"{reference.callback_model_call_id}.json").read_text(encoding="utf-8"))
+        assert artifact["identity"] == {
+            "session_id": case.session, "thread_id": case.thread,
+            "model_call_id": reference.callback_model_call_id,
+        }
+        assert snapshot.request_hash_preimage == normalize_wire_request(artifact["request"])
+        return artifact["request"]
+
+    async def dispatch(task_id, *, messages=()):
+        namespace = f"model_call/{case.session}/{case.thread}"
+        next_call = str(UUID(hex=replay.control.next_uuid(namespace)))
+        if next_call not in planned:
+            planned.update(replay.control.plan_model_calls(case.session, case.thread, [interaction]))
+        before = controller.transport.call_count
+        snapshot = await actual_dispatch(task_id, messages=messages)
+        assert controller.transport.call_count == before + 1
+        assert controller.transport.request_urls[-1] == endpoint + suffix
+        read_request(snapshot)
+        return snapshot
+
+    controller.ensure_installed()
+    case.controller, case.request = controller, read_request
+    case.artifacts, case.dispatch = replay.artifacts.parent, dispatch
+    return case
 
 
 @pytest.mark.asyncio
@@ -1625,14 +1701,14 @@ async def test_typed_dispatch_reference_blocks_each_binding_mismatch_before_http
             sealed_assembly_dispatch_scope(replace(reference, **{field: value}), snapshot, resource_refs=(), native_projection=native),
         ):
             await case.model.ainvoke([])
-        assert len(case.state.requests) == 1, field
+        assert case.controller.transport.call_count == 1, field
     with (
         pytest.raises(TypeError, match="dispatch reference"),
         # 有意向类型边界注入缺失引用，证明真实发送前拒绝。
         sealed_assembly_dispatch_scope(None, snapshot, resource_refs=(), native_projection=native),  # pyright: ignore[reportArgumentType]
     ):
         await case.model.ainvoke([])
-    assert len(case.state.requests) == 1
+    assert case.controller.transport.call_count == 1
 
 
 @pytest.mark.asyncio
@@ -1643,6 +1719,7 @@ async def test_cold_dispatch_reference_reads_exact_payload_without_preparation(
     case = toolset_dispatch_case
     snapshot = await case.dispatch("reference-cold-retry")
     reference = case.dispatches[-1].reference
+    original_request = case.request(snapshot)
 
     def unexpected(*_args, **_kwargs):
         raise AssertionError("只读 dispatch 不得重取 CSM/ToolSet 或重新准备")
@@ -1661,18 +1738,19 @@ async def test_cold_dispatch_reference_reads_exact_payload_without_preparation(
         ):
             await case.model.bind_tools(payload["tools"]).ainvoke(payload["messages"])
         assert restarted.get_context_assembly(case.session, case.thread, assembly_id=snapshot.assembly_id) == snapshot
-    assert len(case.state.requests) == 2
-    assert case.state.requests[0]["body"] == case.state.requests[1]["body"]
+    assert case.controller.transport.call_count == 2
+    assert case.request(snapshot) == original_request
+    assert sorted(case.controller.transport.hit_counts.values()) == [2]
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("target_format", ["responses", "chat_completions"])
 @pytest.mark.parametrize("callback_mismatch", [False, True], ids=["matched-callback", "stale-callback"])
 async def test_sealed_retry_callback_reference_reaches_real_step_adapter(
-    toolset_dispatch_case, target_format, callback_mismatch, monkeypatch,
+    native_toolset_dispatch_case, target_format, callback_mismatch, monkeypatch,
 ):
     """真实 HTTP 失败后重试同一 payload；每次 callback 精确消费自己的引用。"""
-    case = toolset_dispatch_case
+    case = native_toolset_dispatch_case
     admission = current_execution_admission(langgraph_thread_id=case.thread)
     assert admission is not None
     consumed_ids = []
@@ -1776,7 +1854,7 @@ async def test_sealed_retry_callback_reference_reaches_real_step_adapter(
 async def test_real_bridge_dispatch_uses_seal_projection_without_post_ack_reread(
     toolset_dispatch_case, monkeypatch, target_format,
 ):
-    """真实 Bridge 和 HTTP 复用本次 seal 收据，ack 后不再冷读 assembly。"""
+    """真实 Bridge 和 Provider 复用本次 seal 收据，ack 后不再冷读 assembly。"""
     case = toolset_dispatch_case
     storage = case.saver._storage.storage
     original_ack = case.manager.acknowledge_sealed_pending
@@ -1807,8 +1885,8 @@ async def test_real_bridge_dispatch_uses_seal_projection_without_post_ack_reread
     assert acknowledged == [snapshot.assembly_id]
     assert cold_projection_calls == []
     assert post_ack_snapshots == []
-    assert len(case.state.requests) == 1
-    body = case.state.requests[-1]["body"]
+    assert case.controller.transport.call_count == 1
+    body = case.request(snapshot)
     assert snapshot.request_hash_preimage == normalize_wire_request(body)
     if target_format == "responses":
         native = handle.native_projection
@@ -1939,7 +2017,7 @@ async def test_real_preparation_worker_keeps_loop_and_admission_until_settled(
             await asyncio.wait_for(queued, 20)
     assert settled.is_set()
     assert all(admission == observed_admissions[0] for admission in observed_admissions)
-    assert len(case.state.requests) == (0 if cancelled else 1)
+    assert case.controller.transport.call_count == (0 if cancelled else 1)
     with closing(SessionControlStore(control_path)) as control:
         assert not [lease for lease in control.list_non_terminal_leases() if lease.operation_kind == "context_control"]
         for operation in operations:
@@ -1976,7 +2054,7 @@ def _contract_wire_tool_names(case, body):
 async def test_real_request_prefix_chain_keeps_tool_group_full_delta_and_retry_bytes(
     toolset_dispatch_case, target_format,
 ):
-    """正常 HTTP 链逐字节继承 root/canonical/full/delta；仅工具切换重建 epoch。"""
+    """正常 Provider 链逐字节继承 root/canonical/full/delta；仅工具切换重建 epoch。"""
     del target_format
     case = toolset_dispatch_case
     initial = await case.dispatch("prefix-chain-initial")
@@ -2016,19 +2094,23 @@ async def test_real_request_prefix_chain_keeps_tool_group_full_delta_and_retry_b
     ]
     assert frames[0].role == "system"
     assert any(frame.role == "user" and "HTTP canonical user" in str(frame.content) for frame in frames)
+    delta_request = case.request(delta)
     before = _sealed_contract_rows(case)
     retry = await case.dispatch("prefix-chain-delta", messages=messages)
     assert retry == delta
-    assert case.state.requests[-1]["body"] == case.state.requests[-2]["body"]
+    assert case.request(retry) == delta_request
     assert _sealed_contract_rows(case) == before
+    assert case.dispatches[-1].reference.sealed_model_call_id == delta.model_call_id
+    assert case.dispatches[-1].reference.callback_model_call_id != delta.model_call_id
+    assert sorted(case.controller.transport.hit_counts.values()) == [1, 1, 1, 1]
     _select_contract_tools(case, "inspect_folder")
     rebuilt = await case.dispatch("prefix-chain-rebase", messages=messages)
     assert rebuilt.seal_binding.prefix.state.epoch.ordinal == initial.seal_binding.prefix.state.epoch.ordinal + 1
     assert rebuilt.seal_binding.prefix.state.epoch.reason == EpochReason.TOOLSET_CHANGED
     assert rebuilt.seal_binding.prefix.state.tool_compatibility_key != delta.seal_binding.prefix.state.tool_compatibility_key
     assert _sealed_contract_rows(case)[:-1] == before
-    # 实际 HTTP 正文必须维持两个独立 user 来源块，不能由 adapter 合并。
-    body = case.state.requests[2]["body"]
+    # 实际 Provider 正文必须维持两个独立 user 来源块，不能由 adapter 合并。
+    body = case.request(delta)
     wire_items = body["input"] if case.target_format == "responses" else body["messages"]
     assert [entry for entry in wire_items if entry.get("role") == "user"][-2:] == [
         {"role": "user", "content": [{"type": "input_text", "text": text}]
@@ -2091,13 +2173,13 @@ async def test_unpaired_tool_group_does_not_capture_model_call_resources(
     assert control_operations[-1] == rejected_operation
     assert captures == []
     assert frozen_ids() == before
-    assert len(case.state.requests) == 1
+    assert case.controller.transport.call_count == 1
     result = ToolMessage(content="完整结果", id="activation-paired-result", tool_call_id="activation-call",
                          name="inspect_file")
     await case.dispatch("activation-protocol-next", messages=(call, result))
     assert len(captures) == 1
     assert len(frozen_ids()) == len(before) + 1
-    assert len(case.state.requests) == 2
+    assert case.controller.transport.call_count == 2
 
 
 @pytest.mark.asyncio
@@ -2158,7 +2240,7 @@ async def test_registry_wait_rechecks_protocol_before_committing_activation(
         with pytest.raises(ToolProtocolBoundaryConflict):
             await asyncio.wait_for(running, 20)
     assert calls == {"source": 0, "seal": 0}
-    assert len(case.state.requests) == 1
+    assert case.controller.transport.call_count == 1
     assert _sealed_contract_rows(case) == before_rows
     with case.saver._context_reader.open_snapshot(case.session, case.thread) as snapshot:
         assert tuple(snapshot.connection.execute(
@@ -2168,17 +2250,17 @@ async def test_registry_wait_rechecks_protocol_before_committing_activation(
                          name="inspect_file")
     await case.dispatch("activation-race-next", messages=(call, result))
     assert calls == {"source": 1, "seal": 1}
-    assert len(case.state.requests) == 2
+    assert case.controller.transport.call_count == 2
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("target_format", ["responses", "chat_completions"])
 async def test_real_inflight_selection_change_keeps_sealed_retry_and_applies_next_call(
-    toolset_dispatch_case, monkeypatch, target_format,
+    native_toolset_dispatch_case, monkeypatch, target_format,
 ):
     """真实 HTTP in-flight 中改 desired；旧 retry 零新来源/零新 seal。"""
     del target_format
-    case = toolset_dispatch_case
+    case = native_toolset_dispatch_case
     case.state.release_response.clear()
     in_flight = asyncio.create_task(case.dispatch("toolset-inflight-first"))
     try:
@@ -2253,7 +2335,7 @@ async def test_real_control_switches_coalesce_and_each_call_can_open_an_epoch_in
     assert produced[0].tool_names == ("search_notes",)
     assert second.seal_binding.applied_toolset_revision == produced[0].revision
     assert second.seal_binding.tool_set_snapshot_id == produced[0].snapshot_id
-    assert _contract_wire_tool_names(case, case.state.requests[1]["body"]) == ("search_notes",)
+    assert _contract_wire_tool_names(case, case.request(second)) == ("search_notes",)
 
     third_selection = _select_contract_tools(case, "inspect_folder")
     third = await case.dispatch("toolset-coalesce-third")
@@ -2274,7 +2356,7 @@ async def test_real_control_switches_coalesce_and_each_call_can_open_an_epoch_in
 async def test_real_bridge_waits_for_paired_terminal_result_before_sources_or_seal(
     toolset_dispatch_case, monkeypatch, target_format, terminal_status,
 ):
-    """真实 request codec 先提交 call；缺 terminal result 时零来源准备/零 seal/零 HTTP。"""
+    """真实 request codec 先提交 call；缺 terminal result 时零来源准备/零 seal/零 Provider 请求。"""
     del target_format
     case = toolset_dispatch_case
     first = await case.dispatch("toolset-protocol-initial")
@@ -2314,7 +2396,7 @@ async def test_real_bridge_waits_for_paired_terminal_result_before_sources_or_se
         await case.dispatch("toolset-protocol-next", messages=(call,))
     assert error.value.code == "tool-protocol-boundary-conflict"
     assert calls == {"sources": 0, "rebuild": 0, "seal": 0}
-    assert len(case.state.requests) == 1
+    assert case.controller.transport.call_count == 1
     assert _sealed_contract_rows(case) == before
     assert _latest_contract_assembly(case).seal_binding == first.seal_binding
     # 只读 pending 容器，避免测试自身调用 prepare_sources 污染边界计数。
@@ -2334,14 +2416,14 @@ async def test_real_bridge_waits_for_paired_terminal_result_before_sources_or_se
     )
     changed = await case.dispatch("toolset-protocol-next", messages=(call, result))
     assert calls == {"sources": 1, "rebuild": 0, "seal": 1}
-    assert len(case.state.requests) == 2
+    assert case.controller.transport.call_count == 2
     assert changed.seal_binding.prefix.state.epoch.ordinal == 2
     assert changed.seal_binding.previous_assembly_id == first.assembly_id
-    assert _contract_wire_tool_names(case, case.state.requests[-1]["body"]) == ("inspect_folder",)
+    assert _contract_wire_tool_names(case, case.request(changed)) == ("inspect_folder",)
     assert _sealed_contract_rows(case)[0] == before[0]
     assert call_item_id in {entry.ref.ref_id for entry in changed.selection if entry.included}
     assert "item-toolset-terminal-result" in {entry.ref.ref_id for entry in changed.selection if entry.included}
-    body = case.state.requests[-1]["body"]
+    body = case.request(changed)
     if case.target_format == "responses":
         old_calls = [entry for entry in body["input"] if entry.get("type") == "function_call"]
         old_results = [entry for entry in body["input"] if entry.get("type") == "function_call_output"]
@@ -2378,7 +2460,7 @@ async def test_real_bridge_seal_transaction_failure_keeps_applied_and_retry_comm
         )
     with pytest.raises(sqlite3.IntegrityError, match="toolset-ref-seal-injected"):
         await case.dispatch("toolset-rollback-next")
-    assert len(case.state.requests) == 1
+    assert case.controller.transport.call_count == 1
     assert _sealed_contract_rows(case) == before
     assert _latest_contract_assembly(case).seal_binding == first.seal_binding
     assert case.manager.prepare_pending() == pending
@@ -2399,7 +2481,7 @@ async def test_real_bridge_seal_transaction_failure_keeps_applied_and_retry_comm
     assert changed.seal_binding.previous_assembly_id == first.assembly_id
     assert changed.seal_binding.applied_toolset_revision != first.seal_binding.applied_toolset_revision
     assert changed.seal_binding.root.content == "重试后才能 applied 的说明"
-    assert _contract_wire_tool_names(case, case.state.requests[-1]["body"]) == ("inspect_folder",)
+    assert _contract_wire_tool_names(case, case.request(changed)) == ("inspect_folder",)
     assert _sealed_contract_rows(case)[0] == before[0]
     assert _latest_contract_assembly(case).seal_binding == changed.seal_binding
     assert case.saver.list_context_assemblies(case.session, case.thread) == (first, changed)
@@ -2452,7 +2534,7 @@ async def test_complete_snapshot_supplier_policy_and_order_changes_bind_real_bri
     assert changed.seal_binding.previous_assembly_id == first.assembly_id
     assert changed.tool_set_refs[0].tool_policy_version == changed_set.policy_version
     assert tuple(changed.tool_set_refs[0].tool_policy["wire_tool_order"]) == changed_set.wire_tool_order
-    assert _contract_wire_tool_names(case, case.state.requests[-1]["body"]) == changed_set.wire_tool_order
+    assert _contract_wire_tool_names(case, case.request(changed)) == changed_set.wire_tool_order
     assert _sealed_contract_rows(case)[0] == before[0]
     assert _latest_contract_assembly(case).seal_binding == changed.seal_binding
 
@@ -2522,7 +2604,7 @@ async def test_real_prepare_rejects_noncompleted_unknown_canonical_tool_result(
     assert projected_knowledge["canonical_item_status"] == canonical_status
     assert projected_knowledge["tool_outcome"] == "unknown"
     assert projected_knowledge["execution_confirmed"] is False
-    (case.state.artifacts / f"noncompleted-unknown-{canonical_status}-{case.target_format}.json").write_text(
+    (case.artifacts / f"noncompleted-unknown-{canonical_status}-{case.target_format}.json").write_text(
         json.dumps({
             "canonical_status": committed_result.status,
             "tool_outcome": committed_result.payload["tool_outcome"],
@@ -2556,7 +2638,7 @@ async def test_real_prepare_rejects_noncompleted_unknown_canonical_tool_result(
         await case.dispatch("toolset-noncompleted-unknown-next")
     assert error.value.code == "tool-protocol-boundary-conflict"
     assert counts == {"sources": 0, "rebuild": 0, "seal": 0}
-    assert len(case.state.requests) == 1
+    assert case.controller.transport.call_count == 1
     assert case.saver.list_context_assemblies(case.session, case.thread) == (first,)
     assert _sealed_contract_rows(case) == before
     assert _latest_contract_assembly(case).seal_binding == first.seal_binding
@@ -2692,11 +2774,11 @@ async def test_real_prepare_observes_completed_unknown_canonical_terminal_notifi
     assert recoded_result.projection_identity is not None
     assert recoded_result.projection_identity.model_call_id == model_call_id
     assert counts == {"sources": 1, "rebuild": 0, "seal": 1}
-    assert len(case.state.requests) == 2
+    assert case.controller.transport.call_count == 2
     assert changed.seal_binding.selection_revision == desired.revision
     assert changed.seal_binding.prefix.state.epoch.ordinal == 2
     assert changed.seal_binding.previous_assembly_id == first.assembly_id
-    assert _contract_wire_tool_names(case, case.state.requests[-1]["body"]) == ("inspect_folder",)
+    assert _contract_wire_tool_names(case, case.request(changed)) == ("inspect_folder",)
     assert {committed_call.item_id, committed_result.item_id} <= {
         entry.ref.ref_id for entry in changed.selection if entry.included
     }
@@ -2706,7 +2788,7 @@ async def test_real_prepare_observes_completed_unknown_canonical_terminal_notifi
         assert case.saver._context_reader.read_canonical_items(
             snapshot, item_ids=(committed_result.item_id,),
         ) == [committed_result]
-    body = case.state.requests[-1]["body"]
+    body = case.request(changed)
     if case.target_format == "responses":
         wire_call, = (entry for entry in body["input"] if entry.get("type") == "function_call")
         wire_result, = (entry for entry in body["input"] if entry.get("type") == "function_call_output")
@@ -2730,7 +2812,7 @@ async def test_real_prepare_observes_completed_unknown_canonical_terminal_notifi
     assert projected_knowledge["tool_outcome"] == "unknown"
     assert projected_knowledge["execution_confirmed"] is False
     # canonical 与真实 codec/Bridge 传输知识分别落证，完整终态仍可闭合。
-    (case.state.artifacts / f"completed-unknown-terminal-{case.target_format}.json").write_text(
+    (case.artifacts / f"completed-unknown-terminal-{case.target_format}.json").write_text(
         json.dumps({
             "canonical_status": committed_result.status,
             "tool_outcome": committed_result.payload["tool_outcome"],

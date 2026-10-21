@@ -49,14 +49,20 @@ async def inprocess_model_replay(
     request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch,
 ) -> AsyncIterator[tuple[ModelStreamReplay, ModelStreamTransportController]]:
     """普通进程内业务共用精确身份回放；HTTP/SDK专项仍由其网络装具负责。"""
+    import litellm
+    from litellm.caching.llm_caching_handler import LLMClientCache
+
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
     with model_stream_replay(
         context.output_root, runtime_root=context.runtime_root_for_node(request.node.nodeid),
         business_assertion=request.node.nodeid,
-    ) as replay:
+    ) as replay, monkeypatch.context() as replay_patch:
         for key, value in replay.environment.items():
-            monkeypatch.setenv(key, value)
-        monkeypatch.setattr(identifier, "_identifier_factory", identifier._identifier_factory)
+            replay_patch.setenv(key, value)
+        # SDK 缓存按 loop ID 分区，pytest 会复用该 ID；每个回放 owner 独占缓存，
+        # 防止下一场景重用包装了已关闭 HTTP client 的 SDK。退出后恢复原缓存。
+        replay_patch.setattr(litellm, "in_memory_llm_clients_cache", LLMClientCache())
+        replay_patch.setattr(identifier, "_identifier_factory", identifier._identifier_factory)
         identifier.bind_identifier_factory(ControlledIdentifiers(
             json.loads(replay.environment["BOXTEAM_E2E_TEST_CONTROL"]),
         ))

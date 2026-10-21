@@ -4,6 +4,7 @@
 
 ```text
 harness/
+├── test_inprocess_model_replay.py          同一事件循环中回放 owner 重建与真实 SDK client 隔离
 ├── test_process_ownership.py               测试进程归属、端口替换及启动失败回收
 ├── test_outbox_fixture_lifetime.py          静态HTTP/Chromium装具的准备及清理失败回收
 ├── test_boundary_display_fixture_lifetime.py 历史边界展示装具的准备与清理失败回收

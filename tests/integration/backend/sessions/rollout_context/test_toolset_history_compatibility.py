@@ -13,7 +13,6 @@ from app.services.mapping.itemized import prefix_frames
 from tests.integration.backend.sessions.itemized_dispatch_helpers import (
     dispatch_saver,
     native_dispatch_workspace,
-    native_http_server,
 )
 from tests.integration.backend.sessions.test_itemized_dispatch_contract import (
     _sealed_contract_rows,
@@ -24,7 +23,7 @@ from tests.integration.backend.sessions.test_itemized_dispatch_contract import (
 
 __all__ = [
     "dispatch_bridge", "dispatch_saver", "native_dispatch_workspace",
-    "native_http_server", "toolset_dispatch_case",
+    "toolset_dispatch_case",
 ]
 
 
@@ -78,7 +77,7 @@ async def test_rebase_rejects_unprojectable_old_tool_history_without_rewriting_f
         await case.dispatch("history-compat-rebase")
 
     assert set(rejected_groups) == unsupported_ids
-    assert len(case.state.requests) == len(case.dispatches) == 1
+    assert case.controller.transport.call_count == len(case.dispatches) == 1
     assert case.saver.list_context_assemblies(case.session, case.thread) == (first,)
     assert _sealed_contract_rows(case) == sealed_rows
     assert case.saver._storage.storage.read_items(case.session, case.thread) == items
