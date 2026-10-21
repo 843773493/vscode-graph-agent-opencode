@@ -1,4 +1,4 @@
-"""真实 Web/Gateway/Backend 元数据初始化；Provider 使用本地 HTTP 协议桩。"""
+"""真实 Web/Gateway/Backend 元数据初始化；共享回放拒绝非预期模型调用。"""
 
 from __future__ import annotations
 
@@ -9,8 +9,7 @@ import os
 import shutil
 import socket
 import subprocess
-from collections.abc import AsyncIterator, Iterator
-from contextlib import contextmanager
+from collections.abc import AsyncIterator
 from pathlib import Path
 
 import commentjson
@@ -18,14 +17,15 @@ import httpx
 import pytest
 
 from tests.harness.python.run_context import TestRunContext
-from tests.integration.stubs.http_stubs import HTTPStubState, openai_chat_stub
+from tests.support.model_stream_config import ModelStreamReplay, model_stream_replay
+from tests.support.paths import chromium_temporary_environment
+from tests.support.ports import TestFilePortBlock, integration_port_block_for_file
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
     acquire_gateway_guest,
     close_gateway_process,
     start_gateway_process,
 )
-from tests.support.ports import TestFilePortBlock, integration_port_block_for_file
 from tests.support.workspaces import (
     install_test_workspace_config,
     prepare_default_test_workspace,
@@ -34,13 +34,9 @@ from tests.support.workspaces import (
 
 def _select_free_port(
     port_block: TestFilePortBlock,
-    *,
-    excluded: frozenset[int] = frozenset(),
 ) -> tuple[int, list[tuple[int, bool]]]:
     probes: list[tuple[int, bool]] = []
     for port in range(port_block.start, port_block.end + 1):
-        if port in excluded:
-            continue
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as candidate:
             try:
                 candidate.bind(("127.0.0.1", port))
@@ -57,28 +53,6 @@ def _select_free_port(
     )
 
 
-@contextmanager
-def _chromium_temporary_environment(
-    context: TestRunContext,
-    node_id: str,
-) -> Iterator[dict[str, str]]:
-    temporary = context.runtime_root_for_node(node_id) / "chromium-tmp"
-    temporary.mkdir(parents=True, exist_ok=True)
-    descriptor: int | None = None
-    if Path("/proc/self/fd").is_dir():
-        descriptor = os.open(temporary, os.O_RDONLY | os.O_DIRECTORY)
-        short_path = f"/proc/{os.getpid()}/fd/{descriptor}"
-    else:
-        short_path = str(temporary)
-    try:
-        if Path(short_path).resolve() != temporary.resolve():
-            raise RuntimeError(f"Chromium 临时目录别名不匹配: {short_path}")
-        yield {name: short_path for name in ("TMPDIR", "TMP", "TEMP")}
-    finally:
-        if descriptor is not None:
-            os.close(descriptor)
-
-
 @pytest.fixture(autouse=True)
 def metadata_web_assets(monkeypatch: pytest.MonkeyPatch) -> None:
     assets = Path.cwd() / "src/clients/web/dist"
@@ -87,14 +61,11 @@ def metadata_web_assets(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.fixture
-async def metadata_case(request: pytest.FixtureRequest) -> AsyncIterator[tuple[httpx.AsyncClient, TestRunContext, Path, HTTPStubState]]:
+async def metadata_case(request: pytest.FixtureRequest) -> AsyncIterator[tuple[httpx.AsyncClient, TestRunContext, Path, ModelStreamReplay]]:
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
     ports = integration_port_block_for_file(Path(request.node.path))
     gateway_port, gateway_probes = _select_free_port(ports)
-    provider_port, provider_probes = _select_free_port(
-        ports,
-        excluded=frozenset({gateway_port}),
-    )
+    provider_port = ports.port(10)
     (context.artifacts_dir / "port-allocation.json").write_text(
         json.dumps(
             {
@@ -108,13 +79,7 @@ async def metadata_case(request: pytest.FixtureRequest) -> AsyncIterator[tuple[h
                         for port, available in gateway_probes
                     ],
                 },
-                "provider_stub": {
-                    "port": provider_port,
-                    "bind_probes": [
-                        {"port": port, "available": available}
-                        for port, available in provider_probes
-                    ],
-                },
+                "provider": {"port": provider_port, "transport": "model_stream_replay"},
             },
             ensure_ascii=False,
             indent=2,
@@ -143,10 +108,14 @@ async def metadata_case(request: pytest.FixtureRequest) -> AsyncIterator[tuple[h
     for agent in config["agents"].values():
         agent["model"]["fallback_providers"] = []
     config_path.write_text(json.dumps(config, ensure_ascii=False, indent=2) + "\n")
-    with openai_chat_stub(provider_port) as provider:
+    with model_stream_replay(
+        context.output_root, runtime_root=context.runtime_root_for_node(request.node.nodeid),
+        business_assertion="metadata-and-unregistered-native-directory-without-model-call",
+    ) as provider:
         gateway = await asyncio.to_thread(
             start_gateway_process, workspace_root=workspace, default_backend_url=None, port=gateway_port,
             boxteam_home=context.boxteam_home_for_node(request.node.nodeid), artifacts_dir=context.artifacts_dir / "gateway",
+            extra_env=provider.environment,
         )
         try:
             async with httpx.AsyncClient(base_url=f"http://127.0.0.1:{gateway_port}", headers=LOCAL_TOKEN_HEADERS, timeout=90) as client:
@@ -167,7 +136,7 @@ async def metadata_data(client: httpx.AsyncClient, path: str):
 @pytest.mark.asyncio
 async def test_workspace_metadata_without_root_initializes_real_web(
     request: pytest.FixtureRequest,
-    metadata_case: tuple[httpx.AsyncClient, TestRunContext, Path, HTTPStubState],
+    metadata_case: tuple[httpx.AsyncClient, TestRunContext, Path, ModelStreamReplay],
 ) -> None:
     client, context, workspace, provider = metadata_case
     await metadata_data(client, "/api/gateway/health")
@@ -207,7 +176,8 @@ async def test_workspace_metadata_without_root_initializes_real_web(
         "BOXTEAM_BROWSER_SCREENSHOT_PATH": str(context.artifacts_dir / "workspace-metadata-browser.png"),
         "PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH": chromium,
     }
-    with _chromium_temporary_environment(context, request.node.nodeid) as temporary_environment:
+    temporary = context.runtime_root_for_node(request.node.nodeid) / "chromium-tmp"
+    with chromium_temporary_environment(temporary) as temporary_environment:
         environment.update(temporary_environment)
         process = await asyncio.to_thread(
             subprocess.run, ["bun", "tests/integration/clients/web/workspace_metadata_bootstrap.mjs"],
@@ -226,5 +196,10 @@ async def test_workspace_metadata_without_root_initializes_real_web(
     after = await metadata_data(client, "/api/gateway/workspaces")
     assert [(item["workspace_id"], item["backend_workspace_id"]) for item in after["items"]] == [
         (item["workspace_id"], item["backend_workspace_id"]) for item in workspaces["items"]]
-    assert provider.requests == [], "元数据初始化不应发送模型请求"
+    # 在 transport 匹配前核真实 ModelCall 分配，失败的意外调用也不能伪装成零请求。
+    with provider.control._condition:
+        calls = {namespace: count for namespace, count in provider.control._counters.items()
+                 if namespace.startswith("model_call/")}
+    (context.artifacts_dir / "provider-call-counts.json").write_text(json.dumps(calls) + "\n")
+    assert calls == {}, "元数据初始化与原生目录编辑不应发送模型请求"
 

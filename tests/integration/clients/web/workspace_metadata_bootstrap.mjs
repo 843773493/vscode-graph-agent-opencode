@@ -11,13 +11,21 @@ function check(value, message) {
   if (!value) throw new Error(message);
 }
 const fixture = JSON.parse(required("BOXTEAM_BROWSER_FIXTURE"));
-const result = { classification: "Integration", provider_boundary: "本地 OpenAI HTTP 协议桩，无模型调用",
-  route_stubs: [], page_errors: [], metadata: null, workspace_navigation_visible: false };
+const result = { classification: "Integration", provider_boundary: "model_stream 精确回放，无模型调用",
+  route_stubs: [], page_errors: [], network: [], metadata: null, workspace_navigation_visible: false };
 const browser = await chromium.launch({
   executablePath: required("PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH"), headless: true,
 });
 const page = await browser.newPage({ viewport: { width: 1600, height: 1000 } });
 page.on("pageerror", (error) => result.page_errors.push(error.message));
+page.on("requestfailed", (request) => result.network.push({
+  url: request.url(), method: request.method(), failure: request.failure(), timing: request.timing(),
+}));
+page.on("response", (response) => {
+  if (new URL(response.url()).pathname.startsWith("/api/")) result.network.push({
+    url: response.url(), status: response.status(), timing: response.request().timing(),
+  });
+});
 try {
   const metadataResponse = page.waitForResponse((response) => response.request().method() === "GET"
     && new URL(response.url()).pathname === "/api/v1/workspace", { timeout: 30_000 });

@@ -1,6 +1,7 @@
 import { writeFile } from "node:fs/promises";
 import process from "node:process";
 import { chromium } from "playwright";
+import { testControl } from "../../../support/e2e_control/browser_client.mjs";
 
 function requiredEnvironment(name) {
   const value = process.env[name];
@@ -89,14 +90,21 @@ const context = await browser.newContext({
 const page = await context.newPage();
 const pageErrors = [];
 const streamResponses = [];
+const traceStreams = [];
 page.on("pageerror", (error) => pageErrors.push(String(error)));
 page.on("response", (response) => {
   if (
     response.status() === 200
-    && (response.url().includes("/traces/stream")
+    && (response.url().includes("/workspace/observations/stream")
       || response.url().includes("/message-stream?"))
   ) {
     streamResponses.push(response.url());
+    if (response.url().includes("/workspace/observations/stream")) {
+      const subscriptions = response.request().postDataJSON().subscriptions;
+      if (response.headers()["content-type"]?.includes("text/event-stream")) {
+        traceStreams.push(...subscriptions.filter((entry) => entry.kind === "session_trace"));
+      }
+    }
   }
 });
 let result;
@@ -132,6 +140,12 @@ try {
   if (updated?.data?.current_provider_id !== "primary") {
     throw new Error("浏览器工具循环会话没有切换到 primary provider");
   }
+  const mainThread = await api(page, `/api/v1/sessions/${sessionId}/main-thread`, { headers: workspaceHeaders });
+  const threadId = mainThread.data.thread_id;
+  const modelCallIds = await testControl({
+    action: "plan_model", session_id: sessionId, thread_id: threadId,
+    interactions: JSON.parse(requiredEnvironment("BOXTEAM_BROWSER_MODEL_INTERACTIONS")),
+  });
 
   await page.reload({ waitUntil: "domcontentloaded" });
   const sessionButton = page.locator(`button[data-session-id="${sessionId}"]`);
@@ -139,7 +153,7 @@ try {
   await sessionButton.click();
   await page.locator("#input").waitFor({ state: "visible", timeout: 30_000 });
   await waitUntil(
-    async () => streamResponses.some((url) => url.includes("/traces/stream")),
+    async () => traceStreams.some((entry) => entry.session_id === sessionId),
     "会话 trace SSE",
   );
 
@@ -163,6 +177,12 @@ try {
   if (sendResponse.status() !== 200) {
     throw new Error(`Composer 发送失败: HTTP ${sendResponse.status()}`);
   }
+  const accepted = (await sendResponse.json()).data;
+  const turnId = accepted?.turn_id;
+  if (typeof turnId !== "string" || !turnId) {
+    throw new Error("Composer acceptance 缺少 turn_id");
+  }
+  const turn = page.locator(`.chat-turn[data-turn-id="${turnId}"]`);
 
   await waitUntil(
     async () => streamResponses.some((url) => url.includes("/message-stream?")),
@@ -175,12 +195,10 @@ try {
     ),
     "浏览器最终回复",
   );
-  const thinkingToggle = page.locator(".chat-thinking-toggle").filter({
-    hasText: "已运行 read_file",
-  });
+  const thinkingToggle = turn.getByRole("button", { name: /^展开 Turn 中间消息：/ });
   await thinkingToggle.waitFor({ state: "visible", timeout: 30_000 });
   await thinkingToggle.click();
-  const completedTool = page.locator(".chat-tool-row").filter({
+  const completedTool = turn.locator(".chat-tool-row.is-complete").filter({
     hasText: "已运行 read_file",
   });
   await completedTool.waitFor({ state: "visible", timeout: 30_000 });
@@ -204,9 +222,12 @@ try {
   result = {
     workspaceId,
     sessionId,
+    threadId,
+    turnId,
+    modelCallIds,
     composerSendRequest: true,
     sentMessage: sentPayload.message.content,
-    traceSseConnected: streamResponses.some((url) => url.includes("/traces/stream")),
+    traceSseConnected: traceStreams.some((entry) => entry.session_id === sessionId),
     messageSseConnected: streamResponses.some((url) => url.includes("/message-stream?")),
     completedToolVisible: await completedTool.isVisible(),
     completedToolText,

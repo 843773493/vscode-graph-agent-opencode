@@ -502,6 +502,27 @@ fork 的范围、历史 local ID 保留、当前存储归属与历史执行 scop
 - **WHEN** target 读取带原 active/interrupted 状态的 imported history，随后请求 resume 或提交新输入
 - **THEN** 历史状态如实保留，resume 返回 turn_not_resumable；新输入正常创建新目标执行，不恢复来源 pending tool、Job 或准入
 
+### Requirement: 集成验收复用统一模型协议且保留真实传输证明
+
+普通业务集成和 Web 测试 MUST 复用现有 `model_stream` 的响应资产、协议编码及请求匹配，迁移完整调用链后删除各自重复的 SSE 实现。专门验证真实 HTTP、SDK 或同步/异步调用的测试 MAY 保留本地 HTTP 服务，但 MUST 共享相同资产和编码，MUST NOT 因异步 transport 回放已通过而删除同步或真实网络验收。
+
+查询、历史投影和展示的局部测试 MAY 手工准备数据，但 MUST 限定其证明范围。执行、fork、恢复的完整验收 MUST 经相应产品入口产生关键业务状态；故障注入可以中断真实 durable 边界，MUST NOT 直接写入本应由产品生成的准入、封存、复制发布或恢复结果。验收记录 MUST 明确产品入口、模型替身与真实 HTTP/SDK 边界。
+
+#### Scenario: 普通业务场景不维护独立 SSE 模型
+
+- **WHEN** 普通业务集成或 Web 测试需要确定性模型响应
+- **THEN** 使用现有 `model_stream` 资产、协议编码与请求匹配；同一响应不在测试文件中再实现一套 SSE 拼装
+
+#### Scenario: 专用网络与同步调用验证保持独立证明
+
+- **WHEN** 测试针对真实 HTTP、SDK 或同步/异步调用边界
+- **THEN** 可以保留本地 HTTP 服务并复用共享响应定义，分别记录所经过的传输和调用方式；异步回放通过不能代替同步或网络通过
+
+#### Scenario: 完整业务验收由产品创建关键状态
+
+- **WHEN** 执行、fork 或恢复的验收声明完整链路通过
+- **THEN** 准入、封存、复制发布与恢复等关键状态由相应产品入口生成；直接准备历史的测试仅证明其声明的局部查询或投影行为
+
 ### Requirement: Runtime notice 的生成结果 payload 闭合且完整参与内容哈希
 
 持久化的 `generated_session_result` MUST 作为 `semantic_kind=runtime_notice`、`payload_kind=structured_content` 的 canonical item 写入既有 v2 envelope。其闭合 `RuntimeNoticePayload` 只包含既有私有模型输入 `prompt` 与 `display_part={kind: generated_session_result, text, provenance}`；`prompt` 可以包含完成 report-back 所需的 branch result，`display_part` 只包含 `kind`、安全固定文案 `text` 和 typed `provenance`，后者只允许可得的 `source_session_id`、`source_thread_id`、`delegation_id`、`source_execution_id`、`source_item_id`。branch 正文 MUST NOT 出现在 `display_part.text`、`provenance`、metadata、extensions 或 history/Web 展示字段。payload 不得扩展任意 key，不得把 display 内容复制到顶层、`metadata` 或 `extensions`，也不得保存 run/generator/control ID。

@@ -1127,6 +1127,12 @@ communication retention不得以短TTL破坏幂等。pending/running记录和被
 
 E2E 必须通过用户可见 DOM 语义、Gateway/workspace 网络回执、thread-qualified history/SSE cursor 和只读 runtime/trace 证据交叉断言，不得仅查数据库或仅看 DOM。除基础两轮的固定golden外，每个新增可见Turn也必须从其权威history projection取得预期item identity/order、`item_count`和`elapsed_ms`，逐项与live DOM及刷新后的DOM对账；同正文不同identity不得去重，同identity不得重影，无可展开item时count必须为0且标题只显示时长/计数而非首条思考。pytest模块可以调用共享Python/Node helper，但场景fixture、collection和PASS/FAIL gate必须由`test_basic_chat_tool_loop.py`拥有，不能把唯一断言藏在未被pytest收集的脚本里。正式workspace根和产物分别使用`out/tests/e2e/clients/web/test_basic_chat_tool_loop/workspace/`与同级`artifacts/`；多workspace分别落在`workspace/primary/`、`workspace/remote/`等确定性子目录并使用隔离端口。两个Gateway的`BOXTEAM_HOME`分别固定到同名输出根的`runtime/gateways/primary/boxteam-home/`和`runtime/gateways/remote/boxteam-home/`，其identity、测试peer credential、registry和日志不得读取或写入用户正常`${BOXTEAM_HOME}`/`~/.boxteams`。`E2ETestControlHarness`的socket/日志也只能位于同名`runtime/test-control/`与`artifacts/`，fixture teardown必须关闭全部子进程和监听端口；禁止注册项目根目录。所有模型调用使用该E2E拥有的确定性ModelStream replay/recording fixture，按SessionThread/model-call identity校验请求并为多Session与child路径提供独立帧；不得访问真实Provider或让多个并发thread误消费同一个顺序fixture。全程收集console/page error、failed request、resolved target、item/time/order、residency transition和operation receipt，任一未预期错误使测试失败。
 
+#### 模型回放复用与验收数据边界
+
+普通业务集成和 Web 测试统一使用现有 `model_stream` 的响应资产、协议编码及按 SessionThread/model-call identity 匹配的回放入口，迁齐调用方后删除各自手工拼装 SSE 的重复实现。该收口只统一模型响应的定义，不统一所有测试的传输方式。专门验证真实 HTTP、SDK、同步或异步调用的测试仍可运行本地 HTTP 服务，并复用相同资产和编码；异步 transport 回放的通过不能代替同步调用或真实网络边界的通过。
+
+查询、投影和展示等局部测试可以直接准备所需历史，并明确其证明范围。执行、fork、恢复的完整验收必须从对应产品入口生成关键 acceptance、sealed request、copy/publication 和 recovery 状态；故障注入可在真实 durable 边界中断，但不能由测试预写本应由产品产生的结果。每份收据分别记录入口、替身边界和真实网络/SDK 覆盖，避免把 helper 或手工数据消费通过外推为完整业务通过。实施与验收由 tasks 7.6 按纵向切片收口。
+
 ### 9.2 集合型 mutation 的统一乐观合同、文件树接入与目录列表读放大
 
 §9.0 已冻结会话目录树的乐观投影、持久入队和终态对账。本节补集合操作的横切收敛判据、Gateway 工作区导航的同族协议、文件树的单目录替换与精确失效，以及目录列表读放大约束。文件树是否新增 202 由 10.4b 的量化前置决定，不因共享判据而预设新增异步机制。
