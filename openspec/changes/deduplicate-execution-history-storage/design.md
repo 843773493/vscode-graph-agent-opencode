@@ -49,3 +49,7 @@
 性能TODO（结构正确性门不放宽）：同负载schema19→20的`summary_restart_continue`阶段，非messages正文364696→51297字节，字典序列化23次/192606字节→12次/11348字节；该进程阶段解码128次/263659字节→181次/444959字节。整体工作负载218.21→220.26秒，单次样本不足以认定耗时改善。沿用版本的冻结解码/比较仍有成本；先保留碰撞检测，待其余结构去重完成后再优化，不能改为无条件信任对象地址或忽略候选。原始测量、前后对照、SQLite一致备份及wire冻结在`out/tests/temp/openspec_takeover/artifacts/history-dedup-state-frozen-001/`与对应baseline目录，计数只比较同一进程阶段，跨重启不累加。
 
 验收主场景通过真实Gateway/目标workspace/产品API生成关键状态；普通业务和Web模型统一model_stream，真实HTTP/SDK/同步transport专项保留并共用协议资产。手工数据仅用于碰撞、损坏和迁移边界局部验证，不能代替产品生成的执行、fork和重启状态。
+
+消息增量前置片保留pending row的两种生命周期状态：未发布时官方serde完整暂存，canonical正文发布后在原事务替换为有序typed引用及框架封装差异；不存在同时维护两份已发布正文的reader/writer。引用以item/group的不可变身份定位，冷读验证owner、namespace、group hash及原写入fingerprint，不按logical message ID猜最新版本。fork从冻结可保留checkpoint集合展开这些引用，再复用同一typed依赖闭包；新增backing不能扩大checkpoint集合。完整产品证据及逐owner指标见tasks。
+
+TODO（带测量的长历史生成长尾）：`history-dedup-state-fixture-timed-002`在600秒外部保护下exit124，生成尚未完成，最后到job-0071、326次normal_turn。inclusive阶段时间normal_turn593.06秒、provider.prepare_total416.18秒、prepare_context337.01秒、saver_put104.58秒，不能相加或当独立耗时。原件`fixture-stage-timing-74ad28bdb22248919398b5fb7930d6ae.jsonl`及`history-dedup-state-fixture-timeout-001.json`保留。先完成结构性去重和恢复合同；该装具未通过，后续人工优化时继续原规模，不缩减数据刷绿。

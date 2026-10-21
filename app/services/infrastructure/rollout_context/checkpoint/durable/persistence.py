@@ -24,6 +24,13 @@ from app.domain.itemized.mutation_intents import (
 from app.services.infrastructure.rollout_context.checkpoint.boundary.tool_protocol_boundary import (
     validate_tool_protocol_closure,
 )
+from app.services.infrastructure.rollout_context.checkpoint.durable.message_writes import (
+    PendingMessageReferences,
+    publish_message_write_references,
+)
+from app.services.infrastructure.rollout_context.checkpoint.durable.writes import (
+    _pending_write_row,
+)
 from app.services.infrastructure.rollout_context.checkpoint.message_commit.compaction import (
     new_compaction_event,
     prepare_compaction,
@@ -323,6 +330,13 @@ class RolloutCheckpointPersistenceMixin:
                         connection, sequence, message_value, timestamp,
                         canonical_items=tuple(item for item, _offset, _length in canonical_locations),
                     )
+                publish_message_write_references(
+                    PendingMessageReferences(
+                        self._storage, connection, session_id=owner.session_id,
+                        thread_id=owner.thread_id, checkpoint_ns=checkpoint_ns,
+                    ),
+                    validate_row=_pending_write_row,
+                )
                 # Turn-less 输出与 typed display notice 在同一事务登记；fork 的
                 # target-local item 也从已校验的 canonical group 恢复 membership。
                 self._storage._append_context_view_items(

@@ -172,11 +172,16 @@ def prepare_target_snapshot(
         if prefix:
             # 原 checkpoint 仍完整时由唯一 owner 复制非消息状态；新 head 的
             # messages 只引用目标 selection。随后只保留依赖齐全的历史 checkpoint。
-            fork_store.materialize_fork_checkpoint(
+            target_checkpoint_id = fork_store.materialize_fork_checkpoint(
                 materialization_id=materialization_id, target_session_id=target_session_id,
                 target_thread_id=target_thread_id, checkpoint_ns=checkpoint_ns,
                 view_id=requested_view, staging_connection=connection,
             )
+            if target_checkpoint_id is not None:
+                connection.execute(
+                    "INSERT INTO fork_selected_checkpoints(checkpoint_id) VALUES (?)",
+                    (target_checkpoint_id,),
+                )
             prune_view_prefix(connection, stage=stage)
         connection.commit()
     _fsync_tree(stage)

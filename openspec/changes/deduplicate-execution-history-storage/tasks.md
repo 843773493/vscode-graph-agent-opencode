@@ -14,7 +14,7 @@
 
 ## 3. P1 官方消息增量与基准恢复
 
-- [ ] 3.1 基于1.2测量确认现有messages正文复用之外的增量收益，核实产品create_agent最终channel声明及DeepAgents reducer差异；冻结官方snapshot计数/频率与serializer合同。
+- [x] 3.1 基于1.2测量确认现有messages正文复用之外的增量收益，核实产品create_agent最终channel声明及DeepAgents reducer差异；冻结官方snapshot计数/频率与serializer合同。
 - [ ] 3.2 迁齐图状态、Saver写入、canonical引用delta、基准snapshot和metadata计数；保留新增/替换/删除/Overwrite/摘要语义，不另存完整消息历史。
 - [ ] 3.3 完成同步/异步get_delta_channel_history与有序重放，沿父链按task_path/task_id/idx恢复，排除目标pending writes，明确区分合法空根和损坏断链。
 - [ ] 3.4 迁齐fork/rewind/compaction及进程重启；目标本地带齐基准和全部必要中间writes，验证深历史、A→B→C、源删除后恢复与工具配对，移除旧路径。
@@ -50,3 +50,7 @@
 2026-10-21 非messages版本片：schema20的writer/read/fork与19→20、18→19→20迁齐，旧逐checkpoint正文列移除。`history-dedup-state-product-final-002`同一完整产品负载通过（1例/221.54秒），此前同负载001也通过（220.26秒）；最终原件另冻于`history-dedup-state-frozen-002/`。版本/碰撞/同步异步声明/原地变异/冷复用/跨namespace13例通过，Saver与该组84例通过，迁移/assembly原132例中131例通过后，剩余旧版本号断言改为实际20并单独通过；正式matrix下fork/protected20例通过。全部改动模块Ruff与strict OpenSpec通过，独审核对typed owner和迁移闭包；版本声明检查前移至公开put，幂等重入也不能绕过。
 
 该片扩展验证的限制如实保留：`test_real_rollout_fixture`完整装具首次生成180秒超时；随后一次导入被另一组正在修改的Trace模块缩进错误打断，恢复后的带阶段计时运行另保留，不把未完成计为通过。`test_context_view_filters_control_records_and_keeps_business_messages`原有internal steering选择断言失败，独审确认其messages选择路径未由本片改变；不为本片通过放宽断言。两次matrix启动因包装形式触发重复内存上限，在测试前exit97；改用正式`bun run test:matrix`后，初次全目录收集被同一临时Trace语法错误阻断，再按python_files精确选定后20例通过。全部原始退出码与阶段均保留；不以这些失败替代本片产品正确性或性能结论。性能长尾和准确指标见design中的TODO。
+
+2026-10-21 消息增量前置片：3.1已核对实际产品graph、两种官方reducer差异、默认1000次更新/5000 superstep快照上界及官方typed serializer，指纹在`history-dedup-message-contract-001.json`。当前pending消息在canonical发布的原事务中转换为精确owner/ns/item/group/hash引用；未发布或不同正文仍保留同一row的暂存值，冷读取保留框架对象metadata及控制batch，幂等重试仍比较原写入fingerprint。fork冻结原有checkpoint集合后展开pending正文及原typed关联闭包，目标synthetic checkpoint显式保留。未改变SQL结构或schema20；未切换图状态，3.2—3.5仍待完成。
+
+最终typed协议103条Saver/state测试通过（43.00秒），独立正文/身份patch损坏及全部pending边界18例通过；正式fork/protected矩阵20例通过；完整Gateway产品负载通过（222.79秒），原件冻结于`history-dedup-message-frozen-001/`，Ruff通过。优化前同负载源A35条messages pending正文60404字节，转换后35661字节；另两个owner分别28490→15126、51196→24454，行数均未改变。按summary_restart_continue相同阶段，全部pending正文78228→53485字节；不是assembly/view收益，也不能据单次耗时宣称性能改善。早期产品失败由新冻结集合遗漏目标synthetic checkpoint导致，精确补入后连续产品复验通过，未放宽业务断言。

@@ -16,6 +16,17 @@ from app.services.infrastructure.rollout_context.assembly.detail_identity import
     detail_ref_from_key,
     detail_ref_key,
 )
+from app.services.infrastructure.rollout_context.checkpoint.codec.pending_messages import (
+    MESSAGE_REFERENCE_SERIALIZER,
+    restore_message_write,
+)
+from app.services.infrastructure.rollout_context.checkpoint.durable.message_writes import (
+    PendingMessageReferences,
+    decode_message_reference,
+)
+from app.services.infrastructure.rollout_context.checkpoint.durable.writes import (
+    _pending_write_row,
+)
 from app.services.infrastructure.rollout_context.runtime.detail_manifest import (
     detail_relative_path,
 )
@@ -23,6 +34,7 @@ from app.services.infrastructure.rollout_context.runtime.detail_payload import (
     parse_detail_payload,
 )
 from app.services.infrastructure.rollout_context.storage.catalog.history_scope import (
+    current_scope,
     require_historical_scope,
 )
 
@@ -153,6 +165,7 @@ def select_view_prefix(
         )
         if assemblies.rowcount < 1:
             raise ValueError("source-mismatch: 空 internal checkpoint 缺少真实完成的封存 assembly")
+    checkpoints_frozen = False
     with (stage / "rollout.jsonl").open("rb") as stream:
         while True:
             items = connection.execute(
@@ -211,7 +224,17 @@ def select_view_prefix(
                 "WHERE visited=0 LIMIT ?", (_BATCH_SIZE,),
             ).fetchall()
             if not items and not assemblies and not details and not activations:
-                break
+                if checkpoints_frozen:
+                    break
+                # 先冻结原有前缀允许保留的 checkpoint，再展开 pending 正文依赖。
+                # backing item 不能反过来扩大 checkpoint 集合而递归带入锚点之后的历史。
+                for table in ("turns", "executions", "checkpoints"):
+                    connection.execute(load_sql(__package__, f"sql/fork_selected_{table}.sql"))
+                connection.execute("DROP TABLE fork_selected_turns")
+                connection.execute("DROP TABLE fork_selected_executions")
+                _include_pending_message_references(storage, connection, stage=stage)
+                checkpoints_frozen = True
+                continue
             for assembly_id, expand_body in assemblies:
                 row = connection.execute(
                     "SELECT snapshot_json,detail_ref FROM context_assemblies WHERE assembly_id=?", (assembly_id,),
@@ -342,6 +365,33 @@ def select_view_prefix(
     )
 
 
+def _include_pending_message_references(storage: RolloutStorage, connection: sqlite3.Connection, *, stage: Path) -> None:
+    session_id, thread_id = current_scope(connection)
+    for row in connection.execute(
+        "SELECT pending.task_id,pending.task_path,pending.write_index,pending.channel,pending.serializer_name,"
+        "pending.value_blob,pending.value_length,pending.value_hash,pending.status,pending.created_at,checkpoint.checkpoint_ns "
+        "FROM pending_writes pending JOIN fork_selected_checkpoints selected USING(checkpoint_id) "
+        "JOIN checkpoints checkpoint USING(checkpoint_id) WHERE substr(pending.serializer_name,1,?)=?",
+        (len(MESSAGE_REFERENCE_SERIALIZER), MESSAGE_REFERENCE_SERIALIZER),
+    ).fetchall():
+        _pending_write_row(tuple(row[:10]))
+        references = PendingMessageReferences(
+            storage, connection, session_id=session_id, thread_id=thread_id,
+            checkpoint_ns=row[10], jsonl_path=stage / "rollout.jsonl",
+        )
+
+        def include(reference, *, references=references):
+            message = references.read(reference)
+            connection.executemany(
+                "INSERT OR IGNORE INTO fork_selected_items(item_id) VALUES (?)",
+                ((item_id,) for item_id, _digest in reference["group"]),
+            )
+            return message
+
+        descriptor = decode_message_reference(storage, row[4], row[5])
+        restore_message_write(descriptor["write"], include)
+
+
 def prune_view_prefix(
     connection: sqlite3.Connection, *, stage: Path,
 ) -> None:
@@ -380,9 +430,6 @@ def _prune_prefix_facts(connection: sqlite3.Connection) -> None:
     )
     connection.execute(
         load_sql(__package__, "sql/fork_selected_plans.sql"),
-    )
-    connection.execute(
-        load_sql(__package__, "sql/fork_selected_checkpoints.sql"),
     )
     connection.execute(
         "DELETE FROM messages WHERE NOT EXISTS(SELECT 1 FROM item_catalog item "

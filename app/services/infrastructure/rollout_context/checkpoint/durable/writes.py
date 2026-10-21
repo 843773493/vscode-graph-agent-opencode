@@ -14,6 +14,13 @@ from typing import TYPE_CHECKING
 from langgraph.checkpoint.base import PendingWrite
 
 from app.core.sqlite_state import utc_now_text as _now
+from app.services.infrastructure.rollout_context.checkpoint.codec.pending_messages import (
+    MESSAGE_REFERENCE_SERIALIZER,
+)
+from app.services.infrastructure.rollout_context.checkpoint.durable.message_writes import (
+    PendingMessageReferences,
+    original_write_fingerprint,
+)
 from app.services.infrastructure.rollout_context.storage.transaction import (
     strict_non_negative_int,
     strict_text,
@@ -138,9 +145,15 @@ class RolloutWriteMixin:
                     _status,
                     _created_at,
                 ) = _pending_write_row(tuple(raw_row))
-                result.append(
-                    (task_id, channel, self._storage.decode_value((serializer, bytes(blob))))
+                value = (
+                    PendingMessageReferences(
+                        self._storage, connection, session_id=session_id,
+                        thread_id=thread_id, checkpoint_ns=checkpoint_ns,
+                    ).restore(serializer, blob)
+                    if serializer.startswith(MESSAGE_REFERENCE_SERIALIZER)
+                    else self._storage.decode_value((serializer, blob))
                 )
+                result.append((task_id, channel, value))
             return result
 
         with self._storage.read_connection(
@@ -202,7 +215,8 @@ class RolloutWriteMixin:
                     ).fetchone()
                     if existing is not None:
                         stored = _pending_write_row(tuple(existing))
-                        if stored[:9] != expected[:9]:
+                        if (stored[:4] != expected[:4] or stored[8] != expected[8]
+                                or original_write_fingerprint(*stored[4:8], storage=self._storage) != original_write_fingerprint(*expected[4:8], storage=self._storage)):
                             raise RuntimeError(
                                 "pending_writes 重试内容不一致: "
                                 f"task={task_id}, path={task_path}, index={index}"
