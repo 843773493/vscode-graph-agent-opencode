@@ -83,6 +83,7 @@ from app.services.infrastructure.rollout_context.storage.catalog.history_scope i
 from app.services.infrastructure.rollout_context.storage.schema import (
     MESSAGES_VERSION_MIGRATION_SQL,
     ROLLOUT_SCHEMA_VERSION,
+    VIEW_MEMBERSHIP_MIGRATION_SQL,
 )
 from app.services.infrastructure.rollout_context.storage.schema_assembly_content import (
     ASSEMBLY_CONTENT_SCHEMA_SQL,
@@ -102,6 +103,7 @@ from tests.harness.python.run_context import TestRunContext
 from tests.integration.backend.sessions.rollout_context._channel_version_fixtures import (
     restore_schema19,
 )
+from tests.support.rollout_view_mutations import mutate_view_members
 
 
 @dataclass(frozen=True)
@@ -727,6 +729,10 @@ def _migrate_ref_threads(case: AssemblyCase) -> None:
         case.thread_id, session_id=case.session_id, to_version=22,
         migration_name="assembly_shared_content", migration_sql=ASSEMBLY_CONTENT_SCHEMA_SQL,
     )
+    case.saver._storage.storage.migrate_schema(
+        case.thread_id, session_id=case.session_id, to_version=23,
+        migration_name="view_membership", migration_sql=VIEW_MEMBERSHIP_MIGRATION_SQL,
+    )
 
 
 def test_schema18_migration_rebuilds_unique_keys_and_backfills_snapshot_threads(assembly_case):
@@ -741,7 +747,7 @@ def test_schema18_migration_rebuilds_unique_keys_and_backfills_snapshot_threads(
                           for index in case.connection.execute(f"PRAGMA index_list({table})") if index[2]]
         assert ("assembly_id", "ref_type", "ref_id", "ref_thread_id") in unique_columns
         assert ("assembly_id", "ref_type", "ref_id") not in unique_columns
-    assert case.connection.execute("SELECT schema_version,database_state FROM database_meta").fetchone() == (22, "active")
+    assert case.connection.execute("SELECT schema_version,database_state FROM database_meta").fetchone() == (23, "active")
 
 
 def test_schema18_migration_preserves_foreign_ref_thread_from_frozen_snapshot(assembly_case):
@@ -866,13 +872,13 @@ def test_seal_rejects_missing_foreign_or_noncanonical_admission_root(
                 (root_id,),
             )
         elif corruption == "invisible":
-            case.connection.execute(
+            mutate_view_members(case.connection,
                 "UPDATE context_view_items SET visible = 0 "
                 "WHERE view_id = ? AND item_id = ?",
                 (snapshot.active_view_id, root_id),
             )
         else:
-            case.connection.execute(
+            mutate_view_members(case.connection,
                 "UPDATE context_view_items SET source_kind = 'derived' "
                 "WHERE view_id = ? AND item_id = ?",
                 (snapshot.active_view_id, root_id),

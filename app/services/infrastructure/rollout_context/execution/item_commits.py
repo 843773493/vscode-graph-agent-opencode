@@ -456,6 +456,8 @@ class CanonicalItemCommitMixin:
                     )
                     resolved_item_ids.append(item.item_id)
                 if not pending:
+                    # 幂等正文仍可能首次发布终态membership，与普通append保持同一事务边界。
+                    connection.execute("BEGIN IMMEDIATE")
                     self._storage._append_context_view_items(
                         connection,
                         checkpoint_ns=checkpoint_ns,

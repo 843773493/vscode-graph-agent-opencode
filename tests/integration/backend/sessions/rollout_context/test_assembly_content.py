@@ -22,6 +22,7 @@ from app.services.infrastructure.rollout_context.storage import (
 )
 from app.services.infrastructure.rollout_context.storage.schema import (
     ASSEMBLY_CONTENT_SCHEMA_SQL,
+    VIEW_MEMBERSHIP_MIGRATION_SQL,
 )
 from tests.integration.backend.sessions.rollout_context._channel_version_fixtures import (
     restore_schema21,
@@ -118,6 +119,8 @@ def test_schema21_upgrade_preserves_historical_jcs_hashes_and_jsonl(shared_assem
     assert [(key, canonical_json_bytes(load_snapshot(connection, raw)).decode()) for key, raw in connection.execute("SELECT assembly_id,snapshot_json FROM context_assemblies ORDER BY assembly_id")] == old
     assert jsonl.read_bytes() == before
     assert connection.execute("SELECT schema_version,database_state FROM database_meta").fetchone() == (22, "active")
+    saver._storage.storage.migrate_schema(thread, session_id=session, to_version=23,
+                                         migration_name="view_membership", migration_sql=VIEW_MEMBERSHIP_MIGRATION_SQL)
     cold = RolloutCheckpointSaver(saver._storage.storage.sessions_dir)
     for original in (first, second):
         assert cold.get_context_assembly(session, thread, assembly_id=original.assembly_id).to_dict() == original.to_dict()

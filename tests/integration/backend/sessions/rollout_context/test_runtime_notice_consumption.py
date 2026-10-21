@@ -47,6 +47,7 @@ from tests.harness.python.run_context import TestRunContext
 from tests.integration.backend.sessions.itemized_projection_helpers import (
     copy_rollout_snapshot,
 )
+from tests.support.rollout_view_mutations import mutate_view_members
 
 
 @dataclass
@@ -345,7 +346,7 @@ def test_acceptance_ignores_output_outside_frozen_head_selection(notice_case, hi
     hidden_id = case.output(internal, "hidden")
     with sqlite3.connect(case.saver._storage.storage.index_path(case.session, thread_id=case.thread)) as connection:
         # 显式构造已提交 selection 的反例；仍经真实 acceptance 入口冻结。
-        connection.execute(f"UPDATE context_view_items SET {hidden_column}=0 WHERE item_id=?", (hidden_id,))
+        mutate_view_members(connection, f"UPDATE context_view_items SET {hidden_column}=0 WHERE item_id=?", (hidden_id,))
     accepted, _user = case.user("membership-user")
     assert case.metadata(accepted)["runtime_notice_selection"]["notices"][0]["private_output_item_ids"] == [selected_id]
 

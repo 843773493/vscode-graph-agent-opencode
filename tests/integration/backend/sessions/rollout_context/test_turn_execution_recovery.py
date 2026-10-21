@@ -60,6 +60,7 @@ from app.services.orchestration.execution_step.model_call import StepModelCallAd
 from app.services.orchestration.execution_step.stream_bindings import CanonicalItemSink
 from app.services.orchestration.message_stream_runtime import MessageStreamRuntime
 from tests.harness.python.run_context import TestRunContext
+from tests.support.rollout_view_mutations import mutate_view_members
 from tests.support.workspaces import prepare_default_test_workspace
 
 SESSION_ID = "ses_019c205391bb7a4b81b6728df70f63e6"
@@ -688,7 +689,7 @@ def test_item_catalog_reads_fail_closed_on_missing_item_and_view_reference(
                 (view_id,),
             ).fetchone()[0]
         )
-        connection.execute(
+        mutate_view_members(connection,
             "INSERT INTO context_view_items(view_id, item_id, logical_item_ordinal, "
             "visible, source_kind, context_selected, context_ordinal) VALUES (?, ?, ?, 1, 'canonical', 1, ?)",
             (view_id, "item-does-not-exist", next_ordinal, next_ordinal),
@@ -2104,7 +2105,7 @@ def test_partial_content_part_anchor_survives_restart_and_rejects_unreachable_vi
                 "2026-09-07T00:00:00+00:00",
             ),
         )
-        connection.execute(
+        mutate_view_members(connection,
             "INSERT INTO context_view_items(view_id, item_id, logical_item_ordinal, "
             "visible, source_kind, context_selected, context_ordinal) VALUES (?, ?, 1, 1, 'canonical', 1, 0)",
             (inactive_view_id, accepted["root_input_item_id"]),

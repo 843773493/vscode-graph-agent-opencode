@@ -17,10 +17,14 @@ from typing import TYPE_CHECKING
 from uuid import uuid4
 
 from app.core.hashing import sha256_hex as _hash_bytes
+from app.core.sqlite_state import load_sql
 from app.core.sqlite_state import utc_now_text as _now
 from app.domain.itemized.errors import FormatDispatchError
 from app.services.infrastructure.rollout_context.storage import (
     schema as storage_version,
+)
+from app.services.infrastructure.rollout_context.storage.catalog.view_items.store import (
+    migrate_members,
 )
 from app.services.infrastructure.rollout_context.storage.format_dispatch import (
     require_v2_runtime,
@@ -42,6 +46,7 @@ from app.services.infrastructure.rollout_context.storage.rollout_schema_introspe
 )
 from app.services.infrastructure.rollout_context.storage.schema import (
     MESSAGES_VERSION_MIGRATION_SQL,
+    VIEW_MEMBERSHIP_MIGRATION_SQL,
     initialize_rollout_schema,
 )
 from app.services.infrastructure.rollout_context.storage.schema_assembly_content import (
@@ -194,7 +199,7 @@ class RolloutMaintenanceOwner(
                     )
                 if (to_version > storage_version.ROLLOUT_SCHEMA_VERSION
                         or (to_version != storage_version.ROLLOUT_SCHEMA_VERSION
-                            and (current_version, to_version) not in {(18, 19), (19, 20), (20, 21), (21, 22)})):
+                            and (current_version, to_version) not in {(18, 19), (19, 20), (20, 21), (21, 22), (22, 23)})):
                     raise RuntimeError(
                         "当前程序尚未声明目标 SQLite schema 版本: "
                         f"target={to_version}, supported={storage_version.ROLLOUT_SCHEMA_VERSION}"
@@ -248,9 +253,14 @@ class RolloutMaintenanceOwner(
                         raise ValueError("schema migration 20→21 必须使用登记的消息版本 SQL")
                     if (current_version, to_version) == (21, 22) and migration_sql != ASSEMBLY_CONTENT_SCHEMA_SQL:
                         raise ValueError("schema migration 21→22 必须使用登记的assembly内容SQL")
+                    if (current_version, to_version) == (22, 23) and migration_sql != VIEW_MEMBERSHIP_MIGRATION_SQL:
+                        raise ValueError("schema migration 22→23 必须使用登记的view成员SQL")
                     execute_atomic_schema_sql(connection, migration_sql)
                     if (current_version, to_version) == (21, 22):
                         migrate_assembly_content(connection)
+                    if (current_version, to_version) == (22, 23):
+                        migrate_members(connection)
+                        execute_atomic_schema_sql(connection, load_sql(__package__, "sql/view_membership_022_023_finish.sql"))
                     meta_result = connection.execute(
                         "UPDATE database_meta SET schema_version = ?, updated_at = ? "
                         "WHERE singleton_id = 1",

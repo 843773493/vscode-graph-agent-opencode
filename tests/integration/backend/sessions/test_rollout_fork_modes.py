@@ -236,6 +236,7 @@ from tests.support.fork_deadline import (
     ForkOperationDeadline,
 )
 from tests.support.rollout_output import commit_fixture_output
+from tests.support.rollout_view_mutations import mutate_view_members
 from tests.support.session_navigation_queue import (
     create_catalog_intent,
     submit_catalog_intent,
@@ -406,6 +407,9 @@ def production_fork_container(request: pytest.FixtureRequest,
             return record.state in {"aborted", "published"}
         if capture is not None:
             return False
+        if isinstance(error, ToolProtocolBoundaryConflict):
+            # 本地预检已明确拒绝且没有创建/捕获事实，观察已结束。
+            return True
         # Pending、传输或运行时失败仍属未知状态；只有稳定的来源校验码
         # 才表示目标创建前发生了无写入拒绝。
         return error is not None and str(error).startswith((
@@ -3512,7 +3516,7 @@ async def test_native_cold_history_rejects_hidden_canonical_final(
         final_item_id = connection.execute(
             "SELECT final_item_id FROM turn_records WHERE turn_id='turn-retry'",
         ).fetchone()[0]
-        updated = connection.execute(
+        updated = mutate_view_members(connection,
             "UPDATE context_view_items SET visible=0 WHERE item_id=?", (final_item_id,),
         )
         assert updated.rowcount > 0
@@ -4016,7 +4020,8 @@ async def test_fork_rejects_orphan_tool_result_before_publication(
         commit_fixture_output(saver, messages=old_messages)
         await saver.aput(
             build_checkpoint_config(thread), _checkpoint("queue-tool-completed", old_messages),
-            {"source": "loop", "step": 4, "parents": {}}, {"messages": "5", "counter": "5"},
+            {"source": "loop", "step": 4, "parents": {}},
+            {"messages": str(len(old_messages)), "counter": str(len(old_messages))},
         )
     completed = await _get_tuple(fork_context, source.session_id)
     assert completed is not None
@@ -4070,7 +4075,7 @@ async def test_fork_rejects_orphan_tool_result_before_publication(
               pytest.raises(ToolProtocolBoundaryConflict, match="tool-protocol-boundary-conflict")):
             await saver.aput(
                 build_checkpoint_config(thread), compacted, {"source": "compaction", "step": 5, "parents": {}},
-                {"messages": "6", "counter": "6", "_summarization_event": "1"},
+                compacted["channel_versions"],
             )
         after_compaction = _fork_intent_state(fork_context)
         assert after_compaction == before_compaction, (
@@ -4086,7 +4091,7 @@ async def test_fork_rejects_orphan_tool_result_before_publication(
             "SELECT branch.head_view_id FROM checkpoint_namespace_state namespace "
             "JOIN branches branch ON branch.branch_id=namespace.active_branch_id WHERE namespace.checkpoint_ns=''",
         ).fetchone()
-        connection.execute(
+        mutate_view_members(connection,
             "UPDATE context_view_items SET visible=0 WHERE view_id=? AND item_id IN "
             "(SELECT item_id FROM item_catalog WHERE message_group_id=?)", (view_id, call_item.message_group_id),
         )
@@ -6905,12 +6910,12 @@ async def test_fork_preserves_stream_member_time_across_checkpoint_carriers(
             view_id = storage._active_context_view_id(connection, "")
             reasoning_ids = [item.item_id for item in stream_items if item.semantic_kind == "reasoning"]
             assert len(reasoning_ids) == 2
-            connection.execute(
+            mutate_view_members(connection,
                 "UPDATE context_view_items SET logical_item_ordinal=logical_item_ordinal+100 "
                 "WHERE view_id=? AND item_id IN (?,?)", (view_id, *reasoning_ids),
             )
             for ordinal, item_id in enumerate(reversed(reasoning_ids), 1):
-                connection.execute("UPDATE context_view_items SET logical_item_ordinal=? WHERE view_id=? AND item_id=?",
+                mutate_view_members(connection, "UPDATE context_view_items SET logical_item_ordinal=? WHERE view_id=? AND item_id=?",
                                    (ordinal, view_id, item_id))
             connection.execute("UPDATE database_meta SET history_view_revision=history_view_revision+1 WHERE singleton_id=1")
     request = TurnHistoryLoadRequest(include=["user", "reasoning_detail", "final_response"])

@@ -442,18 +442,6 @@
             created_at TEXT NOT NULL,
             CHECK(content_hash IS NOT NULL)
         );
-        CREATE TABLE IF NOT EXISTS context_view_items (
-            view_id TEXT NOT NULL,
-            item_id TEXT NOT NULL,
-            logical_item_ordinal INTEGER NOT NULL,
-            visible INTEGER NOT NULL DEFAULT 1,
-            source_kind TEXT NOT NULL DEFAULT 'canonical',
-            context_selected INTEGER NOT NULL DEFAULT 1 CHECK(context_selected IN (0, 1)),
-            context_ordinal INTEGER,
-            PRIMARY KEY(view_id, item_id),
-            UNIQUE(view_id, logical_item_ordinal),
-            UNIQUE(view_id, context_ordinal)
-        );
         CREATE TABLE IF NOT EXISTS source_overlays (
             overlay_id TEXT PRIMARY KEY,
             session_id TEXT NOT NULL,
@@ -561,7 +549,6 @@
         CREATE INDEX IF NOT EXISTS context_assembly_contributions_source_index ON context_assembly_contributions(source_kind, source_revision);
         CREATE INDEX IF NOT EXISTS tool_set_snapshots_assembly_index ON tool_set_snapshots(assembly_id, tool_set_snapshot_id);
         CREATE INDEX IF NOT EXISTS context_assembly_contributions_ordinal_index ON context_assembly_contributions(assembly_id, contribution_ordinal);
-        CREATE INDEX IF NOT EXISTS context_view_items_ordinal_index ON context_view_items(view_id, logical_item_ordinal);
         CREATE INDEX IF NOT EXISTS source_overlays_epoch_index ON source_overlays(session_id, thread_id, source_overlay_epoch);
         CREATE UNIQUE INDEX IF NOT EXISTS context_contributions_source_ordinal_unique
             ON context_contributions(source_ordinal)

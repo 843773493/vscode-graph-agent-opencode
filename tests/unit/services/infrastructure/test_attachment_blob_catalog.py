@@ -88,6 +88,8 @@ from app.services.infrastructure.rollout_context.runtime.context_sources.context
     ContextSourceManager,
 )
 
+from tests.support.rollout_view_mutations import mutate_view_members
+
 SESSION_A = "ses_019b781159d47374805bc4427d081a14"
 SESSION_B = "ses_019b9cdd1ad5758788a18bb227323523"
 
@@ -427,7 +429,7 @@ async def test_fork_source_attachment_candidates_require_frozen_ref_thread(
             "JOIN database_meta meta ON meta.singleton_id=1 WHERE namespace.checkpoint_ns=''",
         ).fetchone()
         # 收窄查询 fixture 的有效 view；前一个 Turn 只保留为 producer 正文依赖。
-        connection.execute(
+        mutate_view_members(connection,
             "UPDATE context_view_items SET visible=0,context_selected=0,context_ordinal=NULL "
             "WHERE view_id=? AND item_id IN (SELECT item_id FROM item_catalog WHERE turn_id=?)",
             (view, case.turn_id),

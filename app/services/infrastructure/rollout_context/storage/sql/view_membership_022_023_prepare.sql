@@ -1,0 +1,2 @@
+ALTER TABLE context_view_items RENAME TO context_view_items_legacy;
+DROP INDEX context_view_items_ordinal_index;

@@ -54,6 +54,10 @@ from app.services.infrastructure.rollout_context.store import RolloutContextStor
 from app.services.infrastructure.rollout_history.paging import HistoryPageReadMixin
 from app.services.infrastructure.rollout_history_reader import RolloutHistoryReader
 from app.services.infrastructure.turn_history.models import InvalidTurnCursorError
+from tests.support.rollout_view_mutations import (
+    mutate_view_members,
+    mutate_view_members_many,
+)
 
 _CREATED_AT = "2026-10-04T00:00:00Z"
 _UPDATED_AT = "2026-10-04T00:00:01Z"
@@ -341,7 +345,7 @@ def _seed_rollout(
             "committed_jsonl_offset = ?, updated_at = ? WHERE singleton_id = 1",
             (len(items), len(jsonl_bytes), _UPDATED_AT),
         )
-        connection.execute(
+        mutate_view_members(connection,
             "DELETE FROM context_view_items WHERE view_id = ?", (view_id,)
         )
         connection.execute(
@@ -454,7 +458,7 @@ def _seed_rollout(
             )
             for spec in displays
         ]
-        connection.executemany(
+        mutate_view_members_many(connection,
             "INSERT INTO context_view_items "
             "(view_id, item_id, logical_item_ordinal, visible, source_kind, context_selected, context_ordinal) "
             "VALUES (?, ?, ?, 1, ?, 1, ?)",
@@ -1133,48 +1137,30 @@ def test_context_view_order_integrity_rejects_corrupt_coordinates(
         session_id=environment.session_id,
     ) as connection:
         if corruption == "negative":
-            connection.execute(
+            mutate_view_members(connection,
                 "UPDATE context_view_items SET logical_item_ordinal = -1 "
                 "WHERE view_id = ? AND item_id = 'root-job-0002'",
                 (_VIEW_ID,),
             )
         elif corruption == "missing_root":
-            connection.execute(
+            mutate_view_members(connection,
                 "DELETE FROM context_view_items WHERE view_id = ? AND item_id = 'root-job-0002'",
                 (_VIEW_ID,),
             )
         elif corruption == "turn_order":
-            connection.execute(
+            mutate_view_members(connection,
                 "UPDATE context_view_items SET logical_item_ordinal = 45 "
                 "WHERE view_id = ? AND item_id = 'root-job-0002'",
                 (_VIEW_ID,),
             )
-            connection.execute(
+            mutate_view_members(connection,
                 "UPDATE context_view_items SET logical_item_ordinal = 35 "
                 "WHERE view_id = ? AND item_id = 'root-job-0007'",
                 (_VIEW_ID,),
             )
         else:
-            rows = connection.execute(
-                "SELECT view_id, item_id, logical_item_ordinal, visible, source_kind, context_selected, context_ordinal "
-                "FROM context_view_items"
-            ).fetchall()
-            connection.execute(
-                "ALTER TABLE context_view_items RENAME TO context_view_items_unique"
-            )
-            connection.execute(
-                "CREATE TABLE context_view_items "
-                "(view_id TEXT NOT NULL, item_id TEXT NOT NULL, "
-                "logical_item_ordinal INTEGER NOT NULL, visible INTEGER NOT NULL, "
-                "source_kind TEXT NOT NULL, context_selected INTEGER NOT NULL, context_ordinal INTEGER, "
-                "PRIMARY KEY(view_id, item_id))"
-            )
-            connection.executemany(
-                "INSERT INTO context_view_items VALUES (?, ?, ?, ?, ?, ?, ?)",
-                rows,
-            )
-            connection.execute("DROP TABLE context_view_items_unique")
-            connection.execute(
+            mutate_view_members(
+                connection,
                 "UPDATE context_view_items SET logical_item_ordinal = 10 "
                 "WHERE view_id = ? AND item_id = 'internal-item-2'",
                 (_VIEW_ID,),

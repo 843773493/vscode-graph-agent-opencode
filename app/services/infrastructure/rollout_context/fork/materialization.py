@@ -20,6 +20,9 @@ from app.services.infrastructure.rollout_context.fork.validation import (
 from app.services.infrastructure.rollout_context.storage.catalog.history_scope import (
     current_scope,
 )
+from app.services.infrastructure.rollout_context.storage.catalog.view_items.store import (
+    replace_members,
+)
 from app.services.infrastructure.rollout_context.storage.serialization import (
     canonical_json_text as _json,
 )
@@ -156,12 +159,12 @@ class ForkMaterializationMixin:
                 "VALUES (?, ?, NULL, 'checkpoint_messages', ?, ?, ?, NULL, ?)",
                 (message_view, head[0], *head[2:], copy_recorded_at),
             )
-            connection.execute(
-                "INSERT INTO context_view_items(view_id,item_id,logical_item_ordinal,visible,source_kind,context_selected,context_ordinal) "
-                "SELECT ?,item_id,context_ordinal,1,source_kind,1,context_ordinal "
+            selected_members = connection.execute(
+                "SELECT item_id,context_ordinal,1,source_kind,1,context_ordinal "
                 "FROM context_view_items WHERE view_id=? AND visible=1 AND context_selected=1",
-                (message_view, view_id),
-            )
+                (view_id,),
+            ).fetchall()
+            replace_members(connection, message_view, selected_members)
             connection.execute(
                 "INSERT INTO context_view_turns(view_id,turn_id,logical_turn_ordinal,user_message_sequence,"
                 "final_message_sequence,root_input_item_id,fork_lineage_json) "

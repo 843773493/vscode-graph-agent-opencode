@@ -80,6 +80,7 @@ from app.services.infrastructure.rollout_context.runtime.context_sources.context
 from app.services.infrastructure.rollout_context.store import (
     RolloutContextStore,
 )
+from tests.support.rollout_view_mutations import mutate_view_members
 
 SESSION_ID = "ses_019c3c97527e707e8dc56fca3f021b97"
 TURN_ID = "turn-delegated-turn2"
@@ -711,7 +712,7 @@ def test_compaction_preflight_does_not_restore_hidden_declarations(
         view_id = connection.execute(
             "SELECT head_view_id FROM branches WHERE status='active'",
         ).fetchone()[0]
-        connection.execute(
+        mutate_view_members(connection,
             "UPDATE context_view_items SET visible=0 WHERE view_id=? "
             "AND item_id IN ('item-live-call','item-request-call')", (view_id,),
         )

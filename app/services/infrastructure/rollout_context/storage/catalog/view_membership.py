@@ -8,6 +8,11 @@ from typing import Literal
 from uuid import uuid4
 
 from app.core.sqlite_state import utc_now_text
+from app.services.infrastructure.rollout_context.storage.catalog.view_items.store import (
+    append_members,
+    clone_members,
+    replace_members,
+)
 from app.services.infrastructure.rollout_context.storage.serialization import (
     canonical_json_text as _json,
 )
@@ -223,19 +228,14 @@ class RolloutViewMembershipMixin:
             ).fetchone()[0],
             field="context_view_items.logical_item_ordinal",
         )
-        for item_id in pending:
-            context_ordinal = connection.execute(
-                "SELECT COALESCE(MAX(context_ordinal), -1) + 1 FROM context_view_items WHERE view_id=?",
-                (view_id,),
-            ).fetchone()[0]
-            cursor = connection.execute(
-                "INSERT INTO context_view_items(view_id, item_id, logical_item_ordinal, visible, source_kind, context_selected, context_ordinal) "
-                "VALUES (?, ?, ?, 1, ?, 1, ?)",
-                (view_id, item_id, next_ordinal, source_kind, context_ordinal),
-            )
-            if cursor.rowcount != 1:
-                raise RuntimeError(f"active view item membership 插入失败: {view_id}/{item_id}")
-            next_ordinal += 1
+        next_context = connection.execute(
+            "SELECT COALESCE(MAX(context_ordinal), -1) + 1 FROM context_view_items WHERE view_id=?",
+            (view_id,),
+        ).fetchone()[0]
+        append_members(connection, view_id, (
+            (item_id, next_ordinal + offset, 1, source_kind, 1, next_context + offset)
+            for offset, item_id in enumerate(pending)
+        ))
         return True
 
     def _create_view(
@@ -278,12 +278,7 @@ class RolloutViewMembershipMixin:
             )
             if header.rowcount != 1:
                 raise RuntimeError(f"active successor parent view 不存在: {parent_view_id}")
-            connection.execute(
-                "INSERT INTO context_view_items(view_id, item_id, logical_item_ordinal, visible, source_kind, context_selected, context_ordinal) "
-                "SELECT ?, item_id, logical_item_ordinal, visible, source_kind, context_selected, context_ordinal "
-                "FROM context_view_items WHERE view_id = ?",
-                (view_id, parent_view_id),
-            )
+            clone_members(connection, parent_view_id, view_id)
             connection.execute(
                 "INSERT INTO context_view_turns(view_id, turn_id, logical_turn_ordinal, "
                 "user_message_sequence, final_message_sequence, root_input_item_id, fork_lineage_json) "
@@ -664,6 +659,7 @@ class RolloutViewMembershipMixin:
                 raise ValueError("context selection 含重复或不属于该历史 view 的 item")
             context_ordinals = {item_id: ordinal for ordinal, item_id in enumerate(context_order)}
             logical_item_ordinal = 0
+            members = []
             for item_id, semantic_kind, turn_id, turn_scope, execution_id in ordered_item_rows:
                 item_id = strict_text(item_id, field="item_catalog.item_id")
                 semantic_kind = strict_text(
@@ -707,15 +703,9 @@ class RolloutViewMembershipMixin:
                     # Turn-less internal checkpoint message 不会因为进入
                     # LangGraph messages channel 而变成 canonical history。
                     continue
-                item_cursor = connection.execute(
-                    "INSERT INTO context_view_items(view_id, item_id, logical_item_ordinal, visible, source_kind, context_selected, context_ordinal) VALUES (?, ?, ?, 1, ?, ?, ?)",
-                    (view_id, item_id, logical_item_ordinal, source_kind, int(item_id in context_ordinals), context_ordinals.get(item_id)),
-                )
-                if item_cursor.rowcount != 1:
-                    raise RuntimeError(
-                        f"context view item 插入失败: {view_id}/{item_id}"
-                    )
+                members.append((item_id, logical_item_ordinal, 1, source_kind, int(item_id in context_ordinals), context_ordinals.get(item_id)))
                 logical_item_ordinal += 1
+            replace_members(connection, view_id, members)
         return view_id
 
 

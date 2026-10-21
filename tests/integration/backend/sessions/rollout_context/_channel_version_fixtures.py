@@ -11,7 +11,29 @@ from app.services.infrastructure.rollout_context.assembly.content_store import (
 )
 
 
+def restore_schema22(connection: sqlite3.Connection) -> None:
+    rows = connection.execute("SELECT * FROM context_view_items").fetchall()
+    connection.executescript("""
+        DROP VIEW context_view_items;
+        CREATE TABLE context_view_items (
+            view_id TEXT NOT NULL, item_id TEXT NOT NULL, logical_item_ordinal INTEGER NOT NULL,
+            visible INTEGER NOT NULL DEFAULT 1, source_kind TEXT NOT NULL DEFAULT 'canonical',
+            context_selected INTEGER NOT NULL DEFAULT 1 CHECK(context_selected IN (0,1)), context_ordinal INTEGER,
+            PRIMARY KEY(view_id,item_id), UNIQUE(view_id,logical_item_ordinal), UNIQUE(view_id,context_ordinal)
+        );
+        CREATE INDEX context_view_items_ordinal_index ON context_view_items(view_id,logical_item_ordinal);
+        DROP TABLE context_view_item_blocks;
+        DROP TABLE context_membership_items;
+        DROP TABLE context_membership_blocks;
+        UPDATE database_meta SET schema_version=22;
+    """)
+    connection.executemany("INSERT INTO context_view_items VALUES (?,?,?,?,?,?,?)", rows)
+    connection.execute("UPDATE schema_migrations SET to_version=22,migration_name='rollout_sqlite_v22',migration_checksum=? WHERE from_version=0", (hashlib.sha256(b"rollout_sqlite_v22").hexdigest(),))
+    connection.commit()
+
+
 def restore_schema21(connection: sqlite3.Connection) -> None:
+    restore_schema22(connection)
     for key, raw in connection.execute("SELECT assembly_id,snapshot_json FROM context_assemblies").fetchall():
         connection.execute("UPDATE context_assemblies SET snapshot_json=? WHERE assembly_id=?", (canonical_json_bytes(load_snapshot(connection, raw)).decode(), key))
     connection.execute("DROP TABLE assembly_content_nodes")

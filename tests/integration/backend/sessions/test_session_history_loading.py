@@ -43,6 +43,7 @@ from app.services.infrastructure.rollout_history_reader import RolloutHistoryRea
 from tests.support.api_helpers import checkpoint_fixture, create_session
 from tests.support.ports import integration_port_block_for_file
 from tests.support.rollout_output import commit_fixture_output
+from tests.support.rollout_view_mutations import mutate_view_members
 
 
 @pytest.fixture(scope="module")
@@ -217,14 +218,15 @@ def _seed_rollout(
             execution_id=f"execution-{turn_index:04d}",
         ):
             commit_fixture_output(saver, messages=all_messages)
+            checkpoint = checkpoint_fixture(
+                f"checkpoint-{turn_index:04d}", all_messages,
+                channel_version=turn_index,
+            )
             config = saver.put(
                 config,
-                checkpoint_fixture(
-                    f"checkpoint-{turn_index:04d}", all_messages,
-                    channel_version=turn_index,
-                ),
+                checkpoint,
                 {"source": "deterministic-rollout-stub", "turn": turn_index},
-                {"messages": str(turn_index)},
+                checkpoint["channel_versions"],
             )
     resolver = get_session_path_resolver(sessions_dir)
     return resolver.resolve_thread_node(session_id, resolver.main_thread_id(session_id)) / "rollout"
@@ -474,15 +476,16 @@ async def test_history_user_projection_keeps_canonical_preview_out_of_display_co
     with _history_user_execution(frozen_provider_prepare, saver, session_id, user, "job-attachment-projection"):
         completed_messages = [user, final]
         commit_fixture_output(saver, messages=completed_messages)
+        checkpoint = checkpoint_fixture(
+            "checkpoint-attachment-projection",
+            completed_messages,
+            channel_version=1,
+        )
         saver.put(
             build_checkpoint_config(owner.thread_id),
-            checkpoint_fixture(
-                "checkpoint-attachment-projection",
-                completed_messages,
-                channel_version=1,
-            ),
+            checkpoint,
             {"source": "attachment-projection-test"},
-            {"messages": "1"},
+            checkpoint["channel_versions"],
         )
 
     page = await _load_history(
@@ -734,11 +737,12 @@ async def test_history_deduplicates_final_checkpoint_reasoning_by_part_ref(
     thread_id = saver.forks.source.resolve_main_thread_owner(session_id).thread_id
     with _history_user_execution(frozen_provider_prepare, saver, session_id, messages[0], turn_id):
         commit_fixture_output(saver, messages=messages)
+        checkpoint = checkpoint_fixture("checkpoint-shared-reasoning", messages, channel_version=1)
         config = saver.put(
             build_checkpoint_config(thread_id),
-            checkpoint_fixture("checkpoint-shared-reasoning", messages, channel_version=1),
+            checkpoint,
             {"source": "deterministic-rollout-stub"},
-            {"messages": "1"},
+            checkpoint["channel_versions"],
         )
     assert config["configurable"]["checkpoint_id"] == "checkpoint-shared-reasoning"
 
@@ -1059,15 +1063,16 @@ async def test_turn_finalize_pointer_wins_over_heuristic_final_response(
             execution_id="history-execution:job-finalization", outcome="completed",
             turn_status="completed", items=items, final_item_id=items[0].item_id,
         )
+        checkpoint = checkpoint_fixture(
+            "checkpoint-finalization",
+            [user, marked_final, later_unmarked],
+            channel_version=1,
+        )
         saver.put(
             config,
-            checkpoint_fixture(
-                "checkpoint-finalization",
-                [user, marked_final, later_unmarked],
-                channel_version=1,
-            ),
+            checkpoint,
             {"source": "deterministic-finalization-stub"},
-            {"messages": "1"},
+            checkpoint["channel_versions"],
         )
 
     reader = RolloutHistoryReader(
@@ -1100,15 +1105,16 @@ async def test_finalization_window_keeps_unfinalized_history_readable(
     )
     final = AIMessage(id="assistant-finalization-window", content="仍可恢复的最终响应")
     with _history_user_execution(frozen_provider_prepare, saver, session_id, user, turn_id):
+        checkpoint = checkpoint_fixture(
+            "checkpoint-finalization-window",
+            [user, final],
+            channel_version=1,
+        )
         saver.put(
             config,
-            checkpoint_fixture(
-                "checkpoint-finalization-window",
-                [user, final],
-                channel_version=1,
-            ),
+            checkpoint,
             {"source": "deterministic-finalization-window-stub"},
-            {"messages": "1"},
+            checkpoint["channel_versions"],
         )
     # 普通 assistant item 已提交仍不代表成功终态；不得事后补 metadata-only final。
     page = RolloutHistoryReader(
@@ -1257,28 +1263,30 @@ async def test_internal_leading_messages_do_not_create_empty_indexed_turn(
         session_thread_owner_scope(owner, langgraph_thread_id=owner.thread_id),
         execution_admission_scope(admission, langgraph_thread_id=owner.thread_id),
     ):
+        checkpoint = checkpoint_fixture(
+            "internal-leading-admission-checkpoint",
+            [notice, internal],
+            channel_version=1,
+        )
         config = saver.put(
             config,
-            checkpoint_fixture(
-                "internal-leading-admission-checkpoint",
-                [notice, internal],
-                channel_version=1,
-            ),
+            checkpoint,
             {"source": "deterministic-rollout-stub"},
-            {"messages": "1"},
+            checkpoint["channel_versions"],
         )
     user_messages = _turn_messages(1)
     messages = [notice, internal, *user_messages]
     with _history_user_execution(frozen_provider_prepare, saver, session_id, user_messages[0], "job-0001"):
+        checkpoint = checkpoint_fixture(
+            "internal-leading-checkpoint",
+            messages,
+            channel_version=2,
+        )
         saver.put(
             config,
-            checkpoint_fixture(
-                "internal-leading-checkpoint",
-                messages,
-                channel_version=2,
-            ),
+            checkpoint,
             {"source": "deterministic-rollout-stub"},
-            {"messages": "2"},
+            checkpoint["channel_versions"],
         )
 
     reader = RolloutHistoryReader(
@@ -1392,11 +1400,12 @@ async def test_history_final_summary_never_reads_final_jsonl_body(
     owner = saver.forks.source.resolve_main_thread_owner(session_id)
     with _history_user_execution(frozen_provider_prepare, saver, session_id, messages[0], "job-0001"):
         commit_fixture_output(saver, messages=messages)
+        checkpoint = checkpoint_fixture("bounded-final", messages, channel_version=1)
         saver.put(
             build_checkpoint_config(owner.thread_id),
-            checkpoint_fixture("bounded-final", messages, channel_version=1),
+            checkpoint,
             {"source": "bounded-final-test"},
-            {"messages": "1"},
+            checkpoint["channel_versions"],
         )
     storage = RolloutContextStore(sessions_dir, message_codec=LangChainMessageCodec())
     jsonl_path = storage.storage.jsonl_path(session_id, thread_id=owner.thread_id)
@@ -1469,7 +1478,7 @@ async def test_history_turn_visibility_uses_canonical_root_membership(
         session_id, storage.storage.main_thread_id(session_id)
     ) as snapshot:
         snapshot.connection.backup(history_catalog_copy)
-        history_catalog_copy.execute(mutation)
+        mutate_view_members(history_catalog_copy, mutation)
         copied = replace(snapshot, connection=history_catalog_copy)
         view_id = history_catalog_copy.execute(
             "SELECT head_view_id FROM branches WHERE status = 'active'"
@@ -1517,7 +1526,7 @@ async def test_history_bounded_final_rejects_mismatched_canonical_pointer(
             )
             error = "final projection 与 canonical Turn/item 指针不一致"
         else:
-            history_catalog_copy.execute(
+            mutate_view_members(history_catalog_copy,
                 "DELETE FROM context_view_items WHERE view_id=? AND item_id IN (SELECT final_item_id FROM turn_records)",
                 (view_id,),
             )
@@ -1563,7 +1572,7 @@ async def test_history_job_identity_requires_canonical_last_execution(
         view_id = storage.storage._active_context_view_id(copied.connection, copied.checkpoint_ns)
         assert view_id is not None
         assert storage.storage.read_turn_projections(copied, view_id, ["job-0001"])["job-0001"]["job_id"] == "history-job:job-0001"
-        history_catalog_copy.execute(mutation)
+        mutate_view_members(history_catalog_copy, mutation)
         with pytest.raises(RuntimeError, match=error):
             storage.storage.read_turn_projections(copied, view_id, ["job-0001"])
     assert jsonl_path.read_bytes() == jsonl_bytes

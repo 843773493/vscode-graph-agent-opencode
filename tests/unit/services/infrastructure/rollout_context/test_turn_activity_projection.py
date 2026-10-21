@@ -38,6 +38,7 @@ from app.services.mapping.itemized.provider_history import (
     visible_text,
 )
 from app.services.mapping.turn_response_parts import response_parts_from_records
+from tests.support.rollout_view_mutations import mutate_view_members
 
 
 def test_plain_turn_has_zero_expandable_items() -> None:
@@ -270,8 +271,8 @@ def test_real_projection_uses_exact_selected_view_membership(membership_projecti
         with closing(storage._connect(admission.thread_id, session_id=admission.session_id)) as copy_source:
             view_id = storage._active_context_view_id(snapshot.connection, snapshot.checkpoint_ns)
             assert view_id is not None
-            copy_source.execute("UPDATE context_view_items SET logical_item_ordinal=20 WHERE view_id=? AND item_id=?", (view_id, items[0].item_id))
-            copy_source.execute("UPDATE context_view_items SET logical_item_ordinal=4 WHERE view_id=? AND item_id=?", (view_id, items[1].item_id))
+            mutate_view_members(copy_source, "UPDATE context_view_items SET logical_item_ordinal=20 WHERE view_id=? AND item_id=?", (view_id, items[0].item_id))
+            mutate_view_members(copy_source, "UPDATE context_view_items SET logical_item_ordinal=4 WHERE view_id=? AND item_id=?", (view_id, items[1].item_id))
             copy_source.commit()
         with storage.open_read_snapshot(admission.session_id, admission.thread_id) as selected:
             projection = storage.read_turn_projections(selected, view_id, (admission.turn_id,))[admission.turn_id]
@@ -296,7 +297,7 @@ def test_projection_excludes_hidden_view_member(membership_projection_case):
     storage = case.saver._storage.storage
     with closing(storage._connect(admission.thread_id, session_id=admission.session_id)) as connection:
         view_id = storage._active_context_view_id(connection, "")
-        connection.execute("UPDATE context_view_items SET visible=0 WHERE view_id=? AND item_id=?", (view_id, items[0].item_id))
+        mutate_view_members(connection, "UPDATE context_view_items SET visible=0 WHERE view_id=? AND item_id=?", (view_id, items[0].item_id))
         connection.commit()
     with storage.open_read_snapshot(admission.session_id, admission.thread_id) as snapshot:
         projection = storage.read_turn_projections(snapshot, view_id, (admission.turn_id,))[admission.turn_id]
@@ -510,7 +511,7 @@ def test_internal_content_hidden_or_other_source_replacement_cannot_hide_visible
     storage, reader = case.saver._storage.storage, case.saver._context_reader
     with closing(storage._connect(admission.thread_id, session_id=admission.session_id)) as connection:
         view_id = storage._active_context_view_id(connection, "")
-        connection.execute(f"UPDATE context_view_items SET {membership_change} WHERE view_id=? AND item_id=?", (view_id, final.item_id))
+        mutate_view_members(connection, f"UPDATE context_view_items SET {membership_change} WHERE view_id=? AND item_id=?", (view_id, final.item_id))
         connection.commit()
     with reader.open_snapshot(admission.session_id, admission.thread_id) as snapshot:
         chain = reader.resolve_chain(snapshot)

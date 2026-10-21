@@ -22,10 +22,10 @@
 
 ## 4. P1 Assembly 与视图结构共享
 
-- [ ] 4.1 测量assembly完整请求、prefix frames、工具/资源正文与view成员重复，确定有序typed引用、共享prefix/view节点的最小结构和实际schema升级范围。
+- [x] 4.1 测量assembly完整请求、prefix frames、工具/资源正文与view成员重复，确定有序typed引用、共享prefix/view节点的最小结构和实际schema升级范围。
 - [x] 4.2 迁齐assembly seal、唯一writer和冷reader，复用canonical/工具/资源不可变版本与前缀，保留选择/省略/贡献/protection并只凭冻结内容重建normalized request和request_hash。
-- [ ] 4.3 迁齐view写读、历史分页、checkpoint selection、rewind/compaction与fork，按共享基准/成员变化保留visible/context_selected与logical/context ordinal，删除完整成员重复写入链。
-- [ ] 4.4 验证资源变化、故障发布、深fork、冷恢复和历史hash；相同负载证明多个assembly共享内容且索引增长减少，静态/独审后提交并push。
+- [x] 4.3 迁齐view写读、历史分页、checkpoint selection、rewind/compaction与fork，按共享基准/成员变化保留visible/context_selected与logical/context ordinal，删除完整成员重复写入链。
+- [x] 4.4 验证资源变化、故障发布、深fork、冷恢复和历史hash；相同负载证明多个assembly共享内容且索引增长减少，静态/独审后提交并push。
 
 ## 5. P2 引用保护回收
 
@@ -77,3 +77,5 @@
 同负载summary_restart_continue的16份assembly，正文由4069437字节变为1726461字节manifest+377264字节共享节点；assembly相关表/索引页5730304→4243456字节，总页17825792→16449536字节。原始分阶段比较保存在`history-dedup-assembly-comparison-002.json`。view成员仍9276行（前片9271，运行排序产生少量差异），尚未去重，因此4.1/4.3/4.4未完成；未宣称整体增长线性或总耗时改善。真实外部Provider E2E未重跑，其读取迁移由sqlite.Row合同覆盖，不冒充外部网络验收。
 
 Assembly子片最终Ruff与strict OpenSpec通过；辅助独审检查运行时读取、迁移事务、canonical依赖和模块职责，未发现明确阻断。新增内容codec保持单一assembly职责，纯静态DDL位于SQL。
+
+View共享验收：结构/迁移24通过；assembly/view/恢复合同195通过（另1项未经matrix触发装具setup拒绝，后由正式matrix覆盖）；projection127通过后发现的4个事务装具错误，已在181项正式matrix通过中覆盖；matrix另外两项旧new_versions装具修正后定向2通过/16.40秒。定向003/004的exit143已由faulthandler归因到通过后的watchdog装具终态遗漏，补齐本地无创建事实的ToolProtocolBoundaryConflict识别，未修改60秒期限。Gateway完整20调用负载1通过/255.49秒，最终回收片仍将对完整最终源码复验。Ruff/strict OpenSpec通过，独立只读审查无阻断。测量原件及全部索引口径见design，冻结`history-dedup-view-frozen-001/`。

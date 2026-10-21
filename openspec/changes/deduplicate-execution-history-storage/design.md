@@ -71,3 +71,11 @@ Assembly子片冻结schema22（不提前占用view共享结构版本）：新增
 预实施结构探针`history-dedup-assembly-dag-probe-002`基于最终Delta产品一致备份，所有保留assembly逐份encode/decode的JCS完全相等。源owner的16份assembly：4069437字节→1726461字节manifest+377264字节node正文（1113行）；另两owner：2223826→905191+276716、1174550→480402+124073。该局部探针不替代在线seal/fork/迁移产品验收，也不以正文数字代替包含索引的总存储或性能结论；完整原始结果保留在`history-dedup-assembly-probe-002/measurements.json`。
 
 TODO（Assembly冷解码耗时）：相同20调用负载在Delta片222.81秒、本片253.14秒；第二轮17.03→20.10秒、第三轮19.66→22.74秒、摘要28.93→36.04秒、源删除/重启/回退37.30→45.86秒（阶段含实际业务与I/O，不是纯codec时间）。节点逐个读取和重建增加工作量，当前只确认结构收益，不把相关性当作完整瓶颈归因。原始比较`history-dedup-assembly-comparison-002.json`、成功冻结`history-dedup-assembly-frozen-002/`保留；后续profile后优化节点批量读取/解码，保持原规模与hash/owner验收。先继续view共享与引用保护。
+
+View子片冻结schema23：逻辑`context_view_items`改为只读SQL view，连接`context_view_item_blocks`的有序引用与不可变`context_membership_items`，`context_membership_blocks`以本地database范围的成员JCS hash标识版本。块只含原六个scalar（item身份、logical ordinal、visible、source_kind、context_selected、context ordinal），不包含canonical正文或第二套业务状态。历史owner仍由当前database/historical namespace和canonical item身份解析；不将共享块ID当跨库locator。引用按view独立冻结，后续active追加不会改变父view，不引入递归祖先重放或新缓存表。
+
+选择16成员一个块：对Assembly产品冻结历史的只读结构分析，源owner9276个重复成员行可表示为981个共享成员行、106个块和712条view引用；另外两owner4015→395、6393→662个共享行。32/64/128的对照见`history-dedup-view-block-probe-001.json`。这只是成员结构估算，正式验收继续测表及索引页，不能从逻辑行数推断固定压缩比例。完整成员完全相同时克隆只复制块引用；增加/隐藏/重选只发布对应新块，旧块不变。块内正文碰撞明确失败；跨块item/logical/context唯一性在唯一writer发布前整体核验。
+
+所有生产INSERT/DELETE迁到共享writer，原SQL查询从唯一SQL view读取；正常存储不保留旧完整成员表或触发器兼容写入。局部查询/损坏测试使用明确的测试专用注入器，在临时关系执行原变更后发布私有损坏块，防止修改共享块误伤其它view；完整执行、fork和恢复仍由产品入口产生关键历史。22→23在原备份/事务边界内暂时重命名旧表、创建共享结构、逐view迁移并核对全部坐标，然后删除旧表并发布版本。失败回滚到22并保留备份；18起的旧库继续显式逐版升级，正常reader只接受23。
+
+View在线同负载测量（schema22→23，原件`history-dedup-view-comparison-001.json`）：summary_restart_continue阶段旧9276成员行变为1033共享成员行、114个块及712条view引用。成员表及全部相关索引页4366336→344064字节（包含membership_items_identity/ordinal与view_item_blocks_source）；总表/索引页16449536→12308480字节。assembly manifest/node正文未变。产品整体253.14→255.49秒，未观察到耗时改善；运行中两处遗漏显式事务的写入口已修，最终回收验收会在完整最终源码重跑。该证据不承诺固定压缩率或全链路线性增长。

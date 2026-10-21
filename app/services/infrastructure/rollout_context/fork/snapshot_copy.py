@@ -22,6 +22,10 @@ from app.services.infrastructure.rollout_context.storage.catalog.history_scope i
     bind_captured_namespace,
     current_scope,
 )
+from app.services.infrastructure.rollout_context.storage.catalog.view_items.store import (
+    clone_members,
+    replace_members,
+)
 from app.services.infrastructure.rollout_context.storage.schema import (
     HISTORY_NAMESPACE_SCHEMA_SQL,
 )
@@ -223,22 +227,21 @@ def _new_target_view(
         "VALUES (?, ?, NULL, 'fork', ?, ?, ?, NULL, ?)", (view_id, branch_id, *header, now),
     )
     if selected_prefix:
-        connection.execute(
-            "INSERT INTO context_view_items(view_id,item_id,logical_item_ordinal,visible,source_kind,context_selected,context_ordinal) "
-            "SELECT ?,selected.item_id,selected.visible_ordinal,1,member.source_kind,member.context_selected,"
+        members = connection.execute(
+            "SELECT selected.item_id,selected.visible_ordinal,1,member.source_kind,member.context_selected,"
             "CASE WHEN member.context_selected=1 THEN SUM(member.context_selected) OVER "
             "(ORDER BY CASE WHEN member.context_selected=1 THEN member.context_ordinal END NULLS LAST)-1 END "
             "FROM fork_selected_items selected JOIN context_view_items member "
             "ON member.item_id=selected.item_id AND member.view_id=? "
-            "WHERE selected.visible_ordinal IS NOT NULL", (view_id, source_view_id),
-        )
-        connection.execute(
-            "INSERT INTO context_view_items(view_id,item_id,logical_item_ordinal,visible,source_kind,context_selected,context_ordinal) "
-            "SELECT ?,selected.item_id,member.logical_item_ordinal,0,member.source_kind,0,NULL "
+            "WHERE selected.visible_ordinal IS NOT NULL", (source_view_id,),
+        ).fetchall()
+        members += connection.execute(
+            "SELECT selected.item_id,member.logical_item_ordinal,0,member.source_kind,0,NULL "
             "FROM fork_selected_items selected JOIN context_view_items member "
             "ON member.item_id=selected.item_id AND member.view_id=? "
-            "WHERE selected.visible_ordinal IS NULL", (view_id, source_view_id),
-        )
+            "WHERE selected.visible_ordinal IS NULL", (source_view_id,),
+        ).fetchall()
+        replace_members(connection, view_id, members)
         connection.execute(
             "INSERT INTO context_view_turns(view_id,turn_id,logical_turn_ordinal,user_message_sequence,"
             "final_message_sequence,root_input_item_id,fork_lineage_json) "
@@ -259,8 +262,8 @@ def _new_target_view(
             (view_id,),
         )
     else:
+        clone_members(connection, source_view_id, view_id)
         for table, columns in (
-            ("context_view_items", "item_id,logical_item_ordinal,visible,source_kind,context_selected,context_ordinal"),
             ("context_view_turns", ("turn_id,logical_turn_ordinal,user_message_sequence,"
                                    "final_message_sequence,root_input_item_id,fork_lineage_json")),
         ):

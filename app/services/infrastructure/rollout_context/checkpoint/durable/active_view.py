@@ -50,6 +50,7 @@ class RolloutActiveViewMixin:
                 thread_id, checkpoint_ns, session_id=session_id
             ) as connection:
                 self._storage._require_v2_runtime(connection)
+                connection.execute("BEGIN IMMEDIATE")
                 branch_row = connection.execute(
                     "SELECT active_branch_id FROM checkpoint_namespace_state WHERE checkpoint_ns = ?",
                     (checkpoint_ns,),

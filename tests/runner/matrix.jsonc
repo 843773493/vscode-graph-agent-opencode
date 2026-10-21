@@ -59,6 +59,38 @@
       ]
     },
     {
+      "id": "integration-execution-history-sharing",
+      "layer": "integration",
+      "client": null,
+      "enabled": true,
+      "timeoutMs": 300000,
+      "dataLimitKb": 4194304,
+      "command": [
+        "uv",
+        "run",
+        "--no-sync",
+        "pytest",
+        "-q",
+        "tests/integration/backend/sessions/rollout_context/test_delta_fork_history.py",
+        "tests/integration/backend/sessions/rollout_context/test_messages_delta_history.py",
+        "tests/integration/backend/sessions/rollout_context/test_message_revisions.py",
+        "tests/integration/backend/sessions/rollout_context/test_langgraph_channel_contract.py",
+        "tests/integration/backend/sessions/rollout_context/test_rollout_checkpoint_saver.py",
+        "tests/integration/backend/sessions/test_rollout_fork_protected.py",
+        "tests/integration/backend/sessions/test_rollout_fork_plan_registry.py",
+        "tests/unit/services/infrastructure/rollout_context/test_turn_activity_projection.py",
+        "tests/integration/backend/sessions/rollout_context/test_runtime_notice_consumption.py::test_fork_copies_notice_epoch_without_source_boundary_and_new_user_binds_target_acceptance",
+        "tests/integration/backend/sessions/test_rollout_fork_modes.py::test_native_cold_history_rejects_hidden_canonical_final",
+        "tests/integration/backend/sessions/test_rollout_fork_modes.py::test_fork_rejects_orphan_tool_result_before_publication",
+        "tests/integration/backend/sessions/test_rollout_fork_modes.py::test_fork_preserves_stream_member_time_across_checkpoint_carriers",
+        "tests/integration/backend/sessions/test_rollout_fork_modes.py::test_fork_first_provider_recompiles_typed_root_without_rewriting_imports",
+        "tests/integration/backend/sessions/test_session_history_loading.py::test_history_turn_visibility_uses_canonical_root_membership",
+        "tests/integration/backend/sessions/test_session_history_loading.py::test_history_bounded_final_rejects_mismatched_canonical_pointer",
+        "tests/integration/backend/sessions/test_session_history_loading.py::test_history_job_identity_requires_canonical_last_execution",
+        "tests/integration/backend/sessions/test_itemized_migration_integrity.py::test_corrupt_staging_is_not_initialized_as_recovered_target"
+      ]
+    },
+    {
       "id": "integration-browser-element-references",
       "layer": "integration",
       "client": null,

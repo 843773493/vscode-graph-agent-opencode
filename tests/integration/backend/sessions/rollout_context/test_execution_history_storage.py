@@ -157,8 +157,9 @@ def _storage_metrics(index: Path) -> dict[str, object]:
             "FROM checkpoint_channels channel LEFT JOIN checkpoint_state_values value ON value.value_id=channel.value_id "
             "GROUP BY channel.channel_name ORDER BY channel.channel_name"
         ).fetchall()
+        logical_view_members = connection.execute("SELECT count(*) FROM context_view_items").fetchone()[0]
     root = index.parent
-    return {"tables": tables, "pages": pages, "channels": channels,
+    return {"tables": tables, "pages": pages, "channels": channels, "logical_view_members": logical_view_members,
             "files": {str(p.relative_to(root)): p.stat().st_size for p in root.rglob('*') if p.is_file()}}
 
 

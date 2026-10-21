@@ -43,6 +43,9 @@ from app.services.infrastructure.rollout_context.storage.catalog.history_scope i
 from app.services.infrastructure.rollout_context.storage.catalog.message_revisions import (
     validate_message_revision_source,
 )
+from app.services.infrastructure.rollout_context.storage.catalog.view_items.store import (
+    prune_members,
+)
 from app.services.infrastructure.rollout_context.storage.checkpoint_lineage import (
     delta_history_path,
 )
@@ -495,10 +498,11 @@ def _prune_prefix_facts(connection: sqlite3.Connection) -> None:
     connection.execute(
         "DELETE FROM tool_calls WHERE assistant_message_sequence NOT IN (SELECT message_sequence FROM messages)",
     )
-    for table in ("item_resource_references", "item_catalog", "item_projections", "item_parts", "operation_anchors", "context_view_items"):
+    for table in ("item_resource_references", "item_catalog", "item_projections", "item_parts", "operation_anchors"):
         connection.execute(
             f"DELETE FROM {table} WHERE item_id NOT IN (SELECT item_id FROM fork_selected_items)",
         )
+    prune_members(connection)
     for table in ("turns", "turn_records", "turn_acceptances", "context_view_turns"):
         connection.execute(
             f"DELETE FROM {table} WHERE turn_id NOT IN (SELECT turn_id FROM fork_selected_turns)",
