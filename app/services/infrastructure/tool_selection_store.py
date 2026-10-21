@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import errno
 import json
 import os
 import time
@@ -153,6 +154,8 @@ def _acquire_file_lock(
             try:
                 msvcrt.locking(lock_file.fileno(), mode, 1)
             except OSError as error:
+                if error.errno not in (errno.EACCES, errno.EDEADLK):
+                    raise
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
                     raise TimeoutError(
