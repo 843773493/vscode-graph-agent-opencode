@@ -23,6 +23,8 @@ import pytest
 from app.core.session_catalog_store import (
     SessionCatalogNode,
     SessionCatalogStore,
+    SourceRetainedByForkError,
+    SourceRetentionOperationPendingError,
     SubtreeDeleteRecord,
 )
 from app.core.session_control_store import SessionControlStore
@@ -238,6 +240,126 @@ def tree(store: SessionCatalogStore, sessions_root: Path) -> DeleteTree:
 # ----------------------------------------------------------------------
 # 完整流
 # ----------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("source_index", [0, 1, 2])
+@pytest.mark.parametrize("claim_state", ["preparing", "active"])
+async def test_descendant_pin_blocks_folder_delete_before_any_session_drain(
+    service: SessionSubtreeDeleteService,
+    store: SessionCatalogStore,
+    sessions_root: Path,
+    tree: DeleteTree,
+    source_index: int,
+    claim_state: str,
+) -> None:
+    """任一深度的后代 pin 都阻断整个 Folder，不能先关闭别的 Session。"""
+    source = (tree.session_s1, tree.session_s2, tree.session_s3)[source_index]
+    claim_id = "descendant-pin"
+    before = {node_id: store.get_node(node_id) for node_id in tree.subtree_node_ids}
+    claim = store.create_or_get_fork_retention_claim(
+        claim_id=claim_id, workspace_id=WORKSPACE_ID,
+        source_session_id=source.node_id, target_session_id=tree.outsider.node_id,
+        source_lifecycle_generation=1,
+    )
+    if claim_state == "active":
+        claim = store.activate_fork_retention_claim(claim_id, expected_generation=1)
+    drained: list[str] = []
+
+    async def record_drain(session_id: str) -> None:
+        drained.append(session_id)
+
+    service.set_session_drain_callback(record_drain)
+    error_type = (
+        SourceRetainedByForkError if claim_state == "active"
+        else SourceRetentionOperationPendingError
+    )
+    with pytest.raises(error_type) as caught:
+        await service.delete(idempotency_key="folder-pin", root_node_id=tree.root)
+
+    assert caught.value.source_session_id == source.node_id
+    assert caught.value.claim_id == claim_id
+    assert caught.value.target_session_id == tree.outsider.node_id
+    assert drained == []
+    assert {node_id: store.get_node(node_id) for node_id in before} == before
+    record = store.get_subtree_delete_record("folder-pin")
+    assert record.state == "aborted"
+    assert record.drained_session_ids == ()
+    assert {item.node_id: item.revision for item in record.frozen_node_ids} == {
+        node_id: node.revision for node_id, node in before.items()
+    }
+    assert record.frozen_session_locators == {
+        node_id: node.storage_relative_locator for node_id, node in before.items()
+        if node.kind == "session"
+    }
+    assert store.get_fork_retention_claim(claim_id) == claim
+    for node in (tree.session_s1, tree.session_s2, tree.session_s3, tree.outsider):
+        directory = date_bucket_dir(sessions_root, node.storage_relative_locator)
+        assert directory.is_dir()
+        control = SessionControlStore(directory / "session-control.sqlite", read_only=True)
+        try:
+            assert control.get_fence() == ("active", 1)
+        finally:
+            control.close()
+    assert not (sessions_root / _DELETING_DIR_NAME / "folder-pin").exists()
+
+async def test_released_descendant_pin_allows_complete_folder_delete(
+    service: SessionSubtreeDeleteService,
+    store: SessionCatalogStore,
+    tree: DeleteTree,
+) -> None:
+    """显式释放后才能重试整树删除，树外 fork 目标不受影响。"""
+    store.create_or_get_fork_retention_claim(
+        claim_id="released-descendant-pin", workspace_id=WORKSPACE_ID,
+        source_session_id=tree.session_s3.node_id,
+        target_session_id=tree.outsider.node_id, source_lifecycle_generation=1,
+    )
+    store.activate_fork_retention_claim("released-descendant-pin", expected_generation=1)
+    released = store.release_fork_retention_claim("released-descendant-pin", "target-release")
+    result = await service.delete(idempotency_key="folder-released-pin", root_node_id=tree.root)
+    assert result.record_state == "completed"
+    assert set(result.drained_session_ids) == set(tree.subtree_session_ids)
+    for node_id in tree.subtree_node_ids:
+        with pytest.raises(KeyError):
+            store.get_node(node_id)
+    assert store.get_node(tree.outsider.node_id) == tree.outsider
+    assert store.get_fork_retention_claim("released-descendant-pin") == released
+
+@pytest.mark.parametrize("source_index", [0, 1, 2])
+async def test_folder_catalog_delete_rejects_descendant_pin_with_active_local_fences(
+    store: SessionCatalogStore,
+    sessions_root: Path,
+    tree: DeleteTree,
+    source_index: int,
+) -> None:
+    """catalog 已整树 deleting 即拒绝 claim，不等待各 Session local fence。"""
+    source = (tree.session_s1, tree.session_s2, tree.session_s3)[source_index]
+    store.create_or_get_subtree_delete_record(
+        idempotency_key="folder-delete-first", workspace_id=WORKSPACE_ID,
+        root_node_id=tree.root,
+    )
+    store.mark_subtree_deleting("folder-delete-first")
+    before = {node_id: store.get_node(node_id) for node_id in tree.subtree_node_ids}
+    record = store.get_subtree_delete_record("folder-delete-first")
+    directory = date_bucket_dir(sessions_root, source.storage_relative_locator)
+    control = SessionControlStore(directory / "session-control.sqlite", read_only=True)
+    try:
+        assert control.get_fence() == ("active", 1)
+        with pytest.raises(RuntimeError, match="零副作用失败"):
+            store.create_or_get_fork_retention_claim(
+                claim_id="late-descendant-pin", workspace_id=WORKSPACE_ID,
+                source_session_id=source.node_id,
+                target_session_id=tree.outsider.node_id, source_lifecycle_generation=1,
+            )
+        assert control.get_fence() == ("active", 1)
+        assert control.list_non_terminal_leases() == ()
+    finally:
+        control.close()
+    with pytest.raises(KeyError):
+        store.get_fork_retention_claim("late-descendant-pin")
+    assert store.list_pinned_claims_for_source(source.node_id) == []
+    assert store.get_subtree_delete_record("folder-delete-first") == record
+    assert {node_id: store.get_node(node_id) for node_id in before} == before
+    assert all(node.state == "deleting" for node in before.values())
 
 
 async def test_delete_full_flow_tombstones_and_isolates(
