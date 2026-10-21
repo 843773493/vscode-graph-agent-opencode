@@ -2,7 +2,11 @@ from __future__ import annotations
 
 import errno
 import sqlite3
+import subprocess
+import sys
 from datetime import UTC, datetime
+from pathlib import Path
+from textwrap import dedent
 
 import pytest
 
@@ -69,6 +73,45 @@ def test_sqlite_state_rejects_second_owner_in_same_process(tmp_path):
             )
     finally:
         first.close()
+
+
+def test_sqlite_state_rejects_owner_in_separate_process(tmp_path):
+    database_path = tmp_path / "state.sqlite"
+    first = SQLiteStateDatabase(
+        path=database_path,
+        schema_version=1,
+        migrations=("CREATE TABLE sample (value TEXT NOT NULL);",),
+    )
+    try:
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                dedent(
+                    """\
+                    import sys
+                    from pathlib import Path
+                    from app.core.sqlite_state import SQLiteStateDatabase
+                    SQLiteStateDatabase(
+                        path=Path(sys.argv[1]),
+                        schema_version=1,
+                        migrations=("CREATE TABLE sample (value TEXT NOT NULL);",),
+                    )
+                    """
+                ),
+                str(database_path),
+            ],
+            cwd=Path.cwd(),
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+    finally:
+        first.close()
+
+    assert result.returncode != 0
+    assert "SQLite 状态库已被另一个进程占用" in result.stderr
 
 
 def test_sqlite_process_ownership_uses_windows_byte_range_lock(monkeypatch, tmp_path):
