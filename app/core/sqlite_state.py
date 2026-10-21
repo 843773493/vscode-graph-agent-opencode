@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import _sqlite3
 import ctypes
+import errno
 import os
 import re
 import sqlite3
@@ -9,9 +10,15 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Final, Self
+from typing import BinaryIO, Final, Self
 
 SQLITE_BUSY_TIMEOUT_MS: Final = 5000
+_IS_WINDOWS = os.name == "nt"
+
+if _IS_WINDOWS:
+    import msvcrt
+else:
+    import fcntl
 
 
 class _SQLiteVFSHeader(ctypes.Structure):
@@ -142,34 +149,51 @@ class SQLiteProcessOwnership:
 
     def __init__(self, database_path: Path) -> None:
         self._lock_path = database_path.with_name(f".{database_path.name}.lock")
-        self._handle = None
+        self._lock_handle: BinaryIO | None = None
 
     def acquire(self) -> None:
         self._lock_path.parent.mkdir(parents=True, exist_ok=True)
-        handle = self._lock_path.open("a+", encoding="utf-8")
-        if os.name == "nt":
-            # TODO: Windows 运行时改为使用等价的原子文件锁实现。
-            handle.close()
-            raise RuntimeError("Windows 暂不支持 SQLite 状态库进程所有权锁")
-        import fcntl
-
+        handle = self._lock_path.open("a+b")
+        lock_attempted = False
         try:
-            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError as error:
+            if _IS_WINDOWS:
+                handle.seek(0, os.SEEK_END)
+                if handle.tell() == 0:
+                    handle.write(b"\0")
+                    handle.flush()
+                handle.seek(0)
+                lock_attempted = True
+                msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+            else:
+                lock_attempted = True
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError as error:
             handle.close()
+            contended = lock_attempted and (
+                error.errno in (errno.EACCES, errno.EDEADLK)
+                if _IS_WINDOWS
+                else isinstance(error, BlockingIOError)
+            )
+            if not contended:
+                raise
             raise RuntimeError(
                 f"SQLite 状态库已被另一个进程占用: {self._lock_path}"
             ) from error
-        self._handle = handle
+        self._lock_handle = handle
 
     def release(self) -> None:
-        if self._handle is None:
+        handle = self._lock_handle
+        if handle is None:
             return
-        import fcntl
-
-        fcntl.flock(self._handle.fileno(), fcntl.LOCK_UN)
-        self._handle.close()
-        self._handle = None
+        self._lock_handle = None
+        try:
+            if _IS_WINDOWS:
+                handle.seek(0)
+                msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+        finally:
+            handle.close()
 
 
 class SQLiteStateDatabase:

@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import errno
 import sqlite3
 from datetime import UTC, datetime
 
 import pytest
 
+from app.core import sqlite_state
 from app.core.sqlite_state import SQLiteStateDatabase, utc_now_text
 
 
@@ -52,7 +54,7 @@ def test_sqlite_state_initializes_wal_and_migrations(tmp_path):
         database.close()
 
 
-def test_sqlite_state_rejects_second_process_owner(tmp_path):
+def test_sqlite_state_rejects_second_owner_in_same_process(tmp_path):
     first = SQLiteStateDatabase(
         path=tmp_path / "state.sqlite",
         schema_version=1,
@@ -67,6 +69,37 @@ def test_sqlite_state_rejects_second_process_owner(tmp_path):
             )
     finally:
         first.close()
+
+
+def test_sqlite_process_ownership_uses_windows_byte_range_lock(monkeypatch, tmp_path):
+    class WindowsLockApi:
+        LK_NBLCK = 1
+        LK_UNLCK = 2
+
+        def __init__(self):
+            self.calls = []
+            self.error = None
+
+        def locking(self, file_descriptor, mode, byte_count):
+            self.calls.append((file_descriptor, mode, byte_count))
+            if self.error is not None:
+                raise self.error
+
+    windows_lock_api = WindowsLockApi()
+    monkeypatch.setattr(sqlite_state, "_IS_WINDOWS", True)
+    monkeypatch.setattr(sqlite_state, "msvcrt", windows_lock_api, raising=False)
+
+    ownership = sqlite_state.SQLiteProcessOwnership(tmp_path / "state.sqlite")
+    ownership.acquire()
+    assert (tmp_path / ".state.sqlite.lock").read_bytes() == b"\0"
+    ownership.release()
+
+    assert windows_lock_api.calls[0][1:] == (WindowsLockApi.LK_NBLCK, 1)
+    assert windows_lock_api.calls[1][1:] == (WindowsLockApi.LK_UNLCK, 1)
+
+    windows_lock_api.error = PermissionError(errno.EACCES, "锁区已占用")
+    with pytest.raises(RuntimeError, match="已被另一个进程占用"):
+        sqlite_state.SQLiteProcessOwnership(tmp_path / "state.sqlite").acquire()
 
 
 def test_sqlite_state_allows_explicit_shared_processes(tmp_path):
