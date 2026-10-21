@@ -173,6 +173,42 @@ def superseded_stream_content_item_ids(
     }
 
 
+def superseded_canonical_message_item_ids(items: Sequence[CanonicalItemRecord]) -> set[str]:
+    """显式正文版本先择一，之后才合并实时流与 checkpoint carrier。"""
+    by_id = {item.item_id: item for item in items}
+    replaced: dict[str, str] = {}
+    groups: set[str] = set()
+    for item in items:
+        group = item.projection_group
+        if group is not None and group.ordinal != group.size - 1:
+            continue
+        relations = [relation for relation in item.provenance_relations
+                     if relation.relation == "replaces" and relation.target_kind == "canonical_item"]
+        if len(relations) > 1:
+            raise ValueError(f"canonical message revision 来源不唯一: {item.item_id}")
+        for relation in relations:
+            if relation.target_id in replaced and replaced[relation.target_id] != item.item_id:
+                raise ValueError(f"canonical message revision 存在分叉: {relation.target_id}")
+            replaced[relation.target_id] = item.item_id
+            previous = by_id.get(relation.target_id)
+            if previous is None:
+                # 当前 selection 可以不含源正文；归属与来源存在性由 storage owner 核验。
+                continue
+            old_identity, new_identity = previous.projection_identity, item.projection_identity
+            if (previous.item_sequence >= item.item_sequence
+                    or old_identity is None or new_identity is None
+                    or old_identity.projection_message_id is None
+                    or old_identity.projection_message_id != new_identity.projection_message_id):
+                raise ValueError(f"canonical message revision 身份/顺序不一致: {item.item_id}")
+            if previous.message_group_id is not None:
+                groups.add(previous.message_group_id)
+    return set(replaced) & set(by_id) | {
+        item.item_id for item in items if item.message_group_id in groups
+    }
+
+
 def superseded_item_ids(items: Sequence[CanonicalItemRecord]) -> set[str]:
-    """返回同一 selection 中必须排除的全部 shadow。"""
-    return superseded_tool_group_item_ids(items) | superseded_stream_content_item_ids(items)
+    """先按精确版本排除旧正文，再择一 stream/checkpoint shadow。"""
+    replaced = superseded_canonical_message_item_ids(items)
+    selected = tuple(item for item in items if item.item_id not in replaced)
+    return replaced | superseded_tool_group_item_ids(selected) | superseded_stream_content_item_ids(selected)

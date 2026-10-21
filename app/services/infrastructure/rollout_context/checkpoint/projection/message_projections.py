@@ -22,6 +22,9 @@ from app.domain.itemized.records import (
 from app.services.infrastructure.rollout_context.storage.catalog.message_groups import (
     read_message_group,
 )
+from app.services.infrastructure.rollout_context.storage.catalog.message_revisions import (
+    validate_message_revision_source,
+)
 from app.services.infrastructure.rollout_context.storage.serialization import (
     canonical_json_text as _json,
 )
@@ -198,6 +201,12 @@ class RolloutMessageProjectionMixin:
                 )
             return existing_sequence, message_id, expected_role
 
+        # logical ID 的新正文必须声明旧 anchor；不能仅因索引允许多版本而
+        # 接受无来源的重复消息，或按最新行猜测替换对象。
+        if connection.execute(
+            "SELECT 1 FROM messages WHERE message_id=? LIMIT 1", (message_id,),
+        ).fetchone() is not None and validate_message_revision_source(connection, item) is None:
+            raise ValueError(f"canonical message 新版本缺少精确 replaces 来源: {message_id}")
         connection.execute(
             "INSERT INTO messages(message_sequence, message_id, turn_id, execution_id, "
             "role, jsonl_offset, jsonl_length, content_length, content_hash, "

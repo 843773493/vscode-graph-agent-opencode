@@ -39,6 +39,9 @@ from app.services.infrastructure.rollout_context.storage.catalog.message_groups 
     find_message_locator,
     read_message_group,
 )
+from app.services.infrastructure.rollout_context.storage.catalog.message_revisions import (
+    validate_message_revision_source,
+)
 from app.services.infrastructure.rollout_context.storage.catalog.tool_result_identity import (
     _strict_db_optional_text,
     _strict_db_text,
@@ -166,6 +169,8 @@ class RolloutItemsMixin:
     ) -> None:
         """写入唯一 canonical catalog，并生成对应 item projection。"""
         item.validate()
+        if item.projection_group is None or item.projection_group.ordinal == item.projection_group.size - 1:
+            validate_message_revision_source(connection, item)
         source_revision, part_ordinal = validate_item_storage_projection(item)
         if (
             not isinstance(commit_id, int)
@@ -554,6 +559,7 @@ class RolloutItemsMixin:
                         )
                         validate_catalog_projection(
                             item,
+                            connection=read_connection,
                             projection_manifest_json=expected_projection_manifest,
                             tool_call_id=expected_tool_call_id,
                             relation_rows=relations_by_item.get(item.item_id, ()),

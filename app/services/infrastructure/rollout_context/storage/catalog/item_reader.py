@@ -82,7 +82,8 @@ class RolloutCanonicalReadMixin:
             (item.item_id,),
         ).fetchall()
         validate_catalog_projection(
-            item, projection_manifest_json=strict_text(catalog[4], field="item_catalog.projection_manifest_json"),
+            item, connection=connection,
+            projection_manifest_json=strict_text(catalog[4], field="item_catalog.projection_manifest_json"),
             tool_call_id=strict_optional_text(catalog[5], field="item_catalog.tool_call_id"),
             relation_rows=relations,
         )

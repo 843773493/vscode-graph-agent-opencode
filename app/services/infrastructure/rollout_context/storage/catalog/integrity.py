@@ -17,6 +17,9 @@ from app.domain.itemized.records import (
     CanonicalItemRecord,
     parse_item_projection_manifest,
 )
+from app.services.infrastructure.rollout_context.storage.catalog.message_revisions import (
+    validate_message_revision_source,
+)
 from app.services.infrastructure.rollout_context.storage.serialization import (
     canonical_json_line,
     canonical_json_text,
@@ -59,6 +62,7 @@ def catalog_body_validation_scope(
 def validate_catalog_projection(
     item: CanonicalItemRecord,
     *,
+    connection: sqlite3.Connection,
     projection_manifest_json: str,
     tool_call_id: str | None,
     relation_rows: Sequence[tuple[object, ...]],
@@ -75,6 +79,8 @@ def validate_catalog_projection(
     ]
     if list(relation_rows) != expected:
         raise RuntimeError(f"item relation index 与 canonical typed relations 不一致: {item.item_id}")
+    if item.projection_group is None or item.projection_group.ordinal == item.projection_group.size - 1:
+        validate_message_revision_source(connection, item)
 
 
 def validate_catalog_body(

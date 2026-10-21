@@ -6,7 +6,39 @@ import hashlib
 import sqlite3
 
 
+def restore_schema20(connection: sqlite3.Connection) -> None:
+    connection.executescript("""
+        ALTER TABLE messages RENAME TO messages_v21;
+        DROP INDEX messages_turn_index;
+        DROP INDEX messages_role_index;
+        DROP INDEX messages_offset_index;
+        DROP INDEX messages_execution_index;
+        DROP INDEX messages_logical_identity;
+        CREATE TABLE messages (
+            message_sequence INTEGER PRIMARY KEY, message_id TEXT NOT NULL UNIQUE,
+            turn_id TEXT, execution_id TEXT NOT NULL,
+            role TEXT NOT NULL CHECK(role IN ('user','assistant','tool')),
+            jsonl_offset INTEGER NOT NULL, jsonl_length INTEGER NOT NULL,
+            content_length INTEGER NOT NULL, content_hash TEXT NOT NULL,
+            visibility TEXT NOT NULL, commit_id INTEGER NOT NULL, created_at TEXT NOT NULL
+        );
+        INSERT INTO messages SELECT * FROM messages_v21;
+        DROP TABLE messages_v21;
+        CREATE INDEX messages_turn_index ON messages(turn_id, message_sequence);
+        CREATE INDEX messages_role_index ON messages(role, message_sequence);
+        CREATE INDEX messages_offset_index ON messages(jsonl_offset);
+        CREATE INDEX messages_execution_index ON messages(execution_id, message_sequence);
+        UPDATE database_meta SET schema_version=20;
+    """)
+    connection.execute(
+        "UPDATE schema_migrations SET to_version=20,migration_name='rollout_sqlite_v20',migration_checksum=? WHERE from_version=0",
+        (hashlib.sha256(b"rollout_sqlite_v20").hexdigest(),),
+    )
+    connection.commit()
+
+
 def restore_schema19(connection: sqlite3.Connection) -> None:
+    restore_schema20(connection)
     connection.executescript("""
         ALTER TABLE checkpoint_channels RENAME TO checkpoint_channels_v20;
         DROP INDEX checkpoint_channels_value;

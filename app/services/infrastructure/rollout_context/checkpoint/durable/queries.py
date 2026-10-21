@@ -36,7 +36,10 @@ from app.services.infrastructure.rollout_context.storage.transaction import (
     strict_optional_text,
     strict_text,
 )
-from app.services.mapping.itemized.carrier_dedup import superseded_item_ids
+from app.services.mapping.itemized.carrier_dedup import (
+    superseded_canonical_message_item_ids,
+    superseded_item_ids,
+)
 
 if TYPE_CHECKING:
     from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
@@ -358,21 +361,19 @@ class RolloutCheckpointQueriesMixin:
         items: tuple[CanonicalItemRecord, ...],
     ) -> tuple[ContextRef, ...]:
         """从已提交 item 生成 Saver-owned canonical refs。"""
-        by_message_id = {
-            message_id: item
-            for item in items
-            if isinstance(
-                message_id := (
-                    item.projection_identity.projection_message_id
-                    if item.projection_identity is not None
-                    else None
-                ),
-                str,
-            )
-            and message_id
-        }
+        replaced = superseded_canonical_message_item_ids(items)
+        selected = tuple(item for item in items if item.item_id not in replaced)
+        by_message_id: dict[str, CanonicalItemRecord] = {}
+        for item in selected:
+            identity = item.projection_identity
+            message_id = identity.projection_message_id if identity is not None else None
+            if message_id is None:
+                continue
+            if message_id in by_message_id:
+                raise RuntimeError(f"canonical message selection 版本歧义: {message_id}")
+            by_message_id[message_id] = item
         superseded_message_ids: set[str] = set()
-        for item in items:
+        for item in selected:
             superseded = next(
                 (
                     relation.target_id
@@ -412,7 +413,7 @@ class RolloutCheckpointQueriesMixin:
                 session_id=session_id,
                 thread_id=thread_id,
             )
-            for item in items
+            for item in selected
             if (
                 item.projection_identity.projection_message_id
                 if item.projection_identity is not None

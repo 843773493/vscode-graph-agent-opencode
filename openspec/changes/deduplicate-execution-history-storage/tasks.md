@@ -58,3 +58,6 @@
 2026-10-21 精确消息定位前置片：request、pending、projection、final pointer、rewind和compaction统一用canonical anchor或冻结view解析消息；无坐标遇到多个版本必须报错，不猜latest。schema仍20、尚未开放同ID多版本，3.2不勾选。`history-dedup-exact-locators-001`157例通过（57.05秒），最终缺失canonical guard及compaction单测24例通过（4.60秒），Ruff及只读独审通过。完整Gateway负载`history-dedup-exact-locators-product-001`通过（225.45秒）；运行中仅将定位查询改为LEFT JOIN并增加悬空投影拒绝，健康路径相同，最终错误分支由24例补验，不冒充全程单一源码指纹。扩展compaction检查80例通过、1例因旧fixture声明scratchpad版本2却提供new_versions版本1失败，未进入本片定位代码；原件保留，不放宽版本合同。
 
 工具活动索引前置片：SQL与归并消费者统一按canonical anchor关联工具坐标，不再按logical message ID合并两个正文版本。`history-dedup-activity-version-001`17例通过（2.45秒），包含同logical ID不同anchor的局部投影；carrier专项及Ruff结果见同前缀原件。本片不开放多版本写入、不勾3.2。
+
+2026-10-21 消息版本来源前置片：schema21及20→21迁移已实现。`history-dedup-revision-schema-20261021-01`75例通过（36.75秒），覆盖迁移、失败回滚、state version及assembly；最终revision/group专项`history-dedup-revision-sources-20261021-03`50例通过（23.62秒），Ruff `history-dedup-revision-static-20261021-04`通过。原先opaque/provenance三条fixture在未发布canonical正文时生成引用，改为经正式append_items先发布后，原断言通过（定向3例5.77秒，未放宽缺失引用检查）。selection初版31例/105例及carrier专项原件继续保留。完整Gateway产品负载`history-dedup-revision-product-20261021-01`1例通过（227.67秒），包含摘要、重启、深fork、源删除、regenerate和历史request_hash；期间追加的revision guard分支由最终定向专项补验，不宣称该产品运行全程单一源码指纹，也不以它证明尚未接入的Delta。3.2—3.5继续未勾选。
+只读独审核对20→21事务复制/索引、写入与冷读来源守卫及实际消费者，未发现可确认的数据正确性阻断。

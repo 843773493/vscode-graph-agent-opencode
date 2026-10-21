@@ -20,9 +20,16 @@ from app.services.infrastructure.rollout_context.storage.schema_wakeup import (
     RUNTIME_WAKEUP_SCHEMA_SQL,
 )
 
-ROLLOUT_SCHEMA_VERSION = 20
+ROLLOUT_SCHEMA_VERSION = 21
 MESSAGE_FORMAT_VERSION = 1
 ROLLOUT_FORMAT_VERSION = 2
+
+MESSAGES_SCHEMA_SQL = load_sql(__package__, "sql/messages.sql")
+MESSAGES_VERSION_MIGRATION_SQL = (
+    load_sql(__package__, "sql/messages_020_021_prepare.sql")
+    + MESSAGES_SCHEMA_SQL
+    + load_sql(__package__, "sql/messages_020_021.sql")
+)
 
 HISTORY_NAMESPACE_SCHEMA_SQL = load_sql(__package__, "sql/history_namespace.sql")
 """复制历史的冻结 namespace；正文与历史业务 hash 不因当前归属改变。"""
@@ -61,6 +68,7 @@ def initialize_rollout_schema(
         + ITEM_RESOURCE_REFERENCES_SCHEMA_SQL
         + ASSEMBLY_REF_SCHEMA_SQL
         + CHANNEL_VALUES_SCHEMA_SQL
+        + MESSAGES_SCHEMA_SQL
         + load_sql(__package__, "sql/rollout.sql")
     )
 

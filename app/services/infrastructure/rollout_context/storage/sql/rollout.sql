@@ -71,14 +71,6 @@
             ancestor_view_id TEXT NOT NULL, ancestor_depth INTEGER NOT NULL,
             PRIMARY KEY(view_id, jump_level)
         );
-        CREATE TABLE IF NOT EXISTS messages (
-            message_sequence INTEGER PRIMARY KEY, message_id TEXT NOT NULL UNIQUE,
-            turn_id TEXT, execution_id TEXT NOT NULL,
-            role TEXT NOT NULL CHECK(role IN ('user','assistant','tool')),
-            jsonl_offset INTEGER NOT NULL, jsonl_length INTEGER NOT NULL,
-            content_length INTEGER NOT NULL, content_hash TEXT NOT NULL,
-            visibility TEXT NOT NULL, commit_id INTEGER NOT NULL, created_at TEXT NOT NULL
-        );
         CREATE TABLE IF NOT EXISTS message_projections (
             message_sequence INTEGER PRIMARY KEY, text_preview TEXT, visible_text TEXT,
             visible_text_length INTEGER NOT NULL, visible_text_truncated INTEGER NOT NULL DEFAULT 0,
@@ -531,9 +523,6 @@
             completed_at TEXT,
             error_message TEXT
         );
-        CREATE INDEX IF NOT EXISTS messages_turn_index ON messages(turn_id, message_sequence);
-        CREATE INDEX IF NOT EXISTS messages_role_index ON messages(role, message_sequence);
-        CREATE INDEX IF NOT EXISTS messages_offset_index ON messages(jsonl_offset);
         CREATE INDEX IF NOT EXISTS turns_ordinal_index ON turns(turn_ordinal);
         CREATE INDEX IF NOT EXISTS context_view_turns_ordinal_index ON context_view_turns(view_id, logical_turn_ordinal);
         CREATE INDEX IF NOT EXISTS context_view_turns_turn_index ON context_view_turns(turn_id, view_id);
@@ -559,7 +548,6 @@
         CREATE INDEX IF NOT EXISTS executions_owner_index ON executions(session_id, thread_id, turn_id, attempt);
         CREATE INDEX IF NOT EXISTS executions_internal_history_index
             ON executions(session_id, thread_id, execution_origin, created_at);
-        CREATE INDEX IF NOT EXISTS messages_execution_index ON messages(execution_id, message_sequence);
         CREATE INDEX IF NOT EXISTS item_catalog_execution_index ON item_catalog(execution_id, item_sequence);
         CREATE INDEX IF NOT EXISTS model_calls_owner_index ON model_calls(session_id, thread_id, execution_id, attempt);
         CREATE INDEX IF NOT EXISTS turn_execution_links_owner_index ON turn_execution_links(session_id, thread_id, turn_id, execution_id);

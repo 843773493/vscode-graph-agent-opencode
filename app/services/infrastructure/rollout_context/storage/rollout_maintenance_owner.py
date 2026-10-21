@@ -41,6 +41,7 @@ from app.services.infrastructure.rollout_context.storage.rollout_schema_introspe
     RolloutSchemaIntrospectionMixin,
 )
 from app.services.infrastructure.rollout_context.storage.schema import (
+    MESSAGES_VERSION_MIGRATION_SQL,
     initialize_rollout_schema,
 )
 from app.services.infrastructure.rollout_context.storage.schema_channel_versions import (
@@ -189,7 +190,7 @@ class RolloutMaintenanceOwner(
                     )
                 if (to_version > storage_version.ROLLOUT_SCHEMA_VERSION
                         or (to_version != storage_version.ROLLOUT_SCHEMA_VERSION
-                            and (current_version, to_version) not in {(18, 19), (19, 20)})):
+                            and (current_version, to_version) not in {(18, 19), (19, 20), (20, 21)})):
                     raise RuntimeError(
                         "当前程序尚未声明目标 SQLite schema 版本: "
                         f"target={to_version}, supported={storage_version.ROLLOUT_SCHEMA_VERSION}"
@@ -239,6 +240,8 @@ class RolloutMaintenanceOwner(
                         if migration_sql != CHANNEL_VALUES_MIGRATION_SQL:
                             raise ValueError("schema migration 19→20 必须使用登记的状态版本 SQL")
                         validate_legacy_channel_values(connection)
+                    if (current_version, to_version) == (20, 21) and migration_sql != MESSAGES_VERSION_MIGRATION_SQL:
+                        raise ValueError("schema migration 20→21 必须使用登记的消息版本 SQL")
                     execute_atomic_schema_sql(connection, migration_sql)
                     meta_result = connection.execute(
                         "UPDATE database_meta SET schema_version = ?, updated_at = ? "

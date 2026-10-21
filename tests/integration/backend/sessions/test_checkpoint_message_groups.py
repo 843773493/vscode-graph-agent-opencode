@@ -145,8 +145,8 @@ def _save(tmp_path, group_case):
 
 
 @pytest.fixture
-def opaque_group_case(group_case):
-    _, _, messages, _ = group_case
+def opaque_group_case(tmp_path, group_case):
+    session_id, _, messages, _ = group_case
     codec = LangChainMessageCodec()
     group = codec.items_for_message(
         messages[1],
@@ -183,6 +183,10 @@ def opaque_group_case(group_case):
         )
         for index, item in enumerate(group)
     )
+    # carrier 的无正文 manifest 引用已发布的 canonical 组，不能替测试完成首次发布。
+    saver = RolloutCheckpointSaver(tmp_path)
+    thread_id = saver._storage.storage.main_thread_id(session_id)
+    saver.append_items(session_id, members, thread_id=thread_id)
     messages[1] = codec.from_dict(codec.project_message(members))
     return group_case, members
 

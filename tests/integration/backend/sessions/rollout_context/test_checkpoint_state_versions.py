@@ -17,6 +17,9 @@ from app.services.infrastructure.rollout_context.checkpoint.saver import (
 from app.services.infrastructure.rollout_context.storage.catalog.history_scope import (
     HistoricalNamespaceBinding,
 )
+from app.services.infrastructure.rollout_context.storage.schema import (
+    MESSAGES_VERSION_MIGRATION_SQL,
+)
 from app.services.infrastructure.rollout_context.storage.schema_channel_versions import (
     CHANNEL_VALUES_MIGRATION_SQL,
 )
@@ -152,6 +155,10 @@ def test_schema19_upgrade_deduplicates_or_rejects_conflicting_history(version_ca
             assert connection.execute("SELECT count(*) FROM checkpoint_channels WHERE channel_name='state'").fetchone() == (2,)
     else:
         saver._storage.storage.migrate_schema(admission.thread_id, **arguments)
+        saver._storage.storage.migrate_schema(
+            admission.thread_id, session_id=SESSION_ID, to_version=21,
+            migration_name="canonical_message_versions", migration_sql=MESSAGES_VERSION_MIGRATION_SQL,
+        )
         with _execution_scope(admission):
             assert RolloutCheckpointSaver(saver._storage.storage.sessions_dir).get_tuple(child).checkpoint["channel_values"]["state"] == value
         with sqlite3.connect(index) as connection:

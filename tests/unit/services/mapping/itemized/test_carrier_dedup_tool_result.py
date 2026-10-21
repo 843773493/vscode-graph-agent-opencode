@@ -25,6 +25,7 @@ from app.domain.itemized.enums import (
 from app.domain.itemized.hashing import content_hash
 from app.domain.itemized.identity.item_projection import (
     ItemProjectionIdentity,
+    ItemProvenanceRelation,
     ProjectionGroup,
     ReasoningCarrier,
 )
@@ -337,3 +338,44 @@ def test_unknown_reasoning_extension_stays_unsupported(
     messages = project_canonical_items((unknown,), capability_losses=losses)
     assert messages == []
     assert losses == [f"{unknown.item_id}:reasoning/extension"]
+
+
+@pytest.fixture
+def revised_tool_group():
+    old = _confirmed_tool_call(5)
+    assert old.projection_identity.projection_message_id is not None
+    revised = replace(
+        old, item_id="revised-anchor", item_sequence=8, message_group_id="revised-group",
+        provenance_relations=(ItemProvenanceRelation(
+            relation="replaces", target_kind="canonical_item", target_id=old.item_id,
+            target_session_id="source-session", target_thread_id="source-thread",
+            target_turn_id=TURN, target_model_call_id=MODEL_CALL,
+        ),),
+    )
+    return old, revised
+
+
+def test_canonical_message_revision_precedes_checkpoint_carrier_dedup(revised_tool_group):
+    old, revised = revised_tool_group
+    assert superseded_item_ids((old, revised)) == {old.item_id}
+    assert superseded_item_ids((old,)) == set()
+    assert superseded_item_ids((revised,)) == set()
+
+
+def test_canonical_revision_replaces_whole_message_group(revised_tool_group):
+    old, revised = revised_tool_group
+    reasoning = replace(_confirmed_reasoning(4), message_group_id=old.message_group_id)
+    assert superseded_item_ids((reasoning, old, revised)) == {reasoning.item_id, old.item_id}
+
+
+def test_canonical_revision_chain_preserves_only_selected_head(revised_tool_group):
+    old, revised = revised_tool_group
+    newest = replace(revised, item_id="newest-anchor", item_sequence=10, message_group_id="newest-group",
+        provenance_relations=(replace(revised.provenance_relations[0], target_id=revised.item_id),))
+    assert superseded_item_ids((old, revised, newest)) == {old.item_id, revised.item_id}
+    with pytest.raises(ValueError, match="分叉"):
+        superseded_item_ids((old, revised, replace(newest, provenance_relations=revised.provenance_relations)))
+    with pytest.raises(ValueError, match="身份/顺序"):
+        superseded_item_ids((old, replace(revised, item_sequence=old.item_sequence)))
+    with pytest.raises(ValueError, match="身份/顺序"):
+        superseded_item_ids((old, replace(revised, projection_identity=replace(revised.projection_identity, projection_message_id="another"))))
