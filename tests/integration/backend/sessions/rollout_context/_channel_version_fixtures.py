@@ -5,8 +5,23 @@ from __future__ import annotations
 import hashlib
 import sqlite3
 
+from app.domain.itemized.hashing import canonical_json_bytes
+from app.services.infrastructure.rollout_context.assembly.content_store import (
+    load_snapshot,
+)
+
+
+def restore_schema21(connection: sqlite3.Connection) -> None:
+    for key, raw in connection.execute("SELECT assembly_id,snapshot_json FROM context_assemblies").fetchall():
+        connection.execute("UPDATE context_assemblies SET snapshot_json=? WHERE assembly_id=?", (canonical_json_bytes(load_snapshot(connection, raw)).decode(), key))
+    connection.execute("DROP TABLE assembly_content_nodes")
+    connection.execute("UPDATE database_meta SET schema_version=21")
+    connection.execute("UPDATE schema_migrations SET to_version=21,migration_name='rollout_sqlite_v21',migration_checksum=? WHERE from_version=0", (hashlib.sha256(b"rollout_sqlite_v21").hexdigest(),))
+    connection.commit()
+
 
 def restore_schema20(connection: sqlite3.Connection) -> None:
+    restore_schema21(connection)
     connection.executescript("""
         ALTER TABLE messages RENAME TO messages_v21;
         DROP INDEX messages_turn_index;

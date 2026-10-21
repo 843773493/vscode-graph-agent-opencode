@@ -61,3 +61,13 @@ TODO（带测量的长历史生成长尾）：`history-dedup-state-fixture-timed
 官方messages Delta切片不改变schema21：checkpoint_channels.value_state使用view（旧完整基准）、snapshot和delta；snapshot正文依旧由冻结view/canonical重建，Delta省略正文并通过官方get_delta_channel_history恢复。精确父链按namespace核验，历史writes按task_path/task_id/idx排序，排除目标pending；缺少已引用祖先或应有基准直接失败。MessagesDeltaChannel保留官方exact reducer identity及默认频率，控制输入由官方add_messages处理清空/删除/同ID重加，chunk转换为完整消息。fresh条件边在put_writes前仅给原BaseMessage规范ID；raw dict/tuple预览保持None，防止暴露持久化时无法复用的临时UUID，正式写入由官方ensure_message_ids规范。
 
 fork保留各Delta channel的on-path祖先与必要pending、canonical revisions；synthetic messages完整基准重置其计数，其他channel使用seed父checkpoint并保留计数，避免提前应用seed pending。恢复backing属于物理历史闭包，不属于可见会话membership；view完整Turn和block继承都只读冻结parent可见成员，不能全局收集同Turn的其他版本。原产品失败现场及最终测量见tasks。Delta接入后pending/assembly正文未再下降，后续第4组必须独立证明共享收益。
+
+Assembly子片冻结schema22（不提前占用view共享结构版本）：新增`assembly_content_nodes(session_id,thread_id,node_id,body_json)`，以assembly历史owner与JCS hash标识不可变typed value/object/prefix/canonical节点。`snapshot_json`只保留原可查询的core/refs/selection/contributions和四个大字段（request_hash_preimage、tool_snapshot、tool_set_refs、seal_binding）的有序节点引用，明确`assembly_content_v1`格式。数组按持久prefix链共享既有前缀，工具定义与冻结资源/格式化正文按不可变节点共享，不把大JSON外移成每次一个文件。小值直接内联，不引入通用JSON diff。
+
+本地included canonical selection的大正文精确匹配时，只存canonical item ID、原execution owner、payload路径和value_hash，读取复用既有catalog/JSONL校验。fork本地selection scope与item历史execution owner分开；其他未捕获Thread的选择仍由原manifest/detail owner核验，内容DAG不擅自按同名ID读取本地正文。格式化后不同于canonical原文的请求内容是冻结的请求版本，不反写canonical事实。历史请求只能从该manifest/DAG和冻结canonical重建，现有request_hash与runtime seal hash一律对重建的原JCS校验，不能对存储引用manifest改算协议hash。
+
+21→22在现有备份/事务/失败恢复协调中执行登记SQL，再逐assembly验证旧hash和seal、转换正文引用、重建并逐字比较历史JCS后发布；保留18→19→20→21→22显式升级链，正常reader只接受当前schema和新manifest，不双读。fork展开DAG的canonical依赖并保留节点历史owner；无引用节点先保留，第5组按retained依赖闭包清理。
+
+预实施结构探针`history-dedup-assembly-dag-probe-002`基于最终Delta产品一致备份，所有保留assembly逐份encode/decode的JCS完全相等。源owner的16份assembly：4069437字节→1726461字节manifest+377264字节node正文（1113行）；另两owner：2223826→905191+276716、1174550→480402+124073。该局部探针不替代在线seal/fork/迁移产品验收，也不以正文数字代替包含索引的总存储或性能结论；完整原始结果保留在`history-dedup-assembly-probe-002/measurements.json`。
+
+TODO（Assembly冷解码耗时）：相同20调用负载在Delta片222.81秒、本片253.14秒；第二轮17.03→20.10秒、第三轮19.66→22.74秒、摘要28.93→36.04秒、源删除/重启/回退37.30→45.86秒（阶段含实际业务与I/O，不是纯codec时间）。节点逐个读取和重建增加工作量，当前只确认结构收益，不把相关性当作完整瓶颈归因。原始比较`history-dedup-assembly-comparison-002.json`、成功冻结`history-dedup-assembly-frozen-002/`保留；后续profile后优化节点批量读取/解码，保持原规模与hash/owner验收。先继续view共享与引用保护。

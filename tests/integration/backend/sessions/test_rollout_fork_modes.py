@@ -157,6 +157,9 @@ from app.services.infrastructure.rollout_context.activation.common import (
     HASH_MISMATCH_CODE,
     ResourceActivationStoreError,
 )
+from app.services.infrastructure.rollout_context.assembly.content_store import (
+    load_snapshot,
+)
 from app.services.infrastructure.rollout_context.assembly.detail_identity import (
     detail_ref_from_key,
     detail_ref_key,
@@ -2279,7 +2282,9 @@ async def test_fork_first_provider_recompiles_typed_root_without_rewriting_impor
     )
     for assembly_id, snapshot_json in readable_bytes:
         historical = cold._storage.assemblies.get_context_assembly(target.session_id, target_thread, assembly_id=assembly_id)
-        assert json.loads(json.dumps(historical.to_dict(), ensure_ascii=False)) == json.loads(snapshot_json)
+        with sqlite3.connect(target_database) as connection:
+            restored = load_snapshot(connection, snapshot_json)
+        assert json.loads(json.dumps(historical.to_dict(), ensure_ascii=False)) == restored
         assert historical.session_id == source.session_id and historical.thread_id == source_thread
         assert cold.load_sealed_resource_activation(
             target.session_id, thread_id=target_thread, assembly_id=assembly_id,

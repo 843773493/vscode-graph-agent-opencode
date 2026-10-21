@@ -24,6 +24,9 @@ from app.domain.itemized.request_plan import (
     ContextRequestPlan,
     SourceBinding,
 )
+from app.services.infrastructure.rollout_context.assembly.content_store import (
+    store_snapshot,
+)
 from app.services.infrastructure.rollout_context.assembly.plans import (
     registry as plan_registry,
 )
@@ -574,7 +577,7 @@ def _insert_snapshot(connection, snapshot):
             snapshot.request_hash,
             snapshot.history_view_revision,
             snapshot.source_overlay_epoch,
-            canonical_json_bytes(snapshot.to_dict()).decode(),
+            store_snapshot(connection, snapshot.to_dict()),
         ),
     )
 

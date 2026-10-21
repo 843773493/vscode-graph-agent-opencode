@@ -22,6 +22,9 @@ from app.core.path_utils import get_session_path_resolver
 from app.core.workspace_identity import load_or_create_workspace_id
 from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
 from app.domain.itemized.serialization import normalize_wire_request
+from app.services.infrastructure.rollout_context.assembly.content_store import (
+    load_snapshot,
+)
 from app.testing.model_stream import build_cassette, chat_completion_frames
 from tests.harness.python.browser_manager import (
     close_browser_manager_processes,
@@ -180,7 +183,7 @@ def _verify_frozen_history(index: Path, wire: list[dict[str, object]]) -> None:
     with sqlite3.connect(index.as_uri() + "?mode=ro", uri=True) as connection:
         for session, thread, call_id, raw in connection.execute("SELECT session_id,thread_id,model_call_id,snapshot_json FROM context_assemblies"):
             assert (session, thread) in owners
-            snapshot = ContextAssemblySnapshot.from_dict(json.loads(raw))
+            snapshot = ContextAssemblySnapshot.from_dict(load_snapshot(connection, raw))
             assert (snapshot.session_id, snapshot.thread_id) == (session, thread)
             record = calls[call_id]
             assert (record["identity"]["session_id"], record["identity"]["thread_id"]) == (session, thread)

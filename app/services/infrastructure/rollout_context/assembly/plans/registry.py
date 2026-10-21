@@ -8,9 +8,15 @@ from dataclasses import replace
 from datetime import UTC, datetime
 
 from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
-from app.domain.itemized.hashing import canonical_json_bytes_and_hash
+from app.domain.itemized.hashing import (
+    canonical_json_bytes,
+    canonical_json_bytes_and_hash,
+)
 from app.domain.itemized.request_plan import ContextRequestPlan
 from app.domain.itemized.serde.plan import unsealed_context_plan_from_dict
+from app.services.infrastructure.rollout_context.assembly.content_store import (
+    load_snapshot,
+)
 from app.services.infrastructure.rollout_context.assembly.plans.manifest import (
     _creation_hash_manifest,
     draft_manifest,
@@ -137,7 +143,8 @@ def read_registration(
         ).fetchone()
         if assembly is None or assembly[2] not in {"sealed", "terminal"}:
             raise ValueError("source-mismatch: sealed plan 缺少同一 assembly")
-        snapshot = ContextAssemblySnapshot.from_dict(json.loads(assembly[0]))
+        snapshot_value = load_snapshot(connection, assembly[0])
+        snapshot = ContextAssemblySnapshot.from_dict(snapshot_value)
         key = (session_id, thread_id, plan_id)
         persisted_rows = (tuple(row), tuple(assembly))
         # 仅在本次 prepare 复用完全相同的 SQL 原文与 scalar，不缓存 typed 对象。
@@ -145,7 +152,7 @@ def read_registration(
         if validated_predecessors is None or validated_predecessors.get(key) != persisted_rows:
             validate_sealed_plan(plan, snapshot)
             seal_hash = persisted_runtime_seal_hash(
-                assembly[0], assembly[1], row[10],
+                canonical_json_bytes(snapshot_value).decode("utf-8"), assembly[1], row[10],
             )
             if row[7] != seal_hash:
                 raise ValueError("source-mismatch: sealed plan preimage 与 assembly 不一致")

@@ -20,9 +20,11 @@ from app.services.infrastructure.rollout_context.storage.schema_wakeup import (
     RUNTIME_WAKEUP_SCHEMA_SQL,
 )
 
-ROLLOUT_SCHEMA_VERSION = 21
+ROLLOUT_SCHEMA_VERSION = 22
 MESSAGE_FORMAT_VERSION = 1
 ROLLOUT_FORMAT_VERSION = 2
+
+ASSEMBLY_CONTENT_SCHEMA_SQL = load_sql(__package__, "sql/assembly_content.sql")
 
 MESSAGES_SCHEMA_SQL = load_sql(__package__, "sql/messages.sql")
 MESSAGES_VERSION_MIGRATION_SQL = (
@@ -70,6 +72,7 @@ def initialize_rollout_schema(
         + CHANNEL_VALUES_SCHEMA_SQL
         + MESSAGES_SCHEMA_SQL
         + load_sql(__package__, "sql/rollout.sql")
+        + ASSEMBLY_CONTENT_SCHEMA_SQL
     )
 
     # 邮箱冷恢复按真实 ModelCall/ToolCall 定位，不能扫描全部已提交工具结果。

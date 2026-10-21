@@ -44,6 +44,10 @@ from app.services.infrastructure.rollout_context.storage.schema import (
     MESSAGES_VERSION_MIGRATION_SQL,
     initialize_rollout_schema,
 )
+from app.services.infrastructure.rollout_context.storage.schema_assembly_content import (
+    ASSEMBLY_CONTENT_SCHEMA_SQL,
+    migrate_assembly_content,
+)
 from app.services.infrastructure.rollout_context.storage.schema_channel_versions import (
     CHANNEL_VALUES_MIGRATION_SQL,
     validate_legacy_channel_values,
@@ -190,7 +194,7 @@ class RolloutMaintenanceOwner(
                     )
                 if (to_version > storage_version.ROLLOUT_SCHEMA_VERSION
                         or (to_version != storage_version.ROLLOUT_SCHEMA_VERSION
-                            and (current_version, to_version) not in {(18, 19), (19, 20), (20, 21)})):
+                            and (current_version, to_version) not in {(18, 19), (19, 20), (20, 21), (21, 22)})):
                     raise RuntimeError(
                         "当前程序尚未声明目标 SQLite schema 版本: "
                         f"target={to_version}, supported={storage_version.ROLLOUT_SCHEMA_VERSION}"
@@ -242,7 +246,11 @@ class RolloutMaintenanceOwner(
                         validate_legacy_channel_values(connection)
                     if (current_version, to_version) == (20, 21) and migration_sql != MESSAGES_VERSION_MIGRATION_SQL:
                         raise ValueError("schema migration 20→21 必须使用登记的消息版本 SQL")
+                    if (current_version, to_version) == (21, 22) and migration_sql != ASSEMBLY_CONTENT_SCHEMA_SQL:
+                        raise ValueError("schema migration 21→22 必须使用登记的assembly内容SQL")
                     execute_atomic_schema_sql(connection, migration_sql)
+                    if (current_version, to_version) == (21, 22):
+                        migrate_assembly_content(connection)
                     meta_result = connection.execute(
                         "UPDATE database_meta SET schema_version = ?, updated_at = ? "
                         "WHERE singleton_id = 1",

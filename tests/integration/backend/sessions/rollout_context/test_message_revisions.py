@@ -30,6 +30,9 @@ from app.services.infrastructure.rollout_context.checkpoint.saver import (
 from app.services.infrastructure.rollout_context.storage.schema import (
     MESSAGES_VERSION_MIGRATION_SQL,
 )
+from app.services.infrastructure.rollout_context.storage.schema_assembly_content import (
+    ASSEMBLY_CONTENT_SCHEMA_SQL,
+)
 from tests.integration.backend.sessions.rollout_context._channel_version_fixtures import (
     restore_schema20,
 )
@@ -260,11 +263,15 @@ def test_schema20_upgrade_preserves_all_locators_then_allows_explicit_revision(r
         admission.thread_id, session_id=SESSION_ID, to_version=21,
         migration_name="canonical_message_versions", migration_sql=MESSAGES_VERSION_MIGRATION_SQL,
     )
+    saver._storage.storage.migrate_schema(
+        admission.thread_id, session_id=SESSION_ID, to_version=22,
+        migration_name="assembly_shared_content", migration_sql=ASSEMBLY_CONTENT_SCHEMA_SQL,
+    )
     assert index.with_name("rollout.jsonl").read_bytes() == before
     with sqlite3.connect(index) as connection:
         assert connection.execute("SELECT * FROM messages ORDER BY message_sequence").fetchall() == rows_before
-        assert connection.execute("SELECT schema_version,database_state FROM database_meta").fetchone() == (21, "active")
-        assert connection.execute("SELECT from_version,to_version,status FROM schema_migrations ORDER BY migration_id").fetchall() == [(0, 20, "completed"), (20, 21, "completed")]
+        assert connection.execute("SELECT schema_version,database_state FROM database_meta").fetchone() == (22, "active")
+        assert connection.execute("SELECT from_version,to_version,status FROM schema_migrations ORDER BY migration_id").fetchall() == [(0, 20, "completed"), (20, 21, "completed"), (21, 22, "completed")]
     cold = RolloutCheckpointSaver(saver._storage.storage.sessions_dir)
     with _execution_scope(admission):
         cold.append_items(SESSION_ID, (revision,), thread_id=admission.thread_id)

@@ -84,6 +84,9 @@ from app.services.infrastructure.rollout_context.storage.schema import (
     MESSAGES_VERSION_MIGRATION_SQL,
     ROLLOUT_SCHEMA_VERSION,
 )
+from app.services.infrastructure.rollout_context.storage.schema_assembly_content import (
+    ASSEMBLY_CONTENT_SCHEMA_SQL,
+)
 from app.services.infrastructure.rollout_context.storage.schema_assembly_refs import (
     ASSEMBLY_REF_SCHEMA_SQL,
     ASSEMBLY_REF_THREAD_MIGRATION_SQL,
@@ -720,6 +723,10 @@ def _migrate_ref_threads(case: AssemblyCase) -> None:
         case.thread_id, session_id=case.session_id, to_version=21,
         migration_name="canonical_message_versions", migration_sql=MESSAGES_VERSION_MIGRATION_SQL,
     )
+    case.saver._storage.storage.migrate_schema(
+        case.thread_id, session_id=case.session_id, to_version=22,
+        migration_name="assembly_shared_content", migration_sql=ASSEMBLY_CONTENT_SCHEMA_SQL,
+    )
 
 
 def test_schema18_migration_rebuilds_unique_keys_and_backfills_snapshot_threads(assembly_case):
@@ -734,7 +741,7 @@ def test_schema18_migration_rebuilds_unique_keys_and_backfills_snapshot_threads(
                           for index in case.connection.execute(f"PRAGMA index_list({table})") if index[2]]
         assert ("assembly_id", "ref_type", "ref_id", "ref_thread_id") in unique_columns
         assert ("assembly_id", "ref_type", "ref_id") not in unique_columns
-    assert case.connection.execute("SELECT schema_version,database_state FROM database_meta").fetchone() == (21, "active")
+    assert case.connection.execute("SELECT schema_version,database_state FROM database_meta").fetchone() == (22, "active")
 
 
 def test_schema18_migration_preserves_foreign_ref_thread_from_frozen_snapshot(assembly_case):

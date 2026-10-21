@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from collections.abc import Callable
 
@@ -11,6 +12,10 @@ from app.domain.itemized.enums import CommitKind, CommitMode, TurnStatus
 from app.domain.itemized.errors import ItemSchemaError
 from app.domain.itemized.hashing import canonical_json_bytes
 from app.domain.itemized.identity.detail_ref import DetailRef
+from app.services.infrastructure.rollout_context.assembly.content_store import (
+    load_snapshot,
+    store_snapshot,
+)
 from app.services.infrastructure.rollout_context.assembly.detail_identity import (
     optional_detail_ref_key,
 )
@@ -31,7 +36,6 @@ from app.services.infrastructure.rollout_context.assembly.plans.types import (
     ContextAssemblySealReceipt,
 )
 from app.services.infrastructure.rollout_context.assembly.validation import (
-    json_text,
     non_negative_int,
     required_text,
 )
@@ -118,7 +122,7 @@ class ContextAssemblySealMixin(ContextAssemblyManifestMixin):
                         raise ValueError("assembly-idempotency-conflict: 已提交重试不能发布新 detail")
                     # 损坏快照必须暴露解析错误，不能伪装成普通幂等键冲突。
                     existing_snapshot_matches = canonical_json_bytes(
-                        json_text(existing[4], field="snapshot_json")
+                        load_snapshot(connection, existing[4])
                     ) == seal.snapshot_json.encode("utf-8")
                     existing_plan_hash = strict_text(
                         existing[0], field="context_assemblies.plan_hash"
@@ -243,7 +247,7 @@ class ContextAssemblySealMixin(ContextAssemblyManifestMixin):
                         snapshot.request_hash,
                         snapshot.history_view_revision,
                         snapshot.source_overlay_epoch,
-                        seal.snapshot_json,
+                        store_snapshot(connection, json.loads(seal.snapshot_json)),
                         snapshot.model_call_id,
                         detail_key,
                         timestamp,

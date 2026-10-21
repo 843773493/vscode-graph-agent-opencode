@@ -24,7 +24,12 @@ from app.domain.itemized.epoch.prefix_epoch import (
 )
 from app.domain.itemized.serialization import normalize_wire_request
 from app.services.business.session_context_resource import context_assembly_identity
+from app.services.infrastructure.rollout_context.assembly.content_store import (
+    load_snapshot,
+)
 from app.services.infrastructure.tool_selection_store import ToolSelectionStore
+from tests.support.paths import output_root_for_test
+from tests.support.ports import e2e_port_block_for_file
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
     GatewayProcess,
@@ -32,8 +37,6 @@ from tests.support.processes.gateway import (
     close_gateway_process,
     start_gateway_process,
 )
-from tests.support.paths import output_root_for_test
-from tests.support.ports import e2e_port_block_for_file
 from tests.support.processes.workspace import (
     close_backend_process,
     start_backend_process,
@@ -177,7 +180,7 @@ def _audit_call(
             (reference["assembly_id"], session_id, thread_id),
         ).fetchone()
         assert row is not None
-        snapshot = ContextAssemblySnapshot.from_dict(json.loads(row["snapshot_json"]))
+        snapshot = ContextAssemblySnapshot.from_dict(load_snapshot(connection, row["snapshot_json"]))
         _save(artifacts / f"turn-{ordinal}-sealed-assembly.json", snapshot.to_dict())
         snapshot.validate_hashes()
         expected_reference = SealedContextDispatchRef.from_snapshot(

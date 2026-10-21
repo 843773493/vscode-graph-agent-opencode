@@ -8,6 +8,10 @@ from datetime import UTC, datetime
 from uuid import uuid4
 
 from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
+from app.domain.itemized.hashing import canonical_json_bytes
+from app.services.infrastructure.rollout_context.assembly.content_store import (
+    load_snapshot,
+)
 from app.services.infrastructure.rollout_context.assembly.plans.manifest import (
     runtime_seal_bytes_and_hash,
     seal_snapshot_prefix,
@@ -79,7 +83,8 @@ def bind_sealed_registration(
     ).fetchone()
     if (
         row is None
-        or row != (prepared.snapshot_json, prepared.detail_key)
+        or row[1] != prepared.detail_key
+        or canonical_json_bytes(load_snapshot(connection, row[0])).decode("utf-8") != prepared.snapshot_json
     ):
         raise ValueError(
             "source-mismatch: plan seal 必须与同事务 assembly snapshot 相符"

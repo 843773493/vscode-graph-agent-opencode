@@ -23,7 +23,7 @@
 ## 4. P1 Assembly 与视图结构共享
 
 - [ ] 4.1 测量assembly完整请求、prefix frames、工具/资源正文与view成员重复，确定有序typed引用、共享prefix/view节点的最小结构和实际schema升级范围。
-- [ ] 4.2 迁齐assembly seal、唯一writer和冷reader，复用canonical/工具/资源不可变版本与前缀，保留选择/省略/贡献/protection并只凭冻结内容重建normalized request和request_hash。
+- [x] 4.2 迁齐assembly seal、唯一writer和冷reader，复用canonical/工具/资源不可变版本与前缀，保留选择/省略/贡献/protection并只凭冻结内容重建normalized request和request_hash。
 - [ ] 4.3 迁齐view写读、历史分页、checkpoint selection、rewind/compaction与fork，按共享基准/成员变化保留visible/context_selected与logical/context ordinal，删除完整成员重复写入链。
 - [ ] 4.4 验证资源变化、故障发布、深fork、冷恢复和历史hash；相同负载证明多个assembly共享内容且索引增长减少，静态/独审后提交并push。
 
@@ -71,3 +71,9 @@
 前两次Delta产品失败现场保留在`history-dedup-delta-regenerate-failure-frozen-001/`和`002/`：view完整Turn及block补齐误用全局物理版本，带回只供历史恢复的旧版本。现改为继承冻结parent可见成员，新消息仍由完整batch加入；精确membership回归覆盖同步/异步，不放宽首轮保留或frontier冲突断言。
 
 同负载summary_restart_continue：pending正文仍53485字节；assembly正文仍4069437字节；相较pending引用前置片，view成员9722→9271，但不以此代替第4组共享结构验收。源owner持久messages为112个delta/11个snapshot，未另建消息正文历史。该进程阶段deserialize183次/446301字节→193次/455090字节，单次整体222.79→222.81秒，不宣称耗时改善。结构和恢复合同完成，assembly/view及回收继续实施。
+
+2026-10-21 Assembly共享子片：schema22新增owner隔离的不可变typed内容DAG，正常seal/冷reader、历史seal hash、fork canonical依赖与18→19→20→21→22显式升级迁齐。137条assembly/hash/发布回滚合同通过（93.33秒）；状态/registry/节点/真实HTTP生成器60例通过（37.93秒），覆盖tuple与sqlite.Row、独立解码对象及迁移失败恢复；正式Delta/fork矩阵137例通过（99.09秒）。Gateway同一20调用产品负载通过（253.14秒），含摘要、A→B→C、源删除、冷恢复和regenerate；历史请求逐份与wire及原hash一致。正式测量run-a0795015cafd与SQLite/wire一致备份冻结于`history-dedup-assembly-frozen-002/`；001误关联旧测量，已明确标无效，不用于收益结论。
+
+同负载summary_restart_continue的16份assembly，正文由4069437字节变为1726461字节manifest+377264字节共享节点；assembly相关表/索引页5730304→4243456字节，总页17825792→16449536字节。原始分阶段比较保存在`history-dedup-assembly-comparison-002.json`。view成员仍9276行（前片9271，运行排序产生少量差异），尚未去重，因此4.1/4.3/4.4未完成；未宣称整体增长线性或总耗时改善。真实外部Provider E2E未重跑，其读取迁移由sqlite.Row合同覆盖，不冒充外部网络验收。
+
+Assembly子片最终Ruff与strict OpenSpec通过；辅助独审检查运行时读取、迁移事务、canonical依赖和模块职责，未发现明确阻断。新增内容codec保持单一assembly职责，纯静态DDL位于SQL。

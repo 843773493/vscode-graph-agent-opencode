@@ -14,6 +14,9 @@ from app.core.execution_admission_context import execution_admission_scope
 from app.core.path_utils import get_session_path_resolver
 from app.core.session_thread_context import session_thread_owner_scope
 from app.domain.itemized.mutation_intents import MutationIntentOwner
+from app.services.infrastructure.rollout_context.assembly.content_store import (
+    load_snapshot,
+)
 from scripts import generate_real_model_rollout_fixture as generator
 from tests.harness.python.run_context import TestRunContext
 from tests.integration.backend.sessions.itemized_dispatch_helpers import (
@@ -180,7 +183,7 @@ def test_provider_stub_generator_writes_real_canonical_owner_and_admissions(
             "SELECT COUNT(*) FROM model_calls WHERE dispatch_state='completed' AND outcome='completed'"
         ).fetchone() == (expected_calls,)
         sealed_requests = [
-            json.loads(row[0])["request_hash_preimage"]
+            load_snapshot(connection, row[0])["request_hash_preimage"]
             for row in connection.execute("SELECT snapshot_json FROM context_assemblies ORDER BY created_at")
         ]
     assert sealed_requests == [request["body"] for request in http_state.requests]

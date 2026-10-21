@@ -14,4 +14,5 @@
 
 # 规范
 
+- `content_store.py`只编码封存内容DAG；canonical正文复用精确历史item，不读取当前Provider配置或源文件。冷读先完整重建再校验原hash，fork保留历史owner与全部依赖。
 - selection 只在 assembly scope 产生，seal 前不得 dispatch；manifest 不一致必须 fail-closed。

@@ -35,6 +35,10 @@ from app.domain.itemized.serialization import normalize_wire_request
 from app.services.infrastructure.rollout_context.assembly import (
     reader as assembly_reader,
 )
+from app.services.infrastructure.rollout_context.assembly.content_store import (
+    load_snapshot,
+    store_snapshot,
+)
 from app.services.infrastructure.rollout_context.assembly.plans import (
     registry as plan_registry,
 )
@@ -462,7 +466,8 @@ def test_prepare_revalidates_predecessor_changed_after_assembly_insert(
     monkeypatch.setattr(assembly_reader, "read_registration", read_registration)
     monkeypatch.setattr(plan_registry, "validate_sealed_plan", validate)
     monkeypatch.setattr(plan_registry, "persisted_runtime_seal_hash", seal_hash)
-    with pytest.raises(ValueError, match="source-mismatch: sealed plan preimage 与 assembly 不一致"):
+    expected_error = "source-mismatch: assembly content manifest 非canonical JSON" if changed_field == "snapshot_json" else "source-mismatch: sealed plan preimage 与 assembly 不一致"
+    with pytest.raises(ValueError, match=expected_error):
         prepare("predecessor-after-trigger")
     assert len(stages) == 2
     assert stages[0][1] is stages[1][1]
@@ -470,8 +475,10 @@ def test_prepare_revalidates_predecessor_changed_after_assembly_insert(
     assert stages[0][3] != changed_value and stages[1][3] == changed_value
     assert [stage[4] for stage in stages] == [1, 2]
     assert stages[1][0]
-    assert validations == [assembly_id, assembly_id]
-    assert [entry[0] for entry in hashes] == [assembly_id, assembly_id]
+    # 非canonical引用manifest在解码准入即失败，不能继续验证或缓存伪造行。
+    expected_validations = [assembly_id] if changed_field == "snapshot_json" else [assembly_id, assembly_id]
+    assert validations == expected_validations
+    assert [entry[0] for entry in hashes] == expected_validations
     assert len(stages[1][1]) == 1  # 失败的 fresh 行不得登记。
     assert connection.execute("SELECT * FROM context_plans WHERE plan_id=?", (plan_id,)).fetchone() == old_plan
     assert connection.execute("SELECT * FROM context_assemblies").fetchall() == [old_assembly]
@@ -849,7 +856,7 @@ def test_cold_assembly_rejects_independently_damaged_tool_snapshot(production_co
         "SELECT snapshot_json, plan_hash, request_hash FROM context_assemblies WHERE assembly_id=?",
         (assembly_id,),
     ).fetchone()
-    raw = json.loads(original[0])
+    raw = load_snapshot(connection, original[0])
     if damage == "unexpected":
         raw["tool_snapshot"].append({"name": "forged-only-snapshot"})
     elif damage == "nested-value":
@@ -858,7 +865,8 @@ def test_cold_assembly_rejects_independently_damaged_tool_snapshot(production_co
         raw["tool_snapshot"].pop()
     else:
         raw["tool_snapshot"].reverse()
-    damaged_json = json.dumps(raw, ensure_ascii=False)
+    connection.execute("BEGIN IMMEDIATE")
+    damaged_json = store_snapshot(connection, raw)
     connection.execute(
         "UPDATE context_assemblies SET snapshot_json=? WHERE assembly_id=?",
         (damaged_json, assembly_id),

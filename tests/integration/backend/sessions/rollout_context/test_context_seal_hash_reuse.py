@@ -1,7 +1,6 @@
 """真实 prepare 的同次摘要复用与 seal 输入首次错误合同。"""
 
 import hashlib
-import json
 from dataclasses import replace
 
 import pytest
@@ -16,6 +15,9 @@ from app.domain.itemized.identity.refs import ToolSetRef
 from app.domain.itemized.request_plan import ContextRequestPlan
 from app.services.infrastructure.rollout_context.assembly import (
     sealing as assembly_writer,
+)
+from app.services.infrastructure.rollout_context.assembly.content_store import (
+    load_snapshot,
 )
 from app.services.infrastructure.rollout_context.assembly.plans import manifest
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
@@ -258,8 +260,9 @@ def test_prepare_persists_the_once_encoded_snapshot_and_cold_retry_revalidates(
         "SELECT snapshot_json,detail_ref FROM context_assemblies WHERE assembly_id=?",
         (snapshot.assembly_id,),
     ).fetchone()
-    assert persisted.encode() == original_encode(seal_preimage["snapshot"])
-    assert ContextAssemblySnapshot.from_dict(json.loads(persisted)).to_dict() == snapshot.to_dict()
+    restored = load_snapshot(connection, persisted)
+    assert original_encode(restored) == original_encode(seal_preimage["snapshot"])
+    assert ContextAssemblySnapshot.from_dict(restored).to_dict() == snapshot.to_dict()
     registration = saver.get_context_plan_registration(session, thread_id=thread, plan_id=snapshot.plan_id)
     expected_hash = "sha256:jcs:v1:" + hashlib.sha256(original_encode({
         "schema": "context-plan-runtime-seal:v1",
@@ -342,9 +345,10 @@ def test_cold_registry_hash_binds_actual_snapshot_text(production_context, damag
             "UPDATE context_assemblies SET snapshot_json=? WHERE assembly_id=?",
             (altered, snapshot.assembly_id),
         )
+    expected_error = "source-mismatch: assembly content manifest 非canonical JSON" if damage == "whitespace" else "source-mismatch: sealed plan preimage 与 assembly 不一致"
     with (
         RolloutCheckpointSaver(saver._storage.storage.sessions_dir) as cold,
-        pytest.raises(ValueError, match="source-mismatch: sealed plan preimage 与 assembly 不一致"),
+        pytest.raises(ValueError, match=expected_error),
     ):
         cold.get_context_plan_registration(session, thread_id=thread, plan_id=snapshot.plan_id)
     assert connection.execute(

@@ -12,6 +12,9 @@ from app.core.sqlite_state import load_sql
 from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
 from app.domain.itemized.identity.detail_ref import DetailRef
 from app.domain.itemized.identity.refs import ContextRef
+from app.services.infrastructure.rollout_context.assembly.content_store import (
+    load_snapshot,
+)
 from app.services.infrastructure.rollout_context.assembly.detail_identity import (
     detail_ref_from_key,
     detail_ref_key,
@@ -253,7 +256,12 @@ def select_view_prefix(
                 ).fetchone()
                 if row is None:
                     raise ValueError("source-mismatch: 所需 ModelCall 的封存 assembly 缺失")
-                assembly = ContextAssemblySnapshot.from_dict(json.loads(row[0]))
+                canonical_items: set[str] = set()
+                assembly = ContextAssemblySnapshot.from_dict(load_snapshot(connection, row[0], canonical_item_ids=canonical_items))
+                connection.executemany(
+                    "INSERT OR IGNORE INTO fork_selected_items(item_id) VALUES (?)",
+                    ((item_id,) for item_id in canonical_items),
+                )
                 assembly.validate_hashes()
                 require_historical_scope(connection, assembly.session_id, assembly.thread_id)
                 if assembly.model_call_id is not None:
