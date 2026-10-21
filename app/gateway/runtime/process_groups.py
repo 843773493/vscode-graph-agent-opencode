@@ -54,10 +54,18 @@ def _posix_group_is_alive(pid: int, leader_starttime: int | None) -> bool:
             return False
         return True
     leader = _linux_process_stat(pid)
-    if leader is not None and (
-        leader[1:3] != (pid, pid) or leader[3] != leader_starttime
-    ):
-        raise RuntimeError(f"owned group 的 leader 已被替换: pid={pid}")
+    if leader is not None:
+        state, group, session, starttime = leader
+        if (group, session) != (pid, pid) or starttime != leader_starttime:
+            raise RuntimeError(f"owned group 的 leader 已被替换: pid={pid}")
+        if state not in {"Z", "X", "x"}:
+            return True
+    try:
+        os.killpg(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError as error:
+        raise RuntimeError(f"核实 owned group 是否存活失败: pid={pid}: {error}") from error
     for entry in Path("/proc").iterdir():
         if not entry.name.isdecimal():
             continue
