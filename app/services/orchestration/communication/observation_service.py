@@ -8,6 +8,7 @@ import binascii
 import hashlib
 import json
 import secrets
+import sys
 import time
 import zlib
 from collections.abc import AsyncIterator, Awaitable
@@ -16,8 +17,8 @@ from dataclasses import asdict
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal, cast
-from uuid import uuid4
 
+import psutil
 from cryptography.exceptions import InvalidTag
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
@@ -81,8 +82,10 @@ _DELETED = (SessionDeletionPendingError, NotFoundError)
 
 class SystemWaitClock:
     def __init__(self) -> None:
-        boot_file = Path("/proc/sys/kernel/random/boot_id")
-        self.origin_id = boot_file.read_text().strip() if boot_file.exists() else "process-" + uuid4().hex
+        if sys.platform == "linux":
+            self.origin_id = Path("/proc/sys/kernel/random/boot_id").read_text().strip()
+        else:
+            self.origin_id = f"boot-{psutil.boot_time():.6f}"
 
     def monotonic_ns(self) -> int:
         return time.monotonic_ns()

@@ -9,6 +9,7 @@ from contextlib import asynccontextmanager, closing
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -51,6 +52,24 @@ from tests.support.graph_binding import TEST_THREAD_GRAPH_BINDING
 GATEWAY = "gateway_99f502c636a98dbcc80959cefae48c16"
 SOURCE = GlobalThreadAddress(GATEWAY, WORKSPACE_ID, SOURCE_SESSION, SOURCE_THREAD)
 TARGET = GlobalThreadAddress(GATEWAY, WORKSPACE_ID, TARGET_SESSION, TARGET_THREAD)
+
+
+@pytest.mark.parametrize("platform", ["darwin", "win32"])
+def test_system_wait_clock_uses_stable_boot_time_on_non_linux(
+    monkeypatch: pytest.MonkeyPatch,
+    platform: str,
+) -> None:
+    monkeypatch.setattr(
+        observation_service, "sys", SimpleNamespace(platform=platform)
+    )
+    monkeypatch.setattr(
+        observation_service.psutil, "boot_time", lambda: 1_797_000_000.125
+    )
+
+    clock = observation_service.SystemWaitClock()
+    restarted_clock = observation_service.SystemWaitClock()
+
+    assert clock.origin_id == restarted_clock.origin_id == "boot-1797000000.125000"
 
 
 @dataclass
