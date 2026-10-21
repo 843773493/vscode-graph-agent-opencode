@@ -2,13 +2,61 @@ from __future__ import annotations
 
 import json
 import shutil
+from collections.abc import Iterator
+from contextlib import contextmanager
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, cast
 
 from configs.runtime import read_jsonc_object
+from tests.support.e2e_test_control import E2ETestControlHarness
 
 ModelStreamMode = Literal["off", "record", "replay"]
 _MODEL_STREAM_MODES = frozenset({"off", "record", "replay"})
+
+
+@dataclass(frozen=True, slots=True)
+class ModelStreamReplay:
+    control: E2ETestControlHarness
+    config_path: Path
+    artifacts: Path
+
+    @property
+    def environment(self) -> dict[str, str]:
+        return {**self.control.environment, "BOXTEAM_TEST_MODEL_STREAM_CONFIG": str(self.config_path)}
+
+
+@contextmanager
+def model_stream_replay(
+    output_root: Path, *, runtime_root: Path, business_assertion: str,
+) -> Iterator[ModelStreamReplay]:
+    """管理业务测试共用的精确回放资产、配置与控制端生命周期。"""
+    fixture_root = runtime_root / "model-stream-fixture"
+    (fixture_root / "scenarios").mkdir(parents=True, exist_ok=True)
+    cassette = json.loads((Path.cwd() / "tests/fixtures/model_stream/handwritten/openai_chat/basic-text.json").read_text(encoding="utf-8"))
+    # loader 要求非空资产；占位身份不能匹配产品 owner，不提供兜底响应。
+    cassette["interactions"][0]["identity"] = {
+        "session_id": "ses_00000000400070008000000000000000",
+        "thread_id": "thr_00000000400070008000000000000000",
+        "model_call_id": "00000000-4000-7000-8000-000000000000",
+    }
+    cassette_path = fixture_root / "calls.json"
+    cassette_path.write_text(json.dumps(cassette, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    (fixture_root / "scenarios/basic-chat-tool-loop.jsonc").write_text(json.dumps({
+        "scenario_id": "basic-chat-tool-loop", "asset": "calls.json",
+        "business_assertion": business_assertion,
+    }) + "\n", encoding="utf-8")
+    control = E2ETestControlHarness(runtime_root / "test-control")
+    try:
+        control.bind_cassette(cassette_path)
+        config = prepare_e2e_model_stream_config(
+            Path.cwd() / "configs/tests/model_stream/model_stream_web_basic_chat_tool_loop.jsonc",
+            output_root=output_root, exact_fixture_root=fixture_root,
+        )
+        control.start()
+        yield ModelStreamReplay(control, config, output_root / "artifacts/model-stream")
+    finally:
+        control.close()
 
 
 def _object(value: object, *, label: str) -> dict[str, object]:

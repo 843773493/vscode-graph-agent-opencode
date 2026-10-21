@@ -14,7 +14,7 @@ import sqlite3
 import threading
 import time
 from collections.abc import Callable
-from contextlib import closing
+from contextlib import ExitStack, closing
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -31,39 +31,50 @@ def deterministic_uuid7(namespace: str, ordinal: int, epoch_ms: int) -> str:
     return UUID(int=value).hex
 
 
-def _process_start(pid: int) -> str:
-    """Linux 进程 start-time；PID 重用不能继承旧租约。"""
+def _linux_process_start_ticks(pid: int) -> str:
+    """返回 /proc stat 第22字段原文：自系统启动至进程创建的时钟滴答数。
+
+    它不是Unix时间或秒数，只与PID联合校验进程身份，防止PID复用继承旧租约。
+    """
     return Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()[19]
 
 
 @dataclass(slots=True)
 class E2EProcessLease:
+    """当前pytest进程的服务端口使用声明，不持有监听socket或操作系统文件锁。"""
+
+    # JSON租约文件；start_time沿用字段名，但值是Linux进程启动滴答数的字符串。
     path: Path
+    # acquire/release检查这些服务端口空闲；端口块分配仍归ports.py。
     ports: tuple[int, ...]
+    # release用本次凭据与当前PID、启动滴答数联合校验，再删除本次记录。
     token: str = field(default_factory=lambda: secrets.token_hex(16))
 
     def acquire(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        record = {"pid": os.getpid(), "start_time": _process_start(os.getpid()), "token": self.token, "ports": self.ports}
+        lease_record = {"pid": os.getpid(), "start_time": _linux_process_start_ticks(os.getpid()), "token": self.token, "ports": self.ports}
         if self.path.exists():
-            previous = json.loads(self.path.read_text())
-            previous_pid = previous["pid"]
-            process_file = Path(f"/proc/{previous_pid}/stat")
-            if process_file.exists() and _process_start(previous_pid) == previous["start_time"]:
-                raise RuntimeError(f"E2E 独占租约仍有效，禁止抢占: {previous}")
+            previous_lease_record = json.loads(self.path.read_text(encoding="utf-8"))
+            lease_owner_pid = previous_lease_record["pid"]
+            lease_owner_stat_path = Path(f"/proc/{lease_owner_pid}/stat")
+            if lease_owner_stat_path.exists() and _linux_process_start_ticks(lease_owner_pid) == previous_lease_record["start_time"]:
+                raise RuntimeError(f"E2E 独占租约仍有效，禁止抢占: {previous_lease_record}")
             self.path.unlink()
         for port in self.ports:
             if 8010 <= port <= 8016:
                 raise ValueError(f"正式 E2E 不得租用开发端口: {port}")
             ensure_local_port_available(port, service_name="Section8 owner")
-        with self.path.open("x", encoding="utf-8") as stream:
-            json.dump(record, stream)
+        with ExitStack() as cleanup:
+            with self.path.open("x", encoding="utf-8") as stream:
+                cleanup.callback(self.path.unlink)
+                json.dump(lease_record, stream)
+            cleanup.pop_all()
 
     def release(self) -> None:
         for port in self.ports:
             ensure_local_port_available(port, service_name="Section8 teardown")
-        record = json.loads(self.path.read_text())
-        if (record["pid"], record["start_time"], record["token"]) != (os.getpid(), _process_start(os.getpid()), self.token):
+        lease_record = json.loads(self.path.read_text(encoding="utf-8"))
+        if (lease_record["pid"], lease_record["start_time"], lease_record["token"]) != (os.getpid(), _linux_process_start_ticks(os.getpid()), self.token):
             raise RuntimeError("E2EProcessLease owner 变化，拒绝删除其它 owner 的租约")
         self.path.unlink()
 
@@ -127,8 +138,11 @@ class E2ETestControlHarness:
                     result = {"error": f"{type(error).__name__}: {error}"}
                 self.wfile.write(json.dumps(result, ensure_ascii=False).encode() + b"\n")
 
-        self._server = _ControlServer(("127.0.0.1", 0), Handler)
-        self._thread = threading.Thread(target=self._server.serve_forever, name="section8-test-control", daemon=True)
+        with ExitStack() as cleanup:
+            self._server = _ControlServer(("127.0.0.1", 0), Handler)
+            cleanup.callback(self._server.server_close)
+            self._thread = threading.Thread(target=self._server.serve_forever, name="section8-test-control", daemon=True)
+            self._cleanup = cleanup.pop_all()
 
     @property
     def environment(self) -> dict[str, str]:
@@ -136,23 +150,31 @@ class E2ETestControlHarness:
         return {"BOXTEAM_E2E_TEST_CONTROL": json.dumps({"host": host, "port": port, "token": self._token})}
 
     def start(self) -> None:
-        self.root.mkdir(parents=True, exist_ok=True)
-        self._thread.start()
+        with self._cleanup as cleanup:
+            self.root.mkdir(parents=True, exist_ok=True)
+            cleanup.callback(self._save_events)
+            self._thread.start()
+            # 未启动的线程不能 shutdown；启动成功后才移交完整停机职责。
+            cleanup.callback(self._join_thread)
+            cleanup.callback(self._server.shutdown)
+            self._cleanup = cleanup.pop_all()
 
     def close(self) -> None:
-        with self._condition:
+        with self._cleanup, self._condition:
             self._stopped = True
             for barrier in self._barriers.values():
                 barrier.released.set()
             for match in self._phase_matches.values():
                 match.barrier.released.set()
             self._condition.notify_all()
-        self._server.shutdown()
-        self._server.server_close()
+
+    def _join_thread(self) -> None:
         self._thread.join(timeout=10)
         if self._thread.is_alive():
             raise RuntimeError("E2ETestControlHarness 未停止")
-        (self.root / "events.json").write_text(json.dumps(self.events, ensure_ascii=False, indent=2) + "\n")
+
+    def _save_events(self) -> None:
+        (self.root / "events.json").write_text(json.dumps(self.events, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
     def arm(self, operation_id: str, phase: str) -> None:
         key = (operation_id, phase)
@@ -217,7 +239,7 @@ class E2ETestControlHarness:
             raise RuntimeError("精确回放 asset 尚未绑定")
         namespace = f"model_call/{session_id}/{thread_id}"
         with self._condition:
-            cassette = json.loads(self._cassette_path.read_text())
+            cassette = json.loads(self._cassette_path.read_text(encoding="utf-8"))
             ordinal = self._counters.get(namespace, 0)
             ids = []
             for offset, interaction in enumerate(interactions):
@@ -230,7 +252,7 @@ class E2ETestControlHarness:
                 cassette["interactions"].append(entry)
                 ids.append(call_id)
             temporary = self._cassette_path.with_suffix(".writing")
-            temporary.write_text(json.dumps(cassette, ensure_ascii=False, indent=2) + "\n")
+            temporary.write_text(json.dumps(cassette, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
             temporary.replace(self._cassette_path)
             return ids
 
@@ -273,6 +295,20 @@ class E2ETestControlHarness:
         if action == "release":
             self.release(cast(str, request["operation_id"]), cast(str, request["phase"]))
             return None
+        if action == "plan_chat":
+            from app.testing.model_stream import build_cassette, chat_completion_frames
+
+            interactions = [build_cassette(
+                asset_id="planned-chat", model="big-pickle",
+                url="https://opencode.ai/zen/v1/chat/completions",
+                frames=chat_completion_frames(
+                    response_id=cast(str, response["response_id"]), model="big-pickle",
+                    deltas=cast(list[dict[str, object]], response["deltas"]),
+                    finish_reason=cast(str, response["finish_reason"]),
+                    usage=cast(dict[str, int] | None, response.get("usage")),
+                ),
+            ).raw["interactions"][0] for response in cast(list[dict[str, object]], request["responses"])]
+            return self.plan_model_calls(cast(str, request["session_id"]), cast(str, request["thread_id"]), interactions)
         if action == "plan_model":
             return self.plan_model_calls(cast(str, request["session_id"]), cast(str, request["thread_id"]), cast(list[dict[str, object]], request["interactions"]))
         if action == "next_uuid":
@@ -289,8 +325,9 @@ class E2ETestControlHarness:
             if not parent.is_relative_to(root):
                 raise ValueError("只读目录路径不属于当前 pytest fixture")
             # 只允许已存在父目录下的叶目录未物化；断链、文件或损坏路径仍报错。
-            if requested.name not in {entry.name for entry in parent.iterdir()}:
-                return None
+            with os.scandir(parent) as entries:
+                if not any(entry.name == requested.name for entry in entries):
+                    return None
             path = requested.resolve(strict=True)
             if not path.is_relative_to(root) or not path.is_dir():
                 raise ValueError("只读目录路径不属于当前 pytest fixture 的目录")
