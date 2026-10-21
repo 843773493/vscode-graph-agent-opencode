@@ -33,24 +33,28 @@ from app.services.infrastructure.workspace_files.text_journal import (
 from app.services.infrastructure.workspace_files.text_owner import (
     WorkspaceTextMutationOwner,
 )
+from app.testing.model_stream import build_cassette, chat_completion_frames
 from tests.harness.python.run_context import TestRunContext
 from tests.integration.backend.sessions.test_session_communication_pipeline import (
     _prepare_workspace,
     _tool,
 )
-from tests.integration.stubs.http_stubs import openai_chat_stub
 from tests.support.api_helpers import create_session
 from tests.support.communication_federation import open_communication_triad
 from tests.support.gateway_processes import LOCAL_TOKEN_HEADERS
+from tests.support.model_stream_config import model_stream_replay
 from tests.support.ports import integration_port_block_for_file
 from tests.support.processes import close_backend_process
 
 
 @pytest.fixture
 def mutation_model(request):
-    ports = integration_port_block_for_file(Path(request.node.path))
-    with openai_chat_stub(ports.port(10)) as model:
-        yield model
+    context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
+    with model_stream_replay(
+        context.artifacts_dir.parent, runtime_root=context.artifacts_dir.parent / "runtime" / request.node.name,
+        business_assertion="text-mutation-effects",
+    ) as replay:
+        yield replay
 
 
 @pytest.fixture
@@ -60,7 +64,7 @@ async def mutation_case(request, mutation_model):
     artifacts.mkdir(parents=True, exist_ok=True)
     async with open_communication_triad(context, _prepare_workspace,
         backend_asgi_app="tests.integration.backend.agents.resource_text_mutation_fault_backend:app",
-        backend_environment={"BOXTEAM_TEST_MUTATION_ARTIFACTS": str(artifacts)}) as nodes:
+        backend_environment={**mutation_model.environment, "BOXTEAM_TEST_MUTATION_ARTIFACTS": str(artifacts)}) as nodes:
         source, target = nodes["b"], nodes["c"]
         gateway = GatewayTextMutation(workspace_id=source.workspace_id,
             connection=GatewayTransportConnection(gateway_url=str(source.client.base_url).rstrip("/")),
@@ -200,11 +204,24 @@ async def test_cancelled_wait_and_http_timeout_do_not_claim_target_stopped(mutat
     (artifacts / "timeout-source.json").write_text(json.dumps(receipt, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
-async def test_real_agent_cancellation_persists_original_unknown_tool_result(mutation_case):
+async def test_real_agent_cancellation_persists_original_unknown_tool_result(mutation_case, request):
     source, target, _, artifacts, model = mutation_case
     command = _patch(source, target, "cancel")
-    model.response_callback = lambda payload: _tool("apply_patch", command.model_dump(), "call_cancel_patch")
     session = await create_session(source.client, "取消远端文件等待")
+    main = await source.client.get(f"/api/v1/sessions/{session}/main-thread")
+    assert main.status_code == 200, main.text
+    thread = main.json()["data"]["thread_id"]
+    port = integration_port_block_for_file(Path(request.node.path)).port(10)
+    cassette = build_cassette(
+        asset_id="cancel-text-mutation", model="e2e-stub-model",
+        url=f"http://127.0.0.1:{port}/v1/chat/completions",
+        frames=chat_completion_frames(
+            response_id="chatcmpl-cancel-patch", model="e2e-stub-model",
+            deltas=({"role": "assistant", **_tool("apply_patch", command.model_dump(), "call_cancel_patch")},),
+            finish_reason="tool_calls",
+        ),
+    )
+    (call_id,) = model.control.plan_model_calls(session, thread, cassette.raw["interactions"])
     response = await source.client.post(f"/api/v1/sessions/{session}/messages", json={
         "message": {"content": "验证取消已发布的远端文件调用"},
         "run": {"mode": "single_agent", "agent_id": "default"},
@@ -223,6 +240,9 @@ async def test_real_agent_cancellation_persists_original_unknown_tool_result(mut
                 break
             await asyncio.sleep(0.02)
     assert job["status"] == "cancelled", job
+    recorded = json.loads((model.artifacts / f"{call_id}.json").read_text(encoding="utf-8"))
+    assert recorded["identity"]["session_id"] == session
+    assert recorded["identity"]["thread_id"] == thread
     events = await source.client.get(f"/api/v1/sessions/{session}/turns/{accepted['turn_id']}/message-stream/events")
     assert events.status_code == 200, events.text
     result, = [item["payload"] for item in events.json()["data"] if item["type"] == "tool.completed"]

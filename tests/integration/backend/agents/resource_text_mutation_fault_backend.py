@@ -7,11 +7,11 @@ import os
 import time
 from pathlib import Path
 
-from app.main import app
 from app.services.infrastructure.workspace_files import text_mutation
 from app.services.infrastructure.workspace_files.text_owner import (
     WorkspaceTextMutationOwner,
 )
+from tests.support.section8_backend import app
 
 __all__ = ["app"]
 
