@@ -6,113 +6,66 @@ import os
 import shutil
 import subprocess
 from collections.abc import AsyncIterator, Generator
-from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from uuid import uuid4
 
 import commentjson
 import httpx
 import pytest
-from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
-from langgraph.checkpoint.base import empty_checkpoint
 
-from app.core.checkpoint_config import build_checkpoint_config
-from app.core.path_utils import get_session_path_resolver
-from app.services.infrastructure.rollout_context.checkpoint.saver import (
-    RolloutCheckpointSaver,
-)
-from tests.integration.stubs.http_stubs import openai_chat_stub
+from app.core.workspace_identity import read_workspace_id
+from app.domain.itemized.enums import CanonicalItemStatus, PayloadKind, SemanticKind
+from app.domain.itemized.identity.item_projection import ItemProjectionIdentity
+from app.testing.model_stream import build_cassette, chat_completion_frames
+from tests.harness.python.run_context import TestRunContext
+from tests.support.model_stream_config import ModelStreamReplay, model_stream_replay
+from tests.support.paths import chromium_temporary_environment
+from tests.support.ports import integration_port_block_for_file
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
     close_gateway_process,
     start_gateway_process,
 )
-from tests.support.ports import integration_port_block_for_file
-from tests.support.processes.workspace import close_backend_process, start_backend_process
-
-
-def _checkpoint(
-    checkpoint_id: str,
-    messages: list[object],
-    *,
-    channel_version: int,
-) -> dict[str, object]:
-    checkpoint = empty_checkpoint()
-    checkpoint["id"] = checkpoint_id
-    checkpoint["channel_values"] = {"messages": messages}
-    checkpoint["channel_versions"] = {
-        "messages": f"{channel_version:032d}.fixture"
-    }
-    checkpoint["updated_channels"] = ["messages"]
-    return checkpoint
-
-
-def _turn_messages(turn_index: int) -> list[object]:
-    turn_id = f"job-{turn_index:04d}"
-    stamp = (
-        datetime(2026, 1, 1, tzinfo=UTC) + timedelta(minutes=turn_index)
-    ).isoformat()
-    user = HumanMessage(
-        id=f"user-{turn_index:04d}",
-        content=f"用户问题 {turn_index}",
-        response_metadata={
-            "message_id": f"user-{turn_index:04d}",
-            "created_at": stamp,
-            "updated_at": stamp,
-            "message_metadata": {"turn_id": turn_id, "job_id": turn_id},
-        },
-    )
-    call = AIMessage(
-        id=f"assistant-tool-{turn_index:04d}",
-        content="",
-        tool_calls=[
-            {
-                "name": "read_fixture",
-                "args": {"path": f"fixture/{turn_index:04d}.json"},
-                "id": f"call-{turn_index:04d}",
-            }
-        ],
-    )
-    result = ToolMessage(
-        id=f"tool-result-{turn_index:04d}",
-        content=json.dumps(
-            {"turn": turn_index, "result": "fixture result"},
-            ensure_ascii=False,
-        ),
-        name="read_fixture",
-        tool_call_id=f"call-{turn_index:04d}",
-    )
-    final = AIMessage(
-        id=f"assistant-final-{turn_index:04d}",
-        content=f"模型最终响应 {turn_index}",
-        response_metadata={"created_at": stamp, "updated_at": stamp},
-    )
-    return [user, call, result, final]
+from tests.support.processes.workspace import (
+    close_backend_process,
+    start_backend_process,
+)
+from tests.support.session_catalog_owner import fixture_catalog_scope
+from tests.support.web_boundary_seeding import (
+    boundary_item,
+    seed_boundary_turn,
+    tool_call_payload,
+    tool_result_payload,
+)
 
 
 def _seed_rollout(workspace_root: Path, session_id: str, count: int) -> None:
-    saver = RolloutCheckpointSaver(workspace_root / ".boxteam" / "sessions")
-    config = build_checkpoint_config(session_id)
-    messages: list[object] = []
-    for turn_index in range(1, count + 1):
-        messages.extend(_turn_messages(turn_index))
-        config = saver.put(
-            config,
-            _checkpoint(
-                f"{turn_index:032x}",
-                messages,
-                channel_version=turn_index,
-            ),
-            {
-                "source": "browser-user-view-stub",
-                "step": turn_index,
-                "turn": turn_index,
-            },
-            {"messages": str(turn_index)},
-        )
-    get_session_path_resolver(
-        workspace_root / ".boxteam" / "sessions"
-    ).resolve_session_node(session_id)
+    """只准备用户视图恢复需要的展示历史；后台通知仍通过真实消息入口执行。"""
+    sessions_dir = workspace_root / ".boxteam/sessions"
+    with fixture_catalog_scope():
+        for turn_index in range(1, count + 1):
+            turn_id = f"job-{turn_index:04d}"
+            call_id = f"call-{turn_index:04d}"
+            model_call_id = f"model-call-{turn_id}"
+            name = "read_fixture"
+            call = tool_call_payload(call_id, name, {"path": f"fixture/{turn_index:04d}.json"}, model_call_id=model_call_id)
+            result = tool_result_payload(call_id, name, json.dumps({"turn": turn_index, "result": "fixture result"}), model_call_id=model_call_id)
+            final_id = f"item-assistant-final-{turn_index:04d}"
+            items = (
+                boundary_item(item_id=f"item-assistant-tool-{turn_index:04d}", semantic_kind=SemanticKind.TOOL_CALL,
+                    payload_kind=PayloadKind.TOOL_CALL, status=CanonicalItemStatus.COMPLETED,
+                    payload=call, turn_id=turn_id, projection_identity=ItemProjectionIdentity(
+                        model_call_id=model_call_id, block_id=call["tool_call_id"], block_index=0)),
+                boundary_item(item_id=f"item-tool-result-{turn_index:04d}", semantic_kind=SemanticKind.TOOL_RESULT,
+                    payload_kind=PayloadKind.TOOL_RESULT, status=CanonicalItemStatus.COMPLETED,
+                    payload=result, turn_id=turn_id, wire_role="tool"),
+                boundary_item(item_id=final_id, semantic_kind=SemanticKind.ASSISTANT_OUTPUT,
+                    payload_kind=PayloadKind.TEXT, status=CanonicalItemStatus.COMPLETED,
+                    payload=f"模型最终响应 {turn_index}", turn_id=turn_id),
+            )
+            seed_boundary_turn(sessions_dir, session_id=session_id, turn_id=turn_id,
+                user_content=f"用户问题 {turn_index}", items=items, outcome="completed",
+                turn_status="completed", final_item_id=final_id)
 
 
 @pytest.fixture(scope="module")
@@ -120,45 +73,53 @@ def browser_backend(
     request: pytest.FixtureRequest,
     integration_workspace_root_path: str,
     integration_workspace_config_path: str,
-) -> Generator[tuple[str, Path], None, None]:
+) -> Generator[tuple[str, Path, ModelStreamReplay], None, None]:
     port_block = integration_port_block_for_file(Path(request.node.fspath))
     workspace_root = Path(integration_workspace_root_path).resolve()
     config_path = Path(integration_workspace_config_path)
     config = commentjson.loads(config_path.read_text(encoding="utf-8"))
-    provider = next(
-        item for item in config["llm"]["providers"] if item["id"] == "primary"
-    )
-    provider.update(
-        {
+    for provider in config["llm"]["providers"]:
+        provider.update({
             "endpoint": f"http://127.0.0.1:{port_block.port(10)}/v1",
-            "model": "e2e-stub-model",
-            "api_key": "e2e-local-model-key",
+            "model": "e2e-stub-model", "api_key": "e2e-local-model-key",
             "custom_llm_provider": "openai",
-        }
-    )
+            "api_mode": {"protocol": "chat_completions", "model_info": {
+                "supports_function_calling": True, "supports_reasoning": True,
+            }, "supports_reasoning": {"reasoning_content": True}},
+        })
+        provider.pop("auth", None)
+        provider.pop("request_options", None)
+    for agent in config["agents"].values():
+        agent["model"]["fallback_providers"] = []
     config_path.write_text(
         json.dumps(config, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
     )
-    with openai_chat_stub(port_block.port(10)):
+    context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
+    with model_stream_replay(
+        context.output_root, runtime_root=context.runtime_root_for_node(request.node.nodeid),
+        business_assertion="gateway-user-view-and-real-background-result-notification",
+    ) as replay:
         backend = start_backend_process(
             workspace_root=str(workspace_root),
             port=port_block.port(0),
             log_name="gateway-user-view-backend",
+            asgi_app="tests.support.e2e_control.backend_app:app",
+            env_overrides={**replay.environment, "BOXTEAM_GATEWAY_URL": f"http://127.0.0.1:{port_block.port(20)}"},
         )
         try:
-            yield f"http://127.0.0.1:{backend.port}", workspace_root
+            yield f"http://127.0.0.1:{backend.port}", workspace_root, replay
         finally:
             close_backend_process(backend)
 
 
 @pytest.fixture
 async def browser_backend_client(
-    browser_backend: tuple[str, Path],
+    browser_backend: tuple[str, Path, ModelStreamReplay],
 ) -> AsyncIterator[httpx.AsyncClient]:
     async with httpx.AsyncClient(
         base_url=browser_backend[0],
-        headers={"X-Local-Token": "local-dev-token"},
+        headers={"X-Local-Token": "local-dev-token", "X-BoxTeam-Workspace-Id": read_workspace_id(browser_backend[1])},
         timeout=60,
     ) as client:
         yield client
@@ -173,7 +134,7 @@ async def _create_session(client: httpx.AsyncClient, title: str) -> str:
 @pytest.mark.asyncio
 async def test_gateway_user_view_sessions_two_browser_chain(
     request: pytest.FixtureRequest,
-    browser_backend: tuple[str, Path],
+    browser_backend: tuple[str, Path, ModelStreamReplay],
     browser_backend_client: httpx.AsyncClient,
 ) -> None:
     project_root = Path.cwd().resolve()
@@ -202,9 +163,21 @@ async def test_gateway_user_view_sessions_two_browser_chain(
         "未打开会话通知",
     )
     _seed_rollout(Path(browser_backend[1]), session_id, count=8)
-    _seed_rollout(Path(browser_backend[1]), unopened_session_id, count=2)
-
+    replay = browser_backend[2]
+    main_thread = await browser_backend_client.get(f"/api/v1/sessions/{unopened_session_id}/main-thread")
+    assert main_thread.status_code == 200, main_thread.text
+    unopened_thread_id = main_thread.json()["data"]["thread_id"]
+    history = await browser_backend_client.post(f"/api/v1/sessions/{unopened_session_id}/history", json={})
+    assert history.status_code == 200, history.text
+    assert history.json()["data"]["items"] == [], "通知会话的执行状态必须由后续真实消息产生"
     port_block = integration_port_block_for_file(Path(request.node.fspath))
+    interaction = build_cassette(
+        asset_id="gateway-user-view-background-notification", model="e2e-stub-model",
+        url=f"http://127.0.0.1:{port_block.port(10)}/v1/chat/completions",
+        frames=chat_completion_frames(response_id="chatcmpl-user-view-background", model="e2e-stub-model",
+            deltas=({"role": "assistant", "content": "后台完成通知已生成。"},), finish_reason="stop"),
+    ).raw["interactions"][0]
+    call_id, = replay.control.plan_model_calls(unopened_session_id, unopened_thread_id, [interaction])
     gateway = start_gateway_process(
         workspace_root=Path(browser_backend[1]),
         default_backend_url=browser_backend[0],
@@ -255,16 +228,19 @@ async def test_gateway_user_view_sessions_two_browser_chain(
                 "PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH": chromium_path,
             }
         )
-        browser_result = await asyncio.to_thread(
-            subprocess.run,
-            ["node", "tests/integration/clients/web/gateway_user_view_sessions.mjs"],
-            cwd=project_root,
-            env=environment,
-            capture_output=True,
-            text=True,
-            timeout=180,
-            check=False,
-        )
+        context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
+        with chromium_temporary_environment(context.runtime_root_for_node(request.node.nodeid) / "chromium-tmp") as temporary_environment:
+            environment.update(temporary_environment)
+            browser_result = await asyncio.to_thread(
+                subprocess.run,
+                ["node", "tests/integration/clients/web/gateway_user_view_sessions.mjs"],
+                cwd=project_root,
+                env=environment,
+                capture_output=True,
+                text=True,
+                timeout=180,
+                check=False,
+            )
         assert browser_result.returncode == 0, (
             "Gateway 用户视图双浏览器集成失败:\n"
             f"stdout:\n{browser_result.stdout}\n"
@@ -282,5 +258,15 @@ async def test_gateway_user_view_sessions_two_browser_chain(
         assert result["viewRestoredInSecondBrowser"] is True
         assert result["unopenedSessionUnread"] is True
         assert result["noPrivateActivityContent"] is True
+        artifacts = list(replay.artifacts.glob("*.json"))
+        assert [path.stem for path in artifacts] == [call_id], "只能执行未打开会话的真实通知消息"
+        recorded = json.loads(artifacts[0].read_text())
+        assert recorded["identity"] == {"session_id": unopened_session_id, "thread_id": unopened_thread_id, "model_call_id": call_id}
+        assert recorded["request"]["stream"] is True
+        assert "后台完成通知测试" in json.dumps(recorded["request"]["messages"], ensure_ascii=False)
+        compiled = [event for event in replay.control.events if event["phase"] == "agent.graph.compiled"]
+        assert len(compiled) == 1
+        assert compiled[0]["details"]["session_id"] == unopened_session_id
+        assert compiled[0]["details"]["thread_id"] == unopened_thread_id
     finally:
         close_gateway_process(gateway)

@@ -190,7 +190,7 @@ try {
     },
   );
   await pageA.reload({ waitUntil: "domcontentloaded" });
-  await pageA.locator('[data-turn-id="job-0008"]').waitFor({ state: "visible", timeout: 30_000 });
+  await pageA.locator('.chat-turn[data-turn-id="job-0008"]').waitFor({ state: "visible", timeout: 30_000 });
 
   await pageB.getByRole("button", { name: "用户视图" }).click();
   const userARowB = pageB.locator(".gateway-user-row").filter({ hasText: userAId });
@@ -210,7 +210,7 @@ try {
     oldPageAccess.status === 401 ||
     (oldPageAccess.status === 200 &&
       JSON.parse(oldPageAccess.body).data.user_id !== userAId);
-  await pageB.locator('[data-turn-id="job-0008"]').waitFor({ state: "visible", timeout: 30_000 });
+  await pageB.locator('.chat-turn[data-turn-id="job-0008"]').waitFor({ state: "visible", timeout: 30_000 });
 
   const jobResponse = await api(pageB, `/api/v1/sessions/${encodeURIComponent(unopenedSessionId)}/messages`, {
     method: "POST",
