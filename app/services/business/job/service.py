@@ -163,6 +163,7 @@ class JobService:
         self._thread_current_job: dict[tuple[str, str], str] = {}
         self._pending_queue = JobPendingQueue()
         self._dispatch_lock = asyncio.Lock()
+        self._preparation_changed = asyncio.Condition(self._dispatch_lock)
         self._job_creation_locks = KeyLockPool()
         self._pending_restore_lock = asyncio.Lock()
         self._session_preparations: dict[str, int] = {}
@@ -525,6 +526,7 @@ class JobService:
                     self._session_preparations[session_id] = remaining
                 else:
                     self._session_preparations.pop(session_id, None)
+                self._preparation_changed.notify_all()
 
     async def run_session_delete_operation(
         self,
@@ -538,7 +540,7 @@ class JobService:
         session_ids: list[str],
         operation: Callable[[], Awaitable[T]],
     ) -> T:
-        """关闭新 admission；既有 Job 由删除流的 cleanup owner 结算。"""
+        """关闭新 admission，排空已登记的准备窗口，再由删除 owner 结算旧 Job。"""
         normalized_session_ids = sorted(set(session_ids))
         if not normalized_session_ids:
             return await operation()
@@ -546,15 +548,17 @@ class JobService:
             for session_id in normalized_session_ids:
                 if session_id in self._deleting_sessions:
                     raise RuntimeError(f"会话删除已在进行: {session_id}")
-                preparation_count = self._session_preparations.get(session_id, 0)
-                if preparation_count:
-                    raise RuntimeError(
-                        "会话正在准备持久化消息，不能删除: "
-                        f"session_id={session_id}, "
-                        f"preparation_count={preparation_count}"
-                    )
             self._deleting_sessions.update(normalized_session_ids)
         try:
+            # 等待时释放调度锁，原准备窗口的 finally 才能结算计数；
+            # 已关闭的新准入不能延长本次排空，旁系 Session 仍可继续工作。
+            async with self._preparation_changed:
+                await self._preparation_changed.wait_for(
+                    lambda: all(
+                        self._session_preparations.get(session_id, 0) == 0
+                        for session_id in normalized_session_ids
+                    )
+                )
             return await operation()
         except BaseException:
             async with self._dispatch_lock:

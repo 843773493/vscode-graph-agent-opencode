@@ -86,6 +86,31 @@ def _prevent_background_execution(
     monkeypatch.setattr(service, "_start_job_task", fake_start)
 
 
+async def _assert_delete_waits_for_preparation(service: JobService, session_id: str) -> None:
+    """取消中的恢复仍保护原存储窗口；删除可排队，不能提前触碰存储。"""
+    entered = asyncio.Event()
+
+    async def delete_storage() -> None:
+        entered.set()
+
+    deletion = asyncio.create_task(service.run_session_delete_operation(session_id, delete_storage))
+    try:
+        async def closed() -> None:
+            while session_id not in service._deleting_sessions:
+                if deletion.done():
+                    await deletion
+                await asyncio.sleep(0)
+
+        await asyncio.wait_for(closed(), timeout=3)
+        assert not deletion.done()
+        assert not entered.is_set()
+        assert service._session_preparations[session_id] > 0
+    finally:
+        deletion.cancel()
+        await asyncio.gather(deletion, return_exceptions=True)
+    assert session_id not in service._deleting_sessions
+
+
 def _request(
     session_id: str,
     *,
@@ -239,8 +264,7 @@ async def test_cancelled_pending_restore_settles_worker_before_session_delete(
     restore.cancel()
 
     try:
-        with pytest.raises(RuntimeError, match="正在准备持久化消息"):
-            await service.run_session_delete_operation(session_id, lambda: asyncio.sleep(0))
+        await _assert_delete_waits_for_preparation(service, session_id)
         assert not restore.done()
     finally:
         release.set()
@@ -295,8 +319,7 @@ async def test_cancelled_restore_finishes_queue_persistence_and_launch(
         restore.cancel()
         await asyncio.sleep(0)
         restore.cancel()
-        with pytest.raises(RuntimeError, match="正在准备持久化消息"):
-            await service.run_session_delete_operation(session_id, lambda: asyncio.sleep(0))
+        await _assert_delete_waits_for_preparation(service, session_id)
         assert not restore.done()
         assert started_jobs == []
     finally:

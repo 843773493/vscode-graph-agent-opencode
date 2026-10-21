@@ -119,6 +119,75 @@ async def admission_harness() -> AsyncIterator[_AdmissionHarness]:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("cancel_delete", [False, True])
+async def test_delete_drains_existing_preparation_before_catalog_mark(
+    admission_harness: _AdmissionHarness,
+    cancel_delete: bool,
+) -> None:
+    workspace = admission_harness.workspace
+    service = admission_harness.job_service
+    session_id = await workspace.create_session("准备窗口与删除竞争")
+    sibling_id = await workspace.create_session("旁系准备窗口")
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    delete_entered = asyncio.Event()
+
+    async def preparing() -> None:
+        entered.set()
+        await release.wait()
+
+    async def deleting():
+        delete_entered.set()
+        assert service._session_preparations.get(session_id, 0) == 0
+        return await workspace.resolver.delete_subtree(
+            idempotency_key="delete-after-preparation", root_node_id=session_id,
+        )
+
+    preparation = asyncio.create_task(service.run_session_preparation(session_id, preparing))
+    await asyncio.wait_for(entered.wait(), timeout=3)
+    deletion = asyncio.create_task(service.run_session_delete_operation(session_id, deleting))
+    try:
+        # 经过同一调度锁确认删除已经关闭新准入，不能以 sleep 猜测执行顺序。
+        async def admission_closed() -> None:
+            while session_id not in service._deleting_sessions:
+                if deletion.done():
+                    await deletion
+                await asyncio.sleep(0)
+
+        await asyncio.wait_for(admission_closed(), timeout=3)
+        assert not delete_entered.is_set()
+        assert workspace.node(session_id).state == "active"
+        with pytest.raises(RuntimeError, match="会话正在删除"):
+            await service.run_session_preparation(session_id, preparing)
+
+        async def sibling_preparation() -> str:
+            return "sibling-open"
+
+        assert await service.run_session_preparation(sibling_id, sibling_preparation) == "sibling-open"
+        if cancel_delete:
+            deletion.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await deletion
+            assert session_id not in service._deleting_sessions
+            assert not delete_entered.is_set()
+            assert await service.run_session_preparation(session_id, sibling_preparation) == "sibling-open"
+        release.set()
+        await asyncio.wait_for(preparation, timeout=3)
+        if not cancel_delete:
+            result = await asyncio.wait_for(deletion, timeout=3)
+            assert result.record_state == "completed"
+            assert delete_entered.is_set()
+            with pytest.raises(KeyError):
+                workspace.store.get_node(session_id)
+        assert workspace.node(sibling_id).state == "active"
+    finally:
+        release.set()
+        if not deletion.done():
+            deletion.cancel()
+        await asyncio.gather(preparation, deletion, return_exceptions=True)
+
+
+@pytest.mark.asyncio
 async def test_catalog_delete_settles_active_and_queued_jobs_before_isolation(
     admission_harness: _AdmissionHarness,
 ) -> None:
