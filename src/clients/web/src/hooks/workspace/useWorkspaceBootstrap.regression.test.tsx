@@ -2,6 +2,7 @@ import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import React, { type MutableRefObject } from "react";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import * as api from "../../api";
+import { HttpRequestError } from "../../api/http";
 import * as gatewayApi from "../../gatewayApi";
 import * as userAccessApi from "../../api/gateway/userAccess";
 import * as userViewStateApi from "../../api/gateway/userViewState";
@@ -88,7 +89,10 @@ interface Mounted {
 const mountedRenderers: ReactTestRenderer[] = [];
 const restoreSpies: Array<() => void> = [];
 
-async function mountBootstrap(initialState: AppState, flushStartup = true): Promise<Mounted> {
+async function mountBootstrap(
+  initialState: AppState, flushStartup = true,
+  initialSelection: { workspaceId: string; sessionId: string } | null = null,
+): Promise<Mounted> {
   let current = initialState;
   let hook: ReturnType<typeof useWorkspaceBootstrap> | undefined;
   const selectionIntentRef = { current: 0 };
@@ -101,6 +105,7 @@ async function mountBootstrap(initialState: AppState, flushStartup = true): Prom
 
   function Probe(): React.ReactNode {
     hook = useWorkspaceBootstrap({
+      initialSelection,
       apiPort: API_PORT,
       selectionIntentRef,
       gatewayListRequestRef,
@@ -255,6 +260,8 @@ describe("useWorkspaceBootstrap 失效标记", () => {
       sessions: [old], sessionsByWorkspace: new Map([["ws-1", [old]]]),
       gatewayUserAccess: { kind: "user", user_id: "user-old" } as never,
     }), false);
+    // 显式刷新取代尚未触发的初始恢复，避免两轮初始化争用同一断言计数。
+    mounted.selectionIntentRef.current += 1;
     await act(async () => { await mounted.refreshSessions(old.session_id); });
     expect(detail).toHaveBeenCalledTimes(1);
     expect(detail).toHaveBeenCalledWith(API_PORT, restored.session_id, "ws-1", { signal: expect.any(AbortSignal) });
@@ -560,4 +567,62 @@ describe("useWorkspaceBootstrap 失效标记", () => {
       "背景图片加载失败: /api/gateway/ui-assets/background-404",
     );
   });
+});
+
+
+describe("扩展窗口固定会话 owner 初始化", () => {
+  for (const outcome of ["ready", "session-missing", "workspace-offline", "workspace-missing", "catalog-unavailable", "snapshot-stale"] as const) {
+    test(`${outcome}: URL 目标优先于当前用户保存的位置且不回退`, async () => {
+      installWindow(); stubCommonBootstrap(); installDocumentStub();
+      const source = { session_id: "ses_00000000400070008000000000000001", title: "旧会话" } as Session;
+      const target = { ...source, session_id: "ses_00000000400070008000000000000002", title: "URL 目标" };
+      spy("getGatewayUiSettings").mockResolvedValue(defaultUiSettings() as never);
+      spy("listGatewayWorkspaces").mockResolvedValue(gatewayWorkspaceList([
+        { workspace_id: "ws-main", name: "原活动工作区", status: "ready" },
+        ...(outcome === "workspace-missing" ? [] : [
+          { workspace_id: "ws-target", name: "窗口目标", status: outcome === "workspace-offline" ? "offline" : "ready" },
+        ]),
+      ]));
+      const activation = spy("activateGatewayWorkspace");
+      const user = spyOn(userAccessApi, "ensureGatewayUserAccess")
+        .mockResolvedValue({ kind: "user", user_id: "window-user" } as never);
+      const view = spyOn(userViewStateApi, "getLatestGatewayUserViewState").mockResolvedValue({
+        user_id: "window-user", workspace_id: "ws-main", session_id: source.session_id,
+      } as never);
+      const list = spyOn(api, "listSessions").mockResolvedValue({ items: [source], next_cursor: null, has_more: false });
+      if (outcome === "catalog-unavailable") list.mockRejectedValue(new Error("目录读取失败"));
+      const detail = spyOn(api, "getSession").mockImplementation(async () => {
+        if (outcome === "session-missing") throw new HttpRequestError(404, "Not Found", "会话不存在", "/api/v1/sessions/target");
+        if (outcome === "snapshot-stale") workspaceSessionListRefresh.invalidateWorkspaceSessionListSnapshot(API_PORT, "ws-target");
+        return target;
+      });
+      restoreSpies.push(() => user.mockRestore(), () => view.mockRestore(), () => list.mockRestore(), () => detail.mockRestore());
+      const mounted = await mountBootstrap(appState(), true, { workspaceId: "ws-target", sessionId: target.session_id });
+      expect(activation).not.toHaveBeenCalled();
+      if (outcome === "ready") {
+        expect(mounted.state().currentSession).toEqual(target);
+        expect(mounted.state().currentSessionWorkspaceId).toBe("ws-target");
+        expect(mounted.state().activeGatewayWorkspaceId).toBe("ws-main");
+        expect(mounted.state().error).toBeNull();
+      } else {
+        expect(mounted.state().currentSession).toBeNull();
+        expect(mounted.state().currentSessionWorkspaceId).toBeNull();
+        expect(mounted.state().error).toContain(outcome === "session-missing" ? "会话不存在"
+          : outcome === "catalog-unavailable" ? "目录读取失败"
+          : outcome === "snapshot-stale" ? "会话目录已更新" : "目标工作区不可用");
+      }
+      if (outcome === "workspace-offline" || outcome === "workspace-missing") {
+        expect(detail).not.toHaveBeenCalled();
+        expect(list).not.toHaveBeenCalled();
+      } else if (outcome === "catalog-unavailable") {
+        expect(detail).not.toHaveBeenCalled();
+        expect(list).toHaveBeenCalledTimes(1);
+      } else {
+        expect(detail).toHaveBeenCalledTimes(1);
+        expect(detail).toHaveBeenCalledWith(API_PORT, target.session_id, "ws-target", { signal: expect.any(AbortSignal) });
+        expect(list).toHaveBeenCalledTimes(1);
+        expect(list.mock.calls[0]?.[1]).toBe("ws-target");
+      }
+    });
+  }
 });

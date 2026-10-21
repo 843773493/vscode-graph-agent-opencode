@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile, writeFile } from "node:fs/promises";
 import { chromium } from "playwright";
-import { testControl } from "../../../support/e2e-test-control.mjs";
+import { planChatCalls, testControl } from "../../../support/e2e-test-control.mjs";
 
 const phase = process.argv[2];
 assert.ok(["before-unload", "after-unload"].includes(phase));
@@ -74,19 +74,33 @@ async function terminalPanel() {
   await panel.waitFor({ state: "visible" });
   return panel;
 }
-async function command(surface, label, action, resourceId, expectedStatus = 200) {
-  const replyPromise = surface.page().waitForResponse((reply) => reply.request().method() === "POST"
-    && new URL(reply.url()).pathname === `/api/v1/resources/${resourceId}/${action}`);
-  await surface.getByRole("button", { name: label, exact: true }).click();
-  if (action === "delete") {
-    const dialog = surface.page().getByRole("dialog");
-    await dialog.getByRole("button", { name: "删除", exact: true }).click();
+async function command(surface, label, action, resourceId, {
+  expectedStatus = 200, expectedOwner, beforeConfirm, expectedRevision,
+} = {}) {
+  const [reply] = await Promise.all([
+    surface.page().waitForResponse((reply) => reply.request().method() === "POST"
+      && new URL(reply.url()).pathname === `/api/v1/resources/${resourceId}/${action}`),
+    (async () => {
+      await surface.getByRole("button", { name: label, exact: true }).click();
+      if (action === "delete") {
+        const dialog = surface.page().getByRole("dialog");
+        await dialog.waitFor({ state: "visible" });
+        if (beforeConfirm) await beforeConfirm();
+        await dialog.getByRole("button", { name: "删除", exact: true }).click();
+      }
+    })(),
+  ]);
+  const requestOwner = reply.request().postDataJSON();
+  if (expectedOwner) {
+    assert.deepEqual(requestOwner.thread, expectedOwner);
   }
-  const reply = await replyPromise;
+  if (expectedRevision !== undefined) assert.equal(requestOwner.expected_revision, expectedRevision);
   assert.equal(reply.status(), expectedStatus, await reply.text());
   const payload = await reply.json();
   assert.equal(payload.request_id, reply.headers()["x-request-id"]);
-  result.checks.push({ resource_id: resourceId, action, status: reply.status() });
+  result.checks.push({ resource_id: resourceId, action, status: reply.status(),
+    request_revision: requestOwner.expected_revision,
+    ...(expectedOwner ? { request_owner: requestOwner.thread } : {}) });
   return payload.data;
 }
 async function browserRow(popup, resourceId) {
@@ -107,12 +121,9 @@ async function openBrowser(resourceId, sessionId) {
     if (value) url.searchParams.set(key, value);
   }
   await popup.goto(url.toString(), { waitUntil: "domcontentloaded" });
-  if (sessionId) {
-    // 扩展窗口隐藏会话树；核验实际 bootstrap 的当前会话，不点击隐藏控件。
-    const currentSession = popup.locator('.session-resource-row[aria-current="true"]')
-      .filter({ has: popup.locator(`button[data-session-id="${sessionId}"]`) });
-    await currentSession.waitFor({ state: "attached" });
-  }
+  await popup.locator('.app-shell[data-window-mode="extension"]').waitFor({ state: "visible" });
+  await browserRow(popup, resourceId);
+  await attachedBrowser(popup);
   return popup;
 }
 async function terminalInput(marker) {
@@ -184,13 +195,7 @@ try {
   await api("/api/v1/workspace");
   if (phase === "before-unload") {
     const source = await createSession("持久资源真实卸载验收");
-    await testControl({ action: "plan_model", session_id: source.session_id, thread_id: source.thread_id, interactions: [{
-      request: { method: "POST", url: "https://opencode.ai/zen/v1/chat/completions", match: { model: "big-pickle", stream: true } },
-      response: { status: 200, headers: { "content-type": "text/event-stream" }, frames: [
-        { kind: "data", encoding: "json", payload: { id: "resource-ready", object: "chat.completion.chunk", model: "big-pickle", choices: [{ index: 0, delta: { role: "assistant", content: "就绪" }, finish_reason: "stop" }] } },
-        { kind: "done", encoding: "text", payload: "[DONE]" },
-      ] },
-    }] });
+    await planChatCalls(source.session_id, source.thread_id, [{ label: "resource-ready", text: "就绪" }]);
     await selectSession(source.session_id);
     const sentPromise = page.waitForResponse((reply) => reply.request().method() === "POST"
       && new URL(reply.url()).pathname === `/api/v1/sessions/${source.session_id}/messages`);
@@ -263,19 +268,34 @@ try {
     const panel = await terminalPanel();
     const terminal = await api(`/api/v1/resources/${result.terminal_id}`);
     await panel.getByRole("button", { name: String(terminal.metadata.title).replace(/^终端\s*[:：]?\s*/, "") }).click();
-    const attached = await command(panel, "关联当前会话", "attach", result.terminal_id);
+    const attached = await command(panel, "关联当前会话", "attach", result.terminal_id, { expectedOwner: other });
     assert.deepEqual(attached.thread_associations, [other]);
     await terminalInput("AFTER");
     assert.deepEqual((await command(panel, "解除关联", "detach", result.terminal_id)).thread_associations, []);
     const popup = await openBrowser(result.browser_id, other.session_id);
     let row = await browserRow(popup, result.browser_id);
-    assert.deepEqual((await command(row, "关联当前会话", "attach", result.browser_id)).thread_associations, [other]);
+    assert.deepEqual((await command(row, "关联当前会话", "attach", result.browser_id, { expectedOwner: other })).thread_associations, [other]);
+    assert.deepEqual((await command(row, "解除关联", "detach", result.browser_id)).thread_associations, []);
+    row = await browserRow(popup, result.browser_id);
     const beforeConflict = await api(`/api/v1/resources/${result.browser_id}`);
     const refreshPromise = popup.waitForResponse((reply) => new URL(reply.url()).pathname === "/api/gateway/resources" && reply.status() === 200);
-    await command(row, "删除", "delete", result.browser_id, 409);
+    await command(row, "删除", "delete", result.browser_id, {
+      expectedStatus: 409, expectedRevision: beforeConflict.owner_revision, beforeConfirm: async () => {
+      // 用户打开删除确认后，另一客户端真实关联资源，使原确认持有的 revision 失效。
+      const changed = await api(`/api/v1/resources/${result.browser_id}/attach`, "POST", {
+        expected_revision: beforeConflict.owner_revision, thread: other,
+      });
+      assert.deepEqual(changed.thread_associations, [other]);
+      assert.ok(changed.owner_revision > beforeConflict.owner_revision);
+      result.conflict_concurrent_owner_change = {
+        before_revision: beforeConflict.owner_revision, after_revision: changed.owner_revision,
+        thread: other,
+      };
+      },
+    });
     await refreshPromise;
     await popup.locator(".resource-notice.is-error").waitFor({ state: "visible" });
-    assert.deepEqual((await api(`/api/v1/resources/${result.browser_id}`)).thread_associations, beforeConflict.thread_associations);
+    assert.deepEqual((await api(`/api/v1/resources/${result.browser_id}`)).thread_associations, [other]);
     result.conflict_shown_and_owner_refetched = true;
     row = await browserRow(popup, result.browser_id);
     assert.deepEqual((await command(row, "解除关联", "detach", result.browser_id)).thread_associations, []);

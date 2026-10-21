@@ -33,7 +33,10 @@ import { isNavigationBackpressureStatus } from "../../api/session/sessionCatalog
 import { requireGatewayWorkspaceRequestTarget } from "../../api/workspaceIdentity";
 import { activeGatewayWorkspaceFields } from "../gatewayWorkspace/activeGatewayWorkspaceFields";
 
+type BootstrapSelection = { workspaceId: string; sessionId: string };
+
 type WorkspaceBootstrapPayload = {
+  selectedWorkspaceId: string;
   userAccess: Awaited<ReturnType<typeof ensureGatewayUserAccess>>;
   userViewState: Awaited<ReturnType<typeof getLatestGatewayUserViewState>>;
   gatewayWorkspaces: Awaited<ReturnType<typeof listGatewayWorkspaces>>;
@@ -203,6 +206,7 @@ export function shouldRestorePersistedWorkspace({
 async function loadWorkspaceBootstrap(
   apiPort: number,
   options: {
+    fixedSelection?: BootstrapSelection | null;
     restorePersistedWorkspace: boolean;
     checkGatewayWorkspaceHealth: boolean;
     preferredSessionId?: string | null;
@@ -248,7 +252,7 @@ async function loadWorkspaceBootstrap(
   options.assertCurrentSelection();
   if (
     shouldRestorePersistedWorkspace({
-      restorePersistedWorkspace: options.restorePersistedWorkspace,
+      restorePersistedWorkspace: options.restorePersistedWorkspace && !options.fixedSelection,
       userViewState,
       activeWorkspaceId: gatewayWorkspaces.active_workspace_id,
       availableWorkspaceIds: gatewayWorkspaces.items.map(
@@ -266,64 +270,82 @@ async function loadWorkspaceBootstrap(
   }
   signal?.throwIfAborted();
   options.assertCurrentSelection();
-  // 不检查健康的列表可带重启前的 offline 快照；改变目标前必须核对真实状态。
-  if (!options.checkGatewayWorkspaceHealth
-    && (selectHealthyGatewayWorkspace(gatewayWorkspaces) === null
-      || selectHealthyGatewayWorkspace(gatewayWorkspaces) !== gatewayWorkspaces.active_workspace_id)) {
-    gatewayWorkspaces = await listGatewayWorkspaces(apiPort, { checkHealth: true });
-    signal?.throwIfAborted();
-    options.assertCurrentSelection();
-  }
-  const healthyWorkspaceId = selectHealthyGatewayWorkspace(gatewayWorkspaces);
-  if (healthyWorkspaceId === null) {
-    throw new WorkspaceBootstrapUnavailableError(gatewayWorkspaces);
-  }
-  if (healthyWorkspaceId !== gatewayWorkspaces.active_workspace_id) {
-    await activateGatewayWorkspace(apiPort, healthyWorkspaceId, signal);
-    signal?.throwIfAborted();
-    options.assertCurrentSelection();
-    gatewayWorkspaces = await listGatewayWorkspaces(apiPort, {
-      checkHealth: options.checkGatewayWorkspaceHealth,
-    });
-  }
-  const activeWorkspaceId = gatewayWorkspaces.active_workspace_id;
-  if (selectHealthyGatewayWorkspace(gatewayWorkspaces) !== activeWorkspaceId) {
-    throw new WorkspaceBootstrapUnavailableError(gatewayWorkspaces);
+  // 扩展窗口固定 URL owner，只读取该目标；不恢复其它会话或改变 Gateway 激活状态。
+  let selectedWorkspaceId: string;
+  const fixedSelection = options.fixedSelection;
+  if (fixedSelection) {
+    const requested = gatewayWorkspaces.items.find(
+      (entry) => entry.workspace_id === fixedSelection.workspaceId,
+    );
+    if (requested?.status !== "ready") {
+      throw new Error(`扩展窗口目标工作区不可用: ${fixedSelection.workspaceId}`);
+    }
+    selectedWorkspaceId = requested.workspace_id;
+  } else {
+    // 不检查健康的列表可带重启前的 offline 快照；改变目标前必须核对真实状态。
+    if (!options.checkGatewayWorkspaceHealth
+      && (selectHealthyGatewayWorkspace(gatewayWorkspaces) === null
+        || selectHealthyGatewayWorkspace(gatewayWorkspaces) !== gatewayWorkspaces.active_workspace_id)) {
+      gatewayWorkspaces = await listGatewayWorkspaces(apiPort, { checkHealth: true });
+      signal?.throwIfAborted();
+      options.assertCurrentSelection();
+    }
+    const healthyWorkspaceId = selectHealthyGatewayWorkspace(gatewayWorkspaces);
+    if (healthyWorkspaceId === null) {
+      throw new WorkspaceBootstrapUnavailableError(gatewayWorkspaces);
+    }
+    if (healthyWorkspaceId !== gatewayWorkspaces.active_workspace_id) {
+      await activateGatewayWorkspace(apiPort, healthyWorkspaceId, signal);
+      signal?.throwIfAborted();
+      options.assertCurrentSelection();
+      gatewayWorkspaces = await listGatewayWorkspaces(apiPort, {
+        checkHealth: options.checkGatewayWorkspaceHealth,
+      });
+    }
+    const activeWorkspaceId = gatewayWorkspaces.active_workspace_id;
+    if (!activeWorkspaceId || selectHealthyGatewayWorkspace(gatewayWorkspaces) !== activeWorkspaceId) {
+      throw new WorkspaceBootstrapUnavailableError(gatewayWorkspaces);
+    }
+    selectedWorkspaceId = activeWorkspaceId;
   }
   const [workspace, workspaceSessionResults, agents] = await Promise.all([
-    getWorkspace(apiPort, activeWorkspaceId),
+    getWorkspace(apiPort, selectedWorkspaceId),
     Promise.allSettled(
-      activeWorkspaceId
+      selectedWorkspaceId
         ? [fetchWorkspaceSessionListSnapshot(
             apiPort,
             requireGatewayWorkspaceRequestTarget(
               gatewayWorkspaces.items,
-              activeWorkspaceId,
+              selectedWorkspaceId,
             ),
           )]
         : [],
     ),
-    apiListAgents(apiPort, activeWorkspaceId),
+    apiListAgents(apiPort, selectedWorkspaceId),
   ]);
-  const targetSessionId = selectBootstrapSessionId({
+  const targetSessionId = options.fixedSelection?.sessionId ?? selectBootstrapSessionId({
     preferredSessionId: options.preferredSessionId,
-    persistedSessionId: userViewState?.workspace_id === activeWorkspaceId ? userViewState.session_id : null,
+    persistedSessionId: userViewState?.workspace_id === selectedWorkspaceId ? userViewState.session_id : null,
     userChanged: options.previousUserAccess?.kind !== userAccess.kind
       || options.previousUserAccess?.user_id !== userAccess.user_id,
   });
   const sessionResult = workspaceSessionResults[0];
+  if (fixedSelection && sessionResult?.status === "rejected") throw sessionResult.reason;
   if (targetSessionId && sessionResult?.status === "fulfilled"
-    && !sessionResult.value.complete
-    && !sessionResult.value.sessions.some((session) => session.session_id === targetSessionId)) {
+    && (options.fixedSelection || (!sessionResult.value.complete
+      && !sessionResult.value.sessions.some((session) => session.session_id === targetSessionId)))) {
     // 恢复首页外的选择只定点读取目标，不能为了定位会话拉完全部分页。
     try {
-      const selected = await getSession(apiPort, targetSessionId, activeWorkspaceId, { signal });
-      sessionResult.value = { ...sessionResult.value, sessions: [...sessionResult.value.sessions, selected] };
+      const selected = await getSession(apiPort, targetSessionId, selectedWorkspaceId, { signal });
+      sessionResult.value = { ...sessionResult.value, sessions: [
+        ...sessionResult.value.sessions.filter((entry) => entry.session_id !== selected.session_id), selected,
+      ] };
     } catch (error: unknown) {
-      if (!(error instanceof HttpRequestError) || error.status !== 404) throw error;
+      if (options.fixedSelection || !(error instanceof HttpRequestError) || error.status !== 404) throw error;
     }
   }
   return {
+    selectedWorkspaceId,
     userAccess,
     userViewState,
     gatewayWorkspaces,
@@ -360,6 +382,7 @@ async function loadWorkspaceBootstrapWithRetry(
 }
 
 export function useWorkspaceBootstrap({
+  initialSelection = null,
   apiPort,
   uiSettings,
   readState,
@@ -368,6 +391,7 @@ export function useWorkspaceBootstrap({
   gatewayListRequestRef,
   runGatewayWorkspaceListTask,
 }: {
+  initialSelection?: BootstrapSelection | null;
   apiPort: number | null;
   uiSettings: Awaited<ReturnType<typeof getGatewayUiSettings>>;
   readState: () => Pick<AppState, "gatewayUserAccess">;
@@ -409,6 +433,7 @@ export function useWorkspaceBootstrap({
     try {
       const resolvedApiPort = apiPort ?? DEFAULT_BACKEND_PORT;
       const {
+        selectedWorkspaceId,
         userAccess,
         userViewState,
         gatewayWorkspaces,
@@ -419,6 +444,7 @@ export function useWorkspaceBootstrap({
         agents,
       } = await runGatewayWorkspaceListTask(() => loadWorkspaceBootstrapWithRetry(resolvedApiPort, {
         preferredSessionId,
+        fixedSelection: initialSelection,
         previousUserAccess: readState().gatewayUserAccess,
         restorePersistedWorkspace: options.restorePersistedWorkspace ?? false,
         checkGatewayWorkspaceHealth: options.checkGatewayWorkspaceHealth ?? true,
@@ -431,8 +457,7 @@ export function useWorkspaceBootstrap({
         },
       }));
       writeCachedUiSettings(uiSettings);
-      const activeWorkspaceId = gatewayWorkspaces.active_workspace_id;
-      const workspaceIds = activeWorkspaceId ? [activeWorkspaceId] : [];
+      const workspaceIds = [selectedWorkspaceId];
       const workspaceSessionEntries: WorkspaceSessionListSnapshot[] = [];
       const workspaceSessionErrors = new Map<string, string>();
       for (const [index, result] of workspaceSessionResults.entries()) {
@@ -491,13 +516,19 @@ export function useWorkspaceBootstrap({
           );
         }
         for (const snapshot of workspaceSessionEntries) {
-          if (isCurrentWorkspaceSessionListSnapshot(snapshot)) {
-            sessionsByWorkspace.set(snapshot.workspaceId, mergeSessionListPage(
-              userChanged ? [] : sessionsByWorkspace.get(snapshot.workspaceId) ?? [],
-              snapshot.sessions,
-              snapshot.complete,
-            ));
+          if (!isCurrentWorkspaceSessionListSnapshot(snapshot)) {
+            // 目录失效同样作废定点详情，不能把删除前的目标重新吸收到窗口中。
+            if (initialSelection) return {
+              ...prev, error: "扩展窗口目标会话目录已更新，请重新加载。",
+              status: "初始化失败", isBootstrapping: false,
+            };
+            continue;
           }
+          sessionsByWorkspace.set(snapshot.workspaceId, mergeSessionListPage(
+            userChanged ? [] : sessionsByWorkspace.get(snapshot.workspaceId) ?? [],
+            snapshot.sessions,
+            snapshot.complete,
+          ));
         }
         const sessionGatewayWorkspaceById = new Map<string, string>();
         for (const [workspaceId, sessions] of sessionsByWorkspace) {
@@ -508,10 +539,10 @@ export function useWorkspaceBootstrap({
             );
           }
         }
-        const activeSessions = activeWorkspaceId
-          ? sessionsByWorkspace.get(activeWorkspaceId) ?? []
+        const activeSessions = selectedWorkspaceId
+          ? sessionsByWorkspace.get(selectedWorkspaceId) ?? []
           : [];
-        const targetSessionId = selectBootstrapSessionId({
+        const targetSessionId = initialSelection?.sessionId ?? selectBootstrapSessionId({
           preferredSessionId,
           persistedSessionId: userViewState?.session_id,
           previousSessionId: prev.currentSession?.session_id,
@@ -521,14 +552,14 @@ export function useWorkspaceBootstrap({
           activeSessions.find(
             (session) => session.session_id === targetSessionId,
           ) ??
-          activeSessions[0] ??
+          (initialSelection ? null : activeSessions[0]) ??
           null;
         const sessionChanged =
           (nextCurrentSession?.session_id ?? null) !==
           (prev.currentSession?.session_id ?? null);
         const workspaceChanged =
-          activeWorkspaceId !== prev.activeGatewayWorkspaceId ||
-          activeWorkspaceId !== prev.currentSessionWorkspaceId;
+          selectedWorkspaceId !== prev.activeGatewayWorkspaceId ||
+          selectedWorkspaceId !== prev.currentSessionWorkspaceId;
         const contentTargetChanged = sessionChanged || workspaceChanged;
         return {
           ...prev,
@@ -558,13 +589,13 @@ export function useWorkspaceBootstrap({
           ...activeGatewayWorkspaceFields({
             ...gatewayWorkspaces,
             items: visibleGatewayWorkspaces,
-            active_workspace_id: activeWorkspaceId,
+            active_workspace_id: gatewayWorkspaces.active_workspace_id,
           }),
           workspaceName: workspace.name,
           agents,
           sessions: activeSessions,
           currentSession: nextCurrentSession,
-          currentSessionWorkspaceId: nextCurrentSession ? activeWorkspaceId : null,
+          currentSessionWorkspaceId: nextCurrentSession ? selectedWorkspaceId : null,
           traceEvents: contentTargetChanged ? [] : prev.traceEvents,
           llmRequestLogs: contentTargetChanged ? [] : prev.llmRequestLogs,
           llmRequestLogsLoadedAt: contentTargetChanged ? null : prev.llmRequestLogsLoadedAt,
@@ -582,7 +613,7 @@ export function useWorkspaceBootstrap({
       });
       // 已通过 list freshness 的快照按 React updater 顺序消费；后续状态读取
       // 不能使这一轮已排入的 bootstrap 自作废。选择变更仍由共同 epoch 隔离。
-      return activeWorkspaceId;
+      return selectedWorkspaceId;
     } catch (error: unknown) {
       if (
         controller.signal.aborted
@@ -618,7 +649,7 @@ export function useWorkspaceBootstrap({
         refreshAbortRef.current = null;
       }
     }
-  }, [apiPort, readState, setState, selectionIntentRef, gatewayListRequestRef]);
+  }, [apiPort, initialSelection, readState, setState, selectionIntentRef, gatewayListRequestRef]);
 
   const refreshGatewayWorkspaceStatuses = useCallback(async (
     expectedWorkspaceId?: string | null,

@@ -57,11 +57,17 @@ export type {
   ComposerContextType,
 } from "./hooks/app/appContext";
 import { AppContext, ComposerContext } from "./hooks/app/appContext";
+import { resolveExtensionWindowRequest } from "./utils/extensionResourceWindow";
 import { INITIAL_APP_STATE } from "./hooks/app/appStateSeed";
 import { createSerialTaskQueue } from "./hooks/runtime/serialTaskQueue";
 
 export function AppProvider({ children }: { children: React.ReactNode }) {
   const [state, setState] = useState<AppState>(INITIAL_APP_STATE);
+  const initialSelection = useMemo(() => {
+    const request = resolveExtensionWindowRequest();
+    return request?.workspaceId && request.sessionId
+      ? { workspaceId: request.workspaceId, sessionId: request.sessionId } : null;
+  }, []);
   const latestStateRef = useRef(state);
   const readState = useCallback(() => latestStateRef.current, []);
   const selectionIntentRef = useRef(0);
@@ -336,6 +342,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     refreshGatewayWorkspaceStatuses,
     refreshSessions,
   } = useWorkspaceBootstrap({
+    initialSelection,
     apiPort: state.apiPort,
     uiSettings: state.uiSettings,
     readState,
