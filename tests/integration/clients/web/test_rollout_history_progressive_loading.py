@@ -6,48 +6,52 @@ import os
 import shutil
 import subprocess
 from collections.abc import AsyncIterator, Generator
-from datetime import UTC, datetime
 from pathlib import Path
 
-import commentjson
 import httpx
 import pytest
-from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
-from langgraph.checkpoint.base import empty_checkpoint
 
-from app.core.checkpoint_config import build_checkpoint_config
 from app.core.execution_admission_context import execution_admission_scope
 from app.core.path_utils import get_session_path_resolver
 from app.core.session_thread_context import session_thread_owner_scope
+from app.core.workspace_identity import read_workspace_id
 from app.domain.itemized.enums import (
     CanonicalItemStatus,
     PayloadKind,
     SemanticKind,
 )
-from app.services.infrastructure.rollout_context.checkpoint.message_codec import (
-    LangChainMessageCodec,
-)
+from app.domain.itemized.identity.item_projection import ItemProjectionIdentity
+from app.domain.itemized.records import CanonicalItemRecord
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
-from app.services.infrastructure.rollout_context.store import RolloutContextStore
-from tests.integration.stubs.http_stubs import openai_chat_stub
-from tests.support.custom_tool_test_workspace import (
-    prepare_custom_tool_test_workspace,
+from tests.harness.python.run_context import TestRunContext
+from tests.support.catalog_session_bundle import seed_catalog_session_bundle
+from tests.support.frozen_provider import (
+    create_frozen_provider_activation,
+    create_frozen_provider_prepare,
+    frozen_provider_wire,
 )
+from tests.support.model_stream_config import ModelStreamReplay, model_stream_replay
+from tests.support.paths import chromium_temporary_environment, output_root_for_test
+from tests.support.ports import integration_port_block_for_file
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
     close_gateway_process,
     reset_gateway_persistent_state,
     start_gateway_process,
 )
-from tests.support.paths import output_root_for_test
-from tests.support.ports import integration_port_block_for_file
-from tests.support.processes.workspace import close_backend_process, start_backend_process
+from tests.support.processes.workspace import (
+    close_backend_process,
+    start_backend_process,
+)
 from tests.support.session_catalog_owner import fixture_catalog_scope
 from tests.support.web_boundary_seeding import (
     boundary_item,
+    tool_call_payload,
+    tool_result_payload,
 )
+from tests.support.workspaces import prepare_test_workspace
 
 STATIC_LONG_SESSION_ID = "ses_019be55bdf8d715d8efbb8419fbc7cd7"
 LONG_SESSION_TOOL_CALL_ID = "call_chat_reasoning_tool"
@@ -127,7 +131,7 @@ def _tool_result_content(turn_number: int) -> str:
     return content
 
 
-def _reasoning_items(turn_id: str, *, has_result: bool) -> tuple[object, ...]:
+def _reasoning_items(turn_id: str, *, has_result: bool) -> tuple[CanonicalItemRecord, ...]:
     """按模板 v1 文案生成推理与摘要 item；block_id 保证逻辑 key 唯一。"""
     blocks: list[tuple[str, str, object]] = [
         ("a", PayloadKind.TEXT, "先读取 "),
@@ -144,8 +148,8 @@ def _reasoning_items(turn_id: str, *, has_result: bool) -> tuple[object, ...]:
                 ("d-summary", PayloadKind.SUMMARY, None),
             ]
         )
-    items: list[object] = []
-    for suffix, payload_kind, text in blocks:
+    items: list[CanonicalItemRecord] = []
+    for block_index, (suffix, payload_kind, text) in enumerate(blocks):
         item_id = f"item-rollout-reasoning-{suffix}-{turn_id}"
         if payload_kind is PayloadKind.SUMMARY:
             payload: object = {
@@ -171,175 +175,75 @@ def _reasoning_items(turn_id: str, *, has_result: bool) -> tuple[object, ...]:
                 status=CanonicalItemStatus.COMPLETED,
                 payload=payload,
                 turn_id=turn_id,
-                metadata={"block_id": f"reasoning-{suffix}-{turn_id}"},
+                projection_identity=ItemProjectionIdentity(
+                    model_call_id=f"model-call-{turn_id}",
+                    block_id=f"reasoning-{suffix}-{turn_id}", block_index=block_index,
+                ),
             )
         )
     return tuple(items)
 
 
 def seed_long_rollout_history(workspace_root: Path) -> None:
-    """把 canonical 基线长历史整理成逐轮工具调用的浏览器场景。"""
-    sessions_dir = workspace_root / ".boxteam" / "sessions"
-    resolver = get_session_path_resolver(sessions_dir)
-    session_dir = resolver.resolve_thread_node(
-        STATIC_LONG_SESSION_ID,
-        resolver.main_thread_id(STATIC_LONG_SESSION_ID),
-    )
-    turn_order: list[str] = []
-    user_texts: dict[str, str] = {}
-    result_turns: set[str] = set()
-    for item in RolloutContextStore(sessions_dir).storage.read_items(STATIC_LONG_SESSION_ID):
-        if item.turn_id is None:
-            continue
-        if item.semantic_kind == "user_input":
-            content = item.payload
-            if not isinstance(content, str):
-                raise TypeError(f"canonical rollout user_input 缺少正文: {item.item_id}")
-            if item.turn_id not in user_texts:
-                turn_order.append(item.turn_id)
-                user_texts[item.turn_id] = content
-        elif item.semantic_kind == "tool_result":
-            result_turns.add(item.turn_id)
-    if len(turn_order) != 128 or len(user_texts) != 128 or len(result_turns) != 16:
-        raise RuntimeError(
-            "模板长会话结构与基线不符: "
-            f"turns={len(turn_order)}, users={len(user_texts)}, results={len(result_turns)}"
-        )
-    shutil.rmtree(session_dir / "rollout")
+    """只为展示准备128轮；本测试不据此证明执行、fork或恢复。"""
+    sessions_dir = workspace_root / ".boxteam/sessions"
+    manifest = json.loads((workspace_root / "rollout-fixture.json").read_text())
+    session = next(item for item in manifest["sessions"] if item["session_id"] == STATIC_LONG_SESSION_ID)
+    assert session["turn_count"] == 128
+    seed_catalog_session_bundle(sessions_dir, STATIC_LONG_SESSION_ID, title=session["title"], current_provider_id="primary")
     saver = RolloutCheckpointSaver(sessions_dir)
     owner = saver.forks.source.resolve_main_thread_owner(STATIC_LONG_SESSION_ID)
-    codec = LangChainMessageCodec()
-    timestamp = datetime.now(UTC).isoformat()
-    for index, turn_id in enumerate(turn_order, start=1):
-        has_result = turn_id in result_turns
+    pending = []
+    for index in range(1, 129):
+        turn_id = f"job-{index:04d}"
+        has_result = index % 8 == 0
         model_call_id = f"model-call-{turn_id}"
-        message_metadata = {
-            "message_metadata": {"turn_id": turn_id},
-            "model_call_id": model_call_id,
-        }
-        messages: list[object] = [
-            HumanMessage(
-                content=user_texts[turn_id],
-                id=f"rollout-user-{turn_id}",
-                response_metadata={
-                    "message_metadata": {"turn_id": turn_id}
-                },
-            ),
-            AIMessage(
-                content="",
-                id=f"rollout-call-{turn_id}",
-                tool_calls=[
-                    {
-                        "name": LONG_SESSION_TOOL_NAME,
-                        "args": _call_arguments(index),
-                        "id": LONG_SESSION_TOOL_CALL_ID,
-                        "type": "tool_call",
-                    }
-                ],
-                response_metadata=message_metadata,
-            ),
-        ]
+        call = tool_call_payload(LONG_SESSION_TOOL_CALL_ID, LONG_SESSION_TOOL_NAME, _call_arguments(index), model_call_id=model_call_id)
+        reasoning = _reasoning_items(turn_id, has_result=has_result)
+        items = [*reasoning[:4], boundary_item(
+            item_id=f"item-rollout-call-{turn_id}", semantic_kind=SemanticKind.TOOL_CALL,
+            payload_kind=PayloadKind.TOOL_CALL, status=CanonicalItemStatus.COMPLETED,
+            payload=call, turn_id=turn_id, projection_identity=ItemProjectionIdentity(
+                model_call_id=model_call_id, block_id=call["tool_call_id"], block_index=0),
+        )]
+        # 有调用但无结果的展示轮次属于interrupted，不能伪装成零输出completed_empty。
+        final_id = None
         if has_result:
-            messages.extend(
-                [
-                    ToolMessage(
-                        content=_tool_result_content(index),
-                        tool_call_id=LONG_SESSION_TOOL_CALL_ID,
-                        name=LONG_SESSION_TOOL_NAME,
-                        id=f"rollout-result-{turn_id}",
-                        status="success",
-                        response_metadata=message_metadata,
-                    ),
-                    AIMessage(
-                        content=LONG_SESSION_FINAL_TEXT,
-                        id=f"rollout-final-{turn_id}",
-                        response_metadata=message_metadata,
-                    ),
-                ]
-            )
+            final_id = f"item-rollout-final-{turn_id}"
+            items.extend((boundary_item(
+                item_id=f"item-rollout-result-{turn_id}", semantic_kind=SemanticKind.TOOL_RESULT,
+                payload_kind=PayloadKind.TOOL_RESULT, status=CanonicalItemStatus.COMPLETED,
+                payload=tool_result_payload(LONG_SESSION_TOOL_CALL_ID, LONG_SESSION_TOOL_NAME, _tool_result_content(index), model_call_id=model_call_id),
+                turn_id=turn_id, wire_role="tool"), *reasoning[4:], boundary_item(
+                    item_id=final_id, semantic_kind=SemanticKind.ASSISTANT_OUTPUT,
+                    payload_kind=PayloadKind.TEXT, status=CanonicalItemStatus.COMPLETED,
+                    payload=LONG_SESSION_FINAL_TEXT, turn_id=turn_id),
+            ))
+        # 展示夹具通过owner写入acceptance；不启动Agent或执行工具。
         accepted = saver.accept_turn(
-            STATIC_LONG_SESSION_ID,
-            thread_id=owner.thread_id,
-            accepted_ingress_id=f"ingress-rollout-{turn_id}",
-            acceptance_idempotency_key=f"acceptance-rollout-{turn_id}",
-            job_id=f"job-rollout-{turn_id}",
-            admission_idempotency_key=f"execution-rollout-{turn_id}",
-            payload=user_texts[turn_id],
-            payload_kind=PayloadKind.TEXT,
-            turn_id=turn_id,
-            root_item_id=f"item-rollout-user-{turn_id}",
-            initial_execution_id=f"execution-rollout-{turn_id}",
-        )
-
-        admission = saver.execution_admission(
             STATIC_LONG_SESSION_ID, thread_id=owner.thread_id,
-            execution_id=str(accepted["initial_execution_id"]),
+            accepted_ingress_id=f"ingress-{turn_id}", acceptance_idempotency_key=f"acceptance-{turn_id}",
+            job_id=f"job-{turn_id}", admission_idempotency_key=f"execution-admission-{turn_id}",
+            payload=f"继续处理第 {index} 轮的大工具历史查询，保留可复查的工具证据。",
+            payload_kind=PayloadKind.TEXT, turn_id=turn_id,
+            root_item_id=f"item-boundary-user-{turn_id}", initial_execution_id=f"execution-{turn_id}",
         )
-
-        def put_checkpoint(
-            turn_messages: list[object], checkpoint_turn_id: str,
-            *, checkpoint_admission=admission,
-        ) -> None:
-            checkpoint = empty_checkpoint()
-            checkpoint["id"] = f"checkpoint-rollout-{checkpoint_turn_id}"
-            checkpoint["channel_values"] = {"messages": turn_messages}
-            checkpoint["channel_versions"] = {"messages": "1"}
-            checkpoint["updated_channels"] = ["messages"]
-            with (
-                session_thread_owner_scope(owner, langgraph_thread_id=owner.thread_id),
-                execution_admission_scope(checkpoint_admission, langgraph_thread_id=owner.thread_id),
-            ):
-                saver.put(
-                    build_checkpoint_config(owner.thread_id),
-                    checkpoint,
-                    {"source": f"rollout-history-fixture-{checkpoint_turn_id}", "step": 1},
-                    {"messages": "1"},
-                )
-
-        if has_result:
-            converge_items: list[object] = []
-            for message in messages[1:]:
-                converge_items.extend(
-                    codec.items_for_message(
-                        message,
-                        item_sequence=1,
-                        message_id=message.id,
-                        turn_id=turn_id,
-                        execution_id=admission.execution_id,
-                        timestamp=timestamp,
-                        model_call_id=model_call_id,
-                    )
-                )
-            saver.converge_execution(
-                STATIC_LONG_SESSION_ID,
-                thread_id=owner.thread_id,
-                turn_id=turn_id,
-                execution_id=str(accepted["initial_execution_id"]),
-                outcome="completed",
-                turn_status="completed",
-                items=tuple(converge_items),
-                final_item_id=f"item-rollout-final-{turn_id}",
-            )
-            put_checkpoint(messages, turn_id)
-        else:
-            put_checkpoint(messages, turn_id)
-            saver.converge_execution(
-                STATIC_LONG_SESSION_ID,
-                thread_id=owner.thread_id,
-                turn_id=turn_id,
-                execution_id=str(accepted["initial_execution_id"]),
-                outcome="completed_empty",
-                turn_status="completed_empty",
-            )
-        with (
-            session_thread_owner_scope(owner, langgraph_thread_id=owner.thread_id),
-            execution_admission_scope(admission, langgraph_thread_id=owner.thread_id),
-        ):
-            saver.append_items(
-                STATIC_LONG_SESSION_ID,
-                list(_reasoning_items(turn_id, has_result=has_result)),
-                thread_id=owner.thread_id,
-            )
+        pending.append((turn_id, str(accepted["initial_execution_id"]), tuple(items), has_result, final_id))
+    # 先准备历史模型记录，再安装显示输出；未闭合调用不会被当成后继模型的可执行前缀。
+    prepare = create_frozen_provider_prepare(frozen_provider_wire, create_frozen_provider_activation())
+    assemblies = {}
+    for turn_id, execution_id, *_ in pending:
+        admission = saver.execution_admission(STATIC_LONG_SESSION_ID, thread_id=owner.thread_id, execution_id=execution_id)
+        with (session_thread_owner_scope(owner, langgraph_thread_id=owner.thread_id),
+              execution_admission_scope(admission, langgraph_thread_id=owner.thread_id)):
+            assemblies[turn_id] = prepare(saver, key=f"progressive-display:{turn_id}").assembly_id
+    for turn_id, execution_id, items, has_result, final_id in pending:
+        saver.converge_execution(
+            STATIC_LONG_SESSION_ID, thread_id=owner.thread_id, turn_id=turn_id,
+            execution_id=execution_id, items=items, assembly_id=assemblies[turn_id],
+            outcome="completed" if has_result else "interrupted",
+            turn_status="completed" if has_result else "interrupted", final_item_id=final_id,
+        )
 
 
 @pytest.fixture(scope="module")
@@ -351,9 +255,11 @@ def integration_workspace_root_path(request: pytest.FixtureRequest) -> str:
         project_root=project_root,
     )
     reset_gateway_persistent_state(workspace_root=output_root / "workspace")
-    workspace_root = prepare_custom_tool_test_workspace(
+    template = project_root / "tests/fixtures/workspaces/custom_tool_test_workspace"
+    workspace_root = prepare_test_workspace(
         workspace_root=output_root / "workspace",
-        template_root=project_root / "tests" / "fixtures" / "workspaces" / "custom_tool_test_workspace",
+        template_root=template,
+        template_items=tuple(sorted([item.name for item in template.iterdir() if item.name != ".boxteam"] + [".boxteam/AGENTS.md", ".boxteam/skills"])),
         shared_skill_root=project_root / "resources" / "skills",
     )
     # 为长历史浏览器场景在副本上生成逐轮工具调用数据。
@@ -367,55 +273,37 @@ def browser_backend(
     request: pytest.FixtureRequest,
     integration_workspace_root_path: str,
     integration_workspace_config_path: str,
-) -> Generator[tuple[str, Path], None, None]:
+) -> Generator[tuple[str, Path, ModelStreamReplay], None, None]:
     port_block = integration_port_block_for_file(Path(request.node.fspath))
     workspace_root = Path(integration_workspace_root_path).resolve()
-    config_path = Path(integration_workspace_config_path)
-    config = commentjson.loads(config_path.read_text(encoding="utf-8"))
-    provider = next(
-        item for item in config["llm"]["providers"] if item["id"] == "primary"
-    )
-    provider.update(
-        {
-            "endpoint": f"http://127.0.0.1:{port_block.port(10)}/v1",
-            "model": "rollout-history-browser-stub",
-            "api_key": "e2e-local-model-key",
-            "custom_llm_provider": "openai",
-        }
-    )
-    config_path.write_text(
-        json.dumps(config, ensure_ascii=False, indent=2) + "\n",
-        encoding="utf-8",
-    )
-    # 本测试的 replay 需要真正启动一轮新 Job；复制后的工作区统一切到测试
-    # stub provider，不修改只读 fixture 源目录。
-    sessions_dir = workspace_root / ".boxteam" / "sessions"
-    with fixture_catalog_scope():
-        resolver = get_session_path_resolver(sessions_dir)
-        node = resolver.catalog_store.get_node(STATIC_LONG_SESSION_ID)
-        resolver.catalog_store.update_session_configuration(
-            STATIC_LONG_SESSION_ID, current_agent_id=node.current_agent_id,
-            current_provider_id="primary", updated_at=datetime.fromisoformat(node.updated_at),
-        )
-    with openai_chat_stub(port_block.port(10)):
+    assert Path(integration_workspace_config_path).is_file()
+    context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
+    with model_stream_replay(
+        context.output_root, runtime_root=context.runtime_root_for_node(request.node.nodeid),
+        business_assertion="read-only-128-turn-progressive-history",
+    ) as replay:
         backend = start_backend_process(
             workspace_root=str(workspace_root),
             port=port_block.port(0),
             log_name="rollout-history-browser-backend",
+            asgi_app="tests.support.e2e_control.backend_app:app",
+            env_overrides={**replay.environment, "BOXTEAM_GATEWAY_URL": f"http://127.0.0.1:{port_block.port(20)}"},
         )
         try:
-            yield f"http://127.0.0.1:{backend.port}", workspace_root
+            yield f"http://127.0.0.1:{backend.port}", workspace_root, replay
         finally:
             close_backend_process(backend)
+        assert list(replay.artifacts.glob("*.json")) == [], "只读长历史不得分配模型调用"
+        assert not any(event["phase"] == "agent.graph.compiled" for event in replay.control.events), "只读长历史不得物化graph"
 
 
 @pytest.fixture
 async def browser_backend_client(
-    browser_backend: tuple[str, Path],
+    browser_backend: tuple[str, Path, ModelStreamReplay],
 ) -> AsyncIterator[httpx.AsyncClient]:
     async with httpx.AsyncClient(
         base_url=browser_backend[0],
-        headers={"X-Local-Token": "local-dev-token"},
+        headers={"X-Local-Token": "local-dev-token", "X-BoxTeam-Workspace-Id": read_workspace_id(browser_backend[1])},
         timeout=60,
     ) as client:
         yield client
@@ -424,7 +312,7 @@ async def browser_backend_client(
 @pytest.mark.asyncio
 async def test_rollout_history_around_loading_real_web_chain(
     request: pytest.FixtureRequest,
-    browser_backend: tuple[str, Path],
+    browser_backend: tuple[str, Path, ModelStreamReplay],
     browser_backend_client: httpx.AsyncClient,
     integration_workspace_root_path: str,
 ) -> None:
@@ -489,8 +377,9 @@ async def test_rollout_history_around_loading_real_web_chain(
     for record in tool_call_records:
         assert "payload_ref" not in record
         payload = record["payload"]
-        (call,) = payload["tool_calls"]
+        call = payload
         assert call["name"] == LONG_SESSION_TOOL_NAME
+        assert call["tool_call_id"] == f"model-call-{record['turn_id']}:tool-call:{LONG_SESSION_TOOL_CALL_ID}"
         arguments = call["args"]
         arguments_json = json.dumps(arguments, ensure_ascii=False)
         marker = arguments["arguments"]["marker"]
@@ -559,19 +448,24 @@ async def test_rollout_history_around_loading_real_web_chain(
                 "PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH": chromium_path,
             }
         )
-        browser_result = await asyncio.to_thread(
-            subprocess.run,
-            [
-                "node",
-                "tests/integration/clients/web/rollout_history_progressive_loading.mjs",
-            ],
-            cwd=project_root,
-            env=environment,
-            capture_output=True,
-            text=True,
-            timeout=240,
-            check=False,
-        )
+        context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
+        with chromium_temporary_environment(context.runtime_root_for_node(request.node.nodeid) / "chromium-tmp") as temporary_environment:
+            environment.update(temporary_environment)
+            browser_result = await asyncio.to_thread(
+                subprocess.run,
+                [
+                    "node",
+                    "tests/integration/clients/web/rollout_history_progressive_loading.mjs",
+                ],
+                cwd=project_root,
+                env=environment,
+                capture_output=True,
+                text=True,
+                timeout=240,
+                check=False,
+            )
+        (artifacts / "browser.stdout.log").write_text(browser_result.stdout)
+        (artifacts / "browser.stderr.log").write_text(browser_result.stderr)
         assert browser_result.returncode == 0, (
             "rollout 历史浏览器集成失败:\n"
             f"stdout:\n{browser_result.stdout}\n"

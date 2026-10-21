@@ -171,9 +171,9 @@ try {
   await sessionButton.waitFor({ state: "visible", timeout: 30_000 });
   await sessionButton.click();
   await page
-    .locator('[data-turn-id="job-0128"]')
+    .locator('.chat-turn[data-turn-id="job-0128"]')
     .waitFor({ state: "visible", timeout: 30_000 });
-  const latestTurn = page.locator('[data-turn-id="job-0128"]').last();
+  const latestTurn = page.locator('.chat-turn[data-turn-id="job-0128"]').last();
   await waitUntil(
     async () => (await latestTurn.innerText()).includes(expectedFinalText),
     "最新 Turn 最终响应",
@@ -375,10 +375,6 @@ try {
     JSON.stringify(afterAroundPage.data.items.map((item) => item.ordinal)) ===
       JSON.stringify([68, 69, 70]);
 
-  await latestTurn
-    .locator('button.chat-thinking-toggle[aria-expanded="false"]')
-    .click();
-
   const toolDetailsResponsePromise = page.waitForResponse(
     (response) => {
       if (!response.url().includes("/history") || response.status() !== 200)
@@ -387,9 +383,11 @@ try {
         const body = JSON.parse(response.request().postData() || "{}");
         return (
           Array.isArray(body.turn_ids) &&
-          body.turn_ids.includes("job-0128") &&
-          body.include?.includes("tool_result") &&
-          body.tool_call_ids?.includes("call_chat_reasoning_tool")
+          body.turn_ids.length === 1 && body.turn_ids[0] === "job-0128" &&
+          body.include?.includes("reasoning_detail") &&
+          body.include?.includes("tool_summary") &&
+          body.include?.includes("tool_call") &&
+          body.include?.includes("tool_result")
         );
       } catch {
         return false;
@@ -397,10 +395,27 @@ try {
     },
     { timeout: 30_000 },
   );
-  await latestTurn.locator(".chat-tool-summary").first().click();
+  await latestTurn.locator('button.chat-thinking-toggle[aria-expanded="false"]').click();
   const toolDetailsResponse = await toolDetailsResponsePromise;
   const toolDetailsPayload = await toolDetailsResponse.json();
   const toolDetailsBody = JSON.stringify(toolDetailsPayload);
+  const expandedTurn = toolDetailsPayload.data.items.find((item) => item.turn_id === "job-0128");
+  const expandedTools = expandedTurn.response_parts.filter((part) => part.kind === "tool_call" || part.kind === "tool_result");
+  if (expandedTools.length !== 2 || expandedTools.some((part) => part.tool_call_id !== detailToolCall.tool_call_id || part.tool_name !== "invoke_extension_tool")) {
+    throw new Error(`展开活动响应的工具身份不一致: ${JSON.stringify(expandedTools)}`);
+  }
+  const expandedCall = expandedTools.find((part) => part.kind === "tool_call");
+  const expandedResult = expandedTools.find((part) => part.kind === "tool_result");
+  if (expandedCall?.arguments !== detailToolCall.arguments || expandedResult?.result !== detailToolResult.result) {
+    throw new Error("展开活动响应没有逐字保留当前工具参数和结果");
+  }
+  await latestTurn.locator(".chat-tool-summary").first().click();
+  const displayedTool = latestTurn.locator(".chat-tool-details").first();
+  await displayedTool.waitFor({ state: "visible", timeout: 30_000 });
+  const displayedToolText = await displayedTool.textContent();
+  if (!displayedToolText.includes("turn-0128") || !displayedToolText.includes("LARGE_RESULT turn-0128_BEGIN")) {
+    throw new Error(`展开工具正文不完整: ${displayedToolText}`);
+  }
   if (
     !toolDetailsBody.includes("turn-0128") ||
     !toolDetailsBody.includes("LARGE_RESULT turn-0128_BEGIN")
@@ -508,7 +523,7 @@ try {
   if (responseActionLabels.includes("重新生成最后回复")) {
     throw new Error(`回复操作栏不应再显示重新生成: ${JSON.stringify(responseActionLabels)}`);
   }
-  const boundaryTurn = page.locator('[data-turn-id="job-0127"]').last();
+  const boundaryTurn = page.locator('.chat-turn[data-turn-id="job-0127"]').last();
   await boundaryTurn.waitFor({ state: "visible", timeout: 30_000 });
   await boundaryTurn.hover();
   const boundaryResponseActions = boundaryTurn.locator(".chat-response-actions");
