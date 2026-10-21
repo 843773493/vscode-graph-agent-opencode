@@ -45,19 +45,20 @@ def make_preimage(content: str = "operation") -> str:
 
 
 # 子进程锁探测脚本：exit 0 = 取得锁；exit 3 = 非阻塞被拒（他人持有）。
-_FLOCK_CHILD = """\
-import fcntl, os, sys
+_FILE_LOCK_CHILD = """\
+import os, portalocker, sys
 path, mode = sys.argv[1], sys.argv[2]
 fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
-flags = fcntl.LOCK_EX if mode == "ex" else fcntl.LOCK_SH
+flags = portalocker.LOCK_EX if mode == "ex" else portalocker.LOCK_SH
 if len(sys.argv) > 3 and sys.argv[3] == "die":
-    fcntl.flock(fd, flags)
+    portalocker.lock(fd, flags)
     os._exit(0)
 code = 0
 try:
-    fcntl.flock(fd, flags | fcntl.LOCK_NB)
-except OSError:
+    portalocker.lock(fd, flags | portalocker.LOCK_NB)
+except portalocker.AlreadyLocked:
     code = 3
+os.close(fd)
 raise SystemExit(code)
 """
 
@@ -66,7 +67,7 @@ def _child_lock_probe(
     lock_path: Path, mode: str, *extra: str
 ) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
-        [sys.executable, "-c", _FLOCK_CHILD, str(lock_path), mode, *extra],
+        [sys.executable, "-c", _FILE_LOCK_CHILD, str(lock_path), mode, *extra],
         capture_output=True,
         check=False,
         text=True,
