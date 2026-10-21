@@ -16,6 +16,7 @@ import commentjson
 import httpx
 import pytest
 
+from app.core.path_utils import get_session_path_resolver
 from app.gateway.runtime.process_lifecycle import ManagedProcess
 from app.services.business.session_context_resource import session_resource_uri
 from tests.harness.python.run_context import TestRunContext
@@ -24,6 +25,9 @@ from tests.support.communication_federation import (
     open_communication_triad,
 )
 from tests.support.e2e_control.harness import E2EProcessLease, E2ETestControlHarness
+from tests.support.model_stream_config import prepare_e2e_model_stream_config
+from tests.support.paths import output_root_for_test
+from tests.support.ports import e2e_port_block_for_file
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
     acquire_gateway_guest,
@@ -31,9 +35,6 @@ from tests.support.processes.gateway import (
     reset_gateway_persistent_state,
     start_gateway_process,
 )
-from tests.support.model_stream_config import prepare_e2e_model_stream_config
-from tests.support.paths import output_root_for_test
-from tests.support.ports import e2e_port_block_for_file
 from tests.support.processes.scope import capture_test_processes, register_test_process
 from tests.support.processes.workspace import (
     ensure_local_port_available,
@@ -41,6 +42,7 @@ from tests.support.processes.workspace import (
     wait_for_http_ok,
     workspace_backend_id_for_root,
 )
+from tests.support.sealed_request_audit import audit_sealed_requests
 from tests.support.workspaces import (
     install_test_workspace_config,
     prepare_default_test_workspace,
@@ -391,6 +393,43 @@ async def test_basic_chat_tool_loop_through_real_web_surface(
         assert isinstance(selected, list)
         assert result["focusedScenarios"] == requested
         assert set(result["section8"]) == set(selected)
+        captures = {}
+        for path in sorted((artifacts / "model-stream").glob("*.json")):
+            capture = json.loads(path.read_text(encoding="utf-8"))
+            call = capture["identity"]["model_call_id"]
+            assert call not in captures, f"transport产物包含重复ModelCall: {call}"
+            captures[call] = capture
+        audits = {}
+        covered_calls = set()
+        for scenario, node_name in (
+            ("basic_chat", "a"), ("child", "a"), ("team_turn", "a"),
+            ("team_model_call", "c"), ("mcp_turn", "a"), ("mcp_model_call", "c"),
+        ):
+            if scenario not in selected:
+                continue
+            owner = section8_product_nodes[node_name]
+            resolver = get_session_path_resolver(owner.workspace / ".boxteam/sessions")
+            facts = result if scenario == "basic_chat" else result["section8"][scenario]
+            session = facts["sessionId"]
+            threads = {capture["identity"]["thread_id"] for capture in captures.values()
+                       if capture["identity"]["session_id"] == session}
+            assert threads, f"场景缺少真实transport请求: {scenario}/{session}"
+            audits[scenario] = {}
+            for thread in sorted(threads):
+                report = audit_sealed_requests(
+                    resolver.resolve_thread_node(session, thread) / "rollout/index.sqlite",
+                    (resolver.resolve_session_node(session) / "logs/llm_requests").glob("*.json"), captures,
+                )
+                audits[scenario][thread] = report
+                covered_calls.update(proof["model_call_id"] for proof in report["requests"])
+            assert covered_calls.issuperset(
+                call for call, capture in captures.items() if capture["identity"]["session_id"] == session
+            ), f"场景存在未审计的thread请求: {scenario}/{session}"
+        (artifacts / "basic-chat-tool-loop-provenance.json").write_text(
+            json.dumps({"scenarios": audits, "covered_model_calls": sorted(covered_calls),
+                        "outside_scope_model_calls": sorted(captures.keys() - covered_calls)},
+                       ensure_ascii=False, indent=2) + "\n", encoding="utf-8",
+        )
         if "runtime_shared_resources" in selected:
             scope = result["section8"]["runtime_shared_resources"]
             assert scope["threadId"] != scope["parentThreadId"]

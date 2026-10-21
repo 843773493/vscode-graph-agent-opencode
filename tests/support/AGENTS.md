@@ -23,6 +23,7 @@ support/
 │   ├── scope.py          进程句柄登记与作用域清理
 │   ├── workspace.py      Workspace 后端、端口与普通 HTTP 就绪
 │   └── gateway.py        Gateway 测试进程与配置准备
+├── sealed_request_audit.py Provider日志、transport与封存历史的只读核对
 ├── paths.py             正式输出路径
 ├── ports.py             按测试文件隔离的端口块
 └── workspaces.py        只读模板复制与测试工作区准备
