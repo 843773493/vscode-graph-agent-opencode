@@ -96,7 +96,9 @@ def prepare_compaction(
         turn_scope=TurnScope.TURN_MEMBER if admission.turn_id is not None else None,
     )
     existing = connection.execute(
-        "SELECT message_sequence FROM messages WHERE message_id=?", (summary_id,),
+        "SELECT message.message_sequence FROM messages message JOIN item_catalog item "
+        "ON item.jsonl_offset=message.jsonl_offset AND item.jsonl_length=message.jsonl_length "
+        "WHERE item.item_id=? AND message.message_id=?", (item.item_id, summary_id),
     ).fetchone()
     if existing is not None:
         sequence = existing[0]

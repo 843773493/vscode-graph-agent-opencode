@@ -18,6 +18,12 @@ from app.services.infrastructure.rollout_context.checkpoint.boundary.tool_protoc
     ToolProtocolBoundaryConflict,
     validate_tool_protocol_closure,
 )
+from app.services.infrastructure.rollout_context.checkpoint.codec.metadata import (
+    canonical_message_anchor,
+)
+from app.services.infrastructure.rollout_context.storage.catalog.message_groups import (
+    find_message_locator,
+)
 from app.services.infrastructure.rollout_context.storage.transaction import (
     strict_non_negative_int,
 )
@@ -145,9 +151,17 @@ class RolloutCompactionPreflightOwnerMixin:
             # channel 内已被最终 carrier 替代的中间 checkpoint 消息。
             codec = self._storage._codec()
             frozen_messages = values["messages"]
-            message_sequences = dict(connection.execute("SELECT message_id, message_sequence FROM messages"))
-            view_sequences = [message_sequences[codec.message_id(message, index)]
-                              for index, message in enumerate(frozen_messages)]
+            frozen_locators = [find_message_locator(
+                connection, codec.message_id(message, index),
+                item_id=canonical_message_anchor(codec.to_dict(message)),
+            ) for index, message in enumerate(frozen_messages)]
+            if any(locator is None for locator in frozen_locators):
+                raise RuntimeError("compaction preflight 冻结消息缺少 canonical locator")
+            view_sequences = [locator[0] for locator in frozen_locators]
+            message_sequences = {
+                codec.message_id(message, index): sequence
+                for index, (message, sequence) in enumerate(zip(frozen_messages, view_sequences, strict=True))
+            }
             active_sequences = {row[0] for row in connection.execute(
                 "SELECT message.message_sequence FROM context_view_items AS member "
                 "JOIN item_catalog AS item ON item.item_id = member.item_id "
@@ -186,10 +200,12 @@ class RolloutCompactionPreflightOwnerMixin:
             has_unpersisted = False
             for index, message in enumerate(state_messages):
                 message_id = codec.message_id(message, index)
-                row = connection.execute(
-                    "SELECT message_sequence FROM messages WHERE message_id = ?",
-                    (message_id,),
-                ).fetchone()
+                row = find_message_locator(
+                    connection, message_id, item_id=canonical_message_anchor(codec.to_dict(message)),
+                    sequences=view_sequences,
+                )
+                if row is None:
+                    row = find_message_locator(connection, message_id)
                 if row is None:
                     # in-flight 未持久化消息只允许出现在已持久化前缀之后。
                     state_sequences.append(None)

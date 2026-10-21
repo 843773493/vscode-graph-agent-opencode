@@ -11,7 +11,11 @@ from pathlib import Path
 from app.core.execution_admission_context import require_current_execution_admission
 from app.domain.itemized.enums import PayloadKind
 from app.domain.itemized.records import CanonicalItemRecord, RuntimeNoticePayload
+from app.services.infrastructure.rollout_context.checkpoint.codec.metadata import (
+    canonical_message_anchor,
+)
 from app.services.infrastructure.rollout_context.storage.catalog.message_groups import (
+    find_message_locator,
     read_message_group,
 )
 from app.services.infrastructure.rollout_context.storage.primitives import MessageCodec
@@ -105,11 +109,10 @@ def prepare_messages(
         for index, (canonical_message_id, message) in enumerate(
             zip(canonical_message_ids, messages, strict=True)
         ):
-            message_locator = connection.execute(
-                "SELECT message_sequence, turn_id, execution_id, jsonl_offset, jsonl_length FROM messages "
-                "WHERE message_id = ?",
-                (canonical_message_id,),
-            ).fetchone()
+            message_locator = find_message_locator(
+                connection, canonical_message_id,
+                item_id=canonical_message_anchor(codec.to_dict(message)),
+            )
             canonical_anchor = connection.execute(
                 "SELECT jsonl_offset, jsonl_length, turn_id, execution_id "
                 "FROM item_catalog WHERE jsonl_offset = ? AND jsonl_length = ?",

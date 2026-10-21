@@ -156,8 +156,9 @@ class RolloutMessageProjectionMixin:
             )
         existing = connection.execute(
             "SELECT message_sequence, turn_id, execution_id, role, jsonl_offset, "
-            "jsonl_length, content_hash FROM messages WHERE message_id = ?",
-            (message_id,),
+            "jsonl_length, content_hash, message_id FROM messages "
+            "WHERE jsonl_offset=? AND jsonl_length=?",
+            (catalog_offset, catalog_length),
         ).fetchone()
         if existing is not None:
             existing_sequence = strict_non_negative_int(
@@ -183,7 +184,8 @@ class RolloutMessageProjectionMixin:
                 existing[6], field=f"messages.content_hash: {message_id}"
             )
             if (
-                existing_turn_id != item.turn_id
+                existing[7] != message_id
+                or existing_turn_id != item.turn_id
                 or existing_execution_id != catalog_execution_id
                 or existing_role != expected_role
                 or existing_offset != catalog_offset

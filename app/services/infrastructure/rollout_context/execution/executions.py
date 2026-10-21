@@ -6,7 +6,6 @@ ports；它们不承担 LangChain/provider projection，也不读取 v1 数据�
 
 from __future__ import annotations
 
-import json
 from collections.abc import Mapping, Sequence
 from dataclasses import replace
 
@@ -23,7 +22,6 @@ from app.domain.itemized.enums import (
 from app.domain.itemized.errors import ItemSchemaError
 from app.domain.itemized.records import (
     CanonicalItemRecord,
-    parse_item_projection_manifest,
 )
 from app.domain.itemized.validation import validate_turn_transition
 from app.services.infrastructure.rollout_context.storage.transaction import (
@@ -659,30 +657,19 @@ class RolloutExecutionsMixin:
                     # 的 final pointer 一并收敛；否则紧随其后的 checkpoint
                     # append 会把旧索引留在 running/NULL，history reader 只能
                     # 看到用户消息而无法证明最终 assistant item。
-                    manifest_row = connection.execute(
-                        "SELECT projection_manifest_json FROM item_catalog WHERE item_id = ?",
-                        (final_item_id,),
-                    ).fetchone()
-                    if manifest_row is None:
-                        raise RuntimeError(f"final item 缺少 catalog: {final_item_id}")
-                    manifest = parse_item_projection_manifest(json.loads(strict_text(manifest_row[0], field="item_catalog.projection_manifest_json")))
-                    identity = manifest["projection_identity"]
-                    final_message_id = identity["projection_message_id"] if identity is not None and "projection_message_id" in identity else None
-                    final_message_row = (
-                        connection.execute(
-                            "SELECT message_sequence, message_id FROM messages "
-                            "WHERE turn_id = ? AND message_id = ? "
-                            "AND role = 'assistant' ORDER BY message_sequence DESC LIMIT 1",
-                            (turn_id, final_message_id),
-                        ).fetchone()
-                        if final_message_id
-                        else None
-                    )
-                    if final_message_row is None:
+                    final_message_rows = connection.execute(
+                        "SELECT message.message_sequence,message.message_id FROM item_catalog item "
+                        "JOIN messages message ON message.jsonl_offset=item.jsonl_offset "
+                        "AND message.jsonl_length=item.jsonl_length "
+                        "WHERE item.item_id=? AND message.turn_id=? AND message.role='assistant'",
+                        (final_item_id, turn_id),
+                    ).fetchall()
+                    if len(final_message_rows) != 1:
                         raise RuntimeError(
                             "terminal convergence 的 final_item_id 没有对应 assistant message projection: "
                             f"turn_id={turn_id}, final_item_id={final_item_id}"
                         )
+                    final_message_row = final_message_rows[0]
                     final_message_sequence = strict_non_negative_int(
                         final_message_row[0], field="messages.message_sequence"
                     )

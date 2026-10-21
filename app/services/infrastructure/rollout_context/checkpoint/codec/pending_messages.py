@@ -50,7 +50,7 @@ def _apply_difference(canonical: Mapping[str, object], patch: Mapping[str, objec
 
 def reference_message_write(
     value: object,
-    locate: Callable[[str], tuple[dict[str, object], Mapping[str, object]] | None],
+    locate: Callable[[BaseMessage], tuple[dict[str, object], Mapping[str, object]] | None],
 ) -> dict[str, object] | None:
     """仅当整个 batch 已有相同 canonical 正文时转引用，保留 batch/Overwrite 边界。"""
     if isinstance(value, Overwrite):
@@ -67,7 +67,7 @@ def reference_message_write(
         return {"kind": "remove", "value": message_to_dict(value)}
     if not isinstance(value, BaseMessage) or not isinstance(value.id, str) or not value.id:
         return None
-    found = locate(value.id)
+    found = locate(value)
     if found is None:
         return None
     reference, canonical = found

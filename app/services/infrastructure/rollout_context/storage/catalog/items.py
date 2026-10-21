@@ -36,6 +36,7 @@ from app.services.infrastructure.rollout_context.storage.catalog.integrity impor
     validate_catalog_projection,
 )
 from app.services.infrastructure.rollout_context.storage.catalog.message_groups import (
+    find_message_locator,
     read_message_group,
 )
 from app.services.infrastructure.rollout_context.storage.catalog.tool_result_identity import (
@@ -296,7 +297,7 @@ class RolloutItemsMixin:
 
     def read_request_groups(
         self, session_id: str, thread_id: str, *, turn_id: str | None,
-        execution_id: str, message_ids: Sequence[str], checkpoint_ns: str = "",
+        execution_id: str, message_locators: Sequence[tuple[str, str | None]], checkpoint_ns: str = "",
         writer_connection: sqlite3.Connection | None = None,
     ) -> tuple[RequestMessageGroup, ...]:
         """读取请求 group 的 canonical locator 和 admission；不解析消息协议。"""
@@ -326,10 +327,9 @@ class RolloutItemsMixin:
             if origin == "internal" and turn_id is not None:
                 raise RuntimeError("internal request item admission 必须 Turn-less")
             with self.jsonl_path(session_id, checkpoint_ns, thread_id=thread_id).open("rb") as stream:
-                for message_id in message_ids:
-                    indexed = connection.execute(
-                        "SELECT turn_id,execution_id,jsonl_offset,jsonl_length FROM messages WHERE message_id=?", (message_id,),
-                    ).fetchone()
+                for message_id, item_id in message_locators:
+                    locator = find_message_locator(connection, message_id, item_id=item_id)
+                    indexed = locator[1:] if locator is not None else None
                     catalog = connection.execute(
                         "SELECT turn_id,execution_id,jsonl_offset,jsonl_length FROM item_catalog "
                         "WHERE jsonl_offset=? AND jsonl_length=?",

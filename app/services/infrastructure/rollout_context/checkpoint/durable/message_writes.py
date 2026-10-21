@@ -8,6 +8,11 @@ from hashlib import sha256
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from langchain_core.messages import BaseMessage, message_to_dict
+
+from app.services.infrastructure.rollout_context.checkpoint.codec.metadata import (
+    canonical_message_anchor,
+)
 from app.services.infrastructure.rollout_context.checkpoint.codec.pending_messages import (
     MESSAGE_REFERENCE_SERIALIZER,
     reference_message_write,
@@ -17,6 +22,7 @@ from app.services.infrastructure.rollout_context.storage.catalog.history_scope i
     require_historical_scope,
 )
 from app.services.infrastructure.rollout_context.storage.catalog.message_groups import (
+    find_message_locator,
     read_message_group,
 )
 
@@ -57,13 +63,16 @@ class PendingMessageReferences:
         }
         return reference, self.storage._codec().project_message(group)
 
-    def locate(self, message_id: str) -> tuple[dict[str, object], Mapping[str, object]] | None:
+    def locate(self, message: BaseMessage) -> tuple[dict[str, object], Mapping[str, object]] | None:
+        locator = find_message_locator(
+            self.connection, message.id, item_id=canonical_message_anchor(message_to_dict(message)),
+        )
+        if locator is None:
+            return None
         row = self.connection.execute(
-            "SELECT item.item_id FROM messages message JOIN item_catalog item "
-            "ON item.jsonl_offset=message.jsonl_offset AND item.jsonl_length=message.jsonl_length "
-            "WHERE message.message_id=?", (message_id,),
+            "SELECT item_id FROM item_catalog WHERE jsonl_offset=? AND jsonl_length=?", locator[3:5],
         ).fetchone()
-        return self._canonical(row[0]) if row is not None else None
+        return self._canonical(row[0])
 
     def read(self, reference: Mapping[str, object]) -> Mapping[str, object]:
         if not isinstance(reference.get("item_id"), str):

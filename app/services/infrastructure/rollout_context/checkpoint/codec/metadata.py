@@ -17,6 +17,23 @@ TOOL_BINDING_KEYS = {
     "tool_call": ("tool_call_id", "tool_invocation_id", "tool_attempt_id"),
     "tool_result": ("tool_call_id", "tool_invocation_id", "tool_attempt_id", "result_id"),
 }
+
+
+def canonical_message_anchor(message: Mapping[str, object]) -> str | None:
+    """读取 carrier 的显式版本坐标，不从 logical message ID 猜 canonical ID。"""
+    data = message.get("data")
+    response = data.get("response_metadata") if isinstance(data, Mapping) else None
+    manifests = response.get(CANONICAL_GROUP_FIELD) if isinstance(response, Mapping) else None
+    if manifests is None:
+        return None
+    if not isinstance(manifests, list) or not manifests:
+        raise ValueError("checkpoint canonical group manifest 必须是非空有序 array")
+    ids = [entry.get("item_id") if isinstance(entry, Mapping) else None for entry in manifests]
+    if any(not isinstance(item_id, str) or not item_id for item_id in ids) or len(set(ids)) != len(ids):
+        raise ValueError("checkpoint canonical group manifest item identity 非法")
+    return ids[-1]
+
+
 # 普通消息的既有控制字段保留原合同；生成结果只接受闭合的结构标记。
 ANNOTATION_FIELDS = (
     "structured_prompt_kind", "structured_prompt_schema_version",

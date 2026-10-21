@@ -524,6 +524,7 @@ class RolloutCheckpointPersistenceMixin:
                         connection,
                         checkpoint=checkpoint,
                         message_count=len(current_messages),
+                        message_sequences=batch.visible_sequences,
                         compaction_event=compaction_event,
                     ),
                     transaction_id,
@@ -576,6 +577,7 @@ class RolloutCheckpointPersistenceMixin:
         *,
         checkpoint: Checkpoint,
         message_count: int,
+        message_sequences: list[int],
         compaction_event: Mapping[str, object] | None = None,
     ) -> dict[str, object]:
         """保存 checkpoint 控制信息，并保留 compaction 的 message cutoff。"""
@@ -589,15 +591,10 @@ class RolloutCheckpointPersistenceMixin:
         cutoff_message_id = event.get("cutoff_message_id")
         if not isinstance(cutoff_message_id, str) or not cutoff_message_id:
             return payload
-        row = connection.execute(
-            "SELECT message_sequence FROM messages WHERE message_id = ?",
-            (cutoff_message_id,),
-        ).fetchone()
-        if row is not None:
-            payload["cutoff_message_id"] = cutoff_message_id
-            payload["cutoff_message_sequence"] = strict_non_negative_int(
-                row[0], field="messages.message_sequence"
-            )
+        if type(cutoff_index) is not int or not 0 < cutoff_index <= len(message_sequences):
+            raise ValueError("compaction cutoff identity 缺少已校验的消息位置")
+        payload["cutoff_message_id"] = cutoff_message_id
+        payload["cutoff_message_sequence"] = message_sequences[cutoff_index - 1]
         return payload
 
     @staticmethod

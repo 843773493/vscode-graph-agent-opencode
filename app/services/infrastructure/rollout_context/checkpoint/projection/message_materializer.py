@@ -50,7 +50,7 @@ class RolloutMessageMaterializerMixin:
         )
         if not sequence_values:
             return []
-        values: list[tuple[tuple[CanonicalItemRecord, ...], dict[str, object]]] = []
+        values: list[tuple[int, tuple[CanonicalItemRecord, ...], dict[str, object]]] = []
         if connection is None:
             with self._storage.read_connection(session_id, thread_id, checkpoint_ns) as owned_connection:
                 return self._read_messages(
@@ -130,7 +130,7 @@ class RolloutMessageMaterializerMixin:
                         f"message={message_id}, item={item.item_id}"
                     )
                 values.append(
-                    (tuple(items), self._hydrate_message_identity(
+                    (sequence, tuple(items), self._hydrate_message_identity(
                         message,
                         message_id=message_id,
                         turn_id=turn_id,
@@ -146,14 +146,13 @@ class RolloutMessageMaterializerMixin:
                 + ",".join(str(sequence) for sequence in missing_sequences)
             )
         order = {sequence: index for index, sequence in enumerate(sequence_values)}
-        by_message_id = {row[1]: order[row[0]] for row in rows}
-        values.sort(key=lambda group_value: by_message_id[group_value[1]["data"]["id"]])
+        values.sort(key=lambda group_value: order[group_value[0]])
         # 私有 checkpoint 恢复也复用 typed carrier 去重；已被完整 checkpoint
         # carrier 替代的 stream 影子不得再次成为 LangGraph 工具调用输入。
         superseded = superseded_item_ids(tuple(
-            item for group, _value in values for item in group
+            item for _sequence, group, _value in values for item in group
         ))
-        return [value for group, value in values
+        return [value for _sequence, group, value in values
                 if not all(item.item_id in superseded for item in group)]
 
 

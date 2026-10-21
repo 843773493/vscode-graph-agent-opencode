@@ -39,6 +39,9 @@ from app.services.infrastructure.rollout_context.checkpoint.boundary.tool_protoc
     ToolProtocolBoundaryConflict,
     validate_tool_protocol_closure,
 )
+from app.services.infrastructure.rollout_context.checkpoint.codec.metadata import (
+    canonical_message_anchor,
+)
 from app.services.infrastructure.rollout_context.checkpoint.seal.preparation import (
     prepare_registered_context,
     prepared_context_plan_id,
@@ -358,7 +361,10 @@ class ContextDispatchOwnerMixin:
             ) as connection:
                 existing_groups = self._storage.storage.read_request_groups(
                     session_id, thread_id, turn_id=turn_id, execution_id=execution_id,
-                    message_ids=tuple(value[2] for value in eligible), checkpoint_ns=checkpoint_ns,
+                    message_locators=tuple(
+                        (message_id, canonical_message_anchor(codec.to_dict(message)))
+                        for _index, message, message_id, _role in eligible
+                    ), checkpoint_ns=checkpoint_ns,
                     writer_connection=connection,
                 )
             pending = []

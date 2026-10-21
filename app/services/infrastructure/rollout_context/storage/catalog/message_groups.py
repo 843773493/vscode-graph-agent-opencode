@@ -3,13 +3,42 @@
 from __future__ import annotations
 
 import sqlite3
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from typing import BinaryIO
 
 from app.domain.itemized.records import CanonicalItemRecord
 from app.services.infrastructure.rollout_context.storage.transaction import (
     strict_non_negative_int,
 )
+
+MessageLocator = tuple[int, str | None, str, int, int]
+
+
+def find_message_locator(
+    connection: sqlite3.Connection, message_id: str, *,
+    item_id: str | None = None, sequences: Sequence[int] | None = None,
+) -> MessageLocator | None:
+    """logical ID 只用于校验；已知 item/view 时必须按其冻结坐标解析版本。"""
+    rows = connection.execute(
+        "SELECT message.message_sequence,message.turn_id,message.execution_id,"
+        "message.jsonl_offset,message.jsonl_length,item.item_id "
+        "FROM messages message LEFT JOIN item_catalog item "
+        "ON item.jsonl_offset=message.jsonl_offset AND item.jsonl_length=message.jsonl_length "
+        "WHERE message.message_id=?" + (" AND item.item_id=?" if item_id is not None else ""),
+        (message_id, item_id) if item_id is not None else (message_id,),
+    ).fetchall()
+    if sequences is not None:
+        allowed = set(sequences)
+        rows = [row for row in rows if row[0] in allowed]
+    if len(rows) > 1:
+        raise RuntimeError(f"message locator 版本歧义，必须提供精确 canonical item/view: {message_id}")
+    if rows and rows[0][5] is None:
+        raise RuntimeError(f"message projection 缺少 canonical item: {message_id}")
+    if not rows:
+        if item_id is not None:
+            raise RuntimeError(f"message locator 缺少指定 canonical item: {message_id}/{item_id}")
+        return None
+    return tuple(rows[0][:5])
 
 
 def read_message_group(

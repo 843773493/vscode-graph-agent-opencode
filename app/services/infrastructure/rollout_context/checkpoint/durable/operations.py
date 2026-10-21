@@ -22,6 +22,9 @@ from app.services.infrastructure.rollout_context.activation.reads import (
 from app.services.infrastructure.rollout_context.checkpoint.boundary.tool_protocol_boundary import (
     validate_tool_protocol_closure,
 )
+from app.services.infrastructure.rollout_context.storage.catalog.message_groups import (
+    find_message_locator,
+)
 from app.services.infrastructure.rollout_context.storage.transaction import (
     strict_non_negative_int,
     strict_optional_text,
@@ -135,10 +138,7 @@ class RolloutCheckpointOperationsMixin:
                     ]
                     cutoff = matching[-1] + 1 if matching else 0
                 if source_anchor is not None:
-                    anchor_row = connection.execute(
-                        "SELECT message_sequence FROM messages WHERE message_id = ?",
-                        (source_anchor,),
-                    ).fetchone()
+                    anchor_row = find_message_locator(connection, source_anchor, sequences=source_sequences)
                     if anchor_row is None:
                         raise KeyError(f"rewind anchor 不存在: {source_anchor}")
                     try:
