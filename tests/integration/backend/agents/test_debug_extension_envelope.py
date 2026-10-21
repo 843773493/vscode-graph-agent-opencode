@@ -1,6 +1,6 @@
 """固定扩展信封与 sealed 目录 binding 的真实后端验收。
 
-本文件复用 ``test_debug_prompt_flow`` 的确定性模型服务器和真实后端 fixture，
+本文件复用 ``test_debug_prompt_flow`` 的确定性模型回放和真实后端 fixture，
 避免把 ``ainvoke`` 当成主证据。模型只能看到 invoke_extension_tool，调试目标
 通过封存 binding 执行；随后从 debug action、ToolSetRef 和 assembly 读取事实。
 """
@@ -15,10 +15,6 @@ from typing import Any
 import httpx
 import pytest
 
-pytest_plugins = (
-    "tests.integration.backend.agents.test_debug_prompt_flow",
-)
-
 from app.agents.tool_identity import EXTENSION_TOOL_INVOKER_NAME
 from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
 from app.domain.itemized.epoch.prefix_epoch import (
@@ -30,14 +26,22 @@ from app.domain.itemized.serialization import normalize_wire_request
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
+from tests.integration.backend.agents import test_debug_prompt_flow as debug_case
 from tests.integration.backend.agents.test_debug_prompt_flow import (
     ScriptedModelState,
+    _plan_debug_calls,
     _session_main_thread_id,
     _write_debug_fixture,
 )
 from tests.support.api_waiters import wait_for_job_done
 from tests.support.messages import last_assistant_message
 from tests.support.trace import get_trace_payload
+
+# 显式登记共享 fixture；测试模块同时被收集时不依赖 pytest_plugins 的全局注册。
+scripted_model_replay = debug_case.scripted_model_replay
+scripted_debug_backend_port = debug_case.scripted_debug_backend_port
+scripted_backend_process = debug_case.scripted_backend_process
+scripted_client = debug_case.scripted_client
 
 
 def _tool_names(request: dict[str, Any]) -> set[str]:
@@ -73,11 +77,11 @@ def _binding_fingerprint(action: dict[str, Any]) -> tuple[str, str, str, int, st
 async def test_fixed_extension_envelope_seals_binding_and_preserves_toolset_prefix(
     scripted_client: httpx.AsyncClient,
     integration_workspace_root_path: str,
-    scripted_model_server: tuple[ScriptedModelState, str],
+    scripted_model_replay: ScriptedModelState,
     scripted_backend_process: object,
 ) -> None:
     del scripted_backend_process
-    state, _endpoint = scripted_model_server
+    state = scripted_model_replay
     workspace_root = Path(integration_workspace_root_path).resolve()
     fixture_path, worker_path = _write_debug_fixture(workspace_root)
     state.fixture_path = fixture_path.relative_to(workspace_root).as_posix()
@@ -90,6 +94,9 @@ async def test_fixed_extension_envelope_seals_binding_and_preserves_toolset_pref
     assert create_response.status_code == 200, create_response.text
     session_id = create_response.json()["data"]["session_id"]
     main_thread_id = await _session_main_thread_id(scripted_client, session_id)
+    _plan_debug_calls(state, session_id, main_thread_id)
+    # 本项在执行后核 sealed binding；Skill 正文屏障由同组 prompt 测试单独验收。
+    state.control.release(state.call_ids[1], "model.response_ready")
     prompt = (
         "请先使用 skill_load(name=debugging)，然后按 Skill 通过固定信封真实执行调试动作；"
         "完成后只回复 envelope acceptance。"
@@ -111,8 +118,7 @@ async def test_fixed_extension_envelope_seals_binding_and_preserves_toolset_pref
     ).json()["data"]["items"]
     assert "DEBUG_PROMPT_FLOW_OK" in last_assistant_message(messages)
 
-    with state.lock:
-        requests = list(state.requests)
+    requests = state.requests
     assert requests
     provider_tool_sets = [
         json.dumps(request["tools"], ensure_ascii=False, sort_keys=True)

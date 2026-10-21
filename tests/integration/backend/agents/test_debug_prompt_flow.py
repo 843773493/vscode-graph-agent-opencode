@@ -1,12 +1,11 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import subprocess
-import threading
-import time
 from collections.abc import AsyncIterator, Generator, Iterator
 from dataclasses import dataclass, field
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import cast
 
@@ -15,10 +14,21 @@ import httpx
 import pytest
 
 from app.agents.tool_identity import EXTENSION_TOOL_INVOKER_NAME
+from app.core.path_utils import get_session_path_resolver
 from app.core.workspace_identity import read_workspace_id
+from app.schemas.internal_v2.node_debug import (
+    NodeDebugConfigurationDTO,
+    NodeDebugSessionManifestDTO,
+)
+from app.services.infrastructure.node_debug.session.session_store import (
+    NodeDebugSessionStore,
+)
 from app.services.infrastructure.workspace_files.paths import WorkspaceFilePaths
+from app.testing.model_stream import build_cassette, chat_completion_frames
 from tests.support.api_waiters import wait_for_job_done
+from tests.support.e2e_test_control import E2ETestControlHarness
 from tests.support.messages import last_assistant_message
+from tests.support.model_stream_config import model_stream_replay
 from tests.support.ports import integration_port_block_for_file
 from tests.support.processes import (
     close_backend_process,
@@ -30,33 +40,24 @@ from tests.support.trace import get_trace_payload
 
 @dataclass(slots=True)
 class ScriptedModelState:
-    requests: list[dict[str, object]] = field(default_factory=list)
+    control: E2ETestControlHarness
+    config_path: Path
+    artifacts: Path
+    call_ids: list[str] = field(default_factory=list)
     fixture_path: str = ""
     worker_path: str = ""
     working_directory: str = ""
-    failure: str | None = None
-    lock: threading.Lock = field(default_factory=threading.Lock)
+
+    @property
+    def requests(self) -> list[dict[str, object]]:
+        return [json.loads((self.artifacts / f"{call_id}.json").read_text())["request"]
+                for call_id in self.call_ids]
 
 
 def _json_object(value: object) -> dict[str, object]:
     if not isinstance(value, dict):
         raise TypeError(f"模型请求必须是 JSON object: {value!r}")
     return cast(dict[str, object], value)
-
-
-def _message_tool_count(payload: dict[str, object]) -> int:
-    messages = payload.get("messages")
-    if not isinstance(messages, list):
-        raise TypeError(f"模型请求缺少 messages 数组: {payload!r}")
-    return sum(
-        1
-        for message in messages
-        if isinstance(message, dict) and message.get("role") == "tool"
-    )
-
-
-def _payload_text(payload: dict[str, object]) -> str:
-    return json.dumps(payload, ensure_ascii=False)
 
 
 def _tool_call(
@@ -75,218 +76,96 @@ def _tool_call(
     }
 
 
-def _stream_response(
-    handler: BaseHTTPRequestHandler,
-    *,
-    request_index: int,
-    call: dict[str, object] | None,
-    assistant_text: str | None = None,
-) -> None:
-    if call is None:
-        chunks = [
-            {
-                "id": f"chatcmpl-debug-e2e-{request_index}",
-                "object": "chat.completion.chunk",
-                "created": int(time.time()),
-                "model": "debug-e2e-model",
-                "choices": [
-                    {
-                        "index": 0,
-                        "delta": {
-                            "role": "assistant",
-                            "content": assistant_text or "DEBUG_PROMPT_FLOW_OK",
-                        },
-                        "finish_reason": None,
-                    }
-                ],
-            },
-            {
-                "id": f"chatcmpl-debug-e2e-{request_index}",
-                "object": "chat.completion.chunk",
-                "created": int(time.time()),
-                "model": "debug-e2e-model",
-                "choices": [
-                    {"index": 0, "delta": {}, "finish_reason": "stop"}
-                ],
-            },
-        ]
-    else:
-        chunks = [
-            {
-                "id": f"chatcmpl-debug-e2e-{request_index}",
-                "object": "chat.completion.chunk",
-                "created": int(time.time()),
-                "model": "debug-e2e-model",
-                "choices": [
-                    {
-                        "index": 0,
-                        "delta": {
-                            "role": "assistant",
-                            **(
-                                {"content": assistant_text}
-                                if assistant_text is not None
-                                else {}
-                            ),
-                            "tool_calls": [call],
-                        },
-                        "finish_reason": None,
-                    }
-                ],
-            },
-            {
-                "id": f"chatcmpl-debug-e2e-{request_index}",
-                "object": "chat.completion.chunk",
-                "created": int(time.time()),
-                "model": "debug-e2e-model",
-                "choices": [
-                    {"index": 0, "delta": {}, "finish_reason": "tool_calls"}
-                ],
-            },
-        ]
-
-    encoded = b"".join(
-        f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n".encode()
-        for chunk in chunks
-    ) + b"data: [DONE]\n\n"
-    handler.send_response(200)
-    handler.send_header("Content-Type", "text/event-stream")
-    handler.send_header("Cache-Control", "no-cache")
-    handler.send_header("Connection", "close")
-    handler.send_header("Content-Length", str(len(encoded)))
-    handler.end_headers()
-    handler.wfile.write(encoded)
-
-
 @pytest.fixture(scope="module")
-def scripted_model_server() -> Iterator[tuple[ScriptedModelState, str]]:
-    state = ScriptedModelState()
+def scripted_model_replay(integration_workspace_root_path: str) -> Iterator[ScriptedModelState]:
+    """普通调试业务复用现有 model_stream，不监听模型端口或绕过真实 SDK。"""
+    output = Path(integration_workspace_root_path).parent
+    with model_stream_replay(output, runtime_root=output / "runtime", business_assertion="debug-prompt-flow") as replay:
+        yield ScriptedModelState(replay.control, replay.config_path, replay.artifacts)
 
-    class Handler(BaseHTTPRequestHandler):
-        protocol_version = "HTTP/1.1"
 
-        def log_message(self, _format: str, *_args: object) -> None:
-            return
-
-        def do_POST(self) -> None:
-            if not self.path.endswith("/chat/completions"):
-                self.send_error(404, f"未知模型路径: {self.path}")
-                return
-            if self.headers.get("Authorization") != "Bearer debug-e2e-key":
-                self.send_error(401, "模型 API key 无效")
-                return
-
-            content_length = int(self.headers.get("Content-Length", "0"))
-            payload = _json_object(
-                json.loads(self.rfile.read(content_length).decode("utf-8"))
-            )
-            with state.lock:
-                state.requests.append(payload)
-                request_index = len(state.requests) - 1
-                tool_count = _message_tool_count(payload)
-                skill_load_failed = False
-
-                if tool_count == 1:
-                    skill_content = _payload_text(payload)
-                    if (
-                        "# 源码调试工具" not in skill_content
-                        or "invoke_extension_tool" not in skill_content
-                    ):
-                        state.failure = (
-                            "模型在进入调试动作前没有收到有效 debugging Skill 内容: "
-                            f"{skill_content[:240]!r}"
-                        )
-                        skill_load_failed = True
-
-            if skill_load_failed:
-                _stream_response(self, request_index=request_index, call=None)
-                return
-
-            assistant_text: str | None = None
-            scripted_calls = (
-                ("list_debug_configurations", {}, None),
-                ("list_breakpoints", {}, None),
-                (
-                    "create_debug_configuration",
-                    {
-                        "name": "计数流程调试",
-                        "fileFullPath": state.fixture_path,
-                        "workingDirectory": state.working_directory,
-                        "configurationName": "node-default",
-                        "arguments": [],
-                    },
-                    None,
-                ),
-                (
-                    "add_breakpoint",
-                    {
-                        "fileFullPath": state.fixture_path,
-                        "line": 3,
-                    },
-                    None,
-                ),
-                (
-                    "add_breakpoint",
-                    {
-                        "fileFullPath": state.worker_path,
-                        "line": 2,
-                    },
-                    None,
-                ),
-                (
-                    "start_debugging",
-                    {
-                        "fileFullPath": state.fixture_path,
-                        "workingDirectory": state.working_directory,
-                    },
-                    None,
-                ),
-                (
-                    "evaluate_expression",
-                    {"expression": "state.counter += 1"},
-                    "入口断点停在 state.counter += 2 之前，这里负责累加入口计数；先把当前计数加一。",
-                ),
-                ("continue_execution", {}, None),
-                (
-                    "evaluate_expression",
-                    {"expression": "state.counter += 1"},
-                    "worker 断点停在 state.counter += 10 之前，这里负责被调模块的增量；先把共享计数加一。",
-                ),
-                ("continue_execution", {}, None),
-                ("list_breakpoints", {}, None),
-            )
-            if tool_count == 0:
-                call = _tool_call(
-                    call_index=tool_count,
-                    name="skill_load",
-                    arguments={"name": "debugging"},
-                )
-            elif tool_count - 1 < len(scripted_calls):
-                name, arguments, assistant_text = scripted_calls[tool_count - 1]
-                call = _tool_call(
-                    call_index=tool_count,
-                    name="invoke_extension_tool",
-                    arguments={"tool_name": name, "arguments": arguments},
-                )
-            else:
-                call = None
-                assistant_text = "两个断点均已解释并完成 counter 加一，目标程序已正常退出。DEBUG_PROMPT_FLOW_OK"
-            _stream_response(
-                self,
-                request_index=request_index,
-                call=call,
-                assistant_text=assistant_text if tool_count > 0 else None,
-            )
-
-    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    port = cast(int, server.server_address[1])
-    try:
-        yield state, f"http://127.0.0.1:{port}/v1"
-    finally:
-        server.shutdown()
-        server.server_close()
-        thread.join(timeout=5)
+def _plan_debug_calls(state: ScriptedModelState, session_id: str, thread_id: str) -> None:
+    scripted_calls = (
+        ("list_debug_configurations", {}, None),
+        ("list_breakpoints", {}, None),
+        (
+            "create_debug_configuration",
+            {
+                "name": "计数流程调试",
+                "fileFullPath": state.fixture_path,
+                "workingDirectory": state.working_directory,
+                "configurationName": "node-default",
+                "arguments": [],
+            },
+            None,
+        ),
+        (
+            "add_breakpoint",
+            {
+                "fileFullPath": state.fixture_path,
+                "line": 3,
+            },
+            None,
+        ),
+        (
+            "add_breakpoint",
+            {
+                "fileFullPath": state.worker_path,
+                "line": 2,
+            },
+            None,
+        ),
+        (
+            "start_debugging",
+            {
+                "fileFullPath": state.fixture_path,
+                "workingDirectory": state.working_directory,
+            },
+            None,
+        ),
+        (
+            "evaluate_expression",
+            {"expression": "state.counter += 1"},
+            "入口断点停在 state.counter += 2 之前，这里负责累加入口计数；先把当前计数加一。",
+        ),
+        ("continue_execution", {}, None),
+        (
+            "evaluate_expression",
+            {"expression": "state.counter += 1"},
+            "worker 断点停在 state.counter += 10 之前，这里负责被调模块的增量；先把共享计数加一。",
+        ),
+        ("continue_execution", {}, None),
+        ("list_breakpoints", {}, None),
+    )
+    interactions: list[dict[str, object]] = []
+    for index in range(len(scripted_calls) + 2):
+        if index == 0:
+            call = _tool_call(call_index=index, name="skill_load", arguments={"name": "debugging"})
+            text = None
+        elif index <= len(scripted_calls):
+            name, arguments, text = scripted_calls[index - 1]
+            call = _tool_call(call_index=index, name="invoke_extension_tool",
+                              arguments={"tool_name": name, "arguments": arguments})
+        else:
+            call = None
+            text = "两个断点均已解释并完成 counter 加一，目标程序已正常退出。DEBUG_PROMPT_FLOW_OK"
+        delta: dict[str, object] = {"role": "assistant"}
+        if text is not None:
+            delta["content"] = text
+        if call is not None:
+            delta["tool_calls"] = [call]
+        cassette = build_cassette(
+            asset_id=f"debug-prompt-{index}", model="debug-e2e-model",
+            url="https://opencode.ai/zen/v1/chat/completions",
+            frames=chat_completion_frames(
+                response_id=f"chatcmpl-debug-e2e-{index}", model="debug-e2e-model",
+                deltas=(delta,), finish_reason="tool_calls" if call is not None else "stop",
+            ),
+        )
+        interactions.append(cassette.raw["interactions"][0])
+    state.call_ids = state.control.plan_model_calls(session_id, thread_id, interactions)
+    # 首次 Skill 真实返回后、下一模型响应前核验请求，保留原来的先验收再执行顺序。
+    state.control.arm(state.call_ids[1], "model.response_ready")
 
 
 @pytest.fixture(scope="module")
@@ -300,9 +179,10 @@ def scripted_backend_process(
     integration_workspace_root_path: str,
     integration_workspace_config_path: str,
     scripted_debug_backend_port: int,
-    scripted_model_server: tuple[ScriptedModelState, str],
+    scripted_model_replay: ScriptedModelState,
 ) -> Generator[subprocess.Popen[str], None, None]:
-    _state, endpoint = scripted_model_server
+    state = scripted_model_replay
+    endpoint = "https://opencode.ai/zen/v1"
     config_path = Path(integration_workspace_config_path)
     config = _json_object(commentjson.loads(config_path.read_text(encoding="utf-8")))
     providers = config["llm"]["providers"]
@@ -351,7 +231,12 @@ def scripted_backend_process(
         workspace_root=integration_workspace_root_path,
         port=scripted_debug_backend_port,
         log_name="debug-prompt-e2e",
-        env_overrides={"BOXTEAM_DEFAULT_SKILL_GROUPS": '["debugging"]'},
+        asgi_app="tests.support.section8_backend:app",
+        env_overrides={
+            "BOXTEAM_DEFAULT_SKILL_GROUPS": '["debugging"]',
+            "BOXTEAM_TEST_MODEL_STREAM_CONFIG": str(state.config_path),
+            **state.control.environment,
+        },
     )
     try:
         yield handle.process
@@ -412,12 +297,83 @@ async def _session_main_thread_id(
 
 
 @pytest.mark.asyncio
+async def test_corrupt_debug_storage_http_errors_keep_owner_without_native_location(
+    scripted_client: httpx.AsyncClient,
+    integration_workspace_root_path: str,
+) -> None:
+    """冷入口实际读取损坏原件，错误回执不能复制底层位置或原始输入。"""
+    workspace_root = Path(integration_workspace_root_path)
+    resolver = get_session_path_resolver(
+        workspace_root / ".boxteam/sessions", workspace_id=read_workspace_id(workspace_root),
+    )
+    store = NodeDebugSessionStore(resolver)
+    configuration_id = "dbgcfg_" + "1" * 32
+    for artifact, corruption in (
+        ("configuration", "json"), ("configuration", "schema"),
+        ("configuration", "extra"), ("configuration", "id"),
+        ("manifest", "json"), ("manifest", "owner"),
+    ):
+        created = await scripted_client.post("/api/v1/sessions", json={"title": "损坏调试数据诊断"})
+        assert created.status_code == 200, created.text
+        session_id = created.json()["data"]["session_id"]
+        thread_id = await _session_main_thread_id(scripted_client, session_id)
+        now = datetime.now(UTC)
+        store.write_configuration(session_id, NodeDebugConfigurationDTO(
+            configuration_id=configuration_id, name="主方案", created_at=now, updated_at=now,
+        ), thread_id)
+        store.write_manifest(NodeDebugSessionManifestDTO(
+            session_id=session_id, thread_id=thread_id, updated_at=now,
+        ))
+        directory = resolver.resolve_thread_node(session_id, thread_id) / "debug/node"
+        path = (
+            directory / "manifest.json" if artifact == "manifest"
+            else directory / "configurations" / f"{configuration_id}.json"
+        )
+        original = path.read_bytes()
+        payload = json.loads(original)
+        private_input = str(directory / "private-input")
+        if corruption == "json":
+            corrupted = b"{"
+        else:
+            if corruption == "schema":
+                payload["updated_at"] = [private_input]
+            elif corruption == "extra":
+                payload[private_input] = "invalid"
+            elif corruption == "id":
+                payload["configuration_id"] = "dbgcfg_" + "2" * 32
+            else:
+                payload["session_id"] = private_input
+            corrupted = json.dumps(payload).encode()
+        path.write_bytes(corrupted)
+        request_id = f"debug-storage-{artifact}-{corruption}"
+        endpoint = f"/api/v1/debug/node/configurations/{configuration_id}"
+        response = await scripted_client.get(
+            endpoint, params={"session_id": session_id, "thread_id": thread_id},
+            headers={"X-Request-ID": request_id},
+        )
+        assert response.status_code == 409, response.text
+        body = response.json()
+        assert response.headers["X-Request-ID"] == body["request_id"] == request_id
+        assert session_id in response.text and thread_id in response.text
+        assert str(workspace_root) not in response.text
+        assert private_input not in response.text
+        assert path.read_bytes() == corrupted
+        # 显式修复原件后沿同一真实入口重试，不能缓存失败或伪造空配置。
+        path.write_bytes(original)
+        repaired = await scripted_client.get(
+            endpoint, params={"session_id": session_id, "thread_id": thread_id},
+        )
+        assert repaired.status_code == 200, repaired.text
+        assert repaired.json()["data"]["configuration_id"] == configuration_id
+
+
+@pytest.mark.asyncio
 async def test_prompt_drives_agent_debug_tools_through_real_backend(
     scripted_client: httpx.AsyncClient,
     integration_workspace_root_path: str,
-    scripted_model_server: tuple[ScriptedModelState, str],
+    scripted_model_replay: ScriptedModelState,
 ) -> None:
-    state, _endpoint = scripted_model_server
+    state = scripted_model_replay
     workspace_root = Path(integration_workspace_root_path).resolve()
     file_paths = WorkspaceFilePaths(
         workspace=workspace_root, workspace_id=read_workspace_id(workspace_root), bindings=None,
@@ -464,6 +420,7 @@ async def test_prompt_drives_agent_debug_tools_through_real_backend(
         "再通过调试表达式把当前帧里的 state.counter 加一，然后继续到下一个断点，"
         "最后重新读取状态确认程序正常结束。不要修改源码来伪造计数变化。"
     )
+    _plan_debug_calls(state, session_id, main_thread_id)
     message_response = await scripted_client.post(
         f"/api/v1/sessions/{session_id}/messages",
         json={
@@ -473,9 +430,15 @@ async def test_prompt_drives_agent_debug_tools_through_real_backend(
     )
     assert message_response.status_code == 200, message_response.text
     job_id = message_response.json()["data"]["job_id"]
+    try:
+        await asyncio.to_thread(state.control.acknowledged, state.call_ids[1], "model.response_ready")
+        skill_request = json.loads((state.artifacts / f"{state.call_ids[1]}.json").read_text())["request"]
+        skill_content = json.dumps(skill_request, ensure_ascii=False)
+        assert "# 源码调试工具" in skill_content
+        assert "invoke_extension_tool" in skill_content
+    finally:
+        state.control.release(state.call_ids[1], "model.response_ready")
     job = await wait_for_job_done(scripted_client, job_id, max_attempts=120)
-    with state.lock:
-        assert state.failure is None, state.failure
     assert job["status"] in {"completed", "succeeded"}
 
     messages_response = await scripted_client.get(
@@ -607,8 +570,7 @@ async def test_prompt_drives_agent_debug_tools_through_real_backend(
     assert debug_state["last_stopped_frame"]["line"] == 2
     assert any('{"result":15}' in line for line in debug_state["output"])
 
-    with state.lock:
-        model_requests = list(state.requests)
+    model_requests = state.requests
     assert len(model_requests) >= len(expected_order) + 1
     first_request_text = json.dumps(model_requests[0], ensure_ascii=False)
     assert prompt in first_request_text
