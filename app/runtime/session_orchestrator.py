@@ -5,6 +5,7 @@ from app.abstractions.job_event_bus import JobEventBusProtocol
 from app.abstractions.job_service import JobServiceProtocol
 from app.core.identifier import create_prefixed_id
 from app.core.job_event_bus import EventType
+from app.core.session_lifecycle_gate import OperationHolderGate
 from app.core.shielded_cleanup import run_sync_shielded
 from app.domain.itemized.execution_admission import (
     ExecutionBinding,
@@ -39,6 +40,7 @@ class SessionOrchestrator:
         config_service: ConfigService,
         job_service: JobServiceProtocol,
         job_event_bus: JobEventBusProtocol,
+        attachment_holder: OperationHolderGate,
         idempotency_store: SessionMessageIdempotencyStore | None = None,
         runtime_source_dispatcher: RuntimeSourceDispatcher | None = None,
     ) -> None:
@@ -47,6 +49,7 @@ class SessionOrchestrator:
         self._config_service = config_service
         self._job_service = job_service
         self._job_event_bus = job_event_bus
+        self._attachment_holder = attachment_holder
         self._idempotency_store = idempotency_store
         self._runtime_source_dispatcher = runtime_source_dispatcher
 
@@ -237,31 +240,33 @@ class SessionOrchestrator:
         thread_id: str | None = None,
     ) -> MessageRunAccepted:
         async def prepare_and_dispatch() -> MessageRunAccepted:
-            if idempotency_key is not None and self._idempotency_store is not None:
-                existing = self._idempotency_store.get(session_id, idempotency_key)
-                if existing is not None:
-                    return existing
-            target_thread_id = thread_id if thread_id is not None else await self._session_service.resolve_main_thread(session_id)
-            self._session_service.path_resolver.resolve_thread_node(session_id, target_thread_id)
-            message = await self._message_service.create(session_id, message_request, thread_id=target_thread_id)
-            execution_binding: ExecutionBinding | None = None
-            if internal:
-                execution_binding = InternalExecutionIntent(
-                    message_id=message.message_id,
-                    execution_id=create_prefixed_id("intr"),
-                    admission_idempotency_key=create_prefixed_id("adm"),
+            # 上传和 canonical acceptance 共用一个准备窗口，删除须先排空它。
+            async with self._attachment_holder.lock_for(session_id, exclusive=False):
+                if idempotency_key is not None and self._idempotency_store is not None:
+                    existing = self._idempotency_store.get(session_id, idempotency_key)
+                    if existing is not None:
+                        return existing
+                target_thread_id = thread_id if thread_id is not None else await self._session_service.resolve_main_thread(session_id)
+                self._session_service.path_resolver.resolve_thread_node(session_id, target_thread_id)
+                message = await self._message_service.create(session_id, message_request, thread_id=target_thread_id)
+                execution_binding: ExecutionBinding | None = None
+                if internal:
+                    execution_binding = InternalExecutionIntent(
+                        message_id=message.message_id,
+                        execution_id=create_prefixed_id("intr"),
+                        admission_idempotency_key=create_prefixed_id("adm"),
+                    )
+                result = await self.dispatch_prepared_message(
+                    session_id,
+                    message,
+                    requested_agent_id=requested_agent_id,
+                    delivery_policy=delivery_policy,
+                    execution_binding=execution_binding,
+                    thread_id=target_thread_id,
                 )
-            result = await self.dispatch_prepared_message(
-                session_id,
-                message,
-                requested_agent_id=requested_agent_id,
-                delivery_policy=delivery_policy,
-                execution_binding=execution_binding,
-                thread_id=target_thread_id,
-            )
-            if idempotency_key is not None and self._idempotency_store is not None:
-                self._idempotency_store.put(session_id, idempotency_key, result)
-            return result
+                if idempotency_key is not None and self._idempotency_store is not None:
+                    self._idempotency_store.put(session_id, idempotency_key, result)
+                return result
 
         return await self._job_service.run_session_preparation(
             session_id,
@@ -282,86 +287,87 @@ class SessionOrchestrator:
         """调度一条已生成稳定 message_id 的用户消息。"""
         import logging
         logger = logging.getLogger(__name__)
-        session = await self._session_service.get(session_id)
-        if message.session_id != session_id:
-            raise ValueError(
-                f"消息派发 Session 与持久 owner 不一致: requested={session_id} "
-                f"message={message.session_id} message_id={message.message_id}"
-            )
-        if thread_id is not None and thread_id != message.thread_id:
-            raise ValueError(
-                f"消息派发 Thread 与持久 owner 不一致: requested={thread_id} "
-                f"message={message.thread_id} message_id={message.message_id}"
-            )
-        # prepare 阶段已冻结消息 owner；恢复和生成器派发只消费该身份。
-        thread_id = message.thread_id
-        self._session_service.path_resolver.resolve_thread_node(session_id, thread_id)
-        if requested_agent_id is None:
-            requested_agent_id = session.current_agent_id
-        effective_agent_id = self._config_service.resolve_agent_id(requested_agent_id)
-        try:
-            self._config_service.validate_agent_id(effective_agent_id)
-        except ValueError:
-            effective_agent_id = self._config_service.get_default_agent_id()
+        async with self._attachment_holder.lock_for(session_id, exclusive=False):
+            session = await self._session_service.get(session_id)
+            if message.session_id != session_id:
+                raise ValueError(
+                    f"消息派发 Session 与持久 owner 不一致: requested={session_id} "
+                    f"message={message.session_id} message_id={message.message_id}"
+                )
+            if thread_id is not None and thread_id != message.thread_id:
+                raise ValueError(
+                    f"消息派发 Thread 与持久 owner 不一致: requested={thread_id} "
+                    f"message={message.thread_id} message_id={message.message_id}"
+                )
+            # prepare 阶段已冻结消息 owner；恢复和生成器派发只消费该身份。
+            thread_id = message.thread_id
+            self._session_service.path_resolver.resolve_thread_node(session_id, thread_id)
+            if requested_agent_id is None:
+                requested_agent_id = session.current_agent_id
+            effective_agent_id = self._config_service.resolve_agent_id(requested_agent_id)
+            try:
+                self._config_service.validate_agent_id(effective_agent_id)
+            except ValueError:
+                effective_agent_id = self._config_service.get_default_agent_id()
 
-        logger.info("[session_orchestrator] message created: session_id=%s message_id=%s", session_id, message.message_id)
-        job_message_metadata = {
-            **message.metadata,
-            "boxteam_session_provider_id": session.current_provider_id,
-        }
-        if execution_binding is None:
-            if reserved_job_id is not None:
-                raise ValueError("未预留 execution binding 时不得单独预留 Job ID")
-            execution_binding = self._job_service.reserve_user_execution_identity()
-        if isinstance(execution_binding, UserExecutionIdentity):
-            await run_sync_shielded(
-                self._message_service.accept_user_message,
-                message,
-                execution_identity=execution_binding,
+            logger.info("[session_orchestrator] message created: session_id=%s message_id=%s", session_id, message.message_id)
+            job_message_metadata = {
+                **message.metadata,
+                "boxteam_session_provider_id": session.current_provider_id,
+            }
+            if execution_binding is None:
+                if reserved_job_id is not None:
+                    raise ValueError("未预留 execution binding 时不得单独预留 Job ID")
+                execution_binding = self._job_service.reserve_user_execution_identity()
+            if isinstance(execution_binding, UserExecutionIdentity):
+                await run_sync_shielded(
+                    self._message_service.accept_user_message,
+                    message,
+                    execution_identity=execution_binding,
+                )
+            dispatch = await self._job_service.start_job(
+                session_id,
+                message.content,
+                thread_id=thread_id,
+                execution_binding=execution_binding,
+                reserved_job_id=reserved_job_id,
+                agent_id=effective_agent_id,
+                message_id=message.message_id,
+                attachments=message.attachments,
+                message_created_at=message.created_at.isoformat(),
+                message_metadata=job_message_metadata,
+                delivery_policy=delivery_policy,
             )
-        dispatch = await self._job_service.start_job(
-            session_id,
-            message.content,
-            thread_id=thread_id,
-            execution_binding=execution_binding,
-            reserved_job_id=reserved_job_id,
-            agent_id=effective_agent_id,
-            message_id=message.message_id,
-            attachments=message.attachments,
-            message_created_at=message.created_at.isoformat(),
-            message_metadata=job_message_metadata,
-            delivery_policy=delivery_policy,
-        )
-        job_id = dispatch.job_id
-        logger.info("[session_orchestrator] start_job returned: session_id=%s job_id=%s", session_id, job_id)
-        display_projection = project_message_for_display(
-            message.content,
-            message.metadata,
-        )
-        await self._job_event_bus.publish(
-            job_id=job_id,
-            event_type=EventType.MESSAGE_CREATED,
-            payload={
-                "message_id": message.message_id,
-                "session_id": message.session_id,
-                "thread_id": thread_id,
-                "role": message.role,
-                "content": display_projection.content,
-                "attachments": [
-                    a.model_dump(mode="json", exclude={"data_url"})
-                    for a in message.attachments
-                ],
-                "metadata": display_projection.metadata,
-                "created_at": message.created_at,
-            },
-            agent_id=effective_agent_id,
-        )
-        logger.info("[session_orchestrator] message_created event published: session_id=%s message_id=%s job_id=%s", session_id, message.message_id, job_id)
-        return MessageRunAccepted(
-            message_id=message.message_id,
-            job_id=job_id,
-            turn_id=(execution_binding.turn_id if isinstance(execution_binding, UserExecutionIdentity) else None),
-            status=dispatch.job_status,
-            dispatch=dispatch,
-            thread_id=thread_id,
-        )
+            job_id = dispatch.job_id
+            logger.info("[session_orchestrator] start_job returned: session_id=%s job_id=%s", session_id, job_id)
+            display_projection = project_message_for_display(
+                message.content,
+                message.metadata,
+            )
+            await self._job_event_bus.publish(
+                job_id=job_id,
+                event_type=EventType.MESSAGE_CREATED,
+                payload={
+                    "message_id": message.message_id,
+                    "session_id": message.session_id,
+                    "thread_id": thread_id,
+                    "role": message.role,
+                    "content": display_projection.content,
+                    "attachments": [
+                        a.model_dump(mode="json", exclude={"data_url"})
+                        for a in message.attachments
+                    ],
+                    "metadata": display_projection.metadata,
+                    "created_at": message.created_at,
+                },
+                agent_id=effective_agent_id,
+            )
+            logger.info("[session_orchestrator] message_created event published: session_id=%s message_id=%s job_id=%s", session_id, message.message_id, job_id)
+            return MessageRunAccepted(
+                message_id=message.message_id,
+                job_id=job_id,
+                turn_id=(execution_binding.turn_id if isinstance(execution_binding, UserExecutionIdentity) else None),
+                status=dispatch.job_status,
+                dispatch=dispatch,
+                thread_id=thread_id,
+            )

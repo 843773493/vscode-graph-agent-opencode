@@ -11,6 +11,7 @@ from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
 from app.core.checkpoint_config import build_checkpoint_config
 from app.core.execution_admission_context import execution_admission_scope
+from app.core.session_lifecycle_gate import OperationHolderGate
 from app.core.session_thread_context import session_thread_owner_scope
 from app.domain.itemized.execution_admission import ExecutionAdmission
 from app.domain.itemized.mutation_intents import MutationIntentOwner
@@ -291,6 +292,7 @@ async def _build_service(
     session_service.get = get_session
     session_service.resolve_main_thread = resolve_main_thread
     service = SessionTurnReplayService(
+        attachment_holder=OperationHolderGate(tmp_path, namespace="attachment_ingest"),
         checkpointer=saver,
         message_service=build_message_service(tmp_path, checkpointer=saver),
         session_service=session_service,
@@ -305,6 +307,55 @@ async def _read_latest(saver: RolloutCheckpointSaver):
     owner = saver.forks.source.resolve_main_thread_owner("ses_019c205391bb7a4b81b6728df70f63e6")
     with session_thread_owner_scope(owner, langgraph_thread_id=owner.thread_id):
         return await saver.aget_tuple(build_checkpoint_config(owner.thread_id))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cancel", [False, True])
+async def test_replay_holds_attachments_after_replacement_creation_until_dispatch(
+    tmp_path, session_bundle_factory, frozen_provider_prepare, monkeypatch, cancel,
+):
+    # 历史 fixture 只提供 replay 的局部前置；本用例验证准备窗口，不代替执行验收。
+    service, _saver, dispatcher = await _build_service(
+        frozen_provider_prepare, tmp_path, session_bundle_factory,
+        [_job("msg_1", JobStatus.completed, job_id="job_1")],
+    )
+    session_id = "ses_019c205391bb7a4b81b6728df70f63e6"
+    paused = asyncio.Event()
+    release = asyncio.Event()
+    create = service._message_service.create
+
+    async def paused_create(*args, **kwargs):
+        replacement = await create(*args, **kwargs)
+        paused.set()
+        await release.wait()
+        return replacement
+
+    monkeypatch.setattr(service._message_service, "create", paused_create)
+    replay = asyncio.create_task(service.replay(
+        session_id, "msg_1",
+        MessageReplayRequest(
+            action="edit_and_continue", content="持锁重放", acknowledge_context_only=True,
+        ),
+    ))
+    try:
+        await asyncio.wait_for(paused.wait(), timeout=3)
+        async with service._attachment_holder.lock_for(session_id, wait=False) as holder:
+            assert not holder.acquired, "创建替换消息后不得提前释放附件 holder"
+        if cancel:
+            replay.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await replay
+            assert dispatcher.dispatched_message_id == ""
+        else:
+            release.set()
+            result = await replay
+            assert result.message_id == dispatcher.dispatched_message_id
+            assert result.removed_message_count == 4
+        async with service._attachment_holder.lock_for(session_id, wait=False) as holder:
+            assert holder.acquired, "重放完成或取消后必须释放 holder"
+    finally:
+        release.set()
+        await asyncio.gather(replay, return_exceptions=True)
 
 
 @pytest.mark.asyncio

@@ -15,6 +15,7 @@ from langgraph.checkpoint.base import CheckpointTuple
 from app.abstractions.job_service import JobServiceProtocol
 from app.core.checkpoint_config import build_checkpoint_config
 from app.core.job_event_bus import EventType
+from app.core.session_lifecycle_gate import OperationHolderGate
 from app.core.session_thread_context import session_thread_owner_scope
 from app.domain.itemized.mutation_intents import MutationIntentOwner
 from app.schemas.internal_v2.common import MessageRole
@@ -67,6 +68,7 @@ class SessionTurnReplayService:
         job_service: JobServiceProtocol,
         dispatcher: PreparedMessageDispatcher,
         trace_event_store: FailedJobTraceReader,
+        attachment_holder: OperationHolderGate,
     ) -> None:
         self._checkpointer = checkpointer
         self._message_service = message_service
@@ -74,6 +76,7 @@ class SessionTurnReplayService:
         self._job_service = job_service
         self._dispatcher = dispatcher
         self._trace_event_store = trace_event_store
+        self._attachment_holder = attachment_holder
         self._session_locks: tuple[asyncio.Lock, ...] = tuple(
             asyncio.Lock() for _ in range(REPLAY_LOCK_SHARDS)
         )
@@ -96,7 +99,7 @@ class SessionTurnReplayService:
             )
 
         session_lock = self._session_lock(session_id)
-        async with session_lock:
+        async with session_lock, self._attachment_holder.lock_for(session_id, exclusive=False):
             await self._assert_session_idle(session_id)
             session = await self._session_service.get(session_id)
             visible_messages = (

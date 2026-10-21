@@ -865,6 +865,7 @@ def _build_app_container(
         saver=checkpointer, session_service=session_service, job_service=job_service,
     )
     session_orchestrator = SessionOrchestrator(
+        attachment_holder=attachment_blob_store.deletion_holder,
         message_service=message_service,
         session_service=session_service,
         config_service=config_service,
@@ -921,6 +922,7 @@ def _build_app_container(
     team_fanout_service.bind_wakeup_finalizer(team_service.finalize_wakeup)
     dependency_provider.set_team_service(team_service)
     session_turn_replay_service = SessionTurnReplayService(
+        attachment_holder=attachment_blob_store.deletion_holder,
         checkpointer=checkpointer,
         message_service=message_service,
         session_service=session_service,

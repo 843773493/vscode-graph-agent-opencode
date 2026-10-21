@@ -1,0 +1,211 @@
+"""消息准备窗口内，真实附件发布和 canonical acceptance 必须先于线程删除。"""
+
+from __future__ import annotations
+
+import asyncio
+import base64
+from dataclasses import dataclass
+from pathlib import Path
+from threading import Event
+from types import SimpleNamespace
+
+import pytest
+
+from app.core.identifier import create_prefixed_id
+from app.core.job_event_bus import JobEventBus
+from app.core.session_thread_context import session_thread_owner_scope
+from app.domain.itemized.execution_admission import UserExecutionIdentity
+from app.domain.itemized.mutation_intents import MutationIntentOwner
+from app.runtime.session_orchestrator import SessionOrchestrator
+from app.schemas.internal_v2.job import JobDispatchSnapshotDTO
+from app.schemas.internal_v2.message import (
+    AttachmentRef,
+    MessageCreateRequest,
+    MessageRunRequest,
+    RunOptions,
+)
+from app.services.business.message_service import MessageService
+from app.services.infrastructure.attachment_blob_catalog.store import (
+    AttachmentBlobStore,
+)
+from app.services.infrastructure.rollout_context.checkpoint.saver import (
+    RolloutCheckpointSaver,
+)
+
+BODY = b"attachment survives until canonical acceptance"
+
+
+@dataclass
+class MessageLifetimeCase:
+    store: AttachmentBlobStore
+    saver: RolloutCheckpointSaver
+    messages: MessageService
+    orchestrator: SessionOrchestrator
+    owner: MutationIntentOwner
+    identity: UserExecutionIdentity
+    started_jobs: list[str]
+
+    async def delete_thread(self) -> None:
+        with session_thread_owner_scope(self.owner, langgraph_thread_id=self.owner.thread_id):
+            await self.saver.adelete_thread(self.owner.thread_id)
+
+
+@pytest.fixture
+def message_lifetime_case(integration_workspace_root_path, session_bundle_factory):
+    root = Path(integration_workspace_root_path)
+    sessions = root / ".boxteam" / "sessions"
+    session_id = create_prefixed_id("ses")
+    session_bundle_factory(sessions, session_id)
+    store = AttachmentBlobStore(root)
+    resolver = store._path_resolver
+    thread_id = resolver.main_thread_id(session_id)
+    identity = UserExecutionIdentity(
+        job_id=create_prefixed_id("job"), turn_id=create_prefixed_id("turn"),
+        admission_idempotency_key=create_prefixed_id("adm"),
+    )
+    started_jobs = []
+
+    async def get_session(_session_id):
+        return SimpleNamespace(current_agent_id="default", current_provider_id=None)
+
+    async def resolve_main_thread(_session_id):
+        return thread_id
+
+    async def run_preparation(_session_id, operation):
+        return await operation()
+
+    async def start_job(_session_id, _content, **kwargs):
+        started_jobs.append(kwargs["message_id"])
+        return JobDispatchSnapshotDTO(
+            session_id=session_id, thread_id=thread_id, job_id=identity.job_id,
+            job_status="running", active_job_id=identity.job_id,
+            queued_jobs_ahead=0, queued_job_count=0, pending_job_count=1,
+        )
+
+    with RolloutCheckpointSaver(sessions, attachment_store=store) as saver:
+        messages = MessageService(
+            main_thread_resolver=resolver.main_thread_id, checkpointer=saver,
+            attachment_store=store, workspace_root=root,
+        )
+        orchestrator = SessionOrchestrator(
+            message_service=messages,
+            session_service=SimpleNamespace(
+                get=get_session, resolve_main_thread=resolve_main_thread, path_resolver=resolver,
+            ),
+            config_service=SimpleNamespace(
+                resolve_agent_id=lambda agent_id: agent_id,
+                validate_agent_id=lambda agent_id: None,
+            ),
+            job_service=SimpleNamespace(
+                run_session_preparation=run_preparation, start_job=start_job,
+                reserve_user_execution_identity=lambda: identity,
+            ),
+            job_event_bus=JobEventBus(), attachment_holder=store.deletion_holder,
+        )
+        yield MessageLifetimeCase(
+            store, saver, messages, orchestrator,
+            MutationIntentOwner(session_id=session_id, thread_id=thread_id),
+            identity, started_jobs,
+        )
+    store.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("entry", "pause_at", "cancel"),
+    [
+        ("create", "after_upload", False),
+        ("create", "acceptance", False),
+        ("create", "acceptance", True),
+        ("prepared", "acceptance", False),
+        ("prepared", "acceptance", True),
+    ],
+)
+async def test_thread_delete_drains_message_before_releasing_real_attachment(
+    message_lifetime_case, monkeypatch, entry, pause_at, cancel,
+):
+    case = message_lifetime_case
+    session_id, thread_id = case.owner.session_id, case.owner.thread_id
+    prepared = None
+    attachment = AttachmentRef(
+        file_id="inline:message-race", name="race.txt", content_type="text/plain",
+        data_url="data:text/plain;base64," + base64.b64encode(BODY).decode(),
+    )
+    if entry == "prepared":
+        prepared = await case.messages.create(
+            session_id, MessageCreateRequest(role="user", content="读取附件", attachments=[attachment]),
+            thread_id=thread_id,
+        )
+
+    paused = Event()
+    release = Event()
+    accepted = []
+    create = case.messages.create
+    accept = case.messages.accept_user_message
+
+    async def paused_create(*args, **kwargs):
+        message = await create(*args, **kwargs)
+        paused.set()
+        await asyncio.to_thread(release.wait, 5)
+        return message
+
+    def paused_accept(message, *, execution_identity):
+        if pause_at == "acceptance":
+            paused.set()
+            assert release.wait(5), "测试未释放真实 acceptance worker"
+        accept(message, execution_identity=execution_identity)
+        canonical = case.saver.accepted_user_message(
+            session_id, thread_id=thread_id,
+            job_id=execution_identity.job_id, message_id=message.message_id,
+        )
+        data = case.store.read(session_id, message.attachments[0].file_id).data
+        accepted.append((message, canonical, data))
+
+    if pause_at == "after_upload":
+        monkeypatch.setattr(case.messages, "create", paused_create)
+    monkeypatch.setattr(case.messages, "accept_user_message", paused_accept)
+    if prepared is None:
+        operation = case.orchestrator.create_message(
+            session_id,
+            MessageRunRequest(run=RunOptions(), message=MessageCreateRequest(
+                role="user", content="读取附件", attachments=[attachment],
+            )),
+        )
+    else:
+        operation = case.orchestrator.dispatch_prepared_message(
+            session_id, prepared, requested_agent_id="default", execution_binding=case.identity,
+        )
+    dispatch = asyncio.create_task(operation)
+    deletion = None
+    try:
+        assert await asyncio.to_thread(paused.wait, 3)
+        (ref,) = case.store._catalog.list_owner_refs_for_session(session_id, active_only=True)
+        file_id = case.store.reference(session_id, ref.attachment_id)
+        assert case.store.read(session_id, file_id).data == BODY
+        deletion = asyncio.create_task(case.delete_thread())
+        with pytest.raises(TimeoutError):
+            await asyncio.wait_for(asyncio.shield(deletion), timeout=0.15)
+        if cancel:
+            dispatch.cancel()
+            with pytest.raises(TimeoutError):
+                await asyncio.wait_for(asyncio.shield(dispatch), timeout=0.15)
+            assert not deletion.done(), "取消不能放任尚未结束的 acceptance worker 与删除并发"
+        release.set()
+        if cancel:
+            with pytest.raises(asyncio.CancelledError):
+                await dispatch
+        else:
+            result = await dispatch
+            assert result.thread_id == thread_id
+        await deletion
+        ((message, canonical, data),) = accepted
+        assert canonical.response_metadata["attachments"][0]["file_id"] == file_id
+        assert message.attachments[0].data_url is None
+        assert file_id in str(canonical.content)
+        assert data == BODY
+        assert case.started_jobs == ([] if cancel else [message.message_id])
+        assert case.store._catalog.list_owner_refs_for_session(session_id, active_only=True) == ()
+        assert not case.saver._storage.storage.root(session_id, thread_id=thread_id).exists()
+    finally:
+        release.set()
+        await asyncio.gather(dispatch, *([deletion] if deletion is not None else []), return_exceptions=True)

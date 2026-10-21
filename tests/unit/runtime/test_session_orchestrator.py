@@ -9,6 +9,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from app.core.job_event_bus import JobEventBus
+from app.core.session_lifecycle_gate import OperationHolderGate
 from app.domain.itemized.execution_admission import (
     InternalExecutionIntent,
     UserExecutionIdentity,
@@ -24,7 +25,12 @@ from app.services.infrastructure.rollout_context.storage.primitives import (
 
 
 @pytest.fixture
-def prepared_child_dispatch_case():
+def attachment_holder(tmp_path):
+    return OperationHolderGate(tmp_path / "sessions", namespace="attachment_ingest")
+
+
+@pytest.fixture
+def prepared_child_dispatch_case(attachment_holder):
     messages = _FakeMessageService()
     jobs = MagicMock()
     jobs.started = []
@@ -43,6 +49,7 @@ def prepared_child_dispatch_case():
     bus = JobEventBus()
     sessions = _FakeSessionService("default", thread_id="thr_catalog_main")
     orchestrator = SessionOrchestrator(
+        attachment_holder=attachment_holder,
         message_service=messages,
         session_service=sessions,
         config_service=_FakeConfigService(),
@@ -242,7 +249,7 @@ class _FakeSessionService:
 
 
 @pytest.mark.asyncio
-async def test_orchestrator_uses_session_current_agent_when_request_omits_agent(monkeypatch, tmp_path):
+async def test_orchestrator_uses_session_current_agent_when_request_omits_agent(monkeypatch, tmp_path, attachment_holder):
     monkeypatch.setenv("WORKSPACE_ROOT", str(tmp_path))
 
     captured: dict[str, str] = {}
@@ -264,6 +271,7 @@ async def test_orchestrator_uses_session_current_agent_when_request_omits_agent(
             return _running_dispatch(session_id, "job_test_001")
 
     orchestrator = SessionOrchestrator(
+        attachment_holder=attachment_holder,
         message_service=_FakeMessageService(),
         session_service=_FakeSessionService("default"),
         config_service=_FakeConfigService(),
@@ -285,7 +293,7 @@ async def test_orchestrator_uses_session_current_agent_when_request_omits_agent(
 
 
 @pytest.mark.asyncio
-async def test_orchestrator_preserves_reminder_metadata_without_changing_user_role():
+async def test_orchestrator_preserves_reminder_metadata_without_changing_user_role(attachment_holder):
     captured: dict[str, object] = {}
 
     class _FakeJobService:
@@ -304,6 +312,7 @@ async def test_orchestrator_preserves_reminder_metadata_without_changing_user_ro
 
     message_service = _FakeMessageService()
     orchestrator = SessionOrchestrator(
+        attachment_holder=attachment_holder,
         message_service=message_service,
         session_service=_FakeSessionService("default"),
         config_service=_FakeConfigService(),
@@ -342,7 +351,7 @@ async def test_orchestrator_preserves_reminder_metadata_without_changing_user_ro
 
 
 @pytest.mark.asyncio
-async def test_orchestrator_publishes_safe_display_content_but_runs_raw_content():
+async def test_orchestrator_publishes_safe_display_content_but_runs_raw_content(attachment_holder):
     captured: dict[str, object] = {}
 
     class _FakeJobService:
@@ -358,6 +367,7 @@ async def test_orchestrator_publishes_safe_display_content_but_runs_raw_content(
 
     bus = JobEventBus()
     orchestrator = SessionOrchestrator(
+        attachment_holder=attachment_holder,
         message_service=_FakeMessageService(),
         session_service=_FakeSessionService("default"),
         config_service=_FakeConfigService(),
@@ -389,7 +399,7 @@ async def test_orchestrator_publishes_safe_display_content_but_runs_raw_content(
 
 
 @pytest.mark.asyncio
-async def test_orchestrator_redacts_hidden_internal_event_content_and_metadata():
+async def test_orchestrator_redacts_hidden_internal_event_content_and_metadata(attachment_holder):
     class _FakeJobService:
         def reserve_user_execution_identity(self):
             return _user_identity("job_hidden_internal")
@@ -402,6 +412,7 @@ async def test_orchestrator_redacts_hidden_internal_event_content_and_metadata()
 
     bus = JobEventBus()
     orchestrator = SessionOrchestrator(
+        attachment_holder=attachment_holder,
         message_service=_FakeMessageService(),
         session_service=_FakeSessionService("default"),
         config_service=_FakeConfigService(),
@@ -428,7 +439,7 @@ async def test_orchestrator_redacts_hidden_internal_event_content_and_metadata()
 
 
 @pytest.mark.asyncio
-async def test_orchestrator_allows_literal_internal_markup_on_plain_user_path():
+async def test_orchestrator_allows_literal_internal_markup_on_plain_user_path(attachment_holder):
     message_service = _FakeMessageService()
 
     class _FakeJobService:
@@ -442,6 +453,7 @@ async def test_orchestrator_allows_literal_internal_markup_on_plain_user_path():
             return _running_dispatch(session_id, "job_literal_markup")
 
     orchestrator = SessionOrchestrator(
+        attachment_holder=attachment_holder,
         message_service=message_service,
         session_service=_FakeSessionService("default"),
         config_service=_FakeConfigService(),
@@ -458,8 +470,9 @@ async def test_orchestrator_allows_literal_internal_markup_on_plain_user_path():
 
 
 @pytest.mark.asyncio
-async def test_orchestrator_rejects_reserved_internal_metadata_on_user_path():
+async def test_orchestrator_rejects_reserved_internal_metadata_on_user_path(attachment_holder):
     orchestrator = SessionOrchestrator(
+        attachment_holder=attachment_holder,
         message_service=_FakeMessageService(),
         session_service=_FakeSessionService("default"),
         config_service=_FakeConfigService(),
@@ -476,7 +489,7 @@ async def test_orchestrator_rejects_reserved_internal_metadata_on_user_path():
 
 
 @pytest.mark.asyncio
-async def test_orchestrator_forwards_cross_session_delivery_policy():
+async def test_orchestrator_forwards_cross_session_delivery_policy(attachment_holder):
     captured: dict[str, object] = {}
 
     class _FakeJobService:
@@ -491,6 +504,7 @@ async def test_orchestrator_forwards_cross_session_delivery_policy():
             return _running_dispatch(session_id, "job_interrupt")
 
     orchestrator = SessionOrchestrator(
+        attachment_holder=attachment_holder,
         message_service=_FakeMessageService(),
         session_service=_FakeSessionService("default"),
         config_service=_FakeConfigService(),
@@ -508,7 +522,7 @@ async def test_orchestrator_forwards_cross_session_delivery_policy():
 
 
 @pytest.mark.asyncio
-async def test_orchestrator_prefers_request_agent_over_session_agent(monkeypatch, tmp_path):
+async def test_orchestrator_prefers_request_agent_over_session_agent(monkeypatch, tmp_path, attachment_holder):
     monkeypatch.setenv("WORKSPACE_ROOT", str(tmp_path))
 
     captured: dict[str, str] = {}
@@ -531,6 +545,7 @@ async def test_orchestrator_prefers_request_agent_over_session_agent(monkeypatch
             return _running_dispatch(session_id, "job_test_002")
 
     orchestrator = SessionOrchestrator(
+        attachment_holder=attachment_holder,
         message_service=_FakeMessageService(),
         session_service=_FakeSessionService("default"),
         config_service=_FakeConfigService(),
@@ -557,7 +572,7 @@ async def test_orchestrator_prefers_request_agent_over_session_agent(monkeypatch
 
 
 @pytest.mark.asyncio
-async def test_orchestrator_fails_closed_when_session_lacks_main_thread():
+async def test_orchestrator_fails_closed_when_session_lacks_main_thread(attachment_holder):
     """SessionDTO 缺权威 main thread 身份时必须显式失败，不得用 session_id 冒充。"""
 
     class _FakeJobService:
@@ -571,6 +586,7 @@ async def test_orchestrator_fails_closed_when_session_lacks_main_thread():
             return _running_dispatch(session_id, "job_should_not_start")
 
     orchestrator = SessionOrchestrator(
+        attachment_holder=attachment_holder,
         message_service=_FakeMessageService(),
         session_service=_FakeSessionService("default", thread_id=None),
         config_service=_FakeConfigService(),
