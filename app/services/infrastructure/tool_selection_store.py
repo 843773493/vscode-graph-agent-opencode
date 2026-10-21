@@ -65,7 +65,7 @@ class ToolSelectionStore:
     ) -> dict[str, object]:
         raw_settings = payload.get(agent_id, {})
         if not isinstance(raw_settings, dict):
-            raise TypeError(f"工具选择配置的 Agent 项必须是对象: agent={agent_id}")
+            raise TypeError("工具选择配置的 Agent 项必须是对象: artifact=tool_selection")
         execution = raw_settings.get("execution_overrides", {})
         visibility = raw_settings.get("model_visibility_overrides", {})
         if not isinstance(execution, dict) or not all(
@@ -73,7 +73,7 @@ class ToolSelectionStore:
             for name, value in execution.items()
         ):
             raise TypeError(
-                f"工具选择配置 execution_overrides 格式错误: agent={agent_id}"
+                "工具选择配置 execution_overrides 格式错误: artifact=tool_selection"
             )
         if not isinstance(visibility, dict) or not all(
             isinstance(name, str) and isinstance(value, bool)
@@ -81,7 +81,7 @@ class ToolSelectionStore:
         ):
             raise TypeError(
                 "工具选择配置 model_visibility_overrides 格式错误: "
-                f"agent={agent_id}"
+                "artifact=tool_selection"
             )
         return {
             "execution_overrides": dict(execution),
@@ -93,13 +93,13 @@ class ToolSelectionStore:
             return {}
         payload = json.loads(self._path.read_text(encoding="utf-8"))
         if not isinstance(payload, dict):
-            raise TypeError(f"工具选择配置必须是对象: {self._path}")
+            raise TypeError("工具选择配置必须是对象: artifact=tool_selection")
         normalized: dict[str, object] = {}
         for agent_id, settings in payload.items():
             if not isinstance(agent_id, str):
-                raise TypeError(f"工具选择配置 Agent 项格式错误: {self._path}")
+                raise TypeError("工具选择配置 Agent 项格式错误: artifact=tool_selection")
             if not isinstance(settings, dict):
-                raise TypeError(f"工具选择配置 Agent 项格式错误: {self._path}")
+                raise TypeError("工具选择配置 Agent 项格式错误: artifact=tool_selection")
             normalized[agent_id] = settings
 
         for agent_id in normalized:
@@ -117,23 +117,46 @@ class ToolSelectionStore:
 
     @contextmanager
     def _file_lock(self, *, shared: bool) -> Iterator[None]:
-        self._lock_path.parent.mkdir(parents=True, exist_ok=True)
-        with self._lock_path.open("a+b") as lock_file:
-            acquired = False
-            try:
-                _acquire_file_lock(lock_file, shared=shared, path=self._lock_path)
-                acquired = True
-                yield
-            finally:
-                if acquired:
-                    _release_file_lock(lock_file)
+        # 锁与读改写仍共用一个 owner；只有对外诊断不携带原生位置或损坏输入。
+        operation = "snapshot" if shared else "apply_changes"
+        detail = f"artifact=tool_selection, operation={operation}"
+        try:
+            self._lock_path.parent.mkdir(parents=True, exist_ok=True)
+            with self._lock_path.open("a+b") as lock_file:
+                acquired = False
+                try:
+                    _acquire_file_lock(lock_file, shared=shared)
+                    acquired = True
+                    yield
+                finally:
+                    if acquired:
+                        _release_file_lock(lock_file)
+        except OSError as error:
+            detail += f", error={type(error).__name__}, errno={error.errno}"
+            if isinstance(error, TimeoutError):
+                detail = (
+                    f"工具选择配置锁获取超时: {detail}, "
+                    f"timeout_seconds={_TOOL_SELECTION_LOCK_TIMEOUT_SECONDS:g}"
+                )
+            raise type(error)(error.errno, detail) from error
+        except portalocker.LockException as error:
+            if error.args and isinstance(error.args[0], OSError):
+                detail += f", errno={error.args[0].errno}"
+            raise type(error)(f"{detail}, error={type(error).__name__}") from error
+        except json.JSONDecodeError as error:
+            raise ValueError(
+                f"{detail}, error=JSONDecodeError, line={error.lineno}, column={error.colno}"
+            ) from error
+        except UnicodeDecodeError as error:
+            raise ValueError(
+                f"{detail}, error=UnicodeDecodeError, start={error.start}, end={error.end}"
+            ) from error
 
 
 def _acquire_file_lock(
     lock_file: BinaryIO,
     *,
     shared: bool,
-    path: Path,
 ) -> None:
     """有界获取配置锁，避免 Agent 初始化无限等待一个失联写者。"""
     deadline = time.monotonic() + _TOOL_SELECTION_LOCK_TIMEOUT_SECONDS
@@ -151,7 +174,7 @@ def _acquire_file_lock(
             if remaining <= 0:
                 raise TimeoutError(
                     "工具选择配置锁获取超时: "
-                    f"path={path} "
+                    "artifact=tool_selection "
                     f"timeout_seconds={_TOOL_SELECTION_LOCK_TIMEOUT_SECONDS:g}"
                 ) from error
             time.sleep(min(_TOOL_SELECTION_LOCK_POLL_INTERVAL_SECONDS, remaining))

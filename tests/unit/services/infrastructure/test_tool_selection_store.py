@@ -143,7 +143,9 @@ def test_tool_selection_lock_exposes_non_contention_errors(
     with pytest.raises(portalocker.LockException) as captured:
         store.snapshot("default")
 
-    assert captured.value is error
+    assert captured.value.__cause__ is error
+    assert "error=LockException" in str(captured.value)
+    assert str(tmp_path) not in str(captured.value)
 
 
 def test_snapshot_is_frozen_across_later_selection_changes(tmp_path: Path) -> None:
