@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
 from typing import ClassVar
 
@@ -15,6 +16,12 @@ INTEGRATION_PORT_END = (
 )
 E2E_PORT_START = INTEGRATION_PORT_END + 1
 E2E_PORT_END = E2E_PORT_START + TEST_FILE_PORT_BLOCK_SIZE * E2E_PORT_MAX_FILES - 1
+
+
+@lru_cache(maxsize=16)
+def _test_files_for_root(root: Path) -> tuple[Path, ...]:
+    """pytest 单次运行内测试树固定，复用按测试文件排序的目录扫描。"""
+    return tuple(sorted(path.resolve() for path in root.rglob("test_*.py")))
 
 
 @dataclass(frozen=True, slots=True)
@@ -51,7 +58,7 @@ def port_block_for_file(
 ) -> TestFilePortBlock:
     root = tests_root.resolve()
     resolved_file = test_file_path.resolve()
-    test_files = sorted(path.resolve() for path in root.rglob("test_*.py"))
+    test_files = _test_files_for_root(root)
     if resolved_file not in test_files:
         raise ValueError(f"未能为 {test_layer} 测试文件分配端口块: {resolved_file}")
 
