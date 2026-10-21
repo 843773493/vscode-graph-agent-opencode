@@ -9460,13 +9460,13 @@ function mcpEcho(description, schemaVersion = 1) {
 }
 
 async function mcpAssemblies(owner, calls) {
-  const rows = await readRollout(owner,
-    `SELECT model_call_id,snapshot_json FROM context_assemblies WHERE model_call_id IN (${calls.map(() => "?").join(",")})`, calls);
+  const node = await sessionCatalogNode(owner);
+  const rows = await testControl({ action: "read_assemblies", name: owner.name,
+    relative_path: await threadRolloutLocator(owner, node), session_id: owner.sessionId,
+    thread_id: owner.threadId, model_call_ids: calls });
   assert.equal(rows.length, calls.length, "每次实际 Provider call 必须有唯一 sealed assembly");
-  return calls.map((call) => {
-    const row = rows.find((entry) => entry.model_call_id === call);
-    return { call, bytes: row.snapshot_json, snapshot: JSON.parse(row.snapshot_json) };
-  });
+  assert.deepEqual(rows.map((row) => row.call), calls);
+  return rows;
 }
 
 async function mcpBinding(owner, call) {

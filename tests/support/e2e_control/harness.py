@@ -349,16 +349,35 @@ class E2ETestControlHarness:
             if not path.is_relative_to(root) or not path.is_dir():
                 raise ValueError("只读目录路径不属于当前 pytest fixture 的目录")
             return sorted(entry.name for entry in path.iterdir())
-        if action == "read_sql":
+        if action in {"read_sql", "read_assemblies"}:
             root = self._trace_roots[cast(str, request["name"])]
             path = (root / cast(str, request["relative_path"])).resolve(strict=True)
             if not path.is_relative_to(root) or not path.is_file():
                 raise ValueError("只读 trace 路径不属于当前 pytest fixture")
-            query = cast(str, request["query"])
-            if not query.lstrip().upper().startswith(("SELECT ", "WITH ")):
-                raise ValueError("只读 trace 只接受 SELECT")
             with closing(sqlite3.connect(path.as_uri() + "?mode=ro", uri=True)) as connection:
                 connection.execute("PRAGMA query_only=ON")
+                if action == "read_assemblies":
+                    from app.services.infrastructure.rollout_context.assembly.content_store import (
+                        load_snapshot,
+                    )
+
+                    # 同一只读快照展开冻结引用；浏览器不维护第二套DAG解码器。
+                    connection.execute("BEGIN")
+                    result = []
+                    for call in cast(list[str], request["model_call_ids"]):
+                        row = connection.execute(
+                            "SELECT snapshot_json FROM context_assemblies "
+                            "WHERE session_id=? AND thread_id=? AND model_call_id=? "
+                            "AND status IN ('sealed','terminal')",
+                            (request["session_id"], request["thread_id"], call),
+                        ).fetchone()
+                        if row is None:
+                            raise LookupError(f"当前SessionThread缺少sealed assembly: {call}")
+                        result.append({"call": call, "bytes": row[0], "snapshot": load_snapshot(connection, row[0])})
+                    return result
+                query = cast(str, request["query"])
+                if not query.lstrip().upper().startswith(("SELECT ", "WITH ")):
+                    raise ValueError("只读 trace 只接受 SELECT")
                 connection.row_factory = sqlite3.Row
                 return [dict(row) for row in connection.execute(query, cast(list[object], request.get("parameters", [])))]
         if action == "advance_residency":

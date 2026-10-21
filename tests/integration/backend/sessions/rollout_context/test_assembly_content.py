@@ -33,6 +33,7 @@ from tests.integration.backend.sessions.rollout_context.test_context_plan_regist
 from tests.integration.backend.sessions.rollout_context.test_context_production_prefix import (
     production_context as production_context,  # noqa: PLC0414 - 复用真实prepare链
 )
+from tests.support.e2e_control.harness import E2ETestControlHarness
 
 pytestmark = pytest.mark.parametrize("registry_db", ["protected"], indirect=True)
 
@@ -64,6 +65,66 @@ def test_prepare_shares_tools_and_frozen_prefix_then_cold_reads_without_current_
         restored = cold.get_context_assembly(session, thread, assembly_id=original.assembly_id)
         restored.validate_hashes()
         assert restored.to_dict() == original.to_dict()
+
+
+@pytest.fixture
+def assembly_control(shared_assemblies, tmp_path):
+    saver, session, thread, _connection, _manager, first, second, _before = shared_assemblies
+    control = E2ETestControlHarness(tmp_path / "control")
+    try:
+        control.bind_trace_root("owner", saver._storage.storage.root(session, thread_id=thread))
+        yield control, {
+            "action": "read_assemblies", "name": "owner", "relative_path": "index.sqlite",
+            "session_id": session, "thread_id": thread,
+            "model_call_ids": [second.model_call_id, first.model_call_id],
+        }
+    finally:
+        control.close()
+
+
+def test_browser_observer_materializes_frozen_snapshots_and_preserves_raw_bytes(
+    assembly_control, shared_assemblies,
+):
+    control, request = assembly_control
+    _saver, _session, _thread, connection, manager, first, second, _before = shared_assemblies
+    raw = dict(connection.execute("SELECT model_call_id,snapshot_json FROM context_assemblies"))
+    manager.observe("instruction:R01", "当前规则不属于历史请求", revision="instructions:changed")
+
+    observed = control._dispatch(request)
+
+    assert [row["call"] for row in observed] == request["model_call_ids"]
+    for row, original in zip(observed, (second, first), strict=True):
+        assert row["bytes"] == raw[original.model_call_id]
+        assert json.loads(row["bytes"])["_storage_format"] == "assembly_content_v1"
+        assert canonical_json_bytes(row["snapshot"]) == canonical_json_bytes(original.to_dict())
+    assert dict(connection.execute("SELECT model_call_id,snapshot_json FROM context_assemblies")) == raw
+
+
+@pytest.mark.parametrize("scope", ["session_id", "thread_id"])
+def test_browser_observer_rejects_other_owner_without_rewriting_history(
+    assembly_control, shared_assemblies, scope,
+):
+    control, request = assembly_control
+    _saver, _session, _thread, connection, _manager, _first, _second, _before = shared_assemblies
+    before = connection.execute("SELECT * FROM context_assemblies ORDER BY assembly_id").fetchall()
+    with pytest.raises(LookupError, match="当前SessionThread缺少sealed assembly"):
+        control._dispatch({**request, scope: "other-owner"})
+    assert connection.execute("SELECT * FROM context_assemblies ORDER BY assembly_id").fetchall() == before
+
+
+def test_browser_observer_exposes_missing_content_without_repair(assembly_control, shared_assemblies):
+    control, request = assembly_control
+    _saver, _session, _thread, connection, _manager, first, _second, _before = shared_assemblies
+    raw = connection.execute("SELECT snapshot_json FROM context_assemblies WHERE assembly_id=?", (first.assembly_id,)).fetchone()[0]
+    key = json.loads(raw)["tool_snapshot"]["node"]
+    connection.execute("DELETE FROM assembly_content_nodes WHERE node_id=?", (key,))
+    connection.commit()
+    before = connection.execute("SELECT * FROM assembly_content_nodes ORDER BY node_id").fetchall()
+
+    with pytest.raises(ValueError, match="assembly content 缺失"):
+        control._dispatch(request)
+
+    assert connection.execute("SELECT * FROM assembly_content_nodes ORDER BY node_id").fetchall() == before
 
 
 @pytest.mark.parametrize("damage", ["missing", "hash", "owner"])
