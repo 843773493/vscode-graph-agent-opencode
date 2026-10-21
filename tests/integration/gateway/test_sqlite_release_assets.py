@@ -31,10 +31,14 @@ def test_release_copy_loads_sql_initializes_reopens_and_missing_asset_fails(
 ):
     script = '''
 import json
+from contextlib import closing
 from pathlib import Path
 import app.core.sqlite_state as core
+from app.core.session_catalog_store import SessionCatalogStore
+from app.core.session_control_store import SessionControlStore
 from app.gateway.control.gateway_state import GatewayStateStore
 from app.gateway.federation.store import federation_control_database
+from app.services.business.session_navigation.queue_schema import ensure_navigation_queue_tables
 assert Path(core.__file__).is_relative_to(Path.cwd())
 for _ in range(2):
     with GatewayStateStore(path=Path("state/gateway.sqlite")) as store:
@@ -45,6 +49,12 @@ for _ in range(2):
         connection = database.connection()
         assert connection.execute("SELECT COUNT(*) FROM federation_replay_registry").fetchone()[0] == 0
         connection.close()
+    with closing(SessionCatalogStore(Path("state/catalog.sqlite"), Path("state/sessions"))) as catalog:
+        ensure_navigation_queue_tables(catalog)
+        assert catalog.connection.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+    with closing(SessionControlStore(Path("state/session-control.sqlite"))) as control:
+        assert control.connection.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+        assert control.connection.execute("SELECT revision FROM collaboration_ledger").fetchone()[0] == 0
 print(json.dumps({"loaded": core.__file__, "schema": 17}))
 '''
     environment = {**os.environ, "PYTHONPATH": str(staged_application)}

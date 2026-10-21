@@ -1,0 +1,26 @@
+
+CREATE TABLE IF NOT EXISTS session_creation_records (
+    session_creation_idempotency_key TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL UNIQUE,
+    main_thread_id TEXT NOT NULL,
+    workspace_id TEXT NOT NULL,
+    parent_node_id TEXT,
+    display_name TEXT NOT NULL,
+    title_source TEXT NOT NULL CHECK (title_source IN ('default', 'user', 'auto')),
+    purpose TEXT NOT NULL CHECK (purpose IN ('normal', 'context_fork')),
+    graph_id TEXT NOT NULL CHECK (length(graph_id) > 0),
+    graph_revision INTEGER NOT NULL CHECK (graph_revision >= 1),
+    graph_schema_hash TEXT NOT NULL,
+    capability_profile_hash TEXT NOT NULL,
+    session_metadata_json TEXT NOT NULL,
+    request_intent_json TEXT,
+    fork_delivery_request_id TEXT CHECK(fork_delivery_request_id IS NULL OR (purpose='context_fork' AND length(fork_delivery_request_id)>0)),
+    created_at TEXT NOT NULL,
+    storage_relative_locator TEXT NOT NULL UNIQUE,
+    preimage_hash TEXT NOT NULL,
+    parent_revision INTEGER,
+    state TEXT NOT NULL CHECK (state IN ('preparing', 'published', 'aborted')),
+    abort_reason TEXT,
+    record_created_at TEXT NOT NULL,
+    record_updated_at TEXT NOT NULL
+)

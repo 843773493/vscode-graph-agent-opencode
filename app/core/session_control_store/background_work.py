@@ -18,32 +18,10 @@ from app.core.background_task_contracts import (
 )
 from app.core.session_control_thread_catalog.thread_catalog import read_fence_row
 from app.core.session_lifecycle_gate import SessionDeletionPendingError
+from app.core.sqlite_state import load_sql
 
-BACKGROUND_TASKS_DDL = """
-CREATE TABLE IF NOT EXISTS background_tasks (
-    task_id TEXT PRIMARY KEY,
-    session_id TEXT NOT NULL,
-    thread_id TEXT NOT NULL REFERENCES thread_catalog(thread_id),
-    agent_id TEXT NOT NULL,
-    descriptor_json TEXT NOT NULL,
-    preimage_hash TEXT NOT NULL,
-    checkpoint_json TEXT NOT NULL,
-    status TEXT NOT NULL CHECK (status IN (
-        'pending','running','reconcile_required','completed','cancelled','failed','deleted')),
-    lease_id TEXT NOT NULL REFERENCES session_operation_leases(lease_id),
-    fencing_token INTEGER NOT NULL DEFAULT 0 CHECK (fencing_token >= 0),
-    runtime_generation INTEGER NOT NULL DEFAULT 0,
-    external_effect_pending INTEGER NOT NULL DEFAULT 0 CHECK (external_effect_pending IN (0,1)),
-    created_at TEXT NOT NULL,
-    started_at TEXT,
-    ended_at TEXT,
-    metadata_json TEXT NOT NULL
-)
-"""
-BACKGROUND_TASKS_ACTIVE_DDL = """
-CREATE INDEX IF NOT EXISTS idx_background_tasks_active ON background_tasks(thread_id, status)
-WHERE status IN ('pending','running','reconcile_required')
-"""
+BACKGROUND_TASKS_DDL = load_sql(__package__, "sql/background_tasks.sql")
+BACKGROUND_TASKS_ACTIVE_DDL = load_sql(__package__, "sql/idx_background_tasks_active.sql")
 
 
 def background_task_from_row(row: sqlite3.Row) -> BackgroundTaskHandle:

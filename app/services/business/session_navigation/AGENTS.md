@@ -18,6 +18,8 @@
 
 # 规范
 
+- 静态结构 SQL 位于同包 `sql/`，所属 Python 模块只加载和协调原执行顺序；SQL 资产不自行提交事务，不保留内联结构副本。
+
 - 权威 SQLite catalog 保存稳定 ID、显示名、导航父链和 Session 冻结 locator；Folder 无物理目录或 manifest，`session.json` 只保存不可变创建 metadata。
 - `parent_session_id` 只从 catalog 最近祖先 Session 派生，不回写 manifest；fork、delegation、上下文来源和生成器 lineage 与导航父链分离。
 - Session 的物理 locator 为创建 intent 冻结的 UTC 日期桶 `sessions/YYYY/MM/DD/{session_id}`；导航子节点只由 catalog 父链组织，不创建物理 `children/` 树。生成器使用同一创建 owner 建立节点并指定逻辑父节点。

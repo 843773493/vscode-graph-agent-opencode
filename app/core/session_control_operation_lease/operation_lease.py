@@ -33,6 +33,7 @@ from app.core.session_lifecycle_gate import (
     SESSION_OPERATION_LEASE_TERMINAL_STATES,
     SessionOperationLease,
 )
+from app.core.sqlite_state import load_sql
 
 __all__ = [
     "IDX_SESSION_OPERATION_LEASES_NON_TERMINAL_DDL",
@@ -49,36 +50,10 @@ __all__ = [
 # 令牌（恢复接管时 +1，旧 token callback 一律失败）；状态闭集
 # active|settling|completed|cancelled|failed，无墙钟自动到期；
 # recovery_ref 是可选稳定恢复引用（不存物理路径或凭据）。
-SESSION_OPERATION_LEASES_TABLE_DDL = """
-CREATE TABLE IF NOT EXISTS session_operation_leases (
-    lease_id TEXT PRIMARY KEY,
-    operation_kind TEXT NOT NULL CHECK (operation_kind IN (
-        'thread_creation', 'board_migration', 'collaboration_fanout',
-        'runtime_owner', 'execution', 'context_control',
-        'communication_source', 'communication_target', 'federated_call',
-        'remote_observation', 'attachment', 'fork_retention',
-        'session_catalog_mutation')),
-    operation_identity TEXT NOT NULL,
-    preimage_hash TEXT NOT NULL,
-    captured_lifecycle_generation INTEGER NOT NULL,
-    holder_generation INTEGER NOT NULL CHECK (holder_generation >= 1),
-    fencing_token INTEGER NOT NULL CHECK (fencing_token >= 1),
-    state TEXT NOT NULL CHECK (state IN (
-        'active', 'settling', 'completed', 'cancelled', 'failed')),
-    revision INTEGER NOT NULL CHECK (revision >= 1),
-    recovery_ref TEXT,
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL,
-    UNIQUE (captured_lifecycle_generation, operation_identity)
-)
-"""
+SESSION_OPERATION_LEASES_TABLE_DDL = load_sql(__package__, "sql/session_operation_leases.sql")
 
 # 非终态索引（2.3-E）：删除 drain/恢复路径只消费 active|settling。
-IDX_SESSION_OPERATION_LEASES_NON_TERMINAL_DDL = (
-    "CREATE INDEX IF NOT EXISTS idx_session_operation_leases_non_terminal "
-    "ON session_operation_leases(state) "
-    "WHERE state IN ('active', 'settling')"
-)
+IDX_SESSION_OPERATION_LEASES_NON_TERMINAL_DDL = load_sql(__package__, "sql/idx_session_operation_leases_non_terminal.sql")
 
 
 def _lease_from_row(row: sqlite3.Row) -> SessionOperationLease:

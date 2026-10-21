@@ -17,6 +17,8 @@
 
 # 规范
 
+- 静态结构 SQL 位于同包 `sql/`，所属 Python 模块只加载和协调原执行顺序；SQL 资产不自行提交事务，不保留内联结构副本。
+
 - `OperationLeaseMixin` 只依赖宿主类提供的 `database_path`、`_connection`、`_ensure_open()` 与 `_write_transaction()`，以及 `thread_catalog` 的 `FENCE_ROW_ID`；不得假设 `SessionControlStore` 的其它方法存在。
 - `create_or_get_lease` 按 `(captured_lifecycle_generation, operation_identity)` 幂等；同 identity 不同 preimage 必须 fail closed，不得覆盖或重基。
 - fence 非 `active`（尤其 `deleting`）时拒绝建立新 lease；`expected_generation` 是 gate 内 fresh 校验之外的最后一道防线。

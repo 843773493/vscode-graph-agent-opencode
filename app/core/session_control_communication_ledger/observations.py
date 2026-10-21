@@ -11,6 +11,7 @@ from datetime import UTC, datetime
 from app.core.session_control_operation_lease.operation_lease import (
     delete_terminal_leases,
 )
+from app.core.sqlite_state import load_sql
 
 OBSERVATION_ERROR_CODES = frozenset({
     "read-snapshot-invalid", "read-snapshot-mismatch", "read-snapshot-expired",
@@ -43,43 +44,10 @@ def observation_error_code(value: object) -> str | None:
     return None
 
 
-REMOTE_OBSERVATIONS_DDL = """
-CREATE TABLE IF NOT EXISTS remote_observations (
-    observation_id TEXT NOT NULL,
-    side TEXT NOT NULL CHECK(side IN ('source','target')),
-    request_json TEXT NOT NULL CHECK(json_valid(request_json)),
-    snapshot_json TEXT CHECK(snapshot_json IS NULL OR json_valid(snapshot_json)),
-    result_json TEXT CHECK(result_json IS NULL OR json_valid(result_json)),
-    expires_at TEXT NOT NULL,
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL,
-    PRIMARY KEY(observation_id,side)
-)
-"""
-REMOTE_OBSERVATION_PAGES_DDL = """
-CREATE TABLE IF NOT EXISTS remote_observation_pages (
-    observation_id TEXT NOT NULL,
-    side TEXT NOT NULL CHECK(side IN ('source','target')),
-    page_identity TEXT NOT NULL,
-    page_ordinal INTEGER NOT NULL CHECK(page_ordinal >= 0),
-    request_json TEXT NOT NULL CHECK(json_valid(request_json)),
-    result_json TEXT CHECK(result_json IS NULL OR json_valid(result_json)),
-    target_result_json TEXT CHECK(target_result_json IS NULL OR json_valid(target_result_json)),
-    PRIMARY KEY(observation_id,side,page_ordinal),
-    UNIQUE(side,page_identity),
-    FOREIGN KEY(observation_id,side) REFERENCES remote_observations(observation_id,side)
-        ON DELETE CASCADE
-)
-"""
-REMOTE_OBSERVATION_EXPIRY_DDL = """
-CREATE INDEX IF NOT EXISTS idx_remote_observations_expiry ON remote_observations(expires_at)
-"""
-REMOTE_OBSERVATION_KEY_DDL = """
-CREATE TABLE IF NOT EXISTS remote_observation_key (
-    singleton_id INTEGER PRIMARY KEY CHECK(singleton_id=1),
-    cursor_key BLOB NOT NULL CHECK(length(cursor_key)=32)
-)
-"""
+REMOTE_OBSERVATIONS_DDL = load_sql(__package__, "sql/remote_observations.sql")
+REMOTE_OBSERVATION_PAGES_DDL = load_sql(__package__, "sql/remote_observation_pages.sql")
+REMOTE_OBSERVATION_EXPIRY_DDL = load_sql(__package__, "sql/idx_remote_observations_expiry.sql")
+REMOTE_OBSERVATION_KEY_DDL = load_sql(__package__, "sql/remote_observation_key.sql")
 
 
 def canonical_json(value: object) -> str:

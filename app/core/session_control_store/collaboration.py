@@ -23,37 +23,16 @@ from app.core.session_control_primitives import validate_thread_creation_key
 from app.core.session_control_store.sql import (
     SELECT_COLLABORATION_LEDGER_REVISION,
 )
+from app.core.sqlite_state import load_sql
 
 # collaboration ledger（8.5-B，R25）：owner session 内 delegation/member
 # 的权威协作账本。revision 随 member 登记、发布、取消与 board 变更单调推进；
 # thread creation record 冻结登记 revision 与 membership preimage，publish
 # 校验账本未回退及本 member 冻结内容一致；member 行随 thread catalog publish
 # 在同一事务内 registering → published（原子可见性）。
-_COLLABORATION_LEDGER_TABLE_DDL = """
-CREATE TABLE IF NOT EXISTS collaboration_ledger (
-    id INTEGER PRIMARY KEY CHECK (id = 1),
-    revision INTEGER NOT NULL
-)
-"""
+_COLLABORATION_LEDGER_TABLE_DDL = load_sql(__package__, "sql/collaboration_ledger.sql")
 
-_COLLABORATION_MEMBERS_TABLE_DDL = """
-CREATE TABLE IF NOT EXISTS collaboration_members (
-    delegation_id TEXT PRIMARY KEY,
-    creation_idempotency_key TEXT NOT NULL UNIQUE,
-    membership_preimage_hash TEXT NOT NULL,
-    registered_revision INTEGER NOT NULL CHECK (registered_revision > 0),
-    coordinator_session_id TEXT NOT NULL,
-    coordinator_thread_id TEXT NOT NULL,
-    child_thread_id TEXT NOT NULL UNIQUE,
-    role TEXT NOT NULL,
-    subagent_type TEXT NOT NULL,
-    title TEXT NOT NULL,
-    task_seed TEXT NOT NULL,
-    state TEXT NOT NULL CHECK (state IN ('registering', 'published', 'cancelled')),
-    registered_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
-)
-"""
+_COLLABORATION_MEMBERS_TABLE_DDL = load_sql(__package__, "sql/collaboration_members.sql")
 
 _COLLABORATION_MEMBER_COLUMNS = (
     "delegation_id, creation_idempotency_key, membership_preimage_hash, "

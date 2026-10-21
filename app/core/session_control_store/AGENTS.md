@@ -42,6 +42,8 @@ owner binding 与跨 Session 通信 ledger 各自已在同名兄弟子包中承�
 
 # 规范
 
+- 静态结构 SQL 位于同包 `sql/`，所属 Python 模块只加载和协调原执行顺序；SQL 资产不自行提交事务，不保留内联结构副本。
+
 - 既有方法族mixin的跨类静态方法引用用具体
   mixin 类名限定（例如 `ThreadCreationRecordMixin._validate_frozen_json_text`），每个方法在
   `SessionControlStore.__mro__` 中只允许定义一处（`__init__` 除外）。

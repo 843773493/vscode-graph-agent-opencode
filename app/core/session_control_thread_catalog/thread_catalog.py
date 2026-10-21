@@ -33,6 +33,7 @@ from app.core.session_catalog_store.validators import (
     validate_thread_id,
 )
 from app.core.session_control_store.contracts import ThreadGraphBindingRecord
+from app.core.sqlite_state import load_sql
 
 __all__ = [
     "FENCE_ROW_ID",
@@ -74,28 +75,12 @@ def read_fence_row(
 
 
 # 当前 thread_catalog：main/child 共用唯一 catalog，旧生成数据不在此升级。
-THREAD_CATALOG_TABLE_DDL = """
-CREATE TABLE IF NOT EXISTS thread_catalog (
-    thread_id TEXT PRIMARY KEY,
-    kind TEXT NOT NULL CHECK (kind IN ('main', 'child')),
-    created_at TEXT NOT NULL,
-    graph_id TEXT,
-    graph_revision INTEGER CHECK (graph_revision >= 1),
-    graph_schema_hash TEXT,
-    capability_profile_hash TEXT
-)
-"""
+THREAD_CATALOG_TABLE_DDL = load_sql(__package__, "sql/thread_catalog.sql")
 
 
 
 
-LIFECYCLE_FENCE_TABLE_DDL = """
-CREATE TABLE IF NOT EXISTS lifecycle_fence (
-    id INTEGER PRIMARY KEY CHECK (id = 1),
-    state TEXT NOT NULL CHECK (state IN ('active', 'deleting')),
-    generation INTEGER NOT NULL
-)
-"""
+LIFECYCLE_FENCE_TABLE_DDL = load_sql(__package__, "sql/lifecycle_fence.sql")
 
 
 _FENCE_STATES = ("active", "deleting")

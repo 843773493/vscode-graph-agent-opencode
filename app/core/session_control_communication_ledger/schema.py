@@ -4,35 +4,9 @@ from __future__ import annotations
 
 import re
 
-COMMUNICATION_OUTBOX_TABLE_DDL = """
-CREATE TABLE IF NOT EXISTS communication_outbox (
-    send_operation_id TEXT PRIMARY KEY,
-    session_id TEXT NOT NULL,
-    source_gateway_id TEXT NOT NULL,
-    source_workspace_id TEXT NOT NULL,
-    source_thread_id TEXT NOT NULL,
-    communication_id TEXT NOT NULL UNIQUE,
-    target_gateway_id TEXT NOT NULL,
-    target_workspace_id TEXT NOT NULL,
-    target_session_id TEXT NOT NULL,
-    target_thread_id TEXT NOT NULL,
-    kind TEXT NOT NULL CHECK (kind IN ('question', 'reply', 'progress', 'result')),
-    reply_to_communication_id TEXT,
-    payload_hash TEXT NOT NULL,
-    content TEXT NOT NULL CHECK(length(trim(content)) > 0),
-    delivery_policy TEXT NOT NULL,
-    request_id TEXT NOT NULL,
-    target_ref TEXT NOT NULL,
-    state TEXT NOT NULL CHECK (state IN (
-        'accepted', 'routing', 'target_accepted', 'execution_bound',
-        'terminal', 'failed', 'cancelled')),
-    latest_receipt TEXT,
-    abort_reason TEXT,
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL,
-    CHECK ((kind = 'reply') = (reply_to_communication_id IS NOT NULL))
-)
-"""
+from app.core.sqlite_state import load_sql
+
+COMMUNICATION_OUTBOX_TABLE_DDL = load_sql(__package__, "sql/communication_outbox.sql")
 
 
 # 跨 Session 通信 inbox（2.4/4.7，D5）：target main-thread node 持久化的
@@ -41,49 +15,10 @@ CREATE TABLE IF NOT EXISTS communication_outbox (
 # payload_hash) 确定性派生（重试不变）。state 闭集
 # target_accepted → execution_bound → terminal，任一非终态可进
 # failed|cancelled；claim owner/generation 是可恢复领取字段（无 TTL）。
-COMMUNICATION_INBOX_TABLE_DDL = """
-CREATE TABLE IF NOT EXISTS communication_inbox (
-    communication_id TEXT PRIMARY KEY,
-    session_id TEXT NOT NULL,
-    source_gateway_id TEXT NOT NULL,
-    source_workspace_id TEXT NOT NULL,
-    source_session_id TEXT NOT NULL,
-    source_thread_id TEXT NOT NULL,
-    target_gateway_id TEXT NOT NULL,
-    target_workspace_id TEXT NOT NULL,
-    target_thread_id TEXT NOT NULL,
-    kind TEXT NOT NULL CHECK (kind IN ('question', 'reply', 'progress', 'result')),
-    reply_to_communication_id TEXT,
-    payload_hash TEXT NOT NULL,
-    content TEXT NOT NULL CHECK(length(trim(content)) > 0),
-    delivery_policy TEXT NOT NULL,
-    request_id TEXT NOT NULL,
-    admission_id TEXT NOT NULL UNIQUE,
-    wakeup_key TEXT NOT NULL,
-    state TEXT NOT NULL CHECK (state IN (
-        'target_accepted', 'execution_bound', 'terminal', 'failed', 'cancelled')),
-    job_id TEXT,
-    execution_id TEXT,
-    turn_id TEXT,
-    admission_claim_owner TEXT,
-    admission_claim_generation INTEGER,
-    last_error TEXT,
-    terminal_outcome TEXT,
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL,
-    CHECK ((kind = 'reply') = (reply_to_communication_id IS NOT NULL)),
-    CHECK ((admission_claim_owner IS NULL) = (admission_claim_generation IS NULL)),
-    CHECK (admission_claim_generation IS NULL OR admission_claim_generation >= 1),
-    CHECK ((job_id IS NULL) = (execution_id IS NULL)),
-    CHECK (job_id IS NULL OR state IN ('execution_bound', 'terminal'))
-)
-"""
+COMMUNICATION_INBOX_TABLE_DDL = load_sql(__package__, "sql/communication_inbox.sql")
 
 # worker 只消费状态索引（2.4/4.7）：target_accepted 未绑定列表的覆盖索引。
-IDX_COMMUNICATION_INBOX_TARGET_ACCEPTED_DDL = (
-    "CREATE INDEX IF NOT EXISTS idx_communication_inbox_target_accepted "
-    "ON communication_inbox(state) WHERE state = 'target_accepted'"
-)
+IDX_COMMUNICATION_INBOX_TARGET_ACCEPTED_DDL = load_sql(__package__, "sql/idx_communication_inbox_target_accepted.sql")
 
 
 _COMMUNICATION_OUTBOX_COLUMNS = (

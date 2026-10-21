@@ -12,34 +12,12 @@ from app.core.background_task_contracts import (
 )
 from app.core.session_control_thread_catalog.thread_catalog import read_fence_row
 from app.core.session_lifecycle_gate import SessionDeletionPendingError
+from app.core.sqlite_state import load_sql
 from app.domain.itemized.hashing import sha256_jcs
 
-BACKGROUND_MAILBOX_DDL = """
-CREATE TABLE IF NOT EXISTS background_mailbox (
-    sequence INTEGER PRIMARY KEY AUTOINCREMENT,
-    message_id TEXT NOT NULL UNIQUE,
-    session_id TEXT NOT NULL,
-    thread_id TEXT NOT NULL REFERENCES thread_catalog(thread_id),
-    agent_id TEXT NOT NULL,
-    source_id TEXT NOT NULL,
-    preimage_hash TEXT NOT NULL,
-    message_json TEXT NOT NULL
-)
-"""
-BACKGROUND_MAILBOX_OWNER_DDL = """
-CREATE INDEX IF NOT EXISTS idx_background_mailbox_owner
-ON background_mailbox(thread_id,agent_id,sequence)
-"""
-BACKGROUND_CONSUMPTIONS_DDL = """
-CREATE TABLE IF NOT EXISTS background_consumptions (
-    consumption_id TEXT PRIMARY KEY,
-    thread_id TEXT NOT NULL REFERENCES thread_catalog(thread_id),
-    agent_id TEXT NOT NULL,
-    preimage_hash TEXT NOT NULL,
-    batch_json TEXT NOT NULL,
-    acknowledged INTEGER NOT NULL DEFAULT 0 CHECK (acknowledged IN (0,1))
-)
-"""
+BACKGROUND_MAILBOX_DDL = load_sql(__package__, "sql/background_mailbox.sql")
+BACKGROUND_MAILBOX_OWNER_DDL = load_sql(__package__, "sql/idx_background_mailbox_owner.sql")
+BACKGROUND_CONSUMPTIONS_DDL = load_sql(__package__, "sql/background_consumptions.sql")
 
 
 class BackgroundMailboxMixin:

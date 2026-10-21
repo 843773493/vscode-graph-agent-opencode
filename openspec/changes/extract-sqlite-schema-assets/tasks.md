@@ -10,10 +10,10 @@
 
 ## 3. Session catalog 与 control
 
-- [ ] 3.1 提取 session_catalog_store 与 navigation queue 的表/索引/触发器及迁移，验证导航、创建/删除与修复拒绝。
-- [ ] 3.2 提取 thread catalog、owner binding、operation lease 的静态结构和迁移，验证现有 owner 及版本。
-- [ ] 3.3 提取 session_control_store 的 execution intent、thread creation、background/mailbox、collaboration/fanout、copy settlement 与 retention release 结构。
-- [ ] 3.4 提取 communication ledger 的表/索引和 observations 结构，验证消息及页账本。
+- [x] 3.1 提取 session_catalog_store 与 navigation queue 的表/索引/触发器及迁移，验证导航、创建/删除与修复拒绝。
+- [x] 3.2 提取 thread catalog、owner binding、operation lease 的静态结构和迁移，验证现有 owner 及版本。
+- [x] 3.3 提取 session_control_store 的 execution intent、thread creation、background/mailbox、collaboration/fanout、copy settlement 与 retention release 结构。
+- [x] 3.4 提取 communication ledger 的表/索引和 observations 结构，验证消息及页账本。
 
 ## 4. 工作区与 rollout
 
@@ -30,3 +30,5 @@
 2026-10-21 首批：AST盘点保存29个生产owner的147个候选DDL字符串（含fork临时表；1.1的全消费者闭包尚待后续owner复核），原件位于 `out/tests/temp/openspec_takeover/artifacts/sqlite-ddl-baseline-001/` 与 `sqlite-ddl-inventory-001.json`。核心迁移账本、Gateway状态与联邦库已提取，清理SQL尾部空白后，展开load_sql的执行AST与原文仅此空白差异，见 `sqlite-gateway-equivalence-002.json`。`sqlite-assets-gateway-unit-001` 95 passed/3.28s，覆盖核心迁移错误/锁/账本与Gateway/federation行为；全17版本升级、原有行/账本时间保持与冷重开均通过。新增测试静态修正后 `sqlite-assets-gateway-final-002` 18 passed，含真实发行copy→隔离Python加载→建库/重开及删除资产明确失败，未修改产品源码。最终 `sqlite-assets-gateway-static-002` 对本批6文件Ruff exit0；首次包级检查的3条既有TRY004/PYI034位于与HEAD逐字相同的未修改文件，原件另存。非作者只读独审无阻断；准确命令、源码指纹、raw、实际退出码见同目录runs及 `sqlite-assets-gateway-validation-001.json`。本批不代表剩余Session/rollout/工作区owner已迁移，也不声称Windows完整安装包实机验收。
 
 提交前diff检查发现原字符串的尾部缩进进入SQL资产；已清理尾部空白并统一末尾换行，其余执行AST等价。`sqlite-assets-gateway-final-003` 最终96 passed，源码前后指纹一致；最终strict `openspec-002` exit0。首次私有提交在更新分支前被diff-check拒绝，不计交付。
+
+2026-10-21 Session批：16个Python模块的54份结构/种子SQL已迁出，保留逐条execute、事务和版本/旧库拒绝。catalog原8段指纹表达式索引冻结为与原生成结果相同的静态SQL；其它模块展开load_sql后执行AST相同，仅尾部空白与import顺序归一，见 `sqlite-session-equivalence-001.json`；147处直接/间接结构消费者检索保留。`sqlite-assets-session-core-001` 577 passed/14.16s；导航组001为31 passed、1 failed/19.79s，唯一崩溃子进程沿旧路径未绑定catalog owner，失败在领取操作前，不是DDL错误。该测试迁到现有fixture_catalog_scope，不改退出91、running、generation/fencing与同一operation恢复断言，`navigation-recovery-002` 1 passed/4.57s。本批16文件Ruff `static-001` 及fixture静态002 exit0；发行copy扩展到Session/catalog/control/navigation后 `release-002` 1 passed/5.13s，经历新建/冷重开；release001为新增测试误把无context协议的store当context manager，仅改用closing，不改产品。原命令、指纹、raw及退出码见 `out/tests/temp/openspec_takeover/artifacts/runs/sqlite-assets-session-*`，限定收据为 `sqlite-assets-session-validation-001.json`。这是存储/真实崩溃恢复验证，不声称真实HTTP或完整Agent执行。

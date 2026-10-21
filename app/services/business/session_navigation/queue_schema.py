@@ -14,79 +14,18 @@ schema 与一次幂等建表，不含任何队列语义。
 from __future__ import annotations
 
 from app.core.session_catalog_store import SessionCatalogStore
+from app.core.sqlite_state import load_sql
 
 __all__ = ["ensure_navigation_queue_tables"]
 
-_MUTATION_RECORDS_DDL = """
-CREATE TABLE IF NOT EXISTS navigation_mutation_records (
-    gateway_id TEXT NOT NULL,
-    workspace_id TEXT NOT NULL,
-    actor TEXT NOT NULL,
-    operation_id TEXT NOT NULL,
-    client_sequence INTEGER NOT NULL,
-    queue_seq INTEGER NOT NULL,
-    kind TEXT NOT NULL,
-    state TEXT NOT NULL CHECK (
-        state IN ('queued', 'running', 'committed', 'rejected', 'cancelled',
-                  'dependency_failed')
-    ),
-    params_json TEXT NOT NULL,
-    preimage_hash TEXT NOT NULL,
-    depends_on_json TEXT NOT NULL,
-    created_by_operation_id TEXT,
-    target_node_id TEXT,
-    reserved_node_id TEXT,
-    result_node_id TEXT,
-    result_node_revision INTEGER,
-    committed_catalog_revision INTEGER,
-    error_code TEXT,
-    error_detail TEXT,
-    pending_settlement INTEGER NOT NULL DEFAULT 0,
-    holder_id TEXT,
-    fencing_token INTEGER NOT NULL DEFAULT 0,
-    receipt_revision INTEGER NOT NULL DEFAULT 1,
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL,
-    PRIMARY KEY (gateway_id, workspace_id, actor, operation_id)
-)
-"""
+_MUTATION_RECORDS_DDL = load_sql(__package__, "sql/navigation_mutation_records.sql")
 
-_MUTATION_RECORDS_QUEUE_DDL = (
-    "CREATE UNIQUE INDEX IF NOT EXISTS idx_navigation_mutation_queue "
-    "ON navigation_mutation_records(workspace_id, queue_seq)"
-)
-_MUTATION_RECORDS_PENDING_DDL = (
-    "CREATE INDEX IF NOT EXISTS idx_navigation_mutation_pending "
-    "ON navigation_mutation_records(workspace_id, state, queue_seq)"
-)
+_MUTATION_RECORDS_QUEUE_DDL = load_sql(__package__, "sql/idx_navigation_mutation_queue.sql")
+_MUTATION_RECORDS_PENDING_DDL = load_sql(__package__, "sql/idx_navigation_mutation_pending.sql")
 
-_EVENTS_DDL = """
-CREATE TABLE IF NOT EXISTS navigation_events (
-    workspace_id TEXT NOT NULL,
-    event_seq INTEGER NOT NULL,
-    operation_id TEXT NOT NULL,
-    gateway_id TEXT NOT NULL,
-    actor TEXT NOT NULL,
-    queue_seq INTEGER NOT NULL,
-    kind TEXT NOT NULL,
-    result_state TEXT NOT NULL,
-    committed_catalog_revision INTEGER,
-    affected_node_ids_json TEXT NOT NULL,
-    error_code TEXT,
-    error_detail TEXT,
-    created_at TEXT NOT NULL,
-    PRIMARY KEY (workspace_id, event_seq)
-)
-"""
+_EVENTS_DDL = load_sql(__package__, "sql/navigation_events.sql")
 
-_QUEUE_OWNERS_DDL = """
-CREATE TABLE IF NOT EXISTS navigation_queue_owners (
-    workspace_id TEXT PRIMARY KEY,
-    owner_id TEXT NOT NULL,
-    owner_generation INTEGER NOT NULL,
-    updated_at TEXT NOT NULL
-)
-"""
+_QUEUE_OWNERS_DDL = load_sql(__package__, "sql/navigation_queue_owners.sql")
 
 
 def ensure_navigation_queue_tables(store: SessionCatalogStore) -> None:

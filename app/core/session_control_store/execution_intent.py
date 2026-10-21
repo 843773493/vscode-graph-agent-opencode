@@ -31,6 +31,7 @@ from app.core.session_control_store.sql import SELECT_THREAD_CATALOG_CHILD_ROW
 from app.core.session_control_store.thread_creation_record import (
     _INITIAL_STATE_VALUES,
 )
+from app.core.sqlite_state import load_sql
 
 # 初始 execution 的持久 admission intent（8.5-A 落库 + 8.5-B 消费状态机，
 # R23）：``execution_binding_id``/``job_id`` 由 admission 幂等键确定性
@@ -38,41 +39,16 @@ from app.core.session_control_store.thread_creation_record import (
 # key、owner session、thread、creation key、initial state 与稳定
 # binding/job identity；claim owner/generation 是可恢复领取字段（不按
 # TTL 丢弃）；``last_error`` 只记录明确错误并保留 pending 可恢复事实。
-_THREAD_EXECUTION_INTENTS_TABLE_DDL = """
-CREATE TABLE IF NOT EXISTS thread_execution_intents (
-    admission_idempotency_key TEXT PRIMARY KEY,
-    session_id TEXT NOT NULL,
-    thread_id TEXT NOT NULL,
-    creation_idempotency_key TEXT NOT NULL,
-    initial_state TEXT NOT NULL CHECK (initial_state IN ('running', 'idle')),
-    state TEXT NOT NULL CHECK (state IN ('pending', 'bound')),
-    execution_binding_id TEXT NOT NULL UNIQUE,
-    job_id TEXT NOT NULL UNIQUE,
-    binding_preimage_hash TEXT NOT NULL,
-    claim_owner TEXT,
-    claim_generation INTEGER,
-    last_error TEXT,
-    intent_created_at TEXT NOT NULL,
-    intent_updated_at TEXT NOT NULL,
-    CHECK ((claim_owner IS NULL) = (claim_generation IS NULL)),
-    CHECK (claim_generation IS NULL OR claim_generation >= 1)
-)
-"""
+_THREAD_EXECUTION_INTENTS_TABLE_DDL = load_sql(__package__, "sql/thread_execution_intents.sql")
 
 
 
 # 每个 child thread 至多一条初始 execution intent（崩溃不能留下重复初始
 # Job 的持久侧保证）。
-_IDX_THREAD_EXECUTION_INTENT_THREAD_DDL = (
-    "CREATE UNIQUE INDEX IF NOT EXISTS idx_thread_execution_intent_thread "
-    "ON thread_execution_intents(thread_id)"
-)
+_IDX_THREAD_EXECUTION_INTENT_THREAD_DDL = load_sql(__package__, "sql/idx_thread_execution_intent_thread.sql")
 
 # worker 只消费状态索引（8.5-B）：pending 列表查询的覆盖索引。
-_IDX_THREAD_EXECUTION_INTENT_STATE_DDL = (
-    "CREATE INDEX IF NOT EXISTS idx_thread_execution_intent_state "
-    "ON thread_execution_intents(state)"
-)
+_IDX_THREAD_EXECUTION_INTENT_STATE_DDL = load_sql(__package__, "sql/idx_thread_execution_intent_state.sql")
 
 _THREAD_EXECUTION_INTENT_COLUMNS = (
     "admission_idempotency_key, session_id, thread_id, "

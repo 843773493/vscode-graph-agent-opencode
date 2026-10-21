@@ -26,7 +26,7 @@ from app.services.business.session_navigation.queue_store import (
     NavigationQueueOwnerError,
 )
 from tests.harness.python.run_context import TestRunContext
-from tests.support.workspaces import prepare_default_test_workspace
+from tests.support.workspaces import prepare_test_workspace
 
 
 def _operation_id(seed: str) -> str:
@@ -37,9 +37,10 @@ def _operation_id(seed: str) -> str:
 def navigation_workspace(request: pytest.FixtureRequest) -> Path:
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
     template = Path.cwd() / "tests" / "fixtures" / "workspaces" / "default_test_workspace"
-    return prepare_default_test_workspace(
+    return prepare_test_workspace(
         workspace_root=context.workspace_root,
         template_root=template,
+        template_items=(),
     )
 
 
@@ -51,46 +52,48 @@ from pathlib import Path
 
 from app.core.path_utils import get_session_path_resolver
 from app.core.sqlite_state import utc_now_text
+from tests.support.session_catalog_owner import fixture_catalog_scope
 from app.services.business.session_navigation.executor import NavigationMutationExecutor
 from app.services.business.session_navigation.operations_service import local_navigation_scope
 from app.services.business.session_navigation.queue_store import NavigationMutationQueueStore
 
-sessions_root = Path(sys.argv[1])
-operation_id = sys.argv[2]
-resolver = get_session_path_resolver(sessions_root)
-resolver.initialize()
-store = resolver.catalog_store
-workspace_id = resolver.workspace_id
-scope = local_navigation_scope(workspace_id)
-queue = NavigationMutationQueueStore(store)
-executor = NavigationMutationExecutor(
-    store=store,
-    workspace_id=workspace_id,
-    queue=queue,
-    path_resolver=resolver,
-)
+with fixture_catalog_scope():
+    sessions_root = Path(sys.argv[1])
+    operation_id = sys.argv[2]
+    resolver = get_session_path_resolver(sessions_root)
+    resolver.initialize()
+    store = resolver.catalog_store
+    workspace_id = resolver.workspace_id
+    scope = local_navigation_scope(workspace_id)
+    queue = NavigationMutationQueueStore(store)
+    executor = NavigationMutationExecutor(
+        store=store,
+        workspace_id=workspace_id,
+        queue=queue,
+        path_resolver=resolver,
+    )
 
-async def claim_then_exit():
-    async with executor.queue_owner() as owner:
-        with store.write_transaction() as connection:
-            record = queue.next_runnable(connection, workspace_id)
-            assert record is not None and record.operation_id == operation_id
-            claimed = queue.claim_running(
-                connection,
-                record=record,
-                holder_id=owner.holder_id,
-                owner_id=owner.owner_id,
-                owner_generation=owner.generation,
-                now=utc_now_text(),
+    async def claim_then_exit():
+        async with executor.queue_owner() as owner:
+            with store.write_transaction() as connection:
+                record = queue.next_runnable(connection, workspace_id)
+                assert record is not None and record.operation_id == operation_id
+                claimed = queue.claim_running(
+                    connection,
+                    record=record,
+                    holder_id=owner.holder_id,
+                    owner_id=owner.owner_id,
+                    owner_generation=owner.generation,
+                    now=utc_now_text(),
+                )
+                assert claimed is not None and claimed.state == 'running'
+            print(
+                f'claimed:{owner.owner_id}:{owner.generation}:{claimed.fencing_token}',
+                flush=True,
             )
-            assert claimed is not None and claimed.state == 'running'
-        print(
-            f'claimed:{owner.owner_id}:{owner.generation}:{claimed.fencing_token}',
-            flush=True,
-        )
-        os._exit(91)
+            os._exit(91)
 
-asyncio.run(claim_then_exit())
+    asyncio.run(claim_then_exit())
 """
 
 

@@ -17,6 +17,8 @@
 
 # 规范
 
+- 静态结构 SQL 位于同包 `sql/`，所属 Python 模块只加载和协调原执行顺序；SQL 资产不自行提交事务，不保留内联结构副本。
+
 - `ThreadCatalogMixin` 只依赖宿主类提供的 `database_path`、`_connection` 与 `_ensure_open()`；不得假设 `SessionControlStore` 的其它方法存在。
 - `thread_catalog` 只保存与工作区 catalog 冻结的 `main_thread_id` 匹配的 per-session 指针，不维护第二套会话层级。
 - child thread 的物理定位必须继续读取同一发布事务冻结的 `thread_creation_records`，交叉校验失败即 fail closed。

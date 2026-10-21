@@ -48,6 +48,7 @@ from app.core.session_control_primitives import SHA256_HEX_PATTERN
 from app.core.session_control_thread_catalog.thread_catalog import (
     validate_thread_relative_locator,
 )
+from app.core.sqlite_state import load_sql
 
 __all__ = [
     "THREAD_OWNER_BINDINGS_TABLE_DDL",
@@ -63,30 +64,7 @@ __all__ = [
 # 不收物理路径、相对路径片段与凭据形态字段；列表槽存 canonical JSON。
 # prefix epoch 在此只是 owner 侧记录槽，权威解释仍属 ContextStore；
 # ToolSet applied 只由成功封存的 assembly binding 承载。
-THREAD_OWNER_BINDINGS_TABLE_DDL = """
-CREATE TABLE IF NOT EXISTS thread_owner_bindings (
-    thread_id TEXT PRIMARY KEY,
-    final_relative_locator TEXT NOT NULL DEFAULT '',
-    prefix_epoch INTEGER NOT NULL DEFAULT 1 CHECK (prefix_epoch >= 1),
-    prefix_epoch_reason TEXT NOT NULL DEFAULT 'initial' CHECK (
-        prefix_epoch_reason IN ('initial', 'compaction', 'rewind',
-        'toolset_changed')),
-    stable_prefix_hash TEXT,
-    stable_prefix_length INTEGER,
-    resource_activation_snapshot_ref TEXT,
-    assembly_parent_ref TEXT,
-    mutation_provenance TEXT,
-    attachment_refs TEXT NOT NULL DEFAULT '[]',
-    variant_refs TEXT NOT NULL DEFAULT '[]',
-    resource_refs TEXT NOT NULL DEFAULT '[]',
-    source_revision_refs TEXT NOT NULL DEFAULT '[]',
-    tracking_registrations TEXT NOT NULL DEFAULT '[]',
-    selection_provenance TEXT NOT NULL DEFAULT '[]',
-    revision INTEGER NOT NULL DEFAULT 1 CHECK (revision >= 1),
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
-)
-"""
+THREAD_OWNER_BINDINGS_TABLE_DDL = load_sql(__package__, "sql/thread_owner_bindings.sql")
 
 
 _OWNER_BINDING_EPOCH_REASONS = (

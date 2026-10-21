@@ -57,6 +57,7 @@ from app.core.session_control_thread_catalog.thread_catalog import (
 from app.core.session_control_thread_owner_binding.thread_owner_binding import (
     THREAD_OWNER_BINDINGS_TABLE_DDL,
 )
+from app.core.sqlite_state import load_sql
 
 
 class SchemaInitMixin:
@@ -77,8 +78,7 @@ class SchemaInitMixin:
             self._connection.execute(_IDX_THREAD_CREATION_DELEGATION_DDL)
             self._connection.execute(_COLLABORATION_LEDGER_TABLE_DDL)
             self._connection.execute(
-                "INSERT INTO collaboration_ledger (id, revision) "
-                "VALUES (1, 0) ON CONFLICT(id) DO NOTHING"
+                load_sql(__package__, "sql/seeds/collaboration_ledger.sql")
             )
             self._connection.execute(_COLLABORATION_MEMBERS_TABLE_DDL)
             self._connection.execute(_THREAD_EXECUTION_INTENTS_TABLE_DDL)

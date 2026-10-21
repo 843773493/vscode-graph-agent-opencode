@@ -40,12 +40,14 @@ creation record journal（`creation_journal.py`）、subtree delete journal 与�
 
 # 规范
 
+- 静态结构 SQL 位于同包 `sql/`，所属 Python 模块只加载和协调原执行顺序；SQL 资产不自行提交事务，不保留内联结构副本。
+
 - 方法族 mixin 之间只通过宿主 `self` 协作；每个方法在 `SessionCatalogStore.__mro__` 中只允许
   定义一处（`__init__` 除外）。
 - 各 mixin 只依赖宿主类提供的 `database_path`、`sessions_root`、`_connection`、`_closed`、
   `_connection_lock`、`_ensure_open()`、`write_transaction()`、`read_transaction()` 等宿主接口，
   不得假设其它族的私有方法存在。
-- 表 DDL 与列清单常量的唯一定义点在本包 `_schema.py`；各 mixin 从这里取用，不复制 DDL。
+- 表 DDL 的唯一定义点在本包 `sql/`，`_schema.py` 加载结构并维护列清单；各 mixin 从这里取用，不复制 DDL。
 - 错误分类沿用 `session_catalog_store`：`TypeError` 输入类型错误、`ValueError` 输入形态非法、
   `KeyError` 目标行不存在、`RuntimeError` 语义冲突；库被外部改动一律 fail-closed。
 - 修改本目录后运行 `uv run ruff check app/core/session_catalog_store` 与带进程外保护地跑

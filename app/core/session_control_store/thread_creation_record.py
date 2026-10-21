@@ -43,6 +43,7 @@ from app.core.session_control_thread_catalog.thread_catalog import (
     fetch_fence_row,
     validate_thread_relative_locator,
 )
+from app.core.sqlite_state import load_sql
 
 # ThreadCreationRecord（8.5-A，R20）：child thread 创建流 operation lease
 # record。与 workspace catalog 的 session_creation_records 同构：record
@@ -56,45 +57,12 @@ from app.core.session_control_thread_catalog.thread_catalog import (
 # （tasks.md 8.5-A 冻结项 GraphBinding/capability/seed/reference、artifact
 # manifest 本体与 child UTC created_at——恢复只按预存 record 校验，需要
 # 清单本体而非仅 hash），字段映射见 rounds/R20-impl.md §6。
-_THREAD_CREATION_RECORDS_TABLE_DDL = """
-CREATE TABLE IF NOT EXISTS thread_creation_records (
-    thread_creation_idempotency_key TEXT PRIMARY KEY,
-    state TEXT NOT NULL CHECK (state IN ('preparing', 'published', 'aborted')),
-    preimage_hash TEXT NOT NULL,
-    delegation_id TEXT,
-    child_thread_id TEXT NOT NULL UNIQUE,
-    final_relative_locator TEXT NOT NULL UNIQUE,
-    staging_locator TEXT NOT NULL,
-    artifact_manifest TEXT,
-    artifact_manifest_hash TEXT,
-    graph_binding TEXT NOT NULL,
-    capability_profile TEXT NOT NULL,
-    task_seed TEXT,
-    task_reference TEXT,
-    owner_session_lifecycle_generation INTEGER NOT NULL,
-    catalog_precondition_revision INTEGER NOT NULL,
-    collaboration_precondition_revision INTEGER,
-    membership_preimage_hash TEXT,
-    initial_state TEXT NOT NULL CHECK (initial_state IN ('running', 'idle')),
-    admission_intent TEXT,
-    abort_reason TEXT,
-    child_created_at TEXT NOT NULL,
-    record_created_at TEXT NOT NULL,
-    record_updated_at TEXT NOT NULL,
-    purpose TEXT NOT NULL CHECK(purpose IN ('task','fork')),
-    request_intent_json TEXT,
-    fork_delivery_request_id TEXT CHECK(fork_delivery_request_id IS NULL OR (purpose='fork' AND length(fork_delivery_request_id)>0)),
-    fork_completion_json TEXT
-)
-"""
+_THREAD_CREATION_RECORDS_TABLE_DDL = load_sql(__package__, "sql/thread_creation_records.sql")
 
 # delegated child 将 delegation_id 纳入唯一约束（tasks.md 8.5-A）：同一
 # delegation 至多绑定一条创建 record（含 aborted——失败后须换新
 # delegation 重试，不静默改绑）。
-_IDX_THREAD_CREATION_DELEGATION_DDL = (
-    "CREATE UNIQUE INDEX IF NOT EXISTS idx_thread_creation_delegation "
-    "ON thread_creation_records(delegation_id) WHERE delegation_id IS NOT NULL"
-)
+_IDX_THREAD_CREATION_DELEGATION_DDL = load_sql(__package__, "sql/idx_thread_creation_delegation.sql")
 
 
 _THREAD_CREATION_RECORD_COLUMNS = (

@@ -14,30 +14,15 @@ from app.core.session_catalog_store.validators import (
 )
 from app.core.session_control_store.collaboration import validate_collaboration_member
 from app.core.session_control_thread_catalog.thread_catalog import read_fence_row
+from app.core.sqlite_state import load_sql
 
 COLLABORATION_STATE_DDL = (
-    """CREATE TABLE IF NOT EXISTS collaboration_boards (
-        team_id TEXT PRIMARY KEY, version INTEGER NOT NULL CHECK(version >= 1),
-        board_json TEXT NOT NULL)""",
-    """CREATE TABLE IF NOT EXISTS collaboration_events (
-        event_id TEXT PRIMARY KEY, team_id TEXT NOT NULL REFERENCES collaboration_boards(team_id),
-        ledger_revision INTEGER NOT NULL UNIQUE, event_json TEXT NOT NULL)""",
-    """CREATE TABLE IF NOT EXISTS collaboration_fanouts (
-        ledger_revision INTEGER PRIMARY KEY, session_id TEXT NOT NULL,
-        event_hash TEXT NOT NULL, payload_json TEXT NOT NULL,
-        lease_id TEXT NOT NULL UNIQUE REFERENCES session_operation_leases(lease_id),
-        wakeup_json TEXT, wakeup_receipt_json TEXT,
-        state TEXT NOT NULL CHECK(state IN ('pending','completed','cancelled')),
-        created_at TEXT NOT NULL)""",
-    """CREATE INDEX IF NOT EXISTS collaboration_fanouts_pending
-        ON collaboration_fanouts(state, ledger_revision) WHERE state='pending'""",
-    """CREATE TABLE IF NOT EXISTS collaboration_deliveries (
-        ledger_revision INTEGER NOT NULL REFERENCES collaboration_fanouts(ledger_revision),
-        recipient_thread_id TEXT NOT NULL,
-        state TEXT NOT NULL CHECK(state IN ('pending','delivered','recipient_deleted','fence_closed')),
-        error TEXT, PRIMARY KEY(ledger_revision, recipient_thread_id))""",
-    """CREATE INDEX IF NOT EXISTS collaboration_deliveries_pending
-        ON collaboration_deliveries(recipient_thread_id, ledger_revision) WHERE state='pending'""",
+    load_sql(__package__, "sql/collaboration_boards.sql"),
+    load_sql(__package__, "sql/collaboration_events.sql"),
+    load_sql(__package__, "sql/collaboration_fanouts.sql"),
+    load_sql(__package__, "sql/collaboration_fanouts_pending.sql"),
+    load_sql(__package__, "sql/collaboration_deliveries.sql"),
+    load_sql(__package__, "sql/collaboration_deliveries_pending.sql"),
 )
 
 

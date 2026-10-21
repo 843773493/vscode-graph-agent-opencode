@@ -7,26 +7,13 @@ import json
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from app.core.sqlite_state import load_sql
 from app.domain.itemized.hashing import canonical_json_bytes
 
 if TYPE_CHECKING:
     from app.core.session_control_store import SessionControlStore
 
-COPY_ATTACHMENT_SETTLEMENT_DDL = """
-CREATE TABLE IF NOT EXISTS copy_attachment_settlements (
-    copy_operation_id TEXT PRIMARY KEY,
-    preimage_hash TEXT NOT NULL,
-    target_session_id TEXT NOT NULL,
-    target_thread_id TEXT NOT NULL,
-    captured_generation INTEGER NOT NULL,
-    publication_preimage_hash TEXT NOT NULL,
-    claim_ids_json TEXT NOT NULL,
-    claim_manifest_sha256 TEXT NOT NULL,
-    lease_id TEXT NOT NULL UNIQUE,
-    lease_fencing_token INTEGER NOT NULL,
-    state TEXT NOT NULL CHECK (state IN ('preparing', 'published_pending_attachment_commit', 'committed', 'aborted', 'target_deleted'))
-)
-"""
+COPY_ATTACHMENT_SETTLEMENT_DDL = load_sql(__package__, "sql/copy_attachment_settlements.sql")
 
 
 @dataclass(frozen=True, slots=True)
