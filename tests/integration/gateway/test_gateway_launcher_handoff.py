@@ -14,7 +14,7 @@ from urllib.request import Request, urlopen
 
 import commentjson
 
-from tests.integration.stubs.http_stubs import openai_chat_stub
+from tests.support.model_stream_config import prepare_e2e_model_stream_config
 from tests.support.ports import integration_port_block_for_file
 
 
@@ -145,6 +145,11 @@ def test_launcher_handoff_keeps_public_listener_and_workspace_runtime(
             str(project_root / "scripts" / "launch" / "dev.mjs")
         ),
         "BOXTEAM_DEVELOPMENT_RESTART_CWD": str(project_root),
+        "BOXTEAM_TEST_MODEL_STREAM_CONFIG": str(prepare_e2e_model_stream_config(
+            project_root / "configs/tests/model_stream/model_stream_chat_basic.jsonc",
+            output_root=output_root,
+            mode="replay",
+        )),
     }
     process = None
     stdout_file = stdout_path.open("w", encoding="utf-8")
@@ -160,8 +165,8 @@ def test_launcher_handoff_keeps_public_listener_and_workspace_runtime(
     )
     primary_provider.update(
         {
-            "endpoint": f"http://127.0.0.1:{port - 10}/v1",
-            "model": "e2e-stub-model",
+            "endpoint": "https://opencode.ai/zen/v1",
+            "model": "big-pickle",
             "api_key": "${LAUNCHER_HANDOFF_MODEL_KEY}",
             "custom_llm_provider": "openai",
         }
@@ -175,8 +180,6 @@ def test_launcher_handoff_keeps_public_listener_and_workspace_runtime(
         encoding="utf-8",
     )
     environment["LAUNCHER_HANDOFF_MODEL_KEY"] = "e2e-local-model-key"
-    model_stub = openai_chat_stub(port - 10)
-    model_state = model_stub.__enter__()
     try:
         process = subprocess.Popen(
             [node_executable, "packages/launcher/bin/boxteam.mjs", "start", "--no-open"],
@@ -406,6 +409,8 @@ def test_launcher_handoff_keeps_public_listener_and_workspace_runtime(
         assert isinstance(session_data, dict)
         session_id = session_data.get("session_id")
         assert isinstance(session_id, str)
+        thread_id = session_data.get("thread_id")
+        assert isinstance(thread_id, str)
         message_payload = _request_json(
             f"http://127.0.0.1:{port}/api/v1/sessions/{session_id}/messages",
             token,
@@ -418,6 +423,7 @@ def test_launcher_handoff_keeps_public_listener_and_workspace_runtime(
         )
         message_data = message_payload.get("data")
         assert isinstance(message_data, dict)
+        assert message_data["thread_id"] == thread_id
         job_id = message_data.get("job_id")
         assert isinstance(job_id, str)
         completed_job = _wait_for_json(
@@ -434,8 +440,18 @@ def test_launcher_handoff_keeps_public_listener_and_workspace_runtime(
         completed_job_data = completed_job["data"]
         assert isinstance(completed_job_data, dict)
         assert completed_job_data["status"] in {"completed", "succeeded"}
-        assert model_state.requests
-        assert model_state.requests[-1]["path"] == "/v1/chat/completions"
+        assert completed_job_data["thread_id"] == thread_id
+        messages = _get_json(
+            f"http://127.0.0.1:{port}/api/v1/sessions/{session_id}/messages",
+            token,
+            cookie=guest_cookie,
+        )["data"]
+        assert isinstance(messages, dict)
+        assert [
+            (message["session_id"], message["thread_id"], message["content"])
+            for message in messages["items"]
+            if message["role"] == "assistant"
+        ] == [(session_id, thread_id, "基础回放")]
 
         config_path = boxteam_home / "config" / "gateway.jsonc"
         document = config_path.read_text(encoding="utf-8")
@@ -620,4 +636,3 @@ def test_launcher_handoff_keeps_public_listener_and_workspace_runtime(
                 process.wait(timeout=10)
         stdout_file.close()
         stderr_file.close()
-        model_stub.__exit__(None, None, None)
