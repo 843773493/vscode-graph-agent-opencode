@@ -180,25 +180,25 @@ class NodeDebugConfigurationFactory:
     def resolve_script_path(self, raw_path: str) -> tuple[Path, str]:
         if not raw_path.strip():
             raise ValueError("Node 调试脚本路径不能为空")
-        script_path, _ = self.resolve_workspace_path(raw_path, script=True)
+        script_path, uri = self.resolve_workspace_path(raw_path, script=True)
         if script_path.suffix.lower() not in _SUPPORTED_EXTENSIONS:
             raise ValueError("Node 调试目前只支持 .js、.mjs 和 .cjs 文件")
         if not script_path.is_file():
-            raise FileNotFoundError(f"Node 调试脚本不存在: {raw_path}")
+            raise FileNotFoundError(f"Node 调试脚本不存在: {uri}")
         relative_path = script_path.relative_to(self._workspace_root).as_posix()
         return script_path, relative_path
 
     def resolve_working_directory(self, raw_path: str) -> Path:
         try:
-            resolved, _ = self.resolve_workspace_path(raw_path)
+            resolved, uri = self.resolve_workspace_path(raw_path)
         except ForbiddenError as error:
             if Path(raw_path.strip()).is_absolute():
                 raise ValueError(
-                    f"调试工作目录必须位于当前 workspace 内: {raw_path}"
+                    "调试工作目录必须位于当前 workspace 内"
                 ) from error
             raise
         if not resolved.is_dir():
-            raise FileNotFoundError(f"调试工作目录不存在: {raw_path}")
+            raise FileNotFoundError(f"调试工作目录不存在: {uri}")
         return resolved
 
     @staticmethod

@@ -283,3 +283,29 @@ def test_symlink_outside_workspace_is_rejected(tmp_path: Path, input_kind: str, 
     with pytest.raises(ValueError, match="访问能力"):
         path_factory(root).workspace_relative_path(value)
     assert outside.read_text(encoding="utf-8") == "outside"
+
+
+@pytest.mark.parametrize("target_kind", ["script", "working_directory"])
+@pytest.mark.parametrize("input_kind", ["relative", "absolute", "uri"])
+def test_missing_debug_target_reports_uri_without_native_location(
+    tmp_path: Path, target_kind: str, input_kind: str,
+) -> None:
+    factory = _factory(tmp_path)
+    target = tmp_path / "workspace" / ("missing.mjs" if target_kind == "script" else "missing-directory")
+    uri = factory.resolve_workspace_path(str(target))[1]
+    value = {"relative": target.name, "absolute": str(target), "uri": uri}[input_kind]
+    resolve = factory.resolve_script_path if target_kind == "script" else factory.resolve_working_directory
+    with pytest.raises(FileNotFoundError) as failure:
+        resolve(value)
+    assert uri in str(failure.value)
+    assert str(tmp_path) not in str(failure.value)
+
+
+def test_external_debug_working_directory_error_does_not_echo_native_input(tmp_path: Path) -> None:
+    factory = _factory(tmp_path)
+    outside = tmp_path / "private-outside"
+    outside.mkdir()
+    with pytest.raises(ValueError, match="必须位于当前 workspace 内") as failure:
+        factory.resolve_working_directory(str(outside))
+    assert str(outside) not in str(failure.value)
+    assert isinstance(failure.value.__cause__, ForbiddenError)
