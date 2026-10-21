@@ -121,7 +121,7 @@ class RolloutWriteMixin:
                 channel_filter = f" AND channel IN ({','.join('?' for _ in selected)})"
                 parameters += tuple(selected)
             rows = connection.execute(
-                "SELECT task_id, task_path, write_index, channel, serializer_name, value_blob, value_length, value_hash, status, created_at FROM pending_writes WHERE checkpoint_id = ? AND status = 'pending'" + channel_filter + " ORDER BY task_path, write_index",
+                "SELECT task_id, task_path, write_index, channel, serializer_name, value_blob, value_length, value_hash, status, created_at FROM pending_writes WHERE checkpoint_id = ? AND status = 'pending'" + channel_filter + " ORDER BY task_path, task_id, write_index",
                 parameters,
             ).fetchall()
             result: list[PendingWrite] = []

@@ -1,8 +1,8 @@
 ## 1. P0 依赖与恢复合同（先于结构改动）
 
-- [ ] 1.1 固定当前锁定/安装版本、官方发布及源码指纹；核对模型节点、DeltaChannel、消息reducer、serializer、new_versions、writes_sort_key和同步/异步增量历史合同，并登记全部实际产品调用方。
+- [x] 1.1 固定当前锁定/安装版本、官方发布及源码指纹；核对模型节点、DeltaChannel、消息reducer、serializer、new_versions、writes_sort_key和同步/异步增量历史合同，并登记全部实际产品调用方。
 - [ ] 1.2 用相同真实产品工作负载保存优化前的各表/正文/索引增量、serializer调用/字节、写入/恢复时间，区分既有canonical消息复用与仍重复的channel、assembly、view成本。
-- [ ] 1.3 将低于目标的依赖更新至LangGraph1.2.16/checkpoint4.3.0或当前更高版本，不回退；迁齐模型节点适配，验证真实图同步/异步执行、消息合并与checkpoint冷恢复，独立提交，不宣称去重完成。
+- [x] 1.3 将低于目标的依赖更新至LangGraph1.2.16/checkpoint4.3.0或当前更高版本，不回退；迁齐模型节点适配，验证真实图同步/异步执行、消息合并与checkpoint冷恢复，独立提交，不宣称去重完成。
 
 ## 2. P0 非 messages 通道版本复用
 
@@ -41,4 +41,6 @@
 
 优先级裁定：本变更1/2组影响后续全部执行恢复存储，优先于已完成fork核心的纯性能长尾；3/4组依赖它们的合同，但不能借Delta接入遗漏assembly/view去重；5组最后，避免清理早于引用关系。现有正确性缺陷仍先处理。`extract-sqlite-schema-assets`只做独立纯重构，已有验证批次继续收口，不列为本变更前置依赖。
 
-2026-10-21 已进行部分1.1研究：PyPI发布与sdist哈希核实，目标版Delta/serializer/base/memory源码已读取；当前版本1.2.0/4.1.0，产品图使用create_agent，当前put消费new_versions但未传持久层，非messages每次_encode。全部产品消费者、模型节点合同与同负载基线尚未闭合，故1.1–1.3均未勾。研究原件 `out/tests/temp/openspec_takeover/artifacts/history-dedup-upstream-001/`。
+2026-10-21 依赖合同片：LangGraph1.2.16/checkpoint4.3.0、SDK0.4.8已安装并锁定；源码和全部直接消费者指纹见 `out/tests/temp/openspec_takeover/artifacts/history-dedup-contract-audit-001.json`。模型节点同步/异步2例、官方Delta图及Saver恢复合同12例、升级后的Gateway四轮工具循环/并发结果/重启/历史request_hash均通过。集成矩阵89例通过，另外2条锁mock原本误拦截fcntl而实现使用portalocker，恢复正确mock后与真实HTTP/SDK同步异步专项一起通过，原失败保留。独审无升级阻断。升级不等于去重完成。
+
+1.2仍待补齐摘要、深fork与回退同负载；已保存优化前和升级后的四轮工具/重启工作负载，分表正文/索引字节、serializer计数及耗时。旧依赖基线冻结在 `out/tests/temp/openspec_takeover/artifacts/history-dedup-baseline-frozen-001/`；正式原始测量在 `out/tests/integration/backend/sessions/rollout_context/test_execution_history_storage/artifacts/run-*/measurements.json`。不得以这些局部场景冒称全部验收。

@@ -2,9 +2,11 @@
 
 动机与范围见 proposal。2026-10-21 核实：本机与 uv.lock 的 LangGraph 为1.2.0、checkpoint为4.1.0；PyPI目标1.2.16发布于2026-10-16，checkpoint4.3.0发布于2026-10-12。元数据、sdist SHA256与从发布包读取的官方源码保存在 `out/tests/temp/openspec_takeover/artifacts/history-dedup-upstream-001/`；不把安装成功当功能验收。
 
-现有 `checkpoint/runtime/langgraph_api.py::put` 消费new_versions补全版本，却没有将它传给writer/持久层；`storage/transaction_projections.py::_insert_checkpoint_channels`对每个非messages值重新_encode并存BLOB。messages已使用canonical正文和冻结view，不应重复复制正文来接入新机制。产品图由 `app/agents/model_call_graph.py` 调用create_agent构造；已安装DeepAgents自己的默认图使用DeltaChannel，不足以证明产品图已启用或Saver支持完整增量恢复。
+现有 `checkpoint/runtime/langgraph_api.py::put` 消费new_versions补全版本，却没有将它传给writer/持久层；`storage/transaction_projections.py::_insert_checkpoint_channels`对每个非messages值重新_encode并存BLOB。messages已使用canonical正文和冻结view，不应重复复制正文来接入新机制。产品图由 `app/agents/model_call_graph.py` 调用create_agent构造；产品messages仍是AgentState/add_messages；实际FilesystemMiddleware的files已使用DeltaChannel（snapshot_frequency=50）。不能将DeepAgents默认图的messages声明当作本产品声明。
 
 官方目标版DeltaChannel为beta：非snapshot步不在channel_values保存该channel，基准使用 `_DeltaSnapshot`；`get_delta_channel_history`沿parent_config遍历，而不是按时间list，排除目标checkpoint自身待应用writes，逐步按 `writes_sort_key(task_path,task_id,idx)` 还原。快照由更新计数和superstep上界共同触发，metadata中的计数必须保留。plain value可作旧聚合channel的基准。上述合同来自已校验sdist中的channels/delta.py及checkpoint/base、serde、memory源码；具体实现只使用本项目现有owner。
+
+目标版官方 `_messages_delta_reducer` 不处理REMOVE_ALL_MESSAGES、未知ID删除报错及chunk转完整消息；其 `ensure_message_ids` 仅对精确官方reducer补齐所有message-like输入。消息片必须迁齐清空/摘要调用方并验证这些边界，不能单改Annotated或复制另一份reducer。当前已修复pending writes同task_path时缺task_id排序的问题，同步/异步冷读取和父链恢复均有回归。
 
 ## Goals / Non-Goals
 
