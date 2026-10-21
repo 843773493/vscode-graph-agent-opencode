@@ -2,7 +2,10 @@
 from __future__ import annotations
 
 import json
+import threading
 from collections.abc import Iterator
+from contextlib import ExitStack
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import httpx
@@ -10,17 +13,13 @@ import pytest
 from openai import AsyncOpenAI, OpenAI
 from openai.types.chat import ChatCompletionChunk
 
+from app.testing.model_stream import get_protocol_codec, load_cassette
 from tests.integration.stubs.http_stubs import (
     HTTPStubState,
     openai_chat_stub,
     openai_chat_tool_loop_stub,
 )
-from tests.integration.workspace_services import (
-    test_gateway_resource_shutdown as shutdown_case,
-)
 from tests.support.ports import integration_port_block_for_file
-
-model_replay = shutdown_case.model_replay
 
 
 @pytest.fixture(params=["text", "tool"])
@@ -98,6 +97,52 @@ def test_http_chat_json_failure_and_authorization_share_scenario_asset(
 @pytest.fixture(scope="module", params=["responses", "chat_completions"])
 def model_protocol(request: pytest.FixtureRequest) -> str:
     return str(request.param)
+
+
+@pytest.fixture
+def model_replay(integration_workspace_root_path: str, model_protocol: str) -> Iterator[tuple[str, list[dict[str, object]]]]:
+    requests: list[dict[str, object]] = []
+    protocol_directory = "openai_responses" if model_protocol == "responses" else "openai_chat"
+    fixture = Path.cwd() / "tests/fixtures/model_stream/handwritten" / protocol_directory / "basic-text.json"
+    response = load_cassette(fixture).interactions[0]
+    codec = get_protocol_codec(response.protocol)
+    codec.validate_stream(response.response.frames, label="关闭验收模型响应")
+    body = b"".join(codec.encode(frame) for frame in response.response.frames)
+
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, _format: str, *args: object) -> None:
+            pass
+
+        def do_POST(self) -> None:
+            payload = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+            requests.append(payload)
+            expected_path = "/v1/responses" if model_protocol == "responses" else "/v1/chat/completions"
+            assert self.path == expected_path
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+    with ExitStack() as lifetime:
+        def save_replay_requests() -> None:
+            output = Path(integration_workspace_root_path).parent / "artifacts"
+            output.mkdir(exist_ok=True)
+            (output / "model-replay-requests.json").write_text(json.dumps(requests, ensure_ascii=False, indent=2))
+
+        lifetime.callback(save_replay_requests)
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        lifetime.callback(server.server_close)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+
+        def join_server_thread() -> None:
+            thread.join(timeout=5)
+            assert not thread.is_alive()
+
+        lifetime.callback(join_server_thread)
+        lifetime.callback(server.shutdown)
+        yield f"http://127.0.0.1:{server.server_port}/v1", requests
 
 
 @pytest.fixture

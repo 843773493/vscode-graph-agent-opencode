@@ -1,4 +1,4 @@
-"""模型为显式 TCP 回放替身；关闭链路使用真实 Gateway、backend、PTY 与 Chromium。"""
+"""模型按真实 SessionThread/ModelCall 精确回放；关闭使用真实 Gateway、PTY 与 Chromium。"""
 
 from __future__ import annotations
 
@@ -6,18 +6,18 @@ import asyncio
 import json
 import os
 import shutil
-import threading
 import time
 from collections.abc import Iterator
 from contextlib import ExitStack
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import httpx
 import pytest
 
-from app.testing.model_stream import get_protocol_codec, load_cassette
+from app.testing.model_stream import ModelStreamCassette, load_cassette
 from configs.runtime import read_jsonc_object, validate_config
+from tests.support.model_stream_config import ModelStreamReplay, model_stream_replay
+from tests.support.ports import integration_port_block_for_file
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
     acquire_gateway_guest,
@@ -25,7 +25,6 @@ from tests.support.processes.gateway import (
     reset_gateway_persistent_state,
     start_gateway_process,
 )
-from tests.support.ports import integration_port_block_for_file
 
 
 def _active_group_members(groups: set[int]) -> dict[int, tuple[int, str]]:
@@ -68,55 +67,27 @@ def integration_workspace_root_path(
 
 
 @pytest.fixture
-def model_replay(integration_workspace_root_path: str, model_protocol: str) -> Iterator[tuple[str, list[dict[str, object]]]]:
-    requests: list[dict[str, object]] = []
-    protocol_directory = "openai_responses" if model_protocol == "responses" else "openai_chat"
-    fixture = Path.cwd() / "tests/fixtures/model_stream/handwritten" / protocol_directory / "basic-text.json"
-    response = load_cassette(fixture).interactions[0]
-    codec = get_protocol_codec(response.protocol)
-    codec.validate_stream(response.response.frames, label="关闭验收模型响应")
-    body = b"".join(codec.encode(frame) for frame in response.response.frames)
+def shutdown_cassette(model_protocol: str) -> ModelStreamCassette:
+    directory = "openai_responses" if model_protocol == "responses" else "openai_chat"
+    return load_cassette(
+        Path.cwd() / "tests/fixtures/model_stream/handwritten" / directory / "basic-text.json"
+    )
 
-    class Handler(BaseHTTPRequestHandler):
-        def log_message(self, _format: str, *args: object) -> None:
-            pass
 
-        def do_POST(self) -> None:
-            payload = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
-            requests.append(payload)
-            expected_path = "/v1/responses" if model_protocol == "responses" else "/v1/chat/completions"
-            assert self.path == expected_path
-            self.send_response(200)
-            self.send_header("Content-Type", "text/event-stream")
-            self.send_header("Content-Length", str(len(body)))
-            self.end_headers()
-            self.wfile.write(body)
-
-    with ExitStack() as lifetime:
-        def save_replay_requests() -> None:
-            output = Path(integration_workspace_root_path).parent / "artifacts"
-            output.mkdir(exist_ok=True)
-            (output / "model-replay-requests.json").write_text(json.dumps(requests, ensure_ascii=False, indent=2))
-
-        lifetime.callback(save_replay_requests)
-        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-        lifetime.callback(server.server_close)
-        thread = threading.Thread(target=server.serve_forever, daemon=True)
-        thread.start()
-
-        def join_server_thread() -> None:
-            thread.join(timeout=5)
-            assert not thread.is_alive()
-
-        lifetime.callback(join_server_thread)
-        lifetime.callback(server.shutdown)
-        yield f"http://127.0.0.1:{server.server_port}/v1", requests
+@pytest.fixture
+def shutdown_replay(integration_workspace_root_path: str) -> Iterator[ModelStreamReplay]:
+    output = Path(integration_workspace_root_path).parent
+    with model_stream_replay(
+        output, runtime_root=output / "runtime",
+        business_assertion="gateway-shutdown-drains-real-resource-owners",
+    ) as replay:
+        yield replay
 
 
 @pytest.fixture
 def shutdown_environment(
     integration_workspace_config_path: str, integration_workspace_root_path: str,
-    model_replay: tuple[str, list[dict[str, object]]], model_protocol: str,
+    shutdown_cassette: ModelStreamCassette, model_protocol: str,
 ) -> Iterator[dict[str, str]]:
     config_path = Path(integration_workspace_config_path)
     before = config_path.read_bytes()
@@ -125,8 +96,10 @@ def shutdown_environment(
     target = primary if model_protocol == "chat_completions" else next(
         provider for provider in config["llm"]["providers"] if provider["id"] == "backup_3"
     )
+    endpoint_suffix = "/responses" if model_protocol == "responses" else "/chat/completions"
     primary.update({
-        "endpoint": model_replay[0], "model": target["model"], "api_key": "fixture-key",
+        "endpoint": shutdown_cassette.interactions[0].request.url.removesuffix(endpoint_suffix),
+        "model": shutdown_cassette.metadata["model"], "api_key": "fixture-key",
         "api_mode": target["api_mode"],
     })
     config["agents"]["default"]["model"]["fallback_providers"] = []
@@ -147,7 +120,8 @@ def shutdown_environment(
 @pytest.mark.asyncio
 async def test_non_preserve_gateway_shutdown_drains_resources_before_auxiliary_exit(
     request: pytest.FixtureRequest, integration_workspace_root_path: str,
-    shutdown_environment: dict[str, str], model_replay: tuple[str, list[dict[str, object]]],
+    shutdown_environment: dict[str, str], shutdown_replay: ModelStreamReplay,
+    shutdown_cassette: ModelStreamCassette, model_protocol: str,
 ) -> None:
     workspace = Path(integration_workspace_root_path)
     output = workspace.parent / "artifacts"
@@ -155,7 +129,10 @@ async def test_non_preserve_gateway_shutdown_drains_resources_before_auxiliary_e
     ports = integration_port_block_for_file(Path(request.node.path))
     gateway = start_gateway_process(
         workspace_root=workspace, default_backend_url=None, port=ports.port(21),
-        extra_env=shutdown_environment | {"BOXTEAM_DEFAULT_BACKEND_PORT": str(ports.port(10))},
+        extra_env=shutdown_environment | shutdown_replay.environment | {
+            "BOXTEAM_DEFAULT_BACKEND_PORT": str(ports.port(10)),
+        },
+        asgi_app="tests.support.e2e_control.gateway_app:app",
     )
     before: list[dict[str, object]] = []
     pids: dict[str, int] = {}
@@ -184,7 +161,13 @@ async def test_non_preserve_gateway_shutdown_drains_resources_before_auxiliary_e
             created = await client.post("/api/v1/sessions", json={"title": "整组关闭集成验收"})
             assert created.status_code == 200, created.text
             session = created.json()["data"]
-            sid = session["session_id"]
+            sid, thread_id = session["session_id"], session["thread_id"]
+            [call_id] = shutdown_replay.control.plan_model_calls(
+                sid, thread_id, [
+                    {**entry, "protocol": shutdown_cassette.interactions[index].protocol}
+                    for index, entry in enumerate(shutdown_cassette.raw["interactions"])
+                ],
+            )
             sent = await client.post(f"/api/v1/sessions/{sid}/messages", json={
                 "message": {"content": "只回复就绪"}, "run": {"async": True},
             })
@@ -200,7 +183,19 @@ async def test_non_preserve_gateway_shutdown_drains_resources_before_auxiliary_e
                     break
                 assert time.monotonic() < deadline, job
                 await asyncio.sleep(0.05)
-            assert model_replay[1], "实际 Job 必须发送到明确的模型替身"
+            observed = json.loads((shutdown_replay.artifacts / f"{call_id}.json").read_text(encoding="utf-8"))
+            assert observed["identity"] == {
+                "session_id": sid, "thread_id": thread_id, "model_call_id": call_id,
+            }
+            assert job["thread_id"] == thread_id
+            history = await client.get(f"/api/v1/sessions/{sid}/messages")
+            assert history.status_code == 200, history.text
+            expected_text = "响应文本" if model_protocol == "responses" else "基础回放"
+            assert [
+                (item["session_id"], item["thread_id"], item["content"])
+                for item in history.json()["data"]["items"]
+                if item["role"] == "assistant"
+            ] == [(sid, thread_id, expected_text)]
             for kind in ("terminal", "browser"):
                 for scope in ("thread", "workspace"):
                     reply = await client.post(f"/api/v1/resources/{kind}s", json={

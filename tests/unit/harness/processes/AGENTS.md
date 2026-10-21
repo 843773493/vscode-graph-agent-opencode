@@ -2,6 +2,8 @@
 
 验证测试进程设施的启动、HTTP 就绪、日志描述符和确定性清理。用 mock 注入创建失败、中断和清理失败，观察被测装具持有的句柄，不启动真实产品服务。
 
+`test_model_replay_fixture_lifetime.py`只检查 HTTP/SDK 专项测试中模型服务的socket、线程和请求诊断文件；用两种模型协议验证启动与清理失败，不启动Gateway、模型执行或辅助服务，也不替代真实关闭验收。
+
 ## 可修改内容
 
 - 进程 scope、Workspace/Gateway 后端和 Browser/Terminal 辅助服务装具的单元测试。
