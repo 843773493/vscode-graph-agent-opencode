@@ -59,8 +59,15 @@ def create_long_running_terminal(
         headers={"content-type": "application/json", "X-BoxTeam-Workspace-Id": workspace_id, "X-BoxTeam-Resource-Owner": "workspace-terminal"},
         method="POST",
     )
-    with urlopen(request, timeout=5) as response:
-        return json.loads(response.read().decode("utf-8"))["data"]
+    try:
+        with urlopen(request, timeout=5) as response:
+            return json.loads(response.read().decode("utf-8"))["data"]
+    except HTTPError as error:
+        with error:
+            detail = error.read().decode("utf-8", errors="replace")
+        raise RuntimeError(
+            f"创建终端失败: status={error.code}, body={detail}"
+        ) from error
 
 
 def get_terminal_snapshot(backend_port: int, terminal_id: str, workspace_id: str) -> dict[str, object]:
