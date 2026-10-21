@@ -8,23 +8,25 @@ import subprocess
 from collections.abc import AsyncIterator, Generator
 from pathlib import Path
 
-import commentjson
 import httpx
 import pytest
 
-from tests.integration.stubs.http_stubs import openai_chat_stub
-from tests.support.custom_tool_test_workspace import (
-    prepare_custom_tool_test_workspace,
-)
+from app.core.workspace_identity import read_workspace_id
+from tests.harness.python.run_context import TestRunContext
+from tests.support.model_stream_config import ModelStreamReplay, model_stream_replay
+from tests.support.paths import chromium_temporary_environment, output_root_for_test
+from tests.support.ports import integration_port_block_for_file
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
     close_gateway_process,
     reset_gateway_persistent_state,
     start_gateway_process,
 )
-from tests.support.paths import output_root_for_test
-from tests.support.ports import integration_port_block_for_file
-from tests.support.processes.workspace import close_backend_process, start_backend_process
+from tests.support.processes.workspace import (
+    close_backend_process,
+    start_backend_process,
+)
+from tests.support.web_boundary_seeding import prepare_boundary_test_workspace
 
 UNKNOWN_TOOL_SESSION_ID = "ses_019bc1148cec71b78b1aaa3b19b60363"
 UNKNOWN_TOOL_TURN_ID = "boundary-turn-0003"
@@ -39,10 +41,10 @@ def integration_workspace_root_path(request: pytest.FixtureRequest) -> str:
         project_root=project_root,
     )
     reset_gateway_persistent_state(workspace_root=output_root / "workspace")
-    workspace_root = prepare_custom_tool_test_workspace(
+    workspace_root = prepare_boundary_test_workspace(
         workspace_root=output_root / "workspace",
         template_root=project_root / "tests" / "fixtures" / "workspaces" / "custom_tool_test_workspace",
-        shared_skill_root=project_root / "resources" / "skills",
+        session_ids=(UNKNOWN_TOOL_SESSION_ID,),
     )
     return str(workspace_root)
 
@@ -52,45 +54,43 @@ def browser_backend(
     request: pytest.FixtureRequest,
     integration_workspace_root_path: str,
     integration_workspace_config_path: str,
-) -> Generator[tuple[str, Path], None, None]:
+) -> Generator[tuple[str, Path, ModelStreamReplay], None, None]:
     port_block = integration_port_block_for_file(Path(request.node.fspath))
     workspace_root = Path(integration_workspace_root_path).resolve()
-    config_path = Path(integration_workspace_config_path)
-    config = commentjson.loads(config_path.read_text(encoding="utf-8"))
-    provider = next(
-        item for item in config["llm"]["providers"] if item["id"] == "primary"
-    )
-    provider.update(
-        {
-            "endpoint": f"http://127.0.0.1:{port_block.port(10)}/v1",
-            "model": "unknown-tool-outcome-browser-stub",
-            "api_key": "unknown-tool-outcome-local-key",
-            "custom_llm_provider": "openai",
-        }
-    )
-    config_path.write_text(
-        json.dumps(config, ensure_ascii=False, indent=2) + "\n",
-        encoding="utf-8",
-    )
-    with openai_chat_stub(port_block.port(10)):
+    assert Path(integration_workspace_config_path).is_file()
+    context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
+    with model_stream_replay(
+        context.output_root, runtime_root=context.runtime_root_for_node(request.node.nodeid),
+        business_assertion="read-only-unknown-tool-outcome-display",
+    ) as replay:
         backend = start_backend_process(
             workspace_root=str(workspace_root),
             port=port_block.port(0),
             log_name="unknown-tool-outcome-browser-backend",
+            asgi_app="tests.support.e2e_control.backend_app:app",
+            env_overrides={
+                **replay.environment,
+                "BOXTEAM_GATEWAY_URL": f"http://127.0.0.1:{port_block.port(20)}",
+            },
         )
         try:
-            yield f"http://127.0.0.1:{backend.port}", workspace_root
+            yield f"http://127.0.0.1:{backend.port}", workspace_root, replay
         finally:
             close_backend_process(backend)
+        assert list(replay.artifacts.glob("*.json")) == [], "只读历史展示不得调用模型"
+        assert not any(event["phase"] == "agent.graph.compiled" for event in replay.control.events), "只读历史展示不得物化 graph"
 
 
 @pytest.fixture
 async def browser_backend_client(
-    browser_backend: tuple[str, Path],
+    browser_backend: tuple[str, Path, ModelStreamReplay],
 ) -> AsyncIterator[httpx.AsyncClient]:
     async with httpx.AsyncClient(
         base_url=browser_backend[0],
-        headers={"X-Local-Token": "local-dev-token"},
+        headers={
+            "X-Local-Token": "local-dev-token",
+            "X-BoxTeam-Workspace-Id": read_workspace_id(browser_backend[1]),
+        },
         timeout=60,
     ) as client:
         yield client
@@ -99,7 +99,7 @@ async def browser_backend_client(
 @pytest.mark.asyncio
 async def test_unknown_tool_outcome_is_explicit_in_real_web_chain(
     request: pytest.FixtureRequest,
-    browser_backend: tuple[str, Path],
+    browser_backend: tuple[str, Path, ModelStreamReplay],
     browser_backend_client: httpx.AsyncClient,
 ) -> None:
     project_root = Path.cwd().resolve()
@@ -185,19 +185,22 @@ async def test_unknown_tool_outcome_is_explicit_in_real_web_chain(
                 "PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH": chromium_path,
             }
         )
-        browser_result = await asyncio.to_thread(
-            subprocess.run,
-            [
-                "node",
-                "tests/integration/clients/web/unknown_tool_outcome_display.mjs",
-            ],
-            cwd=project_root,
-            env=environment,
-            capture_output=True,
-            text=True,
-            timeout=120,
-            check=False,
-        )
+        context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
+        with chromium_temporary_environment(context.runtime_root_for_node(request.node.nodeid) / "chromium-tmp") as temporary_environment:
+            environment.update(temporary_environment)
+            browser_result = await asyncio.to_thread(
+                subprocess.run,
+                [
+                    "node",
+                    "tests/integration/clients/web/unknown_tool_outcome_display.mjs",
+                ],
+                cwd=project_root,
+                env=environment,
+                capture_output=True,
+                text=True,
+                timeout=120,
+                check=False,
+            )
         assert browser_result.returncode == 0, (
             "未知工具结果浏览器集成失败:\n"
             f"stdout:\n{browser_result.stdout}\n"

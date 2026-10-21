@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Sequence
 from pathlib import Path
 
@@ -24,11 +25,14 @@ from app.domain.itemized.records import CanonicalItemRecord
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
+from tests.support.catalog_session_bundle import seed_catalog_session_bundle
 from tests.support.frozen_provider import (
     create_frozen_provider_activation,
     create_frozen_provider_prepare,
     frozen_provider_wire,
 )
+from tests.support.session_catalog_owner import fixture_catalog_scope
+from tests.support.workspaces import prepare_test_workspace
 
 
 def boundary_item(
@@ -70,7 +74,9 @@ def tool_call_payload(
     call_id: str,
     name: str,
     args: dict[str, object],
+    *, model_call_id: str,
 ) -> dict[str, object]:
+    call_id = f"{model_call_id}:tool-call:{call_id}"
     return {
         "tool_call_id": call_id,
         "tool_invocation_id": f"invocation-{call_id}",
@@ -84,7 +90,9 @@ def tool_result_payload(
     call_id: str,
     name: str,
     content: str,
+    *, model_call_id: str,
 ) -> dict[str, object]:
+    call_id = f"{model_call_id}:tool-call:{call_id}"
     return {
         "tool_call_id": call_id,
         "tool_invocation_id": f"invocation-{call_id}",
@@ -197,7 +205,8 @@ def _seed_case_0001(sessions_dir: Path) -> None:
                 payload_kind=PayloadKind.TOOL_CALL,
                 status=CanonicalItemStatus.COMPLETED,
                 payload=tool_call_payload(
-                    "call-boundary-text-tool", "read_file", {"path": "README.md"}
+                    "call-boundary-text-tool", "read_file", {"path": "README.md"},
+                    model_call_id="model-call-boundary-turn-0001",
                 ),
                 turn_id="boundary-turn-0001",
                 projection_identity=ItemProjectionIdentity(
@@ -218,6 +227,7 @@ def _seed_case_0001(sessions_dir: Path) -> None:
                     "call-boundary-text-tool",
                     "read_file",
                     '{"path": "README.md", "result": "boundary fixture read success"}',
+                    model_call_id="model-call-boundary-turn-0001",
                 ),
                 turn_id="boundary-turn-0001",
                 wire_role="tool",
@@ -266,7 +276,8 @@ def _seed_case_0002(sessions_dir: Path) -> None:
                 payload_kind=PayloadKind.TOOL_CALL,
                 status=CanonicalItemStatus.PARTIAL,
                 payload=tool_call_payload(
-                    "call-boundary-partial-tool", "read_file", {"path": "config/"}
+                    "call-boundary-partial-tool", "read_file", {"path": "config/"},
+                    model_call_id="model-call-boundary-turn-0002",
                 ),
                 turn_id="boundary-turn-0002",
                 projection_identity=ItemProjectionIdentity(
@@ -308,6 +319,7 @@ def _seed_case_0003(sessions_dir: Path) -> None:
                     "call-boundary-unknown-tool",
                     "large_test_output",
                     {"lines": 768, "marker": "unknown-result"},
+                    model_call_id="model-call-boundary-turn-0003",
                 ),
                 turn_id="boundary-turn-0003",
                 projection_identity=ItemProjectionIdentity(
@@ -397,7 +409,8 @@ def _seed_case_0006(sessions_dir: Path) -> None:
                 payload_kind=PayloadKind.TOOL_CALL,
                 status=CanonicalItemStatus.COMPLETED,
                 payload=tool_call_payload(
-                    "call-boundary-parallel-read", "read_file", {"path": "README.md"}
+                    "call-boundary-parallel-read", "read_file", {"path": "README.md"},
+                    model_call_id="model-call-boundary-turn-0006",
                 ),
                 turn_id="boundary-turn-0006",
                 projection_identity=ItemProjectionIdentity(
@@ -418,6 +431,7 @@ def _seed_case_0006(sessions_dir: Path) -> None:
                     "call-boundary-parallel-search",
                     "search_files",
                     {"query": "MessageBlock"},
+                    model_call_id="model-call-boundary-turn-0006",
                 ),
                 turn_id="boundary-turn-0006",
                 projection_identity=ItemProjectionIdentity(
@@ -438,6 +452,7 @@ def _seed_case_0006(sessions_dir: Path) -> None:
                     "call-boundary-parallel-read",
                     "read_file",
                     '{"result": "README ok"}',
+                    model_call_id="model-call-boundary-turn-0006",
                 ),
                 turn_id="boundary-turn-0006",
                 wire_role="tool",
@@ -454,6 +469,7 @@ def _seed_case_0006(sessions_dir: Path) -> None:
                     "call-boundary-parallel-search",
                     "search_files",
                     '{"matches": 3}',
+                    model_call_id="model-call-boundary-turn-0006",
                 ),
                 turn_id="boundary-turn-0006",
                 wire_role="tool",
@@ -498,3 +514,29 @@ def seed_boundary_cases(
     sessions_dir = workspace_root / ".boxteam" / "sessions"
     for session_id in targets:
         SESSION_SEEDS[session_id](sessions_dir)
+
+
+def prepare_boundary_test_workspace(
+    *, workspace_root: Path, template_root: Path, session_ids: Sequence[str],
+) -> Path:
+    """只准备只读展示所需的边界历史；不作为执行、fork 或恢复的验收前提。"""
+    entries = {
+        item["session_id"]: item
+        for item in json.loads((template_root / "rollout-fixture.json").read_text(encoding="utf-8"))["boundary_sessions"]
+    }
+    for session_id in session_ids:
+        if session_id not in SESSION_SEEDS or session_id not in entries:
+            raise ValueError(f"未知边界会话: {session_id}")
+    workspace_root = prepare_test_workspace(
+        workspace_root=workspace_root,
+        template_root=template_root,
+        template_items=tuple(sorted(item.name for item in template_root.iterdir() if item.name != ".boxteam"))
+        + (".boxteam/AGENTS.md", ".boxteam/skills"),
+    )
+    with fixture_catalog_scope():
+        for session_id in session_ids:
+            seed_catalog_session_bundle(
+                workspace_root / ".boxteam/sessions", session_id, title=entries[session_id]["title"],
+            )
+        seed_boundary_cases(workspace_root, session_ids=session_ids)
+    return workspace_root

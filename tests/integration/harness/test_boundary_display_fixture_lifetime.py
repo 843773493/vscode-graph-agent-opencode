@@ -9,6 +9,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.support.paths import chromium_temporary_environment
+
 
 @pytest.fixture
 def boundary_display_failure_probe(tmp_path: Path) -> Path:
@@ -122,15 +124,17 @@ def test_boundary_display_failure_releases_resources_and_preserves_errors(
         "BOXTEAM_BROWSER_RESULT_PATH": str(tmp_path / "result.json"),
         "BOXTEAM_BROWSER_SCREENSHOT_PATH": str(tmp_path / "failure.png"),
     }
-    result = subprocess.run(
-        ["bun", str(boundary_display_failure_probe), script_name, failure_stage],
-        cwd=Path.cwd(),
-        env=environment,
-        capture_output=True,
-        text=True,
-        timeout=15,
-        check=False,
-    )
+    with chromium_temporary_environment(tmp_path / "chromium-tmp") as temporary_environment:
+        environment.update(temporary_environment)
+        result = subprocess.run(
+            ["bun", str(boundary_display_failure_probe), script_name, failure_stage],
+            cwd=Path.cwd(),
+            env=environment,
+            capture_output=True,
+            text=True,
+            timeout=15,
+            check=False,
+        )
     (tmp_path / "stdout.raw").write_text(result.stdout, encoding="utf-8")
     (tmp_path / "stderr.raw").write_text(result.stderr, encoding="utf-8")
     assert result.returncode == 0, result.stderr

@@ -80,9 +80,6 @@ async function ensureGuest(page) {
 }
 
 const runContext = TestRunContext.fromTestFile(fileURLToPath(import.meta.url));
-const runtimeDirectory = path.join(runContext.outputRoot, "runtime");
-await mkdir(runtimeDirectory, { recursive: true });
-for (const name of ["TMPDIR", "TMP", "TEMP"]) process.env[name] = runtimeDirectory;
 let page;
 let executionError;
 const pageErrors = [];
@@ -127,7 +124,7 @@ try {
   }
 
   await page.locator(`button[data-session-id="${sessionId}"]`).click();
-  const boundaryTurn = page.locator(`[data-turn-id="${turnId}"]`);
+  const boundaryTurn = page.locator(`.chat-turn[data-turn-id="${turnId}"]`);
   await boundaryTurn.waitFor({ state: "visible", timeout: 30_000 });
   await boundaryTurn
     .getByRole("button", { name: /展开 Turn 中间消息/ })

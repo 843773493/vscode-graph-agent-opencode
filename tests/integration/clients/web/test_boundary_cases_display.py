@@ -8,23 +8,25 @@ import subprocess
 from collections.abc import AsyncIterator, Generator
 from pathlib import Path
 
-import commentjson
 import httpx
 import pytest
 
-from tests.integration.stubs.http_stubs import openai_chat_stub
-from tests.support.custom_tool_test_workspace import (
-    prepare_custom_tool_test_workspace,
-)
+from app.core.workspace_identity import read_workspace_id
+from tests.harness.python.run_context import TestRunContext
+from tests.support.model_stream_config import ModelStreamReplay, model_stream_replay
+from tests.support.paths import chromium_temporary_environment, output_root_for_test
+from tests.support.ports import integration_port_block_for_file
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
     close_gateway_process,
     reset_gateway_persistent_state,
     start_gateway_process,
 )
-from tests.support.paths import output_root_for_test
-from tests.support.ports import integration_port_block_for_file
-from tests.support.processes.workspace import close_backend_process, start_backend_process
+from tests.support.processes.workspace import (
+    close_backend_process,
+    start_backend_process,
+)
+from tests.support.web_boundary_seeding import prepare_boundary_test_workspace
 
 BOUNDARY_CASES = (
     ("ses_019bf985d867717182fe710be0f6adae", "boundary-turn-0001", "completed"),
@@ -45,10 +47,10 @@ def integration_workspace_root_path(request: pytest.FixtureRequest) -> str:
         project_root=project_root,
     )
     reset_gateway_persistent_state(workspace_root=output_root / "workspace")
-    workspace_root = prepare_custom_tool_test_workspace(
+    workspace_root = prepare_boundary_test_workspace(
         workspace_root=output_root / "workspace",
         template_root=project_root / "tests" / "fixtures" / "workspaces" / "custom_tool_test_workspace",
-        shared_skill_root=project_root / "resources" / "skills",
+        session_ids=tuple(case[0] for case in BOUNDARY_CASES),
     )
     return str(workspace_root)
 
@@ -58,43 +60,43 @@ def browser_backend(
     request: pytest.FixtureRequest,
     integration_workspace_root_path: str,
     integration_workspace_config_path: str,
-) -> Generator[tuple[str, Path], None, None]:
+) -> Generator[tuple[str, Path, ModelStreamReplay], None, None]:
     port_block = integration_port_block_for_file(Path(request.node.fspath))
     workspace_root = Path(integration_workspace_root_path).resolve()
-    config_path = Path(integration_workspace_config_path)
-    config = commentjson.loads(config_path.read_text(encoding="utf-8"))
-    provider = next(item for item in config["llm"]["providers"] if item["id"] == "primary")
-    provider.update(
-        {
-            "endpoint": f"http://127.0.0.1:{port_block.port(10)}/v1",
-            "model": "boundary-cases-browser-stub",
-            "api_key": "boundary-cases-local-key",
-            "custom_llm_provider": "openai",
-        }
-    )
-    config_path.write_text(
-        json.dumps(config, ensure_ascii=False, indent=2) + "\n",
-        encoding="utf-8",
-    )
-    with openai_chat_stub(port_block.port(10)):
+    assert Path(integration_workspace_config_path).is_file()
+    context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
+    with model_stream_replay(
+        context.output_root, runtime_root=context.runtime_root_for_node(request.node.nodeid),
+        business_assertion="read-only-boundary-cases-display",
+    ) as replay:
         backend = start_backend_process(
             workspace_root=str(workspace_root),
             port=port_block.port(0),
             log_name="boundary-cases-browser-backend",
+            asgi_app="tests.support.e2e_control.backend_app:app",
+            env_overrides={
+                **replay.environment,
+                "BOXTEAM_GATEWAY_URL": f"http://127.0.0.1:{port_block.port(20)}",
+            },
         )
         try:
-            yield f"http://127.0.0.1:{backend.port}", workspace_root
+            yield f"http://127.0.0.1:{backend.port}", workspace_root, replay
         finally:
             close_backend_process(backend)
+        assert list(replay.artifacts.glob("*.json")) == [], "只读历史展示不得调用模型"
+        assert not any(event["phase"] == "agent.graph.compiled" for event in replay.control.events), "只读历史展示不得物化 graph"
 
 
 @pytest.fixture
 async def browser_backend_client(
-    browser_backend: tuple[str, Path],
+    browser_backend: tuple[str, Path, ModelStreamReplay],
 ) -> AsyncIterator[httpx.AsyncClient]:
     async with httpx.AsyncClient(
         base_url=browser_backend[0],
-        headers={"X-Local-Token": "local-dev-token"},
+        headers={
+            "X-Local-Token": "local-dev-token",
+            "X-BoxTeam-Workspace-Id": read_workspace_id(browser_backend[1]),
+        },
         timeout=60,
     ) as client:
         yield client
@@ -103,7 +105,7 @@ async def browser_backend_client(
 @pytest.mark.asyncio
 async def test_boundary_fixtures_have_distinct_copilot_style_web_states(
     request: pytest.FixtureRequest,
-    browser_backend: tuple[str, Path],
+    browser_backend: tuple[str, Path, ModelStreamReplay],
     browser_backend_client: httpx.AsyncClient,
 ) -> None:
     project_root = Path.cwd().resolve()
@@ -137,6 +139,16 @@ async def test_boundary_fixtures_have_distinct_copilot_style_web_states(
         assert response.status_code == 200, response.text
         item = response.json()["data"]["items"][0]
         assert item["status"] == expected_status
+        if turn_id == "boundary-turn-0006":
+            expected = [
+                ("read_file", "model-call-boundary-turn-0006:tool-call:call-boundary-parallel-read"),
+                ("search_files", "model-call-boundary-turn-0006:tool-call:call-boundary-parallel-search"),
+            ]
+            for kind in ("tool_call", "tool_result"):
+                assert [
+                    (part["tool_name"], part["tool_call_id"])
+                    for part in item["response_parts"] if part["kind"] == kind
+                ] == expected
 
     port_block = integration_port_block_for_file(Path(request.node.fspath))
     gateway = start_gateway_process(
@@ -179,16 +191,19 @@ async def test_boundary_fixtures_have_distinct_copilot_style_web_states(
                 "PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH": chromium_path,
             }
         )
-        browser_result = await asyncio.to_thread(
-            subprocess.run,
-            ["node", "tests/integration/clients/web/boundary_cases_display.mjs"],
-            cwd=project_root,
-            env=environment,
-            capture_output=True,
-            text=True,
-            timeout=180,
-            check=False,
-        )
+        context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
+        with chromium_temporary_environment(context.runtime_root_for_node(request.node.nodeid) / "chromium-tmp") as temporary_environment:
+            environment.update(temporary_environment)
+            browser_result = await asyncio.to_thread(
+                subprocess.run,
+                ["node", "tests/integration/clients/web/boundary_cases_display.mjs"],
+                cwd=project_root,
+                env=environment,
+                capture_output=True,
+                text=True,
+                timeout=180,
+                check=False,
+            )
         assert browser_result.returncode == 0, (
             "边界状态浏览器集成失败:\n"
             f"stdout:\n{browser_result.stdout}\n"

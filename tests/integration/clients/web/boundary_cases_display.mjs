@@ -160,7 +160,7 @@ async function loadBoundaryCase(page, item) {
   // 会话目录同步完成后再刷新，避免把初始目录竞态误判为展示问题。
   await page.reload({ waitUntil: "domcontentloaded" });
   await page.locator(`button[data-session-id="${item.sessionId}"]`).click();
-  const turn = page.locator(`[data-turn-id="${item.turnId}"]`);
+  const turn = page.locator(`.chat-turn[data-turn-id="${item.turnId}"]`);
   await turn.waitFor({ state: "visible", timeout: 30_000 });
   await waitUntil(
     async () => (await turn.innerText()).includes(item.finalText),
@@ -206,9 +206,6 @@ async function loadBoundaryCase(page, item) {
 }
 
 const runContext = TestRunContext.fromTestFile(fileURLToPath(import.meta.url));
-const runtimeDirectory = path.join(runContext.outputRoot, "runtime");
-await mkdir(runtimeDirectory, { recursive: true });
-for (const name of ["TMPDIR", "TMP", "TEMP"]) process.env[name] = runtimeDirectory;
 let page;
 let executionError;
 const pageErrors = [];

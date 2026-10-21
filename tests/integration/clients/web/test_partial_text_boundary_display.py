@@ -8,118 +8,31 @@ import subprocess
 from collections.abc import AsyncIterator, Generator
 from pathlib import Path
 
-import commentjson
 import httpx
 import pytest
-from langchain_core.messages import HumanMessage
-from langgraph.checkpoint.base import empty_checkpoint
 
-from app.core.checkpoint_config import build_checkpoint_config
 from app.core.path_utils import get_session_path_resolver
-from app.domain.itemized.enums import (
-    CanonicalItemStatus,
-    PayloadKind,
-    SemanticKind,
-    TurnScope,
-)
-from app.domain.itemized.identity.item_projection import (
-    ItemProjectionIdentity,
-)
-from app.domain.itemized.records import CanonicalItemRecord
-from app.services.infrastructure.rollout_context.checkpoint.saver import (
-    RolloutCheckpointSaver,
-)
-from tests.integration.stubs.http_stubs import openai_chat_stub
-from tests.support.custom_tool_test_workspace import (
-    prepare_custom_tool_test_workspace,
-)
+from app.core.workspace_identity import read_workspace_id
+from tests.harness.python.run_context import TestRunContext
+from tests.support.model_stream_config import ModelStreamReplay, model_stream_replay
+from tests.support.paths import chromium_temporary_environment, output_root_for_test
+from tests.support.ports import integration_port_block_for_file
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
     close_gateway_process,
     reset_gateway_persistent_state,
     start_gateway_process,
 )
-from tests.support.paths import output_root_for_test
-from tests.support.ports import integration_port_block_for_file
-from tests.support.processes.workspace import close_backend_process, start_backend_process
+from tests.support.processes.workspace import (
+    close_backend_process,
+    start_backend_process,
+)
+from tests.support.web_boundary_seeding import prepare_boundary_test_workspace
 
 PARTIAL_TEXT_SESSION_ID = "ses_019c5123cafb789e8fdf8704f6464f74"
 PARTIAL_TEXT_TURN_ID = "boundary-turn-0004"
-PARTIAL_TEXT_ITEM_ID = "item-boundary-assistant-partial-text-0004"
-PARTIAL_TEXT_MESSAGE_ID = "boundary-assistant-partial-text-0004"
+PARTIAL_TEXT_ITEM_ID = "item-boundary-partial-text-0004"
 PARTIAL_TEXT_CONTENT = "我已经开始分析这个问题，但回答在这里被用户中断……"
-PARTIAL_TEXT_USER_CONTENT = "请分析这个问题；如果我中断，请保留已经生成的正文。"
-
-
-def _seed_v2_partial_text_turn(workspace_root: Path) -> None:
-    sessions_dir = workspace_root / ".boxteam" / "sessions"
-    resolver = get_session_path_resolver(sessions_dir)
-    session_dir = resolver.resolve_thread_node(
-        PARTIAL_TEXT_SESSION_ID,
-        resolver.main_thread_id(PARTIAL_TEXT_SESSION_ID),
-    )
-    shutil.rmtree(session_dir / "rollout")
-
-    saver = RolloutCheckpointSaver(sessions_dir)
-    accepted = saver.accept_turn(
-        PARTIAL_TEXT_SESSION_ID,
-        thread_id=saver._storage.storage.main_thread_id(PARTIAL_TEXT_SESSION_ID), accepted_ingress_id="ingress-boundary-partial-text-0004",
-        acceptance_idempotency_key="acceptance-boundary-partial-text-0004",
-        job_id="job-boundary-partial-text-0004",
-        admission_idempotency_key="execution-boundary-partial-text-0004",
-        payload=PARTIAL_TEXT_USER_CONTENT,
-        payload_kind=PayloadKind.TEXT,
-        turn_id=PARTIAL_TEXT_TURN_ID,
-        root_item_id="item-boundary-user-partial-text-0004",
-        initial_execution_id="execution-boundary-partial-text-0004",
-    )
-    checkpoint = empty_checkpoint()
-    checkpoint["id"] = "checkpoint-boundary-partial-text-0004"
-    checkpoint["channel_values"] = {
-        "messages": [
-            HumanMessage(
-                content=PARTIAL_TEXT_USER_CONTENT,
-                id="boundary-user-partial-text-0004",
-                response_metadata={
-                    "message_metadata": {"turn_id": PARTIAL_TEXT_TURN_ID}
-                },
-            )
-        ]
-    }
-    checkpoint["channel_versions"] = {"messages": "1"}
-    checkpoint["updated_channels"] = ["messages"]
-    saver.put(
-        build_checkpoint_config(PARTIAL_TEXT_SESSION_ID),
-        checkpoint,
-        {"source": "partial-text-boundary-v2-fixture", "step": 1},
-        {"messages": "1"},
-    )
-    partial_item = CanonicalItemRecord.create(
-        item_sequence=1,
-        item_id=PARTIAL_TEXT_ITEM_ID,
-        semantic_kind=SemanticKind.ASSISTANT_OUTPUT,
-        payload_kind=PayloadKind.TEXT,
-        status=CanonicalItemStatus.PARTIAL,
-        producer_ref={
-            "producer_kind": "provider",
-            "producer_id": "model-call-boundary-partial-text-0004",
-            "invocation_id": str(accepted["initial_execution_id"]),
-        },
-        payload=PARTIAL_TEXT_CONTENT,
-        projection_identity=ItemProjectionIdentity(projection_message_id=PARTIAL_TEXT_MESSAGE_ID, phase="assistant_text", completion_reason="user_interrupt"),
-        turn_id=PARTIAL_TEXT_TURN_ID,
-        turn_scope=TurnScope.TURN_MEMBER,
-        message_group_id="message-boundary-partial-text-0004",
-        wire_role="assistant",
-    )
-    saver.converge_execution(
-        PARTIAL_TEXT_SESSION_ID,
-        thread_id=saver._storage.storage.main_thread_id(PARTIAL_TEXT_SESSION_ID), turn_id=PARTIAL_TEXT_TURN_ID,
-        execution_id=str(accepted["initial_execution_id"]),
-        outcome="cancelled",
-        turn_status="cancelled",
-        items=(partial_item,),
-    )
 
 
 @pytest.fixture(scope="module")
@@ -131,12 +44,11 @@ def integration_workspace_root_path(request: pytest.FixtureRequest) -> str:
         project_root=project_root,
     )
     reset_gateway_persistent_state(workspace_root=output_root / "workspace")
-    workspace_root = prepare_custom_tool_test_workspace(
+    workspace_root = prepare_boundary_test_workspace(
         workspace_root=output_root / "workspace",
         template_root=project_root / "tests" / "fixtures" / "workspaces" / "custom_tool_test_workspace",
-        shared_skill_root=project_root / "resources" / "skills",
+        session_ids=(PARTIAL_TEXT_SESSION_ID,),
     )
-    _seed_v2_partial_text_turn(workspace_root)
     return str(workspace_root)
 
 
@@ -145,48 +57,43 @@ def browser_backend(
     request: pytest.FixtureRequest,
     integration_workspace_root_path: str,
     integration_workspace_config_path: str,
-) -> Generator[tuple[str, Path], None, None]:
+) -> Generator[tuple[str, Path, ModelStreamReplay], None, None]:
     port_block = integration_port_block_for_file(Path(request.node.fspath))
     workspace_root = Path(integration_workspace_root_path).resolve()
-    config_path = Path(integration_workspace_config_path)
-    config = commentjson.loads(config_path.read_text(encoding="utf-8"))
-    provider = next(
-        item for item in config["llm"]["providers"] if item["id"] == "primary"
-    )
-    provider.update(
-        {
-            "endpoint": f"http://127.0.0.1:{port_block.port(10)}/v1",
-            "model": "partial-text-boundary-browser-stub",
-            "api_key": "${BOXTEAM_TEST_MODEL_API_KEY}",
-            "custom_llm_provider": "openai",
-        }
-    )
-    config_path.write_text(
-        json.dumps(config, ensure_ascii=False, indent=2) + "\n",
-        encoding="utf-8",
-    )
-    with openai_chat_stub(port_block.port(10)):
+    assert Path(integration_workspace_config_path).is_file()
+    context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
+    with model_stream_replay(
+        context.output_root, runtime_root=context.runtime_root_for_node(request.node.nodeid),
+        business_assertion="read-only-partial-text-boundary-display",
+    ) as replay:
         backend = start_backend_process(
             workspace_root=str(workspace_root),
             port=port_block.port(0),
             log_name="partial-text-boundary-browser-backend",
+            asgi_app="tests.support.e2e_control.backend_app:app",
             env_overrides={
-                "BOXTEAM_TEST_MODEL_API_KEY": "partial-text-boundary-local-key"
+                **replay.environment,
+                "BOXTEAM_GATEWAY_URL": f"http://127.0.0.1:{port_block.port(20)}",
             },
         )
         try:
-            yield f"http://127.0.0.1:{backend.port}", workspace_root
+            yield f"http://127.0.0.1:{backend.port}", workspace_root, replay
         finally:
             close_backend_process(backend)
+        assert list(replay.artifacts.glob("*.json")) == [], "只读历史展示不得调用模型"
+        assert not any(event["phase"] == "agent.graph.compiled" for event in replay.control.events), "只读历史展示不得物化 graph"
 
 
 @pytest.fixture
 async def browser_backend_client(
-    browser_backend: tuple[str, Path],
+    browser_backend: tuple[str, Path, ModelStreamReplay],
 ) -> AsyncIterator[httpx.AsyncClient]:
     async with httpx.AsyncClient(
         base_url=browser_backend[0],
-        headers={"X-Local-Token": "local-dev-token"},
+        headers={
+            "X-Local-Token": "local-dev-token",
+            "X-BoxTeam-Workspace-Id": read_workspace_id(browser_backend[1]),
+        },
         timeout=60,
     ) as client:
         yield client
@@ -195,7 +102,7 @@ async def browser_backend_client(
 @pytest.mark.asyncio
 async def test_partial_text_cancelled_turn_is_explicit_in_real_web_chain(
     request: pytest.FixtureRequest,
-    browser_backend: tuple[str, Path],
+    browser_backend: tuple[str, Path, ModelStreamReplay],
     browser_backend_client: httpx.AsyncClient,
     integration_workspace_root_path: str,
 ) -> None:
@@ -242,7 +149,7 @@ async def test_partial_text_cancelled_turn_is_explicit_in_real_web_chain(
     assert boundary_record["status"] == "partial"
     assert boundary_record["wire_role"] == "assistant"
     assert boundary_record["payload"] == PARTIAL_TEXT_CONTENT
-    assert boundary_record["metadata"]["completion_reason"] == "user_interrupt"
+    assert boundary_record["projection_identity"]["completion_reason"] == "user_interrupt"
     assert "role" not in boundary_record
     assert "message" not in boundary_record
 
@@ -311,19 +218,22 @@ async def test_partial_text_cancelled_turn_is_explicit_in_real_web_chain(
                 "PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH": chromium_path,
             }
         )
-        browser_result = await asyncio.to_thread(
-            subprocess.run,
-            [
-                "node",
-                "tests/integration/clients/web/partial_text_boundary_display.mjs",
-            ],
-            cwd=project_root,
-            env=environment,
-            capture_output=True,
-            text=True,
-            timeout=120,
-            check=False,
-        )
+        context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
+        with chromium_temporary_environment(context.runtime_root_for_node(request.node.nodeid) / "chromium-tmp") as temporary_environment:
+            environment.update(temporary_environment)
+            browser_result = await asyncio.to_thread(
+                subprocess.run,
+                [
+                    "node",
+                    "tests/integration/clients/web/partial_text_boundary_display.mjs",
+                ],
+                cwd=project_root,
+                env=environment,
+                capture_output=True,
+                text=True,
+                timeout=120,
+                check=False,
+            )
         assert browser_result.returncode == 0, (
             "partial text 浏览器集成失败:\n"
             f"stdout:\n{browser_result.stdout}\n"

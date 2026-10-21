@@ -80,9 +80,6 @@ async function waitUntil(predicate, label, timeout = 30_000) {
 }
 
 const runContext = TestRunContext.fromTestFile(fileURLToPath(import.meta.url));
-const runtimeDirectory = path.join(runContext.outputRoot, "runtime");
-await mkdir(runtimeDirectory, { recursive: true });
-for (const name of ["TMPDIR", "TMP", "TEMP"]) process.env[name] = runtimeDirectory;
 let page;
 let executionError;
 const pageErrors = [];
@@ -135,7 +132,7 @@ try {
   // 让前端从同一份权威会话列表启动，而不是把启动竞态误判为 UI 缺陷。
   await page.reload({ waitUntil: "domcontentloaded" });
   await page.locator(`button[data-session-id="${sessionId}"]`).click();
-  const boundaryTurn = page.locator(`[data-turn-id="${turnId}"]`);
+  const boundaryTurn = page.locator(`.chat-turn[data-turn-id="${turnId}"]`);
   await boundaryTurn.waitFor({ state: "visible", timeout: 30_000 });
   await waitUntil(
     async () => (await boundaryTurn.innerText()).includes("工具执行结果未知"),
