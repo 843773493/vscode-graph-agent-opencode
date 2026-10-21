@@ -13,7 +13,6 @@ from collections.abc import AsyncIterator, Callable, Iterator
 from contextlib import AsyncExitStack, ExitStack, asynccontextmanager, closing
 from dataclasses import dataclass, field
 from pathlib import Path
-from threading import Event
 
 import commentjson
 import httpx
@@ -25,6 +24,7 @@ from app import main
 from app.abstractions.job_executor import JobRuntimeStateProtocol
 from app.agents.graph_binding import compute_capability_profile_hash
 from app.container import AppContainer
+from app.core import identifier, phase_observer
 from app.core.checkpoint_config import build_checkpoint_config
 from app.core.execution_admission_context import execution_admission_scope
 from app.core.path_utils import get_session_path_resolver
@@ -48,6 +48,7 @@ from app.gateway.routes.skill_sources import router as gateway_skill_sources_rou
 from app.gateway.runtime.skill_sources import GatewaySkillSourceOwner
 from app.gateway.workspace_ids import build_managed_local_workspace_id
 from app.prompting import PromptSection, internal_message_factory
+from app.runtime.model_stream import configure_model_stream_from_environment
 from app.services.business.message_display import project_message_for_display
 from app.services.business.system_reminder_checkpoint_service import (
     persist_interrupt_checkpoint,
@@ -75,6 +76,7 @@ from app.services.infrastructure.rollout_context.runtime.context_sources.context
 from app.services.infrastructure.rollout_context.runtime.detail_manifest import (
     detail_relative_path,
 )
+from app.services.orchestration.execution_step import runner
 from app.services.orchestration.initial_execution_binding_worker import (
     InitialExecutionBindingWorker,
 )
@@ -85,9 +87,13 @@ from tests.harness.python.browser_manager import (
 )
 from tests.harness.python.run_context import TestRunContext
 from tests.harness.python.terminal_backend import start_terminal_backend
-from tests.integration.stubs.http_stubs import HTTPStubState, openai_chat_stub
 from tests.support.api_helpers import create_session
 from tests.support.e2e_control.harness import E2ETestControlHarness, control_request
+from tests.support.e2e_control.runtime_ports import (
+    ControlledIdentifiers,
+    ControlledPhases,
+)
+from tests.support.e2e_control.tool_observations import ObservedCanonicalItemSink
 from tests.support.fork_deadline import ForkDeadlineRegistry
 from tests.support.model_stream_config import ModelStreamReplay, model_stream_replay
 from tests.support.ports import integration_port_block_for_file
@@ -104,19 +110,74 @@ from tests.support.workspaces import (
 
 
 @dataclass
-class RuntimeSourceCase:
+class ModelReplayCase:
     client: httpx.AsyncClient
-    container: AppContainer
-    model: HTTPStubState
-    context: TestRunContext
+    model: ModelStreamReplay
+    workspace: Path
     artifacts_dir: Path
-    gateway_id: str | None
-    gateway_skill_source_owner: GatewaySkillSourceOwner | None
+    planned_calls: dict[str, dict[str, str]] = field(default_factory=dict, init=False)
+
+    @property
+    def control(self) -> E2ETestControlHarness:
+        return self.model.control
+
+    async def plan(
+        self, session_id: str, responses: list[dict[str, object]], *, thread_id: str | None = None,
+    ) -> list[str]:
+        if thread_id is None:
+            main_thread = await self.client.get(f"/api/v1/sessions/{session_id}/main-thread")
+            assert main_thread.status_code == 200, main_thread.text
+            thread_id = main_thread.json()["data"]["thread_id"]
+        config = commentjson.loads((self.workspace / ".boxteam/workspace.jsonc").read_text())
+        endpoint = next(provider["endpoint"] for provider in config["llm"]["providers"] if provider["id"] == "primary")
+        interactions = [build_cassette(
+            asset_id="runtime-source-restart", model="e2e-stub-model", url=endpoint + "/chat/completions",
+            frames=chat_completion_frames(
+                response_id=f"chatcmpl-runtime-source-{index}", model="e2e-stub-model",
+                deltas=({"role": "assistant", **response},),
+                finish_reason="tool_calls" if "tool_calls" in response else "stop",
+            ),
+        ).raw["interactions"][0] for index, response in enumerate(responses)]
+        calls = self.control.plan_model_calls(session_id, thread_id, interactions)
+        self.planned_calls.update({call: {"session_id": session_id, "thread_id": thread_id, "model_call_id": call} for call in calls})
+        return calls
+
+    def request(self, call: str) -> dict[str, object]:
+        artifact = json.loads((self.model.artifacts / (call + ".json")).read_text())
+        assert artifact["identity"] == self.planned_calls[call]
+        assert artifact["request"]["stream"] is True
+        return artifact["request"]
+
+    def call_count(self, session_id: str, thread_id: str) -> int:
+        with self.control._condition:
+            return self.control._counters.get(f"model_call/{session_id}/{thread_id}", 0)
+
+    def requests(self) -> list[dict[str, object]]:
+        calls = [event["operation_id"] for event in self.control.events if event["phase"] == "model.response_ready"]
+        assert {path.stem for path in self.model.artifacts.glob("*.json")} == set(calls)
+        with self.control._condition:
+            actual_calls = sum(count for namespace, count in self.control._counters.items() if namespace.startswith("model_call/"))
+        assert actual_calls == len(calls)
+        return [self.request(call) for call in calls]
+
+    def tool_result(self, call: str) -> dict[str, object]:
+        event, = [event for event in self.control.events
+                  if event["phase"] == "test.tool_result.committed" and event["operation_id"] == call]
+        assert event["details"]["item"]["payload"]["tool_call_id"] == call
+        return json.loads(event["details"]["item"]["payload"]["content"])
 
     def write_actual(self, name: str, value: dict[str, object]) -> None:
         (self.artifacts_dir / f"{name}-actual.json").write_text(
             json.dumps(value, ensure_ascii=False, indent=2) + "\n",
         )
+
+
+@dataclass
+class RuntimeSourceCase(ModelReplayCase):
+    container: AppContainer
+    context: TestRunContext
+    gateway_id: str | None
+    gateway_skill_source_owner: GatewaySkillSourceOwner | None
 
     def sql(self, session_id: str, thread_id: str, query: str, params: tuple = ()) -> list[tuple]:
         root = self.container.checkpointer._storage.storage.root(session_id, thread_id=thread_id)
@@ -241,24 +302,44 @@ async def source_case(
             monkeypatch.delenv("BOXTEAM_GATEWAY_URL", raising=False)
         mount_payload = {
             "workspace_id": workspace_id, "workspace_root": str(workspace), "terminal_backend_url": None, "browser_backend_url": None, "config_candidate_ref": None, "config_generation": None, "config_fencing_token": None}
-        with ExitStack() as services, openai_chat_stub(port) as model:
+        runtime_root = context.runtime_root_for_node(request.node.nodeid)
+        artifacts_dir = context.artifacts_dir / runtime_root.parent.name / runtime_root.name
+        artifacts_dir.mkdir(parents=True, exist_ok=True)
+        with ExitStack() as services:
+            model = services.enter_context(model_stream_replay(
+                artifacts_dir, runtime_root=runtime_root,
+                business_assertion="runtime-source-product-admission-and-context",
+            ))
+            for key, value in model.environment.items():
+                monkeypatch.setenv(key, value)
+            address = json.loads(model.environment["BOXTEAM_E2E_TEST_CONTROL"])
+            monkeypatch.setattr(identifier, "_identifier_factory", identifier._identifier_factory)
+            monkeypatch.setattr(phase_observer, "_observer", phase_observer._observer)
+            identifier.bind_identifier_factory(ControlledIdentifiers(address))
+            phase_observer.bind_phase_observer(ControlledPhases(address))
+            monkeypatch.setattr(runner, "CanonicalItemSink", ObservedCanonicalItemSink)
             if options.get("terminal"):
                 terminal_port = integration_port_block_for_file(Path(request.node.path)).port(40)
                 mount_payload["terminal_backend_url"] = f"http://127.0.0.1:{terminal_port}"
-                process = start_terminal_backend(backend_port=terminal_port, workspace_root=str(workspace), artifacts_dir=TestRunContext.from_test_file(Path(__file__)).artifacts_dir)
+                process = start_terminal_backend(backend_port=terminal_port, workspace_root=str(workspace), artifacts_dir=artifacts_dir)
                 services.callback(terminate_process, process)
             if options.get("browser"):
                 browser_port = integration_port_block_for_file(Path(request.node.path)).port(42)
                 mount_payload["browser_backend_url"] = f"http://127.0.0.1:{browser_port}"
                 browser = start_browser_manager_processes(
                     workspace_root=workspace, backend_port=browser_port,
-                    artifacts_dir=TestRunContext.from_test_file(Path(__file__)).artifacts_dir,
+                    artifacts_dir=artifacts_dir,
                     frontend_port=integration_port_block_for_file(Path(request.node.path)).port(43),
                     backend_host="127.0.0.1",
                 )
                 services.callback(close_browser_manager_processes, browser)
             monkeypatch.setenv("BOXTEAM_MOUNTED_WORKSPACES", json.dumps([mount_payload]))
-            async with main.lifespan(main.app):
+            async with AsyncExitStack() as lifespan:
+                controller = configure_model_stream_from_environment(project_root=Path.cwd())
+                assert controller is not None
+                lifespan.push_async_callback(controller.aclose)
+                monkeypatch.setattr(main, "_model_stream_controller", controller)
+                await lifespan.enter_async_context(main.lifespan(main.app))
                 registry = main.app.state.workspace_container_registry
                 container = registry.get(workspace_id)
                 async with httpx.AsyncClient(
@@ -270,17 +351,15 @@ async def source_case(
                     },
                     timeout=30,
                 ) as client:
-                    runtime_root = context.runtime_root_for_node(request.node.nodeid)
-                    artifacts_dir = context.artifacts_dir / runtime_root.parent.name / runtime_root.name
-                    artifacts_dir.mkdir(parents=True, exist_ok=True)
                     case = RuntimeSourceCase(
-                        client, container, model, context, artifacts_dir, gateway_id,
-                        gateway_skill_source_owner,
+                        client=client, model=model, workspace=workspace, artifacts_dir=artifacts_dir,
+                        container=container, context=context, gateway_id=gateway_id,
+                        gateway_skill_source_owner=gateway_skill_source_owner,
                     )
                     try:
                         yield case
                     finally:
-                        case.write_actual(request.node.name + "-wire", {"requests": model.requests})
+                        case.write_actual(request.node.name + "-wire", {"requests": case.requests()})
 
 
 async def _wait_until(predicate: Callable[[], bool], seconds: float = 30) -> None:
@@ -326,38 +405,34 @@ def _tool_reply(name: str, arguments: dict[str, object], call_id: str) -> dict[s
 
 
 async def _team_child(case: RuntimeSourceCase) -> tuple[dict[str, object], dict[str, object], ThreadExecutionIntent]:
-    child_started = False
-
-    def model_reply(payload: dict[str, object]) -> dict[str, object]:
-        nonlocal child_started
-        messages = payload["messages"]
-        assert isinstance(messages, list)
-        human = "\n".join(_wire_text(m["content"]) for m in messages
-                          if m["role"] == "user" and m["content"])
-        if "<generated_session_result" in human:
-            return {"content": "parent-result-ack-h1"}
-        if "<delegated_task" in human and "private-seed-h1" in human:
-            child_started = True
-            return {"content": "child-result-h1"}
-        if "H1-team-core" not in human:
-            return {"content": "核心验证会话"}
-        tools = [m for m in messages if m["role"] == "tool"]
-        names = {m.get("name") for m in tools}
-        if "create_team" not in names:
-            return _tool_reply("create_team", {"name": "H1 同会话团队"}, "call_h1_team")
-        team_result = json.loads(next(m["content"] for m in tools if m.get("name") == "create_team"))
-        if "create_team_member" not in names:
-            return _tool_reply("create_team_member", {
-                "team_id": team_result["team_id"], "role": "reviewer",
-                "startup_prompt": "private-seed-h1，独立确认成员运行，返回 child-result-h1。",
-            }, "call_h1_member")
-        return {"content": "parent-dispatched-h1"}
-
-    case.model.response_callback = model_reply
     session_id = await create_session(case.client, "H1-team-core")
+    case.control.arm_match("h1-child", "thread.runtime.acquired", {"session_id": session_id, "execution_origin": "internal"})
+    first_call, = await case.plan(session_id, [
+        _tool_reply("create_team", {"name": "H1 同会话团队"}, "call_h1_team"),
+    ])
+    team_call = first_call + ":tool-call:call_h1_team"
+    case.control.arm(team_call, "test.tool_result.committed")
     accepted = await _send(case, session_id, "H1-team-core：创建团队并启动一个成员。")
+    try:
+        await asyncio.to_thread(case.control.acknowledged, team_call, "test.tool_result.committed")
+        team = case.tool_result(team_call)
+        await case.plan(session_id, [
+            _tool_reply("create_team_member", {
+                "team_id": team["team_id"], "role": "reviewer",
+                "startup_prompt": "private-seed-h1，独立确认成员运行，返回 child-result-h1。",
+            }, "call_h1_member"),
+            {"content": "parent-dispatched-h1"}, {"content": "parent-result-ack-h1"},
+        ])
+    finally:
+        case.control.release(team_call, "test.tool_result.committed")
+    child = await asyncio.to_thread(case.control.acknowledged_match, "h1-child")
+    try:
+        child_call, = await case.plan(session_id, [{"content": "child-result-h1"}], thread_id=child["details"]["thread_id"])
+    finally:
+        control_request(json.loads(case.control.environment["BOXTEAM_E2E_TEST_CONTROL"]), {
+            "action": "release_match", "barrier_id": "h1-child",
+        })
     parent_job = await _job(case, str(accepted["job_id"]))
-    await _wait_until(lambda: child_started)
     factory = case.container.thread_initial_execution_service._factory
     control = factory.for_owner_session(session_id).control_store
     intents = control.list_initial_execution_intents()
@@ -365,6 +440,7 @@ async def _team_child(case: RuntimeSourceCase) -> tuple[dict[str, object], dict[
     intent = intents[0]
     assert intent.session_id == session_id and intent.state == "bound"
     child_job = await _job(case, intent.job_id)
+    assert "private-seed-h1" in _wire_text(case.request(child_call)["messages"])
     await _wait_until(lambda: case.sql(
         session_id, parent_job["thread_id"],
         "SELECT COUNT(*) FROM executions WHERE execution_origin='internal' AND outcome='completed'",
@@ -427,7 +503,7 @@ async def test_runtime_notice_plain_text_containing_display_part_stays_text(
         ],
         metadata={"source": "send_message_to_session", "kind": "result"},
     )
-    case.model.response_callback = lambda _request: {"content": "R1520 provider ack"}
+    await case.plan(session_id, [{"content": "R1520 provider ack"}])
 
     accepted = await case.container.session_orchestrator.submit_runtime_event(
         session_id,
@@ -470,8 +546,8 @@ async def test_runtime_notice_plain_text_containing_display_part_stays_text(
         (notice_id,),
     )[0][0] > 0
 
-    assert len(case.model.requests) == 1
-    provider_messages = case.model.requests[0]["json"]["messages"]
+    assert len(case.requests()) == 1
+    provider_messages = case.requests()[0]["messages"]
     assert any(
         message["role"] == "user" and marker in _wire_text(message["content"])
         for message in provider_messages
@@ -510,7 +586,7 @@ async def test_runtime_wakeup_before_provider_preserves_started_job_and_frozen_a
         return await original_run(job)
 
     monkeypatch.setattr(executor, "run", hold_before_provider)
-    case.model.response_callback = lambda _request: {"content": "同一原准入完成"}
+    await case.plan(session_id, [{"content": "同一原准入完成"}])
     prepared = internal_message_factory.build(
         kind="session_message", control="原 runtime 准入恢复验证",
         sections=[
@@ -560,7 +636,7 @@ async def test_runtime_wakeup_before_provider_preserves_started_job_and_frozen_a
     assert case.sql(session_id, thread_id,
         "SELECT COUNT(*) FROM item_catalog WHERE semantic_kind='runtime_notice'",
     ) == [(1,)]
-    assert len(case.model.requests) == 1
+    assert len(case.requests()) == 1
 
 
 @pytest.mark.asyncio
@@ -591,10 +667,10 @@ async def test_h1_http_team_child_seed_binder_and_exact_parent_report(source_cas
     assert len(persisted_boards) == 1
     assert json.loads(persisted_boards[0])["members"] == []
     assert not (control.database_path.parent / "teams").exists()
-    seed_wire = [r["json"] for r in case.model.requests if any(
+    seed_wire = [r for r in case.requests() if any(
         m["role"] == "user" and "<delegated_task" in _wire_text(m["content"])
         and "private-seed-h1" in _wire_text(m["content"])
-        for m in r["json"]["messages"]
+        for m in r["messages"]
     )]
     assert seed_wire
     parent_inputs = case.sql(session_id, parent_job["thread_id"],
@@ -613,41 +689,18 @@ async def test_h1_http_team_child_seed_binder_and_exact_parent_report(source_cas
     case.write_actual("h1", {"parent_job": parent_job, "child_job": child_job,
         "request_input": request, "child_executions": child_executions, "team": board.model_dump(mode="json"),
         "parent_runtime_inputs": parent_inputs, "canonical_report": canonical_report,
-        "model_request_count": len(case.model.requests)})
+        "model_request_count": len(case.requests())})
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("source_case", [{"terminal": True}], indirect=True)
 async def test_h2_goal_terminal_and_interrupt_sources_keep_real_execution(source_case: RuntimeSourceCase) -> None:
     case = source_case
-    started, release = Event(), Event()
-
-    def reply(payload: dict[str, object]) -> dict[str, object]:
-        messages = payload["messages"]
-        human = next((_wire_text(m["content"]) for m in reversed(messages)
-                      if m["role"] == "user" and m["content"]), "")
-        tools = [m for m in messages if m["role"] == "tool"]
-        if "H2-interrupt" in human:
-            started.set()
-            assert release.wait(20), "测试没有解除外部模型等待"
-            return {"content": "中断后不可采纳的回复"}
-        if "后台终端命令已经结束" in human:
-            if not any(m.get("name") == "write_stdin" for m in tools):
-                result = json.loads(next(m["content"] for m in reversed(tools) if m.get("name") == "exec_command"))
-                return _tool_reply("write_stdin", {"session_id": result["session_id"], "chars": "", "yield_time_ms": 1000}, "call_h2_stdin")
-            return {"content": "H2-terminal-result-ack"}
-        if "H2-terminal" in human:
-            if not any(m.get("name") == "exec_command" for m in tools):
-                return _tool_reply("exec_command", {"cmd": "sleep 3; printf 'H2-terminal-completed\\n'", "yield_time_ms": 1000}, "call_h2_terminal")
-            return {"content": "H2-terminal-backgrounded"}
-        if "H2-goal" in human:
-            if not any(m.get("name") == "update_goal" for m in tools):
-                return _tool_reply("update_goal", {"status": "complete"}, "call_h2_goal")
-            return {"content": "H2-goal-completed"}
-        return {"content": "H2 普通回复"}
-
-    case.model.response_callback = reply
     session_id = await create_session(case.client, "H2-source-core")
+    await case.plan(session_id, [
+        _tool_reply("update_goal", {"status": "complete"}, "call_h2_goal"),
+        {"content": "H2-goal-completed"},
+    ])
     thread_id = await case.container.session_service.resolve_main_thread(session_id)
     goal_response = await case.client.put(f"/api/v1/sessions/{session_id}/goal", json={"objective": "H2-goal：完成目标并调用 update_goal。"})
     assert goal_response.status_code == 200, goal_response.text
@@ -659,7 +712,22 @@ async def test_h2_goal_terminal_and_interrupt_sources_keep_real_execution(source
     assert case.sql(session_id, thread_id, "SELECT execution_origin,turn_id FROM executions") == [("internal", None)]
     assert (await case.client.get(f"/api/v1/sessions/{session_id}/goal")).json()["data"]["status"] == "complete"
 
+    terminal_call, = await case.plan(session_id, [
+        _tool_reply("exec_command", {"cmd": "sleep 3; printf 'H2-terminal-completed\\n'", "yield_time_ms": 1000}, "call_h2_terminal"),
+    ])
+    terminal_tool = terminal_call + ":tool-call:call_h2_terminal"
+    case.control.arm(terminal_tool, "test.tool_result.committed")
     terminal_accepted = await _send(case, session_id, "H2-terminal：执行后台命令并读取最终输出。")
+    try:
+        await asyncio.to_thread(case.control.acknowledged, terminal_tool, "test.tool_result.committed")
+        terminal = case.tool_result(terminal_tool)
+        await case.plan(session_id, [
+            {"content": "H2-terminal-backgrounded"},
+            _tool_reply("write_stdin", {"session_id": terminal["session_id"], "chars": "", "yield_time_ms": 1000}, "call_h2_stdin"),
+            {"content": "H2-terminal-result-ack"},
+        ])
+    finally:
+        case.control.release(terminal_tool, "test.tool_result.committed")
     terminal_job = await _job(case, terminal_accepted["job_id"])
     await _wait_until(lambda: case.sql(session_id, thread_id,
         "SELECT COUNT(*) FROM executions WHERE execution_origin='internal'")[0][0] == 2, seconds=45)
@@ -673,9 +741,11 @@ async def test_h2_goal_terminal_and_interrupt_sources_keep_real_execution(source
     assert case.sql(session_id, thread_id, "SELECT source_id,execution_id FROM runtime_execution_wakeups ORDER BY source_id") == before_repeat
     assert sum(source.startswith("terminal:") for source, _execution in before_repeat) == 1
 
+    interrupted_call, = await case.plan(session_id, [{"content": "中断后不可采纳的回复"}])
+    case.control.arm(interrupted_call, "model.response_ready")
     accepted = await _send(case, session_id, "H2-interrupt：等待用户中断。")
     try:
-        await _wait_until(started.is_set)
+        await asyncio.to_thread(case.control.acknowledged, interrupted_call, "model.response_ready", 20)
         admission = case.container.checkpointer.execution_admission_for_job(session_id, thread_id=thread_id, job_id=accepted["job_id"])
         for _attempt in range(2):
             submit_checkpoint_reminder(checkpointer=case.container.checkpointer,
@@ -685,7 +755,7 @@ async def test_h2_goal_terminal_and_interrupt_sources_keep_real_execution(source
         interrupted = await case.client.post(f"/api/v1/sessions/{session_id}/interrupt")
         assert interrupted.status_code == 200, interrupted.text
     finally:
-        release.set()
+        case.control.release(interrupted_call, "model.response_ready")
     cancelled_job = await _job(case, accepted["job_id"], "cancelled")
     notices = case.sql(session_id, thread_id, "SELECT item_id,execution_id FROM item_catalog WHERE semantic_kind='runtime_notice' AND execution_id=?", (admission.execution_id,))
     assert len(notices) == 2 and all(row[1] == admission.execution_id for row in notices)
@@ -705,19 +775,14 @@ async def test_h2_goal_terminal_and_interrupt_sources_keep_real_execution(source
 @pytest.mark.parametrize("retry_kind", ["empty", "custom", "delegated", "question"])
 async def test_h3_four_retries_share_one_real_execution(source_case: RuntimeSourceCase, retry_kind: str) -> None:
     case = source_case
-    calls = 0
-
-    def reply(_payload: dict[str, object]) -> dict[str, object]:
-        nonlocal calls
-        calls += 1
-        if retry_kind == "empty" and calls <= 2:
-            return {"content": ""}
-        if retry_kind == "custom" and calls == 3:
-            return _tool_reply("invoke_extension_tool", {"tool_name": "test_tool_2", "arguments": {}}, "call_h3_custom")
-        return {"content": f"H3-{retry_kind}-final"}
-
-    case.model.response_callback = reply
+    calls = 4 if retry_kind == "custom" else 3
     session_id = await create_session(case.client, f"H3-{retry_kind}")
+    responses = [{"content": f"H3-{retry_kind}-final"} for _ in range(calls)]
+    if retry_kind == "empty":
+        responses[:2] = [{"content": ""}, {"content": ""}]
+    elif retry_kind == "custom":
+        responses[2] = _tool_reply("invoke_extension_tool", {"tool_name": "test_tool_2", "arguments": {}}, "call_h3_custom")
+    await case.plan(session_id, responses)
     thread_id = await case.container.session_service.resolve_main_thread(session_id)
     if retry_kind in {"empty", "custom"}:
         accepted = await _send(case, session_id, "H3 调用 test_tool_2" if retry_kind == "custom" else "H3 空响应恢复")
@@ -749,7 +814,7 @@ async def test_h3_four_retries_share_one_real_execution(source_case: RuntimeSour
     assert origin == ("internal" if retry_kind in {"delegated", "question"} else "user_turn")
     assert (turn_id is None) == (origin == "internal")
     assert len(await case.container.job_service.list(session_id=session_id)) == 1
-    assert calls == (4 if retry_kind == "custom" else 3)
+    assert len(case.requests()) == calls
     retry_items = case.sql(session_id, thread_id,
         "SELECT item_id,execution_id FROM item_catalog WHERE semantic_kind='runtime_notice' AND item_id LIKE '%retry:%' ORDER BY item_sequence")
     assert len(retry_items) == 2 and all(row[1] == execution_id for row in retry_items)
@@ -773,11 +838,11 @@ async def test_h3_four_retries_share_one_real_execution(source_case: RuntimeSour
     assert all(value.extensions["boxteam.checkpoint.annotations"]["value"]["structured_prompt_kind"] == source_kind
                for value in frozen_items)
     retry_prompts = [_wire_text(value.payload) for value in sorted(frozen_items, key=lambda item: item.item_sequence)]
-    for request_index, request in enumerate(case.model.requests):
-        selected_retry_prompts = [_wire_text(message["content"]) for message in request["json"]["messages"]
+    for request_index, request in enumerate(case.requests()):
+        selected_retry_prompts = [_wire_text(message["content"]) for message in request["messages"]
                                   if _wire_text(message.get("content", "")) in retry_prompts]
         assert selected_retry_prompts == retry_prompts[:min(request_index, 2)]
-        assert all(message["role"] == "user" for message in request["json"]["messages"]
+        assert all(message["role"] == "user" for message in request["messages"]
                    if _wire_text(message.get("content", "")) in retry_prompts)
     sealed = [saver.get_context_assembly(session_id, thread_id, assembly_id=row[0]) for row in assemblies]
     with RolloutCheckpointSaver(saver._storage.storage.sessions_dir) as cold:
@@ -790,11 +855,12 @@ async def test_h3_four_retries_share_one_real_execution(source_case: RuntimeSour
             restored = cold.get_context_assembly(session_id, thread_id, assembly_id=snapshot.assembly_id)
             assert canonical_json_bytes(restored.to_dict()) == canonical_json_bytes(snapshot.to_dict())
     if origin == "user_turn":
-        previous_wire = case.model.requests[-1]["json"]
+        previous_wire = case.requests()[-1]
+        await case.plan(session_id, [{"content": f"H3-{retry_kind}-final"}])
         continued = await _send(case, session_id, "H3 后续用户输入：直接完成。")
         await _job(case, continued["job_id"])
         assert continued["turn_id"] != turn_id
-        following_wire = case.model.requests[-1]["json"]
+        following_wire = case.requests()[-1]
         assert following_wire["messages"][:len(previous_wire["messages"])] == previous_wire["messages"]
         assert following_wire["tools"] == previous_wire["tools"]
         assert [_wire_text(message["content"]) for message in following_wire["messages"]
@@ -812,16 +878,16 @@ async def test_h3_four_retries_share_one_real_execution(source_case: RuntimeSour
 @pytest.mark.asyncio
 async def test_e07_reminder_reasons_commit_once_and_cold_restore_without_checkpoint_mutation(source_case: RuntimeSourceCase) -> None:
     case = source_case
-    case.model.response_callback = lambda _payload: {"content": "E07 原执行完成"}
     session_id = await create_session(case.client, "E07-reminder-owner")
     thread_id = await case.container.session_service.resolve_main_thread(session_id)
+    await case.plan(session_id, [{"content": "E07 原执行完成"}])
     accepted = await _send(case, session_id, "E07 建立唯一真实 execution")
     await _job(case, accepted["job_id"])
     saver = case.container.checkpointer
     active = saver.execution_admission_for_job(session_id, thread_id=thread_id, job_id=accepted["job_id"])
     checkpoint_headers = case.sql(session_id, thread_id, "SELECT * FROM checkpoints ORDER BY checkpoint_id")
     checkpoint_channels = case.sql(session_id, thread_id, "SELECT * FROM checkpoint_channels ORDER BY checkpoint_id,channel_name")
-    calls = len(case.model.requests)
+    calls = len(case.requests())
     reasons = ("interrupt", "job_startup_timeout", "job_timeout", "scope_deadline_exceeded",
                "tool_dispatch_timeout", "execution_lost", "execution_error", "resource_cancel")
     for reason in reasons:
@@ -860,7 +926,7 @@ async def test_e07_reminder_reasons_commit_once_and_cold_restore_without_checkpo
     assert case.sql(session_id, thread_id, "SELECT * FROM checkpoint_channels ORDER BY checkpoint_id,channel_name") == checkpoint_channels
     assert case.sql(session_id, thread_id, "SELECT COUNT(*) FROM executions")[0][0] == 1
     assert len(await case.container.job_service.list(session_id=session_id)) == 1
-    assert len(case.model.requests) == calls
+    assert len(case.requests()) == calls
     assert len(saver._storage.storage.read_items(session_id, thread_id, item_ids=item_ids)) == len(reasons)
     case.write_actual("e07-reminder-reasons", {"execution_id": active.execution_id, "sources": sorted(source_ids),
         "canonical_bytes_hash": sha256_jcs([item.to_dict() for item in items]),
@@ -902,14 +968,10 @@ async def test_e05_terminal_completion_rehydrates_exact_cold_child_owner(source_
             await asyncio.sleep(0.05)
     assert terminal["source_thread_id"] == thread_id and terminal["completion_event_id"]
 
-    def reply(payload):
-        tools = [value for value in payload["messages"] if value["role"] == "tool" and value.get("name") == "write_stdin"]
-        if not tools:
-            return _tool_reply("write_stdin", {"session_id": terminal_id, "chars": "", "yield_time_ms": 1000}, "call_e05_stdin")
-        assert "E05-final" in tools[-1]["content"]
-        return {"content": "E05 cold child 已读取真实终端输出"}
-
-    case.model.response_callback = reply
+    _read_call, final_call = await case.plan(session_id, [
+        _tool_reply("write_stdin", {"session_id": terminal_id, "chars": "", "yield_time_ms": 1000}, "call_e05_stdin"),
+        {"content": "E05 cold child 已读取真实终端输出"},
+    ], thread_id=thread_id)
     await steering.scan_once()
     wakeups = case.sql(session_id, thread_id,
         "SELECT w.source_id,w.source_item_id,w.admission_idempotency_key,e.job_id FROM runtime_execution_wakeups w JOIN executions e ON e.execution_id=w.execution_id WHERE w.source_id=?",
@@ -921,6 +983,8 @@ async def test_e05_terminal_completion_rehydrates_exact_cold_child_owner(source_
     assert wakeup.admission_idempotency_key == f"radm_{event_digest}"
     result = await _job(case, wakeups[0][3])
     assert result["thread_id"] == thread_id
+    assert "E05-final" in next(message["content"] for message in reversed(case.request(final_call)["messages"])
+                               if message["role"] == "tool" and message.get("name") == "write_stdin")
     assert tracker.snapshot(session_id, thread_id).generation > original.generation
     assert not tracker.is_current_generation(session_id, thread_id, original.generation)
     assert case.sql(session_id, main_thread, "SELECT COUNT(*) FROM executions")[0][0] == main_count
@@ -942,21 +1006,8 @@ async def test_h4_generated_branch_returns_to_frozen_child_thread(source_case: R
     parent_job, _child_job, intent = await _team_child(case)
     session_id, child_thread_id = parent_job["session_id"], intent.thread_id
     main_thread_id = parent_job["thread_id"]
-    generated_contexts: list[str] = []
-    report_prompts: list[str] = []
-
-    def reply(payload: dict[str, object]) -> dict[str, object]:
-        human = "\n".join(_wire_text(m["content"]) for m in payload["messages"]
-                          if m["role"] == "user" and m["content"])
-        if "<generated_session_result" in human:
-            report_prompts.extend(_wire_text(m["content"]) for m in payload["messages"]
-                                  if m["role"] == "user" and "<generated_session_result" in _wire_text(m["content"]))
-            return {"content": "H4-exact-child-origin-ack"}
-        assert "H4-private-generator-prompt" in human
-        generated_contexts.append(_wire_text(payload["messages"]))
-        return {"content": "H4-generated-result"}
-
-    case.model.response_callback = reply
+    report_call, = await case.plan(session_id, [{"content": "H4-exact-child-origin-ack"}], thread_id=child_thread_id)
+    case.control.arm_match("h4-generated", "thread.runtime.acquired", {"execution_origin": "user_turn"})
     workspace_id = case.client.headers["X-BoxTeam-Workspace-Id"]
     payload = {
         "run_id": "h4-run", "generator_id": "h4-generator", "idempotency_key": "h4-stable-key",
@@ -973,6 +1024,14 @@ async def test_h4_generated_branch_returns_to_frozen_child_thread(source_case: R
     assert response.status_code == 200, response.text
     accepted = response.json()["data"]
     generated_session_id = accepted["outputs"][0]["session_id"]
+    generated = await asyncio.to_thread(case.control.acknowledged_match, "h4-generated")
+    try:
+        assert generated["details"]["session_id"] == generated_session_id
+        generated_call, = await case.plan(generated_session_id, [{"content": "H4-generated-result"}], thread_id=generated["details"]["thread_id"])
+    finally:
+        control_request(json.loads(case.control.environment["BOXTEAM_E2E_TEST_CONTROL"]), {
+            "action": "release_match", "barrier_id": "h4-generated",
+        })
     generated_job = await _job(case, accepted["job_id"])
     async with asyncio.timeout(45):
         while True:
@@ -1026,6 +1085,10 @@ async def test_h4_generated_branch_returns_to_frozen_child_thread(source_case: R
             "source_execution_id": generated_execution[0][0], "source_item_id": generated_execution[0][1]},
         private_result="H4-generated-result",
     )
+    generated_contexts = [_wire_text(case.request(generated_call)["messages"])]
+    assert "H4-private-generator-prompt" in generated_contexts[0]
+    report_prompts = [_wire_text(message["content"]) for message in case.request(report_call)["messages"]
+                      if message["role"] == "user" and "<generated_session_result" in _wire_text(message["content"])]
     assert len(report_prompts) == 1 and report_prompts[0].count("H4-generated-result") == 1
     report_admission = case.container.checkpointer.execution_admission_for_job(
         session_id, thread_id=child_thread_id, job_id=report_job["job_id"],
@@ -1522,7 +1585,7 @@ async def test_h5_cold_refork_and_hard_exit_recovery(source_case: RuntimeSourceC
 async def completed_empty_seed_source(
     source_case: RuntimeSourceCase, frozen_provider_wire, frozen_provider_activation,
 ):
-    """正式 creation、准入、封存与收敛组成无输出来源，不伪造 notice/Turn。"""
+    """手工准备 completed_empty 历史，仅证明冷存储复制边界，不作为完整执行验收。"""
     case = source_case
     session_id = await create_session(case.client, "H5 completed_empty seed")
     creation = case.container.thread_initial_execution_service._factory.for_owner_session(session_id)
@@ -1644,67 +1707,8 @@ async def test_h5_completed_empty_seed_preserves_metadata_only_admission(
 
 
 @dataclass
-class RestartRuntimeSourceCase:
-    client: httpx.AsyncClient
-    model: ModelStreamReplay
-    workspace: Path
-    artifacts_dir: Path
+class RestartRuntimeSourceCase(ModelReplayCase):
     backends: list[BackendProcess]
-    planned_calls: dict[str, dict[str, str]] = field(default_factory=dict)
-
-    @property
-    def control(self) -> E2ETestControlHarness:
-        return self.model.control
-
-    async def plan(
-        self, session_id: str, responses: list[dict[str, object]], *, thread_id: str | None = None,
-    ) -> list[str]:
-        if thread_id is None:
-            main_thread = await self.client.get(f"/api/v1/sessions/{session_id}/main-thread")
-            assert main_thread.status_code == 200, main_thread.text
-            thread_id = main_thread.json()["data"]["thread_id"]
-        config = commentjson.loads((self.workspace / ".boxteam/workspace.jsonc").read_text())
-        endpoint = next(provider["endpoint"] for provider in config["llm"]["providers"] if provider["id"] == "primary")
-        interactions = [build_cassette(
-            asset_id="runtime-source-restart", model="e2e-stub-model", url=endpoint + "/chat/completions",
-            frames=chat_completion_frames(
-                response_id=f"chatcmpl-runtime-source-{index}", model="e2e-stub-model",
-                deltas=({"role": "assistant", **response},),
-                finish_reason="tool_calls" if "tool_calls" in response else "stop",
-            ),
-        ).raw["interactions"][0] for index, response in enumerate(responses)]
-        calls = self.control.plan_model_calls(session_id, thread_id, interactions)
-        self.planned_calls.update({call: {"session_id": session_id, "thread_id": thread_id, "model_call_id": call} for call in calls})
-        return calls
-
-    def request(self, call: str) -> dict[str, object]:
-        artifact = json.loads((self.model.artifacts / (call + ".json")).read_text())
-        assert artifact["identity"] == self.planned_calls[call]
-        assert artifact["request"]["stream"] is True
-        return artifact["request"]
-
-    def call_count(self, session_id: str, thread_id: str) -> int:
-        with self.control._condition:
-            return self.control._counters.get(f"model_call/{session_id}/{thread_id}", 0)
-
-    def requests(self) -> list[dict[str, object]]:
-        calls = [event["operation_id"] for event in self.control.events if event["phase"] == "model.response_ready"]
-        assert {path.stem for path in self.model.artifacts.glob("*.json")} == set(calls)
-        with self.control._condition:
-            actual_calls = sum(count for namespace, count in self.control._counters.items() if namespace.startswith("model_call/"))
-        assert actual_calls == len(calls)
-        return [self.request(call) for call in calls]
-
-    def tool_result(self, call: str) -> dict[str, object]:
-        event, = [event for event in self.control.events
-                  if event["phase"] == "test.tool_result.committed" and event["operation_id"] == call]
-        assert event["details"]["item"]["payload"]["tool_call_id"] == call
-        return json.loads(event["details"]["item"]["payload"]["content"])
-
-    def write_actual(self, name: str, value: dict[str, object]) -> None:
-        (self.artifacts_dir / f"{name}-actual.json").write_text(
-            json.dumps(value, ensure_ascii=False, indent=2) + "\n",
-        )
 
     async def restart(self, *, hard: bool, while_stopped: Callable[[], None] | None = None) -> None:
         previous = self.backends[-1]
@@ -1984,13 +1988,10 @@ async def test_replay_and_manual_compaction_http_keep_catalog_main_owner(
 ) -> None:
     case = source_case
 
-    def reply(payload: dict[str, object]) -> dict[str, object]:
-        human = next((_wire_text(message["content"]) for message in reversed(payload["messages"])
-                      if message["role"] == "user" and message["content"]), "")
-        return {"content": f"真实 owner 回答：{human}"}
-
-    case.model.response_callback = reply
     session_id = await create_session(case.client, "Replay 与手动压缩归属")
+    await case.plan(session_id, [{"content": "真实 owner 回答：" + prompt} for prompt in (
+        "replay-first-private", "replay-second-private", "replay-edited-private", "replay-edited-private",
+    )])
     first = await _send(case, session_id, "replay-first-private")
     await _job(case, first["job_id"])
     second = await _send(case, session_id, "replay-second-private")

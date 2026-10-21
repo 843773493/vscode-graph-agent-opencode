@@ -7,6 +7,7 @@ e2e_control/
 ├── harness.py             控制服务、进程租约、phase、时钟和精确回放计划
 ├── runtime_ports.py       无应用副作用、显式控制地址的 ID/phase/时钟端口
 ├── backend_app.py         绑定受控 ID、phase 与时钟的真实 Backend ASGI app
+├── tool_observations.py   真实 canonical 工具提交的无绑定观测实现
 ├── communication_backend_app.py  在同一受控Backend安装通信故障及真实工具提交观测
 ├── gateway_app.py         连接受控 Backend ASGI app 的真实 Gateway app
 ├── mcp_stdio_server.py    接受测试 catalog 的真实 MCP stdio server

@@ -54,12 +54,6 @@ from tests.support.fork_deadline import ForkDeadlineRegistry
 __all__ = ["cold_fork_deadlines", "restart_source_case", "source_case"]
 
 
-def _request_json(request: dict[str, object]) -> dict[str, object]:
-    payload = request["json"]
-    assert isinstance(payload, dict)
-    return payload
-
-
 def _messages(wire: dict[str, object]) -> list[dict[str, object]]:
     messages = wire["messages"]
     assert isinstance(messages, list) and all(isinstance(message, dict) for message in messages)
@@ -226,8 +220,8 @@ async def test_live_agents_publication_appends_delta_without_changing_sealed_roo
         return accepted
 
     monkeypatch.setattr(ResourceRegistry, "publish", record_publication)
-    case.model.response_callback = lambda _payload: {"content": "CIL 同进程回复"}
     session_id = await create_session(case.client, "CIL 同进程 AGENTS A→B")
+    await case.plan(session_id, [{"content": "CIL 同进程回复"}, {"content": "CIL 同进程回复"}])
     first = await _send(case, session_id, "cil-live-first-private")
     assert isinstance(first["job_id"], str)
     await _job(case, first["job_id"])
@@ -244,14 +238,14 @@ async def test_live_agents_publication_appends_delta_without_changing_sealed_roo
     before_control = next(state for state in saver.load_context_source_control_states(owner)
                           if state.source_id == WORKSPACE_AGENTS_SOURCE_ID)
     assert before_control.latest_revision == before_control.latest_visible_committed_revision == sha256_jcs({"content": first_body})
-    requests_before = len(case.model.requests)
+    requests_before = len(case.requests())
     path.write_bytes(second_body.encode())
     uri = workspace_agent_spec_display_uri(load_or_create_workspace_id(files.workspace_root))
     files.refresh(uri)
     await _wait_until(lambda: any(snapshot.available and agents_content(snapshot.payload) == second_body
                                   for snapshot in published))
     # 文件 owner 和语义图已发布 B，但 source 控制与请求只能在真正 activation 推进。
-    assert len(case.model.requests) == requests_before
+    assert len(case.requests()) == requests_before
     assert next(state for state in saver.load_context_source_control_states(owner)
                 if state.source_id == WORKSPACE_AGENTS_SOURCE_ID) == before_control
     second = await _send(case, session_id, "cil-live-second-private")
@@ -282,7 +276,7 @@ async def test_live_agents_publication_appends_delta_without_changing_sealed_roo
     assert canonical_json_bytes(second_assembly.seal_binding.root.frame_manifest()) == root_bytes
     restored = saver.get_context_assembly(session_id, thread_id, assembly_id=first_assembly.assembly_id)
     assert canonical_json_bytes(restored.to_dict()) == first_bytes
-    wire = _request_json(case.model.requests[-1])
+    wire = case.requests()[-1]
     assert normalize_wire_request(wire) == second_assembly.request_hash_preimage
     assert {"role": "user", "content": expected_delta} in _messages(wire)
     case.write_actual("live-agents-a-to-b", {
@@ -303,8 +297,8 @@ async def test_agents_full_copy_target_restores_sealed_chain_before_real_provide
     case = source_case
     body = "CIL_FORK_AGENTS 精确恢复来源链。\r\n保留空白  \n"
     (case.container.workspace_file_resource_registry.workspace_root / "AGENTS.md").write_bytes(body.encode())
-    case.model.response_callback = lambda _payload: {"content": "CIL fork 目标回复"}
     source_session = await create_session(case.client, "CIL AGENTS fork 来源")
+    await case.plan(source_session, [{"content": "CIL fork 目标回复"}])
     first = await _send(case, source_session, "cil-fork-source-private")
     assert isinstance(first["job_id"], str) and isinstance(first["thread_id"], str)
     await _job(case, first["job_id"])
@@ -322,7 +316,7 @@ async def test_agents_full_copy_target_restores_sealed_chain_before_real_provide
     point = point_response.json()["data"]
     key = "cil-agents-full-copy-provider"
     deadline = cold_fork_deadlines.for_operation(point["main_container_uri"], key)
-    requests_before = len(case.model.requests)
+    requests_before = len(case.requests())
     response = await deadline.wait(case.client.post(
         f"/api/v1/sessions/{source_session}/fork-context", json={
             "idempotency_key": key, "source_uri": point["source_uri"],
@@ -336,7 +330,7 @@ async def test_agents_full_copy_target_restores_sealed_chain_before_real_provide
     target = response.json()["data"]
     target_session, target_thread = target["session"]["session_id"], target["thread_id"]
     assert target_session != source_session and target_thread != source_thread
-    assert len(case.model.requests) == requests_before
+    assert len(case.requests()) == requests_before
     restored = saver.get_context_assembly(target_session, target_thread, assembly_id=original.assembly_id)
     assert canonical_json_bytes(restored.to_dict()) == original_bytes
     copied = saver.load_sealed_resource_activation(
@@ -349,14 +343,15 @@ async def test_agents_full_copy_target_restores_sealed_chain_before_real_provide
         assert agents_content(saver.read_resource_activation_payload(
             copied, binding, storage_owner=(target_session, target_thread),
         )) == body
+    await case.plan(target_session, [{"content": "CIL fork 目标回复"}], thread_id=target_thread)
     sent = await _send(case, target_session, "cil-fork-target-private")
     assert isinstance(sent["job_id"], str) and sent["thread_id"] == target_thread
     await _job(case, sent["job_id"])
     current, = [assembly for assembly in saver.list_context_assemblies(target_session, target_thread)
                 if (assembly.session_id, assembly.thread_id) == (target_session, target_thread)]
     _assert_sealed_agents_facets(saver, current, body)
-    wire = _request_json(case.model.requests[-1])
-    assert len(case.model.requests) == requests_before + 1
+    wire = case.requests()[-1]
+    assert len(case.requests()) == requests_before + 1
     assert normalize_wire_request(wire) == current.request_hash_preimage
     assert sum(_wire_text(message["content"]).count("CIL_FORK_AGENTS") for message in _messages(wire)) == 1
     control, = [state for state in saver.load_context_source_control_states(ContextSourceOwnerKey(target_session, target_thread))

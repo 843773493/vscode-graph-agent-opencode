@@ -10,6 +10,7 @@ support/
 │   ├── harness.py        时钟、phase、identity、进程租约与回放计划
 │   ├── runtime_ports.py  无应用副作用的显式受控端口
 │   ├── backend_app.py    使用受控 RuntimeClockPorts/identity 的真实 Backend
+│   ├── tool_observations.py 真实 canonical 工具提交观测
 │   ├── communication_backend_app.py 同一受控Backend的通信故障及工具提交观测
 │   ├── gateway_app.py    启动上述 Backend 的真实 Gateway
 │   ├── mcp_stdio_server.py 真实 stdio MCP 服务
