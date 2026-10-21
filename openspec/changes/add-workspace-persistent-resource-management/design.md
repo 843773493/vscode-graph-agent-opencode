@@ -41,7 +41,7 @@ Browser、Terminal 等 Agent 资源创建工具必须显式提供 `retention_sco
 
 ### 3. `LifetimeScope` 通知卸载，由领域管理方停止外部资源
 
-Thread 常驻机制沿用既有的空闲卸载资格和代际栅栏。卸载或显式删除 Thread 时，向每个领域管理方发送身份由 `(session_id, thread_id, runtime_generation)` 确定的幂等通知。领域管理方先释放该 Thread 的运行句柄和已完成操作的租约，再移除该 Thread 的资源关联。对 `thread` 范围资源，owner 会按不可变来源 Thread 找到全部资源，随后立即执行删除流程：停止外部实例、核实结果并删除资源记录；不得只卸载 Agent 计算图或运行时，也不得解除关联后让浏览器、终端进程继续运行。对 `workspace` 范围资源，owner 只移除该 Thread 的关联并保留资源。`LifetimeScope.close()` 只释放进程内句柄，不能代替领域管理方对外部资源停止和删除的回执。
+Thread 常驻机制沿用既有的空闲卸载资格和代际栅栏；以下释放规则同样适用于连续30分钟闲置获准的idle unload，不因卸载原因改变资源保留范围。卸载或显式删除 Thread 时，向每个领域管理方发送身份由 `(session_id, thread_id, runtime_generation)` 确定的幂等通知。领域管理方先释放该 Thread 的运行句柄和已完成操作的租约，再移除该 Thread 的资源关联。对 `thread` 范围资源，owner 会按不可变来源 Thread 找到全部资源，随后立即执行删除流程：停止外部实例、核实结果并删除资源记录；不得只卸载 Agent 计算图或运行时，也不得解除关联后让浏览器、终端进程继续运行。对 `workspace` 范围资源，owner 只移除该 Thread 的关联并保留资源。`LifetimeScope.close()` 只释放进程内句柄，不能代替领域管理方对外部资源停止和删除的回执。
 
 Session 删除复用现有 `Session catalog` 与栅栏协议：关闭新准入后，删除流程要求领域管理方清理 Thread 范围资源，并等待管理方回执，再进行物理删除。工作区范围记录保留在工作区存储中，各管理方只删除指向该 Session/Thread 的引用。清理结果不确定时，删除保持 `pending` 状态或返回管理方错误，由现有删除日志恢复。
 

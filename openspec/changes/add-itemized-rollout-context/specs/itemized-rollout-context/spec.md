@@ -309,7 +309,7 @@ delegated child 的初始 execution 绑定 MUST 由生产提供真实 thread bin
 
 ### Requirement: durable Thread 与 resident runtime 必须分离
 
-系统 SHALL 将 SessionThread 的 durable identity、catalog metadata、GraphBinding、canonical history、checkpoint/context view、CSM control state和 ToolSet applied binding与进程内 resident runtime分离。每个 durable SessionThread（包括 main 与 child thread）的默认 idle unload threshold MUST 为30分钟；当 thread没有 active、runnable或pending execution，没有未收敛 model/tool call或 mutation transaction，没有 runtime lease，且debug owner已核实没有`launch_pending`进程claim、`starting|running|paused|stopping`调试进程或`reconcile_required`阻断，并连续达到该阈值无 execution、消息准入或 runtime callback活动时，系统 MUST 只卸载可重建运行资源，不得删除、归档、重命名或改写该 thread的持久事实。活动调试期间不累计idle时长；调试owner核实终态并结清lease后重新起算30分钟，residency owner只消费该阻断状态而不决定业务进程停止。
+系统 SHALL 将 SessionThread 的 durable identity、catalog metadata、GraphBinding、canonical history、checkpoint/context view、CSM control state和 ToolSet applied binding与进程内 resident runtime分离。每个 durable SessionThread（包括 main 与 child thread）的默认 idle unload threshold MUST 为30分钟；当 thread没有 active、runnable或pending execution，没有未收敛 model/tool call或 mutation transaction，没有 runtime lease，且debug owner已核实没有`launch_pending`进程claim、`starting|running|paused|stopping`调试进程或`reconcile_required`阻断，并连续达到该阈值无 execution、消息准入或 runtime callback活动时，系统 MUST 卸载可重建进程内运行资源，不得删除、归档、重命名或改写该 thread的持久事实。外部terminal/browser资源的释放 MUST 由领域owner按`add-workspace-persistent-resource-management`的唯一保留合同执行：立即停止、核实并删除来源Thread的`thread`临时资源，保留`workspace`资源原实例并移除该Thread关联；`LifetimeScope.close()`本身不得直接停止业务资源。活动调试期间不累计idle时长；调试owner核实终态并结清lease后重新起算30分钟，residency owner只消费该阻断状态而不决定业务进程停止。
 
 普通 thread列表、状态、历史和详情读取 MUST 使用 cold read路径，不得仅因用户查看 child历史就初始化模型、工具、graph或可写 ContextStore runtime。新的用户消息、内部 wakeup或其它需要执行的操作 MUST 在准入时以原 `(session_id, thread_id)` 和GraphBinding延迟重建唯一 runtime owner；新runtime generation必须重新解析并逐字段验证原`graph_id、graph_revision、graph_schema_hash、capability_profile_hash`，不得因为进程缓存已清空或registry已有更新而改用latest graph。卸载前后已经提交的上下文字节、prefix epoch、tracked registration、diff基准和ToolSet binding必须保持一致。idle unload不得被解释为Skill/上下文到期，也不得生成 context item。
 
@@ -323,7 +323,7 @@ delegated child 的初始 execution 绑定 MUST 由生产提供真实 thread bin
 #### Scenario: main thread 空闲30分钟后卸载资源
 
 - **WHEN** 一个 durable main thread 连续30分钟没有活动，且不存在执行、排队任务、未收敛工具调用、mutation或runtime lease
-- **THEN** 系统只释放该 main thread 的可重建进程内资源并标记为cold；其Session、历史、checkpoint、GraphBinding、CSM/ToolSet状态和Workspace资源不变
+- **THEN** 系统只释放该 main thread 的可重建进程内资源并标记为cold；其Session、历史、checkpoint、GraphBinding和CSM/ToolSet状态不变，Workspace资源保留原实例并移除该Thread关联
 
 #### Scenario: 活跃任务阻止空闲卸载
 

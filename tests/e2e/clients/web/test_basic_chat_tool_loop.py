@@ -241,7 +241,9 @@ async def section8_product_nodes(
             # 本场景验证模型 transport，不验证远端价格表更新；使用 LiteLLM 包内表。
             "LITELLM_LOCAL_MODEL_COST_MAP": "true",
         },
-        gateway_environment={"BOXTEAM_WEB_ASSETS": str(project / "src/clients/web/dist")},
+        gateway_environment={
+            "BOXTEAM_WEB_ASSETS": str(project / "src/clients/web/dist"),
+        },
     ) as nodes:
         for name, node in nodes.items():
             section8_control.bind_process_control(name, node.restart_backend)
@@ -389,6 +391,41 @@ async def test_basic_chat_tool_loop_through_real_web_surface(
         assert isinstance(selected, list)
         assert result["focusedScenarios"] == requested
         assert set(result["section8"]) == set(selected)
+        if "runtime_shared_resources" in selected:
+            scope = result["section8"]["runtime_shared_resources"]
+            assert scope["threadId"] != scope["parentThreadId"]
+            assert scope["historyBefore"]["items"] == scope["coldHistory"]["items"]
+            assert scope["historyBefore"]["internal_executions"] == scope["coldHistory"]["internal_executions"]
+            assert scope["prefixBefore"] == scope["prefixAfter"]
+            closed, = scope["closed"]["closed"]
+            assert closed["details"]["scope_state"] == "closed"
+            assert closed["details"]["session_id"] == scope["sessionId"]
+            assert closed["details"]["thread_id"] == scope["threadId"]
+            assert len(scope["closed"]["compiled"]) == 1
+            assert scope["coldBeforeResume"]["residency"] == "cold"
+            assert len(scope["rebuilt"]["compiled"]) == 2
+            assert scope["consumerBefore"]["compiled"] == scope["consumerAfter"]["compiled"]
+            assert scope["consumerAfter"]["closed"] == []
+            watch = scope["watchPublished"]
+            assert watch["at"] > closed["at"] and watch["pid"] == closed["pid"]
+            assert watch["details"]["revision"] == scope["changedRevision"]
+            assert watch["details"]["available"] is True and watch["details"]["subscriber_ids"]
+            assert scope["changedMarker"] in json.dumps(scope["observedRequest"]["request"]["messages"], ensure_ascii=False)
+            assert len(scope["resources"]) == 4
+            assert {(resource["kind"], resource["retention_scope"]) for resource in scope["resources"]} == {
+                (kind, retention) for kind in ("terminal", "browser") for retention in ("thread", "workspace")
+            }
+            for before, after in zip(scope["resources"], scope["externalAfter"], strict=True):
+                assert before["resource_id"] == after["resource_id"]
+                assert after["owner_revision"] > before["owner_revision"]
+                assert after["retention_scope"] == before["retention_scope"]
+                assert after["reconciliation_status"] == "verified"
+                assert after["thread_associations"] == []
+                assert after["status"] == ("deleted" if before["retention_scope"] == "thread" else "running")
+                if before["retention_scope"] == "workspace":
+                    fields = ("os_pid", "process_start_time", "pty_worker_pid") if before["kind"] == "terminal" else ("runtime_generation", "active_page_id")
+                    for field in fields:
+                        assert after["metadata"].get(field) == before["metadata"].get(field)
         if "child" in selected:
             child = result["section8"]["child"]
             assert child["startupHistory"]["thread_id"] == child["mainThreadId"]

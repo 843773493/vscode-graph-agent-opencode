@@ -73,12 +73,17 @@
 
 ### Requirement: Thread unload 和删除按资源保留范围释放资源
 
-Thread runtime unload 或 Thread 删除 MUST 向领域 owner 发出带精确 `session_id`、`thread_id` 和 runtime generation 的幂等释放通知。领域 owner MUST 释放该 Thread 的运行期句柄和已完成操作的 operation lease，再解除该 Thread 的资源关联。对来源为该 Thread 的每项 `thread` 范围资源，owner MUST 在 unload/删除路径立即停止外部实例、核实结果并删除资源记录；这适用于当前仍关联的资源，也适用于先前被显式 detach 的资源。Thread unload 不得只卸载 Agent graph/runtime 而让临时 Browser、Terminal 或 shell 进程继续运行。`workspace` 范围资源 MUST 在来源 Thread unload、Thread 删除或来源 Session 删除后继续存在；owner 只移除对应 Thread 关联。`LifetimeScope.close()` MUST NOT 直接停止或删除外部业务资源。Thread idle 阈值仍由既有 Thread residency 能力定义；本能力另行定义的 30 分钟期限只用于回收无 Thread 关联的 `thread` 范围资源，不能代替或修改 Thread idle 阈值。
+Thread runtime unload（包括连续30分钟闲置获准的idle unload）或 Thread 删除 MUST 向领域 owner 发出带精确 `session_id`、`thread_id` 和 runtime generation 的幂等释放通知。领域 owner MUST 释放该 Thread 的运行期句柄和已完成操作的 operation lease，再解除该 Thread 的资源关联。对来源为该 Thread 的每项 `thread` 范围资源，owner MUST 在 unload/删除路径立即停止外部实例、核实结果并删除资源记录；这适用于当前仍关联的资源，也适用于先前被显式 detach 的资源。Thread unload 不得只卸载 Agent graph/runtime 而让临时 Browser、Terminal 或 shell 进程继续运行。`workspace` 范围资源 MUST 在来源 Thread unload、Thread 删除或来源 Session 删除后继续存在；owner 只移除对应 Thread 关联。`LifetimeScope.close()` MUST NOT 直接停止或删除外部业务资源。Thread idle 阈值仍由既有 Thread residency 能力定义；本能力另行定义的 30 分钟期限只用于回收无 Thread 关联的 `thread` 范围资源，不能代替或修改 Thread idle 阈值。
 
 #### Scenario: Thread 释放或删除时 detach 并立即删除临时资源
 
 - **WHEN** 创建 Browser、Terminal 或 shell 资源的 Thread runtime generation 被卸载或 Thread 被删除，且资源为 `thread` 范围
 - **THEN** 领域 owner 释放该 Thread 的句柄和已完成 lease，自动移除资源关联并立即停止、核实和删除资源；不得等待 30 分钟孤儿期限，核实前不得报告已删除
+
+#### Scenario: 闲置卸载按保留范围处理真实外部实例
+
+- **WHEN** 同一Thread通过产品入口创建`thread`和`workspace`两种范围的Terminal与Browser，随后连续30分钟闲置并获准卸载
+- **THEN** owner核实两项`thread`临时资源已删除；两项`workspace`资源保留原PTY进程和浏览器页面实例、移除该Thread关联并推进owner revision，用户仍可输入终端命令及读取浏览器原页面内存；冷历史读取不得重建Thread graph，后续真实消息才按原GraphBinding恢复
 
 #### Scenario: 临时资源清理失败时 unload 不伪报完成
 

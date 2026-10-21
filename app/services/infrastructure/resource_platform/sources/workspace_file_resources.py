@@ -16,6 +16,7 @@ from collections.abc import AsyncGenerator
 from dataclasses import dataclass, replace
 from pathlib import Path
 
+from app.core.phase_observer import observe_phase
 from app.core.resource_uri import parse_resource_uri, skill_display_uri
 from app.services.infrastructure.resource_platform.observation.resource_observation_channel import (
     ResourceObservation,
@@ -531,7 +532,14 @@ class WorkspaceFileResourceRegistry:
                             if path in paths and uri not in skill_uris:
                                 self.refresh(uri)
                         for directory_id in dirty_directories:
-                            self._reconcile_skill_directory(directory_id, self._skill_directories[directory_id])
+                            directory = self._reconcile_skill_directory(directory_id, self._skill_directories[directory_id])
+                            for entry in directory.entries:
+                                snapshot = self.snapshot(entry.uri)
+                                await observe_phase(entry.uri, "workspace.source.watch.published", details={
+                                    "revision": snapshot.revision, "available": snapshot.available,
+                                    "registry_object_id": id(self),
+                                    "subscriber_ids": self._observation_channel.subscriber_ids,
+                                })
                         self._watch_unavailable = False
                 await self._sync_watch_subscriptions()
         finally:

@@ -28,6 +28,7 @@ function section8ScenarioRegistry(surfaces, facts) {
     basic_chat: { default: true, run: () => runBasicChat(surfaces.a) },
     session_page_selection: { default: true, run: () => runSessionPageSelection(surfaces.a) },
     child: { default: true, run: () => runChildFifoAndResidency(surfaces.a) },
+    runtime_shared_resources: { default: true, run: () => runRuntimeSharedResources(surfaces.a) },
     team_turn: { default: true, run: async () => runTeamActivation(surfaces.a, "turn", await teamTarget()) },
     team_model_call: { default: true, run: async () => runTeamActivation(surfaces.c, "model_call", await teamTarget()) },
     mcp_turn: { default: true, run: () => runMcpActivation(surfaces.a, "turn") },
@@ -2894,7 +2895,10 @@ async function assertInternalHistory(owner, history, stage) {
       const report = owner.page.locator(`.child-thread-conversation[data-thread-id="${owner.threadId}"] .child-thread-report[data-execution-id="${execution.execution_id}"]`);
       await report.waitFor({ state: "visible" });
       for (const part of execution.response_parts.filter((entry) => entry.kind === "text" || entry.kind === "final_text")) {
-        if (part.text) assert.ok((await report.innerText()).includes(part.text), `${stage}: internal report 正文丢失`);
+        if (part.text) {
+          const rendered = await report.locator(".chat-markdown").allTextContents();
+          assert.ok(rendered.some((text) => text.includes(part.text)), `${stage}: internal report 正文丢失: ${JSON.stringify({ expected: part.text, rendered })}`);
+        }
       }
     }
     facts.push({ executionId: execution.execution_id, jobId: execution.job_id, parts, display: execution.display_parts });
@@ -7684,6 +7688,190 @@ async function runRealCompaction(surface) {
   assert.ok((await display.innerText()).includes("README"));
   return { sessionId: owner.sessionId, prepared, actual, summary: summaries[0], archiveRead,
     compactedRequest: compactedRequest.identity, activity: turn.activity_stats };
+}
+
+async function runRuntimeSharedResources(surface) {
+  const parent = await createProductSession(surface, "卸载 scope 按保留范围释放资源并保持共享来源");
+  const threadId = `thr_${await testControl({ action: "next_uuid", namespace: "thr" })}`;
+  const initialCalls = await planChatCalls(parent.sessionId, threadId, [
+    toolResponse("scope-child-read", "read_file", { path: "README.md" }),
+    finalResponse("scope-child-ready", "子线程已读取 README.md。"),
+  ]);
+  await completeOwnerTurn(parent, "创建独立子线程读取 README.md。", [
+    toolResponse("scope-delegate", "task", { description: "读取 README.md 后等待。", subagent_type: "general-purpose" }),
+    finalResponse("scope-created", "子线程已创建。"),
+    finalResponse("scope-report", "子线程报告已收到。"),
+  ]);
+  const child = { ...parent, threadId, child: true };
+  await waitForIdleChildRuntime(child);
+  const tracked = await completeOwnerTurn(parent, "持续跟踪 gateway-context Skill。", [
+    toolResponse("scope-track", "skill_load", { name: "gateway-context", mode: "tracked" }),
+    finalResponse("scope-tracked", "共享来源已跟踪。"),
+  ]);
+  const tracking = await readRollout(parent, "SELECT tracking_status FROM context_source_control_states WHERE session_id=? AND thread_id=? AND source_kind='skill' AND name='gateway-context'", [parent.sessionId, parent.threadId]);
+  assert.deepEqual(tracking, [{ tracking_status: "tracked" }]);
+  const thread = { session_id: child.sessionId, thread_id: child.threadId };
+  const getResource = async (id) => (await ownerApi(child, `/api/v1/resources/${id}`)).data;
+  const resources = [];
+  for (const [kind, retentionScope] of [
+    ["terminal", "thread"], ["browser", "thread"],
+    ["terminal", "workspace"], ["browser", "workspace"],
+  ]) {
+    const resource = (await ownerApi(child, `/api/v1/resources/${kind === "terminal" ? "terminals" : "browsers"}`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ...thread, retention_scope: retentionScope, title: `scope-${retentionScope}-${kind}` }),
+    })).data;
+    assert.equal(resource.kind, kind);
+    assert.deepEqual(resource.source_thread, thread);
+    assert.equal(resource.retention_scope, retentionScope);
+    assert.equal(resource.status, "running");
+    assert.deepEqual(resource.thread_associations, [thread]);
+    if (kind === "terminal") {
+      assert.ok(Number.isInteger(resource.metadata.os_pid) && resource.metadata.os_pid > 0);
+      assert.ok(resource.metadata.process_start_time, "临时与持久终端都必须真实启动PTY");
+    } else {
+      assert.ok(resource.metadata.runtime_generation && resource.metadata.active_page_id, "临时与持久浏览器都必须真实启动页面");
+    }
+    resources.push(resource);
+  }
+  const terminal = resources.find((entry) => entry.kind === "terminal" && entry.retention_scope === "workspace");
+  const browserResource = resources.find((entry) => entry.kind === "browser" && entry.retention_scope === "workspace");
+  assert.ok(Number.isInteger(terminal.metadata.os_pid) && terminal.metadata.os_pid > 0);
+  assert.ok(browserResource.metadata.runtime_generation && browserResource.metadata.active_page_id);
+  const browserRun = async (code) => {
+    const current = await getResource(browserResource.resource_id);
+    return (await ownerApi(child, `/api/v1/resources/${current.resource_id}/browser-operation`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ expected_revision: current.owner_revision, action: "run", payload: { code } }),
+    })).data;
+  };
+  const marker = `scope:${child.threadId}`;
+  assert.equal((await browserRun(`return await page.evaluate((value) => { window.__scopeMarker = value; return value; }, ${JSON.stringify(marker)});`)).result, marker);
+  const heldCalls = await planChatCalls(parent.sessionId, parent.threadId, [
+    toolResponse("scope-consumer-held", "read_file", { path: "README.md" }),
+    finalResponse("scope-consumer-final", "另一个来源消费者仍在原 graph 中。"),
+  ]);
+  const hold = { operation_id: `${heldCalls[0]}:tool-call:scope-consumer-held`, phase: "canonical.tool_result.before_commit" };
+  const skillPath = join(parent.workspace, ".boxteam/skills/gateway-context/SKILL.md");
+  const skillBytes = await readFile(skillPath);
+  await testControl({ action: "arm", ...hold });
+  let observation;
+  let held;
+  try {
+    await openOwner(parent);
+    held = await sendOwnerPrompt(parent, "保持本次读取活跃，核对另一个线程卸载后的来源更新。");
+    await testControl({ action: "acknowledged", ...hold });
+    const historyBefore = await loadThreadHistory(child);
+    const bindingBefore = await graphBinding(child);
+    const itemsBefore = await readRollout(child, "SELECT item_id,content_hash FROM item_catalog ORDER BY item_sequence");
+    const epochsBefore = await readRollout(child, "SELECT * FROM context_epoch_transitions ORDER BY transition_id");
+    const idle = await waitForIdleChildRuntime(child);
+    await testControl({ action: "advance_residency", seconds: 1799 });
+    assert.equal((await graphLifecycle(child)).closed.length, 0);
+    await testControl({ action: "advance_residency", seconds: 1 });
+    await waitUntil(async () => (await graphLifecycle(child)).closed.length === 1, "仅关闭到期 child 的 scope", residencyScanObservationTimeoutMs);
+    const closed = await graphLifecycle(child);
+    const consumerBefore = await graphLifecycle(parent);
+    assert.equal(consumerBefore.compiled.length, 1);
+    assert.equal(consumerBefore.closed.length, 0, "活跃消费者不得随另一个 scope 关闭");
+    assert.equal(closed.closed[0].details.scope_state, "closed");
+    await openOwner(child);
+    const coldHistory = await loadThreadHistory(child);
+    assert.deepEqual(coldHistory.items, historyBefore.items, "刷新及 cold history 不改写持久历史");
+    assert.deepEqual(coldHistory.internal_executions, historyBefore.internal_executions);
+    assert.deepEqual(await readRollout(child, "SELECT item_id,content_hash FROM item_catalog ORDER BY item_sequence"), itemsBefore);
+    assert.deepEqual(await readRollout(child, "SELECT * FROM context_epoch_transitions ORDER BY transition_id"), epochsBefore, "卸载不能创建上下文 epoch");
+    assert.deepEqual(await graphBinding(child), bindingBefore);
+    assert.equal((await browserRun("return await page.evaluate(() => window.__scopeMarker);")).result, marker, "workspace 浏览器的原页面内存必须跨 scope 关闭保留");
+    const externalAfter = await Promise.all(resources.map((resource) => getResource(resource.resource_id)));
+    for (const [index, current] of externalAfter.entries()) {
+      const original = resources[index];
+      assert.equal(current.retention_scope, original.retention_scope);
+      assert.equal(current.status, original.retention_scope === "thread" ? "deleted" : "running");
+      assert.equal(current.reconciliation_status, "verified", "资源状态必须由实际 owner 核实");
+      assert.ok(current.owner_revision > original.owner_revision, "释放关联必须推进 owner revision");
+      assert.deepEqual(current.thread_associations, []);
+      if (original.retention_scope === "workspace") {
+        const fields = current.kind === "terminal" ? ["os_pid", "process_start_time", "pty_worker_pid"] : ["runtime_generation", "active_page_id"];
+        for (const field of fields) assert.equal(current.metadata[field], original.metadata[field], "卸载不能停止或重建 workspace 外部实例");
+      }
+    }
+    assert.equal((await graphLifecycle(child)).compiled.length, 1, "冷读取及外部资源操作不得物化 child graph");
+    const changedMarker = `SCOPE_WATCH_${parent.threadId}`;
+    const changedBytes = Buffer.concat([skillBytes, Buffer.from(`\n${changedMarker}\n`)]);
+    const changedRevision = `sha256:${createHash("sha256").update(changedBytes).digest("hex")}`;
+    await writeFile(skillPath, changedBytes);
+    let watchPublished;
+    await waitUntil(async () => {
+      watchPublished = (await testControl({ action: "events" })).find((event) => event.phase === "workspace.source.watch.published"
+        && event.pid === closed.closed[0].pid && event.at > closed.closed[0].at
+        && event.details?.revision === changedRevision);
+      return Boolean(watchPublished);
+    }, "未发起后续模型请求前，共享 watcher 已发布精确新版来源");
+    assert.ok(watchPublished.operation_id.endsWith("/gateway-context/SKILL.md"));
+    assert.equal(watchPublished.details.available, true);
+    assert.ok(watchPublished.details.subscriber_ids.length > 0, "共享来源通道仍有消费者；parent接收由后续原graph请求核实");
+    assert.equal((await graphLifecycle(parent)).acquired.length, consumerBefore.acquired.length, "watch 发布必须先于下一次模型准入");
+    await testControl({ action: "release", ...hold });
+    await waitForJobStatus(parent, held.jobId);
+    const parentThread = { session_id: parent.sessionId, thread_id: parent.threadId };
+    const terminalBeforeUse = await getResource(terminal.resource_id);
+    const attached = (await ownerApi(parent, `/api/v1/resources/${terminal.resource_id}/attach`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ expected_revision: terminalBeforeUse.owner_revision, thread: parentThread }),
+    })).data;
+    assert.deepEqual(attached.thread_associations, [parentThread]);
+    const observed = await completeOwnerTurn(parent, "核对已跟踪 Skill 的当前正文，并向保留的 workspace 终端写入后读取输出。", [
+      toolResponse("scope-pty-write", "write_stdin", { session_id: terminal.resource_id, chars: "printf 'SCOPE_%s_%s\\n' 'PTY' 'ALIVE'\n" }),
+      toolResponse("scope-pty-read", "write_stdin", { session_id: terminal.resource_id }),
+      finalResponse("scope-watch-observed", "共享监听已发布新正文，原 PTY 仍可操作。"),
+    ]);
+    const observedRequest = await modelRequest(observed.calls[0]);
+    const terminalResultRequest = await modelRequest(observed.calls[2]);
+    const terminalOutput = terminalResultRequest.request.messages.filter((message) => message.role === "tool");
+    assert.ok(terminalOutput.some((message) => message.content.includes(terminal.resource_id) && message.content.includes("SCOPE_PTY_ALIVE")), "卸载后原 PTY 必须执行命令并返回真实输出，不能只核命令回显");
+    const terminalAfterUse = await getResource(terminal.resource_id);
+    assert.equal(terminalAfterUse.metadata.os_pid, terminal.metadata.os_pid);
+    assert.equal(terminalAfterUse.metadata.process_start_time, terminal.metadata.process_start_time);
+    const detached = (await ownerApi(parent, `/api/v1/resources/${terminal.resource_id}/detach`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ expected_revision: terminalAfterUse.owner_revision, thread: parentThread }),
+    })).data;
+    assert.deepEqual(detached.thread_associations, []);
+    assert.ok(JSON.stringify(observedRequest.request.messages).includes(changedMarker), "另一个已订阅消费者必须收到卸载后的真实文件变化");
+    const consumerAfter = await graphLifecycle(parent);
+    assert.equal(consumerAfter.compiled.length, 1, "来源更新必须由原 resident consumer 接收");
+    assert.equal(consumerAfter.closed.length, 0);
+    observation = { idle, historyBefore, coldHistory, bindingBefore, itemsBefore, epochsBefore, closed,
+      consumerBefore, consumerAfter, externalAfter, observed, observedRequest, terminalResultRequest, terminalAfterUse, changedMarker, changedRevision, watchPublished };
+  } finally {
+    await testControl({ action: "release", ...hold });
+    await writeFile(skillPath, skillBytes);
+  }
+  const coldBeforeResume = (await ownerApi(child, `/api/v1/sessions/${child.sessionId}/child-threads`)).data.items.find((entry) => entry.thread_id === child.threadId).runtime;
+  assert.equal(coldBeforeResume.residency, "cold", "资源关联、PTY读写及解除关联不得唤醒child");
+  assert.equal((await graphLifecycle(child)).compiled.length, 1, "只有后续真实消息准入才能重建child graph");
+  const resumed = await completeOwnerTurn(child, "重新加载原 child 并读取 README.md。", [
+    toolResponse("scope-resumed-read", "read_file", { path: "README.md" }),
+    finalResponse("scope-resumed-final", "workspace 外部实例与原 GraphBinding 保留。"),
+  ]);
+  const prefix = (request) => JSON.stringify(request.request.messages.filter((message) => message.role === "system"));
+  const prefixBefore = prefix(await modelRequest(initialCalls[0]));
+  const prefixAfter = prefix(await modelRequest(resumed.calls[0]));
+  assert.equal(prefixAfter, prefixBefore, "仅卸载和刷新不能漂移 child stable-prefix bytes");
+  assert.deepEqual(await graphBinding(child), observation.bindingBefore);
+  const rebuilt = await graphLifecycle(child);
+  assert.equal(rebuilt.compiled.length, 2);
+  assert.ok(graphAdmission(rebuilt, resumed.sent.jobId).details.generation > observation.closed.acquired[0].details.generation);
+  for (const resource of resources.filter((entry) => entry.retention_scope === "workspace")) {
+    const current = await getResource(resource.resource_id);
+    await ownerApi(child, `/api/v1/resources/${current.resource_id}/stop`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ expected_revision: current.owner_revision }),
+    });
+  }
+  return { sessionId: child.sessionId, threadId: child.threadId, parentThreadId: parent.threadId,
+    initialCalls, tracked, held, heldCalls, resources, ...observation, coldBeforeResume, prefixBefore, prefixAfter, resumed, rebuilt };
 }
 
 async function runChildFifoAndResidency(surface) {

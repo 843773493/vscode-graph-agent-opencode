@@ -207,7 +207,7 @@ main-thread history bootstrap、pending 队列和 active Job 展示 SHALL 消费
 #### Scenario: idle unload 与 cold history 在 Web E2E 中可证明
 
 - **WHEN** fake clock依次推进到29分59秒、30分00秒，并在cold后只打开child历史，最后发送一条新消息
-- **THEN** 只读residency与trace证明仅在30分钟且无blocker、该generation的`LifetimeScope`已取消并排空自有task/句柄后转为cold；另以当前child保有`launch_pending`进程claim或正在`starting|running|paused|stopping`的Node调试进程推进同一fake clock，验证仍resident且显示脱敏debug blocker，debug owner核实终态/结清lease后重新起算30分钟。其它consumer仍持有的共享watch和跨Turn terminal/browser/MCP不随child关闭。查看历史不唤醒，新消息才reload；reload产生新的runtime generation，但持久`GraphBinding(graph_id, graph_revision, graph_schema_hash, capability_profile_hash)`逐字段等于卸载前值，Provider/runtime trace证明该次执行使用这一精确binding而非当前latest graph。上述过程不改变已提交item、stable prefix、sealed bytes或历史排序
+- **THEN** 只读residency与trace证明仅在30分钟且无blocker、该generation的`LifetimeScope`已取消并排空自有task/句柄后转为cold；另以当前child保有`launch_pending`进程claim或正在`starting|running|paused|stopping`的Node调试进程推进同一fake clock，验证仍resident且显示脱敏debug blocker，debug owner核实终态/结清lease后重新起算30分钟。其它consumer仍持有的共享watch不随child关闭；terminal/browser由领域owner按唯一保留合同核实删除`thread`临时资源，保留`workspace`原实例并移除child关联，MCP继续遵循其owner/lease合同。查看历史不唤醒，新消息才reload；reload产生新的runtime generation，但持久`GraphBinding(graph_id, graph_revision, graph_schema_hash, capability_profile_hash)`逐字段等于卸载前值，Provider/runtime trace证明该次执行使用这一精确binding而非当前latest graph。上述过程不改变已提交item、stable prefix、sealed bytes或历史排序
 
 #### Scenario: Session 内 team 与跨 Session 无状态边界可见
 
