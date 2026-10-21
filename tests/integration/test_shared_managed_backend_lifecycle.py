@@ -1,4 +1,4 @@
-"""真实 Gateway 与共享 Backend；仅模型服务使用受控 HTTP 外部边界。"""
+"""真实 Gateway 与共享 Backend；模型使用共享精确回放。"""
 
 from __future__ import annotations
 
@@ -8,9 +8,8 @@ import os
 import re
 import signal
 import sqlite3
-import threading
 from collections.abc import AsyncIterator
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import commentjson
@@ -40,8 +39,10 @@ from app.gateway.runtime.port_forwarding import SshPortForwardManager
 from app.gateway.runtime.workspace import WorkspaceRuntime
 from app.gateway.workspace_ids import build_managed_local_workspace_id
 from app.services.infrastructure.trace_event_store import TraceEventStore
+from app.testing.model_stream import build_cassette, chat_completion_frames
 from tests.harness.python.run_context import TestRunContext
-from tests.integration.stubs.http_stubs import HTTPStubState, openai_chat_stub
+from tests.support.model_stream_config import ModelStreamReplay, model_stream_replay
+from tests.support.ports import integration_port_block_for_file
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
     GatewayProcess,
@@ -49,7 +50,6 @@ from tests.support.processes.gateway import (
     close_gateway_process,
     start_gateway_process,
 )
-from tests.support.ports import integration_port_block_for_file
 from tests.support.workspaces import (
     install_test_workspace_config,
     prepare_default_test_workspace,
@@ -62,8 +62,9 @@ class SharedBackendCase:
     context: TestRunContext
     roots: tuple[Path, Path]
     boxteam_home: Path
-    provider: HTTPStubState
+    replay: ModelStreamReplay
     gateway: GatewayProcess
+    planned_calls: dict[str, dict[str, str]] = field(default_factory=dict)
 
     async def data(self, method: str, path: str, **kwargs):
         response = await self.client.request(method, path, **kwargs)
@@ -71,6 +72,28 @@ class SharedBackendCase:
         payload = response.json()
         assert response.headers["X-Request-ID"] == payload["request_id"]
         return payload["data"]
+
+    async def plan(self, workspace_id: str, session_id: str, text: str) -> str:
+        main = await self.data("GET", f"/api/v1/sessions/{session_id}/main-thread", headers={"X-BoxTeam-Workspace-Id": workspace_id})
+        thread_id = main["thread_id"]
+        port = integration_port_block_for_file(self.context.test_file).port(80)
+        interaction = build_cassette(
+            asset_id="shared-managed-backend", model="e2e-stub-model",
+            url=f"http://127.0.0.1:{port}/v1/chat/completions",
+            frames=chat_completion_frames(
+                response_id="chatcmpl-shared-owner", model="e2e-stub-model",
+                deltas=({"role": "assistant", "content": text},), finish_reason="stop",
+            ),
+        ).raw["interactions"][0]
+        call, = self.replay.control.plan_model_calls(session_id, thread_id, [interaction])
+        self.planned_calls[call] = {"session_id": session_id, "thread_id": thread_id, "model_call_id": call}
+        return call
+
+    def request(self, call: str) -> dict[str, object]:
+        artifact = json.loads((self.replay.artifacts / (call + ".json")).read_text(encoding="utf-8"))
+        assert artifact["identity"] == self.planned_calls[call]
+        assert artifact["request"]["stream"] is True
+        return artifact["request"]
 
 
 @pytest.fixture
@@ -103,20 +126,27 @@ async def shared_backend_case(request: pytest.FixtureRequest) -> AsyncIterator[S
             agent["model"]["fallback_providers"] = []
         config_path.write_text(json.dumps(config, ensure_ascii=False, indent=2) + "\n")
     boxteam_home = context.boxteam_home_for_node(request.node.nodeid)
-    with openai_chat_stub(ports.port(80)) as provider:
+    with model_stream_replay(
+        context.artifacts_dir / request.node.name, runtime_root=context.runtime_root_for_node(request.node.nodeid),
+        business_assertion="shared-backend-mount-isolation-and-controlled-exit",
+    ) as replay:
         gateway = await asyncio.to_thread(
             start_gateway_process, workspace_root=roots[0], default_backend_url=None, port=ports.port(20),
             boxteam_home=boxteam_home, artifacts_dir=context.artifacts_dir / "gateway",
+            asgi_app="tests.support.e2e_control.gateway_app:app",
+            extra_env={**replay.environment, "LITELLM_LOCAL_MODEL_COST_MAP": "true"},
         )
-        async with httpx.AsyncClient(
-            base_url=f"http://127.0.0.1:{ports.port(20)}", headers=LOCAL_TOKEN_HEADERS, timeout=180,
-        ) as client:
-            case = SharedBackendCase(client, context, roots, boxteam_home, provider, gateway)
-            try:
+        case = None
+        try:
+            async with httpx.AsyncClient(
+                base_url=f"http://127.0.0.1:{ports.port(20)}", headers=LOCAL_TOKEN_HEADERS, timeout=180,
+            ) as client:
+                case = SharedBackendCase(client, context, roots, boxteam_home, replay, gateway)
                 await acquire_gateway_guest(client)
                 yield case
-            finally:
-                await asyncio.to_thread(close_gateway_process, case.gateway)
+                assert {path.stem for path in replay.artifacts.glob("*.json")} == set(case.planned_calls)
+        finally:
+            await asyncio.to_thread(close_gateway_process, case.gateway if case is not None else gateway)
 
 
 async def _join_group(case: SharedBackendCase):
@@ -272,7 +302,7 @@ async def test_real_gateway_denies_ungranted_peer_before_directory_registry_or_p
     backend_after = (await case.client.get("/api/v1/health")).json()
     for key in ("process_id", "workspace_id", "backend_generation", "mount_manifest_digest"):
         assert backend_after[key] == backend_before[key]
-    assert not case.provider.requests
+    assert not list(case.replay.artifacts.glob("*.json"))
     (case.context.artifacts_dir / "root-binding-peer-denied.json").write_text(json.dumps({
         "receipts": receipts, "relay_statuses": relay_statuses,
         "registry_unchanged": True, "backend_before": backend_before, "backend_after": backend_after,
@@ -340,6 +370,8 @@ async def test_real_peer_admin_root_binding_survives_restart_and_revocation(
     case.gateway = await asyncio.to_thread(
         start_gateway_process, workspace_root=case.roots[0], default_backend_url=None, port=port,
         boxteam_home=case.boxteam_home, artifacts_dir=case.context.artifacts_dir / "gateway-restarted",
+        asgi_app="tests.support.e2e_control.gateway_app:app",
+        extra_env={**case.replay.environment, "LITELLM_LOCAL_MODEL_COST_MAP": "true"},
     )
     assert case.gateway.process.pid != gateway_pid
     await acquire_gateway_guest(case.client)
@@ -365,7 +397,7 @@ async def test_real_peer_admin_root_binding_survives_restart_and_revocation(
     assert removed.status_code == 200, removed.text
     assert all(item["workspace_id"] != target_id for item in (await case.data("GET", "/api/gateway/workspaces"))["items"])
     assert probe.read_text() == "原生 owner 的固定根\n"
-    assert not case.provider.requests
+    assert not list(case.replay.artifacts.glob("*.json"))
     (case.context.artifacts_dir / "root-binding-peer-granted.json").write_text(json.dumps({
         "target_id": target_id, "backend_id": backend_id, "gateway_restarted": True,
         "denied_status": denied.status_code, "removed_status": removed.status_code,
@@ -400,6 +432,7 @@ async def test_real_gateway_one_backend_two_mounts_and_isolated_session_jobs(sha
         backend_healths.append(response.json())
         session = await case.data("POST", "/api/v1/sessions", headers=headers, json={"title": f"mount-{index}"})
         sessions.append(session["session_id"])
+        call = await case.plan(identity, sessions[-1], f"mount-{index} 已完成")
         accepted = await case.data("POST", f"/api/v1/sessions/{sessions[-1]}/messages", headers=headers, json={
             "message": {"content": f"回复 mount-{index}"}, "run": {"mode": "single_agent", "agent_id": "default"},
         })
@@ -411,6 +444,10 @@ async def test_real_gateway_one_backend_two_mounts_and_isolated_session_jobs(sha
                     assert job["session_id"] == sessions[-1]
                     break
                 await asyncio.sleep(0.1)
+        wire = case.request(call)
+        assert any(message["role"] == "user" and message["content"] == f"回复 mount-{index}" for message in wire["messages"])
+        history = await case.data("POST", f"/api/v1/sessions/{sessions[-1]}/history", headers=headers, json={"direction": "tail"})
+        assert history["items"][-1]["final_response"] == f"mount-{index} 已完成"
     assert len({item["process_id"] for item in backend_healths}) == 1
     assert {item["backend_generation"] for item in backend_healths} == {joined["backend_generation"]}
     assert len({item["mount_manifest_digest"] for item in backend_healths}) == 1
@@ -470,7 +507,7 @@ async def test_candidate_process_failure_recovers_complete_previous_group(shared
                 if candidate is not None:
                     pid, port = candidate
                     command = Path(f"/proc/{pid}/cmdline").read_bytes().replace(b"\x00", b" ")
-                    assert b"app.main:app" in command and str(port).encode() in command
+                    assert b"tests.support.e2e_control.backend_app:app" in command and str(port).encode() in command
                     os.kill(pid, signal.SIGKILL)
                     return pid
                 await asyncio.sleep(0.05)
@@ -532,23 +569,20 @@ async def test_real_delete_last_member_blocks_job_then_force_commits_durable_int
     log_path = case.context.artifacts_dir / "gateway/gateway.stderr.log"
     starts_before = re.findall(r"启动工作区后端: pid=(\d+)", log_path.read_text())
     assert starts_before[-1] == str(health["process_id"])
-    entered, release = threading.Event(), threading.Event()
-    def paused_response(_):
-        entered.set()
-        assert release.wait(90), "模型边界等待未释放"
-        return {"content": "退出探针完成"}
-    case.provider.response_callback = paused_response
     request = {
         "expected_backend_generation": secondary["backend_generation"],
         "expected_workspace_ids": secondary["affected_workspace_ids"],
         "desired_workspace_ids": [],
     }
+    session = await case.data("POST", "/api/v1/sessions", headers=headers, json={"title": "last-member-job"})
+    call = await case.plan(identity, session["session_id"], "退出探针完成")
+    case.replay.control.arm(call, "model.response_ready")
     try:
-        session = await case.data("POST", "/api/v1/sessions", headers=headers, json={"title": "last-member-job"})
         accepted = await case.data("POST", f"/api/v1/sessions/{session['session_id']}/messages", headers=headers, json={
             "message": {"content": "保持运行直到受控退出"}, "run": {"mode": "single_agent", "agent_id": "default"},
         })
-        assert await asyncio.to_thread(entered.wait, 20), "真实 Job 未到达模型边界"
+        await asyncio.to_thread(case.replay.control.acknowledged, call, "model.response_ready", 20)
+        assert any(message["role"] == "user" and message["content"] == "保持运行直到受控退出" for message in case.request(call)["messages"])
         blocked = await case.client.request("DELETE", f"/api/gateway/workspaces/{identity}", json=request)
         assert blocked.status_code == 409, blocked.text
         detail = blocked.json()["detail"]
@@ -590,8 +624,7 @@ async def test_real_delete_last_member_blocks_job_then_force_commits_durable_int
             "remaining_owners": _managed_owner_snapshot(case),
         }, ensure_ascii=False, indent=2) + "\n")
     finally:
-        release.set()
-        case.provider.response_callback = None
+        case.replay.control.release(call, "model.response_ready")
 
 
 @pytest.mark.asyncio
