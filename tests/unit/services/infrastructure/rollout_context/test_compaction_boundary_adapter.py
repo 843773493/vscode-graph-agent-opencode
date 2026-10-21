@@ -65,14 +65,11 @@ def test_closed_boundaries_pass(paired_saver: RolloutCheckpointSaver) -> None:
         validate_compaction_prefix_cutoffs(snapshot.connection, sequences, [1, 4])
 
 
-def _checkpoint(checkpoint_id: str, messages: list[object]) -> dict[str, object]:
+def _checkpoint(checkpoint_id: str, messages: list[object], version: str) -> dict[str, object]:
     checkpoint = empty_checkpoint()
     checkpoint["id"] = checkpoint_id
     checkpoint["channel_values"] = {"messages": messages}
-    checkpoint["channel_versions"] = {
-        channel: str(index + 1)
-        for index, channel in enumerate(checkpoint["channel_values"])
-    }
+    checkpoint["channel_versions"] = {"messages": version}
     checkpoint["updated_channels"] = list(checkpoint["channel_values"])
     return checkpoint
 
@@ -104,7 +101,7 @@ def _put_checkpoint(
     ):
         return saver.put(
             config,
-            _checkpoint(checkpoint_id, messages),
+            _checkpoint(checkpoint_id, messages, str(step)),
             {"source": "job", "step": step},
             {"messages": str(step)},
         )

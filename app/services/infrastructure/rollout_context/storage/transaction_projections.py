@@ -32,12 +32,15 @@ class RolloutTransactionProjectionMixin:
         timestamp: str,
         *, session_id: str, thread_id: str, checkpoint_ns: str,
         parent_checkpoint_id: str | None, new_versions: Mapping[str, object],
+        messages_state: str = "view",
     ) -> None:
         checkpoint_id = strict_text(
             checkpoint_id, field="checkpoint_channels.checkpoint_id"
         )
         view_id = strict_text(view_id, field="checkpoint_channels.context_view_id")
         strict_text(timestamp, field="checkpoint_channels.created_at")
+        if messages_state not in {"view", "delta", "snapshot"}:
+            raise ValueError(f"checkpoint messages value_state 非法: {messages_state!r}")
         values = checkpoint.get("channel_values", {})
         versions = checkpoint.get("channel_versions", {})
         updated = checkpoint.get("updated_channels") or []
@@ -57,7 +60,8 @@ class RolloutTransactionProjectionMixin:
             raise TypeError("checkpoint updated_channels 的名称必须是非空字符串")
         if len(set(updated)) != len(updated):
             raise ValueError("checkpoint updated_channels 不得重复")
-        names = set(values) | set(versions) | set(updated)
+        # 官方 Delta 根步可以既无值也无版本，仍登记其冻结空 selection。
+        names = set(values) | set(versions) | set(updated) | {"messages"}
         for name in sorted(names):
             version = versions.get(name)
             if name in values and version is None:
@@ -70,10 +74,11 @@ class RolloutTransactionProjectionMixin:
             updated_index = updated.index(name) if name in updated else None
             if name == "messages":
                 result = connection.execute(
-                    "INSERT INTO checkpoint_channels(checkpoint_id, channel_name, storage_kind, value_state, channel_version, context_view_id, updated_index, created_at) VALUES (?, ?, 'rollout_view', 'view', ?, ?, ?, ?)",
+                    "INSERT INTO checkpoint_channels(checkpoint_id, channel_name, storage_kind, value_state, channel_version, context_view_id, updated_index, created_at) VALUES (?, ?, 'rollout_view', ?, ?, ?, ?, ?)",
                     (
                         checkpoint_id,
                         name,
+                        messages_state,
                         version,
                         view_id,
                         updated_index,

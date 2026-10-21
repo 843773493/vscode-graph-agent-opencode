@@ -12,7 +12,9 @@ from app.agents.checkpoint_recovery import (
 )
 from app.domain.itemized.execution_admission import ExecutionAdmission
 from app.domain.itemized.runtime import ModelCallRecord
-from app.services.infrastructure.rollout_context.checkpoint.message_codec import LangChainMessageCodec
+from app.services.infrastructure.rollout_context.checkpoint.message_codec import (
+    LangChainMessageCodec,
+)
 
 
 @pytest.fixture
@@ -39,7 +41,7 @@ def recovery_case():
 
         async def aget_tuple(self, query):
             messages = [assistant] if query["configurable"].get("checkpoint_id") else [assistant, HumanMessage("队列中的新输入")]
-            return SimpleNamespace(config=config, checkpoint={"channel_values": {"messages": messages}})
+            return SimpleNamespace(config=config, checkpoint={"channel_values": {"messages": messages}, "channel_versions": {"messages": "1"}})
 
     class Agent:
         snapshot = SimpleNamespace(next=("tools",), tasks=(), values={"messages": [assistant]}, config=config)

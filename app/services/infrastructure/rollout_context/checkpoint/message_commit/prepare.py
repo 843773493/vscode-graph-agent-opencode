@@ -14,6 +14,9 @@ from app.domain.itemized.records import CanonicalItemRecord, RuntimeNoticePayloa
 from app.services.infrastructure.rollout_context.checkpoint.codec.metadata import (
     canonical_message_anchor,
 )
+from app.services.infrastructure.rollout_context.checkpoint.message_commit.revisions import (
+    resolve_message_group,
+)
 from app.services.infrastructure.rollout_context.storage.catalog.message_groups import (
     find_message_locator,
     read_message_group,
@@ -51,42 +54,6 @@ class MessageBatch:
     message_item_ids: dict[str, tuple[str, ...]] = field(default_factory=dict)
 
 
-def _compare_group(
-    expected: Sequence[CanonicalItemRecord],
-    actual: Sequence[CanonicalItemRecord],
-) -> None:
-    if len(expected) != len(actual):
-        raise ValueError("canonical message group 成员数发生变化")
-    for candidate, stored in zip(expected, actual, strict=True):
-        differing = [
-            name
-            for name in (
-                "item_id",
-                "semantic_kind",
-                "payload_kind",
-                "content_hash",
-                "turn_id",
-                "turn_scope",
-                "message_group_id",
-            )
-            if getattr(candidate, name) != getattr(stored, name)
-        ]
-        if differing:
-            raise ValueError(
-                f"canonical item 与 message projection 内容不一致: {stored.item_id}:"
-                + ",".join(
-                    f"{name}={getattr(candidate, name)!r}/{getattr(stored, name)!r}"
-                    for name in differing
-                )
-            )
-        if canonical_json_text(candidate.projection_manifest()) != canonical_json_text(
-            stored.projection_manifest()
-        ):
-            raise ValueError(
-                f"canonical item typed provenance/extensions 不一致: {stored.item_id}"
-            )
-
-
 def prepare_messages(
     *,
     connection: sqlite3.Connection,
@@ -98,6 +65,8 @@ def prepare_messages(
     last_message_sequence: int,
     next_item_sequence: int,
     offset: int,
+    locator_sequences: Sequence[int] | None = None,
+    allow_revisions: bool = False,
 ) -> MessageBatch:
     batch = MessageBatch(next_item_sequence, last_message_sequence)
     canonical_message_ids = [
@@ -109,9 +78,14 @@ def prepare_messages(
         for index, (canonical_message_id, message) in enumerate(
             zip(canonical_message_ids, messages, strict=True)
         ):
+            message_value = codec.to_dict(message)
+            explicit_anchor = canonical_message_anchor(message_value)
+            versions = connection.execute(
+                "SELECT COUNT(*) FROM messages WHERE message_id=?", (canonical_message_id,),
+            ).fetchone()[0]
             message_locator = find_message_locator(
-                connection, canonical_message_id,
-                item_id=canonical_message_anchor(codec.to_dict(message)),
+                connection, canonical_message_id, item_id=explicit_anchor,
+                sequences=locator_sequences if explicit_anchor is None and versions > 1 else None,
             )
             canonical_anchor = connection.execute(
                 "SELECT jsonl_offset, jsonl_length, turn_id, execution_id "
@@ -212,22 +186,15 @@ def prepare_messages(
                 if message_role == "assistant"
                 else None
             )
-            group = codec.items_for_message(
-                message,
-                item_sequence=message_item_group[0].item_sequence
-                if message_item_group
-                else batch.next_item_sequence,
-                message_id=canonical_message_id,
-                turn_id=turn_id,
-                execution_id=execution_id,
-                timestamp=datetime.now(UTC).isoformat(),
-                model_call_id=model_call_id,
-                canonical_items=message_item_group,
+            group, created = resolve_message_group(
+                connection, codec=codec, message=message, message_value=message_value,
+                explicit_anchor=explicit_anchor, stored_group=message_item_group,
+                message_id=canonical_message_id, turn_id=turn_id, execution_id=execution_id,
+                model_call_id=model_call_id, next_item_sequence=batch.next_item_sequence,
+                timestamp=datetime.now(UTC).isoformat(), allow_revisions=allow_revisions,
             )
-            # codec 自身验证 group 完整性；不能接受返回顺序与投影不一致的适配器。
-            codec.project_message(group)
-            if message_item_group:
-                _compare_group(group, message_item_group)
+            if created:
+                message_locator = None
             batch.item_ids.extend(item.item_id for item in group)
             batch.message_item_ids[canonical_message_id] = tuple(item.item_id for item in group)
             for item in group:

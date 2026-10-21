@@ -42,6 +42,9 @@ from app.services.business.reasoning_checkpoint_service import (
     persist_standard_assistant_checkpoint,
     persist_user_message_checkpoint,
 )
+from app.services.infrastructure.rollout_context.checkpoint.codec.message_channel import (
+    checkpoint_messages,
+)
 from app.services.infrastructure.rollout_context.checkpoint.codec.metadata import (
     producer_response_metadata,
 )
@@ -242,7 +245,7 @@ async def test_persist_user_message_checkpoint_is_idempotent(
     ):
         latest = await saver.aget_tuple(config)
     assert latest is not None
-    messages = latest.checkpoint["channel_values"]["messages"]
+    messages = checkpoint_messages(saver, latest)
     assert [item.response_metadata["message_id"] for item in messages] == [
         "msg_previous",
         "msg_user_checkpoint",
@@ -425,7 +428,7 @@ async def test_persist_user_message_checkpoint_discards_stale_execution_tasks(
     assert checkpoint["pending_sends"] == []
     assert [
         item.response_metadata["message_id"]
-        for item in checkpoint["channel_values"]["messages"]
+        for item in checkpoint_messages(saver, latest)
     ] == ["msg_previous", "msg_after_stale_task"]
 
 
@@ -498,7 +501,7 @@ async def test_internal_seed_checkpoint_keeps_graph_messages_and_cleans_stale_ta
         assert persist_user_message_checkpoint(**arguments) is stale_tasks
         assert persist_user_message_checkpoint(**arguments) is False
         latest = await saver.aget_tuple(config)
-    messages = latest.checkpoint["channel_values"]["messages"]
+    messages = checkpoint_messages(saver, latest)
     assert len(messages) == 1
     assert messages[0].response_metadata["message_id"] == "msg_previous"
     assert latest.checkpoint["pending_sends"] == []
@@ -636,7 +639,7 @@ async def test_persist_standard_assistant_checkpoint_rewrites_latest_message(
     ):
         latest = await saver.aget_tuple(config)
     assert latest is not None
-    messages = latest.checkpoint["channel_values"]["messages"]
+    messages = checkpoint_messages(saver, latest)
     assistant = messages[-1]
     assert isinstance(assistant, AIMessage)
     assert assistant.response_metadata["phase"] == "final_answer"
@@ -856,7 +859,7 @@ async def test_final_before_persist_convergence_replays_without_typed_provenance
         checkpoint_before_failure = deepcopy(replayed.checkpoint)
         config_before_failure = deepcopy(replayed.config)
         metadata_before_failure = deepcopy(replayed.metadata)
-        replayed_messages = replayed.checkpoint["channel_values"]["messages"]
+        replayed_messages = checkpoint_messages(saver, replayed)
         final_message = replayed_messages[-1]
         assert isinstance(final_message, AIMessage)
         assert final_message.id == final_message_id
@@ -983,7 +986,7 @@ async def test_persist_checkpoint_keeps_encrypted_response_reasoning(
         )
         latest = await saver.aget_tuple(config)
     assert latest is not None
-    assistant = latest.checkpoint["channel_values"]["messages"][-1]
+    assistant = checkpoint_messages(saver, latest)[-1]
     assert assistant.content[0] == {
         "type": "reasoning_items",
         "reasoning_items": [reasoning_item],

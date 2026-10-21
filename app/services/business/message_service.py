@@ -50,6 +50,9 @@ from app.services.infrastructure.attachment_blob_catalog.store import (
 from app.services.infrastructure.attachment_content_service import (
     AttachmentContentService,
 )
+from app.services.infrastructure.rollout_context.checkpoint.codec.message_channel import (
+    acheckpoint_messages,
+)
 from app.services.infrastructure.rollout_context.checkpoint.codec.metadata import (
     message_annotations,
 )
@@ -91,9 +94,15 @@ class MessageService(MessageContentProjectionMixin):
             return None
         owner = MutationIntentOwner(session_id=session_id, thread_id=thread_id)
         with session_thread_owner_scope(owner, langgraph_thread_id=thread_id):
-            return await self._checkpointer.aget_tuple(
-                build_checkpoint_config(thread_id)
-            )
+            checkpoint = await self._checkpointer.aget_tuple(build_checkpoint_config(thread_id))
+            if checkpoint is None:
+                return None
+            messages = await acheckpoint_messages(self._checkpointer, checkpoint)
+            return checkpoint._replace(checkpoint={
+                **checkpoint.checkpoint, "channel_values": {
+                    **checkpoint.checkpoint["channel_values"], "messages": messages,
+                },
+            })
 
     async def list(
         self,

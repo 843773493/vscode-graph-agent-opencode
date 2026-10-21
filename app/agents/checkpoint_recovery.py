@@ -9,9 +9,12 @@ from langchain_core.messages import AIMessage
 from langchain_core.runnables import RunnableConfig
 
 from app.core.checkpoint_config import build_checkpoint_config
-from app.domain.itemized.execution_admission import ExecutionAdmission
 from app.domain.itemized.errors import ItemSchemaError
+from app.domain.itemized.execution_admission import ExecutionAdmission
 from app.domain.itemized.runtime import ModelCallRecord
+from app.services.infrastructure.rollout_context.checkpoint.codec.message_channel import (
+    acheckpoint_messages,
+)
 from app.services.infrastructure.rollout_context.checkpoint.message_codec import (
     LangChainMessageCodec,
 )
@@ -61,7 +64,7 @@ async def persisted_pending_tool_candidate(
     frozen = await checkpointer.aget_tuple(latest.config)
     if frozen is None:
         raise RuntimeError("恢复预检的固定 checkpoint 已消失")
-    assistant = pending_tool_assistant(frozen.checkpoint.get("channel_values", {}).get("messages"))
+    assistant = pending_tool_assistant(await acheckpoint_messages(checkpointer, frozen))
     if assistant is None:
         return None
     return await _registered_candidate(checkpointer, admission, assistant, frozen.config)

@@ -15,10 +15,10 @@
 ## 3. P1 官方消息增量与基准恢复
 
 - [x] 3.1 基于1.2测量确认现有messages正文复用之外的增量收益，核实产品create_agent最终channel声明及DeepAgents reducer差异；冻结官方snapshot计数/频率与serializer合同。
-- [ ] 3.2 迁齐图状态、Saver写入、canonical引用delta、基准snapshot和metadata计数；保留新增/替换/删除/Overwrite/摘要语义，不另存完整消息历史。
-- [ ] 3.3 完成同步/异步get_delta_channel_history与有序重放，沿父链按task_path/task_id/idx恢复，排除目标pending writes，明确区分合法空根和损坏断链。
-- [ ] 3.4 迁齐fork/rewind/compaction及进程重启；目标本地带齐基准和全部必要中间writes，验证深历史、A→B→C、源删除后恢复与工具配对，移除旧路径。
-- [ ] 3.5 通过真实产品入口和同步/异步图验收比较恢复结果、存储/序列化收益，完成静态/审查后独立提交并push。
+- [x] 3.2 迁齐图状态、Saver写入、canonical引用delta、基准snapshot和metadata计数；保留新增/替换/删除/Overwrite/摘要语义，不另存完整消息历史。
+- [x] 3.3 完成同步/异步get_delta_channel_history与有序重放，沿父链按task_path/task_id/idx恢复，排除目标pending writes，明确区分合法空根和损坏断链。
+- [x] 3.4 迁齐fork/rewind/compaction及进程重启；目标本地带齐基准和全部必要中间writes，验证深历史、A→B→C、源删除后恢复与工具配对，移除旧路径。
+- [x] 3.5 通过真实产品入口和同步/异步图验收比较恢复结果、存储/序列化收益，完成静态/审查后独立提交并push。
 
 ## 4. P1 Assembly 与视图结构共享
 
@@ -61,3 +61,13 @@
 
 2026-10-21 消息版本来源前置片：schema21及20→21迁移已实现。`history-dedup-revision-schema-20261021-01`75例通过（36.75秒），覆盖迁移、失败回滚、state version及assembly；最终revision/group专项`history-dedup-revision-sources-20261021-03`50例通过（23.62秒），Ruff `history-dedup-revision-static-20261021-04`通过。原先opaque/provenance三条fixture在未发布canonical正文时生成引用，改为经正式append_items先发布后，原断言通过（定向3例5.77秒，未放宽缺失引用检查）。selection初版31例/105例及carrier专项原件继续保留。完整Gateway产品负载`history-dedup-revision-product-20261021-01`1例通过（227.67秒），包含摘要、重启、深fork、源删除、regenerate和历史request_hash；期间追加的revision guard分支由最终定向专项补验，不宣称该产品运行全程单一源码指纹，也不以它证明尚未接入的Delta。3.2—3.5继续未勾选。
 只读独审核对20→21事务复制/索引、写入与冷读来源守卫及实际消费者，未发现可确认的数据正确性阻断。
+
+2026-10-21 官方Delta切片：图状态、官方snapshot/counters、唯一Saver写读与canonical版本producer、业务恢复读取、fork/rewind/compaction已迁齐。非snapshot步不返回messages正文，由官方channels_from_checkpoint沿确切父链重放；已发布pending引用精确canonical版本，目标pending排除。fork复制全部Delta通道的on-path基准/中间writes及revision闭包，synthetic head保留非messages计数和正确父链，源删除后本地恢复。schema仍21，不因协议接入增加结构版本。
+
+最终正式矩阵`history-dedup-delta-fork-matrix-20261021-05`133例通过（96.52秒），包含同步/异步、缺祖先/缺基准拒绝、版本替换、官方控制输入、fork保护及registry；最后补齐raw dict/tuple混合Remove的fresh预览身份边界，`history-dedup-fresh-controls-20261021-01`28例通过（14.59秒）。Ruff `history-dedup-delta-static-20261021-05`通过。只读独审核对Delta闭包、synthetic父链和冻结view，未发现明确阻断。
+
+真实Gateway同负载`history-dedup-messages-product-20261021-04`1例通过（222.81秒），包含20次模型调用、多轮并行工具、摘要/重启、A→B→C深fork、两源删除后冷恢复、正式regenerate与逐assembly历史request_hash。原始SQLite一致备份、wire、源码指纹和measurements冻结于`history-dedup-delta-frozen-001/`。产品运行后仅追加上述raw混合输入分支及回归，由28例单独验证，不宣称所有最终源码均在该产品运行中使用。
+
+前两次Delta产品失败现场保留在`history-dedup-delta-regenerate-failure-frozen-001/`和`002/`：view完整Turn及block补齐误用全局物理版本，带回只供历史恢复的旧版本。现改为继承冻结parent可见成员，新消息仍由完整batch加入；精确membership回归覆盖同步/异步，不放宽首轮保留或frontier冲突断言。
+
+同负载summary_restart_continue：pending正文仍53485字节；assembly正文仍4069437字节；相较pending引用前置片，view成员9722→9271，但不以此代替第4组共享结构验收。源owner持久messages为112个delta/11个snapshot，未另建消息正文历史。该进程阶段deserialize183次/446301字节→193次/455090字节，单次整体222.79→222.81秒，不宣称耗时改善。结构和恢复合同完成，assembly/view及回收继续实施。

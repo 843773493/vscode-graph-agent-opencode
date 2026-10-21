@@ -5,22 +5,30 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import replace
 from inspect import getclosurevars
-from typing import Any
+from typing import Annotated, Any
 
 from langchain.agents import create_agent
 from langchain.agents.factory import _build_commands
-from langchain.agents.middleware import ModelRequest
+from langchain.agents.middleware import AgentState, ModelRequest
+from langchain_core.messages import AnyMessage
 from langchain_core.tools import BaseTool
 from langgraph._internal._runnable import RunnableCallable
 from langgraph.graph.state import CompiledStateGraph
 from langgraph.runtime import Runtime
 
 from app.agents.model_call_execution import ModelCallExecution
+from app.services.infrastructure.rollout_context.checkpoint.codec.message_channel import (
+    MessagesDeltaChannel,
+)
+
+
+class IncrementalAgentState(AgentState):
+    messages: Annotated[list[AnyMessage], MessagesDeltaChannel()]
 
 
 def create_model_call_agent(model, *, execution: ModelCallExecution, **options) -> CompiledStateGraph:
     """保留框架图、输出解析及请求链，只替换 terminal model execution。"""
-    graph = create_agent(model, **options)
+    graph = create_agent(model, state_schema=IncrementalAgentState, **options)
     node = graph.builder.nodes["model"]
     runnable = node.runnable
     if not isinstance(runnable, RunnableCallable) or not callable(runnable.func) or not callable(runnable.afunc):

@@ -17,6 +17,11 @@ from app.domain.itemized.execution_admission import (
 from app.domain.itemized.identity.item_projection import ItemProvenanceRelation
 from app.domain.itemized.records import user_input_payload
 from app.schemas.event import ModelTokenUsagePayload
+from app.services.infrastructure.rollout_context.checkpoint.codec.message_channel import (
+    checkpoint_messages,
+    message_snapshot,
+    message_snapshot_metadata,
+)
 from app.services.infrastructure.rollout_context.checkpoint.codec.metadata import (
     message_annotations,
     producer_response_metadata,
@@ -214,7 +219,7 @@ def persist_standard_assistant_checkpoint(
 
     checkpoint = tup.checkpoint.copy()
     channel_values = dict(checkpoint.get("channel_values", {}))
-    raw_messages = channel_values.get("messages", [])
+    raw_messages = checkpoint_messages(checkpointer, tup)
     if not isinstance(raw_messages, list):
         raise TypeError(
             f"LangGraph checkpoint messages 应为 list，实际类型: {type(raw_messages).__name__}"
@@ -237,7 +242,7 @@ def persist_standard_assistant_checkpoint(
     if before_persist is not None:
         before_persist(rewritten)
 
-    channel_values["messages"] = messages
+    channel_values["messages"] = message_snapshot(messages)
     checkpoint["channel_values"] = channel_values
     checkpoint["id"] = str(uuid.uuid4())
 
@@ -251,7 +256,7 @@ def persist_standard_assistant_checkpoint(
     checkpointer.put(
         config=tup.config,
         checkpoint=checkpoint,
-        metadata={"source": "standard_assistant_content", "step": -1, "writes": {}},
+        metadata={**message_snapshot_metadata(tup.metadata), "source": "standard_assistant_content", "step": -1, "writes": {}},
         new_versions={"messages": messages_version},
     )
     return True
@@ -370,7 +375,7 @@ def persist_user_message_checkpoint(
 
     checkpoint = tup.checkpoint.copy()
     channel_values = dict(checkpoint.get("channel_values", {}))
-    raw_messages = channel_values.get("messages", [])
+    raw_messages = checkpoint_messages(checkpointer, tup)
     if not isinstance(raw_messages, list):
         raise TypeError(
             f"LangGraph checkpoint messages 应为 list，实际类型: {type(raw_messages).__name__}"
@@ -386,7 +391,7 @@ def persist_user_message_checkpoint(
         frozen_tuple = checkpointer.get_tuple(tup.config)
         if frozen_tuple is None:
             raise RuntimeError("已解析的冻结 checkpoint 在执行期间消失")
-        frozen_messages = frozen_tuple.checkpoint["channel_values"]["messages"]
+        frozen_messages = checkpoint_messages(checkpointer, frozen_tuple)
         input_uncheckpointed = not any(
             isinstance(existing, HumanMessage)
             and existing.response_metadata.get("message_id") == message_id
@@ -402,7 +407,7 @@ def persist_user_message_checkpoint(
     # 固化 channel，且不重复追加同 ID 的输入。
     if not (append_user_input or input_uncheckpointed or stale_execution_state):
         return False
-    channel_values["messages"] = [*raw_messages, message] if append_user_input else list(raw_messages)
+    channel_values["messages"] = message_snapshot([*raw_messages, message] if append_user_input else list(raw_messages))
     # 失败/重启后的 LangGraph checkpoint 可能仍保留上一轮已经失效的
     # Pregel task。新用户消息只能从干净的会话上下文启动，不能把旧工具
     # Send 重新交给当前 AgentLoop；否则新 job 会显示 running，却永远等
@@ -431,7 +436,7 @@ def persist_user_message_checkpoint(
         checkpointer.put(
             config=tup.config,
             checkpoint=checkpoint,
-            metadata={"source": "user_message_checkpoint", "step": -1, "writes": {}},
+            metadata={**message_snapshot_metadata(tup.metadata), "source": "user_message_checkpoint", "step": -1, "writes": {}},
             new_versions={"messages": messages_version},
         )
     return True

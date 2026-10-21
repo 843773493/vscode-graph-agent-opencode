@@ -26,6 +26,9 @@ from app.domain.itemized.mutation_intents import MutationIntentOwner
 from app.services.infrastructure.rollout_context.checkpoint.message_codec import (
     LangChainMessageCodec,
 )
+from app.services.infrastructure.rollout_context.checkpoint.runtime.message_values import (
+    prepare_message_values,
+)
 from app.services.infrastructure.rollout_context.storage.primitives import (
     RolloutNotMaterializedError,
     RolloutPruningPlan,
@@ -237,51 +240,24 @@ class RolloutLangGraphCheckpointMixin:
         parent_checkpoint_id = config["configurable"].get("checkpoint_id")
         if isinstance(parent_checkpoint_id, str) and parent_checkpoint_id:
             parent_checkpoint = self.get_tuple(config)
-        current_messages = channel_values.get("messages", [])
-        if not isinstance(current_messages, list) or not all(
-            isinstance(message, BaseMessage) for message in current_messages
-        ):
-            raise TypeError("checkpoint messages 必须是 LangChain BaseMessage 列表")
-        if "messages" not in channel_values:
-            if (
-                parent_checkpoint is None
-                and isinstance(parent_checkpoint_id, str)
-                and parent_checkpoint_id
-            ):
-                raise RuntimeError(
-                    f"父 checkpoint 不可读取且当前 checkpoint 未携带 messages: {parent_checkpoint_id}"
-                )
-            if parent_checkpoint is not None:
-                parent_values = parent_checkpoint.checkpoint.get("channel_values", {})
-                inherited_messages = (
-                    parent_values.get("messages")
-                    if isinstance(parent_values, dict)
-                    else None
-                )
-                if not isinstance(inherited_messages, list) or not all(
-                    isinstance(message, BaseMessage) for message in inherited_messages
-                ):
-                    raise RuntimeError(
-                        f"父 checkpoint 的 messages channel 不可恢复: {parent_checkpoint_id}"
-                    )
-            else:
-                inherited_messages = []
-            channel_values = dict(channel_values)
-            channel_values["messages"] = inherited_messages
-            checkpoint["channel_values"] = channel_values
-            current_messages = inherited_messages
-        elif parent_checkpoint is None and isinstance(parent_checkpoint_id, str):
-            # LangGraph 的首个实际写入可能带着尚未持久化的内存父 ID。
-            # 当前 checkpoint 已携带完整 messages 快照，按根 checkpoint 落盘，
-            # 避免新 rollout 从一开始就生成不可解析的孤儿父引用。
+        if parent_checkpoint is None and isinstance(parent_checkpoint_id, str) and "messages" in channel_values:
+            # 首个完整基准可独立建立根；省略值不能掩盖已引用父链的丢失。
             parent_checkpoint_id = None
+        elif parent_checkpoint is None and parent_checkpoint_id:
+            raise RuntimeError(f"父 checkpoint 不可读取: {parent_checkpoint_id}")
+        current_messages, messages_state = prepare_message_values(
+            self, values=channel_values, versions=checkpoint.get("channel_versions", {}),
+            new_versions=new_versions, metadata=metadata, parent=parent_checkpoint,
+        )
+        if messages_state == "view" and "messages" not in channel_values:
+            channel_values = {**channel_values, "messages": current_messages}
+            checkpoint["channel_values"] = channel_values
         channel_versions = checkpoint.get("channel_versions", {})
         if not isinstance(channel_versions, dict):
             raise TypeError("checkpoint.channel_versions 必须是 dict")
         merged_channel_versions = dict(channel_versions)
         for channel_name, version in new_versions.items():
-            # TODO：messages 在官方增量消息切片迁齐调用方后统一校验；本片只改变其它通道的版本合同。
-            if channel_name != "messages" and channel_name in channel_versions and channel_versions[channel_name] != version:
+            if channel_name in channel_versions and channel_versions[channel_name] != version:
                 raise ValueError(f"checkpoint new_versions 与 channel_versions 不一致: {channel_name}")
             merged_channel_versions.setdefault(channel_name, version)
         parent_channel_versions = (
@@ -314,6 +290,7 @@ class RolloutLangGraphCheckpointMixin:
             metadata=effective_metadata,
             parent_checkpoint_id=parent_checkpoint_id,
             current_messages=current_messages,
+            messages_state=messages_state,
             consume_epoch_intent=self.consume_mutation_intent,
             new_versions=new_versions,
         )

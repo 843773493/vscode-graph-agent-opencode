@@ -16,6 +16,7 @@ from langgraph.checkpoint.base import (
     CheckpointMetadata,
     DeltaChannelHistory,
 )
+from langgraph.checkpoint.serde.types import _DeltaSnapshot
 
 from app.core.execution_admission_context import current_execution_admission
 from app.domain.itemized.enums import ControlOutcome
@@ -23,6 +24,9 @@ from app.domain.itemized.identity.refs import ContextRef
 from app.domain.itemized.records import CanonicalItemRecord
 from app.services.infrastructure.rollout_context.storage.catalog.history_scope import (
     require_historical_scope,
+)
+from app.services.infrastructure.rollout_context.storage.checkpoint_lineage import (
+    delta_history_path,
 )
 from app.services.infrastructure.rollout_context.storage.checkpoint_state_values import (
     read_state_value,
@@ -212,12 +216,11 @@ class RolloutCheckpointQueriesMixin:
             snapshot.session_id, snapshot.thread_id, snapshot.checkpoint_ns,
             index, snapshot=snapshot, requested_channels=frozenset(),
         )
-        visited = {index.checkpoint_id}
-        cursor = index.parent_checkpoint_id
-        while cursor is not None and remaining:
-            if cursor in visited:
-                raise RuntimeError(f"checkpoint parent lineage 存在循环: {cursor}")
-            visited.add(cursor)
+        connection = self._storage._snapshot_connection(snapshot)
+        for cursor in delta_history_path(
+            connection, index.checkpoint_id, checkpoint_ns=snapshot.checkpoint_ns,
+            channels=channels,
+        ):
             index = self.latest_checkpoint(
                 snapshot.session_id, snapshot.thread_id, snapshot.checkpoint_ns,
                 cursor, snapshot=snapshot,
@@ -233,12 +236,11 @@ class RolloutCheckpointQueriesMixin:
                 result[write[1]]["writes"].append(write)
             values = self.checkpoint_values(
                 snapshot.session_id, snapshot.thread_id, snapshot.checkpoint_ns,
-                index, snapshot=snapshot, requested_channels=requested,
+                index, snapshot=snapshot, requested_channels=requested, message_protocol=True,
             )
             for channel, seed in values.items():
                 result[channel]["seed"] = seed
                 remaining.remove(channel)
-            cursor = index.parent_checkpoint_id
         for history in result.values():
             history["writes"].reverse()
         return result
@@ -499,6 +501,7 @@ class RolloutCheckpointQueriesMixin:
         context_view_id_override: str | None = None,
         include_execution_context: bool = False,
         requested_channels: frozenset[str] | None = None,
+        message_protocol: bool = False,
     ) -> dict[str, object]:
         session_id = strict_text(session_id, field="checkpoint_values.session_id")
         strict_text(thread_id, field="checkpoint_values.thread_id")
@@ -547,7 +550,7 @@ class RolloutCheckpointQueriesMixin:
                     context_view_id = context_view_id_override or view_id
                     if (
                         storage_kind != "rollout_view"
-                        or state != "view"
+                        or state not in {"view", "delta", "snapshot"}
                         or view_id is None
                         or any(value is not None for value in (value_id, value_session_id, value_thread_id))
                     ):
@@ -561,6 +564,8 @@ class RolloutCheckpointQueriesMixin:
                     )
                     has_messages = True
                     if requested_channels is not None and channel not in requested_channels:
+                        continue
+                    if message_protocol and state == "delta" and not include_execution_context and context_view_id_override is None:
                         continue
                     selection_view_id = None
                     execution_view_id = None
@@ -623,6 +628,8 @@ class RolloutCheckpointQueriesMixin:
                         execution_fenced=(include_execution_context and
                             current_execution_admission(langgraph_thread_id=thread_id) is not None),
                     )
+                    if message_protocol and state in {"delta", "snapshot"}:
+                        values[channel] = _DeltaSnapshot(values[channel])
                 elif state == "present":
                     if storage_kind != "sqlite_value" or view_id is not None:
                         raise RuntimeError(
@@ -695,10 +702,18 @@ class RolloutCheckpointQueriesMixin:
             snapshot=snapshot,
             context_view_id_override=context_view_id_override,
             include_execution_context=include_execution_context,
+            message_protocol=True,
         )
         checkpoint["channel_versions"] = {}
         checkpoint["updated_channels"] = []
         connection = self._storage._snapshot_connection(snapshot)
+        message_state = connection.execute(
+            "SELECT value_state FROM checkpoint_channels WHERE checkpoint_id=? AND channel_name='messages'",
+            (index.checkpoint_id,),
+        ).fetchone()
+        if message_state == ("delta",):
+            # latest overlay 虽返回完整 selection，也不能掩盖其已登记增量依赖损坏。
+            delta_history_path(connection, index.checkpoint_id, checkpoint_ns=checkpoint_ns, channels=("messages",))
         rows = connection.execute(
             "SELECT channel_name, channel_version, updated_index FROM checkpoint_channels WHERE checkpoint_id = ? ORDER BY updated_index",
             (index.checkpoint_id,),

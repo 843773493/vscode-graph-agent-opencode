@@ -41,6 +41,24 @@
       "command": ["uv", "run", "pytest", "tests/integration"]
     },
     {
+      "id": "integration-execution-history-delta",
+      "layer": "integration",
+      "client": null,
+      "enabled": true,
+      "timeoutMs": 240000,
+      "dataLimitKb": 4194304,
+      "command": [
+        "uv", "run", "--no-sync", "pytest", "-q",
+        "tests/integration/backend/sessions/rollout_context/test_delta_fork_history.py",
+        "tests/integration/backend/sessions/rollout_context/test_messages_delta_history.py",
+        "tests/integration/backend/sessions/rollout_context/test_message_revisions.py",
+        "tests/integration/backend/sessions/rollout_context/test_langgraph_channel_contract.py",
+        "tests/integration/backend/sessions/rollout_context/test_rollout_checkpoint_saver.py",
+        "tests/integration/backend/sessions/test_rollout_fork_protected.py",
+        "tests/integration/backend/sessions/test_rollout_fork_plan_registry.py"
+      ]
+    },
+    {
       "id": "integration-browser-element-references",
       "layer": "integration",
       "client": null,

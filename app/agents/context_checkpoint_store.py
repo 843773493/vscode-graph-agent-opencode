@@ -8,6 +8,11 @@ from langgraph.checkpoint.base import BaseCheckpointSaver, Checkpoint, Checkpoin
 from app.core.checkpoint_config import build_checkpoint_config
 from app.core.session_thread_context import session_thread_owner_scope
 from app.domain.itemized.mutation_intents import MutationIntentOwner
+from app.services.infrastructure.rollout_context.checkpoint.codec.message_channel import (
+    acheckpoint_messages,
+    message_snapshot,
+    message_snapshot_metadata,
+)
 
 
 @dataclass(slots=True)
@@ -38,7 +43,9 @@ class ContextCompactionCheckpointStore:
                 f"实际类型: {type(raw_channel_values).__name__}"
             )
         channel_values: dict[str, object] = dict(raw_channel_values)
-        raw_messages = channel_values.get("messages", [])
+        with session_thread_owner_scope(owner, langgraph_thread_id=owner.thread_id):
+            raw_messages = await acheckpoint_messages(self._checkpointer, tup)
+        channel_values["messages"] = raw_messages
         if not isinstance(raw_messages, list):
             raise TypeError(
                 f"LangGraph checkpoint messages 应为 list，实际类型: {type(raw_messages).__name__}"
@@ -74,6 +81,7 @@ class ContextCompactionCheckpointStore:
         source: str,
     ) -> None:
         channel_values = dict(checkpoint._channel_values)
+        channel_values["messages"] = message_snapshot(checkpoint.raw_messages)
         channel_values[channel] = value
 
         next_checkpoint = checkpoint._checkpoint.copy()
@@ -98,6 +106,6 @@ class ContextCompactionCheckpointStore:
             await self._checkpointer.aput(
                 config=checkpoint._tuple.config,
                 checkpoint=next_checkpoint,
-                metadata={"source": source, "step": -1, "writes": {}},
+                metadata={**message_snapshot_metadata(checkpoint._tuple.metadata), "source": source, "step": -1, "writes": {}},
                 new_versions={channel: value_version},
             )

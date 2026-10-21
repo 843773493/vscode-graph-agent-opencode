@@ -63,9 +63,17 @@ class PendingMessageReferences:
         }
         return reference, self.storage._codec().project_message(group)
 
-    def locate(self, message: BaseMessage) -> tuple[dict[str, object], Mapping[str, object]] | None:
+    def locate(self, message: BaseMessage, *, item_ids: Mapping[str, str] | None = None) -> tuple[dict[str, object], Mapping[str, object]] | None:
+        if item_ids is not None and message.id in item_ids:
+            return self._canonical(item_ids[message.id])
+        anchor = canonical_message_anchor(message_to_dict(message))
+        if anchor is None and self.connection.execute(
+            "SELECT COUNT(*) FROM messages WHERE message_id=?", (message.id,),
+        ).fetchone()[0] > 1:
+            # 原写入暂存到其 checkpoint 的正式发布事务取得版本坐标；不猜正文或 latest。
+            return None
         locator = find_message_locator(
-            self.connection, message.id, item_id=canonical_message_anchor(message_to_dict(message)),
+            self.connection, message.id, item_id=anchor,
         )
         if locator is None:
             return None
@@ -90,6 +98,8 @@ class PendingMessageReferences:
 def publish_message_write_references(
     references: PendingMessageReferences, *,
     validate_row: Callable[[tuple[object, ...]], tuple[str, str, int, str, str, bytes, int, str, str, str]],
+    parent_checkpoint_id: str | None = None,
+    item_ids: Mapping[str, str] | None = None,
 ) -> None:
     """JSONL/catalog 已在当前事务准备完毕；失败时引用与正文共同回滚。"""
     connection = references.connection
@@ -105,7 +115,10 @@ def publish_message_write_references(
         validated = validate_row(tuple(row[1:]))
         serializer, blob, length, digest = validated[4:8]
         value = references.storage.decode_value((serializer, blob))
-        descriptor = reference_message_write(value, references.locate)
+        selected_ids = item_ids if row[0] == parent_checkpoint_id else None
+        descriptor = reference_message_write(value, lambda message, selected_ids=selected_ids: references.locate(
+            message, item_ids=selected_ids,
+        ))
         if descriptor is None:
             # 未发布或不同版本仍是同一 pending row 的暂存态；不能丢掉崩溃恢复所需原写入。
             continue

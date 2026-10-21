@@ -37,6 +37,12 @@ from app.services.infrastructure.rollout_context.storage.catalog.history_scope i
     current_scope,
     require_historical_scope,
 )
+from app.services.infrastructure.rollout_context.storage.catalog.message_revisions import (
+    validate_message_revision_source,
+)
+from app.services.infrastructure.rollout_context.storage.checkpoint_lineage import (
+    delta_history_path,
+)
 
 if TYPE_CHECKING:
     from app.services.infrastructure.rollout_context.storage.service import (
@@ -179,6 +185,11 @@ def select_view_prefix(
                     connection, stream, sequence=sequence, offset=offset, length=length,
                 )
                 connection.execute("UPDATE fork_selected_items SET visited=1 WHERE item_id=?", (item_id,))
+                source = validate_message_revision_source(connection, item)
+                if source is not None:
+                    connection.execute(
+                        "INSERT OR IGNORE INTO fork_selected_items(item_id) VALUES (?)", (source.item_id,),
+                    )
                 if item.message_group_id is not None:
                     connection.execute(
                         "INSERT OR IGNORE INTO fork_selected_items(item_id) "
@@ -232,6 +243,7 @@ def select_view_prefix(
                     connection.execute(load_sql(__package__, f"sql/fork_selected_{table}.sql"))
                 connection.execute("DROP TABLE fork_selected_turns")
                 connection.execute("DROP TABLE fork_selected_executions")
+                _include_delta_history(connection)
                 _include_pending_message_references(storage, connection, stage=stage)
                 checkpoints_frozen = True
                 continue
@@ -362,6 +374,38 @@ def select_view_prefix(
         raise ValueError("source-mismatch: 前缀正文闭包存在缺失 canonical item")
     connection.execute(
         load_sql(__package__, "sql/fork_visible_messages.sql"),
+    )
+
+
+def _include_delta_history(connection: sqlite3.Connection) -> None:
+    """只展开已冻结 checkpoint 的 on-path 基准和中间写入，不扩大可见前缀。"""
+    pending = {row[0] for row in connection.execute("SELECT checkpoint_id FROM fork_selected_checkpoints")}
+    expanded: set[str] = set()
+    while pending:
+        checkpoint_id = pending.pop()
+        expanded.add(checkpoint_id)
+        for checkpoint_ns, channel in connection.execute(
+            "SELECT checkpoint_ns,channel_name FROM checkpoints JOIN checkpoint_channels USING(checkpoint_id) "
+            "WHERE checkpoint_id=? AND (value_state='delta' "
+            "OR (value_state='absent' AND channel_version IS NOT NULL))", (checkpoint_id,),
+        ).fetchall():
+            for ancestor in delta_history_path(
+                connection, checkpoint_id, checkpoint_ns=checkpoint_ns, channels=(channel,),
+            ):
+                connection.execute(
+                    "INSERT INTO fork_selected_checkpoints(checkpoint_id) "
+                    "SELECT ? WHERE NOT EXISTS(SELECT 1 FROM fork_selected_checkpoints WHERE checkpoint_id=?)",
+                    (ancestor, ancestor),
+                )
+                if ancestor not in expanded:
+                    pending.add(ancestor)
+    # 冻结 view 的全部成员是恢复支撑，原 selection 坐标保持不变。
+    connection.execute(
+        "INSERT OR IGNORE INTO fork_selected_items(item_id) "
+        "SELECT member.item_id FROM context_view_items member JOIN checkpoints checkpoint "
+        "ON member.view_id=checkpoint.view_id JOIN fork_selected_checkpoints USING(checkpoint_id) "
+        "UNION SELECT member.item_id FROM context_view_items member JOIN checkpoint_channels channel "
+        "ON member.view_id=channel.context_view_id JOIN fork_selected_checkpoints USING(checkpoint_id)",
     )
 
 

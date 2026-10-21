@@ -966,7 +966,7 @@ def test_rollout_preserves_langchain_invalid_tool_calls_field(
                 [user, valid, invalid],
             ),
             {"source": "invalid-tool-call-field-test"},
-            {"messages": "test"},
+            {"messages": "cp-invalid-tool-call"},
         )
 
         records = [
@@ -1024,7 +1024,7 @@ def test_put_treats_unpersisted_initial_parent_as_root(
                 [user],
             ),
             {"source": "root-parent-test"},
-            {"messages": "1"},
+            {"messages": "cp-root"},
         )
 
         restored = saver.get_tuple(build_checkpoint_config(thread_id))
@@ -1073,7 +1073,7 @@ def test_put_tool_result_phase_allows_queued_turn_before_storage_lock(
         with _execution_scope(admission):
             saver.put(
                 build_checkpoint_config(thread_id), _checkpoint("cp-phase-first", messages),
-                {"source": "phase-first"}, {"messages": "1"},
+                {"source": "phase-first"}, {"messages": "cp-phase-first"},
             )
 
     with ThreadPoolExecutor(max_workers=2) as executor:
@@ -1154,7 +1154,7 @@ def test_checkpoint_namespace_queries_do_not_cross_match(
             namespace_a,
             _checkpoint("cp-ns-a", [user_a]),
             {"source": "namespace-a"},
-            {"messages": "a"},
+            {"messages": "cp-ns-a"},
         )
     user_b = HumanMessage(content="B", id="user-b")
     admission_b = _accept_user_execution(
@@ -1165,7 +1165,7 @@ def test_checkpoint_namespace_queries_do_not_cross_match(
             namespace_b,
             _checkpoint("cp-ns-b", [user_b]),
             {"source": "namespace-b"},
-            {"messages": "b"},
+            {"messages": "cp-ns-b"},
         )
 
         restored_a = saver.get_tuple(namespace_a)
@@ -1201,7 +1201,7 @@ def checkpoint_listing(
             for index in range(3):
                 parent = saver.put(
                     parent, _checkpoint(f"cp-alist-{index}", [user]),
-                    {"source": "alist", "step": index}, {"messages": str(index)},
+                    {"source": "alist", "step": index}, {"messages": f"cp-alist-{index}"},
                 )
         yield saver, owner, config
 
@@ -1350,7 +1350,7 @@ def _append_checkpoint_in_child(sessions_dir: str, thread_id: str) -> None:
                 build_checkpoint_config(thread_id),
                 _checkpoint("cp-child", [user]),
                 {"source": "cross-process-lock"},
-                {"messages": "child"},
+                {"messages": "cp-child"},
             )
 
 
@@ -1371,7 +1371,7 @@ def test_read_snapshot_keeps_sqlite_and_jsonl_watermark_consistent_across_proces
             build_checkpoint_config(thread_id),
             _checkpoint("cp-parent", [user]),
             {"source": "snapshot-test"},
-            {"messages": "parent"},
+            {"messages": "cp-parent"},
         )
     storage = _storage(sessions_dir)
     snapshot = storage.storage.open_read_snapshot(SESSION_ID, thread_id)
@@ -1456,7 +1456,7 @@ def test_checkpoint_read_does_not_reinitialize_existing_rollout(
                 [user],
             ),
             {"source": "read-without-recovery"},
-            {"messages": "existing"},
+            {"messages": "cp-existing"},
         )
 
         def fail_initialize(*_args: object, **_kwargs: object) -> None:
@@ -1529,7 +1529,7 @@ def test_history_page_uses_one_snapshot_and_sqlite_keyset_window(
             build_checkpoint_config(thread_id),
             _checkpoint("cp-1", first),
             {"source": "keyset-test"},
-            {"messages": "1"},
+            {"messages": "cp-1"},
         )
     second = _turn("turn-2", "002")
     second_admission = _accept_user_execution(
@@ -1540,7 +1540,7 @@ def test_history_page_uses_one_snapshot_and_sqlite_keyset_window(
             config,
             _checkpoint("cp-2", [*first, *second]),
             {"source": "keyset-test"},
-            {"messages": "2"},
+            {"messages": "cp-2"},
         )
     reader = RolloutHistoryReader(RolloutContextReader(_storage(sessions_dir)))
     original_open_snapshot = reader._context_reader.open_snapshot
@@ -1587,7 +1587,7 @@ def test_history_reads_accepted_turn_from_active_successor_before_next_checkpoin
             build_checkpoint_config(thread_id),
             _checkpoint("cp-1", first),
             {"source": "active-history-test"},
-            {"messages": "1"},
+            {"messages": "cp-1"},
         )
     context_reader = RolloutContextReader(_storage(sessions_dir))
     reader = RolloutHistoryReader(context_reader)
@@ -1694,7 +1694,7 @@ def test_checkpoint_envelope_and_channels_are_authoritative_sqlite(
             build_checkpoint_config(thread_id),
             _checkpoint("cp-1", messages, counter=3, task_state=None),
             {"source": "unit", "step": 1},
-            {"messages": "1", "counter": "cp-1", "task_state": "cp-1"},
+            {"messages": "cp-1", "counter": "cp-1", "task_state": "cp-1"},
         )
 
         restored = saver.get_tuple(checkpoint_config)
@@ -1796,7 +1796,7 @@ def test_failed_turn_status_survives_history_reload(
             build_checkpoint_config(thread_id),
             _checkpoint("cp-failed", messages),
             {"source": "failed-turn-test"},
-            {"messages": "1"},
+            {"messages": "cp-failed"},
         )
 
         writer = RolloutAppendWriter(sessions_dir)
@@ -1852,7 +1852,7 @@ def test_terminal_turn_status_convergence_is_idempotent_after_termination(
             build_checkpoint_config(thread_id),
             _checkpoint("cp-cancelled", messages),
             {"source": "cancelled-turn-test"},
-            {"messages": "1"},
+            {"messages": "cp-cancelled"},
         )
 
         def turn_status() -> str:
@@ -1929,7 +1929,7 @@ def test_hidden_system_reminder_does_not_create_empty_chat_turn(
             build_checkpoint_config(thread_id),
             _checkpoint("cp-1", [user]),
             {"source": "test"},
-            {"messages": "1"},
+            {"messages": "cp-1"},
         )
 
         assert (
@@ -2073,7 +2073,7 @@ def test_checkpoint_reminder_source_transaction_rolls_back_jsonl_on_sqlite_failu
             build_checkpoint_config(thread_id),
             _checkpoint("cp-before-reminder-failure", [user]),
             {"source": "test"},
-            {"messages": "1"},
+            {"messages": "cp-before-reminder-failure"},
         )
         rollout_root = saver._storage.storage.root(SESSION_ID, "", thread_id=thread_id)
         jsonl_path = saver._storage.storage.jsonl_path(SESSION_ID, "", thread_id=thread_id)
@@ -2167,7 +2167,7 @@ def test_structured_runtime_notice_checkpoint_cold_restore_preserves_private_and
             config = saver.put(
                 build_checkpoint_config(thread_id),
                 _checkpoint("checkpoint-structured-notice", [message]),
-                {"source": "runtime-notice-roundtrip"}, {"messages": "1"},
+                {"source": "runtime-notice-roundtrip"}, {"messages": "checkpoint-structured-notice"},
             )
         (original,) = saver._storage.storage.read_items(
             SESSION_ID, thread_id, item_ids=(intent.notice_item_id,),
@@ -2229,7 +2229,7 @@ def test_legacy_hidden_reminder_turn_is_excluded_from_history(
             build_checkpoint_config(thread_id),
             _checkpoint("cp-legacy", [legacy_reminder]),
             {"source": "legacy-reminder"},
-            {"messages": "1"},
+            {"messages": "cp-legacy"},
         )
 
         page = RolloutHistoryReader(RolloutContextReader(_storage(sessions_dir))).load(
@@ -2261,7 +2261,7 @@ def test_rewind_replay_uses_new_canonical_suffix_without_replacement_event(
             build_checkpoint_config(thread_id),
             _checkpoint("cp-1", first),
             {"source": "unit"},
-            {"messages": "1"},
+            {"messages": "cp-1"},
         )
         first_snapshot = saver.get_tuple(first_config)
         assert first_snapshot is not None
@@ -2275,7 +2275,7 @@ def test_rewind_replay_uses_new_canonical_suffix_without_replacement_event(
             first_config,
             _checkpoint("cp-2", [*first, *second]),
             {"source": "unit"},
-            {"messages": "2"},
+            {"messages": "cp-2"},
         )
     root = saver._storage.storage.root(SESSION_ID, thread_id=thread_id)
     immutable_prefix = (root / "rollout.jsonl").read_bytes()
@@ -2314,7 +2314,7 @@ def test_rewind_replay_uses_new_canonical_suffix_without_replacement_event(
                 "cp-3", [replay_user, AIMessage(content="编辑后的响应", id="replay-a")]
             ),
             {"source": "replay"},
-            {"messages": "3"},
+            {"messages": "cp-3"},
         )
         restored = saver.get_tuple(replay_config)
         second_snapshot = saver.get_tuple(second_config)
@@ -2461,7 +2461,7 @@ def test_pending_writes_and_all_checkpoint_channels_round_trip(
             build_checkpoint_config(thread_id),
             _checkpoint("cp-1", [user], counter=0, optional=None),
             {"source": "unit"},
-            {"messages": "1", "counter": "cp-1", "optional": "cp-1"},
+            {"messages": "cp-1", "counter": "cp-1", "optional": "cp-1"},
         )
         saver.put_writes(config, [("counter", 1)], "task-1", "node-a")
         restored = saver.get_tuple(config)
@@ -2632,7 +2632,7 @@ def test_pending_write_corruption_is_rejected_instead_of_decoded(
             build_checkpoint_config(thread_id),
             _checkpoint("cp-1", [user]),
             {"source": "unit"},
-            {"messages": "1"},
+            {"messages": "cp-1"},
         )
         saver.put_writes(config, [("counter", 1)], "task-1", "node-a")
         root = _main_thread_node(sessions_dir, SESSION_ID)
@@ -2664,7 +2664,7 @@ def test_uncommitted_jsonl_tail_is_truncated_but_sqlite_loss_is_explicit_failure
             build_checkpoint_config(thread_id),
             _checkpoint("cp-1", [user]),
             {"source": "unit"},
-            {"messages": "1"},
+            {"messages": "cp-1"},
         )
         root = (
             _main_thread_node(sessions_dir, SESSION_ID)
@@ -2779,7 +2779,7 @@ def test_sqlite_commit_window_is_retryable_without_duplicate_jsonl(
         monkeypatch.setattr(storage.storage, "_commit_connection", commit_then_crash)
         with pytest.raises(OSError, match="SQLite commit"):
             saver.put(
-                config, checkpoint, {"source": "commit-window"}, {"messages": "1"}
+                config, checkpoint, {"source": "commit-window"}, {"messages": checkpoint["channel_versions"]["messages"]}
             )
 
         rollout_path = (
@@ -2795,7 +2795,7 @@ def test_sqlite_commit_window_is_retryable_without_duplicate_jsonl(
             config,
             checkpoint,
             {"source": "commit-window"},
-            {"messages": "1"},
+            {"messages": checkpoint["channel_versions"]["messages"]},
         )
         assert retry_config["configurable"]["checkpoint_id"] == "cp-commit-window"
         assert rollout_path.read_bytes() == committed_bytes
@@ -2884,7 +2884,7 @@ def test_concurrent_checkpoint_appends_do_not_interleave_jsonl(
                     build_checkpoint_config(thread_id),
                     _checkpoint(f"cp-concurrent-{index}", [user]),
                     {"source": "concurrency-test", "step": index},
-                    {"messages": str(index)},
+                    {"messages": f"cp-concurrent-{index}"},
                 )
 
     with ThreadPoolExecutor(max_workers=4) as executor:
@@ -2917,7 +2917,7 @@ def test_repeating_same_checkpoint_is_idempotent_but_conflicting_payload_fails(
         [HumanMessage(content="只写一次", id="u-idempotent")],
     )
     metadata = {"source": "idempotency"}
-    versions = {"messages": "1"}
+    versions = {"messages": checkpoint["channel_versions"]["messages"]}
     admission = _accept_user_execution(
         saver,
         SESSION_ID,
@@ -2959,7 +2959,7 @@ def test_checkpoint_retry_rejects_corrupted_commit_pointer(
         [HumanMessage(content="commit pointer", id="u-pointer")],
     )
     metadata = {"source": "commit-pointer"}
-    versions = {"messages": "1"}
+    versions = {"messages": checkpoint["channel_versions"]["messages"]}
     admission = _accept_user_execution(
         saver,
         SESSION_ID,
@@ -3007,7 +3007,7 @@ def test_checkpoint_view_without_new_items_reuses_previous_commit(
                 [user],
             ),
             {"source": "view-source"},
-            {"messages": "1"},
+            {"messages": "cp-view-source"},
         )
         second_config = saver.put(
             first_config,
@@ -3016,7 +3016,7 @@ def test_checkpoint_view_without_new_items_reuses_previous_commit(
                 [HumanMessage(content="同一个 canonical item", id="view-user")],
             ),
             {"source": "view-only"},
-            {"messages": "2"},
+            {"messages": "cp-view-only"},
         )
 
         root = _main_thread_node(sessions_dir, SESSION_ID)
@@ -3060,7 +3060,7 @@ def test_read_rejects_broken_storage_commit_offset_chain(
                 [user],
             ),
             {"source": "broken-commit-chain"},
-            {"messages": "1"},
+            {"messages": "cp-broken-commit-chain"},
         )
         root = _main_thread_node(sessions_dir, SESSION_ID)
         with sqlite3.connect(root / "rollout" / "index.sqlite") as connection:
@@ -3094,7 +3094,7 @@ def test_read_rejects_storage_commit_with_incomplete_item_catalog(
                 [user],
             ),
             {"source": "broken-commit-catalog"},
-            {"messages": "1"},
+            {"messages": "cp-broken-commit-catalog"},
         )
         root = _main_thread_node(sessions_dir, SESSION_ID)
         with sqlite3.connect(root / "rollout" / "index.sqlite") as connection:
@@ -3128,7 +3128,7 @@ def test_read_rejects_catalog_locator_that_does_not_match_canonical_jsonl(
                 [user],
             ),
             {"source": "broken-item-locator"},
-            {"messages": "1"},
+            {"messages": "cp-broken-item-locator"},
         )
         root = _main_thread_node(sessions_dir, SESSION_ID)
         with sqlite3.connect(root / "rollout" / "index.sqlite") as connection:
@@ -3293,7 +3293,7 @@ def test_sqlite_backup_restores_authoritative_checkpoint_state(
             build_checkpoint_config(thread_id),
             _checkpoint("cp-1", [user], counter=1),
             {"source": "backup-test"},
-            {"messages": "1", "counter": "cp-1"},
+            {"messages": "cp-1", "counter": "cp-1"},
         )
         storage = _storage(sessions_dir)
         backup = storage.storage.backup_index(

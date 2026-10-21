@@ -19,6 +19,9 @@ from app.schemas.internal_v2.common import JobStatus, RunMode
 from app.schemas.internal_v2.job import JobDispatchSnapshotDTO, JobDTO
 from app.schemas.internal_v2.message import MessageReplayRequest, MessageRunAccepted
 from app.services.business.session_turn_replay_service import SessionTurnReplayService
+from app.services.infrastructure.rollout_context.checkpoint.codec.message_channel import (
+    checkpoint_messages,
+)
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
@@ -94,7 +97,7 @@ class RecordingDispatcher:
                 build_checkpoint_config(owner.thread_id)
             )
             assert checkpoint_tuple is not None
-            messages = checkpoint_tuple.checkpoint["channel_values"]["messages"]
+            messages = checkpoint_messages(self.saver, checkpoint_tuple)
             self.pre_dispatch_message_ids = [
                 item.response_metadata.get("message_id", "") for item in messages
             ]
@@ -389,7 +392,7 @@ async def test_edit_first_turn_removes_all_following_turns(
     assert dispatcher.dispatched_message_id not in dispatcher.pre_dispatch_message_ids
     latest = await _read_latest(saver)
     assert latest is not None
-    final_messages = latest.checkpoint["channel_values"]["messages"]
+    final_messages = checkpoint_messages(saver, latest)
     replacement_count = sum(
         item.response_metadata.get("message_id") == dispatcher.dispatched_message_id
         for item in final_messages
@@ -426,7 +429,7 @@ async def test_replay_turn_uses_turn_anchor_resolver(
     assert dispatcher.dispatched_message_id
     latest = await _read_latest(saver)
     assert latest is not None
-    messages = latest.checkpoint["channel_values"]["messages"]
+    messages = checkpoint_messages(saver, latest)
     assert [message.content for message in messages] == ["按 Turn 重放第一问"]
 
 
@@ -482,7 +485,7 @@ async def test_retry_failed_clears_partial_tool_messages(
     assert dispatcher.pre_dispatch_message_ids == ["msg_1", "assistant_1"]
     latest = await _read_latest(saver)
     assert latest is not None
-    final_messages = latest.checkpoint["channel_values"]["messages"]
+    final_messages = checkpoint_messages(saver, latest)
     assert not any(isinstance(message, ToolMessage) for message in final_messages)
     assert not any(
         isinstance(message, AIMessage) and bool(message.tool_calls)

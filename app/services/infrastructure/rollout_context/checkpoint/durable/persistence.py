@@ -61,6 +61,7 @@ class RolloutCheckpointPersistenceMixin:
         metadata: CheckpointMetadata,
         parent_checkpoint_id: str | None,
         current_messages: list[object],
+        messages_state: str = "view",
         new_versions: ChannelVersions,
         branch_id: str | None = None,
         consume_epoch_intent: Callable[[RebuildContextEpochIntent, sqlite3.Connection], None] | None = None,
@@ -181,6 +182,20 @@ class RolloutCheckpointPersistenceMixin:
                 jsonl_offset_before = strict_non_negative_int(meta[2], field="database_meta.committed_jsonl_offset")
                 if jsonl.stat().st_size != jsonl_offset_before:
                     raise RuntimeError("checkpoint append 前 JSONL 与 committed offset 不一致")
+                locator_checkpoint = checkpoint_id if repeated_checkpoint else parent_checkpoint_id
+                locator_view = connection.execute(
+                    "SELECT context_view_id FROM checkpoint_channels WHERE checkpoint_id=? AND channel_name='messages'",
+                    (locator_checkpoint,),
+                ).fetchone() if locator_checkpoint is not None else None
+                message_version = new_versions.get("messages")
+                parent_message_version = connection.execute(
+                    "SELECT channel_version FROM checkpoint_channels WHERE checkpoint_id=? AND channel_name='messages'",
+                    (parent_checkpoint_id,),
+                ).fetchone()
+                # 版本递增属于当前父链；其它 branch 可以合法地产生相同版本号。
+                new_message_version = message_version is not None and (
+                    parent_message_version is None or parent_message_version[0] != message_version
+                )
                 batch = prepare_messages(
                     connection=connection, jsonl=jsonl, codec=self._storage._codec(),
                     read_item=self._storage._read_v2_item_at, thread_id=thread_id,
@@ -188,6 +203,8 @@ class RolloutCheckpointPersistenceMixin:
                     last_message_sequence=strict_non_negative_int(meta[1], field="database_meta.last_message_sequence"),
                     next_item_sequence=strict_non_negative_int(meta[3], field="database_meta.last_item_sequence") + 1,
                     offset=jsonl_offset_before,
+                    locator_sequences=self._storage._view_message_sequences_from_connection(connection, locator_view[0]) if locator_view else None,
+                    allow_revisions=new_message_version and not repeated_checkpoint,
                 )
                 compaction_event = new_compaction_event(
                     connection, checkpoint, parent_checkpoint_id=parent_checkpoint_id,
@@ -336,6 +353,8 @@ class RolloutCheckpointPersistenceMixin:
                         thread_id=owner.thread_id, checkpoint_ns=checkpoint_ns,
                     ),
                     validate_row=_pending_write_row,
+                    parent_checkpoint_id=parent_checkpoint_id,
+                    item_ids={message_id: members[-1] for message_id, members in batch.message_item_ids.items()},
                 )
                 # Turn-less 输出与 typed display notice 在同一事务登记；fork 的
                 # target-local item 也从已校验的 canonical group 恢复 membership。
@@ -405,6 +424,13 @@ class RolloutCheckpointPersistenceMixin:
                     (row for row in parent_members if row[1] == 1),
                     key=lambda row: strict_non_negative_int(row[2], field="context_view_items.context_ordinal"),
                 )]
+                if messages_state != "view" and locator_view is not None:
+                    previous_items = {row[0] for row in connection.execute(
+                        "SELECT item_id FROM context_view_items WHERE view_id=? AND visible=1",
+                        (locator_view[0],),
+                    )}
+                    removed_items = previous_items - set(batch.item_ids)
+                    inherited = [item_id for item_id in inherited if item_id not in removed_items]
                 context_selection = compaction_selection if compaction_selection is not None else (
                     *inherited, *(item_id for item_id in batch.item_ids if item_id not in parent_item_ids)
                 )
@@ -423,7 +449,7 @@ class RolloutCheckpointPersistenceMixin:
                 # context view owner 提交，不从 Turn 的物理全量记录重建执行状态。
                 parent_messages_view = None
                 messages_sequences = visible_sequences
-                if parent is not None and view_kind == "checkpoint":
+                if parent is not None and view_kind == "checkpoint" and messages_state == "view":
                     parent_channel = connection.execute(
                         "SELECT context_view_id FROM checkpoint_channels "
                         "WHERE checkpoint_id = ? AND channel_name = 'messages'",
@@ -493,7 +519,7 @@ class RolloutCheckpointPersistenceMixin:
                     connection, checkpoint_id, checkpoint, messages_view_id, timestamp,
                     session_id=owner.session_id, thread_id=owner.thread_id,
                     checkpoint_ns=checkpoint_ns, parent_checkpoint_id=parent_checkpoint_id,
-                    new_versions=new_versions,
+                    new_versions=new_versions, messages_state=messages_state,
                 )
                 self._capture_checkpoint_context_sources(
                     connection,

@@ -104,7 +104,7 @@ class ForkMaterializationMixin:
             seed_checkpoint_id = journal[1]
             seed = connection.execute(
                 "SELECT checkpoint_version, checkpoint_json, versions_seen_type, versions_seen_blob, "
-                "versions_seen_length, versions_seen_hash FROM checkpoints "
+                "versions_seen_length, versions_seen_hash,parent_checkpoint_id,metadata_json FROM checkpoints "
                 "WHERE checkpoint_id=? AND checkpoint_ns=? AND status='active'",
                 (seed_checkpoint_id, checkpoint_ns),
             ).fetchone() if seed_checkpoint_id is not None else None
@@ -124,7 +124,8 @@ class ForkMaterializationMixin:
             }
             # 原 checkpoint/event 保留为历史；新执行只读取目标 selection，
             # 不把源 raw 坐标下的压缩事件套到重排后的消息上。
-            versions = self._storage._encode({}) if seed is None else tuple(seed[2:])
+            versions = self._storage._encode({}) if seed is None else tuple(seed[2:6])
+            parent_checkpoint_id = None
             pending = self._storage._encode([])
             core = {key: value for key, value in checkpoint.items() if key not in {
                 "channel_values", "channel_versions", "updated_channels",
@@ -136,6 +137,19 @@ class ForkMaterializationMixin:
                 checkpoint["v"] = seed[0]
                 core = {**json.loads(seed[1]), "id": checkpoint_id, "ts": checkpoint["ts"]}
                 metadata["fork_context_checkpoint_id"] = seed_checkpoint_id
+                counters = json.loads(seed[7]).get("counters_since_delta_snapshot", {})
+                if not isinstance(counters, dict):
+                    raise TypeError("fork seed Delta counters 必须是 mapping")
+                metadata["counters_since_delta_snapshot"] = {
+                    channel: value for channel, value in counters.items() if channel != "messages"
+                }
+                if connection.execute(
+                    "SELECT 1 FROM checkpoint_channels WHERE checkpoint_id=? AND channel_name!='messages' "
+                    "AND value_state='absent' AND channel_version IS NOT NULL LIMIT 1",
+                    (seed_checkpoint_id,),
+                ).fetchone() is not None:
+                    # 新 head 复用 seed 已提交值；沿 seed 的父链重放，排除 seed 自己尚未应用的 writes。
+                    parent_checkpoint_id = seed[6]
             connection.execute(
                 "INSERT INTO context_views(view_id, branch_id, parent_view_id, view_kind, "
                 "head_turn_id, head_message_sequence, logical_turn_count, control_sequence, created_at) "
@@ -178,8 +192,8 @@ class ForkMaterializationMixin:
                 "checkpoint_timestamp,checkpoint_kind,status,checkpoint_json,metadata_json,"
                 "envelope_serializer_name,versions_seen_type,versions_seen_blob,versions_seen_length,"
                 "versions_seen_hash,pending_sends_type,pending_sends_blob,pending_sends_length,pending_sends_hash) "
-                "VALUES (?,?,?,?,?,NULL,?,?,?,?,'normal','active',?,?,'json',?,?,?,?,?,?,?,?)",
-                (checkpoint_id, checkpoint_ns, commit, head[3] or 0, count, view_id,
+                "VALUES (?,?,?,?,?,?,?,?,?,?,'normal','active',?,?,'json',?,?,?,?,?,?,?,?)",
+                (checkpoint_id, checkpoint_ns, commit, head[3] or 0, count, parent_checkpoint_id, view_id,
                  head[0], checkpoint["v"], checkpoint["ts"], _json(core), _json(metadata),
                  *versions, *pending),
             )
@@ -194,7 +208,7 @@ class ForkMaterializationMixin:
                 connection.execute(
                     "INSERT INTO checkpoint_channels(checkpoint_id,channel_name,storage_kind,value_state,"
                     "channel_version,value_id,value_session_id,value_thread_id,context_view_id,"
-                    "updated_index,created_at) SELECT ?,channel_name,storage_kind,value_state,channel_version,"
+                    "updated_index,created_at) SELECT ?,channel_name,storage_kind,CASE WHEN channel_name='messages' AND value_state='delta' THEN 'snapshot' ELSE value_state END,channel_version,"
                     "value_id,value_session_id,value_thread_id,"
                     "CASE WHEN channel_name='messages' THEN ? ELSE context_view_id END,updated_index,? "
                     "FROM checkpoint_channels WHERE checkpoint_id=? "

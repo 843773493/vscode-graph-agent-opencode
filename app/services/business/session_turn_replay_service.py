@@ -10,7 +10,6 @@ from typing import Protocol
 from uuid import uuid4
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
-from langgraph.checkpoint.base import CheckpointTuple
 
 from app.abstractions.job_service import JobServiceProtocol
 from app.core.checkpoint_config import build_checkpoint_config
@@ -32,6 +31,11 @@ from app.services.business.job.lifecycle import (
 )
 from app.services.business.message_service import MessageService
 from app.services.business.session_service import SessionService
+from app.services.infrastructure.rollout_context.checkpoint.codec.message_channel import (
+    acheckpoint_messages,
+    message_snapshot,
+    message_snapshot_metadata,
+)
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
@@ -303,7 +307,7 @@ class SessionTurnReplayService:
         )
         if latest is None:
             raise ValueError("当前会话没有可回退的 checkpoint")
-        latest_messages = self._checkpoint_messages(latest)
+        latest_messages = await acheckpoint_messages(self._checkpointer, latest)
         target_raw_index = self._message_index(latest_messages, target_message_id)
         if target_raw_index < 0:
             raise ValueError(
@@ -357,7 +361,7 @@ class SessionTurnReplayService:
         ):
             raise TypeError("回退 checkpoint.channel_versions 必须是 dict")
 
-        channel_values["messages"] = base_messages
+        channel_values["messages"] = message_snapshot(base_messages)
         new_versions: dict[str, str] = {}
         summarization_event = channel_values.get("_summarization_event")
         if isinstance(summarization_event, Mapping):
@@ -378,6 +382,7 @@ class SessionTurnReplayService:
             config=active_config,
             checkpoint=checkpoint,
             metadata={
+                **message_snapshot_metadata(base.metadata),
                 "source": "session_turn_replay",
                 "step": -1,
                 "writes": {},
@@ -392,16 +397,6 @@ class SessionTurnReplayService:
             for message in latest_messages[target_raw_index:]
             if self._is_visible_message(message)
         )
-
-    @staticmethod
-    def _checkpoint_messages(checkpoint: CheckpointTuple) -> list[object]:
-        channel_values = checkpoint.checkpoint.get("channel_values")
-        if not isinstance(channel_values, Mapping):
-            raise TypeError("checkpoint.channel_values 必须是 mapping")
-        messages = channel_values.get("messages", [])
-        if not isinstance(messages, list):
-            raise TypeError("checkpoint messages 必须是 list")
-        return list(messages)
 
     @staticmethod
     def _message_index(messages: list[object], message_id: str) -> int:

@@ -259,7 +259,7 @@ with fixture_catalog_scope():
         ]
         reopened.put(
             config,
-            {**restored.checkpoint, "id": "checkpoint-opaque-retry"},
+            {**restored.checkpoint, "id": "checkpoint-opaque-retry", "channel_versions": {"messages": "2"}},
             {"source": "test", "step": 2, "writes": {}},
             {"messages": "2"},
         )
@@ -301,6 +301,7 @@ def test_same_body_checkpoint_rejects_changed_opaque_or_member_provenance(
             {
                 **checkpoint,
                 "id": "checkpoint-opaque-conflict",
+                "channel_versions": {"messages": "2"},
                 "channel_values": {"messages": messages},
             },
             {"source": "test", "step": 2, "writes": {}},

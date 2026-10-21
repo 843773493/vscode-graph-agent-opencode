@@ -398,17 +398,25 @@ class RolloutViewMembershipMixin:
                 and final_sequence < user_sequence
             ):
                 raise RuntimeError(f"Turn message sequence 索引非法: {value}")
-            # 不同并发 Turn 的 canonical message sequence 可能交错。不能用
-            # first..last 的连续整数判断完整性，否则后来完成的 Turn 会因为
-            # 中间插入了其它 Turn 的消息而从 active view 消失，历史读取随后
-            # 被错误识别成 stale reference。
+            # 完整性相对于冻结来源 view 判断；全局 catalog 还包含其它分支、
+            # 被替换版本及 fork 的增量恢复 backing，不能要求它们全部可见。
+            # 新出现的 Turn 才使用当前已提交消息；并发序号仍不能按连续范围推断。
+            inherited_turn = parent_view_id is not None and connection.execute(
+                "SELECT 1 FROM context_view_turns WHERE view_id=? AND turn_id=?",
+                (parent_view_id, value),
+            ).fetchone() is not None
             turn_sequences = {
                 strict_non_negative_int(
                     message_row[0], field=f"messages.message_sequence: {value}"
                 )
                 for message_row in connection.execute(
-                    "SELECT message_sequence FROM messages WHERE turn_id = ?",
-                    (value,),
+                    "SELECT m.message_sequence FROM messages m "
+                    "JOIN item_catalog i ON i.jsonl_offset=m.jsonl_offset AND i.jsonl_length=m.jsonl_length "
+                    "JOIN context_view_items member ON member.item_id=i.item_id "
+                    "WHERE member.view_id=? AND member.visible=1 AND m.turn_id=?"
+                    if inherited_turn else
+                    "SELECT message_sequence FROM messages WHERE turn_id=?",
+                    (parent_view_id, value) if inherited_turn else (value,),
                 ).fetchall()
             }
             if turn_sequences and turn_sequences.issubset(sequence_set):
@@ -600,8 +608,13 @@ class RolloutViewMembershipMixin:
         if turn_ids and view_kind != "checkpoint_messages":
             placeholders = ",".join("?" for _ in turn_ids)
             block_items = connection.execute(
+                "SELECT item.item_id FROM item_catalog item "
+                "JOIN context_view_items member ON member.item_id=item.item_id "
+                f"WHERE member.view_id=? AND member.visible=1 AND item.turn_id IN ({placeholders}) "
+                "ORDER BY member.logical_item_ordinal"
+                if parent_view_id is not None else
                 f"SELECT item_id FROM item_catalog WHERE turn_id IN ({placeholders}) ORDER BY item_sequence, item_id",
-                tuple(turn_ids),
+                (parent_view_id, *turn_ids) if parent_view_id is not None else tuple(turn_ids),
             ).fetchall()
             candidate_item_ids.update(
                 strict_text(item_id, field="item_catalog.item_id")
