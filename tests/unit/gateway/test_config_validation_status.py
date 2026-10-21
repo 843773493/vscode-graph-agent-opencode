@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import asdict
 from pathlib import Path
 
 import httpx
@@ -139,3 +140,61 @@ async def test_source_read_failure_has_no_native_path_and_preserves_active_state
         assert recovered["healthy"] is True
         assert recovered["last_error"] is None
         assert store.get_active_config_snapshot("gateway") == active
+
+
+@pytest.mark.parametrize("source", ["config", "schema"])
+@pytest.mark.parametrize("damage", ["character", "token", "utf8"])
+async def test_parse_failure_status_does_not_echo_document_or_advance_sources(
+    validation_owner, source: str, damage: str,
+) -> None:
+    application, service, store, config_path, schema_path, _ = validation_owner
+    target = config_path if source == "config" else schema_path
+    original = target.read_bytes()
+    initial_config = service.config
+    active = store.get_active_config_snapshot("gateway")
+    source_keys = ("gateway_mutable_override", "gateway_local_mutable_override")
+
+    def source_state() -> dict[str, object]:
+        # 既有秘密迁移检查会刷新审计时间；其余全部持久字段必须保持原值。
+        return {
+            key: {name: value for name, value in asdict(record).items() if name != "updated_at"}
+            if (record := store.get_source_layer(key)) is not None else None
+            for key in source_keys
+        }
+
+    sources = source_state()
+    prefix = json.dumps({"private": "secret-marker", "native": str(target)})[:-1]
+    suffix = {"character": b', "broken": @}', "token": b' "another"}', "utf8": b"\xff"}[damage]
+    target.write_bytes(prefix.encode("utf-8") + suffix)
+
+    with pytest.raises(ValueError, match="配置 .*失败") as failure:
+        await service.reload()
+    assert failure.value.__cause__ is not None
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=application), base_url="http://test",
+    ) as client:
+        response = await client.get(
+            "/api/gateway/config/reload-status", headers={"X-Request-ID": "parse-failure"},
+        )
+        assert response.status_code == 200, response.text
+        assert response.headers["X-Request-ID"] == response.json()["request_id"] == "parse-failure"
+        status = response.json()["data"]
+        assert status["healthy"] is False
+        assert status["reason"] == "invalid_config"
+        assert status["last_error"] == f"ValueError: {failure.value}"
+        assert "secret-marker" not in response.text
+        assert str(config_path.parent) not in response.text
+        assert "another" not in response.text
+        assert service.config is initial_config
+        assert store.get_active_config_snapshot("gateway") == active
+        assert store.get_pending_config_candidate(config_domain="gateway") is None
+        assert source_state() == sources
+        assert service.list_events() == ()
+
+        target.write_bytes(original)
+        await service.reload()
+        recovered = (await client.get("/api/gateway/config/reload-status")).json()["data"]
+        assert recovered["healthy"] is True
+        assert recovered["last_error"] is None
+        assert store.get_active_config_snapshot("gateway") == active
+        assert source_state() == sources

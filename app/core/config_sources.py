@@ -131,7 +131,31 @@ def parse_stable_config_file(
         return None
     if snapshot.raw_bytes is None:
         raise RuntimeError("present 配置快照缺少文件内容")
-    parsed = commentjson.loads(snapshot.raw_bytes.decode("utf-8"))
+    try:
+        text = snapshot.raw_bytes.decode("utf-8")
+    except UnicodeDecodeError as error:
+        raise ValueError(
+            f"配置 UTF-8 解码失败: byte_start={error.start}, byte_end={error.end}: {error.reason}"
+        ) from error
+    try:
+        parsed = commentjson.loads(text)
+    except Exception as error:
+        # commentjson 的解析异常没有共同基类，且正文可能包含整份配置或 token。
+        # 此边界只发布类型和结构化位置；原始原因完整保留，不在响应层截断或脱敏。
+        if isinstance(error, json.JSONDecodeError):
+            position = f"normalized_json_line={error.lineno}, column={error.colno}"
+        else:
+            parser_error = error.__context__ if type(error) is ValueError else error
+            line = getattr(parser_error, "line", None)
+            column = getattr(parser_error, "column", None)
+            position = (
+                f"line={line}, column={column}"
+                if isinstance(line, int) and isinstance(column, int)
+                else "position=unavailable"
+            )
+        raise ValueError(
+            f"配置 JSONC 解析失败: parser_error={type(error).__name__}, {position}"
+        ) from error
     if not isinstance(parsed, dict):
         raise TypeError("配置文件根节点必须是对象")
     return parsed

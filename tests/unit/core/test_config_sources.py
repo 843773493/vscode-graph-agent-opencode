@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import errno
+import json
 from dataclasses import replace
 from pathlib import Path
 
@@ -99,3 +100,44 @@ def test_changed_source_and_missing_payload_fail_without_native_path(config_file
         parse_stable_config_file(replace(snapshot, raw_bytes=None))
     assert str(config_file.parent) not in str(changed.value)
     assert str(config_file.parent) not in str(missing.value)
+
+
+@pytest.mark.parametrize(("suffix", "parser_error"), [
+    ('@}', "ValueError"),
+    ('"secret-token" "another"}', "UnexpectedToken"),
+    ('', "UnexpectedToken"),
+    ('"\\q"}', "JSONDecodeError"),
+])
+def test_jsonc_parse_error_reports_position_without_document_or_token(
+    config_file: Path, suffix: str, parser_error: str,
+) -> None:
+    content = '{\n"private": "secret-marker",\n"native": ' + json.dumps(str(config_file))
+    config_file.write_text(content + ',\n"broken": ' + suffix, encoding="utf-8")
+
+    with pytest.raises(ValueError, match="配置 JSONC 解析失败") as failure:
+        parse_stable_config_file(read_stable_config_file(config_file))
+    assert type(failure.value.__cause__).__name__ == parser_error
+    message = str(failure.value)
+    assert f"parser_error={parser_error}" in message
+    assert "line=" in message and "column=" in message
+    assert "secret-marker" not in message
+    assert str(config_file.parent) not in message
+    assert '"another"' not in message
+
+
+def test_invalid_utf8_reports_byte_offset_without_document(config_file: Path) -> None:
+    payload = b'{"private":"secret-marker","broken":"\xff"}'
+    config_file.write_bytes(payload)
+    with pytest.raises(ValueError, match="配置 UTF-8 解码失败") as failure:
+        parse_stable_config_file(read_stable_config_file(config_file))
+    cause = failure.value.__cause__
+    assert isinstance(cause, UnicodeDecodeError)
+    assert cause.object == payload
+    byte_start = payload.index(b"\xff")
+    assert f"byte_start={byte_start}" in str(failure.value)
+    assert "secret-marker" not in str(failure.value)
+
+
+def test_jsonc_comments_trailing_comma_and_unicode_keep_same_values(config_file: Path) -> None:
+    config_file.write_text('{\n// 注释\n"值": [1, true,],\n}', encoding="utf-8")
+    assert parse_stable_config_file(read_stable_config_file(config_file)) == {"值": [1, True]}
