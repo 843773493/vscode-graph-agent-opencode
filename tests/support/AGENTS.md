@@ -8,6 +8,7 @@
 support/
 ├── e2e_control/          pytest 外置控制面与受控真实 E2E 服务组合
 │   ├── harness.py        时钟、phase、identity、进程租约与回放计划
+│   ├── runtime_ports.py  无应用副作用的显式受控端口
 │   ├── backend_app.py    使用受控 RuntimeClockPorts/identity 的真实 Backend
 │   ├── communication_backend_app.py 同一受控Backend的通信故障及工具提交观测
 │   ├── gateway_app.py    启动上述 Backend 的真实 Gateway
