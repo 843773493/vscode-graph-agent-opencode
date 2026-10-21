@@ -425,7 +425,10 @@ async def test_prompt_drives_agent_debug_tools_through_real_backend(
         f"/api/v1/sessions/{session_id}/messages",
         json={
             "message": {"content": prompt},
-            "run": {"mode": "single_agent", "agent_id": "default"},
+            "run": {
+                "mode": "single_agent", "agent_id": "default",
+                "max_steps": 20, "timeout_seconds": 240,
+            },
         },
     )
     assert message_response.status_code == 200, message_response.text
@@ -535,6 +538,38 @@ async def test_prompt_drives_agent_debug_tools_through_real_backend(
         and get_trace_payload(trace).get("tool_name") in debug_tool_names
     ]
     assert debug_end_traces
+    end_payloads_by_name = {
+        name: [get_trace_payload(trace) for trace in debug_end_traces
+               if get_trace_payload(trace).get("tool_name") == name]
+        for name in debug_tool_names
+    }
+    assert all(end_payloads_by_name.values()), end_payloads_by_name
+    assert all(
+        payload.get("status") == "success"
+        for payloads in end_payloads_by_name.values()
+        for payload in payloads
+    ), end_payloads_by_name
+    decoded_results = {
+        name: json.loads(str(payloads[-1]["result"]))
+        for name, payloads in end_payloads_by_name.items()
+    }
+    assert all(isinstance(result, dict) and result.get("ok") is True
+               for result in decoded_results.values()), decoded_results
+    for name, result in decoded_results.items():
+        serialized = json.dumps(result, ensure_ascii=False)
+        for private_field in (
+            "inspector_url", "inspector_id", "call_frame_id", "object_id",
+            '"pid"', '"session_id"', '"tool_call_id"',
+        ):
+            assert private_field not in serialized, (name, private_field)
+    start_state = decoded_results["start_debugging"]["state"]
+    assert start_state["status"] == "paused", start_state
+    assert start_state["call_stack"], start_state
+    evaluation_state = decoded_results["evaluate_expression"]["state"]
+    assert evaluation_state["status"] == "paused", evaluation_state
+    assert evaluation_state["last_evaluation"]["expression"] == "state.counter += 1"
+    assert evaluation_state["last_evaluation"]["value"] == "5"
+    assert decoded_results["continue_execution"]["state"]["status"] == "exited"
     successful_results = [
         str(get_trace_payload(trace)["result"])
         for trace in debug_end_traces
@@ -590,6 +625,20 @@ async def test_prompt_drives_agent_debug_tools_through_real_backend(
     request_history = json.dumps(model_requests, ensure_ascii=False)
     assert "入口断点停在 state.counter += 2 之前" in request_history
     assert "worker 断点停在 state.counter += 10 之前" in request_history
+
+    logs_response = await scripted_client.get(f"/api/v1/sessions/{session_id}/llm-request-logs")
+    assert logs_response.status_code == 200, logs_response.text
+    logs = logs_response.json()["data"]
+    assert isinstance(logs, list) and logs, logs
+    logged_requests = [log["request"] for log in logs]
+    assert {request["model_name"] for request in logged_requests} == {"debug-e2e-model"}
+    exposed_tool_names = [
+        {tool.get("name", tool.get("function", {}).get("name"))
+         for tool in request["tools"]}
+        for request in logged_requests
+    ]
+    assert any(EXTENSION_TOOL_INVOKER_NAME in names for names in exposed_tool_names)
+    assert all(not debug_tool_names & names for names in exposed_tool_names), exposed_tool_names
 
     configuration_id = debug_state["active_configuration_id"]
     assert isinstance(configuration_id, str)

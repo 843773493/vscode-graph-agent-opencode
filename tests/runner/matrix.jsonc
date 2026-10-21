@@ -93,14 +93,6 @@
       ]
     },
     {
-      "id": "e2e-live-source-debug",
-      "layer": "e2e",
-      "client": null,
-      "enabled": true,
-      "requiredEnvironment": ["BOXTEAM_RUN_LIVE_DEBUG_E2E"],
-      "command": ["uv", "run", "pytest", "tests/e2e/system/agent/test_debug_prompt_live.py"]
-    },
-    {
       "id": "e2e-electron",
       "layer": "e2e",
       "client": "electron",
