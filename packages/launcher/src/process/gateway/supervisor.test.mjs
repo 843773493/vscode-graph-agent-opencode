@@ -7,18 +7,22 @@ import path from "node:path";
 
 import {
   forwardGatewayOutput,
-  buildGatewayPendingEnvironment,
-  createGatewayPublicListener,
-  createGatewaySupervisorControl,
   gatewayEndpoint,
   gatewayEnvironment,
-  resolveGatewaySupervisorSocketPath,
-  gatewayStartupContract,
   installSignalForwarding,
-  requestGatewayHandoff,
   spawnGateway,
   superviseGateway,
-} from "./gateway-supervisor.mjs";
+} from "./supervisor.mjs";
+import {
+  createGatewaySupervisorControl,
+  requestGatewayHandoff,
+  resolveGatewaySupervisorSocketPath,
+} from "./handoff-control.mjs";
+import { createGatewayPublicListener } from "./public-listener.mjs";
+import {
+  buildGatewayPendingEnvironment,
+  gatewayStartupContract,
+} from "./startup-contract.mjs";
 
 function fakeChild() {
   const child = new EventEmitter();

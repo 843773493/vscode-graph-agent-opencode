@@ -8,7 +8,8 @@ src/
 ├── doctor.mjs               诊断结果构建与呈现
 ├── configuration/           配置安装、运行时发现与 manifest 校验
 ├── federation/              Gateway 联邦配对凭证
-└── process/                 detached 进程、Gateway 监督、实例锁、日志与停止
+└── process/                 detached 进程、实例锁、日志与停止
+    └── gateway/             Gateway generation 启动、监听、handoff 与监督
 ```
 
 每组的实现和单元测试并列放置；新增文件先归入对应职责目录，不建立旧路径转发层。

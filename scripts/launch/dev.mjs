@@ -18,7 +18,7 @@ import {
   resolveServiceLogPath,
   SERVICE_LOG_CAPTURED_ENV,
 } from "../../packages/launcher/src/process/service-log.mjs";
-import { requestGatewayHandoff } from "../../packages/launcher/src/process/gateway-supervisor.mjs";
+import { requestGatewayHandoff } from "../../packages/launcher/src/process/gateway/handoff-control.mjs";
 import { BOXTEAM_VERSION } from "../../packaging/runtime/versions.mjs";
 import {
   remainingOccupiedPorts,

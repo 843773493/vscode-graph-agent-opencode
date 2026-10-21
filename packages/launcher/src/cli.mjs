@@ -7,7 +7,7 @@ import {
 } from "./configuration/config-bootstrap.mjs";
 import { buildDoctorReport, printDoctorReport } from "./doctor.mjs";
 import { issueFederationToken } from "./federation/federation-token.mjs";
-import { superviseGateway } from "./process/gateway-supervisor.mjs";
+import { superviseGateway } from "./process/gateway/supervisor.mjs";
 import { acquireLauncherLock } from "./process/instance-lock.mjs";
 import { discoverRuntime } from "./configuration/runtime-discovery.mjs";
 import { openServiceLog } from "./process/service-log.mjs";

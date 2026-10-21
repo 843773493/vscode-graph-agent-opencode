@@ -1,11 +1,12 @@
 # 目录用途
 
-存放 Launcher 进程生命周期能力：detached 进程、Gateway 监督、实例锁、服务日志与停止流程。
+存放 Launcher 进程生命周期能力：detached 进程、实例锁、服务日志、停止流程，以及 Gateway 子树。
 
 # 可修改内容
 
 - 进程创建、监督、handoff、信号转发、锁文件、日志轮转和停止逻辑。
 - 与这些实现直接对应的单元测试。
+- `gateway/` 子目录中的 generation 启动契约、稳定代理监听与 handoff 控制。
 
 # 不可修改内容
 
@@ -16,3 +17,4 @@
 
 - 停止进程必须核实实例身份；平台能力差异要明确分支并覆盖对应测试。
 - 超时、退出码和错误必须如实传回调用方，不得静默伪报停止成功。
+- Gateway 公开流量由 `gateway/public-listener.mjs` 代理，generation 决策由 `gateway/supervisor.mjs` 独占。
