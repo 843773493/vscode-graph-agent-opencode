@@ -1,4 +1,4 @@
-"""本地 Provider 桩 + 真实 Web/Gateway/Saver 的 Integration，不是 E2E。"""
+"""模型回放与真实 Web/Gateway/Saver 的查询展示 Integration。"""
 
 from __future__ import annotations
 
@@ -9,6 +9,7 @@ import os
 import shutil
 import socket
 import subprocess
+from collections.abc import AsyncIterator
 from dataclasses import replace
 from pathlib import Path
 from uuid import uuid4
@@ -16,6 +17,7 @@ from uuid import uuid4
 import httpx
 import pytest
 
+from app.core import identifier
 from app.domain.itemized.epoch.tool_set import ToolSetSnapshot
 from app.domain.itemized.hashing import sha256_jcs
 from app.domain.itemized.identity.item_projection import (
@@ -26,6 +28,7 @@ from app.domain.itemized.records import (
     CanonicalItemRecord,
     TurnScope,
 )
+from app.runtime.model_stream import configure_model_stream_from_environment
 from app.services.business.session_context_resource import context_assembly_identity
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
@@ -33,28 +36,33 @@ from app.services.infrastructure.rollout_context.checkpoint.saver import (
 from app.services.mapping.itemized.resource_activation import (
     project_sealed_resource_refs,
 )
+from app.testing.model_stream import build_cassette, responses_frames
 from tests.harness.python.run_context import TestRunContext
 from tests.integration.backend.sessions.itemized_dispatch_helpers import (
     EMPTY_TOOL_SET,
     dispatch_execution_scope,
     inspection_resource_registry,
     invoke_provider_dispatch,
-    native_http_server,
     seed_dispatch_history,
     seed_dispatch_overlay,
 )
 from tests.integration.backend.sessions.itemized_projection_helpers import (
     register_projection_draft,
 )
+from tests.support.e2e_control.runtime_ports import ControlledIdentifiers
+from tests.support.model_stream_config import ModelStreamReplay, model_stream_replay
+from tests.support.ports import integration_port_block_for_file
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
     close_gateway_process,
     start_gateway_process,
 )
-from tests.support.ports import integration_port_block_for_file
-from tests.support.processes.workspace import close_backend_process, start_backend_process
+from tests.support.processes.workspace import (
+    close_backend_process,
+    start_backend_process,
+)
 
-__all__ = ["inspection_resource_registry", "native_http_server"]
+__all__ = ["inspection_resource_registry"]
 
 
 def _require_free_port(port: int) -> None:
@@ -129,6 +137,29 @@ def browser_runtime(
         close_backend_process(backend)
 
 
+@pytest.fixture
+async def browser_model_replay(
+    browser_runtime, request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch,
+) -> AsyncIterator[ModelStreamReplay]:
+    context, _base_url = browser_runtime
+    with model_stream_replay(
+        context.output_root, runtime_root=context.runtime_root_for_node(request.node.nodeid),
+        business_assertion="itemized-context-query-and-display",
+    ) as replay:
+        for key, value in replay.environment.items():
+            monkeypatch.setenv(key, value)
+        monkeypatch.setattr(identifier, "_identifier_factory", identifier._identifier_factory)
+        identifier.bind_identifier_factory(ControlledIdentifiers(
+            json.loads(replay.environment["BOXTEAM_E2E_TEST_CONTROL"]),
+        ))
+        controller = configure_model_stream_from_environment(project_root=Path.cwd())
+        assert controller is not None
+        try:
+            yield replay
+        finally:
+            await controller.aclose()
+
+
 def _projection_evidence(saver, session_id, snapshot):
     plan = snapshot.as_sealed_plan()
     projection = saver.project_context_plan_to_history_with_diagnostics(
@@ -157,9 +188,10 @@ def _projection_evidence(saver, session_id, snapshot):
 
 
 @pytest.fixture
-async def browser_source(browser_runtime, native_http_server, inspection_resource_registry):
+async def browser_source(browser_runtime, browser_model_replay, inspection_resource_registry):
     context, base_url = browser_runtime
-    state, endpoint = native_http_server
+    replay = browser_model_replay
+    endpoint = "https://itemized-context.invalid/v1"
     async with httpx.AsyncClient(
         base_url=base_url, headers=LOCAL_TOKEN_HEADERS, timeout=30
     ) as client:
@@ -187,13 +219,37 @@ async def browser_source(browser_runtime, native_http_server, inspection_resourc
     with RolloutCheckpointSaver(context.workspace_root / ".boxteam/sessions") as saver:
         turn_id = seed_dispatch_history(saver, session_id, registry=inspection_resource_registry)
         seed_dispatch_overlay(saver, session_id)
-        await invoke_provider_dispatch(saver, session_id, turn_id, endpoint, state.api_key, target_format="responses")
+        thread_id = saver._storage.storage.main_thread_id(session_id)
+        cassette = build_cassette(
+            asset_id="itemized-context-browser", model="gpt-4.1", url=endpoint + "/responses",
+            protocol="openai_responses_sse",
+            frames=responses_frames(
+                response_id="resp-native-1", model="contract-model",
+                output=({
+                    "type": "message", "id": "msg-native-1", "role": "assistant",
+                    "status": "completed", "content": [{
+                        "type": "output_text", "text": "native-http-result", "annotations": [],
+                    }],
+                },),
+                usage={"input_tokens": 10, "output_tokens": 1, "total_tokens": 11},
+            ),
+        )
+        interaction = {**cassette.raw["interactions"][0], "protocol": "openai_responses_sse"}
+        (call_id,) = replay.control.plan_model_calls(session_id, thread_id, [interaction])
+        await invoke_provider_dispatch(
+            saver, session_id, turn_id, endpoint, "context-replay-key", target_format="responses",
+        )
+        recorded = json.loads((replay.artifacts / f"{call_id}.json").read_text())
+        assert recorded["identity"] == {
+            "session_id": session_id, "thread_id": thread_id, "model_call_id": call_id,
+        }
         with dispatch_execution_scope(saver, session_id, turn_id):
             (first,) = saver.list_context_assemblies(
                 session_id, saver._storage.storage.main_thread_id(session_id)
             )
             # 本装具直接调用模型图，没有产品event adapter；按真实已封存call登记控制事实。
             assert first.model_call_id is not None
+            assert first.model_call_id == call_id
             saver.register_model_call(
                 session_id, thread_id=first.thread_id, execution_id=first.execution_id,
                 model_call_id=first.model_call_id, attempt=1, provider="openai",
@@ -205,7 +261,7 @@ async def browser_source(browser_runtime, native_http_server, inspection_resourc
             )
             first_evidence = _projection_evidence(saver, session_id, first)
             assert (
-                state.requests[0]["body"]["input"]
+                recorded["request"]["input"]
                 == first_evidence["native_request"]["input"]
             )
             source_items = saver.read_canonical_items(session_id)
@@ -371,7 +427,7 @@ async def browser_source(browser_runtime, native_http_server, inspection_resourc
 
 
 @pytest.mark.asyncio
-async def test_itemized_context_through_real_web_gateway_with_native_http_stub(
+async def test_itemized_context_through_real_web_gateway_with_model_stream_replay(
     browser_runtime, browser_source
 ):
     context, base_url = browser_runtime
