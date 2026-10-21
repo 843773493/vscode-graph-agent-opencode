@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from threading import RLock
 
+from app.core.sqlite_state import load_sql
 from app.schemas.internal_v2.session_navigation.operations import (
     NAVIGATION_MUTATION_TERMINAL_STATES,
     validate_operation_id,
@@ -83,20 +84,15 @@ class WorkspaceFileStore:
         version = self._db.execute("PRAGMA user_version").fetchone()[0]
         if version == 0 and not self._db.execute("SELECT 1 FROM sqlite_master WHERE type='table'").fetchone():
             with self.transaction() as db:
-                db.execute("CREATE TABLE owner (workspace_id TEXT PRIMARY KEY)")
-                db.execute("INSERT INTO owner VALUES (?)", (workspace_id,))
+                db.execute(load_sql(__package__, "sql/owner.sql"))
+                db.execute(load_sql(__package__, "sql/owner_seed.sql"), (workspace_id,))
                 # 每个已访问目录只留固定宽度摘要与版本，不存逐文件身份或正文。
-                db.execute("CREATE TABLE directories (key TEXT PRIMARY KEY, uri TEXT NOT NULL, "
-                           "revision INTEGER NOT NULL, signature TEXT NOT NULL, present INTEGER NOT NULL)")
-                db.execute("CREATE INDEX file_directory_uri ON directories(uri)")
-                db.execute("CREATE TABLE operations (queue_seq INTEGER PRIMARY KEY AUTOINCREMENT, "
-                           "operation_id TEXT NOT NULL UNIQUE, actor TEXT NOT NULL, request_hash TEXT NOT NULL, "
-                           "payload TEXT NOT NULL, payload_hash TEXT NOT NULL, state TEXT NOT NULL, "
-                           "token INTEGER NOT NULL DEFAULT 0, steps TEXT NOT NULL, steps_hash TEXT NOT NULL, receipt TEXT NOT NULL, "
-                           "cleanup_done INTEGER NOT NULL DEFAULT 0)")
-                db.execute("CREATE INDEX file_operations_pending ON operations(queue_seq) WHERE state IN ('queued','running')")
-                db.execute("CREATE INDEX file_operations_cleanup ON operations(cleanup_done,queue_seq)")
-                db.execute("CREATE TABLE events (event_id INTEGER PRIMARY KEY AUTOINCREMENT, payload TEXT NOT NULL)")
+                db.execute(load_sql(__package__, "sql/directories.sql"))
+                db.execute(load_sql(__package__, "sql/file_directory_uri.sql"))
+                db.execute(load_sql(__package__, "sql/operations.sql"))
+                db.execute(load_sql(__package__, "sql/file_operations_pending.sql"))
+                db.execute(load_sql(__package__, "sql/file_operations_cleanup.sql"))
+                db.execute(load_sql(__package__, "sql/events.sql"))
                 db.execute("PRAGMA user_version=3")
         elif version != 3:
             self._db.close()

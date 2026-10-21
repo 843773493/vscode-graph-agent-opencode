@@ -39,6 +39,10 @@ from app.core.session_control_store import SessionControlStore
 from app.gateway.control.gateway_state import GatewayStateStore
 from app.gateway.federation.store import federation_control_database
 from app.services.business.session_navigation.queue_schema import ensure_navigation_queue_tables
+from app.services.infrastructure.workspace_state_store import WorkspaceStateStore
+from app.services.infrastructure.workspace_files.store import WorkspaceFileStore
+from app.services.infrastructure.config.source_owner import WorkspaceSourceOwner
+from app.services.infrastructure.attachment_blob_catalog.catalog import AttachmentBlobCatalog
 assert Path(core.__file__).is_relative_to(Path.cwd())
 for _ in range(2):
     with GatewayStateStore(path=Path("state/gateway.sqlite")) as store:
@@ -55,6 +59,15 @@ for _ in range(2):
     with closing(SessionControlStore(Path("state/session-control.sqlite"))) as control:
         assert control.connection.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
         assert control.connection.execute("SELECT revision FROM collaboration_ledger").fetchone()[0] == 0
+    with closing(WorkspaceStateStore(workspace_root=Path("state/workspace"))) as workspace:
+        with closing(workspace.connection()) as connection:
+            assert connection.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+    with closing(WorkspaceFileStore(Path("state/workspace"), "workspace-release")) as files:
+        assert files.path.is_file()
+    with closing(WorkspaceSourceOwner(path=Path("state/source-owner.sqlite"))) as source:
+        assert source.high_water_mark() == 0
+    with closing(AttachmentBlobCatalog(Path("state/attachments/catalog.sqlite"))) as attachments:
+        assert attachments.connection.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
 print(json.dumps({"loaded": core.__file__, "schema": 17}))
 '''
     environment = {**os.environ, "PYTHONPATH": str(staged_application)}

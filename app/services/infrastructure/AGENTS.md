@@ -23,3 +23,4 @@
 - 会话专属持久化必须先通过统一会话路径解析器取得物理会话节点，再使用该节点下的对应子目录；禁止拼接或假设 `${workspace_abs_path}/.boxteam/sessions/{session_id}/` 固定路径。
 - 新增会话存储时必须同时考虑会话移动、删除、导出和迁移，确保操作解析后的整个会话目录即可完整处理数据。
 - 派生索引不得反向覆盖物理目录树；发现重复稳定 ID、损坏 manifest 或越界路径时必须直接报告冲突。
+- `workspace_state_sql/` 是 WorkspaceStateStore 的静态迁移唯一来源；Python 保留版本顺序和条件数据转换。

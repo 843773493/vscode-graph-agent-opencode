@@ -1,0 +1,1 @@
+CREATE INDEX IF NOT EXISTS idx_attachment_ingest_records_state ON attachment_ingest_records(state)

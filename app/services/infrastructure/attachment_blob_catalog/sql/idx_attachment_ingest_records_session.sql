@@ -1,0 +1,1 @@
+CREATE INDEX IF NOT EXISTS idx_attachment_ingest_records_session ON attachment_ingest_records(owner_session_id, state)

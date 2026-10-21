@@ -17,8 +17,8 @@
 
 ## 4. 工作区与 rollout
 
-- [ ] 4.1 提取 workspace state/config source、workspace files operation 的结构与迁移，验证配置和恢复。
-- [ ] 4.2 提取 attachment blob catalog 的结构与迁移，验证 claim/owner/ref。
+- [x] 4.1 提取 workspace state/config source、workspace files operation 的结构与迁移，验证配置和恢复。
+- [x] 4.2 提取 attachment blob catalog 的结构与迁移，验证 claim/owner/ref。
 - [ ] 4.3 提取 rollout storage 的 schema、plan、assembly refs、wakeup 与 activation 的结构/迁移 SQL，保持连接内执行顺序及条件分支。
 - [ ] 4.4 提取 fork snapshot 的静态索引迁移语句与 copy_items 的临时表结构，验证真实 fork owner 与历史保真。
 
@@ -32,3 +32,5 @@
 提交前diff检查发现原字符串的尾部缩进进入SQL资产；已清理尾部空白并统一末尾换行，其余执行AST等价。`sqlite-assets-gateway-final-003` 最终96 passed，源码前后指纹一致；最终strict `openspec-002` exit0。首次私有提交在更新分支前被diff-check拒绝，不计交付。
 
 2026-10-21 Session批：16个Python模块的54份结构/种子SQL已迁出，保留逐条execute、事务和版本/旧库拒绝。catalog原8段指纹表达式索引冻结为与原生成结果相同的静态SQL；其它模块展开load_sql后执行AST相同，仅尾部空白与import顺序归一，见 `sqlite-session-equivalence-001.json`；147处直接/间接结构消费者检索保留。`sqlite-assets-session-core-001` 577 passed/14.16s；导航组001为31 passed、1 failed/19.79s，唯一崩溃子进程沿旧路径未绑定catalog owner，失败在领取操作前，不是DDL错误。该测试迁到现有fixture_catalog_scope，不改退出91、running、generation/fencing与同一operation恢复断言，`navigation-recovery-002` 1 passed/4.57s。本批16文件Ruff `static-001` 及fixture静态002 exit0；发行copy扩展到Session/catalog/control/navigation后 `release-002` 1 passed/5.13s，经历新建/冷重开；release001为新增测试误把无context协议的store当context manager，仅改用closing，不改产品。原命令、指纹、raw及退出码见 `out/tests/temp/openspec_takeover/artifacts/runs/sqlite-assets-session-*`，限定收据为 `sqlite-assets-session-validation-001.json`。这是存储/真实崩溃恢复验证，不声称真实HTTP或完整Agent执行。
+
+2026-10-21 工作区/附件批：4个生产owner的48份结构/迁移/种子SQL已迁出，版本仍为Workspace14、文件operation3、附件3。源码与原文展开比对执行AST等价，source owner的事务仍由Python拼接协调且executescript方式不变；19份附件表/索引/触发器与1个种子共20份资产保留原顺序。新增source_path→uri旧库迁移冷重开与中途DROP拒绝验证journal/fanout保留及结构/数据回滚。`sqlite-assets-workspace-unit-001` 124 passed/46.12s，含既有配置/文件恢复/附件失败及扩展后的发行copy smoke；Ruff `static-002`、compile001 exit0。static001仅新增import顺序已修；另一个PYI034为与HEAD同AST的原有__enter__注解，限定检查显式忽略该既存项，证据 `sqlite-workspace-static-baseline-001.json`。独立只读审查无结构/事务阻断。release子进程继承run_task的RLIMIT_DATA，整个进程组有外部timeout，不是裸跑。基础设施全目录扩展检查 `infrastructure-001` 以SIGINT在硬期限前中止，exit2；1135 passed/9 setup errors/232.53s。九项fork用例均在fork_deadline fixture因要求正式matrix runner而拒绝，未进入业务；这是本次扩展入口选择问题，不计SQL失败，剩余目录未完成，不重复裸跑；不以该124项声称整个目录全绿。原件位于 `out/tests/temp/openspec_takeover/artifacts/sqlite-workspace-*` 及runs。

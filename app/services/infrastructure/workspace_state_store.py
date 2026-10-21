@@ -1,7 +1,7 @@
 """Workspace 控制面 SQLite 状态库的装配点与 lifecycle/config-kv 方法族。
 
 WorkspaceStateStore 组合 workspace activity、config event、config source 以及本模块
-导入的 apply / snapshot / restart 各族 mixin；本模块另承载 _WORKSPACE_MIGRATIONS DDL、
+导入的 apply / snapshot / restart 各族 mixin；本模块显式加载 workspace_state_sql/ 迁移、
 一次性来源层迁移回调与 lifecycle / config-kv 方法。"""
 
 from __future__ import annotations
@@ -15,6 +15,7 @@ from app.core.config_sources import config_revision
 from app.core.sqlite_state import (
     SQLiteDiagnostics,
     SQLiteStateDatabase,
+    load_sql,
     utc_now_text,
 )
 from app.services.infrastructure.config.state import (
@@ -72,13 +73,12 @@ def _migrate_workspace_config_into_source_layers(
     """
 
     exists = connection.execute(
-        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'workspace_config'"
+        load_sql(__package__, "workspace_state_sql/legacy_config/exists.sql")
     ).fetchone()
     if exists is None:
         return
     rows = connection.execute(
-        "SELECT config_key, config_version, payload_json, updated_at "
-        "FROM workspace_config"
+        load_sql(__package__, "workspace_state_sql/legacy_config/read_mirror.sql")
     ).fetchall()
     for row in rows:
         config_key = str(row[0])
@@ -95,8 +95,7 @@ def _migrate_workspace_config_into_source_layers(
                 f"config_source_layers: key={config_key}: {error}"
             ) from error
         layer = connection.execute(
-            "SELECT presence, payload_json FROM config_source_layers "
-            "WHERE config_key = ?",
+            load_sql(__package__, "workspace_state_sql/legacy_config/read_source.sql"),
             (config_key,),
         ).fetchone()
         if layer is not None:
@@ -112,13 +111,7 @@ def _migrate_workspace_config_into_source_layers(
                 )
             continue
         connection.execute(
-            """
-            INSERT INTO config_source_layers(
-                config_key, uri, presence, config_version, payload_json,
-                layer_revision, layer_digest, source_generation, previous_digest,
-                updated_at, previous_payload_json
-            ) VALUES (?, NULL, 'present', ?, ?, 1, ?, 1, NULL, ?, NULL)
-            """,
+            load_sql(__package__, "workspace_state_sql/legacy_config/insert_source.sql"),
             (
                 config_key,
                 config_version,
@@ -131,233 +124,25 @@ def _migrate_workspace_config_into_source_layers(
             "legacy workspace_config 行已一次性并入 config_source_layers: key=%s",
             config_key,
         )
-    connection.execute("DROP TABLE workspace_config")
+    connection.execute(load_sql(__package__, "workspace_state_sql/legacy_config/drop_mirror.sql"))
 
 
 _WORKSPACE_MIGRATIONS = (
-    """
-    CREATE TABLE IF NOT EXISTS workspace_activity (
-        event_seq INTEGER PRIMARY KEY AUTOINCREMENT,
-        event_id TEXT NOT NULL UNIQUE,
-        session_id TEXT NOT NULL,
-        status TEXT NOT NULL,
-        summary TEXT NOT NULL,
-        occurred_at TEXT NOT NULL
-    );
-    CREATE TABLE IF NOT EXISTS workspace_event_cursors (
-        cursor_key TEXT PRIMARY KEY,
-        cursor_value TEXT NOT NULL,
-        updated_at TEXT NOT NULL
-    );
-    """,
-    """
-    CREATE TABLE IF NOT EXISTS config_source_layers (
-        config_key TEXT PRIMARY KEY,
-        source_path TEXT NOT NULL,
-        presence TEXT NOT NULL CHECK (presence IN ('present', 'absent')),
-        config_version INTEGER NOT NULL,
-        payload_json TEXT,
-        layer_revision INTEGER NOT NULL,
-        layer_digest TEXT,
-        source_generation INTEGER NOT NULL,
-        previous_digest TEXT,
-        updated_at TEXT NOT NULL
-    );
-    """,
-    """
-    CREATE TABLE IF NOT EXISTS config_revision_meta (
-        config_domain TEXT PRIMARY KEY,
-        next_revision INTEGER NOT NULL
-    );
-    CREATE TABLE IF NOT EXISTS config_active_snapshot (
-        config_domain TEXT PRIMARY KEY,
-        active_revision INTEGER NOT NULL,
-        candidate_id TEXT,
-        payload_json TEXT NOT NULL,
-        source_baseline_json TEXT NOT NULL,
-        source_generation INTEGER NOT NULL,
-        layer_revisions_json TEXT NOT NULL,
-        layer_digests_json TEXT NOT NULL,
-        effective_digest TEXT NOT NULL,
-        secret_bindings_json TEXT NOT NULL,
-        schema_version INTEGER NOT NULL,
-        promoted_generation TEXT,
-        promoted_apply_id TEXT,
-        promoted_at TEXT NOT NULL
-    );
-    CREATE TABLE IF NOT EXISTS config_pending_candidate (
-        config_domain TEXT NOT NULL,
-        candidate_id TEXT NOT NULL,
-        idempotency_key TEXT NOT NULL,
-        pending_revision INTEGER NOT NULL,
-        payload_json TEXT NOT NULL,
-        source_baseline_json TEXT NOT NULL,
-        candidate_digest TEXT NOT NULL,
-        effective_digest TEXT NOT NULL,
-        target_generation TEXT,
-        fencing_token TEXT,
-        state TEXT NOT NULL,
-        last_error TEXT,
-        created_at TEXT NOT NULL,
-        PRIMARY KEY (config_domain, candidate_id),
-        UNIQUE (config_domain, idempotency_key)
-    );
-    CREATE TABLE IF NOT EXISTS config_apply_claim (
-        config_domain TEXT PRIMARY KEY,
-        candidate_id TEXT NOT NULL,
-        attempt_id TEXT NOT NULL,
-        apply_id TEXT NOT NULL UNIQUE,
-        owner TEXT NOT NULL,
-        base_active_revision INTEGER,
-        target_generation TEXT,
-        lease_expires_at TEXT NOT NULL,
-        fencing_token TEXT NOT NULL,
-        updated_at TEXT NOT NULL
-    );
-    CREATE TABLE IF NOT EXISTS config_events (
-        event_seq INTEGER PRIMARY KEY AUTOINCREMENT,
-        event_id TEXT NOT NULL UNIQUE,
-        config_domain TEXT NOT NULL,
-        candidate_id TEXT,
-        attempt_id TEXT,
-        apply_id TEXT,
-        idempotency_key TEXT,
-        commit_revision INTEGER,
-        active_revision INTEGER,
-        pending_revision INTEGER,
-        source TEXT NOT NULL,
-        result TEXT NOT NULL,
-        changed_paths_json TEXT NOT NULL,
-        applied_paths_json TEXT NOT NULL,
-        deferred_paths_json TEXT NOT NULL,
-        error TEXT,
-        occurred_at TEXT NOT NULL
-    );
-    """,
-    """
-    CREATE TABLE IF NOT EXISTS config_source_owner (
-        source_key TEXT PRIMARY KEY,
-        next_generation INTEGER NOT NULL
-    );
-    CREATE TABLE IF NOT EXISTS config_source_journal (
-        source_key TEXT NOT NULL,
-        source_generation INTEGER NOT NULL,
-        source_event_id TEXT NOT NULL UNIQUE,
-        source_path TEXT NOT NULL,
-        presence TEXT NOT NULL CHECK (presence IN ('present', 'absent')),
-        layer_revision INTEGER NOT NULL,
-        layer_digest TEXT,
-        previous_digest TEXT,
-        origin TEXT NOT NULL,
-        fanout_id TEXT NOT NULL,
-        created_at TEXT NOT NULL,
-        PRIMARY KEY (source_key, source_generation)
-    );
-    CREATE TABLE IF NOT EXISTS config_source_fanout (
-        source_key TEXT NOT NULL,
-        source_generation INTEGER NOT NULL,
-        workspace_id TEXT NOT NULL,
-        status TEXT NOT NULL,
-        layer_revision INTEGER,
-        layer_digest TEXT,
-        result TEXT,
-        error TEXT,
-        updated_at TEXT NOT NULL,
-        PRIMARY KEY (source_key, source_generation, workspace_id),
-        FOREIGN KEY (source_key, source_generation)
-            REFERENCES config_source_journal(source_key, source_generation)
-            ON DELETE CASCADE
-    );
-    """,
-    """
-    ALTER TABLE config_pending_candidate ADD COLUMN last_attempt_id TEXT;
-    ALTER TABLE config_pending_candidate ADD COLUMN last_apply_id TEXT;
-    """,
-    """
-    ALTER TABLE config_events ADD COLUMN activation_scope TEXT NOT NULL DEFAULT 'unknown';
-    """,
-    """
-    ALTER TABLE config_pending_candidate ADD COLUMN candidate_ref TEXT;
-    CREATE UNIQUE INDEX IF NOT EXISTS config_pending_candidate_ref_unique
-        ON config_pending_candidate(candidate_ref)
-        WHERE candidate_ref IS NOT NULL;
-    """,
-    """
-    ALTER TABLE config_events ADD COLUMN relay_state TEXT NOT NULL DEFAULT 'pending';
-    ALTER TABLE config_events ADD COLUMN relay_attempts INTEGER NOT NULL DEFAULT 0;
-    ALTER TABLE config_events ADD COLUMN relay_last_error TEXT;
-    ALTER TABLE config_events ADD COLUMN relay_claimed_by TEXT;
-    ALTER TABLE config_events ADD COLUMN relay_claimed_until TEXT;
-    ALTER TABLE config_events ADD COLUMN relay_next_attempt_at TEXT
-        NOT NULL DEFAULT '1970-01-01T00:00:00+00:00';
-    CREATE INDEX IF NOT EXISTS config_events_relay_idx
-        ON config_events(relay_state, relay_next_attempt_at, event_seq);
-    """,
-    """
-    CREATE TABLE IF NOT EXISTS config_event_relay_delivery (
-        event_id TEXT NOT NULL REFERENCES config_events(event_id) ON DELETE CASCADE,
-        consumer_id TEXT NOT NULL,
-        state TEXT NOT NULL CHECK (state IN ('claimed', 'delivered', 'failed')),
-        attempts INTEGER NOT NULL DEFAULT 0,
-        last_error TEXT,
-        claimed_until TEXT,
-        next_attempt_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL,
-        PRIMARY KEY (event_id, consumer_id)
-    );
-    CREATE INDEX IF NOT EXISTS config_event_relay_delivery_due_idx
-        ON config_event_relay_delivery(consumer_id, state, next_attempt_at, event_id);
-    """,
-    """
-    ALTER TABLE config_pending_candidate ADD COLUMN base_active_revision INTEGER;
-    ALTER TABLE config_pending_candidate ADD COLUMN persistence_location TEXT
-        NOT NULL DEFAULT '';
-    """,
-    """
-    ALTER TABLE config_source_layers ADD COLUMN previous_payload_json TEXT;
-    ALTER TABLE config_source_layers ADD COLUMN backup_path TEXT;
-    ALTER TABLE config_pending_candidate ADD COLUMN source_generation INTEGER;
-    ALTER TABLE config_active_snapshot ADD COLUMN state TEXT NOT NULL DEFAULT 'active';
-    ALTER TABLE config_active_snapshot ADD COLUMN last_error TEXT;
-    CREATE UNIQUE INDEX IF NOT EXISTS config_events_idempotency_result_unique
-        ON config_events(config_domain, idempotency_key, result)
-        WHERE idempotency_key IS NOT NULL;
-    CREATE TABLE IF NOT EXISTS config_apply_journal (
-        config_domain TEXT NOT NULL,
-        apply_id TEXT PRIMARY KEY,
-        candidate_id TEXT NOT NULL,
-        attempt_id TEXT NOT NULL,
-        owner TEXT NOT NULL,
-        base_active_revision INTEGER,
-        pending_revision INTEGER,
-        source_baseline_json TEXT NOT NULL,
-        active_baseline_json TEXT NOT NULL,
-        registry_revision INTEGER,
-        side_effects_json TEXT NOT NULL,
-        state TEXT NOT NULL CHECK (
-            state IN ('applying', 'committed', 'failed',
-                      'recovery_required', 'compensated')
-        ),
-        last_error TEXT,
-        created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL
-    );
-    CREATE INDEX IF NOT EXISTS config_apply_journal_domain_idx
-        ON config_apply_journal(config_domain, state, updated_at);
-    """,
-    """
-    ALTER TABLE config_pending_candidate ADD COLUMN secret_bindings_json TEXT
-        NOT NULL DEFAULT '{}';
-    """,
+    load_sql(__package__, "workspace_state_sql/001.sql"),
+    load_sql(__package__, "workspace_state_sql/002.sql"),
+    load_sql(__package__, "workspace_state_sql/003.sql"),
+    load_sql(__package__, "workspace_state_sql/004.sql"),
+    load_sql(__package__, "workspace_state_sql/005.sql"),
+    load_sql(__package__, "workspace_state_sql/006.sql"),
+    load_sql(__package__, "workspace_state_sql/007.sql"),
+    load_sql(__package__, "workspace_state_sql/008.sql"),
+    load_sql(__package__, "workspace_state_sql/009.sql"),
+    load_sql(__package__, "workspace_state_sql/010.sql"),
+    load_sql(__package__, "workspace_state_sql/011.sql"),
+    load_sql(__package__, "workspace_state_sql/012.sql"),
     # 配置来源位置改以 URI 表达（real path 不持久化）：丢弃旧真实路径列、新增 URI 列。
     # 旧值一律不迁移（列本身即被删除）；新列可空，sqlite 层不可寻址即写 NULL。
-    """
-    ALTER TABLE config_source_layers DROP COLUMN source_path;
-    ALTER TABLE config_source_layers DROP COLUMN backup_path;
-    ALTER TABLE config_source_layers ADD COLUMN uri TEXT;
-    ALTER TABLE config_source_journal DROP COLUMN source_path;
-    ALTER TABLE config_source_journal ADD COLUMN uri TEXT;
-    """,
+    load_sql(__package__, "workspace_state_sql/013.sql"),
     # 一次性显式迁移：把 legacy workspace_config 残留行并入权威 config_source_layers
     # 后物理 DROP 该镜像表（彻底根除表级双轨）。遇同 key 语义冲突 fail-closed。
     _migrate_workspace_config_into_source_layers,

@@ -30,3 +30,4 @@
 - 会话默认值文件必须校验可解析、是对象且 schema 版本匹配；损坏或过期文件直接报错，不得静默回落默认值。
 - 重载状态协作者只接收快照状态的叶子提供者（无参、返回不可变 `ConfigReloadStatus`），不得注入 `ConfigSnapshotStore`，以免把候选快照构建反向拖入本目录。
 - 重载状态聚合不得抹掉快照基底的 `healthy`/`reason`/`last_error`，叠加 active/pending 只能补充字段。
+- `sql/` 保存 source owner 的结构和旧列迁移；连接、条件判断、事务协调留在 Python。

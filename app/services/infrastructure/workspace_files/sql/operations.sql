@@ -1,0 +1,1 @@
+CREATE TABLE operations (queue_seq INTEGER PRIMARY KEY AUTOINCREMENT, operation_id TEXT NOT NULL UNIQUE, actor TEXT NOT NULL, request_hash TEXT NOT NULL, payload TEXT NOT NULL, payload_hash TEXT NOT NULL, state TEXT NOT NULL, token INTEGER NOT NULL DEFAULT 0, steps TEXT NOT NULL, steps_hash TEXT NOT NULL, receipt TEXT NOT NULL, cleanup_done INTEGER NOT NULL DEFAULT 0)

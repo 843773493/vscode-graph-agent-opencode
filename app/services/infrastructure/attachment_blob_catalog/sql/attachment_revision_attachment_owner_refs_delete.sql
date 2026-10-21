@@ -1,0 +1,1 @@
+CREATE TRIGGER IF NOT EXISTS attachment_revision_attachment_owner_refs_delete AFTER DELETE ON attachment_owner_refs BEGIN UPDATE attachment_catalog_revision SET revision = revision + 1 WHERE id = 1; END

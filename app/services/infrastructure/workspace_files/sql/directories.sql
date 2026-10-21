@@ -1,0 +1,1 @@
+CREATE TABLE directories (key TEXT PRIMARY KEY, uri TEXT NOT NULL, revision INTEGER NOT NULL, signature TEXT NOT NULL, present INTEGER NOT NULL)

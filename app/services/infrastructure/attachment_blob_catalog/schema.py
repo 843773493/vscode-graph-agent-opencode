@@ -1,7 +1,7 @@
-"""attachment blob catalog 的表 DDL、共享常量与形态校验（唯一 DDL 定义点）。
+"""attachment blob catalog 的 SQL 加载、共享常量与形态校验。
 
-四张表 DDL、索引 DDL、必需表清单、库文件名与 ingest 终态闭集都在本模块单点
-定义；records/ingest/blobs/queries 各 mixin 从这里取用，不复制。
+表、索引和触发器唯一定义在 sql/；本模块显式加载并保留必需表清单、库文件名
+与 ingest 终态闭集；records/ingest/blobs/queries 各 mixin 从这里取用，不复制。
 
 本模块同时承载两个只做形态归一/解析的模块级小工具
 （_validate_non_empty、_date_from_locator）；它们被 ingest/blobs 两个 mixin
@@ -9,6 +9,8 @@
 """
 
 from __future__ import annotations
+
+from app.core.sqlite_state import load_sql
 
 __all__ = [
     "CATALOG_DATABASE_NAME",
@@ -25,139 +27,44 @@ INGEST_RECORD_TERMINAL_STATES = ("published", "aborted")
 
 _SCHEMA_VERSION = 3
 
-_BLOBS_TABLE_DDL = """
-CREATE TABLE IF NOT EXISTS attachment_blobs (
-    blob_id TEXT PRIMARY KEY,
-    digest TEXT NOT NULL UNIQUE,
-    relative_locator TEXT NOT NULL UNIQUE,
-    length INTEGER NOT NULL CHECK (length >= 0),
-    mime_type TEXT,
-    protection TEXT NOT NULL DEFAULT 'private',
-    availability TEXT NOT NULL CHECK (availability IN ('available', 'tombstoned')),
-    tombstoned_at TEXT,
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
-)
-"""
+_BLOBS_TABLE_DDL = load_sql(__package__, "sql/attachment_blobs.sql")
 
-_INGEST_RECORDS_TABLE_DDL = """
-CREATE TABLE IF NOT EXISTS attachment_ingest_records (
-    ingest_idempotency_key TEXT PRIMARY KEY,
-    ingest_id TEXT NOT NULL UNIQUE,
-    owner_session_id TEXT NOT NULL,
-    owner_thread_id TEXT NOT NULL,
-    pin_lease_id TEXT NOT NULL,
-    pin_fencing_token INTEGER NOT NULL CHECK (pin_fencing_token >= 1),
-    pin_captured_generation INTEGER NOT NULL CHECK (pin_captured_generation >= 0),
-    preimage_hash TEXT NOT NULL,
-    staging_relative_locator TEXT NOT NULL UNIQUE,
-    max_bytes INTEGER NOT NULL CHECK (max_bytes > 0),
-    state TEXT NOT NULL CHECK (state IN ('preparing', 'hashed', 'published', 'aborted')),
-    digest TEXT,
-    blob_id TEXT,
-    length INTEGER,
-    abort_reason TEXT,
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
-)
-"""
+_INGEST_RECORDS_TABLE_DDL = load_sql(__package__, "sql/attachment_ingest_records.sql")
 
-_CLAIMS_TABLE_DDL = """
-CREATE TABLE IF NOT EXISTS attachment_blob_commit_claims (
-    digest TEXT PRIMARY KEY,
-    blob_id TEXT NOT NULL UNIQUE,
-    final_relative_locator TEXT NOT NULL UNIQUE,
-    expected_length INTEGER NOT NULL CHECK (expected_length >= 0),
-    first_claim_utc_date TEXT NOT NULL,
-    winning_ingest_id TEXT NOT NULL,
-    state TEXT NOT NULL CHECK (state IN ('claimed', 'published', 'aborted')),
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
-)
-"""
+_CLAIMS_TABLE_DDL = load_sql(__package__, "sql/attachment_blob_commit_claims.sql")
 
-_OWNER_REFS_TABLE_DDL = """
-CREATE TABLE IF NOT EXISTS attachment_owner_refs (
-    owner_ref_id TEXT PRIMARY KEY,
-    attachment_id TEXT NOT NULL UNIQUE,
-    blob_id TEXT NOT NULL,
-    digest TEXT NOT NULL,
-    owner_session_id TEXT NOT NULL,
-    owner_thread_id TEXT NOT NULL,
-    file_name TEXT,
-    mime_type TEXT,
-    variant TEXT NOT NULL DEFAULT 'original',
-    item_ref TEXT,
-    retention_until TEXT,
-    state TEXT NOT NULL CHECK (state IN ('active', 'released')),
-    released_reason TEXT,
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
-)
-"""
+_OWNER_REFS_TABLE_DDL = load_sql(__package__, "sql/attachment_owner_refs.sql")
 
-_FORK_CLAIMS_TABLE_DDL = """
-CREATE TABLE IF NOT EXISTS fork_attachment_claims (
-    claim_id TEXT PRIMARY KEY,
-    copy_operation_id TEXT NOT NULL,
-    source_snapshot_id TEXT NOT NULL,
-    source_attachment_id TEXT NOT NULL,
-    target_owner_ref_id TEXT NOT NULL,
-    target_session_id TEXT NOT NULL,
-    target_thread_id TEXT NOT NULL,
-    blob_id TEXT NOT NULL,
-    snapshot_json TEXT NOT NULL,
-    operation_preimage_hash TEXT NOT NULL,
-    preimage_hash TEXT NOT NULL,
-    state TEXT NOT NULL CHECK (state IN ('preparing', 'owner_reserved', 'committed', 'aborted', 'target_deleted')),
-    UNIQUE (copy_operation_id, source_attachment_id, target_owner_ref_id)
-)
-"""
+_FORK_CLAIMS_TABLE_DDL = load_sql(__package__, "sql/fork_attachment_claims.sql")
 
-_FORK_CLAIMS_INDEX_DDL = """
-CREATE INDEX IF NOT EXISTS idx_fork_attachment_claims_blob
-ON fork_attachment_claims(blob_id, state)
-"""
+_FORK_CLAIMS_INDEX_DDL = load_sql(__package__, "sql/idx_fork_attachment_claims_blob.sql")
 
-_FORK_MAPPINGS_TABLE_DDL = """
-CREATE TABLE IF NOT EXISTS fork_attachment_mappings (
-    copy_operation_id TEXT NOT NULL,
-    source_file_id TEXT NOT NULL,
-    target_session_id TEXT NOT NULL,
-    target_thread_id TEXT NOT NULL,
-    snapshot_json TEXT NOT NULL,
-    PRIMARY KEY (copy_operation_id, source_file_id)
-)
-"""
+_FORK_MAPPINGS_TABLE_DDL = load_sql(__package__, "sql/fork_attachment_mappings.sql")
 
-_FORK_MAPPINGS_INDEX_DDL = """
-CREATE INDEX IF NOT EXISTS fork_attachment_mappings_target
-ON fork_attachment_mappings(target_session_id, target_thread_id, source_file_id)
-"""
+_FORK_MAPPINGS_INDEX_DDL = load_sql(__package__, "sql/fork_attachment_mappings_target.sql")
 
 _REVISION_DDL = (
-    "CREATE TABLE IF NOT EXISTS attachment_catalog_revision (id INTEGER PRIMARY KEY CHECK (id = 1), revision INTEGER NOT NULL)",
-    "INSERT INTO attachment_catalog_revision VALUES (1, 1) ON CONFLICT DO NOTHING",
-    *(f"CREATE TRIGGER IF NOT EXISTS attachment_revision_{table}_{action} AFTER {action.upper()} ON {table} "
-      "BEGIN UPDATE attachment_catalog_revision SET revision = revision + 1 WHERE id = 1; END"
-      for table in ("attachment_blobs", "attachment_owner_refs") for action in ("insert", "update", "delete")),
+    load_sql(__package__, "sql/attachment_catalog_revision.sql"),
+    load_sql(__package__, "sql/attachment_catalog_revision_seed.sql"),
+    load_sql(__package__, "sql/attachment_revision_attachment_blobs_insert.sql"),
+    load_sql(__package__, "sql/attachment_revision_attachment_blobs_update.sql"),
+    load_sql(__package__, "sql/attachment_revision_attachment_blobs_delete.sql"),
+    load_sql(__package__, "sql/attachment_revision_attachment_owner_refs_insert.sql"),
+    load_sql(__package__, "sql/attachment_revision_attachment_owner_refs_update.sql"),
+    load_sql(__package__, "sql/attachment_revision_attachment_owner_refs_delete.sql"),
 )
 
 _IDX_OWNER_REFS_BLOB_DDL = (
-    "CREATE INDEX IF NOT EXISTS idx_attachment_owner_refs_blob "
-    "ON attachment_owner_refs(blob_id, state)"
+    load_sql(__package__, "sql/idx_attachment_owner_refs_blob.sql")
 )
 _IDX_OWNER_REFS_SESSION_DDL = (
-    "CREATE INDEX IF NOT EXISTS idx_attachment_owner_refs_session "
-    "ON attachment_owner_refs(owner_session_id, state)"
+    load_sql(__package__, "sql/idx_attachment_owner_refs_session.sql")
 )
 _IDX_INGEST_STATE_DDL = (
-    "CREATE INDEX IF NOT EXISTS idx_attachment_ingest_records_state "
-    "ON attachment_ingest_records(state)"
+    load_sql(__package__, "sql/idx_attachment_ingest_records_state.sql")
 )
 _IDX_INGEST_SESSION_DDL = (
-    "CREATE INDEX IF NOT EXISTS idx_attachment_ingest_records_session "
-    "ON attachment_ingest_records(owner_session_id, state)"
+    load_sql(__package__, "sql/idx_attachment_ingest_records_session.sql")
 )
 
 _REQUIRED_TABLES = (

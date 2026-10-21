@@ -6,7 +6,7 @@ from datetime import datetime
 from pathlib import Path
 from uuid import uuid4
 
-from app.core.sqlite_state import utc_now_text
+from app.core.sqlite_state import load_sql, utc_now_text
 from app.services.infrastructure.config.state import (
     ConfigConflictError,
     ConfigSourceJournalRecord,
@@ -36,44 +36,7 @@ class WorkspaceSourceOwner:
     ``BEGIN IMMEDIATE`` 和 source_generation CAS 提供。
     """
 
-    _SCHEMA = """
-    CREATE TABLE IF NOT EXISTS config_source_owner (
-        source_key TEXT PRIMARY KEY,
-        next_generation INTEGER NOT NULL,
-        next_layer_revision INTEGER NOT NULL
-    );
-    CREATE TABLE IF NOT EXISTS config_source_journal (
-        source_key TEXT NOT NULL,
-        source_generation INTEGER NOT NULL,
-        source_event_id TEXT NOT NULL UNIQUE,
-        uri TEXT,
-        presence TEXT NOT NULL CHECK (presence IN ('present', 'absent')),
-        layer_revision INTEGER NOT NULL,
-        layer_digest TEXT,
-        previous_digest TEXT,
-        origin TEXT NOT NULL,
-        fanout_id TEXT NOT NULL,
-        created_at TEXT NOT NULL,
-        PRIMARY KEY (source_key, source_generation)
-    );
-    CREATE TABLE IF NOT EXISTS config_source_fanout (
-        source_key TEXT NOT NULL,
-        source_generation INTEGER NOT NULL,
-        workspace_id TEXT NOT NULL,
-        status TEXT NOT NULL,
-        layer_revision INTEGER,
-        layer_digest TEXT,
-        result TEXT,
-        error TEXT,
-        updated_at TEXT NOT NULL,
-        PRIMARY KEY (source_key, source_generation, workspace_id),
-        FOREIGN KEY (source_key, source_generation)
-            REFERENCES config_source_journal(source_key, source_generation)
-        ON DELETE CASCADE
-    );
-    CREATE INDEX IF NOT EXISTS config_source_fanout_workspace_idx
-        ON config_source_fanout(source_key, workspace_id, source_generation);
-    """
+    _SCHEMA = load_sql(__package__, "sql/source_owner.sql")
 
     _VALID_FANOUT_STATUSES = frozenset(
         {"pending", "applying", "applied", "superseded", "conflict", "failed", "blocked"}
@@ -131,38 +94,11 @@ class WorkspaceSourceOwner:
         if "source_path" not in columns or "uri" in columns:
             return
         connection.executescript(
-            """
-            PRAGMA foreign_keys = OFF;
-            BEGIN IMMEDIATE;
-            DROP INDEX IF EXISTS config_source_journal_path_idx;
-            CREATE TABLE config_source_journal__new (
-                source_key TEXT NOT NULL,
-                source_generation INTEGER NOT NULL,
-                source_event_id TEXT NOT NULL UNIQUE,
-                uri TEXT,
-                presence TEXT NOT NULL CHECK (presence IN ('present', 'absent')),
-                layer_revision INTEGER NOT NULL,
-                layer_digest TEXT,
-                previous_digest TEXT,
-                origin TEXT NOT NULL,
-                fanout_id TEXT NOT NULL,
-                created_at TEXT NOT NULL,
-                PRIMARY KEY (source_key, source_generation)
-            );
-            INSERT INTO config_source_journal__new(
-                source_key, source_generation, source_event_id, uri, presence,
-                layer_revision, layer_digest, previous_digest, origin, fanout_id,
-                created_at
-            )
-            SELECT source_key, source_generation, source_event_id, NULL, presence,
-                   layer_revision, layer_digest, previous_digest, origin, fanout_id,
-                   created_at
-            FROM config_source_journal;
-            DROP TABLE config_source_journal;
-            ALTER TABLE config_source_journal__new RENAME TO config_source_journal;
-            COMMIT;
-            PRAGMA foreign_keys = ON;
-            """
+            "PRAGMA foreign_keys = OFF;\n"
+            "BEGIN IMMEDIATE;\n"
+            f"{load_sql(__package__, 'sql/source_owner_uri_migration.sql')}\n"
+            "COMMIT;\n"
+            "PRAGMA foreign_keys = ON;"
         )
 
     def observe(
