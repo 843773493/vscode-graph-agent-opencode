@@ -41,9 +41,9 @@ from tests.integration.backend.sessions.test_session_communication_pipeline impo
 from tests.integration.stubs.http_stubs import openai_chat_stub
 from tests.support.api_helpers import create_session
 from tests.support.communication_federation import open_communication_triad
-from tests.support.gateway_processes import LOCAL_TOKEN_HEADERS
+from tests.support.processes.gateway import LOCAL_TOKEN_HEADERS
 from tests.support.ports import integration_port_block_for_file
-from tests.support.processes import close_backend_process
+from tests.support.processes.workspace import close_backend_process
 
 
 @pytest.fixture

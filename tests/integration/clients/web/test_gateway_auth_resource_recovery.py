@@ -10,7 +10,7 @@ from pathlib import Path
 import httpx
 import pytest
 
-from tests.support.gateway_processes import (
+from tests.support.processes.gateway import (
     close_gateway_process,
     start_gateway_process,
 )

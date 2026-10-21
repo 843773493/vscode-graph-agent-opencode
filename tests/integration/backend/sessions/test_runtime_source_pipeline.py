@@ -89,7 +89,7 @@ from tests.support.api_helpers import create_session
 from tests.support.e2e_control.harness import E2ETestControlHarness, control_request
 from tests.support.fork_deadline import ForkDeadlineRegistry
 from tests.support.ports import integration_port_block_for_file
-from tests.support.processes import (
+from tests.support.processes.workspace import (
     BackendProcess,
     close_backend_process,
     start_backend_process,

@@ -24,7 +24,7 @@ from tests.e2e.system.workspace_services.terminal.terminal_process_helpers impor
 from tests.harness.python.process_output import spawn_logged_process
 from tests.harness.python.run_context import TestRunContext
 from tests.harness.python.terminal_backend import start_terminal_backend
-from tests.support.processes import terminate_process, wait_for_http_ok
+from tests.support.processes.workspace import terminate_process, wait_for_http_ok
 from tests.support.workspaces import prepare_default_test_workspace
 
 

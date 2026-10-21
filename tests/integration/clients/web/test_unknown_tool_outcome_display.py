@@ -16,7 +16,7 @@ from tests.integration.stubs.http_stubs import openai_chat_stub
 from tests.support.custom_tool_test_workspace import (
     prepare_custom_tool_test_workspace,
 )
-from tests.support.gateway_processes import (
+from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
     close_gateway_process,
     reset_gateway_persistent_state,
@@ -24,7 +24,7 @@ from tests.support.gateway_processes import (
 )
 from tests.support.paths import output_root_for_test
 from tests.support.ports import integration_port_block_for_file
-from tests.support.processes import close_backend_process, start_backend_process
+from tests.support.processes.workspace import close_backend_process, start_backend_process
 
 UNKNOWN_TOOL_SESSION_ID = "ses_019bc1148cec71b78b1aaa3b19b60363"
 UNKNOWN_TOOL_TURN_ID = "boundary-turn-0003"

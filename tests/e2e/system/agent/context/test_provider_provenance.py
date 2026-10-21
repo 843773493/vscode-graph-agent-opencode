@@ -25,7 +25,7 @@ from app.domain.itemized.epoch.prefix_epoch import (
 from app.domain.itemized.serialization import normalize_wire_request
 from app.services.business.session_context_resource import context_assembly_identity
 from app.services.infrastructure.tool_selection_store import ToolSelectionStore
-from tests.support.gateway_processes import (
+from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
     GatewayProcess,
     acquire_gateway_guest,
@@ -34,7 +34,7 @@ from tests.support.gateway_processes import (
 )
 from tests.support.paths import output_root_for_test
 from tests.support.ports import e2e_port_block_for_file
-from tests.support.processes import (
+from tests.support.processes.workspace import (
     close_backend_process,
     start_backend_process,
     terminate_process,

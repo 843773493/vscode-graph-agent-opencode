@@ -16,9 +16,10 @@ support/
 │   ├── sessions.py      Terminal/Browser 共用会话前提
 │   ├── terminal.py      Terminal owner 装具
 │   └── browser.py       Browser owner 装具
-├── process_scope.py     进程句柄登记与作用域清理
-├── processes.py         Workspace 后端及普通进程就绪辅助
-├── gateway_processes.py Gateway 测试进程与配置准备
+├── processes/           测试进程的 scope、Workspace 与 Gateway 生命周期
+│   ├── scope.py          进程句柄登记与作用域清理
+│   ├── workspace.py      Workspace 后端、端口与普通 HTTP 就绪
+│   └── gateway.py        Gateway 测试进程与配置准备
 ├── paths.py             正式输出路径
 ├── ports.py             按测试文件隔离的端口块
 └── workspaces.py        只读模板复制与测试工作区准备
@@ -44,8 +45,8 @@ support/
 - 进程和外部资源必须由创建者明确清理，失败时暴露完整错误。
 - Workspace和Gateway启动装具在创建进程前持有日志文件，任何文件打开或创建进程失败都要立即关闭已打开的文件；创建成功后由返回的进程句柄接管，关闭进程时一并关闭日志。
 - 关闭进程和各日志是独立释放动作；一个释放失败或中断时仍尝试其余动作，再用BaseExceptionGroup保留全部原始错误。全部释放成功后再注销进程句柄。
-- `process_scope.py` 按句柄身份登记进程归属，嵌套 scope 退出后恢复外层归属；即使某个回收动作抛出中断，也先尝试回收其余已登记进程，再汇总原始错误。带标签的通用测试资源由 `tests/harness/` 的运行上下文管理。
-- 只检查 HTTP 200 的就绪等待统一由 `processes.py::wait_for_http_ok` 提供，Gateway探针通过它透传本地认证头；期限是总等待预算，连接与重试间隔使用剩余预算。HTTP 非200及进程提前退出直接暴露，不重试错误路由或鉴权拒绝。需要校验工作区身份、响应正文的后端探针保留专用合同，不降为仅检查200。
+- `processes/scope.py` 按句柄身份登记进程归属，嵌套 scope 退出后恢复外层归属；即使某个回收动作抛出中断，也先尝试回收其余已登记进程，再汇总原始错误。带标签的通用测试资源由 `tests/harness/` 的运行上下文管理。
+- 只检查 HTTP 200 的就绪等待统一由 `processes/workspace.py::wait_for_http_ok` 提供，Gateway探针通过它透传本地认证头；期限是总等待预算，连接与重试间隔使用剩余预算。HTTP 非200及进程提前退出直接暴露，不重试错误路由或鉴权拒绝。需要校验工作区身份、响应正文的后端探针保留专用合同，不降为仅检查200。
 - 就绪等待发现进程退出后，错误以已观察的退出码和目标为主；输出采集只使用剩余预算，采集超时保留已捕获内容及原始 cause，不能掩盖退出事实。就绪探针不越权终止仍持有管道的其他进程，清理由创建者负责。
 - `session_navigation_http.py` 的30秒等待覆盖实际HTTP请求、轮询间隔和可选的删除settlement；期限只属于本次观察，不取消后端导航操作。传输层异常和调用方取消原样传播，不能翻译为operation超时；提交入口返回的是operation ID，等待入口返回终态回执。
 - `wait_for_backend_ready` 专门核对响应正文的工作区 UUID，连接和重试也受剩余预算约束；HTTP拒绝保留有界诊断正文并关闭响应，不把身份不符或异常状态轮询至超时。

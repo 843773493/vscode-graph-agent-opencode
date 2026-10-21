@@ -11,7 +11,7 @@ from unittest.mock import Mock
 
 import pytest
 
-from tests.support.processes import wait_for_backend_ready
+from tests.support.processes.workspace import wait_for_backend_ready
 
 EXPECTED_WORKSPACE_ID = "00000000-0000-4000-8000-000000000001"
 

@@ -45,8 +45,8 @@ from tests.integration.backend.sessions.itemized_dispatch_helpers import (
 from tests.integration.backend.sessions.itemized_projection_helpers import (
     register_projection_draft,
 )
-from tests.support.process_scope import unregister_test_process
-from tests.support.processes import close_backend_process, start_backend_process
+from tests.support.processes.scope import unregister_test_process
+from tests.support.processes.workspace import close_backend_process, start_backend_process
 
 __all__ = ["inspection_resource_registry", "native_http_server"]
 

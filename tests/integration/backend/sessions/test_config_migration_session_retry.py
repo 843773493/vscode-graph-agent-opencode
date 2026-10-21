@@ -11,7 +11,7 @@ import pytest
 from tests.integration.stubs.http_stubs import openai_chat_stub
 from tests.support.api_waiters import wait_for_job_done
 from tests.support.ports import integration_port_block_for_file
-from tests.support.processes import close_backend_process, start_backend_process
+from tests.support.processes.workspace import close_backend_process, start_backend_process
 
 
 async def _wait_for_failed_job(

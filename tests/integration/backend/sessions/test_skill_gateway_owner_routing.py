@@ -32,7 +32,7 @@ from tests.support.communication_federation import (
     open_communication_triad,
 )
 from tests.support.ports import integration_port_block_for_file
-from tests.support.processes import start_backend_process
+from tests.support.processes.workspace import start_backend_process
 
 SKILL_NAME = "owner-proof"
 OBSERVATION_APP = "tests.support.skill_gateway_observations:app"

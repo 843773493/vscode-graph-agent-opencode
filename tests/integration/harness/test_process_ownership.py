@@ -32,14 +32,14 @@ from tests.integration.gateway import (
 from tests.integration.workspace_services.browser import (
     test_browser_resource_performance as performance_case,
 )
-from tests.support.gateway_processes import (
+from tests.support.processes.gateway import (
     GatewayProcess,
     close_gateway_process,
     start_gateway_process,
 )
 from tests.support.ports import integration_port_block_for_file
-from tests.support.process_scope import capture_test_processes, register_test_process
-from tests.support.processes import (
+from tests.support.processes.scope import capture_test_processes, register_test_process
+from tests.support.processes.workspace import (
     BackendProcess,
     close_backend_process,
     start_backend_process,

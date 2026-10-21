@@ -17,7 +17,7 @@ from tests.integration.backend.sessions.test_rollout_fork_transfer import (
 )
 from tests.support.api_helpers import create_session
 from tests.support.communication_federation import CommunicationNode
-from tests.support.gateway_processes import close_gateway_process
+from tests.support.processes.gateway import close_gateway_process
 
 
 def _catalog_facts(node: CommunicationNode) -> dict[str, object]:

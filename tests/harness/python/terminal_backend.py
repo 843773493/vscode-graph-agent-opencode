@@ -9,7 +9,7 @@ from pathlib import Path
 
 from app.core.workspace_identity import load_or_create_workspace_id
 from tests.harness.python.process_output import spawn_logged_process
-from tests.support.processes import (
+from tests.support.processes.workspace import (
     ensure_local_port_available,
     terminate_process,
     wait_for_http_ok,

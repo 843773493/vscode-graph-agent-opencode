@@ -38,7 +38,7 @@ from tests.support.communication_federation import (
 )
 from tests.support.e2e_control.harness import E2ETestControlHarness
 from tests.support.fork_deadline import ForkDeadlineRegistry, ForkOperationDeadline
-from tests.support.gateway_processes import close_gateway_process
+from tests.support.processes.gateway import close_gateway_process
 from tests.support.ports import integration_port_block_for_file
 from tests.support.session_navigation_http import submit_navigation_operation
 

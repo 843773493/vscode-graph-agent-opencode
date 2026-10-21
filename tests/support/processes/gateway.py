@@ -14,8 +14,8 @@ import httpx
 
 from configs.installer import install_user_configuration
 from configs.runtime import load_validated_config
-from tests.support.process_scope import register_test_process, unregister_test_process
-from tests.support.processes import (
+from tests.support.processes.scope import register_test_process, unregister_test_process
+from tests.support.processes.workspace import (
     ensure_local_port_available,
     resolve_workspace_python_executable,
     terminate_process,

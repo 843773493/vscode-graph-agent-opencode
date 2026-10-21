@@ -24,7 +24,7 @@ from tests.support.communication_federation import (
     open_communication_triad,
 )
 from tests.support.e2e_control.harness import E2EProcessLease, E2ETestControlHarness
-from tests.support.gateway_processes import (
+from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
     acquire_gateway_guest,
     close_gateway_process,
@@ -34,8 +34,8 @@ from tests.support.gateway_processes import (
 from tests.support.model_stream_config import prepare_e2e_model_stream_config
 from tests.support.paths import output_root_for_test
 from tests.support.ports import e2e_port_block_for_file
-from tests.support.process_scope import capture_test_processes, register_test_process
-from tests.support.processes import (
+from tests.support.processes.scope import capture_test_processes, register_test_process
+from tests.support.processes.workspace import (
     ensure_local_port_available,
     terminate_process,
     wait_for_http_ok,

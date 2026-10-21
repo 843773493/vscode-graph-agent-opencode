@@ -33,7 +33,7 @@ from tests.harness.python.run_context import TestRunContext
 from tests.harness.python.terminal_backend import start_terminal_backend
 from tests.support.api_waiters import wait_for_job_done
 from tests.support.messages import last_assistant_message
-from tests.support.processes import (
+from tests.support.processes.workspace import (
     close_backend_process,
     start_backend_process,
     terminate_process,

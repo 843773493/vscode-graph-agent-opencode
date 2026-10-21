@@ -23,7 +23,7 @@ from uuid import UUID
 
 import psutil
 
-from tests.support.processes import ensure_local_port_available
+from tests.support.processes.workspace import ensure_local_port_available
 
 
 def deterministic_uuid7(namespace: str, ordinal: int, epoch_ms: int) -> str:

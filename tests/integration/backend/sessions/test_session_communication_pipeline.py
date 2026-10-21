@@ -29,7 +29,7 @@ from tests.support.communication_federation import (
     CommunicationNode,
     open_communication_triad,
 )
-from tests.support.gateway_processes import (
+from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
     GatewayProcess,
     acquire_gateway_guest,
@@ -38,7 +38,7 @@ from tests.support.gateway_processes import (
     start_gateway_process,
 )
 from tests.support.ports import integration_port_block_for_file
-from tests.support.processes import (
+from tests.support.processes.workspace import (
     BackendProcess,
     close_backend_process,
     start_backend_process,

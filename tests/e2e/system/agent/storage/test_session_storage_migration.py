@@ -8,7 +8,7 @@ from pathlib import Path
 import httpx
 import pytest
 
-from tests.support.processes import close_backend_process, start_backend_process
+from tests.support.processes.workspace import close_backend_process, start_backend_process
 
 LOCAL_TOKEN_HEADERS = {"X-Local-Token": "local-dev-token"}
 

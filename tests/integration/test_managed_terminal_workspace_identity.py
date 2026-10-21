@@ -23,7 +23,7 @@ from app.gateway.runtime.managed_backend import (
     ManagedBackendOwner,
 )
 from app.services.infrastructure.terminal_manager_client import TerminalManagerClient
-from tests.support.gateway_processes import (
+from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
     acquire_gateway_guest,
     close_gateway_process,

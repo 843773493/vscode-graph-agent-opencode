@@ -11,7 +11,7 @@ from dotenv import load_dotenv
 
 from tests.harness.python.run_context import TestRunContext
 from tests.support.fork_deadline import ForkDeadlineRegistry
-from tests.support.process_scope import capture_test_processes
+from tests.support.processes.scope import capture_test_processes
 from tests.support.session_catalog_owner import (
     FixtureCatalogOwner,
     fixture_catalog_scope,

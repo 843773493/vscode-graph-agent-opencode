@@ -9,7 +9,7 @@ resource_owners/
 └── browser.py   BrowserOwnerFixture、真实 owner/租约、BrowserTransportFake
 ```
 
-共用前提放在 `sessions.py`，两个业务装具分别依赖它，不跨业务装具借用常量或替身。真实辅助服务的启动、就绪与清理由 `tests/harness/` 和 `tests/support/processes.py` 等进程装具负责。
+共用前提放在 `sessions.py`，两个业务装具分别依赖它，不跨业务装具借用常量或替身。真实辅助服务的启动、就绪与清理由 `tests/harness/` 和 `tests/support/processes/` 等进程装具负责。
 
 ## 可修改内容
 

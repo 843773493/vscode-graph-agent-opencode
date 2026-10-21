@@ -18,7 +18,7 @@ import websockets
 
 from app.core.workspace_identity import load_or_create_workspace_id
 from tests.support.ports import integration_port_block_for_file
-from tests.support.processes import (
+from tests.support.processes.workspace import (
     ensure_local_port_available,
     terminate_process,
     wait_for_http_ok,

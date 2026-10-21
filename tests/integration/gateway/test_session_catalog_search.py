@@ -11,13 +11,13 @@ import pytest
 from app.core.identifier import create_prefixed_id
 from app.gateway.workspace_ids import build_managed_local_workspace_id
 from tests.integration.stubs.http_stubs import generation_target_stub
-from tests.support.gateway_processes import (
+from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
     close_gateway_process,
     start_gateway_process,
 )
 from tests.support.ports import integration_port_block_for_file
-from tests.support.processes import (
+from tests.support.processes.workspace import (
     close_backend_process,
     start_backend_process,
     workspace_backend_id_for_root,

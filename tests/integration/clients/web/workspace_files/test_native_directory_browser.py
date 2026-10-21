@@ -29,7 +29,7 @@ from tests.integration.backend.sessions.test_session_communication_pipeline impo
     communication_triad as communication_triad,  # noqa: PLC0414 - 独立 Gateway 与真实 SSH 路由
 )
 from tests.support.api_helpers import create_session
-from tests.support.gateway_processes import (
+from tests.support.processes.gateway import (
     close_gateway_process,
     start_gateway_process,
 )

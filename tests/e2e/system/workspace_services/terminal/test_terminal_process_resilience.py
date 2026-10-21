@@ -23,7 +23,7 @@ from tests.e2e.system.workspace_services.terminal.terminal_process_helpers impor
 )
 from tests.harness.python.run_context import TestRunContext
 from tests.harness.python.terminal_backend import start_terminal_backend
-from tests.support.processes import terminate_process
+from tests.support.processes.workspace import terminate_process
 
 
 async def _transport_grant(client: httpx.AsyncClient, terminal_id: str) -> str:

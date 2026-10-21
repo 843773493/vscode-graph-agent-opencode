@@ -31,8 +31,8 @@ from app.services.business.workspace_resources.owner import ResourceConflict
 from app.services.business.workspace_resources.records import ThreadRef
 from tests.harness.python.run_context import TestRunContext
 from tests.support.ports import integration_port_block_for_file
-from tests.support.process_scope import register_test_process
-from tests.support.processes import terminate_process
+from tests.support.processes.scope import register_test_process
+from tests.support.processes.workspace import terminate_process
 from tests.support.workspace_tool_runtime import workspace_tool_runtime
 
 ResourceKind = Literal["terminal", "browser"]

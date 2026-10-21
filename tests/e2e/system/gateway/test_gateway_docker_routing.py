@@ -44,7 +44,7 @@ from tests.e2e.system.gateway.gateway_target import (
     start_remote_gateway_via_ssh,
     stop_remote_backend,
 )
-from tests.support.gateway_processes import (
+from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
     GatewayProcess,
     acquire_gateway_guest,
