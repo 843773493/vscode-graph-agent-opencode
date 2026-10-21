@@ -19,7 +19,7 @@
 - 可以维护 facade `__init__.py` 中的 `GatewayStateStore` 类声明、连接生命周期与 KV 读写方法、
   `GatewayConfigRecord` 与 `_GATEWAY_MIGRATIONS` 再导出面。
 - 可以维护各 mixin 文件中的方法体与族内私有静态方法（行投影 helper）。
-- 可以维护 `_schema.py` 中的迁移 DDL 序列与一次性镜像行迁移函数；新增表结构改动落在该模块，
+- 可以维护 `_schema.py` 中的迁移序列与一次性镜像行迁移函数；表结构与迁移 SQL 落在同包 `sql/`，
   不在各族复制 DDL。
 - 可以维护随本包落地的四段式 `AGENTS.md`。
 - 可以维护对应单元测试；测试仍放在 `tests/unit/gateway/` 与 `tests/unit/configs/` 下。
@@ -45,7 +45,7 @@
   解析，不引入 mixin 之间的继承边，以避免 MRO 线性化冲突。
 - 各 mixin 只依赖宿主提供的 `_database`（以及内核 `self._insert_config_event` /
   `self._read_registry_revision` 等兄弟子包提供的唯一实现），不重复实现兄弟子包的表读写。
-- 表 DDL 与迁移序号的唯一定义点在本包 `_schema.py`；`logger` 名固定为 facade 模块名，
+- 表 DDL 的唯一定义点在本包 `sql/`，迁移序号由 `_schema.py` 显式装配；`logger` 名固定为 facade 模块名，
   保证搬迁前后日志路由不变。
 - 错误分类沿用 gateway_state 约定：`ValueError` 输入形态非法、`KeyError` 目标记录缺失、
   `ConfigConflictError` CAS/幂等冲突、`RuntimeError` 事务后读取失败。

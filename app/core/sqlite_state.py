@@ -8,12 +8,18 @@ import sqlite3
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from importlib.resources import files
 from pathlib import Path
 from typing import BinaryIO, Final, Self
 
 import portalocker
 
 SQLITE_BUSY_TIMEOUT_MS: Final = 5000
+
+
+def load_sql(package: str, resource: str) -> str:
+    """读取随 owner 分发的 SQL；资产缺失或不可读时直接报错。"""
+    return files(package).joinpath(resource).read_text(encoding="utf-8")
 
 
 class _SQLiteVFSHeader(ctypes.Structure):
@@ -238,12 +244,7 @@ class SQLiteStateDatabase:
         connection = self._connect()
         try:
             connection.execute(
-                """
-            CREATE TABLE IF NOT EXISTS schema_migrations (
-                version INTEGER PRIMARY KEY,
-                applied_at TEXT NOT NULL
-            )
-            """
+                load_sql(__package__, "sqlite_state.sql")
             )
             applied = tuple(
                 int(row[0])
