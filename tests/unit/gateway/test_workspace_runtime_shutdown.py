@@ -10,7 +10,7 @@ from pathlib import Path
 import pytest
 
 from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceTarget
-from app.gateway.runtime.process import ManagedProcess
+from app.gateway.runtime.process_lifecycle import ManagedProcess
 from app.gateway.runtime.workspace import WorkspaceRuntime
 
 
@@ -134,7 +134,7 @@ def surviving_group_probe() -> str:
     return '''
 import ctypes, io, json, os, signal, subprocess, sys, threading
 from pathlib import Path
-from app.gateway.runtime.process import AdoptedManagedProcess, ManagedProcess
+from app.gateway.runtime.process_lifecycle import AdoptedManagedProcess, ManagedProcess
 
 assert ctypes.CDLL(None, use_errno=True).prctl(36, 1, 0, 0, 0) == 0
 manifest = Path(sys.argv[2])

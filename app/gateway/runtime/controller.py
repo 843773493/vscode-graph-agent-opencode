@@ -23,8 +23,8 @@ from app.gateway.runtime.group_actions import ManagedBackendGroupActions
 from app.gateway.runtime.local_workspace import (
     wait_for_workspace_health,
 )
-from app.gateway.runtime.process import resolve_backend_workspace_id
 from app.gateway.runtime.workspace import WorkspaceRuntime
+from app.gateway.runtime.workspace_process import resolve_backend_workspace_id
 from app.schemas.gateway.lifecycle import (
     GatewayRuntimeBlockerDTO,
     GatewayRuntimeGroupRequest,

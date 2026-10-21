@@ -22,16 +22,18 @@ from app.gateway.runtime.managed_backend import (
     ManagedBackendMember,
     ManagedBackendOwner,
 )
-from app.gateway.runtime.process import (
-    GATEWAY_PROCESS_READY_TIMEOUT_SECONDS,
-    AdoptedManagedProcess,
+from app.gateway.runtime.process_lifecycle import AdoptedManagedProcess
+from app.gateway.runtime.process_ports import (
     allocate_local_port,
     is_local_port_available,
+)
+from app.gateway.runtime.workspace import WorkspaceRuntime
+from app.gateway.runtime.workspace_process import (
+    GATEWAY_PROCESS_READY_TIMEOUT_SECONDS,
     resolve_backend_workspace_id,
     start_local_backend_process,
     start_local_node_service_process,
 )
-from app.gateway.runtime.workspace import WorkspaceRuntime
 
 if TYPE_CHECKING:
     from app.gateway.registry import GatewayWorkspaceRegistry

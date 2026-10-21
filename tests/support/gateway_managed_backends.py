@@ -11,7 +11,7 @@ from app.gateway.runtime.managed_backend import (
     ManagedBackendMember,
     ManagedBackendOwner,
 )
-from app.gateway.runtime.process import ManagedProcessHandle
+from app.gateway.runtime.process_lifecycle import ManagedProcessHandle
 from app.gateway.runtime.workspace import WorkspaceRuntime
 from app.schemas.gateway.lifecycle import GatewayRuntimeGroupRequest
 

@@ -16,7 +16,7 @@ import commentjson
 import httpx
 import pytest
 
-from app.gateway.runtime.process import ManagedProcess
+from app.gateway.runtime.process_lifecycle import ManagedProcess
 from app.services.business.session_context_resource import session_resource_uri
 from tests.harness.python.run_context import TestRunContext
 from tests.support.communication_federation import (

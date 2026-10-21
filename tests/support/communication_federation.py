@@ -22,7 +22,7 @@ from app.core.workspace_identity import (
     load_or_create_workspace_id,
     workspace_identity_path,
 )
-from app.gateway.runtime.process import ManagedProcess
+from app.gateway.runtime.process_lifecycle import ManagedProcess
 from configs.installer import install_user_configuration
 from tests.e2e.system.gateway.gateway_target import GatewaySshTarget, wait_for_ssh_ready
 from tests.harness.python.browser_manager import (

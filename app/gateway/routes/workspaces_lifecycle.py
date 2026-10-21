@@ -48,8 +48,8 @@ from app.gateway.routes.workspaces_managed import (
 from app.gateway.runtime.controller import GatewayWorkspaceRuntimeController
 from app.gateway.runtime.local_workspace import wait_for_workspace_health
 from app.gateway.runtime.port_forwarding import SshPortForwardManager
-from app.gateway.runtime.process import resolve_backend_workspace_id
 from app.gateway.runtime.workspace import WorkspaceRuntime
+from app.gateway.runtime.workspace_process import resolve_backend_workspace_id
 from app.gateway.server.port_forwarding import get_port_forward_manager
 from app.gateway.ssh_connections import (
     list_ssh_connection_options,
