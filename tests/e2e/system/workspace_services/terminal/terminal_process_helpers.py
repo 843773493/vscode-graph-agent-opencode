@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import json
-import os
 import shutil
 import time
 from pathlib import Path
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
+
+import psutil
 
 from app.core.identifier import create_uuid_hex
 from app.core.workspace_identity import load_or_create_workspace_id
@@ -119,11 +120,7 @@ def terminal_state_record(workspace_root: str, terminal_id: str) -> dict[str, ob
 
 
 def process_exists(pid: int) -> bool:
-    try:
-        os.kill(pid, 0)
-        return True
-    except ProcessLookupError:
-        return False
+    return psutil.pid_exists(pid)
 
 
 def wait_process_gone(pid: int) -> None:

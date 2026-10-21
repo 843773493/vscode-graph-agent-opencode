@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import os
 import shlex
 import signal
 import sys
@@ -10,6 +9,7 @@ import time
 from pathlib import Path
 
 import httpx
+import psutil
 import pytest
 import websockets
 
@@ -36,14 +36,7 @@ async def _transport_grant(client: httpx.AsyncClient, terminal_id: str) -> str:
 
 
 def _direct_child_pids(pid: int) -> set[int]:
-    children_path = Path(f"/proc/{pid}/task/{pid}/children")
-    if not children_path.exists():
-        return set()
-    return {
-        int(value)
-        for value in children_path.read_text(encoding="utf-8").split()
-        if value
-    }
+    return {child.pid for child in psutil.Process(pid).children(recursive=False)}
 
 
 async def _wait_for_output(
@@ -136,9 +129,6 @@ async def test_utf8_output_replay_and_snapshot_respect_byte_limits(
 
 
 @pytest.mark.asyncio
-@pytest.mark.skipif(
-    sys.platform != "linux", reason="PTY Worker 进程清理断言仅覆盖当前 Linux 环境"
-)
 async def test_pty_worker_crash_is_isolated_and_shell_is_reaped(
     e2e_workspace_root_path: str,
     e2e_backend_port: int,
@@ -189,7 +179,7 @@ async def test_pty_worker_crash_is_isolated_and_shell_is_reaped(
             survivor_response.raise_for_status()
             survivor_id = str(survivor_response.json()["data"]["terminal_id"])
 
-            os.kill(worker_pid, 9)
+            psutil.Process(worker_pid).kill()
             deadline = time.monotonic() + 5
             snapshot: dict[str, object] | None = None
             while time.monotonic() < deadline:
@@ -219,9 +209,6 @@ async def test_pty_worker_crash_is_isolated_and_shell_is_reaped(
 
 
 @pytest.mark.asyncio
-@pytest.mark.skipif(
-    sys.platform != "linux", reason="Worker 子进程泄漏检查仅覆盖当前 Linux 环境"
-)
 async def test_failed_terminal_start_rolls_back_session_and_worker(
     e2e_workspace_root_path: str,
     e2e_backend_port: int,
@@ -252,7 +239,7 @@ async def test_failed_terminal_start_rolls_back_session_and_worker(
                     "owner_revision": 1,
                     "title": "failed start",
                     "cwd": str(Path(workspace_root).resolve()),
-                    "command": "/definitely/missing/boxteam-shell",
+                    "command": f"boxteam-missing-shell-{create_uuid_hex()}",
                     "args": [],
                 },
             )
