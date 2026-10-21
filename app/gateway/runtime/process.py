@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import csv
 import json
 import logging
 import math
@@ -79,22 +78,13 @@ def _taskkill_process_tree(pid: int, *, force: bool) -> None:
 
 
 def _windows_process_is_alive(pid: int) -> bool:
-    """通过 tasklist 查询 Windows 进程，避免 os.kill(pid, 0) 的语义差异。"""
-    # TODO: Windows 不支持 POSIX 的 os.kill(pid, 0) 探活语义，使用 CSV 输出避免本地化文本影响解析。
-    result = subprocess.run(
-        ["tasklist", "/FI", f"PID eq {pid}", "/FO", "CSV", "/NH"],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    if result.returncode != 0:
-        raise RuntimeError(
-            f"Windows 进程状态查询失败: pid={pid}, stderr={result.stderr.strip()}"
-        )
-    return any(
-        len(row) >= 2 and row[1] == str(pid)
-        for row in csv.reader(result.stdout.splitlines())
-    )
+    """用系统进程 API 查询 Windows PID，避免周期性启动 tasklist 子进程。"""
+    import psutil
+
+    try:
+        return psutil.pid_exists(pid)
+    except psutil.Error as error:
+        raise RuntimeError(f"Windows 进程状态查询失败: pid={pid}: {error}") from error
 
 
 class ManagedProcessHandle(Protocol):

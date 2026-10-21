@@ -5,6 +5,7 @@ import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 
+import psutil
 import pytest
 
 from app.core.mounted_workspaces import MountedWorkspace
@@ -348,20 +349,51 @@ def test_managed_process_windows_force_kills_complete_process_tree_after_timeout
     assert process.wait_calls == 2
 
 
-def test_adopted_process_windows_uses_tasklist_for_liveness(
+def test_adopted_process_windows_checks_liveness_without_spawning_process(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    checked_pids: list[int] = []
     monkeypatch.setattr(os, "name", "nt")
     monkeypatch.setattr(
+        psutil,
+        "pid_exists",
+        lambda pid: checked_pids.append(pid) or True,
+    )
+    monkeypatch.setattr(
         "app.gateway.runtime.process.subprocess.run",
-        lambda arguments, **_: SimpleNamespace(
-            returncode=0,
-            stdout='"python.exe","4321","Console","1","10,000 K"\n',
-            stderr="",
-        ),
+        lambda *_args, **_kwargs: pytest.fail("进程探活不得启动外部命令"),
     )
 
     assert AdoptedManagedProcess(pid=4321)._is_alive() is True
+    assert checked_pids == [4321]
+
+
+def test_adopted_process_windows_reports_missing_pid_as_not_alive(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(os, "name", "nt")
+    monkeypatch.setattr(psutil, "pid_exists", lambda _pid: False)
+
+    assert AdoptedManagedProcess(pid=4321)._is_alive() is False
+
+
+def test_adopted_process_windows_surfaces_process_query_errors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fail_query(_pid: int) -> bool:
+        raise psutil.AccessDenied(pid=4321)
+
+    monkeypatch.setattr(os, "name", "nt")
+    monkeypatch.setattr(
+        psutil,
+        "pid_exists",
+        fail_query,
+    )
+
+    with pytest.raises(RuntimeError, match="Windows 进程状态查询失败") as raised:
+        AdoptedManagedProcess(pid=4321)._is_alive()
+
+    assert isinstance(raised.value.__cause__, psutil.AccessDenied)
 
 
 def test_workspace_backend_has_bounded_connection_drain_timeout(
