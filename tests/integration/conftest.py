@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 from collections.abc import AsyncIterator, Generator, Sequence
@@ -9,10 +10,18 @@ from pathlib import Path
 import httpx
 import pytest
 
+from app.core import identifier
 from app.core.mounted_workspaces import MountedWorkspace
-from tests.support.processes.gateway import reset_gateway_persistent_state
+from app.runtime.model_stream import (
+    ModelStreamTransportController,
+    configure_model_stream_from_environment,
+)
+from tests.harness.python.run_context import TestRunContext
+from tests.support.e2e_control.runtime_ports import ControlledIdentifiers
+from tests.support.model_stream_config import ModelStreamReplay, model_stream_replay
 from tests.support.paths import output_root_for_test
 from tests.support.ports import integration_port_block_for_file
+from tests.support.processes.gateway import reset_gateway_persistent_state
 from tests.support.processes.workspace import (
     close_backend_process,
     start_backend_process,
@@ -33,6 +42,30 @@ _PROXY_ENV_NAMES = (
     "NO_PROXY",
     "no_proxy",
 )
+
+
+@pytest.fixture
+async def inprocess_model_replay(
+    request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch,
+) -> AsyncIterator[tuple[ModelStreamReplay, ModelStreamTransportController]]:
+    """普通进程内业务共用精确身份回放；HTTP/SDK专项仍由其网络装具负责。"""
+    context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
+    with model_stream_replay(
+        context.output_root, runtime_root=context.runtime_root_for_node(request.node.nodeid),
+        business_assertion=request.node.nodeid,
+    ) as replay:
+        for key, value in replay.environment.items():
+            monkeypatch.setenv(key, value)
+        monkeypatch.setattr(identifier, "_identifier_factory", identifier._identifier_factory)
+        identifier.bind_identifier_factory(ControlledIdentifiers(
+            json.loads(replay.environment["BOXTEAM_E2E_TEST_CONTROL"]),
+        ))
+        controller = configure_model_stream_from_environment(project_root=Path.cwd())
+        assert controller is not None
+        try:
+            yield replay, controller
+        finally:
+            await controller.aclose()
 
 
 @pytest.fixture(scope="session", autouse=True)

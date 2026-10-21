@@ -1,7 +1,8 @@
-"""真实 Saver/Bridge/Provider HTTP 的混合资源边界与冷恢复合同。"""
+"""真实 Saver/Bridge/Provider 配合精确模型回放的混合资源边界与冷恢复合同。"""
 
 from __future__ import annotations
 
+import json
 from dataclasses import replace
 
 import pytest
@@ -14,16 +15,18 @@ from app.domain.itemized.resource_activation import ResourceActivationPolicySnap
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
+from app.testing.model_stream import build_cassette
 from tests.integration.backend.sessions.itemized_dispatch_helpers import (
+    chat_reply_frames,
     dispatch_execution_scope,
     inspection_resource_registry,
     invoke_provider_dispatch,
     native_dispatch_workspace,
-    native_http_server,
+    responses_reply_frames,
     seed_dispatch_history,
 )
 
-__all__ = ["inspection_resource_registry", "native_dispatch_workspace", "native_http_server"]
+__all__ = ["inspection_resource_registry", "native_dispatch_workspace"]
 
 
 @pytest.fixture
@@ -52,11 +55,25 @@ def _load_activation(saver, snapshot):
 @pytest.mark.asyncio
 @pytest.mark.parametrize("target_format", ["responses", "chat_completions"])
 async def test_mixed_activation_survives_lost_execution_and_cold_resume(
-    activation_case, native_http_server, target_format, monkeypatch,
+    activation_case, inprocess_model_replay, target_format, monkeypatch,
 ):
     """真实 execution 丢失后恢复同 Turn；policy/Turn binding 不漂移，新 call 更新 MCP。"""
     saver, session, turn, sessions, registry, policy = activation_case
-    state, endpoint = native_http_server
+    replay, controller = inprocess_model_replay
+    endpoint = "https://activation-replay.invalid/v1"
+    api_key = "activation-replay-key"
+    thread = saver._storage.storage.main_thread_id(session)
+    protocol = "openai_responses_sse" if target_format == "responses" else "openai_chat_sse"
+    suffix = "/responses" if target_format == "responses" else "/chat/completions"
+    frames = responses_reply_frames if target_format == "responses" else chat_reply_frames
+    interactions = []
+    for ordinal in (1, 2):
+        cassette = build_cassette(
+            asset_id=f"activation-call-{ordinal}", url=endpoint + suffix, model="gpt-4.1",
+            protocol=protocol, frames=frames(ordinal),
+        )
+        interactions.append({**cassette.raw["interactions"][0], "protocol": protocol})
+    first_call, second_call = replay.control.plan_model_calls(session, thread, interactions)
     prepared = []
     prepare = saver.prepare_context_for_provider
 
@@ -67,11 +84,13 @@ async def test_mixed_activation_survives_lost_execution_and_cold_resume(
 
     monkeypatch.setattr(saver, "prepare_context_for_provider", record_prepare)
     await invoke_provider_dispatch(
-        saver, session, turn, endpoint, state.api_key,
+        saver, session, turn, endpoint, api_key,
         target_format=target_format, registry=registry, activation_policy=policy,
     )
-    thread = saver._storage.storage.main_thread_id(session)
     (first,) = saver.list_context_assemblies(session, thread)
+    assert first.model_call_id == first_call
+    first_request = json.loads((replay.artifacts / f"{first_call}.json").read_text(encoding="utf-8"))
+    assert first_request["identity"] == {"session_id": session, "thread_id": thread, "model_call_id": first_call}
     original = _load_activation(saver, first)
     original_bindings = {binding.resource_kind: binding for binding in original.bindings}
     assert set(original_bindings) == {"skills", "mcp_tool_catalog"}
@@ -100,12 +119,15 @@ async def test_mixed_activation_survives_lost_execution_and_cold_resume(
         prepare = restarted.prepare_context_for_provider
         monkeypatch.setattr(restarted, "prepare_context_for_provider", record_prepare)
         await invoke_provider_dispatch(
-            restarted, session, turn, endpoint, state.api_key,
+            restarted, session, turn, endpoint, api_key,
             target_format=target_format, registry=registry, activation_policy=hot_policy,
         )
         second = next(snapshot for snapshot in restarted.list_context_assemblies(session, thread)
                       if snapshot.assembly_id != first.assembly_id)
         recovered = _load_activation(restarted, second)
+        assert second.model_call_id == second_call
+        second_request = json.loads((replay.artifacts / f"{second_call}.json").read_text(encoding="utf-8"))
+        assert second_request["identity"] == {"session_id": session, "thread_id": thread, "model_call_id": second_call}
         bindings = {binding.resource_kind: binding for binding in recovered.bindings}
         assert recovered.execution_id == resumed["execution_id"]
         assert recovered.turn_id == original.turn_id == turn
@@ -121,7 +143,7 @@ async def test_mixed_activation_survives_lost_execution_and_cold_resume(
         assert recovered.parent.activation_policy == original.parent.activation_policy
         assert restarted.read_canonical_items(session)[:len(canonical_before)] == canonical_before
         assert _load_activation(restarted, first) == original
-        assert len(state.requests) == 2
+        assert controller.transport.call_count == 2
 
     # 原请求冷读取后直接经过 Provider 发送；禁止重准备或读取当前 Registry。
     def unexpected(*_args, **_kwargs):
@@ -147,11 +169,14 @@ async def test_mixed_activation_survives_lost_execution_and_cold_resume(
                     "chat_completions": BoxteamLiteLLMChatModel,
                 }[target_format]
                 model = model_type(
-                    model="openai/gpt-4.1", api_key=state.api_key, api_base=endpoint,
+                    model="openai/gpt-4.1", api_key=api_key, api_base=endpoint,
                     custom_llm_provider="openai", streaming=True, max_retries=0,
                 )
                 bound = model.bind_tools(payload["tools"]) if payload["tools"] else model
                 await bound.ainvoke(payload["messages"])
         assert len(cold.list_context_assemblies(session, thread)) == 2
-    assert len(state.requests) == 3
-    assert state.requests[1]["body"] == state.requests[2]["body"]
+    assert controller.transport.call_count == 3
+    retried_request = json.loads((replay.artifacts / f"{second_call}.json").read_text(encoding="utf-8"))
+    assert second_request == retried_request
+    assert sorted(controller.transport.hit_counts.values()) == [1, 2]
+    assert controller.transport.request_urls == (endpoint + suffix,) * 3

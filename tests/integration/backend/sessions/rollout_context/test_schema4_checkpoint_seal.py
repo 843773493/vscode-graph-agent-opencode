@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import replace
 
 import pytest
@@ -35,13 +36,12 @@ from app.services.infrastructure.rollout_context.runtime.context_sources.context
 from app.services.infrastructure.rollout_context.storage.schema import (
     ROLLOUT_SCHEMA_VERSION,
 )
+from app.testing.model_stream import build_cassette
 from tests.integration.backend.sessions.itemized_dispatch_helpers import (
     invoke_provider_dispatch,
-    native_http_server,
+    responses_reply_frames,
     seed_dispatch_overlay,
 )
-
-__all__ = ["native_http_server"]
 from tests.integration.backend.sessions.rollout_context.test_context_plan_registry import (
     draft as draft,  # noqa: PLC0414 - 复用真实 Saver fixture，不运行主文件用例
 )
@@ -663,17 +663,29 @@ def test_sealed_prepare_retry_keeps_binding_and_pending_desired(frozen_provider_
 
 @pytest.mark.parametrize("registry_db", ["protected"], indirect=True)
 @pytest.mark.asyncio
-async def test_real_middleware_registers_current_schema_before_native_http(
-    registry_db, native_http_server
+async def test_real_middleware_registers_current_schema_before_dispatch(
+    registry_db, inprocess_model_replay,
 ):
     saver, session, connection, accepted = registry_db
-    state, endpoint = native_http_server
+    replay, controller = inprocess_model_replay
+    endpoint = "https://schema-seal-replay.invalid/v1"
+    thread = saver._storage.storage.main_thread_id(session)
+    cassette = build_cassette(
+        asset_id="schema-seal", url=endpoint + "/responses", model="gpt-4.1",
+        protocol="openai_responses_sse", frames=responses_reply_frames(1),
+    )
+    (call_id,) = replay.control.plan_model_calls(session, thread, [
+        {**cassette.raw["interactions"][0], "protocol": "openai_responses_sse"},
+    ])
     seed_dispatch_overlay(saver, session)
-    await invoke_provider_dispatch(saver, session, accepted["turn_id"], endpoint, state.api_key, target_format="responses")
-    assert len(state.requests) == 1
+    await invoke_provider_dispatch(saver, session, accepted["turn_id"], endpoint, "schema-replay-key", target_format="responses")
+    assert controller.transport.call_count == 1
     (snapshot,) = saver.list_context_assemblies(
         session, saver._storage.storage.main_thread_id(session)
     )
+    assert snapshot.model_call_id == call_id
+    recorded = json.loads((replay.artifacts / f"{call_id}.json").read_text(encoding="utf-8"))
+    assert recorded["identity"] == {"session_id": session, "thread_id": thread, "model_call_id": call_id}
     registration = saver.get_context_plan_registration(
         session,
         plan_id=snapshot.plan_id,
@@ -690,4 +702,4 @@ async def test_real_middleware_registers_current_schema_before_native_http(
     native = saver.project_context_plan_to_native(
         session, snapshot.thread_id, snapshot.as_sealed_plan()
     )
-    assert state.requests[0]["body"]["input"] == native["request"]["input"]
+    assert recorded["request"]["input"] == native["request"]["input"]

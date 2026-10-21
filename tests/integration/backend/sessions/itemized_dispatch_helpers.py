@@ -63,6 +63,12 @@ from app.services.orchestration.resource_activation.contracts import (
     reset_current_execution_resource_activation,
     set_current_execution_resource_activation,
 )
+from app.testing.model_stream import (
+    StreamFrame,
+    chat_completion_frames,
+    get_protocol_codec,
+    responses_frames,
+)
 from tests.harness.python.run_context import TestRunContext
 from tests.support.workspaces import prepare_default_test_workspace
 
@@ -250,156 +256,44 @@ class NativeHTTPState:
             return ordinal
 
 
-def _response_events(
+def responses_reply_frames(
     ordinal: int, *, call_tool: bool = False, text: str = "native-http-result",
     tool_name: str = "inspect_file", reasoning_item: dict[str, object] | None = None,
-) -> bytes:
-    message_id = f"msg-native-{ordinal}"
-    part = {"type": "output_text", "text": text, "annotations": []}
-    item = {
-        "type": "message",
-        "id": message_id,
-        "role": "assistant",
-        "status": "completed",
-        "content": [part],
-    }
-    response = {
-        "id": f"resp-native-{ordinal}",
-        "object": "response",
-        "created_at": 1,
-        "model": "contract-model",
-        "status": "completed",
-        "output": [item],
-        "usage": {"input_tokens": 10, "output_tokens": 1, "total_tokens": 11},
-    }
-    events = [
-        {
-            "type": "response.created",
-            "response": {**response, "status": "in_progress", "output": []},
-        },
-        {
-            "type": "response.output_item.added",
-            "output_index": 0,
-            "item": {**item, "status": "in_progress", "content": []},
-        },
-        {
-            "type": "response.content_part.added",
-            "item_id": message_id,
-            "output_index": 0,
-            "content_index": 0,
-            "part": {**part, "text": ""},
-        },
-        {
-            "type": "response.output_text.delta",
-            "item_id": message_id,
-            "output_index": 0,
-            "content_index": 0,
-            "delta": text,
-        },
-        {
-            "type": "response.output_text.done",
-            "item_id": message_id,
-            "output_index": 0,
-            "content_index": 0,
-            "text": text,
-        },
-        {
-            "type": "response.content_part.done",
-            "item_id": message_id,
-            "output_index": 0,
-            "content_index": 0,
-            "part": part,
-        },
-        {"type": "response.output_item.done", "output_index": 0, "item": item},
-        {"type": "response.completed", "response": response},
-    ]
-    if call_tool:
-        arguments = json.dumps({"path": "README.md"} if tool_name == "inspect_file" else {"answer": text})
-        call = {
-            "type": "function_call",
-            "id": "fc-native",
-            "call_id": "call-native",
-            "name": tool_name,
-            "arguments": arguments,
-            "status": "completed",
-        }
-        events = [
-            {
-                "type": "response.created",
-                "response": {**response, "status": "in_progress", "output": []},
-            },
-            {
-                "type": "response.output_item.added",
-                "output_index": 0,
-                "item": {**call, "status": "in_progress", "arguments": ""},
-            },
-            {
-                "type": "response.function_call_arguments.delta",
-                "item_id": "fc-native",
-                "output_index": 0,
-                "delta": arguments,
-            },
-            {
-                "type": "response.function_call_arguments.done",
-                "item_id": "fc-native",
-                "output_index": 0,
-                "arguments": arguments,
-            },
-            {"type": "response.output_item.done", "output_index": 0, "item": call},
-            {"type": "response.completed", "response": {**response, "output": [call]}},
-        ]
+) -> tuple[StreamFrame, ...]:
+    output: list[dict[str, object]] = []
     if reasoning_item is not None:
-        # reasoning 与工具调用共享同一响应；真实字段原样参与下一次 HTTP 请求。
-        for event in events:
-            if "output_index" in event:
-                event["output_index"] += 1
-        events[1:1] = [
-            {"type": "response.output_item.added", "output_index": 0, "item": {
-                **reasoning_item, "status": "in_progress", "summary": [],
-                "content": [], "encrypted_content": None,
-            }},
-            {"type": "response.output_item.done", "output_index": 0, "item": {
-                **reasoning_item, "status": "completed",
-            }},
-        ]
-        events[-1]["response"]["output"].insert(0, reasoning_item)
-    return "".join(
-        "event: "
-        + event["type"]
-        + "\ndata: "
-        + json.dumps({**event, "sequence_number": index}, ensure_ascii=False)
-        + "\n\n"
-        for index, event in enumerate(events)
-    ).encode("utf-8")
+        output.append(reasoning_item)
+    if call_tool:
+        arguments = {"path": "README.md"} if tool_name == "inspect_file" else {"answer": text}
+        output.append({
+            "type": "function_call", "id": "fc-native", "call_id": "call-native",
+            "name": tool_name, "arguments": json.dumps(arguments), "status": "completed",
+        })
+    else:
+        output.append({
+            "type": "message", "id": f"msg-native-{ordinal}", "role": "assistant",
+            "status": "completed", "content": [{"type": "output_text", "text": text, "annotations": []}],
+        })
+    return responses_frames(
+        response_id=f"resp-native-{ordinal}", model="contract-model", output=output,
+        usage={"input_tokens": 10, "output_tokens": 1, "total_tokens": 11},
+    )
 
 
-def _chat_response_events(
+def chat_reply_frames(
     ordinal: int, *, text: str = "native-http-result", tool_name: str | None = None,
-) -> bytes:
+) -> tuple[StreamFrame, ...]:
     """真实 Chat Completions SSE 必须包含上游 stop 和 DONE。"""
-    common = {
-        "id": f"chat-contract-{ordinal}",
-        "object": "chat.completion.chunk",
-        "created": 1,
-        "model": "contract-model",
-    }
     delta = {"role": "assistant", "content": text}
     if tool_name is not None:
         delta = {"role": "assistant", "tool_calls": [{
             "index": 0, "id": "call-native", "type": "function",
             "function": {"name": tool_name, "arguments": json.dumps({"answer": text})},
         }]}
-    chunks = [
-        {**common, "choices": [{
-            "index": 0, "delta": delta,
-            "finish_reason": None,
-        }]},
-        {**common, "choices": [{"index": 0, "delta": {}, "finish_reason": "tool_calls" if tool_name is not None else "stop"}]},
-    ]
-    return (
-        "".join("data: " + json.dumps(chunk, ensure_ascii=False) + "\n\n" for chunk in chunks)
-        + "data: [DONE]\n\n"
-    ).encode("utf-8")
+    return chat_completion_frames(
+        response_id=f"chat-contract-{ordinal}", model="contract-model", deltas=(delta,),
+        finish_reason="tool_calls" if tool_name is not None else "stop",
+    )
 
 
 @pytest.fixture
@@ -442,15 +336,19 @@ def native_http_server(
                 self.end_headers()
                 self.wfile.write(response)
                 return
-            response = (
-                _response_events(
+            if self.path == "/v1/responses":
+                frames = responses_reply_frames(
                     ordinal, call_tool=(state.call_tool or state.output_tool_name is not None) and ordinal == 1,
                     text=state.response_text, tool_name=state.output_tool_name or "inspect_file",
                     reasoning_item=state.reasoning_item if ordinal == 1 else None,
                 )
-                if self.path == "/v1/responses"
-                else _chat_response_events(ordinal, text=state.response_text, tool_name=state.output_tool_name)
-            )
+                protocol = "openai_responses_sse"
+            else:
+                frames = chat_reply_frames(ordinal, text=state.response_text, tool_name=state.output_tool_name)
+                protocol = "openai_chat_sse"
+            codec = get_protocol_codec(protocol)
+            codec.validate_stream(frames, label="native HTTP response")
+            response = b"".join(codec.encode(frame) for frame in frames)
             (state.artifacts / f"native-http-{ordinal}.response.sse").write_bytes(
                 response
             )
