@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from .common import TimestampedDTO
 
@@ -22,6 +22,9 @@ TeamTaskStatus = Literal[
 
 
 class TeamMemberDTO(BaseModel):
+    # 旧跨Session成员字段必须拒绝，不能丢弃后伪装成当前child成员。
+    model_config = ConfigDict(extra="forbid")
+
     thread_id: str
     delegation_id: str | None = None
     role: str
@@ -39,6 +42,8 @@ class TeamMemberDTO(BaseModel):
 
 
 class TeamTaskDTO(TimestampedDTO):
+    model_config = ConfigDict(extra="forbid")
+
     task_id: str
     title: str
     description: str
@@ -54,6 +59,8 @@ class TeamTaskDTO(TimestampedDTO):
 
 
 class TeamEventDTO(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     event_id: str
     team_id: str
     type: str
@@ -64,6 +71,8 @@ class TeamEventDTO(BaseModel):
 
 
 class TeamBoardDTO(TimestampedDTO):
+    model_config = ConfigDict(extra="forbid")
+
     team_id: str
     name: str
     session_id: str
