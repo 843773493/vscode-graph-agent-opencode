@@ -21,7 +21,7 @@ def case(request: pytest.FixtureRequest) -> EditFileScenarioCase:
 
 
 @pytest.fixture
-def asset_root() -> Path:
+def fixture_workspace_root() -> Path:
     return (
         Path.cwd()
         / "tests"
@@ -35,20 +35,19 @@ def asset_root() -> Path:
 def prepared_case(
     tmp_path: Path,
     case: EditFileScenarioCase,
-    asset_root: Path,
+    fixture_workspace_root: Path,
 ) -> tuple[PreparedToolTest, Path]:
     attempt_root = tmp_path / ".boxteam" / "tool_tests" / "attempt"
     prepared = case.prepare(
         workspace_root=tmp_path,
         attempt_root=attempt_root,
-        asset_root=asset_root,
+        asset_root=fixture_workspace_root,
     )
     return prepared, attempt_root
 
 
 def test_prepare_copies_seed_and_selects_real_edit_file_tool(
     prepared_case: tuple[PreparedToolTest, Path],
-    asset_root: Path,
     case: EditFileScenarioCase,
 ) -> None:
     prepared, attempt_root = prepared_case
@@ -67,22 +66,26 @@ def test_prepare_copies_seed_and_selects_real_edit_file_tool(
     assert (attempt_root / case.file_name).is_file()
 
 
+@pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
 async def test_real_edit_file_tool_and_evaluate(
     prepared_case: tuple[PreparedToolTest, Path],
     case: EditFileScenarioCase,
+    asynchronous: bool,
 ) -> None:
     prepared, attempt_root = prepared_case
 
-    result = await prepared.tool.ainvoke(
-        {
+    arguments = {
             "file_path": case.file_name,
-            "expected_version": "sha256:" + sha256((attempt_root / case.file_name).read_bytes()).hexdigest(),
+            "expected_version": "sha256:"
+            + sha256(
+                (attempt_root / case.file_name).read_bytes()
+            ).hexdigest(),
             "old_string": case.old_string,
             "new_string": case.new_string,
             "replace_all": case.replace_all,
             **prepared.injected_arguments,
-        }
-    )
+    }
+    result = await prepared.tool.ainvoke(arguments) if asynchronous else prepared.tool.invoke(arguments)
 
     assert isinstance(result, ToolMessage)
     assert result.status == "success"
@@ -96,7 +99,9 @@ def test_evaluate_rejects_incorrect_file_result(
     case: EditFileScenarioCase,
 ) -> None:
     _, attempt_root = prepared_case
-    (attempt_root / case.file_name).write_text("错误内容\n", encoding="utf-8")
+    (attempt_root / case.file_name).write_text(
+        "错误内容\n", encoding="utf-8"
+    )
 
     evaluation = case.evaluate(attempt_root=attempt_root, tool_result=None)
 

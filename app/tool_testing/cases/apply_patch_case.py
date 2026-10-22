@@ -6,12 +6,11 @@ from hashlib import sha256
 from pathlib import Path
 
 from app.agents.tools.apply_patch import create_apply_patch_tool
-from app.core.workspace_identity import load_or_create_workspace_id
-from app.services.infrastructure.workspace_files.paths import WorkspaceFilePaths
 from app.services.infrastructure.workspace_files.text_owner import (
     WorkspaceTextMutationOwner,
 )
 from app.tool_testing.definitions import PreparedToolTest, ToolTestEvaluation
+from app.tool_testing.sandbox import ToolTestFilePaths
 
 
 @dataclass(frozen=True, slots=True)
@@ -30,9 +29,8 @@ class ApplyPatchScenarioCase:
         attempt_root: Path,
         asset_root: Path,
     ) -> PreparedToolTest:
-        del workspace_root, asset_root
-        attempt_root.mkdir(parents=True)
-        load_or_create_workspace_id(attempt_root)
+        del asset_root
+        file_paths = ToolTestFilePaths(workspace_root=workspace_root, attempt_root=attempt_root)
         for relative_path, content in self.initial_files.items():
             target = attempt_root / relative_path
             target.parent.mkdir(parents=True, exist_ok=True)
@@ -45,8 +43,7 @@ class ApplyPatchScenarioCase:
         }
         return PreparedToolTest(
             prompt=self.prompt_template + "\nexpected_versions = " + json.dumps(versions, ensure_ascii=False),
-            tool=create_apply_patch_tool(text_mutations=WorkspaceTextMutationOwner(paths=WorkspaceFilePaths(
-                workspace=attempt_root, workspace_id=load_or_create_workspace_id(attempt_root), bindings=None))),
+            tool=create_apply_patch_tool(text_mutations=WorkspaceTextMutationOwner(paths=file_paths)),
         )
 
     def evaluate(

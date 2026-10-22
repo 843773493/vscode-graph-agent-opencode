@@ -12,15 +12,14 @@ from langgraph.prebuilt.tool_node import ToolRuntime
 from app.agents.workspace_backend import build_workspace_backend
 from app.agents.workspace_filesystem_tools import configure_workspace_filesystem_tools
 from app.core.hashing import sha256_hex
-from app.core.workspace_identity import load_or_create_workspace_id
 from app.services.infrastructure.resource_platform.sources.resource_navigation import (
     ResourceNavigation,
 )
-from app.services.infrastructure.workspace_files.paths import WorkspaceFilePaths
 from app.services.infrastructure.workspace_files.text_owner import (
     WorkspaceTextMutationOwner,
 )
 from app.tool_testing.definitions import PreparedToolTest, ToolTestEvaluation
+from app.tool_testing.sandbox import ToolTestFilePaths
 
 
 @dataclass(frozen=True, slots=True)
@@ -44,7 +43,8 @@ class EditFileScenarioCase:
         source = asset_root / "edit_file" / "exact_replacement"
         if not source.is_dir():
             raise FileNotFoundError(f"edit_file 测试资源不存在: {source}")
-        shutil.copytree(source, attempt_root)
+        file_paths = ToolTestFilePaths(workspace_root=workspace_root, attempt_root=attempt_root)
+        shutil.copytree(source, attempt_root, dirs_exist_ok=True)
 
         target = attempt_root / self.file_name
         if not target.is_file():
@@ -66,7 +66,7 @@ class EditFileScenarioCase:
             "不要把 Markdown 标记或额外分隔符放进参数，不要修改文件中的其他任何内容，"
             "也不要只在正文中描述操作。"
         )
-        tool, runtime = _select_tool(attempt_root)
+        tool, runtime = _select_tool(file_paths)
         return PreparedToolTest(
             prompt=prompt,
             tool=tool,
@@ -198,13 +198,13 @@ def create_edit_file_cases() -> list[EditFileScenarioCase]:
     ]
 
 
-def _select_tool(workspace_root: Path) -> tuple[BaseTool, ToolRuntime]:
-    workspace_id = load_or_create_workspace_id(workspace_root)
+def _select_tool(file_paths: ToolTestFilePaths) -> tuple[BaseTool, ToolRuntime]:
+    workspace_root, workspace_id = file_paths.workspace, file_paths.workspace_id
     middleware = FilesystemMiddleware(backend=build_workspace_backend(workspace_root))
     navigation = ResourceNavigation(workspace_root=workspace_root, workspace_id=workspace_id,
-        file_paths=WorkspaceFilePaths(workspace=workspace_root, workspace_id=workspace_id, bindings=None))
+        file_paths=file_paths)
     configure_workspace_filesystem_tools(middleware, workspace_root=workspace_root, resource_navigation=navigation,
-        text_mutations=WorkspaceTextMutationOwner(paths=WorkspaceFilePaths(workspace=workspace_root, workspace_id=workspace_id, bindings=None)))
+        text_mutations=WorkspaceTextMutationOwner(paths=file_paths))
     matches = [tool for tool in middleware.tools if tool.name == "edit_file"]
     if len(matches) != 1:
         raise RuntimeError(
