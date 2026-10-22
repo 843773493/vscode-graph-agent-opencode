@@ -151,26 +151,25 @@ export function useChildThreadConversation({
     if (!sessionId || !threadId || !key || sendingRef.current.has(key)) return;
     const content = latestRef.current.draft.trim();
     if (!content) return;
-    const ownerScope = scope;
     let failure: string | null = null;
     sendingRef.current.add(key);
     update(key, (prior) => ({ ...prior, sending: true, error: null }));
     try {
       const accepted = await sendUserMessage(apiPort, sessionId, content, "default", [], workspaceId, "after_turn", threadId);
       if (accepted.thread_id !== threadId) throw new Error("子线程消息响应的 owner 与请求不一致");
-      if (scopeRef.current !== ownerScope) return;
-      update(key, (prior) => ({ ...prior, accepted, sending: false, draft: prior.draft.trim() === content ? "" : prior.draft }));
+      update(key, (prior) => ({ ...prior, accepted, draft: prior.draft.trim() === content ? "" : prior.draft }));
     } catch (error) {
-      if (scopeRef.current !== ownerScope) return;
       failure = errorMessage(error);
-      update(key, (prior) => ({ ...prior, sending: false, error: failure }));
+      update(key, (prior) => ({ ...prior, error: failure }));
     } finally {
-      // 发送锁只覆盖接受请求；历史刷新不能阻止同一 child 的后继 queued 消息。
+      // key 冻结原工作区/Session/child；切换视图后仍须结算原请求，不能留下发送中。
       sendingRef.current.delete(key);
+      update(key, (prior) => ({ ...prior, sending: false }));
     }
+    if (activeKeyRef.current !== key) return;
     await read("history");
     if (failure !== null) update(key, (prior) => ({ ...prior, error: prior.error ? `${failure}；重新读取失败：${prior.error}` : failure }));
-  }, [apiPort, key, read, scope, sessionId, threadId, update, workspaceId]);
+  }, [apiPort, key, read, sessionId, threadId, update, workspaceId]);
 
   const selectThreadForOwner = useCallback((
     owner: { workspaceId: string; sessionId: string },

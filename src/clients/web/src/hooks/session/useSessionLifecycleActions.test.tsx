@@ -607,7 +607,7 @@ describe("会话生命周期写动作的竞态与失败补偿", () => {
       backend_workspace_id: "00000000-0000-0000-0000-000000000001", connection_kind: "local" };
     const oldList = refreshWorkspaceSessionList(8014, target, mounted.setState);
     const events = ["session_auto_title_updated", "pending_request_added"].map((reason): SessionStreamEvent => ({
-      event_id: `evt_${reason}`, session_id: deleted.session_id, job_id: "job_before_delete",
+      event_id: `evt_${reason}`, session_id: deleted.session_id, thread_id: "thr_00000000700070008000000000000001", job_id: "job_before_delete",
       timestamp: "2026-10-14T00:00:00Z", type: "status_change", phase: "status", title: reason, content: "",
       raw: { payload: { reason } },
     }));

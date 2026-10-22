@@ -60,6 +60,7 @@ function conversation(
     events: [{
       event_id: "evt_1",
       session_id: "ses_web_replay",
+      thread_id: "thr_web_replay",
       job_id: "job_1",
       step_id: null,
       agent_id: "default",

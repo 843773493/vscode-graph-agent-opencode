@@ -54,7 +54,7 @@ describe("useSessionTurnHistory pending bootstrap", () => {
         assistantMessages: [{ message_id: "msg_live_metadata", session_id: SESSION_ID, thread_id: threadId,
           role: "assistant", content: "已收到的实时正文", attachments: [], metadata: {},
           created_at: "2026-10-09T00:00:01Z", updated_at: "2026-10-09T00:00:01Z" }],
-        events: [{ event_id: "evt_live_metadata", session_id: SESSION_ID, job_id: jobId,
+        events: [{ event_id: "evt_live_metadata", session_id: SESSION_ID, thread_id: threadId, job_id: jobId,
           type: "text_delta", phase: "text", title: "文本增量", content: "已收到的实时事件",
           timestamp: "2026-10-09T00:00:01Z" }],
         status: "running", jobId, pending: true, source: "pending",

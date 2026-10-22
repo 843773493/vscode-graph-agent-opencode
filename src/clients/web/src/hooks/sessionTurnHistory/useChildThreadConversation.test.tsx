@@ -1,7 +1,7 @@
 import { afterEach, expect, test } from "bun:test";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import { installSessionApiFetchMock, unwrapSessionApiFetch } from "../../api/session/sessionApiFetchMock";
-import type { ChildThreadSummary } from "../../types/backend";
+import type { ChildThreadSummary, MessageRunAccepted } from "../../types/backend";
 import { resolveTerminalResourceTarget, useChildThreadConversation } from "./useChildThreadConversation";
 
 const SESSION = "ses_019fca64740070008000000000000001";
@@ -301,6 +301,45 @@ test("发送期间切到 sibling 后，原 child 的迟到回执不覆盖 siblin
   expect(current.snapshot.history?.thread_id).toBe(CHILDREN[1]!.thread_id);
   expect(current.snapshot.accepted).toBeNull();
   expect(current.snapshot.loading).toBe(false);
+});
+
+test.each(["accepted", "rejected"] as const)("跨工作区切换后原 child 的 %s 回执只结算原 owner", async (outcome) => {
+  let completeSend: ((reply: Response) => void) | null = null;
+  installSessionApiFetchMock(({ path }) => path.endsWith("/messages")
+    ? new Promise<Response>((resolve) => { completeSend = resolve; })
+    : response(history(path.split("/").slice(-2)[0]!)));
+  act(() => { renderer = create(<Harness />); });
+  act(() => current.selectThread(CHILDREN[0]!.thread_id));
+  await until(() => current.snapshot.history !== null);
+  act(() => current.setDraft("原工作区请求"));
+  let pending: Promise<void>;
+  act(() => { pending = current.send(); });
+  await until(() => completeSend !== null && current.snapshot.sending);
+
+  act(() => { renderer!.update(<Harness workspaceId="workspace-b" />); });
+  act(() => current.selectThread(CHILDREN[0]!.thread_id));
+  await until(() => current.snapshot.history !== null);
+  act(() => current.setDraft("另一工作区草稿"));
+  const accepted: MessageRunAccepted = {
+    message_id: "message-a", job_id: "job-a", turn_id: "turn-a", thread_id: CHILDREN[0]!.thread_id, status: "queued",
+    dispatch: { session_id: SESSION, thread_id: CHILDREN[0]!.thread_id, job_id: "job-a", job_status: "queued",
+      queued_jobs_ahead: 1, queued_job_count: 1, pending_job_count: 1 },
+  };
+  await act(async () => {
+    completeSend!(outcome === "accepted" ? response(accepted)
+      : Response.json({ detail: "原工作区拒绝消息" }, { status: 409 }));
+    await pending!;
+  });
+  expect(current.snapshot).toMatchObject({ draft: "另一工作区草稿", sending: false, accepted: null, error: null });
+
+  // 先检查原 owner 的回执收尾，避免自动刷新清除其请求错误。
+  act(() => { renderer!.update(<Harness enabled={false} />); });
+  act(() => current.selectThread(CHILDREN[0]!.thread_id));
+  await until(() => current.snapshot.history !== null && !current.snapshot.loading);
+  expect(current.snapshot.sending).toBe(false);
+  expect(current.snapshot.draft).toBe(outcome === "accepted" ? "" : "原工作区请求");
+  expect(current.snapshot.accepted).toEqual(outcome === "accepted" ? accepted : null);
+  if (outcome === "rejected") expect(current.snapshot.error).toContain("原工作区拒绝消息");
 });
 
 test("消息已接受后，历史读取未返回仍允许向同一 child 继续发送", async () => {
