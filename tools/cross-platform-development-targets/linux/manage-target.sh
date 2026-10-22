@@ -222,7 +222,8 @@ case "$action" in
           BOXTEAM_SERVICE_LOG_PATH="$log_file" \
           UV_PROJECT_ENVIRONMENT="$repository/.venv" \
           PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/usr/bin/chromium \
-          BOXTEAM_ENABLE_GATEWAY_E2E_WORKSPACE=0 \
+          BOXTEAM_DEV_LOCAL_ONLY=1 \
+          BOXTEAM_DEV_PORT_OFFSET=0 \
           bun run scripts/launch/dev.mjs --only-launch >"$log_file" 2>&1 </dev/null &
         printf '%s\n' "$!" > "$artifacts/runtime/$profile/start.pid"
       )

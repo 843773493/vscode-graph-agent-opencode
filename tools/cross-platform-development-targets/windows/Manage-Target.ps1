@@ -174,10 +174,12 @@ function Invoke-TargetAction([string[]]$Arguments) {
                     BOXTEAM_HOME = $BoxTeamHome
                     BOXTEAM_DEFAULT_USER_WORKSPACE_ROOT = $Workspace
                     BOXTEAM_PYTHON_BIN = $Python
+                    # 管理入口共用固定端口，不能继承宿主 .env 的偏移。
+                    BOXTEAM_DEV_PORT_OFFSET = "0"
                     # TODO: 在真实 Windows VMware 目标验证统一服务日志的 detached 文件句柄生命周期。
                     BOXTEAM_SERVICE_LOG_PATH = $Log
                     UV_PROJECT_ENVIRONMENT = (Join-Path $Repository ".venv")
-                    BOXTEAM_ENABLE_GATEWAY_E2E_WORKSPACE = "0"
+                    BOXTEAM_DEV_LOCAL_ONLY = "1"
                 }
                 foreach ($Pair in $Environment.GetEnumerator()) { [Environment]::SetEnvironmentVariable($Pair.Key, $Pair.Value, "Process") }
                 # dev 的 launcher 自己分离 manager 并等待就绪；外层不得提前返回成功。

@@ -27,7 +27,7 @@ describe("config bootstrap", () => {
       environment: {
         BOXTEAM_HOME: "/tmp/boxteams",
         BOXTEAM_INSTALL_DEVELOPMENT_ASSETS: "1",
-        BOXTEAM_ENABLE_GATEWAY_E2E_WORKSPACE: "1",
+        BOXTEAM_DEV_LOCAL_ONLY: "1",
       },
       spawnSyncImpl(command, args, options) {
         calls.push({ command, args, options });
@@ -44,7 +44,7 @@ describe("config bootstrap", () => {
     expect(calls[0].options.cwd).toBe("/runtime/application");
     expect(calls[0].options.env.BOXTEAM_HOME).toBe("/tmp/boxteams");
     expect(calls[0].options.env.BOXTEAM_INSTALL_DEVELOPMENT_ASSETS).toBe("1");
-    expect(calls[0].options.env.BOXTEAM_ENABLE_GATEWAY_E2E_WORKSPACE).toBe("1");
+    expect(calls[0].options.env.BOXTEAM_DEV_LOCAL_ONLY).toBe("1");
     expect(result.output).toContain('"created":true');
   });
 
@@ -58,7 +58,7 @@ describe("config bootstrap", () => {
       },
       environment: {
         BOXTEAM_INSTALL_DEVELOPMENT_ASSETS: "1",
-        BOXTEAM_ENABLE_GATEWAY_E2E_WORKSPACE: "1",
+        BOXTEAM_DEV_LOCAL_ONLY: "1",
       },
       spawnSyncImpl(command, args, options) {
         calls.push({ command, args, options });
@@ -67,7 +67,7 @@ describe("config bootstrap", () => {
     });
 
     expect(calls[0].options.env.BOXTEAM_INSTALL_DEVELOPMENT_ASSETS).toBe("1");
-    expect(calls[0].options.env.BOXTEAM_ENABLE_GATEWAY_E2E_WORKSPACE).toBe("1");
+    expect(calls[0].options.env.BOXTEAM_DEV_LOCAL_ONLY).toBe("1");
     expect(calls[0].args).toEqual(["-m", "configs.boxteam"]);
   });
 
