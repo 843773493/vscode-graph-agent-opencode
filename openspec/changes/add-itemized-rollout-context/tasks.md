@@ -807,3 +807,11 @@ pending 恢复的硬错误重试已闭合（2026-10-22）：进程内装载阶�
 - 固定候选 `e692f22339ab03e2306c27099d7c9a33e397881b` 的 Job 全目录 `taskless-cancel-unit-final-004` 为99 passed/36.54s，运行时/排空相邻 `taskless-cancel-runtime-adjacent-001` 为22 passed/4.94s；Ruff `taskless-cancel-static-003` exit0。`taskless-cancel-entry-004` 为14 passed/97.33s：产品 Session/child、canonical acceptance、Job 准入生成双 thread 队列，覆盖两个派发故障、取消/排空及 active/queued 终态落盘失败重试、冷 Saver outcome、原 FIFO/Job 身份与一次事件。该项为重开调度器和替换执行端口，不是整进程/Provider 验收；007→008 service 与集成文件逐字相同，008仅补 paused 活任务等待分支及其单测，复用依据为 `taskless-cancel-validation-reuse-001.json`。
 - 完整候选导出后仅恢复旧 control 的 `taskless-cancel-mutation-red-001` 为1 failed/0.43s，明确在活动槽未释放处失败。非作者只读复核确认 queued 中途失败漏事件问题已修、当前 durable listeners 无反向等待 dispatch_lock 的路径。最终 compileall/43项严格 OpenSpec 检查另行保留收据。初轮 `taskless-cancel-entry-003` 的4失败来自新排空测试遗漏显式 workspace context，8项通过；补齐上下文后由004覆盖，不把003记为全绿。
 - 8.3保持未勾：独审确认 admission/queue 的原子排序和 claim→task start 的进程崩溃窗口尚未闭合，继续下一核心切片，不把本项同进程重试当作完整持久队列验收。准确命令、源码指纹、raw、退出码、候选及变异原件位于 `out/tests/temp/openspec_takeover/artifacts/`。
+
+
+### 2026-10-22 8.3 活任务取消写入失败与原 Job 重试
+
+- paused 活任务退出时 canonical 取消落盘失败，控制入口透传原错误；后台回调不把 cancelling 改成业务 failed，不发送 JOB_FAILED。未提交终态保留原活动槽，finalizer 在写入前拒绝其它状态；批量排空汇总全部 task 结果，继续其它 Job 与快照收尾，最后报告错误，失败项留给显式重试。
+- 启动前取消的后台 finalizer 在原协程内按失败阶段保存错误归属，canonical 重试成功后清除该 Job 的旧错；迟到的 done callback 不重新登记旧错。终态后的事件/调度错误仍由 drain 明确报告，不因 Job 已 cancelled 而忽略。
+- 固定候选 `72562e53ec924c1652a3967dfacad641cb8bb768`：`paused-cancel-errors-final-004` 为5 passed/39.66s（004→005仅删无用 noqa/空行，AST与测试指纹复用证据 `paused-cancel-004-005-reuse.json`）；经真实 Session/child、canonical acceptance、Job准入/执行端口覆盖 paused/active/force 的落盘硬错及原身份重试、FIFO、冷 Saver、一次取消事件，并额外扣留启动前取消的旧 callback，先重试成功再释放，确认 drain 不再误报。此项替换执行端口，不是完整进程/真实 Provider 验收。
+- 最终 `paused-cancel-unit-final-005` 为99 passed/36.79s，`paused-cancel-recovery-final-005` 为14 passed/97.66s，加上上述5项覆盖该集成全文件。早期 `paused-cancel-entry-full-002` 为17 passed/118.25s，后续修订已由最终用例覆盖。完整导出后恢复旧 service/control 的 `paused-cancel-mutation-red-001` 为1 failed/12.40s，准确复现 failed→cancelled 冲突。`paused-cancel-adjacent-final-003` 为22 passed/5.09s；Ruff `paused-cancel-static-final-005` 与 compileall/43项 strict OpenSpec `paused-cancel-compile-spec-final-005` 均exit0。非作者只读独审确认取消闭包无具体遗漏，见 `paused-cancel-review-final-001.json`；不替代8.3的durable队列与完整验收门，整项保持未勾。

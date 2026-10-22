@@ -211,6 +211,8 @@ class JobControlService:
                 # 暂停任务可能仍在退出；先让其任务体/回调结算，保持 paused
                 # 取消返回终态的合同，同时避免两个收尾者并发发布事件。
                 await asyncio.gather(task_to_cancel, return_exceptions=True)
+                if not task_to_cancel.cancelled():
+                    task_to_cancel.result()
             # 在锁外等待收尾：control 返回时活动槽必已释放、FIFO 队首已被唤醒，
             # 不会留下「已 terminal 但槽未释放」的可观察中间态。
             await self._schedule_after_cancel(job_to_finalize)

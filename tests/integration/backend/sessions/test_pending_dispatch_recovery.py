@@ -311,3 +311,177 @@ async def test_cancel_unstarted_recovery_commits_terminal_and_wakes_original_fif
             assert case.jobs._input_owner.accepted_job_outcome(reference) == "cancelled"
             events = await case.jobs._bus.list_events(identity)
             assert [event.type for event in events].count("job_cancelled") == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ["cancel_paused", "force_paused", "cancel_active"])
+async def test_live_cancel_write_failure_retains_owner_and_retry_uses_original_fifo(
+    pending_recovery_case: PendingRecoveryCase, monkeypatch: pytest.MonkeyPatch,
+    operation: str,
+) -> None:
+    """真实准入和执行端口生成取消故障；失败不能变业务失败或释放原槽。"""
+    case = pending_recovery_case
+    references = {item.job_id: item for item in await case.store.load(case.session_id)}
+    await case.jobs.list_pending(case.session_id)
+    for group in case.queued:
+        assert await asyncio.wait_for(case.executor.started.get(), 5) == group[0]
+    first, successor = case.queued[0]
+    job, successor_job = case.jobs._jobs[first], case.jobs._jobs[successor]
+    original_task = job.task
+    writer = case.jobs._terminal_status_writer
+    original_terminal = writer.mark_job_terminal_status
+    fault = OSError("injected live cancellation terminal failure")
+    attempts: list[str] = []
+
+    def fail_terminal_once(**kwargs):
+        if kwargs["job_id"] == first:
+            attempts.append(kwargs["status"])
+            if len(attempts) == 1:
+                raise fault
+        return original_terminal(**kwargs)
+
+    monkeypatch.setattr(writer, "mark_job_terminal_status", fail_terminal_once)
+    if operation != "cancel_active":
+        await case.jobs.control(first, JobControlRequest(action="pause"))
+        assert not original_task.done()
+
+    async def cancel():
+        if operation == "force_paused":
+            with workspace_context(case.workspace_id, case.workspace_root):
+                return await case.jobs.force_interrupt_active(reason="runtime_restart")
+        return await case.jobs.control(first, JobControlRequest(action="cancel"))
+
+    if operation == "cancel_active":
+        result = await cancel()
+        assert result.status == JobStatus.cancelling
+        with pytest.raises(OSError) as raised:
+            await original_task
+    else:
+        with pytest.raises(OSError) as raised:
+            await cancel()
+    assert raised.value is fault
+    assert attempts == ["cancelled"], "失败后不能在同一次取消中隐式重试"
+    assert case.jobs._jobs[first] is job and job.task is original_task
+    assert job.status == JobStatus.cancelling and job.ended_at is None
+    assert case.jobs._thread_current_job[(case.session_id, case.threads[0])] == first
+    assert case.jobs._input_owner.accepted_job_outcome(references[first]) == "unknown"
+    events = await case.jobs._bus.list_events(first)
+    assert not {"job_failed", "job_cancelled"}.intersection(event.type for event in events)
+    assert case.executor.started.empty()
+    if operation == "force_paused":
+        assert all(other.status == JobStatus.cancelled for key, other in case.jobs._jobs.items() if key != first)
+        assert await case.store.load(case.session_id) == []
+    else:
+        assert successor_job.status == JobStatus.queued
+        # drain 必须暴露背景写入错误；先让仍正常运行的 sibling 通过产品暂停退出。
+        sibling = case.jobs._jobs[case.queued[1][0]]
+        await case.jobs.control(sibling.job_id, JobControlRequest(action="pause"))
+    with pytest.raises(BaseExceptionGroup) as drained:
+        await case.jobs.drain_finalizations()
+    assert drained.value.exceptions == (fault,)
+
+    result = await cancel()
+    assert job.status == JobStatus.cancelled and job.ended_at is not None
+    assert attempts == ["cancelled", "cancelled"]
+    assert job.task is original_task and case.jobs._jobs[successor] is successor_job
+    if operation == "force_paused":
+        assert result == 1
+        assert case.jobs._thread_current_job == {}
+    else:
+        assert result.status == JobStatus.cancelled
+        assert case.jobs._thread_current_job[(case.session_id, case.threads[0])] == successor
+        assert await asyncio.wait_for(case.executor.started.get(), 5) == successor
+        assert case.executor.started.empty()
+        await case.jobs.control(successor, JobControlRequest(action="pause"))
+    await case.jobs.drain_finalizations()
+    events = await case.jobs._bus.list_events(first)
+    assert [event.type for event in events].count("job_cancelled") == 1
+    assert not any(event.type == "job_failed" for event in events)
+    cold_saver = RolloutCheckpointSaver(sessions_dir=case.store._sessions_dir)
+    admission = cold_saver.execution_admission_for_job(
+        case.session_id, thread_id=case.threads[0], job_id=first,
+    )
+    assert cold_saver.runtime_execution_outcome(
+        case.session_id, case.threads[0], admission.execution_id,
+    ) == "cancelled"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("defer_callback", [False, True])
+async def test_prebody_cancel_write_failure_clears_only_after_original_job_retry(
+    pending_recovery_case: PendingRecoveryCase, monkeypatch: pytest.MonkeyPatch,
+    defer_callback: bool,
+) -> None:
+    case = pending_recovery_case
+    first, successor = case.queued[0]
+    original_run = case.jobs._run_job_background
+    entered = asyncio.Event()
+
+    async def wait_before_body(job_id, session_id, message):
+        if job_id == first:
+            entered.set()
+            await asyncio.Future()
+        await original_run(job_id, session_id, message)
+
+    original_callback = case.jobs._on_finalization_done
+    deferred: list[asyncio.Task] = []
+    callback_ready = asyncio.Event()
+
+    def defer_done(task, *, records_errors):
+        if records_errors:
+            deferred.append(task)
+            callback_ready.set()
+        else:
+            original_callback(task, records_errors=records_errors)
+
+    if defer_callback:
+        monkeypatch.setattr(case.jobs, "_on_finalization_done", defer_done)
+    monkeypatch.setattr(case.jobs, "_run_job_background", wait_before_body)
+    await case.jobs.list_pending(case.session_id)
+    await asyncio.wait_for(entered.wait(), 5)
+    assert await asyncio.wait_for(case.executor.started.get(), 5) == case.queued[1][0]
+    sibling = case.jobs._jobs[case.queued[1][0]]
+    await case.jobs.control(sibling.job_id, JobControlRequest(action="pause"))
+    job = case.jobs._jobs[first]
+    original_task = job.task
+    writer = case.jobs._terminal_status_writer
+    original_terminal = writer.mark_job_terminal_status
+    fault = OSError("injected prebody cancellation terminal failure")
+    attempts = 0
+
+    def fail_terminal_once(**kwargs):
+        nonlocal attempts
+        if kwargs["job_id"] == first:
+            attempts += 1
+            if attempts == 1:
+                raise fault
+        return original_terminal(**kwargs)
+
+    monkeypatch.setattr(writer, "mark_job_terminal_status", fail_terminal_once)
+    await case.jobs.control(first, JobControlRequest(action="cancel"))
+    if defer_callback:
+        await asyncio.wait_for(callback_ready.wait(), 5)
+        assert case.jobs._finalization_errors[first] is fault
+    else:
+        with pytest.raises(BaseExceptionGroup) as raised:
+            await case.jobs.drain_finalizations()
+        assert raised.value.exceptions == (fault,)
+    assert job.status == JobStatus.cancelling and job.task is original_task
+    assert case.jobs._thread_current_job[(case.session_id, case.threads[0])] == first
+    assert case.jobs._jobs[successor].status == JobStatus.queued
+    assert case.executor.started.empty()
+    events = await case.jobs._bus.list_events(first)
+    assert not {"job_failed", "job_cancelled"}.intersection(event.type for event in events)
+
+    result = await case.jobs.control(first, JobControlRequest(action="cancel"))
+    assert result.status == JobStatus.cancelled and attempts == 2
+    assert job.task is original_task
+    if defer_callback:
+        assert len(deferred) == 1
+        original_callback(deferred[0], records_errors=True)
+    assert await asyncio.wait_for(case.executor.started.get(), 5) == successor
+    await case.jobs.control(successor, JobControlRequest(action="pause"))
+    await case.jobs.drain_finalizations()
+    events = await case.jobs._bus.list_events(first)
+    assert [event.type for event in events].count("job_cancelled") == 1
+    assert not any(event.type == "job_failed" for event in events)

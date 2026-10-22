@@ -159,7 +159,7 @@ class JobService:
             raise ValueError("execution_cancel_timeout_seconds 必须大于 0")
         self._jobs: dict[str, JobState] = {}
         self._finalization_tasks: set[asyncio.Task[object]] = set()
-        self._finalization_error: BaseException | None = None
+        self._finalization_errors: dict[str | None, BaseException] = {}
         self._bus: JobEventBusProtocol | None = job_event_bus
         self._thread_current_job: dict[tuple[str, str], str] = {}
         self._pending_queue = JobPendingQueue()
@@ -241,35 +241,44 @@ class JobService:
     def open_admission(self) -> None:
         self._accepting_jobs = True
 
-    def _spawn_finalization(self, coroutine: Coroutine[object, object, object]) -> None:
+    def _spawn_finalization(
+        self, coroutine: Coroutine[object, object, object], *, records_errors: bool = False,
+    ) -> None:
         task = asyncio.create_task(coroutine)
         self._finalization_tasks.add(task)
-        task.add_done_callback(self._on_finalization_done)
+        task.add_done_callback(lambda done: self._on_finalization_done(done, records_errors=records_errors))
 
-    def _on_finalization_done(self, task: asyncio.Task[object]) -> None:
+    def _on_finalization_done(self, task: asyncio.Task[object], *, records_errors: bool) -> None:
         self._finalization_tasks.discard(task)
         try:
             task.result()
         except BaseException as error:
-            if self._finalization_error is None:
-                self._finalization_error = error
+            if not records_errors:
+                self._finalization_errors.setdefault(None, error)
             logger.error("Job 后台终态收尾失败", exc_info=error)
 
     async def drain_finalizations(self) -> None:
         """收完执行根及其 done callback 派生的 writer 和终态事件。"""
-        tasks = tuple(job.task for job in self._jobs.values() if job.task is not None)
-        if tasks:
+        task_jobs = tuple(
+            (job, task) for job in self._jobs.values() if (task := job.task) is not None
+        )
+        if task_jobs:
             # gather 等待已完成任务时也会让其先登记的 done callback 执行，
             # 避免任务体前取消的收尾还没加入集合就误判排空。
-            await asyncio.gather(*tasks, return_exceptions=True)
+            await asyncio.gather(*(task for _, task in task_jobs), return_exceptions=True)
         while self._finalization_tasks:
             await asyncio.gather(
                 *tuple(self._finalization_tasks), return_exceptions=True
             )
-        if self._finalization_error is not None:
-            raise BaseExceptionGroup(
-                "Job 后台终态收尾失败", [self._finalization_error]
-            )
+        errors: list[BaseException] = []
+        for job, task in task_jobs:
+            if job.task is task and job.status == JobStatus.cancelling and not task.cancelled():
+                error = task.exception()
+                if error is not None:
+                    errors.append(error)
+        errors.extend(self._finalization_errors.values())
+        if errors:
+            raise BaseExceptionGroup("Job 后台终态收尾失败", errors)
 
     @property
     def accepting_jobs(self) -> bool:
@@ -370,17 +379,34 @@ class JobService:
 
         for task in tasks:
             task.cancel()
+        failed_tasks: set[asyncio.Task] = set()
+        errors: list[BaseException] = []
         if tasks:
-            await asyncio.gather(*tasks, return_exceptions=True)
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            for task, result in zip(tasks, results, strict=True):
+                if isinstance(result, BaseException) and not isinstance(result, asyncio.CancelledError):
+                    failed_tasks.add(task)
+                    errors.append(result)
         for blocker in active_blockers:
             job = self._jobs.get(blocker.job_id)
-            if job is None or job.status != JobStatus.cancelling:
+            if job is None or job.status != JobStatus.cancelling or job.task in failed_tasks:
                 continue
-            await self._finalize_cancelled_without_task_body(job)
+            try:
+                await self._finalize_cancelled_without_task_body(job)
+            except Exception as error:  # noqa: BLE001
+                # 一项落盘失败不阻止其它 thread 收尾；失败项保留原槽供重试。
+                errors.append(error)
         for session_id in sessions_with_queued_jobs:
-            await self._pending_requests.persist(
-                await self._pending_requests.list(session_id)
-            )
+            try:
+                await self._pending_requests.persist(
+                    await self._pending_requests.list(session_id)
+                )
+            except Exception as error:  # noqa: BLE001
+                errors.append(error)
+        if len(errors) == 1:
+            raise errors[0]
+        if errors:
+            raise BaseExceptionGroup("批量取消 Job 收尾失败", errors)
         return len(active_blockers)
 
     async def list(self, session_id: str | None = None) -> list[JobDTO]:
@@ -1018,6 +1044,10 @@ class JobService:
                     "Job task failed: job_id=%s",
                     job.job_id,
                 )
+                if job.status == JobStatus.cancelling:
+                    # 取消终态未提交：原 task 保留错误供 control/drain 读取，
+                    # 不能发布业务失败或交还尚未结算的活动槽。
+                    return
                 if not self._is_terminal_status(job.status):
                     transition_job_status(job, JobStatus.failed, error_message=str(e))
                 if self._bus is not None:
@@ -1095,30 +1125,44 @@ class JobService:
             job.session_id,
         )
         self._spawn_finalization(
-            self._finalize_cancelled_without_task_body(job)
+            self._finalize_cancelled_without_task_body(job), records_errors=True,
         )
 
     async def _finalize_cancelled_without_task_body(self, job: JobState) -> None:
         """补齐权威写入点在取消路径上会做的收尾：Turn 终态、事件、交还会话。"""
         async def finalize() -> None:
-            async with self._dispatch_lock:
-                if job.status != JobStatus.cancelled:
-                    await self._persist_terminal_execution_status(job, "cancelled")
-                    transition_job_status(
-                        job, JobStatus.cancelled,
-                        error_message=job.cancellation_reason or "任务被用户取消",
+            error_owner: str | None = None
+            try:
+                async with self._dispatch_lock:
+                    if job.status not in {JobStatus.cancelling, JobStatus.cancelled}:
+                        raise RuntimeError(
+                            f"取消收尾不能覆盖其它 Job 状态: job_id={job.job_id} status={job.status.value}"
+                        )
+                    if job.status == JobStatus.cancelling:
+                        error_owner = job.job_id
+                        await self._persist_terminal_execution_status(job, "cancelled")
+                        transition_job_status(
+                            job, JobStatus.cancelled,
+                            error_message=job.cancellation_reason or "任务被用户取消",
+                        )
+                        self._finalization_errors.pop(job.job_id, None)
+                        error_owner = None
+                        publish_cancelled = True
+                    else:
+                        publish_cancelled = False
+                if publish_cancelled and self._bus is not None:
+                    await self._bus.publish(
+                        job_id=job.job_id,
+                        event_type=EventType.JOB_CANCELLED,
+                        payload={"session_id": job.session_id},
+                        agent_id="job_service",
                     )
-                    publish_cancelled = True
-                else:
-                    publish_cancelled = False
-            if publish_cancelled and self._bus is not None:
-                await self._bus.publish(
-                    job_id=job.job_id,
-                    event_type=EventType.JOB_CANCELLED,
-                    payload={"session_id": job.session_id},
-                    agent_id="job_service",
-                )
-            await self._schedule_next_job_if_needed(job)
+                await self._schedule_next_job_if_needed(job)
+            except Exception as error:
+                # 在失败阶段记录归属；延迟的 done callback 不能把已重试
+                # 成功的 canonical 错误重新登记成永久的全局错误。
+                self._finalization_errors.setdefault(error_owner, error)
+                raise
 
         await run_cleanup_shielded(finalize)
 
@@ -1167,19 +1211,7 @@ class JobService:
     async def _schedule_next_job_if_needed(self, finished_job: JobState) -> None:
         # 任何终态都是 after_turn 语义下的已提交终止边界；取消同样会把
         # Session 交还给队列，否则该会话的 FIFO 队首将永久无人消费。
-        should_continue = finished_job.status in TERMINAL_JOB_STATUSES
-        if not should_continue:
-            async with self._dispatch_lock:
-                if finished_job.status == JobStatus.paused:
-                    return
-                if (
-                    self._thread_current_job.get((finished_job.session_id, finished_job.thread_id))
-                    == finished_job.job_id
-                ):
-                    self._thread_current_job.pop((finished_job.session_id, finished_job.thread_id), None)
-            # 终态 Job 没有后继消息时也要把内存队列的空状态落盘。否则
-            # 上一轮已经取出并失败的队首可能在重启后再次被恢复。
-            await self._pending_requests.persist_current(finished_job.session_id)
+        if finished_job.status not in TERMINAL_JOB_STATUSES:
             return
 
         stale_internal_jobs: list[JobState] = []
@@ -1466,6 +1498,7 @@ class JobService:
                     error_message="任务已暂停",
                 )
             else:
+                transition_job_status(job, JobStatus.cancelling)
                 await self._persist_terminal_execution_status(job, "cancelled")
                 transition_job_status(
                     job,
