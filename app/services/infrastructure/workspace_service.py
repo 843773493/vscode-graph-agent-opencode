@@ -552,9 +552,9 @@ class WorkspaceService:
     def _validate_entry_name(name: str) -> str:
         normalized = name.strip()
         if normalized != name or normalized in {"", ".", ".."}:
-            raise ValueError(f"文件名无效: {name!r}")
+            raise ValueError("文件名无效：名称不能为空、点段或包含首尾空白")
         if "/" in normalized or "\\" in normalized or "\x00" in normalized:
-            raise ValueError(f"文件名只能包含一个路径片段: {name!r}")
+            raise ValueError("文件名只能包含一个不含 NUL 的路径片段")
         return normalized
 
     def _looks_like_binary(self, raw_content: bytes) -> bool:

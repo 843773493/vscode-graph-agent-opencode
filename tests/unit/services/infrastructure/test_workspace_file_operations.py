@@ -148,6 +148,59 @@ async def test_four_entries_worker_only_and_upload_body_is_durable(file_case):
     assert not incoming.exists()
 
 
+@pytest.mark.parametrize("invalid_path", [
+    "/private-upload-marker/file.txt", "private-upload-marker/", "private-upload-marker//file.txt",
+    r"C:\private-upload-marker\file.txt", r"C:private-upload-marker.txt",
+    r"\\private-upload-marker\share\file.txt", "../private-upload-marker/file.txt",
+    "private-upload-marker/./file.txt", "private-upload-marker/../file.txt",
+    "private-upload-marker\x00.txt", "", ".",
+])
+async def test_upload_names_are_relative_and_fail_before_reading_any_body(file_case, invalid_path):
+    case = file_case
+    command = await intent(case)
+    first, invalid = io.BytesIO(b"first"), io.BytesIO(b"invalid")
+    with pytest.raises(ValueError, match="上传文件相对路径无效") as failure:
+        await case.service.upload_file_entries(
+            directory_path="target", scope="workspace", intent=command, actor="local",
+            entries=[("first.txt", first), (invalid_path, invalid)],
+        )
+    assert "private-upload-marker" not in str(failure.value)
+    assert first.tell() == invalid.tell() == 0
+    assert not case.owner._incoming.exists()
+    assert case.owner.store.pending() == ()
+    with pytest.raises(KeyError):
+        case.owner.store.get(command.client_operation_id, "local")
+    assert list((case.workspace / "target").iterdir()) == []
+
+
+async def test_duplicate_upload_paths_are_rejected_before_body_or_staging(file_case):
+    case = file_case
+    first, duplicate = io.BytesIO(b"first"), io.BytesIO(b"duplicate")
+    with pytest.raises(FileExistsError, match="上传内容包含重复相对路径"):
+        await case.service.upload_file_entries(
+            directory_path="target", scope="workspace", intent=await intent(case), actor="local",
+            entries=[("目录/文件.txt", first), (r"目录\文件.txt", duplicate)],
+        )
+    assert first.tell() == duplicate.tell() == 0
+    assert not case.owner._incoming.exists()
+    assert list((case.workspace / "target").iterdir()) == []
+
+
+@pytest.mark.parametrize("name", ["/private-name-marker/file.txt", r"C:\private-name-marker\file.txt",
+                                 r"\\private-name-marker\share", " private-name-marker ", "private-name-marker\x00.txt"])
+async def test_invalid_entry_names_do_not_echo_native_input(file_case, name):
+    case = file_case
+    command = await intent(case)
+    with pytest.raises(ValueError) as failure:
+        await case.owner.enqueue(kind="create", directory_path="target", scope="workspace",
+                                 intent=command, actor="local", data={"name": name, "kind": "file"})
+    assert "private-name-marker" not in str(failure.value)
+    assert case.owner.store.pending() == ()
+    with pytest.raises(KeyError):
+        case.owner.store.get(command.client_operation_id, "local")
+    assert list((case.workspace / "target").iterdir()) == []
+
+
 async def test_directory_revision_pins_cursor_and_ignores_unrelated_change(file_case):
     case = file_case
     for name in ("a", "b", "c"):

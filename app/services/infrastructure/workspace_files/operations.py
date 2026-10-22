@@ -8,7 +8,7 @@ import os
 import shutil
 import sys
 from collections.abc import Callable
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from threading import RLock
 from typing import BinaryIO
 from uuid import uuid4
@@ -246,6 +246,17 @@ class WorkspaceFileOperations:
             accepted = False
             try:
                 if uploads is not None:
+                    paths = []
+                    for raw_path, _stream in uploads:
+                        normalized = raw_path.replace("\\", "/")
+                        if (PureWindowsPath(raw_path).drive or "\x00" in normalized
+                                or any(part in ("", ".", "..") for part in normalized.split("/"))):
+                            raise ValueError("上传文件相对路径无效：必须是目标目录下的非空相对文件路径")
+                        if normalized in paths:
+                            raise FileExistsError("上传内容包含重复相对路径")
+                        paths.append(normalized)
+                    if not paths:
+                        raise ValueError("上传内容不能为空")
                     candidate = self._incoming / (intent.client_operation_id + "-" + uuid4().hex)
                     candidate.mkdir(parents=True)
                     incoming = candidate
@@ -256,18 +267,9 @@ class WorkspaceFileOperations:
                         os.fsync(marker.fileno())
                     fsync_directory(incoming)
                     fsync_directory(incoming.parent)
-                    paths = []
-                    for raw_path, stream in uploads:
-                        normalized = raw_path.replace("\\", "/").strip("/")
-                        if not normalized or any(part in ("", ".", "..") for part in normalized.split("/")):
-                            raise ValueError(f"上传文件相对路径无效: {raw_path}")
-                        if normalized in paths:
-                            raise FileExistsError(f"上传内容包含重复路径: {normalized}")
-                        paths.append(normalized)
+                    for normalized, (_raw_path, stream) in zip(paths, uploads, strict=True):
                         proof = await asyncio.to_thread(write_upload, safe_join(incoming / "body", normalized), stream)
                         request.setdefault("uploads", []).append({"path": normalized, **proof})
-                    if not paths:
-                        raise ValueError("上传内容不能为空")
                     await asyncio.to_thread(sync_tree, incoming)
                     fsync_directory(incoming.parent)
                 request_hash = digest(request)
