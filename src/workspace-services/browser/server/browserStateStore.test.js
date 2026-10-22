@@ -1,6 +1,7 @@
 import { afterAll, afterEach, describe, expect, mock, spyOn, test } from "bun:test";
 import path from "node:path";
 import { cp, mkdir, readdir, rm, writeFile } from "node:fs/promises";
+import * as fs from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { BrowserStateStore } from "./browserStateStore.js";
 
@@ -20,6 +21,41 @@ async function createBrowserStateStoreForTest(limits) {
 function serializedBytes(checkpoint) {
   return Buffer.byteLength(`${JSON.stringify(checkpoint)}\n`, "utf8");
 }
+
+describe("浏览器截图错误归属", () => {
+  test.each(["目录创建", "正文保存"])("%s失败保留原异常并允许显式重试", async (stage) => {
+    const store = await createBrowserStateStoreForTest();
+    const diagnostics = spyOn(console, "error").mockImplementation(() => {});
+    const original = Object.assign(new Error(`写入失败: ${store.screenshotDir}`), { code: "EIO" });
+    if (stage === "目录创建") {
+      await mkdir(store.stateDir, { recursive: true });
+      await writeFile(store.screenshotDir, "保留原文件");
+    } else {
+      spyOn(fs, "writeFile").mockRejectedValueOnce(original);
+    }
+    const failure = await store.writeScreenshot("browser_capture", Buffer.from("png-body")).catch(error => error);
+    expect(failure).toBeInstanceOf(Error);
+    expect(failure.message).toContain("browser_id=browser_capture, screenshot_id=screenshot_");
+    expect(failure.message).toContain(`stage=${stage}, code=${failure.code}`);
+    expect(failure.message).not.toContain(store.workspaceRoot);
+    expect(failure.cause).toBeInstanceOf(Error);
+    expect(diagnostics.mock.calls[0][2]).toBe(failure.cause);
+    expect(diagnostics.mock.calls[0][1].filePath).toContain(store.screenshotDir);
+    if (stage === "正文保存") {
+      expect(failure.cause).toBe(original);
+      expect(failure.code).toBe("EIO");
+      expect(await readdir(store.screenshotDir)).toEqual([]);
+    } else {
+      expect(["EEXIST", "ENOTDIR"]).toContain(failure.cause.code);
+      expect(failure.code).toBe(failure.cause.code);
+      await rm(store.screenshotDir);
+    }
+    const saved = await store.writeScreenshot("browser_capture", Buffer.from("png-body"));
+    expect(saved.screenshot_id).toStartWith("screenshot_");
+    expect(saved.byte_length).toBe(8);
+    expect(await readdir(store.screenshotDir)).toEqual([`browser_capture-${saved.screenshot_id}.png`]);
+  });
+});
 
 describe("浏览器检查点错误归属", () => {
   test("目录核验丢失条目不能冒充目标检查点不存在", async () => {

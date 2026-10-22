@@ -323,13 +323,25 @@ export class BrowserStateStore {
   }
 
   async writeScreenshot(browserId, buffer) {
-    await mkdir(this.screenshotDir, { recursive: true });
     // 非 canonical 身份：Node 进程（无 crypto.randomUUIDv7）生成的 screenshot_/*
     // 本地 id 允许继续使用 v4，不进入 canonical 校验器命名空间。
     const screenshotId = `screenshot_${randomUUID().replaceAll("-", "")}`;
     const fileName = `${browserId}-${screenshotId}.png`;
     const filePath = path.join(this.screenshotDir, fileName);
-    await writeFile(filePath, buffer);
+    let stage = "目录创建";
+    try {
+      await mkdir(this.screenshotDir, { recursive: true });
+      stage = "正文保存";
+      await writeFile(filePath, buffer);
+    } catch (error) {
+      console.error("[browser-state-store] 保存浏览器截图失败", { browserId, screenshotId, filePath, stage }, error);
+      const wrapped = new Error(
+        `保存浏览器截图失败: browser_id=${browserId}, screenshot_id=${screenshotId}, stage=${stage}, code=${error?.code || "browser_screenshot_write_failed"}`,
+        { cause: error },
+      );
+      wrapped.code = error?.code || "browser_screenshot_write_failed";
+      throw wrapped;
+    }
     // 只返回不含文件系统路径的可寻址身份；真实路径仅在本调用栈内使用（裁定 D-A2/D-A3）。
     return { screenshot_id: screenshotId, byte_length: buffer.byteLength };
   }

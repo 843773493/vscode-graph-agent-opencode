@@ -1071,3 +1071,78 @@ return 'download-started';
             destination.unlink()
         deleted = await _detach_delete(integration_client, browser_id, browser_context)
         assert deleted.status_code == 200, deleted.text
+
+
+@pytest.mark.asyncio
+async def test_screenshot_failure_reports_stage_and_recovers_through_tool(
+    integration_client: httpx.AsyncClient, browser_context: CustomToolFactoryContext,
+    browser_manager_processes: tuple[int, int], browser_runtime: WorkspaceToolRuntime,
+) -> None:
+    container, _session, _invocation = browser_runtime
+    created = await integration_client.post("/api/v1/resources/browsers", json={
+        "session_id": browser_context.session_id,
+        "thread_id": browser_context.invocation_context.thread_binding.thread_id,
+        "url": "about:blank",
+    })
+    assert created.status_code == 200, created.text
+    browser_id = created.json()["data"]["resource_id"]
+    root = Path(container.workspace_root)
+    destination = root / ".boxteam/browser-manager/screenshots"
+    destination.write_bytes(b"existing-directory-conflict")
+    transport = BrowserManagerClient(
+        workspace_id=container.workspace_id,
+        backend_url=f"http://127.0.0.1:{browser_manager_processes[0]}",
+    )
+    failures: list[dict[str, object]] = []
+    screenshot_page = create_screenshot_page_tool(browser_context)
+    try:
+        for mode in ("sync", "async", "tool"):
+            with pytest.raises(BrowserRequestError) as caught:
+                if mode == "sync":
+                    await asyncio.to_thread(transport._json_request_sync, "POST", f"/api/browsers/{browser_id}/screenshot", {})
+                elif mode == "async":
+                    await transport._json_request("POST", f"/api/browsers/{browser_id}/screenshot", {})
+                else:
+                    await screenshot_page.ainvoke({"pageId": browser_id})
+            failure = caught.value
+            assert failure.status == 500
+            assert failure.code in {"EEXIST", "ENOTDIR", "EPERM"}
+            assert failure.payload["error"].startswith(f"保存浏览器截图失败: browser_id={browser_id}, screenshot_id=screenshot_")
+            assert failure.payload["error"].endswith(f"stage=目录创建, code={failure.code}")
+            assert failure.payload["operation_outcome"] == "failed"
+            assert str(root) not in json.dumps(failure.payload)
+            assert str(root) not in str(failure)
+            failures.append(failure.payload)
+            assert destination.read_bytes() == b"existing-directory-conflict"
+        observed = await integration_client.get(f"/api/v1/resources/{browser_id}")
+        assert observed.status_code == 200, observed.text
+        assert observed.headers["X-Request-ID"] == observed.json()["request_id"]
+        assert observed.json()["data"]["reconciliation_status"] == "verified"
+        assert container.browser_resource_owner._leases.leases_for_resource(browser_id) == []
+        records = json.loads((root / ".boxteam/browser-manager/browsers.json").read_text())
+        record, = [item for item in records["browsers"] if item["browser_id"] == browser_id]
+        assert str(root) not in json.dumps(record)
+        assert "screenshot_error" not in record
+        artifacts = TestRunContext.from_test_file(Path(__file__)).artifacts_dir
+        diagnostics = "\n".join(item.read_text() for item in artifacts.glob("browser-backend-*.stderr.log"))
+        assert "[browser-state-store] 保存浏览器截图失败" in diagnostics
+        assert str(destination) in diagnostics
+        destination.unlink()
+        saved = _json_tool_result(await screenshot_page.ainvoke({"pageId": browser_id}))
+        assert saved["mime_type"] == "image/png"
+        assert str(root) not in json.dumps(saved)
+        artifact_path = destination / f"{browser_id}-{saved['screenshot_id']}.png"
+        expected = artifact_path.read_bytes()
+        assert expected.startswith(b"\x89PNG\r\n\x1a\n")
+        assert len(expected) == saved["byte_length"]
+        status, body = await asyncio.to_thread(_read_http, f"http://127.0.0.1:{browser_manager_processes[0]}{saved['screenshot_url']}?workspace_id={container.workspace_id}")
+        assert status == 200 and body == expected
+        (artifacts / f"screenshot-failure-{time.time_ns()}.json").write_text(json.dumps({
+            "transport_failures": failures, "resource_response": observed.json(),
+            "node_record": record, "recovered_screenshot": saved,
+        }, ensure_ascii=False, indent=2), encoding="utf-8")
+    finally:
+        if destination.is_file():
+            destination.unlink()
+        deleted = await _detach_delete(integration_client, browser_id, browser_context)
+        assert deleted.status_code == 200, deleted.text

@@ -227,3 +227,10 @@
 - 实际下载存储owner在目录创建及正文保存处生成browser/download身份、阶段和错误码，原系统路径与异常保留在服务端诊断及cause；既有Session下载事件消费者只持久化该错误文本，不增加正则脱敏或第二错误链。成功下载记录和目标不变，失败后可显式重试。
 - 固定完整tree `0c76e46e8652bf045944126e8b4d12535cf0b176`：`browser-download-errors-static-unit-001` Ruff/compileall/Node语法通过，12项Bun测试通过；`http-001` 为1 passed/13.00秒、exit0，真实Chromium下载事件经Node HTTP触发目录冲突，核原冲突文件不变、零成功下载发布，Node响应、Python资源GET和browsers.json的download_error一致且无原生路径，同一request_id；服务stderr保原存储位置。修复目录后再次通过真实下载事件保存并逐字核正文。
 - 完整archive仅恢复旧存储producer的`red-001`两项均失败，区分目录创建及saveAs原路径回显。各run源码前后一致、无运行组残留；准确命令/指纹/raw/退出码均保存在 `out/tests/temp/openspec_takeover/artifacts/runs/browser-download-errors-*`。本切片只覆盖下载错误产生及消费链，Browser file URL合同仍待裁定，其它producer及2.2/7.2整体门继续未勾。
+
+
+### 2026-10-22 Browser截图存储错误出口（部分收口）
+
+- 截图存储owner在mkdir/writeFile边界生成browser/screenshot身份、阶段及错误码，原异常与真实目标保留于cause和Node诊断；现有HTTP、Python同步/异步及Agent工具消费者沿同一链路传播，不增加截图错误持久状态或正则脱敏。
+- 固定完整tree `291a3fcf8077453debcf378b998fc7abc6cec309`：`browser-screenshot-errors-static-unit-001` Ruff/compileall/Node语法通过，14项Bun测试通过；`http-002` 为1 passed/12.68秒、exit0。产品API创建浏览器，真实Chromium截图分别经同步HTTP、异步HTTP及Agent工具遭遇目录冲突，错误无原生路径、原冲突文件不变，资源归属仍verified且lease释放；移除冲突后经同一工具取得真实PNG并逐字核HTTP读取正文。正文写入失败在store单测注入验证，真实HTTP只覆盖目录创建失败。
+- 完整archive只还原旧截图producer的`red-001`为2 failed，均精确区分旧错误回显路径及缺身份。首轮`http-001`截图通过，后续两项因共用旧装具留下无冻结队列的执行记录在下一lifespan初始化失败；未计三项整组通过，装具迁移另作独立切片。各run源码前后一致、无运行组残留，准确命令/指纹/raw/退出码见 `out/tests/temp/openspec_takeover/artifacts/runs/browser-screenshot-errors-*`。本项不代表Browser file URL或其它producer及2.2/7.2整体完成。
