@@ -149,7 +149,7 @@ class ForkMaterializationJournalMixin:
         target_thread_id: str, checkpoint_ns: str,
     ) -> str:
         """退出 source snapshot scope 后，仅由目标 journal 完成 retention。"""
-        if self._storage._fork_source_snapshot_for_session(target_session_id) is not None:
+        if self._storage.fork_paths.source_snapshot(target_session_id) is not None:
             raise RuntimeError("fork completion target 不能是 source snapshot")
         with self._storage._connect(target_thread_id, checkpoint_ns,
                            session_id=target_session_id, read_only=True) as connection:
@@ -163,7 +163,7 @@ class ForkMaterializationJournalMixin:
             raise RuntimeError("fork completion journal target scope 不一致")
         fork_id = required_text(row[0], field="fork_materializations.fork_id")
         source_session_id = required_text(row[1], field="fork_materializations.source_session_id")
-        if self._storage._fork_source_snapshot_for_session(source_session_id) is not None:
+        if self._storage.fork_paths.source_snapshot(source_session_id) is not None:
             raise RuntimeError("fork retention 必须在 source snapshot scope 释放后完成")
         optional_text(row[2], field="fork_materializations.source_checkpoint_id")
         optional_text(row[3], field="fork_materializations.source_view_id")

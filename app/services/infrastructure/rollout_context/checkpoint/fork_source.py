@@ -216,7 +216,7 @@ class CheckpointForkSource:
             if cancellation is not None:
                 raise cancellation
             await observe_phase(capture_record.copy_operation_id, "copy.source.partial")
-            with self._storage.storage.fork_source_snapshot_scope(
+            with self._storage.storage.fork_paths.fork_source_snapshot_scope(
                 session_id=source_session_id, thread_id=source_owner.thread_id,
                 captured_root=rollout_snapshot.captured_root,
             ):

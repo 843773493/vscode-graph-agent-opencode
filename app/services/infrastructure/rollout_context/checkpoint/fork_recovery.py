@@ -111,7 +111,7 @@ class CheckpointForkRecovery:
         record: SessionCreationRecord,
     ) -> None:
         """在 abort/quarantine 前按 prepared target capability 释放所有引用。"""
-        with self._storage.storage.prepared_fork_target_scope(record):
+        with self._storage.storage.fork_paths.prepared_fork_target_scope(record):
             await self._storage.forks.release_fork_retentions(record.session_id)
 
 
@@ -133,7 +133,7 @@ class CheckpointForkRecovery:
             or result.source_snapshot_sha256 is None
         ):
             raise RuntimeError("fork 物化结果缺少 committed journal identity/hash")
-        with self._storage.storage.prepared_fork_target_scope(record):
+        with self._storage.storage.fork_paths.prepared_fork_target_scope(record):
             target_owner = self._source.resolve_prepared_main_thread_owner(record)
             materialization_id, fork_id = (
                 self._storage.forks.read_committed_fork_materialization(
@@ -162,7 +162,7 @@ class CheckpointForkRecovery:
         self, record: SessionCreationRecord,
     ) -> ForkCompletionProof | None:
         """只按 creation capability 定点恢复；prepared 不能发布，committed 补证明。"""
-        with self._storage.storage.prepared_fork_target_scope(record):
+        with self._storage.storage.fork_paths.prepared_fork_target_scope(record):
             target_owner = self._source.resolve_prepared_main_thread_owner(record)
             if not self._storage.storage.index_path(record.session_id,
                                             thread_id=target_owner.thread_id).is_file():

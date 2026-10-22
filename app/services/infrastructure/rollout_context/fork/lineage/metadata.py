@@ -101,7 +101,7 @@ class ForkMetadataMixin:
             raise TypeError("fork retention checkpoint_ns 必须是字符串")
         if source_view_id is None and source_checkpoint_id is None:
             raise RuntimeError("pinned fork retention 缺少真实 source view/checkpoint")
-        if self._storage._fork_source_snapshot_for_session(source_session_id) is not None:
+        if self._storage.fork_paths.source_snapshot(source_session_id) is not None:
             raise RuntimeError("fork retention 不能写入冻结 source snapshot")
         # 只消费 capture 前已建立的同一 claim；完成/恢复均禁止首次补写。
         claim = self._catalog_store().get_fork_retention_claim(fork_id)

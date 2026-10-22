@@ -12,20 +12,18 @@ import sqlite3
 import threading
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import AbstractContextManager, contextmanager
-from contextvars import ContextVar, Token
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 from urllib.parse import quote
 
 from app.core.path_utils import get_session_path_resolver
 from app.core.session_catalog_store import (
-    SessionCreationRecord,
     validate_session_id,
     validate_thread_id,
 )
 from app.core.session_thread_context import require_current_session_thread_owner
 from app.domain.itemized.records import CanonicalItemRecord
+from app.services.infrastructure.rollout_context.fork.path_scope import ForkPathScope
 from app.services.infrastructure.rollout_context.storage.catalog.integrity import (
     catalog_body_validation_scope,
 )
@@ -76,41 +74,12 @@ from app.services.infrastructure.rollout_context.storage.transaction_projections
 )
 
 _ROLLOUT_FILE_LOCK_TIMEOUT_SECONDS = 10.0
-@dataclass(frozen=True, slots=True)
-class _PreparedForkTarget:
-    session_id: str
-    thread_id: str
-    session_node: Path
-    thread_node: Path
-
-
-_prepared_fork_target: ContextVar[_PreparedForkTarget | None] = ContextVar(
-    "prepared_fork_target",
-    default=None,
-)
-
-
-@dataclass(frozen=True, slots=True)
-class _ForkSourceSnapshot:
-    session_id: str
-    thread_id: str
-    captured_root: Path
-
-
-_fork_source_snapshot: ContextVar[_ForkSourceSnapshot | None] = ContextVar(
-    "fork_source_snapshot",
-    default=None,
-)
-
-
 class SerializerPort(Protocol):
     """checkpoint 层注入的 typed serializer；storage 不依赖 LangChain。"""
 
     def dumps_typed(self, value: object) -> tuple[str, bytes]: ...
 
     def loads_typed(self, value: tuple[str, bytes]) -> object: ...
-
-
 
 class RolloutStorage(
     TurnProjectionQueryMixin,
@@ -138,6 +107,7 @@ class RolloutStorage(
     ) -> None:
         self.sessions_dir = Path(sessions_dir).resolve()
         self._path_resolver = get_session_path_resolver(self.sessions_dir)
+        self.fork_paths = ForkPathScope(self._path_resolver)
         self._serde = serde
         self._message_codec = message_codec
         self._locks: dict[tuple[str, str], _RolloutOperationLock] = {}
@@ -186,120 +156,23 @@ class RolloutStorage(
                 ),
             )
 
-    @contextmanager
-    def prepared_fork_target_scope(
-        self,
-        record: SessionCreationRecord,
-    ) -> Iterator[Path]:
-        """把创建记录 capability 限定为本次 fork 的 target 路径解析权限。"""
-        if not isinstance(record, SessionCreationRecord):
-            raise TypeError("prepared fork target 必须是 SessionCreationRecord")
-        target_path = self._path_resolver.resolve_prepared_session_node(record)
-        thread_path = self._path_resolver.resolve_prepared_thread_node(record, record.main_thread_id)
-        target = _PreparedForkTarget(record.session_id, record.main_thread_id, target_path, thread_path)
-        token = _prepared_fork_target.set(target)
-        try:
-            yield target_path
-        finally:
-            _prepared_fork_target.reset(token)
 
-    @contextmanager
-    def prepared_child_fork_target_scope(self, session_id: str, record) -> Iterator[Path]:
-        """Thread creation owner 的冻结 record 只授予该未发布 child 的路径能力。"""
-        from app.core.session_control_store import (
-            SessionControlStore,
-            ThreadCreationRecord,
-        )
 
-        if not isinstance(record, ThreadCreationRecord) or record.purpose != "fork":
-            raise TypeError("prepared child fork target 必须是 fork ThreadCreationRecord")
-        session_node = self._path_resolver.resolve_session_node(session_id)
-        control = SessionControlStore(session_node / "session-control.sqlite", read_only=True)
-        try:
-            current = control.get_thread_creation_record(record.thread_creation_idempotency_key)
-            if current != record or current.state not in {"preparing", "published"}:
-                raise RuntimeError("prepared child fork target 的冻结 creation intent 已变化")
-        finally:
-            control.close()
-        thread_node = session_node / record.final_relative_locator
-        if thread_node.is_symlink() or not thread_node.is_dir():
-            raise RuntimeError("prepared child fork target 缺少已 rename 的普通节点目录")
-        target = _PreparedForkTarget(session_id, record.child_thread_id, session_node, thread_node)
-        token = _prepared_fork_target.set(target)
-        try:
-            yield thread_node
-        finally:
-            _prepared_fork_target.reset(token)
-
-    @contextmanager
-    def fork_source_snapshot_scope(
-        self,
-        *,
-        session_id: str,
-        thread_id: str,
-        captured_root: Path,
-    ) -> Iterator[Path]:
-        """把 source Thread 的 rollout I/O 定向到私有 snapshot captured_root。
-
-        ``session_id``/``thread_id`` 仅标识来源历史 owner，thread_id 可为 child；
-        物理 I/O 只使用调用方传入的私有捕获副本 ``captured_root``，不按 main_thread_id
-        或 thread_id 推导路径。
-        """
-        validate_session_id(session_id)
-        validate_thread_id(thread_id)
-        if not isinstance(captured_root, Path):
-            raise TypeError("fork source snapshot captured_root 必须是 Path")
-        if _fork_source_snapshot.get() is not None:
-            raise RuntimeError("fork source snapshot scope 不能嵌套")
-        snapshot_node = captured_root.resolve(strict=True)
-        thread_node = snapshot_node
-        if (
-            snapshot_node.is_symlink()
-            or not snapshot_node.is_dir()
-            or thread_node.is_symlink()
-            or not thread_node.is_dir()
-        ):
-            raise RuntimeError(
-                "fork source Thread 的私有 snapshot captured_root 必须是普通目录: "
-                f"captured_root={snapshot_node}, thread_id={thread_id}"
-            )
-        snapshot = _ForkSourceSnapshot(session_id, thread_id, snapshot_node)
-        token: Token[_ForkSourceSnapshot | None] = _fork_source_snapshot.set(
-            snapshot
-        )
-        try:
-            yield thread_node
-        finally:
-            _fork_source_snapshot.reset(token)
-
-    @staticmethod
-    def _fork_source_snapshot_for_session(
-        session_id: str,
-    ) -> _ForkSourceSnapshot | None:
-        snapshot = _fork_source_snapshot.get()
-        return snapshot if snapshot is not None and snapshot.session_id == session_id else None
-
-    @staticmethod
-    def _prepared_target_record(
-        session_id: str,
-    ) -> _PreparedForkTarget | None:
-        record = _prepared_fork_target.get()
-        return record if record is not None and record.session_id == session_id else None
 
     def _resolve_session_node(self, session_id: str) -> Path:
-        record = self._prepared_target_record(session_id)
+        record = self.fork_paths.prepared_target(session_id)
         if record is not None:
             return record.session_node
-        snapshot = self._fork_source_snapshot_for_session(session_id)
+        snapshot = self.fork_paths.source_snapshot(session_id)
         if snapshot is not None:
             return snapshot.captured_root
         return self._path_resolver.resolve_session_node(session_id)
 
     def _resolve_thread_node(self, session_id: str, thread_id: str) -> Path:
-        snapshot = self._fork_source_snapshot_for_session(session_id)
+        snapshot = self.fork_paths.source_snapshot(session_id)
         if snapshot is not None and thread_id == snapshot.thread_id:
             return snapshot.captured_root
-        record = self._prepared_target_record(session_id)
+        record = self.fork_paths.prepared_target(session_id)
         if record is not None and thread_id == record.thread_id:
             return record.thread_node
         if snapshot is not None:
@@ -323,8 +196,8 @@ class RolloutStorage(
                 f"8.3 要求 (session_id, thread_id)）：session_id={session_id!r}"
             ) from error
         if thread_id is None:
-            record = self._prepared_target_record(session_id)
-            snapshot = self._fork_source_snapshot_for_session(session_id)
+            record = self.fork_paths.prepared_target(session_id)
+            snapshot = self.fork_paths.source_snapshot(session_id)
             thread_id = (
                 record.thread_id
                 if record is not None
@@ -427,7 +300,7 @@ class RolloutStorage(
     ) -> sqlite3.Connection:
         if not isinstance(checkpoint_ns, str):
             raise TypeError("rollout checkpoint_ns 必须是字符串")
-        if not read_only and self._fork_source_snapshot_for_session(session_id) is not None:
+        if not read_only and self.fork_paths.source_snapshot(session_id) is not None:
             raise RuntimeError(
                 "fork frozen source snapshot 禁止可写 SQLite 连接: "
                 f"session_id={session_id}, thread_id={thread_id}, checkpoint_ns={checkpoint_ns!r}"
@@ -453,7 +326,7 @@ class RolloutStorage(
             # 仅冻结 source snapshot 使用 immutable，在线源必须读到已提交 WAL。
             connection = sqlite3.connect(
                 f"file:{quote(str(index_path), safe='/')}?mode=ro"
-                + ("&immutable=1" if self._fork_source_snapshot_for_session(session_id) is not None else ""),
+                + ("&immutable=1" if self.fork_paths.source_snapshot(session_id) is not None else ""),
                 uri=True,
                 timeout=30,
                 check_same_thread=False,
@@ -517,8 +390,6 @@ class RolloutStorage(
         else:
             with self.open_read_snapshot(session_id, thread_id, checkpoint_ns) as owned:
                 yield owned.connection
-
-
 
     def _require_regular_file(self, path: Path, *, field: str) -> None:
         return self._maintenance_owner._require_regular_file(path, field=field)
@@ -610,11 +481,10 @@ class RolloutStorage(
         return self._maintenance_owner.validate_index(session_id, thread_id, checkpoint_ns)
 
     def main_thread_id(self, session_id: str) -> str:
-        record = self._prepared_target_record(session_id)
+        record = self.fork_paths.prepared_target(session_id)
         if record is not None:
-            self._path_resolver.resolve_prepared_session_node(record)
-            return record.main_thread_id
-        snapshot = self._fork_source_snapshot_for_session(session_id)
+            return record.thread_id
+        snapshot = self.fork_paths.source_snapshot(session_id)
         if snapshot is not None:
             return snapshot.thread_id
         return self._path_resolver.main_thread_id(session_id)
@@ -654,8 +524,6 @@ class RolloutStorage(
 
     def _reject_unpublished_migration(self, thread_id: str, checkpoint_ns: str, *, session_id: str) -> None:
         return self._maintenance_owner._reject_unpublished_migration(thread_id, checkpoint_ns, session_id=session_id)
-
-
 
     def _rollout_id(
         self, session_id: str, *, thread_id: str, checkpoint_ns: str

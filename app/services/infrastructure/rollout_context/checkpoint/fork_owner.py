@@ -337,7 +337,7 @@ class CheckpointForkOwner:
             if target_owner is not None and target_owner != prepared_owner:
                 raise RuntimeError("fork child target owner 与 creation intent 不匹配")
             target_owner = prepared_owner
-            with self._storage.storage.prepared_child_fork_target_scope(target_session_id, thread_creation_record):
+            with self._storage.storage.fork_paths.prepared_child_fork_target_scope(target_session_id, thread_creation_record):
                 pass
         elif creation_record is None:
             target_owner = self.source._require_thread_owner(
@@ -437,8 +437,8 @@ class CheckpointForkOwner:
                 "target_session_id": target_session_id,
             })
         target_scope = (
-            self._storage.storage.prepared_fork_target_scope(creation_record)
-            if creation_record is not None else self._storage.storage.prepared_child_fork_target_scope(target_session_id, thread_creation_record)
+            self._storage.storage.fork_paths.prepared_fork_target_scope(creation_record)
+            if creation_record is not None else self._storage.storage.fork_paths.prepared_child_fork_target_scope(target_session_id, thread_creation_record)
             if thread_creation_record is not None else nullcontext()
         )
         with target_scope:
@@ -623,7 +623,7 @@ class CheckpointForkOwner:
         ):
             raise RuntimeError("fork child completion 与冻结 creation owner 不一致")
         with (
-            self._storage.storage.prepared_child_fork_target_scope(target_session_id, record),
+            self._storage.storage.fork_paths.prepared_child_fork_target_scope(target_session_id, record),
             self._storage.storage._connect(
                 record.child_thread_id, request["checkpoint_ns"], session_id=target_session_id, read_only=True,
             ) as connection,
@@ -682,7 +682,7 @@ class CheckpointForkOwner:
                 await self.source.attachment_store.recover_idle_session(target_session_id, messages=self.source._checkpoint)
             remove_captured_snapshot(self._storage.storage.sessions_dir, capture)
             return False
-        with self._storage.storage.prepared_child_fork_target_scope(target_session_id, record):
+        with self._storage.storage.fork_paths.prepared_child_fork_target_scope(target_session_id, record):
             storage = self._storage.storage
             target_root = storage.root(target_session_id, request["checkpoint_ns"], thread_id=record.child_thread_id)
             if target_root.exists() or target_root.with_name(f".fork-{capture.materialization_id}.rollout").exists() or target_root.with_name(f".fork-{capture.materialization_id}.rollback").exists():

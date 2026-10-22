@@ -173,6 +173,9 @@ from app.services.infrastructure.rollout_context.checkpoint import (
 from app.services.infrastructure.rollout_context.checkpoint.boundary.tool_protocol_boundary import (
     ToolProtocolBoundaryConflict,
 )
+from app.services.infrastructure.rollout_context.checkpoint.codec.message_channel import (
+    acheckpoint_messages,
+)
 from app.services.infrastructure.rollout_context.checkpoint.message_codec import (
     LangChainMessageCodec,
 )
@@ -224,6 +227,9 @@ from app.services.mapping.itemized.resource_activation import (
     project_sealed_resource_refs,
 )
 from tests.harness.python.run_context import TestRunContext
+from tests.integration.backend.sessions.fork_execution_source import (
+    fork_execution_source as fork_execution_source,  # noqa: PLC0414 - 产品执行生成来源历史
+)
 from tests.integration.backend.sessions.rollout_test_workspace import (
     prepare_rollout_workspace,
 )
@@ -6182,13 +6188,20 @@ async def test_lifespan_retries_pending_remote_export_without_restart_or_fork_re
 @pytest.mark.asyncio
 @pytest.mark.parametrize("crash_state", ["prepared", "target_committed", "committed"])
 async def test_production_lifespan_recovers_unpublished_fork(
-    fork_provider_prepare,
+    fork_execution_source: SessionDTO,
     production_fork_container: AppContainer,
     monkeypatch: pytest.MonkeyPatch,
     crash_state: str,
 ) -> None:
     context = _production_fork_context(production_fork_container)
-    source = await _seed_source(context, fork_provider_prepare)
+    source = fork_execution_source
+    source_owner = context.saver.forks.source.resolve_main_thread_owner(source.session_id)
+    source_checkpoint = await _get_tuple(context, source.session_id)
+    assert source_checkpoint is not None
+    with session_thread_owner_scope(source_owner, langgraph_thread_id=source_owner.thread_id):
+        source_messages = await acheckpoint_messages(context.saver, source_checkpoint)
+    assert [message.type for message in source_messages] == ["human", "ai"]
+    assert [message.content for message in source_messages] == ["问题一", [{"type": "text", "text": "回答一"}]]
     request = await _fork_request(context, source.session_id, creation_kind="new_session_main", mode="context_fork", relationship="pinned")
     operation_deadlines: list[ForkOperationDeadline] = []
     for_operation = ForkDeadlineRegistry.for_operation
@@ -6223,6 +6236,11 @@ async def test_production_lifespan_recovers_unpublished_fork(
         context.forks._creation_key(request.idempotency_key)
     )
     assert record.state == "preparing"
+    with storage.storage.fork_paths.prepared_fork_target_scope(record):
+        assert storage.storage.main_thread_id(record.session_id) == record.main_thread_id
+        assert storage.storage.root(record.session_id) == (
+            context.sessions.path_resolver.resolve_prepared_thread_node(record, record.main_thread_id) / "rollout"
+        )
     if crash_state == "target_committed":
         capture = storage.forks._catalog_store().get_fork_source_capture(
             creation_key=record.session_creation_idempotency_key,
@@ -6232,7 +6250,7 @@ async def test_production_lifespan_recovers_unpublished_fork(
         assert marker_hash == capture.marker_sha256
         # 物化已消费原 frozen bytes；只读 finalization 查询不能切换 SQLite journal。
         with (
-            storage.storage.fork_source_snapshot_scope(
+            storage.storage.fork_paths.fork_source_snapshot_scope(
                 session_id=capture.source_session_id, thread_id=capture.source_thread_id,
                 captured_root=snapshot.captured_root,
             ),
@@ -6256,7 +6274,12 @@ async def test_production_lifespan_recovers_unpublished_fork(
         assert (await restarted.session_service.get(record.session_id)).context_source_session_id == source.session_id
         restored = await _get_tuple(_production_fork_context(restarted), record.session_id)
         assert restored is not None
-        assert [message.content for message in restored.checkpoint["channel_values"]["messages"]] == ["问题一", "回答一"]
+        owner = MutationIntentOwner(record.session_id, record.main_thread_id)
+        with session_thread_owner_scope(owner, langgraph_thread_id=owner.thread_id):
+            recovered_messages = await acheckpoint_messages(restarted.checkpointer, restored)
+        assert [message_to_dict(message) for message in recovered_messages] == [
+            message_to_dict(message) for message in source_messages
+        ]
     assert len(operation_deadlines) == 2
     assert operation_deadlines[0] is operation_deadlines[1]
     assert operation_deadlines[0]._completed

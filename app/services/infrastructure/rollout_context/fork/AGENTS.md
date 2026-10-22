@@ -17,3 +17,5 @@
 - 保留历史 ID、时间、事实状态与封存 bytes；新输入只创建当前 owner 的新执行。
 - 可见前缀与正文依赖闭包分开；A→B→C 不在线回读 A/B。
 - 静态结构与迁移SQL唯一定义在 `sql/`；Python显式加载并保留事务、条件、版本与参数协调。
+
+- `path_scope.py` 持有每个 storage 实例的私有 ContextVar；冻结来源只读，目标 capability 仅授予冻结 creation record 的节点。

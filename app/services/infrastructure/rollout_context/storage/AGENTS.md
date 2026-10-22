@@ -19,3 +19,5 @@
 - 静态结构与迁移SQL唯一定义在 `sql/`；Python显式加载并保留事务、条件、版本与参数协调。
 
 - 附件引用与系统生成块的消息投影归 checkpoint/projection；基础 storage 不持有附件 projector 或提供转发方法。
+
+- Fork 来源冻结与未发布目标 capability 作用域由 `fork/path_scope.py` 独占；storage 只消费该作用域解析出的 owner 节点，不保留旧入口。

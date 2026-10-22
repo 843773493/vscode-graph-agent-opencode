@@ -189,7 +189,9 @@ class DetailRegistryMixin(DetailRetentionMixin):
             raise ValueError("detail locator 必须严格等于 typed owner 的 assembly/detail_id 路径")
         # 使用正文唯一 path owner 校验既存路径；尚未发布的父目录可不存在。
         DetailFiles(self._storage._path_resolver).path(
-            ref, creation_record=self._storage._prepared_target_record(ref.session_id),
+            ref, creation_record=(
+                target.creation_record if (target := self._storage.fork_paths.prepared_target(ref.session_id)) is not None else None
+            ),
         )
         values = (
             key, ref.session_id, ref.thread_id, detail.checkpoint_ns, ref.assembly_id, ref.detail_id,

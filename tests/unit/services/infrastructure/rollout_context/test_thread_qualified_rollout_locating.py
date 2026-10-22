@@ -120,6 +120,34 @@ def test_main_thread_resolves_to_catalog_thread_node_rollout(
     assert not (session_node / "rollout").exists()
 
 
+
+def test_frozen_fork_source_scope_is_private_to_storage_instance(
+    storage: RolloutContextStore, tmp_path: Path,
+) -> None:
+    """来源 capability 只能影响持有它的 storage，退出后恢复 catalog 定位。"""
+    other = RolloutContextStore(
+        storage.storage.sessions_dir,
+        serde=JsonPlusSerializer(), message_codec=LangChainMessageCodec(),
+    )
+    main = storage.storage.main_thread_id(SESSION_ID)
+    original = storage.storage.root(SESSION_ID, thread_id=main)
+    captured = tmp_path / "captured-source"
+    captured.mkdir()
+    with storage.storage.fork_paths.fork_source_snapshot_scope(
+        session_id=SESSION_ID, thread_id=main, captured_root=captured,
+    ):
+        assert storage.storage.root(SESSION_ID, thread_id=main) == captured / "rollout"
+        assert storage.storage.main_thread_id(SESSION_ID) == main
+        assert other.storage.root(SESSION_ID, thread_id=main) == original
+        assert other.storage.fork_paths.source_snapshot(SESSION_ID) is None
+        with pytest.raises(RuntimeError, match="只授予冻结 source Thread"):
+            storage.storage.root(SESSION_ID, thread_id=CHILD_THREAD_ID)
+        with pytest.raises(RuntimeError, match="禁止可写 SQLite"):
+            storage.storage._connect(main, session_id=SESSION_ID)
+    assert storage.storage.root(SESSION_ID, thread_id=main) == original
+    assert storage.storage.fork_paths.source_snapshot(SESSION_ID) is None
+
+
 @pytest.mark.parametrize(("fault", "error_type", "message"), [
     ("missing_meta", RuntimeError, "rollout database_meta 缺失"),
     ("empty_owner", ValueError, "rollout 当前 SessionThread owner 非法"),
@@ -559,12 +587,12 @@ def test_main_and_child_checkpoints_restore_through_exact_owner(
     ]
     assert anchor.turn_id == child_turn_id
 
-    # LangGraph list(config=None) retains its catalog Session enumeration contract;
-    # each Session resolves exactly its authoritative main thread, never a child.
+    # 无显式 config 时枚举 catalog 中的全部 main/child owner；顺序和正文不能串线。
     all_sessions = list(saver.list(None))
     assert [item.config["configurable"]["thread_id"] for item in all_sessions] == [
-        main_thread_id
+        main_thread_id, CHILD_THREAD_ID,
     ]
+    assert all_sessions[1].checkpoint["channel_values"]["messages"][0].content == "child-owner question"
     assert all_sessions[0].checkpoint["channel_values"]["messages"][0].content == (
         "main-owner question"
     )

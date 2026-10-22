@@ -59,7 +59,7 @@ class CheckpointForkCopy:
     ) -> RolloutForkResult:
         """同 Session child 也必须先退出 source scope，再解析目标 namespace。"""
         storage = self._storage.storage
-        with storage.fork_source_snapshot_scope(
+        with storage.fork_paths.fork_source_snapshot_scope(
             session_id=source_session_id, thread_id=source_owner.thread_id,
             captured_root=source_snapshot.captured_root,
         ), session_thread_owner_scope(source_owner, langgraph_thread_id=source_owner.thread_id):

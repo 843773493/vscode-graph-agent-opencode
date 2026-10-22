@@ -864,3 +864,12 @@ pending 恢复的硬错误重试已闭合（2026-10-22）：进程内装载阶�
 - 公开错误只暴露逻辑owner/stage/type/errno，原生filename保留原因链，store含反例。非作者只读审查发现的删除顺序与deleting枚举两处缺口均修复并复核；审查未独立重复全部测试。全仓MessageService准入调用已迁必填queue_input，旧接口调用审计与最终静态原件随提交保留。
 - 环境限制：pending API错误、Job trace HTTP和Runner取消专项在健康/Session初始化阶段因缺少OPENCODE_ZEN_API_KEY失败，未到业务断言；未改用户环境或填假密钥。Runner局部恢复fixture已迁持久队列领取/启动及当前before-provider语义，但不记为业务通过。8.3/8.5及Section 8完整验收仍保留未勾；准确命令、完整tree、source前后指纹、raw、退出码及复用映射统一在本任务artifacts/runs与thread-queue前缀产物。
 - 最终候选026补验 `thread-queue-final-runtime-source-026` 1 passed/28.34s，真实 runtime source→原Job→模型请求，活holder拒绝后幂等dispatch保持一次created/started；完成后canonical/queue终态及一次请求不变。`thread-queue-final-static-026` Ruff、compileall、43项严格OpenSpec和全仓旧接口/7个RuntimeService构造调用审计均exit0。复用依据 `thread-queue-validation-reuse-026.json`列出022→026全部字节差异：唯一生产差异是queries.py局部变量消歧；其它新增/迁移测试单独核验，Runner环境阻断保留。027相较026仅补本收据，源码及测试逐字相同。
+
+
+### 2026-10-22 7.5-F fork 私有路径能力与真实执行来源恢复（部分收口）
+
+- 冻结来源与未发布目标作用域迁到唯一 `fork/path_scope.py`；ContextVar 归各 RolloutStorage 实例，迁齐 checkpoint/fork/lineage/detail 直接及间接消费者后物理删除 storage 旧入口。prepared target 保留真实 SessionCreationRecord，detail 路径只消费该 creation capability；main_thread_id 返回已核验 target.thread_id，修复将包装对象当 creation record 的错误。冻结来源仍只读、拒绝 sibling，退出后恢复 catalog；未增加 writer/持久状态。
+- 固定候选008 `61054dfc5d2c309a9fc9371227e4214d593f0010`：`fork-path-scope-unit-008` 71 passed/15.11s；`integration-008` 正式matrix 3 passed/42.10s。来源通过产品 Session准入→Job→真实Agent/SDK执行，由既有model_stream回放，核terminal completed和恰一次模型请求；prepared/target_committed/committed三阶段在新容器真实lifespan恢复，官方Delta读取后逐字段有序比较全部消息，并核未发布目标路径。此项是进程中断异常后重开容器，不冒充真实os._exit。Ruff `static-008`、compileall `compile-008` exit0。
+- 独审008发现fixture启动失败绕过清理；009改AsyncExitStack，仅成功启动项逆序关闭并最终恢复Gateway context。`integration-009` 三参数重新通过、`static-009` Ruff exit0，复用清单 `fork-path-scope-validation-reuse-009.json` 核其余源码/测试逐字不变。非作者复核009关闭P2且无新增finding，报告 `fork-path-scope-review-20261022-009.json`，未独立重跑。
+- 完整候选导出仅恢复共享ContextVar的 `fork-path-scope-mutation-shared-001` 为1 failed/0.56s、exit1，准确命中第二storage错误读到捕获路径。另一个main_thread_id变异 `mutation-main-001` 在断言后仍保留fork deadline，60.059秒由watchdog终止，exit143；缺完整异常诊断，不计有效红测。旧 `list(None)` 仅main预期经修复前完整候选复现失败后，按已实现的main+child合同改精确身份/正文断言。
+- 中间002/003/004/006/007失败与raw保留；整文件混合手填acceptance缺队列和冷附件authority的失败在修复前候选也复现，本切片不放宽。integration005因archive未解包完成而从live启动，source-before缺失，明确无效，不计验收。最终所有运行保留进程外保护、准确命令、source前后、raw和退出码于 `out/tests/temp/openspec_takeover/artifacts/runs/`；7.5/8.3完整门及Web均继续未勾。
