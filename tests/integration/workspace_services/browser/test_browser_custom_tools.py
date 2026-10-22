@@ -36,6 +36,7 @@ from app.core.trace_middleware import TraceMiddleware
 from app.core.workspace_identity import load_or_create_workspace_id
 from app.main import workspace_api
 from app.services.business.workspace_resources.records import ThreadRef
+from app.services.infrastructure.browser_manager_client import BrowserManagerClient
 from tests.harness.python.browser_manager import (
     close_browser_manager_processes,
     start_browser_manager_processes,
@@ -300,6 +301,79 @@ async def _detach_delete(client: httpx.AsyncClient, resource_id: str, context: C
     })
     assert detached.status_code == 200, detached.text
     return await client.post(f"/api/v1/resources/{resource_id}/delete", json={"expected_revision": detached.json()["data"]["owner_revision"]})
+
+
+@pytest.mark.asyncio
+async def test_checkpoint_failure_reports_stage_without_publishing_native_path(
+    integration_client: httpx.AsyncClient, browser_context: CustomToolFactoryContext,
+    browser_manager_processes: tuple[int, int], browser_runtime: WorkspaceToolRuntime,
+) -> None:
+    container, _session, _invocation = browser_runtime
+    response = await integration_client.post("/api/v1/resources/browsers", json={
+        "session_id": browser_context.session_id,
+        "thread_id": browser_context.invocation_context.thread_binding.thread_id,
+        "url": "about:blank",
+    })
+    assert response.status_code == 200, response.text
+    resource = response.json()["data"]
+    browser_id = resource["resource_id"]
+    root = Path(container.workspace_root)
+    checkpoint = root / ".boxteam/browser-manager/checkpoints" / f"{browser_id}.json"
+    checkpoint.mkdir(parents=True)
+    transport = BrowserManagerClient(
+        workspace_id=container.workspace_id,
+        backend_url=f"http://127.0.0.1:{browser_manager_processes[0]}",
+    )
+    failures: list[BrowserRequestError] = []
+    for mode in ("sync", "async"):
+        with pytest.raises(BrowserRequestError) as caught:
+            if mode == "sync":
+                await asyncio.to_thread(transport._json_request_sync, "POST", f"/api/browsers/{browser_id}/freeze", {})
+            else:
+                await transport._json_request("POST", f"/api/browsers/{browser_id}/freeze", {})
+        failure = caught.value
+        assert failure.status == 500
+        assert failure.code in {"EISDIR", "EPERM", "EEXIST"}
+        assert failure.payload["error"] == f"写入浏览器检查点失败: browser_id={browser_id}, stage=文件发布, code={failure.code}"
+        assert failure.payload["operation_outcome"] == "failed"
+        assert str(root) not in json.dumps(failure.payload)
+        failures.append(failure)
+    command = {"action": "freeze", "expected_revision": resource["owner_revision"], "thread": resource["source_thread"]}
+    failed = await integration_client.post(f"/api/v1/resources/{browser_id}/browser-operation", json=command)
+    assert failed.status_code == 500, failed.text
+    assert failed.json()["detail"] == str(f"BrowserRequestError: {failures[0]}")
+    assert failed.headers["X-Request-ID"]
+    assert list(checkpoint.iterdir()) == []
+    assert sorted(item.name for item in checkpoint.parent.iterdir()) == [checkpoint.name]
+    observed = (await integration_client.get(f"/api/v1/resources/{browser_id}")).json()["data"]
+    assert observed["reconciliation_status"] == "verified"
+    assert observed["metadata"]["resource_transition_error"] == failures[0].payload["error"]
+    assert container.browser_resource_owner._leases.leases_for_resource(browser_id) == []
+    records = json.loads((root / ".boxteam/browser-manager/browsers.json").read_text())
+    record, = [item for item in records["browsers"] if item["browser_id"] == browser_id]
+    assert record["resource_transition_error"] == failures[0].payload["error"]
+    assert str(root) not in json.dumps(record)
+    artifacts = TestRunContext.from_test_file(Path(__file__)).artifacts_dir
+    artifacts.mkdir(parents=True, exist_ok=True)
+    (artifacts / f"checkpoint-failure-{time.time_ns()}.json").write_text(json.dumps({
+        "transport_payloads": [failure.payload for failure in failures],
+        "api_status": failed.status_code, "api_body": failed.json(),
+        "request_id": failed.headers["X-Request-ID"],
+        "owner_projection": observed, "node_record": record,
+    }, ensure_ascii=False, indent=2), encoding="utf-8")
+    checkpoint.rmdir()
+    frozen = await integration_client.post(f"/api/v1/resources/{browser_id}/browser-operation", json=command)
+    assert frozen.status_code == 200, frozen.text
+    assert frozen.json()["data"]["browser"]["metadata"]["resource_state"] == "frozen"
+    assert checkpoint.is_file()
+    diagnostics = "\n".join(item.read_text() for item in artifacts.glob("browser-backend-*.stderr.log"))
+    assert "[browser-state-store] 写入浏览器检查点失败" in diagnostics
+    assert str(checkpoint) in diagnostics
+    assert "文件发布" in diagnostics
+    assert failures[0].code in diagnostics
+    awake = await integration_client.post(f"/api/v1/resources/{browser_id}/browser-operation", json={**command, "action": "wake"})
+    assert awake.status_code == 200, awake.text
+    assert awake.json()["data"]["browser"]["metadata"]["resource_transition_error"] is None
 
 
 @pytest.mark.asyncio

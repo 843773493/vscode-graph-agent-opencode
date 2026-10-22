@@ -1,4 +1,4 @@
-import { afterAll, describe, expect, test } from "bun:test";
+import { afterAll, afterEach, describe, expect, mock, spyOn, test } from "bun:test";
 import path from "node:path";
 import { cp, mkdir, readdir, rm, writeFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
@@ -7,6 +7,7 @@ import { BrowserStateStore } from "./browserStateStore.js";
 const workspaceRunRoot = path.join(process.cwd(), "out/tests/src/workspace-services/browser/server/browserStateStore/workspace", randomUUID());
 // 先登记本次运行的清理，工作区复制或用例断言失败也会回收。
 afterAll(() => rm(workspaceRunRoot, { recursive: true, force: true }));
+afterEach(() => mock.restore());
 
 async function createBrowserStateStoreForTest(limits) {
   const workspaceRoot = path.join(workspaceRunRoot, randomUUID());
@@ -19,6 +20,73 @@ async function createBrowserStateStoreForTest(limits) {
 function serializedBytes(checkpoint) {
   return Buffer.byteLength(`${JSON.stringify(checkpoint)}\n`, "utf8");
 }
+
+describe("浏览器检查点错误归属", () => {
+  test("目录核验丢失条目不能冒充目标检查点不存在", async () => {
+    const store = await createBrowserStateStoreForTest();
+    const cause = Object.assign(new Error("目录项在列出后消失"), { code: "ENOENT" });
+    const diagnostics = spyOn(console, "error").mockImplementation(() => {});
+    spyOn(store, "verifyCheckpointSizes").mockRejectedValueOnce(cause);
+    const failure = await store.readCheckpoint("browser_missing").catch((error) => error);
+    expect(failure.message).toBe("读取浏览器检查点失败: browser_id=browser_missing, stage=目录核验, code=ENOENT");
+    expect(failure.cause).toBe(cause);
+    expect(diagnostics.mock.calls[0][2]).toBe(cause);
+    expect(await store.readCheckpoint("browser_missing")).toBeNull();
+  });
+
+  test("解析失败不复制正文或物理位置，原异常留在日志和cause", async () => {
+    const store = await createBrowserStateStoreForTest();
+    const diagnostics = spyOn(console, "error").mockImplementation(() => {});
+    await mkdir(store.checkpointDir, { recursive: true });
+    const filePath = store.checkpointPath("browser_broken");
+    await writeFile(filePath, `{"private":"${store.workspaceRoot}"`);
+    const failure = await store.readCheckpoint("browser_broken").catch((error) => error);
+    expect(failure.code).toBe("browser_checkpoint_read_failed");
+    expect(failure.message).toBe("读取浏览器检查点失败: browser_id=browser_broken, stage=正文解析, code=browser_checkpoint_read_failed");
+    expect(failure.cause).toBeInstanceOf(SyntaxError);
+    expect(diagnostics.mock.calls[0][1].filePath).toBe(filePath);
+    expect(diagnostics.mock.calls[0][2]).toBe(failure.cause);
+    await store.deleteCheckpoint("browser_broken");
+    expect(await store.readCheckpoint("browser_broken")).toBeNull();
+  });
+
+  test("发布失败保留原目录和错误码，清理临时文件后可显式重试", async () => {
+    const store = await createBrowserStateStoreForTest();
+    const diagnostics = spyOn(console, "error").mockImplementation(() => {});
+    const filePath = store.checkpointPath("browser_directory");
+    await mkdir(filePath, { recursive: true });
+    const failure = await store.writeCheckpoint("browser_directory", { body: "未发布" }).catch((error) => error);
+    expect(failure.message).toBe(`写入浏览器检查点失败: browser_id=browser_directory, stage=文件发布, code=${failure.code}`);
+    expect(failure.cause.code).toBe(failure.code);
+    expect(failure.cause.path).toContain(store.checkpointDir);
+    expect(diagnostics.mock.calls[0][2]).toBe(failure.cause);
+    expect(await readdir(filePath)).toEqual([]);
+    expect(await readdir(store.checkpointDir)).toEqual(["browser_directory.json"]);
+    expect((await store.checkpointBudgetSnapshot()).used_bytes).toBe(0);
+    await rm(filePath, { recursive: true });
+    await store.writeCheckpoint("browser_directory", { body: "显式重试" });
+    expect(await store.readCheckpoint("browser_directory")).toEqual({ body: "显式重试" });
+  });
+
+  test("目录核验与删除失败都不公开系统路径", async () => {
+    const store = await createBrowserStateStoreForTest();
+    const diagnostics = spyOn(console, "error").mockImplementation(() => {});
+    await mkdir(store.stateDir, { recursive: true });
+    await writeFile(store.checkpointDir, "不能当作目录");
+    const scan = await store.checkpointBudgetSnapshot().catch((error) => error);
+    expect(scan.message).toBe(`核验浏览器检查点目录失败: stage=目录读取, code=${scan.code}`);
+    expect(scan.cause.path).toBe(store.checkpointDir);
+    expect(diagnostics.mock.calls[0][2]).toBe(scan.cause);
+    await rm(store.checkpointDir);
+    const filePath = store.checkpointPath("browser_directory");
+    await mkdir(filePath, { recursive: true });
+    const deletion = await store.deleteCheckpoint("browser_directory").catch((error) => error);
+    expect(deletion.message).toBe(`删除浏览器检查点失败: browser_id=browser_directory, code=${deletion.code}`);
+    expect(deletion.cause.path).toBe(filePath);
+    expect(diagnostics.mock.calls.at(-1)[2]).toBe(deletion.cause);
+    expect(await readdir(filePath)).toEqual([]);
+  });
+});
 
 describe("浏览器检查点配额", () => {
   test("精确上限允许写入而多一个字节明确失败且保留旧检查点", async () => {

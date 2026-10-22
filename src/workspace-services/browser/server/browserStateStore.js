@@ -53,7 +53,7 @@ export class BrowserStateStore {
 
   checkpointPath(browserId) {
     if (typeof browserId !== "string" || !/^browser_[a-zA-Z0-9]+$/.test(browserId)) {
-      throw new Error(`浏览器 ID 不能用于检查点路径: ${browserId}`);
+      throw new Error("浏览器 ID 不能用于检查点路径");
     }
     return path.join(this.checkpointDir, `${browserId}.json`);
   }
@@ -61,8 +61,10 @@ export class BrowserStateStore {
   async readCheckpoint(browserId) {
     const filePath = this.checkpointPath(browserId);
     const execution = this.checkpointOperationTail.then(async () => {
+      let stage = "目录核验";
       try {
         await this.verifyCheckpointSizes();
+        stage = "文件检查";
         const metadata = await stat(filePath);
         if (metadata.size > this.checkpointLimits.perCheckpointMaxBytes) {
           throw checkpointQuotaError(
@@ -75,9 +77,12 @@ export class BrowserStateStore {
             },
           );
         }
-        return JSON.parse(await readFile(filePath, "utf8"));
+        stage = "正文读取";
+        const serialized = await readFile(filePath, "utf8");
+        stage = "正文解析";
+        return JSON.parse(serialized);
       } catch (error) {
-        if (error?.code === "ENOENT") {
+        if (error?.code === "ENOENT" && ["文件检查", "正文读取"].includes(stage)) {
           this.checkpointSizeBytesByBrowserId?.delete(browserId);
           return null;
         }
@@ -86,8 +91,10 @@ export class BrowserStateStore {
           "browser_checkpoint_workspace_quota_exceeded",
           "browser_checkpoint_index_changed_externally",
         ].includes(error?.code)) throw error;
+        console.error("[browser-state-store] 读取浏览器检查点失败", { browserId, filePath, stage }, error);
         const wrapped = new Error(
-          `读取浏览器检查点失败: browser_id=${browserId}, path=${filePath}, error=${error instanceof Error ? error.message : String(error)}`,
+          `读取浏览器检查点失败: browser_id=${browserId}, stage=${stage}, code=${error?.code || "browser_checkpoint_read_failed"}`,
+          { cause: error },
         );
         wrapped.code = error?.code || "browser_checkpoint_read_failed";
         throw wrapped;
@@ -113,31 +120,50 @@ export class BrowserStateStore {
     }
     const filePath = this.checkpointPath(browserId);
     const execution = this.checkpointOperationTail.then(async () => {
-      await this.verifyCheckpointSizes();
-      const previousBytes = this.checkpointSizeBytesByBrowserId.get(browserId) || 0;
-      const totalBytes = [...this.checkpointSizeBytesByBrowserId.values()].reduce((total, size) => total + size, 0);
-      const projectedBytes = totalBytes - previousBytes + sizeBytes;
-      if (projectedBytes > this.checkpointLimits.workspaceCheckpointMaxBytes) {
-        throw checkpointQuotaError(
-          "browser_checkpoint_workspace_quota_exceeded",
-          "浏览器检查点超过工作区硬上限",
-          {
-            browser_id: browserId,
-            actual_bytes: sizeBytes,
-            projected_workspace_bytes: projectedBytes,
-            max_workspace_bytes: this.checkpointLimits.workspaceCheckpointMaxBytes,
-          },
-        );
-      }
-      await mkdir(this.checkpointDir, { recursive: true });
+      let stage = "目录核验";
       const temporaryFile = `${filePath}.${process.pid}.${randomUUID()}.tmp`;
+      let projectedBytes;
       try {
+        await this.verifyCheckpointSizes();
+        const previousBytes = this.checkpointSizeBytesByBrowserId.get(browserId) || 0;
+        const totalBytes = [...this.checkpointSizeBytesByBrowserId.values()].reduce((total, size) => total + size, 0);
+        projectedBytes = totalBytes - previousBytes + sizeBytes;
+        if (projectedBytes > this.checkpointLimits.workspaceCheckpointMaxBytes) {
+          throw checkpointQuotaError(
+            "browser_checkpoint_workspace_quota_exceeded",
+            "浏览器检查点超过工作区硬上限",
+            {
+              browser_id: browserId,
+              actual_bytes: sizeBytes,
+              projected_workspace_bytes: projectedBytes,
+              max_workspace_bytes: this.checkpointLimits.workspaceCheckpointMaxBytes,
+            },
+          );
+        }
+        stage = "目录创建";
+        await mkdir(this.checkpointDir, { recursive: true });
+        stage = "正文写入";
         await writeFile(temporaryFile, serialized, "utf8");
+        stage = "文件发布";
         await rename(temporaryFile, filePath);
       } catch (error) {
-        await rm(temporaryFile, { force: true });
+        if ([
+          "browser_checkpoint_too_large",
+          "browser_checkpoint_workspace_quota_exceeded",
+          "browser_checkpoint_index_changed_externally",
+        ].includes(error?.code)) throw error;
+        let cause = error;
+        if (["正文写入", "文件发布"].includes(stage)) {
+          try {
+            await rm(temporaryFile, { force: true });
+          } catch (cleanupError) {
+            cause = new AggregateError([error, cleanupError], "检查点写入失败且临时文件清理失败");
+          }
+        }
+        console.error("[browser-state-store] 写入浏览器检查点失败", { browserId, filePath, stage }, cause);
         const wrapped = new Error(
-          `写入浏览器检查点失败: browser_id=${browserId}, path=${filePath}, error=${error instanceof Error ? error.message : String(error)}`,
+          `写入浏览器检查点失败: browser_id=${browserId}, stage=${stage}, code=${error?.code || "browser_checkpoint_write_failed"}`,
+          { cause },
         );
         wrapped.code = error?.code || "browser_checkpoint_write_failed";
         throw wrapped;
@@ -152,7 +178,18 @@ export class BrowserStateStore {
   async deleteCheckpoint(browserId) {
     const execution = this.checkpointOperationTail.then(async () => {
       await this.verifyCheckpointSizes();
-      await rm(this.checkpointPath(browserId), { force: true });
+      const filePath = this.checkpointPath(browserId);
+      try {
+        await rm(filePath, { force: true });
+      } catch (error) {
+        console.error("[browser-state-store] 删除浏览器检查点失败", { browserId, filePath }, error);
+        const wrapped = new Error(
+          `删除浏览器检查点失败: browser_id=${browserId}, code=${error?.code || "browser_checkpoint_delete_failed"}`,
+          { cause: error },
+        );
+        wrapped.code = error?.code || "browser_checkpoint_delete_failed";
+        throw wrapped;
+      }
       this.checkpointSizeBytesByBrowserId.delete(browserId);
     });
     this.checkpointOperationTail = execution.then(() => undefined, () => undefined);
@@ -198,27 +235,32 @@ export class BrowserStateStore {
 
   async scanCheckpointSizes({ cleanupTemporaryFiles }) {
     const sizes = new Map();
-    let entries;
+    let stage = "目录读取";
     try {
-      entries = await readdir(this.checkpointDir, { withFileTypes: true });
-    } catch (error) {
-      if (error?.code === "ENOENT") {
-        return sizes;
-      }
-      throw error;
-    }
-    await Promise.all(entries.map(async (entry) => {
-      if (entry.isFile() && entry.name.endsWith(".tmp")) {
-        if (cleanupTemporaryFiles) {
-          await rm(path.join(this.checkpointDir, entry.name), { force: true });
+      const entries = await readdir(this.checkpointDir, { withFileTypes: true });
+      stage = "目录项检查或清理";
+      await Promise.all(entries.map(async (entry) => {
+        if (entry.isFile() && entry.name.endsWith(".tmp")) {
+          if (cleanupTemporaryFiles) {
+            await rm(path.join(this.checkpointDir, entry.name), { force: true });
+          }
+          return;
         }
-        return;
-      }
-      const match = entry.isFile() ? entry.name.match(/^(browser_[a-zA-Z0-9]+)\.json$/) : null;
-      if (!match) return;
-      const metadata = await stat(path.join(this.checkpointDir, entry.name));
-      sizes.set(match[1], metadata.size);
-    }));
+        const match = entry.isFile() ? entry.name.match(/^(browser_[a-zA-Z0-9]+)\.json$/) : null;
+        if (!match) return;
+        const metadata = await stat(path.join(this.checkpointDir, entry.name));
+        sizes.set(match[1], metadata.size);
+      }));
+    } catch (error) {
+      if (stage === "目录读取" && error?.code === "ENOENT") return sizes;
+      console.error("[browser-state-store] 核验浏览器检查点目录失败", { directory: this.checkpointDir, stage }, error);
+      const wrapped = new Error(
+        `核验浏览器检查点目录失败: stage=${stage}, code=${error?.code || "browser_checkpoint_directory_failed"}`,
+        { cause: error },
+      );
+      wrapped.code = error?.code || "browser_checkpoint_directory_failed";
+      throw wrapped;
+    }
     const totalBytes = [...sizes.values()].reduce((total, size) => total + size, 0);
     if (totalBytes > this.checkpointLimits.workspaceCheckpointMaxBytes) {
       throw checkpointQuotaError(

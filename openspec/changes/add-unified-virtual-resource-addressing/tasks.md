@@ -207,3 +207,9 @@
 - 唯一 cwd 解析仍按目标端原生路径解释相对/绝对目录；stat 失败、非目录与 PTY 启动失败在 producer 发布固定阶段及终端 ID，原始异常/cause、cwd、command 留在服务诊断。Worker/退出清理的 release_reason 只保存阶段，不再把原生错误正文写入状态或广播；unknown、创建失败回收和原状态码保留，无响应端正则脱敏。
 - 最终候选 tree `9527d2a8dc826bd6e79b93226a496f22bc1ba351` 的 `terminal-errors-http-tool-002` 为7 passed/71.21秒、exit0：真实 Node HTTP 五类拒绝逐项覆盖sync/async、500与完整错误正文，核零终端发布/原文件不变及服务日志保原原因；真实工具读取工作区外兄弟目录，核原目标、退出码、模型结果无绝对路径；既有PTY输入输出/租约/崩溃恢复通过。`static-node-001` Ruff/Node语法与37项Node测试通过；003与002的产品/Node测试逐字一致，复用原结果。旧生产完整archive的`red-001`四项全部失败，明确区分四处回显。
 - 首轮`http-tool-001`首个HTTP用例通过，后续因模块工作区复用上例直接准入留下的无冻结队列执行，5个setup和1个子进程启动失败；改为每例完整fixture副本及相同配置后002全通过，不放宽生产恢复校验、不替测试补队列或终态。独审002/003无finding，前者独立Node37项通过；Bun的node:test mock不支持导致的审查尝试失败另存，不能算产品失败。各次准确命令/raw/指纹/退出码及原件在本任务artifacts/runs，限定复用和产品证据SHA见`terminal-errors-final-proof-003.json`。无运行组残留，未验证Gateway/Web或Windows，本项不关闭2.2/7.2整体。
+
+### 2026-10-22 Browser检查点原生错误出口（部分收口）
+
+- 检查点读/写/目录核验/删除由实际文件操作处生成资源ID、阶段和错误码；原路径、JSON解析/系统原因只保留在服务端日志及cause。发布与临时清理同时失败时保留两份原异常，主错误码不被覆盖；失败不更新配额或正式正文，下一次显式操作仍可继续。目录核验中的ENOENT明确失败，只有目标文件检查/读取的ENOENT表示不存在。客户端生成的超时公开消息保留method/timeout和重试恢复信息，协议route继续保留在BrowserRequestError.path，不混入该消息。
+- 固定生产候选005 tree `501f29ebb91faa5daa0eb1f9575d49032f0f3ddb` 的 `browser-checkpoint-errors-static-unit-002` 为10项Node及75项Python通过，Ruff/Node语法exit0；006仅增强集成回执封存，`http-003` 真实Node HTTP与sync/async客户端→资源API→Node记录全部通过（1 passed/12.84秒，准确耗时以原始输出为准），同时Ruff/compileall exit0。覆盖原500与完整错误正文、同一request_id、verified失败回执、零临时残留、显式freeze/wake重试，以及独立API传输超时的408、完整metadata、重启后unknown和零自动重放。原生路径/底层错误在Node stderr可核，公开正文和持久错误不含该路径。
+- 完整archive恢复旧生产的红测为3项Node失败及1项API失败，分别区分原路径回显及超时metadata被误抹。非作者独审指出的目录核验ENOENT问题已修并复核，10项Node独立复跑通过；目录项核验/清理共享阶段名只影响诊断粒度，cause与code仍完整。005→006不变源码的限定复用、准确命令/raw/指纹/退出码和封存产品原件SHA见本任务 `browser-checkpoint-errors-final-proof-006.json` 与 `runs/browser-checkpoint-errors-*`。本切片未移除通用public_error正则，其它producer仍需迁齐；不以此勾选2.2/7.2，不声称完整Gateway/Web或Windows验收。

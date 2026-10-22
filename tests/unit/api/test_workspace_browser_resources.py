@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator, Iterator
 from pathlib import Path
+from urllib.request import Request as UrlRequest
 
 import pytest
 from fastapi import FastAPI, Request
@@ -16,6 +17,7 @@ from app.api.deps import (
 from app.api.resources import router
 from app.core.path_utils import workspace_context
 from app.core.trace_middleware import TraceMiddleware
+from app.services.infrastructure.browser_manager_client import BrowserManagerClient
 from tests.support.resource_owners.browser import (
     BrowserOwnerFixture,
     build_browser_owner_fixture,
@@ -271,3 +273,40 @@ def test_browser_api_delete_rejects_thread_association_without_side_effects(
     listed = client.get("/api/v1/resources", params={"kind": "browser"})
     assert listed.status_code == 200, listed.text
     assert listed.json()["data"]["items"] == []
+
+
+def test_transport_timeout_api_preserves_recovery_details_and_durable_unknown(
+    client: TestClient, browser: BrowserOwnerFixture,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    resource = create(client)
+    resource_id = resource["resource_id"]
+    transport = BrowserManagerClient(workspace_id=WORKSPACE_ID, backend_url="http://browser.test")
+    attempted: list[str] = []
+
+    def timed_out(request: UrlRequest, **_options: object) -> None:
+        attempted.append(request.full_url)
+        raise TimeoutError("timed out")
+
+    monkeypatch.setattr("app.services.infrastructure.browser_manager_client.urlopen", timed_out)
+    monkeypatch.setattr(browser.transport, "perform", transport.perform)
+    command = {"action": "run", "payload": {"timeoutMs": 25},
+               "expected_revision": resource["owner_revision"], "thread": resource["source_thread"]}
+    failed = client.post(f"/api/v1/resources/{resource_id}/browser-operation", json=command)
+    assert failed.status_code == 408, failed.text
+    detail = failed.json()["detail"]
+    assert "浏览器管理器操作超时" in detail
+    assert "timeoutMs=25" in detail
+    assert "code=browser_tool_timeout" in detail
+    assert "retryable=true" in detail
+    assert "recovery=page_reset" in detail
+    assert failed.headers["X-Request-ID"]
+    browser.restart()
+    observed = client.get(f"/api/v1/resources/{resource_id}").json()["data"]
+    assert observed["error"] == detail
+    assert observed["reconciliation_status"] == "unknown"
+    assert observed["available_actions"] == []
+    assert browser.leases.leases_for_resource(resource_id) == []
+    rejected = client.post(f"/api/v1/resources/{resource_id}/browser-operation", json=command)
+    assert rejected.status_code == 409, rejected.text
+    assert attempted == [f"http://browser.test/api/browsers/{resource_id}/run"]

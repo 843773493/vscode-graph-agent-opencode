@@ -175,7 +175,7 @@ class BrowserManagerClient:
                     "code": "browser_tool_timeout",
                     "error": (
                         "浏览器管理器操作超时: "
-                        f"method={method}, path={path}, timeoutMs={timeout_ms}；"
+                        f"method={method}, timeoutMs={timeout_ms}；"
                         "浏览器页面可能已重置，请重新 readPage 后重试"
                     ),
                     "retryable": True,
