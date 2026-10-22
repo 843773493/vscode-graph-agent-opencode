@@ -42,6 +42,25 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def validate_workspace_health_identity(
+    payload: object, backend_workspace_id: str,
+) -> dict[str, object]:
+    """健康身份校验只公开已绑定的 UUID，响应原值留在 Gateway 诊断。"""
+
+    if not isinstance(payload, dict):
+        raise TypeError("Workspace 健康响应必须是 JSON 对象")
+    actual_workspace_id = payload.get("workspace_id")
+    if actual_workspace_id != backend_workspace_id:
+        logger.error(
+            "Workspace 健康响应 backend UUID 不匹配: expected=%s, actual=%r",
+            backend_workspace_id, actual_workspace_id,
+        )
+        raise RuntimeError(
+            f"Workspace 健康响应 backend UUID 不匹配: expected={backend_workspace_id}"
+        )
+    return payload
+
+
 def validate_workspace_root_access(workspace_root: Path) -> None:
     """在启动任何工作区子服务前确认业务目录具备写入权限。"""
 
@@ -97,20 +116,10 @@ async def wait_for_workspace_config_proof(
                 last_error = error
             else:
                 if response.status_code != 200:
-                    last_error = RuntimeError(
-                        f"健康检查返回 {response.status_code}: {response.text[:300]}"
-                    )
+                    logger.error("Workspace config 健康检查失败: url=%s, status=%s, body=%s", url, response.status_code, response.text)
+                    last_error = RuntimeError(f"健康检查返回 {response.status_code}")
                 else:
-                    payload = response.json()
-                    if not isinstance(payload, dict):
-                        raise TypeError("Workspace 健康响应必须是 JSON 对象")
-                    actual_workspace_id = payload.get("workspace_id")
-                    if actual_workspace_id != backend_workspace_id:
-                        raise RuntimeError(
-                            "Workspace 健康响应 backend UUID 不匹配: "
-                            f"expected={backend_workspace_id}, "
-                            f"actual={actual_workspace_id!r}"
-                        )
+                    payload = validate_workspace_health_identity(response.json(), backend_workspace_id)
                     proof = payload.get("config_proof")
                     if not isinstance(proof, dict):
                         raise TypeError("Workspace 健康响应缺少 config_proof")
@@ -121,8 +130,9 @@ async def wait_for_workspace_config_proof(
                     }
                     if not mismatches:
                         return
+                    logger.error("Workspace config proof 不匹配: %r", mismatches)
                     last_error = RuntimeError(
-                        f"Workspace config proof 不匹配: {mismatches}"
+                        "Workspace config proof 不匹配: " + ", ".join(mismatches)
                     )
             await asyncio.sleep(poll_interval_seconds)
     detail = f"，最后错误: {last_error}" if last_error else ""
@@ -159,21 +169,10 @@ async def wait_for_workspace_health(
                 last_error = error
             else:
                 if response.status_code != 200:
-                    last_error = RuntimeError(
-                        f"健康检查返回 {response.status_code}: {response.text[:300]}"
-                    )
+                    logger.error("Workspace 健康检查失败: url=%s, status=%s, body=%s", url, response.status_code, response.text)
+                    last_error = RuntimeError(f"健康检查返回 {response.status_code}")
                 else:
-                    payload = response.json()
-                    if not isinstance(payload, dict):
-                        raise TypeError("Workspace 健康响应必须是 JSON 对象")
-                    actual_workspace_id = payload.get("workspace_id")
-                    if actual_workspace_id != backend_workspace_id:
-                        raise RuntimeError(
-                            "Workspace 健康响应 backend UUID 不匹配: "
-                            f"expected={backend_workspace_id}, "
-                            f"actual={actual_workspace_id!r}"
-                        )
-                    return payload
+                    return validate_workspace_health_identity(response.json(), backend_workspace_id)
             await asyncio.sleep(poll_interval_seconds)
     detail = f"，最后错误: {last_error}" if last_error else ""
     raise TimeoutError(
@@ -255,18 +254,19 @@ async def _adopt_local_node_service(
     except httpx.HTTPError:
         return None
     if response.status_code != 200:
+        logger.error("持久化 %s 健康检查失败: url=%s, status=%s, body=%s", service_name, service_url, response.status_code, response.text)
         raise RuntimeError(
             f"持久化 {service_name} 健康检查失败: "
-            f"url={service_url}, status={response.status_code}, body={response.text[:300]}"
+            f"url={service_url}, status={response.status_code}"
         )
     payload = response.json()
     if not isinstance(payload, dict):
         raise TypeError(f"持久化 {service_name} 健康响应必须是 JSON 对象: {service_url}")
     if payload.get("workspace_id") != backend_workspace_id:
+        logger.error("持久化 %s backend UUID 不匹配: expected=%s, actual=%r", service_name, backend_workspace_id, payload.get("workspace_id"))
         raise RuntimeError(
             f"持久化 {service_name} backend UUID 不匹配: "
-            f"url={service_url}, expected={backend_workspace_id}, "
-            f"actual={payload.get('workspace_id')!r}"
+            f"url={service_url}, expected={backend_workspace_id}"
         )
     process_id = payload.get("process_id")
     if isinstance(process_id, bool) or not isinstance(process_id, int):
@@ -286,7 +286,8 @@ def _validate_group_health(
     }
     mismatches = {key: (value, payload.get(key)) for key, value in expected.items() if payload.get(key) != value}
     if mismatches:
-        raise RuntimeError(f"Backend 完整组健康证明不匹配: {mismatches}")
+        logger.error("Backend 完整组健康证明不匹配: %r", mismatches)
+        raise RuntimeError("Backend 完整组健康证明不匹配: " + ", ".join(mismatches))
     actual_pid = payload.get("process_id")
     if isinstance(actual_pid, bool) or not isinstance(actual_pid, int) or actual_pid <= 0:
         raise TypeError("Backend 健康证明缺少合法 process_id")
@@ -299,7 +300,8 @@ def _validate_group_health(
         expected_proof = workspace_config_proof_expectation(startup_contract)
         mismatch = {key: (value, proof.get(key)) for key, value in expected_proof.items() if proof.get(key) != value}
         if mismatch:
-            raise RuntimeError(f"Workspace config proof 不匹配: {mismatch}")
+            logger.error("Workspace config proof 不匹配: %r", mismatch)
+            raise RuntimeError("Workspace config proof 不匹配: " + ", ".join(mismatch))
     return actual_pid
 
 

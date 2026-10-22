@@ -21,6 +21,7 @@ from app.gateway.remote_gateway import (
 from app.gateway.runtime.consumer_protocol import GatewayRuntimeHealthProof
 from app.gateway.runtime.group_actions import ManagedBackendGroupActions
 from app.gateway.runtime.local_workspace import (
+    validate_workspace_health_identity,
     wait_for_workspace_health,
 )
 from app.gateway.runtime.workspace import WorkspaceRuntime
@@ -197,15 +198,9 @@ class GatewayWorkspaceRuntimeController(ManagedBackendGroupActions):
                 ),
             )
             health_response.raise_for_status()
-            health_payload = health_response.json()
-            if not isinstance(health_payload, dict):
-                raise TypeError("Workspace 健康响应必须是 JSON 对象")
-            if health_payload.get("workspace_id") != target.backend_workspace_id:
-                raise RuntimeError(
-                    "Workspace 健康响应 backend UUID 不匹配: "
-                    f"expected={target.backend_workspace_id}, "
-                    f"actual={health_payload.get('workspace_id')!r}"
-                )
+            health_payload = validate_workspace_health_identity(
+                health_response.json(), target.backend_workspace_id,
+            )
             health_proof = health_payload.get("config_proof")
             if not isinstance(health_proof, dict):
                 raise TypeError("Workspace 健康响应缺少 config_proof")

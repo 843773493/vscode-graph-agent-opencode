@@ -8,6 +8,7 @@ from urllib.parse import urlparse
 import httpx
 
 from app.core.mounted_workspaces import mounted_workspace_manifest_digest
+from app.gateway.runtime.local_workspace import validate_workspace_health_identity
 from app.gateway.service_types import GatewayServiceName
 from app.schemas.gateway.config import GatewayConfigReloadStatusDTO
 from app.schemas.gateway.workspaces import (
@@ -87,16 +88,9 @@ class RegistryDtosMixin:
                             headers=self._target_headers(target),
                         )
                         if response.status_code == 200:
-                            health_payload = response.json()
-                            if not isinstance(health_payload, dict):
-                                raise TypeError("Workspace 健康响应必须是 JSON 对象")
-                            actual_workspace_id = health_payload.get("workspace_id")
-                            if actual_workspace_id != target.backend_workspace_id:
-                                raise RuntimeError(
-                                    "Workspace 健康响应 backend UUID 不匹配: "
-                                    f"expected={target.backend_workspace_id}, "
-                                    f"actual={health_payload.get('workspace_id')!r}"
-                                )
+                            health_payload = validate_workspace_health_identity(
+                                response.json(), target.backend_workspace_id,
+                            )
                             if backend_owner is not None and (
                                 health_payload.get("backend_generation") != backend_contract.generation
                                 or health_payload.get("mount_manifest_digest") != mounted_workspace_manifest_digest(cast("GatewayWorkspaceRegistry", self).resolve_backend_mounts(backend_contract))
