@@ -192,6 +192,12 @@ async def test_item_projection_reads_exact_thread_with_same_item_identity(
             turn_id="same-turn", root_item_id="same-root", initial_execution_id="same-execution",
         )
 
+    with RolloutCheckpointSaver(storage.sessions_dir) as cold:
+        for thread_id, payload in ((main_thread, "main 的真实输入"), (child_thread, "child 的真实输入")):
+            (item,) = cold.read_canonical_items(session_id, thread_id)
+            assert (item.item_id, item.turn_id, item.payload) == ("same-root", "same-turn", payload)
+            assert cold.read_canonical_items(session_id, thread_id) == tuple(storage.read_items(session_id, thread_id))
+
     original_open = type(storage.sessions_dir).open
     jsonl_paths = {storage.jsonl_path(session_id, thread_id=thread_id)
                    for thread_id in (main_thread, child_thread)}
@@ -277,6 +283,7 @@ async def test_idle_child_public_history_does_not_materialize_rollout(
     lock = root.parent / ".rollout.write.lock"
     assert not root.exists() and not lock.exists()
     assert storage.read_item_projections(session_id, child) == []
+    assert runtime_case.runner.saver.read_canonical_items(session_id, child) == ()
     with pytest.raises(KeyError, match="item projection 缺少请求的 canonical item: main-root"):
         storage.read_item_projections(session_id, child, item_ids=("main-root",))
 

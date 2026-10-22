@@ -112,7 +112,7 @@ async def test_internal_attachment_admission_cold_read_and_provider_request(
         message_created_at=message.created_at.isoformat(),
     )
     case.messages.accept_job_input(job)
-    (notice,) = case.saver.read_canonical_items(owner.session_id)
+    (notice,) = case.saver.read_canonical_items(owner.session_id, owner.thread_id)
     payload = RuntimeNoticePayload.from_dict(notice.payload)
     assert payload.prompt == prepared.content
     assert private not in canonical_json_bytes(payload.attachment_blocks).decode()
@@ -150,7 +150,7 @@ async def test_internal_attachment_admission_cold_read_and_provider_request(
             case.messages.accept_job_input(SimpleNamespace(**{
                 **vars(job), "message_metadata": frozen.response_metadata, "message": prepared.content + "漂移",
             }))
-    assert case.saver.read_canonical_items(owner.session_id) == (notice,)
+    assert case.saver.read_canonical_items(owner.session_id, owner.thread_id) == (notice,)
     with RolloutCheckpointSaver(
         Path(integration_workspace_root_path) / ".boxteam" / "sessions", attachment_store=case.store,
     ) as cold:
@@ -205,7 +205,7 @@ async def test_internal_attachment_admission_cold_read_and_provider_request(
         if images:
             url = images[0]["image_url"]
             assert (url["url"] if isinstance(url, dict) else url).startswith("data:image/")
-        assert cold.read_canonical_items(owner.session_id) == (notice,)
+        assert cold.read_canonical_items(owner.session_id, owner.thread_id) == (notice,)
         wire = frozen_provider_wire("attachment-test", target_format)
         native = result.get("native_projection")
         assert normalize_wire_request(finalize_provider_wire(
@@ -361,7 +361,7 @@ async def test_message_http_retry_accepts_same_attachment_after_failed_upload(
             failed = await client.post(path, json=request)
         assert failed.status_code == 500, failed.text
         assert case.started_jobs == []
-        assert case.saver.read_canonical_items(session_id) == ()
+        assert case.saver.read_canonical_items(session_id, case.saver._storage.storage.main_thread_id(session_id)) == ()
         (old,) = case.store._catalog.connection.execute(
             "SELECT * FROM attachment_ingest_records WHERE owner_session_id=?", (session_id,),
         ).fetchall()

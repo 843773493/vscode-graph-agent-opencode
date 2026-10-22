@@ -413,7 +413,7 @@ async def test_native_http_tool_loop_replays_canonical_call_and_result(
         assert codec.model_call_id(assistant) == codec.model_call_id(tool_result) == snapshots[0].model_call_id
         assert observations == [("call-native", snapshots[0].model_call_id)]
         (reasoning_carrier,) = [
-            item for item in restarted.read_canonical_items(session_id)
+            item for item in restarted.read_canonical_items(session_id, restarted._storage.storage.main_thread_id(session_id))
             if item.semantic_kind == "reasoning" and item.payload_kind == "extension"
             and item.payload["wire_type"] == "reasoning_items"
         ]

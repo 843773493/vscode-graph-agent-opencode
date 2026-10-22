@@ -468,14 +468,15 @@ class ContextOwnerMixin(
     def read_canonical_items(
         self,
         session_id: str,
+        thread_id: str,
         *,
         checkpoint_ns: str = "",
     ) -> tuple[CanonicalItemRecord, ...]:
-        """提供已提交 canonical item 的只读 owner API。"""
+        """按精确 SessionThread 提供已提交 canonical item 的只读 API。"""
         return tuple(
             self._storage.storage.read_items(
                 session_id,
-                self._storage.storage.main_thread_id(session_id),
+                thread_id,
                 checkpoint_ns=self.context_owner_namespace(checkpoint_ns),
             )
         )

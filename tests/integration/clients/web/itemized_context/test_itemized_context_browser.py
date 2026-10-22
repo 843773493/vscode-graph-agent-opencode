@@ -264,7 +264,7 @@ async def browser_source(browser_runtime, browser_model_replay, inspection_resou
                 recorded["request"]["input"]
                 == first_evidence["native_request"]["input"]
             )
-            source_items = saver.read_canonical_items(session_id)
+            source_items = saver.read_canonical_items(session_id, saver._storage.storage.main_thread_id(session_id))
             final_item = next(
                 item
                 for item in reversed(source_items)

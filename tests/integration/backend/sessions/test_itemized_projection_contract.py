@@ -109,7 +109,7 @@ def test_saver_seal_restores_same_selection_across_projections_and_process(
     assert before["native"]["selection"] == before["selection"]
     assert before["native"]["plan_hash"] == before["plan_hash"]
     assert [message["id"] for message in before["history"]] == ["answer-1", "user-1"]
-    assert {item.item_id for item in saver.read_canonical_items(session_id)} == {
+    assert {item.item_id for item in saver.read_canonical_items(session_id, saver._storage.storage.main_thread_id(session_id))} == {
         "item-user-1",
         "item-answer-1",
     }

@@ -47,7 +47,10 @@ from tests.integration.backend.sessions.itemized_projection_helpers import (
     register_projection_draft,
 )
 from tests.support.processes.scope import unregister_test_process
-from tests.support.processes.workspace import close_backend_process, start_backend_process
+from tests.support.processes.workspace import (
+    close_backend_process,
+    start_backend_process,
+)
 
 __all__ = ["inspection_resource_registry", "native_http_server"]
 
@@ -306,7 +309,7 @@ async def test_frozen_selection_http_and_active_history_survive_backend_restart(
                 assert result[0]["request"] == prepared[0]["native_projection"]["request"]
     for request in state.requests:
         assert "resource_refs" not in json.dumps(request["body"])
-    canonical_before = saver.read_canonical_items(session_id)
+    canonical_before = saver.read_canonical_items(session_id, saver._storage.storage.main_thread_id(session_id))
     # 当前发布内容前进，旧assembly仍使用冻结值；重启后也不能读当前来源回填。
     for current in inspection_resource_registry.snapshots():
         inspection_resource_registry.publish(replace(
@@ -315,7 +318,7 @@ async def test_frozen_selection_http_and_active_history_survive_backend_restart(
     items, pages = await _read_pages(integration_client, resource, state.artifacts)
     messages = _assert_snapshot(items, snapshot, saver, session_id)
     assert len(pages) > 1
-    assert saver.read_canonical_items(session_id) == canonical_before
+    assert saver.read_canonical_items(session_id, saver._storage.storage.main_thread_id(session_id)) == canonical_before
     assert {ref["display_uri"] for ref in items[0]["resource_refs"]} == {
         "boxteam://workspace/test/resources/skills/inspection/SKILL.md", None,
     }

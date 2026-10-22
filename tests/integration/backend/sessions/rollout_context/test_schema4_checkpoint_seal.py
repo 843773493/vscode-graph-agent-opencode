@@ -417,7 +417,7 @@ def test_prepare_registers_final_filter_and_restarts_without_recompose(frozen_pr
         "overlay_base",
         "overlay_delta",
     }
-    items = saver.read_canonical_items(session)
+    items = saver.read_canonical_items(session, saver._storage.storage.main_thread_id(session))
     saver.append_items(
         session,
         (

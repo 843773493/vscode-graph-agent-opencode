@@ -102,7 +102,7 @@ async def test_mixed_activation_survives_lost_execution_and_cold_resume(
         session, thread_id=thread, turn_id=turn, execution_id=first.execution_id,
     )
     assert lost["outcome"] == "execution_lost"
-    canonical_before = saver.read_canonical_items(session)
+    canonical_before = saver.read_canonical_items(session, saver._storage.storage.main_thread_id(session))
     for published in registry.snapshots():
         registry.publish(replace(
             published, revision="activation-revision-2",
@@ -141,7 +141,7 @@ async def test_mixed_activation_survives_lost_execution_and_cold_resume(
         assert recovered.parent is not None and recovered.parent.execution_id == resumed["execution_id"]
         assert recovered.parent.bindings == original.parent.bindings
         assert recovered.parent.activation_policy == original.parent.activation_policy
-        assert restarted.read_canonical_items(session)[:len(canonical_before)] == canonical_before
+        assert restarted.read_canonical_items(session, restarted._storage.storage.main_thread_id(session))[:len(canonical_before)] == canonical_before
         assert _load_activation(restarted, first) == original
         assert controller.transport.call_count == 2
 
