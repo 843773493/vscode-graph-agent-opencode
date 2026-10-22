@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import sqlite3
 from typing import Annotated, TypedDict
 
@@ -30,6 +31,7 @@ from app.services.infrastructure.rollout_context.checkpoint.codec.message_channe
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
+from app.services.orchestration.event_stream.reader import iter_agent_events
 from tests.integration.backend.sessions.rollout_context.test_langgraph_channel_contract import (
     channel_owner,
 )
@@ -52,6 +54,65 @@ def _graph(saver, mutation):
     graph.add_edge("first", "second")
     graph.add_edge("second", END)
     return graph.compile(checkpointer=saver)
+
+
+async def test_product_event_stream_commits_scheduler_before_tool_effect(channel_owner, monkeypatch):
+    saver, admission, user, sessions = channel_owner
+    committing = asyncio.Event()
+    release = asyncio.Event()
+    entered = asyncio.Event()
+    observations = []
+    original_put = saver.aput
+
+    async def blocked_put(config, checkpoint, metadata, new_versions):
+        if "branch:to:tools" in checkpoint["channel_values"]:
+            committing.set()
+            await release.wait()
+        return await original_put(config, checkpoint, metadata, new_versions)
+
+    monkeypatch.setattr(saver, "aput", blocked_put)
+
+    def build_graph(checkpointer):
+        graph = StateGraph(MessageState)
+        graph.add_node("model", lambda _: {"messages": [AIMessage(id="carrier", content="冻结工具调度")]})
+
+        async def tools(_state):
+            entered.set()
+            cold = RolloutCheckpointSaver(sessions)
+            latest = await cold.aget_tuple(build_checkpoint_config(admission.thread_id))
+            frozen = await build_graph(cold).aget_state(latest.config)
+            observations.append((frozen.next, [message.id for message in frozen.values["messages"]]))
+            return {}
+
+        graph.add_node("tools", tools)
+        graph.add_edge(START, "model")
+        graph.add_edge("model", "tools")
+        graph.add_edge("tools", END)
+        return graph.compile(checkpointer=checkpointer)
+
+    async def consume():
+        async for _event in iter_agent_events(
+            agent=build_graph(saver), input_payload={"messages": [user]},
+            stream_config=build_checkpoint_config(admission.thread_id),
+            session_id=admission.session_id, job_id=admission.job_id,
+            message_stream_runtime=None, cancellation_signal=None,
+            idle_model_timeout_seconds=None, initial_event_timeout_seconds=10,
+            effective_tool_dispatch_timeout_seconds=10,
+        ):
+            pass
+
+    with _execution_scope(admission):
+        task = asyncio.create_task(consume())
+        try:
+            await asyncio.wait_for(committing.wait(), timeout=5)
+            # 异步持久化会在提交阻塞时进入 tools；同步模式必须等数据库提交完成。
+            with pytest.raises(TimeoutError):
+                await asyncio.wait_for(entered.wait(), timeout=0.1)
+        finally:
+            release.set()
+            await asyncio.wait_for(task, timeout=10)
+    assert entered.is_set()
+    assert observations == [(("tools",), [user.id, "carrier"])]
 
 
 @pytest.mark.parametrize("asynchronous", [False, True])
