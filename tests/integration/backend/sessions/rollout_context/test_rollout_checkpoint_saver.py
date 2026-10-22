@@ -1134,7 +1134,7 @@ def test_put_repairs_empty_message_channel_version(
         )
 
 
-def test_checkpoint_namespace_queries_do_not_cross_match(
+async def test_checkpoint_namespace_queries_do_not_cross_match(
     tmp_path: Path,
     session_bundle_factory,
 ) -> None:
@@ -1180,6 +1180,17 @@ def test_checkpoint_namespace_queries_do_not_cross_match(
         assert [item.checkpoint["id"] for item in saver.list(namespace_b)] == [
             "cp-ns-b"
         ]
+
+    global_entries = list(saver.list(None))
+    assert [(item.config["configurable"]["checkpoint_ns"], item.checkpoint["id"])
+            for item in global_entries] == [("ns-b", "cp-ns-b"), ("ns-a", "cp-ns-a")]
+    assert [item async for item in saver.alist(None)] == global_entries
+    # LIMIT 只截断命中过滤器的结果，不能先丢掉较老的匹配项。
+    assert list(saver.list(None, filter={"source": "namespace-a"}, limit=1)) == global_entries[1:]
+    assert [item async for item in saver.alist(None, filter={"source": "namespace-a"}, limit=1)] == global_entries[1:]
+    before = build_checkpoint_config(thread_id, checkpoint_ns="ns-b", checkpoint_id="cp-ns-b")
+    assert list(saver.list(None, before=before)) == global_entries[1:]
+    assert [item async for item in saver.alist(None, before=before)] == global_entries[1:]
 
 
 @pytest.fixture
@@ -1281,12 +1292,14 @@ async def test_checkpoint_alist_awaits_external_file_lock(
 
 
 @pytest.mark.parametrize("all_owners", [False, True])
+@pytest.mark.parametrize("use_before", [False, True])
 async def test_checkpoint_alist_preserves_before_filter_and_limit(
     checkpoint_listing: tuple[RolloutCheckpointSaver, MutationIntentOwner, RunnableConfig],
     all_owners: bool,
+    use_before: bool,
 ) -> None:
     saver, owner, config = checkpoint_listing
-    before = build_checkpoint_config(owner.thread_id, checkpoint_id="cp-alist-2")
+    before = build_checkpoint_config(owner.thread_id, checkpoint_id="cp-alist-2") if use_before else None
     with session_thread_owner_scope(owner, langgraph_thread_id=owner.thread_id):
         query = None if all_owners else config
         expected = list(saver.list(query, before=before, filter={"step": 1}, limit=1))

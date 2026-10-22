@@ -59,15 +59,17 @@ class RolloutIndexMixin:
         self,
         session_id: str,
         thread_id: str,
-        checkpoint_ns: str = "",
+        checkpoint_ns: str | None = "",
         *,
         validate_integrity: bool = False,
     ) -> RolloutReadSnapshot:
-        """打开带文件锁和 SQLite 事务的只读 snapshot。"""
-        root = self._host.root(session_id, checkpoint_ns, thread_id=thread_id)
+        """打开只读事务；未指定 namespace 时从同库选择已发布的 manifest。"""
+        if checkpoint_ns is not None and not isinstance(checkpoint_ns, str):
+            raise TypeError("rollout checkpoint_ns 必须是字符串或 null")
+        root = self._host.root(session_id, checkpoint_ns or "", thread_id=thread_id)
         jsonl_path = root / "rollout.jsonl"
         index_path = root / "index.sqlite"
-        file_lock = self.read_lock(session_id, thread_id, checkpoint_ns)
+        file_lock = self.read_lock(session_id, thread_id, checkpoint_ns or "")
         file_lock.acquire()
         connection: sqlite3.Connection | None = None
         try:
@@ -82,7 +84,7 @@ class RolloutIndexMixin:
                 )
             connection = self._host._connect(
                 thread_id,
-                checkpoint_ns,
+                checkpoint_ns or "",
                 session_id=session_id,
                 read_only=True,
             )
@@ -131,6 +133,13 @@ class RolloutIndexMixin:
                     "recovery_required: rollout SQLite integrity_check 失败: "
                     f"session_id={session_id}, thread_id={thread_id}: {integrity}"
                 )
+            if checkpoint_ns is None:
+                namespace = connection.execute(
+                    "SELECT checkpoint_ns FROM checkpoint_namespace_state ORDER BY checkpoint_ns LIMIT 1"
+                ).fetchone()
+                if namespace is None:
+                    raise RuntimeError("rollout 缺少已发布的 checkpoint namespace 状态")
+                checkpoint_ns = strict_text(namespace[0], field="checkpoint_namespace_state.checkpoint_ns", allow_empty=True)
             manifest = self._manifest_from_connection(connection, checkpoint_ns)
         except sqlite3.DatabaseError as error:
             if connection is not None:

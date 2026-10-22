@@ -23,6 +23,9 @@ from app.api.deps import (
 from app.core.session_thread_context import session_thread_owner_scope
 from app.domain.itemized.enums import PayloadKind
 from app.domain.itemized.mutation_intents import MutationIntentOwner
+from app.services.infrastructure.rollout_context.checkpoint.saver import (
+    RolloutCheckpointSaver,
+)
 from app.services.infrastructure.rollout_context.storage.primitives import (
     RolloutNotMaterializedError,
     _RolloutFileLock,
@@ -30,6 +33,7 @@ from app.services.infrastructure.rollout_context.storage.primitives import (
 from tests.integration.backend.sessions.test_thread_runtime_runner import (
     RuntimeCase,
     _child,
+    _complete_job,
     _session,
 )
 from tests.integration.backend.sessions.test_thread_runtime_runner import (
@@ -204,6 +208,49 @@ async def test_item_projection_reads_exact_thread_with_same_item_identity(
         assert rows[0]["item_id"] == "same-root"
         assert rows[0]["turn_id"] == "same-turn"
         assert rows[0]["content"] == payload
+
+
+async def test_cold_global_checkpoints_include_published_child_without_materializing_idle_child(
+    runtime_case: RuntimeCase,
+) -> None:
+    """由真实执行生成两条历史，冷 Saver 的全局枚举必须保留精确 Thread。"""
+    session_id, main = await _session(runtime_case.runner)
+    child = await _child(runtime_case, session_id, creation_key="checkpoint-child")
+    idle = await _child(runtime_case, session_id, creation_key="checkpoint-idle")
+    await _complete_job(runtime_case, session_id, main)
+    await _complete_job(runtime_case, session_id, child)
+    storage = runtime_case.runner.saver._storage.storage
+    idle_root = storage.root(session_id, thread_id=idle)
+    idle_lock = idle_root.parent / ".rollout.write.lock"
+    assert not idle_root.exists() and not idle_lock.exists()
+    authority = tuple(
+        path
+        for thread_id in (main, child)
+        for path in (
+            storage.index_path(session_id, thread_id=thread_id),
+            storage.jsonl_path(session_id, thread_id=thread_id),
+        )
+    )
+    before = {path: hashlib.sha256(path.read_bytes()).hexdigest() for path in authority}
+    compiled = len(runtime_case.compiled)
+    with RolloutCheckpointSaver(storage.sessions_dir) as cold:
+        expected = []
+        for thread_id in (main, child):
+            with session_thread_owner_scope(
+                MutationIntentOwner(session_id, thread_id), langgraph_thread_id=thread_id,
+            ):
+                entries = list(cold.list({"configurable": {"thread_id": thread_id}}))
+            assert entries
+            assert all(entry.config["configurable"]["thread_id"] == thread_id for entry in entries)
+            expected.extend(entries)
+        # 不依赖当前 execution/Thread 上下文，也不能把 idle child 回退为 main。
+        assert list(cold.list(None)) == expected
+        assert [entry async for entry in cold.alist(None)] == expected
+        assert list(cold.list(None, limit=1)) == expected[:1]
+        assert [entry async for entry in cold.alist(None, limit=1)] == expected[:1]
+    assert not idle_root.exists() and not idle_lock.exists()
+    assert {path: hashlib.sha256(path.read_bytes()).hexdigest() for path in authority} == before
+    assert len(runtime_case.compiled) == compiled
 
 
 async def test_idle_child_public_history_does_not_materialize_rollout(

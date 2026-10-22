@@ -191,10 +191,3 @@ class ForkMetadataMixin:
             required_text(row[0], field="retention_refs.owner_session_id")
             for row in rows
         )
-
-    def list_thread_ids(self) -> tuple[str, ...]:
-        return tuple(
-            node.node_id
-            for node in self._storage._path_resolver.list_nodes()
-            if node.kind == "session"
-        )

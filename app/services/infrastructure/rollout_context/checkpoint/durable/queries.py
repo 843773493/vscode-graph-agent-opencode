@@ -19,8 +19,11 @@ from langgraph.checkpoint.base import (
 from langgraph.checkpoint.serde.types import _DeltaSnapshot
 
 from app.core.execution_admission_context import current_execution_admission
+from app.core.session_control_primitives import CONTROL_DATABASE_NAME
+from app.core.session_control_store import SessionControlStore
 from app.domain.itemized.enums import ControlOutcome
 from app.domain.itemized.identity.refs import ContextRef
+from app.domain.itemized.mutation_intents import MutationIntentOwner
 from app.domain.itemized.records import CanonicalItemRecord
 from app.services.infrastructure.rollout_context.storage.catalog.history_scope import (
     require_historical_scope,
@@ -55,6 +58,26 @@ if TYPE_CHECKING:
 
 class RolloutCheckpointQueriesMixin:
     """checkpoint header、active view 和已提交 context query owner。"""
+
+    def list_checkpoint_owners(self) -> tuple[MutationIntentOwner, ...]:
+        """只从已发布 catalog 枚举 main/child，不扫描目录或物化 rollout。"""
+        resolver = self._storage._path_resolver
+        owners: list[MutationIntentOwner] = []
+        for node in resolver.list_nodes():
+            if node.kind != "session":
+                continue
+            session_id = node.node_id
+            main_thread_id = resolver.main_thread_id(session_id)
+            session_node = resolver.resolve_session_node(session_id)
+            control = SessionControlStore(session_node / CONTROL_DATABASE_NAME, read_only=True)
+            try:
+                control.verify_matches_catalog_main_thread(main_thread_id)
+                children = control.list_child_thread_rows()
+            finally:
+                control.close()
+            owners.append(MutationIntentOwner(session_id, main_thread_id))
+            owners.extend(MutationIntentOwner(session_id, child.thread_id) for child in children)
+        return tuple(owners)
 
     def execution_context_excluded_item_ids(
         self, connection: sqlite3.Connection, *, session_id: str, thread_id: str,
@@ -437,7 +460,6 @@ class RolloutCheckpointQueriesMixin:
         thread_id = strict_text(thread_id, field="list_checkpoints.thread_id")
         if checkpoint_ns is not None and not isinstance(checkpoint_ns, str):
             raise TypeError("list_checkpoints.checkpoint_ns 必须是字符串或 null")
-        checkpoint_ns = checkpoint_ns or ""
         before_checkpoint_id = strict_optional_text(
             before_checkpoint_id, field="list_checkpoints.before_checkpoint_id"
         )
@@ -446,14 +468,15 @@ class RolloutCheckpointQueriesMixin:
         ):
             raise ValueError("checkpoint limit 必须是正整数或 null")
         try:
-            with self._storage.read_connection(session_id, thread_id, checkpoint_ns) as connection:
+            with self._storage.open_read_snapshot(session_id, thread_id, checkpoint_ns) as snapshot:
+                connection = snapshot.connection
                 self._storage._require_v2_runtime(connection)
                 before = (
                     connection.execute(
                         "SELECT cv.control_sequence FROM checkpoints AS c "
                         "LEFT JOIN context_views AS cv ON cv.view_id = c.view_id "
-                        "WHERE c.checkpoint_id = ? AND c.checkpoint_ns = ?",
-                        (before_checkpoint_id, checkpoint_ns),
+                        "WHERE c.checkpoint_id = ? AND (? IS NULL OR c.checkpoint_ns = ?)",
+                        (before_checkpoint_id, checkpoint_ns, checkpoint_ns),
                     ).fetchone()
                     if before_checkpoint_id
                     else None
@@ -465,7 +488,7 @@ class RolloutCheckpointQueriesMixin:
                     "c.metadata_json, c.versions_seen_type, c.versions_seen_blob, "
                     "c.pending_sends_type, c.pending_sends_blob, cv.control_sequence "
                     "FROM checkpoints AS c LEFT JOIN context_views AS cv ON cv.view_id = c.view_id "
-                    "WHERE c.checkpoint_ns = ? AND c.status = 'active' "
+                    "WHERE (? IS NULL OR c.checkpoint_ns = ?) AND c.status = 'active' "
                     "AND (? IS NULL OR cv.control_sequence < ?) ORDER BY cv.control_sequence DESC"
                     + (" LIMIT ?" if limit is not None else "")
                 )
@@ -475,6 +498,7 @@ class RolloutCheckpointQueriesMixin:
                     else None
                 )
                 params: tuple[object, ...] = (
+                    checkpoint_ns,
                     checkpoint_ns,
                     before_control_sequence,
                     before_control_sequence,

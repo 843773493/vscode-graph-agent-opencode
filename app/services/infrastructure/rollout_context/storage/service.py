@@ -603,7 +603,7 @@ class RolloutStorage(
     def read_lock(self, session_id: str, thread_id: str, checkpoint_ns: str='') -> _RolloutFileLock:
         return self._maintenance_owner.read_lock(session_id, thread_id, checkpoint_ns)
 
-    def open_read_snapshot(self, session_id: str, thread_id: str, checkpoint_ns: str='', *, validate_integrity: bool=False) -> RolloutReadSnapshot:
+    def open_read_snapshot(self, session_id: str, thread_id: str, checkpoint_ns: str | None='', *, validate_integrity: bool=False) -> RolloutReadSnapshot:
         return self._maintenance_owner.open_read_snapshot(session_id, thread_id, checkpoint_ns, validate_integrity=validate_integrity)
 
     def validate_index(self, session_id: str, thread_id: str, checkpoint_ns: str='') -> RolloutReadSnapshot:

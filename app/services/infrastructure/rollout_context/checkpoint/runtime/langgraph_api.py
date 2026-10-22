@@ -186,13 +186,7 @@ class RolloutLangGraphCheckpointMixin:
             )
         else:
             checkpoint_ns = None
-            owners = tuple(
-                MutationIntentOwner(
-                    session_id=session_id,
-                    thread_id=self._storage.storage.main_thread_id(session_id),
-                )
-                for session_id in self._storage.forks.list_thread_ids()
-            )
+            owners = self._storage.checkpoints.list_checkpoint_owners()
         return owners, checkpoint_ns
 
     def _list_owner_checkpoint_tuples(
@@ -207,7 +201,7 @@ class RolloutLangGraphCheckpointMixin:
             owner.thread_id,
             checkpoint_ns,
             before_checkpoint_id=before_id,
-            limit=limit,
+            limit=None if filter else limit,
         )
         for index in indexes:
             metadata = self._decode_metadata(index)
