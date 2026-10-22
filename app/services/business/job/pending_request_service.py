@@ -33,7 +33,8 @@ class JobPendingRequestService:
     ) -> None:
         self._store = store
         self._store_lock = asyncio.Lock()
-        self._loaded_sessions: set[str] = set()
+        # 只记录进程内恢复阶段；队列及执行事实仍由原 owner 保存。
+        self._loaded_sessions: dict[str, bool] = {}
         self._controller = JobPendingRequestController(
             queue=queue,
             lock=lock,
@@ -43,14 +44,20 @@ class JobPendingRequestService:
             input_owner=input_owner,
         )
 
-    async def load_unrestored(self, session_id: str) -> list[PendingRequestDTO] | None:
+    async def load_unloaded(self, session_id: str) -> list[PendingRequestDTO] | None:
         if session_id in self._loaded_sessions:
             return None
         return await self._store.load(session_id) if self._store is not None else []
 
+    def mark_loaded(self, session_id: str) -> None:
+        """装载后不再覆盖内存队列；落盘与派发完成前仍需重试恢复。"""
+        self._loaded_sessions[session_id] = False
+
     def mark_restored(self, session_id: str) -> None:
-        """仅在调度锁内完成队列装载后登记，读取失败仍可重试。"""
-        self._loaded_sessions.add(session_id)
+        self._loaded_sessions[session_id] = True
+
+    def is_restored(self, session_id: str) -> bool:
+        return self._loaded_sessions.get(session_id, False)
 
     async def list(
         self, session_id: str, *, thread_id: str | None = None,
@@ -114,6 +121,6 @@ class JobPendingRequestService:
         await self.persist(await self.list(session_id))
 
     async def delete(self, session_id: str) -> None:
-        self._loaded_sessions.discard(session_id)
+        self._loaded_sessions.pop(session_id, None)
         if self._store is not None:
             await self._store.delete(session_id)

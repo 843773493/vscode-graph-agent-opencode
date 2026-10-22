@@ -171,6 +171,11 @@ main-thread history bootstrap、pending 队列和 active Job 展示 SHALL 消费
 - **WHEN** 同一 Session 的 main 与 child 各自存在 active Job 或 pending 请求，用户启动主线程历史、刷新页面或完成一次 Session pending mutation
 - **THEN** 主展示只接收 canonical main thread 的 active Job 和 pending 请求；child 原始 Turn 不进入主历史，同一持久队列版本的热与冷 pending 计数及分页上限一致，Session 聚合查询及 mutation 的原范围保持不变
 
+#### Scenario: 队列恢复硬错误后重试原 thread 派发
+
+- **WHEN** 产品准入已生成 main 与 child 的持久 pending 请求，恢复在装载后保存、取队首后保存或任务创建阶段发生硬错误，调用方在同进程重试
+- **THEN** 原错误明确返回；重试沿用原 Job、execution binding、活动槽和 FIFO，不重装覆盖已加载队列，也不重复启动已经运行的 sibling。恢复完成标记只在落盘及各 thread 派发结算后发布；同一 thread 的并发重试只创建一个任务，原取消收敛和删除 preparation 边界保持有效
+
 #### Scenario: 在右侧侧边栏查看 cold child 历史
 
 - **WHEN** 用户在当前Session右侧侧边栏选择一个已经卸载运行资源的child thread

@@ -640,3 +640,106 @@ async def test_restore_discards_reference_after_canonical_cancel_before_queue_sa
     assert restarted_owner._checkpointer.accepted_user_message(
         session_id, thread_id=cancelled.thread_id, job_id=cancelled.job_id, message_id=cancelled.message_id,
     ).content == cancelled.content
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", ["load_save", "dispatch_save", "task_start"])
+async def test_restore_retries_hard_error_without_reloading_fifo(
+    failure, tmp_path, monkeypatch, session_bundle_factory,
+    request_factory, store_factory, pending_input_owner, session_lifecycle_guard,
+) -> None:
+    session_id = "ses_019c018e721e70b38f769ca61010e13a"
+    sessions_dir = tmp_path / "sessions"
+    session_bundle_factory(sessions_dir, session_id)
+    store = store_factory(sessions_dir)
+    records = [request_factory(
+        session_id, job_id=f"job_{index}", message_id=f"msg_{index}", sequence=index,
+    ) for index in (1, 2)]
+    await store.save(session_id, records)
+    service = _service(sessions_dir, session_lifecycle_guard, pending_input_owner)
+    started: list[str] = []
+    _prevent_background_execution(service, monkeypatch, started)
+    original_save = service._pending_requests.persist_current
+    original_start = service._start_job_task
+    save_calls = 0
+
+    async def fail_save_once(target_session_id):
+        nonlocal save_calls
+        save_calls += 1
+        if (failure, save_calls) in {("load_save", 1), ("dispatch_save", 2)}:
+            raise OSError("injected pending save failure")
+        await original_save(target_session_id)
+
+    def fail_start_once(job):
+        monkeypatch.setattr(service, "_start_job_task", original_start)
+        raise OSError("injected pending task failure")
+
+    monkeypatch.setattr(service._pending_requests, "persist_current", fail_save_once)
+    if failure == "task_start":
+        monkeypatch.setattr(service, "_start_job_task", fail_start_once)
+    with pytest.raises(OSError, match="injected pending"):
+        await service.list_pending(session_id)
+    original_jobs = dict(service._jobs)
+    assert started == []
+    restored = await service.list_pending(session_id)
+    assert restored.active_job_id == records[0].job_id
+    assert [item.job_id for item in restored.requests] == [records[1].job_id]
+    assert started == [records[0].job_id]
+    assert all(service._jobs[key] is job for key, job in original_jobs.items())
+    assert service._jobs[records[0].job_id].execution_binding == records[0].execution_binding
+    assert [item.message_id for item in await store.load(session_id)] == [records[1].message_id]
+    save_count = save_calls
+    assert (await service.list_pending(session_id)).active_job_id == records[0].job_id
+    assert started == [records[0].job_id]
+    assert save_calls == save_count
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", ["save", "task_start"])
+async def test_loaded_dispatch_retries_original_active_slot_once(
+    failure, tmp_path, monkeypatch, session_bundle_factory,
+    request_factory, store_factory, pending_input_owner, session_lifecycle_guard,
+) -> None:
+    from app.services.business.job.lifecycle import transition_job_status
+
+    session_id = "ses_019c018e721e70b38f769ca61010e13a"
+    sessions_dir = tmp_path / "sessions"
+    session_bundle_factory(sessions_dir, session_id)
+    store = store_factory(sessions_dir)
+    records = [request_factory(
+        session_id, job_id=f"job_{index}", message_id=f"msg_{index}", sequence=index,
+    ) for index in (1, 2, 3)]
+    await store.save(session_id, records)
+    service = _service(sessions_dir, session_lifecycle_guard, pending_input_owner)
+    started: list[str] = []
+    _prevent_background_execution(service, monkeypatch, started)
+    await service.list_pending(session_id)
+    original_jobs = dict(service._jobs)
+    transition_job_status(service._jobs[records[0].job_id], JobStatus.completed)
+    original_save = service._pending_requests.persist_current
+    original_start = service._start_job_task
+
+    async def fail_save_once(target_session_id):
+        monkeypatch.setattr(service._pending_requests, "persist_current", original_save)
+        raise OSError("injected pending save failure")
+
+    def fail_start_once(job):
+        monkeypatch.setattr(service, "_start_job_task", original_start)
+        raise OSError("injected pending task failure")
+
+    if failure == "save":
+        monkeypatch.setattr(service._pending_requests, "persist_current", fail_save_once)
+    else:
+        monkeypatch.setattr(service, "_start_job_task", fail_start_once)
+    with pytest.raises(OSError, match="injected pending"):
+        await service.notify_boundary(session_id, "after_turn", thread_id=records[0].thread_id)
+    assert started == [records[0].job_id]
+    results = await asyncio.gather(*(
+        service.notify_boundary(session_id, "after_turn", thread_id=records[0].thread_id)
+        for _ in range(3)
+    ))
+    assert all(result.active_job_id == records[1].job_id for result in results)
+    assert all([item.job_id for item in result.requests] == [records[2].job_id] for result in results)
+    assert started == [records[0].job_id, records[1].job_id]
+    assert all(service._jobs[key] is job for key, job in original_jobs.items())
+    assert [item.message_id for item in await store.load(session_id)] == [records[2].message_id]

@@ -1008,6 +1008,8 @@ collaboration ledger每次mutation必须先通过Session生命周期准入，并
 
 同thread至多一个active root execution，其余按ordinal FIFO，workspace scheduler只能施加跨thread容量限制而不能改变thread内顺序。前一execution终态后，owner在一个事务中把下一entry切为active、推进queued visibility并冻结其新ExecutionContextFence，之后才执行before-model reconciliation和seal；不能先让queued root进入前一execution的active view。cancel/failure保留ordinal和terminal queue/Turn record，未admit即取消的真实用户root仍作为明确cancelled historical Turn保留但不触发Provider。tool/provider/runtime callback必须绑定既有execution并经过generation fence，不得创建伪高优先级entry。显式interrupt/cancel控制当前execution但不让后续entry越序。由此用户在active child上直接发送消息会立即显示为该child的queued Turn，却不会污染当前模型上下文；sibling child和其它Session仍可并行。
 
+Session pending 控制仍只由既有 pending owner 持久化，正文仍读 canonical acceptance。进程内恢复阶段区分未装载、已装载和已恢复；已装载后保存或派发失败，不重读覆盖原队列，只有保存和各 thread 派发结算后才登记已恢复。每个 `(session_id, thread_id)` 的队首选取、保存和同步创建任务串行；取出队首后原 running 活动槽若尚无 task 且不属于 checkpoint 续接，重试继续该槽，不能再取后一项或重新创建 Job。保存后的任务创建前重验槽、状态和 task，取消或删除已经改变状态时不得启动。整个恢复继续处于原 preparation/取消结算窗口，已启动 sibling 保留原 task；不新增持久恢复表或队列正文副本。
+
 #### Durable identity 与 resident runtime 分离
 
 `SessionThread` 的持久身份不等于常驻内存的 Agent runtime。统一的 `ThreadRuntimePolicy` 至少区分 capability profile、Goal capability 和 idle unload policy；所有main与child thread的默认空闲卸载阈值为 30 分钟。只有同时满足以下条件才可卸载 resident runtime：

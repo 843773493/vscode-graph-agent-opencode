@@ -40,6 +40,7 @@ from app.schemas.internal_v2.pending_request import (
     DeliveryBoundary,
     DeliveryPolicy,
     PendingRequestControl,
+    PendingRequestDTO,
     PendingRequestListDTO,
     PendingRequestSummaryListDTO,
 )
@@ -166,6 +167,7 @@ class JobService:
         self._preparation_changed = asyncio.Condition(self._dispatch_lock)
         self._job_creation_locks = KeyLockPool()
         self._pending_restore_lock = asyncio.Lock()
+        self._pending_dispatch_locks = KeyLockPool()
         self._session_preparations: dict[str, int] = {}
         self._deleting_sessions: set[str] = set()
         self._accepting_jobs = True
@@ -1676,75 +1678,89 @@ class JobService:
                     raise RuntimeError(
                         f"会话正在删除，拒绝恢复待处理队列: {session_id}"
                     )
-            should_resume = False
-            records = await self._pending_requests.load_unrestored(session_id)
-            if records is None:
-                return
-            if self._input_owner is not None:
-                live_records = []
-                for record in records:
-                    reference = PendingRequestControl.model_validate(record.model_dump(exclude={
-                        "content", "attachments", "message_created_at", "message_metadata",
-                    }))
-                    outcome = await asyncio.to_thread(
-                        self._input_owner.accepted_job_outcome,
-                        reference,
-                    )
-                    if outcome == "unknown":
-                        live_records.append(record)
-                    elif outcome not in {"completed", "completed_empty", "failed", "interrupted", "cancelled", "execution_lost"}:
-                        raise RuntimeError(f"待处理引用的 canonical execution outcome 无效: {record.job_id} {outcome}")
-                # canonical 终态可能先于队列文件更新持久化；恢复时先消除残留引用。
-                records = live_records
+            records = await self._pending_requests.load_unloaded(session_id)
+            if records is not None:
+                await self._load_pending_records(session_id, records)
             async with self._dispatch_lock:
-                if session_id in self._deleting_sessions:
-                    raise RuntimeError(
-                        f"会话正在删除，拒绝恢复待处理队列: {session_id}"
-                    )
-                restored: list[QueueEntry] = []
-                for record in sorted(records, key=lambda item: item.enqueue_sequence):
-                    self._jobs[record.job_id] = JobState(
-                        job_id=record.job_id,
-                        session_id=record.session_id,
-                        thread_id=record.thread_id,
-                        message=record.content,
-                        message_id=record.message_id,
-                        message_created_at=record.message_created_at,
-                        execution_binding=record.execution_binding,
-                        agent_id=record.agent_id,
-                        # 恢复的 Job 沿用创建时持久化的真实 gateway_id（独立执行根，
-                        # MUST 显式携带），使重启后队首 Job 在 gateway 层可解析；
-                        # 缺该字段的老数据由 PendingRequestDTO 校验直接拒绝，不静默补齐。
-                        gateway_id=record.gateway_id,
-                        # 恢复的 Job 沿用创建时持久化的权威 request_id（独立执行根，
-                        # MUST 显式携带），使重启后 job 下游能沿用同一请求 ID。
-                        request_id=record.request_id,
-                        status=JobStatus.queued,
-                        message_metadata=dict(record.message_metadata),
-                        attachments=list(record.attachments),
-                        created_at=record.created_at,
-                        updated_at=record.updated_at,
-                        delivery_policy=record.delivery_policy,
-                    )
-                    restored.append(
-                        QueueEntry(
-                            job_id=record.job_id,
-                            thread_id=record.thread_id,
-                            enqueue_sequence=record.enqueue_sequence,
-                            delivery_policy=record.delivery_policy,
-                            waiting_reason=record.waiting_reason,
-                            last_boundary=record.last_boundary,
-                            snapshot_version=record.snapshot_version,
-                        )
-                    )
-                self._pending_queue.restore(session_id, restored)
-                self._pending_requests.mark_restored(session_id)
-                should_resume = bool(restored)
-            # TODO：装载后落盘/派发发生硬错误的幂等恢复需另行闭合，不能当作调用者取消处理。
+                thread_ids: dict[str, None] = {}
+                if not self._pending_requests.is_restored(session_id):
+                    thread_ids.update(dict.fromkeys(
+                        self._pending_queue.entry(job_id).thread_id
+                        for job_id in self._pending_queue.ids(session_id)
+                    ))
+                for (owner_session_id, thread_id), job_id in self._thread_current_job.items():
+                    if owner_session_id == session_id and self._pending_dispatch_unstarted(self._jobs[job_id]):
+                        thread_ids[thread_id] = None
+            if self._pending_requests.is_restored(session_id) and not thread_ids:
+                return
             await self._pending_requests.persist_current(session_id)
-            if should_resume:
-                for restored_thread_id in dict.fromkeys(record.thread_id for record in records):
-                    await self._start_next_pending(session_id, thread_id=restored_thread_id, boundary="idle")
+            for thread_id in thread_ids:
+                await self._start_next_pending(session_id, thread_id=thread_id, boundary="idle")
+            self._pending_requests.mark_restored(session_id)
+
+    async def _load_pending_records(
+        self, session_id: str, records: list[PendingRequestDTO],
+    ) -> None:
+        """仅首次装载，失败重试不得覆盖已经启动的 sibling Job。"""
+        if self._input_owner is not None:
+            live_records = []
+            for record in records:
+                reference = PendingRequestControl.model_validate(record.model_dump(exclude={
+                    "content", "attachments", "message_created_at", "message_metadata",
+                }))
+                outcome = await asyncio.to_thread(
+                    self._input_owner.accepted_job_outcome,
+                    reference,
+                )
+                if outcome == "unknown":
+                    live_records.append(record)
+                elif outcome not in {"completed", "completed_empty", "failed", "interrupted", "cancelled", "execution_lost"}:
+                    raise RuntimeError(f"待处理引用的 canonical execution outcome 无效: {record.job_id} {outcome}")
+            # canonical 终态可能先于队列文件更新持久化；恢复时先消除残留引用。
+            records = live_records
+        async with self._dispatch_lock:
+            if session_id in self._deleting_sessions:
+                raise RuntimeError(
+                    f"会话正在删除，拒绝恢复待处理队列: {session_id}"
+                )
+            restored: list[QueueEntry] = []
+            for record in sorted(records, key=lambda item: item.enqueue_sequence):
+                self._jobs[record.job_id] = JobState(
+                    job_id=record.job_id,
+                    session_id=record.session_id,
+                    thread_id=record.thread_id,
+                    message=record.content,
+                    message_id=record.message_id,
+                    message_created_at=record.message_created_at,
+                    execution_binding=record.execution_binding,
+                    agent_id=record.agent_id,
+                    # 恢复的 Job 沿用创建时持久化的真实 gateway_id（独立执行根，
+                    # MUST 显式携带），使重启后队首 Job 在 gateway 层可解析；
+                    # 缺该字段的老数据由 PendingRequestDTO 校验直接拒绝，不静默补齐。
+                    gateway_id=record.gateway_id,
+                    # 恢复的 Job 沿用创建时持久化的权威 request_id（独立执行根，
+                    # MUST 显式携带），使重启后 job 下游能沿用同一请求 ID。
+                    request_id=record.request_id,
+                    status=JobStatus.queued,
+                    message_metadata=dict(record.message_metadata),
+                    attachments=list(record.attachments),
+                    created_at=record.created_at,
+                    updated_at=record.updated_at,
+                    delivery_policy=record.delivery_policy,
+                )
+                restored.append(
+                    QueueEntry(
+                        job_id=record.job_id,
+                        thread_id=record.thread_id,
+                        enqueue_sequence=record.enqueue_sequence,
+                        delivery_policy=record.delivery_policy,
+                        waiting_reason=record.waiting_reason,
+                        last_boundary=record.last_boundary,
+                        snapshot_version=record.snapshot_version,
+                    )
+                )
+            self._pending_queue.restore(session_id, restored)
+            self._pending_requests.mark_loaded(session_id)
 
     async def _publish_pending(
         self,
@@ -1789,6 +1805,15 @@ class JobService:
             agent_id="job_service",
         )
 
+    @staticmethod
+    def _pending_dispatch_unstarted(job: JobState) -> bool:
+        """活动槽已保留但尚未创建执行任务；checkpoint 续接由启动 owner 处理。"""
+        return (
+            job.status == JobStatus.running
+            and job.task is None
+            and job.resume_checkpoint_id is None
+        )
+
     async def _start_next_pending(
         self,
         session_id: str,
@@ -1797,55 +1822,65 @@ class JobService:
         boundary: DeliveryBoundary = "idle",
         tool_result_available: bool = True,
     ) -> bool:
-        stale_internal_jobs: list[JobState] = []
-        stale_parent_job_id: str | None = None
-        async with self._dispatch_lock:
-            current_job_id = self._thread_current_job.get((session_id, thread_id))
-            current_job = self._jobs.get(current_job_id) if current_job_id else None
-            if current_job is not None and not self._is_terminal_status(current_job.status):
-                return False
-            if current_job is not None and current_job.status in FAILED_JOB_STATUSES:
-                stale_parent_job_id = current_job.job_id
-                stale_internal_jobs = self._discard_stale_terminal_followups(
-                    session_id,
-                    parent_job_id=current_job.job_id,
-                    thread_id=thread_id,
-                )
-            entry = self._pending_queue.take_head(
-                session_id,
-                boundary,
-                thread_id=thread_id,
-                tool_result_available=tool_result_available,
-            )
-            if entry is None:
-                self._thread_current_job.pop((session_id, thread_id), None)
-                next_job = None
-            else:
-                next_job = self._jobs.get(entry.job_id)
-                if next_job is None:
-                    raise RuntimeError(
-                        "FIFO 队列引用不存在的 Job: "
-                        f"session_id={session_id}, job_id={entry.job_id}"
+        async with self._pending_dispatch_locks.lock_for(f"{session_id}/{thread_id}"):
+            stale_internal_jobs: list[JobState] = []
+            stale_parent_job_id: str | None = None
+            async with self._dispatch_lock:
+                current_job_id = self._thread_current_job.get((session_id, thread_id))
+                current_job = self._jobs.get(current_job_id) if current_job_id else None
+                if current_job is not None and not self._is_terminal_status(current_job.status):
+                    if not self._pending_dispatch_unstarted(current_job):
+                        return False
+                    next_job = current_job
+                else:
+                    if current_job is not None and current_job.status in FAILED_JOB_STATUSES:
+                        stale_parent_job_id = current_job.job_id
+                        stale_internal_jobs = self._discard_stale_terminal_followups(
+                            session_id,
+                            parent_job_id=current_job.job_id,
+                            thread_id=thread_id,
+                        )
+                    entry = self._pending_queue.take_head(
+                        session_id,
+                        boundary,
+                        thread_id=thread_id,
+                        tool_result_available=tool_result_available,
                     )
-                self._thread_current_job[(session_id, thread_id)] = next_job.job_id
-                next_job.delivery_policy = entry.delivery_policy
-                next_job.delivery_boundary = entry.last_boundary
-                transition_job_status(next_job, JobStatus.running)
-        await self._record_discarded_stale_followups(
-            session_id,
-            stale_internal_jobs,
-            parent_job_id=stale_parent_job_id or "unknown",
-        )
-        if next_job is None:
+                    if entry is None:
+                        self._thread_current_job.pop((session_id, thread_id), None)
+                        next_job = None
+                    else:
+                        next_job = self._jobs.get(entry.job_id)
+                        if next_job is None:
+                            raise RuntimeError(
+                                "FIFO 队列引用不存在的 Job: "
+                                f"session_id={session_id}, job_id={entry.job_id}"
+                            )
+                        self._thread_current_job[(session_id, thread_id)] = next_job.job_id
+                        next_job.delivery_policy = entry.delivery_policy
+                        next_job.delivery_boundary = entry.last_boundary
+                        transition_job_status(next_job, JobStatus.running)
+            await self._record_discarded_stale_followups(
+                session_id,
+                stale_internal_jobs,
+                parent_job_id=stale_parent_job_id or "unknown",
+            )
+            if next_job is None:
+                await self._pending_requests.persist_current(session_id)
+                return False
+            # 队首已经从内存 FIFO 取出后立即覆盖磁盘快照。否则进程重启会把
+            # 已经启动、甚至已经失败的 Job 当成新的 queued 请求再次恢复。
+            # 必须在创建后台任务之前完成落盘，避免进程恰好在两步之间退出而
+            # 把同一个 Job 恢复成第二个并发执行根。
             await self._pending_requests.persist_current(session_id)
-            return False
-        # 队首已经从内存 FIFO 取出后立即覆盖磁盘快照。否则进程重启会把
-        # 已经启动、甚至已经失败的 Job 当成新的 queued 请求再次恢复。
-        # 必须在创建后台任务之前完成落盘，避免进程恰好在两步之间退出而
-        # 把同一个 Job 恢复成第二个并发执行根。
-        await self._pending_requests.persist_current(session_id)
-        self._start_job_task(next_job)
-        return True
+            async with self._dispatch_lock:
+                if (
+                    self._thread_current_job.get((session_id, thread_id)) != next_job.job_id
+                    or not self._pending_dispatch_unstarted(next_job)
+                ):
+                    return False
+                self._start_job_task(next_job)
+                return True
 
     async def notify_boundary(
         self,
