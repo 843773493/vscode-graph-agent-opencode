@@ -340,8 +340,10 @@ async def test_basic_chat_tool_loop_through_real_web_surface(
             browser_process = ManagedProcess(process=process, log_file=browser_stdout)
             register_test_process(browser_process, browser_process.close)
             print(f"{datetime.now(UTC).isoformat()} browser_driver_process_begin pid={process.pid}", file=phase_output, flush=True)
-            # 默认场景合并了基础聊天和完整 fork 矩阵；单项业务 deadline 仍由各 owner 约束。
-            returncode = await asyncio.to_thread(process.wait, timeout=3600)
+            # default 实测运行一小时仍在推进 fork 矩阵；整套预算须覆盖后续场景。
+            # 单项业务 deadline 仍由各 owner 约束，focus 保留原一小时上限。
+            driver_seconds = 10800 if section8_selection_contract["mode"] == "default" else 3600
+            returncode = await asyncio.to_thread(process.wait, timeout=driver_seconds)
             print(f"{datetime.now(UTC).isoformat()} browser_driver_end returncode={returncode}", file=phase_output, flush=True)
         assert returncode == 0, (
             "基础聊天工具循环 Web E2E 失败:\n"

@@ -3141,8 +3141,7 @@ async function readFrozenControl(owner, node, query, parameters = []) {
   return testControl({ action: "read_sql", name: owner.name, relative_path: `${sessionLocator(node)}/session-control.sqlite`, query, parameters });
 }
 
-async function threadRolloutLocator(owner, node) {
-  const sessionPath = sessionLocator(node);
+async function threadRolloutLocator(owner, node, sessionPath = sessionLocator(node)) {
   const threads = await testControl({ action: "read_sql", name: owner.name,
     relative_path: `${sessionPath}/session-control.sqlite`,
     query: "SELECT tc.thread_id,tc.kind,tc.created_at,(SELECT COUNT(*) FROM thread_catalog WHERE kind='main') AS main_count,(SELECT thread_id FROM thread_catalog WHERE kind='main') AS main_thread_id,tcr.state AS creation_state,tcr.final_relative_locator,tcr.child_created_at FROM thread_catalog tc LEFT JOIN thread_creation_records tcr ON tcr.child_thread_id=tc.thread_id WHERE tc.thread_id=?",
@@ -3560,15 +3559,18 @@ async function runLifecycleAdmissionDeletion(surfaces) {
     return readFrozenRollout(owner, node,
       "SELECT (SELECT COUNT(*) FROM executions) AS executions,(SELECT COUNT(*) FROM model_calls) AS calls,(SELECT COUNT(*) FROM context_assemblies) AS assemblies,(SELECT COUNT(*) FROM turn_records) AS roots");
   };
-  const deletedRolloutCounts = async (owner, deletion) => {
+  const deletedRolloutCounts = async (owner, deletion, node) => {
     const rows = await readCatalog(owner, "SELECT subtree_delete_idempotency_key,frozen_session_locators FROM subtree_delete_records WHERE subtree_delete_idempotency_key=?", [deletion.operationId]);
     assert.equal(rows.length, 1);
     const frozen = JSON.parse(rows[0].frozen_session_locators).find((entry) => entry.session_id === owner.sessionId);
     assert.ok(frozen?.storage_relative_locator);
-    const directory = `.boxteam/sessions/.deleting/${rows[0].subtree_delete_idempotency_key}/${owner.sessionId}/rollout`;
+    assert.equal(frozen.storage_relative_locator, node.storage_relative_locator);
+    const isolatedSession = `.boxteam/sessions/.deleting/${rows[0].subtree_delete_idempotency_key}/${owner.sessionId}`;
+    const index = await threadRolloutLocator(owner, node, isolatedSession);
+    const directory = index.slice(0, -"/index.sqlite".length);
     if (await testControl({ action: "read_directory", name: owner.name, relative_path: directory }) === null) return null;
     return testControl({ action: "read_sql", name: owner.name,
-      relative_path: `${directory}/index.sqlite`,
+      relative_path: index,
       query: "SELECT (SELECT COUNT(*) FROM executions) AS executions,(SELECT COUNT(*) FROM model_calls) AS calls,(SELECT COUNT(*) FROM context_assemblies) AS assemblies,(SELECT COUNT(*) FROM turn_records) AS roots" });
   };
   const deniedHistory = async (owner) => {
@@ -3671,7 +3673,7 @@ async function runLifecycleAdmissionDeletion(surfaces) {
         }
         await release(control);
         const terminal = await navigationTerminal(owner, deletion.operation);
-        const after = await deletedRolloutCounts(owner, deletion.operation);
+        const after = await deletedRolloutCounts(owner, deletion.operation, node);
         const controlAfter = await readDeletedControl(owner, deletion.operation, "SELECT (SELECT COUNT(*) FROM thread_catalog) AS threads,(SELECT COUNT(*) FROM thread_creation_records) AS creations,(SELECT COUNT(*) FROM communication_inbox) AS inbox,(SELECT COUNT(*) FROM thread_execution_intents) AS intents,(SELECT COUNT(*) FROM collaboration_fanouts) AS fanouts");
         assert.deepEqual(controlAfter, baseline, "独立控制失败不能旁生 thread/inbox/intent/fanout");
         const events = (await testControl({ action: "events" })).filter((event) => event.operation_id === admitted.operation_id);
@@ -3793,7 +3795,7 @@ async function runLifecycleAdmissionDeletion(surfaces) {
       const results = history.response_parts.filter((part) => part.kind === "tool_result");
       assert.equal(results.length, 1, "同一通信调用只能提交一个 ToolResult");
       const after = await readDeletedControl(target, deletion.operation, "SELECT * FROM communication_inbox WHERE communication_id=?", [communicationId]);
-      const afterRollout = await deletedRolloutCounts(target, deletion.operation);
+      const afterRollout = await deletedRolloutCounts(target, deletion.operation, node);
       if (boundary === "deletion_first") {
         assert.deepEqual(after, []);
         assert.deepEqual(afterRollout, before, "删除先行不能注入 inbox/ambient/context/Job/root");

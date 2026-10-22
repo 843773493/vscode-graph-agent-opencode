@@ -137,6 +137,7 @@
       "client": "web",
       "enabled": true,
       "dataLimitKb": 4194304,
+      "timeoutMs": 12600000,
       "command": [
         "uv", "run", "pytest",
         "tests/e2e/clients/web/test_basic_chat_tool_loop.py::test_basic_chat_tool_loop_through_real_web_surface"
