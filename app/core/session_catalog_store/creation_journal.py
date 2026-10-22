@@ -37,7 +37,7 @@ from app.core.session_catalog_store.contracts import (
 )
 from app.core.session_catalog_store.validators import (
     validate_session_id,
-    validate_storage_relative_locator,
+    validate_session_storage_identity,
     validate_thread_id,
 )
 from app.core.session_control_primitives import CONTROL_DATABASE_NAME
@@ -564,7 +564,7 @@ class CreationJournalMixin:
             validate_thread_id(allocated_main_thread_id)
             utc_date = allocated_created_at.astimezone(UTC).date()
             locator = f"sessions/{utc_date:%Y/%m/%d}/{allocated_session_id}"
-            validate_storage_relative_locator(locator)
+            validate_session_storage_identity(allocated_session_id, allocated_created_at, locator)
             self._validate_locator_budget(locator)
             # fail fast：新分配身份不得与既有可见 node 冲突（UNIQUE 兜底）。
             self._require_node_id_available(connection, allocated_session_id)
@@ -728,8 +728,7 @@ class CreationJournalMixin:
                     f"fail closed）: {title_source!r}"
                 )
             validate_thread_id(main_thread_id)
-            validate_storage_relative_locator(locator)
-            self._validate_locator_matches_session(session_id, created_at, locator)
+            validate_session_storage_identity(session_id, created_at, locator)
             self._validate_locator_budget(locator)
             # 父节点 CAS：仍存在、active、revision 未漂移。
             if parent_node_id is not None:

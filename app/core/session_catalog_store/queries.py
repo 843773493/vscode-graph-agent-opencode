@@ -29,7 +29,9 @@ from app.core.session_catalog_store.contracts import (
 )
 from app.core.session_catalog_store.validators import (
     validate_path_budget,
+    validate_session_storage_identity,
     validate_storage_relative_locator,
+    validate_thread_id,
 )
 
 # 根级 active session 直接可见；其它候选只有完整 active 祖先链到根才可见。
@@ -280,11 +282,31 @@ class CatalogQueriesMixin:
             return self._node_from_row(row)
 
     def verify_workspace_consistency(self) -> None:
-        """全表校验：父节点存在、父子同 workspace、无环；违反抛 RuntimeError。"""
+        """同一快照核父链与已发布/待发布 Session 的冻结存储身份。"""
         with self.read_transaction() as connection:
             rows = connection.execute(
                 "SELECT node_id, parent_node_id, workspace_id FROM nodes"
             ).fetchall()
+            identities = connection.execute(
+                "SELECT node_id AS session_id, main_thread_id, created_at, "
+                "storage_relative_locator, 'nodes' AS owner FROM nodes WHERE kind = 'session' "
+                "UNION ALL SELECT session_id, main_thread_id, created_at, "
+                "storage_relative_locator, 'session_creation_records' AS owner "
+                "FROM session_creation_records WHERE state = 'preparing'"
+            )
+            for identity in identities:
+                try:
+                    locator = identity["storage_relative_locator"]
+                    validate_session_storage_identity(
+                        identity["session_id"], datetime.fromisoformat(identity["created_at"]), locator,
+                    )
+                    validate_thread_id(identity["main_thread_id"])
+                    validate_path_budget(self.sessions_root, locator[len(_LOCATOR_PREFIX):])
+                except (TypeError, ValueError) as error:
+                    raise CatalogMaintenanceRequiredError(
+                        "session catalog 存储身份损坏，须进入维护模式核对并保留原数据: "
+                        f"owner={identity['owner']}, session_id={identity['session_id']}"
+                    ) from error
         by_id = {str(row["node_id"]): row for row in rows}
         for row in rows:
             parent_node_id = row["parent_node_id"]

@@ -13,7 +13,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from contextlib import nullcontext
-from datetime import UTC, date, datetime
+from datetime import datetime
 
 from app.core.session_catalog_store._schema import (
     _LOCATOR_PREFIX,
@@ -27,7 +27,7 @@ from app.core.session_catalog_store.contracts import (
 from app.core.session_catalog_store.validators import (
     validate_path_budget,
     validate_session_id,
-    validate_storage_relative_locator,
+    validate_session_storage_identity,
     validate_thread_id,
 )
 
@@ -132,30 +132,6 @@ class CatalogNodesMixin:
                 f"parent={parent_node_id}, "
                 f"parent_workspace={parent['workspace_id']}, "
                 f"child_workspace={workspace_id}"
-            )
-
-    @staticmethod
-    def _validate_locator_matches_session(
-        node_id: str,
-        created_at: datetime,
-        storage_relative_locator: str,
-    ) -> None:
-        """验证 locator 叶名等于 session_id，且日期等于 created_at 的 UTC 日期。"""
-        parts = storage_relative_locator.split("/")
-        locator_session_id = parts[4]
-        if locator_session_id != node_id:
-            raise ValueError(
-                "locator 叶名必须等于 session_id: "
-                f"locator={storage_relative_locator}, session_id={node_id}"
-            )
-        locator_date = date(int(parts[1]), int(parts[2]), int(parts[3]))
-        created_date = created_at.astimezone(UTC).date()
-        if locator_date != created_date:
-            raise ValueError(
-                "locator 日期必须等于 created_at 的 UTC 日期: "
-                f"locator={storage_relative_locator}, "
-                f"created_at={created_at.isoformat()}, "
-                f"utc_date={created_date.isoformat()}"
             )
 
     def _validate_locator_budget(self, storage_relative_locator: str) -> None:
@@ -274,20 +250,10 @@ class CatalogNodesMixin:
         connection: sqlite3.Connection | None = None,
     ) -> SessionCatalogNode:
         """创建 session 节点；locator 日期必须等于 created_at 的 UTC 日期。"""
-        validate_session_id(node_id)
         validate_thread_id(main_thread_id)
-        validate_storage_relative_locator(storage_relative_locator)
+        validate_session_storage_identity(node_id, created_at, storage_relative_locator)
         self._validate_common_fields(workspace_id, display_name)
         self._validate_title_source(title_source)
-        if not isinstance(created_at, datetime):
-            raise TypeError(f"created_at 必须是 datetime: {created_at!r}")
-        if created_at.tzinfo is None:
-            raise ValueError(f"created_at 必须带时区: {created_at!r}")
-        self._validate_locator_matches_session(
-            node_id,
-            created_at,
-            storage_relative_locator,
-        )
         self._validate_locator_budget(storage_relative_locator)
         updated_at = updated_at or created_at
         self._validate_session_fields(

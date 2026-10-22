@@ -94,6 +94,32 @@ def validate_storage_relative_locator(value: str) -> None:
         )
 
 
+def validate_session_storage_identity(
+    session_id: str, created_at: datetime, storage_relative_locator: str,
+) -> None:
+    """创建、发布和启动共用同一份 Session 身份、UTC 日期与 locator 校验。"""
+    validate_session_id(session_id)
+    validate_storage_relative_locator(storage_relative_locator)
+    if not isinstance(created_at, datetime):
+        raise TypeError(f"created_at 必须是 datetime: {created_at!r}")
+    if created_at.tzinfo is None:
+        raise ValueError(f"created_at 必须带时区: {created_at!r}")
+    parts = storage_relative_locator.split("/")
+    if parts[4] != session_id:
+        raise ValueError(
+            "locator 叶名必须等于 session_id: "
+            f"locator={storage_relative_locator}, session_id={session_id}"
+        )
+    locator_date = date(int(parts[1]), int(parts[2]), int(parts[3]))
+    created_date = created_at.astimezone(UTC).date()
+    if locator_date != created_date:
+        raise ValueError(
+            "locator 日期必须等于 created_at 的 UTC 日期: "
+            f"locator={storage_relative_locator}, "
+            f"created_at={created_at.isoformat()}, utc_date={created_date.isoformat()}"
+        )
+
+
 def uuid7_embedded_utc_date(payload: str) -> date:
     """从 32 位 v7 hex payload 的前 48 bit 解出内嵌 Unix 毫秒并按 UTC 求日期。
 
