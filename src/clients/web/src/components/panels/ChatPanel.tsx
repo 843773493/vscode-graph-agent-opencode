@@ -11,6 +11,7 @@ import type {
   SessionChangesSummary,
   GatewayUserViewState,
   InternalExecutionHistory,
+  InternalDisplayProvenance,
 } from "../../types/backend";
 import type { ConversationView } from "../../types/frontend";
 import { conversationTurnKey } from "../../state/session/turnIdentity";
@@ -29,6 +30,9 @@ import type { ChatTurnHandlers, LoadToolDetails, LoadTurnDetails } from "../chat
 interface ChatPanelRenderState extends ChatTurnHandlers {
   apiPort: number;
   workspaceId?: string | null;
+  sessionId: string | null;
+  threadId: string | null;
+  onOpenChildReport?: (source: InternalDisplayProvenance) => void;
   expandDetails: boolean;
   lastTurnKey: string | null;
   sessionBusy: boolean;
@@ -114,9 +118,13 @@ const renderChatPanelItem: ItemContent<
 > = (_index, item, context) => {
   const state = currentChatPanelRenderState(context);
   if (item.kind === "internal_execution") {
+    const source = item.displayPart.provenance;
+    const canOpenReport = state.onOpenChildReport && source.source_session_id === state.sessionId
+      && source.source_thread_id && source.source_thread_id !== state.threadId && source.source_execution_id;
     return (
       <div className="chat-virtual-item">
         <ChatInternalExecutionDisplay displayPart={item.displayPart} />
+        {canOpenReport ? <button type="button" onClick={() => state.onOpenChildReport?.(source)}>查看来源报告</button> : null}
       </div>
     );
   }
@@ -221,6 +229,7 @@ export default function ChatPanel({
   onChangePendingPolicy,
   onOpenAttachment,
   onForkConversation,
+  onOpenChildReport,
   viewState,
   onViewStateChange,
   onViewStateRestoreStatus,
@@ -254,6 +263,7 @@ export default function ChatPanel({
   sessionChangesLoading?: boolean;
   onOpenChanges?: () => void;
   onOpenAttachment?: (sessionId: string, attachment: AttachmentRef) => void;
+  onOpenChildReport?: (source: InternalDisplayProvenance) => void;
   viewState?: GatewayUserViewState | null;
   onViewStateChange?: (payload: {
     turn_anchor: string | null;
@@ -379,6 +389,9 @@ export default function ChatPanel({
   renderStateRef.current = {
     apiPort,
     workspaceId,
+    sessionId,
+    threadId,
+    onOpenChildReport,
     expandDetails,
     lastTurnKey,
     sessionBusy,

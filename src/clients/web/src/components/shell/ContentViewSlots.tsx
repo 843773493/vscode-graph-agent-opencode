@@ -44,6 +44,7 @@ interface ContentViewSlotsProps extends Pick<
   | "onChangePendingPolicy"
   | "onOpenAttachment"
   | "onForkConversation"
+  | "onOpenChildReport"
   | "onViewStateChange"
   | "onViewStateRestoreStatus"
 > {
@@ -142,6 +143,7 @@ export default function ContentViewSlots({
   onChangePendingPolicy,
   onOpenAttachment,
   onForkConversation,
+  onOpenChildReport,
   onViewStateChange,
   onViewStateRestoreStatus,
 }: ContentViewSlotsProps) {
@@ -253,6 +255,7 @@ export default function ContentViewSlots({
           onChangePendingPolicy={onChangePendingPolicy}
           onOpenAttachment={onOpenAttachment}
           onForkConversation={onForkConversation}
+          onOpenChildReport={onOpenChildReport}
           viewState={
             activeSessionCacheKey
               ? gatewayUserViewStates.get(activeSessionCacheKey) ?? null

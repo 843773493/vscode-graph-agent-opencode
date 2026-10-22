@@ -7987,6 +7987,49 @@ async function runChildFifoAndResidency(surface) {
   const mainGraph = await graphLifecycle(owner);
   assert.equal(mainGraph.compiled.length, 1, "main thread 后续 Turn 必须复用首次 compiled graph");
   assert.equal(graphAdmission(mainGraph, creation.sent.jobId).details.agent_object_id, graphAdmission(mainGraph, siblingCreation.sent.jobId).details.agent_object_id);
+  await openOwner(owner);
+  const mainHistory = await loadThreadHistory(owner);
+  const reportNotice = mainHistory.internal_executions.flatMap((execution) => execution.display_parts)
+    .find((part) => part.provenance.source_thread_id === child.threadId);
+  assert.ok(reportNotice, "main 必须持有真实 child 汇报来源，不能由测试补造");
+  assert.equal(reportNotice.provenance.source_session_id, owner.sessionId);
+  assert.equal(reportNotice.provenance.source_execution_id, initialHistory.internal_executions[0].execution_id);
+  const mainTranscript = expectedTranscript(mainHistory);
+  const reportIndex = mainTranscript.findIndex((entry) => entry.kind === "internal" && entry.ordinal === reportNotice.logical_item_ordinal);
+  assert.ok(reportIndex >= 0, "汇报通知必须位于真实 main transcript");
+  const { cell: reportCell } = await visitTranscriptIndex(owner, reportIndex, mainTranscript[reportIndex]);
+  const [sourceReportResponse] = await Promise.all([
+    owner.page.waitForResponse((response) => new URL(response.url()).pathname === `/api/v1/sessions/${child.sessionId}/threads/${child.threadId}/history`
+      && response.request().method() === "POST" && response.request().postDataJSON().execution_id === reportNotice.provenance.source_execution_id,
+    { timeout: 30_000 }),
+    reportCell.getByRole("button", { name: "查看来源报告", exact: true }).click(),
+  ]);
+  assert.equal(sourceReportResponse.status(), 200, await sourceReportResponse.text());
+  const sourceReport = (await sourceReportResponse.json()).data;
+  assert.equal(sourceReport.thread_id, child.threadId);
+  assert.deepEqual(sourceReport.internal_executions.map((execution) => execution.execution_id), [reportNotice.provenance.source_execution_id]);
+  const childPanel = owner.page.locator(`.child-thread-conversation[data-thread-id="${child.threadId}"]`);
+  await childPanel.locator(`.child-thread-report[data-execution-id="${reportNotice.provenance.source_execution_id}"]`).waitFor({ state: "visible" });
+  assert.equal(await catalogRow(owner, owner.sessionId).getAttribute("aria-current"), "true");
+  assert.equal(await owner.page.locator("#input").isVisible(), true, "打开来源报告必须保留 main 输入入口");
+  for (const threadId of [child.threadId, sibling.threadId]) {
+    assert.equal(await owner.page.locator(`button[data-session-id="${threadId}"]`).count(), 0, "child 不得进入左侧 Session 导航");
+  }
+  const childRow = owner.page.locator(`.child-thread-item[data-thread-id="${child.threadId}"]`);
+  const siblingRow = owner.page.locator(`.child-thread-item[data-thread-id="${sibling.threadId}"]`);
+  await waitUntil(async () => !(await childRow.locator(".child-thread-report-link").innerText()).includes("新报告"), "来源报告读取后取消精确 child 未读");
+  assert.ok((await siblingRow.locator(".child-thread-report-link").innerText()).includes("新报告"), "读取一个 child 不得确认 sibling 报告");
+  await childPanel.locator("textarea").fill("child 独立草稿");
+  await siblingRow.locator(".child-thread-main").click();
+  const siblingPanel = owner.page.locator(`.child-thread-conversation[data-thread-id="${sibling.threadId}"]`);
+  assert.equal(await siblingPanel.locator("textarea").inputValue(), "");
+  await siblingPanel.locator("textarea").fill("sibling 独立草稿");
+  await childRow.locator(".child-thread-main").click();
+  assert.equal(await childPanel.locator("textarea").inputValue(), "child 独立草稿");
+  await siblingRow.locator(".child-thread-main").click();
+  assert.equal(await siblingPanel.locator("textarea").inputValue(), "sibling 独立草稿");
+  const panelEvidence = { sourceReport, reportNotice, mainTurnIds: mainHistory.items.map((turn) => turn.turn_id),
+    selectedSessionId: owner.sessionId, childDraft: "child 独立草稿", siblingDraft: "sibling 独立草稿" };
   const firstPrompt = "FIFO 第一条：读取 README.md，queued 第二条不得进入本轮。";
   const secondPrompt = "FIFO 第二条：独立核对 README.md，保持根消息因果顺序。";
   const calls = await planChatCalls(child.sessionId, child.threadId, [
@@ -8024,6 +8067,10 @@ async function runChildFifoAndResidency(surface) {
   assert.equal(withBlocker.runtime.residency, "resident");
   assert.equal(withBlocker.runtime.execution_state, "active", "runtime lease 必须由权威 active 状态表达");
   assert.equal(withBlocker.runtime.cold_eligible, false, "active/queued lease 必须阻止卸载");
+  await waitUntil(async () => {
+    const text = await childRow.locator(".child-thread-runtime").innerText();
+    return withBlocker.runtime.blockers.every((blocker) => text.includes(blocker.reason));
+  }, "右侧列表展示后端脱敏 blocker");
   await testControl({ action: "advance_residency", seconds: 1800 });
   const stillActive = (await ownerApi(child, `/api/v1/sessions/${child.sessionId}/child-threads`)).data.items.find((item) => item.thread_id === child.threadId);
   assert.equal(stillActive.runtime.residency, "resident");
@@ -8072,6 +8119,11 @@ async function runChildFifoAndResidency(surface) {
   assert.equal(released.compiled.length, 1, "cold history/detail 不得再次编译 graph");
   assert.equal(released.closed.length, 1, "到期后的后台扫描必须真实关闭 scope");
   assert.equal(released.closed[0].details.generation, reused.acquired[0].details.generation);
+  await waitUntil(async () => (await childRow.locator(".child-thread-runtime").innerText()).includes("运行时已释放"), "列表镜像 cold residency");
+  await childRow.locator(".child-thread-report-link").click();
+  await childPanel.locator(`.child-thread-report[data-execution-id="${reportNotice.provenance.source_execution_id}"]`).waitFor({ state: "visible" });
+  assert.equal((await graphLifecycle(child)).compiled.length, 1, "真实点击 cold 报告不得重新建图");
+  assert.deepEqual((await loadThreadHistory(owner)).items, mainHistory.items, "child 直接对话不得修改 main Turn 历史");
   const rehydrated = await completeOwnerTurn(child, "cold 后再次读取 README.md。", [
     toolResponse("child-rehydrated-tool", "read_file", { path: "README.md" }), finalResponse("child-rehydrated-final", "原 GraphBinding 已重新驻留。"),
   ]);
@@ -8084,7 +8136,7 @@ async function runChildFifoAndResidency(surface) {
     pending, queuedDom, terminalHistory, secondRoot, requests: { firstContinuation: request, successors },
     runtime: { withBlocker: withBlocker.runtime, stillActive: stillActive.runtime, beforeDeadline: beforeDeadline.runtime, coldRuntime },
     interleaved, bindingBefore, bindingAfter, coldHistory, coldDetail, traceIdentity, rehydrated,
-    graph: { initiallyResident, reused, siblingGraph, mainGraph, released, rebuilt, idleRuntime }, siblingCreation, siblingHistory };
+    graph: { initiallyResident, reused, siblingGraph, mainGraph, released, rebuilt, idleRuntime }, siblingCreation, siblingHistory, panelEvidence };
 }
 
 async function assertColdThreadTraceIdentity(owner, mainThreadId) {

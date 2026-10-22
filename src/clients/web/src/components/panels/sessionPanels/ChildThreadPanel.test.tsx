@@ -73,6 +73,16 @@ function panelProps(overrides: {
 }
 
 describe("子会话线程面板", () => {
+  test("列表已确认缺少所选报告来源时明确提示，不回退主线程", () => {
+    const props = panelProps();
+    const html = renderToStaticMarkup(<ChildThreadPanel {...props} conversation={{ ...props.conversation,
+      selectionIntent: { workspaceId: "workspace", sessionId: "ses_parent", threadId: "missing-child", view: "report", reportExecutionId: "old-execution" },
+    }} />);
+    expect(html).toContain("所选子线程已不可用");
+    expect(html).toContain('role="alert"');
+    expect(html).not.toContain("child-thread-conversation");
+  });
+
   test("子线程对话单次展开按原序展示压缩前后正文", async () => {
     const selected = thread(1);
     const turn: TurnDetail = {

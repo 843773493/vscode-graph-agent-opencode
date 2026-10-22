@@ -29,6 +29,7 @@ export interface ChildThreadSelectionIntent {
   sessionId: string;
   threadId: string;
   view: "history" | "report";
+  reportExecutionId?: string;
 }
 
 export function resolveTerminalResourceTarget({
@@ -67,19 +68,22 @@ export function useChildThreadConversation({
   threads: ChildThreadSummary[]; enabled: boolean;
 }) {
   const scope = JSON.stringify([workspaceId, sessionId]);
-  const scopeRef = useRef(scope);
-  scopeRef.current = scope;
-  const [selection, setSelection] = useState<{ scope: string; threadId: string; view: "history" | "report" } | null>(null);
+  const [selection, setSelection] = useState<(Omit<ChildThreadSelectionIntent, "workspaceId" | "sessionId"> & { scope: string }) | null>(null);
   const [snapshots, setSnapshots] = useState<Record<string, ChildThreadConversationSnapshot>>({});
   const [seen, setSeen] = useState<Record<string, string>>({});
   const readRef = useRef<AbortController | null>(null);
   const sendingRef = useRef(new Set<string>());
   const selectionIntent: ChildThreadSelectionIntent | null = selection?.scope === scope && workspaceId && sessionId
-    ? { workspaceId, sessionId, threadId: selection.threadId, view: selection.view } : null;
+    ? { workspaceId, sessionId, threadId: selection.threadId, view: selection.view,
+      ...(selection.reportExecutionId ? { reportExecutionId: selection.reportExecutionId } : {}) } : null;
   const selectedThread = selectionIntent
     ? threads.find((thread) => thread.thread_id === selectionIntent.threadId) ?? null : null;
   const threadId = selectedThread?.thread_id ?? null;
+  const reportExecutionId = selectionIntent?.reportExecutionId ?? selectedThread?.report_execution_id ?? undefined;
   const key = threadId ? JSON.stringify([scope, threadId]) : null;
+  const selectionToken = JSON.stringify([key, selectionIntent?.view, selectionIntent?.reportExecutionId]);
+  const selectionTokenRef = useRef(selectionToken);
+  selectionTokenRef.current = selectionToken;
   const activeKeyRef = useRef(key);
   activeKeyRef.current = key;
   const snapshot = key ? snapshots[key] ?? EMPTY : EMPTY;
@@ -92,8 +96,7 @@ export function useChildThreadConversation({
 
   const read = useCallback(async (view: "history" | "report", older = false, silent = false) => {
     if (!sessionId || !threadId || !key || activeKeyRef.current !== key) return;
-    if (view === "report" && !selectedThread?.report_execution_id) return;
-    const ownerScope = scope;
+    if (view === "report" && !reportExecutionId) return;
     const previous = latestRef.current;
     const cursor = older ? previous[view]?.before_cursor : null;
     if (older && !cursor) return;
@@ -105,29 +108,29 @@ export function useChildThreadConversation({
       const page = await loadSessionHistory(apiPort, sessionId, {
         direction: older ? "before" : "tail",
         cursor: cursor ?? undefined,
-        ...(view === "report" ? { execution_id: selectedThread?.report_execution_id ?? undefined } : { turns: 10 }),
+        ...(view === "report" ? { execution_id: reportExecutionId } : { turns: 10 }),
         include: [...INCLUDE],
       }, workspaceId, controller.signal, threadId);
-      if (controller.signal.aborted || scopeRef.current !== ownerScope) return;
+      if (controller.signal.aborted || readRef.current !== controller || selectionTokenRef.current !== selectionToken) return;
       // page 属于请求的真实容器；继承的历史成员保留其原 Session/Thread scope。
       if (page.thread_id !== threadId) {
         throw new Error("子线程历史响应的 owner 与请求不一致");
       }
-      if (view === "report" && !(page.internal_executions ?? []).some((execution) => execution.execution_id === selectedThread?.report_execution_id)) {
+      if (view === "report" && !(page.internal_executions ?? []).some((execution) => execution.execution_id === reportExecutionId)) {
         throw new Error("该报告尚未提交或已不在当前历史视图中");
       }
       update(key, (prior) => ({
         ...prior, [view]: older ? mergeChildThreadHistory(prior[view], page) : page,
         view, loading: false, error: null, paged: view === "history" && older,
       }));
-      if (view === "report" && selectedThread?.report_execution_id && selectedThread.report_status) {
+      if (view === "report" && reportExecutionId === selectedThread?.report_execution_id && selectedThread?.report_status) {
         setSeen((prior) => ({ ...prior, [key]: `${selectedThread.report_execution_id}:${selectedThread.report_status}` }));
       }
     } catch (error) {
-      if (controller.signal.aborted || scopeRef.current !== ownerScope) return;
+      if (controller.signal.aborted || readRef.current !== controller || selectionTokenRef.current !== selectionToken) return;
       update(key, (prior) => ({ ...prior, loading: false, error: errorMessage(error) }));
     }
-  }, [apiPort, key, scope, selectedThread?.report_execution_id, selectedThread?.report_status, sessionId, threadId, update, workspaceId]);
+  }, [apiPort, key, reportExecutionId, selectionToken, selectedThread?.report_execution_id, selectedThread?.report_status, sessionId, threadId, update, workspaceId]);
 
   useEffect(() => {
     readRef.current?.abort();
@@ -175,10 +178,12 @@ export function useChildThreadConversation({
     owner: { workspaceId: string; sessionId: string },
     id: string,
     view: "history" | "report" = "history",
+    reportExecutionId?: string,
   ) => {
     const ownerScope = JSON.stringify([owner.workspaceId, owner.sessionId]);
     setSelection((prior) => prior?.scope === ownerScope && prior.threadId === id && prior.view === view
-      ? prior : { scope: ownerScope, threadId: id, view });
+      && prior.reportExecutionId === reportExecutionId
+      ? prior : { scope: ownerScope, threadId: id, view, ...(reportExecutionId ? { reportExecutionId } : {}) });
   }, []);
   const selectThread = useCallback((id: string, view: "history" | "report" = "history") => {
     if (!workspaceId || !sessionId) return;

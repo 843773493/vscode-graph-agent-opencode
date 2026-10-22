@@ -257,6 +257,8 @@ export default function ChildThreadPanel({
           })}
         </div>
       ) : null}
+      {!loading && !error && loadedAt && conversation.selectionIntent && !conversation.selectedThread
+        ? <p role="alert">所选子线程已不可用，无法读取其历史或报告。</p> : null}
       {conversation.selectedThread ? <ChildThreadConversation thread={conversation.selectedThread} conversation={conversation}
         onFork={onForkFromThread ? (point) => onForkFromThread(conversation.selectedThread!.thread_id, point) : undefined} /> : null}
     </section>

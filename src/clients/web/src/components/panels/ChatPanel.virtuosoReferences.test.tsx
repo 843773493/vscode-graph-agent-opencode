@@ -3,6 +3,7 @@ import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import { afterEach, describe, expect, test } from "bun:test";
 import { Virtuoso, VirtuosoMockContext } from "react-virtuoso";
 import ChatPanel from "./ChatPanel";
+import type { InternalDisplayProvenance, InternalExecutionDisplayPart } from "../../types/backend";
 import type { ConversationView } from "../../types/frontend";
 import { restoreGlobalDescriptor } from "../../tests/testGlobals";
 
@@ -282,3 +283,45 @@ describe("ChatPanel Virtuoso 渲染引用", () => {
     act(() => renderer!.unmount());
   });
 });
+
+  test("汇报入口只回传当前 Session 精确 child/execution 来源，DOM 不暴露来源身份", () => {
+    installVirtuosoEnvironment();
+    const source: InternalDisplayProvenance = {
+      source_session_id: "session-1", source_thread_id: "child-private", source_execution_id: "execution-private",
+    };
+    const display: InternalExecutionDisplayPart = {
+      kind: "generated_session_result", text: "子线程已提交报告。", item_id: "notice-private", item_sequence: 1,
+      logical_item_ordinal: 0, created_at: "2026-10-22T00:00:00Z", provenance: source,
+    };
+    const opened: InternalDisplayProvenance[] = [];
+    let renderer!: ReactTestRenderer;
+    act(() => { renderer = create(withVirtuosoMock(<ChatPanel {...panelProps([])}
+      internalExecutions={[{ execution_id: "target-execution", job_id: "job-report", session_id: "session-1",
+        thread_id: "thread-main", status: "completed", created_at: display.created_at, updated_at: display.created_at,
+        display_parts: [display], response_parts: [] }]}
+      onOpenChildReport={(target) => opened.push(target)} />), { createNodeMock: createVirtuosoHostNode }); });
+    const props = renderer.root.findByType(Virtuoso).props;
+    const renderItem = (provenance: InternalDisplayProvenance) => props.itemContent(0, {
+      kind: "internal_execution", key: "report", executionId: "target-execution",
+      displayPart: { ...display, provenance },
+    }, props.context) as React.ReactElement;
+    let item!: ReactTestRenderer;
+    act(() => { item = create(renderItem(source)); });
+    const button = item.root.findByProps({ children: "查看来源报告" });
+    act(() => button.props.onClick());
+    expect(opened).toEqual([source]);
+    const markup = JSON.stringify(item.toJSON());
+    for (const id of Object.values(source)) expect(markup).not.toContain(id);
+    act(() => item.unmount());
+    for (const invalid of [
+      { ...source, source_session_id: "copied-source-session" },
+      { ...source, source_thread_id: "thread-main" },
+      { ...source, source_thread_id: undefined },
+      { ...source, source_execution_id: undefined },
+    ]) {
+      act(() => { item = create(renderItem(invalid)); });
+      expect(item.root.findAllByType("button")).toHaveLength(0);
+      act(() => item.unmount());
+    }
+    act(() => renderer.unmount());
+  });

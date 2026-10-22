@@ -150,6 +150,95 @@ test("冷历史和报告请求冻结 child owner，草稿和未读按 child 独�
   expect(requests[requests.length - 1]!.body).toEqual({ direction: "tail", execution_id: "execution-1", include: ["user", "text", "reasoning_detail", "encrypted_reasoning_meta", "tool_call", "tool_result", "final_response", "internal"] });
 });
 
+test("来源报告固定历史 execution，新报告发布后不改投或误标已读", async () => {
+  const executionIds: string[] = [];
+  installSessionApiFetchMock(({ init }) => {
+    const body = JSON.parse(String(init?.body));
+    executionIds.push(body.execution_id);
+    return response({ ...history(CHILDREN[0]!.thread_id), internal_executions: [{
+      execution_id: body.execution_id, job_id: "job-report", session_id: SESSION, thread_id: CHILDREN[0]!.thread_id,
+      status: "completed", created_at: "2026-10-08T00:00:00Z", updated_at: "2026-10-08T00:00:01Z",
+      display_parts: [], response_parts: [],
+    }] });
+  });
+  act(() => { renderer = create(<Harness />); });
+  act(() => current.selectThreadForOwner(
+    { workspaceId: "workspace-a", sessionId: SESSION }, CHILDREN[0]!.thread_id, "report", "historical-execution",
+  ));
+  await until(() => current.snapshot.report !== null && !current.snapshot.loading);
+  expect(executionIds).toEqual(["historical-execution"]);
+  expect(current.isUnread(CHILDREN[0]!)).toBe(true);
+
+  const latest = { ...CHILDREN[0]!, report_execution_id: "newer-execution" };
+  act(() => renderer!.update(<Harness threads={[latest, CHILDREN[1]!]} />));
+  await until(() => executionIds.length === 2 && !current.snapshot.loading);
+  expect(executionIds).toEqual(["historical-execution", "historical-execution"]);
+  expect(current.snapshot.report?.internal_executions?.[0]?.execution_id).toBe("historical-execution");
+  expect(current.isUnread(latest)).toBe(true);
+
+  act(() => current.selectThread(latest.thread_id, "report"));
+  await until(() => executionIds.length === 3 && !current.snapshot.loading);
+  expect(executionIds[2]).toBe("newer-execution");
+  expect(current.isUnread(latest)).toBe(false);
+});
+
+test("同一 child 快速切换报告，旧成功和错误都不能覆盖新 execution", async () => {
+  const replies = new Map<string, (response: Response) => void>();
+  installSessionApiFetchMock(({ init }) => {
+    const executionId = JSON.parse(String(init?.body)).execution_id as string;
+    return new Promise<Response>((resolve) => { replies.set(executionId, resolve); });
+  });
+  const select = (execution: string) => act(() => current.selectThreadForOwner(
+    { workspaceId: "workspace-a", sessionId: SESSION }, CHILDREN[0]!.thread_id, "report", execution,
+  ));
+  act(() => { renderer = create(<Harness />); });
+  select("old-success");
+  await until(() => replies.has("old-success"));
+  select("old-error");
+  await until(() => replies.has("old-error"));
+  select("selected-execution");
+  await until(() => replies.has("selected-execution"));
+  const report = (execution: string) => response({ ...history(CHILDREN[0]!.thread_id), internal_executions: [{
+    execution_id: execution, job_id: "job-report", session_id: SESSION, thread_id: CHILDREN[0]!.thread_id,
+    status: "completed", created_at: "2026-10-08T00:00:00Z", updated_at: "2026-10-08T00:00:01Z",
+    display_parts: [], response_parts: [],
+  }] });
+  await act(async () => { replies.get("selected-execution")!(report("selected-execution")); });
+  await until(() => current.snapshot.report !== null && !current.snapshot.loading);
+  await act(async () => {
+    replies.get("old-success")!(report("old-success"));
+    replies.get("old-error")!(Response.json({ detail: "过期报告读取失败" }, { status: 409 }));
+  });
+  expect(current.snapshot.report?.internal_executions?.map((execution) => execution.execution_id)).toEqual(["selected-execution"]);
+  expect(current.snapshot.error).toBeNull();
+  expect(current.isUnread(CHILDREN[0]!)).toBe(true);
+});
+
+test("报告选择已提交但 passive effect 尚未取消旧请求时，旧正文不得发布", async () => {
+  let reply!: (response: Response) => void;
+  let signal: AbortSignal | null = null;
+  installSessionApiFetchMock(({ init }) => {
+    signal = init?.signal ?? null;
+    return new Promise<Response>((resolve) => { reply = resolve; });
+  });
+  act(() => { renderer = create(<Harness />); });
+  const owner = { workspaceId: "workspace-a", sessionId: SESSION };
+  act(() => current.selectThreadForOwner(owner, CHILDREN[0]!.thread_id, "report", "old-execution"));
+  await until(() => signal !== null);
+  // 刻意不包 act：观察 render 已更新选择、passive effect 尚未 abort 的真实窗口。
+  current.selectThreadForOwner(owner, CHILDREN[0]!.thread_id, "report", "new-execution");
+  expect(current.selectionIntent?.reportExecutionId).toBe("new-execution");
+  expect((signal as AbortSignal | null)?.aborted).toBe(false);
+  reply(response({ ...history(CHILDREN[0]!.thread_id), internal_executions: [{
+    execution_id: "old-execution", job_id: "job-report", session_id: SESSION, thread_id: CHILDREN[0]!.thread_id,
+    status: "completed", created_at: "2026-10-08T00:00:00Z", updated_at: "2026-10-08T00:00:01Z",
+    display_parts: [], response_parts: [],
+  }] }));
+  for (let microtask = 0; microtask < 20; microtask += 1) await Promise.resolve();
+  expect(current.snapshot.report).toBeNull();
+  await act(async () => {});
+});
+
 test("报告请求在途时重复点击同一 child 报告保留唯一读取并正常收敛", async () => {
   let complete!: (reply: Response) => void;
   let signal: AbortSignal | null = null;

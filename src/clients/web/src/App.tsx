@@ -894,6 +894,18 @@ export default function AppShell() {
                       onRemovePending={removePendingRequest}
                       onChangePendingPolicy={updatePendingRequestPolicy}
                       onOpenAttachment={handleOpenAttachment}
+                      onOpenChildReport={(source) => {
+                        if (!activeSessionWorkspaceId || !source.source_session_id || source.source_session_id !== activeSession?.session_id
+                          || !source.source_thread_id || !source.source_execution_id) {
+                          throw new Error("报告来源不属于当前会话的精确子线程执行");
+                        }
+                        setForkChildOwner(null);
+                        childConversation.selectThreadForOwner(
+                          { workspaceId: activeSessionWorkspaceId, sessionId: source.source_session_id },
+                          source.source_thread_id, "report", source.source_execution_id,
+                        );
+                        openAuxiliaryTab("resources");
+                      }}
                       onForkConversation={(point) => {
                         void handleForkSessionContext(point.workspaceId, point.sessionId, point);
                       }}
