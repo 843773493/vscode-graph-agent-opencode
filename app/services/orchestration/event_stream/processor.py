@@ -111,6 +111,7 @@ async def process_agent_event_stream(
     input_payload: dict[str, Any] | None,
     config: dict[str, Any],
     session_id: str,
+    thread_id: str,
     job_id: str,
     turn_id: str | None,
     agent_id: str,
@@ -201,7 +202,7 @@ async def process_agent_event_stream(
                 record_latest_model_part(part)
                 collected_text_parts.append(part.text)
                 SessionInterruptState.set(
-                    session_id,
+                    session_id, thread_id=thread_id,
                     current_text="".join(collected_text_parts),
                 )
 
@@ -476,7 +477,7 @@ async def process_agent_event_stream(
             if event_type == "on_tool_start":
                 if collected_text_parts:
                     collected_text_parts.clear()
-                    SessionInterruptState.set(session_id, current_text="")
+                    SessionInterruptState.set(session_id, thread_id=thread_id, current_text="")
                 if not name:
                     raise RuntimeError("工具开始事件缺少 name")
                 raw_tool_name = name
@@ -525,7 +526,7 @@ async def process_agent_event_stream(
                     message_stream_tool_attempt_ids_by_run_id[run_id] = tool_attempt_id
                 skill_names = custom_tool_skill_sources.get(display_context.tool_name, [])
                 interrupt_state = SessionInterruptState.start_tool(
-                    session_id,
+                    session_id, thread_id=thread_id,
                     run_id=run_id,
                     tool_name=display_context.tool_name,
                 )
@@ -684,7 +685,7 @@ async def process_agent_event_stream(
                             )
                             if stored_edit is not None:
                                 stored_edits.append(stored_edit)
-                interrupt_state = SessionInterruptState.end_tool(session_id, run_id=run_id)
+                interrupt_state = SessionInterruptState.end_tool(session_id, thread_id=thread_id, run_id=run_id)
                 if interrupt_state.active_tools_by_run_id:
                     set_interruptible_phase("tool")
                     set_active_tool_name(interrupt_state.tool_name)

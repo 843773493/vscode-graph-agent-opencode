@@ -11,6 +11,7 @@ from app.core.turn_execution_scope import (
     AgentControlInbox,
     AgentLoopControlCoordinator,
     ScopeCancelledError,
+    TurnControlCoordinator,
     TurnExecutionScope,
     TurnExecutionScopeRegistry,
 )
@@ -237,4 +238,90 @@ async def test_agent_loop_control_coordinator_linearizes_interrupt_once() -> Non
     assert scope.cancellation_signal.reason == "user_requested"
     assert inbox.get(command.command_id).status == "consumed"
     assert writer.commit.await_count == 1
+    await scope.close()
+
+
+@pytest.mark.asyncio
+async def test_interrupt_prepares_owner_before_cancel_and_concurrent_loop_consumption() -> None:
+    scope, inbox = TurnExecutionScope("stream_1"), AgentControlInbox("stream_1")
+    writer, accepted = AsyncMock(), []
+    writing, release = asyncio.Event(), asyncio.Event()
+
+    async def commit(*_args, **_kwargs):
+        writing.set()
+        await release.wait()
+        return {"type": "interrupt.requested", "event_seq": 1}
+
+    async def cancel_hook(_reason):
+        assert accepted == ["original-request"]
+
+    writer.commit.side_effect = commit
+    scope.register_abort(cancel_hook)
+    direct = asyncio.create_task(TurnControlCoordinator(scope, inbox, writer).submit_interrupt(
+        command_id="original-request", idempotency_key="original-request",
+        on_accepted=lambda: accepted.append("original-request"),
+    ))
+    await writing.wait()
+    command = await inbox.next()
+    loop = asyncio.create_task(AgentLoopControlCoordinator(scope, inbox, writer).process(command))
+    await asyncio.sleep(0)
+    assert not scope.cancellation_signal.is_cancelled
+    assert not accepted
+    release.set()
+    await asyncio.gather(direct, loop)
+    assert accepted == ["original-request"]
+    assert scope.cancellation_signal.reason == "user_requested"
+    assert inbox.get(command.command_id).status == "consumed"
+    writer.commit.assert_awaited_once()
+    await scope.close()
+
+
+@pytest.mark.asyncio
+async def test_rejected_interrupt_never_prepares_owner_or_cancels() -> None:
+    scope, inbox, writer = TurnExecutionScope("stream_1"), AgentControlInbox("stream_1"), AsyncMock()
+    accepted = []
+    writer.commit.return_value = {"type": "interrupt.rejected"}
+    await TurnControlCoordinator(scope, inbox, writer).submit_interrupt(
+        command_id="late", idempotency_key="late", on_accepted=lambda: accepted.append("late"),
+    )
+    assert not accepted
+    assert not scope.cancellation_signal.is_cancelled
+    assert inbox.get("late").status == "rejected"
+    await scope.close()
+
+
+@pytest.mark.asyncio
+async def test_accepted_interrupt_cancels_and_settles_even_if_owner_publication_fails() -> None:
+    scope, inbox, writer = TurnExecutionScope("stream_1"), AgentControlInbox("stream_1"), AsyncMock()
+    writer.commit.return_value = {"type": "interrupt.requested"}
+    failure = RuntimeError("reminder 写入失败")
+
+    def fail_publication():
+        raise failure
+
+    with pytest.raises(RuntimeError) as caught:
+        await TurnControlCoordinator(scope, inbox, writer).submit_interrupt(
+            command_id="accepted", idempotency_key="accepted", on_accepted=fail_publication,
+        )
+    assert caught.value is failure
+    assert scope.cancellation_signal.reason == "user_requested"
+    assert inbox.get("accepted").status == "consumed"
+    queued = await inbox.next()
+    assert (await AgentLoopControlCoordinator(scope, inbox, writer).process(queued))["status"] == "consumed"
+    writer.commit.assert_awaited_once()
+    await scope.close()
+
+
+@pytest.mark.asyncio
+async def test_stale_queued_interrupt_cannot_rewrite_consumed_status() -> None:
+    scope, inbox, writer = TurnExecutionScope("stream_1"), AgentControlInbox("stream_1"), AsyncMock()
+    writer.commit.return_value = {"type": "interrupt.requested"}
+    await TurnControlCoordinator(scope, inbox, writer).submit_interrupt(command_id="cmd", idempotency_key="cmd")
+    queued = await inbox.next()
+    result = await AgentLoopControlCoordinator(scope, inbox, writer).process(queued)
+    assert result["status"] == "consumed"
+    assert inbox.get("cmd").status == "consumed"
+    writer.commit.assert_awaited_once()
+    with pytest.raises(RuntimeError, match="终态不可改写"):
+        inbox.mark("cmd", "rejected")
     await scope.close()

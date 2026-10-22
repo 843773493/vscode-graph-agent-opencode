@@ -64,6 +64,7 @@ async def run_agent_with_retries(
     checkpointer: RolloutCheckpointSaver,
     admission: ExecutionAdmission,
     session_id: str,
+    thread_id: str,
     job_id: str,
     turn_id: str | None,
     resolved_agent_id: str,
@@ -86,6 +87,8 @@ async def run_agent_with_retries(
     question_communication_id: str | None,
     resume_from_checkpoint: bool = False,
 ) -> StepAgentRetryResult:
+    if (admission.session_id, admission.thread_id, admission.job_id, admission.turn_id) != (session_id, thread_id, job_id, turn_id):
+        raise ValueError("Agent retry 的 Session/Thread/Job/Turn 与 execution admission 不一致")
 
     def register_retry(*, message_id: str, kind: str, reminder: str, metadata: dict[str, object]) -> None:
         checkpointer.register_execution_retry_source(
@@ -119,6 +122,7 @@ async def run_agent_with_retries(
             input_payload=None if resume_from_checkpoint else {"messages": next_input_messages},
             config=config,
             session_id=session_id,
+            thread_id=thread_id,
             job_id=job_id,
             turn_id=turn_id,
             agent_id=resolved_agent_id,

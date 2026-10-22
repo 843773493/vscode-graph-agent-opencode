@@ -6,8 +6,8 @@ import {
 } from "./sessionTurnHistory";
 import { HttpRequestError } from "../http";
 import {
-  installSessionCatalogFetchMock,
-  unwrapSessionCatalogFetch,
+  installSessionApiFetchMock,
+  unwrapSessionApiFetch,
 } from "./sessionApiFetchMock";
 
 function apiResponse(data: unknown, status = 200): Response {
@@ -18,13 +18,13 @@ function apiResponse(data: unknown, status = 200): Response {
 }
 
 afterEach(() => {
-  unwrapSessionCatalogFetch();
+  unwrapSessionApiFetch();
 });
 
 describe("Turn 历史 API client", () => {
   test("按约定路径请求 bootstrap 和语义化历史", async () => {
     const requests: Array<{ path: string; method: string; body: unknown }> = [];
-    installSessionCatalogFetchMock(({ url: rawUrl, path, method, init }) => {
+    installSessionApiFetchMock(({ url: rawUrl, path, method, init }) => {
       requests.push({
         path: `${path}${new URL(rawUrl).search}`,
         method: method,
@@ -93,7 +93,7 @@ describe("Turn 历史 API client", () => {
 
   test("把 409 stale cursor 映射为可识别错误", async () => {
     const seen: string[] = [];
-    installSessionCatalogFetchMock(({ path, method }) => {
+    installSessionApiFetchMock(({ path, method }) => {
       seen.push(`${method} ${path}`);
       return Response.json({
         detail: {
@@ -121,7 +121,7 @@ describe("Turn 历史 API client", () => {
 
   test("结构化后端错误保留可诊断 message", async () => {
     const seen: string[] = [];
-    installSessionCatalogFetchMock(({ path, method }) => {
+    installSessionApiFetchMock(({ path, method }) => {
       seen.push(`${method} ${path}`);
       return Response.json({
         detail: {

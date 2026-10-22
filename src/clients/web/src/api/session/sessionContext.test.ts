@@ -1,12 +1,12 @@
 import { afterEach, expect, test } from "bun:test";
 import {
-  installSessionCatalogFetchMock,
-  unwrapSessionCatalogFetch,
+  installSessionApiFetchMock,
+  unwrapSessionApiFetch,
 } from "./sessionApiFetchMock";
 import { readSessionContext, type SessionContextSession } from "./sessionContext";
 
 afterEach(() => {
-  unwrapSessionCatalogFetch();
+  unwrapSessionApiFetch();
 });
 
 test("上下文请求透传 Session API 身份与目录返回的 assembly_ref", async () => {
@@ -17,7 +17,7 @@ test("上下文请求透传 Session API 身份与目录返回的 assembly_ref", 
     scope: "workspace",
   };
   let requestBody: unknown;
-  installSessionCatalogFetchMock(({ path, method, init }) => {
+  installSessionApiFetchMock(({ path, method, init }) => {
     if (path !== "/api/v1/context/read" || method !== "POST") return undefined;
     requestBody = JSON.parse(String(init?.body));
     return Response.json({

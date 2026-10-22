@@ -1,9 +1,9 @@
 import { afterEach, describe, expect, jest, test } from "bun:test";
-import { getLLMRequestLogs, listMessages, replayMessageTurn, sendUserMessage } from "./sessionMessages";
+import { getLLMRequestLogs, interruptSession, listMessages, replayMessageTurn, sendUserMessage } from "./sessionMessages";
 import { restoreGlobalDescriptor } from "../../tests/testGlobals";
 import {
-  installSessionCatalogFetchMock,
-  unwrapSessionCatalogFetch,
+  installSessionApiFetchMock,
+  unwrapSessionApiFetch,
 } from "./sessionApiFetchMock";
 
 const originalFetch = globalThis.fetch;
@@ -21,12 +21,12 @@ function installWindow(port: number): void {
 }
 
 function installFetchMock(respond: () => Response): void {
-  installSessionCatalogFetchMock(() => respond(), { credentialToken: "messages-token" });
+  installSessionApiFetchMock(() => respond(), { credentialToken: "messages-token" });
 }
 
 afterEach(() => {
   jest.useRealTimers();
-  unwrapSessionCatalogFetch();
+  unwrapSessionApiFetch();
   restoreGlobalDescriptor("window", originalWindowDescriptor);
 });
 
@@ -52,6 +52,31 @@ describe("会话消息列表 API 的 CursorPage 契约", () => {
 
     await expect(listMessages(48_309, "ses_x", "workspace-1")).rejects
       .toThrow("会话消息列表响应 items 必须是数组，实际为 number");
+  });
+});
+
+describe("中断请求只作用于明确的 Thread", () => {
+  const result = { session_id: "ses_interrupt", thread_id: "thr_main", job_id: "job_interrupt", status: "cancelling", phase: "tool", interrupt_request_id: "intr_exact" };
+
+  test("传递精确 Thread 并保留后端完整回执", async () => {
+    const requests: string[] = [];
+    installSessionApiFetchMock(({ url, method }) => {
+      expect(method).toBe("POST");
+      requests.push(url);
+      return Response.json({ data: result, request_id: "req-interrupt" });
+    });
+    expect(await interruptSession(48_311, result.session_id, result.thread_id, "workspace-1")).toEqual(result);
+    expect(requests).toHaveLength(1);
+    expect(new URL(requests[0], "http://localhost").searchParams.get("thread_id")).toBe(result.thread_id);
+  });
+
+  test.each([
+    { ...result, session_id: "ses_other" },
+    { ...result, thread_id: "thr_child" },
+    { ...result, thread_id: undefined },
+  ])("拒绝错位或缺失的回执身份 %j", async (response) => {
+    installFetchMock(() => Response.json({ data: response, request_id: "req-interrupt-bad-owner" }));
+    await expect(interruptSession(48_311, result.session_id, result.thread_id, "workspace-1")).rejects.toThrow("中断响应归属不匹配");
   });
 });
 

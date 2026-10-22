@@ -5,6 +5,7 @@ from datetime import UTC, datetime
 
 from app.abstractions.job_event_bus import JobEventBusProtocol
 from app.abstractions.job_service import JobServiceProtocol
+from app.abstractions.turn_history import TurnSessionLookupProtocol
 from app.core.identifier import create_prefixed_id
 from app.core.job_event_bus import EventType
 from app.core.session_interrupt_state import SessionInterruptState
@@ -16,7 +17,7 @@ from app.domain.itemized.execution_admission import (
     InternalExecutionIntent,
     UserExecutionIdentity,
 )
-from app.schemas.internal_v2.common import ControlAction, JobStatus
+from app.schemas.internal_v2.common import ControlAction
 from app.schemas.internal_v2.job import JobControlRequest
 from app.schemas.internal_v2.session import SessionInterruptResultDTO
 from app.services.business.job.lifecycle import PAUSABLE_JOB_STATUSES
@@ -35,45 +36,56 @@ class SessionInterruptService:
         job_event_bus: JobEventBusProtocol,
         message_service: MessageService,
         message_stream_store: MessageStreamStore,
+        session_service: TurnSessionLookupProtocol,
         execution_scope_registry: TurnExecutionScopeRegistry | None = None,
     ) -> None:
         self._job_service = job_service
         self._job_event_bus = job_event_bus
         self._message_service = message_service
         self._message_stream_store = message_stream_store
+        self._session_service = session_service
         self._execution_scope_registry = execution_scope_registry
 
-    async def interrupt(self, session_id: str) -> SessionInterruptResultDTO:
+    async def interrupt(self, session_id: str, *, thread_id: str | None = None) -> SessionInterruptResultDTO:
+        # 仅在解析身份时持有读准入；JobService 自有准入不可嵌套同一 Session gate。
+        async with self._session_service.session_read_admission(session_id):
+            target_thread = (
+                await self._session_service.resolve_main_thread(session_id)
+                if thread_id is None
+                else await self._session_service.resolve_thread(session_id, thread_id)
+            )
+        return await self._interrupt_thread(session_id, target_thread)
+
+    async def _interrupt_thread(self, session_id: str, thread_id: str) -> SessionInterruptResultDTO:
         jobs = await self._job_service.list(session_id=session_id)
         active_job = next(
             (
                 job
                 for job in jobs
-                if job.status in PAUSABLE_JOB_STATUSES
+                if job.session_id == session_id and job.thread_id == thread_id
+                and job.status in PAUSABLE_JOB_STATUSES
             ),
             None,
         )
         if active_job is None:
-            raise ValueError(f"Session {session_id} 当前没有正在运行的任务")
+            raise ValueError(f"SessionThread {session_id}/{thread_id} 当前没有正在运行的任务")
 
-        try:
-            execution_binding = self._job_service.get_execution_binding(
-                active_job.job_id
-            )
-        except KeyError:
-            jobs = await self._job_service.list(session_id=session_id)
-            active_job = next(
-                (job for job in jobs if job.status in PAUSABLE_JOB_STATUSES),
-                None,
-            )
-            if active_job is None:
-                raise ValueError(f"Session {session_id} 当前没有正在运行的任务")
-            execution_binding = self._job_service.get_execution_binding(
-                active_job.job_id
-            )
+        # 选中后冻结 Job，绑定已消失时明确失败，不能重选后继执行或其它 Thread。
+        execution_binding = self._job_service.get_execution_binding(active_job.job_id)
+        admission = self._message_service.execution_admission_for_job(
+            session_id, thread_id=thread_id, job_id=active_job.job_id,
+        )
+        if (
+            (admission.session_id, admission.thread_id, admission.job_id)
+            != (session_id, thread_id, active_job.job_id)
+            or admission.admission_idempotency_key != execution_binding.admission_idempotency_key
+        ):
+            raise RuntimeError(f"中断目标与 execution admission 归属不一致: {session_id}/{thread_id}/{active_job.job_id}")
 
         if isinstance(execution_binding, UserExecutionIdentity):
-            if execution_binding.job_id != active_job.job_id:
+            if (execution_binding.job_id != active_job.job_id
+                    or admission.turn_id != execution_binding.turn_id
+                    or admission.execution_origin != "user_turn"):
                 raise RuntimeError(
                     "active Job 与 user execution identity 不一致: "
                     f"job_id={active_job.job_id!r} "
@@ -81,6 +93,11 @@ class SessionInterruptService:
                 )
             turn_id = execution_binding.turn_id
         elif isinstance(execution_binding, InternalExecutionIntent):
+            if (admission.execution_id != execution_binding.execution_id
+                    or admission.turn_id is not None
+                    or admission.execution_origin != "internal"
+                    or active_job.message_id != execution_binding.message_id):
+                raise RuntimeError("中断目标与 internal execution identity 不一致")
             turn_id = None
         else:
             raise TypeError(
@@ -88,97 +105,105 @@ class SessionInterruptService:
                 f"{type(execution_binding).__name__}"
             )
 
-        state = SessionInterruptState.get(session_id)
+        state = SessionInterruptState.get(session_id, thread_id=thread_id)
         phase = state.phase or "text"
         tool_name = state.tool_name
         interrupted_at = datetime.now(UTC)
         interrupt_request_id = create_prefixed_id("intr")
 
-        message_stream = None
-        control_inbox = None
-        if turn_id is not None:
-            message_stream = await self._message_stream_store.open(
-                session_id=session_id,
-                thread_id=active_job.thread_id,
-                turn_id=turn_id,
-                job_id=active_job.job_id,
-            )
-            control_inbox = (
-                self._execution_scope_registry.get_inbox(message_stream.turn_stream_id)
-                if self._execution_scope_registry is not None
-                else None
-            )
-            scope = (
-                self._execution_scope_registry.get(message_stream.turn_stream_id)
-                if self._execution_scope_registry is not None
-                else None
-            )
-            if control_inbox is not None and scope is not None:
-                interrupt_event = await TurnControlCoordinator(
-                    scope=scope,
-                    inbox=control_inbox,
-                    writer=message_stream,
-                ).submit_interrupt(
-                    command_id=interrupt_request_id,
-                    idempotency_key=interrupt_request_id,
-                )
-            else:
-                # AgentLoop 尚未完成 scope 注册时仍需先持久化控制事实；后续
-                # AgentExecutionService 会从消息流终态判断这次早期中断。
-                interrupt_event = await message_stream.commit(
-                    "interrupt.requested",
-                    {
-                        "interrupt_request_id": interrupt_request_id,
-                        "reason": "user_requested",
-                    },
-                    event_id=interrupt_request_id,
-                )
-            if interrupt_event["type"] == "interrupt.rejected":
-                stream_state = await self._message_stream_store.get_state(
-                    message_stream.turn_stream_id
-                )
-                return SessionInterruptResultDTO(
-                    session_id=session_id,
-                    job_id=active_job.job_id,
-                    status=str(stream_state["stream_status"]),
-                    interrupt_request_id=interrupt_request_id,
-                    phase=phase,
-                    tool_name=tool_name,
-                    interrupted_at=interrupted_at,
-                )
-        SessionInterruptState.set(
-            session_id,
-            interrupt_request_id=interrupt_request_id,
-            cancellation_reason="user_requested",
-        )
-        if (
-            message_stream is not None
-            and control_inbox is None
-            and self._execution_scope_registry is not None
-        ):
-            await self._execution_scope_registry.cancel(
-                message_stream.turn_stream_id,
-                "user_requested",
-            )
+        cancellation_prepared = False
 
-        reminder_injected = self._append_user_interrupt_reminder(
-            session_id=session_id,
-            thread_id=active_job.thread_id,
-            execution_id=self._message_service.execution_admission_for_job(session_id, thread_id=active_job.thread_id, job_id=active_job.job_id).execution_id,
-            phase=phase,
-            tool_name=tool_name,
-            interrupted_at=interrupted_at,
-        )
-        if reminder_injected:
+        def prepare_cancellation() -> None:
+            nonlocal cancellation_prepared
+            # durable accept 后、取消信号前同步发布；runner 收尾必须先看到该身份。
             SessionInterruptState.set(
-                session_id,
+                session_id, thread_id=thread_id,
+                interrupt_request_id=interrupt_request_id,
+                cancellation_reason="user_requested",
+            )
+            cancellation_prepared = True
+            self._append_user_interrupt_reminder(
+                session_id=session_id, thread_id=thread_id,
+                execution_id=admission.execution_id, phase=phase,
+                tool_name=tool_name, interrupted_at=interrupted_at,
+            )
+            SessionInterruptState.set(
+                session_id, thread_id=thread_id,
                 user_interrupt_reminder_injected=True,
             )
 
-        await self._job_service.control(
-            active_job.job_id,
-            JobControlRequest(action=ControlAction.cancel),
-        )
+        try:
+            message_stream = None
+            control_inbox = None
+            if turn_id is not None:
+                message_stream = await self._message_stream_store.open(
+                    session_id=session_id,
+                    thread_id=active_job.thread_id,
+                    turn_id=turn_id,
+                    job_id=active_job.job_id,
+                )
+                control_inbox = (
+                    self._execution_scope_registry.get_inbox(message_stream.turn_stream_id)
+                    if self._execution_scope_registry is not None
+                    else None
+                )
+                scope = (
+                    self._execution_scope_registry.get(message_stream.turn_stream_id)
+                    if self._execution_scope_registry is not None
+                    else None
+                )
+                if control_inbox is not None and scope is not None:
+                    interrupt_event = await TurnControlCoordinator(
+                        scope=scope,
+                        inbox=control_inbox,
+                        writer=message_stream,
+                    ).submit_interrupt(
+                        command_id=interrupt_request_id,
+                        idempotency_key=interrupt_request_id,
+                        on_accepted=prepare_cancellation,
+                    )
+                else:
+                    # AgentLoop 尚未完成 scope 注册时仍需先持久化控制事实；后续
+                    # AgentExecutionService 会从消息流终态判断这次早期中断。
+                    interrupt_event = await message_stream.commit(
+                        "interrupt.requested",
+                        {
+                            "interrupt_request_id": interrupt_request_id,
+                            "reason": "user_requested",
+                        },
+                        event_id=interrupt_request_id,
+                    )
+                if interrupt_event["type"] == "interrupt.rejected":
+                    stream_state = await self._message_stream_store.get_state(
+                        message_stream.turn_stream_id
+                    )
+                    return SessionInterruptResultDTO(
+                        session_id=session_id,
+                        thread_id=thread_id,
+                        job_id=active_job.job_id,
+                        status=str(stream_state["stream_status"]),
+                        interrupt_request_id=interrupt_request_id,
+                        phase=phase,
+                        tool_name=tool_name,
+                        interrupted_at=interrupted_at,
+                    )
+            # TODO: internal execution 的自然终结与中断仍需统一原子边界；不重选后继 Job。
+            if turn_id is None or control_inbox is None or scope is None:
+                try:
+                    prepare_cancellation()
+                finally:
+                    if message_stream is not None and self._execution_scope_registry is not None:
+                        await self._execution_scope_registry.cancel(
+                            message_stream.turn_stream_id,
+                            "user_requested",
+                        )
+        finally:
+            # 接受身份发布后，即使 reminder 或 scope hook 失败，也必须通知已冻结的 Job。
+            if cancellation_prepared:
+                control_result = await self._job_service.control(
+                    active_job.job_id,
+                    JobControlRequest(action=ControlAction.cancel),
+                )
 
         await self._job_service.notify_boundary(
             session_id,
@@ -203,8 +228,9 @@ class SessionInterruptService:
 
         return SessionInterruptResultDTO(
             session_id=session_id,
+            thread_id=thread_id,
             job_id=active_job.job_id,
-            status=JobStatus.cancelling.value,
+            status=control_result.status.value,
             interrupt_request_id=interrupt_request_id,
             phase=phase,
             tool_name=tool_name,
@@ -233,7 +259,7 @@ class SessionInterruptService:
             "user_initiated": True,
             "interrupted_at": interrupted_at.isoformat(),
             "checkpoint_event_id": (
-                SessionInterruptState.get(session_id).interrupt_request_id
+                SessionInterruptState.get(session_id, thread_id=thread_id).interrupt_request_id
             ),
         }
         injected = self._message_service.submit_system_reminder(

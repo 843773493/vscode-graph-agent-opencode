@@ -59,7 +59,7 @@ function gatewayBarrierResponse(
   return undefined;
 }
 
-export interface SessionCatalogFetchRequest {
+export interface SessionApiFetchRequest {
   url: string;
   path: string;
   method: string;
@@ -70,8 +70,8 @@ export interface SessionCatalogFetchRequest {
  * 返回 Response；返回 undefined 表示本用例不认领该请求。未认领的请求会被统一抛出，
  * 绝不允许静默返回空响应。
  */
-export type SessionCatalogFetchHandler = (
-  request: SessionCatalogFetchRequest,
+export type SessionApiFetchHandler = (
+  request: SessionApiFetchRequest,
 ) => Response | Promise<Response> | undefined;
 
 /**
@@ -81,8 +81,8 @@ export type SessionCatalogFetchHandler = (
  *   （调用方自己按路径伪造凭据响应）。
  * - 业务响应一律交给 `handler`；未声明请求抛出带方法/路径的错误。
  */
-export function installSessionCatalogFetchMock(
-  handler: SessionCatalogFetchHandler,
+export function installSessionApiFetchMock(
+  handler: SessionApiFetchHandler,
   options: { credentialToken?: string | null } = {},
 ): void {
   const token = options.credentialToken === undefined ? "test-token" : options.credentialToken;
@@ -109,6 +109,6 @@ export function installSessionCatalogFetchMock(
 }
 
 /** 还原到安装前的 fetch；供 afterEach 调用。 */
-export function unwrapSessionCatalogFetch(): void {
+export function unwrapSessionApiFetch(): void {
   globalThis.fetch = originalFetch;
 }

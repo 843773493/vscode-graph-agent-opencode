@@ -17,7 +17,6 @@ import type {
   SessionCompactResult,
 } from "../../types/backend";
 import type { AppState, ConversationContentView, ConversationView } from "../../types/frontend";
-import { cloneMaps } from "../../state/appStateMaps";
 import { listMainThreadPendingRequests as apiListMainThreadPendingRequests } from "../../pendingRequestsApi";
 import { updateSessionAttachmentSummary } from "../../state/attachments";
 import {
@@ -104,7 +103,13 @@ export function useSessionRunActions({
       const pendingSubmissionId = `pending_submission_${pendingSubmissionSeqRef.current}`;
       const submittedAt = new Date().toISOString();
       setState((prev) => {
-        const next = cloneMaps(prev);
+        const next = {
+          ...prev,
+          pendingConversations: new Map(prev.pendingConversations),
+          sessionAttachmentSummaries: attachments.length > 0
+            ? new Map(prev.sessionAttachmentSummaries)
+            : prev.sessionAttachmentSummaries,
+        };
         const conversation: ConversationView = {
           conversationId: pendingSubmissionId,
           displayMode: "live",
@@ -184,7 +189,11 @@ export function useSessionRunActions({
           message = `${message}；重新读取待处理队列也失败: ${reconciliationFailure}`;
         }
         setState((prev) => {
-          const next = cloneMaps(prev);
+          const next = {
+            ...prev,
+            pendingConversations: new Map(prev.pendingConversations),
+            activeJobIdsBySession: new Map(prev.activeJobIdsBySession),
+          };
           if (snapshot) {
             writePendingSnapshot(
               next.pendingConversations,
@@ -224,7 +233,11 @@ export function useSessionRunActions({
       const jobId = accepted.job_id;
 
       setState((prev) => {
-        const next = cloneMaps(prev);
+        const next = {
+          ...prev,
+          pendingConversations: new Map(prev.pendingConversations),
+          activeJobIdsBySession: new Map(prev.activeJobIdsBySession),
+        };
         const conversation: ConversationView = {
           conversationId: messageId,
           displayMode: "live",
@@ -319,7 +332,10 @@ export function useSessionRunActions({
         currentSessionGatewayWorkspaceId,
       );
       setState((prev) => {
-        const next = cloneMaps(prev);
+        const next = {
+          ...prev,
+          eventQueuesBySession: new Map(prev.eventQueuesBySession),
+        };
         next.compactLoading = false;
         next.lastCompactResult = result;
         // compactLoading/lastCompactResult 是全局单值，无论会话是否切走都要复位；
@@ -388,12 +404,16 @@ export function useSessionRunActions({
     if (!session) {
       throw new Error("当前没有可中断的会话");
     }
+    if (!session.thread_id) {
+      throw new Error("当前会话缺少权威 main Thread 身份，无法中断");
+    }
 
     setState((prev) => ({ ...prev, status: "正在中断生成..." }));
     try {
       const result = await apiInterruptSession(
         apiPort,
         session.session_id,
+        session.thread_id,
         currentSessionGatewayWorkspaceId,
       );
       setState((prev) => {
@@ -429,7 +449,11 @@ export function useSessionRunActions({
             currentSessionGatewayWorkspaceId,
           );
           setState((prev) => {
-            const next = cloneMaps(prev);
+            const next = {
+              ...prev,
+              pendingConversations: new Map(prev.pendingConversations),
+              activeJobIdsBySession: new Map(prev.activeJobIdsBySession),
+            };
             writePendingSnapshot(
               next.pendingConversations,
               next.activeJobIdsBySession,
@@ -457,7 +481,11 @@ export function useSessionRunActions({
       // 后端已确认没有运行中的任务，清掉因重连/丢 SSE 残留的前端运行态，
       // 并触发一次历史 bootstrap 读取已提交的终态。
       setState((prev) => {
-        const next = cloneMaps(prev);
+        const next = {
+          ...prev,
+          pendingConversations: new Map(prev.pendingConversations),
+          activeJobIdsBySession: new Map(prev.activeJobIdsBySession),
+        };
         next.activeJobIdsBySession.delete(sessionCacheKey);
         next.pendingConversations.delete(sessionCacheKey);
         next.sessionHistoryReloadNonce = prev.sessionHistoryReloadNonce + 1;
@@ -508,7 +536,11 @@ export function useSessionRunActions({
         ? (content ?? "").trim()
         : displayContent;
       setState((prev) => {
-        const next = cloneMaps(prev);
+        const next = {
+          ...prev,
+          pendingConversations: new Map(prev.pendingConversations),
+          activeJobIdsBySession: new Map(prev.activeJobIdsBySession),
+        };
         const conversation: ConversationView = {
           conversationId: accepted.message_id,
           displayMode: "live",

@@ -57,7 +57,7 @@ from app.services.orchestration.event_stream.tool_events import (
 from app.services.orchestration.message_stream_runtime import MessageStreamRuntime
 from app.services.orchestration.trace_observer import MessageStreamTraceObserver
 
-pytestmark = pytest.mark.usefixtures("workspace_scope")
+pytestmark = pytest.mark.usefixtures("empty_workspace_scope")
 
 
 @pytest.fixture
@@ -320,7 +320,7 @@ async def test_agent_stream_fails_when_no_model_or_tool_event_arrives(
             agent=HangingBeforeProgressAgent(),
             input_payload={"messages": []},
             config={},
-            session_id="ses_first_event_timeout",
+            session_id="ses_first_event_timeout", thread_id="thr_stream",
             job_id="job_first_event_timeout",
             turn_id="job_first_event_timeout",
             agent_id="default",
@@ -340,7 +340,7 @@ async def test_lifecycle_events_extend_initial_model_event_watchdog(
         agent=LifecycleEventsBeforeModelAgent(),
         input_payload={"messages": []},
         config={},
-        session_id="ses_lifecycle_event_watchdog",
+        session_id="ses_lifecycle_event_watchdog", thread_id="thr_stream",
         job_id="job_lifecycle_event_watchdog",
         turn_id="job_lifecycle_event_watchdog",
         agent_id="default",
@@ -362,7 +362,7 @@ async def test_active_model_events_refresh_idle_watchdog_for_long_response(
         agent=SlowlyStreamingModelAgent(),
         input_payload={"messages": []},
         config={},
-        session_id="ses_model_idle_watchdog",
+        session_id="ses_model_idle_watchdog", thread_id="thr_stream",
         job_id="job_model_idle_watchdog",
         turn_id="job_model_idle_watchdog",
         agent_id="default",
@@ -425,7 +425,7 @@ async def test_default_model_wait_after_start_uses_job_budget_not_idle_watchdog(
         agent=ModelStartsThenWaitsAgent(),
         input_payload={"messages": []},
         config={},
-        session_id="ses_model_wait_after_start",
+        session_id="ses_model_wait_after_start", thread_id="thr_stream",
         job_id="job_model_wait_after_start",
         turn_id="job_model_wait_after_start",
         agent_id="default",
@@ -492,7 +492,7 @@ async def test_active_model_stream_is_not_cancelled_by_fixed_model_scope_deadlin
             agent=ActiveStreamingAgent(),
             input_payload={"messages": []},
             config={},
-            session_id="ses_active_model_scope",
+            session_id="ses_active_model_scope", thread_id="thr_stream",
             job_id="job_active_model_scope",
             turn_id="job_active_model_scope",
             agent_id="default",
@@ -562,7 +562,7 @@ async def dispatch_watchdog_case(
         try:
             return await process_agent_event_stream(
                 agent=agent, input_payload={"messages": []}, config={},
-                session_id=session_id, job_id="job_dispatch_progress",
+                session_id=session_id, thread_id="thr_stream", job_id="job_dispatch_progress",
                 turn_id="job_dispatch_progress", agent_id="default",
                 custom_tool_skill_sources={},
                 publish=publish or (lambda *_args, **_kwargs: _async_noop()),
@@ -571,7 +571,7 @@ async def dispatch_watchdog_case(
                 cancellation_signal=cancellation_signal,
             )
         finally:
-            SessionInterruptState.clear(session_id)
+            SessionInterruptState.clear(session_id, thread_id="thr_stream")
 
     return SimpleNamespace(
         runtime=runtime, writer=writer, sink=sink,
@@ -814,7 +814,7 @@ async def test_tool_dispatch_timeout_does_not_escape_as_agent_cancellation(
             agent=CancellationSensitiveAgent(),
             input_payload={"messages": []},
             config={},
-            session_id="ses_dispatch_timeout",
+            session_id="ses_dispatch_timeout", thread_id="thr_stream",
             job_id="job_dispatch_timeout",
             turn_id="job_dispatch_timeout",
             agent_id="default",
@@ -877,7 +877,7 @@ async def test_provider_scope_cancellation_from_event_iterator_reaches_agent_loo
             agent=CancelledAgent(),
             input_payload={"messages": []},
             config={},
-            session_id="ses_provider_cancelled",
+            session_id="ses_provider_cancelled", thread_id="thr_stream",
             job_id="job_provider_cancelled",
             turn_id="job_provider_cancelled",
             agent_id="default",
@@ -935,7 +935,7 @@ async def test_tool_start_event_contains_only_model_visible_arguments(
         agent=GraphFakeAgent(events, [runtime_aware]),
         input_payload={"messages": []},
         config={},
-        session_id="ses_runtime_args",
+        session_id="ses_runtime_args", thread_id="thr_stream",
         job_id="job_runtime_args",
         turn_id="job_runtime_args",
         agent_id="default",
@@ -1019,7 +1019,7 @@ async def test_parallel_schema_errors_keep_original_provider_arguments_and_claim
             for index, provider_id in enumerate(call_ids)
         }),
         input_payload={"messages": []}, config={},
-        session_id="ses_schema_observer", job_id="job_schema_observer",
+        session_id="ses_schema_observer", thread_id="thr_stream", job_id="job_schema_observer",
         turn_id="turn_schema_observer", agent_id="default",
         custom_tool_skill_sources={}, publish=publish,
         session_changes_service=FakeSessionChangesService(), workspace_root=tmp_path,
@@ -1132,7 +1132,7 @@ async def test_custom_tool_execution_keeps_provider_tool_call_identity(
         }),
         input_payload={"messages": []},
         config={},
-        session_id="ses_unknown_tool",
+        session_id="ses_unknown_tool", thread_id="thr_stream",
         job_id="job_unknown_tool",
         turn_id="job_unknown_tool",
         agent_id="default",
@@ -1276,7 +1276,7 @@ async def test_model_failed_custom_event_is_published_to_trace(tmp_path: Path) -
         agent=FakeAgent(events),
         input_payload={"messages": []},
         config={},
-        session_id="ses_model_failed",
+        session_id="ses_model_failed", thread_id="thr_stream",
         job_id="job_model_failed",
         turn_id="job_model_failed",
         agent_id="default",
@@ -1422,7 +1422,7 @@ async def test_stream_cleanup_preserves_primary_error_and_reports_close_failure(
     with pytest.raises(type(case.primary)) as raised:
         await process_agent_event_stream(
             agent=case.source, input_payload={"messages": []}, config={},
-            session_id="ses_cleanup", job_id="job_cleanup", turn_id="job_cleanup",
+            session_id="ses_cleanup", thread_id="thr_stream", job_id="job_cleanup", turn_id="job_cleanup",
             agent_id="default", custom_tool_skill_sources={},
             publish=lambda *_args, **_kwargs: _async_noop(),
             session_changes_service=session_changes_service, workspace_root=tmp_path,
@@ -1444,7 +1444,7 @@ async def test_agent_stream_starts_with_isolated_callbacks_and_business_identity
         agent=agent,
         input_payload={"messages": []},
         config={},
-        session_id="ses_isolated",
+        session_id="ses_isolated", thread_id="thr_stream",
         job_id="job_isolated",
         turn_id="job_isolated",
         agent_id="default",
@@ -1480,7 +1480,7 @@ async def test_agent_stream_does_not_inherit_sender_callback_context(
             agent=agent,
             input_payload={"messages": []},
             config={},
-            session_id="ses_target",
+            session_id="ses_target", thread_id="thr_stream",
             job_id="job_target",
             turn_id="job_target",
             agent_id="default",
@@ -1526,7 +1526,7 @@ async def test_agent_stream_rejects_model_event_from_another_job(
             agent=agent,
             input_payload={"messages": []},
             config={},
-            session_id="ses_sender",
+            session_id="ses_sender", thread_id="thr_stream",
             job_id="job_sender",
             turn_id="job_sender",
             agent_id="default",
@@ -1582,7 +1582,7 @@ async def test_agent_stream_reports_model_and_tool_progress(
         agent=GraphFakeAgent(events, [read_file]),
         input_payload={"messages": []},
         config={},
-        session_id="ses_progress_report",
+        session_id="ses_progress_report", thread_id="thr_stream",
         job_id="job_progress_report",
         turn_id="job_progress_report",
         agent_id="default",
@@ -1603,11 +1603,11 @@ async def test_first_parallel_tool_end_does_not_clear_remaining_tool(
     session_changes_service: FakeSessionChangesService,
 ) -> None:
     session_id = "ses_parallel_event_stream"
-    SessionInterruptState.clear(session_id)
+    SessionInterruptState.clear(session_id, thread_id="thr_stream")
     observed_states: list[tuple[str, str | None, str | None, str | None]] = []
 
     async def publish(event_type: str, payload: dict[str, Any]) -> None:
-        state = SessionInterruptState.get(session_id)
+        state = SessionInterruptState.get(session_id, thread_id="thr_stream")
         observed_states.append(
             (
                 event_type,
@@ -1621,7 +1621,7 @@ async def test_first_parallel_tool_end_does_not_clear_remaining_tool(
         agent=FakeAgent(parallel_tool_events),
         input_payload={"messages": []},
         config={},
-        session_id=session_id,
+        session_id=session_id, thread_id="thr_stream",
         job_id="job_parallel",
         turn_id="job_parallel",
         agent_id="default",
@@ -1639,7 +1639,7 @@ async def test_first_parallel_tool_end_does_not_clear_remaining_tool(
     ]
     assert get_interruptible_phase() == "text"
     assert get_active_tool_name() is None
-    SessionInterruptState.clear(session_id)
+    SessionInterruptState.clear(session_id, thread_id="thr_stream")
 
 
 @pytest.mark.asyncio
@@ -1688,7 +1688,7 @@ async def test_failed_tool_message_publishes_failed_tool_call_end(
         agent=FakeAgent(events),
         input_payload={"messages": []},
         config={},
-        session_id="ses_failed_tool",
+        session_id="ses_failed_tool", thread_id="thr_stream",
         job_id="job_failed_tool",
         turn_id="job_failed_tool",
         agent_id="default",
@@ -1760,7 +1760,7 @@ async def test_structured_tool_error_is_not_treated_as_successful_apply_patch(
         agent=FakeAgent(events),
         input_payload={"messages": []},
         config={},
-        session_id="ses_apply_patch_error",
+        session_id="ses_apply_patch_error", thread_id="thr_stream",
         job_id="job_apply_patch_error",
         turn_id="job_apply_patch_error",
         agent_id="default",
@@ -1816,7 +1816,7 @@ async def test_skill_load_event_does_not_expose_internal_source_metadata(
         agent=FakeAgent(events),
         input_payload={"messages": []},
         config={},
-        session_id="ses_system_skill",
+        session_id="ses_system_skill", thread_id="thr_stream",
         job_id="job_system_skill",
         turn_id="job_system_skill",
         agent_id="default",
@@ -1875,7 +1875,7 @@ async def test_command_tool_output_extracts_nested_tool_message(
         agent=FakeAgent(events),
         input_payload={"messages": []},
         config={},
-        session_id="ses_command_tool",
+        session_id="ses_command_tool", thread_id="thr_stream",
         job_id="job_command_tool",
         turn_id="job_command_tool",
         agent_id="default",
@@ -1934,7 +1934,7 @@ async def test_successful_tool_call_keeps_arguments_for_delegation_validation(
         agent=FakeAgent(events),
         input_payload={"messages": []},
         config={},
-        session_id="ses_child",
+        session_id="ses_child", thread_id="thr_stream",
         job_id="job_child",
         turn_id="job_child",
         agent_id="default",
@@ -1992,7 +1992,7 @@ async def test_file_edit_keeps_model_tool_call_id_and_execution_id_separate(
         agent=FakeAgent(events),
         input_payload={"messages": []},
         config={},
-        session_id="ses_tool_identity",
+        session_id="ses_tool_identity", thread_id="thr_stream",
         job_id="job_tool_identity",
         turn_id="job_tool_identity",
         agent_id="default",
@@ -2047,7 +2047,7 @@ async def test_internal_file_edit_keeps_job_identity_without_turn_attribution(
         agent=FakeAgent(events),
         input_payload={"messages": []},
         config={},
-        session_id="ses_internal_tool_identity",
+        session_id="ses_internal_tool_identity", thread_id="thr_stream",
         job_id="job_internal_tool_identity",
         turn_id=None,
         agent_id="default",
@@ -2099,7 +2099,7 @@ async def test_small_model_chunks_only_feed_final_text_aggregation(
         agent=FakeAgent(events),
         input_payload={"messages": []},
         config={},
-        session_id="ses_coalesced_delta",
+        session_id="ses_coalesced_delta", thread_id="thr_stream",
         job_id="job_coalesced_delta",
         turn_id="job_coalesced_delta",
         agent_id="default",
@@ -2150,7 +2150,7 @@ async def test_model_end_output_recovers_text_missing_from_stream_callback(
         agent=FakeAgent(events),
         input_payload={"messages": []},
         config={},
-        session_id="ses_model_end_only",
+        session_id="ses_model_end_only", thread_id="thr_stream",
         job_id="job_model_end_only",
         turn_id="job_model_end_only",
         agent_id="default",
@@ -2222,7 +2222,7 @@ async def test_summary_candidate_completion_uses_public_outcome_and_hides_candid
         agent=FakeAgent(events),
         input_payload={"messages": []},
         config={},
-        session_id="ses_019bef80066f7038ae8e88ccb2e5e2ea",
+        session_id="ses_019bef80066f7038ae8e88ccb2e5e2ea", thread_id="thr_stream",
         job_id="job_summary_candidate",
         turn_id="turn_summary_candidate",
         agent_id="default",
@@ -2332,7 +2332,7 @@ async def test_model_end_does_not_replay_text_already_committed_by_provider_hook
         agent=ProviderCommittedAgent(),
         input_payload={"messages": []},
         config={},
-        session_id="ses_model_end_dedup",
+        session_id="ses_model_end_dedup", thread_id="thr_stream",
         job_id="job_model_end_dedup",
         turn_id="job_model_end_dedup",
         agent_id="default",
@@ -2414,7 +2414,7 @@ async def test_resumed_authoritative_text_part_keeps_all_text_without_legacy_rea
         agent=FakeAgent(events),
         input_payload={"messages": []},
         config={},
-        session_id="ses_resumed_text_part",
+        session_id="ses_resumed_text_part", thread_id="thr_stream",
         job_id="job_resumed_text_part",
         turn_id="job_resumed_text_part",
         agent_id="default",
@@ -2500,7 +2500,7 @@ async def test_model_stream_usage_keeps_only_last_call(
         agent=FakeAgent(events),
         input_payload={"messages": []},
         config={},
-        session_id="ses_token_usage",
+        session_id="ses_token_usage", thread_id="thr_stream",
         job_id="job_token_usage",
         turn_id="job_token_usage",
         agent_id="default",
@@ -2573,7 +2573,7 @@ async def test_empty_reasoning_done_preserves_encrypted_response_item(
         agent=FakeAgent(events),
         input_payload={"messages": []},
         config={},
-        session_id="ses_encrypted_reasoning",
+        session_id="ses_encrypted_reasoning", thread_id="thr_stream",
         job_id="job_encrypted_reasoning",
         turn_id="job_encrypted_reasoning",
         agent_id="default",
@@ -2642,7 +2642,7 @@ async def test_task_tool_is_projected_as_subagent_activity(
         }),
         input_payload={"messages": []},
         config={},
-        session_id="ses_parent",
+        session_id="ses_parent", thread_id="thr_stream",
         job_id="job_parent",
         turn_id="job_parent",
         agent_id="default",
@@ -2718,7 +2718,7 @@ async def test_resource_tool_is_projected_as_resource_activity(
         }),
         input_payload={"messages": []},
         config={},
-        session_id="ses_resource",
+        session_id="ses_resource", thread_id="thr_stream",
         job_id="job_resource",
         turn_id="job_resource",
         agent_id="default",
@@ -2830,7 +2830,7 @@ async def test_retryable_resource_failure_does_not_abort_event_stream(
         }),
         input_payload={"messages": []},
         config={},
-        session_id="ses_resource_error",
+        session_id="ses_resource_error", thread_id="thr_stream",
         job_id="job_resource_error",
         turn_id="job_resource_error",
         agent_id="default",

@@ -1,7 +1,7 @@
 import React from "react";
 import { afterEach, expect, test } from "bun:test";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
-import { installSessionCatalogFetchMock, unwrapSessionCatalogFetch } from "../../api/session/sessionApiFetchMock";
+import { installSessionApiFetchMock, unwrapSessionApiFetch } from "../../api/session/sessionApiFetchMock";
 import { untrackSessionSkill } from "../../api/session/sessionSkillTracking";
 import type { ComposerStateSnapshot } from "../../state/composerState";
 import type { SessionSkillUntrackResult } from "../../types/backend";
@@ -15,7 +15,7 @@ const renderers: ReactTestRenderer[] = [];
 
 afterEach(() => {
   act(() => { for (const renderer of renderers.splice(0)) renderer.unmount(); });
-  unwrapSessionCatalogFetch();
+  unwrapSessionApiFetch();
 });
 
 function receipt(overrides: Partial<SessionSkillUntrackResult> = {}): SessionSkillUntrackResult {
@@ -57,7 +57,7 @@ test("默认主线程从后端取得，等待期间路由冻结，切换会话�
   let mainRequested!: () => void;
   const mainSeen = new Promise<void>((resolve) => { mainRequested = resolve; });
   const calls: string[] = [];
-  installSessionCatalogFetchMock(async ({ path, method, init }) => {
+  installSessionApiFetchMock(async ({ path, method, init }) => {
     calls.push(path);
     const headers = new Headers(init?.headers);
     expect(headers.get("X-BoxTeam-Workspace-Id")).toBe(target.workspace_id);
@@ -86,7 +86,7 @@ test("默认主线程从后端取得，等待期间路由冻结，切换会话�
 
 test.each(["loaded", "not_tracked"] as const)("显式线程直接控制，%s 完整结果决定提示", async (status) => {
   let count = 0;
-  installSessionCatalogFetchMock(({ path, init }) => {
+  installSessionApiFetchMock(({ path, init }) => {
     expect(path).toBe(endpoint);
     expect(JSON.parse(String(init?.body))).toEqual({ name: "review skill" });
     count += 1;
@@ -107,7 +107,7 @@ test.each([
   receipt({ status: "rebound" }),
   receipt({ append_status: "appended" }),
 ])("后端失败或仍在跟踪时不显示成功", async (result) => {
-  installSessionCatalogFetchMock(() => envelope(result));
+  installSessionApiFetchMock(() => envelope(result));
   const ui = harness();
   await ui.run(`"review skill" ${threadId}`);
   expect(ui.notices).toEqual([]);
@@ -116,14 +116,14 @@ test.each([
 });
 
 test.each(["session_id", "thread_id", "name", "mode"] as const)("API 拒绝归属或操作不一致的 %s", async (field) => {
-  installSessionCatalogFetchMock(() => envelope({ ...receipt(), [field]: "wrong" }));
+  installSessionApiFetchMock(() => envelope({ ...receipt(), [field]: "wrong" }));
   await expect(untrackSessionSkill(49352, target, sessionId, threadId, "review skill"))
     .rejects.toThrow("停止跟踪 Skill 的响应与请求归属不一致");
 });
 
 test("空名称和多余参数不发起请求", async () => {
   let count = 0;
-  installSessionCatalogFetchMock(() => { count += 1; return envelope(receipt()); });
+  installSessionApiFetchMock(() => { count += 1; return envelope(receipt()); });
   const ui = harness();
   await ui.run('"  "');
   await ui.run("skill thread extra");

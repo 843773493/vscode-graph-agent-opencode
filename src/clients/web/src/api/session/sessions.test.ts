@@ -8,20 +8,20 @@ import {
   listSessions,
 } from "./sessions";
 import {
-  installSessionCatalogFetchMock,
-  unwrapSessionCatalogFetch,
+  installSessionApiFetchMock,
+  unwrapSessionApiFetch,
 } from "./sessionApiFetchMock";
 
 function installFetchMock(
   respond: (init: RequestInit | undefined, url: string) => Response,
 ): void {
-  installSessionCatalogFetchMock(({ init, url }) => respond(init, url), {
+  installSessionApiFetchMock(({ init, url }) => respond(init, url), {
     credentialToken: "child-threads-token",
   });
 }
 
 afterEach(() => {
-  unwrapSessionCatalogFetch();
+  unwrapSessionApiFetch();
 });
 
 describe("main thread API", () => {

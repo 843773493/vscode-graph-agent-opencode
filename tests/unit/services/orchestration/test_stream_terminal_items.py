@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -20,7 +21,9 @@ def item_sink() -> AsyncMock:
 
 @pytest.fixture
 def tool_result_sink() -> AsyncMock:
-    return AsyncMock()
+    return AsyncMock(wraps=lambda completion: SimpleNamespace(payload={
+        "content": completion.content, "tool_outcome": completion.tool_outcome,
+    }))
 
 
 @pytest.fixture
@@ -613,3 +616,30 @@ async def test_split_tool_call_keeps_id_when_model_start_event_is_late() -> None
         "read_file",
         "read_file",
     ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("known_outcome", "expected_status", "expected_outcome"),
+    [("success", "completed", "success"), ("failure", "failed", "provider_error"),
+     ("cancelled", "completed", "cancelled"), ("unknown", "completed", "outcome_unknown")],
+)
+async def test_interrupt_mirrors_owner_result_instead_of_overwriting_with_unknown(
+    runtime: MessageStreamRuntime, tool_result_sink: AsyncMock,
+    active_scoped_tool_call_id: str, known_outcome: str,
+    expected_status: str, expected_outcome: str,
+) -> None:
+    tool_result_sink.return_value = SimpleNamespace(payload={
+        "content": "owner 已提交的原始正文", "tool_outcome": known_outcome,
+    })
+    await runtime.finalize_interruption_facts()
+    tool_result_sink.assert_awaited_once()
+    assert tool_result_sink.await_args.args[0].tool_outcome == "unknown"
+    completed = [call.args[1] for call in runtime.writer.commit.await_args_list if call.args[0] == "tool.completed"]
+    assert len(completed) == 1
+    assert completed[0]["tool_call_id"] == active_scoped_tool_call_id
+    assert completed[0]["result"] == "owner 已提交的原始正文"
+    assert completed[0]["status"] == expected_status
+    assert completed[0]["outcome"] == expected_outcome
+    if known_outcome != "unknown":
+        assert "error" not in completed[0]

@@ -502,7 +502,7 @@ class StepRunner:
             interruptible_phase_token = set_interruptible_phase("text")
             active_tool_name_token = set_active_tool_name(None)
             SessionInterruptState.set(
-                session_id,
+                session_id, thread_id=thread_id,
                 phase=None,
                 tool_name=None,
                 clear_active_tools=True,
@@ -655,6 +655,7 @@ class StepRunner:
                 checkpointer=checkpointer,
                 admission=admission,
                 session_id=session_id,
+                thread_id=thread_id,
                 resolved_agent_id=resolved_agent_id,
                 job_id=job_id,
                 turn_id=turn_id,
@@ -683,7 +684,7 @@ class StepRunner:
 
             if final_text:
                 SessionInterruptState.set(
-                    session_id,
+                    session_id, thread_id=thread_id,
                     phase=None,
                     tool_name=None,
                     clear_active_tools=True,
@@ -773,7 +774,7 @@ class StepRunner:
                 operation_error = await settle_started_operations()
                 await handle_step_cancelled(
                     cancellation_error=cancellation,
-                    state=SessionInterruptState.get(session_id),
+                    state=SessionInterruptState.get(session_id, thread_id=thread_id),
                     message_stream_runtime=message_stream_runtime,
                     message_stream_writer=message_stream_writer,
                     checkpointer=checkpointer,
@@ -800,7 +801,7 @@ class StepRunner:
                 operation_error = await settle_started_operations()
                 await handle_step_failure(
                     error=failure,
-                    interrupt_state=SessionInterruptState.get(session_id),
+                    interrupt_state=SessionInterruptState.get(session_id, thread_id=thread_id),
                     message_stream_runtime=message_stream_runtime,
                     message_stream_writer=message_stream_writer,
                     checkpointer=checkpointer,
@@ -861,4 +862,4 @@ class StepRunner:
                         runtime_lease.release()
 
             await run_cleanup_shielded(release_resources)
-            SessionInterruptState.clear(session_id)
+            SessionInterruptState.clear(session_id, thread_id=thread_id)

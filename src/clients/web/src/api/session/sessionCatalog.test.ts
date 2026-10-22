@@ -5,8 +5,8 @@ import {
   refreshSessionCatalog,
 } from "./sessionCatalog";
 import {
-  installSessionCatalogFetchMock,
-  unwrapSessionCatalogFetch,
+  installSessionApiFetchMock,
+  unwrapSessionApiFetch,
 } from "./sessionApiFetchMock";
 
 function catalogPage(items: unknown[]): Response {
@@ -17,7 +17,7 @@ function catalogPage(items: unknown[]): Response {
 }
 
 afterEach(() => {
-  unwrapSessionCatalogFetch();
+  unwrapSessionApiFetch();
 });
 
 const workspaceTarget = {
@@ -29,7 +29,7 @@ const workspaceTarget = {
 describe("会话目录节点合法性校验", () => {
   test("成功：合法节点原样返回", async () => {
     let request: RequestInit | undefined;
-    installSessionCatalogFetchMock((captured) => {
+    installSessionApiFetchMock((captured) => {
       request = captured.init;
       return catalogPage([
       { node_id: "cnode_1", kind: "folder", name: "文件夹", has_children: true },
@@ -44,7 +44,7 @@ describe("会话目录节点合法性校验", () => {
   });
 
   test("缺少 node_id 的子节点必须响亮失败而不是留给 React 警告", async () => {
-    installSessionCatalogFetchMock(() => catalogPage([
+    installSessionApiFetchMock(() => catalogPage([
       { kind: "folder", name: "坏文件夹", has_children: true },
     ]));
     await expect(listSessionCatalogChildren(48_402, workspaceTarget))
@@ -52,7 +52,7 @@ describe("会话目录节点合法性校验", () => {
   });
 
   test("node_id 为非字符串的子节点必须响亮失败", async () => {
-    installSessionCatalogFetchMock(() => catalogPage([
+    installSessionApiFetchMock(() => catalogPage([
       { node_id: 42, kind: "session", name: "坏会话", session_id: "s1", has_children: false },
     ]));
     await expect(listSessionCatalogChildren(48_403, workspaceTarget))
@@ -60,7 +60,7 @@ describe("会话目录节点合法性校验", () => {
   });
 
   test("重复 node_id 的同级节点必须响亮失败", async () => {
-    installSessionCatalogFetchMock(() => catalogPage([
+    installSessionApiFetchMock(() => catalogPage([
       { node_id: "dup", kind: "session", name: "甲", session_id: "s-a", has_children: false },
       { node_id: "dup", kind: "session", name: "乙", session_id: "s-b", has_children: false },
     ]));
@@ -69,7 +69,7 @@ describe("会话目录节点合法性校验", () => {
   });
 
   test("刷新目录同样校验节点合法性", async () => {
-    installSessionCatalogFetchMock(() => catalogPage([
+    installSessionApiFetchMock(() => catalogPage([
       { kind: "session", name: "缺 ID", session_id: "s1", has_children: false },
     ]));
     await expect(refreshSessionCatalog(48_405, workspaceTarget))
@@ -77,7 +77,7 @@ describe("会话目录节点合法性校验", () => {
   });
 
   test("面包屑同样校验节点合法性", async () => {
-    installSessionCatalogFetchMock(() => Response.json({
+    installSessionApiFetchMock(() => Response.json({
       data: { revision: "catalog", items: [{ kind: "folder", name: "坏文件夹" }] },
       request_id: "req-catalog",
     }));

@@ -374,12 +374,33 @@ class StreamToolRegistryMixin:
                     content=result, tool_outcome=result_outcome,
                 )
                 try:
-                    await self._tool_result_sink(completion)
+                    item = await self._tool_result_sink(completion)
                 except CanonicalItemObserverError as observer_failure:
+                    if result_outcome == "unknown":
+                        # 没有收到 owner 的真实结果，不可用未知正文伪造已完成镜像。
+                        raise
                     if observer_failure.committed_item_ids != (completion.item_id,):
                         raise
                     # 已提交结果只更新既有运行镜像，失败清理不得再生成同 ID 的结果。
                     observer_error = observer_failure.observer_error
+                else:
+                    if result_outcome == "unknown":
+                        # canonical 是唯一正文来源；收尾不得把先提交的成功/失败改成未知。
+                        persisted = item.payload
+                        persisted_outcome = persisted["tool_outcome"]
+                        payload["result"] = tool_result_content_text(persisted["content"])
+                        payload["outcome"] = (
+                            "outcome_unknown" if persisted_outcome == "unknown"
+                            else "success" if persisted_outcome == "success"
+                            else "cancelled" if persisted_outcome == "cancelled"
+                            else "provider_error"
+                        )
+                        if persisted_outcome != "unknown":
+                            payload["status"] = "failed" if persisted_outcome == "failure" else "completed"
+                            payload.pop("error", None)
+                            payload["completion_reason"] = (
+                                "user_interrupt" if persisted_outcome == "cancelled" else "tool_completed"
+                            )
             # 完成镜像必须晚于 canonical 提交；重试时保留原事件身份和正文，
             # 避免把同一 canonical 结果按清理错误再次写入。
             pending = self._pending_tool_completion(

@@ -328,6 +328,14 @@ describe("发送消息状态更新", () => {
     expect(mounted.state().status).toBe("运行任务已结束，正在同步会话历史");
   });
 
+  test("缺少 main Thread 身份时不发送中断请求", async () => {
+    let requests = 0;
+    installGatewayFetch(() => { requests += 1; throw new Error("不应发送请求"); });
+    const mounted = runActions({ ...session(), thread_id: undefined });
+    await expect(mounted.actions.interruptSession()).rejects.toThrow("缺少权威 main Thread 身份");
+    expect(requests).toBe(0);
+  });
+
   test("中断返回 cancelling 时显示已请求收尾而不是已停止", async () => {
     const currentSession = session();
     installGatewayFetch(({ path }) => {
@@ -336,6 +344,7 @@ describe("发送消息状态更新", () => {
           session_id: SESSION_ID,
           job_id: "job_interrupt_cancelling",
           status: "cancelling",
+          thread_id: currentSession.thread_id,
           interrupt_request_id: "intr_cancelling",
           phase: "text",
         });
@@ -357,6 +366,7 @@ describe("发送消息状态更新", () => {
             session_id: SESSION_ID,
             job_id: `job_interrupt_${status}`,
             status,
+            thread_id: session().thread_id,
             interrupt_request_id: `intr_${status}`,
             phase: "text",
           });
@@ -900,6 +910,9 @@ describe("在途运行动作的迟到回写不得污染已切到的会话", () =
     releaseInterrupt(apiResponse({
       status: "cancelling",
       phase: "text",
+      session_id: started.session_id,
+      thread_id: started.thread_id,
+      job_id: "job_switched_away",
       interrupt_request_id: "intr_switched_away",
     }));
     await interrupting;
@@ -955,6 +968,7 @@ describe("在途运行动作的迟到回写不得污染已切到的会话", () =
       session_id: started.session_id,
       job_id: "job_interrupt_other_owner",
       status: "cancelling",
+      thread_id: started.thread_id,
       interrupt_request_id: "intr_other_owner",
       phase: "text",
     }));

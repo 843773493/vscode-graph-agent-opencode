@@ -1,52 +1,54 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from app.core.path_utils import get_workspace_id, workspace_context
 from app.core.session_interrupt_state import SessionInterruptState
 
-pytestmark = pytest.mark.usefixtures("workspace_scope")
+pytestmark = pytest.mark.usefixtures("empty_workspace_scope")
 
 
 def test_session_interrupt_state_can_clear_explicit_none() -> None:
     session_id = "ses_interrupt_state_clear"
-    SessionInterruptState.clear(session_id)
+    SessionInterruptState.clear(session_id, thread_id="thr_state")
 
     SessionInterruptState.set(
-        session_id,
+        session_id, thread_id="thr_state",
         phase="tool",
         tool_name="python_exec",
         current_text="处理中",
     )
     SessionInterruptState.set(
-        session_id,
+        session_id, thread_id="thr_state",
         phase="text",
         tool_name=None,
         current_text="",
     )
 
-    state = SessionInterruptState.get(session_id)
+    state = SessionInterruptState.get(session_id, thread_id="thr_state")
     assert state.phase == "text"
     assert state.tool_name is None
     assert state.current_text == ""
     assert state.user_interrupt_reminder_injected is False
 
-    SessionInterruptState.set(session_id, user_interrupt_reminder_injected=True)
-    assert SessionInterruptState.get(session_id).user_interrupt_reminder_injected is True
+    SessionInterruptState.set(session_id, thread_id="thr_state", user_interrupt_reminder_injected=True)
+    assert SessionInterruptState.get(session_id, thread_id="thr_state").user_interrupt_reminder_injected is True
 
-    SessionInterruptState.set(session_id, phase=None)
-    assert SessionInterruptState.get(session_id).phase is None
+    SessionInterruptState.set(session_id, thread_id="thr_state", phase=None)
+    assert SessionInterruptState.get(session_id, thread_id="thr_state").phase is None
 
-    SessionInterruptState.clear(session_id)
-    assert SessionInterruptState.get(session_id).user_interrupt_reminder_injected is False
+    SessionInterruptState.clear(session_id, thread_id="thr_state")
+    assert SessionInterruptState.get(session_id, thread_id="thr_state").user_interrupt_reminder_injected is False
 
 
 def test_parallel_tool_state_keeps_remaining_tool_active() -> None:
     session_id = "ses_parallel_tool_state"
-    SessionInterruptState.clear(session_id)
+    SessionInterruptState.clear(session_id, thread_id="thr_state")
 
     first_state = SessionInterruptState.start_tool(
-        session_id,
+        session_id, thread_id="thr_state",
         run_id="run_a",
         tool_name="read_file",
     )
@@ -54,50 +56,50 @@ def test_parallel_tool_state_keeps_remaining_tool_active() -> None:
     assert first_state.tool_name == "read_file"
 
     parallel_state = SessionInterruptState.start_tool(
-        session_id,
+        session_id, thread_id="thr_state",
         run_id="run_b",
         tool_name="grep",
     )
     assert parallel_state.active_tool_names == ("read_file", "grep")
     assert parallel_state.tool_name == "read_file、grep"
 
-    remaining_state = SessionInterruptState.end_tool(session_id, run_id="run_a")
+    remaining_state = SessionInterruptState.end_tool(session_id, thread_id="thr_state", run_id="run_a")
     assert remaining_state.phase == "tool"
     assert remaining_state.tool_name == "grep"
     assert remaining_state.active_tools_by_run_id == {"run_b": "grep"}
 
-    finished_state = SessionInterruptState.end_tool(session_id, run_id="run_b")
+    finished_state = SessionInterruptState.end_tool(session_id, thread_id="thr_state", run_id="run_b")
     assert finished_state.phase is None
     assert finished_state.tool_name is None
     assert finished_state.active_tool_names == ()
-    SessionInterruptState.clear(session_id)
+    SessionInterruptState.clear(session_id, thread_id="thr_state")
 
 
 def test_parallel_tool_state_rejects_unknown_end_event() -> None:
     session_id = "ses_parallel_tool_unknown_end"
-    SessionInterruptState.clear(session_id)
+    SessionInterruptState.clear(session_id, thread_id="thr_state")
 
     with pytest.raises(RuntimeError, match="未登记"):
-        SessionInterruptState.end_tool(session_id, run_id="missing")
+        SessionInterruptState.end_tool(session_id, thread_id="thr_state", run_id="missing")
 
 
 def test_parallel_tool_state_rejects_legacy_phase_overwrite() -> None:
     session_id = "ses_parallel_tool_legacy_overwrite"
-    SessionInterruptState.clear(session_id)
+    SessionInterruptState.clear(session_id, thread_id="thr_state")
     SessionInterruptState.start_tool(
-        session_id,
+        session_id, thread_id="thr_state",
         run_id="run_active",
         tool_name="read_file",
     )
 
     with pytest.raises(RuntimeError, match="不能直接覆盖"):
-        SessionInterruptState.set(session_id, phase=None, tool_name=None)
+        SessionInterruptState.set(session_id, thread_id="thr_state", phase=None, tool_name=None)
 
-    state = SessionInterruptState.get(session_id)
+    state = SessionInterruptState.get(session_id, thread_id="thr_state")
     assert state.phase == "tool"
     assert state.tool_name == "read_file"
     assert state.active_tools_by_run_id == {"run_active": "read_file"}
-    SessionInterruptState.clear(session_id)
+    SessionInterruptState.clear(session_id, thread_id="thr_state")
 
 
 def test_no_op_state_reset_does_not_accumulate_session_keys() -> None:
@@ -111,7 +113,7 @@ def test_no_op_state_reset_does_not_accumulate_session_keys() -> None:
     try:
         for index in range(5000):
             SessionInterruptState.set(
-                "ses_noop_" + str(index),
+                "ses_noop_" + str(index), thread_id="thr_state",
                 phase=None,
                 tool_name=None,
                 clear_active_tools=True,
@@ -119,7 +121,7 @@ def test_no_op_state_reset_does_not_accumulate_session_keys() -> None:
         # 上界恒定：全默认态不落键，不随会话数增长。
         assert len(SessionInterruptState._states) == 0
         # 无状态会话 get 仍返回全默认态（语义不变）。
-        state = SessionInterruptState.get("ses_noop_0")
+        state = SessionInterruptState.get("ses_noop_0", thread_id="thr_state")
         assert state.phase is None
         assert state.tool_name is None
         assert state.active_tool_names == ()
@@ -131,13 +133,13 @@ def test_real_state_is_recalled_and_reclaimed() -> None:
     """有实质状态的会话仍恒定命中；clear 后回收键，上界不随历史会话增长。"""
     SessionInterruptState._states.clear()
     try:
-        SessionInterruptState.set("ses_real", phase="tool", tool_name="read_file")
+        SessionInterruptState.set("ses_real", thread_id="thr_state", phase="tool", tool_name="read_file")
         assert len(SessionInterruptState._states) == 1
         # 同 session 恒定命中。
-        assert SessionInterruptState.get("ses_real").phase == "tool"
-        assert SessionInterruptState.get("ses_real").tool_name == "read_file"
+        assert SessionInterruptState.get("ses_real", thread_id="thr_state").phase == "tool"
+        assert SessionInterruptState.get("ses_real", thread_id="thr_state").tool_name == "read_file"
         # 回收：clear 释放键。
-        SessionInterruptState.clear("ses_real")
+        SessionInterruptState.clear("ses_real", thread_id="thr_state")
         assert len(SessionInterruptState._states) == 0
     finally:
         SessionInterruptState._states.clear()
@@ -155,16 +157,16 @@ def test_pre_try_default_reset_leaves_no_residue_without_clear() -> None:
     try:
         # 等价 runner 进入 try 之前的唯一写入。
         SessionInterruptState.set(
-            session_id,
+            session_id, thread_id="thr_state",
             phase=None,
             tool_name=None,
             clear_active_tools=True,
         )
-        assert (get_workspace_id(), session_id) not in SessionInterruptState._states
+        assert (get_workspace_id(), session_id, "thr_state") not in SessionInterruptState._states
         # 模拟 try 之前的校验异常：finally 的 clear 不会执行。
         with pytest.raises(RuntimeError):
             raise RuntimeError("会话模型 provider id 必须是字符串")
-        assert (get_workspace_id(), session_id) not in SessionInterruptState._states
+        assert (get_workspace_id(), session_id, "thr_state") not in SessionInterruptState._states
     finally:
         SessionInterruptState._states.clear()
 
@@ -173,34 +175,58 @@ def test_non_default_state_is_retained_until_clear() -> None:
     """非默认态是合法状态：不得被默认态重置逻辑误清空，须由 clear 回收。"""
     SessionInterruptState._states.clear()
     try:
-        SessionInterruptState.set("ses_keep", interrupt_request_id="intr_keep")
-        assert (get_workspace_id(), "ses_keep") in SessionInterruptState._states
-        assert SessionInterruptState.get("ses_keep").interrupt_request_id == "intr_keep"
-        SessionInterruptState.clear("ses_keep")
-        assert (get_workspace_id(), "ses_keep") not in SessionInterruptState._states
+        SessionInterruptState.set("ses_keep", thread_id="thr_state", interrupt_request_id="intr_keep")
+        assert (get_workspace_id(), "ses_keep", "thr_state") in SessionInterruptState._states
+        assert SessionInterruptState.get("ses_keep", thread_id="thr_state").interrupt_request_id == "intr_keep"
+        SessionInterruptState.clear("ses_keep", thread_id="thr_state")
+        assert (get_workspace_id(), "ses_keep", "thr_state") not in SessionInterruptState._states
     finally:
         SessionInterruptState._states.clear()
 
 
-def test_same_session_id_isolated_between_workspaces(workspace_scope, tmp_path) -> None:
-    original_workspace_id, original_root = workspace_scope
+def test_same_session_id_isolated_between_workspaces(
+    empty_workspace_scope: tuple[str, Path],
+) -> None:
+    original_workspace_id, original_root = empty_workspace_scope
     second_workspace_id = "00000000-0000-4000-8000-000000000002"
+    second_workspace_root = original_root / "second-workspace"
+    second_workspace_root.mkdir()
     session_id = "ses_same"
-    SessionInterruptState.set(session_id, current_text="工作区A")
+    SessionInterruptState.set(session_id, thread_id="thr_state", current_text="工作区A")
     try:
-        with workspace_context(second_workspace_id, tmp_path):
-            assert SessionInterruptState.get(session_id).current_text == ""
-            SessionInterruptState.set(session_id, current_text="工作区B")
-            assert SessionInterruptState.get(session_id).current_text == "工作区B"
-            SessionInterruptState.clear(session_id)
+        with workspace_context(second_workspace_id, second_workspace_root):
+            assert SessionInterruptState.get(session_id, thread_id="thr_state").current_text == ""
+            SessionInterruptState.set(session_id, thread_id="thr_state", current_text="工作区B")
+            assert SessionInterruptState.get(session_id, thread_id="thr_state").current_text == "工作区B"
+            SessionInterruptState.clear(session_id, thread_id="thr_state")
         with workspace_context(original_workspace_id, original_root):
-            assert SessionInterruptState.get(session_id).current_text == "工作区A"
+            assert SessionInterruptState.get(session_id, thread_id="thr_state").current_text == "工作区A"
     finally:
-        SessionInterruptState.clear(session_id)
+        SessionInterruptState.clear(session_id, thread_id="thr_state")
 
 
 def test_interrupt_state_requires_explicit_workspace_scope() -> None:
     from contextvars import Context
 
     with pytest.raises(RuntimeError, match="工作区"):
-        Context().run(SessionInterruptState.get, "ses_missing_workspace")
+        Context().run(SessionInterruptState.get, "ses_missing_workspace", thread_id="thr_state")
+
+
+def test_sibling_tools_and_cancellation_remain_isolated() -> None:
+    session_id = "ses_parallel_threads"
+    SessionInterruptState.start_tool(session_id, thread_id="main", run_id="same_run", tool_name="read_file")
+    SessionInterruptState.start_tool(session_id, thread_id="child", run_id="same_run", tool_name="terminal")
+    try:
+        SessionInterruptState.set(session_id, thread_id="main", interrupt_request_id="intr_main", cancellation_reason="user_requested")
+        child = SessionInterruptState.get(session_id, thread_id="child")
+        assert child.active_tool_names == ("terminal",)
+        assert child.interrupt_request_id is None
+        assert child.cancellation_reason is None
+        SessionInterruptState.end_tool(session_id, thread_id="main", run_id="same_run")
+        SessionInterruptState.clear(session_id, thread_id="main")
+        assert SessionInterruptState.get(session_id, thread_id="child").active_tool_names == ("terminal",)
+        SessionInterruptState.end_tool(session_id, thread_id="child", run_id="same_run")
+        assert SessionInterruptState.get(session_id, thread_id="child").is_default()
+    finally:
+        SessionInterruptState.clear(session_id, thread_id="main")
+        SessionInterruptState.clear(session_id, thread_id="child")

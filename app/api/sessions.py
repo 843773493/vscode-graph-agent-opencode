@@ -917,6 +917,7 @@ async def compact_session_context(
 )
 async def interrupt_session(
     session_id: CanonicalSessionId,
+    thread_id: CanonicalThreadId | None = None,
     _: str = Depends(verify_local_token),
     request_id: str = Depends(get_request_id),
     session_interrupt_service: SessionInterruptService = Depends(
@@ -924,7 +925,9 @@ async def interrupt_session(
     ),
 ):
     try:
-        result = await session_interrupt_service.interrupt(session_id=session_id)
+        result = await session_interrupt_service.interrupt(session_id=session_id, thread_id=thread_id)
+    except SessionDeletionPendingError as error:
+        raise state_conflict_http_error(error) from error
     except (KeyError, NotFoundError) as error:
         raise not_found_http_error(error) from error
     except ValueError as e:

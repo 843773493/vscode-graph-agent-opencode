@@ -1,6 +1,6 @@
 import { afterEach, expect, test } from "bun:test";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
-import { installSessionCatalogFetchMock, unwrapSessionCatalogFetch } from "../../api/session/sessionApiFetchMock";
+import { installSessionApiFetchMock, unwrapSessionApiFetch } from "../../api/session/sessionApiFetchMock";
 import type { ChildThreadSummary } from "../../types/backend";
 import { resolveTerminalResourceTarget, useChildThreadConversation } from "./useChildThreadConversation";
 
@@ -44,7 +44,7 @@ async function until(condition: () => boolean) {
 afterEach(() => {
   if (renderer) act(() => renderer?.unmount());
   renderer = null;
-  unwrapSessionCatalogFetch();
+  unwrapSessionApiFetch();
 });
 
 test("终端目标遵循可见 child pair，未解析时停用，隐藏或关闭后回到主线程", () => {
@@ -119,7 +119,7 @@ test("fork 初选在新 owner 未解析时保留 owner，加载后可选择并�
 
 test("冷历史和报告请求冻结 child owner，草稿和未读按 child 独立保存", async () => {
   const requests: { path: string; body: Record<string, unknown>; workspace: string | null }[] = [];
-  installSessionCatalogFetchMock(({ path, init }) => {
+  installSessionApiFetchMock(({ path, init }) => {
     const body = JSON.parse(String(init?.body));
     const threadId = path.split("/").slice(-2)[0]!;
     requests.push({ path, body, workspace: new Headers(init?.headers).get("X-BoxTeam-Workspace-Id") });
@@ -154,7 +154,7 @@ test("报告请求在途时重复点击同一 child 报告保留唯一读取并�
   let complete!: (reply: Response) => void;
   let signal: AbortSignal | null = null;
   let requests = 0;
-  installSessionCatalogFetchMock(({ init }) => {
+  installSessionApiFetchMock(({ init }) => {
     requests += 1;
     signal = init?.signal ?? null;
     return new Promise<Response>((resolve) => { complete = resolve; });
@@ -206,7 +206,7 @@ test("报告续页合并同一 execution 的 256 加 44 个 response part 并按
   const olderParts = Array.from({ length: 44 }, (_, ordinal) => part(ordinal));
   olderParts.push(part(100, 0, "detail", "完整投影"));
   const requests: { path: string; body: Record<string, unknown> }[] = [];
-  installSessionCatalogFetchMock(({ path, init }) => {
+  installSessionApiFetchMock(({ path, init }) => {
     const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
     requests.push({ path, body });
     const thread = path.split("/").slice(-2)[0]!;
@@ -275,7 +275,7 @@ test("报告续页合并同一 execution 的 256 加 44 个 response part 并按
 test("发送期间切到 sibling 后，原 child 的迟到回执不覆盖 sibling 历史", async () => {
   let completeSend: ((reply: Response) => void) | null = null;
   const sends: { path: string; workspace: string | null; content: string }[] = [];
-  installSessionCatalogFetchMock(({ path, init }) => {
+  installSessionApiFetchMock(({ path, init }) => {
     if (path.endsWith("/messages")) {
       const body = JSON.parse(String(init?.body));
       sends.push({ path, workspace: new Headers(init?.headers).get("X-BoxTeam-Workspace-Id"), content: body.message.content });
@@ -307,7 +307,7 @@ test("消息已接受后，历史读取未返回仍允许向同一 child 继续�
   const sends: string[] = [];
   const reads: ((reply: Response) => void)[] = [];
   let holdReads = false;
-  installSessionCatalogFetchMock(({ path, init }) => {
+  installSessionApiFetchMock(({ path, init }) => {
     if (path.endsWith("/messages")) {
       sends.push(JSON.parse(String(init?.body)).message.content);
       holdReads = true;
@@ -342,7 +342,7 @@ test("旧发送失败的历史刷新结算不能释放后继仍待回执的发�
   let firstRead: ((reply: Response) => void) | null = null;
   let secondSend: ((reply: Response) => void) | null = null;
   let holdRead = false;
-  installSessionCatalogFetchMock(({ path }) => {
+  installSessionApiFetchMock(({ path }) => {
     if (path.endsWith("/messages")) {
       sends += 1;
       if (sends === 1) {

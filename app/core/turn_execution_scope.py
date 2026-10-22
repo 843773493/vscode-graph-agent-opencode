@@ -375,6 +375,7 @@ class AgentControlInbox:
         self._next_seq = 0
         self._commands: dict[str, AgentControlCommand] = {}
         self._pending: asyncio.Queue[AgentControlCommand] = asyncio.Queue()
+        self.interrupt_lock = asyncio.Lock()
         self._load()
 
     def accept(
@@ -422,6 +423,8 @@ class AgentControlInbox:
         command = self._commands.get(command_id)
         if command is None:
             raise KeyError(f"控制命令不存在: command_id={command_id}")
+        if command.status != "accepted" and command.status != status:
+            raise RuntimeError(f"控制命令终态不可改写: command_id={command_id} {command.status}->{status}")
         updated = AgentControlCommand(
             command_id=command.command_id,
             kind=command.kind,
@@ -523,29 +526,45 @@ class TurnControlCoordinator:
         command_id: str,
         idempotency_key: str,
         reason: str = "user_requested",
+        on_accepted: Callable[[], None] | None = None,
     ) -> dict[str, object]:
-        command = self.inbox.accept(
-            command_id=command_id,
-            kind="interrupt",
-            idempotency_key=idempotency_key,
-            payload={"reason": reason},
-        )
-        if command.status != "accepted":
-            return {"status": command.status, "command_id": command.command_id}
-        event = await self.writer.commit(
-            "interrupt.requested",
-            {
-                "interrupt_request_id": command.command_id,
-                "reason": reason,
-            },
-            event_id=command.command_id,
-        )
-        if event["type"] == "interrupt.rejected":
-            self.inbox.mark(command.command_id, "rejected")
+        # 直接提交与 AgentLoop 消费同一条命令，必须串行核对最新状态。
+        async with self.inbox.interrupt_lock:
+            command = self.inbox.accept(
+                command_id=command_id,
+                kind="interrupt",
+                idempotency_key=idempotency_key,
+                payload={"reason": reason},
+            )
+            if command.status != "accepted":
+                return {"status": command.status, "command_id": command.command_id}
+            if self.scope.is_closed or self.scope.cancellation_signal.is_cancelled:
+                self.inbox.mark(command.command_id, "rejected")
+                return {
+                    "type": "interrupt.rejected", "status": "rejected",
+                    "command_id": command.command_id, "reason": "turn_not_active",
+                }
+            event = await self.writer.commit(
+                "interrupt.requested",
+                {
+                    "interrupt_request_id": command.command_id,
+                    "reason": reason,
+                },
+                event_id=command.command_id,
+            )
+            if event["type"] == "interrupt.rejected":
+                self.inbox.mark(command.command_id, "rejected")
+                return {**event, "command_id": command.command_id}
+            # 接受事实已提交；发布或 hook 失败也必须完成取消，并保留原始异常。
+            try:
+                if on_accepted is not None:
+                    on_accepted()
+            finally:
+                try:
+                    await self.scope.cancel(reason)
+                finally:
+                    self.inbox.mark(command.command_id, "consumed")
             return {**event, "command_id": command.command_id}
-        await self.scope.cancel(reason)
-        self.inbox.mark(command.command_id, "consumed")
-        return {**event, "command_id": command.command_id}
 
 
 @dataclass(slots=True)
@@ -557,15 +576,6 @@ class AgentLoopControlCoordinator:
     writer: MessageStreamCommitter
 
     async def process(self, command: AgentControlCommand) -> dict[str, object]:
-        if command.status != "accepted":
-            return {"status": command.status, "command_id": command.command_id}
-        if self.scope.is_closed or self.scope.cancellation_signal.is_cancelled:
-            self.inbox.mark(command.command_id, "rejected")
-            return {
-                "status": "rejected",
-                "command_id": command.command_id,
-                "reason": "turn_not_active",
-            }
         if command.kind == "interrupt":
             return await TurnControlCoordinator(
                 scope=self.scope,
@@ -576,6 +586,15 @@ class AgentLoopControlCoordinator:
                 idempotency_key=command.idempotency_key,
                 reason=str(command.payload.get("reason") or "user_requested"),
             )
+        current = self.inbox.get(command.command_id)
+        if current.status != "accepted":
+            return {"status": current.status, "command_id": current.command_id}
+        if self.scope.is_closed or self.scope.cancellation_signal.is_cancelled:
+            self.inbox.mark(command.command_id, "rejected")
+            return {
+                "status": "rejected", "command_id": command.command_id,
+                "reason": "turn_not_active",
+            }
         # 这些命令必须由明确的业务 handler 消费；没有 handler 时宁可拒绝，
         # 不能假设审批/资源结果已经安全生效。
         self.inbox.mark(command.command_id, "rejected")

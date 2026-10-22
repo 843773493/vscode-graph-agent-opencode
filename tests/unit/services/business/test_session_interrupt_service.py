@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import json
+from contextlib import nullcontext
 from datetime import UTC, datetime
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 from langchain_core.messages import HumanMessage
@@ -14,6 +15,7 @@ from app.core.execution_admission_context import execution_admission_scope
 from app.core.path_utils import get_session_path_resolver
 from app.core.session_interrupt_state import SessionInterruptState
 from app.core.session_thread_context import session_thread_owner_scope
+from app.core.turn_execution_scope import AgentControlInbox, TurnExecutionScopeRegistry
 from app.domain.itemized.execution_admission import (
     ExecutionAdmission,
     InternalExecutionIntent,
@@ -30,7 +32,25 @@ from app.services.infrastructure.rollout_context.checkpoint.saver import (
 )
 from tests.support.message_service import build_message_service
 
-pytestmark = pytest.mark.usefixtures("workspace_scope")
+pytestmark = pytest.mark.usefixtures("empty_workspace_scope")
+
+
+@pytest.fixture
+def interrupt_sessions(tmp_path):
+    resolver = get_session_path_resolver(tmp_path)
+
+    async def resolve_main(session_id):
+        return resolver.main_thread_id(session_id)
+
+    async def resolve_thread(session_id, thread_id):
+        resolver.resolve_thread_node(session_id, thread_id)
+        return thread_id
+
+    return SimpleNamespace(
+        session_read_admission=lambda _session_id: nullcontext(),
+        resolve_main_thread=AsyncMock(side_effect=resolve_main),
+        resolve_thread=AsyncMock(side_effect=resolve_thread),
+    )
 
 
 class FakeJobService:
@@ -38,8 +58,10 @@ class FakeJobService:
         self,
         job: JobDTO,
         execution_binding: InternalExecutionIntent | UserExecutionIdentity | None = None,
+        control_status: JobStatus = JobStatus.cancelling,
     ) -> None:
         self.job = job
+        self.control_status = control_status
         self.execution_binding = execution_binding or UserExecutionIdentity(
             job_id=job.job_id,
             turn_id=f"turn:{job.job_id}",
@@ -71,7 +93,7 @@ class FakeJobService:
         self.control_requests.append(control_request)
         return JobControlResponseDTO(
             job_id=job_id,
-            status=JobStatus.cancelling,
+            status=self.control_status,
             control_state="cancelling",
         )
 
@@ -87,6 +109,60 @@ class FakeJobService:
         assert thread_id == self.job.thread_id
         assert boundary == "after_interrupt"
         self.boundary_notifications.append((boundary, tool_result_available))
+
+
+@pytest.mark.parametrize("registration", ["none", "scope", "inbox"])
+async def test_reminder_failure_still_cancels_frozen_job_and_registered_scope(registration):
+    session_id = "ses_019b782883b57e5b8a8f9d1b7645266d"
+    thread_id = "thr_019bef80066f7038ae8e88ccb2e5e2eb"
+    binding = UserExecutionIdentity(job_id="job_cancel", turn_id="turn_cancel", admission_idempotency_key="admission_cancel")
+    job = JobDTO(
+        job_id=binding.job_id, message_id="msg_cancel", session_id=session_id, thread_id=thread_id,
+        mode=RunMode.single_agent, status=JobStatus.running, entry_agent="default",
+        created_at=datetime.now(UTC), updated_at=datetime.now(UTC),
+    )
+    jobs = FakeJobService(job, execution_binding=binding)
+    failure = RuntimeError("reminder 写入失败")
+    messages = SimpleNamespace(
+        execution_admission_for_job=Mock(return_value=SimpleNamespace(
+            session_id=session_id, thread_id=thread_id, job_id=binding.job_id,
+            admission_idempotency_key=binding.admission_idempotency_key,
+            execution_id="execution_cancel", turn_id=binding.turn_id, execution_origin="user_turn",
+        )),
+        submit_system_reminder=Mock(side_effect=failure),
+    )
+    writer = SimpleNamespace(turn_stream_id="stream_cancel", commit=AsyncMock(return_value={"type": "interrupt.requested"}))
+    streams = SimpleNamespace(open=AsyncMock(return_value=writer))
+    sessions = SimpleNamespace(
+        session_read_admission=lambda _session: nullcontext(),
+        resolve_main_thread=AsyncMock(return_value=thread_id),
+    )
+    registry = TurnExecutionScopeRegistry()
+    scope = registry.create(writer.turn_stream_id) if registration != "none" else None
+    inbox = AgentControlInbox(writer.turn_stream_id)
+    if registration == "inbox":
+        registry.register_inbox(writer.turn_stream_id, inbox)
+    service = SessionInterruptService(
+        job_service=jobs, job_event_bus=FakeJobEventBus(), message_service=messages,
+        message_stream_store=streams, session_service=sessions, execution_scope_registry=registry,
+    )
+    try:
+        with pytest.raises(RuntimeError) as caught:
+            await service.interrupt(session_id)
+        assert caught.value is failure
+        assert [request.action for request in jobs.control_requests] == [ControlAction.cancel]
+        state = SessionInterruptState.get(session_id, thread_id=thread_id)
+        assert state.interrupt_request_id and state.cancellation_reason == "user_requested"
+        assert not state.user_interrupt_reminder_injected
+        assert writer.commit.await_count == 1
+        if scope is not None:
+            assert scope.cancellation_signal.reason == "user_requested"
+        if registration == "inbox":
+            assert inbox.get(state.interrupt_request_id).status == "consumed"
+    finally:
+        if scope is not None:
+            await scope.close()
+        SessionInterruptState.clear(session_id, thread_id=thread_id)
 
 
 def _thread_binding(
@@ -241,6 +317,7 @@ class FakeJobEventBus:
 async def test_user_interrupt_injects_system_reminder_before_task_cancel(
     tmp_path,
     session_bundle_factory,
+    interrupt_sessions,
     phase: str,
     tool_name: str | None,
     current_text: str,
@@ -254,7 +331,6 @@ async def test_user_interrupt_injects_system_reminder_before_task_cancel(
         "tool": "ses_019c531022297723866bc035db07731d",  # ses_user_interrupt_tool
     }[phase]
     job_id = f"job_user_interrupt_{phase}"
-    SessionInterruptState.clear(session_id)
     session_bundle_factory(tmp_path, session_id)
     saver = RolloutCheckpointSaver(sessions_dir=tmp_path)
     binding = _thread_binding(tmp_path, session_id)
@@ -272,7 +348,7 @@ async def test_user_interrupt_injects_system_reminder_before_task_cancel(
     await _persist_checkpoint(saver, binding, admission, user_message)
 
     SessionInterruptState.set(
-        session_id,
+        session_id, thread_id=binding.thread_id,
         phase=phase,
         tool_name=tool_name,
         current_text=current_text,
@@ -291,6 +367,7 @@ async def test_user_interrupt_injects_system_reminder_before_task_cancel(
     job_service = FakeJobService(job, execution_binding=execution_binding)
     event_bus = FakeJobEventBus()
     service = SessionInterruptService(
+        session_service=interrupt_sessions,
         job_service=job_service,
         job_event_bus=event_bus,
         message_service=message_service,
@@ -299,13 +376,14 @@ async def test_user_interrupt_injects_system_reminder_before_task_cancel(
 
     result = await service.interrupt(session_id=session_id)
 
+    assert result.thread_id == binding.thread_id
     assert result.job_id == job_id
     assert result.phase == phase
     assert result.tool_name == tool_name
     assert job_service.control_requests
     assert job_service.control_requests[0].action == ControlAction.cancel
     assert job_service.boundary_notifications == [("after_interrupt", False)]
-    assert SessionInterruptState.get(session_id).user_interrupt_reminder_injected is True
+    assert SessionInterruptState.get(session_id, thread_id=binding.thread_id).user_interrupt_reminder_injected is True
     assert event_bus.events
     assert event_bus.events[-1]["event_type"] == "session_interrupted"
 
@@ -350,17 +428,17 @@ async def test_user_interrupt_injects_system_reminder_before_task_cancel(
     ]
     assert current_text not in assistant_contents
 
-    SessionInterruptState.clear(session_id)
+    SessionInterruptState.clear(session_id, thread_id=binding.thread_id)
 
 
 @pytest.mark.asyncio
 async def test_user_interrupt_submits_reminder_without_existing_checkpoint(
     tmp_path,
     session_bundle_factory,
+    interrupt_sessions,
 ) -> None:
     session_id = "ses_019c75960c0c763d844344c4deaada6e"
     job_id = "job_user_interrupt_missing_checkpoint"
-    SessionInterruptState.clear(session_id)
     session_bundle_factory(tmp_path, session_id)
 
     saver = RolloutCheckpointSaver(sessions_dir=tmp_path)
@@ -377,7 +455,7 @@ async def test_user_interrupt_submits_reminder_without_existing_checkpoint(
         path_resolver=get_session_path_resolver(tmp_path),
     )
     SessionInterruptState.set(
-        session_id,
+        session_id, thread_id=binding.thread_id,
         phase="text",
         tool_name=None,
         current_text="已经生成但尚未完成的文本",
@@ -395,6 +473,7 @@ async def test_user_interrupt_submits_reminder_without_existing_checkpoint(
     )
     job_service = FakeJobService(job, execution_binding=execution_binding)
     service = SessionInterruptService(
+        session_service=interrupt_sessions,
         job_service=job_service,
         job_event_bus=FakeJobEventBus(),
         message_service=message_service,
@@ -403,9 +482,10 @@ async def test_user_interrupt_submits_reminder_without_existing_checkpoint(
 
     result = await service.interrupt(session_id=session_id)
 
+    assert result.thread_id == binding.thread_id
     assert result.job_id == job_id
     assert job_service.control_requests
-    assert SessionInterruptState.get(session_id).user_interrupt_reminder_injected is True
+    assert SessionInterruptState.get(session_id, thread_id=binding.thread_id).user_interrupt_reminder_injected is True
     projections = saver._storage.storage.read_item_projections(session_id)
     reminders = [
         projection
@@ -418,13 +498,14 @@ async def test_user_interrupt_submits_reminder_without_existing_checkpoint(
     assert reminders[0]["wire_role"] == "user"
     assert "<system_reminder>" in str(reminders[0]["content"])
     assert "文本生成" in str(reminders[0]["content"])
-    SessionInterruptState.clear(session_id)
+    SessionInterruptState.clear(session_id, thread_id=binding.thread_id)
 
 
 @pytest.mark.asyncio
 async def test_interrupt_ignores_interrupt_pending_job(
     tmp_path,
     session_bundle_factory,
+    interrupt_sessions,
 ) -> None:
     """interrupt_pending 的 Job 不属于可中断集合，不得被再次选为中断目标。
 
@@ -433,7 +514,6 @@ async def test_interrupt_ignores_interrupt_pending_job(
     """
 
     session_id = "ses_019d2e4f6a8b7c1d9e2f3a4b5c6d7e8f"
-    SessionInterruptState.clear(session_id)
     session_bundle_factory(tmp_path, session_id)
     saver = RolloutCheckpointSaver(sessions_dir=tmp_path)
     binding = _thread_binding(tmp_path, session_id)
@@ -450,6 +530,7 @@ async def test_interrupt_ignores_interrupt_pending_job(
     )
     job_service = FakeJobService(job)
     service = SessionInterruptService(
+        session_service=interrupt_sessions,
         job_service=job_service,
         job_event_bus=FakeJobEventBus(),
         message_service=build_message_service(tmp_path, checkpointer=saver),
@@ -464,14 +545,16 @@ async def test_interrupt_ignores_interrupt_pending_job(
     assert job_service.control_requests == []
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("control_status", [JobStatus.cancelling, JobStatus.cancelled])
 async def test_internal_job_interrupt_never_opens_a_turn_stream(
     tmp_path,
     session_bundle_factory,
+    interrupt_sessions,
+    control_status,
 ) -> None:
     session_id = "ses_019c75960c0c763d844344c4deaada6e"
     job_id = "job_internal_interrupt"
     message_id = "msg_internal_interrupt"
-    SessionInterruptState.clear(session_id)
     session_bundle_factory(tmp_path, session_id)
     saver = RolloutCheckpointSaver(sessions_dir=tmp_path)
     binding = _thread_binding(tmp_path, session_id)
@@ -503,9 +586,11 @@ async def test_internal_job_interrupt_never_opens_a_turn_stream(
     job_service = FakeJobService(
         job,
         execution_binding=execution_binding,
+        control_status=control_status,
     )
     event_bus = FakeJobEventBus()
     service = SessionInterruptService(
+        session_service=interrupt_sessions,
         job_service=job_service,
         job_event_bus=event_bus,
         message_service=message_service,
@@ -514,12 +599,13 @@ async def test_internal_job_interrupt_never_opens_a_turn_stream(
 
     result = await service.interrupt(session_id=session_id)
 
+    assert result.thread_id == binding.thread_id
     assert result.job_id == job_id
-    assert result.status == JobStatus.cancelling.value
+    assert result.status == control_status.value
     message_stream_store.open.assert_not_awaited()
     assert [request.action for request in job_service.control_requests] == [
         ControlAction.cancel
     ]
-    assert SessionInterruptState.get(session_id).interrupt_request_id
+    assert SessionInterruptState.get(session_id, thread_id=binding.thread_id).interrupt_request_id
     assert event_bus.events[-1]["event_type"] == "session_interrupted"
-    SessionInterruptState.clear(session_id)
+    SessionInterruptState.clear(session_id, thread_id=binding.thread_id)

@@ -6,8 +6,8 @@ import {
   SessionActivityCursorGoneError,
 } from "./sessionActivity";
 import {
-  installSessionCatalogFetchMock,
-  unwrapSessionCatalogFetch,
+  installSessionApiFetchMock,
+  unwrapSessionApiFetch,
 } from "./sessionApiFetchMock";
 
 function streamResponse(chunks: string[], init: RequestInit | undefined): Response {
@@ -30,7 +30,7 @@ function streamResponse(chunks: string[], init: RequestInit | undefined): Respon
 
 afterEach(() => {
   jest.useRealTimers();
-  unwrapSessionCatalogFetch();
+  unwrapSessionApiFetch();
 });
 
 const workspaceTarget = {
@@ -48,7 +48,7 @@ async function flushMicrotasks(rounds = 50): Promise<void> {
 describe("Workspace 会话活动 API", () => {
   test("列表请求携带工作区并返回持久游标", async () => {
     let request: RequestInit | undefined;
-    installSessionCatalogFetchMock(({ init }) => {
+    installSessionApiFetchMock(({ init }) => {
       request = init;
       return Response.json({
         data: {
@@ -77,7 +77,7 @@ describe("Workspace 会话活动 API", () => {
 
   test("SSE 活动事件解析 id 并转发游标", async () => {
     let request: RequestInit | undefined;
-    installSessionCatalogFetchMock(({ init }) => {
+    installSessionApiFetchMock(({ init }) => {
       request = init;
       return streamResponse([
         "id: 8\nevent: session_activity\ndata: {\"event_seq\":8,\"event_id\":\"evt-8\",\"session_id\":\"session-8\",\"status\":\"failed\",\"summary\":\"任务失败\",\"occurred_at\":\"2026-08-16T00:00:00Z\"}\n\n",
@@ -97,7 +97,7 @@ describe("Workspace 会话活动 API", () => {
   });
 
   test("游标失效直接暴露给调用方", async () => {
-    installSessionCatalogFetchMock(() => new Response("{}", { status: 410, statusText: "Gone" }), {
+    installSessionApiFetchMock(() => new Response("{}", { status: 410, statusText: "Gone" }), {
       credentialToken: "activity-token",
     });
 
@@ -114,7 +114,7 @@ describe("Workspace 会话活动流空闲超时", () => {
 
     const port = 48_204;
     let streamCancelled = false;
-    installSessionCatalogFetchMock(({ init }) => new Response(new ReadableStream<Uint8Array>({
+    installSessionApiFetchMock(({ init }) => new Response(new ReadableStream<Uint8Array>({
         start(controller) {
           controller.enqueue(new TextEncoder().encode(`event: observation\ndata: ${JSON.stringify({
             subscription_id: JSON.parse(String(init?.body)).subscriptions[0].subscription_id, state: "connected",

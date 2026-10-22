@@ -207,16 +207,20 @@ class JobService:
         )
 
     def _resolve_job_timeout_seconds(self) -> float:
-        value = (
+        job_timeout_seconds = (
             self._job_timeout_seconds_provider()
             if self._job_timeout_seconds_provider is not None
             else self._job_timeout_seconds
         )
-        if isinstance(value, bool) or not isinstance(value, (int, float)) or value <= 0:
+        if (
+            isinstance(job_timeout_seconds, bool)
+            or not isinstance(job_timeout_seconds, (int, float))
+            or job_timeout_seconds <= 0
+        ):
             raise ValueError(
                 "Job timeout provider 必须返回大于 0 的数字"
             )
-        return float(value)
+        return float(job_timeout_seconds)
 
     def _resolve_finalization_grace_seconds(self, job_timeout_seconds: float) -> float:
         if self._configured_job_finalization_grace_seconds is not None:
@@ -290,7 +294,7 @@ class JobService:
         for job in jobs:
             if job.internal_reservation or self._is_terminal_status(job.status):
                 continue
-            interrupt_state = SessionInterruptState.get(job.session_id)
+            interrupt_state = SessionInterruptState.get(job.session_id, thread_id=job.thread_id)
             blockers.append(
                 JobDrainBlocker(
                     job_id=job.job_id,
@@ -464,7 +468,15 @@ class JobService:
                     "会话正在准备持久化消息，不能修改 checkpoint: "
                     f"session_id={session_id}, preparation_count={preparation_count}"
                 )
-            active_job_id = next((value for key, value in self._thread_current_job.items() if key[0] == session_id), None)
+            active_job_id = next(
+                (
+                    job_id
+                    for (candidate_session_id, _thread_id), job_id
+                    in self._thread_current_job.items()
+                    if candidate_session_id == session_id
+                ),
+                None,
+            )
             if active_job_id is not None:
                 raise RuntimeError(
                     "会话存在运行中或正在收尾的任务，不能修改 checkpoint: "
@@ -492,7 +504,15 @@ class JobService:
                         f"session_id={session_id}, "
                         f"preparation_count={preparation_count}"
                     )
-                active_job_id = next((value for key, value in self._thread_current_job.items() if key[0] == session_id), None)
+                active_job_id = next(
+                    (
+                        job_id
+                        for (candidate_session_id, _thread_id), job_id
+                        in self._thread_current_job.items()
+                        if candidate_session_id == session_id
+                    ),
+                    None,
+                )
                 if active_job_id is not None:
                     raise RuntimeError(
                         "会话存在运行中或正在收尾的任务，不能移动物理存储: "

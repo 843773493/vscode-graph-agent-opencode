@@ -51,7 +51,9 @@ def writerless_runtime() -> tuple[
     AsyncMock,
 ]:
     canonical_sink = AsyncMock()
-    tool_result_sink = AsyncMock()
+    tool_result_sink = AsyncMock(wraps=lambda completion: SimpleNamespace(payload={
+        "content": completion.content, "tool_outcome": completion.tool_outcome,
+    }))
     registrar = AsyncMock(return_value="execution_internal")
     outcome_sink = AsyncMock()
     runtime = MessageStreamRuntime(
@@ -264,3 +266,21 @@ async def test_writerless_internal_user_cancel_converges_tool_result_and_executi
         reason="user_interrupt",
         checkpoint_ns="",
     )
+
+
+@pytest.mark.asyncio
+async def test_user_interrupt_with_exception_closes_original_turn_stream() -> None:
+    runtime, writer = AsyncMock(), AsyncMock()
+    checkpointer, publish = MagicMock(), AsyncMock()
+    await handle_step_failure(
+        error=RuntimeError("工具取消后抛出异常"),
+        interrupt_state=SimpleNamespace(interrupt_request_id="interrupt-original"),
+        message_stream_runtime=runtime, message_stream_writer=writer,
+        checkpointer=checkpointer, session_id="session", thread_id="thread",
+        job_id="job", turn_id="turn", execution_id="execution", checkpoint_ns="",
+        publish=publish, logger=MagicMock(spec=logging.Logger),
+    )
+    runtime.finalize_interruption_facts.assert_awaited_once_with()
+    writer.close_interrupted.assert_awaited_once_with("interrupt-original")
+    writer.close_failed.assert_not_awaited()
+    publish.assert_not_awaited()

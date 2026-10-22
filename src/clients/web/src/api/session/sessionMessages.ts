@@ -206,13 +206,18 @@ export async function replayMessageTurn(
 export async function interruptSession(
   port: number,
   sessionId: string,
+  threadId: string,
   workspaceId?: string | null,
 ): Promise<InterruptSessionResult> {
-  return unwrapApiData(
+  const result = unwrapApiData(
     await requestJson<APIResponse<InterruptSessionResult>>(
       port,
-      `/api/v1/sessions/${encodeURIComponent(sessionId)}/interrupt`,
+      `/api/v1/sessions/${encodeURIComponent(sessionId)}/interrupt?${new URLSearchParams({ thread_id: threadId })}`,
       { method: "POST", headers: workspaceHeader(workspaceId) },
     ),
   );
+  if (result.session_id !== sessionId || result.thread_id !== threadId) {
+    throw new Error(`中断响应归属不匹配: 请求 ${sessionId}/${threadId}，收到 ${result.session_id}/${result.thread_id}`);
+  }
+  return result;
 }

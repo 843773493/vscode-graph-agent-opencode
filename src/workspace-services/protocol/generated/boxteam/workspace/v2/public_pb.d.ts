@@ -5961,6 +5961,11 @@ export declare type SessionInterruptResultDTO = Message<"boxteam.workspace.v2.Se
    * @generated from field: string interrupt_request_id = 7;
    */
   interruptRequestId: string;
+
+  /**
+   * @generated from field: string thread_id = 8;
+   */
+  threadId: string;
 };
 
 /**

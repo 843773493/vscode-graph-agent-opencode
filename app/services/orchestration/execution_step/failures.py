@@ -221,6 +221,8 @@ async def handle_step_failure(
                 reason="user_interrupt",
                 checkpoint_ns=checkpoint_ns,
             )
+        elif message_stream_writer is not None:
+            await message_stream_writer.close_interrupted(interrupt_state.interrupt_request_id)
         return
     failure_code = (
         error.code

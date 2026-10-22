@@ -1383,6 +1383,7 @@ export interface SessionInterruptResultDTO {
   tool_name?: string | undefined;
   interrupted_at?: string | undefined;
   interrupt_request_id: string;
+  thread_id: string;
 }
 
 export interface SessionListResultDTO {
@@ -11295,6 +11296,7 @@ function createBaseSessionInterruptResultDTO(): SessionInterruptResultDTO {
     tool_name: undefined,
     interrupted_at: undefined,
     interrupt_request_id: "",
+    thread_id: "",
   };
 }
 
@@ -11308,6 +11310,7 @@ export const SessionInterruptResultDTO: MessageFns<SessionInterruptResultDTO> = 
       tool_name: isSet(object.tool_name) ? globalThis.String(object.tool_name) : undefined,
       interrupted_at: isSet(object.interrupted_at) ? globalThis.String(object.interrupted_at) : undefined,
       interrupt_request_id: isSet(object.interrupt_request_id) ? globalThis.String(object.interrupt_request_id) : "",
+      thread_id: isSet(object.thread_id) ? globalThis.String(object.thread_id) : "",
     };
   },
 
@@ -11334,6 +11337,9 @@ export const SessionInterruptResultDTO: MessageFns<SessionInterruptResultDTO> = 
     if (message.interrupt_request_id !== "") {
       obj.interrupt_request_id = message.interrupt_request_id;
     }
+    if (message.thread_id !== "") {
+      obj.thread_id = message.thread_id;
+    }
     return obj;
   },
 
@@ -11349,6 +11355,7 @@ export const SessionInterruptResultDTO: MessageFns<SessionInterruptResultDTO> = 
     message.tool_name = object.tool_name ?? undefined;
     message.interrupted_at = object.interrupted_at ?? undefined;
     message.interrupt_request_id = object.interrupt_request_id ?? "";
+    message.thread_id = object.thread_id ?? "";
     return message;
   },
 };

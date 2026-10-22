@@ -951,6 +951,7 @@ def _build_app_container(
         session_orchestrator=session_orchestrator,
     )
     session_interrupt_service = SessionInterruptService(
+        session_service=session_service,
         job_service=job_service,
         job_event_bus=job_event_bus,
         message_service=message_service,

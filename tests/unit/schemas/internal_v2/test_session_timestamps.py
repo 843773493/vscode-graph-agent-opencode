@@ -11,6 +11,7 @@ def test_interrupt_result_default_timestamp_is_timezone_aware() -> None:
     """缺省也不得回退到 naive：事件时间戳必须含时区（对齐 event schema 不变式）。"""
     result = SessionInterruptResultDTO(
         session_id="s",
+        thread_id="thr_019bef80066f7038ae8e88ccb2e5e2ea",
         job_id="j",
         status="cancelling",
         interrupt_request_id="i",

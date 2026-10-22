@@ -59,6 +59,7 @@ async def test_failure_commits_exact_active_attempt_once_before_return(tool_fail
     async def commit(_completion: ToolResultCompletion):
         commit_started.set()
         await release_commit.wait()
+        return SimpleNamespace(payload={"content": _completion.content, "tool_outcome": _completion.tool_outcome})
 
     case.tool_result_sink.side_effect = commit
     sibling = case.runtime.claim_tool_call_id("original-model", "sibling")

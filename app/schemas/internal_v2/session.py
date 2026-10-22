@@ -9,6 +9,7 @@ from app.core.session_catalog_store.contracts import (
     SessionGenerationOriginDTO,
     SessionKind,
 )
+from app.schemas.canonical_params import CanonicalThreadId
 
 from .common import TimestampedDTO
 from .session_context import SessionContextScope, SessionResourceIdentity
@@ -369,6 +370,7 @@ class SessionControlResultDTO(BaseModel):
 
 class SessionInterruptResultDTO(BaseModel):
     session_id: str
+    thread_id: CanonicalThreadId
     job_id: str
     status: str
     interrupt_request_id: str

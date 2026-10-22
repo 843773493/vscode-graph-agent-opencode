@@ -88,6 +88,8 @@ class CanonicalItemSink:
         item = await asyncio.to_thread(
             self._complete_tool, session_id=self._session_id, thread_id=self._thread_id,
             job_id=admission.job_id, completion=completion, checkpoint_ns=self._checkpoint_ns,
+            # 未知结果是收尾观察；工具可能已经先于事件消费者提交真实结果。
+            recovery=completion.tool_outcome == "unknown",
         )
         if self._committed_item_observer is not None:
             try:

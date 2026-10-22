@@ -201,7 +201,6 @@ class StreamTerminalStateMixin:
         """在线性化的 interrupt.requested 后闭合所有已知运行时事实。"""
         if self._interruption_facts_finalized:
             return
-        self._interruption_facts_finalized = True
         await self._finish_model(
             completion_reason="user_interrupt",
             partial=True,
@@ -254,3 +253,4 @@ class StreamTerminalStateMixin:
             outcome="user_interrupt",
             retryable=False,
         )
+        self._interruption_facts_finalized = True

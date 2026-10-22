@@ -24,7 +24,6 @@ from app.core.model_delta_context import (
 from app.core.path_utils import get_session_catalog_components
 from app.core.session_interrupt_state import SessionInterruptState
 from app.core.turn_execution_scope import ScopeCancelledError
-from app.core.workspace_identity import load_or_create_workspace_id
 from app.domain.itemized.dispatch_ref import SealedContextDispatchRef
 from app.domain.itemized.execution_admission import (
     ExecutionAdmission,
@@ -80,13 +79,11 @@ from app.services.orchestration.execution_step.reminders import (
 from app.services.orchestration.resource_activation import ResourceActivationCoordinator
 from app.services.orchestration.thread_residency import ThreadResidencyTracker
 from configs.runtime import read_jsonc_object
-from tests.harness.python.run_context import TestRunContext
 from tests.support.communication import SOURCE_SESSION, SOURCE_THREAD, WORKSPACE_ID
 from tests.support.mcp_session_doubles import (
     FakeMcpSessionFactory,
     drain_pending_relists,
 )
-from tests.support.workspaces import prepare_default_test_workspace
 
 pytestmark = pytest.mark.usefixtures("workspace_scope")
 
@@ -232,7 +229,10 @@ class _ActivationBodyStore:
 
 
 @pytest.fixture
-def mock_dependencies(monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest):
+def mock_dependencies(
+    monkeypatch: pytest.MonkeyPatch,
+    workspace_scope: tuple[str, Path],
+):
     """创建一组共用的 mock 依赖。"""
     config_service = MagicMock()
     config_service.get_snapshot.return_value = build_config_snapshot(
@@ -446,15 +446,7 @@ def mock_dependencies(monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRe
         persist_final,
     )
     dependency_provider.get_checkpointer.return_value = saver
-    workspace_root = TestRunContext.from_test_file(
-        Path(request.node.path)
-    ).workspace_root
-
-    prepare_default_test_workspace(
-        workspace_root=workspace_root,
-        template_root=Path.cwd() / "tests/fixtures/workspaces/default_test_workspace",
-    )
-    workspace_id = load_or_create_workspace_id(workspace_root)
+    workspace_id, workspace_root = workspace_scope
     activation_body_store = _ActivationBodyStore(workspace_id=workspace_id)
     workspace_file_resource_registry = WorkspaceFileResourceRegistry(
         workspace_root=workspace_root,
@@ -2136,7 +2128,7 @@ async def test_cancelled_after_user_interrupt_closes_as_interrupted(
 
     async def process_user_cancelled(**_kwargs):
         SessionInterruptState.set(
-            "ses_user_cancelled",
+            "ses_user_cancelled", thread_id="thr_test",
             interrupt_request_id="intr_user_cancelled",
             cancellation_reason="user_requested",
             user_interrupt_reminder_injected=True,
