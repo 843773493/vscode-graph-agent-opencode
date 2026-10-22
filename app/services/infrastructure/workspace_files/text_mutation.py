@@ -261,15 +261,15 @@ def validate_text_paths(paths: list[str], workspace_root: Path) -> None:
 
 def _resolve_workspace_file(file_path: str, workspace_root: Path) -> Path:
     if "://" in file_path or Path(file_path).is_absolute() or PureWindowsPath(file_path).drive:
-        raise ValueError(f"apply_patch 文件路径无效: 补丁内文件名必须相对固定根: {file_path}")
+        raise ValueError("apply_patch 文件路径无效: 补丁内文件名必须相对固定根，禁止绝对路径和 URI")
     if not file_path or ".." in Path(file_path).parts or "\x00" in file_path:
-        raise ValueError(f"文本文件相对路径无效: {file_path}")
+        raise ValueError("文本文件相对路径无效: 文件名不能为空、包含空字符或上级目录段")
     try:
         path = resolve_native_file_path(workspace_root, file_path)
     except ForbiddenError as error:
         raise ValueError("文本文件路径越出固定根") from error
     if path == workspace_root or not path.is_relative_to(workspace_root):
-        raise ValueError(f"apply_patch 文件路径无效: 文件必须位于固定根内: {file_path}")
+        raise ValueError("apply_patch 文件路径无效: 文件必须位于固定根内且不能等于根目录")
     return path
 
 

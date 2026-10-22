@@ -10,8 +10,72 @@ from pathlib import Path
 import httpx
 import pytest
 
-from app.schemas.internal_v2.text_mutation import EditText, TextMutationRequest
+from app.schemas.internal_v2.text_mutation import (
+    EditText,
+    PatchText,
+    TextMutationRequest,
+)
 from tests.harness.python.run_context import TestRunContext
+
+
+@pytest.mark.asyncio
+async def test_patch_filename_errors_are_path_free_before_any_publication(
+    integration_client: httpx.AsyncClient,
+    integration_workspace_root_path: str,
+    request: pytest.FixtureRequest,
+) -> None:
+    root = Path(integration_workspace_root_path)
+    source = root / "patch-path-source.txt"
+    source.write_bytes(b"before\n")
+    reference = await integration_client.post("/api/v1/workspace/files/references", json={"paths": [str(root)]})
+    assert reference.status_code == 200, reference.text
+    uri = reference.json()["data"]["uris"][0]
+    journal_root = root / ".boxteam/cache/text_mutations"
+    journals = set(journal_root.glob("*.json"))
+    filenames = (
+        str(root / "patch-path-marker.txt"),
+        r"C:\Users\patch-path-marker\private.txt",
+        r"\\private-host\patch-path-marker\private.txt",
+        "../patch-path-marker/private.txt",
+        "boxteam://workspace/patch-path-marker/files/root/private.txt",
+        ".",
+        "",
+        "patch-path-marker\x00.txt",
+    )
+    outside = root.parent / "patch-path-marker/private.txt"
+    assert not outside.exists()
+    receipts = []
+    for filename in filenames:
+        for action in ("Add", "Update", "Delete", "Move"):
+            versions = {"patch-safe-first.txt": "absent", filename: "absent"}
+            if action == "Move":
+                versions[source.name] = "sha256:" + hashlib.sha256(b"before\n").hexdigest()
+                operation = f"*** Update File: {source.name}\n*** Move to: {filename}\n@@\n-before\n+after\n"
+            else:
+                operation = f"*** {action} File: {filename}\n" + ("+blocked\n" if action == "Add" else "")
+            command = PatchText(target=uri, input="*** Begin Patch\n*** Add File: patch-safe-first.txt\n+first\n" + operation + "*** End Patch",
+                                expected_versions=versions, explanation="验证非法补丁文件名的失败边界")
+            response = await integration_client.post("/api/v1/resources/text-mutations", json=
+                TextMutationRequest.from_command(command).model_dump(mode="json", exclude_none=True))
+            assert response.status_code == 200, response.text
+            assert response.headers["X-Request-ID"] == response.json()["request_id"]
+            transfer = response.json()["data"]
+            receipt = transfer["receipt"]
+            assert receipt["status"] == "error" and receipt["effect"] == "not_executed"
+            assert receipt["code"] == "invalid_patch" and receipt["error_type"] == "DiffError"
+            assert receipt["owner"] == "resource_file_operations" and receipt["retryable"] is False
+            assert "文件" in receipt["error"] and "路径" in receipt["error"]
+            assert receipt["files"] == [] and transfer["snapshots"] == []
+            assert "patch-path-marker" not in response.text and str(root) not in response.text
+            assert source.read_bytes() == b"before\n"
+            assert not (root / "patch-safe-first.txt").exists() and not (root / "patch-path-marker.txt").exists()
+            assert not outside.exists()
+            assert set(journal_root.glob("*.json")) == journals
+            receipts.append({"action": action, "response": response.json()})
+    context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
+    (context.artifacts_dir / "patch-invalid-filenames.json").write_text(
+        json.dumps(receipts, ensure_ascii=False, indent=2) + "\n", encoding="utf-8",
+    )
 
 
 @pytest.fixture

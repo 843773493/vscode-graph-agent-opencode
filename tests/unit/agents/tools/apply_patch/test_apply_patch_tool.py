@@ -62,6 +62,45 @@ def test_apply_patch_schema_matches_vscode_required_parameters(text_mutations_fa
         tool.invoke({"input": "*** Begin Patch\n*** End Patch"})
 
 
+@pytest.mark.parametrize("input_form", ["absolute", "windows_drive", "windows_unc", "traversal", "uri", "root", "empty", "nul"])
+@pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
+async def test_patch_filename_failure_does_not_echo_native_path(
+    text_mutations_factory, workspace_scope, input_form: str, asynchronous: bool,
+) -> None:
+    root = workspace_scope[1]
+    filename = {
+        "absolute": str(root / "patch-path-marker.txt"),
+        "windows_drive": r"C:\Users\patch-path-marker\private.txt",
+        "windows_unc": r"\\private-host\patch-path-marker\private.txt",
+        "traversal": "../patch-path-marker/private.txt",
+        "uri": "boxteam://workspace/patch-path-marker/files/root/private.txt",
+        "root": ".",
+        "empty": "",
+        "nul": "patch-path-marker\x00.txt",
+    }[input_form]
+    tool = create_apply_patch_tool(text_mutations=text_mutations_factory(root))
+    journal_root = root / ".boxteam/cache/text_mutations"
+    journals = set(journal_root.glob("*.json"))
+    outside = root.parent / "patch-path-marker/private.txt"
+    assert not outside.exists()
+    arguments = {
+        "input": f"*** Begin Patch\n*** Add File: first.txt\n+first\n*** Add File: {filename}\n+blocked\n*** End Patch",
+        "explanation": "验证整批路径预检失败", "target": str(root),
+        "expected_versions": {"first.txt": "absent", filename: "absent"},
+    }
+    wire = await tool.ainvoke(arguments) if asynchronous else tool.invoke(arguments)
+    result = json.loads(wire)
+    assert result["status"] == "error" and result["effect"] == "not_executed"
+    assert result["code"] == "invalid_patch" and result["error_type"] == "DiffError"
+    assert result["retryable"] is False and result["owner"] == "resource_file_operations"
+    assert "文件" in result["error"] and "路径" in result["error"]
+    assert "patch-path-marker" not in wire and str(root) not in wire
+    assert result.get("files", []) == []
+    assert not (root / "first.txt").exists() and not (root / "patch-path-marker.txt").exists()
+    assert not outside.exists()
+    assert set(journal_root.glob("*.json")) == journals
+
+
 @pytest.fixture
 async def patch_lifecycle():
     loop = asyncio.get_running_loop()
