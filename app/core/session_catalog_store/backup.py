@@ -11,7 +11,9 @@
 from __future__ import annotations
 
 import hashlib
+import os
 import sqlite3
+import stat
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -19,7 +21,23 @@ from app.core.session_catalog_store.contracts import (
     CatalogBackupManifest,
     CatalogIntegrityReport,
     CatalogMaintenanceRequiredError,
+    _parse_frozen_session_locators,
 )
+from app.core.session_catalog_store.validators import validate_storage_relative_locator
+
+
+def _numeric_child_directories(directory: Path) -> list[Path]:
+    directories: list[Path] = []
+    with os.scandir(directory) as entries:
+        for entry in entries:
+            if not entry.name.isdigit():
+                continue
+            if entry.is_symlink() or not entry.is_dir(follow_symlinks=False):
+                raise CatalogMaintenanceRequiredError(
+                    "Session 日期目录被替换为链接或非目录，须进入维护模式核对并保留原数据"
+                )
+            directories.append(Path(entry.path))
+    return directories
 
 
 class CatalogBackupMixin:
@@ -138,44 +156,57 @@ class CatalogBackupMixin:
         )
 
     def verify_registered_date_directories(self) -> None:
-        """校验 ``sessions/YYYY/MM/DD`` 日期桶与 catalog locator 一一对应（8.1-F）。
+        """核对日期目录与权威记录；生产调用方须持 topology shared gate。
 
-        存在**未登记**日期目录（磁盘上有而 catalog 无对应 locator）→
-        ``CatalogMaintenanceRequiredError``：只保留原数据、进入维护模式核对，
-        绝不扫盘补 active node、绝不 GC 未知目录。反向（catalog 有而磁盘缺）
-        由 locator 解析层 fail closed，不在本方法重复。
+        preparing creation 可以已经 rename；已完成的创建/删除记录可证明空日期桶
+        的来源，但不能授权已删除 Session 的旧目录重新出现。只检查归属，不吸收、
+        修复或清理磁盘内容；缺失的已登记正文仍由各自 locator/恢复 owner 检查。
         """
         if not self.sessions_root.is_dir():
             return
-        registered: set[str] = set()
         with self.read_transaction() as connection:
             rows = connection.execute(
-                "SELECT storage_relative_locator FROM nodes "
-                "WHERE kind = 'session' AND storage_relative_locator IS NOT NULL"
+                "SELECT storage_relative_locator, 1 AS allows_directory FROM nodes WHERE kind='session' "
+                "UNION ALL SELECT storage_relative_locator, state='preparing' FROM session_creation_records"
             ).fetchall()
-        for row in rows:
-            locator = str(row[0])
-            parts = locator.split("/")
-            registered.add("/".join(parts[1:4]))
+            deletions = connection.execute("SELECT frozen_session_locators FROM subtree_delete_records").fetchall()
+        known_locators = {str(row[0]) for row in rows}
+        allowed_locators = {str(row[0]) for row in rows if row[1]}
+        try:
+            for deletion in deletions:
+                known_locators.update(_parse_frozen_session_locators(str(deletion[0])).values())
+            for locator in known_locators:
+                validate_storage_relative_locator(locator)
+        except (TypeError, ValueError, RuntimeError) as error:
+            raise CatalogMaintenanceRequiredError(
+                "Session 日期目录归属记录损坏，须进入维护模式核对并保留原数据"
+            ) from error
+        registered = {"/".join(locator.split("/")[1:4]) for locator in known_locators}
         unknown: list[str] = []
-        for year_dir in sorted(self.sessions_root.iterdir()):
-            if not year_dir.is_dir() or not year_dir.name.isdigit():
-                # 非日期桶目录（如 .staging/.deleting）不属于本校验面。
-                continue
-            for month_dir in sorted(year_dir.iterdir()):
-                if not month_dir.is_dir() or not month_dir.name.isdigit():
-                    continue
-                for day_dir in sorted(month_dir.iterdir()):
-                    if not day_dir.is_dir() or not day_dir.name.isdigit():
-                        continue
+        # 只枚举日期树，不进入 .staging/.deleting 或私有 fork capture。
+        for year_dir in _numeric_child_directories(self.sessions_root):
+            for month_dir in _numeric_child_directories(year_dir):
+                for day_dir in _numeric_child_directories(month_dir):
                     bucket = f"{year_dir.name}/{month_dir.name}/{day_dir.name}"
                     if bucket not in registered:
                         unknown.append(bucket)
+                    with os.scandir(day_dir) as entries:
+                        for entry in entries:
+                            locator = f"sessions/{bucket}/{entry.name}"
+                            if locator not in allowed_locators:
+                                unknown.append(locator)
+                                continue
+                            try:
+                                mode = entry.stat(follow_symlinks=False).st_mode
+                            except FileNotFoundError:
+                                # 删除 drain 在 topology gate 外隔离叶目录；缺失交由 locator owner 核验。
+                                continue
+                            if not stat.S_ISDIR(mode):
+                                unknown.append(locator)
         if unknown:
             raise CatalogMaintenanceRequiredError(
-                "sessions 下存在未登记日期目录（须进入维护模式核对并保留原数据，"
-                "不得扫盘补 active node 或交给 GC）: "
-                f"sessions_root={self.sessions_root}, unknown={sorted(unknown)}"
+                "sessions 下存在未登记日期目录或 Session 目录（须进入维护模式核对并保留原数据，"
+                f"不得扫盘补 active node 或交给 GC）: unknown={sorted(unknown)}"
             )
 
 

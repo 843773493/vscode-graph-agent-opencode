@@ -42,6 +42,8 @@ from app.core.path_utils import (
     initialize_directories,
     workspace_context,
 )
+from app.core.session_lifecycle_gate import NavigationTopologyGate
+from app.core.shielded_cleanup import run_sync_shielded
 from app.core.trace_middleware import TraceMiddleware, get_request_id
 from app.protocol.codecs.http_validation import request_validation_error_response
 from app.runtime.model_stream import configure_model_stream_from_environment
@@ -184,6 +186,11 @@ async def _workspace_lifespan(container: AppContainer):
             operations = container.session_catalog_service.operations
             resources.push_async_callback(operations.stop)
 
+            with _workspace_startup_stage(container, "session_catalog.verify_registered_date_directories"):
+                async with NavigationTopologyGate(container.session_catalog.sessions_root).shared():
+                    await run_sync_shielded(
+                        container.session_service.path_resolver.catalog_store.verify_registered_date_directories
+                    )
             container.config_service.validate_workspace_config()
             with _workspace_startup_stage(container, "workspace_service.start"):
                 await container.workspace_service.start()
