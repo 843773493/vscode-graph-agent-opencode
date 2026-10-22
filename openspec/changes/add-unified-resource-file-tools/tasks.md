@@ -55,8 +55,10 @@
   - `navigation-owner-unit-001` 47项、`navigation-owner-server-regression-001` 整个 Gateway server 116项通过。`navigation-owner-final-static-003` 五个相关 Python 文件 Ruff通过；workspace_proxy 原7条告警由 `navigation-owner-static-baseline-001` 与 HEAD 对照完全一致，无新增。原件统一保留在 `out/tests/temp/openspec_takeover/artifacts/runs/`，含进程外超时/4GiB保护、命令、指纹、输出和退出码。首轮 shared-http-001 失败是观察装具漏传 deadline，生命周期 http-001 是新屏障误读 gateway_id 字段；修齐签名及 local_gateway_id 后通过，没有放宽内容/身份/顺序/权限断言。
   - 独立只读复审确认路由、观察装具及真实生命周期断言；按其建议把屏障 JSON 改成写完后原子替换，消除半写读取竞态。最终 `navigation-lifecycle-http-final-003` 1项通过，外层81.56秒、exit0、前后源码指纹完全一致；最终静态为 `navigation-owner-final-static-004`，OpenSpec strict为 `navigation-owner-openspec-001`。本批未变更HTTP/proto/Web字段，复用前序官方生成、真实类型和构建证据。
 - [ ] 3.4 从真实读写入口验证三种输入命中同一文件、相对路径不受 source/relay 当前目录影响、远端绝对路径按目标平台解释（含 Windows 盘符）；使用两端同名对照文件核实目标内容和 source/relay 零误写，目标失败不本地 fallback。
+  - 2026-10-22 Windows 实机切片：目标 `hyf-win` 经统一开发目标入口运行真实后端和 Gateway，三种输入逐次 PUT/GET 核正文原字节、revision 和 URI；盘符相对路径 HTTP400，未注册目录浏览、202 创建、编辑及持久 SSE 成功，注册表不变且响应/业务库不泄漏原生路径。早期 `windows-native-gateway-007` 3 passed/29.53秒；最终固定候选 `native-windows-candidate-014`（tree `1e7625618cc2ebdf15e3e2dfe9fe39773e4a175d`）在 `native-windows-final-014` 联合验证 atomic_fs、超 MAX_PATH 暂存文件/目录复制、重读证明、无覆盖发布、精确清理和真实 Gateway 文件接口，12 passed/34.62秒，exit0；`native-windows-final-static-014` Ruff exit0，非作者复审无 finding，已随 `55de9bdc` 提交推送。Linux `native-windows-io-linux-001` 52 passed/1 skipped，Windows 语义专属项跳过。所有运行位于 `out/tests/temp/openspec_takeover/artifacts/runs/`，带进程外超时及内存保护，保存准确命令/指纹/raw/退出码。修复了 CPython Windows SQLite VFS 符号入口、内部暂存路径长度及文件/目录同步权限；Windows 目录刷新在该目标文件系统实测，不冒充所有 Windows 文件系统或断电验收。既有 Linux A→SSH→C 三输入证据保持，跨操作系统联邦和真实 UNC 共享未验，整项继续未勾。
+
   - Linux真实远端入口已完成：`native-file-target-http-final-002` 1项通过，外层79.94秒、exit0、前后源码指纹完全一致。A经既有SSH访问C Gateway的公开canonical文件API，A当前激活及选择header均指B；relative/native absolute/URI读相同C原件与原字节revision，三种输入各保存一次并全部重读同一C文件。A/B同名文件与旧去根回退位置的实际decoy全部不变；C退出明确502且无locator/credential，C重开仍按原URI读回。相对输入锚定C工作区，而所有进程cwd均不取该目录。
-  - TODO（Windows实机）：按仓库跨平台目标技能检查现行默认配置，只有 `docker-debian` Linux目标，没有Windows目标；未猜测地址/用户/盘符或改环境。盘符、UNC和盘符相对路径的真实Windows Gateway验收仍缺，正式测试代码保留TODO，因此整项不勾选，不能把Linux通过或跳过用例当Windows证据。
+  - TODO（剩余跨平台验收）：用户提供的 `ssh hyf_win` 已接入隔离目标 `hyf-win`，盘符和盘符相对路径拒绝在真实 Windows Gateway 通过；仍需 Linux source/relay 到 Windows target 的同名对照及故障零 fallback、可用真实 UNC 共享的读写证明。不以纯字符串转换或 Linux 跳过结果替代。
 
 ## 4. 工作区源码树与条件写入
 
