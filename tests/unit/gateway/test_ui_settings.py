@@ -221,4 +221,4 @@ def test_ui_file_preference_http_rejection_does_not_echo_input(ui_settings_clien
     body = response.json()
     assert body["request_id"] == response.headers["X-Request-ID"]
     assert body["detail"] == [{"loc": ["body", "workspace_file_tree" if field == "expanded_paths_by_workspace" else "layout", field],
-                               "type": "value_error", "msg": "UI 设置字段校验失败"}]
+                               "type": "value_error", "msg": "请求参数校验失败"}]

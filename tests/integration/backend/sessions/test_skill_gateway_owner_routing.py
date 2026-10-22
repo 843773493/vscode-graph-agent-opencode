@@ -400,7 +400,8 @@ async def test_remote_skill_navigation_is_lightweight_encoded_and_fixed_to_owner
             assert owner["result_request_id"] == request_id and owner["status"] == status
         else:
             assert body["detail"][0]["loc"] == ["body", "operation"]
-            assert body["detail"][0]["input"] == operation
+            assert "input" not in body["detail"][0]
+            assert body["request_id"] == request_id
             assert not any(row["event"] == "owner_receipt" and row["request_id"] == request_id for row in case.observations())
         if status != 200:
             return body

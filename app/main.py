@@ -9,7 +9,6 @@ from datetime import timedelta
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request
-from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -44,6 +43,7 @@ from app.core.path_utils import (
     workspace_context,
 )
 from app.core.trace_middleware import TraceMiddleware, get_request_id
+from app.protocol.codecs.http_validation import request_validation_error_response
 from app.runtime.model_stream import configure_model_stream_from_environment
 from app.runtime.runtime_ports import DEFAULT_RUNTIME_CLOCK_PORTS
 from app.schemas.internal_v2.sse import install_sse_openapi_components
@@ -439,21 +439,7 @@ async def workspace_http_exception_handler(
     )
 
 
-@app.exception_handler(RequestValidationError)
-async def workspace_request_validation_exception_handler(
-    request: Request,
-    error: RequestValidationError,
-) -> JSONResponse:
-    """让 FastAPI 参数校验错误返回同一权威 request_id。"""
-    request_id = get_request_id(request)
-    return JSONResponse(
-        status_code=422,
-        headers={"X-Request-ID": request_id},
-        content={
-            "detail": jsonable_encoder(error.errors()),
-            "request_id": request_id,
-        },
-    )
+app.add_exception_handler(RequestValidationError, request_validation_error_response)
 
 
 workspace_api = APIRouter(dependencies=[Depends(workspace_container_scope)])

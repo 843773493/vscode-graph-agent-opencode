@@ -248,3 +248,51 @@ async def test_native_file_uri_events(
     with case.replay.control._condition:
         assert not any(key.startswith("model_call/") for key in case.replay.control._counters)
     case.record("file-uri-serialization", {"responses": records, "terminal": terminal, "upload_terminal": upload_terminal})
+
+
+async def test_validation_rejection_preserves_owner_state_and_does_not_echo_native_input(
+    communication_case: CommunicationCase,
+) -> None:
+    case = communication_case
+    target = case.workspace / "validation-original.txt"
+    target.write_bytes(b"original bytes\n")
+    response = await case.client.get("/api/v1/workspace/files/content", params={"path": str(target)})
+    assert response.status_code == 200, response.text
+    original = response.json()["data"]
+    database = case.workspace.parent / "boxteam-home/state/gateway/gateway.sqlite"
+
+    def registry():
+        with closing(sqlite3.connect(database.as_uri() + "?mode=ro", uri=True)) as connection:
+            return connection.execute("SELECT * FROM gateway_workspace_registry ORDER BY workspace_id").fetchall()
+
+    registered = registry()
+    evidence = []
+    for native in ("/private/validation-sentinel.txt", r"C:\private\validation-sentinel.txt", r"\\server\share\validation-sentinel.txt"):
+        requests = (
+            ("PUT", "/api/v1/workspace/files/content", {"path": str(target)},
+             {"content": native, "expected_revision": native}, "expected_revision", "string_too_short"),
+            ("PUT", "/api/v1/workspace/files/content", {"path": str(target), "scope": native},
+             {"content": native, "expected_revision": original["revision"]}, "scope", "literal_error"),
+            ("POST", "/api/gateway/workspaces/local", {}, {"root_path": [native]}, "root_path", "string_type"),
+        )
+        for method, endpoint, params, payload, field, rule in requests:
+            request_id = f"validation-http-{len(evidence)}"
+            response = await case.client.request(method, endpoint, params=params, json=payload, headers={"X-Request-ID": request_id})
+            assert response.status_code == 422, response.text
+            assert "validation-sentinel" not in response.text and str(case.workspace) not in response.text
+            body = response.json()
+            assert body["request_id"] == response.headers["X-Request-ID"] == request_id
+            assert body["detail"] == [{"loc": ["query" if field == "scope" else "body", field],
+                                       "type": rule, "msg": "请求参数校验失败"}]
+            assert target.read_bytes() == b"original bytes\n"
+            evidence.append(body)
+    current = await case.client.get("/api/gateway/workspaces", params={"check_health": "false"})
+    assert current.status_code == 200, current.text
+    assert registry() == registered
+    # 同一入口仍接受合法原生路径；拒绝过程不能破坏后续文件操作。
+    saved = await case.client.put("/api/v1/workspace/files/content", params={"path": str(target)},
+                                  json={"content": "verified after rejection\n", "expected_revision": original["revision"]})
+    assert saved.status_code == 200, saved.text
+    assert saved.json()["data"]["path"] == original["path"]
+    assert target.read_bytes() == b"verified after rejection\n"
+    case.record("request-validation-errors", evidence)

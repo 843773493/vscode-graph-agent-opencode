@@ -42,7 +42,23 @@ try {
     await session.first().waitFor({ state: "visible", timeout: 30_000 });
     await session.first().click();
     await page.getByRole("tab", { name: "文件", exact: true }).click();
-    await page.locator(".files-tree-root > button.root").first().waitFor();
+    await page.locator(".files-tree-root button.root").first().waitFor();
+  };
+  const revealTreeRow = async (row) => {
+    const scroller = page.locator(".files-tree-virtualized");
+    if (await row.count() === 0 && await scroller.count() > 0) {
+      await scroller.evaluate((element) => element.scrollTo({ top: 0, behavior: "instant" }));
+      await scroller.hover();
+      await page.waitForTimeout(50);
+      const deadline = Date.now() + 15_000;
+      while (await row.count() === 0 && Date.now() < deadline) {
+        // 大目录只挂载可视行；像用户一样逐屏滚动，保留点击和真实 HTTP 验证。
+        await page.mouse.wheel(0, await scroller.evaluate((element) => Math.max(1, element.clientHeight * 0.75)));
+        await page.waitForTimeout(50);
+      }
+    }
+    await row.waitFor({ state: "visible" });
+    return row;
   };
   await page.goto(process.env.BOXTEAM_BROWSER_BASE_URL, { waitUntil: "domcontentloaded" });
   await selectSession();
@@ -107,7 +123,7 @@ try {
   if (fixture.shortcut_uri) {
     shortcut = { path: fixture.shortcut_uri };
   } else {
-    const roots = page.locator(".files-tree-root > button.root");
+    const roots = page.locator(".files-tree-root button.root");
     const workspaceRoot = roots.first(), filesystemRoot = roots.last();
     if (await workspaceRoot.getAttribute("aria-expanded") === "true") await workspaceRoot.click();
     await Promise.all(pending);
@@ -125,13 +141,13 @@ try {
       const child = listing.items.find((item) => item.name === segment);
       assert.ok(child, `真实目录结果缺少 ${segment}`);
       response = directoryResponse(child.path);
-      await page.getByTitle(child.path, { exact: true }).click();
+      await (await revealTreeRow(page.getByTitle(child.path, { exact: true }))).click();
       listing = (await (await response).json()).data;
     }
     const directoryUri = listing.path;
     const file = listing.items.find((item) => item.name === fixture.file_name);
     assert.ok(file);
-    await page.getByTitle(file.path, { exact: true }).click();
+    await (await revealTreeRow(page.getByTitle(file.path, { exact: true }))).click();
 
     await editor.waitFor();
     assert.equal(await editor.inputValue(), fixture.original);
@@ -142,7 +158,7 @@ try {
     await page.getByRole("button", { name: "保存", exact: true }).click();
     const saved = await saveResponse;
     assert.equal(saved.status(), 200, await saved.text());
-    await page.getByTitle(directoryUri, { exact: true }).click({ button: "right" });
+    await (await revealTreeRow(page.getByTitle(directoryUri, { exact: true }))).click({ button: "right" });
     const shortcutResponse = page.waitForResponse((response) => response.request().method() === "POST"
       && new URL(response.url()).pathname === `/api/v1/sessions/${fixture.session_id}/file-tree-shortcuts`);
     await page.getByRole("menuitem", { name: "添加到当前会话快捷路径", exact: true }).click();
@@ -160,13 +176,15 @@ try {
     await editor.waitFor();
     assert.equal(await editor.inputValue(), fixture.edited, "页面应从用户 profile 自动恢复文件预览");
   }
-  const shortcutRow = page.locator(".files-tree-shortcut .files-tree-quick-main");
-  await shortcutRow.waitFor();
+  const shortcutRow = await revealTreeRow(page.getByTitle(shortcut.path, { exact: true }).and(page.locator("button.root")));
   assert.equal(await shortcutRow.getAttribute("title"), shortcut.path);
   if (await shortcutRow.getAttribute("aria-expanded") !== "true") await shortcutRow.click();
-  await page.locator(".files-tree-shortcut").locator("button.files-tree-item").filter({
+  const fileRow = page.locator(".files-tree-root button.files-tree-item").filter({
     has: page.locator(".file-label").getByText(fixture.file_name, { exact: true }),
-  }).click();
+  }).first();
+  await revealTreeRow(fileRow);
+  assert.ok((await fileRow.getAttribute("title"))?.startsWith(shortcut.path + "/"));
+  await fileRow.click();
   await editor.waitFor();
   assert.equal(await editor.inputValue(), fixture.edited);
   await Promise.all(pending);

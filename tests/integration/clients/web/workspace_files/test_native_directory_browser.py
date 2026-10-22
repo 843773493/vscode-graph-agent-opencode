@@ -140,7 +140,7 @@ async def test_unregistered_directory_browser_edit_and_shortcut_reopen(communica
         assert denied.status_code == 422, denied.text
         assert str(external) not in denied.text
         assert denied.json()["request_id"] == denied.headers["X-Request-ID"]
-        assert denied.json()["detail"] == [{"loc": ["body", "layout", field], "type": "value_error", "msg": "UI 设置字段校验失败"}]
+        assert denied.json()["detail"] == [{"loc": ["body", "layout", field], "type": "value_error", "msg": "请求参数校验失败"}]
         assert profile_path.read_bytes() == original_profile
     denied = await case.client.put("/api/gateway/ui-settings", json={"workspace_file_tree": {
         "expanded_paths_by_workspace": {"target": [str(external)]}}})
@@ -148,7 +148,7 @@ async def test_unregistered_directory_browser_edit_and_shortcut_reopen(communica
     assert str(external) not in denied.text
     assert denied.json()["request_id"] == denied.headers["X-Request-ID"]
     assert denied.json()["detail"] == [{"loc": ["body", "workspace_file_tree", "expanded_paths_by_workspace"],
-                                        "type": "value_error", "msg": "UI 设置字段校验失败"}]
+                                        "type": "value_error", "msg": "请求参数校验失败"}]
     assert profile_path.read_bytes() == original_profile
     # 损坏的旧落盘值不是本次请求输入；冷读与更新失败均不得把它回显到普通响应。
     invalid_profile = {**profile, "layout": {**profile["layout"], "workspace_preview_file_paths": [str(file)]}}
