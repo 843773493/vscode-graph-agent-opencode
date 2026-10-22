@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import logging
 import os
 from collections.abc import Sequence
 from dataclasses import replace
@@ -38,29 +39,33 @@ from app.gateway.runtime.workspace_process import (
 if TYPE_CHECKING:
     from app.gateway.registry import GatewayWorkspaceRegistry
 
+logger = logging.getLogger(__name__)
+
 
 def validate_workspace_root_access(workspace_root: Path) -> None:
     """在启动任何工作区子服务前确认业务目录具备写入权限。"""
 
     if not workspace_root.is_dir():
-        raise FileNotFoundError(f"工作区目录不存在: {workspace_root}")
+        logger.error("工作区目录不存在: %s", workspace_root)
+        raise FileNotFoundError("工作区目录不存在")
     if not os.access(workspace_root, os.W_OK | os.X_OK):
+        logger.error("工作区目录不可写: %s", workspace_root)
         raise PermissionError(
             "工作区目录不可写，无法创建 .boxteam 运行时数据: "
-            f"{workspace_root}；请将目录所有者或写权限授予当前用户"
+            "请将目录所有者或写权限授予当前用户"
         )
     metadata_root = workspace_root / ".boxteam"
     if metadata_root.exists() and not metadata_root.is_dir():
-        raise NotADirectoryError(
-            f"工作区运行时目录不是目录: {metadata_root}"
-        )
+        logger.error("工作区运行时目录不是目录: %s", metadata_root)
+        raise NotADirectoryError("工作区运行时目录不是目录")
     if metadata_root.is_dir() and not os.access(
         metadata_root,
         os.W_OK | os.X_OK,
     ):
+        logger.error("工作区运行时目录不可写: %s", metadata_root)
         raise PermissionError(
             "工作区运行时目录不可写，无法保存会话和服务状态: "
-            f"{metadata_root}；请将目录所有者或写权限授予当前用户"
+            "请将目录所有者或写权限授予当前用户"
         )
 
 
