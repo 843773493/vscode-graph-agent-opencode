@@ -9631,15 +9631,14 @@ async function runTeamActivation(surface, boundary, foreign) {
   const setup = [await completeOwnerTurn(owner, "建立用于实际 child 协作的团队。", [
     toolResponse(`${boundary}-team-create`, "create_team", { name: `团队 ${boundary}` }), finalResponse(`${boundary}-team-created`, "团队面板已创建。"),
   ])];
-  const members = [];
-  for (const role of ["reviewer", "tester"]) {
+  const createMember = async (coordinator, role) => {
     const threadId = `thr_${await testControl({ action: "next_uuid", namespace: "thr" })}`;
     const before = (await loadThreadHistory(owner)).internal_executions.length;
     await planChatCalls(owner.sessionId, threadId, [finalResponse(`${boundary}-${role}-initial`, `${role} 已确认角色，等待正式工作。`)]);
-    setup.push(await completeOwnerTurn(owner, `创建 ${role} 团队成员。`, [
+    const creation = await completeOwnerTurn(coordinator, `创建 ${role} 团队成员。`, [
       toolResponse(`${boundary}-${role}-create`, "create_team_member", { team_id: teamId, role, startup_prompt: "只确认团队角色与协议，不修改文件。", work_mode: "read_only" }),
       finalResponse(`${boundary}-${role}-created`, `${role} 已加入团队。`), finalResponse(`${boundary}-${role}-report`, `${role} 初始报告已确认。`),
-    ]));
+    ]);
     await waitUntil(async () => {
       const { children } = await teamBoard(owner, teamId);
       const child = children.find((entry) => entry.thread_id === threadId);
@@ -9647,7 +9646,16 @@ async function runTeamActivation(surface, boundary, foreign) {
       return ["completed", "completed_empty"].includes(child?.report_status) && history.internal_executions.length > before
         && ["completed", "completed_empty"].includes(history.internal_executions.at(-1).status);
     }, "成员及 coordinator 的真实报告结束", 120_000);
-    members.push({ ...owner, threadId, child: true, role });
+    const member = { ...owner, threadId, child: true, role };
+    const { board } = await teamBoard(owner, teamId);
+    assert.equal(board.members.find((entry) => entry.thread_id === threadId)?.role, role);
+    return { member, creation };
+  };
+  const members = [];
+  for (const role of ["reviewer", "tester"]) {
+    const { member, creation } = await createMember(owner, role);
+    setup.push(creation);
+    members.push(member);
   }
   const [reviewer, tester] = members;
   const initial = await teamBoard(owner, teamId);
@@ -9681,21 +9689,29 @@ async function runTeamActivation(surface, boundary, foreign) {
     assert.equal((await loadThreadHistory(reviewer)).items.at(-1).status, "accepted");
     const queuedTitle = `排队期间登记-${boundary}`;
     const activeTitle = `active-slot后登记-${boundary}`;
+    const queuedRole = `queued-observer-${boundary}`;
+    const activeRole = `active-observer-${boundary}`;
     const assign = (label, title) => completeOwnerTurn(coordinator, title, [
       toolResponse(label, "assign_team_task", { team_id: teamId, assignee_thread_id: reviewer.threadId, title, description: "核对 README 并保留团队冻结证据。", phase: "review", start_assignee: false }),
       finalResponse(`${label}-done`, `${title} 已登记，不启动额外 Job。`),
     ]);
     const delivered = () => waitUntil(async () => (await readControl(owner, "SELECT COUNT(*) AS pending FROM collaboration_fanouts WHERE state='pending'"))[0].pending === 0, "团队 revision 全部持久投递");
+    const queuedMember = await createMember(coordinator, queuedRole);
     const queuedMutation = await assign(`${boundary}-queued-task`, queuedTitle);
     await delivered();
     const afterQueued = await teamBoard(coordinator, teamId);
+    assert.equal(afterQueued.board.members.length, 4);
+    assert.equal(afterQueued.board.members.find((entry) => entry.thread_id === queuedMember.member.threadId)?.role, queuedRole);
     await assertTeamDom(coordinator, afterQueued.board);
     await testControl({ action: "release", operation_id: firstTool, phase: "canonical.tool_result.before_commit" });
     await waitForJobStatus(reviewer, first.jobId);
     await testControl({ action: "acknowledged", operation_id: queuedTool, phase: "canonical.tool_result.before_commit" });
+    const activeMember = await createMember(coordinator, activeRole);
     const activeMutation = await assign(`${boundary}-active-task`, activeTitle);
     await delivered();
     const afterActive = await teamBoard(coordinator, teamId);
+    assert.equal(afterActive.board.members.length, 5);
+    assert.equal(afterActive.board.members.find((entry) => entry.thread_id === activeMember.member.threadId)?.role, activeRole);
     await assertTeamDom(coordinator, afterActive.board);
     assert.equal((await teamBoard(coordinator, teamId)).children.find((entry) => entry.thread_id === tester.threadId).runtime.residency, "cold", "fanout 不能唤醒 cold child");
     assert.deepEqual(await loadThreadHistory(tester), coldHistory, "fanout 不能创建 cold child execution 或用户 Turn");
@@ -9708,6 +9724,16 @@ async function runTeamActivation(surface, boundary, foreign) {
     assert.equal(messages[1].includes(queuedTitle), boundary === "model_call");
     assert.ok(messages[2].includes(queuedTitle) && !messages[2].includes(activeTitle));
     assert.equal(messages[3].includes(activeTitle), boundary === "model_call");
+    for (const marker of [queuedRole, queuedMember.member.threadId]) {
+      assert.ok(!messages[0].includes(marker), "首次请求不能看到后续新增成员");
+      assert.equal(messages[1].includes(marker), boundary === "model_call", "排队期间新增成员遵守当前 Turn 的激活边界");
+      assert.ok(messages[2].includes(marker), "排队执行取得 active slot 时必须冻结已发布成员和角色");
+      assert.ok(messages[3].includes(marker));
+    }
+    for (const marker of [activeRole, activeMember.member.threadId]) {
+      assert.ok(!messages[0].includes(marker) && !messages[1].includes(marker) && !messages[2].includes(marker));
+      assert.equal(messages[3].includes(marker), boundary === "model_call", "active slot 后新增成员仅在显式 ModelCall 边界激活");
+    }
     const snapshots = await readRollout(reviewer, "SELECT s.execution_id,s.turn_id,s.snapshot_kind,s.model_call_id,b.resource_id,b.revision,b.effective_boundary,b.activation_ordinal FROM resource_activation_snapshots s JOIN resource_activation_bindings b USING(session_id,thread_id,activation_snapshot_id) WHERE b.resource_kind='team_state' ORDER BY s.created_at,b.activation_ordinal");
     const current = snapshots.filter((row) => [first.turnId, queued.turnId].includes(row.turn_id));
     assert.ok(current.length >= 4 && current.every((row) => row.effective_boundary === boundary));
@@ -9755,7 +9781,7 @@ async function runTeamActivation(surface, boundary, foreign) {
     }
     await assertNegativeIsolation();
     const negative = { foreignMember, statePayload };
-    return { sessionId: owner.sessionId, teamId, boundary, setup, initial, first, queued, queuedMutation, activeMutation, afterQueued, afterActive, current, displayed, negative };
+    return { sessionId: owner.sessionId, teamId, boundary, setup, initial, first, queued, queuedMember, activeMember, queuedMutation, activeMutation, afterQueued, afterActive, current, displayed, negative };
   } finally {
     await operatorPage.close();
   }
