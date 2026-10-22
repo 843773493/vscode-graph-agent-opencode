@@ -34,7 +34,7 @@ class RegistryDtosMixin:
             for owner, contract in backend_owners
             for workspace_id in contract.workspace_ids
         }
-        async with httpx.AsyncClient(timeout=2) as client:
+        async with httpx.AsyncClient(timeout=2, trust_env=False) as client:
             async def build_dto(target: WorkspaceTarget) -> GatewayWorkspaceDTO:
                 backend_owner, backend_contract = backend_contracts.get(target.workspace_id, (None, None))
                 runtime = self._runtimes.get(target.workspace_id)

@@ -141,7 +141,7 @@ async def wait_for_http_ok(
 ) -> None:
     deadline = asyncio.get_running_loop().time() + GATEWAY_PROCESS_READY_TIMEOUT_SECONDS
     last_error: Exception | None = None
-    async with httpx.AsyncClient(timeout=request_timeout_seconds) as client:
+    async with httpx.AsyncClient(timeout=request_timeout_seconds, trust_env=False) as client:
         while asyncio.get_running_loop().time() < deadline:
             if process is not None and process.poll() is not None:
                 raise RuntimeError(

@@ -16,11 +16,15 @@ from app.core.mounted_workspaces import (
     mounted_workspace_manifest_digest,
 )
 from app.core.trace_middleware import TraceMiddleware
-from app.gateway.auth import GatewayAuthContext, verify_federation_token, verify_gateway_token
-from app.gateway.federation.policy import FederationPolicyStore
-from app.gateway.federation.ports import principal_ref_for_gateway
+from app.gateway.auth import (
+    GatewayAuthContext,
+    verify_federation_token,
+    verify_gateway_token,
+)
 from app.gateway.control.gateway_state import GatewayStateStore
 from app.gateway.federation import RemoteGatewayConnection
+from app.gateway.federation.policy import FederationPolicyStore
+from app.gateway.federation.ports import principal_ref_for_gateway
 from app.gateway.main import gateway_http_exception_handler
 from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceTarget
 from app.gateway.routes import (
@@ -43,7 +47,6 @@ from app.gateway.runtime.local_workspace import (
     wait_for_workspace_health,
     workspace_config_proof_expectation,
 )
-from app.gateway.runtime.managed_backend import ManagedBackendContract
 from app.gateway.runtime.port_forwarding import SshPortForwardManager
 from app.gateway.runtime.workspace import WorkspaceRuntime
 from app.gateway.server.port_forwarding import get_port_forward_manager
@@ -219,8 +222,8 @@ def local_http(monkeypatch: pytest.MonkeyPatch):
     client_type = httpx.AsyncClient
 
     def install(handler):
-        monkeypatch.setattr(local_workspace.httpx, "AsyncClient", lambda *, timeout: client_type(
-            timeout=timeout, transport=httpx.MockTransport(handler), trust_env=False,
+        monkeypatch.setattr(local_workspace.httpx, "AsyncClient", lambda *, timeout, trust_env: client_type(
+            timeout=timeout, transport=httpx.MockTransport(handler), trust_env=trust_env,
         ))
     return install
 
@@ -828,7 +831,7 @@ async def test_managed_runtime_reuses_browser_without_starting_replacement(singl
     async def adopt(*, service_name, **_):
         return adopted if service_name == "browser_manager" else None
     monkeypatch.setattr(local_workspace, "_adopt_local_node_service", adopt)
-    contract, runtimes = await start_managed_backend_runtime(owner=singleton.owner, registry=singleton_registry, project_root=tmp_path, log_dir=tmp_path / "logs")
+    _, runtimes = await start_managed_backend_runtime(owner=singleton.owner, registry=singleton_registry, project_root=tmp_path, log_dir=tmp_path / "logs")
     assert [service for service, _ in process_boundary.nodes] == ["terminal"]
     assert process_boundary.starts[0]["mounts"][0].browser_backend_url == runtimes["member-a"].service_urls["browser_manager"]
     assert runtimes["member-a"].processes["browser_manager"] is adopted

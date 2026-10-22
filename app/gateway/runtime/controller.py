@@ -165,7 +165,7 @@ class GatewayWorkspaceRuntimeController(ManagedBackendGroupActions):
         old_runtime_recovered: bool,
         request_id: str,
     ) -> None:
-        async with httpx.AsyncClient(timeout=10) as client:
+        async with httpx.AsyncClient(timeout=10, trust_env=False) as client:
             response = await client.post(
                 f"{target.backend_url.rstrip('/')}/api/v1/config/pending/restart-failed",
                 params={"candidate_ref": candidate_ref},
@@ -189,7 +189,7 @@ class GatewayWorkspaceRuntimeController(ManagedBackendGroupActions):
     ) -> None:
         """用候选后端的健康证明提交已成功启动的 Workspace 配置。"""
 
-        async with httpx.AsyncClient(timeout=10) as client:
+        async with httpx.AsyncClient(timeout=10, trust_env=False) as client:
             health_response = await client.get(
                 f"{target.backend_url.rstrip('/')}/api/v1/health",
                 headers=self._backend_headers(
@@ -221,7 +221,7 @@ class GatewayWorkspaceRuntimeController(ManagedBackendGroupActions):
         *,
         request_id: str,
     ) -> dict[str, object]:
-        async with httpx.AsyncClient(timeout=5) as client:
+        async with httpx.AsyncClient(timeout=5, trust_env=False) as client:
             response = await client.get(
                 f"{target.backend_url.rstrip('/')}/api/v1/runtime/status",
                 headers=self._backend_headers(
@@ -238,7 +238,7 @@ class GatewayWorkspaceRuntimeController(ManagedBackendGroupActions):
         *,
         request_id: str,
     ) -> dict[str, object] | None:
-        async with httpx.AsyncClient(timeout=10) as client:
+        async with httpx.AsyncClient(timeout=10, trust_env=False) as client:
             status_response = await client.get(
                 f"{target.backend_url.rstrip('/')}/api/v1/config/reload-status",
                 headers=self._backend_headers(
@@ -254,7 +254,7 @@ class GatewayWorkspaceRuntimeController(ManagedBackendGroupActions):
                 raise RuntimeError(
                     "Workspace 报告 recovery_required，但缺少 candidate_ref"
                 )
-            async with httpx.AsyncClient(timeout=10) as client:
+            async with httpx.AsyncClient(timeout=10, trust_env=False) as client:
                 retry_response = await client.post(
                     f"{target.backend_url.rstrip('/')}/api/v1/config/pending/retry",
                     params={"candidate_ref": candidate_ref},
@@ -272,7 +272,7 @@ class GatewayWorkspaceRuntimeController(ManagedBackendGroupActions):
             raise RuntimeError(
                 "Workspace 报告 restart_required，但缺少 candidate_ref"
             )
-        async with httpx.AsyncClient(timeout=10) as client:
+        async with httpx.AsyncClient(timeout=10, trust_env=False) as client:
             response = await client.get(
                 f"{target.backend_url.rstrip('/')}/api/v1/config/pending/startup-contract",
                 params={"candidate_ref": candidate_ref},
@@ -306,7 +306,7 @@ class GatewayWorkspaceRuntimeController(ManagedBackendGroupActions):
         *,
         request_id: str,
     ) -> dict[str, object]:
-        async with httpx.AsyncClient(timeout=10) as client:
+        async with httpx.AsyncClient(timeout=10, trust_env=False) as client:
             response = await client.post(
                 f"{target.backend_url.rstrip('/')}{path}",
                 headers=self._backend_headers(

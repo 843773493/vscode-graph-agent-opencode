@@ -43,8 +43,8 @@ def health_http(monkeypatch: pytest.MonkeyPatch, health_payload: dict[str, objec
         assert request.headers.get("X-BoxTeam-Workspace-Id") in (UUID, None)
         return httpx.Response(200, json=health_payload)
 
-    monkeypatch.setattr(httpx, "AsyncClient", lambda *, timeout: client(
-        timeout=timeout, transport=httpx.MockTransport(response), trust_env=False,
+    monkeypatch.setattr(httpx, "AsyncClient", lambda *, timeout, trust_env: client(
+        timeout=timeout, transport=httpx.MockTransport(response), trust_env=trust_env,
     ))
     return calls
 
@@ -140,8 +140,8 @@ async def test_failed_http_body_remains_in_logs_only(
 ) -> None:
     client = httpx.AsyncClient
     body = str(tmp_path / "private-health-marker")
-    monkeypatch.setattr(httpx, "AsyncClient", lambda *, timeout: client(
-        timeout=timeout, transport=httpx.MockTransport(lambda _: httpx.Response(503, text=body)), trust_env=False,
+    monkeypatch.setattr(httpx, "AsyncClient", lambda *, timeout, trust_env: client(
+        timeout=timeout, transport=httpx.MockTransport(lambda _: httpx.Response(503, text=body)), trust_env=trust_env,
     ))
     monkeypatch.setattr(local_workspace, "GATEWAY_PROCESS_READY_TIMEOUT_SECONDS", 0.02)
     with pytest.raises(RuntimeError if entry == "adopt" else TimeoutError) as failure:

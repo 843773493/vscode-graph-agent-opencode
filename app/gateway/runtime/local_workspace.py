@@ -102,7 +102,7 @@ async def wait_for_workspace_config_proof(
     _validate_backend_workspace_id(backend_workspace_id)
     deadline = asyncio.get_running_loop().time() + GATEWAY_PROCESS_READY_TIMEOUT_SECONDS
     last_error: Exception | None = None
-    async with httpx.AsyncClient(timeout=request_timeout_seconds) as client:
+    async with httpx.AsyncClient(timeout=request_timeout_seconds, trust_env=False) as client:
         while asyncio.get_running_loop().time() < deadline:
             poll = getattr(process, "poll", None)
             if callable(poll) and (returncode := poll()) is not None:
@@ -155,7 +155,7 @@ async def wait_for_workspace_health(
     _validate_backend_workspace_id(backend_workspace_id)
     deadline = asyncio.get_running_loop().time() + GATEWAY_PROCESS_READY_TIMEOUT_SECONDS
     last_error: Exception | None = None
-    async with httpx.AsyncClient(timeout=request_timeout_seconds) as client:
+    async with httpx.AsyncClient(timeout=request_timeout_seconds, trust_env=False) as client:
         while asyncio.get_running_loop().time() < deadline:
             poll = getattr(process, "poll", None)
             if callable(poll) and (returncode := poll()) is not None:
@@ -249,7 +249,7 @@ async def _adopt_local_node_service(
     if parsed.port is None:
         raise ValueError(f"持久化 {service_name} URL 缺少端口: {service_url}")
     try:
-        async with httpx.AsyncClient(timeout=2) as client:
+        async with httpx.AsyncClient(timeout=2, trust_env=False) as client:
             response = await client.get(f"{service_url.rstrip('/')}/health")
     except httpx.HTTPError:
         return None
@@ -337,7 +337,7 @@ async def _adopt_workspace_backend(
     if parsed.scheme != "http" or parsed.hostname not in {"127.0.0.1", "localhost"} or parsed.port is None:
         raise ValueError(f"持久化 Workspace API URL 必须是本机 HTTP 地址: {contract.backend_url}")
     process_id = None
-    async with httpx.AsyncClient(timeout=2) as client:
+    async with httpx.AsyncClient(timeout=2, trust_env=False) as client:
         for mount in mounts:
             try:
                 response = await client.get(

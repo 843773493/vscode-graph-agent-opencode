@@ -135,3 +135,41 @@ async def test_health_identity_failure_does_not_publish_or_persist_response_valu
         log = (context.artifacts_dir / "gateway.stderr.log").read_text()
         assert "private-health-marker" in log
         (context.artifacts_dir / "health-protocol-errors.json").write_text(json.dumps(evidence, indent=2) + "\n")
+
+
+@pytest.mark.asyncio
+async def test_gateway_workspace_control_ignores_model_proxy_environment(
+    health_stub: tuple[TestRunContext, Path, str, int, int],
+) -> None:
+    context, _, backend_id, backend_port, gateway_port = health_stub
+    reset_gateway_persistent_state(workspace_root=context.workspace_root)
+    # 代理地址故意不可用，NO_PROXY 为空；控制面不能依赖模型网络的代理配置。
+    proxy_environment = {name: "http://127.0.0.1:1" for name in (
+        "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy",
+    )}
+    proxy_environment.update({"NO_PROXY": "", "no_proxy": ""})
+    with ExitStack() as lifetime:
+        gateway = start_gateway_process(
+            workspace_root=context.workspace_root, default_backend_url=f"http://127.0.0.1:{backend_port}",
+            port=gateway_port, artifacts_dir=context.artifacts_dir, extra_env=proxy_environment,
+        )
+        lifetime.callback(close_gateway_process, gateway)
+        async with httpx.AsyncClient(
+            base_url=f"http://127.0.0.1:{gateway_port}", headers=LOCAL_TOKEN_HEADERS,
+            timeout=10, trust_env=False,
+        ) as client:
+            await acquire_gateway_guest(client)
+            listed = await client.get("/api/gateway/workspaces")
+            assert listed.status_code == 200, listed.text
+            target, = listed.json()["data"]["items"]
+            assert target["status"] == "ready" and target["backend_workspace_id"] == backend_id
+            probe = await client.post(f"/api/gateway/workspaces/{target['workspace_id']}/probe")
+            assert probe.status_code == 200, probe.text
+            target, = probe.json()["data"]["items"]
+            assert target["status"] == "ready" and target["connection_error"] is None
+            assert target["backend_workspace_id"] == backend_id
+            assert probe.json()["request_id"] == probe.headers["X-Request-ID"]
+            (context.artifacts_dir / "proxy-environment-control.json").write_text(
+                json.dumps({"list": listed.json(), "probe": probe.json()}, indent=2) + "\n",
+                encoding="utf-8",
+            )

@@ -7,12 +7,12 @@ from pathlib import Path
 import httpx
 import pytest
 
+from app.core.mounted_workspaces import mounted_workspace_manifest_digest
 from app.gateway.control.gateway_state import GatewayStateStore
 from app.gateway.federation import (
     RemoteGatewayConnection,
     build_projected_workspace_id,
 )
-from app.core.mounted_workspaces import mounted_workspace_manifest_digest
 from app.gateway.registry import (
     GatewayWorkspaceRegistry,
     WorkspaceTarget,
@@ -250,8 +250,9 @@ class _ConfigStatusResponse:
 
 
 class _ConfigAwareHealthClient:
-    def __init__(self, *, timeout: int) -> None:
+    def __init__(self, *, timeout: int, trust_env: bool) -> None:
         assert timeout == 2
+        assert trust_env is False
 
     async def __aenter__(self):
         return self
@@ -294,8 +295,9 @@ class _ConcurrentHealthClient:
     active_requests = 0
     peak_requests = 0
 
-    def __init__(self, *, timeout: int) -> None:
+    def __init__(self, *, timeout: int, trust_env: bool) -> None:
         assert timeout == 2
+        assert trust_env is False
 
     async def __aenter__(self):
         return self
@@ -1143,7 +1145,7 @@ async def test_backend_dtos_probe_published_contract_inside_lifecycle_lock(
         return httpx.Response(200, json=payload)
 
     monkeypatch.setattr("app.gateway.registry.httpx.AsyncClient", lambda **options: client_type(
-        **options, transport=httpx.MockTransport(response), trust_env=False,
+        **options, transport=httpx.MockTransport(response),
     ))
     async with graph.owner.lock:
         with pytest.raises(LookupError, match="正在切换路由"):
@@ -1177,7 +1179,7 @@ async def test_backend_dto_probe_failure_is_visible_and_only_stable_owner_persis
         return httpx.Response(200, json=payload)
 
     monkeypatch.setattr("app.gateway.registry.httpx.AsyncClient", lambda **options: client_type(
-        **options, transport=httpx.MockTransport(response), trust_env=False,
+        **options, transport=httpx.MockTransport(response),
     ))
     if during_transition:
         await graph.owner.lock.acquire()
@@ -1218,7 +1220,7 @@ async def test_old_dto_probe_cannot_mark_newly_published_owner_failed(
         })
 
     monkeypatch.setattr("app.gateway.registry.httpx.AsyncClient", lambda **options: client_type(
-        **options, transport=httpx.MockTransport(response), trust_env=False,
+        **options, transport=httpx.MockTransport(response),
     ))
     pending = asyncio.create_task(registry.list_dtos())
     await asyncio.wait_for(entered.wait(), 2)
@@ -1259,7 +1261,7 @@ async def test_dto_active_state_uses_snapshot_from_list_entry_during_health_prob
         })
 
     monkeypatch.setattr("app.gateway.registry.httpx.AsyncClient", lambda **options: client_type(
-        **options, transport=httpx.MockTransport(response), trust_env=False,
+        **options, transport=httpx.MockTransport(response),
     ))
     pending = asyncio.create_task(registry.list_dtos())
     await asyncio.wait_for(entered.wait(), 2)
