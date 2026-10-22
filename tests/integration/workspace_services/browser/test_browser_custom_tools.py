@@ -14,7 +14,7 @@ from urllib.request import Request, urlopen
 import httpx
 import pytest
 import websockets
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 
 from app.abstractions.browser_resources import BrowserRequestError
 from app.agents.custom_tools import CustomToolFactoryContext
@@ -34,7 +34,7 @@ from app.agents.tools.browser import (
 from app.core.mounted_workspaces import MountedWorkspace
 from app.core.trace_middleware import TraceMiddleware
 from app.core.workspace_identity import load_or_create_workspace_id
-from app.main import workspace_api
+from app.main import workspace_api, workspace_http_exception_handler
 from app.services.business.workspace_resources.records import ThreadRef
 from app.services.infrastructure.browser_manager_client import BrowserManagerClient
 from tests.harness.python.browser_manager import (
@@ -234,6 +234,7 @@ def browser_manager_processes(
 def browser_application() -> FastAPI:
     application = FastAPI()
     application.add_middleware(TraceMiddleware)
+    application.add_exception_handler(HTTPException, workspace_http_exception_handler)
     application.include_router(workspace_api, prefix="/api/v1")
     return application
 
@@ -1188,3 +1189,77 @@ async def test_tool_runtime_reentry_retains_cancelled_queue_and_releases_holder(
     (artifacts / f"tool-runtime-reentry-{time.time_ns()}.json").write_text(
         json.dumps(facts, ensure_ascii=False, indent=2), encoding="utf-8",
     )
+
+
+@pytest.mark.asyncio
+async def test_state_publish_failure_reports_workspace_stage_and_allows_explicit_retry(
+    integration_client: httpx.AsyncClient, browser_context: CustomToolFactoryContext,
+    browser_manager_processes: tuple[int, int], browser_runtime: WorkspaceToolRuntime,
+) -> None:
+    container, _session, _invocation = browser_runtime
+    created = await integration_client.post("/api/v1/resources/browsers", json={
+        "session_id": browser_context.session_id,
+        "thread_id": browser_context.invocation_context.thread_binding.thread_id,
+        "url": "about:blank",
+    })
+    assert created.status_code == 200, created.text
+    resource = created.json()["data"]
+    browser_id = resource["resource_id"]
+    root = Path(container.workspace_root)
+    state_file = root / ".boxteam/browser-manager/browsers.json"
+    published_bytes = state_file.read_bytes()
+    backup = state_file.with_suffix(".published-test-backup")
+    state_file.rename(backup)
+    state_file.mkdir()
+    transport = BrowserManagerClient(
+        workspace_id=container.workspace_id,
+        backend_url=f"http://127.0.0.1:{browser_manager_processes[0]}",
+    )
+    failures: list[BrowserRequestError] = []
+    command = {"action": "resource-policy", "expected_revision": resource["owner_revision"],
+               "thread": resource["source_thread"], "payload": {"policy": "keep_alive"}}
+    try:
+        for mode in ("sync", "async"):
+            with pytest.raises(BrowserRequestError) as caught:
+                if mode == "sync":
+                    await asyncio.to_thread(transport._json_request_sync, "PATCH", f"/api/browsers/{browser_id}/resource-policy", {"policy": "keep_alive"})
+                else:
+                    await transport._json_request("PATCH", f"/api/browsers/{browser_id}/resource-policy", {"policy": "keep_alive"})
+            failure = caught.value
+            assert failure.status == 500
+            assert failure.code in {"EISDIR", "EPERM", "EEXIST"}
+            assert failure.payload["error"] == f"写入浏览器状态失败: workspace_id={container.workspace_id}, artifact=browser_records, stage=文件发布, code={failure.code}"
+            assert failure.payload["operation_outcome"] == "failed"
+            assert str(root) not in json.dumps(failure.payload)
+            failures.append(failure)
+        failed = await integration_client.post(f"/api/v1/resources/{browser_id}/browser-operation", json=command)
+        assert failed.status_code == 500, failed.text
+        assert failed.json()["request_id"] == failed.headers["X-Request-ID"]
+        assert failures[0].payload["error"] in failed.json()["detail"]
+        assert str(root) not in failed.text
+        assert state_file.is_dir() and list(state_file.iterdir()) == []
+        assert backup.read_bytes() == published_bytes
+        assert list(state_file.parent.glob("browsers.json.*.tmp")) == []
+        observed = (await integration_client.get(f"/api/v1/resources/{browser_id}")).json()["data"]
+        assert observed["reconciliation_status"] == "verified"
+        assert observed["metadata"]["resource_policy"] == "keep_alive"
+        assert container.browser_resource_owner._leases.leases_for_resource(browser_id) == []
+        artifacts = TestRunContext.from_test_file(Path(__file__)).artifacts_dir
+        (artifacts / f"state-publish-failure-{time.time_ns()}.json").write_text(json.dumps({
+            "transport_payloads": [failure.payload for failure in failures],
+            "api_status": failed.status_code, "api_body": failed.json(),
+            "request_id": failed.headers["X-Request-ID"], "owner_projection": observed,
+        }, ensure_ascii=False, indent=2), encoding="utf-8")
+    finally:
+        state_file.rmdir()
+        backup.rename(state_file)
+    retried = await integration_client.post(f"/api/v1/resources/{browser_id}/browser-operation", json=command)
+    assert retried.status_code == 200, retried.text
+    records = json.loads(state_file.read_text())
+    record, = [entry for entry in records["browsers"] if entry["browser_id"] == browser_id]
+    assert record["resource_policy"] == "keep_alive"
+    assert str(root) not in json.dumps(record)
+    diagnostics = "\n".join(item.read_text() for item in artifacts.glob("browser-backend-*.stderr.log"))
+    assert "[browser-state-store] 写入浏览器状态失败" in diagnostics
+    assert str(state_file) in diagnostics
+    assert failures[0].code in diagnostics

@@ -234,3 +234,10 @@
 - 截图存储owner在mkdir/writeFile边界生成browser/screenshot身份、阶段及错误码，原异常与真实目标保留于cause和Node诊断；现有HTTP、Python同步/异步及Agent工具消费者沿同一链路传播，不增加截图错误持久状态或正则脱敏。
 - 固定完整tree `291a3fcf8077453debcf378b998fc7abc6cec309`：`browser-screenshot-errors-static-unit-001` Ruff/compileall/Node语法通过，14项Bun测试通过；`http-002` 为1 passed/12.68秒、exit0。产品API创建浏览器，真实Chromium截图分别经同步HTTP、异步HTTP及Agent工具遭遇目录冲突，错误无原生路径、原冲突文件不变，资源归属仍verified且lease释放；移除冲突后经同一工具取得真实PNG并逐字核HTTP读取正文。正文写入失败在store单测注入验证，真实HTTP只覆盖目录创建失败。
 - 完整archive只还原旧截图producer的`red-001`为2 failed，均精确区分旧错误回显路径及缺身份。首轮`http-001`截图通过，后续两项因共用旧装具留下无冻结队列的执行记录在下一lifespan初始化失败；未计三项整组通过，装具迁移另作独立切片。各run源码前后一致、无运行组残留，准确命令/指纹/raw/退出码见 `out/tests/temp/openspec_takeover/artifacts/runs/browser-screenshot-errors-*`。本项不代表Browser file URL或其它producer及2.2/7.2整体完成。
+
+
+### 2026-10-22 Browser恢复记录存储错误出口（部分收口）
+
+- Browser状态读取/发布仍由同一store负责，在正文读取、解析、记录核验及目录创建、正文写入、文件发布的实际失败处生成workspace身份、artifact、阶段和原错误码。原生存储位置与完整异常只留在cause和服务诊断；发布失败只清本次临时文件，清理同样失败时保留两份原异常，主错误码不被覆盖。不以响应正则掩盖路径，也不把持久化失败伪报为内存回滚。
+- 固定代码候选004 tree `0af3ed741574e11792144e99bb1ecf166958d893`：复用逐字相同的003产品/JS测试blob，`browser-record-errors-static-unit-003` 为20项Bun/132断言与5项Node通过；004补精简应用注册现有产品HTTP异常处理器，`browser-record-errors-static-004` Ruff/compileall/Node语法exit0。`browser-record-errors-http-004` 为2 passed/15.03秒、exit0：真实API创建Browser，同步/异步Node HTTP与资源API均遇到真实发布目录冲突，核完整安全错误、同一request_id、原状态字节不变、零临时残留、owner仍verified及lease释放，恢复原文件后同一操作显式重试成功；同时复验既有checkpoint失败/恢复链。
+- 完整archive只恢复旧read/write producer的`browser-record-errors-red-001`为6 failed，分别区分原路径回显及缺错误归属。首轮003真实HTTP的sync/async已通过，后续因精简应用漏注册生产HTTP异常处理器而缺request_id，不算整轮通过；候选002构造及输入缺失失败均保留原件。准确命令/源码指纹/raw/退出码、产品原件SHA与复用范围见本任务`browser-record-errors-proof-004.json`及`runs/browser-record-errors-*`。不代替Gateway/Web、Windows或2.2/7.2整体门，其它producer与Browser file URL边界仍独立处理。

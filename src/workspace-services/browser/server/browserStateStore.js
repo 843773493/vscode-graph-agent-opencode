@@ -276,12 +276,15 @@ export class BrowserStateStore {
   }
 
   async readRecords() {
+    let stage = "正文读取";
     try {
       const raw = await readFile(this.stateFile, "utf8");
+      stage = "正文解析";
       const parsed = JSON.parse(raw);
+      stage = "记录核验";
       if (parsed.schema_version !== 2 || parsed.workspace_id !== this.workspaceId
         || !Array.isArray(parsed.browsers)) {
-        throw new Error(`浏览器状态文件格式错误: ${this.stateFile}`);
+        throw new Error("浏览器状态文件格式错误");
       }
       const ids = new Set();
       for (const record of parsed.browsers) {
@@ -291,10 +294,14 @@ export class BrowserStateStore {
       }
       return parsed.browsers;
     } catch (error) {
-      if (error?.code === "ENOENT") {
-        return null;
-      }
-      throw error;
+      if (stage === "正文读取" && error?.code === "ENOENT") return null;
+      console.error("[browser-state-store] 读取浏览器状态失败", { workspaceId: this.workspaceId, filePath: this.stateFile, stage }, error);
+      const wrapped = new Error(
+        `读取浏览器状态失败: workspace_id=${this.workspaceId}, artifact=browser_records, stage=${stage}, code=${error?.code || "browser_records_read_failed"}`,
+        { cause: error },
+      );
+      wrapped.code = error?.code || "browser_records_read_failed";
+      throw wrapped;
     }
   }
 
@@ -316,10 +323,32 @@ export class BrowserStateStore {
   async write(payload) {
     for (const record of payload.browsers) this.validateRecord(record);
     payload = { ...payload, schema_version: 2, workspace_id: this.workspaceId };
-    await mkdir(this.stateDir, { recursive: true });
+    const serialized = `${JSON.stringify(payload, null, 2)}\n`;
     const temporaryFile = `${this.stateFile}.${process.pid}.${randomUUID()}.tmp`;
-    await writeFile(temporaryFile, `${JSON.stringify(payload, null, 2)}\n`, "utf8");
-    await rename(temporaryFile, this.stateFile);
+    let stage = "目录创建";
+    try {
+      await mkdir(this.stateDir, { recursive: true });
+      stage = "正文写入";
+      await writeFile(temporaryFile, serialized, "utf8");
+      stage = "文件发布";
+      await rename(temporaryFile, this.stateFile);
+    } catch (writeError) {
+      let cause = writeError;
+      if (stage !== "目录创建") {
+        try {
+          await rm(temporaryFile, { force: true });
+        } catch (cleanupError) {
+          cause = new AggregateError([writeError, cleanupError], "状态写入失败且临时文件清理失败", { cause: writeError });
+        }
+      }
+      console.error("[browser-state-store] 写入浏览器状态失败", { workspaceId: this.workspaceId, filePath: this.stateFile, stage }, cause);
+      const wrapped = new Error(
+        `写入浏览器状态失败: workspace_id=${this.workspaceId}, artifact=browser_records, stage=${stage}, code=${writeError?.code || "browser_records_write_failed"}`,
+        { cause },
+      );
+      wrapped.code = writeError?.code || "browser_records_write_failed";
+      throw wrapped;
+    }
   }
 
   async writeScreenshot(browserId, buffer) {

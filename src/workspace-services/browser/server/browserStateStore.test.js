@@ -22,6 +22,57 @@ function serializedBytes(checkpoint) {
   return Buffer.byteLength(`${JSON.stringify(checkpoint)}\n`, "utf8");
 }
 
+describe("浏览器恢复记录错误归属", () => {
+  test.each(["正文解析", "记录核验", "正文读取"])("%s失败保留原因且不复制原生存储位置", async (stage) => {
+    const store = await createBrowserStateStoreForTest();
+    const diagnostics = spyOn(console, "error").mockImplementation(() => {});
+    await mkdir(store.stateDir, { recursive: true });
+    if (stage === "正文读取") await mkdir(store.stateFile);
+    else await writeFile(store.stateFile, stage === "正文解析"
+      ? `{"private":"${store.workspaceRoot}"`
+      : JSON.stringify({ schema_version: 1, workspace_id: store.workspaceId, browsers: [] }));
+    const failure = await store.readRecords().catch(error => error);
+    expect(failure).toBeInstanceOf(Error);
+    expect(failure.message).toBe(`读取浏览器状态失败: workspace_id=${store.workspaceId}, artifact=browser_records, stage=${stage}, code=${failure.code}`);
+    expect(failure.message).not.toContain(store.workspaceRoot);
+    expect(diagnostics.mock.calls[0][1].filePath).toBe(store.stateFile);
+    expect(diagnostics.mock.calls[0][2]).toBe(failure.cause);
+    if (stage === "正文解析") expect(failure.cause).toBeInstanceOf(SyntaxError);
+    else if (stage === "正文读取") expect(failure.cause.code).toBe("EISDIR");
+    else expect(failure.cause.message).toBe("浏览器状态文件格式错误");
+    await rm(store.stateFile, { recursive: true });
+    expect(await store.readRecords()).toBeNull();
+    await store.write({ browsers: [] });
+    expect(await store.readRecords()).toEqual([]);
+  });
+
+  test.each(["目录创建", "正文写入", "文件发布"])("%s失败保留错误码和原件，释放本次临时文件后可重试", async (stage) => {
+    const store = await createBrowserStateStoreForTest();
+    const diagnostics = spyOn(console, "error").mockImplementation(() => {});
+    if (stage === "目录创建") await writeFile(store.stateDir, "原目录位置已有文件");
+    else {
+      await mkdir(store.stateDir, { recursive: true });
+      if (stage === "文件发布") await mkdir(store.stateFile);
+      else spyOn(fs, "writeFile").mockRejectedValueOnce(Object.assign(new Error(`private=${store.stateFile}`), { code: "EIO" }));
+    }
+    const failure = await store.write({ browsers: [] }).catch(error => error);
+    expect(failure.message).toBe(`写入浏览器状态失败: workspace_id=${store.workspaceId}, artifact=browser_records, stage=${stage}, code=${failure.code}`);
+    expect(failure.message).not.toContain(store.workspaceRoot);
+    expect(failure.cause.code).toBe(failure.code);
+    expect(diagnostics.mock.calls[0][2]).toBe(failure.cause);
+    if (stage === "目录创建") await rm(store.stateDir);
+    else {
+      expect(await readdir(store.stateDir)).toEqual(stage === "文件发布" ? ["browsers.json"] : []);
+      if (stage === "文件发布") {
+        expect(await readdir(store.stateFile)).toEqual([]);
+        await rm(store.stateFile, { recursive: true });
+      }
+    }
+    await store.write({ browsers: [] });
+    expect(await store.readRecords()).toEqual([]);
+  });
+});
+
 describe("浏览器截图错误归属", () => {
   test.each(["目录创建", "正文保存"])("%s失败保留原异常并允许显式重试", async (stage) => {
     const store = await createBrowserStateStoreForTest();
