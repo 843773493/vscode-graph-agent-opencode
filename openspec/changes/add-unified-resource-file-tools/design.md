@@ -18,7 +18,7 @@ read/write 的文件目标、ls/glob/grep 的根目标和 apply_patch 的根目�
 
 未注册目录的文件树浏览、编辑与快捷目录保留，由统一寻址 owner 先补齐规范引用，消费者同批迁响应、持久化与重开，不私建模板、不借用工作区身份、不以注册为访问前提。真实 UI 验收需核指定目录内容、编辑实际文件、重开快捷目录和工作区注册表不变，不能用改为只读或删除目录入口来消除真实路径字段。
 
-2026-10-20 路径迁移已删除 `workspace_tool_paths.py::_absolute_to_workspace_relative()` 及其 `path.lstrip("/")` 歧义回退。`core/path_utils.py::resolve_native_file_path` 是目标机器原生路径的统一解释入口，显式绑定根；Web 文件 owner 按既有能力允许外部绝对路径，模型只读导航复用同一原生目录能力，模型文本修改与源码调试保持工作区能力，越界明确拒绝。Workspace files URI 使用公共 grammar、只读既有工作区身份，再交同一文件 owner 和内部操作链；解析不创建身份。补丁内部文件名仍相对固定根。旧虚拟路径转换和冗余解析导出已全仓检索并物理删除，`WorkspaceToolPathResolver` 只保留源码调试实际调用的 `workspace_relative_path`；不再借 DeepAgents 的虚拟 `validate_path` 解释用户路径。内部虚拟 `/` 只由 `workspace_backend.py` 的框架 backend 消费，普通文件工具不调用它。URI 输出、技能导航、远端 URI 执行及产物迁移已在各自任务完成，远端原生路径与 Windows 主机仍按3.4独立验收。
+2026-10-20 路径迁移已删除 `workspace_tool_paths.py::_absolute_to_workspace_relative()` 及其 `path.lstrip("/")` 歧义回退。`core/path_utils.py::resolve_native_file_path` 是目标机器原生路径的统一解释入口，显式绑定根；Web 文件 owner 按既有能力允许外部绝对路径，模型只读导航复用同一原生目录能力，模型文本修改与源码调试保持工作区能力，越界明确拒绝。Workspace files URI 使用公共 grammar、只读既有工作区身份，再交同一文件 owner 和内部操作链；解析不创建身份。补丁内部文件名仍相对固定根。旧虚拟路径转换和冗余解析导出已全仓检索并物理删除，`WorkspaceToolPathResolver` 只保留源码调试实际调用的 `workspace_relative_path`；不再借 DeepAgents 的虚拟 `validate_path` 解释用户路径。内部虚拟 `/` 只由 `workspace_backend.py` 的框架 backend 消费，普通文件工具不调用它。URI 输出、技能导航、远端 URI 执行及产物迁移已在各自任务完成，远端原生路径、Windows盘符和Linux→Windows联邦已由3.4的具名真实入口证据验收，真实UNC共享未验。
 
 ### 1.1 直接与间接调用清单
 
