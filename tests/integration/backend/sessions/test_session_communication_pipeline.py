@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import sqlite3
 from collections.abc import AsyncIterator
@@ -53,10 +54,12 @@ from tests.support.workspaces import (
 async def _plan_communication_calls(
     replay: ModelStreamReplay, client: httpx.AsyncClient, workspace: Path,
     session_id: str, responses: list[dict[str, object]],
+    *, thread_id: str | None = None,
 ) -> tuple[list[str], str]:
-    main = await client.get(f"/api/v1/sessions/{session_id}/main-thread")
-    assert main.status_code == 200, main.text
-    thread_id = main.json()["data"]["thread_id"]
+    if thread_id is None:
+        main = await client.get(f"/api/v1/sessions/{session_id}/main-thread")
+        assert main.status_code == 200, main.text
+        thread_id = main.json()["data"]["thread_id"]
     config = commentjson.loads((workspace / ".boxteam/workspace.jsonc").read_text())
     endpoint = next(provider["endpoint"] for provider in config["llm"]["providers"] if provider["id"] == "primary")
     interactions = [build_cassette(
@@ -115,8 +118,12 @@ class CommunicationCase:
         resolver = get_session_path_resolver(self.workspace / ".boxteam/sessions")
         return resolver.resolve_thread_node(session_id, resolver.main_thread_id(session_id))
 
-    async def plan(self, session_id: str, responses: list[dict[str, object]]) -> list[str]:
-        calls, thread_id = await _plan_communication_calls(self.replay, self.client, self.workspace, session_id, responses)
+    async def plan(
+        self, session_id: str, responses: list[dict[str, object]], *, thread_id: str | None = None,
+    ) -> list[str]:
+        calls, thread_id = await _plan_communication_calls(
+            self.replay, self.client, self.workspace, session_id, responses, thread_id=thread_id,
+        )
         self.planned_calls.update({call: {"session_id": session_id, "thread_id": thread_id, "model_call_id": call} for call in calls})
         return calls
 
@@ -300,6 +307,105 @@ async def test_c1_real_send_worker_wait_read(communication_case: CommunicationCa
         assert connection.execute("SELECT execution_origin,turn_id FROM executions").fetchall() == [("internal", None)]
         assert connection.execute("SELECT COUNT(*) FROM turn_records").fetchone()[0] == 0
         assert connection.execute("SELECT source_id,job_id FROM runtime_execution_wakeups").fetchall() == [(receipt["communication_id"], inbox.job_id)]
+
+
+@pytest.mark.asyncio
+async def test_real_child_execution_sends_and_waits_with_durable_source_owner(
+    communication_case: CommunicationCase,
+) -> None:
+    """从真实 task 创建 child，经原执行工具链验证 outbox 与 wait 的 source owner。"""
+    case = communication_case
+    source = await create_session(case.client, "child 通信来源")
+    target = await create_session(case.client, "child 通信目标")
+    source_main = (await case.client.get(f"/api/v1/sessions/{source}/main-thread")).json()["data"]["thread_id"]
+    target_main = (await case.client.get(f"/api/v1/sessions/{target}/main-thread")).json()["data"]["thread_id"]
+    child = "thr_" + case.replay.control.next_uuid("thr")
+    await case.plan(source, [{"content": "child 初始化完成。"}], thread_id=child)
+    await case.plan(source, [
+        _tool("task", {"description": "初始化后等待直接消息。", "subagent_type": "general-purpose"}, "child-source-create"),
+        {"content": "已创建通信 child。"}, {"content": "child 初始化汇报已处理。"},
+    ])
+    created = await case.client.post(f"/api/v1/sessions/{source}/messages", json={
+        "message": {"content": "创建一个同 Session 的持久 child，等待直接指令。"}, "run": {},
+    })
+    assert created.status_code == 200, created.text
+    await _completed(case.client, created.json()["data"]["job_id"])
+    async with asyncio.timeout(60):
+        while True:
+            listing = await case.client.get(f"/api/v1/sessions/{source}/child-threads")
+            assert listing.status_code == 200, listing.text
+            items = [row for row in listing.json()["data"]["items"] if row["thread_id"] == child]
+            if items and items[0]["report_status"] in {"completed", "completed_empty"}:
+                break
+            await asyncio.sleep(0.05)
+    assert child != source_main
+    await case.plan(target, [{"content": "目标 main 完成 child 发送的任务。"}])
+    send_provider_id = "child-source-send"
+    first_call, = await case.plan(source, [_tool("send_message_to_session", {
+        "target_session_id": target, "content": "来自真实 child 的唯一通信。", "kind": "result",
+    }, send_provider_id)], thread_id=child)
+    send_call = first_call + ":tool-call:" + send_provider_id
+    case.replay.control.arm(send_call, "test.tool_result.committed")
+    response = await case.client.post(f"/api/v1/sessions/{source}/threads/{child}/messages", json={
+        "message": {"content": "向目标发送结果，并通过原 communication 等待完成。"}, "run": {},
+    })
+    assert response.status_code == 200, response.text
+    assert response.json()["data"]["thread_id"] == response.json()["data"]["dispatch"]["thread_id"] == child
+    try:
+        await asyncio.to_thread(case.replay.control.acknowledged, send_call, "test.tool_result.committed", 30)
+        sent = case.tool_result(source, send_call)
+        receipt = json.loads(sent["content"])
+        following = await case.plan(source, [
+            _tool("wait_for_session", {"target_session_id": target,
+                  "communication_id": receipt["communication_id"], "timeout_seconds": 60}, "child-source-wait"),
+            {"content": "child 已确认目标完成。"},
+        ], thread_id=child)
+    finally:
+        case.replay.control.release(send_call, "test.tool_result.committed")
+    source_job = await _completed(case.client, response.json()["data"]["job_id"])
+    assert (source_job["session_id"], source_job["thread_id"]) == (source, child)
+    final_request = case.request(following[-1])
+    tools = {row["name"]: json.loads(row["content"]) for row in final_request["messages"] if row["role"] == "tool"}
+    assert tools["send_message_to_session"] == receipt
+    assert tools["wait_for_session"]["status"] == "completed"
+
+    def operation(kind: str, model_call: str, provider_call: str) -> str:
+        preimage = json.dumps([kind, source, child, model_call, provider_call], separators=(",", ":"))
+        return "cop_" + hashlib.sha256(preimage.encode()).hexdigest()
+
+    send_operation = operation("send", first_call, send_provider_id)
+    wait_operation = operation("wait", following[0], "child-source-wait")
+    source_node = await case.session_node(source)
+    target_node = await case.session_node(target)
+    with closing(SessionControlStore(source_node / CONTROL_DATABASE_NAME)) as source_store, closing(SessionControlStore(target_node / CONTROL_DATABASE_NAME)) as target_store:
+        outbox = source_store.get_communication_outbox(send_operation)
+        inbox = target_store.get_communication_inbox(receipt["communication_id"])
+        assert outbox.source_thread_id == inbox.source_thread_id == child
+        assert outbox.target_thread_id == inbox.target_thread_id == target_main
+        assert outbox.session_id == inbox.source_session_id == source
+        assert outbox.communication_id == receipt["communication_id"]
+        assert inbox.state == "execution_bound" and inbox.turn_id is None
+        assert outbox.target_session_id == inbox.session_id == target
+        target_job = await _completed(case.client, inbox.job_id)
+        assert target_job["thread_id"] == target_main
+        case.record("child-source-ledger", {"outbox": asdict(outbox), "inbox": asdict(inbox), "receipt": receipt})
+    with sqlite3.connect((source_node / CONTROL_DATABASE_NAME).as_uri() + "?mode=ro", uri=True) as connection:
+        observations = [json.loads(row[0]) for row in connection.execute(
+            "SELECT request_json FROM remote_observations WHERE side='source'",
+        )]
+        wait, = [row for row in observations if row["envelope"]["source_call_id"] == wait_operation]
+        assert wait["envelope"]["source"]["thread_id"] == child
+        assert wait["envelope"]["source"]["session_id"] == source
+        assert wait["envelope"]["target"]["thread_id"] == target_main
+        assert connection.execute("SELECT COUNT(*) FROM communication_outbox WHERE source_thread_id=?", (child,)).fetchone() == (1,)
+    committed = [event["details"] for event in case.replay.control.events
+                 if event["phase"] == "test.tool_result.committed" and event["operation_id"] in {
+                     send_call, following[0] + ":tool-call:child-source-wait",
+                 }]
+    assert len(committed) == 2 and {(row["session_id"], row["thread_id"]) for row in committed} == {(source, child)}
+    case.record("child-source-owner", {"source_main": source_main, "child": child, "target_main": target_main,
+                                      "send_operation": send_operation, "wait_operation": wait_operation,
+                                      "wait": wait, "committed": committed, "source_job": source_job})
 
 
 @pytest.mark.asyncio
