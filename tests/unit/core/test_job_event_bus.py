@@ -7,8 +7,82 @@ import pytest
 from pydantic import ValidationError
 
 from app.core.job_event_bus import EventType, JobEventBus
+from app.core.resource_uri import session_artifact_uri
 from app.schemas.event import Event
 from tests.support.job_thread_fixture import job_fixture_thread_id
+
+
+@pytest.fixture
+def tool_output_payload() -> dict[str, object]:
+    uri = session_artifact_uri(
+        "workspace_1", "ses_019bd0aa8bb2784aaadbe51563ee17f0", "tool-results",
+        "tool_" + "a" * 24 + ".txt",
+        gateway_authority="gateway_" + "b" * 32,
+    )
+    return {
+        "path": uri, "read_path": uri, "tool_name": "large_tool",
+        "tool_call_id": "call_large", "byte_count": 2048, "line_count": 80,
+        "content_sha256": "c" * 64,
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("field", ["path", "read_path"])
+@pytest.mark.parametrize("invalid", [
+    "/private/workspace/.boxteam/sessions/tool.txt",
+    r"C:\Users\local\.boxteam\tool.txt",
+    "tool-results/tool.txt",
+    "boxteam://session/ses_1/resources/artifacts/tool-results/tool.txt",
+    "boxteam://workspace/workspace_1/resources/files/root/tool.txt",
+    "boxteam://workspace/workspace_1/resources/session/ses_019bd0aa8bb2784aaadbe51563ee17f0/attachments/att_" + "a" * 32,
+])
+async def test_tool_output_rejects_non_result_uri_before_delivery(
+    tool_output_payload: dict[str, object], field: str, invalid: str,
+) -> None:
+    bus = JobEventBus()
+    queue = await bus.subscribe("job_invalid_output", subscriber_kind="test_tool_output")
+    received: list[Event] = []
+
+    async def record(event: Event) -> None:
+        received.append(event)
+
+    await bus.register_durable_listener(record)
+    with pytest.raises(ValidationError) as failure:
+        await bus.publish(
+            job_id="job_invalid_output", event_type=EventType.TOOL_CALL_END,
+            payload={"part_id": "part_output",
+                "execution_id": "execution_1", "tool_call_id": "call_large",
+                "tool_name": "large_tool", "tool_output": {**tool_output_payload, field: invalid},
+            },
+        )
+    assert failure.value.errors(include_input=False)[0]["loc"] == ("tool_output", field)
+    assert received == []
+    assert await bus.list_events("job_invalid_output") == []
+    assert queue.empty()
+
+
+@pytest.mark.asyncio
+async def test_tool_output_uri_round_trips_without_resolving_target(
+    tool_output_payload: dict[str, object],
+) -> None:
+    bus = JobEventBus()
+    queue = await bus.subscribe("job_output", subscriber_kind="test_tool_output")
+    received: list[Event] = []
+
+    async def record(event: Event) -> None:
+        received.append(event)
+
+    await bus.register_durable_listener(record)
+    event = await bus.publish(
+        job_id="job_output", event_type=EventType.TOOL_CALL_END,
+        payload={"part_id": "part_output", "execution_id": "execution_1", "tool_call_id": "call_large",
+                 "tool_name": "large_tool", "tool_output": tool_output_payload},
+    )
+    expected = {"type": "tool_output", "truncated": True, **tool_output_payload}
+    assert event.payload.tool_output.model_dump() == expected
+    assert received == [event]
+    assert (await bus.list_events("job_output"))[0].payload.tool_output.model_dump() == expected
+    assert (await queue.get()).model_dump(mode="json")["payload"]["tool_output"] == expected
 
 
 @pytest.mark.asyncio

@@ -19,6 +19,7 @@ from pydantic import (
     model_validator,
 )
 
+from app.core.resource_uri import parse_session_artifact_uri
 from app.domain.itemized.execution_admission import ExecutionBinding
 from app.schemas.internal_v2.pending_request import DeliveryBoundary, DeliveryPolicy
 from app.schemas.internal_v2.session_changes import validate_change_file_reference
@@ -203,6 +204,14 @@ class ToolOutputReferencePayload(BaseModel):
     line_count: int
     content_sha256: str
     truncated: bool = True
+
+    @field_validator("path", "read_path")
+    @classmethod
+    def validate_tool_result_uri(cls, value: str) -> str:
+        parsed = parse_session_artifact_uri(value)
+        if parsed.session_artifact_kind != "tool-results":
+            raise ValueError("工具输出引用必须指向工具结果产物")
+        return parsed.display_uri
 
 
 class ToolCallEndPayload(BaseModel):

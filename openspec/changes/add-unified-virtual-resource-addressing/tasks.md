@@ -213,3 +213,10 @@
 - 检查点读/写/目录核验/删除由实际文件操作处生成资源ID、阶段和错误码；原路径、JSON解析/系统原因只保留在服务端日志及cause。发布与临时清理同时失败时保留两份原异常，主错误码不被覆盖；失败不更新配额或正式正文，下一次显式操作仍可继续。目录核验中的ENOENT明确失败，只有目标文件检查/读取的ENOENT表示不存在。客户端生成的超时公开消息保留method/timeout和重试恢复信息，协议route继续保留在BrowserRequestError.path，不混入该消息。
 - 固定生产候选005 tree `501f29ebb91faa5daa0eb1f9575d49032f0f3ddb` 的 `browser-checkpoint-errors-static-unit-002` 为10项Node及75项Python通过，Ruff/Node语法exit0；006仅增强集成回执封存，`http-003` 真实Node HTTP与sync/async客户端→资源API→Node记录全部通过（1 passed/12.84秒，准确耗时以原始输出为准），同时Ruff/compileall exit0。覆盖原500与完整错误正文、同一request_id、verified失败回执、零临时残留、显式freeze/wake重试，以及独立API传输超时的408、完整metadata、重启后unknown和零自动重放。原生路径/底层错误在Node stderr可核，公开正文和持久错误不含该路径。
 - 完整archive恢复旧生产的红测为3项Node失败及1项API失败，分别区分原路径回显及超时metadata被误抹。非作者独审指出的目录核验ENOENT问题已修并复核，10项Node独立复跑通过；目录项核验/清理共享阶段名只影响诊断粒度，cause与code仍完整。005→006不变源码的限定复用、准确命令/raw/指纹/退出码和封存产品原件SHA见本任务 `browser-checkpoint-errors-final-proof-006.json` 与 `runs/browser-checkpoint-errors-*`。本切片未移除通用public_error正则，其它producer仍需迁齐；不以此勾选2.2/7.2，不声称完整Gateway/Web或Windows验收。
+
+
+### 2026-10-22 工具输出事件引用校验（部分收口）
+
+- `ToolOutputReferencePayload.path/read_path` 在事件发布前共用中央 session artifact URI parser，并限定为 `tool-results`。拒绝原生/相对路径、旧 scheme、普通文件及附件 URI；不检查目标存在性，保留合法远端 authority、字段形状与 writer 生成的规范 URI。没有另建 parser 或响应端脱敏。
+- 固定代码候选002 tree `f0928d79d7406bd00378ffad13d9d1942cfe2380` 的 `tool-output-uri-static-unit-002` 为71 passed/3.00秒、exit0，Ruff及compileall通过。覆盖真实 `ToolOutputStore.bound` 落盘回执到DTO、合法联邦悬空URI的durable listener/内存历史/订阅队列完整round-trip，以及两字段各六类非法引用在任何交付前拒绝。完整archive仅恢复旧事件schema的 `red-002` 为12 failed/1 passed，失败均为未拒绝非法输入；首轮装具误传part_id的失败保留，不算红证。
+- 独立只读审查 `tool-output-uri-review-001.json` 未发现此三文件切片的剩余问题；候选目录是Git archive，版本以记录的tree及文件blob核验，不用向上检索所得的主仓HEAD代表候选。准确命令、前后源码指纹、raw、退出码位于本任务artifacts/runs；最终仅追加本收据，复用不变代码的71项结果。本切片不代替完整执行、Gateway/Web、Windows或2.2/7.2全局审计，两项继续未勾。

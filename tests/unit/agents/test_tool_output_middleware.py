@@ -12,6 +12,7 @@ from langchain_core.messages import ToolMessage
 from app.agents.tool_output_middleware import ToolOutputMiddleware
 from app.core.resource_uri import session_artifact_uri
 from app.core.workspace_identity import read_workspace_id
+from app.schemas.event import ToolOutputReferencePayload
 from app.services.infrastructure.tool_output_store import (
     TOOL_OUTPUT_ARTIFACT_KEY,
     ToolOutputStore,
@@ -110,6 +111,8 @@ def test_tool_output_store_persists_exact_large_result_and_returns_preview(
     assert isinstance(result.artifact, dict)
     assert result.artifact["original_tool_artifact"] == {"source": "unit-test"}
     assert TOOL_OUTPUT_ARTIFACT_KEY in result.artifact
+
+    assert ToolOutputReferencePayload.model_validate(reference).model_dump() == reference
 
 
 def test_tool_output_store_reuses_identical_tool_call_output(
