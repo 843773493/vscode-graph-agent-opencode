@@ -58,7 +58,7 @@ def build_remote_pair_command(
             f"Set-Location '{target.repository_path}'; "
             f"$env:BOXTEAM_HOME='{remote_boxteam_home}'; "
             f"$env:BOXTEAM_GATEWAY_ROOT='{remote_boxteam_home}\\state\\gateway'; "
-            f"& '{python}' -m app.gateway.federation_pairing\""
+            f"& '{python}' -m app.gateway.federation_pairing {{pairing_args}}\""
         )
     return (
         f"cd {shlex.quote(target.repository_path)} && "

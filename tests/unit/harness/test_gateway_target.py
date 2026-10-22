@@ -44,6 +44,12 @@ def test_windows_target_pair_command_uses_powershell_and_scripts_python(
     assert command.startswith("powershell -NoProfile")
     assert "Scripts\\python.exe" in command
     assert "/bin/python" not in command
+    # 联邦 owner 会替换占位符；参数必须仍在远端 PowerShell 的脚本引号内。
+    import shlex
+
+    arguments = shlex.split(command.replace("{pairing_args}", "--connection-id test:peer --peer-gateway-id peer --json"))
+    assert arguments[-1].endswith("--connection-id test:peer --peer-gateway-id peer --json")
+    assert arguments[-2] == "-Command"
 
 
 def test_ssh_command_requires_preinstalled_host_key(tmp_path: Path) -> None:
