@@ -1509,7 +1509,6 @@ export interface ForkSourceCaptureDTO {
   target_session_id: string;
   target_thread_id: string;
   snapshot_id: string;
-  snapshot_relative_locator: string;
   fork_id: string;
   materialization_id: string;
   request_json: string;
@@ -12122,7 +12121,6 @@ function createBaseForkSourceCaptureDTO(): ForkSourceCaptureDTO {
     target_session_id: "",
     target_thread_id: "",
     snapshot_id: "",
-    snapshot_relative_locator: "",
     fork_id: "",
     materialization_id: "",
     request_json: "",
@@ -12144,9 +12142,6 @@ export const ForkSourceCaptureDTO: MessageFns<ForkSourceCaptureDTO> = {
       target_session_id: isSet(object.target_session_id) ? globalThis.String(object.target_session_id) : "",
       target_thread_id: isSet(object.target_thread_id) ? globalThis.String(object.target_thread_id) : "",
       snapshot_id: isSet(object.snapshot_id) ? globalThis.String(object.snapshot_id) : "",
-      snapshot_relative_locator: isSet(object.snapshot_relative_locator)
-        ? globalThis.String(object.snapshot_relative_locator)
-        : "",
       fork_id: isSet(object.fork_id) ? globalThis.String(object.fork_id) : "",
       materialization_id: isSet(object.materialization_id) ? globalThis.String(object.materialization_id) : "",
       request_json: isSet(object.request_json) ? globalThis.String(object.request_json) : "",
@@ -12180,9 +12175,6 @@ export const ForkSourceCaptureDTO: MessageFns<ForkSourceCaptureDTO> = {
     }
     if (message.snapshot_id !== "") {
       obj.snapshot_id = message.snapshot_id;
-    }
-    if (message.snapshot_relative_locator !== "") {
-      obj.snapshot_relative_locator = message.snapshot_relative_locator;
     }
     if (message.fork_id !== "") {
       obj.fork_id = message.fork_id;
@@ -12223,7 +12215,6 @@ export const ForkSourceCaptureDTO: MessageFns<ForkSourceCaptureDTO> = {
     message.target_session_id = object.target_session_id ?? "";
     message.target_thread_id = object.target_thread_id ?? "";
     message.snapshot_id = object.snapshot_id ?? "";
-    message.snapshot_relative_locator = object.snapshot_relative_locator ?? "";
     message.fork_id = object.fork_id ?? "";
     message.materialization_id = object.materialization_id ?? "";
     message.request_json = object.request_json ?? "";

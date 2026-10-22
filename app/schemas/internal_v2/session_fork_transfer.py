@@ -11,6 +11,7 @@ from app.core.resource_uri import parse_resource_uri
 from app.core.session_catalog_store.contracts import (
     ForkSourceCaptureRecord,
     SessionGenerationOriginDTO,
+    fork_source_capture_relative_locator,
 )
 from app.gateway.federation.grants import ForkGrantTarget
 from app.schemas.internal_v2.session import SessionForkRequest, SessionForkResultDTO
@@ -28,8 +29,7 @@ class ForkSourceCaptureDTO(BaseModel):
     source_thread_id: str
     target_session_id: str
     target_thread_id: str
-    snapshot_id: str
-    snapshot_relative_locator: str
+    snapshot_id: str = Field(pattern=r"^[0-9a-f]{32}$")
     fork_id: str
     materialization_id: str
     request_json: str
@@ -41,10 +41,15 @@ class ForkSourceCaptureDTO(BaseModel):
 
     @classmethod
     def from_record(cls, record: ForkSourceCaptureRecord) -> ForkSourceCaptureDTO:
-        return cls.model_validate(asdict(record))
+        payload = asdict(record)
+        if payload.pop("snapshot_relative_locator") != fork_source_capture_relative_locator(record.snapshot_id):
+            raise RuntimeError("fork capture 内部 locator 与预分配 identity 不一致")
+        return cls.model_validate(payload)
 
     def to_record(self) -> ForkSourceCaptureRecord:
-        return ForkSourceCaptureRecord(**self.model_dump())
+        return ForkSourceCaptureRecord(
+            **self.model_dump(), snapshot_relative_locator=fork_source_capture_relative_locator(self.snapshot_id),
+        )
 
 
 class SessionForkTransferRequest(BaseModel):

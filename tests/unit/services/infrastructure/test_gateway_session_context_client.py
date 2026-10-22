@@ -5,6 +5,7 @@ import copy
 import hashlib
 import json
 from collections.abc import AsyncIterator, Callable, Iterator
+from dataclasses import replace
 from json import JSONDecodeError
 from unittest.mock import Mock
 
@@ -115,7 +116,7 @@ def gateway_capture_request(gateway_fork_request: SessionForkTransferRequest) ->
         copy_operation_id=key, creation_key=key,
         source_session_id=session_id, source_thread_id=thread_id,
         target_session_id=f"ses_{create_uuid_hex()}", target_thread_id=f"thr_{create_uuid_hex()}",
-        snapshot_id=snapshot_id, snapshot_relative_locator=f"fork-source-captures/{snapshot_id}",
+        snapshot_id=snapshot_id,
         fork_id=create_uuid_hex(), materialization_id=create_uuid_hex(),
         request_json=json.dumps(request.model_dump(mode="json")), preimage_hash="a" * 64,
         state="preparing", snapshot_sha256=None, marker_sha256=None, abort_reason=None,
@@ -135,6 +136,30 @@ def incomplete_capture_wire(gateway_capture_request: SessionForkTransferRequest)
             },
         },
     }
+
+
+def test_fork_capture_wire_keeps_private_locator_local(
+    gateway_capture_request: SessionForkTransferRequest,
+) -> None:
+    record = gateway_capture_request.capture.to_record()
+    transferred = ForkSourceCaptureDTO.from_record(record)
+    assert transferred.to_record() == record
+    assert "snapshot_relative_locator" not in transferred.model_dump()
+    assert "fork-source-captures/" not in gateway_capture_request.model_dump_json()
+    detail = IncompleteForkSourceCaptureError(record).to_detail(action="capture")
+    assert detail["capture"] == transferred.model_dump(mode="json")
+    assert "fork-source-captures/" not in json.dumps(detail)
+
+
+def test_fork_capture_wire_rejects_corrupted_local_locator(
+    gateway_capture_request: SessionForkTransferRequest,
+) -> None:
+    record = gateway_capture_request.capture.to_record()
+    corrupted = replace(record, snapshot_relative_locator="fork-source-captures/another-snapshot")
+    with pytest.raises(RuntimeError, match="locator 与预分配 identity 不一致"):
+        ForkSourceCaptureDTO.from_record(corrupted)
+    with pytest.raises(RuntimeError, match="locator 与预分配 identity 不一致"):
+        IncompleteForkSourceCaptureError(corrupted).to_detail(action="capture")
 
 
 def _read_request(workspace_id: str):

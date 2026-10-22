@@ -71,9 +71,16 @@ class SessionCatalogNode:
     updated_at: str | None
 
 
+def fork_source_capture_relative_locator(snapshot_id: str) -> str:
+    """私有存储坐标只在本地由冻结快照身份定位，不进入跨 owner 合同。"""
+    if len(snapshot_id) != 32 or any(char not in "0123456789abcdef" for char in snapshot_id):
+        raise RuntimeError("fork capture 内部 snapshot identity 非法")
+    return f"fork-source-captures/{snapshot_id}"
+
+
 @dataclass(frozen=True, slots=True)
 class ForkSourceCaptureRecord:
-    """创建 journal 预分配的 source capture；locator 不由恢复方推导。"""
+    """创建 journal 预分配的 source capture；私有 locator 由存储 owner 核验。"""
 
     copy_operation_id: str
     creation_key: str | None

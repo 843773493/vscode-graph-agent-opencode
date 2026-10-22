@@ -9,9 +9,13 @@ import shutil
 from dataclasses import asdict
 from pathlib import Path
 
-from app.core.session_catalog_store.contracts import ForkSourceCaptureRecord
+from app.core.session_catalog_store.contracts import (
+    ForkSourceCaptureRecord,
+    fork_source_capture_relative_locator,
+)
 from app.core.session_control_primitives import CONTROL_DATABASE_NAME
 from app.domain.itemized.hashing import canonical_json_bytes
+from app.schemas.internal_v2.session_fork_transfer import ForkSourceCaptureDTO
 from app.services.infrastructure.attachment_blob_catalog.records import (
     ForkAttachmentSnapshot,
 )
@@ -46,14 +50,12 @@ class IncompleteForkSourceCaptureError(RuntimeError):
     def to_detail(self, *, action: str) -> dict[str, object]:
         """跨 HTTP 保留原 owner 的完整 operation/source/target 冻结身份。"""
         return {"owner": self.owner, "code": self.code, "action": action,
-                "capture": asdict(self.capture), "message": str(self)}
+                "capture": ForkSourceCaptureDTO.from_record(self.capture).model_dump(mode="json"), "message": str(self)}
 
 
 def capture_directory(sessions_root: Path, record: ForkSourceCaptureRecord) -> Path:
     """locator 必须逐字匹配 journal 分配的 snapshot identity，正常 resolver 不可见。"""
-    if record.snapshot_relative_locator != f"fork-source-captures/{record.snapshot_id}" or (
-        len(record.snapshot_id) != 32 or any(char not in "0123456789abcdef" for char in record.snapshot_id)
-    ):
+    if record.snapshot_relative_locator != fork_source_capture_relative_locator(record.snapshot_id):
         raise RuntimeError("fork capture 内部 locator 与预分配 identity 不一致")
     root = sessions_root.parent / "navigation" / "fork-source-captures"
     if root.is_symlink():

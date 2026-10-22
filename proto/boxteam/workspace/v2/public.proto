@@ -1496,7 +1496,8 @@ message ForkSourceCaptureDTO {
   string target_session_id = 5;
   string target_thread_id = 6;
   string snapshot_id = 7;
-  string snapshot_relative_locator = 8;
+  reserved 8;
+  reserved "snapshot_relative_locator";
   string fork_id = 9;
   string materialization_id = 10;
   string request_json = 11;

@@ -13,6 +13,7 @@ from pathlib import Path
 import commentjson
 import httpx
 import pytest
+from pydantic import ValidationError
 
 from app.core.identifier import create_prefixed_id
 from app.core.resource_uri import (
@@ -22,6 +23,7 @@ from app.core.resource_uri import (
     resource_display_uri,
     thread_resource_uri,
 )
+from app.schemas.internal_v2.session import SessionForkRequest
 from app.schemas.internal_v2.session_fork_transfer import FORK_TRANSFER_CHUNK_BYTES
 from app.services.business.session_context_resource import (
     workspace_session_inventory_uri,
@@ -694,6 +696,8 @@ async def test_real_b_to_c_full_copy_cold_read_and_new_input_with_source_offline
             gateway_authority=source.gateway_id,
         ),
     }
+    with pytest.raises(ValidationError, match="Goal 只能在显式创建新 Session main 时继承"):
+        SessionForkRequest.model_validate(child_request)
     child_threads_before = await source.client.get(f"/api/v1/sessions/{source_session_id}/child-threads")
     assert child_threads_before.status_code == 200, child_threads_before.text
     rejected_child = await _post_fork(
@@ -701,7 +705,9 @@ async def test_real_b_to_c_full_copy_cold_read_and_new_input_with_source_offline
         _fork_deadline(source, child_request, fork_deadlines), stage="rejected_goal_http_response",
     )
     assert rejected_child.status_code == 422, rejected_child.text
-    assert "Goal 只能在显式创建新 Session main 时继承" in rejected_child.text
+    assert rejected_child.json()["detail"] == [
+        {"loc": ["body"], "type": "value_error", "msg": "请求参数校验失败"},
+    ]
     child_threads_after = await source.client.get(f"/api/v1/sessions/{source_session_id}/child-threads")
     assert child_threads_after.status_code == 200, child_threads_after.text
     assert child_threads_after.json()["data"] == child_threads_before.json()["data"]

@@ -33,6 +33,7 @@ from app.core.session_catalog_store.contracts import (
     SessionCatalogNode,
     SessionCreationPurpose,
     SessionCreationRecord,
+    fork_source_capture_relative_locator,
 )
 from app.core.session_catalog_store.validators import (
     validate_session_id,
@@ -120,7 +121,7 @@ class CreationJournalMixin:
                 "snapshot_relative_locator, fork_id, materialization_id, request_json, preimage_hash, state, export_release_state) "
                 "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'preparing', ?)",
                 (copy_operation_id, *expected[:5], snapshot_id,
-                 f"fork-source-captures/{snapshot_id}",
+                 fork_source_capture_relative_locator(snapshot_id),
                  fork_id or create_uuid_hex(namespace="fork/identity"),
                  materialization_id or create_uuid_hex(namespace="fork/materialization"),
                   request_json, preimage_hash, "pending" if source_external else None),

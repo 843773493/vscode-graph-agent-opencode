@@ -6506,11 +6506,6 @@ export declare type ForkSourceCaptureDTO = Message<"boxteam.workspace.v2.ForkSou
   snapshotId: string;
 
   /**
-   * @generated from field: string snapshot_relative_locator = 8;
-   */
-  snapshotRelativeLocator: string;
-
-  /**
    * @generated from field: string fork_id = 9;
    */
   forkId: string;
