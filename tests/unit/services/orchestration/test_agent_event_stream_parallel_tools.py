@@ -84,7 +84,9 @@ class FakeAgent:
         *,
         config: dict[str, Any],
         version: str,
+        durability: str,
     ) -> AsyncIterator[dict[str, Any]]:
+        assert durability == "sync"
         del input_payload, version
         self.received_configs.append(config)
         config_metadata = config.get("metadata")
@@ -167,7 +169,9 @@ class ResolvingConfigAgent(FakeAgent):
         *,
         config: dict[str, Any],
         version: str,
+        durability: str,
     ) -> AsyncIterator[dict[str, Any]]:
+        assert durability == "sync"
         del input_payload, version
         self.received_configs.append(config)
         self.resolved_configs.append(ensure_config(config))
@@ -182,7 +186,9 @@ class HangingBeforeProgressAgent:
         *,
         config: dict[str, Any],
         version: str,
+        durability: str,
     ) -> AsyncIterator[dict[str, Any]]:
+        assert durability == "sync"
         del config, version
         await asyncio.Future()
         if False:
@@ -196,7 +202,9 @@ class LifecycleEventsBeforeModelAgent:
         *,
         config: dict[str, Any],
         version: str,
+        durability: str,
     ) -> AsyncIterator[dict[str, Any]]:
+        assert durability == "sync"
         del version
         metadata = config.get("metadata")
         if not isinstance(metadata, dict):
@@ -247,7 +255,9 @@ class CancellationSensitiveAgent:
         *,
         config: dict[str, Any],
         version: str,
+        durability: str,
     ) -> AsyncIterator[dict[str, Any]]:
+        assert durability == "sync"
         del config, version
         try:
             await asyncio.Future()
@@ -266,7 +276,9 @@ class SlowlyStreamingModelAgent:
         *,
         config: dict[str, Any],
         version: str,
+        durability: str,
     ) -> AsyncIterator[dict[str, Any]]:
+        assert durability == "sync"
         del version
         config_metadata = config.get("metadata")
         if not isinstance(config_metadata, dict):
@@ -388,7 +400,9 @@ async def test_default_model_wait_after_start_uses_job_budget_not_idle_watchdog(
             *,
             config: dict[str, Any],
             version: str,
+            durability: str,
         ) -> AsyncIterator[dict[str, Any]]:
+            assert durability == "sync"
             del version
             metadata = config.get("metadata")
             if not isinstance(metadata, dict):
@@ -449,7 +463,9 @@ async def test_active_model_stream_is_not_cancelled_by_fixed_model_scope_deadlin
             *,
             config: dict[str, Any],
             version: str,
+            durability: str,
         ) -> AsyncIterator[dict[str, Any]]:
+            assert durability == "sync"
             del version
             metadata = config.get("metadata")
             if not isinstance(metadata, dict):
@@ -864,7 +880,9 @@ async def test_provider_scope_cancellation_from_event_iterator_reaches_agent_loo
             *,
             config: dict[str, Any],
             version: str,
+            durability: str,
         ) -> AsyncIterator[dict[str, Any]]:
+            assert durability == "sync"
             del config, version
             if False:
                 yield {}
@@ -2292,7 +2310,9 @@ async def test_model_end_does_not_replay_text_already_committed_by_provider_hook
             *,
             config: dict[str, Any],
             version: str,
+            durability: str,
         ) -> AsyncIterator[dict[str, Any]]:
+            assert durability == "sync"
             del version
             event_metadata = config["metadata"]
             yield {

@@ -754,3 +754,11 @@ TODO（pending 恢复的硬错误重试，2026-10-20）：本轮完成调用者�
 - 产品入口：`thread-trace-product-002` 正式matrix（focus=`basic_chat,child`、model_stream replay）exit0，312.77秒。真实Chromium→Gateway→Workspace生成main/child历史，冷读精确Trace集合与聚合集合子集一致、无重复、游标前进，三种跨范围复用均410，随后cold/runtime与GraphBinding断言通过。该证据属于模型回放下的真实产品浏览器验收，不表示真实Provider验证；原件封存在该attempt的`product-artifacts-with-source-drift/`。运行前后Trace相关源码指纹一致，同期3个无关测试/fixture脚本变化详列manifest，未宣称全树不变。初次运行仅因负向协议请求产生预期410浏览器console而红；现复用同一Gateway请求客户端执行负向请求，仍精确核验状态/code/request_id，页面console检查未放宽。
 - 性能TODO：`trace-owner-index-measurement.json` 为查询索引基准，非全链路验收；1 Job查询1k/10k/100k行的5次中位为14.1/140.2/1461.2ms。调用已移出事件循环；后续在同一索引增加Job定位，禁止新增可变归属事实。
 - 8.6尚未整体完成：SessionInterruptState与普通中断入口仍需按精确Thread迁齐，继续下一纵向切片。
+
+
+### 2026-10-22 8.13 pending-tools 重启续接的持久化次序
+
+- 唯一生产 graph 事件入口显式采用 LangGraph `durability="sync"`：下一节点执行前先提交 scheduler checkpoint，避免通信工具已经收到远端响应、进程退出后却只留下 after-model 中间件 checkpoint。重试与重启恢复复用同一入口；不改原工具 identity、幂等和恢复拒绝条件，也不将外部工具效果宣称为数据库事务。
+- 真实 Saver 阻塞提交用例经生产事件入口验证：工具 scheduler 的 `aput` 未放行时工具不进入，放行后 cold Saver 的原 checkpoint 为 `next=("tools",)`，消息 identity 保持。`scheduler-durability-focused-002` 为82 passed/17.91s；`scheduler-durability-cancellation-002` 为34 passed/73.40s，覆盖实际取消、终态、重启工具收敛和事件消费者。Ruff `scheduler-durability-static-002` exit0。独立只读审查由 `/root/terminal_convergence_review` 完成，入口与判别证据无阻断；收据为 `scheduler-durability-review.json`。
+- 唯一正式 Web owner 的 focus=`weekly`、`model_stream` replay 场景 `weekly-sync-scheduler-001` exit0，1 passed/482.72s：真实 Chromium→三个 Gateway/Workspace 生成历史，原 pending-tools Job 跨后端重启继续原冻结分页，逐页只有一个 canonical ToolResult，不混入冻结后素材，并拒绝参数冲突、篡改 cursor 和 revision。结果及当次71份产物封存在该 run 的 `product-evidence/`，不宣称真实 Provider 验证或 default 全场景已通过。原失败 `weekly-current-owner-diagnostic-001` 保留 backend log、原 Session 副本及 `rejected-checkpoint-scheduler.json`，明确记录当时 durable checkpoint 仍指向 `SourceOwnedTodoListMiddleware.after_model`。
+- 上述原件统一位于 `out/tests/temp/openspec_takeover/artifacts/runs/`。扩大运行 `scheduler-durability-cancellation-001` 到180秒外置期限后退出124，不作全组通过证据；摘要专项先因未使用正式 matrix 被 fixture 明确拒绝，正式 `scheduler-durability-compaction-002` 又发现测试直接读取 DeltaSnapshot 的旧合同。迁至既有官方恢复链后，`scheduler-durability-compaction-003` 在第二次摘要触发时暴露生产错误 `compaction preflight 已冻结摘要脱离 active history`（143.13s，exit1）。下一切片继续修复该明确功能问题；本恢复次序提交不包含尚未通过的摘要测试迁移，摘要/fork门槛及8.13整项仍保持未勾。

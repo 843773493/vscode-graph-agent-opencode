@@ -107,6 +107,8 @@ async def iter_agent_events(
         input_payload,
         config=stream_config,
         version="v2",
+        # 下一节点可能产生外部效果；必须先提交原 scheduler，重启才能证明续接点。
+        durability="sync",
     ).__aiter__()
     loop = asyncio.get_running_loop()
     next_event_task: asyncio.Task[dict[str, Any]] | None = None
