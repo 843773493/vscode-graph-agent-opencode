@@ -151,6 +151,16 @@ class RegistryPersistenceMixin:
                     "Gateway registry connection_kind 非法: "
                     f"workspace_id={original_workspace_id}, kind={connection_kind}"
                 )
+            for field in ("owner", "target_namespace", "connection_id", "target_generation"):
+                if field not in item:
+                    raise ValueError(
+                        f"Gateway registry target 缺少 {field}: workspace_id={original_workspace_id}"
+                    )
+            target_generation = item["target_generation"]
+            if not isinstance(target_generation, str) or not target_generation.strip():
+                raise ValueError(
+                    f"Gateway registry target_generation 必须是非空字符串: workspace_id={original_workspace_id}"
+                )
             managed = bool(item.get("managed", False))
             system_default = bool(item.get("system_default", False))
             desired_running = item.get("desired_running", False)
@@ -194,36 +204,10 @@ class RegistryPersistenceMixin:
                 root_path=root_path,
                 backend_url=backend_url,
                 connection_kind=connection_kind,
-                owner=(
-                    item.get("owner")
-                    if item.get("owner") in {
-                        "config",
-                        "manual",
-                        "system",
-                        "remote_projection",
-                    }
-                    else (
-                        "remote_projection"
-                        if connection_kind == "remote_gateway"
-                        else "system"
-                        if system_default
-                        else "manual"
-                    )
-                ),
-                target_namespace=str(item.get("target_namespace", "gateway")),
-                connection_id=(
-                    str(item["connection_id"])
-                    if item.get("connection_id") is not None
-                    else (
-                        str(item["remote_gateway_connection_id"])
-                        if connection_kind == "remote_gateway"
-                        and item.get("remote_gateway_connection_id") is not None
-                        else None
-                    )
-                ),
-                target_generation=str(
-                    item.get("target_generation") or "target_generation_legacy"
-                ),
+                owner=item["owner"],
+                target_namespace=item["target_namespace"],
+                connection_id=item["connection_id"],
+                target_generation=target_generation,
                 runtime_lease_id=(
                     str(item["runtime_lease_id"])
                     if item.get("runtime_lease_id") is not None

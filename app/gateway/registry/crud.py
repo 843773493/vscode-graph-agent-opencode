@@ -48,14 +48,7 @@ class RegistryCrudMixin:
                     "Gateway 不能替换仍有代理引用的工作区运行时，请先完成排空: "
                     f"workspace_id={target.workspace_id}"
                 )
-            # TODO: 旧内存夹具和早期注册记录可能只设置 system_default，未同步写入 system owner；仅允许默认目标完成这一次规范化。
-            legacy_system_owner_migration = (
-                existing.owner == "manual"
-                and target.owner == "system"
-                and existing.system_default
-                and target.system_default
-            )
-            if target.owner != existing.owner and not legacy_system_owner_migration:
+            if target.owner != existing.owner:
                 raise PermissionError(
                     "Gateway registry 不允许通过 upsert 改变 target owner: "
                     f"workspace_id={target.workspace_id}, "
@@ -111,10 +104,12 @@ class RegistryCrudMixin:
             raise ValueError(f"远端 projection 不得包含 root binding: {target.workspace_id}")
         if target.owner not in {"config", "manual", "system", "remote_projection"}:
             raise ValueError(f"Gateway registry target owner 非法: {target.owner}")
-        if not target.target_namespace.strip():
-            raise ValueError("Gateway registry target namespace 不能为空")
-        if target.connection_id is not None and not target.connection_id.strip():
-            raise ValueError("Gateway registry target connection_id 不能为空")
+        if not isinstance(target.target_namespace, str) or not target.target_namespace.strip():
+            raise ValueError("Gateway registry target_namespace 必须是非空字符串")
+        if target.connection_id is not None and (
+            not isinstance(target.connection_id, str) or not target.connection_id.strip()
+        ):
+            raise ValueError("Gateway registry target connection_id 必须是非空字符串或 null")
         if target.owner == "remote_projection" and (
             target.connection_id is None or target.remote_workspace_id is None
         ):
