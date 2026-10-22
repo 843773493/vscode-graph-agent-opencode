@@ -3641,6 +3641,64 @@ async def test_cold_clicked_prefix_history_excludes_backing_final(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("anchor", ["root", "tool_result"])
+async def test_clicked_prefix_successor_checkpoint_keeps_source_final_hidden(
+    fork_context: ForkIntegrationContext, fork_provider_prepare, anchor: str,
+) -> None:
+    source, _ = await _seed_retry_tool_source(fork_context, fork_provider_prepare)
+    saver = fork_context.saver
+    with sqlite3.connect(saver._storage.storage.index_path(source.session_id, thread_id=source.thread_id)) as connection:
+        final_item_id = connection.execute(
+            "SELECT final_item_id FROM turn_records WHERE turn_id='turn-retry'",
+        ).fetchone()[0]
+        anchor_item_id = "item-retry-user" if anchor == "root" else connection.execute(
+            "SELECT item_id FROM item_catalog WHERE turn_id='turn-retry' AND semantic_kind='tool_result' ORDER BY item_sequence LIMIT 1",
+        ).fetchone()[0]
+    fork = await fork_context.forks.fork(await _fork_request(
+        fork_context, source.session_id, creation_kind="new_child_thread", item_id=anchor_item_id,
+    ))
+    accepted = saver.accept_turn(
+        source.session_id, thread_id=fork.thread_id, accepted_ingress_id="prefix-next-ingress",
+        acceptance_idempotency_key="prefix-next-accept", job_id="prefix-next-job",
+        admission_idempotency_key="prefix-next-admit", payload="分支后继续",
+    )
+    manager = ContextSourceManager(
+        owner=ContextSourceOwnerKey(source.session_id, fork.thread_id), control_state_port=saver,
+    )
+    prepared = fork_provider_prepare(
+        fork_context, source.session_id, accepted["initial_execution_id"], manager,
+        "prefix-next", thread_id=fork.thread_id, attempt=1,
+    )
+    messages = [*prepared["messages"], AIMessage(
+        content="分支新回答", id="prefix-next-final",
+        response_metadata={"model_call_id": prepared["snapshot"].model_call_id},
+    )]
+    admission = saver.execution_admission(
+        source.session_id, thread_id=fork.thread_id, execution_id=accepted["initial_execution_id"],
+    )
+    with (
+        session_thread_owner_scope(MutationIntentOwner(source.session_id, fork.thread_id), langgraph_thread_id=fork.thread_id),
+        execution_admission_scope(admission, langgraph_thread_id=fork.thread_id),
+    ):
+        commit_fixture_output(saver, messages=messages)
+        await saver.aput(
+            build_checkpoint_config(fork.thread_id), _checkpoint("prefix-next-checkpoint", messages),
+            {"source": "loop", "step": 1, "parents": {}},
+            {"messages": str(len(messages)), "counter": str(len(messages))},
+        )
+    # 冷读同时核验旧 Turn 的完整身份与视图边界、新 Turn 的真实 final。
+    with RolloutCheckpointSaver(fork_context.sessions.path_resolver.sessions_root) as cold:
+        page = cold.load_history(source.session_id, fork.thread_id, TurnHistoryLoadRequest(direction="tail"))
+        assert [turn.turn_id for turn in page.items] == ["turn-retry", accepted["turn_id"]]
+        assert [turn.final_response for turn in page.items] == ["", "分支新回答"]
+        assert all(part.source.item_id != final_item_id for turn in page.items for part in turn.response_parts)
+        with sqlite3.connect(cold._storage.storage.index_path(source.session_id, thread_id=fork.thread_id)) as connection:
+            assert connection.execute(
+                "SELECT status, final_item_id FROM turn_records WHERE turn_id='turn-retry'",
+            ).fetchone() == ("completed", final_item_id)
+
+
+@pytest.mark.asyncio
 async def test_native_cold_history_rejects_hidden_canonical_final(
     fork_context: ForkIntegrationContext, fork_provider_prepare,
 ) -> None:
@@ -3658,6 +3716,16 @@ async def test_native_cold_history_rejects_hidden_canonical_final(
     reader = RolloutHistoryReader(RolloutContextReader(cold._storage))
     with pytest.raises(RuntimeError, match="canonical final item 缺少可见 view membership"):
         reader.load(source.session_id, thread_id, TurnHistoryLoadRequest(direction="tail"))
+    with sqlite3.connect(cold._storage.storage.index_path(source.session_id, thread_id=thread_id)) as connection:
+        branch_id = connection.execute(
+            "SELECT active_branch_id FROM checkpoint_namespace_state WHERE checkpoint_ns=''",
+        ).fetchone()[0]
+        parent = cold._storage.storage._active_context_view_id(connection, "", branch_id)
+        # 创建后继视图也必须拒绝损坏，不能把原生 final 丢失洗成合法前缀。
+        with pytest.raises(RuntimeError, match="context view 丢失 canonical final message"):
+            cold._storage.storage._create_view(
+                connection, branch_id, parent, (), "2026-10-22T00:00:00+00:00",
+            )
 
 
 @pytest.mark.asyncio

@@ -873,3 +873,9 @@ pending 恢复的硬错误重试已闭合（2026-10-22）：进程内装载阶�
 - 独审008发现fixture启动失败绕过清理；009改AsyncExitStack，仅成功启动项逆序关闭并最终恢复Gateway context。`integration-009` 三参数重新通过、`static-009` Ruff exit0，复用清单 `fork-path-scope-validation-reuse-009.json` 核其余源码/测试逐字不变。非作者复核009关闭P2且无新增finding，报告 `fork-path-scope-review-20261022-009.json`，未独立重跑。
 - 完整候选导出仅恢复共享ContextVar的 `fork-path-scope-mutation-shared-001` 为1 failed/0.56s、exit1，准确命中第二storage错误读到捕获路径。另一个main_thread_id变异 `mutation-main-001` 在断言后仍保留fork deadline，60.059秒由watchdog终止，exit143；缺完整异常诊断，不计有效红测。旧 `list(None)` 仅main预期经修复前完整候选复现失败后，按已实现的main+child合同改精确身份/正文断言。
 - 中间002/003/004/006/007失败与raw保留；整文件混合手填acceptance缺队列和冷附件authority的失败在修复前候选也复现，本切片不放宽。integration005因archive未解包完成而从live启动，source-before缺失，明确无效，不计验收。最终所有运行保留进程外保护、准确命令、source前后、raw和退出码于 `out/tests/temp/openspec_takeover/artifacts/runs/`；7.5/8.3完整门及Web均继续未勾。
+
+### 2026-10-22 7.5-C 前缀 fork 后续 checkpoint 的视图 final 边界（部分收口）
+
+- 真实完整 Web `agent-state-canonical-web-default-001` 在 `fork_child_ui` 首次续聊后失败：全局 Turn 的原 final 被后继 checkpoint 重新放入视图指针，尽管它只作为不可见恢复 backing 存在。修复唯一 `_create_view` writer：缺失 final 仅在父视图已明确 final=NULL 时延续隐藏；native final 意外丢失直接报错，读取侧完整性检查不放宽。
+- 固定候选002 tree `4ec1d642ff85a57fe8941a40a5815a9555f30673`：`fork-prefix-successor-integration-003` 正式 matrix 5 passed/27.56s、exit0，含 root/tool_result 两种前缀 fork 后续 checkpoint、冷历史及 native 损坏在 reader/writer 双端拒绝；`fork-prefix-successor-static-002` Ruff exit0。完整候选只恢复旧 writer 的 `fork-prefix-successor-red-001` 两参数均以缺失可见 canonical final 失败（2 failed/19.18s、exit1），证明测试能区分原缺陷。
+- `fork-prefix-successor-web-002` 使用既有 model_stream、真实 Gateway/Web 页面点击 root 分支、产品入口执行来源及首次续聊、冷历史与附件断言：1 passed/164.95s、exit0；同批正式 Web build returncode0。独审001发现 native 损坏可能被清空指针掩盖，002已修复并关闭，报告 `fork-prefix-successor-review-002/review.json`；独审为静态复核，未独立跑测试。所有原始输出在 `out/tests/temp/openspec_takeover/artifacts/runs/`，固定候选未夹带共享工作树改动。本收据仅关闭该 fork 续聊缺陷，不代表 default 全部场景、7.5 或8.13整体通过。

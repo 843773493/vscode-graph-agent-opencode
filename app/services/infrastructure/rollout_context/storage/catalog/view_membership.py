@@ -429,6 +429,16 @@ class RolloutViewMembershipMixin:
                 final_sequence_value = strict_optional_non_negative_int(
                     row[1], field=f"turns.final_message_sequence: {turn_id}"
                 )
+                # Turn 保留来源 final 身份；派生视图只索引本次实际包含的消息，
+                # 不能把前缀 fork 隐藏的恢复 backing 重新变成展示指针。
+                if final_sequence_value not in sequence_set:
+                    parent_turn = connection.execute(
+                        "SELECT final_message_sequence FROM context_view_turns WHERE view_id=? AND turn_id=?",
+                        (parent_view_id, turn_id),
+                    ).fetchone()
+                    if final_sequence_value is not None and (parent_turn is None or parent_turn[0] is not None):
+                        raise RuntimeError(f"context view 丢失 canonical final message: {view_id}/{turn_id}")
+                    final_sequence_value = None
                 root_row = connection.execute(
                     "SELECT root_input_item_id FROM turn_records WHERE turn_id = ?",
                     (turn_id,),
