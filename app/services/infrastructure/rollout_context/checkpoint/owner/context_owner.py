@@ -367,9 +367,9 @@ class ContextOwnerMixin(
         )
 
     def project_message_attachment_refs(self, session_id: str, thread_id: str, messages: list[BaseMessage]) -> list[BaseMessage]:
-        """所有派生请求/历史复用 storage 的 target-local mapping，canonical 不改写。"""
+        """所有派生请求/历史复用附件投影 owner 的 target-local mapping，canonical 不改写。"""
         return messages_from_dict([
-            self._storage.storage.project_message_attachments(session_id, thread_id, message_to_dict(message))
+            self._storage.attachment_projection.project_message_attachments(session_id, thread_id, message_to_dict(message))
             for message in messages
         ])
 

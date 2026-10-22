@@ -219,7 +219,7 @@ class ContextProjectionOwnerMixin:
         native = project_native_request(
             snapshot.as_sealed_plan(), items, request_content,
             seal_binding=snapshot.seal_binding,
-            attachment_projector=lambda payload: self._storage.storage.project_attachment_payload(session_id, thread_id, payload),
+            attachment_projector=lambda payload: self._storage.attachment_projection.project_attachment_payload(session_id, thread_id, payload),
         )
         native["resource_refs"] = [ref.model_dump(mode="json") for ref in resource_refs]
         return native

@@ -695,8 +695,8 @@ def test_seal_projection_is_reused_and_independent_cold_projection_maps_after_cl
     for owner, name in (
         (context_owner, "project_context_plan"),
         (native_request, "project_native_request"),
-        (storage, "project_message_attachments"),
-        (storage, "project_attachment_payload"),
+        (saver._storage.attachment_projection, "project_message_attachments"),
+        (saver._storage.attachment_projection, "project_attachment_payload"),
     ):
         monkeypatch.setattr(owner, name, unlocked(getattr(owner, name)))
 

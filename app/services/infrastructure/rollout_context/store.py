@@ -15,6 +15,9 @@ from app.services.infrastructure.rollout_context.assembly.store import (
 from app.services.infrastructure.rollout_context.checkpoint.durable.store import (
     RolloutCheckpointStore,
 )
+from app.services.infrastructure.rollout_context.checkpoint.projection.attachments import (
+    RolloutAttachmentProjection,
+)
 from app.services.infrastructure.rollout_context.execution.store import (
     RolloutExecutionStore,
 )
@@ -54,10 +57,10 @@ class RolloutContextStore:
         self.storage = storage or RolloutStorage(
             sessions_dir, serde=serde, message_codec=message_codec,
             fork_recovery=recover_materialization, initialize_activation=create_resource_activation_schema,
-            attachment_ref_projector=attachment_ref_projector,
         )
         if storage is not None:
             storage._fork_recovery = recover_materialization
+        self.attachment_projection = RolloutAttachmentProjection(attachment_ref_projector)
         self.executions = RolloutExecutionStore(self)
         self.checkpoints = RolloutCheckpointStore(self)
         self.assemblies = ContextAssemblyStore(self)

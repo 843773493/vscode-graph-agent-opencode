@@ -291,8 +291,8 @@ async def test_source_point_projects_ingress_attachment_with_frozen_scope(
 
 
 @pytest.fixture
-def fork_attachment_storage(fork_capture, tmp_path, monkeypatch):
-    """复用真实 Saver 的 storage 接线，仅观察真实附件投影调用次数。"""
+def fork_attachment_projection(fork_capture, tmp_path, monkeypatch):
+    """复用真实 Saver 的附件投影接线，仅观察真实附件投影调用次数。"""
     store, _ = fork_capture
     calls: list[tuple[str, str, str]] = []
     original = AttachmentBlobStore.project_attachment
@@ -303,7 +303,7 @@ def fork_attachment_storage(fork_capture, tmp_path, monkeypatch):
 
     monkeypatch.setattr(AttachmentBlobStore, "project_attachment", project)
     saver = RolloutCheckpointSaver(tmp_path / ".boxteam" / "sessions", attachment_store=store)
-    return saver._storage.storage, calls
+    return saver._storage.attachment_projection, calls
 
 
 @pytest.mark.asyncio
@@ -472,7 +472,7 @@ async def test_fork_source_attachment_candidates_require_frozen_ref_thread(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("content_type", ["text/plain", "image/png"])
-async def test_fork_projects_generated_attachment_blocks_without_mutating_user_text(fork_capture, fork_attachment_storage, tmp_path, content_type: str):
+async def test_fork_projects_generated_attachment_blocks_without_mutating_user_text(fork_capture, fork_attachment_projection, tmp_path, content_type: str):
     store, record = fork_capture
     buffer = BytesIO()
     Image.new("RGB", (4, 4)).save(buffer, format="PNG")
@@ -486,11 +486,11 @@ async def test_fork_projects_generated_attachment_blocks_without_mutating_user_t
     with pytest.raises(FileNotFoundError, match="尚未完成发布"):
         store.read(SESSION_B, captured.target_file_id)
     await store.finalize_copy_attachments(record, publication_preimage_hash=record.preimage_hash)
-    storage, calls = fork_attachment_storage
+    projection, calls = fork_attachment_projection
     message = message_to_dict(HumanMessage(content=built.content, response_metadata={"attachments": [ref.model_dump(mode="json", exclude={"data_url"})]}))
     original = json.dumps(message, sort_keys=True)
     calls.clear()
-    projected = storage.project_message_attachments(SESSION_B, record.target_thread_id, message)
+    projected = projection.project_message_attachments(SESSION_B, record.target_thread_id, message)
     target = captured.target_file_id
     assert projected["data"]["content"][0]["text"] == user_text
     manifest = projected["data"]["content"][1]

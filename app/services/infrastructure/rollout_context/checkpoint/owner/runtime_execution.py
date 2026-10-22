@@ -84,7 +84,7 @@ class RuntimeExecutionOwnerMixin:
                 attachments = item.payload.get("attachments", []) if isinstance(item.payload, Mapping) else []
                 if references != tuple(entry["file_id"] for entry in attachments):
                     raise RuntimeError("canonical 附件正文与使用索引不一致")
-                projected = storage.project_attachment_payload(session_id, thread_id, {"attachments": list(attachments)})
+                projected = self._storage.attachment_projection.project_attachment_payload(session_id, thread_id, {"attachments": list(attachments)})
                 return tuple(entry["file_id"] for entry in projected["attachments"])
         except RolloutNotMaterializedError:
             return None
@@ -103,7 +103,7 @@ class RuntimeExecutionOwnerMixin:
                     references = tuple(uri for (uri,) in connection.execute(
                         "SELECT DISTINCT resource_uri FROM item_resource_references WHERE resource_kind='attachment'",
                     ))
-                    projected = storage.project_attachment_payload(session_id, candidate, {
+                    projected = self._storage.attachment_projection.project_attachment_payload(session_id, candidate, {
                         "attachments": [{"file_id": uri} for uri in references],
                     })
                     for entry in projected["attachments"]:

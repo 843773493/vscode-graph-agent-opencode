@@ -492,7 +492,7 @@ class IndexedRecordQueryMixin:
                     length=length,
                     read_item=self._storage._read_v2_item_at,
                 )
-                message = self._storage.project_message_attachments(session_id, thread_id, self._storage._codec().project_message(items))
+                message = self._context.attachment_projection.project_message_attachments(session_id, thread_id, self._storage._codec().project_message(items))
                 message_identity = messages_by_sequence.get(sequence)
                 if message_identity is None:
                     raise RuntimeError(

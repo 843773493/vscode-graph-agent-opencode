@@ -457,7 +457,7 @@ class ContextDispatchOwnerMixin:
         )
         for entry in entries:
             item = resolve_selected_item(entry, items)
-            payload = self._storage.storage.project_attachment_payload(session_id, thread_id, item.payload)
+            payload = self._storage.attachment_projection.project_attachment_payload(session_id, thread_id, item.payload)
             if not isinstance(payload, Mapping):
                 continue
             attachments = payload.get("attachments", ())

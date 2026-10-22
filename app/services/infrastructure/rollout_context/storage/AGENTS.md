@@ -17,3 +17,5 @@
 - JSONL item 必须不可变、使用 RFC 8785 JCS；offset/length 必须与唯一权威 commit 状态一致。
 - 失败必须明确报错，不得静默跳过损坏记录。
 - 静态结构与迁移SQL唯一定义在 `sql/`；Python显式加载并保留事务、条件、版本与参数协调。
+
+- 附件引用与系统生成块的消息投影归 checkpoint/projection；基础 storage 不持有附件 projector 或提供转发方法。
