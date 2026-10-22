@@ -195,6 +195,34 @@ async def test_main_thread_message_reads_use_catalog_owner_and_thread_config(
 
 
 @pytest.mark.asyncio
+async def test_agent_state_canonical_reader_uses_catalog_main_even_inside_child_scope(
+    tmp_path, session_bundle_factory,
+):
+    session_id = "ses_019c1bb705d872778f7f2b8e56394a96"
+    session_bundle_factory(tmp_path, session_id)
+    main = get_session_path_resolver(tmp_path).main_thread_id(session_id)
+    child = "thr_019c1bb705d872778f7f2b8e56394a97"
+    checkpointer = _RecordingCheckpointReader()
+    canonical_reads: list[tuple[str, str]] = []
+
+    def read_items(owner_session: str, owner_thread: str):
+        canonical_reads.append((owner_session, owner_thread))
+        return ()
+
+    service = build_message_service(
+        tmp_path, checkpointer=checkpointer, canonical_item_reader=read_items,
+    )
+    with session_thread_owner_scope(MutationIntentOwner(session_id, child), langgraph_thread_id=child):
+        result = await service.get_agent_state_messages(session_id)
+
+    assert result.session_id == session_id and result.message_count == 0 and result.jsonl == ""
+    assert canonical_reads == [(session_id, main)]
+    assert checkpointer.reads == [
+        ({"configurable": {"thread_id": main, "checkpoint_ns": ""}}, MutationIntentOwner(session_id, main)),
+    ]
+
+
+@pytest.mark.asyncio
 async def test_agent_context_read_keeps_explicit_child_thread_owner():
     session_id = "ses_019c1bb705d872778f7f2b8e56394a96"
     child_thread_id = "thr_019c1bb705d872778f7f2b8e56394a96"

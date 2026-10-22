@@ -73,7 +73,7 @@ class MessageService(MessageContentProjectionMixin):
         main_thread_resolver: Callable[[str], str],
         checkpointer: BaseCheckpointSaver | None = None,
         attachment_store: AttachmentBlobStore | None = None,
-        canonical_item_reader: Callable[[str], Sequence[CanonicalItemRecord]]
+        canonical_item_reader: Callable[[str, str], Sequence[CanonicalItemRecord]]
         | None = None,
         workspace_root: Path | None = None,
     ) -> None:
@@ -326,6 +326,7 @@ class MessageService(MessageContentProjectionMixin):
             canonical_items = await asyncio.to_thread(
                 self._canonical_item_reader,
                 session_id,
+                self._resolve_main_thread_id(session_id),
             )
             raw_messages = merge_canonical_reasoning(
                 raw_messages,

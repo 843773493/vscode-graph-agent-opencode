@@ -117,6 +117,16 @@ async def test_public_session_history_and_replay_stay_on_main_with_real_child(
         assert {item["message_id"] for item in accepted[main]} <= visible_ids
         assert not {item["message_id"] for item in accepted[child]} & visible_ids
 
+        agent_state = await history_client.get(base + "/agent-state/messages")
+        assert agent_state.status_code == 200, agent_state.text
+        state = agent_state.json()["data"]
+        assert state["session_id"] == session_id
+        records = [json.loads(line) for line in state["jsonl"].splitlines()]
+        assert state["message_count"] == len(records) and records
+        for index in range(2):
+            assert f"{main} 第 {index + 1} 条真实输入" in state["jsonl"]
+            assert f"{child} 第 {index + 1} 条真实输入" not in state["jsonl"]
+
         pages = {}
         for thread_id in (main, child):
             endpoint = base + ("" if thread_id == main else f"/threads/{thread_id}") + "/history"
