@@ -224,12 +224,16 @@ async function ownerApiResponse(owner, pathname, init = {}) {
     headers: { ...init.headers, "X-Local-Token": token, "X-BoxTeam-Workspace-Id": owner.gatewayWorkspaceId },
     ...(body === undefined ? {} : { data: body }),
   });
-  const text = await response.text();
-  const payload = text ? JSON.parse(text) : null;
-  const requestId = response.headers()["x-request-id"];
-  assert.ok(requestId, `API ${pathname} 缺少 X-Request-ID`);
-  assert.equal(payload?.request_id, requestId, `API ${pathname} 响应体与 X-Request-ID 不一致`);
-  return { status: response.status(), requestId, body: payload };
+  try {
+    const text = await response.text();
+    const payload = text ? JSON.parse(text) : null;
+    const requestId = response.headers()["x-request-id"];
+    assert.ok(requestId, `API ${pathname} 缺少 X-Request-ID`);
+    assert.equal(payload?.request_id, requestId, `API ${pathname} 响应体与 X-Request-ID 不一致`);
+    return { status: response.status(), requestId, body: payload };
+  } finally {
+    await response.dispose();
+  }
 }
 
 async function waitUntil(predicate, label, timeout = 30_000) {
@@ -4928,19 +4932,23 @@ async function readForkDurableHistory(targetSurface, payload, deadline) {
     data: JSON.stringify({ direction: "tail", turns: 256 }),
     timeout: validationBudget ? validationBudget.remainingMs() : 0,
   }), "读取 fork Thread 持久历史");
-  const text = await wait(response.text(), "读取 fork Thread 持久历史响应正文");
-  if (!response.ok()) throw new Error(`fork Thread 持久历史读取失败 ${response.status()}: ${text}`);
-  const history = text ? JSON.parse(text) : null;
-  const requestId = response.headers()["x-request-id"];
-  assert.ok(requestId, "fork Thread 历史响应缺少 X-Request-ID");
-  assert.equal(history?.request_id, requestId, "fork Thread 历史响应体与 X-Request-ID 不一致");
-  assert.equal(history.data.thread_id, threadId, "真实历史读取必须落在刚发布的 fork Thread owner");
-  assert.equal(typeof history.data.source_view_id, "string", "fork Thread 历史必须返回实际读取 view");
-  assert.ok(Number.isSafeInteger(history.data.source_view_revision), "fork Thread 历史必须返回实际读取 revision");
-  const proof = { sessionId, threadId, sourceViewId: history.data.source_view_id,
-    sourceViewRevision: history.data.source_view_revision, turnCount: history.data.items.length };
-  result.forkDurabilityProofs.push(proof);
-  return proof;
+  try {
+    const text = await wait(response.text(), "读取 fork Thread 持久历史响应正文");
+    if (!response.ok()) throw new Error(`fork Thread 持久历史读取失败 ${response.status()}: ${text}`);
+    const history = text ? JSON.parse(text) : null;
+    const requestId = response.headers()["x-request-id"];
+    assert.ok(requestId, "fork Thread 历史响应缺少 X-Request-ID");
+    assert.equal(history?.request_id, requestId, "fork Thread 历史响应体与 X-Request-ID 不一致");
+    assert.equal(history.data.thread_id, threadId, "真实历史读取必须落在刚发布的 fork Thread owner");
+    assert.equal(typeof history.data.source_view_id, "string", "fork Thread 历史必须返回实际读取 view");
+    assert.ok(Number.isSafeInteger(history.data.source_view_revision), "fork Thread 历史必须返回实际读取 revision");
+    const proof = { sessionId, threadId, sourceViewId: history.data.source_view_id,
+      sourceViewRevision: history.data.source_view_revision, turnCount: history.data.items.length };
+    result.forkDurabilityProofs.push(proof);
+    return proof;
+  } finally {
+    await response.dispose();
+  }
 }
 
 function liveForkResources(payload) {
@@ -5421,14 +5429,18 @@ async function requestForkHttpResponse(source, request, targetSurface) {
       + `target_workspace=${deadline.targetWorkspace}, idempotency_key=${deadline.operationKey}, `
       + `last_phase=${deadline.lastStage}, backend_state=unknown; ${String(error)}`);
   }
-  const text = await waitForForkBudget(response.text(), deadline, "fork_context POST 响应正文");
-  const body = text ? JSON.parse(text) : null;
-  const requestId = assertForkResponseRequestId(response, body,
-    `API /api/v1/sessions/${source.sessionId}/fork-context`);
-  const backendState = await classifyForkResponse(deadline, response.status(), body, request, targetSurface.gatewayId);
-  const remainingMs = await remainingForkDeadlineMs(deadline);
-  return { response: { status: response.status(), requestId, body, backendState,
-    remainingMs, deadlineToken: deadline.token, deadlineNs: deadline.deadlineNs }, deadline };
+  try {
+    const text = await waitForForkBudget(response.text(), deadline, "fork_context POST 响应正文");
+    const body = text ? JSON.parse(text) : null;
+    const requestId = assertForkResponseRequestId(response, body,
+      `API /api/v1/sessions/${source.sessionId}/fork-context`);
+    const backendState = await classifyForkResponse(deadline, response.status(), body, request, targetSurface.gatewayId);
+    const remainingMs = await remainingForkDeadlineMs(deadline);
+    return { response: { status: response.status(), requestId, body, backendState,
+      remainingMs, deadlineToken: deadline.token, deadlineNs: deadline.deadlineNs }, deadline };
+  } finally {
+    await response.dispose();
+  }
 }
 
 async function forkHistoryEvidence(owner) {
@@ -11259,8 +11271,11 @@ try {
   await Promise.all(navigationReads);
   Object.assign(result.diagnostics, classifyConsoleErrors());
   // 长流程的完整诊断仍在内存中供分类；失败回执逐项写出，避免再复制整份历史掩盖原始错误。
+  // TODO: 按完整default测量继续定位driver内存增长；释放响应尚未证明解决target detach时的OOM。
   const diagnostics = {};
-  for (const [name, value] of Object.entries(result.diagnostics)) {
+  for (const [name, value] of Object.entries({ ...result.diagnostics,
+    conflictResponses, historyErrorResponses, lifecycleErrorResponses, lifecycleDeletionProofs,
+  })) {
     if (Array.isArray(value)) {
       const file = `${resultPath}.${name}.jsonl`;
       await writeFile(file, "");

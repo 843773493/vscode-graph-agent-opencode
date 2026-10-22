@@ -971,3 +971,11 @@ pending 恢复的硬错误重试已闭合（2026-10-22）：进程内装载阶�
 - `workspace_tool_runtime`删除裸`accept_turn`前提，使用真实Session当前agent/provider、`MessageService.accept_user_message`和冻结`ExecutionQueueInput`原子创建canonical输入及队列，再领取、启动精确Thread的OS holder。装具仅执行资源工具；退出以cancelled结算自身任务，不伪造模型完成。准入成功即登记结算责任，读取admission/queue、建立作用域、领取或启动失败仍结算；终态写入返回False明确报错。工具、资源、终态、holder、admission按真实归属释放，异常和取消不跳过其余清理。
 - 完整Git归档tree `500e0b99e0b69fed68c47686f097b66f189ce0d7`的受保护定向验证：Ruff/compileall及28项生命周期单测通过（6.21秒）；Browser连续两次lifespan核canonical消息、started→cancelled队列、旧执行不再可调度及OS holder持有/释放，并连续通过真实截图/下载/checkpoint错误回归，共4 passed/23.58秒；Terminal真实owner/lease/PTY/最终回执参数化2 passed/23.32秒。三组exit0、源码前后相同、准确命令及raw保留于`out/tests/temp/openspec_takeover/artifacts/runs/workspace-tool-queue-*-005/`，汇总`workspace-tool-queue-proof-005.json`，独审`workspace-tool-queue-review-005.json`。
 - 本收据仅关闭共用资源工具装具的旧准入前提和准备失败窗口；不代替完整模型执行、Windows实机或全量Web验收，不据此勾选8.3/8.13或Section 8整体。
+
+
+### 2026-10-22 Web driver响应释放与失败原件补全（性能尾项保留）
+
+- 三个HTTP辅助入口在消费body/header并生成纯值后，于finally释放Playwright APIResponse，避免请求上下文长期保留已消费正文。fork绝对60秒deadline、owner/request hash/状态断言与精确console错误分类均未放宽；失败回执另外逐条保存conflict/history/lifecycle响应及删除proof，保留同一request_id和body来归因，不仅保留已分类摘要。
+- 固定完整Git归档tree `cf413e7628b38f3e689254a182e5343b8a783237` 的 `web-lifecycle-refusal-evidence-003` 经真实Gateway、多workspace和Web初始化、原model_stream资产执行，仅focus lifecycle_admission_deletion，正式matrix为1 passed/495.61秒、exit0；原result含17个实际409响应、15个删除proof，未归属console/request均0，pageerror0。`web-response-lifetime-static-003`的Node语法、message-stream诊断、fork deadline、peer清理和controlled-restart四个self-test均exit0。命令、源码前后指纹、raw和result在`out/tests/temp/openspec_takeover/artifacts/runs/`同名目录；独审`web-response-lifetime-review-002.json`。
+- 此前`web-response-lifetime-tail-002`虽然9个focus阶段结束，最终仍1 failed/1451.50秒：两个history POST409缺少可核的完整响应原件而未归属。本次focus采得具名session_deletion_pending正文并通过，不反推旧失败已解决。此前`full-default-current-003`为1 failed/5263.18秒，Playwright target detach的`_disposeRecursively`触发OOM，数据段4,193,692kB、RSS约658MiB；driver不响应TERM，经核身份后SIGKILL，真实returncode -9。原件`full-default-driver-oom-003/`和独审`default-driver-oom-review-003.json`保留。
+- TODO（按用户性能后置裁定）：基于上述测量继续定位完整default的driver内存长尾；APIResponse释放只消除已知保留点，尚无完整default复跑证据，不能宣称OOM解决。保留原完整Web验收门未完成，不以阶段结束、定向通过或文档校验勾选8.13/9.7/Section 8整体。
