@@ -41,7 +41,19 @@ def sqlite_vfs_max_pathname() -> int:
             f"sqlite_version={sqlite3.sqlite_version}, extension={extension_path!r}"
         )
     try:
-        native_sqlite = ctypes.CDLL(extension_path)
+        if os.name == "nt":
+            # CPython 的 Windows 扩展从已加载的 sqlite3.dll 导入符号；
+            # 不从 PATH 搜索并加载另一份 SQLite，否则会查询错误的 VFS 注册表。
+            kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+            get_module = kernel.GetModuleHandleW
+            get_module.argtypes = [ctypes.c_wchar_p]
+            get_module.restype = ctypes.c_void_p
+            handle = get_module("sqlite3.dll")
+            if not handle:
+                raise ctypes.WinError(ctypes.get_last_error())
+            native_sqlite = ctypes.CDLL("sqlite3.dll", handle=handle)
+        else:
+            native_sqlite = ctypes.CDLL(extension_path)
     except OSError as error:
         raise RuntimeError(
             "无法加载当前 Python SQLite 扩展以读取默认 VFS mxPathname: "
