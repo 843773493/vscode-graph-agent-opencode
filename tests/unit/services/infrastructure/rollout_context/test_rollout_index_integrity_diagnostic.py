@@ -49,7 +49,7 @@ def _damage_database_page_count(index_path: Path) -> None:
         database.flush()
 
 
-def test_integrity_failure_reports_session_thread_path_and_releases_handles(
+def test_integrity_failure_reports_owner_without_path_and_releases_handles(
     storage_owner: tuple[RolloutContextStore, str, str],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -103,7 +103,11 @@ def test_integrity_failure_reports_session_thread_path_and_releases_handles(
     with pytest.raises(RuntimeError, match="integrity_check 失败") as raised:
         storage.storage.validate_index(session_id, thread_id)
 
-    assert str(index_path) in str(raised.value)
+    diagnostic = str(raised.value)
+    assert "recovery_required" in diagnostic
+    assert f"session_id={session_id}, thread_id={thread_id}" in diagnostic
+    assert "never used" in diagnostic
+    assert str(index_path) not in diagnostic
     assert len(opened_connections) == 1
     assert len(read_locks) == 1
     assert len(opened_lock_handles) == 1
@@ -112,7 +116,7 @@ def test_integrity_failure_reports_session_thread_path_and_releases_handles(
         opened_connections[0].execute("SELECT 1")
 
 
-def test_existing_index_error_reports_pair_path(
+def test_existing_index_error_reports_owner_and_explicit_recovery_without_path(
     storage_owner: tuple[RolloutContextStore, str, str],
 ) -> None:
     storage, session_id, thread_id = storage_owner
@@ -129,4 +133,8 @@ def test_existing_index_error_reports_pair_path(
     ):
         raise AssertionError("damaged SQLite must fail before yielding")
 
-    assert str(index_path) in str(raised.value)
+    diagnostic = str(raised.value)
+    assert f"session_id={session_id}, thread_id={thread_id}" in diagnostic
+    assert "SQLite backup 执行显式恢复，禁止从 JSONL 重建" in diagnostic
+    assert str(index_path) not in diagnostic
+    assert isinstance(raised.value.__cause__, sqlite3.DatabaseError)
