@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { chmod, readFile, rename, stat, unlink, writeFile } from "node:fs/promises";
+import { appendFile, chmod, readFile, rename, stat, unlink, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { dirname, join } from "node:path";
 import process from "node:process";
@@ -4658,7 +4658,9 @@ async function runNavigationDates(surfaces) {
       assert.deepEqual(await readRollout(execution.owner, "SELECT item_id,content_hash,item_sequence,execution_id,turn_id FROM item_catalog ORDER BY item_sequence"), execution.items);
       assert.deepEqual(await readRollout(execution.owner, "SELECT assembly_id,request_hash,plan_hash,status FROM context_assemblies ORDER BY assembly_id"), execution.assemblies);
       assert.deepEqual(await graphBinding(execution.owner), execution.binding);
-      await assertTranscriptDom(execution.owner, await loadThreadHistory(execution.owner), "导航完成的活跃对话");
+      // 此时模型响应仍被 barrier 阻塞；历史跳转在下方 Turn 完成后由 verifyOwnerTurns 验证。
+      const current = await assertAcceptedTurn(execution.owner, execution.sent);
+      assert.equal(current.turn_id, execution.sent.turnId, "目录变化保留运行中的 Turn 身份");
     }
     for (const execution of active) await testControl({ action: "release", ...execution.barrier });
     const completed = [];
@@ -4702,8 +4704,11 @@ async function runNavigationDates(surfaces) {
     assert.equal(deletingRows.length, frozenIds.length);
     assert.ok(deletingRows.every((node) => node.state === "deleting"));
     for (const owner of [first, second, fork.owner]) {
-      const metadata = (await ownerApi(owner, `/api/v1/sessions/${owner.sessionId}`)).data;
-      assert.equal(metadata.session_id, owner.sessionId, "deleting 的 catalog metadata 仍可定点观察");
+      // 删除中只观察 catalog；Session 详情同样受业务读取准入约束。
+      const metadata = await readCatalog(owner,
+        "SELECT node_id,state,main_thread_id FROM nodes WHERE node_id=?", [owner.sessionId]);
+      assert.deepEqual(metadata, [{ node_id: owner.sessionId, state: "deleting", main_thread_id: owner.threadId }],
+        "deleting 的 catalog metadata 仍可定点观察");
       const refused = await ownerApiResponse(owner, `/api/v1/sessions/${owner.sessionId}/threads/${owner.threadId}/history`, {
         method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ direction: "tail", turns: 1, include: HISTORY_INCLUDE }),
       });
@@ -11253,7 +11258,21 @@ try {
   }
   await Promise.all(navigationReads);
   Object.assign(result.diagnostics, classifyConsoleErrors());
-  await writeFile(resultPath, JSON.stringify({ ...result, error: String(error), screenshotError, pageErrors, consoleErrors, failedRequests }, null, 2));
+  // 长流程的完整诊断仍在内存中供分类；失败回执逐项写出，避免再复制整份历史掩盖原始错误。
+  const diagnostics = {};
+  for (const [name, value] of Object.entries(result.diagnostics)) {
+    if (Array.isArray(value)) {
+      const file = `${resultPath}.${name}.jsonl`;
+      await writeFile(file, "");
+      for (const record of value) await appendFile(file, `${JSON.stringify(record)}\n`);
+      diagnostics[name] = { count: value.length, file };
+    } else {
+      diagnostics[name] = value;
+    }
+  }
+  await writeFile(resultPath, JSON.stringify({ ...failure, screenshotError,
+    section8Mode: result.section8Mode, focusedScenarios: result.focusedScenarios,
+    completedScenarios: Object.keys(result.section8 ?? {}), diagnostics }, null, 2));
   throw error;
 } finally {
   try {
