@@ -287,7 +287,7 @@ def test_new_user_turn_append_uses_acceptance_and_prefix_replay_needs_no_admissi
                 [user_message, assistant_message],
             ),
             {"source": "unit", "step": "prefix-replay"},
-            {"messages": "prefix-replay"},
+            {"messages": "checkpoint-user-prefix-replay"},
         )
     assert _query(
         storage,
@@ -444,7 +444,7 @@ def test_new_checkpoint_message_requires_admission_and_rejects_cross_thread_owne
                 [AIMessage(content="must be admitted", id="missing-admission")],
             ),
             {"source": "unit", "step": "missing-admission"},
-            {"messages": "missing-admission"},
+            {"messages": "checkpoint-missing-admission"},
         )
 
     other_thread_id = get_session_path_resolver(
@@ -465,7 +465,7 @@ def test_new_checkpoint_message_requires_admission_and_rejects_cross_thread_owne
                 [AIMessage(content="wrong owner", id="cross-thread-owner")],
             ),
             {"source": "unit", "step": "cross-thread-owner"},
-            {"messages": "cross-thread-owner"},
+            {"messages": "checkpoint-cross-thread-owner"},
         )
 
     assert _query(
@@ -554,7 +554,7 @@ def test_checkpoint_append_rolls_back_jsonl_and_attribution_on_projection_failur
                 [AIMessage(content="transactional output", id="rollback-output")],
             ),
             {"source": "unit", "step": "rollback"},
-            {"messages": "rollback"},
+            {"messages": "checkpoint-rollback-attribution"},
         )
 
     assert jsonl.read_bytes() == original_jsonl
