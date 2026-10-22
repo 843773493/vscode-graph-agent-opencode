@@ -159,25 +159,7 @@ class RolloutStorage(
 
 
 
-    def _resolve_session_node(self, session_id: str) -> Path:
-        record = self.fork_paths.prepared_target(session_id)
-        if record is not None:
-            return record.session_node
-        snapshot = self.fork_paths.source_snapshot(session_id)
-        if snapshot is not None:
-            return snapshot.captured_root
-        return self._path_resolver.resolve_session_node(session_id)
 
-    def _resolve_thread_node(self, session_id: str, thread_id: str) -> Path:
-        snapshot = self.fork_paths.source_snapshot(session_id)
-        if snapshot is not None and thread_id == snapshot.thread_id:
-            return snapshot.captured_root
-        record = self.fork_paths.prepared_target(session_id)
-        if record is not None and thread_id == record.thread_id:
-            return record.thread_node
-        if snapshot is not None:
-            raise RuntimeError("fork source snapshot 只授予冻结 source Thread 的路径能力")
-        return self._path_resolver.resolve_thread_node(session_id, thread_id)
 
     def _resolve_thread_identity(self, session_id: str, thread_id: str | None) -> str:
         """解析 (session_id, thread_id) 的 thread 半。
@@ -239,7 +221,7 @@ class RolloutStorage(
         `(session_id, thread_id)` 解析，不保留第二套旧物理布局。
         """
         resolved_thread_id = self._resolve_thread_identity(session_id, thread_id)
-        thread_node = self._resolve_thread_node(session_id, resolved_thread_id)
+        thread_node = self.fork_paths.thread_node(session_id, resolved_thread_id)
         return thread_node / "rollout"
 
     def index_path(
@@ -260,35 +242,6 @@ class RolloutStorage(
     ) -> Path:
         return self.root(session_id, checkpoint_ns, thread_id=thread_id) / "rollout.jsonl"
 
-    @staticmethod
-    def _safe_session_relative_path(
-        session_root: Path,
-        relative_path: str | Path,
-    ) -> Path:
-        """解析 session 节点内的相对路径，并逐级拒绝 symlink/越界。"""
-        relative = Path(relative_path)
-        if relative.is_absolute() or ".." in relative.parts or not relative.parts:
-            raise RuntimeError(f"session relative path 非法: {relative}")
-        if session_root.is_symlink() or not session_root.is_dir():
-            raise RuntimeError(f"session node 不是安全普通目录: {session_root}")
-        current = session_root
-        for index, component in enumerate(relative.parts):
-            if current.is_symlink() or not current.is_dir():
-                raise RuntimeError(f"session path 父目录不是安全普通目录: {current}")
-            current = current / component
-            if current.is_symlink():
-                raise RuntimeError(f"session path 不能包含符号链接: {current}")
-            if (
-                index < len(relative.parts) - 1
-                and current.exists()
-                and not current.is_dir()
-            ):
-                raise RuntimeError(f"session path 父组件不是目录: {current}")
-        try:
-            current.resolve(strict=False).relative_to(session_root.resolve())
-        except ValueError as error:
-            raise RuntimeError(f"session path 越出 session node: {relative}") from error
-        return current
 
     def _connect(
         self,

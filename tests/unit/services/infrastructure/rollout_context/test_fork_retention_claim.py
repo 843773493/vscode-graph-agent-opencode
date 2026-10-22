@@ -96,7 +96,7 @@ async def test_activate_then_release_claim_by_target(
             "target_main_thread_id": target_thread_id,
         },
     )
-    control = SessionControlStore(storage.storage._resolve_session_node(SOURCE_SESSION_ID) / "session-control.sqlite")
+    control = SessionControlStore(storage.storage.fork_paths.session_node(SOURCE_SESSION_ID) / "session-control.sqlite")
     try:
         lease = control.create_or_get_lease(
             operation_kind="fork_retention", operation_identity="fork-retention:" + CLAIM_ID,
@@ -122,13 +122,13 @@ async def test_activate_then_release_claim_by_target(
         await storage.forks.release_fork_retentions(TARGET_SESSION_ID)
         assert catalog.get_fork_retention_claim(CLAIM_ID).state == "released"
         assert catalog.list_pinned_claims_for_source(SOURCE_SESSION_ID) == []
-        control = SessionControlStore(storage.storage._resolve_session_node(SOURCE_SESSION_ID) / "session-control.sqlite", read_only=True)
+        control = SessionControlStore(storage.storage.fork_paths.session_node(SOURCE_SESSION_ID) / "session-control.sqlite", read_only=True)
         try:
             assert control.get_lease(lease.lease_id).state == "completed"
             assert not control.verify_lease_token(lease_id=lease.lease_id, fencing_token=lease.fencing_token)
         finally:
             control.close()
-        control = SessionControlStore(storage.storage._resolve_session_node(TARGET_SESSION_ID) / "session-control.sqlite", read_only=True)
+        control = SessionControlStore(storage.storage.fork_paths.session_node(TARGET_SESSION_ID) / "session-control.sqlite", read_only=True)
         try:
             record, = read_fork_retention_releases(control)
             assert record.state == "committed"

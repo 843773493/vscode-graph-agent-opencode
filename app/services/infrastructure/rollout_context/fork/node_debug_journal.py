@@ -117,7 +117,7 @@ class NodeDebugForkJournalMixin:
 
         proof = json.loads(row[1])
         verify_published_target_snapshot(
-            self._storage._resolve_thread_node(session_id, thread_id),
+            self._storage.fork_paths.thread_node(session_id, thread_id),
             target_session_id=session_id, target_thread_id=thread_id,
             manifest_sha256=proof["target_manifest_sha256"],
             source_configurations_json=json.dumps(proof["snapshot"]["configuration_artifacts"]),

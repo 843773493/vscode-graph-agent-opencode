@@ -177,7 +177,7 @@ def capture_fork_rollout_snapshot(
                 "source-mismatch: fork source snapshot bytes 与冻结 source manifest 不一致"
             )
         copy_live_sqlite_snapshot(
-            storage.storage._resolve_session_node(source_session_id), captured_root,
+            storage.storage.fork_paths.session_node(source_session_id), captured_root,
             filenames=(CONTROL_DATABASE_NAME, CONTROL_DATABASE_NAME + "-wal",
                        CONTROL_DATABASE_NAME + "-journal"),
         )

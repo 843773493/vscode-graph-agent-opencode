@@ -30,7 +30,7 @@ async def release_fork_retentions(
     topology = NavigationTopologyGate(storage.sessions_dir)
     gate = SessionLifecycleGate(storage.sessions_dir)
     async with topology.shared(), gate.exclusive(target_session_id):
-        target_node = storage._resolve_session_node(target_session_id)
+        target_node = storage.fork_paths.session_node(target_session_id)
         control_path = target_node / CONTROL_DATABASE_NAME
         if not control_path.is_file():
             raise RuntimeError(f"fork retention release 缺少 target 控制库: {control_path}")
@@ -67,7 +67,7 @@ async def release_fork_retentions(
         await _release_source_retention(storage, catalog, topology, gate, record)
         await observe_phase(record.fork_retention_claim_id, "fork.retention.release.source_released")
         async with topology.shared(), gate.exclusive(target_session_id):
-            control = SessionControlStore(storage._resolve_session_node(target_session_id) / CONTROL_DATABASE_NAME)
+            control = SessionControlStore(storage.fork_paths.session_node(target_session_id) / CONTROL_DATABASE_NAME)
             try:
                 claim = catalog.get_fork_retention_claim(record.fork_retention_claim_id)
                 record.verify_claim(claim)
@@ -99,7 +99,7 @@ async def _release_source_retention(
         source = catalog.get_node(record.source_session_id)
         if source.state != "active" or source.workspace_id != record.workspace_id:
             raise RuntimeError("未释放的 fork retention source catalog 非 active 或 workspace 冲突")
-        source_control_path = storage._resolve_session_node(record.source_session_id) / CONTROL_DATABASE_NAME
+        source_control_path = storage.fork_paths.session_node(record.source_session_id) / CONTROL_DATABASE_NAME
         if not source_control_path.is_file():
             raise RuntimeError(f"fork retention release 缺少 source 控制库: {source_control_path}")
         control = SessionControlStore(source_control_path, read_only=True)

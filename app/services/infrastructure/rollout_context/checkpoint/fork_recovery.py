@@ -44,7 +44,7 @@ class CheckpointForkRecovery:
             node = catalog.get_node(capture.source_session_id)
             if node.state != "active":
                 raise SessionDeletionPendingError("session_deletion_pending: fork retention source 正在删除")
-            storage.storage._resolve_thread_node(capture.source_session_id, capture.source_thread_id)
+            storage.storage.fork_paths.thread_node(capture.source_session_id, capture.source_thread_id)
             generation = storage.forks._source_lifecycle_generation(capture.source_session_id)
             claim = storage.forks.begin_pinned_fork_retention_claim(
                 claim_id=capture.fork_id, source_session_id=capture.source_session_id,
@@ -55,7 +55,7 @@ class CheckpointForkRecovery:
                 raise RuntimeError("fork retention claim 已 released，禁止重新准入")
             # catalog blocker 先 durable；只有同 capture 的 source lease 随后
             # 提交成功才允许 capture。两库事务顺序执行，崩溃由原 target 恢复。
-            control = SessionControlStore(storage.storage._resolve_session_node(capture.source_session_id) / CONTROL_DATABASE_NAME)
+            control = SessionControlStore(storage.storage.fork_paths.session_node(capture.source_session_id) / CONTROL_DATABASE_NAME)
             try:
                 lease = control.create_or_get_lease(
                     operation_kind="fork_retention", operation_identity="fork-retention:" + capture.fork_id,
@@ -92,7 +92,7 @@ class CheckpointForkRecovery:
             if node.state != "active":
                 raise SessionDeletionPendingError("session_deletion_pending: pinned fork source 正在删除")
             claim = storage.forks._catalog_store().get_fork_retention_claim(capture.fork_id)
-            control = SessionControlStore(storage.storage._resolve_session_node(capture.source_session_id) / CONTROL_DATABASE_NAME, read_only=True)
+            control = SessionControlStore(storage.storage.fork_paths.session_node(capture.source_session_id) / CONTROL_DATABASE_NAME, read_only=True)
             try:
                 lease = read_fork_retention_lease(control, capture, expected_generation=claim.source_lifecycle_generation)
                 if lease is None or lease.state != "active":

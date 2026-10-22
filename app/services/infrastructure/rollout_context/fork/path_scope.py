@@ -39,6 +39,28 @@ class ForkPathScope:
         self._prepared_target: ContextVar[PreparedForkTarget | None] = ContextVar("prepared_fork_target", default=None)
         self._source_snapshot: ContextVar[ForkSourceSnapshot | None] = ContextVar("fork_source_snapshot", default=None)
 
+    def session_node(self, session_id: str) -> Path:
+        """按当前 capability 解析 Session 节点，普通访问仍由 catalog 裁决。"""
+        record = self.prepared_target(session_id)
+        if record is not None:
+            return record.session_node
+        snapshot = self.source_snapshot(session_id)
+        if snapshot is not None:
+            return snapshot.captured_root
+        return self._path_resolver.resolve_session_node(session_id)
+
+    def thread_node(self, session_id: str, thread_id: str) -> Path:
+        """冻结来源只允许原 Thread；未发布目标使用原 creation 授予的节点。"""
+        snapshot = self.source_snapshot(session_id)
+        if snapshot is not None and thread_id == snapshot.thread_id:
+            return snapshot.captured_root
+        record = self.prepared_target(session_id)
+        if record is not None and thread_id == record.thread_id:
+            return record.thread_node
+        if snapshot is not None:
+            raise RuntimeError("fork source snapshot 只授予冻结 source Thread 的路径能力")
+        return self._path_resolver.resolve_thread_node(session_id, thread_id)
+
     @contextmanager
     def prepared_fork_target_scope(
         self,

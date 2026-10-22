@@ -140,7 +140,7 @@ def materialize_node_debug_fork(
         return
     if not snapshot.configuration_artifacts:
         raise RuntimeError("显式 debug snapshot 缺少所选方案")
-    target_node = storage.storage._resolve_thread_node(target_session_id, target_thread_id)
+    target_node = storage.storage.fork_paths.thread_node(target_session_id, target_thread_id)
     staging_root = target_staging_root(storage.storage.root(
         target_session_id, checkpoint_ns, thread_id=target_thread_id,
     ), materialization_id)
