@@ -36,7 +36,7 @@ def load_boxteam_env(*, override: bool = False, required: bool = False) -> Path 
     for stream in (sys.stdout, sys.stderr):
         if hasattr(stream, "reconfigure"):
             stream.reconfigure(errors="backslashreplace")
-    print(f"[Env] 加载 BoxTeam 环境配置: {env_file}")
+    print("[Env] 加载 BoxTeam 环境配置")
 
     if not env_file.exists():
         if required:

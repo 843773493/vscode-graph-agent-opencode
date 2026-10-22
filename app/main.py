@@ -67,11 +67,11 @@ logger = logging.getLogger(__name__)
 @contextmanager
 def _workspace_startup_stage(container: AppContainer, stage: str):
     started = time.monotonic()
-    logger.info("Workspace 启动阶段 begin: workspace_id=%s root=%s stage=%s",
-                container.workspace_id, container.workspace_root, stage)
+    logger.info("Workspace 启动阶段 begin: workspace_id=%s stage=%s",
+                container.workspace_id, stage)
     yield
-    logger.info("Workspace 启动阶段 end: workspace_id=%s root=%s stage=%s elapsed=%.3fs",
-                container.workspace_id, container.workspace_root, stage, time.monotonic() - started)
+    logger.info("Workspace 启动阶段 end: workspace_id=%s stage=%s elapsed=%.3fs",
+                container.workspace_id, stage, time.monotonic() - started)
 
 
 async def _prune_workspace_activity_periodically(container: AppContainer) -> None:
@@ -308,7 +308,7 @@ async def _workspace_lifespan(container: AppContainer):
 async def lifespan(application: FastAPI):
     configure_application_logging()
     startup_started = time.monotonic()
-    logger.info("Backend 启动阶段 begin: stage=workspace_registry root=%s", Path.cwd())
+    logger.info("Backend 启动阶段 begin: stage=workspace_registry")
     try:
         async with AsyncExitStack() as workspaces:
             if _model_stream_controller is not None:
@@ -327,14 +327,14 @@ async def lifespan(application: FastAPI):
             for workspace_id in registry.workspace_ids:
                 mount = mounted.resolve(workspace_id)
                 mount_started = time.monotonic()
-                logger.info("Workspace 挂载 begin: workspace_id=%s root=%s", workspace_id, mount.workspace_root)
+                logger.info("Workspace 挂载 begin: workspace_id=%s", workspace_id)
                 with catalog_provider_scope(registry):
                     initialize_directories(mount.workspace_id, mount.workspace_root)
                     container = registry.get(workspace_id)
                 # 先登记已构造容器，再检查配置；校验失败不能遗留资源。
                 await workspaces.enter_async_context(_workspace_lifespan(container))
-                logger.info("Workspace 挂载 ready: workspace_id=%s root=%s elapsed=%.3fs",
-                            workspace_id, mount.workspace_root, time.monotonic() - mount_started)
+                logger.info("Workspace 挂载 ready: workspace_id=%s elapsed=%.3fs",
+                            workspace_id, time.monotonic() - mount_started)
                 candidate = (
                     container.config_service.get_logger_level(),
                     container.config_service.get_logger_pretty(),

@@ -253,7 +253,7 @@ class WorkspaceFileWatchService:
         change_filter: WorkspaceFileChangeFilter | None,
     ) -> None:
         started = time.monotonic()
-        logger.info("开始共享文件监听: root=%s", root)
+        logger.info("开始共享文件监听: recursive=%s filtered=%s", recursive, change_filter is not None)
         try:
             first_iteration = True
             async for raw_changes in awatch(
@@ -271,9 +271,7 @@ class WorkspaceFileWatchService:
                     ready.set()
                     first_iteration = False
                     logger.info(
-                        "共享文件监听首次 yield ready: workspace_root=%s root=%s elapsed=%.3fs",
-                        self._workspace_root,
-                        root,
+                        "共享文件监听首次 yield ready: elapsed=%.3fs",
                         time.monotonic() - started,
                     )
                 changes = tuple(
@@ -296,14 +294,14 @@ class WorkspaceFileWatchService:
         except asyncio.CancelledError:
             raise
         except Exception as error:
-            logger.exception("共享文件监听失败: root=%s", root)
+            logger.exception("共享文件监听失败")
             self._publish(
                 subscribers,
                 WorkspaceFileChangeBatch(error=f"文件监听失败: {type(error).__name__}, errno={getattr(error, 'errno', None)}"),
             )
         finally:
             ready.set()
-            logger.info("停止共享文件监听: root=%s", root)
+            logger.info("停止共享文件监听")
 
     @staticmethod
     def _watcher_key(

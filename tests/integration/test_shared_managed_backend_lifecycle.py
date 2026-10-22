@@ -227,6 +227,48 @@ async def root_binding_relay_client(
 
 
 @pytest.mark.asyncio
+async def test_workspace_startup_log_keeps_owner_without_native_roots_in_diagnostics(
+    shared_backend_case: SharedBackendCase, root_binding_peer_credential: FederationCredential,
+) -> None:
+    case = shared_backend_case
+    targets = await case.data("GET", "/api/gateway/workspaces")
+    target = next(item for item in targets["items"] if item["system_default"])
+    workspace_id, backend_workspace_id = target["workspace_id"], target["backend_workspace_id"]
+    health = await case.client.get("/api/v1/health", headers={"X-BoxTeam-Workspace-Id": workspace_id})
+    assert health.status_code == 200, health.text
+    assert health.json()["workspace_id"] == backend_workspace_id
+    log_id = f"workspace:{workspace_id}:workspace_api"
+    receipts = []
+    for route, owner_field, headers in (
+        ("/api/gateway/diagnostics", "workspace_id", LOCAL_TOKEN_HEADERS),
+        ("/api/gateway/federation/diagnostics", "remote_workspace_id", {
+            "X-BoxTeam-Federation-Token": root_binding_peer_credential.token,
+        }),
+    ):
+        response = await case.client.get(route, params={
+            owner_field: workspace_id, "log_id": log_id, "tail_lines": 1000,
+        }, headers=headers)
+        assert response.status_code == 200, response.text
+        payload = response.json()
+        assert response.headers["X-Request-ID"] == payload["request_id"]
+        data = payload["data"]
+        assert data["selected_log_id"] == log_id
+        log = next(item for item in data["logs"] if item["log_id"] == log_id)
+        assert log["status"] == "available"
+        assert log["workspace_id"] == workspace_id
+        assert f"Workspace 挂载 ready: workspace_id={backend_workspace_id}" in log["tail"]
+        assert f"Workspace 启动阶段 end: workspace_id={backend_workspace_id}" in log["tail"]
+        # 核实真实启动 producer 与两个诊断 consumer，不用伪造日志代替产品启动。
+        for native_root in (*case.roots, case.boxteam_home, Path.cwd()):
+            assert str(native_root) not in response.text
+        receipts.append({"route": route, "request_id": payload["request_id"], "log": log})
+    assert not case.planned_calls
+    (case.context.artifacts_dir / "startup-log-uri-boundary.json").write_text(
+        json.dumps(receipts, ensure_ascii=False, indent=2) + "\n",
+    )
+
+
+@pytest.mark.asyncio
 async def test_real_gateway_denies_ungranted_peer_before_directory_registry_or_process_changes(
     shared_backend_case: SharedBackendCase, root_binding_peer_credential: FederationCredential,
     root_binding_relay_client: httpx.AsyncClient,

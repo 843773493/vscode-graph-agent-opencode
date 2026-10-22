@@ -182,3 +182,9 @@
 - `ForkSourceCaptureDTO` 与 incomplete 409 detail 删除私有 `snapshot_relative_locator`；跨 owner 仅传冻结 `snapshot_id` 与原身份/hash，接收方由唯一存储规则生成并核对本地相对坐标。catalog 的内部 locator、原 release receipt 和磁盘布局保持原合同，无 schema 升级或双读。该字段原为私有相对坐标，此项不称真实绝对路径泄漏。proto tag/name 8 已 reserved，官方 Python、两套 Buf/TS 与 OpenAPI 快照同步。
 - 固定候选005 `87c00ac0a1e26a14709edd3a2348677bd74ea87d`：`fork-transfer-locator-unit-003` 52 passed/2.90s；真实三端 Gateway/SSH 的 `recovery-004` 1 passed/118.36s，覆盖 partial capture 中止及原 owner 409 经联邦恢复；`matrix-006` 1 passed/124.09s，产品入口生成消息/附件/Goal，跨端复制后 source 离线，目标冷读、原字节与新输入通过。`final-static-005` Ruff/compileall 和101项 API 契约均通过；官方生成、Buf format、真实 tsc、Web build 通过。Buf breaking 相对214c0399 exit100，仅报告本次删除的field8，不另建兼容字段。004独审更正先前对extra=forbid与生成物的误判，未发现新增阻断。
 - `matrix-004` 在首次fork前被旧422文案断言挡住：按已发布共享校验合同改为精确loc/type/msg，同时保留Schema领域错误和原零副作用断言；`matrix-005` 为并发隔离端口冲突的setup错误，未执行业务，串行006通过。早期候选准备、直接pytest缺matrix watchdog及import排版失败原件均保留，不计通过。各次准确命令、raw、源码前后指纹、退出码及无残留核验在 `out/tests/temp/openspec_takeover/artifacts/runs/fork-transfer-locator-*`，复用范围另见 `fork-transfer-locator-validation-reuse-006.json`。本收据不关闭URI2.2/7.2或itemized整体验收。
+
+### 2026-10-22 启动日志经诊断接口输出真实路径的修复（部分收口）
+
+- 独审 `uri-owner-final-independent-20261022-001.json` 确认main启动日志→Gateway diagnostics tail→federation diagnostics泄漏链；真实启动再发现env加载及共享watcher正常日志输出物理路径。一并从producer移除真实位置参数，保留阶段、owner ID、监听选项、耗时与原异常传播，不添加响应端通用脱敏或第二日志链路。
+- 固定候选003 tree `72a33d56e5f1734783882cf4d12d5f7307ff3700`：`startup-root-product-003` Ruff通过、真实Gateway启动managed Backend后核本地/联邦两个诊断响应，1 passed/25.97秒；后端UUID与Gateway导航ID分别核实，tail非空且含实际启动阶段，roots、独立BOXTEAM_HOME及项目根均不出现，request ID一致。`startup-root-owners-003` 18 passed/2.19秒，覆盖env、watcher、diagnostics既有行为。
+- 001测试保留失败原件：首先误用Gateway ID匹配Backend日志，原输出同时揭示env/watch路径，002修正producer与精确身份后通过；独审002发现独立BOXTEAM_HOME测试遗漏，003补齐。owners002误写不存在文件路径退出4，003按真实文件补验。原始命令、指纹、raw和退出码均在 `out/tests/temp/openspec_takeover/artifacts/runs/`；异常栈/自由文本等全producer闭包仍需继续审计，不据本条勾选2.2/7.2整体门。
