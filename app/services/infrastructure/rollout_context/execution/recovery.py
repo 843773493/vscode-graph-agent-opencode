@@ -34,7 +34,7 @@ class RolloutExecutionRecoveryMixin:
         strict_text(turn_id, field='turn_id')
         strict_text(checkpoint_ns, field='checkpoint_ns', allow_empty=True)
         job_id = strict_text(job_id, field='job_id')
-        owner_thread_id = self._storage._resolve_thread_identity(session_id, strict_text(thread_id, field="thread_id"))
+        owner_thread_id = self._storage.fork_paths.thread_identity(session_id, strict_text(thread_id, field="thread_id"))
         with self._storage._lock(owner_thread_id, checkpoint_ns, session_id=session_id):
             self._storage.initialize(session_id, checkpoint_ns, thread_id=owner_thread_id)
             with self._storage._connect(owner_thread_id, checkpoint_ns, session_id=session_id) as connection:
@@ -97,7 +97,7 @@ class RolloutExecutionRecoveryMixin:
     ) -> dict[str, object]:
         """把 dispatch 后、terminal commit 前丢失的 execution 收敛为 unknown。"""
         session_id = strict_text(session_id, field="session_id")
-        owner_thread_id = self._storage._resolve_thread_identity(session_id, strict_text(thread_id, field="thread_id"))
+        owner_thread_id = self._storage.fork_paths.thread_identity(session_id, strict_text(thread_id, field="thread_id"))
         turn_id = strict_optional_text(turn_id, field="turn_id")
         strict_text(checkpoint_ns, field="checkpoint_ns", allow_empty=True)
         strict_text(reason, field="execution lost reason")

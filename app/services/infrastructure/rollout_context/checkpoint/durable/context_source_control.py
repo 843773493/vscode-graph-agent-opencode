@@ -128,7 +128,7 @@ class ContextSourceControlStorageMixin:
             raise ValueError("CSM 控制状态 session_id 必须是非空字符串")
         if not isinstance(thread_id, str) or not thread_id:
             raise ValueError("CSM 控制状态 thread_id 必须是非空字符串")
-        resolved_thread_id = self._storage._resolve_thread_identity(session_id, thread_id)
+        resolved_thread_id = self._storage.fork_paths.thread_identity(session_id, thread_id)
         self._storage.fork_paths.thread_node(session_id, resolved_thread_id)
         return resolved_thread_id
 

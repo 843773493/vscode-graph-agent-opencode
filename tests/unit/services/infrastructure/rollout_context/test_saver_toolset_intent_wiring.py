@@ -52,7 +52,7 @@ def saver(tmp_path: Path, session_bundle_factory) -> RolloutCheckpointSaver:
 
 
 def _main_thread_id(saver: RolloutCheckpointSaver) -> str:
-    return saver._storage.storage._resolve_thread_identity(SESSION_ID, None)
+    return saver._storage.storage.fork_paths.thread_identity(SESSION_ID, None)
 
 
 @pytest.fixture

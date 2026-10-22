@@ -113,7 +113,7 @@ class ForkMetadataMixin:
             raise RuntimeError("fork retention source lifecycle generation 已漂移")
         if claim.state not in {"preparing", "active"}:
             raise RuntimeError("fork retention 已 released，禁止迟到 activation")
-        source_owner_thread_id = self._storage._resolve_thread_identity(source_session_id, source_thread_id)
+        source_owner_thread_id = self._storage.fork_paths.thread_identity(source_session_id, source_thread_id)
         index = self._storage.index_path(source_session_id, checkpoint_ns, thread_id=source_owner_thread_id)
         if not index.is_file():
             raise RuntimeError(f"fork retention source index 缺失: {index}")

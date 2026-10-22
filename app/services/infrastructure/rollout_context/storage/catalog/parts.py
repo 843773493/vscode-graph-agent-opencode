@@ -74,7 +74,7 @@ class RolloutPartsMixin:
     ) -> ContentPartAnchor:
         """重启后恢复 anchor，并校验 view、part 与父 JSONL 行完整性。"""
         session_id = strict_text(session_id, field="session_id")
-        owner_thread_id = self._resolve_thread_identity(session_id, thread_id)
+        owner_thread_id = self.fork_paths.thread_identity(session_id, thread_id)
         anchor_id = strict_text(anchor_id, field="operation_anchors.anchor_id")
         checkpoint_ns = strict_text(
             checkpoint_ns, field="checkpoint_ns", allow_empty=True
@@ -243,7 +243,7 @@ class RolloutPartsMixin:
     ) -> None:
         """建立 part locator 派生索引，正文仍只从父 JSONL item 读取。"""
         session_id = strict_text(session_id, field="session_id")
-        owner_thread_id = self._resolve_thread_identity(session_id, thread_id)
+        owner_thread_id = self.fork_paths.thread_identity(session_id, thread_id)
         item_id = strict_text(item_id, field="item_id")
         checkpoint_ns = strict_text(
             checkpoint_ns, field="checkpoint_ns", allow_empty=True
@@ -405,7 +405,7 @@ class RolloutPartsMixin:
         checkpoint_ns = strict_text(
             checkpoint_ns, field="checkpoint_ns", allow_empty=True
         )
-        owner_thread_id = self._resolve_thread_identity(session_id, thread_id)
+        owner_thread_id = self.fork_paths.thread_identity(session_id, thread_id)
         with self._lock(owner_thread_id, checkpoint_ns, session_id=session_id):
             self.initialize(session_id, checkpoint_ns, thread_id=owner_thread_id)
             with self._connect(
@@ -561,7 +561,7 @@ class RolloutPartsMixin:
     ) -> None:
         session_id = strict_text(session_id, field="session_id")
         thread_id = strict_text(thread_id, field="thread_id")
-        owner_thread_id = self._resolve_thread_identity(session_id, thread_id)
+        owner_thread_id = self.fork_paths.thread_identity(session_id, thread_id)
         checkpoint_ns = strict_text(
             checkpoint_ns, field="checkpoint_ns", allow_empty=True
         )

@@ -224,7 +224,7 @@ class ResourceActivationReadMixin:
         """按稳定 identity 读取并重算 hash；篡改 fail closed。"""
 
         with self._storage.storage._connect(
-            self._storage.storage._resolve_thread_identity(session_id, thread_id),
+            self._storage.storage.fork_paths.thread_identity(session_id, thread_id),
             checkpoint_ns,
             session_id=session_id,
             read_only=True,
@@ -254,7 +254,7 @@ class ResourceActivationReadMixin:
         """精确 identity 查找；合法无行返回 None，schema 缺失仍失败。"""
 
         with self._storage.storage._connect(
-            self._storage.storage._resolve_thread_identity(session_id, thread_id),
+            self._storage.storage.fork_paths.thread_identity(session_id, thread_id),
             checkpoint_ns, session_id=session_id, read_only=True,
         ) as connection:
             self._storage.storage._require_v2_runtime(connection)
@@ -368,7 +368,7 @@ class ResourceActivationReadMixin:
         snapshot 缺失或正文被 retention 清理都显式失败。
         """
 
-        thread_id = self._storage.storage._resolve_thread_identity(session_id, thread_id)
+        thread_id = self._storage.storage.fork_paths.thread_identity(session_id, thread_id)
         with (
             self._storage.storage.open_read_snapshot(session_id, thread_id, checkpoint_ns)
             if snapshot is None else nullcontext(snapshot)

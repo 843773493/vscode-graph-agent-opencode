@@ -281,7 +281,7 @@ class RolloutExecutionAdmissionReadMixin:
     ) -> ExecutionAdmission:
         """按精确 owner 和 Job 查唯一准入，不从 trace 或 main 别名补身份。"""
         session_id = strict_text(session_id, field="session_id")
-        owner_thread_id = self._storage._resolve_thread_identity(session_id, strict_text(thread_id, field="thread_id"))
+        owner_thread_id = self._storage.fork_paths.thread_identity(session_id, strict_text(thread_id, field="thread_id"))
         job_id = strict_text(job_id, field="job_id")
         checkpoint_ns = strict_text(
             checkpoint_ns, field="checkpoint_ns", allow_empty=True
@@ -324,7 +324,7 @@ class RolloutExecutionAdmissionReadMixin:
     ) -> ExecutionAdmission:
         """读取并核验 owner 下的 user-turn/internal execution admission。"""
         session_id = strict_text(session_id, field="session_id")
-        owner_thread_id = self._storage._resolve_thread_identity(session_id, strict_text(thread_id, field="thread_id"))
+        owner_thread_id = self._storage.fork_paths.thread_identity(session_id, strict_text(thread_id, field="thread_id"))
         execution_id = strict_text(execution_id, field="execution_id")
         checkpoint_ns = strict_text(
             checkpoint_ns,

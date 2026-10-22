@@ -52,7 +52,7 @@ class LegacyRolloutImporter:
     def _main_owner(self, session_id: str, thread_id: str) -> None:
         strict_text(session_id, field="migration.session_id")
         strict_text(thread_id, field="migration.thread_id")
-        if self.storage.storage._resolve_thread_identity(
+        if self.storage.storage.fork_paths.thread_identity(
             session_id, thread_id
         ) != self.storage.storage.main_thread_id(session_id):
             raise ValueError("一次性 v1 import 必须显式绑定 catalog main thread")

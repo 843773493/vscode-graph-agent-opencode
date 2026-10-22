@@ -342,7 +342,7 @@ class RolloutMaintenanceOwner(
         validate_jsonl_items: bool = True,
     ) -> RolloutManifest:
         session_id = strict_text(session_id, field="session_id")
-        thread_id = self._host._resolve_thread_identity(session_id, thread_id)
+        thread_id = self._host.fork_paths.thread_identity(session_id, thread_id)
         checkpoint_ns = strict_text(
             checkpoint_ns, field="checkpoint_ns", allow_empty=True
         )

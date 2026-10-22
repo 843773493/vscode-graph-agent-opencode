@@ -52,7 +52,7 @@ class RolloutTurnLifecycleMixin:
     ) -> bool:
         """独立 Turn 控制也通过真实 execution 委派唯一 convergence 事务。"""
         session_id = strict_text(session_id, field="session_id")
-        thread_id = self._storage._resolve_thread_identity(
+        thread_id = self._storage.fork_paths.thread_identity(
             session_id, strict_text(thread_id, field="thread_id")
         )
         turn_id = strict_text(turn_id, field="turn_id")

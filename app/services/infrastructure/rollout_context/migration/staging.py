@@ -37,7 +37,7 @@ class ImportStagingStorage(RolloutStorage):
         *,
         thread_id: str | None = None,
     ) -> Path:
-        owner_thread_id = self._resolve_thread_identity(session_id, thread_id)
+        owner_thread_id = self.fork_paths.thread_identity(session_id, thread_id)
         if (session_id, owner_thread_id, checkpoint_ns) != (
             self._session_id,
             self._thread_id,

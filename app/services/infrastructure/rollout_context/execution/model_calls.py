@@ -113,7 +113,7 @@ class RolloutModelCallsMixin:
     ) -> None:
         """登记 provider call；provider request id 只作审计，不进入 request hash。"""
         session_id = strict_text(session_id, field="session_id")
-        owner_thread_id = self._storage._resolve_thread_identity(session_id, strict_text(thread_id, field="thread_id"))
+        owner_thread_id = self._storage.fork_paths.thread_identity(session_id, strict_text(thread_id, field="thread_id"))
         model_call_id = strict_text(model_call_id, field="model_call_id")
         execution_id = strict_text(execution_id, field="execution_id")
         provider = strict_text(provider, field="model_call.provider")
@@ -410,7 +410,7 @@ class RolloutModelCallsMixin:
     ) -> None:
         """原子更新已登记 model call 的控制 outcome。"""
         session_id = strict_text(session_id, field="session_id")
-        owner_thread_id = self._storage._resolve_thread_identity(session_id, strict_text(thread_id, field="thread_id"))
+        owner_thread_id = self._storage.fork_paths.thread_identity(session_id, strict_text(thread_id, field="thread_id"))
         model_call_id = strict_text(model_call_id, field="model_call_id")
         outcome = strict_text(outcome, field="model_call.outcome")
         dispatch_state = strict_optional_text(

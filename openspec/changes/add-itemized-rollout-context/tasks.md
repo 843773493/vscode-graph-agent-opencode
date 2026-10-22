@@ -931,3 +931,15 @@ pending 恢复的硬错误重试已闭合（2026-10-22）：进程内装载阶�
 
 - 四组相邻恢复测试改用真实消息准入、执行队列和 Agent/model_stream 执行生成来源。冲突 capture、伪造 creation capability 及坏 release receipt 的原拒绝、身份和零副作用断言保持；断言完成后仅撤销各测试自身注入，由原 creation/release owner 继续发布或中止，核原 key、冻结 preimage、一次合法发布与精确释放，不延长单次 fork 的60秒期限。
 - 固定候选 `6a14c7af1ba4c3358546e67c41789ad14ec5c540` 的正式 matrix `fork-failure-lifecycle-integration-001` 为12 passed/160.83秒、exit0；`fork-failure-lifecycle-static-001` Ruff exit0。2630项源码前后指纹一致、运行组无残留；独立只读审查 `fork-failure-lifecycle-review-001.json` 无 finding，未代跑测试。准确命令、源码指纹、raw、退出码和旧失败均保留在同任务 `artifacts/runs/`。本收据关闭上述测试生命周期缺口，不代替7.5/8.3或完整default Web门。
+
+
+### 2026-10-22 混合 capture 与 fork 路径 owner 收口（部分验收）
+
+- `53158431` 将部分 capture 中止与完整 marker 冷恢复的四个 main/child×中断阶段组合迁至真实消息准入、队列和 Agent/model_stream 来源；原身份、pin/claim、零重捕获和清理断言保持。`fork-mixed-capture-integration-001` 4 passed/75.94秒、Ruff exit0，独审无finding；来源不变证据限定为rollout原字节与main Thread归属，不外推附件blob全量字节。
+- `f29fa3ea` 将冻结来源/未发布目标的Session与Thread节点解析集中到现有`ForkPathScope`，迁齐所有消费者，删除旧私有入口及零调用路径helper。两个方法AST归一等价，storage facade降为459行；`fork-path-owner-unit-001` 100 passed/23.46秒、正式`integration-001` 14 passed/173.81秒，Ruff exit0，独立架构审查无finding。五组run源码前后一致且无运行组残留，准确命令/raw及限定复用见同任务artifacts的`fork-path-owner-final-proof-001.json`。这些切片不替代7.5-F总门或完整default Web验收。
+
+
+### 2026-10-22 7.5-F Thread 身份解析归属（部分收口）
+
+- main选择与Thread identity校验迁入既有`ForkPathScope`，storage公开main查询仅委托owner；activation、执行准入/恢复、part、来源控制、fork lineage及一次性import/staging消费者全部直接迁齐，旧私有入口零调用。main选择AST完全等价，身份校验在内联同一main选择后AST等价；别名拒绝、精确child与capability优先级不变，未增加class/mixin/路径实现，storage facade降为404行。
+- 固定候选tree `59ca07afd634112b743b8cf8b99d0be545b59594`：`thread-identity-owner-unit-001` 145 passed/48.94秒，正式`integration-001` 141 passed/259.75秒，覆盖四模块迁移/原件/崩溃恢复、terminal原子性和带附件main/child冷恢复；Ruff、compileall及strict全部exit0。四组源码前后一致且无残留；独审001的目录说明P3已在002关闭，最终生产/测试blob仍等于被测候选，仅修说明并补本收据。准确命令/raw与AST/独审/最终证明均在同任务artifacts；不替代7.5-F其余门、UVAR全量不变量或完整default Web验收。

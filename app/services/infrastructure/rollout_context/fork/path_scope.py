@@ -39,6 +39,50 @@ class ForkPathScope:
         self._prepared_target: ContextVar[PreparedForkTarget | None] = ContextVar("prepared_fork_target", default=None)
         self._source_snapshot: ContextVar[ForkSourceSnapshot | None] = ContextVar("fork_source_snapshot", default=None)
 
+    def thread_identity(self, session_id: str, thread_id: str | None) -> str:
+        """解析 (session_id, thread_id) 的 thread 半。
+
+        thread_id 未显式给出、或给成裸 main 别名 / 裸 session_id 时，必须经
+        thread catalog 显式解析该 Session 的唯一 main thread，绝不把 session_id
+        或裸 main 当作 thread identity 拼路径。
+        """
+        if not isinstance(session_id, str) or not session_id:
+            raise TypeError("rollout 定位的 session_id 必须是非空字符串")
+        try:
+            validate_session_id(session_id)
+        except (TypeError, ValueError) as error:
+            raise RuntimeError(
+                "rollout 定位的 session_id 不是 canonical Session 身份（OpenSpec "
+                f"8.3 要求 (session_id, thread_id)）：session_id={session_id!r}"
+            ) from error
+        if thread_id is None:
+            thread_id = self.main_thread_id(session_id)
+        if not isinstance(thread_id, str):
+            raise TypeError("rollout 定位的 thread_id 必须是字符串")
+        if thread_id in ("", "main", session_id):
+            raise RuntimeError(
+                "rollout 定位拒绝 thread alias；必须传入 catalog 的真实 thread_id: "
+                f"session_id={session_id!r}, thread_id={thread_id!r}"
+            )
+        try:
+            validate_thread_id(thread_id)
+        except (TypeError, ValueError) as error:
+            raise RuntimeError(
+                f"rollout 定位的 thread_id 不是 canonical Thread 身份: {thread_id!r}"
+            ) from error
+        return thread_id
+
+
+    def main_thread_id(self, session_id: str) -> str:
+        record = self.prepared_target(session_id)
+        if record is not None:
+            return record.thread_id
+        snapshot = self.source_snapshot(session_id)
+        if snapshot is not None:
+            return snapshot.thread_id
+        return self._path_resolver.main_thread_id(session_id)
+
+
     def session_node(self, session_id: str) -> Path:
         """按当前 capability 解析 Session 节点，普通访问仍由 catalog 裁决。"""
         record = self.prepared_target(session_id)
