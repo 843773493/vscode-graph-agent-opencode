@@ -50,7 +50,12 @@ function Stop-DevelopmentPorts([string]$Profile) {
         Where-Object { $Ports -contains $_.LocalPort } |
         Select-Object -ExpandProperty OwningProcess -Unique
     foreach ($ProcessId in $Processes) {
-        Stop-Process -Id $ProcessId -Force -ErrorAction Stop
+        try {
+            Stop-Process -Id $ProcessId -Force -ErrorAction Stop
+        } catch {
+            # 停止 manager 会连带结束其它已枚举进程；只接受该 PID 已不存在。
+            if ($_.FullyQualifiedErrorId -ne "NoProcessFoundForGivenId,Microsoft.PowerShell.Commands.StopProcessCommand") { throw }
+        }
     }
 }
 
@@ -85,11 +90,14 @@ function Invoke-TargetAction([string[]]$Arguments) {
             $Repository, $SnapshotRef = $Values
             Require-Repository $Repository
             $Dirty = @(git -C $Repository status --porcelain --untracked-files=all)
+            Assert-NativeCommand "git status"
             if ($Dirty.Count -gt 0) { Fail-Target "目标工作区包含本地修改，拒绝激活: $($Dirty -join '; ')" }
             git -C $Repository show-ref --verify --quiet $SnapshotRef
             if ($LASTEXITCODE -ne 0) { Fail-Target "快照引用不存在: $SnapshotRef" }
             git -C $Repository checkout -B boxteam-host-snapshot $SnapshotRef
+            Assert-NativeCommand "git checkout"
             git -C $Repository rev-parse HEAD
+            Assert-NativeCommand "git rev-parse"
         }
         "latest-snapshot" {
             $Repository = $Values[0]
