@@ -996,6 +996,13 @@ class SessionContextForkService:
         origin = intent["generation_origin"] if main else None
         try:
             with self._delivery_context(intent, record.fork_delivery_request_id):
+                if isinstance(record, SessionCreationRecord):
+                    capture = self._session_service.path_resolver.catalog_store.get_fork_source_capture(copy_operation_id=key)
+                    if capture is not None and capture.state == "aborted":
+                        # capture 已终结时只继续原创建 owner 的清理，不能重新物化。
+                        await self._abort_if_unpublished(record, "fork startup resumed aborted capture cleanup")
+                        await self._finish_remote_export(intent, key)
+                        return False
                 await self.fork(SessionForkRequest.model_validate(intent["request"]),
                                 generation_origin=SessionGenerationOriginDTO.model_validate(origin) if origin is not None else None)
         except (IncompleteForkSourceCaptureError, ThreadCreationAbortedError) as error:

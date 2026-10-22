@@ -918,3 +918,11 @@ pending 恢复的硬错误重试已闭合（2026-10-22）：进程内装载阶�
 - 固定候选002 tree `85934a9a58918be9e4fc01915b66d5b48d5671d5`：`maintenance-fs-unit-002` 11 passed、1 skipped/0.73秒、exit0；Ruff `static-002` 与严格OpenSpec `openspec-002` exit0。正式matrix `integration-002` 明确记录7个备份/离线恢复/schema/fsync故障用例、三模式×两目标的6个公开debug fork和配置漂移拒绝均PASSED；后续损坏capture组的6个new_session_main也PASSED，但child组已有5个FAIL、末例未完成并被监督组以143结束，**不记整组通过**。
 - 旧测试问题如实保留：`unit-001` 的两条测试仍要求已取消的真实路径输出（生产与测试均与base逐字相同）；`integration-001`/`diagnostic-002/004` 的debug恢复在删除source时因手填 `job-turn-2` 缺冻结execution_queue失败，fixture后续被原60秒watchdog终止，不放宽准入/期限。003诊断在runner拒绝绝对源码清单阶段退出，004仅添加即时封存pytest原始report的诊断插件。原始trace、退出码、源码前后与独立归因均保留，下一切片迁移产品执行来源和修正测试locator。
 - `maintenance-fs-architecture-002.json` 核storage根目录由21降为20个直接Python文件；独审002关闭POSIX描述符P2且未发现悬空调用/屏障顺序变化。`service.py`路径/连接等职责仍待迁移，本条不关闭7.5-F/8.13或完整Web验收。所有原件位于 `out/tests/temp/openspec_takeover/artifacts/` 及同前缀 `runs/`。
+
+
+### 2026-10-22 fork 已中止 capture 的冷启动清理（部分收口）
+
+- 新 Session/main 的 creation 仍 preparing、capture 已 aborted 时，冷启动在原冻结 delivery context 内调用同一 owner 完成清理及远端 release，不再重新物化；保留 creation/capture/preimage 身份校验、symlink 拒绝、附件与 retention 清理。该切片未新增 writer 或修改业务期限。
+- 两组旧手填恢复来源改为产品 Session/message admission→队列→真实 Agent/SDK 执行、既有 model_stream 回放，确认 terminal completed 后冷恢复。损坏 root symlink 的拒绝断言后，只撤销测试注入的链接，再由原 owner 收敛 aborted；child 控制库路径经 Session locator 取得，避免已关闭 catalog 与错误 Thread 目录。`fork-recovery-source-final-001` 正式 matrix 15 passed/168.12秒、exit0；固定候选004 tree `ae36353c77fa9fa8480bbec7087627a996faedaf`。
+- 候选007 tree `bec408becb577fc792f5819417bf16aa2e2ac81f` 新增直接远端 main 崩溃窗口：capture aborted 后、creation 中止前抛出进程退出型异常，新容器真实 lifespan 在 Gateway/request ambient=None 下完成精确清理与一次 aborted release，确认无 recapture/materialize、零发布/Job、来源原字节不变和同键拒绝；仅这次负向重试设置冻结目标 Gateway 身份，finally 恢复 None。`fork-recovery-source-remote-007` 1 passed/45.91秒、exit0，`static-007` 两文件 Ruff exit0。007 相较004的生产与旧15case完全相同，只新增该测试；限定复用见 `fork-recovery-source-validation-008.json`，非作者独审004/007无剩余 finding，未独立跑测试。
+- 中间001/002及邻近回归001/002被不可延长60秒 watchdog 以143终止，均不计整组通过；邻近旧故障测试分别保留冲突 preparing creation、坏回执 pending release，后续需撤销测试注入后交还原 owner 收敛。远端005在 URI 构造缺必填参数失败，006先标FAIL但teardown被保护终止且缺原始trace；007依据源码及独审修正负向重试的调用身份，不把006臆断为产品恢复缺陷。所有原始输出、准确命令、源码前后指纹、sidecar及退出码保留在 `out/tests/temp/openspec_takeover/artifacts/runs/`。本项不代替7.5/8.3全门或完整 default Web验收，继续未勾。

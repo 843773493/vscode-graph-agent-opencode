@@ -2736,23 +2736,24 @@ async def test_debug_config_drift_aborts_entire_public_fork(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("fault", ["mkdir", "rename", "materialization_commit"])
 async def test_debug_frozen_operation_recovers_publication_without_live_source(
-    fork_provider_prepare, fork_context: ForkIntegrationContext,
+    fork_execution_source: SessionDTO, production_fork_container: AppContainer,
     monkeypatch: pytest.MonkeyPatch, fork_deadlines, fault: str,
 ) -> None:
-    source = await _seed_source(fork_context, fork_provider_prepare)
-    _, saved_id = _seed_debug_configurations(fork_context, source.session_id)
-    request = await _fork_request(fork_context, source.session_id, creation_kind="new_session_main", mode="full_rollout_copy")
-    target = await fork_context.sessions.create(SessionCreateRequest(title="debug crash target"))
-    target_thread = _main_thread_id(fork_context, target.session_id)
-    target_node = _main_thread_node(fork_context, target.session_id)
-    storage = fork_context.saver._storage
+    context = _production_fork_context(production_fork_container)
+    source = fork_execution_source
+    _, saved_id = _seed_debug_configurations(context, source.session_id)
+    request = await _fork_request(context, source.session_id, creation_kind="new_session_main", mode="full_rollout_copy")
+    target = await context.sessions.create(SessionCreateRequest(title="debug crash target"))
+    target_thread = _main_thread_id(context, target.session_id)
+    target_node = _main_thread_node(context, target.session_id)
+    storage = context.saver._storage
     operation_id, materialization_id = uuid4().hex, uuid4().hex
-    deadline_target = f"{fork_context.sessions.workspace_id}/{target.session_id}"
+    deadline_target = f"{context.sessions.workspace_id}/{target.session_id}"
     deadline = fork_deadlines.for_operation(target=deadline_target, operation_key=operation_id)
     arguments = {
         "source_session_id": source.session_id, "target_session_id": target.session_id,
         "source_uri": request.source_uri,
-        "source_owner": MutationIntentOwner(source.session_id, _main_thread_id(fork_context, source.session_id)),
+        "source_owner": MutationIntentOwner(source.session_id, _main_thread_id(context, source.session_id)),
         "target_owner": MutationIntentOwner(target.session_id, target_thread),
         "mode": request.mode, "source_view_id": request.source_view_id,
         "source_view_revision": request.source_view_revision,
@@ -2785,11 +2786,11 @@ async def test_debug_frozen_operation_recovers_publication_without_live_source(
         monkeypatch.setattr(storage.forks, "commit_fork_materialization", crash_commit)
     with pytest.raises(RuntimeError, match="injected debug"):
         await deadline.wait(
-            fork_context.saver.forks.afork(**arguments),
+            context.saver.forks.afork(**arguments),
             "RolloutCheckpointSaver.forks.afork.initial",
         )
     assert not deadline._completed
-    capture = fork_context.sessions.path_resolver.catalog_store.get_fork_source_capture(copy_operation_id=operation_id)
+    capture = context.sessions.path_resolver.catalog_store.get_fork_source_capture(copy_operation_id=operation_id)
     assert capture is not None and capture.state == "source_captured"
     frozen, _ = read_captured_snapshot(storage.storage.sessions_dir, capture)
     assert frozen.node_debug is not None
@@ -2800,7 +2801,7 @@ async def test_debug_frozen_operation_recovers_publication_without_live_source(
     monkeypatch.setattr(Path, "rename", original_rename)
     monkeypatch.setattr(node_debug_materialization, "publish_target_snapshot", original_publish)
     monkeypatch.setattr(storage.forks, "commit_fork_materialization", original_commit)
-    await fork_context.sessions.path_resolver.delete_subtree(
+    await context.sessions.path_resolver.delete_subtree(
         idempotency_key=f"fork-delete-{source.session_id}", root_node_id=source.session_id,
     )
 
@@ -5955,6 +5956,113 @@ async def test_remote_partial_import_recovers_by_exact_owner_abort(
 
 
 @pytest.mark.asyncio
+async def test_remote_aborted_main_capture_resumes_cleanup_after_restart(
+    fork_execution_source: SessionDTO, production_fork_container: AppContainer,
+    remote_fork_target: tuple[AppContainer, SourceForkOwnerTransport],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """capture 中止后崩溃，由冷启动完成原 main 创建及远端 release。"""
+    source_context = _production_fork_context(production_fork_container)
+    source = fork_execution_source
+    source_node = _main_thread_node(source_context, source.session_id)
+    source_bytes = (source_node / "rollout/rollout.jsonl").read_bytes()
+    target, transport = remote_fork_target
+    context = _production_fork_context(target)
+    request = await _fork_request(
+        source_context, source.session_id, creation_kind="new_session_main", mode="full_rollout_copy",
+        target_container_uri=resource_display_uri(
+            scope="workspace", scope_id=context.sessions.workspace_id, kind="session", tail_segments=(),
+            gateway_authority="gateway_2d2ab24c1f08e28f5f0217140c8be744",
+        ),
+    )
+    request = request.model_copy(update={"source_uri": resource_display_uri(
+        scope="workspace", scope_id=source.workspace_id, kind="session",
+        tail_segments=(source.session_id, "threads", _main_thread_id(source_context, source.session_id)),
+        gateway_authority="gateway_4aae160f813ed87bcf65a8bb8bfd3729",
+    )})
+    key = context.forks._creation_key(request.idempotency_key)
+    materialize = context.forks._materialize
+
+    class OwnerProcessExit(BaseException):
+        pass
+
+    async def fail_after_materialize(*args, **kwargs):
+        await materialize(*args, **kwargs)
+        raise ValueError("物化后、发布前进入原 owner 中止")
+
+    async def exit_before_creation_abort(*_args, **_kwargs):
+        raise OwnerProcessExit("capture 已中止，creation 尚 preparing")
+
+    gateway_token = set_current_gateway_id("gateway_2d2ab24c1f08e28f5f0217140c8be744")
+    request_token = set_current_request_id("aborted-main-cold-delivery")
+    try:
+        with monkeypatch.context() as crash:
+            crash.setattr(context.forks, "_materialize", fail_after_materialize)
+            crash.setattr(context.sessions, "abort_prepared_context_fork", exit_before_creation_abort)
+            with pytest.raises(OwnerProcessExit):
+                await context.forks.fork(request)
+        catalog = context.sessions.path_resolver.catalog_store
+        frozen = catalog.get_creation_record(key)
+        capture = catalog.get_fork_source_capture(copy_operation_id=key)
+        assert frozen.state == "preparing" and capture is not None and capture.state == "aborted"
+        target_root = capture_directory(context.saver._storage.storage.sessions_dir, capture)
+        assert not target_root.exists()
+        await context.forks.retry_pending_remote_exports()
+        assert catalog.get_fork_export_release(key) == ("pending", None)
+        assert not [call for call in transport.calls if call.action == "release"]
+        exported = source_context.sessions.path_resolver.catalog_store.get_fork_source_capture(copy_operation_id=key)
+        assert exported is not None and exported.state == "source_captured"
+        target.workspace_activity_service.store.close()
+        target.session_catalog.close()
+        await target.workspace_session_context_transport.aclose()
+        restarted = _build_owned_container(context.workspace, monkeypatch)
+        _isolate_non_navigation_services(restarted, monkeypatch)
+        recovered = _production_fork_context(restarted)
+        monkeypatch.setattr(recovered.forks, "_transport", transport)
+
+        async def forbid_rebuild(*_args, **_kwargs):
+            pytest.fail("aborted main 冷恢复不得重新捕获或物化")
+
+        monkeypatch.setattr(recovered.forks, "_materialize", forbid_rebuild)
+        monkeypatch.setattr(source_context.saver.forks.source, "_capture_fork_source_snapshot", forbid_rebuild)
+        cold_gateway = set_current_gateway_id(None)
+        cold_request = set_current_request_id(None)
+        try:
+            async with main.lifespan(main.app):
+                cold_catalog = recovered.sessions.path_resolver.catalog_store
+                terminal = cold_catalog.get_creation_record(key)
+                assert terminal.state == "aborted"
+                assert replace(terminal, state=frozen.state, abort_reason=frozen.abort_reason,
+                               record_updated_at=frozen.record_updated_at) == frozen
+                assert cold_catalog.get_fork_source_capture(copy_operation_id=key) == capture
+                assert cold_catalog.get_fork_export_release(key) == ("confirmed", None)
+                assert not target_root.exists()
+                released = source_context.sessions.path_resolver.catalog_store.get_fork_source_capture(copy_operation_id=key)
+                assert released is not None and replace(released, state=exported.state) == exported
+                assert released.state == "aborted"
+                assert not capture_directory(source_context.saver._storage.storage.sessions_dir, released).exists()
+                assert [(call.action, call.release_state) for call in transport.calls if call.action == "release"] == [("release", "aborted")]
+                assert (await recovered.sessions.list(limit=100)).total == 0
+                assert not await restarted.job_service.list()
+                retry_gateway = set_current_gateway_id(json.loads(frozen.request_intent_json)["target_gateway_id"])
+                try:
+                    with pytest.raises(RuntimeError, match="已中止|aborted"):
+                        await recovered.forks.fork(request)
+                finally:
+                    reset_current_gateway_id(retry_gateway)
+                assert await recovered.forks.recover_prepared_forks() == 0
+                assert len([call for call in transport.calls if call.action == "capture"]) == 1
+                assert (source_node / "rollout/rollout.jsonl").read_bytes() == source_bytes
+                assert get_current_gateway_id() is None and get_current_request_id() is None
+        finally:
+            reset_current_request_id(cold_request)
+            reset_current_gateway_id(cold_gateway)
+    finally:
+        reset_current_request_id(request_token)
+        reset_current_gateway_id(gateway_token)
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("creation_kind", "release_receipt_fault"),
     [
@@ -6860,12 +6968,13 @@ async def test_local_capture_waiters_do_not_borrow_another_task_shared_hold(
 @pytest.mark.parametrize("creation_kind", ["new_session_main", "new_child_thread"])
 @pytest.mark.parametrize("fault", ["committed_missing", "marker_directory", "marker_symlink", "marker_identity", "marker_hash", "root_symlink"])
 async def test_fork_startup_rejects_corrupted_capture_proof(
-    fork_provider_prepare, production_fork_container: AppContainer,
+    fork_execution_source: SessionDTO, production_fork_container: AppContainer,
     monkeypatch: pytest.MonkeyPatch, creation_kind: SessionForkCreationKind, fault: str,
     fork_gateway_request_context: None,
 ) -> None:
     context = _production_fork_context(production_fork_container)
-    source = await _seed_source(context, fork_provider_prepare)
+    source = fork_execution_source
+    source_session_node = context.sessions.path_resolver.resolve_session_node(source.session_id)
     source_node = _main_thread_node(context, source.session_id)
     source_jsonl = (source_node / "rollout/rollout.jsonl").read_bytes()
     request = await _fork_request(context, source.session_id, creation_kind=creation_kind, mode="context_fork")
@@ -6948,11 +7057,34 @@ async def test_fork_startup_rejects_corrupted_capture_proof(
                 "SELECT state FROM session_creation_records WHERE session_creation_idempotency_key=?", (key,),
             ).fetchone()[0] != "published"
     else:
-        with sqlite3.connect(source_node / "session-control.sqlite") as connection:
+        with sqlite3.connect(source_session_node / "session-control.sqlite") as connection:
             assert connection.execute(
                 "SELECT state FROM thread_creation_records WHERE thread_creation_idempotency_key=?", (key,),
             ).fetchone()[0] != "published"
     assert (source_node / "rollout/rollout.jsonl").read_bytes() == source_jsonl
+
+    if fault == "root_symlink":
+        # 已证明启动拒绝注入的链接；仅撤销该故障，再由原 owner 收敛中止。
+        # 同键恢复继续使用原 60 秒期限，不能让 preparing operation 悬空到 fixture 结束。
+        assert root.is_symlink()
+        root.unlink()
+        cleanup_container = _build_owned_container(context.workspace, monkeypatch)
+        _isolate_non_navigation_services(cleanup_container, monkeypatch)
+        cleanup = _production_fork_context(cleanup_container)
+        monkeypatch.setattr(cleanup.saver.forks.source, "_capture_fork_source_snapshot", forbid_recapture)
+        async with main.lifespan(main.app):
+            cleanup_catalog = cleanup.sessions.path_resolver.catalog_store
+            cleanup_capture = cleanup_catalog.get_fork_source_capture(copy_operation_id=key)
+            assert cleanup_capture is not None and cleanup_capture.state == "aborted"
+            creation = (
+                cleanup_catalog.get_creation_record(key) if creation_kind == "new_session_main" else
+                cleanup.forks._threads.for_owner_session(source.session_id).control_store.get_thread_creation_record(key)
+            )
+            assert creation.state == "aborted"
+            assert not root.exists() and not root.is_symlink()
+            with pytest.raises(RuntimeError, match="已中止|aborted"):
+                await cleanup.forks.fork(request)
+            assert (source_node / "rollout/rollout.jsonl").read_bytes() == source_jsonl
 
 
 @pytest.mark.asyncio
