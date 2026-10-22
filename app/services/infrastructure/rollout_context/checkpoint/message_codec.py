@@ -134,11 +134,16 @@ def _runtime_notice_payload(
     if not isinstance(kind, str):
         raise TypeError("内部结构消息 structured_prompt_kind 必须是字符串")
     kind_spec = structured_prompt_registry.internal_message_kind(kind)
-    if kind_spec.display_policy != InternalDisplayPolicy.explicit:
+    raw_attachments = response_metadata.get("attachments", [])
+    raw_blocks = response_metadata.get("attachment_blocks", [])
+    if not isinstance(raw_attachments, list) or not isinstance(raw_blocks, list):
+        raise TypeError("内部结构消息附件及生成块必须是 array")
+    if kind_spec.display_policy != InternalDisplayPolicy.explicit and not raw_attachments:
         return None
     display_kind = kind_spec.display_kind
     display_text = metadata.get("display_content")
-    if display_kind is None or not isinstance(display_text, str):
+    explicit = kind_spec.display_policy == InternalDisplayPolicy.explicit
+    if explicit and (display_kind is None or not isinstance(display_text, str)):
         raise ValueError(f"显式展示内部消息 kind={kind} 缺少 typed display")
     return RuntimeNoticePayload(
         prompt=prompt,
@@ -146,7 +151,10 @@ def _runtime_notice_payload(
             kind=display_kind,
             text=display_text,
             provenance=_internal_display_provenance(response_metadata),
-        ),
+        ) if explicit else None,
+        attachments=tuple({key: value for key, value in attachment.items() if value is not None}
+                          for attachment in raw_attachments),
+        attachment_blocks=tuple(raw_blocks),
     )
 
 
@@ -557,12 +565,16 @@ class LangChainMessageCodec:
                 display = notice_payload.display_part
                 response_metadata: dict[str, object] = {
                     "internal": True,
-                    "structured_prompt_kind": display.kind,
+                    "structured_prompt_kind": display.kind if display is not None else project_annotations(item).get("structured_prompt_kind"),
                     "structured_prompt_schema_version": INTERNAL_PROMPT_SCHEMA_VERSION,
-                    "internal_display_kind": display.kind,
-                    "display_content": display.text,
-                    "internal_display_provenance": display.provenance.to_dict(),
                 }
+                if display is not None:
+                    response_metadata.update(
+                        internal_display_kind=display.kind, display_content=display.text,
+                        internal_display_provenance=display.provenance.to_dict(),
+                    )
+                if notice_payload.attachments:
+                    response_metadata["attachment_blocks"] = [dict(block) for block in notice_payload.attachment_blocks]
                 validate_internal_message(notice_payload.prompt, response_metadata)
                 message = HumanMessage(
                     content=notice_payload.prompt,

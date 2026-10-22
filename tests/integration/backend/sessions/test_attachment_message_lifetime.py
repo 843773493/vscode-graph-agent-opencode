@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import io
 import json
 from dataclasses import dataclass
 from pathlib import Path
@@ -13,10 +14,15 @@ from types import SimpleNamespace
 import pytest
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
+from langgraph.graph import END, START, MessagesState, StateGraph
+from PIL import Image
 
+from app.agents.providers.wire_finalize import finalize_provider_wire
 from app.api import messages as messages_api
 from app.api.deps import get_session_orchestrator, verify_local_token
-from app.core.identifier import create_prefixed_id
+from app.core.checkpoint_config import build_checkpoint_config
+from app.core.execution_admission_context import execution_admission_scope
+from app.core.identifier import create_prefixed_id, create_uuid_hex
 from app.core.job_event_bus import JobEventBus
 from app.core.resource_uri import resource_display_uri
 from app.core.session_thread_context import session_thread_owner_scope
@@ -27,8 +33,16 @@ from app.core.trace_middleware import (
     set_current_gateway_id,
 )
 from app.core.workspace_identity import read_workspace_id
-from app.domain.itemized.execution_admission import UserExecutionIdentity
+from app.domain.itemized.epoch.tool_set import ToolSetSnapshot
+from app.domain.itemized.execution_admission import (
+    InternalExecutionIntent,
+    UserExecutionIdentity,
+)
+from app.domain.itemized.hashing import canonical_json_bytes, content_hash, sha256_jcs
 from app.domain.itemized.mutation_intents import MutationIntentOwner
+from app.domain.itemized.records import RuntimeNoticePayload
+from app.domain.itemized.serialization import normalize_wire_request
+from app.prompting import PromptSection, internal_message_factory
 from app.runtime.session_orchestrator import SessionOrchestrator
 from app.schemas.internal_v2.job import JobDispatchSnapshotDTO
 from app.schemas.internal_v2.message import (
@@ -37,6 +51,7 @@ from app.schemas.internal_v2.message import (
     MessageRunRequest,
     RunOptions,
 )
+from app.schemas.internal_v2.turn import TurnHistoryLoadRequest
 from app.services.business.message_service import MessageService
 from app.services.infrastructure.attachment_blob_catalog.store import (
     AttachmentBlobStore,
@@ -44,8 +59,186 @@ from app.services.infrastructure.attachment_blob_catalog.store import (
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
+from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_control_state import (
+    ContextSourceOwnerKey,
+)
+from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_manager import (
+    ContextSourceManager,
+)
+from app.services.infrastructure.rollout_history_reader import RolloutHistoryReader
+from app.services.mapping.itemized.canonical_langchain import validate_summary_source
+from app.services.mapping.itemized.provider_request import project_user_message_content
 
 BODY = b"attachment survives until canonical acceptance"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["generated_session_result", "session_message"])
+@pytest.mark.parametrize("media_type", ["text/plain", "image/png"])
+@pytest.mark.parametrize("target_format", ["chat_completions", "responses"])
+async def test_internal_attachment_admission_cold_read_and_provider_request(
+    message_lifetime_case, integration_workspace_root_path, frozen_provider_wire,
+    frozen_provider_activation, monkeypatch, kind, media_type, target_format,
+):
+    """经真实消息准备和 Job 准入生成 notice，再冷读、重试及封存请求。"""
+    case = message_lifetime_case
+    owner = case.owner
+    private = "内部私有控制与附件处理正文"
+    prepared = internal_message_factory.build(
+        kind=kind, control="处理附件并保留原始请求。",
+        sections=(PromptSection("control_context", {"source_session_id": owner.session_id}),
+                  PromptSection(kind, private)),
+        **({"display_content": "生成分支已结束，正在处理结果。"} if kind == "generated_session_result" else {}),
+    )
+    body = BODY
+    if media_type == "image/png":
+        buffer = io.BytesIO()
+        Image.new("RGB", (4, 4), color=(240, 30, 20)).save(buffer, format="PNG")
+        body = buffer.getvalue()
+    message = await case.messages.create(owner.session_id, MessageCreateRequest(
+        content=prepared.content, metadata=prepared.metadata,
+        attachments=[AttachmentRef(file_id="inline:internal", name="input", content_type=media_type,
+            data_url=f"data:{media_type};base64," + base64.b64encode(body).decode())],
+    ), thread_id=owner.thread_id)
+    intent = InternalExecutionIntent(
+        message_id=message.message_id, execution_id=create_uuid_hex(namespace="execution"),
+        admission_idempotency_key=create_prefixed_id("adm"),
+    )
+    job_id = create_prefixed_id("job")
+    job = SimpleNamespace(
+        session_id=owner.session_id, thread_id=owner.thread_id, job_id=job_id,
+        execution_binding=intent, message_id=message.message_id, message=message.content,
+        attachments=message.attachments, message_metadata=message.metadata,
+        message_created_at=message.created_at.isoformat(),
+    )
+    case.messages.accept_job_input(job)
+    (notice,) = case.saver.read_canonical_items(owner.session_id)
+    payload = RuntimeNoticePayload.from_dict(notice.payload)
+    assert payload.prompt == prepared.content
+    assert private not in canonical_json_bytes(payload.attachment_blocks).decode()
+    assert notice.turn_id is None and notice.turn_scope == "pending_next_turn"
+    assert notice.content_hash == content_hash("structured_content", notice.payload)
+    assert payload.attachments == tuple(a.model_dump(exclude_none=True) for a in message.attachments)
+    with case.saver._storage.storage.read_connection(owner.session_id, owner.thread_id) as connection:
+        assert connection.execute("SELECT item_id,reference_ordinal,resource_uri FROM item_resource_references").fetchall() == [
+            (notice.item_id, 0, message.attachments[0].file_id),
+        ]
+        assert connection.execute("SELECT count(*) FROM turns").fetchone() == (0,)
+    frozen = case.saver.accepted_internal_message(
+        owner.session_id, thread_id=owner.thread_id, job_id=job_id,
+        message_id=message.message_id, intent=intent,
+    )
+    assert frozen.content == prepared.content
+    assert frozen.response_metadata["attachments"] == list(payload.attachments)
+    assert frozen.response_metadata["attachment_blocks"] == list(payload.attachment_blocks)
+    validate_summary_source(frozen, (notice,))
+    visible = case.messages._message_to_dto(owner.session_id, owner.thread_id, 0, frozen)
+    assert private not in visible.model_dump_json()
+    assert visible.content == ("生成分支已结束，正在处理结果。" if kind == "generated_session_result" else "")
+    assert visible.attachments == message.attachments
+    # 重入只消费冻结的 canonical 内容，不重新读取附件或生成媒体预览。
+    def refuse_rebuild(*_args, **_kwargs):
+        raise AssertionError("已接受的内部消息不得重新生成附件内容")
+    with monkeypatch.context() as patch:
+        patch.setattr("app.services.business.message_service.UserContentBuilder.build", refuse_rebuild)
+        case.messages.accept_job_input(SimpleNamespace(**{**vars(job), "message_metadata": frozen.response_metadata}))
+        with pytest.raises(ValueError, match="附件.*不一致"):
+            case.messages.accept_job_input(SimpleNamespace(**{
+                **vars(job), "message_metadata": frozen.response_metadata, "attachments": [],
+            }))
+        with pytest.raises(ValueError):
+            case.messages.accept_job_input(SimpleNamespace(**{
+                **vars(job), "message_metadata": frozen.response_metadata, "message": prepared.content + "漂移",
+            }))
+    assert case.saver.read_canonical_items(owner.session_id) == (notice,)
+    with RolloutCheckpointSaver(
+        Path(integration_workspace_root_path) / ".boxteam" / "sessions", attachment_store=case.store,
+    ) as cold:
+        assert cold.accepted_internal_message(
+            owner.session_id, thread_id=owner.thread_id, job_id=job_id,
+            message_id=message.message_id, intent=intent,
+        ) == frozen
+        admission = cold.execution_admission_for_job(owner.session_id, thread_id=owner.thread_id, job_id=job_id)
+        manager = ContextSourceManager(owner=ContextSourceOwnerKey(owner.session_id, owner.thread_id), control_state_port=cold)
+        key = f"internal-attachment:{target_format}"
+        with (session_thread_owner_scope(owner, langgraph_thread_id=owner.thread_id),
+              execution_admission_scope(admission, langgraph_thread_id=owner.thread_id)):
+            # 使用真实 LangGraph checkpoint 协议消费已准入输入；这里不执行模型。
+            graph = StateGraph(MessagesState)
+            graph.add_node("ingress", lambda _state: {})
+            graph.add_edge(START, "ingress")
+            graph.add_edge("ingress", END)
+            await graph.compile(checkpointer=cold).ainvoke(
+                {"messages": [frozen]}, build_checkpoint_config(owner.thread_id),
+            )
+            result = cold.prepare_context_for_provider(
+                owner.session_id, owner.thread_id, turn_id=None, execution_id=intent.execution_id,
+                plan_creation_idempotency_key=key, seal_idempotency_key="seal:" + key,
+                context_source_manager=manager,
+                tool_set_supplier=lambda: ToolSetSnapshot(selection_revision=sha256_jcs({}), tools=()),
+                **frozen_provider_wire("attachment-test", target_format),
+                **frozen_provider_activation(cold, plan_creation_idempotency_key=key),
+            )
+        selected = [entry for entry in result["snapshot"].selection if entry.included and entry.ref.ref_id == notice.item_id]
+        assert len(selected) == 1 and selected[0].content_hash == notice.content_hash
+        if target_format == "responses":
+            wire = result["native_projection"]["request"]["input"]
+            candidates = [entry["content"] for entry in wire if any(
+                block.get("text") == prepared.content for block in entry.get("content", [])
+            )]
+            assert len(candidates) == 1, wire
+            blocks = candidates[0]
+        else:
+            candidates = [entry for entry in result["messages"] if isinstance(entry.content, list)
+                          and entry.content and entry.content[0].get("text") == prepared.content]
+            assert len(candidates) == 1, result["messages"]
+            carrier = candidates[0]
+            projection = project_user_message_content(carrier.content, target_format=target_format, image_input=True)
+            assert projection["diagnostics"] == []
+            blocks = projection["content"]
+        assert isinstance(blocks, list)
+        text_type = "input_text" if target_format == "responses" else "text"
+        assert blocks[0] == {"type": text_type, "text": prepared.content}
+        assert message.attachments[0].file_id in blocks[1]["text"]
+        images = [block for block in blocks if block["type"] in {"image_url", "input_image"}]
+        assert len(images) == int(media_type == "image/png")
+        if images:
+            url = images[0]["image_url"]
+            assert (url["url"] if isinstance(url, dict) else url).startswith("data:image/")
+        assert cold.read_canonical_items(owner.session_id) == (notice,)
+        wire = frozen_provider_wire("attachment-test", target_format)
+        native = result.get("native_projection")
+        assert normalize_wire_request(finalize_provider_wire(
+            messages=result["messages"], tools=result["tools"],
+            native_request=None if native is None else native["request"],
+            profile=wire["wire_profile"], params=wire["wire_params"],
+        )) == result["snapshot"].request_hash_preimage
+        history = RolloutHistoryReader(cold._context_reader).load(
+            owner.session_id, owner.thread_id,
+            TurnHistoryLoadRequest(execution_id=intent.execution_id, include=["internal"]),
+        )
+        assert history.items == []
+        assert private not in history.model_dump_json()
+        assert "data:image/" not in history.model_dump_json()
+        if kind == "generated_session_result":
+            assert [part.item_id for execution in history.internal_executions for part in execution.display_parts] == [notice.item_id]
+        if media_type == "image/png":
+            without_vision = project_user_message_content(
+                result["messages"][-1].content, target_format=target_format, image_input=False,
+            )
+            assert [diagnostic["status"] for diagnostic in without_vision["diagnostics"]] == ["not_sent"]
+        point = await cold.forks.source.freeze_display_point(
+            source_session_id=owner.session_id, source_owner=owner, mode="full_rollout_copy",
+        )
+        resources = await cold.forks.source.project_display_resources(
+            source_session_id=owner.session_id, source_owner=owner, mode="full_rollout_copy", anchor_mode="inclusive",
+            source_view_id=point.source_view_id, source_view_revision=point.source_view_revision,
+            anchor_item_id=point.anchor_item_id,
+            source_uri=f"boxteam://workspace/{read_workspace_id(Path(integration_workspace_root_path))}/resources/session/{owner.session_id}/threads/{owner.thread_id}",
+        )
+        assert [(resource.resource_uri, resource.availability) for resource in resources] == [
+            (message.attachments[0].file_id, "available"),
+        ]
 
 
 @dataclass

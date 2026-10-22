@@ -16,7 +16,7 @@ from langchain_core.messages import (
 from app.domain.itemized.enums import SemanticKind
 from app.domain.itemized.hashing import canonical_json_bytes
 from app.domain.itemized.identity.tool_call_identity import provider_tool_call_id
-from app.domain.itemized.records import CanonicalItemRecord
+from app.domain.itemized.records import CanonicalItemRecord, RuntimeNoticePayload
 from app.prompting.validation import internal_prompt_metadata, validate_internal_message
 from app.services.mapping.itemized.carrier_dedup import (
     projection_message_group_id as _projection_message_group_id,
@@ -125,7 +125,10 @@ def project_summary_source(group: Sequence[CanonicalItemRecord]) -> BaseMessage:
         raise ValueError("summary-source-mismatch: canonical 来源不是完整的唯一消息")
     expected = originals[0]
     anchor = group[-1]
-    if anchor.projection_group is not None:
+    if anchor.semantic_kind == SemanticKind.RUNTIME_NOTICE and isinstance(anchor.payload, Mapping) and "prompt" in anchor.payload:
+        # checkpoint 保留原始内部 XML；附件块只在 Provider 投影时组合。
+        expected = expected.model_copy(update={"content": RuntimeNoticePayload.from_dict(anchor.payload).prompt})
+    elif anchor.projection_group is not None:
         content: list[object] = []
         for item in group:
             if item.semantic_kind == SemanticKind.TOOL_CALL:

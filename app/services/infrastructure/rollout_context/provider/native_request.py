@@ -267,10 +267,16 @@ def project_native_request(
                         "source-mismatch: native runtime_notice 必须投影为 user: "
                         f"{item.item_id}"
                     )
-                content = _text_blocks(
-                    project_runtime_notice_content(item.payload),
-                    role="user",
+                payload = attachment_projector(item.payload) if attachment_projector is not None else item.payload
+                projection = project_user_message_content(
+                    project_runtime_notice_content(payload),
+                    target_format="responses", image_input=True,
                 )
+                if projection["diagnostics"]:
+                    raise ValueError(f"source-mismatch: native runtime notice content: {item.item_id}")
+                content = projection["content"]
+                if isinstance(content, str):
+                    content = _text_blocks(content, role="user")
                 if content:
                     inputs.append({"role": "user", "content": content})
             else:

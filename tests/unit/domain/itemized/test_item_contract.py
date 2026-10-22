@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from copy import deepcopy
 from dataclasses import replace
 from itertools import product
 
@@ -45,6 +46,77 @@ PAYLOADS = (
     "extension",
 )
 STATUSES = ("completed", "partial", "incomplete", "cancelled", "failed", "unknown")
+
+
+@pytest.fixture
+def notice_attachment_payload():
+    uri = "boxteam://workspace/notice-tests/resources/session/ses_019c3635a6c278efb831fe265bdcd656/attachments/att_00000000000000000000000000000000"
+    metadata = {
+        "origin": "generated", "schema_version": 1, "file_id": uri, "path": uri,
+        "name": "input.png", "content_type": "image/png", "preview_status": "available",
+    }
+    return {
+        "prompt": "<system_reminder>私有正文</system_reminder>",
+        "display_part": {"kind": "generated_session_result", "text": "正在处理结果。", "provenance": {}},
+        "attachments": [{"file_id": uri, "name": "input.png", "content_type": "image/png"}],
+        "attachment_blocks": [
+            {"type": "text", "text": f'<attachment id="{uri}" path="{uri}" name="input.png">',
+             "metadata": {**metadata, "kind": "attachment_manifest"}},
+            {"type": "image_url", "image_url": {"url": "data:image/png;base64,aGVsbG8="},
+             "metadata": {**metadata, "kind": "attachment_preview", "variant": "preview"}},
+        ],
+    }
+
+
+@pytest.mark.parametrize("hidden", [False, True])
+def test_runtime_notice_attachment_payload_roundtrip_and_hash(notice_attachment_payload, hidden):
+    raw = notice_attachment_payload
+    if hidden:
+        del raw["display_part"]
+    frozen = RuntimeNoticePayload.from_dict(raw)
+    assert frozen.to_dict() == raw
+    assert RuntimeNoticePayload.from_dict(json.loads(canonical_json_bytes(frozen.to_dict()))) == frozen
+    for field in ("prompt", "attachments", "attachment_blocks"):
+        altered = deepcopy(raw)
+        if field == "prompt":
+            altered[field] += "改变"
+        elif field == "attachments":
+            altered[field][0]["name"] = "another.png"
+        else:
+            altered[field][1]["image_url"]["url"] = "data:image/png;base64,YW5vdGhlcg=="
+        assert content_hash("structured_content", altered) != content_hash("structured_content", raw)
+
+
+@pytest.mark.parametrize("fault", [
+    "raw_data", "physical_path", "unknown_payload", "unpaired", "missing_manifest",
+    "wrong_manifest", "raw_prompt_block", "wrong_origin", "wrong_version", "preview_order", "live_preview",
+])
+def test_runtime_notice_attachment_payload_rejects_unfrozen_or_unbound_content(notice_attachment_payload, fault):
+    raw = notice_attachment_payload
+    if fault == "raw_data":
+        raw["attachments"][0]["data_url"] = "data:image/png;base64,aGVsbG8="
+    elif fault == "physical_path":
+        raw["attachments"][0]["file_id"] = "/tmp/private.png"
+    elif fault == "unknown_payload":
+        raw["run_id"] = "forged-control"
+    elif fault == "unpaired":
+        del raw["attachment_blocks"]
+    elif fault == "missing_manifest":
+        raw["attachment_blocks"].pop(0)
+    elif fault == "wrong_manifest":
+        raw["attachment_blocks"][0]["text"] = '<attachment id="another" path="another">'
+    elif fault == "raw_prompt_block":
+        raw["attachment_blocks"][0]["text"] = raw["prompt"]
+    elif fault == "wrong_origin":
+        raw["attachment_blocks"][0]["metadata"]["origin"] = "user"
+    elif fault == "wrong_version":
+        raw["attachment_blocks"][0]["metadata"]["schema_version"] = True
+    elif fault == "preview_order":
+        raw["attachment_blocks"].reverse()
+    elif fault == "live_preview":
+        raw["attachment_blocks"][1]["image_url"]["url"] = "file:///tmp/private.png"
+    with pytest.raises(ValueError):
+        RuntimeNoticePayload.from_dict(raw)
 
 
 def test_runtime_notice_display_payload_round_trips_with_one_content_hash() -> None:

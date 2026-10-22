@@ -18,7 +18,7 @@ from app.domain.itemized.hashing import (
     payload_content_length,
 )
 from app.domain.itemized.identity.refs import ContextRef, ref_identity
-from app.domain.itemized.records import CanonicalItemRecord
+from app.domain.itemized.records import CanonicalItemRecord, RuntimeNoticePayload
 from app.services.infrastructure.resource_platform.virtual_resources.resolver import (
     check_resource_target,
 )
@@ -233,16 +233,18 @@ class RolloutItemsMixin:
         )
         self._insert_item_projection(connection, item, commit_recorded_at)
         self._insert_canonical_relations(connection, item)
-        if item.semantic_kind == SemanticKind.USER_INPUT and isinstance(item.payload, Mapping):
-            # user_input_payload 的 typed 附件槽在首次 canonical 提交时登记。
+        if item.semantic_kind in {SemanticKind.USER_INPUT, SemanticKind.RUNTIME_NOTICE} and isinstance(item.payload, Mapping):
+            # 用户与内部消息的 typed 附件槽在首次 canonical 提交时统一登记。
             # 同一附件的多次使用分别归各 item，不借用 blob owner 的单 item_ref。
             attachments = item.payload.get("attachments", [])
+            if item.semantic_kind == SemanticKind.RUNTIME_NOTICE and set(item.payload) & {"prompt", "display_part"}:
+                attachments = list(RuntimeNoticePayload.from_dict(item.payload).attachments)
             if not isinstance(attachments, list):
-                raise TypeError("UserInput attachments 必须是 typed list")
+                raise TypeError("canonical attachments 必须是 typed list")
             for ordinal, attachment in enumerate(attachments):
                 if not isinstance(attachment, Mapping):
-                    raise TypeError("UserInput attachment 必须是 typed mapping")
-                file_id = strict_text(attachment.get("file_id"), field="UserInput.attachment.file_id")
+                    raise TypeError("canonical attachment 必须是 typed mapping")
+                file_id = strict_text(attachment.get("file_id"), field="canonical.attachment.file_id")
                 connection.execute(
                     "INSERT INTO item_resource_references VALUES (?, ?, 'attachment', ?)",
                     (item.item_id, ordinal, file_id),

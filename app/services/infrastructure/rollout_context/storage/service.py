@@ -196,8 +196,9 @@ class RolloutStorage(
                         raise TypeError("message attachment projection 必须使用 typed logical file_id")
                     mapped.append({**attachment, **project(attachment["file_id"])})
                 projected["attachments"] = mapped
-            if "content" in payload:
-                projected["content"] = self.project_attachment_payload(session_id, thread_id, payload["content"], mappings=cache)
+            for field in ("content", "attachment_blocks"):
+                if field in payload:
+                    projected[field] = self.project_attachment_payload(session_id, thread_id, payload[field], mappings=cache)
             return projected
         if not isinstance(payload, list):
             return payload

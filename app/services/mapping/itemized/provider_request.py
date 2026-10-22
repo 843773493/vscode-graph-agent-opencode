@@ -26,14 +26,17 @@ _RUNTIME_NOTICE_TEXT_TYPES = frozenset({"text", "input_text", "output_text"})
 _TOOL_IMAGE_BLOCK_TYPES = frozenset({"image", "image_url", "input_image"})
 
 
-def project_runtime_notice_content(content: Any) -> str | list[dict[str, str]]:
-    """把 runtime source 正文规范化为两种 Provider 共用的 user 文本。"""
+def project_runtime_notice_content(content: object) -> str | list[dict[str, object]]:
+    """投影冻结的私有 prompt 与附件块；媒体沿普通用户消息的编码链路。"""
     if isinstance(content, Mapping) and set(content) & {"prompt", "display_part"}:
-        content = RuntimeNoticePayload.from_dict(content).prompt
+        notice = RuntimeNoticePayload.from_dict(content)
+        if notice.attachment_blocks:
+            return [{"type": "text", "text": notice.prompt}, *copy.deepcopy(notice.attachment_blocks)]
+        return notice.prompt
     if isinstance(content, str):
         return content
     values = content if isinstance(content, (list, tuple)) else [content]
-    blocks: list[dict[str, str]] = []
+    blocks: list[dict[str, object]] = []
     for value in values:
         if isinstance(value, str):
             blocks.append({"type": "text", "text": value})

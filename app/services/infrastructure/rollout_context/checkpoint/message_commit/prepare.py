@@ -204,10 +204,11 @@ def prepare_messages(
                     if (
                         item.payload_kind != PayloadKind.STRUCTURED_CONTENT
                         or not isinstance(item.payload, Mapping)
-                        or set(item.payload) != {"prompt", "display_part"}
+                        or not set(item.payload) & {"prompt", "display_part"}
                     ):
                         continue
-                    RuntimeNoticePayload.from_dict(item.payload)
+                    if RuntimeNoticePayload.from_dict(item.payload).display_part is None:
+                        continue
                 if item.turn_scope is None or item.semantic_kind == "runtime_notice":
                     batch.display_only_item_ids.append(item.item_id)
             if message_locator is not None:

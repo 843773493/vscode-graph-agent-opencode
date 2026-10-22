@@ -5,7 +5,9 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from xml.etree import ElementTree
 
+from app.core.resource_uri import parse_session_artifact_uri
 from app.domain.itemized.enums import (
     CanonicalItemStatus,
     PayloadKind,
@@ -43,7 +45,7 @@ _OPTIONAL_FIELDS = frozenset(
     {"turn_id", "turn_scope", "message_group_id", "wire_role", "projection_group", "projection_identity", "tool_result_evidence", "source_manifest", "provenance_relations"}
 )
 _INTERNAL_DISPLAY_KINDS = frozenset({"delegated_task", "generated_session_result"})
-_RUNTIME_NOTICE_PAYLOAD_FIELDS = frozenset({"prompt", "display_part"})
+_RUNTIME_NOTICE_PAYLOAD_FIELDS = frozenset({"prompt", "display_part", "attachments", "attachment_blocks"})
 _DISPLAY_PART_FIELDS = frozenset({"kind", "text", "provenance"})
 _DISPLAY_PROVENANCE_FIELDS = frozenset(
     {
@@ -183,35 +185,99 @@ class InternalDisplayPart:
 @dataclass(frozen=True, slots=True)
 class RuntimeNoticePayload:
     prompt: str
-    display_part: InternalDisplayPart
+    display_part: InternalDisplayPart | None = None
+    # 附件引用与冻结的生成块归同一 canonical payload；不复制私有 prompt。
+    attachments: tuple[Mapping[str, object], ...] = ()
+    attachment_blocks: tuple[Mapping[str, object], ...] = ()
 
     def __post_init__(self) -> None:
         if not isinstance(self.prompt, str) or not self.prompt:
             raise ItemSchemaError("runtime_notice.prompt 必须是非空字符串")
-        if not isinstance(self.display_part, InternalDisplayPart):
+        if self.display_part is not None and not isinstance(self.display_part, InternalDisplayPart):
             raise ItemSchemaError("runtime_notice.display_part 必须是 typed display part")
+        if self.display_part is None and not self.attachments:
+            raise ItemSchemaError("RuntimeNoticePayload 缺少字段: display_part 或附件")
+        references = set()
+        for attachment in self.attachments:
+            raw = _strict_mapping(attachment, frozenset({"file_id", "name", "content_type", "availability"}), "runtime_notice.attachment")
+            file_id = _non_empty_string(raw.get("file_id"), "runtime_notice.attachment.file_id")
+            if parse_session_artifact_uri(file_id).session_artifact_kind != "attachments":
+                raise ItemSchemaError("runtime_notice 附件必须使用逻辑附件 URI")
+            references.add(file_id)
+            for key, value in raw.items():
+                _non_empty_string(value, f"runtime_notice.attachment.{key}")
+            if "availability" in raw and raw["availability"] not in {"available", "unavailable"}:
+                raise ItemSchemaError("runtime_notice 附件 availability 非法")
+        manifests = []
+        for block in self.attachment_blocks:
+            raw = _strict_mapping(block, frozenset({"type", "text", "image_url", "metadata"}), "runtime_notice.attachment_block")
+            metadata = _strict_mapping(raw.get("metadata"), frozenset({"origin", "kind", "schema_version", "file_id", "path", "name", "content_type", "variant", "preview_status", "availability"}), "runtime_notice.attachment_block.metadata")
+            file_id = _non_empty_string(metadata.get("file_id"), "runtime_notice.attachment_block.file_id")
+            if (metadata.get("origin") != "generated" or type(metadata.get("schema_version")) is not int or metadata["schema_version"] != 1
+                    or file_id not in references or metadata.get("path") != file_id):
+                raise ItemSchemaError("runtime_notice 附件块缺少精确生成来源")
+            if "availability" in metadata and metadata["availability"] not in {"available", "unavailable"}:
+                raise ItemSchemaError("runtime_notice 附件块 availability 非法")
+            kind = metadata.get("kind")
+            if kind == "attachment_manifest":
+                if set(raw) != {"type", "text", "metadata"} or raw["type"] != "text":
+                    raise ItemSchemaError("runtime_notice 附件 manifest 必须是 text block")
+                text = _non_empty_string(raw["text"], "runtime_notice.attachment_block.text")
+                try:
+                    manifest = ElementTree.fromstring(text + "</attachment>")
+                except ElementTree.ParseError as error:
+                    raise ItemSchemaError("runtime_notice 附件 manifest 结构非法") from error
+                if (manifest.tag != "attachment" or list(manifest) or manifest.text or manifest.tail
+                        or manifest.attrib.get("id") != file_id or manifest.attrib.get("path") != file_id
+                        or set(manifest.attrib) - {"id", "path", "name", "content_type", "preview_status", "preview_error"}):
+                    raise ItemSchemaError("runtime_notice 附件 manifest 与生成来源不一致")
+                manifests.append(file_id)
+            elif kind == "attachment_preview":
+                if not manifests or manifests[-1] != file_id:
+                    raise ItemSchemaError("runtime_notice preview 必须跟随同一附件 manifest")
+                if set(raw) != {"type", "image_url", "metadata"} or raw["type"] != "image_url":
+                    raise ItemSchemaError("runtime_notice 附件 preview 必须是 image_url block")
+                image = _strict_mapping(raw["image_url"], frozenset({"url"}), "runtime_notice.attachment_block.image_url")
+                url = _non_empty_string(image.get("url"), "runtime_notice.attachment_block.image_url.url")
+                if not url.startswith("data:image/"):
+                    raise ItemSchemaError("runtime_notice preview 必须是冻结的图片内容")
+            else:
+                raise ItemSchemaError("runtime_notice 附件块 kind 未注册")
+            _ensure_json_value(raw)
+        if manifests != [entry["file_id"] for entry in self.attachments]:
+            raise ItemSchemaError("runtime_notice 附件 manifest 与引用顺序不一致")
 
     @classmethod
     def from_dict(cls, value: object) -> RuntimeNoticePayload:
         raw = _strict_mapping(
             value, _RUNTIME_NOTICE_PAYLOAD_FIELDS, "RuntimeNoticePayload"
         )
-        missing = sorted(_RUNTIME_NOTICE_PAYLOAD_FIELDS - set(raw))
+        missing = sorted({"prompt"} - set(raw))
         if missing:
             raise ItemSchemaError("RuntimeNoticePayload 缺少字段: " + ",".join(missing))
         prompt = raw["prompt"]
         if not isinstance(prompt, str):
             raise ItemSchemaError("runtime_notice.prompt 必须是字符串")
+        attachments = raw.get("attachments", [])
+        blocks = raw.get("attachment_blocks", [])
+        if not isinstance(attachments, list) or not isinstance(blocks, list):
+            raise ItemSchemaError("runtime_notice 附件及生成块必须是 array")
+        if ("attachments" in raw) != ("attachment_blocks" in raw) or ("attachments" in raw and not attachments):
+            raise ItemSchemaError("runtime_notice 附件与生成块必须成对且非空")
         return cls(
             prompt=prompt,
-            display_part=InternalDisplayPart.from_dict(raw["display_part"]),
+            display_part=InternalDisplayPart.from_dict(raw["display_part"]) if "display_part" in raw else None,
+            attachments=tuple(attachments), attachment_blocks=tuple(blocks),
         )
 
     def to_dict(self) -> dict[str, object]:
-        return {
-            "prompt": self.prompt,
-            "display_part": self.display_part.to_dict(),
-        }
+        result: dict[str, object] = {"prompt": self.prompt}
+        if self.display_part is not None:
+            result["display_part"] = self.display_part.to_dict()
+        if self.attachments:
+            result.update(attachments=[dict(entry) for entry in self.attachments],
+                          attachment_blocks=[dict(block) for block in self.attachment_blocks])
+        return result
 
 
 def _validate_producer(value: object) -> dict[str, object]:
@@ -240,7 +306,12 @@ def _validate_payload(
         and set(payload) & _RUNTIME_NOTICE_PAYLOAD_FIELDS
     ):
         notice = RuntimeNoticePayload.from_dict(payload)
-        if notice.display_part.kind == "generated_session_result":
+        annotation = extensions.get("boxteam.checkpoint.annotations", {})
+        annotations = annotation.get("value") if isinstance(annotation, Mapping) else None
+        prompt_kind = annotations.get("structured_prompt_kind") if isinstance(annotations, Mapping) else None
+        if prompt_kind in _INTERNAL_DISPLAY_KINDS and notice.display_part is None:
+            raise ItemSchemaError("RuntimeNoticePayload 缺少字段: display_part")
+        if notice.display_part is not None and notice.display_part.kind == "generated_session_result":
             validate_generated_result_extensions(extensions)
     if payload_kind == PayloadKind.SUMMARY and not isinstance(payload, Mapping):
         raise ItemSchemaError("summary payload 必须是 object")

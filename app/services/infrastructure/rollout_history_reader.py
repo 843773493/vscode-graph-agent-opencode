@@ -487,12 +487,12 @@ class RolloutHistoryReader(HistoryPageReadMixin):
                 if (
                     item.payload_kind != PayloadKind.STRUCTURED_CONTENT
                     or not isinstance(item.payload, Mapping)
-                    or set(item.payload) != {"prompt", "display_part"}
+                    or not set(item.payload) & {"prompt", "display_part"}
                 ):
                     continue
                 notice = RuntimeNoticePayload.from_dict(item.payload)
                 display_part = notice.display_part
-                if display_part.kind == "generated_session_result":
+                if display_part is not None and display_part.kind == "generated_session_result":
                     projection.display_parts.append(
                         InternalExecutionDisplayPartDTO(
                             kind=display_part.kind,

@@ -1599,7 +1599,15 @@ v1 root candidate 必须按 source `message_sequence` 升序切分为 user-root 
 
 内部生成结果回报 MUST 由接收 thread 的 owner 在一个事务中，通过 `admit_internal_execution(session_id, *, thread_id, execution_id, job_id, admission_idempotency_key, payload_hash, runtime_notice_item)` 持久化 internal admission 与其 `runtime_notice` item。`payload_hash` 是 admission request/preimage 的 JCS hash，不能复用 canonical item 的 `content_hash`；相同 idempotency key 重试时，payload hash、execution 或 job 任一不同都必须冲突，完全匹配时返回既有 admission/item 而不得重复创建。该 item 使用 `semantic_kind=runtime_notice`、`payload_kind=structured_content`、`turn_scope=pending_next_turn`、`turn_id=NULL`；它不得创建用户 acceptance、Turn、root、Turn execution link，也不得挂到 source completed Turn。内部 execution 的 model call、checkpoint、输出和失败终态 MUST 始终使用同一个显式 `ExecutionAdmission`，独立于 source Turn 的 lineage；缺少或无法解析该 binding 时必须 fail closed，不能从相邻 item、source Turn 或调用栈推断或补造。
 
-`generated_session_result` 的 payload MUST 使用闭合的 `RuntimeNoticePayload`：同一 structured payload 包含原有 `prompt` 和 `display_part={kind: generated_session_result, text, provenance}`；私有 `prompt` 可包含完成模型 report-back 所需的 branch result，但 branch 正文 MUST NOT 进入 `display_part.text`、`provenance`、metadata、extensions 或任何 history/Web 展示字段。`provenance` 只允许可得的 typed `source_session_id`、`source_thread_id`、`delegation_id`、`source_execution_id`、`source_item_id`。未知字段、run/generator/control ID 不得写入该 payload、metadata 或 extensions。Provider 与 checkpoint message projection 只消费原有 `prompt`；history 使用 `display_part`，不得把它当用户输入或 Turn activity。`content_hash` MUST 覆盖完整 `{payload_kind, payload}`，包括 prompt 中的 branch result、display part 与 provenance。
+`generated_session_result` 的 payload MUST 使用闭合的 `RuntimeNoticePayload`：同一 structured payload 包含原有 `prompt` 和 `display_part={kind: generated_session_result, text, provenance}`；私有 `prompt` 可包含完成模型 report-back 所需的 branch result，但 branch 正文 MUST NOT 进入 `display_part.text`、`provenance`、metadata、extensions 或任何 history/Web 展示字段。`provenance` 只允许可得的 typed `source_session_id`、`source_thread_id`、`delegation_id`、`source_execution_id`、`source_item_id`。未知字段、run/generator/control ID 不得写入该 payload、metadata 或 extensions。checkpoint message projection MUST 保留原始 `prompt` 并恢复附件引用与冻结块；Provider MUST 按原始 prompt、附件块顺序复用普通用户消息的媒体编码；history 使用 `display_part`，不得把它当用户输入或 Turn activity。`content_hash` MUST 覆盖完整 `{payload_kind, payload}`，包括 prompt 中的 branch result、display part 与 provenance。
+
+带附件的内部 notice MUST 在同一 payload 中保存成对非空的 `attachments` 与 `attachment_blocks`，并将它们纳入 content hash 与 admission preimage；refs 只含逻辑附件 URI、可选名称和 MIME，生成块必须绑定同一引用的 manifest/preview，manifest 顺序与附件列表一致，preview 跟随所属 manifest。MUST NOT 复制原始 prompt 到附件块、保存裸附件 data_url/物理 locator/实时预览地址或从私有文字扫描引用。重复引用按有序使用保留。图片预览和视频帧复用既有用户消息的冻结规则，恢复与重入 MUST NOT 读取当前资源重新生成历史内容。隐藏内部 kind 可在有附件时省略 display_part，但 MUST 保持注册的隐藏策略；seed/reference admission MUST 拒绝额外附件。首次提交 MUST 将这些引用登记到既有 item_resource_references，供 fork、view membership 与后续 pin 结算使用，不建立第二套正文或使用事实。
+
+#### Scenario: 内部附件准入、冷读与 Provider 编码保持一致
+
+- **WHEN** 内部结果回报或隐藏会话通信通过真实消息准备与 Job 准入携带文本或图片附件，随后 checkpoint 消费、关闭重开 Saver 并封存请求
+- **THEN** 原始 XML、附件身份/顺序、生成块及 content hash 保持不变；Chat Completions 与 Responses 分别按自己的普通用户内容协议编码；同 admission 重入不重建预览，正文或附件漂移明确冲突，canonical 使用索引包含该 notice 的精确 item identity；展示只返回安全文案及独立引用，不泄露私有正文或媒体块
+
 
 #### Scenario: 内部生成结果绑定到目标 thread
 

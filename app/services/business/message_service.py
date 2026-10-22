@@ -227,21 +227,28 @@ class MessageService(MessageContentProjectionMixin):
             return
         if not isinstance(binding, InternalExecutionIntent):
             raise TypeError("Job input owner 只接受 typed execution binding")
-        built = UserContentBuilder(attachment_service=AttachmentContentService(
-            workspace_root=self._workspace_root, attachment_store=self._attachment_store,
-        )).build(job.message, job.attachments)
-        response = build_human_response_metadata(
-            message_id=job.message_id, display_content=None,
-            attachments=built.attachments, message_created_at=job.message_created_at,
-            message_metadata=dict(job.message_metadata), attachment_diagnostics=built.diagnostics,
-        )
+        if binding.input_reference_json is not None and job.attachments:
+            raise ValueError("seed/reference 准入不得携带未登记的附件")
         if "canonical_item_manifests" in job.message_metadata:
             response = dict(job.message_metadata)
+            if self._attachments_from_metadata(response) != job.attachments:
+                raise ValueError("内部 Job 附件与已接受 canonical 输入不一致")
+        else:
+            built = UserContentBuilder(attachment_service=AttachmentContentService(
+                workspace_root=self._workspace_root, attachment_store=self._attachment_store,
+            )).build("", job.attachments)
+            response = build_human_response_metadata(
+                message_id=job.message_id, display_content=None,
+                attachments=built.attachments, message_created_at=job.message_created_at,
+                message_metadata=dict(job.message_metadata), attachment_diagnostics=built.diagnostics,
+            )
+            if built.attachments:
+                response["attachment_blocks"] = built.content
         saver.admit_internal_execution(
             job.session_id, thread_id=job.thread_id, job_id=job.job_id,
             intent=binding,
             message=(None if binding.input_reference_json is not None else HumanMessage(
-                id=job.message_id, content=built.content, response_metadata=response,
+                id=job.message_id, content=job.message, response_metadata=response,
             )),
         )
 

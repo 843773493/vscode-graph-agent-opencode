@@ -343,7 +343,7 @@ class RolloutExecutionAdmissionMixin:
             notice_item is not None
             and notice_item.payload_kind == PayloadKind.STRUCTURED_CONTENT
             and isinstance(notice_item.payload, Mapping)
-            and set(notice_item.payload) == {"prompt", "display_part"}
+            and "display_part" in notice_item.payload
         )
         commit_metadata = {
             "execution_id": execution_id,
