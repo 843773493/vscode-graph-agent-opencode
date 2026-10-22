@@ -76,16 +76,18 @@ def frames(url: str) -> list[dict[str, object]]:
 
 
 @pytest.mark.parametrize("from_script_cache", [False, True])
+@pytest.mark.parametrize("source_form", ["native", "file-uri"])
 def test_workspace_source_uses_uri_and_keeps_breakpoint_location(
     inspector: NodeDebugInspector, runtime: NodeDebugRuntime,
-    file_paths: WorkspaceFilePaths, from_script_cache: bool,
+    file_paths: WorkspaceFilePaths, from_script_cache: bool, source_form: str,
 ) -> None:
     source = file_paths.workspace / "中文 100%.mjs"
     source.write_text("debugger;\n", encoding="utf-8")
-    # 模块选择 query 不改变源码文件；URL 文件段只解码一次。
-    runtime.inspector.script_urls["script-1"] = source.as_uri() + "?module=1"
+    url = str(source) if source_form == "native" else source.as_uri()
+    # 模块选择 query 不改变 file URL 源码；原生路径中的百分号保持原义。
+    runtime.inspector.script_urls["script-1"] = url + ("?module=1" if source_form == "file-uri" else "")
     frame = inspector._parse_call_frames(
-        runtime, frames("" if from_script_cache else source.as_uri()),
+        runtime, frames("" if from_script_cache else url),
     )[0]
     assert frame.url == file_paths.reference(source)
     assert frame.path == source.name
@@ -95,13 +97,16 @@ def test_workspace_source_uses_uri_and_keeps_breakpoint_location(
     assert file_paths.native(frame.url) == source
 
 
+@pytest.mark.parametrize("source_form", ["native", "file-uri"])
 def test_external_source_uses_target_gateway_binding(
     inspector: NodeDebugInspector, runtime: NodeDebugRuntime,
     file_paths: WorkspaceFilePaths, bindings: DirectoryBindings, tmp_path: Path,
+    source_form: str,
 ) -> None:
     source = tmp_path / "外部 源码.mjs"
     source.write_text("debugger;\n", encoding="utf-8")
-    frame = inspector._parse_call_frames(runtime, frames(source.as_uri()))[0]
+    url = str(source) if source_form == "native" else source.as_uri()
+    frame = inspector._parse_call_frames(runtime, frames(url))[0]
     assert frame.path is None
     assert frame.url.startswith(bindings.uri + "/")
     assert bindings.roots == [source.parent]
@@ -110,26 +115,33 @@ def test_external_source_uses_target_gateway_binding(
     assert "file:" not in frame.model_dump_json()
 
 
+@pytest.mark.parametrize("source_form", ["native", "file-uri"])
 def test_external_source_without_binding_fails_explicitly(
     inspector: NodeDebugInspector, runtime: NodeDebugRuntime,
-    file_paths: WorkspaceFilePaths, tmp_path: Path,
+    file_paths: WorkspaceFilePaths, tmp_path: Path, source_form: str,
 ) -> None:
     file_paths.bindings = None
+    source = tmp_path / "external.mjs"
+    url = str(source) if source_form == "native" else source.as_uri()
     with pytest.raises(RuntimeError, match="尚未装配"):
-        inspector._parse_call_frames(runtime, frames((tmp_path / "external.mjs").as_uri()))
+        inspector._parse_call_frames(runtime, frames(url))
 
 
+@pytest.mark.parametrize("source_form", ["native", "file-uri"])
 def test_private_source_cannot_be_published(
     inspector: NodeDebugInspector, runtime: NodeDebugRuntime, file_paths: WorkspaceFilePaths,
+    source_form: str,
 ) -> None:
+    source = file_paths.workspace / ".boxteam/private.mjs"
+    url = str(source) if source_form == "native" else source.as_uri()
     with pytest.raises(ForbiddenError, match="私有存储"):
-        inspector._parse_call_frames(runtime, frames((file_paths.workspace / ".boxteam/private.mjs").as_uri()))
+        inspector._parse_call_frames(runtime, frames(url))
 
 
 def test_builtin_and_anonymous_sources_keep_inspector_labels(
     inspector: NodeDebugInspector, runtime: NodeDebugRuntime,
 ) -> None:
-    for url in ["node:internal/modules/run_main", ""]:
+    for url in ["node:internal/modules/run_main", "evalmachine.<anonymous>", "https://example.test/source.js", ""]:
         frame = inspector._parse_call_frames(runtime, frames(url))[0]
         assert frame.url == url
         assert frame.path is None

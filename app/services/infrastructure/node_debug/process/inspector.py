@@ -471,6 +471,10 @@ class NodeDebugInspector:
 
     @staticmethod
     def _source_path(url: str) -> Path | None:
+        # sourceURL 也可直接携带目标机原生路径；原生百分号不是 URL 编码。
+        native_path = Path(url)
+        if native_path.is_absolute():
+            return native_path.resolve()
         parsed = urlparse(url)
         if parsed.scheme != "file":
             return None
