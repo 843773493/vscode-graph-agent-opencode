@@ -1003,7 +1003,7 @@ def _build_app_container(
             # 隔离：删除 owner 按 pin 阻断 canonical 使用、释放 reference 后
             # 才隔离 Session 节点，且不留下指向已删除 owner 的 reference。
             attachment_blob_store.release_session_references(session_id)
-            collected = attachment_blob_store.collect_garbage(retention=timedelta(0))
+            collected = await attachment_blob_store.collect_garbage(retention=timedelta(0))
             await observe_phase(session_id, "attachments.gc.completed", details={
                 "collected_blob_ids": list(collected),
             })

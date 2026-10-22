@@ -147,7 +147,7 @@ class AttachmentIngestRecoveryMixin:
                 actions.append("settled-pin")
         finally:
             control.close()
-        # TODO: 按唯一 claim 协调未发布正文的回收与同 digest 后续上传，不能扫盘或误删其它 owner。
+        # 正文/claim 由 collect_garbage 在独立 digest 锁内统一回收，不在 Session gate 内发布正文。
         return tuple(actions)
 
     async def recover_idle_session(self, session_id: str, *, messages: AttachmentMessageReader) -> tuple[str, ...]:

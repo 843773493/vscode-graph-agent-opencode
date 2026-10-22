@@ -159,8 +159,6 @@ class ForkAttachmentClaimsMixin:
                 return ingest_id, blob.relative_locator
             claim = _claim_blob_identity(connection, identity=BlobIdentity(snapshot.blob_id, snapshot.digest, snapshot.length),
                                          winning_ingest_id=ingest_id, now=datetime.now(UTC))
-            if claim.state == "aborted":
-                raise RuntimeError("fork imported blob claim 已 aborted，拒绝复活")
             return ingest_id, claim.final_relative_locator
 
     def release_fork_export_claims(self, copy_operation_id: str) -> None:

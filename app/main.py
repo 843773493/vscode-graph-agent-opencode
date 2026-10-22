@@ -248,7 +248,7 @@ async def _workspace_lifespan(container: AppContainer):
             if recovered_ingests:
                 logger.info("已按持久 operation 收敛 %s 个附件上传 pin", recovered_ingests)
             with _workspace_startup_stage(container, "attachment_blob_store.collect_garbage"):
-                collected = container.attachment_blob_store.collect_garbage(retention=timedelta(0))
+                collected = await container.attachment_blob_store.collect_garbage(retention=timedelta(0))
             if collected:
                 logger.info("已按附件 catalog 回收 %s 个零引用 blob", len(collected))
             with _workspace_startup_stage(container, "agent_execution_service.start"):

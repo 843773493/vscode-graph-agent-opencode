@@ -13,7 +13,8 @@
 3. 正文只写入 record 指定的 staging，完成有界写入、hash/length 与 durability barrier；
 4. catalog 事务内推进 record→`hashed` 并以 digest 唯一约束 create-or-get
    `BlobCommitClaim`；
-5. 胜出者把 staging 原子 rename 到 claim 冻结的最终 locator 并复验正文；
+5. 持有 digest 提交锁，把 staging 原子 rename 到 claim 冻结的最终 locator
+   并复验正文；后续上传可完成尚未落盘的同内容 claim，不改写其身份；
 6. 发布 availability/owner reference **必须再次取得同一 gate**，持锁期间
    复验 pin 有效、fence 仍为 pin 捕获的 active generation、thread 未失效，
    提交 attachment catalog 事务后才释放 gate 与 pin。
@@ -70,6 +71,9 @@ from app.services.infrastructure.attachment_blob_catalog.locator import (
     resolve_blob_path,
     resolve_staging_path,
 )
+from app.services.infrastructure.attachment_blob_catalog.queries import (
+    AttachmentBlobRetainedError,
+)
 from app.services.infrastructure.attachment_blob_catalog.recovery import (
     AttachmentIngestRecoveryMixin,
 )
@@ -110,6 +114,7 @@ class AttachmentBlobStore(ForkAttachmentStoreMixin, AttachmentIngestRecoveryMixi
         self._workspace_root = workspace_root.expanduser().resolve()
         self._verified_blob_signatures: dict[tuple[str, str, str, int], tuple[int, int, int, int, int]] = {}
         self._sessions_root = self._workspace_root / ".boxteam" / "sessions"
+        self._blob_commits = OperationHolderGate(self._sessions_root, namespace="attachment_blob_commit")
         self._attachments_root = (
             self._workspace_root / ".boxteam" / ATTACHMENT_ROOT_DIRECTORY_NAME
         )
@@ -216,24 +221,24 @@ class AttachmentBlobStore(ForkAttachmentStoreMixin, AttachmentIngestRecoveryMixi
             )
             try:
                 self._write_staging(staging_path, data)
-                _record, claim = self._catalog.mark_ingest_hashed(
-                    ingest_idempotency_key=idempotency_key, identity=identity
-                )
-                if claim.winning_ingest_id == ingest_id:
-                    final_path = resolve_blob_path(
-                        self._attachments_root, claim.final_relative_locator
+                async with self._blob_commits.lock_for(identity.blob_id):
+                    _record, claim = self._catalog.mark_ingest_hashed(
+                        ingest_idempotency_key=idempotency_key, identity=identity
                     )
-                    self._commit_staged_blob(
-                        staging_path=staging_path,
-                        final_path=final_path,
-                        identity=identity,
-                    )
-                else:
-                    # 并发相同 digest 的失败方：定点清理自身 staging 并复用胜出 blob。
-                    _remove_file(staging_path)
-                # 所有发布者都复验冻结正文；非胜者不能把尚未落盘的 claim 当作可用内容。
-                published_path = self._verified_blob_path(identity.blob_id, claim.final_relative_locator)
-                self._verify_blob_content(published_path, identity.digest, identity.length, identity.blob_id)
+                    blob = self._catalog.get_blob(identity.blob_id)
+                    if blob is None or blob.availability == "tombstoned":
+                        # 同内容 staging 可完成原 claim；首次日期、locator 和活 winner 不变。
+                        self._commit_staged_blob(
+                            staging_path=staging_path,
+                            final_path=resolve_blob_path(self._attachments_root, claim.final_relative_locator),
+                            identity=identity,
+                        )
+                    else:
+                        # 已发布正文损坏或丢失必须暴露，不能借重传静默修复。
+                        published_path = self._verified_blob_path(identity.blob_id, claim.final_relative_locator)
+                        self._verify_blob_content(published_path, identity.digest, identity.length, identity.blob_id)
+                        _remove_file(staging_path)
+                # hashed record 在 GC 事务中保活；释放正文锁后才取得 Session gate。
                 await self._publish(
                     session_id=session_id,
                     thread_id=thread_id,
@@ -456,23 +461,43 @@ class AttachmentBlobStore(ForkAttachmentStoreMixin, AttachmentIngestRecoveryMixi
             raise RuntimeError(f"附件正文在完整性校验期间发生变化: blob_id={blob_id}, path={path}")
         self._verified_blob_signatures[key] = signature
 
-    def collect_garbage(self, *, retention: timedelta) -> tuple[str, ...]:
-        """引用感知 GC：零引用 + retention 后先提交 tombstone 再删物理 blob。"""
+    async def collect_garbage(self, *, retention: timedelta) -> tuple[str, ...]:
+        """定点回收无操作依赖的正文；不等待正在提交的 digest 分片。"""
         if not isinstance(retention, timedelta):
             raise TypeError(f"retention 必须是 timedelta: {retention!r}")
         before = datetime.now(UTC) - retention
         collected: list[str] = []
-        for blob in self._catalog.list_gc_candidates(before=before):
-            # 先原子提交 tombstone/availability，再删除物理正文；失败可幂等重试。
-            self._catalog.tombstone_blob(blob.blob_id)
-            path = resolve_blob_path(self._attachments_root, blob.relative_locator)
-            _remove_file(path)
-            collected.append(blob.blob_id)
-        for blob in self._catalog.list_tombstoned_blobs():
-            path = resolve_blob_path(self._attachments_root, blob.relative_locator)
-            if path.is_file():
+        for claim in self._catalog.list_unpublished_gc_claims(before=before):
+            async with self._blob_commits.lock_for(claim.blob_id, wait=False) as holder:
+                if not holder.acquired:
+                    continue
+                claim = self._catalog.abort_unused_blob_claim(claim.blob_id)
+                if claim is None:
+                    continue
+                path = resolve_blob_path(self._attachments_root, claim.final_relative_locator)
+                if path.is_symlink():
+                    raise RuntimeError(f"未发布附件正文不得是符号链接: blob_id={claim.blob_id}")
+                if path.exists():
+                    self._verify_blob_content(path, claim.digest, claim.expected_length, claim.blob_id)
+                    _remove_file(path)
+                    collected.append(claim.blob_id)
+        blobs = {blob.blob_id: blob for blob in (
+            *self._catalog.list_gc_candidates(before=before), *self._catalog.list_tombstoned_blobs(),
+        )}
+        for blob in blobs.values():
+            async with self._blob_commits.lock_for(blob.blob_id, wait=False) as holder:
+                if not holder.acquired:
+                    continue
+                try:
+                    # 事务内重查 ingest/fork/owner 保活；也重查已 tombstone 的删除重试。
+                    self._catalog.tombstone_blob(blob.blob_id)
+                except AttachmentBlobRetainedError:
+                    continue
+                path = resolve_blob_path(self._attachments_root, blob.relative_locator)
+                existed = path.exists()
                 _remove_file(path)
-                collected.append(blob.blob_id)
+                if existed or blob.availability == "available":
+                    collected.append(blob.blob_id)
         return tuple(collected)
 
     # ------------------------------------------------------------------

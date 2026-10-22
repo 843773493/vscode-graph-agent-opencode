@@ -27,6 +27,7 @@ from app.prompting import PromptSection, internal_message_factory
 from app.schemas.internal_v2.message import AttachmentRef, MessageCreateRequest
 from app.services.business.message_service import MessageService
 from app.services.infrastructure.attachment_blob_catalog.locator import (
+    resolve_blob_path,
     resolve_staging_path,
 )
 from app.services.infrastructure.attachment_blob_catalog.store import (
@@ -66,6 +67,28 @@ with catalog_provider_scope(components):
     thread = store._path_resolver.main_thread_id(session)
     if boundary == "pin":
         store._catalog.create_or_get_ingest_record = lambda **kwargs: os._exit(73)
+    elif boundary == "hashed":
+        original = store._catalog.mark_ingest_hashed
+        def stop(**kwargs):
+            original(**kwargs)
+            os._exit(73)
+        store._catalog.mark_ingest_hashed = stop
+    elif boundary.startswith("concurrent-"):
+        if boundary == "concurrent-winner":
+            original = store._catalog.mark_ingest_hashed
+            def pause(**kwargs):
+                result = original(**kwargs)
+                print("claimed", flush=True)
+                if sys.stdin.readline().strip() == "crash":
+                    os._exit(73)
+                return result
+            store._catalog.mark_ingest_hashed = pause
+        else:
+            original = store._write_staging
+            def staged(*args, **kwargs):
+                original(*args, **kwargs)
+                print("staged", flush=True)
+            store._write_staging = staged
     elif boundary in {"staging", "rename"}:
         name = "_write_staging" if boundary == "staging" else "_commit_staged_blob"
         original = getattr(store, name)
@@ -95,6 +118,9 @@ with catalog_provider_scope(components):
             job_id=create_prefixed_id("job"), turn_id=create_prefixed_id("turn"),
             admission_idempotency_key=create_prefixed_id("adm")))
     asyncio.run(send())
+    if boundary.startswith("concurrent-"):
+        print("accepted", flush=True)
+        sys.exit(0)
     raise AssertionError("上传没有经过要求的崩溃边界")
 '''
 
@@ -129,7 +155,7 @@ def ingest_case(tmp_path, session_bundle_factory):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("boundary", ["pin", "staging", "rename", "published-active", "accepted-active", "accepted-settling"])
+@pytest.mark.parametrize("boundary", ["pin", "staging", "hashed", "rename", "published-active", "accepted-active", "accepted-settling"])
 async def test_restart_recovers_upload_pin_at_real_durable_boundary(ingest_case, boundary):
     case = ingest_case
     case.crash(boundary)
@@ -312,7 +338,7 @@ async def test_recovery_releases_only_unaccepted_message_reference(
             f"attachment:{SESSION}:{abandoned.thread_id}:{abandoned.message_id}",
         )).fetchone()
         assert failed[0] == "failed"
-    case.store.collect_garbage(retention=timedelta(0))
+    await case.store.collect_garbage(retention=timedelta(0))
     assert case.store.read(SESSION, message.attachments[0].file_id).data == BODY
     if same_body:
         assert abandoned.attachments[0].file_id == message.attachments[0].file_id
@@ -354,3 +380,189 @@ async def test_recovery_rejects_canonical_reference_index_drift(ingest_case):
     with closing(case.control()) as control:
         assert control.get_lease(pin.lease_id) == pin
     assert case.store._catalog.list_owner_refs_for_session(SESSION, active_only=True) == refs
+
+
+@pytest.fixture
+async def upload_process_factory(ingest_case):
+    """进程只从真实 MessageService 入口创建并接受附件消息，fixture 负责排空。"""
+    processes = []
+
+    async def start(session_id, boundary):
+        process = await asyncio.create_subprocess_exec(
+            sys.executable, "-c", _UPLOAD_WORKER, str(ingest_case.root), session_id, boundary,
+            stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+        )
+        processes.append(process)
+        return process
+
+    yield start
+    for process in processes:
+        if process.returncode is None:
+            process.kill()
+        await asyncio.wait_for(process.communicate(), timeout=5)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("crash_winner", [False, True])
+async def test_concurrent_processes_join_one_claim_before_rename(
+    ingest_case, session_bundle_factory, upload_process_factory, crash_winner,
+):
+    """胜者停在 claim 后；第二个真实进程不能因正文未落盘提前失败。"""
+    case = ingest_case
+    other = "ses_019b781159d47374805bc4427d081a15"
+    session_bundle_factory(case.root / ".boxteam/sessions", other)
+    winner = await upload_process_factory(SESSION, "concurrent-winner")
+    assert await asyncio.wait_for(winner.stdout.readline(), timeout=20) == b"claimed\n"
+    (frozen,) = case.store._catalog.list_non_terminal_claims()
+    contender = await upload_process_factory(other, "concurrent-contender")
+    assert await asyncio.wait_for(contender.stdout.readline(), timeout=20) == b"staged\n"
+    try:
+        await asyncio.wait_for(contender.wait(), timeout=0.2)
+    except TimeoutError:
+        pass
+    else:
+        stdout, stderr = await contender.communicate()
+        pytest.fail(f"后到上传在胜者落盘前退出: {contender.returncode}: {stdout!r} {stderr!r}")
+    # 删除侧已有 Session gate 时，GC 也不能反向等待正文提交 holder。
+    async with case.store._gate.exclusive(other):
+        assert await asyncio.wait_for(case.store.collect_garbage(retention=timedelta(0)), timeout=1) == ()
+    winner.stdin.write(b"crash\n" if crash_winner else b"publish\n")
+    await winner.stdin.drain()
+    stdout, stderr = await asyncio.wait_for(winner.communicate(), timeout=20)
+    assert winner.returncode == (73 if crash_winner else 0), stdout + stderr
+    stdout, stderr = await asyncio.wait_for(contender.communicate(), timeout=20)
+    assert contender.returncode == 0, stdout + stderr
+    assert stdout == b"accepted\n"
+    claim = case.store._catalog.get_claim_by_digest(frozen.digest)
+    assert claim.state == "published"
+    assert (claim.final_relative_locator, claim.first_claim_utc_date, claim.winning_ingest_id) == (
+        frozen.final_relative_locator, frozen.first_claim_utc_date, frozen.winning_ingest_id,
+    )
+    assert await case.store.recover_pending_ingests(messages=case.saver) == int(crash_winner)
+    for session_id in (other,) if crash_winner else (SESSION, other):
+        (ref,) = case.store._catalog.list_owner_refs_for_session(session_id, active_only=True)
+        assert case.store.read(session_id, case.store.reference(session_id, ref.attachment_id)).data == BODY
+        assert case.saver.attachment_reference_in_use(session_id, ref.owner_thread_id, ref.attachment_id)
+    assert len(tuple(case.store._attachments_root.glob("*/*/*/blb_*"))) == 1
+    assert await case.store.collect_garbage(retention=timedelta(0)) == ()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("boundary", ["hashed", "rename"])
+async def test_unpublished_claim_gc_and_fresh_upload_preserve_frozen_identity(ingest_case, boundary):
+    """崩溃清理只终止旧尝试；新产品请求复用原日期/locator，并能冷读。"""
+    case = ingest_case
+    case.crash(boundary)
+    (frozen,) = case.store._catalog.list_non_terminal_claims()
+    path = resolve_blob_path(case.store._attachments_root, frozen.final_relative_locator)
+    assert path.exists() == (boundary == "rename")
+    assert await case.store.recover_pending_ingests(messages=case.saver) == 1
+    (old,) = case.store._catalog.connection.execute("SELECT * FROM attachment_ingest_records").fetchall()
+    old = dict(old)
+    assert old["state"] == "aborted"
+    assert await case.store.collect_garbage(retention=timedelta(days=365)) == ()
+    assert case.store._catalog.get_claim_by_digest(frozen.digest).state == "claimed"
+    assert await case.store.collect_garbage(retention=timedelta(0)) == ((frozen.blob_id,) if boundary == "rename" else ())
+    assert not path.exists()
+    assert case.store._catalog.get_claim_by_digest(frozen.digest).state == "aborted"
+    attachment = AttachmentRef(file_id="inline:retry", name="retry.txt", content_type="text/plain",
+                               data_url="data:text/plain;base64," + base64.b64encode(BODY).decode())
+    thread = case.store._path_resolver.main_thread_id(SESSION)
+    message = await case.messages.create(SESSION, MessageCreateRequest(content="重新上传", attachments=[attachment]), thread_id=thread)
+    case.messages.accept_user_message(message, execution_identity=UserExecutionIdentity(
+        job_id=create_prefixed_id("job"), turn_id=create_prefixed_id("turn"),
+        admission_idempotency_key=create_prefixed_id("adm")))
+    claim = case.store._catalog.get_claim_by_digest(frozen.digest)
+    assert claim.state == "published" and claim.winning_ingest_id != frozen.winning_ingest_id
+    assert (claim.final_relative_locator, claim.first_claim_utc_date) == (frozen.final_relative_locator, frozen.first_claim_utc_date)
+    assert dict(case.store._catalog.connection.execute(
+        "SELECT * FROM attachment_ingest_records WHERE ingest_idempotency_key=?", (old["ingest_idempotency_key"],),
+    ).fetchone()) == old
+    with closing(AttachmentBlobStore(case.root)) as cold:
+        assert cold.read(SESSION, message.attachments[0].file_id).data == BODY
+
+
+@pytest.mark.asyncio
+async def test_aborted_claim_retries_interrupted_physical_gc(ingest_case, monkeypatch):
+    """claim 终止已提交但删除失败时，下次 GC 仍按同一 locator 重试。"""
+    from app.services.infrastructure.attachment_blob_catalog import (
+        store as store_module,
+    )
+
+    case = ingest_case
+    case.crash("rename")
+    await case.store.recover_pending_ingests(messages=case.saver)
+    (claim,) = case.store._catalog.list_non_terminal_claims()
+    path = resolve_blob_path(case.store._attachments_root, claim.final_relative_locator)
+    async with case.store._blob_commits.lock_for(claim.blob_id):
+        assert await asyncio.wait_for(case.store.collect_garbage(retention=timedelta(0)), timeout=1) == ()
+        assert case.store._catalog.get_claim_by_digest(claim.digest).state == "claimed"
+    with monkeypatch.context() as patch:
+        def interrupted(target):
+            assert target == path
+            raise OSError("正文删除中断")
+        patch.setattr(store_module, "_remove_file", interrupted)
+        with pytest.raises(OSError, match="正文删除中断"):
+            await case.store.collect_garbage(retention=timedelta(0))
+    assert case.store._catalog.get_claim_by_digest(claim.digest).state == "aborted"
+    assert path.exists()
+    assert await case.store.collect_garbage(retention=timedelta(0)) == (claim.blob_id,)
+    assert not path.exists()
+
+
+@pytest.mark.asyncio
+async def test_unpublished_claim_gc_rejects_corrupted_body(ingest_case):
+    case = ingest_case
+    case.crash("rename")
+    await case.store.recover_pending_ingests(messages=case.saver)
+    (claim,) = case.store._catalog.list_non_terminal_claims()
+    path = resolve_blob_path(case.store._attachments_root, claim.final_relative_locator)
+    path.write_bytes(b"corrupted")
+    with pytest.raises(RuntimeError, match="hash/length 不一致"):
+        await case.store.collect_garbage(retention=timedelta(0))
+    assert path.read_bytes() == b"corrupted"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("delete_body", [False, True])
+async def test_gc_preserves_hashed_reupload_of_tombstoned_blob(ingest_case, monkeypatch, delete_body):
+    """GC 崩溃留下 tombstone 正文，新上传在发布前也必须被 hashed record 保活。"""
+    case = ingest_case
+    thread = case.store._path_resolver.main_thread_id(SESSION)
+    attachment = AttachmentRef(file_id="inline:gc", name="gc.txt", content_type="text/plain",
+                               data_url="data:text/plain;base64," + base64.b64encode(BODY).decode())
+    first = await case.messages.create(SESSION, MessageCreateRequest(content="原上传", attachments=[attachment]), thread_id=thread)
+    case.messages.accept_user_message(first, execution_identity=UserExecutionIdentity(
+        job_id=create_prefixed_id("job"), turn_id=create_prefixed_id("turn"), admission_idempotency_key=create_prefixed_id("adm")))
+    case.store.release_session_references(SESSION)
+    (ref,) = case.store._catalog.list_owner_refs_for_session(SESSION)
+    case.store._catalog.tombstone_blob(ref.blob_id)
+    if delete_body:
+        assert await case.store.collect_garbage(retention=timedelta(0)) == (ref.blob_id,)
+    ready, release = asyncio.Event(), asyncio.Event()
+    original = case.store._publish
+
+    async def pause(**kwargs):
+        ready.set()
+        await release.wait()
+        return await original(**kwargs)
+
+    monkeypatch.setattr(case.store, "_publish", pause)
+    upload = asyncio.create_task(case.messages.create(
+        SESSION, MessageCreateRequest(content="重新上传", attachments=[attachment]), thread_id=thread,
+    ))
+    try:
+        await asyncio.wait_for(ready.wait(), timeout=2)
+        assert await case.store.collect_garbage(retention=timedelta(0)) == ()
+        release.set()
+        message = await asyncio.wait_for(upload, timeout=2)
+    finally:
+        release.set()
+        if not upload.done():
+            upload.cancel()
+            await asyncio.gather(upload, return_exceptions=True)
+    case.messages.accept_user_message(message, execution_identity=UserExecutionIdentity(
+        job_id=create_prefixed_id("job"), turn_id=create_prefixed_id("turn"), admission_idempotency_key=create_prefixed_id("adm")))
+    assert case.store._catalog.get_blob(ref.blob_id).availability == "available"
+    assert case.store._catalog.connection.execute("SELECT tombstoned_at FROM attachment_blobs").fetchone()[0] is None
+    assert case.store.read(SESSION, message.attachments[0].file_id).data == BODY

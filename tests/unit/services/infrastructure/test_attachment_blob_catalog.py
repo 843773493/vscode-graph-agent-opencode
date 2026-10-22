@@ -1175,7 +1175,7 @@ async def test_release_session_references_keeps_other_session_blob(
         store.read(SESSION_A, ref_a.file_id)
     assert store.read(SESSION_B, ref_b.file_id).data == payload
     # 另有 session 的 active reference，GC 不得回收该正文。
-    store.collect_garbage(retention=timedelta(0))
+    await store.collect_garbage(retention=timedelta(0))
     assert len(_blob_files(tmp_path)) == 1
     store.close()
 
@@ -1188,7 +1188,7 @@ async def test_collect_garbage_tombstones_then_deletes_unreferenced_blob(
     ref = (await store.persist_inline(SESSION_A, [_attach("a.bin", "application/pdf", b"gone")], thread_id=store._path_resolver.main_thread_id(SESSION_A), message_id="msg_" + create_uuid_hex(namespace="message")))[0]
 
     store.release_session_references(SESSION_A)
-    collected = store.collect_garbage(retention=timedelta(0))
+    collected = await store.collect_garbage(retention=timedelta(0))
 
     assert collected
     assert _blob_files(tmp_path) == []
@@ -1269,7 +1269,7 @@ async def test_pending_fork_reuse_keeps_upload_pin_until_mapping_is_released(for
             settled = control.get_lease(pin.lease_id)
             assert settled.state == "failed" and settled.fencing_token == pin.fencing_token + 1
         assert await store.recover_pending_ingests(messages=saver) == 0
-        store.collect_garbage(retention=timedelta(0))
+        await store.collect_garbage(retention=timedelta(0))
         with pytest.raises(FileNotFoundError):
             store.read(SESSION_B, target.file_id)
 

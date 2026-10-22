@@ -69,7 +69,7 @@ def _publish_blob_metadata(
             f"blob_id={identity.blob_id!r}, existing={blob.relative_locator!r}, actual={relative_locator!r}"
         )
     if restore_available and blob.availability != "available":
-        connection.execute("UPDATE attachment_blobs SET availability='available', updated_at=? WHERE blob_id=?", (now_text, identity.blob_id))
+        connection.execute("UPDATE attachment_blobs SET availability='available', tombstoned_at=NULL, updated_at=? WHERE blob_id=?", (now_text, identity.blob_id))
 
 
 class BlobsMixin:
@@ -138,7 +138,7 @@ class BlobsMixin:
         now_text = datetime.now(UTC).isoformat()
         with self.write_transaction() as connection:
             _publish_blob_metadata(connection, identity=identity, relative_locator=relative_locator,
-                                   mime_type=mime_type, protection=protection, now_text=now_text)
+                                   mime_type=mime_type, protection=protection, now_text=now_text, restore_available=True)
 
             record = self._require_ingest_row(connection, ingest_idempotency_key)
             if record.blob_id is not None and record.blob_id != identity.blob_id:

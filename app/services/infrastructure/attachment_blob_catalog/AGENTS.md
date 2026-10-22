@@ -6,7 +6,7 @@ catalog 侧原先的单文件 `catalog.py` 已按垂直链路拆入本包，faca
 
 # 可修改内容
 
-- 可以维护 `blob_identity.py` 的身份原语、`locator.py` 的 locator 形态与预算校验、`sql/` 的表/索引/触发器/种子及 `schema.py` 的加载、必需表清单与形态工具、`records.py` 的行投影与身份派生、`ingest.py`/`blobs.py`/`queries.py` 的方法体、facade `__init__.py` 的类声明与生命周期，以及 `store.py` 的写入 saga、统一正文校验、读取和 `collect_garbage`，以及 `recovery.py` 的接受结算、`recover_session` 与引用释放；fork 捕获、目标保活与发布方法仅维护在 `fork_store.py`，SQLite alias/claim 事务仅维护在 `fork_claims.py`。
+- 可以维护 `blob_identity.py` 的身份原语、`locator.py` 的 locator 形态与预算校验、`sql/` 的表/索引/触发器/种子及 `schema.py` 的加载、必需表清单与形态工具、`records.py` 的行投影与身份派生、`ingest.py`/`blobs.py`/`queries.py` 的方法体、facade `__init__.py` 的类声明与生命周期，以及 `store.py` 的写入 saga、统一正文校验、读取和异步 `collect_garbage`，以及 `recovery.py` 的接受结算、`recover_session` 与引用释放；fork 捕获、目标保活与发布方法仅维护在 `fork_store.py`，SQLite alias/claim 事务仅维护在 `fork_claims.py`。
 - 可以维护随本包落地的四段式 `AGENTS.md`。
 - 可以维护对应的单元测试（放在 `tests/unit/services/infrastructure/`）。
 
@@ -26,13 +26,14 @@ catalog 侧原先的单文件 `catalog.py` 已按垂直链路拆入本包，faca
 # 规范
 
 - 严格照 saga 顺序：取 gate + fresh 校验 + create-or-get `AttachmentOperationPin` → create-or-get `AttachmentIngestRecord(preparing)` → 写 staging 并 durable → 推进 `hashed` 并竞争唯一 `BlobCommitClaim` → 原子 rename 到 claim 冻结 locator 并复验 → 再次取同一 gate 复验 pin/fence/thread 后发布 availability/attachment/owner ref → 主体 durable 后才把 pin 推进终态。
-- 统一锁序：一个 `SessionLifecycleGate` → 至多一个 catalog/SQLite 写事务。
+- 正文提交复用 `OperationHolderGate(namespace="attachment_blob_commit")` 的固定分片跨进程锁。普通上传在该锁内推进 hashed、完成唯一 locator 的 rename/复验；释放锁后才取得 Session gate 发布。hashed record 在 catalog 事务中保护尚未发布的正文，fork import 则由原 preparing/owner_reserved claim 保活。正文提交锁内不得等待 Session gate、网络或另一把正文锁。
+- Session 准入与发布锁序仍为一个 `SessionLifecycleGate` → 至多一个 catalog/SQLite 写事务。GC 可在删除 gate 内调用，但只能非阻塞探测正文提交锁（wait=False）；未取得即留待下次回收，绝不反向等待。GC 取得锁后事务重查 owner/retention、非终态 ingest 和 fork claim，再提交 tombstone/aborted，最后按冻结 locator 删除；不扫盘。
 - ingest record 的 digest/blob_id/length + 状态 UPDATE 是单点：`ingest._update_ingest_record_identity`，`mark_ingest_hashed`（走 `hashed`）与 `publish_blob_and_owner_ref`（走 `published`）都调用它，不得在两处各写一条同型语句。
 - catalog mixin 依赖宿主提供的 `database_path`、`_closed`、`_connection`、`_connected()`、`write_transaction()` 和同一 catalog 的既有查询；`ForkAttachmentStoreMixin` 显式消费宿主的 catalog、locator、Session gate、控制库及正文验证端口，不建立第二套 store。表、索引与触发器唯一定义在 `sql/`；`schema.py` 显式加载，列清单和执行协调保留在 Python，不复制 DDL。
 - 无 claim 的复用必须冻结真实已发布 owner 引用；保活范围和消费 Thread 不混同。必要 claim 在 source guard 释放前建立，reserved 引用在 finalizer 提交前不可读取；失败、删除与 GC 只处理本 operation 的精确引用，无 claim 的操作不建立 settlement record。
 - 附件单文件 URI 只由公共 grammar 构造与解析；原 attachment_id、blob/lease/GC 语义不变。fork 快照同时冻结目标 Gateway/Workspace URI，投影不得按当前请求重新拼目标或重绑映射。
 - 错误分类沿用 `session_catalog_store`：`TypeError` 类型错、`ValueError` 形态非法、`KeyError` 目标行缺失、`RuntimeError`（含 `BlobIdentityConflictError`）语义冲突；库被外部改动一律 fail-closed。
-- GC 必须先原子提交 tombstone/availability，再删物理正文；失败可幂等重试。
+- GC 必须先原子提交 tombstone/availability 或未发布 claim 的 aborted，再删物理正文；失败可幂等重试。未发布 claim 保留首次日期/locator，新 operation 可重新领取；旧 ingest/pin 不重开。已发布正文缺失或损坏必须报错，普通重新上传只允许恢复已 tombstone 正文的 availability。
 - 修改本目录后运行 `uv run ruff check`、`uv run python -m compileall` 与带进程外保护地跑 `uv run pytest tests/unit/services/infrastructure`。
 - 模板示例；在整理 `AGENTS.md` 时请保留此行。
 

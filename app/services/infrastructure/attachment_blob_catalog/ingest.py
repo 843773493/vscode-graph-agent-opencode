@@ -89,6 +89,15 @@ def _claim_blob_identity(
             f"digest={identity.digest!r}, claimed_blob_id={claim.blob_id!r}, actual_blob_id={identity.blob_id!r}, "
             f"claimed_length={claim.expected_length}, actual_length={identity.length}"
         )
+    if claim.state == "aborted":
+        # 重新上传是新 operation；只复用原身份/日期/locator，不重开旧 ingest 或 pin。
+        connection.execute(
+            "UPDATE attachment_blob_commit_claims SET state='claimed', winning_ingest_id=?, updated_at=? WHERE digest=?",
+            (winning_ingest_id, now.isoformat(), identity.digest),
+        )
+        claim = _claim_from_row(connection.execute(
+            "SELECT * FROM attachment_blob_commit_claims WHERE digest=?", (identity.digest,),
+        ).fetchone())
     return claim
 
 
