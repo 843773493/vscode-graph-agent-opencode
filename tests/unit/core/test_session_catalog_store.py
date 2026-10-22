@@ -12,6 +12,7 @@ import json
 import sqlite3
 import threading
 from collections.abc import Callable
+from contextlib import closing
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
@@ -3185,6 +3186,96 @@ def test_online_backup_rejects_existing_target(
     store.create_consistent_backup(backup_path)
     with pytest.raises(RuntimeError, match="拒绝覆盖"):
         store.create_consistent_backup(backup_path)
+
+
+@pytest.mark.parametrize("commit_before_copy", [True, False], ids=["before-copy", "after-copy"])
+def test_backup_manifest_generation_belongs_to_copied_database(
+    store: SessionCatalogStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    commit_before_copy: bool,
+) -> None:
+    from app.core.session_catalog_store import backup
+
+    create_session(store, display_name="备份前会话")
+    generation_before = store.current_generation()
+    writer = SessionCatalogStore(store.database_path, store.sessions_root)
+    backup_path = tmp_path / "concurrent-backup.sqlite"
+    connect = sqlite3.connect
+    checksum = backup._sha256_file
+    written = []
+
+    def commit_concurrent_change() -> None:
+        written.append(create_session(writer, display_name="并发提交的目录"))
+
+    def open_destination(path, *args, **kwargs):
+        if Path(path) == backup_path:
+            commit_concurrent_change()
+        return connect(path, *args, **kwargs)
+
+    def hash_after_commit(path: Path) -> str:
+        commit_concurrent_change()
+        return checksum(path)
+
+    if commit_before_copy:
+        monkeypatch.setattr(backup.sqlite3, "connect", open_destination)
+    else:
+        monkeypatch.setattr(backup, "_sha256_file", hash_after_commit)
+    try:
+        manifest = store.create_consistent_backup(backup_path)
+        assert len(written) == 1
+        with closing(connect(backup_path.as_uri() + "?mode=ro", uri=True)) as copied:
+            generation = copied.execute("SELECT generation FROM catalog_metadata WHERE singleton_id=1").fetchone()[0]
+            names = {row[0] for row in copied.execute("SELECT display_name FROM nodes")}
+        assert generation == generation_before + int(commit_before_copy)
+        assert ("并发提交的目录" in names) is commit_before_copy
+        assert manifest.generation == generation, "备份清单必须描述复制的正文，不能采样复制前或复制后的活动库版本"
+        assert manifest.checksum == hashlib.sha256(backup_path.read_bytes()).hexdigest()
+        assert store.current_generation() == generation_before + 1
+    finally:
+        writer.close()
+
+
+@pytest.mark.parametrize("generation_delta", [-1, 1])
+def test_verify_backup_rejects_generation_that_disagrees_with_its_bytes(
+    store: SessionCatalogStore, tmp_path: Path, generation_delta: int,
+) -> None:
+    create_session(store, display_name="清单版本核验")
+    backup_path = tmp_path / "manifest-generation.sqlite"
+    manifest = store.create_consistent_backup(backup_path)
+    original = backup_path.read_bytes()
+    with pytest.raises(CatalogMaintenanceRequiredError, match="generation 与备份正文不一致"):
+        store.verify_consistent_backup(backup_path, expected_checksum=manifest.checksum,
+                                       backup_generation=manifest.generation + generation_delta)
+    assert backup_path.read_bytes() == original
+    assert store.current_generation() == manifest.generation
+
+
+def test_verify_stale_backup_cannot_bypass_check_with_current_generation(
+    store: SessionCatalogStore, tmp_path: Path,
+) -> None:
+    backup_path = tmp_path / "stale-manifest.sqlite"
+    manifest = store.create_consistent_backup(backup_path)
+    create_session(store, display_name="备份后新增")
+    with pytest.raises(CatalogMaintenanceRequiredError, match="generation 与备份正文不一致"):
+        store.verify_consistent_backup(backup_path, expected_checksum=manifest.checksum,
+                                       backup_generation=store.current_generation())
+
+
+@pytest.mark.parametrize("invalid_database", [True, False], ids=["invalid-sqlite", "wrong-schema"])
+def test_matching_checksum_does_not_replace_backup_structure_validation(
+    store: SessionCatalogStore, tmp_path: Path, invalid_database: bool,
+) -> None:
+    backup_path = tmp_path / "invalid-snapshot.sqlite"
+    if invalid_database:
+        backup_path.write_bytes(b"not a SQLite database")
+    else:
+        store.create_consistent_backup(backup_path)
+        with closing(sqlite3.connect(backup_path)) as copied:
+            copied.execute("PRAGMA user_version=999")
+    original = backup_path.read_bytes()
+    with pytest.raises(CatalogMaintenanceRequiredError, match="备份.*(损坏|schema)"):
+        store.verify_consistent_backup(backup_path, expected_checksum=hashlib.sha256(original).hexdigest(),
+                                       backup_generation=store.current_generation())
+    assert backup_path.read_bytes() == original
 
 
 def test_verify_backup_rejects_checksum_mismatch(

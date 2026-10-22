@@ -48,12 +48,15 @@ class CatalogBackupMixin:
         if resolved.exists():
             raise RuntimeError(f"备份目标已存在，拒绝覆盖: {resolved}")
         resolved.parent.mkdir(parents=True, exist_ok=True)
-        generation = self.current_generation()
         with self._connection_lock:
             self._ensure_open()
             destination = sqlite3.connect(resolved)
             try:
                 self._connection.backup(destination)
+                # 其它 catalog 连接可在复制前或复制后提交；清单只描述已复制的快照。
+                generation = int(destination.execute(
+                    "SELECT generation FROM catalog_metadata WHERE singleton_id = 1"
+                ).fetchone()[0])
             finally:
                 destination.close()
         checksum = _sha256_file(resolved)
@@ -75,7 +78,8 @@ class CatalogBackupMixin:
 
         - checksum 与 ``expected_checksum`` 不符 → ``CatalogMaintenanceRequiredError``
           （备份被外部改动或损坏）；
-        - ``backup_generation`` 小于当前 generation → 备份落后于已提交操作，
+        - 清单 generation 与备份正文不一致 → 明确拒绝；
+        - 备份 generation 小于当前 generation → 备份落后于已提交操作，
           ``CatalogMaintenanceRequiredError``；
         - 相等 → 返回核对报告（不修改任何数据）。
         """
@@ -93,6 +97,31 @@ class CatalogBackupMixin:
                 "核对并保留原数据）: "
                 f"path={resolved}, expected={expected_checksum}, "
                 f"actual={actual_checksum}"
+            )
+        # 备份是独立的单文件快照；只读且不创建 WAL/SHM，不调用会初始化的 catalog 构造器。
+        try:
+            snapshot = sqlite3.connect(resolved.as_uri() + "?mode=ro&immutable=1", uri=True)
+            try:
+                statuses = [str(row[0]) for row in snapshot.execute("PRAGMA quick_check")]
+                if statuses != ["ok"]:
+                    raise CatalogMaintenanceRequiredError(f"一致性备份损坏，须进入维护模式核对: status={statuses}")
+                schema = int(snapshot.execute("PRAGMA user_version").fetchone()[0])
+                if schema != self.SCHEMA_VERSION:
+                    raise CatalogMaintenanceRequiredError(
+                        f"一致性备份 schema 不受支持: actual={schema}, required={self.SCHEMA_VERSION}"
+                    )
+                row = snapshot.execute("SELECT generation FROM catalog_metadata WHERE singleton_id = 1").fetchone()
+                if row is None:
+                    raise CatalogMaintenanceRequiredError("一致性备份缺少 generation，须进入维护模式核对")
+                copied_generation = int(row[0])
+            finally:
+                snapshot.close()
+        except sqlite3.DatabaseError as error:
+            raise CatalogMaintenanceRequiredError("一致性备份损坏或结构不完整，须进入维护模式核对") from error
+        if backup_generation != copied_generation:
+            raise CatalogMaintenanceRequiredError(
+                "清单 generation 与备份正文不一致，须进入维护模式核对: "
+                f"manifest={backup_generation}, snapshot={copied_generation}"
             )
         current = self.current_generation()
         if backup_generation < current:
