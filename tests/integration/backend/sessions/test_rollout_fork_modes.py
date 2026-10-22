@@ -6661,16 +6661,17 @@ async def test_qualified_local_fork_lifespan_recovers_without_http_context(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("fork_execution_source", [True], indirect=True)
 @pytest.mark.parametrize("creation_kind", ["new_session_main", "new_child_thread"])
 @pytest.mark.parametrize("partial_phase", ["copy.source.partial", "copy.attachments.preparing"])
 async def test_local_partial_capture_abort_does_not_block_complete_marker_recovery(
-    fork_provider_prepare, production_fork_container: AppContainer,
+    fork_execution_source: SessionDTO, production_fork_container: AppContainer,
     monkeypatch: pytest.MonkeyPatch, creation_kind: SessionForkCreationKind, partial_phase: str,
     fork_gateway_request_context: None,
 ) -> None:
     context = _production_fork_context(production_fork_container)
     store = production_fork_container.attachment_blob_store
-    source, _ = await _seed_retry_tool_source(context, fork_provider_prepare, attachment_store=store)
+    source = fork_execution_source
     source_thread = _main_thread_id(context, source.session_id)
     source_jsonl = (_main_thread_node(context, source.session_id) / "rollout/rollout.jsonl").read_bytes()
     parent = (await context.sessions.create(SessionCreateRequest(title="不完整 child fork 的 owner"))
