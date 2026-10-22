@@ -56,14 +56,7 @@ def pending_checkpoint_inspector():
     return inspect
 
 
-@pytest.fixture
-def before_provider_inspector():
-    async def inspect(_job: JobState) -> bool:
-        return False
-    return inspect
-
-
-def _build_runtime(tmp_path: Path, session_lifecycle_guard, *, pending_checkpoint_inspector, before_provider_inspector) -> RuntimeService:
+def _build_runtime(tmp_path: Path, session_lifecycle_guard, *, pending_checkpoint_inspector) -> RuntimeService:
     """真实 RuntimeService；只替换 executor/bus 这些外部边界。"""
     sessions_dir = tmp_path / ".boxteam" / "sessions"
     jobs = JobService(
@@ -76,7 +69,7 @@ def _build_runtime(tmp_path: Path, session_lifecycle_guard, *, pending_checkpoin
         workspace_root=tmp_path,
         job_service=jobs,
         pending_tool_checkpoint_id=pending_checkpoint_inspector,
-        can_restart_before_provider=before_provider_inspector,
+        pending_request_store=_EmptyQueueStore(),
         background_task_registry=build_background_registry(sessions_dir),
         trace_event_store=TraceEventStore(sessions_dir=sessions_dir),
         message_stream_store=MessageStreamStore(
@@ -85,11 +78,16 @@ def _build_runtime(tmp_path: Path, session_lifecycle_guard, *, pending_checkpoin
     )
 
 
+class _EmptyQueueStore:
+    async def records(self):
+        return ()
+
+
 @pytest.mark.asyncio
-async def test_cancel_drain_before_draining_is_conflict_not_500(pending_checkpoint_inspector, before_provider_inspector,
+async def test_cancel_drain_before_draining_is_conflict_not_500(pending_checkpoint_inspector,
     tmp_path: Path, session_lifecycle_guard
 ) -> None:
-    runtime = _build_runtime(tmp_path, pending_checkpoint_inspector=pending_checkpoint_inspector, before_provider_inspector=before_provider_inspector, session_lifecycle_guard=session_lifecycle_guard)
+    runtime = _build_runtime(tmp_path, pending_checkpoint_inspector=pending_checkpoint_inspector, session_lifecycle_guard=session_lifecycle_guard)
 
     with pytest.raises(HTTPException) as raised:
         await cancel_runtime_drain(
@@ -106,11 +104,11 @@ async def test_cancel_drain_before_draining_is_conflict_not_500(pending_checkpoi
 
 
 @pytest.mark.asyncio
-async def test_force_interrupt_before_draining_is_conflict_not_500(pending_checkpoint_inspector, before_provider_inspector,
+async def test_force_interrupt_before_draining_is_conflict_not_500(pending_checkpoint_inspector,
     tmp_path: Path,
     session_lifecycle_guard,
 ) -> None:
-    runtime = _build_runtime(tmp_path, pending_checkpoint_inspector=pending_checkpoint_inspector, before_provider_inspector=before_provider_inspector, session_lifecycle_guard=session_lifecycle_guard)
+    runtime = _build_runtime(tmp_path, pending_checkpoint_inspector=pending_checkpoint_inspector, session_lifecycle_guard=session_lifecycle_guard)
 
     with pytest.raises(HTTPException) as raised:
         await force_runtime_drain(
@@ -127,10 +125,10 @@ async def test_force_interrupt_before_draining_is_conflict_not_500(pending_check
 
 
 @pytest.mark.asyncio
-async def test_begin_drain_after_stopping_is_conflict_not_500(pending_checkpoint_inspector, before_provider_inspector,
+async def test_begin_drain_after_stopping_is_conflict_not_500(pending_checkpoint_inspector,
     tmp_path: Path, session_lifecycle_guard
 ) -> None:
-    runtime = _build_runtime(tmp_path, pending_checkpoint_inspector=pending_checkpoint_inspector, before_provider_inspector=before_provider_inspector, session_lifecycle_guard=session_lifecycle_guard)
+    runtime = _build_runtime(tmp_path, pending_checkpoint_inspector=pending_checkpoint_inspector, session_lifecycle_guard=session_lifecycle_guard)
     await runtime.begin_drain()
     await runtime.force_interrupt()
 
@@ -148,11 +146,11 @@ async def test_begin_drain_after_stopping_is_conflict_not_500(pending_checkpoint
     assert raised.value.detail == "Workspace API 已进入 stopping，不能重新开始 drain"
 
 
-def test_drain_guards_http_envelope_is_409_without_internal_class_name(pending_checkpoint_inspector, before_provider_inspector,
+def test_drain_guards_http_envelope_is_409_without_internal_class_name(pending_checkpoint_inspector,
     tmp_path: Path,
     session_lifecycle_guard,
 ) -> None:
-    runtime = _build_runtime(tmp_path, pending_checkpoint_inspector=pending_checkpoint_inspector, before_provider_inspector=before_provider_inspector, session_lifecycle_guard=session_lifecycle_guard)
+    runtime = _build_runtime(tmp_path, pending_checkpoint_inspector=pending_checkpoint_inspector, session_lifecycle_guard=session_lifecycle_guard)
     app = FastAPI()
     app.add_middleware(TraceMiddleware)
     app.include_router(router, prefix="/api/v1")

@@ -302,6 +302,26 @@ delegated child 的初始 execution 绑定 MUST 由生产提供真实 thread bin
 - **WHEN**进程在queue entry提交后、active slot claim后或execution启动后退出
 - **THEN**恢复按同一admission幂等identity和ordinal找回pending/active execution，至多启动一次且不越过更早entry；历史callback只能回到原execution
 
+#### Scenario: 已加载调度器发现未派发的新 acceptance
+
+- **WHEN** 同一 Thread 已有运行任务，后续用户消息完成 acceptance 事务后请求断开，尚未调用 start_job
+- **THEN** 下一次恢复或 pending 查询从 SQLite 发现原 entry，保持其原 identity 和 FIFO；原运行 Job、claim 与 task 不被替换或重启
+
+#### Scenario: 活 execution holder 阻止第二 runtime 就绪
+
+- **WHEN** 启动恢复发现原进程仍持有 Thread execution 的 OS holder
+- **THEN** 新 runtime 在服务就绪前明确失败，报告逻辑 owner 和 Job；不得跳过该 entry 后继续服务。原进程退出后，重启沿原 admission 和 generation fence 恢复
+
+#### Scenario: 旧 active 缺冻结队列输入时拒绝升级运行
+
+- **WHEN** 当前 owner 的未结算 execution 缺少持久执行队列输入，且受支持的显式旧 pending 导入不能提供该输入
+- **THEN** 正常调度明确拒绝，要求在旧 runtime 先结算再升级；不得从 Trace 或当前配置猜补输入，也不得把旧 active 当成空队列。历史只读、显式迁移与 fork 历史的来源 owner 解析保持各自职责
+
+#### Scenario: 删除排空覆盖已经接受但尚未启动的任务
+
+- **WHEN** Session 已进入 deleting，存在 active、已装载 queued 和 acceptance 已提交但未调用 start_job 的任务
+- **THEN** 删除 owner 按精确 Session catalog 枚举全部 Thread 并结算原队列，不能借用隐藏 deleting 节点的全局列表；逐项取消 queued，全部提交后才取消并等待 active。后续 queued 落盘失败时，已提交项保持终态，活任务及剩余 FIFO 保持可重试状态
+
 #### Scenario: 缺 binder 时初始 execution 不得静默滞留 pending
 
 - **WHEN**已发布的 durable child 拥有初始 execution intent，但生产未提供可用的真实 thread binder

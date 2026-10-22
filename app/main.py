@@ -231,6 +231,8 @@ async def _workspace_lifespan(container: AppContainer):
                 await container.job_event_bus.register_durable_listener(container.goal_runtime_service.on_event)
                 await container.job_event_bus.register_durable_listener(container.thread_initial_execution_service.on_event)
                 await container.job_event_bus.register_durable_listener(record_session_activity)
+            with _workspace_startup_stage(container, "pending_request_store.migrate_all"):
+                await container.pending_request_store.migrate_all()
             with _workspace_startup_stage(container, "runtime_service.reconcile_stale_executions"):
                 reconciled = await container.runtime_service.reconcile_stale_executions()
             if reconciled:

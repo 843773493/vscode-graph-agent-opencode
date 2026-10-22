@@ -26,6 +26,7 @@ lease 没有墙钟自动到期；恢复 owner 验证旧 holder 失效并 CAS 新
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import os
 import zlib
 from dataclasses import dataclass
@@ -59,6 +60,7 @@ __all__ = [
     "SessionLifecycleGate",
     "SessionOperationLease",
     "SessionReadGuard",
+    "ThreadExecutionHolderGate",
 ]
 
 # workspace 导航目录名（<workspace .boxteam>/navigation/）。
@@ -277,6 +279,23 @@ class OperationHolderGate:
         shard = zlib.crc32(key.encode("utf-8")) % KEY_LOCK_SHARDS
         path = self._root / f"{self._namespace}-{shard:02d}.lock"
         return _CrossProcessFileLock(path, exclusive=exclusive, wait=wait)
+
+
+class ThreadExecutionHolderGate:
+    """每个精确 Thread 的长执行 holder；不持有 topology/Session gate。
+
+    仅非阻塞取得，拿不到即旧执行者仍在；禁止按时间抢占。锁 inode 不删除，
+    同 Thread 在原任务、受保护写入和终态结算完成后才释放，sibling 不共享锁。
+    """
+
+    def __init__(self, sessions_root: Path) -> None:
+        self._root = _navigation_root(sessions_root) / "thread-execution-holders"
+
+    def lock_for(self, session_id: str, thread_id: str) -> _CrossProcessFileLock:
+        if not session_id or not thread_id:
+            raise ValueError("execution holder 必须携带精确 Session/Thread identity")
+        key = hashlib.sha256(f"{session_id}\0{thread_id}".encode()).hexdigest()
+        return _CrossProcessFileLock(self._root / f"{key}.lock", exclusive=True, wait=False)
 
 
 class SessionLifecycleGate:

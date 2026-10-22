@@ -32,36 +32,28 @@ class JobPendingRequestService:
         input_owner: JobInputOwnerProtocol | None,
     ) -> None:
         self._store = store
-        self._store_lock = asyncio.Lock()
-        # 只记录进程内恢复阶段；队列及执行事实仍由原 owner 保存。
-        self._loaded_sessions: dict[str, bool] = {}
+        self._queue = queue
+        # 只区分可否使用进程内摘要投影；恢复阶段以持久 claim 为准。
+        self._loaded_sessions: set[str] = set()
         self._controller = JobPendingRequestController(
             queue=queue,
             lock=lock,
             get_jobs=get_jobs,
             get_current_jobs=get_current_jobs,
             persist_terminal_status=persist_terminal_status,
-            input_owner=input_owner,
+            input_owner=input_owner, store=store,
         )
 
-    async def load_unloaded(self, session_id: str) -> list[PendingRequestDTO] | None:
-        if session_id in self._loaded_sessions:
-            return None
+    async def load(self, session_id: str) -> list[PendingRequestDTO]:
         return await self._store.load(session_id) if self._store is not None else []
 
     def mark_loaded(self, session_id: str) -> None:
-        """装载后不再覆盖内存队列；落盘与派发完成前仍需重试恢复。"""
-        self._loaded_sessions[session_id] = False
-
-    def mark_restored(self, session_id: str) -> None:
-        self._loaded_sessions[session_id] = True
-
-    def is_restored(self, session_id: str) -> bool:
-        return self._loaded_sessions.get(session_id, False)
+        self._loaded_sessions.add(session_id)
 
     async def list(
         self, session_id: str, *, thread_id: str | None = None,
     ) -> PendingRequestListDTO:
+        await self.refresh_version(session_id)
         return await self._controller.list(session_id, thread_id=thread_id)
 
     async def list_summaries(
@@ -83,44 +75,38 @@ class JobPendingRequestService:
         delivery_policy: DeliveryPolicy,
         expected_snapshot_version: int | None,
     ) -> PendingRequestListDTO:
-        snapshot = await self._controller.update_policy(
+        await self._controller.update_policy(
             session_id,
             message_id,
             delivery_policy=delivery_policy,
             expected_snapshot_version=expected_snapshot_version,
         )
-        await self.persist(snapshot)
-        return snapshot
+        return await self.list(session_id)
 
     async def remove(self, session_id: str, message_id: str) -> PendingRequestListDTO:
-        snapshot = await self._controller.remove(session_id, message_id)
-        await self.persist(snapshot)
-        return snapshot
+        await self._controller.remove(session_id, message_id)
+        return await self.list(session_id)
 
     async def clear(self, session_id: str) -> PendingRequestListDTO:
         try:
-            return await self._controller.clear(session_id)
+            await self._controller.clear(session_id)
         finally:
             # 多个 thread 的终态各自提交；中途失败也保留已经撤回的队列结果。
-            await self.persist_current(session_id)
+            await self.refresh_version(session_id)
+        return await self.list(session_id)
 
     async def reject_reorder(self, session_id: str) -> None:
         await self._controller.reject_reorder(session_id)
 
-    async def persist(self, snapshot: PendingRequestListDTO) -> None:
+    @property
+    def store(self) -> PendingRequestStoreProtocol:
         if self._store is None:
-            return
-        async with self._store_lock:
-            latest = await self._controller.list(snapshot.session_id, display=False)
-            await self._store.save(latest.session_id, list(latest.requests))
+            raise RuntimeError("Job 调度缺少持久 Thread 执行队列 owner")
+        return self._store
 
-    async def persist_current(self, session_id: str) -> None:
-        """把当前内存队列写回磁盘；未配置持久化时不构造展示 DTO。"""
-        if self._store is None:
-            return
-        await self.persist(await self.list(session_id))
+    async def refresh_version(self, session_id: str) -> None:
+        if self._store is not None:
+            self._queue.set_snapshot_version(session_id, await self._store.snapshot_version(session_id))
 
     async def delete(self, session_id: str) -> None:
-        self._loaded_sessions.pop(session_id, None)
-        if self._store is not None:
-            await self._store.delete(session_id)
+        self._loaded_sessions.discard(session_id)

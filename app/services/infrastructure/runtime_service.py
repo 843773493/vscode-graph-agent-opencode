@@ -6,6 +6,7 @@ from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from pathlib import Path
 
+from app.abstractions.pending_request_store import PendingRequestStoreProtocol
 from app.abstractions.state_conflict import ClientStateConflictError
 from app.abstractions.turn_terminal_status import TurnTerminalStatusWriter
 from app.agents.checkpoint_recovery import CheckpointRecoveryRejectedError
@@ -14,12 +15,10 @@ from app.core.identifier import create_prefixed_id
 from app.core.workspace_identity import validate_workspace_id
 from app.schemas.event import (
     Event,
-    JobCreatedPayload,
     SessionInterruptedEvent,
     SessionInterruptedPayload,
 )
 from app.schemas.internal_v2.common import JobStatus
-from app.schemas.internal_v2.message import AttachmentRef
 from app.schemas.internal_v2.runtime import (
     RuntimeDrainBlockerDTO,
     RuntimeDrainResultDTO,
@@ -48,7 +47,7 @@ class RuntimeService:
         message_stream_store: MessageStreamStore,
         terminal_status_writer: TurnTerminalStatusWriter | None = None,
         pending_tool_checkpoint_id: Callable[[JobState], Awaitable[str | None]],
-        can_restart_before_provider: Callable[[JobState], Awaitable[bool]],
+        pending_request_store: PendingRequestStoreProtocol,
     ) -> None:
         self._workspace_id = validate_workspace_id(workspace_id)
         self._workspace_root = workspace_root.expanduser().resolve()
@@ -58,7 +57,7 @@ class RuntimeService:
         self._message_stream_store = message_stream_store
         self._terminal_status_writer = terminal_status_writer
         self._pending_tool_checkpoint_id = pending_tool_checkpoint_id
-        self._can_restart_before_provider = can_restart_before_provider
+        self._pending_request_store = pending_request_store
         self._lifecycle_state: RuntimeLifecycleState = "ready"
         self._start_time: float | None = None
         self._startup_reconciliation_errors: list[dict[str, str]] = []
@@ -132,7 +131,6 @@ class RuntimeService:
             "session_interrupted",
         }
         job_owners: dict[str, tuple[str, str]] = {}
-        started_job_ids: set[str] = set()
         lifecycle_jobs_by_session: dict[str, set[str]] = {}
         event: Event | None = None
         for session_id in self._trace_event_store.list_session_ids():
@@ -152,8 +150,6 @@ class RuntimeService:
                             f"同一 Job 的 {phase} owner 漂移: job_id={event.job_id!r}, "
                             f"previous={previous!r}, current={owner!r}"
                         )
-                    if event.type == "job_started":
-                        started_job_ids.add(event.job_id)
                 if event.type == "job_started" or event.type in terminal_types:
                     lifecycle_jobs.add(event.job_id)
             lifecycle_jobs_by_session[session_id] = lifecycle_jobs
@@ -169,95 +165,73 @@ class RuntimeService:
                         f"trace_session={session_id!r}, owner={owner!r}"
                     )
 
-        for session_id in lifecycle_jobs_by_session:
-            # 校验通过后逐会话读取正文，不在全库扫描期间常驻全部请求与事件。
-            event = None
-            request: JobCreatedPayload | None = None
-            requests_by_job: dict[str, JobCreatedPayload] = {}
-            lifecycle_by_job: dict[str, Event] = {}
-            for event in self._trace_event_store.read_events(session_id):
-                if event.type == "job_created":
-                    requests_by_job[event.job_id] = event.payload
-                if event.type == "job_started" or event.type in terminal_types:
-                    lifecycle_by_job[event.job_id] = event
-            for job_id, event in lifecycle_by_job.items():
-                # 排队取消或准入前失败可以没有 started，不产生 execution/Turn。
-                if job_id not in started_job_ids:
-                    continue
-                owner = job_owners[job_id]
-                event_type = event.type
-                if event_type == "job_failed":
-                    status = "timed_out" if is_job_timeout_event(event) else "failed"
-                elif event_type == "job_cancelled":
-                    status = "cancelled"
-                elif event_type == "session_interrupted":
-                    payload = event.payload
-                    if payload.code != "execution_lost" and payload.phase != "process_exit":
-                        continue
-                    status = "execution_lost"
-                elif event_type == "job_started":
-                    request = requests_by_job.get(job_id)
-                    if request is not None and request.execution_binding is not None:
-                        if not request.message_id or request.message_created_at is None:
-                            raise RuntimeError(f"已持久准入 Job 缺少原始消息身份: {job_id}")
-                        job = JobState(
-                            job_id=job_id, session_id=owner[0], thread_id=owner[1],
-                            message=request.message, message_id=request.message_id,
-                            message_created_at=request.message_created_at.isoformat(),
-                            execution_binding=request.execution_binding, agent_id=request.agent_id,
-                            status=JobStatus.running, message_metadata=dict(request.message_metadata),
-                            attachments=[AttachmentRef.model_validate(value) for value in request.attachments],
-                            gateway_id=request.gateway_id, request_id=request.request_id,
-                            created_at=event.timestamp, updated_at=event.timestamp,
-                            delivery_policy=request.delivery_policy,
-                        )
-                        if await self._can_restart_before_provider(job):
-                            resumed_job_ids.add(job_id)
-                            continue
-                        try:
-                            checkpoint_id = await self._pending_tool_checkpoint_id(job)
-                        except CheckpointRecoveryRejectedError as error:
-                            self._startup_reconciliation_errors.append(f"Job {job_id} 原 checkpoint 恢复证据被拒绝: {error}")
-                            checkpoint_id = None
-                        if checkpoint_id is not None:
-                            job.resume_checkpoint_id = checkpoint_id
-                            await self._job_service.restore_active_job(job)
-                            resumed_job_ids.add(job_id)
-                            continue
-                    status = "execution_lost"
-                else:
-                    continue
-                if self._terminal_status_writer is not None:
-                    if status == "execution_lost":
+        records = await self._pending_request_store.records()
+        for record in records:
+            admission = record.cursor.admission
+            owner = (admission.session_id, admission.thread_id)
+            traced_owner = job_owners.get(admission.job_id)
+            if traced_owner is not None and traced_owner != owner:
+                raise RuntimeError(f"执行队列与 Trace owner 冲突: job_id={admission.job_id}, queue={owner}, trace={traced_owner}")
+        for record in records:
+            if record.phase == "queued":
+                continue
+            admission = record.cursor.admission
+            claim = await self._pending_request_store.claim(record)
+            if claim is None:
+                # 本地工作区没有备用 runtime 接管协议；不能跳过队首后宣告启动成功。
+                raise RuntimeError(
+                    "工作区执行仍由另一个 runtime 持有，拒绝并存启动: "
+                    f"session_id={admission.session_id}, thread_id={admission.thread_id}, "
+                    f"job_id={admission.job_id}；请先停止原 runtime 后重试"
+                )
+            restored = False
+            try:
+                request = await self._pending_request_store.project(claim.record, position=0, snapshot_version=0)
+                job = JobState(
+                    job_id=admission.job_id, session_id=admission.session_id, thread_id=admission.thread_id,
+                    message=request.content, message_id=request.message_id, message_created_at=request.message_created_at,
+                    execution_binding=request.execution_binding, agent_id=request.agent_id,
+                    status=JobStatus.running, message_metadata=dict(request.message_metadata), attachments=list(request.attachments),
+                    gateway_id=request.gateway_id, request_id=request.request_id,
+                    created_at=request.created_at, updated_at=request.updated_at, delivery_policy=request.delivery_policy,
+                    queue_record=claim.record, queue_claim=claim,
+                )
+                if not await self._pending_request_store.before_dispatch(claim.record):
+                    try:
+                        job.resume_checkpoint_id = await self._pending_tool_checkpoint_id(job)
+                    except CheckpointRecoveryRejectedError as error:
+                        self._startup_reconciliation_errors.append({
+                            "session_id": job.session_id, "job_id": job.job_id,
+                            "error_type": type(error).__name__, "message": str(error),
+                        })
+                    if job.resume_checkpoint_id is None:
+                        if self._terminal_status_writer is None:
+                            raise RuntimeError("无法安全恢复的执行缺少 canonical terminal owner")
                         await self._message_stream_store.reconcile_job_tools(
-                            session_id=owner[0], thread_id=owner[1], job_id=job_id,
+                            session_id=admission.session_id, thread_id=admission.thread_id, job_id=job.job_id,
                             terminal_status_writer=self._terminal_status_writer,
                         )
-                    self._terminal_status_writer.mark_job_terminal_status(
-                        session_id=owner[0], thread_id=owner[1],
-                        job_id=job_id, status=status,
-                    )
-                if event_type != "job_started":
-                    continue
-                now = datetime.now(UTC)
-                await self._trace_event_store.append(
-                    session_id,
-                    SessionInterruptedEvent(
-                        event_id=create_prefixed_id("evt"),
-                        job_id=job_id,
-                        agent_id="runtime_reconciler",
-                        timestamp=now,
-                        payload=SessionInterruptedPayload(
-                            session_id=session_id,
-                            phase="process_exit",
-                            interrupted_at=now,
-                            code="execution_lost",
-                            message="工作区后端重启，无法安全续接原 AgentLoop 执行",
-                            resumable=False,
-                        ),
-                    ),
-                )
-                reconciled += 1
+                        if not self._terminal_status_writer.mark_job_terminal_status(
+                            session_id=admission.session_id, thread_id=admission.thread_id,
+                            job_id=job.job_id, status="execution_lost",
+                        ):
+                            raise RuntimeError("原持久执行缺少 terminal admission")
+                        now = datetime.now(UTC)
+                        await self._trace_event_store.append(admission.session_id, SessionInterruptedEvent(
+                            event_id=create_prefixed_id("evt"), job_id=job.job_id, agent_id="runtime_reconciler", timestamp=now,
+                            payload=SessionInterruptedPayload(
+                                session_id=admission.session_id, phase="process_exit", interrupted_at=now,
+                                code="execution_lost", message="工作区后端重启，无法安全续接原 AgentLoop 执行", resumable=False,
+                            ),
+                        ))
+                        reconciled += 1
+                        continue
+                await self._job_service.restore_active_job(job)
+                resumed_job_ids.add(job.job_id)
+                restored = True
+            finally:
+                if not restored:
+                    await claim.close()
         reconciled += await self._message_stream_store.reconcile_unfinished_streams(
             resumed_job_ids=resumed_job_ids,
         )

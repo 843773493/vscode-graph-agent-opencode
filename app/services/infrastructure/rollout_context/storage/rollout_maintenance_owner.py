@@ -45,6 +45,7 @@ from app.services.infrastructure.rollout_context.storage.rollout_schema_introspe
     RolloutSchemaIntrospectionMixin,
 )
 from app.services.infrastructure.rollout_context.storage.schema import (
+    EXECUTION_QUEUE_SCHEMA_SQL,
     MESSAGES_VERSION_MIGRATION_SQL,
     VIEW_MEMBERSHIP_MIGRATION_SQL,
     initialize_rollout_schema,
@@ -199,7 +200,7 @@ class RolloutMaintenanceOwner(
                     )
                 if (to_version > storage_version.ROLLOUT_SCHEMA_VERSION
                         or (to_version != storage_version.ROLLOUT_SCHEMA_VERSION
-                            and (current_version, to_version) not in {(18, 19), (19, 20), (20, 21), (21, 22), (22, 23)})):
+                            and (current_version, to_version) not in {(18, 19), (19, 20), (20, 21), (21, 22), (22, 23), (23, 24)})):
                     raise RuntimeError(
                         "当前程序尚未声明目标 SQLite schema 版本: "
                         f"target={to_version}, supported={storage_version.ROLLOUT_SCHEMA_VERSION}"
@@ -255,6 +256,8 @@ class RolloutMaintenanceOwner(
                         raise ValueError("schema migration 21→22 必须使用登记的assembly内容SQL")
                     if (current_version, to_version) == (22, 23) and migration_sql != VIEW_MEMBERSHIP_MIGRATION_SQL:
                         raise ValueError("schema migration 22→23 必须使用登记的view成员SQL")
+                    if (current_version, to_version) == (23, 24) and migration_sql != EXECUTION_QUEUE_SCHEMA_SQL:
+                        raise ValueError("schema migration 23→24 必须使用登记的执行队列 SQL")
                     execute_atomic_schema_sql(connection, migration_sql)
                     if (current_version, to_version) == (21, 22):
                         migrate_assembly_content(connection)

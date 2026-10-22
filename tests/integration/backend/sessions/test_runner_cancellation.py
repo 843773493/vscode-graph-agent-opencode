@@ -38,6 +38,7 @@ from app.domain.itemized.execution_admission import (
     InternalExecutionIntent,
     UserExecutionIdentity,
 )
+from app.domain.itemized.execution_queue import ExecutionQueueInput
 from app.domain.itemized.hashing import sha256_jcs
 from app.domain.itemized.mutation_intents import MutationIntentOwner
 from app.prompting.factory import PromptSection, internal_message_factory
@@ -149,13 +150,18 @@ async def _start_job(case: RunnerCase, origin: str, session_id: str, thread_id: 
     binding = intent or case.container.job_service.reserve_user_execution_identity()
     created_at = datetime.now(UTC)
     if isinstance(binding, UserExecutionIdentity):
-        case.container.message_service.accept_user_message(
-            MessageDTO(
+        queued_message = MessageDTO(
                 message_id=message_id, session_id=session_id, thread_id=thread_id,
                 role=MessageRole.user, content=content, metadata=metadata,
                 created_at=created_at, updated_at=created_at,
-            ),
-            execution_identity=binding,
+            )
+        case.container.message_service.accept_user_message(
+            queued_message,
+            execution_identity=binding, queue_input=ExecutionQueueInput(
+            execution_binding=binding, message_id=queued_message.message_id, agent_id="default",
+            provider_id=None, delivery_policy="after_turn", gateway_id=None, request_id=None,
+            created_at=queued_message.created_at.isoformat(),
+        ),
         )
     dispatch = await case.container.job_service.start_job(
         session_id,
@@ -350,13 +356,18 @@ def _admit(
     )
     created_at = datetime.now(UTC)
     if isinstance(binding, UserExecutionIdentity):
-        case.container.message_service.accept_user_message(
-            MessageDTO(
+        queued_message = MessageDTO(
                 message_id=message_id, session_id=session_id, thread_id=thread_id,
                 role=MessageRole.user, content=content, metadata=metadata,
                 created_at=created_at, updated_at=created_at,
-            ),
-            execution_identity=binding,
+            )
+        case.container.message_service.accept_user_message(
+            queued_message,
+            execution_identity=binding, queue_input=ExecutionQueueInput(
+            execution_binding=binding, message_id=queued_message.message_id, agent_id="default",
+            provider_id=None, delivery_policy="after_turn", gateway_id=None, request_id=None,
+            created_at=queued_message.created_at.isoformat(),
+        ),
         )
         human = case.saver.accepted_user_message(
             session_id, thread_id=thread_id, job_id=job_id, message_id=message_id,
@@ -369,7 +380,14 @@ def _admit(
                 "message_metadata": metadata,
             },
         )
-        case.saver.admit_internal_execution(session_id, thread_id=thread_id, job_id=job_id, intent=binding, message=human)
+        case.saver.admit_internal_execution(
+            session_id, thread_id=thread_id, job_id=job_id, intent=binding, message=human,
+            queue_input=ExecutionQueueInput(
+                execution_binding=binding, message_id=message_id, agent_id="default",
+                provider_id=None, delivery_policy="after_turn", gateway_id=None, request_id=None,
+                created_at=created_at.isoformat(),
+            ),
+        )
         human = case.saver.accepted_internal_message(session_id, thread_id=thread_id, job_id=job_id, message_id=message_id, intent=binding)
     with session_thread_owner_scope(
         MutationIntentOwner(session_id=session_id, thread_id=thread_id),
@@ -387,6 +405,18 @@ def _admit(
     return case.saver.execution_admission_for_job(
         session_id, thread_id=thread_id, job_id=job_id
     )
+
+
+async def _settle_local_recovery_claim(case: RunnerCase, admission: ExecutionAdmission) -> None:
+    """局部恢复 fixture 领取并启动原准入；无活 writer 时释放 holder，进程退出另有专项。"""
+    store = case.container.pending_request_store
+    record = await store.record(admission.session_id, admission.thread_id, admission.job_id)
+    claim = await store.claim(record)
+    assert claim is not None
+    try:
+        await claim.start()
+    finally:
+        await claim.close()
 
 
 @pytest.mark.asyncio
@@ -683,7 +713,7 @@ async def test_failed_before_admission_does_not_create_execution_or_turn(
 
 
 @pytest.mark.asyncio
-async def test_restart_converges_real_child_job_using_started_owner(
+async def test_restart_restores_original_child_before_provider_dispatch(
     runner_case: RunnerCase,
 ) -> None:
     session_id, main_thread_id = await _session(runner_case)
@@ -753,13 +783,22 @@ async def test_restart_converges_real_child_job_using_started_owner(
         message_stream_store=runner_case.container.message_stream_store,
         terminal_status_writer=restarted,
         pending_tool_checkpoint_id=runner_case.container.agent_execution_service.pending_tool_checkpoint_id,
-        can_restart_before_provider=runner_case.container.runtime_source_dispatcher.can_restart_before_provider,
+        pending_request_store=runner_case.container.pending_request_store,
     )
-    assert await runtime.reconcile_stale_executions() == 1
-    assert _facts(runner_case, session_id, child.child_thread_id)[0] == [
-        (admission.execution_id, "internal", None, "execution_lost")
-    ]
-    assert _facts(runner_case, session_id, child.child_thread_id)[1] == []
+    await _settle_local_recovery_claim(runner_case, admission)
+    try:
+        assert await runtime.reconcile_stale_executions() == 0
+        restored = runner_case.container.job_service._jobs[admission.job_id]
+        assert (restored.session_id, restored.thread_id) == (session_id, child.child_thread_id)
+        assert restored.execution_binding.execution_id == admission.execution_id
+        assert restored.queue_claim is not None and restored.task is None
+        assert _facts(runner_case, session_id, child.child_thread_id)[0] == [
+            (admission.execution_id, "internal", None, "unknown")
+        ]
+        assert _facts(runner_case, session_id, child.child_thread_id)[1] == []
+    finally:
+        await runner_case.container.job_service.force_interrupt_active(reason="test_recovery_teardown")
+        await runner_case.container.job_service.drain_finalizations()
 
 
 @pytest.fixture
@@ -770,6 +809,7 @@ async def started_tool_attempt(
     """真实准入、prepare、双 carrier checkpoint 与持久 tool.started。"""
     session_id, thread_id = await _session(runner_case)
     admission = _admit(runner_case, session_id, thread_id, "user")
+    await _settle_local_recovery_claim(runner_case, admission)
     assert admission.turn_id is not None
     owner = MutationIntentOwner(session_id, thread_id)
     saver = runner_case.saver
@@ -942,7 +982,7 @@ async def test_restart_closes_original_tool_attempt_before_internal_prepare(
         trace_event_store=runner_case.container.trace_event_store,
         message_stream_store=cold_streams, terminal_status_writer=restarted,
         pending_tool_checkpoint_id=runner_case.container.agent_execution_service.pending_tool_checkpoint_id,
-        can_restart_before_provider=runner_case.container.runtime_source_dispatcher.can_restart_before_provider,
+        pending_request_store=runner_case.container.pending_request_store,
     )
     assert await runtime.reconcile_stale_executions() == 2
     terminals = [item for item in restarted._storage.storage.read_items(session_id, thread_id)

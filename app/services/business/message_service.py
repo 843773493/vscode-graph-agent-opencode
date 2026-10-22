@@ -23,6 +23,10 @@ from app.domain.itemized.execution_admission import (
     InternalExecutionIntent,
     UserExecutionIdentity,
 )
+from app.domain.itemized.execution_queue import (
+    ExecutionQueueInput,
+    ExecutionQueueRecord,
+)
 from app.domain.itemized.mutation_intents import MutationIntentOwner
 from app.domain.itemized.records import (
     CanonicalItemRecord,
@@ -169,6 +173,7 @@ class MessageService(MessageContentProjectionMixin):
 
     def accept_user_message(
         self, message: MessageDTO, *, execution_identity: UserExecutionIdentity,
+        queue_input: ExecutionQueueInput,
     ) -> None:
         """在 Job 入队前冻结用户输入，并原子建立 acceptance、Turn/root 和 initial execution。"""
         if message.role != MessageRole.user or message.thread_id is None:
@@ -203,7 +208,7 @@ class MessageService(MessageContentProjectionMixin):
             payload_kind="text" if isinstance(payload, str) else "structured_content",
             turn_id=execution_identity.turn_id,
             root_item_id=f"item-{message.message_id}",
-            extensions=message_annotations(response),
+            extensions=message_annotations(response), queue_input=queue_input,
         )
         if self._attachment_store is not None:
             self._attachment_store.complete_message_ingests(
@@ -211,7 +216,7 @@ class MessageService(MessageContentProjectionMixin):
                 messages=self._checkpointer,
             )
 
-    def accept_job_input(self, job: JobRuntimeStateProtocol) -> None:
+    def accept_job_input(self, job: JobRuntimeStateProtocol, *, queue_input: ExecutionQueueInput) -> ExecutionQueueRecord:
         """真实 Job 入队前完成唯一次准入；已有输入只按完整 identity 核验。"""
         saver = self._checkpointer
         if saver is None:
@@ -234,7 +239,7 @@ class MessageService(MessageContentProjectionMixin):
                 self._attachment_store.complete_message_ingests(
                     job.session_id, thread_id=job.thread_id, message_id=job.message_id, messages=saver,
                 )
-            return
+            return saver.execution_queue_record(job.session_id, job.thread_id, job.job_id)
         if not isinstance(binding, InternalExecutionIntent):
             raise TypeError("Job input owner 只接受 typed execution binding")
         if binding.input_reference_json is not None and job.attachments:
@@ -256,7 +261,7 @@ class MessageService(MessageContentProjectionMixin):
                 response["attachment_blocks"] = built.content
         saver.admit_internal_execution(
             job.session_id, thread_id=job.thread_id, job_id=job.job_id,
-            intent=binding,
+            intent=binding, queue_input=queue_input,
             message=(None if binding.input_reference_json is not None else HumanMessage(
                 id=job.message_id, content=job.message, response_metadata=response,
             )),
@@ -266,6 +271,8 @@ class MessageService(MessageContentProjectionMixin):
                 job.session_id, thread_id=job.thread_id, message_id=job.message_id,
                 messages=saver,
             )
+
+        return saver.execution_queue_record(job.session_id, job.thread_id, job.job_id)
 
     def accepted_job_message(
         self, reference: PendingRequestControl, *, display: bool,

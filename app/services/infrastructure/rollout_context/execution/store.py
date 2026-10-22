@@ -24,6 +24,9 @@ from app.services.infrastructure.rollout_context.execution.lifecycle import (
 from app.services.infrastructure.rollout_context.execution.model_calls import (
     RolloutModelCallsMixin,
 )
+from app.services.infrastructure.rollout_context.execution.queue import (
+    RolloutExecutionQueueMixin,
+)
 from app.services.infrastructure.rollout_context.execution.recovery import (
     RolloutExecutionRecoveryMixin,
 )
@@ -54,6 +57,7 @@ class RolloutExecutionStore(
     RuntimeNoticeConsumptionMixin,
     RuntimeWakeupStorageMixin,
     RolloutTurnsMixin,
+    RolloutExecutionQueueMixin,
     RolloutReplayMixin,
     RolloutTurnIndexMixin,
     RolloutExecutionsMixin,

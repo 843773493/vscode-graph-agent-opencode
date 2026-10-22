@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping
-from dataclasses import asdict
+from dataclasses import asdict, replace
 
 from app.core.sqlite_state import utc_now_text
+from app.domain.itemized.execution_queue import ExecutionQueueInput
 from app.domain.itemized.mutation_intents import ApplySourceLifecycleDecision
 from app.domain.itemized.records import CanonicalItemRecord, InternalDisplayProvenance
 from app.domain.itemized.runtime_wakeup import RuntimeExecutionWakeup
@@ -29,6 +30,7 @@ class RuntimeWakeupStorageMixin:
         decision: ApplySourceLifecycleDecision,
         item: CanonicalItemRecord,
         wakeup: RuntimeExecutionWakeup,
+        *, queue_input: ExecutionQueueInput,
     ) -> RuntimeExecutionWakeup:
         if (
             wakeup.session_id != decision.owner.session_id
@@ -52,21 +54,26 @@ class RuntimeWakeupStorageMixin:
                 for column in _COLUMNS:
                     if column not in {"gateway_id", "request_id", "agent_id"} and getattr(frozen, column) != values[column]:
                         raise ValueError("runtime wakeup 幂等请求 identity 漂移")
-                self._admit_internal_execution_transaction(
+                admission = self._admit_internal_execution_transaction(
                     connection, wakeup.session_id, thread_id=wakeup.thread_id,
                     execution_id=wakeup.execution_id, job_id=wakeup.job_id,
                     admission_idempotency_key=wakeup.admission_idempotency_key,
                     runtime_notice_item=item,
                     request_input={"kind": "runtime_notice", "payload": item.payload},
                 )
+                self.publish_execution_queue_input(connection, admission, replace(
+                    queue_input, agent_id=frozen.agent_id, gateway_id=frozen.gateway_id,
+                    request_id=frozen.request_id,
+                ), checkpoint_ns="")
                 return frozen
-            self._admit_internal_execution_transaction(
+            admission = self._admit_internal_execution_transaction(
                 connection, wakeup.session_id, thread_id=wakeup.thread_id,
                 execution_id=wakeup.execution_id, job_id=wakeup.job_id,
                 admission_idempotency_key=wakeup.admission_idempotency_key,
                 runtime_notice_item=item,
                 request_input={"kind": "runtime_notice", "payload": item.payload},
             )
+            self.publish_execution_queue_input(connection, admission, queue_input, checkpoint_ns="")
             self._context.checkpoints._apply_source_lifecycle_decision_transaction(connection, decision, item)
             expected = tuple(values[column] for column in _COLUMNS)
             connection.execute(
@@ -119,44 +126,6 @@ class RuntimeWakeupStorageMixin:
             return ()
         return tuple(wakeup for _commit_id, wakeup in sorted(ordered, key=lambda entry: entry[0]))
 
-    def runtime_wakeup_before_provider(
-        self, session_id: str, thread_id: str, *, execution_id: str,
-        job_id: str, admission_idempotency_key: str,
-    ) -> RuntimeExecutionWakeup | None:
-        """仅恢复尚无 Provider assembly 的原准入，不能据延迟的模型事件判断未派发。"""
-        try:
-            with self._storage.read_connection(session_id, thread_id, "") as connection:
-                row = connection.execute(
-                    f"SELECT {','.join(_COLUMNS)} FROM runtime_execution_wakeups "
-                    "WHERE session_id=? AND thread_id=? AND admission_idempotency_key=?",
-                    (session_id, thread_id, admission_idempotency_key),
-                ).fetchone()
-                if row is None:
-                    return None
-                wakeup = RuntimeExecutionWakeup(**dict(zip(_COLUMNS, row, strict=True)))
-                admission = self.execution_admission(
-                    session_id, thread_id=thread_id, execution_id=execution_id,
-                    writer_connection=connection,
-                )
-                if (
-                    (wakeup.execution_id, wakeup.job_id) != (execution_id, job_id)
-                    or admission.execution_origin != "internal"
-                    or (admission.job_id, admission.admission_idempotency_key)
-                    != (job_id, admission_idempotency_key)
-                ):
-                    raise RuntimeError("未派发 runtime wakeup 与原 Job/admission identity 不一致")
-                self.execution_admission_cursor(admission, connection=connection)
-                state = connection.execute(
-                    "SELECT outcome,first_model_call_id,last_model_call_id,"
-                    "EXISTS(SELECT 1 FROM model_calls WHERE execution_id=?),"
-                    "EXISTS(SELECT 1 FROM context_assemblies WHERE execution_id=?) "
-                    "FROM executions WHERE execution_id=?",
-                    (execution_id, execution_id, execution_id),
-                ).fetchone()
-                # assembly 在真实 handler 前封存；model-start 的消费可晚于网络请求。
-                return wakeup if state == ("unknown", None, None, 0, 0) else None
-        except RolloutNotMaterializedError:
-            return None
 
     def runtime_wakeup_input(self, wakeup: RuntimeExecutionWakeup) -> CanonicalItemRecord:
         with self._storage.read_connection(wakeup.session_id, wakeup.thread_id, "") as connection:

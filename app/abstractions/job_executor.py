@@ -6,6 +6,10 @@ from datetime import datetime
 from typing import Protocol
 
 from app.domain.itemized.execution_admission import ExecutionBinding
+from app.domain.itemized.execution_queue import (
+    ExecutionQueueInput,
+    ExecutionQueueRecord,
+)
 from app.schemas.internal_v2.common import JobStatus
 from app.schemas.internal_v2.message import AttachmentRef, MessageDTO
 from app.schemas.internal_v2.pending_request import PendingRequestControl
@@ -48,7 +52,7 @@ class JobExecutorProtocol(Protocol):
 class JobInputOwnerProtocol(Protocol):
     """入队前冻结准入；只读正文由唯一 canonical input owner 提供。"""
 
-    def accept_job_input(self, job: JobRuntimeStateProtocol) -> None: ...
+    def accept_job_input(self, job: JobRuntimeStateProtocol, *, queue_input: ExecutionQueueInput) -> ExecutionQueueRecord: ...
 
     def accepted_job_message(
         self, reference: PendingRequestControl, *, display: bool,

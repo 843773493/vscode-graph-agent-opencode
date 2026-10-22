@@ -10,16 +10,10 @@ from app.domain.itemized.execution_admission import (
     InternalExecutionIntent,
     UserExecutionIdentity,
 )
+from app.domain.itemized.execution_queue import DeliveryBoundary, DeliveryPolicy
 
 from .attachment import AttachmentRef
 
-DeliveryPolicy = Literal["after_turn", "after_tool_result", "after_interrupt"]
-DeliveryBoundary = Literal[
-    "idle",
-    "after_turn",
-    "after_tool_result",
-    "after_interrupt",
-]
 PendingRequestStatus = Literal["queued"]
 
 

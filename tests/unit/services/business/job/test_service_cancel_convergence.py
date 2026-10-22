@@ -38,20 +38,37 @@ async def _wait_slot_cleared(service: JobService, session_id: str) -> None:
     raise AssertionError(f"会话活动槽未释放: session_id={session_id}")
 
 
-def _make_service(session_lifecycle_guard) -> tuple[JobService, _InstantExecutor]:
+def _make_service(session_lifecycle_guard, *, job_service_factory) -> tuple[JobService, _InstantExecutor]:
     executor = _InstantExecutor()
-    return JobService(
+    return job_service_factory(
         job_event_bus=JobEventBus(),
         job_executor=executor,
         session_lifecycle_guard=session_lifecycle_guard,
     ), executor
 
 
+def _hold_first_task_before_body(service: JobService, monkeypatch: pytest.MonkeyPatch) -> None:
+    """准入本身可以让出事件循环；显式固定首次任务体尚未进入的取消窗口。"""
+    original = service._run_job_background
+    first = True
+
+    async def run(*args):
+        nonlocal first
+        if first:
+            first = False
+            await asyncio.Future()
+        return await original(*args)
+
+    monkeypatch.setattr(service, "_run_job_background", run)
+
+
 @pytest.mark.asyncio
-async def test_cancel_before_task_body_runs_converges_to_cancelled(
+async def test_cancel_before_task_body_runs_converges_to_cancelled(job_service_factory,
     session_lifecycle_guard,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    service, executor = _make_service(session_lifecycle_guard=session_lifecycle_guard)
+    service, executor = _make_service(session_lifecycle_guard=session_lifecycle_guard, job_service_factory=job_service_factory)
+    _hold_first_task_before_body(service, monkeypatch)
     session_id = "session_cancel_before_start"
     dispatch = await service.start_job(
         session_id,
@@ -74,10 +91,12 @@ async def test_cancel_before_task_body_runs_converges_to_cancelled(
 
 
 @pytest.mark.asyncio
-async def test_cancel_before_task_body_releases_fifo_head(
+async def test_cancel_before_task_body_releases_fifo_head(job_service_factory,
     session_lifecycle_guard,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    service, executor = _make_service(session_lifecycle_guard=session_lifecycle_guard)
+    service, executor = _make_service(session_lifecycle_guard=session_lifecycle_guard, job_service_factory=job_service_factory)
+    _hold_first_task_before_body(service, monkeypatch)
     session_id = "session_cancel_before_start_fifo"
     first = await service.start_job(
         session_id,
@@ -108,7 +127,7 @@ async def test_cancel_before_task_body_releases_fifo_head(
 
 
 @pytest.mark.asyncio
-async def test_concurrent_cancel_before_start_never_stalls_in_cancelling(
+async def test_concurrent_cancel_before_start_never_stalls_in_cancelling(job_service_factory,
     session_lifecycle_guard,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -119,15 +138,11 @@ async def test_concurrent_cancel_before_start_never_stalls_in_cancelling(
             index,
             session_lifecycle_guard=session_lifecycle_guard,
             monkeypatch=monkeypatch,
-        )
+        job_service_factory=job_service_factory)
 
 
-async def _run_concurrent_cancel_case(
-    index: int,
-    session_lifecycle_guard,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    service, executor = _make_service(session_lifecycle_guard=session_lifecycle_guard)
+async def _run_concurrent_cancel_case(index: int, session_lifecycle_guard, monkeypatch: pytest.MonkeyPatch, *, job_service_factory) -> None:
+    service, executor = _make_service(session_lifecycle_guard=session_lifecycle_guard, job_service_factory=job_service_factory)
     # 准入恢复可以让出事件循环；显式阻挡任务体，保证测到启动前取消而非执行中取消。
     entered = asyncio.Event()
 
@@ -169,12 +184,14 @@ async def _run_concurrent_cancel_case(
 
 
 @pytest.mark.asyncio
-async def test_pause_before_task_body_runs_resumes_cleanly(
+async def test_pause_before_task_body_runs_resumes_cleanly(job_service_factory,
     session_lifecycle_guard,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """同一未启动任务的 pause 变体：任务已死但语义未终结，resume 后须继续。"""
 
-    service, executor = _make_service(session_lifecycle_guard=session_lifecycle_guard)
+    service, executor = _make_service(session_lifecycle_guard=session_lifecycle_guard, job_service_factory=job_service_factory)
+    _hold_first_task_before_body(service, monkeypatch)
     session_id = "session_pause_before_start"
     dispatch = await service.start_job(
         session_id,
@@ -204,7 +221,7 @@ async def test_pause_before_task_body_runs_resumes_cleanly(
 
 
 @pytest.mark.asyncio
-async def test_cancel_after_task_body_started_keeps_task_path_terminal(
+async def test_cancel_after_task_body_started_keeps_task_path_terminal(job_service_factory,
     session_lifecycle_guard,
 ) -> None:
     """任务体已进入执行时，权威写入点仍是唯一终态写入者。"""
@@ -222,7 +239,7 @@ async def test_cancel_after_task_body_started_keeps_task_path_terminal(
             await asyncio.Future()
 
     executor = _BlockingExecutor()
-    service = JobService(
+    service = job_service_factory(
         job_event_bus=JobEventBus(),
         job_executor=executor,
         session_lifecycle_guard=session_lifecycle_guard,
@@ -275,7 +292,7 @@ class _BlockFirstThenFast:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("wait_for_paused_task", [False, True])
-async def test_cancel_paused_after_task_done_releases_slot_and_wakes_fifo(
+async def test_cancel_paused_after_task_done_releases_slot_and_wakes_fifo(job_service_factory,
     session_lifecycle_guard, wait_for_paused_task: bool,
 ) -> None:
     """P-1 回归：暂停后等执行任务彻底结束再取消，槽必须释放且 FIFO 队首被唤醒。
@@ -286,7 +303,7 @@ async def test_cancel_paused_after_task_done_releases_slot_and_wakes_fifo(
     """
 
     executor = _BlockFirstThenFast()
-    service = JobService(
+    service = job_service_factory(
         job_event_bus=JobEventBus(),
         job_executor=executor,
         session_lifecycle_guard=session_lifecycle_guard,
@@ -343,12 +360,12 @@ async def test_cancel_paused_after_task_done_releases_slot_and_wakes_fifo(
 
 
 @pytest.mark.asyncio
-@pytest.mark.usefixtures("workspace_scope")
-async def test_force_interrupt_paused_releases_slot(session_lifecycle_guard) -> None:
+@pytest.mark.usefixtures("empty_workspace_scope")
+async def test_force_interrupt_paused_releases_slot(job_service_factory, session_lifecycle_guard) -> None:
     """P2 变体：运行期排空作用于 paused Job 时也必须释放活动槽。"""
 
     executor = _BlockFirstThenFast()
-    service = JobService(
+    service = job_service_factory(
         job_event_bus=JobEventBus(),
         job_executor=executor,
         session_lifecycle_guard=session_lifecycle_guard,
@@ -380,10 +397,10 @@ async def test_force_interrupt_paused_releases_slot(session_lifecycle_guard) -> 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("task_finished", [False, True])
-async def test_cancel_active_without_live_task_releases_slot(
+async def test_cancel_active_without_live_task_releases_slot(job_service_factory,
     session_lifecycle_guard, monkeypatch: pytest.MonkeyPatch, task_finished: bool,
 ) -> None:
-    service, executor = _make_service(session_lifecycle_guard)
+    service, executor = _make_service(session_lifecycle_guard, job_service_factory=job_service_factory)
     session_id = "session_taskless_cancel"
     identity = service.reserve_user_execution_identity()
 

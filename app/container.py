@@ -839,7 +839,7 @@ def _build_app_container(
         session_title_service=session_title_service,
     )
     pending_request_store = PendingRequestStore(
-        sessions_dir=resolved_sessions_root,
+        sessions_dir=resolved_sessions_root, owner=checkpointer,
         input_reader=lambda reference: message_service.accepted_job_message(reference, display=False),
     )
     job_service = JobService(
@@ -943,7 +943,7 @@ def _build_app_container(
         message_stream_store=message_stream_store,
         terminal_status_writer=checkpointer,
         pending_tool_checkpoint_id=agent_execution_service.pending_tool_checkpoint_id,
-        can_restart_before_provider=runtime_source_dispatcher.can_restart_before_provider,
+        pending_request_store=pending_request_store,
     )
     goal_runtime_service = GoalRuntimeService(
         goal_service=goal_service,

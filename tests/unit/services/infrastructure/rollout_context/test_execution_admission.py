@@ -125,10 +125,11 @@ def test_pending_runtime_wakeups_keep_admission_order_after_restart(
         )
     with RolloutCheckpointSaver(sessions_dir=sessions_dir) as restarted:
         assert restarted.pending_runtime_wakeups(SESSION_ID, thread_id) == (accepted[1],)
-        assert restarted.runtime_wakeup_before_provider(
-            SESSION_ID, thread_id, execution_id=cancelled.execution_id, job_id=cancelled.job_id,
-            admission_idempotency_key=cancelled.admission_idempotency_key,
-        ) is None
+        terminal = restarted.execution_queue_record(SESSION_ID, thread_id, cancelled.job_id)
+        assert terminal.phase == "terminal" and terminal.outcome == "cancelled"
+        remaining, = restarted.execution_queue_snapshot(SESSION_ID, thread_id).records
+        assert remaining.cursor.admission.job_id == accepted[1].job_id
+        assert remaining.cursor.commit_id == cursors[1]
 
 
 def test_internal_admission_creates_turnless_execution_and_reuses_exact_identity(

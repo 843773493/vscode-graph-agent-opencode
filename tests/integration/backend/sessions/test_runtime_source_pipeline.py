@@ -607,11 +607,23 @@ async def test_runtime_wakeup_before_provider_preserves_started_job_and_frozen_a
         before = case.sql(session_id, thread_id,
             "SELECT execution_id,job_id,admission_idempotency_key,admission_payload_hash,outcome "
             "FROM executions")
+        queue_store = case.container.job_service._pending_requests.store
+        queue_record = await queue_store.record(session_id, thread_id, accepted.job_id)
+        assert await queue_store.before_dispatch(queue_record)
         assert len(before) == 1 and before[0][-1] == "unknown"
         assert case.sql(session_id, thread_id, "SELECT COUNT(*) FROM model_calls") == [(0,)]
         assert case.sql(session_id, thread_id, "SELECT COUNT(*) FROM context_assemblies") == [(0,)]
-        assert await dispatcher.can_restart_before_provider(job)
-        assert await case.container.runtime_service.reconcile_stale_executions() == 0
+        trace_before = case.container.trace_event_store.read_events(session_id)
+        with pytest.raises(RuntimeError, match="仍由另一个 runtime 持有"):
+            await case.container.runtime_service.reconcile_stale_executions()
+        assert case.container.job_service._jobs[accepted.job_id] is job
+        assert job.task is original_task and original_task is not None and not original_task.done()
+        assert case.sql(session_id, thread_id,
+            "SELECT execution_id,job_id,admission_idempotency_key,admission_payload_hash,outcome "
+            "FROM executions") == before
+        assert await queue_store.record(session_id, thread_id, accepted.job_id) == queue_record
+        assert await queue_store.before_dispatch(queue_record)
+        assert case.container.trace_event_store.read_events(session_id) == trace_before
         assert case.sql(session_id, thread_id,
             "SELECT execution_id,job_id,admission_idempotency_key,admission_payload_hash,outcome "
             "FROM executions") == before
@@ -621,6 +633,7 @@ async def test_runtime_wakeup_before_provider_preserves_started_job_and_frozen_a
         assert wakeup is not None
         repeated = await dispatcher.dispatch(wakeup)
         assert repeated.job_id == accepted.job_id and job.task is original_task
+        assert await queue_store.record(session_id, thread_id, accepted.job_id) == queue_record
         trace = case.container.trace_event_store.read_events(session_id)
         own_trace = [event for event in trace if event.job_id == accepted.job_id]
         assert [event.type for event in own_trace].count("job_created") == 1
@@ -629,7 +642,9 @@ async def test_runtime_wakeup_before_provider_preserves_started_job_and_frozen_a
     finally:
         release.set()
     await _job(case, accepted.job_id)
-    assert not await dispatcher.can_restart_before_provider(job)
+    terminal_record = await queue_store.record(session_id, thread_id, accepted.job_id)
+    assert terminal_record.phase == "terminal" and terminal_record.outcome == "completed"
+    assert not await queue_store.before_dispatch(terminal_record)
     assert case.sql(session_id, thread_id,
         "SELECT execution_id,job_id,admission_idempotency_key,admission_payload_hash FROM executions",
     ) == [before[0][:-1]]

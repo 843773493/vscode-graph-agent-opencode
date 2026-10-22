@@ -8,6 +8,7 @@ import pytest
 
 from app.core.job_event_bus import JobEventBus
 from app.domain.itemized.execution_admission import UserExecutionIdentity
+from app.domain.itemized.execution_queue import ExecutionQueueInput
 from app.schemas.internal_v2.common import JobStatus, MessageRole
 from app.schemas.internal_v2.message import MessageDTO
 from app.schemas.internal_v2.pending_request import (
@@ -17,7 +18,6 @@ from app.schemas.internal_v2.pending_request import (
 from app.services.business.job.service import (
     JobAdmissionClosedError,
     JobService,
-    JobState,
 )
 from app.services.business.message_service import MessageService
 from app.services.infrastructure.pending_request_store import PendingRequestStore
@@ -25,7 +25,6 @@ from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
 from tests.support.job_thread_fixture import (
-    job_fixture_execution_binding,
     job_fixture_thread_id,
 )
 from tests.support.message_service import build_message_service
@@ -45,7 +44,7 @@ def request_factory(pending_input_owner):
 @pytest.fixture
 def store_factory(pending_input_owner):
     def make(sessions_dir):
-        return PendingRequestStore(sessions_dir=sessions_dir, input_reader=lambda reference: pending_input_owner.accepted_job_message(reference, display=False))
+        return PendingRequestStore(sessions_dir=sessions_dir, owner=pending_input_owner._checkpointer, input_reader=lambda reference: pending_input_owner.accepted_job_message(reference, display=False))
     return make
 
 
@@ -66,7 +65,7 @@ def _service(sessions_dir: Path, session_lifecycle_guard, input_owner: MessageSe
     return JobService(
         job_event_bus=JobEventBus(),
         job_executor=_UnusedExecutor(),
-        pending_request_store=PendingRequestStore(sessions_dir=sessions_dir, input_reader=lambda reference: input_owner.accepted_job_message(reference, display=False)),
+        pending_request_store=PendingRequestStore(sessions_dir=sessions_dir, owner=input_owner._checkpointer, input_reader=lambda reference: input_owner.accepted_job_message(reference, display=False)),
         session_lifecycle_guard=session_lifecycle_guard,
         input_owner=input_owner,
         terminal_status_writer=input_owner._checkpointer,
@@ -149,7 +148,10 @@ def _request(
     input_owner.accept_user_message(MessageDTO(
         message_id=message_id, session_id=session_id, thread_id=request.thread_id,
         role=MessageRole.user, content=message_id, created_at=now, updated_at=now,
-    ), execution_identity=execution_binding)
+    ), execution_identity=execution_binding, queue_input=ExecutionQueueInput(
+        execution_binding=execution_binding, message_id=message_id, agent_id="default", provider_id=None,
+        delivery_policy="after_turn", gateway_id=gateway_id, request_id=request_id, created_at=now.isoformat(),
+    ))
     reference = PendingRequestControl.model_validate(request.model_dump(exclude={"content", "attachments", "message_created_at", "message_metadata"}))
     message = input_owner.accepted_job_message(reference, display=False)
     return request.model_copy(update={"message_created_at": message.created_at.isoformat(), "message_metadata": {**message.metadata, "boxteam_session_provider_id": None}})
@@ -165,10 +167,7 @@ async def test_job_service_restores_only_messages_still_in_queue(
 ) -> None:
     sessions_dir = tmp_path / "sessions"
     session_bundle_factory(sessions_dir, "ses_019c018e721e70b38f769ca61010e13a")
-    store = store_factory(sessions_dir)
-    await store.save(
-        "ses_019c018e721e70b38f769ca61010e13a",
-        [
+    _ = [
             request_factory(
                 "ses_019c018e721e70b38f769ca61010e13a",
                 job_id="job_first",
@@ -181,8 +180,7 @@ async def test_job_service_restores_only_messages_still_in_queue(
                 message_id="msg_second",
                 sequence=2,
             ),
-        ],
-    )
+        ]
 
     service = _service(sessions_dir, session_lifecycle_guard=session_lifecycle_guard, input_owner=pending_input_owner)
     started_jobs: list[str] = []
@@ -211,29 +209,8 @@ async def test_cancelled_pending_restore_settles_worker_before_session_delete(
     session_id = "ses_019c018e721e70b38f769ca61010e13a"
     sessions_dir = tmp_path / "sessions"
     session_bundle_factory(sessions_dir, session_id)
-    store = store_factory(sessions_dir)
-    await store.save(
-        session_id,
-        [request_factory(session_id, job_id="job_restore", message_id="msg_restore", sequence=1)],
-    )
+    _ = [request_factory(session_id, job_id="job_restore", message_id="msg_restore", sequence=1)]
     service = _service(sessions_dir, session_lifecycle_guard, pending_input_owner)
-    thread_id = pending_input_owner._resolve_main_thread_id(session_id)
-    if entrypoint == "start_restored_executions":
-        active_job = JobState(
-            job_id="job_active_restore",
-            session_id=session_id,
-            thread_id=thread_id,
-            message="active",
-            message_id="msg_active_restore",
-            message_created_at="2026-07-17T00:00:00+00:00",
-            execution_binding=job_fixture_execution_binding("job_active_restore"),
-            agent_id="default",
-            status=JobStatus.running,
-            resume_checkpoint_id="checkpoint_restore",
-        )
-        service._jobs[active_job.job_id] = active_job
-        service._thread_current_job[(session_id, thread_id)] = active_job.job_id
-        monkeypatch.setattr(service, "_start_job_task", lambda _job: None)
     async def do_nothing(*_args, **_kwargs):
         return None
 
@@ -293,15 +270,15 @@ async def test_cancelled_restore_finishes_queue_persistence_and_launch(
     sessions_dir = tmp_path / "sessions"
     session_bundle_factory(sessions_dir, session_id)
     store = store_factory(sessions_dir)
-    await store.save(session_id, [request_factory(
+    _ = [request_factory(
         session_id, job_id="job_restore", message_id="msg_restore", sequence=1,
-    )])
+    )]
     service = _service(sessions_dir, session_lifecycle_guard, pending_input_owner)
     started_jobs: list[str] = []
     _prevent_background_execution(service, monkeypatch, started_jobs)
     reached = asyncio.Event()
     release = asyncio.Event()
-    original = service._pending_requests.persist_current
+    original = service._pending_requests.refresh_version
     calls = 0
 
     async def blocked_persist(target_session_id: str) -> None:
@@ -312,7 +289,7 @@ async def test_cancelled_restore_finishes_queue_persistence_and_launch(
             await release.wait()
         await original(target_session_id)
 
-    monkeypatch.setattr(service._pending_requests, "persist_current", blocked_persist)
+    monkeypatch.setattr(service._pending_requests, "refresh_version", blocked_persist)
     restore = asyncio.create_task(service.list_pending(session_id))
     try:
         await asyncio.wait_for(reached.wait(), timeout=5)
@@ -347,9 +324,9 @@ async def test_failed_canonical_restore_keeps_pending_available_for_retry(
     sessions_dir = tmp_path / "sessions"
     session_bundle_factory(sessions_dir, session_id)
     store = store_factory(sessions_dir)
-    await store.save(session_id, [request_factory(
+    _ = [request_factory(
         session_id, job_id="job_restore", message_id="msg_restore", sequence=1,
-    )])
+    )]
     service = _service(sessions_dir, session_lifecycle_guard, pending_input_owner)
     started_jobs: list[str] = []
     _prevent_background_execution(service, monkeypatch, started_jobs)
@@ -389,29 +366,9 @@ async def test_closed_admission_allows_existing_pending_restore_but_rejects_new_
     session_id = "ses_019c018e721e70b38f769ca61010e13a"
     sessions_dir = tmp_path / "sessions"
     session_bundle_factory(sessions_dir, session_id)
-    store = store_factory(sessions_dir)
-    await store.save(
-        session_id,
-        [request_factory(session_id, job_id="job_restore", message_id="msg_restore", sequence=1)],
-    )
+    _ = [request_factory(session_id, job_id="job_restore", message_id="msg_restore", sequence=1)]
     service = _service(sessions_dir, session_lifecycle_guard, pending_input_owner)
     thread_id = pending_input_owner._resolve_main_thread_id(session_id)
-    if entrypoint == "start_restored_executions":
-        active_job = JobState(
-            job_id="job_active_restore",
-            session_id=session_id,
-            thread_id=thread_id,
-            message="active",
-            message_id="msg_active_restore",
-            message_created_at="2026-07-17T00:00:00+00:00",
-            execution_binding=job_fixture_execution_binding("job_active_restore"),
-            agent_id="default",
-            status=JobStatus.running,
-            resume_checkpoint_id="checkpoint_restore",
-        )
-        service._jobs[active_job.job_id] = active_job
-        service._thread_current_job[(session_id, thread_id)] = active_job.job_id
-        monkeypatch.setattr(service, "_start_job_task", lambda _job: None)
 
     async def do_nothing(*_args, **_kwargs):
         return None
@@ -420,7 +377,7 @@ async def test_closed_admission_allows_existing_pending_restore_but_rejects_new_
     service.close_admission()
 
     if entrypoint == "start_restored_executions":
-        assert await service.start_restored_executions() == 1
+        assert await service.start_restored_executions() == 0
         assert service._jobs["job_restore"].status == JobStatus.queued
     else:
         snapshot = await service.notify_boundary(
@@ -452,18 +409,14 @@ async def test_restore_and_new_send_keep_one_session_fifo_order(
 ) -> None:
     sessions_dir = tmp_path / "sessions"
     session_bundle_factory(sessions_dir, "ses_019b8605a35b7fd6829e9dfec660d38c")
-    store = store_factory(sessions_dir)
-    await store.save(
-        "ses_019b8605a35b7fd6829e9dfec660d38c",
-        [
+    _ = [
             request_factory(
                 "ses_019b8605a35b7fd6829e9dfec660d38c",
                 job_id="job_restored_first",
                 message_id="msg_restored_first",
                 sequence=1,
             )
-        ],
-    )
+        ]
     service = _service(sessions_dir, session_lifecycle_guard=session_lifecycle_guard, input_owner=pending_input_owner)
     started_jobs: list[str] = []
     _prevent_background_execution(service, monkeypatch, started_jobs)
@@ -474,7 +427,10 @@ async def test_restore_and_new_send_keep_one_session_fifo_order(
     pending_input_owner.accept_user_message(MessageDTO(
         message_id="msg_new", session_id="ses_019b8605a35b7fd6829e9dfec660d38c", thread_id=new_thread,
         role=MessageRole.user, content="后发送", created_at=new_created, updated_at=new_created,
-    ), execution_identity=new_binding)
+    ), execution_identity=new_binding, queue_input=ExecutionQueueInput(
+        execution_binding=new_binding, message_id="msg_new", agent_id="default", provider_id=None,
+        delivery_policy="after_turn", gateway_id=None, request_id=None, created_at=new_created.isoformat(),
+    ))
     _snapshot, new_dispatch = await asyncio.gather(
         service.list_pending("ses_019b8605a35b7fd6829e9dfec660d38c"),
         service.start_job(
@@ -510,17 +466,14 @@ async def test_dispatch_removes_started_head_from_persistent_queue(
     session_id = "ses_019c5edf70037e1791483733a8865f97"
     session_bundle_factory(sessions_dir, session_id)
     store = store_factory(sessions_dir)
-    await store.save(
-        session_id,
-        [
+    _ = [
             request_factory(
                 session_id,
                 job_id="job_started",
                 message_id="msg_started",
                 sequence=1,
             ),
-        ],
-    )
+        ]
 
     service = _service(sessions_dir, session_lifecycle_guard=session_lifecycle_guard, input_owner=pending_input_owner)
     started_jobs: list[str] = []
@@ -546,10 +499,7 @@ async def test_restored_pending_job_carries_persisted_gateway_id(
     sessions_dir = tmp_path / "sessions"
     session_id = "ses_019b990a9cce734bbccc60ec5321f320"
     session_bundle_factory(sessions_dir, session_id)
-    store = store_factory(sessions_dir)
-    await store.save(
-        session_id,
-        [
+    _ = [
             request_factory(
                 session_id,
                 job_id="job_head",
@@ -564,8 +514,7 @@ async def test_restored_pending_job_carries_persisted_gateway_id(
                 sequence=2,
                 gateway_id="gateway_restored1234",
             ),
-        ],
-    )
+        ]
 
     service = _service(sessions_dir, session_lifecycle_guard=session_lifecycle_guard, input_owner=pending_input_owner)
     _prevent_background_execution(service, monkeypatch)
@@ -589,10 +538,7 @@ async def test_restored_pending_job_carries_persisted_request_id(
     sessions_dir = tmp_path / "sessions"
     session_id = "ses_00000000f00070008000000000a1b2c3"
     session_bundle_factory(sessions_dir, session_id)
-    store = store_factory(sessions_dir)
-    await store.save(
-        session_id,
-        [
+    _ = [
             request_factory(
                 session_id,
                 job_id="job_head",
@@ -600,8 +546,7 @@ async def test_restored_pending_job_carries_persisted_request_id(
                 sequence=1,
                 request_id="request_restored1234",
             ),
-        ],
-    )
+        ]
 
     service = _service(sessions_dir, session_lifecycle_guard=session_lifecycle_guard, input_owner=pending_input_owner)
     _prevent_background_execution(service, monkeypatch)
@@ -624,7 +569,7 @@ async def test_restore_discards_reference_after_canonical_cancel_before_queue_sa
     cancelled = request_factory(session_id, job_id="job_cancelled", message_id="msg_cancelled", sequence=1)
     successor = request_factory(session_id, job_id="job_successor", message_id="msg_successor", sequence=2)
     store = store_factory(sessions_dir)
-    await store.save(session_id, [cancelled, successor])
+    _ = [cancelled, successor]
     assert pending_input_owner._checkpointer.mark_job_terminal_status(
         session_id=session_id, thread_id=cancelled.thread_id, job_id=cancelled.job_id, status="cancelled",
     )
@@ -643,7 +588,7 @@ async def test_restore_discards_reference_after_canonical_cancel_before_queue_sa
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("failure", ["load_save", "dispatch_save", "task_start"])
+@pytest.mark.parametrize("failure", ["load_projection", "dispatch_projection", "task_start"])
 async def test_restore_retries_hard_error_without_reloading_fifo(
     failure, tmp_path, monkeypatch, session_bundle_factory,
     request_factory, store_factory, pending_input_owner, session_lifecycle_guard,
@@ -655,18 +600,18 @@ async def test_restore_retries_hard_error_without_reloading_fifo(
     records = [request_factory(
         session_id, job_id=f"job_{index}", message_id=f"msg_{index}", sequence=index,
     ) for index in (1, 2)]
-    await store.save(session_id, records)
+    _ = records
     service = _service(sessions_dir, session_lifecycle_guard, pending_input_owner)
     started: list[str] = []
     _prevent_background_execution(service, monkeypatch, started)
-    original_save = service._pending_requests.persist_current
+    original_save = service._pending_requests.refresh_version
     original_start = service._start_job_task
     save_calls = 0
 
     async def fail_save_once(target_session_id):
         nonlocal save_calls
         save_calls += 1
-        if (failure, save_calls) in {("load_save", 1), ("dispatch_save", 2)}:
+        if (failure, save_calls) in {("load_projection", 1), ("dispatch_projection", 2)}:
             raise OSError("injected pending save failure")
         await original_save(target_session_id)
 
@@ -674,7 +619,7 @@ async def test_restore_retries_hard_error_without_reloading_fifo(
         monkeypatch.setattr(service, "_start_job_task", original_start)
         raise OSError("injected pending task failure")
 
-    monkeypatch.setattr(service._pending_requests, "persist_current", fail_save_once)
+    monkeypatch.setattr(service._pending_requests, "refresh_version", fail_save_once)
     if failure == "task_start":
         monkeypatch.setattr(service, "_start_job_task", fail_start_once)
     with pytest.raises(OSError, match="injected pending"):
@@ -691,7 +636,8 @@ async def test_restore_retries_hard_error_without_reloading_fifo(
     save_count = save_calls
     assert (await service.list_pending(session_id)).active_job_id == records[0].job_id
     assert started == [records[0].job_id]
-    assert save_calls == save_count
+    assert save_calls > save_count
+    assert service._jobs[records[0].job_id].queue_record.claim_generation == 1
 
 
 @pytest.mark.asyncio
@@ -709,18 +655,21 @@ async def test_loaded_dispatch_retries_original_active_slot_once(
     records = [request_factory(
         session_id, job_id=f"job_{index}", message_id=f"msg_{index}", sequence=index,
     ) for index in (1, 2, 3)]
-    await store.save(session_id, records)
+    _ = records
     service = _service(sessions_dir, session_lifecycle_guard, pending_input_owner)
     started: list[str] = []
     _prevent_background_execution(service, monkeypatch, started)
     await service.list_pending(session_id)
     original_jobs = dict(service._jobs)
-    transition_job_status(service._jobs[records[0].job_id], JobStatus.completed)
-    original_save = service._pending_requests.persist_current
+    first_job = service._jobs[records[0].job_id]
+    assert pending_input_owner._checkpointer.mark_job_terminal_status(
+        session_id=session_id, thread_id=first_job.thread_id, job_id=first_job.job_id, status="cancelled")
+    transition_job_status(first_job, JobStatus.cancelled)
+    original_save = service._pending_requests.refresh_version
     original_start = service._start_job_task
 
     async def fail_save_once(target_session_id):
-        monkeypatch.setattr(service._pending_requests, "persist_current", original_save)
+        monkeypatch.setattr(service._pending_requests, "refresh_version", original_save)
         raise OSError("injected pending save failure")
 
     def fail_start_once(job):
@@ -728,11 +677,11 @@ async def test_loaded_dispatch_retries_original_active_slot_once(
         raise OSError("injected pending task failure")
 
     if failure == "save":
-        monkeypatch.setattr(service._pending_requests, "persist_current", fail_save_once)
+        monkeypatch.setattr(service._pending_requests, "refresh_version", fail_save_once)
     else:
         monkeypatch.setattr(service, "_start_job_task", fail_start_once)
     with pytest.raises(OSError, match="injected pending"):
-        await service.notify_boundary(session_id, "after_turn", thread_id=records[0].thread_id)
+        await service._schedule_next_job_if_needed(first_job)
     assert started == [records[0].job_id]
     results = await asyncio.gather(*(
         service.notify_boundary(session_id, "after_turn", thread_id=records[0].thread_id)

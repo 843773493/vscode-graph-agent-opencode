@@ -95,10 +95,10 @@ async def test_message_acceptance_waits_for_rollout_without_blocking_event_loop(
     entered = Event()
     original_accept = messages.accept_user_message
 
-    def accept(message, *, execution_identity):
+    def accept(message, *, execution_identity, queue_input):
         entered.set()
         with _RolloutOperationLock(lock_path):
-            original_accept(message, execution_identity=execution_identity)
+            original_accept(message, execution_identity=execution_identity, queue_input=queue_input)
 
     monkeypatch.setattr(messages, "accept_user_message", accept)
     dispatch = None
@@ -210,7 +210,9 @@ class _FakeMessageService:
         self.created_messages = []
         self.accepted_messages = []
 
-    def accept_user_message(self, message, *, execution_identity):
+    def accept_user_message(self, message, *, execution_identity, queue_input):
+        assert queue_input.execution_binding == execution_identity
+        assert queue_input.message_id == message.message_id
         self.accepted_messages.append((message, execution_identity))
 
     async def create(self, session_id: str, message_create, *, thread_id: str):

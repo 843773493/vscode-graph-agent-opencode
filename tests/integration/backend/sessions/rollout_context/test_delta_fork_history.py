@@ -12,7 +12,9 @@ from langgraph.graph import END, START, StateGraph
 
 from app.core.checkpoint_config import build_checkpoint_config
 from app.core.session_thread_context import session_thread_owner_scope
+from app.domain.itemized.execution_queue import ExecutionQueueInput
 from app.domain.itemized.mutation_intents import MutationIntentOwner
+from app.schemas.internal_v2.message import MessageCreateRequest
 from app.schemas.internal_v2.session import SessionCreateRequest
 from app.services.infrastructure.rollout_context.checkpoint.codec.message_channel import (
     MessagesDeltaChannel,
@@ -72,7 +74,7 @@ def _graph(saver, admission=None, *, generic_delta=True):
 @pytest.mark.parametrize("asynchronous", [False, True])
 @pytest.mark.parametrize("generic_delta", [False, True])
 async def test_fork_keeps_generic_delta_parent_writes_and_excludes_seed_pending(
-    fork_context, start_model_call, mode, asynchronous, generic_delta,
+    fork_context, production_fork_container, start_model_call, mode, asynchronous, generic_delta,
 ):
     context = fork_context
     source = await context.sessions.create(SessionCreateRequest(title="Delta fork 源"))
@@ -90,8 +92,21 @@ async def test_fork_keeps_generic_delta_parent_writes_and_excludes_seed_pending(
         assert "events" not in frozen.checkpoint["channel_values"]
         if generic_delta:
             saver.put_writes(frozen.config, [("events", ["尚未应用的源写入"])], "unapplied-source", "unapplied-source")
+    # 关键 pending 状态由消息准入生成，fork 只复制历史，不接管来源待执行任务。
+    messages = production_fork_container.message_service
+    pending = await messages.create(source.session_id, MessageCreateRequest(content="只属于来源的排队任务"), thread_id=thread)
+    identity = production_fork_container.job_service.reserve_user_execution_identity()
+    messages.accept_user_message(pending, execution_identity=identity, queue_input=ExecutionQueueInput(
+        execution_binding=identity, message_id=pending.message_id, agent_id="default", provider_id=None,
+        delivery_policy="after_turn", gateway_id=None, request_id=None, created_at=pending.created_at.isoformat(),
+    ))
+    assert [row.cursor.admission.job_id for row in saver.execution_queue_snapshot(source.session_id, thread).records] == [identity.job_id]
     request = await _fork_request(context, source.session_id, creation_kind="new_session_main", mode=mode)
     target = await context.forks.fork(request)
+    assert saver.execution_queue_snapshot(target.session.session_id, target.thread_id).records == ()
+    (source_pending,) = saver.execution_queue_snapshot(source.session_id, thread).records
+    assert source_pending.cursor.admission.job_id == identity.job_id
+    assert source_pending.phase == "queued" and source_pending.claim_generation == 0
     await context.sessions.path_resolver.delete_subtree(idempotency_key="delta-source-delete", root_node_id=source.session_id)
     cold = RolloutCheckpointSaver(context.sessions.path_resolver.sessions_root)
     owner = MutationIntentOwner(target.session.session_id, target.thread_id)
@@ -101,7 +116,11 @@ async def test_fork_keeps_generic_delta_parent_writes_and_excludes_seed_pending(
         restored = await cold_graph.aget_state(target_config) if asynchronous else cold_graph.get_state(target_config)
         if generic_delta:
             assert restored.values["events"] == actual["events"] == ["原输入", "第一步", "第二步"]
-        assert [(message.id, message.content) for message in restored.values["messages"]] == [(message.id, message.content) for message in actual["messages"]]
+        expected_messages = [(message.id, message.content) for message in actual["messages"]]
+        if mode == "full_rollout_copy":
+            # full 保留已接受的 canonical 历史，但不复制其调度权或自动执行。
+            expected_messages.append((pending.message_id, pending.content))
+        assert [(message.id, message.content) for message in restored.values["messages"]] == expected_messages
         target_head = cold.get_tuple(target_config)
         if generic_delta:
             assert target_head.metadata["counters_since_delta_snapshot"]["events"] == frozen.metadata["counters_since_delta_snapshot"]["events"]

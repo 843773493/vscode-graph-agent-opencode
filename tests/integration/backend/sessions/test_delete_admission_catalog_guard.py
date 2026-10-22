@@ -14,6 +14,7 @@ from app.core.background_message_bus import BackgroundMessageBus
 from app.core.exceptions import NotFoundError
 from app.core.job_event_bus import JobEventBus
 from app.core.session_lifecycle_gate import SessionDeletionPendingError
+from app.domain.itemized.execution_queue import ExecutionQueueInput
 from app.schemas.internal_v2.common import JobStatus, MessageRole
 from app.schemas.internal_v2.message import MessageDTO
 from app.services.business.job.service import JobService, JobState
@@ -21,6 +22,7 @@ from app.services.business.message_service import MessageService
 from app.services.business.session_service import SessionService
 from app.services.infrastructure.background_work_store import BackgroundWorkStore
 from app.services.infrastructure.config_service import ConfigService
+from app.services.infrastructure.pending_request_store import PendingRequestStore
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
@@ -93,6 +95,8 @@ async def admission_harness() -> AsyncIterator[_AdmissionHarness]:
         session_lifecycle_guard=session_lifecycle_guard,
         input_owner=input_owner,
         terminal_status_writer=saver,
+        pending_request_store=PendingRequestStore(sessions_dir=workspace.sessions_root, owner=saver,
+            input_reader=lambda ref: input_owner.accepted_job_message(ref, display=False)),
     )
     try:
         yield _AdmissionHarness(
@@ -199,16 +203,23 @@ async def test_catalog_delete_settles_active_and_queued_jobs_before_isolation(
     thread_id = workspace.resolver.main_thread_id(session_id)
     admission_harness.executor.hold = True
 
-    async def accept(content: str, message_id: str):
+    async def accept(content: str, message_id: str, *, start: bool = True):
         identity = service.reserve_user_execution_identity()
         now = datetime.now(UTC)
-        admission_harness.input_owner.accept_user_message(
-            MessageDTO(
+        queued_message = MessageDTO(
                 message_id=message_id, session_id=session_id, thread_id=thread_id,
                 role=MessageRole.user, content=content, created_at=now, updated_at=now,
-            ),
-            execution_identity=identity,
+            )
+        admission_harness.input_owner.accept_user_message(
+            queued_message,
+            execution_identity=identity, queue_input=ExecutionQueueInput(
+            execution_binding=identity, message_id=queued_message.message_id, agent_id="default",
+            provider_id=None, delivery_policy="after_turn", gateway_id=None, request_id=None,
+            created_at=queued_message.created_at.isoformat(),
+        ),
         )
+        if not start:
+            return identity
         return await service.start_job(
             session_id, content, thread_id=thread_id, execution_binding=identity,
             message_id=message_id, message_created_at=now.isoformat(),
@@ -218,6 +229,8 @@ async def test_catalog_delete_settles_active_and_queued_jobs_before_isolation(
     await asyncio.wait_for(admission_harness.executor.started.wait(), timeout=3)
     queued = await accept("已接受的 queued 输入", "msg-queued-delete")
     assert service._jobs[queued.job_id].status == JobStatus.queued
+    unstarted = await accept("尚未派发的准入", "msg-unstarted-delete", start=False)
+    assert unstarted.job_id not in service._jobs
     database = admission_harness.saver._storage.storage.index_path(
         session_id, thread_id=thread_id,
     )
@@ -234,10 +247,10 @@ async def test_catalog_delete_settles_active_and_queued_jobs_before_isolation(
         assert database.is_file(), "canonical 终态必须先于物理隔离"
         with sqlite3.connect(database.as_uri() + "?mode=ro", uri=True) as connection:
             terminal_rows.update(connection.execute(
-                "SELECT job_id,outcome FROM executions WHERE job_id IN (?,?)",
-                (active.job_id, queued.job_id),
+                "SELECT job_id,outcome FROM executions WHERE job_id IN (?,?,?)",
+                (active.job_id, queued.job_id, unstarted.job_id),
             ).fetchall())
-            assert connection.execute("SELECT COUNT(*) FROM turn_records").fetchone() == (2,)
+            assert connection.execute("SELECT COUNT(*) FROM turn_records").fetchone() == (3,)
 
     workspace.delete_service.set_session_drain_callback(cleanup)
     deletion = asyncio.create_task(service.run_sessions_delete_operation(
@@ -259,7 +272,7 @@ async def test_catalog_delete_settles_active_and_queued_jobs_before_isolation(
         release_drain.set()
         result = await asyncio.wait_for(deletion, timeout=3)
         assert result.record_state == "completed"
-        assert terminal_rows == {active.job_id: "cancelled", queued.job_id: "cancelled"}
+        assert terminal_rows == {active.job_id: "cancelled", queued.job_id: "cancelled", unstarted.job_id: "cancelled"}
         assert admission_harness.executor.session_ids == [session_id], "queued 输入不能在删除收尾中启动"
         assert service._pending_queue.ids(session_id) == ()
         assert all(job.session_id != session_id for job in service._jobs.values())
@@ -391,13 +404,18 @@ async def test_catalog_delete_drain_failure_rejects_late_admission(
     )
     active_identity = job_service.reserve_user_execution_identity()
     active_created_at = datetime.now(UTC)
-    admission_harness.input_owner.accept_user_message(
-        MessageDTO(
+    queued_message = MessageDTO(
             message_id="msg-active-session", session_id=active_session_id,
             thread_id=active_thread_id, role=MessageRole.user, content="active message",
             created_at=active_created_at, updated_at=active_created_at,
-        ),
-        execution_identity=active_identity,
+        )
+    admission_harness.input_owner.accept_user_message(
+        queued_message,
+        execution_identity=active_identity, queue_input=ExecutionQueueInput(
+        execution_binding=active_identity, message_id=queued_message.message_id, agent_id="default",
+        provider_id=None, delivery_policy="after_turn", gateway_id=None, request_id=None,
+        created_at=queued_message.created_at.isoformat(),
+    ),
     )
     active_dispatch = await job_service.start_job(
         active_session_id,

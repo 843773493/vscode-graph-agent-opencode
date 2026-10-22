@@ -1,4 +1,4 @@
-"""真实 HTTP 冷读损坏队列的诊断；不作为完整执行恢复验收。"""
+"""普通 HTTP 入口拒绝旧 pending 输入，保留原件并要求显式迁移。"""
 
 from __future__ import annotations
 
@@ -74,16 +74,12 @@ async def test_pending_request_failure_does_not_publish_native_storage(
         assert str(root) not in response.text
         assert "private-input.txt" not in response.text
         message = response.json()["message"]
-        assert session_id in message and "artifact=pending_requests" in message
-        assert "stage=read_control" in message
-        assert "error=" in message
-        if failure == "permission":
-            assert "PermissionError" in message and "errno=13" in message
+        assert session_id in message and "migrate_schema" in message
         receipts.append(response.json())
     path.chmod(0o644)
     assert path.read_bytes() == corrupted
-    # 修复控制文件后重试原入口，读取失败不得提前标记为已恢复。
-    path.write_bytes(empty)
+    # 普通入口不能吞掉旧输入；移除后重试，失败不得提前标记为已恢复。
+    path.unlink()
     repaired = await integration_client.get(f"/api/v1/sessions/{session_id}/pending-requests")
     assert repaired.status_code == 200, repaired.text
     assert repaired.json()["data"]["requests"] == []

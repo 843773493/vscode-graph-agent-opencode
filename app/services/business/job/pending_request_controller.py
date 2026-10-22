@@ -6,6 +6,7 @@ from datetime import datetime
 from typing import Protocol
 
 from app.abstractions.job_executor import JobInputOwnerProtocol
+from app.abstractions.pending_request_store import PendingRequestStoreProtocol
 from app.core.shielded_cleanup import run_sync_shielded
 from app.domain.itemized.execution_admission import (
     ExecutionBinding,
@@ -60,6 +61,7 @@ class JobPendingRequestController:
         get_current_jobs: Callable[[], dict[tuple[str, str], str]],
         persist_terminal_status: Callable[[PendingJob, str], Awaitable[bool]],
         input_owner: JobInputOwnerProtocol | None,
+        store: PendingRequestStoreProtocol | None,
     ) -> None:
         self._queue = queue
         self._lock = lock
@@ -67,6 +69,7 @@ class JobPendingRequestController:
         self._get_current_jobs = get_current_jobs
         self._persist_terminal_status = persist_terminal_status
         self._input_owner = input_owner
+        self._store = store
 
     def _job_by_message_id(self, session_id: str, message_id: str) -> PendingJob:
         jobs = self._get_jobs()
@@ -208,16 +211,15 @@ class JobPendingRequestController:
         expected_snapshot_version: int | None,
     ) -> PendingRequestListDTO:
         async with self._lock:
-            current_version = self._queue.snapshot_version(session_id)
-            if (
-                expected_snapshot_version is not None
-                and expected_snapshot_version != current_version
-            ):
-                raise RuntimeError(
-                    f"队列快照已过期: session_id={session_id}, "
-                    f"expected={expected_snapshot_version}, actual={current_version}"
-                )
             job = self._job_by_message_id(session_id, message_id)
+            if self._store is None:
+                raise RuntimeError("待处理消息控制缺少持久执行队列 owner")
+            dto = await self._dto(job, 0, display=False)
+            reference = PendingRequestControl.model_validate(dto.model_dump(exclude={
+                "content", "attachments", "message_created_at", "message_metadata",
+            }))
+            await self._store.update_policy(reference, delivery_policy, expected_snapshot_version=expected_snapshot_version)
+            self._queue.set_snapshot_version(session_id, await self._store.snapshot_version(session_id))
             self._queue.update_policy(session_id, job.job_id, delivery_policy)
             job.delivery_policy = delivery_policy
             job.updated_at = datetime.now()  # noqa: DTZ005

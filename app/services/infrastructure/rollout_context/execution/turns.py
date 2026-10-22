@@ -20,6 +20,7 @@ from app.domain.itemized.enums import (
     TurnStatus,
 )
 from app.domain.itemized.execution_admission import user_turn_admission_payload_hash
+from app.domain.itemized.execution_queue import ExecutionQueueInput
 from app.domain.itemized.hashing import content_hash as item_content_hash
 from app.domain.itemized.identity.item_projection import (
     ItemProjectionIdentity,
@@ -79,6 +80,7 @@ class RolloutTurnsMixin:
         provenance_relations: tuple[ItemProvenanceRelation, ...] = (),
         replay_of_turn_id: str | None = None,
         identity_origin: str = "runtime",
+        queue_input: ExecutionQueueInput | None = None,
     ) -> dict[str, object]:
         """在同一事务建立 acceptance、Turn、root item 与 initial execution。"""
         session_id = strict_text(session_id, field="session_id")
@@ -363,6 +365,13 @@ class RolloutTurnsMixin:
                         commit_id = checkpoint_commit[0]
                     else:
                         commit_id = accepted_commit[1]
+                    if queue_input is not None:
+                        admission = self._read_execution_admission_connection(
+                            connection, session_id=session_id, thread_id=owner_thread_id,
+                            execution_id=stored_execution_id, checkpoint_ns=checkpoint_ns,
+                        )
+                        self.publish_execution_queue_input(connection, admission, queue_input, checkpoint_ns=checkpoint_ns)
+                        self._storage._commit_connection(connection)
                     return {
                         "turn_id": stored_turn_id,
                         "root_input_item_id": stored_root_item_id,
@@ -700,6 +709,12 @@ class RolloutTurnsMixin:
                         timestamp,
                     ),
                 )
+                if queue_input is not None:
+                    admission = self._read_execution_admission_connection(
+                        connection, session_id=session_id, thread_id=owner_thread_id,
+                        execution_id=execution_id, checkpoint_ns=checkpoint_ns,
+                    )
+                    self.publish_execution_queue_input(connection, admission, queue_input, checkpoint_ns=checkpoint_ns)
                 self._storage._commit_connection(connection)
                 return {
                     "turn_id": turn_value,

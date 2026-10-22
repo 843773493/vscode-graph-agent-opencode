@@ -59,24 +59,23 @@ if TYPE_CHECKING:
 class RolloutCheckpointQueriesMixin:
     """checkpoint header、active view 和已提交 context query owner。"""
 
-    def list_checkpoint_owners(self) -> tuple[MutationIntentOwner, ...]:
-        """只从已发布 catalog 枚举 main/child，不扫描目录或物化 rollout。"""
+    def list_checkpoint_owners(self, *, session_id: str | None = None) -> tuple[MutationIntentOwner, ...]:
+        """从 catalog 枚举 main/child；精确 Session 读取也覆盖删除排空期。"""
         resolver = self._storage._path_resolver
         owners: list[MutationIntentOwner] = []
-        for node in resolver.list_nodes():
-            if node.kind != "session":
-                continue
-            session_id = node.node_id
-            main_thread_id = resolver.main_thread_id(session_id)
-            session_node = resolver.resolve_session_node(session_id)
+        session_ids = ([session_id] if session_id is not None else
+                       [node.node_id for node in resolver.list_nodes() if node.kind == "session"])
+        for owner_session_id in session_ids:
+            main_thread_id = resolver.main_thread_id(owner_session_id)
+            session_node = resolver.resolve_session_node(owner_session_id)
             control = SessionControlStore(session_node / CONTROL_DATABASE_NAME, read_only=True)
             try:
                 control.verify_matches_catalog_main_thread(main_thread_id)
                 children = control.list_child_thread_rows()
             finally:
                 control.close()
-            owners.append(MutationIntentOwner(session_id, main_thread_id))
-            owners.extend(MutationIntentOwner(session_id, child.thread_id) for child in children)
+            owners.append(MutationIntentOwner(owner_session_id, main_thread_id))
+            owners.extend(MutationIntentOwner(owner_session_id, child.thread_id) for child in children)
         return tuple(owners)
 
     def execution_context_excluded_item_ids(

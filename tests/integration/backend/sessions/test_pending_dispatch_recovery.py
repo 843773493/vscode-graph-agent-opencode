@@ -20,6 +20,7 @@ from app.core.identifier import create_prefixed_id
 from app.core.job_event_bus import JobEventBus
 from app.core.path_utils import workspace_context
 from app.core.workspace_identity import load_or_create_workspace_id
+from app.domain.itemized.execution_queue import ExecutionQueueInput
 from app.schemas.internal_v2.common import JobStatus, MessageRole
 from app.schemas.internal_v2.job import JobControlRequest
 from app.schemas.internal_v2.message import MessageDTO
@@ -75,7 +76,7 @@ class PendingRecoveryCase:
 
 
 @pytest.fixture
-async def pending_recovery_case(request: pytest.FixtureRequest) -> AsyncIterator[PendingRecoveryCase]:
+async def pending_recovery_case(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[PendingRecoveryCase]:
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
     workspace_root = context.workspace_root
     workspace_root.mkdir(parents=True, exist_ok=True)
@@ -105,7 +106,7 @@ async def pending_recovery_case(request: pytest.FixtureRequest) -> AsyncIterator
     )
     store = PendingRequestStore(
         sessions_dir=workspace.sessions_root,
-        input_reader=lambda reference: messages.accepted_job_message(reference, display=False),
+        owner=saver, input_reader=lambda reference: messages.accepted_job_message(reference, display=False),
     )
 
     def scheduler(executor: _HeldExecutor) -> JobService:
@@ -131,7 +132,10 @@ async def pending_recovery_case(request: pytest.FixtureRequest) -> AsyncIterator
                     thread_id=thread_id, role=MessageRole.user, content=f"排队 {index}",
                     created_at=now, updated_at=now,
                 )
-                messages.accept_user_message(message, execution_identity=identity)
+                messages.accept_user_message(message, execution_identity=identity, queue_input=ExecutionQueueInput(
+                    execution_binding=identity, message_id=message.message_id, agent_id="default", provider_id=None,
+                    delivery_policy="after_turn", gateway_id=None, request_id=None, created_at=now.isoformat(),
+                ))
                 dispatch = await source.start_job(
                     session_id, message.content, thread_id=thread_id,
                     execution_binding=identity, message_id=message.message_id,
@@ -145,6 +149,13 @@ async def pending_recovery_case(request: pytest.FixtureRequest) -> AsyncIterator
             queued.append(tuple(identities))
         # 只关闭旧运行面；队列正文和控制引用全部来自上面的真实准入与派发入口。
         await _stop_jobs(source)
+        # 通过产品取消终结占位执行；旧运行面停派发，保留其后的真实等待项。
+        async def stopped_dispatch(*_args, **_kwargs):
+            return False
+        monkeypatch.setattr(source, "_start_next_pending", stopped_dispatch)
+        for state in tuple(source._jobs.values()):
+            if state.status == JobStatus.paused:
+                await source.control(state.job_id, JobControlRequest(action="cancel"))
         assert [item.job_id for item in await store.load(session_id)] == [job for group in queued for job in group]
         yield PendingRecoveryCase(
             session_id, threads, tuple(queued), cold, cold_executor, store,
@@ -159,16 +170,16 @@ async def pending_recovery_case(request: pytest.FixtureRequest) -> AsyncIterator
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("failure", ["load_save", "first_dispatch_save", "sibling_dispatch_save", "sibling_task"])
+@pytest.mark.parametrize("failure", ["load_projection", "first_dispatch_projection", "sibling_dispatch_projection", "sibling_task"])
 async def test_real_pending_queue_retries_without_replacing_or_replaying_sibling(
     pending_recovery_case: PendingRecoveryCase, monkeypatch: pytest.MonkeyPatch, failure: str,
 ) -> None:
     case = pending_recovery_case
-    original_save = case.jobs._pending_requests.persist_current
+    original_save = case.jobs._pending_requests.refresh_version
     original_start = case.jobs._start_job_task
     save_calls = 0
     starts: list[str] = []
-    failing_save = {"load_save": 1, "first_dispatch_save": 2, "sibling_dispatch_save": 3}.get(failure)
+    failing_save = {"load_projection": 1, "first_dispatch_projection": 2, "sibling_dispatch_projection": 3}.get(failure)
     fail_task = failure == "sibling_task"
 
     async def save_once(session_id):
@@ -186,7 +197,7 @@ async def test_real_pending_queue_retries_without_replacing_or_replaying_sibling
         starts.append(job.job_id)
         original_start(job)
 
-    monkeypatch.setattr(case.jobs._pending_requests, "persist_current", save_once)
+    monkeypatch.setattr(case.jobs._pending_requests, "refresh_version", save_once)
     monkeypatch.setattr(case.jobs, "_start_job_task", start_once)
     with pytest.raises(OSError, match="injected"):
         await case.jobs.list_pending(case.session_id)
@@ -210,7 +221,7 @@ async def test_real_pending_queue_retries_without_replacing_or_replaying_sibling
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("failure", ["dispatch_save", "task_start"])
+@pytest.mark.parametrize("failure", ["dispatch_projection", "task_start"])
 @pytest.mark.parametrize("operation,terminal_write_fails,fail_queued", [
     ("cancel", False, False), ("cancel", True, False),
     ("force_interrupt", False, False), ("force_interrupt", True, False),
@@ -223,15 +234,15 @@ async def test_cancel_unstarted_recovery_commits_terminal_and_wakes_original_fif
     """派发硬错误后直接取消；冷 owner 必须看到取消，不能恢复成原请求。"""
     case = pending_recovery_case
     references = {item.job_id: item for item in await case.store.load(case.session_id)}
-    original_save = case.jobs._pending_requests.persist_current
+    original_save = case.jobs._pending_requests.refresh_version
     original_start = case.jobs._start_job_task
     saves = 0
     starts: list[str] = []
 
-    async def fail_dispatch_save(session_id: str) -> None:
+    async def fail_dispatch_projection(session_id: str) -> None:
         nonlocal saves
         saves += 1
-        if failure == "dispatch_save" and saves == 2:
+        if failure == "dispatch_projection" and saves == 2:
             raise OSError("injected dispatch save failure")
         await original_save(session_id)
 
@@ -241,7 +252,7 @@ async def test_cancel_unstarted_recovery_commits_terminal_and_wakes_original_fif
         starts.append(job.job_id)
         original_start(job)
 
-    monkeypatch.setattr(case.jobs._pending_requests, "persist_current", fail_dispatch_save)
+    monkeypatch.setattr(case.jobs._pending_requests, "refresh_version", fail_dispatch_projection)
     monkeypatch.setattr(case.jobs, "_start_job_task", fail_task_start)
     with pytest.raises(OSError, match="injected"):
         await case.jobs.list_pending(case.session_id)
@@ -297,7 +308,7 @@ async def test_cancel_unstarted_recovery_commits_terminal_and_wakes_original_fif
         assert starts == []
     events = await case.jobs._bus.list_events(first)
     assert [event.type for event in events].count("job_cancelled") == 1
-    cold_saver = RolloutCheckpointSaver(sessions_dir=case.store._sessions_dir)
+    cold_saver = RolloutCheckpointSaver(sessions_dir=case.store._path_resolver.sessions_root)
     admission = cold_saver.execution_admission_for_job(
         case.session_id, thread_id=case.threads[0], job_id=first,
     )
@@ -397,7 +408,7 @@ async def test_live_cancel_write_failure_retains_owner_and_retry_uses_original_f
     events = await case.jobs._bus.list_events(first)
     assert [event.type for event in events].count("job_cancelled") == 1
     assert not any(event.type == "job_failed" for event in events)
-    cold_saver = RolloutCheckpointSaver(sessions_dir=case.store._sessions_dir)
+    cold_saver = RolloutCheckpointSaver(sessions_dir=case.store._path_resolver.sessions_root)
     admission = cold_saver.execution_admission_for_job(
         case.session_id, thread_id=case.threads[0], job_id=first,
     )

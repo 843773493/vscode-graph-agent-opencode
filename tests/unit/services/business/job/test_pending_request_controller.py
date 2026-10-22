@@ -7,6 +7,7 @@ from app.domain.itemized.execution_admission import (
     InternalExecutionIntent,
     UserExecutionIdentity,
 )
+from app.domain.itemized.execution_queue import ExecutionQueueInput
 from app.prompting import PromptSection, internal_message_factory
 from app.schemas.internal_v2.common import MessageRole
 from app.schemas.internal_v2.message import MessageDTO
@@ -41,8 +42,8 @@ class _DummyTask:
         return None
 
 
-def _service(monkeypatch: pytest.MonkeyPatch, session_lifecycle_guard) -> JobService:
-    service = JobService(
+def _service(monkeypatch: pytest.MonkeyPatch, session_lifecycle_guard, *, job_service_factory) -> JobService:
+    service = job_service_factory(
         job_event_bus=JobEventBus(),
         job_executor=_DummyJobExecutor(),
         session_lifecycle_guard=session_lifecycle_guard,
@@ -56,10 +57,10 @@ def _service(monkeypatch: pytest.MonkeyPatch, session_lifecycle_guard) -> JobSer
 
 
 @pytest.mark.asyncio
-async def test_thread_pending_reads_keep_exact_active_slot_and_session_controls(
+async def test_thread_pending_reads_keep_exact_active_slot_and_session_controls(job_service_factory,
     monkeypatch: pytest.MonkeyPatch, session_lifecycle_guard,
 ) -> None:
-    service = _service(monkeypatch, session_lifecycle_guard)
+    service = _service(monkeypatch, session_lifecycle_guard, job_service_factory=job_service_factory)
     session_id = "session_scoped_pending"
     main_thread = "thr_main_pending"
     child_thread = "thr_child_pending"
@@ -100,7 +101,7 @@ async def test_thread_pending_reads_keep_exact_active_slot_and_session_controls(
 
 
 @pytest.mark.asyncio
-async def test_pending_controls_policy_remove_without_reordering(
+async def test_pending_controls_policy_remove_without_reordering(job_service_factory,
     monkeypatch, session_lifecycle_guard, tmp_path, session_bundle_factory,
     pending_input_owner, store_factory,
 ):
@@ -110,7 +111,7 @@ async def test_pending_controls_policy_remove_without_reordering(
     saver = pending_input_owner._checkpointer
     thread_id = pending_input_owner._resolve_main_thread_id(session_id)
     store = store_factory(sessions_dir)
-    service = JobService(
+    service = job_service_factory(
         job_event_bus=JobEventBus(), job_executor=_DummyJobExecutor(),
         session_lifecycle_guard=session_lifecycle_guard, pending_request_store=store,
         input_owner=pending_input_owner, terminal_status_writer=saver,
@@ -123,7 +124,10 @@ async def test_pending_controls_policy_remove_without_reordering(
         pending_input_owner.accept_user_message(MessageDTO(
             message_id=message_id, session_id=session_id, thread_id=thread_id, role=MessageRole.user,
             content=content, created_at=now, updated_at=now,
-        ), execution_identity=binding)
+        ), execution_identity=binding, queue_input=ExecutionQueueInput(
+            execution_binding=binding, message_id=message_id, agent_id="default", provider_id=None,
+            delivery_policy=delivery_policy, gateway_id=None, request_id=None, created_at=now.isoformat(),
+        ))
         return await service.start_job(
             session_id, content, thread_id=thread_id, message_id=message_id,
             message_created_at=now.isoformat(), execution_binding=binding, delivery_policy=delivery_policy,
@@ -163,7 +167,7 @@ async def test_pending_controls_policy_remove_without_reordering(
     # 冷 owner 读取同一 cancelled 历史，重启队列不会再次派发已撤回输入。
     with RolloutCheckpointSaver(sessions_dir=sessions_dir) as restarted:
         owner = build_message_service(sessions_dir, checkpointer=restarted, workspace_root=tmp_path)
-        restored = JobService(
+        restored = job_service_factory(
             job_event_bus=JobEventBus(), job_executor=_DummyJobExecutor(),
             session_lifecycle_guard=session_lifecycle_guard, pending_request_store=store,
             input_owner=owner, terminal_status_writer=restarted,
@@ -177,10 +181,10 @@ async def test_pending_controls_policy_remove_without_reordering(
 
 
 @pytest.mark.asyncio
-async def test_job_service_returns_frozen_execution_binding(
+async def test_job_service_returns_frozen_execution_binding(job_service_factory,
     monkeypatch, session_lifecycle_guard
 ):
-    service = _service(monkeypatch, session_lifecycle_guard=session_lifecycle_guard)
+    service = _service(monkeypatch, session_lifecycle_guard=session_lifecycle_guard, job_service_factory=job_service_factory)
     user_job = await service.start_job(
         "session_execution_binding",
         "user turn",
@@ -224,10 +228,10 @@ async def test_job_service_returns_frozen_execution_binding(
 
 
 @pytest.mark.asyncio
-async def test_internal_job_allocates_one_id_when_reservation_is_absent(
+async def test_internal_job_allocates_one_id_when_reservation_is_absent(job_service_factory,
     monkeypatch, session_lifecycle_guard
 ):
-    service = _service(monkeypatch, session_lifecycle_guard=session_lifecycle_guard)
+    service = _service(monkeypatch, session_lifecycle_guard=session_lifecycle_guard, job_service_factory=job_service_factory)
     reservations: list[str] = []
     monkeypatch.setattr(
         service,
@@ -255,12 +259,12 @@ async def test_internal_job_allocates_one_id_when_reservation_is_absent(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("reserved_job_id", ["", " \t\n"])
-async def test_blank_reserved_internal_job_id_fails_before_preparation(
+async def test_blank_reserved_internal_job_id_fails_before_preparation(job_service_factory,
     reserved_job_id: str,
     monkeypatch: pytest.MonkeyPatch,
     session_lifecycle_guard,
 ) -> None:
-    service = _service(monkeypatch, session_lifecycle_guard=session_lifecycle_guard)
+    service = _service(monkeypatch, session_lifecycle_guard=session_lifecycle_guard, job_service_factory=job_service_factory)
     session_id = "session_blank_reserved_internal_job_id"
     reservations: list[str] = []
     starts: list[str] = []
@@ -303,10 +307,10 @@ async def test_blank_reserved_internal_job_id_fails_before_preparation(
 
 
 @pytest.mark.asyncio
-async def test_pending_request_projects_nullable_turn_id_from_execution_binding(
+async def test_pending_request_projects_nullable_turn_id_from_execution_binding(job_service_factory,
     monkeypatch, session_lifecycle_guard
 ):
-    service = _service(monkeypatch, session_lifecycle_guard=session_lifecycle_guard)
+    service = _service(monkeypatch, session_lifecycle_guard=session_lifecycle_guard, job_service_factory=job_service_factory)
     session_id = "session_pending_turn_projection"
     await service.start_job(
         session_id,
@@ -368,10 +372,10 @@ def test_execution_bindings_reject_reused_identity_values():
 
 
 @pytest.mark.asyncio
-async def test_pending_request_uses_safe_display_content(
+async def test_pending_request_uses_safe_display_content(job_service_factory,
     monkeypatch, session_lifecycle_guard
 ):
-    service = _service(monkeypatch, session_lifecycle_guard=session_lifecycle_guard)
+    service = _service(monkeypatch, session_lifecycle_guard=session_lifecycle_guard, job_service_factory=job_service_factory)
     session_id = "session_internal_display"
     await service.start_job(
         session_id,
@@ -409,8 +413,8 @@ async def test_pending_request_uses_safe_display_content(
 
 
 @pytest.mark.asyncio
-async def test_stale_policy_update_is_rejected(monkeypatch, session_lifecycle_guard):
-    service = _service(monkeypatch, session_lifecycle_guard=session_lifecycle_guard)
+async def test_stale_policy_update_is_rejected(job_service_factory, monkeypatch, session_lifecycle_guard):
+    service = _service(monkeypatch, session_lifecycle_guard=session_lifecycle_guard, job_service_factory=job_service_factory)
     session_id = "session_stale_policy"
     await service.start_job(
         session_id,
@@ -437,7 +441,7 @@ async def test_stale_policy_update_is_rejected(monkeypatch, session_lifecycle_gu
 
 
 @pytest.mark.asyncio
-async def test_promoted_pending_head_exposes_no_waiting_reason(
+async def test_promoted_pending_head_exposes_no_waiting_reason(job_service_factory,
     monkeypatch, session_lifecycle_guard
 ):
     """待处理 DTO 不得把「等待队首」暴露给已升为队首的条目。
@@ -447,7 +451,7 @@ async def test_promoted_pending_head_exposes_no_waiting_reason(
     「等待队首」，前端 PendingQueueBar 会把它渲染成 hover 提示，而此时它恰恰
     就是可立即投递的队首。
     """
-    service = _service(monkeypatch, session_lifecycle_guard=session_lifecycle_guard)
+    service = _service(monkeypatch, session_lifecycle_guard=session_lifecycle_guard, job_service_factory=job_service_factory)
     session_id = "session_promoted_head"
     await service.start_job(
         session_id,

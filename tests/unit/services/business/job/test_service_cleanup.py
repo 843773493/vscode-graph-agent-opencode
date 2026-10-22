@@ -5,11 +5,12 @@ import asyncio
 import pytest
 
 from app.schemas.internal_v2.common import JobStatus
-from app.services.business.job.service import JobService, JobState
+from app.services.business.job.service import JobState
 from tests.support.job_thread_fixture import (
     job_fixture_execution_binding,
     job_fixture_thread_id,
 )
+from tests.unit.services.business.job.ports import enqueue_job
 
 
 class FakeJobEventBus:
@@ -23,10 +24,10 @@ class FakeJobExecutor:
 
 
 @pytest.mark.asyncio
-async def test_delete_session_jobs_removes_running_and_queued_jobs(
+async def test_delete_session_jobs_removes_running_and_queued_jobs(job_service_factory,
     session_lifecycle_guard,
 ):
-    service = JobService(
+    service = job_service_factory(
         job_event_bus=FakeJobEventBus(),
         job_executor=FakeJobExecutor(),
         session_lifecycle_guard=session_lifecycle_guard,
@@ -71,7 +72,7 @@ async def test_delete_session_jobs_removes_running_and_queued_jobs(
     service._jobs[queued_job.job_id] = queued_job
     service._jobs[other_job.job_id] = other_job
     service._thread_current_job[(session_id, job_fixture_thread_id(session_id))] = running_job.job_id
-    service._pending_queue.append(session_id, queued_job.job_id, "after_turn", thread_id=queued_job.thread_id)
+    enqueue_job(service, queued_job, "after_turn")
 
     deleted_count = await service.run_session_delete_operation(
         session_id, lambda: service.delete_session_jobs(session_id),

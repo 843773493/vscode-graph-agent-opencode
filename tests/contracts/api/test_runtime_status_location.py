@@ -42,15 +42,12 @@ def runtime_endpoint(tmp_path: Path) -> Iterator[tuple[TestClient, Path]]:
     async def pending_checkpoint(_job: JobState) -> None:
         return None
 
-    async def before_provider(_job: JobState) -> bool:
-        return False
-
     service = RuntimeService(
         workspace_id="00000000-0000-4000-8000-000000000001", workspace_root=tmp_path,
         job_service=jobs, background_task_registry=build_background_registry(sessions_root),
         trace_event_store=TraceEventStore(sessions_dir=sessions_root),
         message_stream_store=MessageStreamStore(path_resolver=get_session_path_resolver(sessions_root)),
-        pending_tool_checkpoint_id=pending_checkpoint, can_restart_before_provider=before_provider,
+        pending_tool_checkpoint_id=pending_checkpoint, pending_request_store=_EmptyQueueStore(),
     )
     application = FastAPI()
     application.add_middleware(TraceMiddleware)
@@ -59,6 +56,11 @@ def runtime_endpoint(tmp_path: Path) -> Iterator[tuple[TestClient, Path]]:
     application.dependency_overrides[verify_local_token] = lambda: "contract-token"
     with TestClient(application) as client:
         yield client, tmp_path
+
+
+class _EmptyQueueStore:
+    async def records(self):
+        return ()
 
 
 def test_runtime_http_status_preserves_lifecycle_without_storage_location(runtime_endpoint) -> None:

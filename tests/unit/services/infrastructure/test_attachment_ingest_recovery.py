@@ -22,6 +22,7 @@ from app.domain.itemized.execution_admission import (
     InternalExecutionIntent,
     UserExecutionIdentity,
 )
+from app.domain.itemized.execution_queue import ExecutionQueueInput
 from app.domain.itemized.mutation_intents import MutationIntentOwner
 from app.prompting import PromptSection, internal_message_factory
 from app.schemas.internal_v2.message import AttachmentRef, MessageCreateRequest
@@ -41,6 +42,7 @@ SESSION = "ses_019b781159d47374805bc4427d081a14"
 BODY = b"durable-upload-crash-boundary"
 
 _UPLOAD_WORKER = r'''
+from app.domain.itemized.execution_queue import ExecutionQueueInput
 import asyncio
 import base64
 import os
@@ -114,9 +116,14 @@ with catalog_provider_scope(components):
                                data_url="data:text/plain;base64," + body)
     async def send():
         message = await messages.create(session, MessageCreateRequest(content="使用附件", attachments=[attachment]), thread_id=thread)
-        messages.accept_user_message(message, execution_identity=UserExecutionIdentity(
+        queued_identity = UserExecutionIdentity(
             job_id=create_prefixed_id("job"), turn_id=create_prefixed_id("turn"),
-            admission_idempotency_key=create_prefixed_id("adm")))
+            admission_idempotency_key=create_prefixed_id("adm"))
+        messages.accept_user_message(message, execution_identity=queued_identity, queue_input=ExecutionQueueInput(
+            execution_binding=queued_identity, message_id=message.message_id, agent_id="default",
+            provider_id=None, delivery_policy="after_turn", gateway_id=None, request_id=None,
+            created_at=message.created_at.isoformat(),
+        ))
     asyncio.run(send())
     if boundary.startswith("concurrent-"):
         print("accepted", flush=True)
@@ -265,8 +272,13 @@ async def test_settlement_error_preserves_durable_published_subject(ingest_case,
     )
     message = await case.messages.create(SESSION, MessageCreateRequest(content="使用附件", attachments=[attachment]))
     with pytest.raises(RuntimeError, match="injected attachment settlement failure"):
-        case.messages.accept_user_message(message, execution_identity=UserExecutionIdentity(
+        queued_identity = UserExecutionIdentity(
             job_id="job_settlement", turn_id="turn_settlement", admission_idempotency_key="adm_settlement",
+        )
+        case.messages.accept_user_message(message, execution_identity=queued_identity, queue_input=ExecutionQueueInput(
+            execution_binding=queued_identity, message_id=message.message_id, agent_id="default",
+            provider_id=None, delivery_policy="after_turn", gateway_id=None, request_id=None,
+            created_at=message.created_at.isoformat(),
         ))
     (ref,) = case.store._catalog.list_owner_refs_for_session(SESSION, active_only=True)
     with closing(case.control()) as control:
@@ -308,16 +320,22 @@ async def test_recovery_releases_only_unaccepted_message_reference(
         (pin,) = control.list_non_terminal_leases()
     assert pin.recovery_ref == f"attachment:{SESSION}:{message.thread_id}:{message.message_id}"
     if internal:
-        case.messages.accept_job_input(SimpleNamespace(
+        queued_input = SimpleNamespace(
             session_id=SESSION, thread_id=message.thread_id, message_id=message.message_id,
             message=message.content, message_metadata=message.metadata, attachments=message.attachments,
             message_created_at=message.created_at.isoformat(), job_id=create_prefixed_id("job"),
             execution_binding=InternalExecutionIntent(message_id=message.message_id,
                 execution_id=create_prefixed_id("intr"), admission_idempotency_key=create_prefixed_id("adm")),
-        ))
+        )
+        case.messages.accept_job_input(queued_input, queue_input=ExecutionQueueInput(execution_binding=queued_input.execution_binding, message_id=queued_input.message_id, agent_id="default", provider_id=None, delivery_policy="after_turn", gateway_id=None, request_id=None, created_at=queued_input.message_created_at))
     else:
-        case.messages.accept_user_message(message, execution_identity=UserExecutionIdentity(
+        queued_identity = UserExecutionIdentity(
             job_id=create_prefixed_id("job"), turn_id=create_prefixed_id("turn"), admission_idempotency_key=create_prefixed_id("adm"),
+        )
+        case.messages.accept_user_message(message, execution_identity=queued_identity, queue_input=ExecutionQueueInput(
+            execution_binding=queued_identity, message_id=message.message_id, agent_id="default",
+            provider_id=None, delivery_policy="after_turn", gateway_id=None, request_id=None,
+            created_at=message.created_at.isoformat(),
         ))
     with closing(case.control()) as control:
         completed = control.get_lease(pin.lease_id)
@@ -469,9 +487,14 @@ async def test_unpublished_claim_gc_and_fresh_upload_preserve_frozen_identity(in
                                data_url="data:text/plain;base64," + base64.b64encode(BODY).decode())
     thread = case.store._path_resolver.main_thread_id(SESSION)
     message = await case.messages.create(SESSION, MessageCreateRequest(content="重新上传", attachments=[attachment]), thread_id=thread)
-    case.messages.accept_user_message(message, execution_identity=UserExecutionIdentity(
+    queued_identity = UserExecutionIdentity(
         job_id=create_prefixed_id("job"), turn_id=create_prefixed_id("turn"),
-        admission_idempotency_key=create_prefixed_id("adm")))
+        admission_idempotency_key=create_prefixed_id("adm"))
+    case.messages.accept_user_message(message, execution_identity=queued_identity, queue_input=ExecutionQueueInput(
+        execution_binding=queued_identity, message_id=message.message_id, agent_id="default",
+        provider_id=None, delivery_policy="after_turn", gateway_id=None, request_id=None,
+        created_at=message.created_at.isoformat(),
+    ))
     claim = case.store._catalog.get_claim_by_digest(frozen.digest)
     assert claim.state == "published" and claim.winning_ingest_id != frozen.winning_ingest_id
     assert (claim.final_relative_locator, claim.first_claim_utc_date) == (frozen.final_relative_locator, frozen.first_claim_utc_date)
@@ -532,8 +555,13 @@ async def test_gc_preserves_hashed_reupload_of_tombstoned_blob(ingest_case, monk
     attachment = AttachmentRef(file_id="inline:gc", name="gc.txt", content_type="text/plain",
                                data_url="data:text/plain;base64," + base64.b64encode(BODY).decode())
     first = await case.messages.create(SESSION, MessageCreateRequest(content="原上传", attachments=[attachment]), thread_id=thread)
-    case.messages.accept_user_message(first, execution_identity=UserExecutionIdentity(
-        job_id=create_prefixed_id("job"), turn_id=create_prefixed_id("turn"), admission_idempotency_key=create_prefixed_id("adm")))
+    queued_identity = UserExecutionIdentity(
+        job_id=create_prefixed_id("job"), turn_id=create_prefixed_id("turn"), admission_idempotency_key=create_prefixed_id("adm"))
+    case.messages.accept_user_message(first, execution_identity=queued_identity, queue_input=ExecutionQueueInput(
+        execution_binding=queued_identity, message_id=first.message_id, agent_id="default",
+        provider_id=None, delivery_policy="after_turn", gateway_id=None, request_id=None,
+        created_at=first.created_at.isoformat(),
+    ))
     case.store.release_session_references(SESSION)
     (ref,) = case.store._catalog.list_owner_refs_for_session(SESSION)
     case.store._catalog.tombstone_blob(ref.blob_id)
@@ -561,8 +589,13 @@ async def test_gc_preserves_hashed_reupload_of_tombstoned_blob(ingest_case, monk
         if not upload.done():
             upload.cancel()
             await asyncio.gather(upload, return_exceptions=True)
-    case.messages.accept_user_message(message, execution_identity=UserExecutionIdentity(
-        job_id=create_prefixed_id("job"), turn_id=create_prefixed_id("turn"), admission_idempotency_key=create_prefixed_id("adm")))
+    queued_identity = UserExecutionIdentity(
+        job_id=create_prefixed_id("job"), turn_id=create_prefixed_id("turn"), admission_idempotency_key=create_prefixed_id("adm"))
+    case.messages.accept_user_message(message, execution_identity=queued_identity, queue_input=ExecutionQueueInput(
+        execution_binding=queued_identity, message_id=message.message_id, agent_id="default",
+        provider_id=None, delivery_policy="after_turn", gateway_id=None, request_id=None,
+        created_at=message.created_at.isoformat(),
+    ))
     assert case.store._catalog.get_blob(ref.blob_id).availability == "available"
     assert case.store._catalog.connection.execute("SELECT tombstoned_at FROM attachment_blobs").fetchone()[0] is None
     assert case.store.read(SESSION, message.attachments[0].file_id).data == BODY

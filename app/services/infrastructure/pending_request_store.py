@@ -1,333 +1,242 @@
+"""Session 查询只聚合 Thread rollout 的执行队列；不维护第二份待执行事实。"""
 from __future__ import annotations
 
 import asyncio
 import json
-import os
-import tempfile
-from collections.abc import Callable, Iterator, Sequence
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
+from datetime import datetime
 from pathlib import Path
-
-from pydantic import BaseModel, Field, ValidationError
+from typing import Protocol
+from uuid import uuid4
 
 from app.core.path_utils import get_session_path_resolver
+from app.core.session_lifecycle_gate import ThreadExecutionHolderGate
+from app.domain.itemized.execution_admission import UserExecutionIdentity
+from app.domain.itemized.execution_queue import (
+    ExecutionQueueInput,
+    ExecutionQueueRecord,
+    ExecutionQueueSnapshot,
+)
+from app.domain.itemized.mutation_intents import MutationIntentOwner
 from app.schemas.internal_v2.message import MessageDTO
 from app.schemas.internal_v2.pending_request import (
+    DeliveryPolicy,
     PendingRequestControl,
     PendingRequestDTO,
     PendingRequestSummaryDTO,
     PendingRequestSummaryListDTO,
 )
 
-_PENDING_HEADER_VERSION = 5
-_PENDING_HEADER_MAX_BYTES = 64 * 1024
-_PENDING_SUMMARY_LIMIT = 8
+
+class ExecutionQueueOwner(Protocol):
+    def validate_execution_queue(self, session_id: str, thread_id: str) -> None: ...
+    def execution_queue_before_dispatch(self, record: ExecutionQueueRecord) -> bool: ...
+    def execution_queue_owners(self, *, session_id: str | None) -> tuple[MutationIntentOwner, ...]: ...
+    def execution_queue_record(self, session_id: str, thread_id: str, job_id: str) -> ExecutionQueueRecord: ...
+    def execution_queue_snapshot(self, session_id: str, thread_id: str) -> ExecutionQueueSnapshot: ...
+    def claim_execution_queue(self, session_id: str, thread_id: str, *, job_id: str,
+                              claim_owner: str, previous_generation: int) -> ExecutionQueueRecord: ...
+    def start_execution_queue(self, session_id: str, thread_id: str, *, job_id: str,
+                              claim_owner: str, claim_generation: int) -> None: ...
+    def update_execution_queue_policy(self, session_id: str, thread_id: str, *, job_id: str,
+                                      policy: str, expected_revision: int) -> ExecutionQueueSnapshot: ...
+    def import_execution_queue(self, session_id: str, thread_id: str,
+                               inputs: tuple[tuple[str, ExecutionQueueInput], ...]) -> None: ...
 
 
-class _PendingRequestHeader(BaseModel):
-    version: int = _PENDING_HEADER_VERSION
-    request_count: int = Field(ge=0)
-    snapshot_version: int = Field(default=0, ge=0)
-    summaries: list[PendingRequestSummaryDTO] = Field(default_factory=list)
+class ExecutionQueueClaim:
+    """持有精确 Thread 的 OS 执行权，直到所有写入与终态结算完成。"""
 
+    def __init__(self, record: ExecutionQueueRecord, holder, owner: ExecutionQueueOwner) -> None:
+        self.record = record
+        self._holder = holder
+        self._owner = owner
+        self._closed = False
 
-class _StoredPendingRequest(PendingRequestControl):
-    # Provider 选择属于调度，不属于不可变用户正文。
-    provider_id: str | None = None
+    async def start(self) -> None:
+        if self._closed:
+            raise RuntimeError("执行 holder 已释放")
+        record = self.record
+        admission = record.cursor.admission
+        await asyncio.to_thread(
+            self._owner.start_execution_queue, admission.session_id, admission.thread_id,
+            job_id=admission.job_id, claim_owner=record.claim_owner, claim_generation=record.claim_generation,
+        )
 
-
-class _PendingControlError(RuntimeError):
-    """本 owner 格式检查的固定规则，不携带磁盘位置或未校验输入。"""
-
-    def __init__(self, rule: str) -> None:
-        self.rule = rule
-        super().__init__(rule)
+    async def close(self) -> None:
+        if not self._closed:
+            self._closed = True
+            await self._holder.__aexit__(None, None, None)
 
 
 class PendingRequestStore:
-    """在会话目录内持久化 FIFO 调度控制，正文只读 canonical owner。"""
-
-    def __init__(
-        self, *, sessions_dir: Path,
-        input_reader: Callable[[PendingRequestControl], MessageDTO],
-    ) -> None:
-        self._sessions_dir = sessions_dir
+    def __init__(self, *, sessions_dir: Path, owner: ExecutionQueueOwner,
+                 input_reader: Callable[[PendingRequestControl], MessageDTO]) -> None:
         self._path_resolver = get_session_path_resolver(sessions_dir)
+        self._owner = owner
         self._input_reader = input_reader
+        self._holder = ThreadExecutionHolderGate(sessions_dir)
+        self._claim_owner = uuid4().hex
 
-    def _path(self, session_id: str) -> Path:
-        return (
-            self._path_resolver.resolve_session_node_for_runtime(session_id)
-            / "pending_requests.json"
+    def _legacy_path(self, session_id: str) -> Path:
+        return self._path_resolver.resolve_session_node_for_runtime(session_id) / "pending_requests.json"
+
+    def _snapshots(self, session_id: str | None) -> tuple[tuple[MutationIntentOwner, ExecutionQueueSnapshot], ...]:
+        owners = self._owner.execution_queue_owners(session_id=session_id)
+        for identity in dict.fromkeys(owner.session_id for owner in owners):
+            if self._legacy_path(identity).exists():
+                raise RuntimeError(f"pending v5 控制引用须显式 migrate_schema 后再启动: session_id={identity}")
+        snapshots = []
+        for owner in owners:
+            with self._access(owner.session_id, owner.thread_id, "read_control"):
+                self._owner.validate_execution_queue(owner.session_id, owner.thread_id)
+                snapshots.append((owner, self._owner.execution_queue_snapshot(owner.session_id, owner.thread_id)))
+        return tuple(snapshots)
+
+    @staticmethod
+    @contextmanager
+    def _access(session_id: str, thread_id: str, stage: str) -> Iterator[None]:
+        """API 诊断按逻辑 owner 定位；原生路径与未校验正文只保留在原因链。"""
+        try:
+            yield
+        except Exception as error:
+            detail = (f"session_id={session_id}, thread_id={thread_id}, artifact=execution_queue, "
+                      f"stage={stage}, error={type(error).__name__}")
+            if isinstance(error, OSError):
+                raise type(error)(error.errno, f"{detail}, errno={error.errno}") from error
+            if isinstance(error, json.JSONDecodeError):
+                detail += f", line={error.lineno}, column={error.colno}"
+            raise RuntimeError(detail) from error
+
+    async def record(self, session_id: str, thread_id: str, job_id: str) -> ExecutionQueueRecord:
+        return await asyncio.to_thread(self._owner.execution_queue_record, session_id, thread_id, job_id)
+
+    async def records(self, session_id: str | None = None) -> tuple[ExecutionQueueRecord, ...]:
+        snapshots = await asyncio.to_thread(self._snapshots, session_id)
+        return tuple(record for _owner, snapshot in snapshots for record in snapshot.records)
+
+    async def snapshot_version(self, session_id: str) -> int:
+        snapshots = await asyncio.to_thread(self._snapshots, session_id)
+        return sum(snapshot.revision for _owner, snapshot in snapshots)
+
+    @staticmethod
+    def _control(record: ExecutionQueueRecord, *, position: int, snapshot_version: int) -> PendingRequestControl:
+        admission = record.cursor.admission
+        frozen = record.input
+        binding = frozen.execution_binding
+        return PendingRequestControl(
+            job_id=admission.job_id, execution_binding=binding, message_id=frozen.message_id,
+            session_id=admission.session_id, thread_id=admission.thread_id,
+            turn_id=binding.turn_id if isinstance(binding, UserExecutionIdentity) else None,
+            agent_id=frozen.agent_id, gateway_id=frozen.gateway_id, request_id=frozen.request_id,
+            delivery_policy=record.delivery_policy, enqueue_sequence=record.cursor.commit_id,
+            position=position, status="queued", snapshot_version=snapshot_version,
+            created_at=datetime.fromisoformat(frozen.created_at), updated_at=datetime.fromisoformat(record.updated_at),
         )
 
-    async def load(self, session_id: str) -> list[PendingRequestDTO]:
-        path = self._existing_path(session_id)
-        if path is None:
-            return []
-        try:
-            with self._access(session_id, "read_control"):
-                _header, references = await asyncio.to_thread(self._read_control_snapshot, session_id, path)
-            with self._access(session_id, "project_input"):
-                requests = [self._project_request(reference) for reference in references]
-        except Exception as error:
-            raise RuntimeError(f"待处理队列恢复失败: {error}") from error
-        return requests
-
-    def _project_request(self, reference: _StoredPendingRequest) -> PendingRequestDTO:
-        message = self._input_reader(reference)
+    async def project(self, record: ExecutionQueueRecord, *, position: int, snapshot_version: int) -> PendingRequestDTO:
+        reference = self._control(record, position=position, snapshot_version=snapshot_version)
+        with self._access(reference.session_id, reference.thread_id, "project_input"):
+            message = await asyncio.to_thread(self._input_reader, reference)
         if (message.session_id, message.thread_id, message.message_id) != (
             reference.session_id, reference.thread_id, reference.message_id,
         ):
-            raise RuntimeError("待处理输入投影与持久队列引用不一致")
+            raise RuntimeError("canonical 输入与执行队列 owner 不一致")
         return PendingRequestDTO(
-            **reference.model_dump(exclude={"provider_id"}),
-            content=message.content, attachments=message.attachments,
+            **reference.model_dump(), content=message.content, attachments=message.attachments,
             message_created_at=message.created_at.isoformat(),
-            message_metadata={**message.metadata, "boxteam_session_provider_id": reference.provider_id},
+            message_metadata={**message.metadata, "boxteam_session_provider_id": record.input.provider_id},
         )
 
-    async def migrate_schema(self, session_id: str) -> None:
-        path = self._existing_path(session_id)
-        if path is None:
-            return
-        with self._access(session_id, "migrate"):
-            if await asyncio.to_thread(self._is_current_schema, path):
-                return
-        raise RuntimeError(
-            "检测到旧 pending kind 元数据；新 FIFO 实现不提供兼容迁移，"
-            f"请在启用新实现前清理该队列文件: session_id={session_id}, "
-            "artifact=pending_requests, stage=migrate"
+    async def load(self, session_id: str) -> list[PendingRequestDTO]:
+        snapshots = await asyncio.to_thread(self._snapshots, session_id)
+        version = sum(snapshot.revision for _owner, snapshot in snapshots)
+        queued = [record for _owner, snapshot in snapshots for record in snapshot.records if record.phase == "queued"]
+        return [await self.project(record, position=position, snapshot_version=version)
+                for position, record in enumerate(queued)]
+
+    async def load_summaries(self, session_id: str, *, limit: int, thread_id: str | None = None) -> PendingRequestSummaryListDTO:
+        if not 1 <= limit <= 8:
+            raise ValueError("待处理摘要 limit 必须在 1..8 范围内")
+        snapshots = await asyncio.to_thread(self._snapshots, session_id)
+        records = [record for owner, snapshot in snapshots if thread_id is None or owner.thread_id == thread_id
+                   for record in snapshot.records if record.phase == "queued"]
+        active = next((record.cursor.admission.job_id for owner, snapshot in snapshots
+                       if thread_id is None or owner.thread_id == thread_id
+                       for record in snapshot.records if record.phase in {"claimed", "started"}), None)
+        summaries = [PendingRequestSummaryDTO(
+            job_id=record.cursor.admission.job_id, message_id=record.input.message_id,
+            thread_id=record.cursor.admission.thread_id, enqueue_sequence=record.cursor.commit_id,
+            delivery_policy=record.delivery_policy, status="queued", updated_at=datetime.fromisoformat(record.updated_at),
+        ) for record in records[:limit]]
+        return PendingRequestSummaryListDTO(
+            session_id=session_id, thread_id=thread_id, active_job_id=active, requests=summaries,
+            request_count=len(records), snapshot_version=sum(snapshot.revision for _owner, snapshot in snapshots),
+            truncated=len(summaries) < len(records),
         )
+
+    async def update_policy(self, reference: PendingRequestControl, policy: DeliveryPolicy,
+                            *, expected_snapshot_version: int | None) -> None:
+        snapshots = await asyncio.to_thread(self._snapshots, reference.session_id)
+        actual = sum(snapshot.revision for _owner, snapshot in snapshots)
+        if expected_snapshot_version is not None and expected_snapshot_version != actual:
+            raise RuntimeError(f"队列快照已过期: expected={expected_snapshot_version}, actual={actual}")
+        revision = next(snapshot.revision for owner, snapshot in snapshots if owner.thread_id == reference.thread_id)
+        await asyncio.to_thread(self._owner.update_execution_queue_policy,
+                                reference.session_id, reference.thread_id, job_id=reference.job_id,
+                                policy=policy, expected_revision=revision)
+
+    async def before_dispatch(self, record: ExecutionQueueRecord) -> bool:
+        return await asyncio.to_thread(self._owner.execution_queue_before_dispatch, record)
+
+    async def claim(self, record: ExecutionQueueRecord) -> ExecutionQueueClaim | None:
+        admission = record.cursor.admission
+        holder = self._holder.lock_for(admission.session_id, admission.thread_id)
+        await holder.__aenter__()
+        if not holder.acquired:
+            return None
+        try:
+            claimed = await asyncio.to_thread(
+                self._owner.claim_execution_queue, admission.session_id, admission.thread_id,
+                job_id=admission.job_id, claim_owner=self._claim_owner, previous_generation=record.claim_generation,
+            )
+        except BaseException:
+            await holder.__aexit__(None, None, None)
+            raise
+        return ExecutionQueueClaim(claimed, holder, self._owner)
+
+    async def migrate_schema(self, session_id: str) -> None:
+        """只接受已登记 v5 控制引用；逐 Thread 原子导入，全部成功才删除输入。"""
+        from app.services.infrastructure.pending_queue_migration import (
+            PendingQueueV5Migration,
+        )
+
+        path = self._legacy_path(session_id)
+        if not path.exists():
+            return
+        original = path.read_bytes()
+        _header, references = PendingQueueV5Migration._read_control_snapshot(session_id, path)
+        groups: dict[str, list[tuple[str, ExecutionQueueInput]]] = {}
+        for reference in references:
+            # 原 canonical reader 同时校验正文和 typed admission，不从旧 JSON 补正文。
+            await asyncio.to_thread(self._input_reader, reference)
+            groups.setdefault(reference.thread_id, []).append((reference.job_id, ExecutionQueueInput(
+                execution_binding=reference.execution_binding, message_id=reference.message_id,
+                agent_id=reference.agent_id, provider_id=reference.provider_id,
+                delivery_policy=reference.delivery_policy, gateway_id=reference.gateway_id,
+                request_id=reference.request_id, created_at=reference.created_at.isoformat(),
+            )))
+        for thread_id, inputs in groups.items():
+            await asyncio.to_thread(self._owner.import_execution_queue, session_id, thread_id, tuple(inputs))
+        if path.read_bytes() != original:
+            raise RuntimeError("迁移期间 pending v5 原件已变化，保留原件")
+        path.unlink()
 
     async def migrate_all(self) -> int:
         migrated = 0
         for node in self._path_resolver.list_nodes():
-            if node.kind != "session":
-                continue
-            path = self._existing_path(node.node_id)
-            if path is None:
-                continue
-            with self._access(node.node_id, "migrate"):
-                if await asyncio.to_thread(self._is_current_schema, path):
-                    continue
-            await self.migrate_schema(node.node_id)
-            migrated += 1
+            if node.kind == "session" and self._legacy_path(node.node_id).exists():
+                await self.migrate_schema(node.node_id)
+                migrated += 1
         return migrated
-
-    async def load_summaries(
-        self,
-        session_id: str,
-        *,
-        limit: int,
-        thread_id: str | None = None,
-    ) -> PendingRequestSummaryListDTO:
-        if limit < 1 or limit > _PENDING_SUMMARY_LIMIT:
-            raise ValueError(
-                f"待处理摘要 limit 必须在 1..{_PENDING_SUMMARY_LIMIT} 范围内"
-            )
-        path = self._existing_path(session_id)
-        if path is None:
-            return PendingRequestSummaryListDTO(
-                session_id=session_id,
-                thread_id=thread_id,
-                request_count=0,
-            )
-        if thread_id is None:
-            with self._access(session_id, "read_header"):
-                header = await asyncio.to_thread(self._read_header, path)
-            items = header.summaries[:limit]
-            request_count = header.request_count
-        else:
-            # 精确 thread 的冷摘要只读控制引用，不读取 canonical 正文或恢复 Job。
-            with self._access(session_id, "read_control"):
-                header, references = await asyncio.to_thread(self._read_control_snapshot, session_id, path)
-            scoped = [item for item in references if item.thread_id == thread_id]
-            request_count = len(scoped)
-            items = [PendingRequestSummaryDTO(
-                job_id=item.job_id, message_id=item.message_id, thread_id=item.thread_id,
-                enqueue_sequence=item.enqueue_sequence, delivery_policy=item.delivery_policy,
-                status=item.status, updated_at=item.updated_at,
-            ) for item in scoped[:limit]]
-        return PendingRequestSummaryListDTO(
-            session_id=session_id,
-            thread_id=thread_id,
-            requests=items,
-            request_count=request_count,
-            snapshot_version=header.snapshot_version,
-            truncated=len(items) < request_count,
-        )
-
-    async def save(
-        self,
-        session_id: str,
-        requests: list[PendingRequestDTO],
-    ) -> None:
-        with self._access(session_id, "resolve"):
-            path = self._path(session_id)
-        self._validate_records(session_id, requests)
-        with self._access(session_id, "validate_control"):
-            references = [self._control_reference(item) for item in requests]
-        with self._access(session_id, "project_input"):
-            for reference in references:
-                await asyncio.to_thread(self._project_request, reference)
-        content = self._serialize_current(references)
-        with self._access(session_id, "write_control"):
-            path.parent.mkdir(parents=True, exist_ok=True)
-            await asyncio.to_thread(self._atomic_write, path, content)
-
-    @staticmethod
-    def _control_reference(item: PendingRequestDTO) -> _StoredPendingRequest:
-        return _StoredPendingRequest.model_validate({
-            **item.model_dump(mode="json", exclude={
-                "content", "attachments", "message_created_at", "message_metadata",
-            }),
-            "provider_id": item.message_metadata.get("boxteam_session_provider_id"),
-        })
-
-    @staticmethod
-    def _serialize_current(requests: list[_StoredPendingRequest]) -> bytes:
-        detail = json.dumps(
-            [item.model_dump(mode="json") for item in requests],
-            ensure_ascii=False,
-            separators=(",", ":"),
-        )
-        header = _PendingRequestHeader(
-            request_count=len(requests),
-            snapshot_version=max(
-                (item.snapshot_version for item in requests),
-                default=0,
-            ),
-            summaries=[
-                PendingRequestSummaryDTO(
-                    job_id=item.job_id,
-                    message_id=item.message_id,
-                    thread_id=item.thread_id,
-                    enqueue_sequence=item.enqueue_sequence,
-                    delivery_policy=item.delivery_policy,
-                    status=item.status,
-                    updated_at=item.updated_at,
-                )
-                for item in requests[:_PENDING_SUMMARY_LIMIT]
-            ],
-        )
-        header_line = header.model_dump_json().encode("utf-8") + b"\n"
-        if len(header_line) > _PENDING_HEADER_MAX_BYTES:
-            raise RuntimeError(
-                "待处理摘要 header 超过固定上限: "
-                f"bytes={len(header_line)}, max={_PENDING_HEADER_MAX_BYTES}"
-            )
-        return header_line + detail.encode("utf-8") + b"\n"
-
-    @staticmethod
-    def _validate_records(
-        session_id: str,
-        requests: Sequence[PendingRequestControl],
-    ) -> None:
-        if any(request.session_id != session_id for request in requests):
-            raise RuntimeError(f"待处理队列引用不属于当前 Session: {session_id}")
-        sequences = [request.enqueue_sequence for request in requests]
-        if len(sequences) != len(set(sequences)):
-            raise RuntimeError(
-                f"待处理队列存在重复入队序号: session_id={session_id}, sequences={sequences}"
-            )
-        if sequences != sorted(sequences):
-            raise RuntimeError(
-                f"待处理队列入队序号未严格递增: session_id={session_id}, sequences={sequences}"
-            )
-
-    async def delete(self, session_id: str) -> None:
-        path = self._existing_path(session_id)
-        if path is not None:
-            with self._access(session_id, "delete"):
-                await asyncio.to_thread(path.unlink)
-
-    def _existing_path(self, session_id: str) -> Path | None:
-        with self._access(session_id, "resolve"):
-            path = self._path(session_id)
-            return path if path.exists() else None
-
-    @staticmethod
-    @contextmanager
-    def _access(session_id: str, stage: str) -> Iterator[None]:
-        """存储诊断按 owner 身份定位，原生位置与校验输入只留在内部原因链。"""
-        try:
-            yield
-        except Exception as error:
-            detail = (
-                f"session_id={session_id}, artifact=pending_requests, "
-                f"stage={stage}, error={type(error).__name__}"
-            )
-            if isinstance(error, OSError):
-                raise type(error)(error.errno, f"{detail}, errno={error.errno}") from error
-            if isinstance(error, ValidationError):
-                rules = sorted({item["type"] for item in error.errors(include_input=False)})
-                detail += f", error_count={error.error_count()}, rules={','.join(rules)}"
-            elif isinstance(error, json.JSONDecodeError):
-                detail += f", line={error.lineno}, column={error.colno}"
-            elif isinstance(error, UnicodeDecodeError):
-                detail += f", start={error.start}, end={error.end}"
-            elif isinstance(error, _PendingControlError):
-                detail += f", rule={error.rule}"
-            for category in (KeyError, ValueError, TypeError):
-                if isinstance(error, category):
-                    raise category(detail) from error
-            raise RuntimeError(detail) from error
-
-    @classmethod
-    def _read_header(cls, path: Path) -> _PendingRequestHeader:
-        with path.open("rb") as stream:
-            line = stream.readline(_PENDING_HEADER_MAX_BYTES + 1)
-        return cls._parse_header(line)
-
-    @staticmethod
-    def _parse_header(line: bytes) -> _PendingRequestHeader:
-        if not line.endswith(b"\n") or len(line) > _PENDING_HEADER_MAX_BYTES:
-            raise _PendingControlError("header_incomplete_or_oversized")
-        header = _PendingRequestHeader.model_validate_json(line)
-        if header.version != _PENDING_HEADER_VERSION:
-            raise _PendingControlError("header_version_unsupported")
-        if len(header.summaries) > _PENDING_SUMMARY_LIMIT:
-            raise _PendingControlError("header_summary_limit_exceeded")
-        return header
-
-    @classmethod
-    def _is_current_schema(cls, path: Path) -> bool:
-        try:
-            cls._read_header(path)
-        except (RuntimeError, ValueError):
-            return False
-        return True
-
-    @classmethod
-    def _read_control_snapshot(
-        cls, session_id: str, path: Path,
-    ) -> tuple[_PendingRequestHeader, list[_StoredPendingRequest]]:
-        # 同一个文件 handle 冻结原子发布版本，避免旧 header 与新 detail 混版。
-        with path.open("rb") as stream:
-            header = cls._parse_header(stream.readline(_PENDING_HEADER_MAX_BYTES + 1))
-            raw = stream.read()
-        if not raw.endswith(b"\n"):
-            raise _PendingControlError("detail_incomplete")
-        payload = json.loads(raw)
-        if not isinstance(payload, list):
-            raise TypeError("待处理消息文件必须是 JSON 数组")
-        references = [_StoredPendingRequest.model_validate(item) for item in payload]
-        cls._validate_records(session_id, references)
-        return header, references
-
-    @staticmethod
-    def _atomic_write(path: Path, content: bytes) -> None:
-        descriptor, temporary_name = tempfile.mkstemp(
-            prefix=f".{path.name}.",
-            dir=path.parent,
-        )
-        temporary_path = Path(temporary_name)
-        try:
-            with os.fdopen(descriptor, "wb") as stream:
-                stream.write(content)
-                stream.flush()
-                os.fsync(stream.fileno())
-            os.replace(temporary_path, path)
-        finally:
-            temporary_path.unlink(missing_ok=True)

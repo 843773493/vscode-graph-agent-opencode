@@ -28,6 +28,7 @@ from app.core.identifier import create_prefixed_id
 from app.core.job_event_bus import EventType, JobEventBus
 from app.core.trace_middleware import TraceMiddleware
 from app.core.workspace_identity import load_or_create_workspace_id
+from app.domain.itemized.execution_queue import ExecutionQueueInput
 from app.schemas.internal_v2.common import MessageRole
 from app.schemas.internal_v2.message import MessageDTO
 from app.services.business.job.service import JobService
@@ -35,6 +36,7 @@ from app.services.business.message_service import MessageService
 from app.services.business.session_service import SessionService
 from app.services.event_service import EventService
 from app.services.infrastructure.config_service import ConfigService
+from app.services.infrastructure.pending_request_store import PendingRequestStore
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
@@ -119,6 +121,8 @@ async def producer_case(request: pytest.FixtureRequest) -> AsyncIterator[TracePr
         job_event_bus=bus, job_executor=_NoModelExecutor(),
         session_lifecycle_guard=assert_active, input_owner=input_owner,
         terminal_status_writer=saver,
+        pending_request_store=PendingRequestStore(sessions_dir=workspace.sessions_root, owner=saver,
+            input_reader=lambda ref: input_owner.accepted_job_message(ref, display=False)),
     )
     sessions = SessionService(
         config_service=ConfigService(), trace_event_store=store,
@@ -178,7 +182,11 @@ async def test_real_job_created_preserves_main_and_child_thread_in_durable_trace
             thread_id=thread_id, role=MessageRole.user, content="相同正文的独立 Thread",
             created_at=now, updated_at=now,
         )
-        case.input_owner.accept_user_message(message, execution_identity=identity)
+        case.input_owner.accept_user_message(message, execution_identity=identity, queue_input=ExecutionQueueInput(
+            execution_binding=identity, message_id=message.message_id, agent_id="default",
+            provider_id=None, delivery_policy="after_turn", gateway_id=None, request_id=None,
+            created_at=message.created_at.isoformat(),
+        ))
         dispatch = await case.jobs.start_job(
             case.session_id, message.content, thread_id=thread_id,
             execution_binding=identity, message_id=message.message_id,

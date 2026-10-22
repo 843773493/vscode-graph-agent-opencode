@@ -14,6 +14,7 @@ from app.domain.itemized.execution_admission import (
     ExecutionAdmission,
     internal_execution_request_preimage,
 )
+from app.domain.itemized.execution_queue import ExecutionQueueInput
 from app.domain.itemized.hashing import sha256_jcs
 from app.domain.itemized.records import CanonicalItemRecord
 from app.services.infrastructure.rollout_context.execution.admission_reads import (
@@ -42,17 +43,21 @@ class RolloutInternalExecutionAdmissionMixin(RolloutExecutionAdmissionReadMixin)
         runtime_notice_item: CanonicalItemRecord | None,
         request_input: Mapping[str, object],
         checkpoint_ns: str = "",
+        queue_input: ExecutionQueueInput | None = None,
     ) -> ExecutionAdmission:
         """原子接受唯一 canonical request；seed/reference 不产生 notice。"""
         owner_thread_id = self._storage._resolve_thread_identity(session_id, strict_text(thread_id, field="thread_id"))
         with self._execution_input_transaction(session_id, owner_thread_id, checkpoint_ns) as connection:
-            return self._admit_internal_execution_transaction(
+            admission = self._admit_internal_execution_transaction(
                 connection, session_id, thread_id=owner_thread_id,
                 execution_id=execution_id, job_id=job_id,
                 admission_idempotency_key=admission_idempotency_key,
                 runtime_notice_item=runtime_notice_item,
                 request_input=request_input, checkpoint_ns=checkpoint_ns,
             )
+            if queue_input is not None:
+                self.publish_execution_queue_input(connection, admission, queue_input, checkpoint_ns=checkpoint_ns)
+            return admission
 
 
     @contextmanager

@@ -218,9 +218,7 @@ class JobControlService:
             await self._schedule_after_cancel(job_to_finalize)
             result = self._response(job_id, job_to_finalize, control_request)
         if pending_session_id is not None:
-            await self._pending_requests.persist(
-                await self._pending_requests.list(pending_session_id)
-            )
+            await self._pending_requests.refresh_version(pending_session_id)
         assert result is not None
         return result
 

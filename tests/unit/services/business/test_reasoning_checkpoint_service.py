@@ -25,6 +25,7 @@ from app.domain.itemized.execution_admission import (
     InternalExecutionIntent,
     UserExecutionIdentity,
 )
+from app.domain.itemized.execution_queue import ExecutionQueueInput
 from app.domain.itemized.hashing import content_hash, sha256_jcs
 from app.domain.itemized.identity.item_projection import (
     ItemProjectionIdentity,
@@ -150,10 +151,15 @@ def accept_runtime_input():
         with workspace_context(
             load_or_create_workspace_id(workspace_root), workspace_root,
         ):
-            build_message_service(sessions_dir, checkpointer=saver).accept_user_message(MessageDTO(
+            queued_message = MessageDTO(
                 message_id=message.response_metadata["message_id"], session_id=session_id, thread_id=thread_id,
                 role=MessageRole.user, content=message.content, created_at=MESSAGE_TIME, updated_at=MESSAGE_TIME,
-            ), execution_identity=binding)
+            )
+            build_message_service(sessions_dir, checkpointer=saver).accept_user_message(queued_message, execution_identity=binding, queue_input=ExecutionQueueInput(
+                execution_binding=binding, message_id=queued_message.message_id, agent_id="default",
+                provider_id=None, delivery_policy="after_turn", gateway_id=None, request_id=None,
+                created_at=queued_message.created_at.isoformat(),
+            ))
         return saver.accepted_user_message(session_id, thread_id=thread_id, job_id=job_id, message_id=message.response_metadata["message_id"])
     return accept
 

@@ -7,11 +7,13 @@ from app.core.identifier import create_prefixed_id
 from app.core.job_event_bus import EventType
 from app.core.session_lifecycle_gate import OperationHolderGate
 from app.core.shielded_cleanup import run_sync_shielded
+from app.core.trace_middleware import get_current_gateway_id, get_current_request_id
 from app.domain.itemized.execution_admission import (
     ExecutionBinding,
     InternalExecutionIntent,
     UserExecutionIdentity,
 )
+from app.domain.itemized.execution_queue import ExecutionQueueInput
 from app.prompting.validation import validate_internal_message
 from app.schemas.internal_v2.common import MessageRole
 from app.schemas.internal_v2.message import (
@@ -324,6 +326,12 @@ class SessionOrchestrator:
                     self._message_service.accept_user_message,
                     message,
                     execution_identity=execution_binding,
+                    queue_input=ExecutionQueueInput(
+                        execution_binding=execution_binding, message_id=message.message_id,
+                        agent_id=effective_agent_id, provider_id=session.current_provider_id,
+                        delivery_policy=delivery_policy, gateway_id=get_current_gateway_id(),
+                        request_id=get_current_request_id(), created_at=message.created_at.isoformat(),
+                    ),
                 )
             dispatch = await self._job_service.start_job(
                 session_id,

@@ -19,6 +19,11 @@ from app.domain.itemized.execution_admission import (
     ExecutionAdmission,
     InternalExecutionIntent,
 )
+from app.domain.itemized.execution_queue import (
+    ExecutionQueueInput,
+    ExecutionQueueRecord,
+    ExecutionQueueSnapshot,
+)
 from app.domain.itemized.hashing import sha256_jcs
 from app.domain.itemized.identity.item_projection import ItemProvenanceRelation
 from app.domain.itemized.mutation_intents import (
@@ -46,6 +51,45 @@ from app.services.mapping.itemized.thread_seed import (
 
 
 class RuntimeExecutionOwnerMixin:
+    def import_execution_queue(self, session_id: str, thread_id: str,
+                               inputs: tuple[tuple[str, ExecutionQueueInput], ...]) -> None:
+        self._storage.executions.import_execution_queue(session_id, thread_id, inputs)
+
+    def execution_queue_before_dispatch(self, record: ExecutionQueueRecord) -> bool:
+        return self._storage.executions.execution_queue_before_dispatch(record)
+
+    def execution_queue_owners(self, *, session_id: str | None) -> tuple[MutationIntentOwner, ...]:
+        return self._storage.checkpoints.list_checkpoint_owners(session_id=session_id)
+
+    def validate_execution_queue(self, session_id: str, thread_id: str) -> None:
+        self._storage.executions.validate_execution_queue(session_id, thread_id)
+
+    def execution_queue_snapshot(self, session_id: str, thread_id: str) -> ExecutionQueueSnapshot:
+        return self._storage.executions.execution_queue_snapshot(session_id, thread_id)
+
+    def execution_queue_record(self, session_id: str, thread_id: str, job_id: str) -> ExecutionQueueRecord:
+        return self._storage.executions.execution_queue_record(session_id, thread_id, job_id)
+
+    def claim_execution_queue(self, session_id: str, thread_id: str, *, job_id: str,
+                              claim_owner: str, previous_generation: int) -> ExecutionQueueRecord:
+        return self._storage.executions.claim_execution_queue(
+            session_id, thread_id, job_id=job_id, claim_owner=claim_owner,
+            previous_generation=previous_generation,
+        )
+
+    def start_execution_queue(self, session_id: str, thread_id: str, *, job_id: str,
+                              claim_owner: str, claim_generation: int) -> None:
+        self._storage.executions.start_execution_queue(
+            session_id, thread_id, job_id=job_id, claim_owner=claim_owner,
+            claim_generation=claim_generation,
+        )
+
+    def update_execution_queue_policy(self, session_id: str, thread_id: str, *, job_id: str,
+                                      policy: str, expected_revision: int) -> ExecutionQueueSnapshot:
+        return self._storage.executions.update_execution_queue_policy(
+            session_id, thread_id, job_id=job_id, policy=policy, expected_revision=expected_revision,
+        )
+
     def attachment_message_references(self, session_id: str, thread_id: str, message_id: str) -> tuple[str, ...] | None:
         """精确读取已接受消息的附件使用；缺消息与损坏提交必须区分。"""
         storage = self._storage.storage
@@ -141,13 +185,14 @@ class RuntimeExecutionOwnerMixin:
         self, session_id: str, *, thread_id: str, job_id: str,
         intent: InternalExecutionIntent, message: HumanMessage | None,
         checkpoint_ns: str = "",
+        queue_input: ExecutionQueueInput | None = None,
     ) -> ExecutionAdmission:
         notice, request_input = self._internal_execution_input(intent, message)
         return self._storage.executions.admit_internal_execution(
             session_id, thread_id=thread_id, execution_id=intent.execution_id,
             job_id=job_id, admission_idempotency_key=intent.admission_idempotency_key,
             runtime_notice_item=notice, request_input=request_input,
-            checkpoint_ns=checkpoint_ns,
+            checkpoint_ns=checkpoint_ns, queue_input=queue_input,
         )
 
     def accepted_internal_message(
@@ -268,7 +313,13 @@ class RuntimeExecutionOwnerMixin:
             item_id=notice.item_id, runtime_notice_payload=(notice.payload if isinstance(notice.payload, dict) else None),
             execution_id=intent.execution_id,
         )
-        return self._storage.executions.commit_runtime_source_wakeup(decision, notice, wakeup)
+        queue_input = ExecutionQueueInput(
+            execution_binding=intent, message_id=intent.message_id, agent_id=wakeup.agent_id,
+            provider_id=message.response_metadata.get("boxteam_session_provider_id"),
+            delivery_policy=wakeup.delivery_policy, gateway_id=wakeup.gateway_id,
+            request_id=wakeup.request_id, created_at=wakeup.message_created_at,
+        )
+        return self._storage.executions.commit_runtime_source_wakeup(decision, notice, wakeup, queue_input=queue_input)
 
     def runtime_wakeup_for_admission(
         self, session_id: str, thread_id: str, admission_idempotency_key: str,
@@ -279,15 +330,6 @@ class RuntimeExecutionOwnerMixin:
         self, session_id: str, thread_id: str,
     ) -> tuple[RuntimeExecutionWakeup, ...]:
         return self._storage.executions.pending_runtime_wakeups(session_id, thread_id)
-
-    def runtime_wakeup_before_provider(
-        self, session_id: str, thread_id: str, *, execution_id: str,
-        job_id: str, admission_idempotency_key: str,
-    ) -> RuntimeExecutionWakeup | None:
-        return self._storage.executions.runtime_wakeup_before_provider(
-            session_id, thread_id, execution_id=execution_id, job_id=job_id,
-            admission_idempotency_key=admission_idempotency_key,
-        )
 
     def runtime_wakeup_message(self, wakeup: RuntimeExecutionWakeup) -> HumanMessage:
         item = self._storage.executions.runtime_wakeup_input(wakeup)
@@ -444,6 +486,7 @@ class RuntimeExecutionOwnerMixin:
         provenance_relations: tuple[ItemProvenanceRelation, ...] = (),
         replay_of_turn_id: str | None = None,
         identity_origin: str = "runtime",
+        queue_input: ExecutionQueueInput | None = None,
     ) -> dict[str, object]:
         """在 checkpoint owner 内接受一个真实用户 Turn。"""
         return self._storage.executions.accept_turn(
@@ -468,6 +511,7 @@ class RuntimeExecutionOwnerMixin:
             provenance_relations=provenance_relations,
             replay_of_turn_id=replay_of_turn_id,
             identity_origin=identity_origin,
+            queue_input=queue_input,
         )
 
     def commit_tool_result(

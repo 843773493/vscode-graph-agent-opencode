@@ -5,12 +5,21 @@ import json
 import weakref
 from datetime import UTC, datetime
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 from app.core.identifier import create_prefixed_id
 from app.core.path_utils import get_session_path_resolver, workspace_context
-from app.domain.itemized.execution_admission import UserExecutionIdentity
+from app.domain.itemized.execution_admission import (
+    ExecutionAdmission,
+    ExecutionAdmissionCursor,
+    UserExecutionIdentity,
+)
+from app.domain.itemized.execution_queue import (
+    ExecutionQueueInput,
+    ExecutionQueueRecord,
+)
 from app.schemas.event import (
     JobCreatedEvent,
     JobCreatedPayload,
@@ -18,8 +27,6 @@ from app.schemas.event import (
     JobFailedPayload,
     JobStartedEvent,
     JobStartedPayload,
-    SessionInterruptedEvent,
-    SessionInterruptedPayload,
 )
 from app.schemas.internal_v2.common import JobStatus
 from app.services.business.job.service import (
@@ -65,6 +72,83 @@ class RecordingTurnStatusWriter:
         return True
 
 
+class EmptyPendingRequestStore:
+    """Runtime 协议替身；只暴露测试显式登记的持久 admission。"""
+
+    def __init__(self) -> None:
+        self._records: list[ExecutionQueueRecord] = []
+        self._inputs: dict[str, object] = {}
+
+    def add_started(self, event: JobCreatedEvent) -> None:
+        payload = event.payload
+        binding = payload.execution_binding
+        assert isinstance(binding, UserExecutionIdentity)
+        created_at = payload.message_created_at.isoformat()
+        queue_input = ExecutionQueueInput(
+            execution_binding=binding,
+            message_id=payload.message_id,
+            agent_id=payload.agent_id,
+            provider_id=None,
+            delivery_policy="after_turn",
+            gateway_id=None,
+            request_id=None,
+            created_at=created_at,
+        )
+        admission = ExecutionAdmission(
+            session_id=payload.session_id,
+            thread_id=payload.thread_id,
+            execution_id=f"execution-{event.job_id}",
+            job_id=event.job_id,
+            admission_idempotency_key=binding.admission_idempotency_key,
+            execution_origin="user_turn",
+            turn_id=binding.turn_id,
+        )
+        record = ExecutionQueueRecord(
+            cursor=ExecutionAdmissionCursor(admission, len(self._records) + 1, "acceptance"),
+            input=queue_input,
+            delivery_policy="after_turn",
+            phase="started",
+            claim_owner="previous-runtime",
+            claim_generation=1,
+            updated_at=created_at,
+            outcome="unknown",
+        )
+        self._records.append(record)
+        self._inputs[event.job_id] = SimpleNamespace(
+            content=payload.message,
+            message_id=payload.message_id,
+            message_created_at=created_at,
+            execution_binding=binding,
+            agent_id=payload.agent_id,
+            message_metadata={},
+            attachments=[],
+            gateway_id=None,
+            request_id=None,
+            created_at=created_at,
+            updated_at=created_at,
+            delivery_policy="after_turn",
+        )
+
+    async def records(self):
+        return tuple(self._records)
+
+    async def claim(self, record):
+        async def close():
+            return None
+
+        return SimpleNamespace(record=record, close=close)
+
+    async def project(self, record, *, position: int, snapshot_version: int):
+        return self._inputs[record.cursor.admission.job_id]
+
+    async def before_dispatch(self, _record):
+        return False
+
+    def add(self, record: ExecutionQueueRecord, request: object) -> None:
+        self._records.append(record)
+        self._inputs[record.cursor.admission.job_id] = request
+
+
 @pytest.fixture
 def pending_checkpoint_inspector():
     async def inspect(_job: JobState) -> None:
@@ -72,14 +156,7 @@ def pending_checkpoint_inspector():
     return inspect
 
 
-@pytest.fixture
-def before_provider_inspector():
-    async def inspect(_job: JobState) -> bool:
-        return False
-    return inspect
-
-
-def build_runtime(pending_checkpoint_inspector, before_provider_inspector,
+def build_runtime(pending_checkpoint_inspector,
     tmp_path: Path,
     terminal_status_writer: RecordingTurnStatusWriter | None = None,
     *,
@@ -97,7 +174,6 @@ def build_runtime(pending_checkpoint_inspector, before_provider_inspector,
         workspace_root=tmp_path,
         job_service=jobs,
         pending_tool_checkpoint_id=pending_checkpoint_inspector,
-        can_restart_before_provider=before_provider_inspector,
         background_task_registry=build_background_registry(sessions_dir),
         trace_event_store=TraceEventStore(sessions_dir=sessions_dir),
         message_stream_store=MessageStreamStore(
@@ -107,19 +183,19 @@ def build_runtime(pending_checkpoint_inspector, before_provider_inspector,
             # 经 factory 注册的会话。
             path_resolver=get_session_path_resolver(sessions_dir)
         ),
+        pending_request_store=EmptyPendingRequestStore(),
         terminal_status_writer=terminal_status_writer,
     )
     return runtime, jobs
 
 
 @pytest.mark.asyncio
-async def test_status_reports_the_injected_workspace_uuid_without_storage_location(pending_checkpoint_inspector, before_provider_inspector,
+async def test_status_reports_the_injected_workspace_uuid_without_storage_location(pending_checkpoint_inspector,
     tmp_path: Path,
     session_lifecycle_guard,
 ) -> None:
     runtime, _ = build_runtime(
         pending_checkpoint_inspector=pending_checkpoint_inspector,
-        before_provider_inspector=before_provider_inspector,
         tmp_path=tmp_path, session_lifecycle_guard=session_lifecycle_guard
     )
 
@@ -132,13 +208,12 @@ async def test_status_reports_the_injected_workspace_uuid_without_storage_locati
 
 
 @pytest.mark.asyncio
-async def test_drain_closes_admission_and_cancel_reopens_it(pending_checkpoint_inspector, before_provider_inspector,
+async def test_drain_closes_admission_and_cancel_reopens_it(pending_checkpoint_inspector,
     tmp_path: Path,
     session_lifecycle_guard,
 ) -> None:
     runtime, jobs = build_runtime(
         pending_checkpoint_inspector=pending_checkpoint_inspector,
-        before_provider_inspector=before_provider_inspector,
         tmp_path=tmp_path, session_lifecycle_guard=session_lifecycle_guard
     )
 
@@ -157,13 +232,12 @@ async def test_drain_closes_admission_and_cancel_reopens_it(pending_checkpoint_i
 
 
 @pytest.mark.asyncio
-async def test_force_interrupt_persists_event_and_cancels_job(pending_checkpoint_inspector, before_provider_inspector,
+async def test_force_interrupt_persists_event_and_cancels_job(pending_checkpoint_inspector,
     tmp_path: Path,
     session_lifecycle_guard,
 ) -> None:
     runtime, jobs = build_runtime(
         pending_checkpoint_inspector=pending_checkpoint_inspector,
-        before_provider_inspector=before_provider_inspector,
         tmp_path=tmp_path, session_lifecycle_guard=session_lifecycle_guard
     )
     task = asyncio.create_task(asyncio.sleep(60))
@@ -195,41 +269,7 @@ async def test_force_interrupt_persists_event_and_cancels_job(pending_checkpoint
 
 
 @pytest.mark.asyncio
-async def test_startup_reconciles_job_without_terminal_event(pending_checkpoint_inspector, before_provider_inspector,
-    tmp_path: Path,
-    session_bundle_factory,
-    session_lifecycle_guard,
-) -> None:
-    session_bundle_factory(
-        tmp_path / ".boxteam" / "sessions", "ses_019c70f868da751480de63aa344e28c9"
-    )
-    runtime, _ = build_runtime(
-        pending_checkpoint_inspector=pending_checkpoint_inspector,
-        before_provider_inspector=before_provider_inspector,
-        tmp_path=tmp_path, session_lifecycle_guard=session_lifecycle_guard
-    )
-    store = runtime._trace_event_store
-    now = datetime.now(UTC)
-    await store.append(
-        "ses_019c70f868da751480de63aa344e28c9",
-        JobStartedEvent(
-            event_id=create_prefixed_id("evt"),
-            job_id="job_stale",
-            timestamp=now,
-            payload=JobStartedPayload(session_id="ses_019c70f868da751480de63aa344e28c9", thread_id=get_session_path_resolver(tmp_path / ".boxteam" / "sessions").main_thread_id("ses_019c70f868da751480de63aa344e28c9")),
-        ),
-    )
-
-    reconciled = await runtime.reconcile_stale_executions()
-    events = store.read_events("ses_019c70f868da751480de63aa344e28c9")
-
-    assert reconciled == 1
-    assert events[-1].type == "session_interrupted"
-    assert events[-1].payload.phase == "process_exit"
-
-
-@pytest.mark.asyncio
-async def test_startup_rejects_invalid_trace(pending_checkpoint_inspector, before_provider_inspector,
+async def test_startup_rejects_invalid_trace(pending_checkpoint_inspector,
     tmp_path: Path,
     session_bundle_factory,
     session_lifecycle_guard,
@@ -256,7 +296,6 @@ async def test_startup_rejects_invalid_trace(pending_checkpoint_inspector, befor
     )
     runtime, _ = build_runtime(
         pending_checkpoint_inspector=pending_checkpoint_inspector,
-        before_provider_inspector=before_provider_inspector,
         tmp_path=tmp_path, session_lifecycle_guard=session_lifecycle_guard
     )
 
@@ -265,227 +304,48 @@ async def test_startup_rejects_invalid_trace(pending_checkpoint_inspector, befor
 
 
 @pytest.mark.asyncio
-async def test_startup_reconciles_persisted_turn_as_failed(pending_checkpoint_inspector, before_provider_inspector,
+async def test_terminal_trace_without_active_queue_admission_does_not_restore_or_rewrite_status(
+    pending_checkpoint_inspector,
     tmp_path: Path,
     session_bundle_factory,
     session_lifecycle_guard,
 ) -> None:
-    session_bundle_factory(
-        tmp_path / ".boxteam" / "sessions", "ses_019c70f868da751480de63aa344e28c9"
-    )
+    session_id = "ses_019c70f868da751480de63aa344e28c9"
+    session_bundle_factory(tmp_path / ".boxteam" / "sessions", session_id)
     writer = RecordingTurnStatusWriter()
-    runtime, _ = build_runtime(
+    runtime, jobs = build_runtime(
         pending_checkpoint_inspector=pending_checkpoint_inspector,
-        before_provider_inspector=before_provider_inspector,
         tmp_path=tmp_path,
         terminal_status_writer=writer,
         session_lifecycle_guard=session_lifecycle_guard,
     )
-    await runtime._trace_event_store.append(
-        "ses_019c70f868da751480de63aa344e28c9",
-        JobStartedEvent(
-            event_id=create_prefixed_id("evt"),
-            job_id="job_stale",
-            timestamp=datetime.now(UTC),
-            payload=JobStartedPayload(session_id="ses_019c70f868da751480de63aa344e28c9", thread_id=get_session_path_resolver(tmp_path / ".boxteam" / "sessions").main_thread_id("ses_019c70f868da751480de63aa344e28c9")),
-        ),
-    )
+    trace = runtime._trace_event_store
+    thread_id = get_session_path_resolver(tmp_path / ".boxteam" / "sessions").main_thread_id(session_id)
+    await trace.append(session_id, JobStartedEvent(
+        event_id=create_prefixed_id("evt"), job_id="job-terminal", timestamp=datetime.now(UTC),
+        payload=JobStartedPayload(session_id=session_id, thread_id=thread_id),
+    ))
+    await trace.append(session_id, JobFailedEvent(
+        event_id=create_prefixed_id("evt"), job_id="job-terminal", timestamp=datetime.now(UTC),
+        payload=JobFailedPayload(error="canonical terminal is already committed", code="job_timeout"),
+    ))
+    events_before = trace.read_events(session_id)
 
-    await runtime.reconcile_stale_executions()
-
-    assert writer.calls == [
-        {
-            "session_id": "ses_019c70f868da751480de63aa344e28c9",
-            "thread_id": get_session_path_resolver(tmp_path / ".boxteam" / "sessions").main_thread_id("ses_019c70f868da751480de63aa344e28c9"),
-            "job_id": "job_stale",
-            "status": "execution_lost",
-        }
-    ]
-    event = runtime._trace_event_store.read_events(
-        "ses_019c70f868da751480de63aa344e28c9"
-    )[-1]
-    assert event.payload.code == "execution_lost"
-    assert event.payload.resumable is False
-
-
-@pytest.mark.asyncio
-async def test_startup_repairs_existing_process_exit_turn_status(pending_checkpoint_inspector, before_provider_inspector,
-    tmp_path: Path,
-    session_bundle_factory,
-    session_lifecycle_guard,
-) -> None:
-    session_bundle_factory(
-        tmp_path / ".boxteam" / "sessions", "ses_019c70f868da751480de63aa344e28c9"
-    )
-    writer = RecordingTurnStatusWriter()
-    runtime, _ = build_runtime(
-        pending_checkpoint_inspector=pending_checkpoint_inspector,
-        before_provider_inspector=before_provider_inspector,
-        tmp_path=tmp_path,
-        terminal_status_writer=writer,
-        session_lifecycle_guard=session_lifecycle_guard,
-    )
-    now = datetime.now(UTC)
-    await runtime._trace_event_store.append(
-        "ses_019c70f868da751480de63aa344e28c9",
-        JobStartedEvent(
-            event_id=create_prefixed_id("evt"),
-            job_id="job_stale",
-            timestamp=now,
-            payload=JobStartedPayload(session_id="ses_019c70f868da751480de63aa344e28c9", thread_id=get_session_path_resolver(tmp_path / ".boxteam" / "sessions").main_thread_id("ses_019c70f868da751480de63aa344e28c9")),
-        ),
-    )
-    await runtime._trace_event_store.append(
-        "ses_019c70f868da751480de63aa344e28c9",
-        SessionInterruptedEvent(
-            event_id=create_prefixed_id("evt"),
-            job_id="job_stale",
-            timestamp=now,
-            payload=SessionInterruptedPayload(
-                session_id="ses_019c70f868da751480de63aa344e28c9",
-                phase="process_exit",
-                code="execution_lost",
-                message="工作区后端重启，无法安全续接原 AgentLoop 执行",
-            ),
-        ),
-    )
-
-    reconciled = await runtime.reconcile_stale_executions()
-
-    assert reconciled == 0
-    assert writer.calls == [
-        {
-            "session_id": "ses_019c70f868da751480de63aa344e28c9",
-            "thread_id": get_session_path_resolver(tmp_path / ".boxteam" / "sessions").main_thread_id("ses_019c70f868da751480de63aa344e28c9"),
-            "job_id": "job_stale",
-            "status": "execution_lost",
-        }
-    ]
-    assert (
-        len(
-            runtime._trace_event_store.read_events(
-                "ses_019c70f868da751480de63aa344e28c9"
-            )
-        )
-        == 2
-    )
-
-
-@pytest.mark.asyncio
-async def test_startup_preserves_timeout_status_from_failed_event(pending_checkpoint_inspector, before_provider_inspector,
-    tmp_path: Path,
-    session_bundle_factory,
-    session_lifecycle_guard,
-) -> None:
-    session_bundle_factory(
-        tmp_path / ".boxteam" / "sessions", "ses_019c162a2dfb7cf08123d546495a99c8"
-    )
-    writer = RecordingTurnStatusWriter()
-    runtime, _ = build_runtime(
-        pending_checkpoint_inspector=pending_checkpoint_inspector,
-        before_provider_inspector=before_provider_inspector,
-        tmp_path=tmp_path,
-        terminal_status_writer=writer,
-        session_lifecycle_guard=session_lifecycle_guard,
-    )
-    await runtime._trace_event_store.append(
-        "ses_019c162a2dfb7cf08123d546495a99c8",
-        JobStartedEvent(
-            event_id=create_prefixed_id("evt"), job_id="job_timeout", timestamp=datetime.now(UTC),
-            payload=JobStartedPayload(
-                session_id="ses_019c162a2dfb7cf08123d546495a99c8",
-                thread_id=get_session_path_resolver(tmp_path / ".boxteam" / "sessions").main_thread_id("ses_019c162a2dfb7cf08123d546495a99c8"),
-            ),
-        ),
-    )
-    await runtime._trace_event_store.append(
-        "ses_019c162a2dfb7cf08123d546495a99c8",
-        JobFailedEvent(
-            event_id=create_prefixed_id("evt"),
-            job_id="job_timeout",
-            timestamp=datetime.now(UTC),
-            payload=JobFailedPayload(
-                error="Job 执行超过总超时上限",
-                code="job_timeout",
-                timeout_seconds=600,
-            ),
-        ),
-    )
-
-    await runtime.reconcile_stale_executions()
-
-    assert writer.calls == [
-        {
-            "session_id": "ses_019c162a2dfb7cf08123d546495a99c8",
-            "thread_id": get_session_path_resolver(tmp_path / ".boxteam" / "sessions").main_thread_id("ses_019c162a2dfb7cf08123d546495a99c8"),
-            "job_id": "job_timeout",
-            "status": "timed_out",
-        }
-    ]
-
-
-@pytest.mark.asyncio
-async def test_startup_requires_structured_timeout_code(pending_checkpoint_inspector, before_provider_inspector,
-    tmp_path: Path,
-    session_bundle_factory,
-    session_lifecycle_guard,
-) -> None:
-    session_bundle_factory(
-        tmp_path / ".boxteam" / "sessions", "ses_019c1bbd6ff678cf8f3e8598a8ae7327"
-    )
-    writer = RecordingTurnStatusWriter()
-    runtime, _ = build_runtime(
-        pending_checkpoint_inspector=pending_checkpoint_inspector,
-        before_provider_inspector=before_provider_inspector,
-        tmp_path=tmp_path,
-        terminal_status_writer=writer,
-        session_lifecycle_guard=session_lifecycle_guard,
-    )
-    await runtime._trace_event_store.append(
-        "ses_019c1bbd6ff678cf8f3e8598a8ae7327",
-        JobStartedEvent(
-            event_id=create_prefixed_id("evt"), job_id="job_legacy_timeout", timestamp=datetime.now(UTC),
-            payload=JobStartedPayload(
-                session_id="ses_019c1bbd6ff678cf8f3e8598a8ae7327",
-                thread_id=get_session_path_resolver(tmp_path / ".boxteam" / "sessions").main_thread_id("ses_019c1bbd6ff678cf8f3e8598a8ae7327"),
-            ),
-        ),
-    )
-    await runtime._trace_event_store.append(
-        "ses_019c1bbd6ff678cf8f3e8598a8ae7327",
-        JobFailedEvent(
-            event_id=create_prefixed_id("evt"),
-            job_id="job_legacy_timeout",
-            timestamp=datetime.now(UTC),
-            payload=JobFailedPayload(error="Job 执行超过总超时上限"),
-        ),
-    )
-
-    await runtime.reconcile_stale_executions()
-
-    assert writer.calls == [
-        {
-            "session_id": "ses_019c1bbd6ff678cf8f3e8598a8ae7327",
-            "thread_id": get_session_path_resolver(tmp_path / ".boxteam" / "sessions").main_thread_id("ses_019c1bbd6ff678cf8f3e8598a8ae7327"),
-            "job_id": "job_legacy_timeout",
-            "status": "failed",
-        }
-    ]
+    assert await runtime.reconcile_stale_executions() == 0
+    assert jobs._jobs == {}
+    assert writer.calls == []
+    assert trace.read_events(session_id) == events_before
 
 
 @pytest.fixture
 def recovery_inspectors():
     calls: list[tuple[str, JobState]] = []
 
-    async def before_provider(job: JobState) -> bool:
-        calls.append(("before_provider", job))
-        return False
-
     async def pending_checkpoint(job: JobState) -> str:
         calls.append(("pending_checkpoint", job))
         return "checkpoint-original"
 
-    return calls, before_provider, pending_checkpoint
+    return calls, pending_checkpoint
 
 
 def _created_request(session_id: str, thread_id: str, job_id: str) -> JobCreatedEvent:
@@ -514,11 +374,11 @@ async def test_startup_restores_only_the_matching_created_and_started_owner(
     session_bundle_factory(sessions_dir, session_id)
     main_thread = get_session_path_resolver(sessions_dir).main_thread_id(session_id)
     thread_id = main_thread if thread_role == "main" else create_prefixed_id("thr")
-    calls, before_provider, pending_checkpoint = recovery_inspectors
+    calls, pending_checkpoint = recovery_inspectors
     writer = RecordingTurnStatusWriter()
     runtime, jobs = build_runtime(
         pending_checkpoint_inspector=pending_checkpoint,
-        before_provider_inspector=before_provider, tmp_path=tmp_path,
+        tmp_path=tmp_path,
         terminal_status_writer=writer, session_lifecycle_guard=session_lifecycle_guard,
     )
     request = _created_request(session_id, thread_id, "job-owner-match")
@@ -530,10 +390,11 @@ async def test_startup_restores_only_the_matching_created_and_started_owner(
             timestamp=datetime.now(UTC),
             payload=JobStartedPayload(session_id=session_id, thread_id=thread_id),
         ))
+    runtime._pending_request_store.add_started(request)
 
     assert await runtime.reconcile_stale_executions() == 0
 
-    assert [kind for kind, _ in calls] == ["before_provider", "pending_checkpoint"]
+    assert [kind for kind, _ in calls] == ["pending_checkpoint"]
     restored = jobs._jobs[request.job_id]
     assert all(job is restored for _, job in calls)
     assert (restored.session_id, restored.thread_id) == (session_id, thread_id)
@@ -564,11 +425,11 @@ async def test_startup_rejects_owner_conflicts_before_any_recovery_side_effect(
     resolver = get_session_path_resolver(sessions_dir)
     main_thread = resolver.main_thread_id(session_id)
     other_thread = resolver.main_thread_id(other_session)
-    calls, before_provider, pending_checkpoint = recovery_inspectors
+    calls, pending_checkpoint = recovery_inspectors
     writer = RecordingTurnStatusWriter()
     runtime, jobs = build_runtime(
         pending_checkpoint_inspector=pending_checkpoint,
-        before_provider_inspector=before_provider, tmp_path=tmp_path,
+        tmp_path=tmp_path,
         terminal_status_writer=writer, session_lifecycle_guard=session_lifecycle_guard,
     )
     store = runtime._trace_event_store
@@ -625,10 +486,10 @@ async def test_startup_releases_other_session_request_bodies_before_recovery(
         "ses_019c70f868da751480de63aa344e28c9",
         "ses_019d70f868da751480de63aa344e28c9",
     )
-    calls, before_provider, pending_checkpoint = recovery_inspectors
+    calls, _pending_checkpoint = recovery_inspectors
     runtime, jobs = build_runtime(
-        pending_checkpoint_inspector=pending_checkpoint,
-        before_provider_inspector=before_provider, tmp_path=tmp_path,
+        pending_checkpoint_inspector=_pending_checkpoint,
+        tmp_path=tmp_path,
         session_lifecycle_guard=session_lifecycle_guard,
     )
     store = runtime._trace_event_store
@@ -646,6 +507,7 @@ async def test_startup_releases_other_session_request_bodies_before_recovery(
         queued = _created_request(session_id, thread_id, f"job-queued-request-{index}")
         queued.payload.message = "排队请求正文" * 200_000
         await store.append(session_id, queued)
+        runtime._pending_request_store.add_started(request)
     payloads: dict[str, list[weakref.ReferenceType[JobCreatedPayload]]] = {}
     original_read = store.read_events
 
@@ -656,19 +518,20 @@ async def test_startup_releases_other_session_request_bodies_before_recovery(
         ])
         return events
 
-    async def observed_restart(job: JobState) -> bool:
-        # 恢复任何会话前已经核完全部 owner，且不再持有其他会话的预校验正文。
+    async def observed_checkpoint(job: JobState) -> str:
+        # 执行任何恢复回调前已校验所有 owner，并释放其他会话的 Trace 正文。
         assert set(payloads) == set(session_ids)
         assert all(
             reference() is None for owner, references in payloads.items()
             if owner != job.session_id for reference in references
         )
-        return await before_provider(job)
+        calls.append(("pending_checkpoint", job))
+        return "checkpoint-original"
 
     monkeypatch.setattr(store, "read_events", observed_read)
-    monkeypatch.setattr(runtime, "_can_restart_before_provider", observed_restart)
+    monkeypatch.setattr(runtime, "_pending_tool_checkpoint_id", observed_checkpoint)
 
     assert await runtime.reconcile_stale_executions() == 0
 
-    assert len(calls) == 4
+    assert len(calls) == 2
     assert len(jobs._jobs) == 2

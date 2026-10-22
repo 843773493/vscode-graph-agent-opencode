@@ -18,6 +18,7 @@ from app.core.trace_middleware import (
     set_current_request_id,
 )
 from app.domain.itemized.execution_admission import InternalExecutionIntent
+from app.domain.itemized.execution_queue import ExecutionQueueInput
 from app.prompting import PromptSection, internal_message_factory
 from app.schemas.event import Event
 from app.services.business.session_service import SessionService
@@ -76,10 +77,20 @@ class ThreadInitialExecutionService:
         return binding, frozen
 
     def _bind(self, target: InitialExecutionBindingTarget) -> InitialExecutionBindOutcome:
-        binding, _frozen = self._binding(target)
+        binding, frozen = self._binding(target)
+        record = self._factory.for_owner_session(target.intent.session_id).control_store.get_thread_creation_record(
+            target.intent.creation_idempotency_key,
+        )
+        queue_input = ExecutionQueueInput(
+            execution_binding=binding, message_id=binding.message_id,
+            agent_id=json.loads(record.task_seed)["agent_id"],
+            provider_id=frozen.message.metadata.get("boxteam_session_provider_id"),
+            delivery_policy="after_turn", gateway_id=frozen.gateway_id,
+            request_id=frozen.request_id, created_at=target.intent.intent_created_at,
+        )
         self._saver.admit_internal_execution(
             target.intent.session_id, thread_id=target.intent.thread_id,
-            job_id=target.job_id, intent=binding, message=None,
+            job_id=target.job_id, intent=binding, message=None, queue_input=queue_input,
         )
         return InitialExecutionBindOutcome(execution_binding_id=binding.execution_id, job_id=target.job_id)
 

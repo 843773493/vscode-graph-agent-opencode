@@ -20,7 +20,9 @@ from app.services.infrastructure.rollout_context.storage.schema_wakeup import (
     RUNTIME_WAKEUP_SCHEMA_SQL,
 )
 
-ROLLOUT_SCHEMA_VERSION = 23
+ROLLOUT_SCHEMA_VERSION = 24
+EXECUTION_QUEUE_SCHEMA_SQL = load_sql(__package__, "sql/execution_queue.sql")
+
 MESSAGE_FORMAT_VERSION = 1
 ROLLOUT_FORMAT_VERSION = 2
 
@@ -76,6 +78,7 @@ def initialize_rollout_schema(
         + load_sql(__package__, "sql/rollout.sql")
         + ASSEMBLY_CONTENT_SCHEMA_SQL
         + VIEW_MEMBERSHIP_SCHEMA_SQL
+        + EXECUTION_QUEUE_SCHEMA_SQL
     )
 
     # 邮箱冷恢复按真实 ModelCall/ToolCall 定位，不能扫描全部已提交工具结果。

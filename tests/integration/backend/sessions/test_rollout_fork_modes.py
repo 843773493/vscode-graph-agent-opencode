@@ -92,6 +92,7 @@ from app.domain.itemized.execution_admission import (
     InternalExecutionIntent,
     user_turn_admission_payload_hash,
 )
+from app.domain.itemized.execution_queue import ExecutionQueueInput
 from app.domain.itemized.hashing import (
     canonical_json_bytes,
     sha256_jcs,
@@ -1513,7 +1514,11 @@ async def test_child_message_ingest_keeps_exact_attachment_owner_through_source_
     assert main_owner is not None and (main_owner.owner_thread_id, main_owner.blob_id) == (source.thread_id, owner.blob_id)
 
     identity = container.job_service.reserve_user_execution_identity()
-    container.message_service.accept_user_message(message, execution_identity=identity)
+    container.message_service.accept_user_message(message, execution_identity=identity, queue_input=ExecutionQueueInput(
+        execution_binding=identity, message_id=message.message_id, agent_id="default",
+        provider_id=None, delivery_policy="after_turn", gateway_id=None, request_id=None,
+        created_at=message.created_at.isoformat(),
+    ))
     admission = container.message_service.execution_admission_for_job(
         source.session_id, thread_id=child.thread_id, job_id=identity.job_id,
     )
@@ -1565,7 +1570,11 @@ async def test_fork_attachment_retention_uses_real_owner_and_cold_target_tool(
     ref = message.attachments[0]
     if prepared is None:
         identity = production_fork_container.job_service.reserve_user_execution_identity()
-        messages.accept_user_message(message, execution_identity=identity)
+        messages.accept_user_message(message, execution_identity=identity, queue_input=ExecutionQueueInput(
+            execution_binding=identity, message_id=message.message_id, agent_id="default",
+            provider_id=None, delivery_policy="after_turn", gateway_id=None, request_id=None,
+            created_at=message.created_at.isoformat(),
+        ))
         job_id = identity.job_id
         frozen = context.saver.accepted_user_message(
             source.session_id, thread_id=source_thread, job_id=job_id, message_id=message.message_id,
@@ -1576,12 +1585,13 @@ async def test_fork_attachment_retention_uses_real_owner_and_cold_target_tool(
             admission_idempotency_key=create_uuid_hex(namespace="admission"),
         )
         job_id = create_uuid_hex(namespace="job")
-        messages.accept_job_input(SimpleNamespace(
+        queued_input = SimpleNamespace(
             session_id=source.session_id, thread_id=source_thread, job_id=job_id,
             execution_binding=intent, message_id=message.message_id, message=message.content,
             attachments=message.attachments, message_metadata=message.metadata,
             message_created_at=message.created_at.isoformat(),
-        ))
+        )
+        messages.accept_job_input(queued_input, queue_input=ExecutionQueueInput(execution_binding=queued_input.execution_binding, message_id=queued_input.message_id, agent_id="default", provider_id=None, delivery_policy="after_turn", gateway_id=None, request_id=None, created_at=queued_input.message_created_at))
         frozen = context.saver.accepted_internal_message(
             source.session_id, thread_id=source_thread, job_id=job_id, message_id=message.message_id, intent=intent,
         )
@@ -1710,7 +1720,11 @@ async def test_fork_settlement_retries_retained_upload_pin_without_restart(
     )])
     message = await container.message_service.create(source.session_id, request, thread_id=source_thread)
     identity = container.job_service.reserve_user_execution_identity()
-    container.message_service.accept_user_message(message, execution_identity=identity)
+    container.message_service.accept_user_message(message, execution_identity=identity, queue_input=ExecutionQueueInput(
+        execution_binding=identity, message_id=message.message_id, agent_id="default",
+        provider_id=None, delivery_policy="after_turn", gateway_id=None, request_id=None,
+        created_at=message.created_at.isoformat(),
+    ))
     admission = container.message_service.execution_admission_for_job(source.session_id, thread_id=source_thread, job_id=identity.job_id)
     frozen = context.saver.accepted_user_message(source.session_id, thread_id=source_thread,
         job_id=identity.job_id, message_id=message.message_id)

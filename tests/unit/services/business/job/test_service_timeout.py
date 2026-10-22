@@ -12,8 +12,9 @@ from app.domain.itemized.execution_admission import (
 )
 from app.prompting import internal_message_factory
 from app.schemas.internal_v2.common import JobStatus
-from app.services.business.job.service import JobService, JobState
+from app.services.business.job.service import JobState
 from tests.support.job_thread_fixture import job_fixture_thread_id
+from tests.unit.services.business.job.ports import enqueue_job
 
 
 def _binding(job_id: str, message_id: str, metadata: dict[str, object]):
@@ -215,12 +216,12 @@ class _RecordingTurnStatusWriter:
 
 
 @pytest.mark.asyncio
-async def test_job_timeout_marks_job_terminal_and_releases_session(
+async def test_job_timeout_marks_job_terminal_and_releases_session(job_service_factory,
     session_lifecycle_guard,
 ) -> None:
     bus = _RecordingBus()
     writer = _RecordingTurnStatusWriter()
-    service = JobService(
+    service = job_service_factory(
         job_event_bus=bus,
         job_executor=_NeverFinishExecutor(),
         job_timeout_seconds=0.01,
@@ -240,7 +241,7 @@ async def test_job_timeout_marks_job_terminal_and_releases_session(
         execution_binding=_binding("job_timeout", "msg_timeout", {}),
     )
     service._jobs[job.job_id] = job
-    service._pending_queue.append(session_id, job.job_id, "after_turn", thread_id=job.thread_id)
+    enqueue_job(service, job, "after_turn")
 
     assert await service._start_next_pending(session_id, thread_id=job_fixture_thread_id(session_id)) is True
     assert job.task is not None
@@ -271,12 +272,12 @@ async def test_job_timeout_marks_job_terminal_and_releases_session(
 
 
 @pytest.mark.asyncio
-async def test_job_timeout_provider_is_read_for_each_new_job(
+async def test_job_timeout_provider_is_read_for_each_new_job(job_service_factory,
     session_lifecycle_guard,
 ) -> None:
     configured_timeout = [0.01]
     bus = _RecordingBus()
-    service = JobService(
+    service = job_service_factory(
         job_event_bus=bus,
         job_executor=_NeverFinishExecutor(),
         job_timeout_seconds=10.0,
@@ -296,7 +297,7 @@ async def test_job_timeout_provider_is_read_for_each_new_job(
         execution_binding=_binding("job_dynamic_timeout", "msg_dynamic_timeout", {}),
     )
     service._jobs[job.job_id] = job
-    service._pending_queue.append(job.session_id, job.job_id, "after_turn", thread_id=job.thread_id)
+    enqueue_job(service, job, "after_turn")
 
     assert await service._start_next_pending(job.session_id, thread_id=job.thread_id) is True
     await job.task
@@ -312,10 +313,10 @@ async def test_job_timeout_provider_is_read_for_each_new_job(
 
 
 @pytest.mark.asyncio
-async def test_job_timeout_does_not_wait_for_uncooperative_executor(
+async def test_job_timeout_does_not_wait_for_uncooperative_executor(job_service_factory,
     session_lifecycle_guard,
 ) -> None:
-    service = JobService(
+    service = job_service_factory(
         job_event_bus=_RecordingBus(),
         job_executor=_CancellationResistantExecutor(),
         job_timeout_seconds=0.01,
@@ -334,7 +335,7 @@ async def test_job_timeout_does_not_wait_for_uncooperative_executor(
         execution_binding=_binding("job_uncooperative_timeout", "msg_uncooperative_timeout", {}),
     )
     service._jobs[job.job_id] = job
-    service._pending_queue.append(job.session_id, job.job_id, "after_turn", thread_id=job.thread_id)
+    enqueue_job(service, job, "after_turn")
 
     assert await service._start_next_pending(job.session_id, thread_id=job.thread_id) is True
     assert job.task is not None
@@ -345,12 +346,12 @@ async def test_job_timeout_does_not_wait_for_uncooperative_executor(
 
 
 @pytest.mark.asyncio
-async def test_job_startup_timeout_closes_job_without_agent_start(
+async def test_job_startup_timeout_closes_job_without_agent_start(job_service_factory,
     session_lifecycle_guard,
 ) -> None:
     bus = _RecordingBus()
     writer = _RecordingTurnStatusWriter()
-    service = JobService(
+    service = job_service_factory(
         job_event_bus=bus,
         job_executor=_NeverFinishExecutor(),
         job_timeout_seconds=1.0,
@@ -371,7 +372,7 @@ async def test_job_startup_timeout_closes_job_without_agent_start(
         execution_binding=_binding("job_startup_timeout", "msg_startup_timeout", {}),
     )
     service._jobs[job.job_id] = job
-    service._pending_queue.append(session_id, job.job_id, "after_turn", thread_id=job.thread_id)
+    enqueue_job(service, job, "after_turn")
 
     assert await service._start_next_pending(session_id, thread_id=job_fixture_thread_id(session_id)) is True
     assert job.task is not None
@@ -395,12 +396,12 @@ async def test_job_startup_timeout_closes_job_without_agent_start(
 
 
 @pytest.mark.asyncio
-async def test_agent_start_does_not_mask_first_model_or_tool_startup_timeout(
+async def test_agent_start_does_not_mask_first_model_or_tool_startup_timeout(job_service_factory,
     session_lifecycle_guard,
 ) -> None:
     bus = _RecordingBus()
     executor = _AgentStartThenNeverFinishExecutor()
-    service = JobService(
+    service = job_service_factory(
         job_event_bus=bus,
         job_executor=executor,
         job_timeout_seconds=1.0,
@@ -420,7 +421,7 @@ async def test_agent_start_does_not_mask_first_model_or_tool_startup_timeout(
         execution_binding=_binding("job_agent_start_without_progress", "msg_agent_start_without_progress", {}),
     )
     service._jobs[job.job_id] = job
-    service._pending_queue.append(session_id, job.job_id, "after_turn", thread_id=job.thread_id)
+    enqueue_job(service, job, "after_turn")
 
     assert await service._start_next_pending(session_id, thread_id=job_fixture_thread_id(session_id)) is True
     await asyncio.wait_for(executor.started.wait(), timeout=0.1)
@@ -435,11 +436,11 @@ async def test_agent_start_does_not_mask_first_model_or_tool_startup_timeout(
 
 
 @pytest.mark.asyncio
-async def test_job_failure_event_preserves_executor_error_code(
+async def test_job_failure_event_preserves_executor_error_code(job_service_factory,
     session_lifecycle_guard,
 ) -> None:
     bus = _RecordingBus()
-    service = JobService(
+    service = job_service_factory(
         job_event_bus=bus,
         job_executor=_CodedFailureExecutor(),
         session_lifecycle_guard=session_lifecycle_guard,
@@ -457,7 +458,7 @@ async def test_job_failure_event_preserves_executor_error_code(
         execution_binding=_binding("job_coded_failure", "msg_coded_failure", {}),
     )
     service._jobs[job.job_id] = job
-    service._pending_queue.append(session_id, job.job_id, "after_turn", thread_id=job.thread_id)
+    enqueue_job(service, job, "after_turn")
 
     assert await service._start_next_pending(session_id, thread_id=job_fixture_thread_id(session_id)) is True
     assert job.task is not None
@@ -474,12 +475,12 @@ async def test_job_failure_event_preserves_executor_error_code(
 
 
 @pytest.mark.asyncio
-async def test_agent_loop_ready_uses_event_watchdog_not_startup_watchdog(
+async def test_agent_loop_ready_uses_event_watchdog_not_startup_watchdog(job_service_factory,
     session_lifecycle_guard,
 ) -> None:
     bus = _RecordingBus()
     executor = _AgentLoopReadyThenNeverFinishExecutor()
-    service = JobService(
+    service = job_service_factory(
         job_event_bus=bus,
         job_executor=executor,
         job_timeout_seconds=0.02,
@@ -499,7 +500,7 @@ async def test_agent_loop_ready_uses_event_watchdog_not_startup_watchdog(
         execution_binding=_binding("job_agent_loop_ready", "msg_agent_loop_ready", {}),
     )
     service._jobs[job.job_id] = job
-    service._pending_queue.append(session_id, job.job_id, "after_turn", thread_id=job.thread_id)
+    enqueue_job(service, job, "after_turn")
 
     assert await service._start_next_pending(session_id, thread_id=job_fixture_thread_id(session_id)) is True
     await asyncio.wait_for(executor.started.wait(), timeout=0.1)
@@ -515,12 +516,12 @@ async def test_agent_loop_ready_uses_event_watchdog_not_startup_watchdog(
 
 
 @pytest.mark.asyncio
-async def test_two_short_messages_start_and_converge_after_previous_turn(
+async def test_two_short_messages_start_and_converge_after_previous_turn(job_service_factory,
     session_lifecycle_guard,
 ) -> None:
     bus = _RecordingBus()
     executor = _ShortMessageExecutor()
-    service = JobService(
+    service = job_service_factory(
         job_event_bus=bus,
         job_executor=executor,
         job_timeout_seconds=0.2,
@@ -544,7 +545,7 @@ async def test_two_short_messages_start_and_converge_after_previous_turn(
         )
         jobs.append(job)
         service._jobs[job.job_id] = job
-        service._pending_queue.append(session_id, job.job_id, "after_turn", thread_id=job.thread_id)
+        enqueue_job(service, job, "after_turn")
 
     assert await service._start_next_pending(session_id, thread_id=job_fixture_thread_id(session_id)) is True
     for job in jobs:
@@ -561,12 +562,12 @@ async def test_two_short_messages_start_and_converge_after_previous_turn(
 
 
 @pytest.mark.asyncio
-async def test_running_job_exposes_progress_and_current_step_before_executor_event(
+async def test_running_job_exposes_progress_and_current_step_before_executor_event(job_service_factory,
     session_lifecycle_guard,
 ) -> None:
     bus = _RecordingBus()
     executor = _BlockingExecutor()
-    service = JobService(
+    service = job_service_factory(
         job_event_bus=bus,
         job_executor=executor,
         job_timeout_seconds=2.0,
@@ -585,7 +586,7 @@ async def test_running_job_exposes_progress_and_current_step_before_executor_eve
         execution_binding=_binding("job_progress", "msg_progress", {}),
     )
     service._jobs[job.job_id] = job
-    service._pending_queue.append(session_id, job.job_id, "after_turn", thread_id=job.thread_id)
+    enqueue_job(service, job, "after_turn")
     queued_updated_at = job.updated_at
 
     assert await service._start_next_pending(session_id, thread_id=job_fixture_thread_id(session_id)) is True
@@ -607,12 +608,12 @@ async def test_running_job_exposes_progress_and_current_step_before_executor_eve
 
 
 @pytest.mark.asyncio
-async def test_tool_progress_refreshes_job_and_timeout_has_distinct_cancel_reason(
+async def test_tool_progress_refreshes_job_and_timeout_has_distinct_cancel_reason(job_service_factory,
     session_lifecycle_guard,
 ) -> None:
     bus = _RecordingBus()
     executor = _ProgressThenNeverFinishExecutor()
-    service = JobService(
+    service = job_service_factory(
         job_event_bus=bus,
         job_executor=executor,
         job_timeout_seconds=0.02,
@@ -631,7 +632,7 @@ async def test_tool_progress_refreshes_job_and_timeout_has_distinct_cancel_reaso
         execution_binding=_binding("job_tool_progress", "msg_tool_progress", {}),
     )
     service._jobs[job.job_id] = job
-    service._pending_queue.append(session_id, job.job_id, "after_turn", thread_id=job.thread_id)
+    enqueue_job(service, job, "after_turn")
 
     assert await service._start_next_pending(session_id, thread_id=job_fixture_thread_id(session_id)) is True
     await asyncio.wait_for(executor.started.wait(), timeout=0.1)
@@ -652,12 +653,12 @@ async def test_tool_progress_refreshes_job_and_timeout_has_distinct_cancel_reaso
 
 
 @pytest.mark.asyncio
-async def test_model_finalization_grace_preserves_response_after_total_budget(
+async def test_model_finalization_grace_preserves_response_after_total_budget(job_service_factory,
     session_lifecycle_guard,
 ) -> None:
     bus = _RecordingBus()
     executor = _ModelFinalizationExecutor()
-    service = JobService(
+    service = job_service_factory(
         job_event_bus=bus,
         job_executor=executor,
         job_timeout_seconds=0.02,
@@ -677,7 +678,7 @@ async def test_model_finalization_grace_preserves_response_after_total_budget(
         execution_binding=_binding("job_model_finalization_grace", "msg_model_finalization_grace", {}),
     )
     service._jobs[job.job_id] = job
-    service._pending_queue.append(session_id, job.job_id, "after_turn", thread_id=job.thread_id)
+    enqueue_job(service, job, "after_turn")
 
     assert await service._start_next_pending(session_id, thread_id=job_fixture_thread_id(session_id)) is True
     await asyncio.wait_for(executor.started.wait(), timeout=0.1)
@@ -695,12 +696,12 @@ async def test_model_finalization_grace_preserves_response_after_total_budget(
 
 
 @pytest.mark.asyncio
-async def test_tool_finalization_grace_preserves_result_after_total_budget(
+async def test_tool_finalization_grace_preserves_result_after_total_budget(job_service_factory,
     session_lifecycle_guard,
 ) -> None:
     bus = _RecordingBus()
     executor = _ToolFinalizationExecutor()
-    service = JobService(
+    service = job_service_factory(
         job_event_bus=bus,
         job_executor=executor,
         job_timeout_seconds=0.02,
@@ -720,7 +721,7 @@ async def test_tool_finalization_grace_preserves_result_after_total_budget(
         execution_binding=_binding("job_tool_finalization_grace", "msg_tool_finalization_grace", {}),
     )
     service._jobs[job.job_id] = job
-    service._pending_queue.append(session_id, job.job_id, "after_turn", thread_id=job.thread_id)
+    enqueue_job(service, job, "after_turn")
 
     assert await service._start_next_pending(session_id, thread_id=job_fixture_thread_id(session_id)) is True
     await asyncio.wait_for(executor.started.wait(), timeout=0.1)
@@ -739,12 +740,12 @@ async def test_tool_finalization_grace_preserves_result_after_total_budget(
 
 
 @pytest.mark.asyncio
-async def test_finalization_grace_does_not_require_fresh_step_projection(
+async def test_finalization_grace_does_not_require_fresh_step_projection(job_service_factory,
     session_lifecycle_guard,
 ) -> None:
     bus = _RecordingBus()
     executor = _StaleStepFinalizationExecutor()
-    service = JobService(
+    service = job_service_factory(
         job_event_bus=bus,
         job_executor=executor,
         job_timeout_seconds=0.02,
@@ -764,7 +765,7 @@ async def test_finalization_grace_does_not_require_fresh_step_projection(
         execution_binding=_binding("job_stale_step_finalization", "msg_stale_step_finalization", {}),
     )
     service._jobs[job.job_id] = job
-    service._pending_queue.append(session_id, job.job_id, "after_turn", thread_id=job.thread_id)
+    enqueue_job(service, job, "after_turn")
 
     assert await service._start_next_pending(session_id, thread_id=job_fixture_thread_id(session_id)) is True
     await asyncio.wait_for(executor.started.wait(), timeout=0.1)
@@ -782,12 +783,12 @@ async def test_finalization_grace_does_not_require_fresh_step_projection(
 
 
 @pytest.mark.asyncio
-async def test_failed_job_discards_queued_terminal_followup_without_new_stream(
+async def test_failed_job_discards_queued_terminal_followup_without_new_stream(job_service_factory,
     monkeypatch: pytest.MonkeyPatch,
     session_lifecycle_guard,
 ) -> None:
     bus = _RecordingBus()
-    service = JobService(
+    service = job_service_factory(
         job_event_bus=bus,
         job_executor=_NeverFinishExecutor(),
         session_lifecycle_guard=session_lifecycle_guard,
@@ -844,12 +845,8 @@ async def test_failed_job_discards_queued_terminal_followup_without_new_stream(
         }
     )
     service._thread_current_job[(session_id, job_fixture_thread_id(session_id))] = parent.job_id
-    service._pending_queue.append(
-        session_id,
-        followup.job_id,
-        "after_tool_result",
-     thread_id=followup.thread_id)
-    service._pending_queue.append(session_id, user_job.job_id, "after_turn", thread_id=user_job.thread_id)
+    enqueue_job(service, followup, "after_tool_result")
+    enqueue_job(service, user_job, "after_turn")
     started: list[str] = []
 
     def start_job_task(job: JobState) -> None:
@@ -874,11 +871,11 @@ async def test_failed_job_discards_queued_terminal_followup_without_new_stream(
 
 
 @pytest.mark.asyncio
-async def test_pending_dispatch_race_cannot_start_terminal_followup_after_failure(
+async def test_pending_dispatch_race_cannot_start_terminal_followup_after_failure(job_service_factory,
     monkeypatch: pytest.MonkeyPatch,
     session_lifecycle_guard,
 ) -> None:
-    service = JobService(
+    service = job_service_factory(
         job_event_bus=_RecordingBus(),
         job_executor=_NeverFinishExecutor(),
         session_lifecycle_guard=session_lifecycle_guard,
@@ -915,7 +912,7 @@ async def test_pending_dispatch_race_cannot_start_terminal_followup_after_failur
     )
     service._jobs.update({parent.job_id: parent, followup.job_id: followup})
     service._thread_current_job[(session_id, job_fixture_thread_id(session_id))] = parent.job_id
-    service._pending_queue.append(session_id, followup.job_id, "after_tool_result", thread_id=followup.thread_id)
+    enqueue_job(service, followup, "after_tool_result")
     started: list[str] = []
     monkeypatch.setattr(
         service,
