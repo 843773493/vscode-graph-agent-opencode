@@ -18,17 +18,44 @@ from tests.support.communication import (
     SOURCE_THREAD,
     CommunicationProbe,
 )
-from tests.support.workspaces import prepare_default_test_workspace
+from tests.support.workspaces import (
+    prepare_default_test_workspace,
+    prepare_test_workspace,
+)
 
 
 @pytest.fixture
 def workspace_scope(request: pytest.FixtureRequest) -> Iterator[tuple[str, Path]]:
     """需要 workspace 上下文的单测显式启用；不给无归属调用补默认值。"""
+    yield from _workspace_scope(request, template_items=None)
+
+
+@pytest.fixture
+def empty_workspace_scope(
+    request: pytest.FixtureRequest,
+) -> Iterator[tuple[str, Path]]:
+    """创建带 identity/context 的空 workspace，不复制模板项目文件。"""
+    yield from _workspace_scope(request, template_items=())
+
+
+def _workspace_scope(
+    request: pytest.FixtureRequest,
+    *,
+    template_items: tuple[str, ...] | None,
+) -> Iterator[tuple[str, Path]]:
     root = TestRunContext.from_test_file(Path(request.node.path)).workspace_root
-    prepare_default_test_workspace(
-        workspace_root=root,
-        template_root=Path.cwd() / "tests/fixtures/workspaces/default_test_workspace",
-    )
+    template_root = Path.cwd() / "tests/fixtures/workspaces/default_test_workspace"
+    if template_items is None:
+        prepare_default_test_workspace(
+            workspace_root=root,
+            template_root=template_root,
+        )
+    else:
+        prepare_test_workspace(
+            workspace_root=root,
+            template_root=template_root,
+            template_items=template_items,
+        )
     workspace_id = load_or_create_workspace_id(root)
     with workspace_context(workspace_id, root):
         yield workspace_id, root

@@ -12,6 +12,16 @@
 - 不放完整 HTTP、Gateway、Workspace 后端或客户端链路测试。
 - 不写入真实用户配置、真实工作区或项目根目录运行数据。
 
+## 按测试所需的 workspace 前提选择 fixture
+
+```text
+workspace 前提
+├── 需要模板里的项目文件、配置或资产 -> workspace_scope
+└── 只需要 workspace identity 与当前上下文 -> empty_workspace_scope
+```
+
+`empty_workspace_scope` 仍创建工作区 identity 并注入上下文，但不复制默认项目模板；从空目录创建文件的测试应优先使用它。
+
 ## 规范
 
 - 测试路径镜像主要被测生产模块；跨越多个真实模块的测试应下沉到 `tests/integration/`。
