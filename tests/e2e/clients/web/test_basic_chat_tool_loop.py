@@ -404,6 +404,7 @@ async def test_basic_chat_tool_loop_through_real_web_surface(
         for scenario, node_name in (
             ("basic_chat", "a"), ("child", "a"), ("team_turn", "a"),
             ("team_model_call", "c"), ("mcp_turn", "a"), ("mcp_model_call", "c"),
+            ("background_mailbox", "a"),
         ):
             if scenario not in selected:
                 continue
