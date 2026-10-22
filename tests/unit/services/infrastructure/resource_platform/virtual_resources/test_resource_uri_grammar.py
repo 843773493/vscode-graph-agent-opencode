@@ -656,3 +656,46 @@ def test_gateway_files_requires_v7_directory_and_real_gateway_identity():
                            (gateway_id, directory_id.replace("7000", "4000"))):
         with pytest.raises(ResourceUriGrammarError):
             resource_display_uri(scope="gateway", scope_id=scope_id, kind="files", tail_segments=(root,))
+
+
+@pytest.mark.parametrize("uri,reason", [
+    ("/private/native-uri-marker/secret", "unknown_scheme"),
+    (r"C:\native-uri-marker\secret", "backslash_rejected"),
+    (r"\\native-uri-marker\share\secret", "backslash_rejected"),
+    ("file:///private/native-uri-marker/secret", "unknown_scheme"),
+    ("boxteam://workspace/root/resources/files/root/x?path=/native-uri-marker", "query_rejected"),
+    ("boxteam://workspace/root/resources/files/root/x#native-uri-marker", "fragment_rejected"),
+    ("boxteam://workspace/root/resources/files/root/native-uri-marker\n", "control_char_rejected"),
+    ("boxteam://workspace/root/resources/files/root/native-uri-marker 中", "non_ascii_rejected"),
+    ("boxteam://workspace/root/resources/files/root/native-uri-marker x", "invalid_character"),
+    ("BOXTEAM://workspace/native-uri-marker/resources/files/root", "scheme_case_error"),
+    ("boxteam://native-uri-marker@host/resources/files/root", "userinfo_rejected"),
+    ("boxteam://workspace/native-uri-marker//files/root", "empty_segment"),
+    ("boxteam://native-uri-marker/id/resources/config/root", "unknown_scope"),
+    ("boxteam://workspace/native-uri-marker/resources/unknown/root", "unknown_resource_kind"),
+    ("boxteam://workspace/native-uri-marker/resources/files", "malformed_path"),
+    ("boxteam://workspace/root/resources/files/root/native-uri-marker%ZZ", "invalid_percent_encoding"),
+    ("boxteam://workspace/root/resources/files/root/native-uri-marker%FF", "invalid_path_encoding"),
+    ("boxteam://workspace/root/resources/files/root/native-uri-marker%2Fsecret", "invalid_character"),
+    ("boxteam://workspace/root/resources/session/native-uri-marker/attachments/att_" + "a" * 32, "invalid_character"),
+])
+def test_uri_grammar_rejections_do_not_echo_input(uri: str, reason: str) -> None:
+    with pytest.raises(ResourceUriGrammarError) as captured:
+        parse_resource_uri(uri)
+    assert captured.value.reason_code == reason
+    assert str(captured.value)
+    assert "native-uri-marker" not in str(captured.value)
+
+
+@pytest.mark.parametrize("field,reason", [
+    ("scope", "unknown_scope"), ("scope_id", "invalid_character"),
+    ("kind", "unknown_resource_kind"), ("gateway_authority", "invalid_character"),
+    ("tail_segments", "backslash_rejected"),
+])
+def test_uri_constructor_rejection_does_not_publish_native_input(field: str, reason: str) -> None:
+    arguments = {"scope": "workspace", "scope_id": "root", "kind": "files", "tail_segments": ("root",)}
+    arguments[field] = ("root", "native-uri-marker\\secret") if field == "tail_segments" else "/private/native-uri-marker/secret"
+    with pytest.raises(ResourceUriGrammarError) as captured:
+        resource_display_uri(**arguments)
+    assert captured.value.reason_code == reason
+    assert "native-uri-marker" not in str(captured.value)

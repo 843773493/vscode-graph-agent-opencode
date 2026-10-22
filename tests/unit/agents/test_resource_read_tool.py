@@ -215,3 +215,26 @@ async def test_existing_workspace_read_permission_applies_to_all_three_inputs(co
         result = await _read(tools, path, synchronous)
         assert result.status == "error" and json.loads(result.content)["code"] == "capability_denied"
         assert "DO NOT READ" not in result.content
+
+
+@pytest.mark.parametrize("synchronous", [False, True])
+@pytest.mark.parametrize("name", ["ls", "read_file", "glob", "grep"])
+@pytest.mark.parametrize("uri,code", [
+    ("file:///private/native-uri-marker/secret", "unknown_scheme"),
+    ("boxteam://workspace/root/resources/files/root/x?path=/native-uri-marker", "query_rejected"),
+    ("boxteam://workspace/root/resources/files/root/native-uri-marker%2Fsecret", "invalid_character"),
+    (r"boxteam://workspace/root/resources/files/root/native-uri-marker\secret", "backslash_rejected"),
+])
+async def test_file_tool_grammar_error_preserves_code_without_input(read_case, synchronous, name, uri, code):
+    workspace, _, tools = read_case
+    before = {path.relative_to(workspace): path.read_bytes() for path in workspace.rglob("*") if path.is_file()}
+    arguments = {"path": uri, "runtime": SimpleNamespace(tool_call_id="uri-grammar-error")}
+    if name in {"glob", "grep"}:
+        arguments["pattern"] = "needle"
+    call = {"name": name, "args": arguments, "id": "uri-grammar-error", "type": "tool_call"}
+    message = tools[name].invoke(call) if synchronous else await tools[name].ainvoke(call)
+    assert message.status == "error" and message.tool_call_id == "uri-grammar-error"
+    body = json.loads(message.content)
+    assert body["owner"] == "resource_uri_grammar" and body["code"] == code
+    assert body["message"] and "native-uri-marker" not in message.model_dump_json()
+    assert {path.relative_to(workspace): path.read_bytes() for path in workspace.rglob("*") if path.is_file()} == before

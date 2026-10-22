@@ -58,7 +58,7 @@ _GRAMMAR_REASON_CODES: Final = frozenset(
 
 
 class ResourceUriGrammarError(ValueError):
-    """URI grammar 拒绝；reason_code 是闭合集合。"""
+    """URI grammar 拒绝；公开说明仅含规则，原输入不得写入异常文本。"""
 
     def __init__(self, reason_code: str, message: str) -> None:
         if reason_code not in _GRAMMAR_REASON_CODES:
@@ -95,7 +95,7 @@ def _has_control_char(value: str) -> bool:
 def _reject_identity_escape(segment: str) -> None:
     if "%" in segment:
         raise ResourceUriGrammarError(
-            "invalid_percent_encoding", f"URI 结构或身份段不得使用百分号编码: {segment!r}"
+            "invalid_percent_encoding", "URI 结构或身份段不得使用百分号编码"
         )
 
 
@@ -105,11 +105,11 @@ def _validate_dynamic_segment(segment: str, *, field: str) -> None:
         raise ResourceUriGrammarError("empty_segment", f"URI {field} 不得为空")
     if segment in (".", ".."):
         raise ResourceUriGrammarError(
-            "dot_segment", f"URI {field} 不得是 '.' 或 '..': {segment!r}"
+            "dot_segment", f"URI {field} 不得是 '.' 或 '..'"
         )
     if not _NAME_CHARSET.issuperset(segment):
         raise ResourceUriGrammarError(
-            "invalid_character", f"URI {field} 含未登记字符: {segment!r}"
+            "invalid_character", f"URI {field} 含未登记字符"
         )
 
 
@@ -117,31 +117,31 @@ def _encode_file_segment(segment: str) -> str:
     if not segment:
         raise ResourceUriGrammarError("empty_segment", "URI 文件段不得为空")
     if segment in (".", ".."):
-        raise ResourceUriGrammarError("dot_segment", f"URI 文件段不得是 '.' 或 '..': {segment!r}")
+        raise ResourceUriGrammarError("dot_segment", "URI 文件段不得是 '.' 或 '..'")
     if "/" in segment:
-        raise ResourceUriGrammarError("invalid_character", f"URI 文件段不得包含分隔符: {segment!r}")
+        raise ResourceUriGrammarError("invalid_character", "URI 文件段不得包含分隔符")
     if "\\" in segment:
-        raise ResourceUriGrammarError("backslash_rejected", f"URI 文件段不得包含反斜杠: {segment!r}")
+        raise ResourceUriGrammarError("backslash_rejected", "URI 文件段不得包含反斜杠")
     if _has_control_char(segment):
-        raise ResourceUriGrammarError("control_char_rejected", f"URI 文件段含控制字符: {segment!r}")
+        raise ResourceUriGrammarError("control_char_rejected", "URI 文件段含控制字符")
     try:
         return quote(segment, safe="", encoding="utf-8", errors="strict")
     except UnicodeEncodeError as error:
         raise ResourceUriGrammarError(
-            "invalid_path_encoding", f"URI 文件段无法编码为 UTF-8: {segment!r}"
+            "invalid_path_encoding", "URI 文件段无法编码为 UTF-8"
         ) from error
 
 
 def _decode_file_segment(segment: str) -> str:
     if _INVALID_PERCENT_ESCAPE.search(segment):
         raise ResourceUriGrammarError(
-            "invalid_percent_encoding", f"URI 文件段含非法百分号编码: {segment!r}"
+            "invalid_percent_encoding", "URI 文件段含非法百分号编码"
         )
     try:
         return unquote(segment, encoding="utf-8", errors="strict")
     except UnicodeDecodeError as error:
         raise ResourceUriGrammarError(
-            "invalid_path_encoding", f"URI 文件段不是有效 UTF-8: {segment!r}"
+            "invalid_path_encoding", "URI 文件段不是有效 UTF-8"
         ) from error
 
 
@@ -151,9 +151,9 @@ def _parse_scope(segment: str) -> str:
         return segment
     if segment.lower() in _SCOPE_KEYWORDS:
         raise ResourceUriGrammarError(
-            "case_error", f"URI scope 大小写错误，必须全小写: {segment!r}"
+            "case_error", "URI scope 大小写错误，必须全小写"
         )
-    raise ResourceUriGrammarError("unknown_scope", f"URI scope 未登记: {segment!r}")
+    raise ResourceUriGrammarError("unknown_scope", "URI scope 未登记")
 
 
 def _parse_kind(segment: str) -> str:
@@ -162,10 +162,10 @@ def _parse_kind(segment: str) -> str:
         return segment
     if segment.lower() in _RESOURCE_KINDS:
         raise ResourceUriGrammarError(
-            "case_error", f"URI 资源 kind 大小写错误: {segment!r}"
+            "case_error", "URI 资源 kind 大小写错误"
         )
     raise ResourceUriGrammarError(
-        "unknown_resource_kind", f"URI 资源 kind 未登记: {segment!r}"
+        "unknown_resource_kind", "URI 资源 kind 未登记"
     )
 
 
@@ -175,10 +175,10 @@ def _expect_fixed_segment(segment: str, expected: str) -> None:
         return
     if segment.lower() == expected.lower():
         raise ResourceUriGrammarError(
-            "case_error", f"URI 固定 segment 大小写错误，期望 {expected!r}: {segment!r}"
+            "case_error", f"URI 固定 segment 大小写错误，期望 {expected!r}"
         )
     raise ResourceUriGrammarError(
-        "malformed_path", f"URI 固定 segment 不匹配，期望 {expected!r}: {segment!r}"
+        "malformed_path", f"URI 固定 segment 不匹配，期望 {expected!r}"
     )
 
 
@@ -220,31 +220,31 @@ def parse_resource_uri(uri: str, *, local_gateway_id: str | None = None) -> Pars
     if not isinstance(uri, str) or not uri:
         raise ResourceUriGrammarError("empty_uri", "URI 必须是非空字符串")
     if "\\" in uri:
-        raise ResourceUriGrammarError("backslash_rejected", f"URI 不得包含反斜杠: {uri!r}")
+        raise ResourceUriGrammarError("backslash_rejected", "URI 不得包含反斜杠")
     if "?" in uri:
-        raise ResourceUriGrammarError("query_rejected", f"URI 不得携带 query: {uri!r}")
+        raise ResourceUriGrammarError("query_rejected", "URI 不得携带 query")
     if "#" in uri:
-        raise ResourceUriGrammarError("fragment_rejected", f"URI 不得携带 fragment: {uri!r}")
+        raise ResourceUriGrammarError("fragment_rejected", "URI 不得携带 fragment")
     if _has_control_char(uri):
-        raise ResourceUriGrammarError("control_char_rejected", f"URI 含控制字符: {uri!r}")
+        raise ResourceUriGrammarError("control_char_rejected", "URI 含控制字符")
     if not uri.isascii():
-        raise ResourceUriGrammarError("non_ascii_rejected", f"URI 必须是纯 ASCII: {uri!r}")
+        raise ResourceUriGrammarError("non_ascii_rejected", "URI 必须是纯 ASCII")
     if " " in uri:
-        raise ResourceUriGrammarError("invalid_character", f"URI 空格必须在文件段编码为 %20: {uri!r}")
+        raise ResourceUriGrammarError("invalid_character", "URI 空格必须在文件段编码为 %20")
     if not uri.startswith(_SCHEME):
         if uri.lower().startswith(_SCHEME):
             raise ResourceUriGrammarError(
-                "scheme_case_error", f"URI scheme 大小写错误，必须全小写: {uri!r}"
+                "scheme_case_error", "URI scheme 大小写错误，必须全小写"
             )
-        raise ResourceUriGrammarError("unknown_scheme", f"URI 只接受 {_SCHEME} scheme: {uri!r}")
+        raise ResourceUriGrammarError("unknown_scheme", f"URI 只接受 {_SCHEME} scheme")
 
     rest = uri[len(_SCHEME) :]
     if "@" in rest.split("/", 1)[0]:
-        raise ResourceUriGrammarError("userinfo_rejected", f"URI 不得携带 userinfo: {uri!r}")
+        raise ResourceUriGrammarError("userinfo_rejected", "URI 不得携带 userinfo")
 
     segments = rest.split("/")
     if any(segment == "" for segment in segments):
-        raise ResourceUriGrammarError("empty_segment", f"URI 不得有空 segment: {uri!r}")
+        raise ResourceUriGrammarError("empty_segment", "URI 不得有空 segment")
 
     authority = None
     if len(segments) > 1 and segments[0].lower() not in _SCOPE_KEYWORDS and segments[1] in _SCOPE_KEYWORDS:
@@ -263,7 +263,7 @@ def parse_resource_uri(uri: str, *, local_gateway_id: str | None = None) -> Pars
     if len(body) < 3:
         raise ResourceUriGrammarError(
             "malformed_path",
-            f"资源 URI 必须是 boxteam://{scope}/{{id}}/resources/{{kind}}/...: {uri!r}",
+            f"资源 URI 必须是 boxteam://{scope}/{{id}}/resources/{{kind}}/...",
         )
     _validate_dynamic_segment(body[0], field="scope id")
     _expect_fixed_segment(body[1], "resources")
@@ -282,7 +282,7 @@ def parse_resource_uri(uri: str, *, local_gateway_id: str | None = None) -> Pars
         if not tails:
             raise ResourceUriGrammarError(
                 "malformed_path",
-                f"{kind} URI 必须携带已登记的目录根: {uri!r}",
+                f"{kind} URI 必须携带已登记的目录根",
             )
         if kind == "files":
             _validate_files_root(scope, body[0], tails[0])
@@ -300,7 +300,7 @@ def parse_resource_uri(uri: str, *, local_gateway_id: str | None = None) -> Pars
             raise ResourceUriGrammarError(
                 "malformed_path",
                 f"agent-spec URI 必须是 boxteam://{scope}/{{id}}/resources/agent-spec/"
-                f"root/AGENTS.md: {uri!r}",
+                "root/AGENTS.md",
             )
         _expect_fixed_segment(tails[0], "root")
         _expect_fixed_segment(tails[1], "AGENTS.md")
@@ -321,13 +321,13 @@ def parse_resource_uri(uri: str, *, local_gateway_id: str | None = None) -> Pars
             validate_session_id(tails[0])
         except ValueError as error:
             raise ResourceUriGrammarError(
-                "invalid_character", f"Session 产物的 session_id 非法: {tails[0]!r}",
+                "invalid_character", "Session 产物的 session_id 非法",
             ) from error
         if tails[2] in {".", ".."}:
             raise ResourceUriGrammarError("dot_segment", "Session 产物 ID 不得是点段")
         if _SESSION_ARTIFACT_ID_PATTERNS[artifact_kind].fullmatch(tails[2]) is None:
             raise ResourceUriGrammarError(
-                "invalid_character", f"Session 产物 ID 不符合原 owner profile: {tails[2]!r}",
+                "invalid_character", "Session 产物 ID 不符合原 owner profile",
             )
         return _parsed(
             scope, body[0], kind, tails, "/".join(tails), uri, authority,
@@ -341,7 +341,7 @@ def parse_resource_uri(uri: str, *, local_gateway_id: str | None = None) -> Pars
         raise ResourceUriGrammarError(
             "malformed_path",
             f"{kind} URI 必须携带规范化尾段: boxteam://{scope}/{{id}}/resources/"
-            f"{kind}/{{...canonical path segments}}: {uri!r}",
+            f"{kind}/{{...canonical path segments}}",
         )
     for tail in tails:
         _validate_dynamic_segment(tail, field=f"{kind} path")
@@ -382,10 +382,10 @@ def resource_display_uri(
     立即走 `parse_resource_uri` 校验；构造与解析使用相同的身份和文件规则。
     """
     if scope not in _SCOPE_KEYWORDS:
-        raise ResourceUriGrammarError("unknown_scope", f"URI scope 未登记: {scope!r}")
+        raise ResourceUriGrammarError("unknown_scope", "URI scope 未登记")
     if kind not in _RESOURCE_KINDS:
         raise ResourceUriGrammarError(
-            "unknown_resource_kind", f"URI 资源 kind 未登记: {kind!r}"
+            "unknown_resource_kind", "URI 资源 kind 未登记"
         )
     _validate_dynamic_segment(scope_id, field="scope id")
     if gateway_authority is not None:

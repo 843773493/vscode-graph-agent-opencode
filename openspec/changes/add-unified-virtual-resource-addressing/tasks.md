@@ -193,3 +193,10 @@
 
 - `ArtifactDTO.path` 复用中央资源 URI grammar，拒绝原生 POSIX/盘符/UNC、相对路径、file/http 与带 query 的非法地址，错误文本不回显输入。合法悬空本地及联邦 URI 保留规范编码，成功 APIResponse 经真实序列化对账；未实现的产物服务仍明确返回501，不新增存储或 URI kind。
 - 固定候选002 tree `c39b1cfb300e97d5ffe554da2fecbe536910972b`：`runs/artifact-uri-contract-final-002` Ruff通过、14 passed/3.75秒、exit0，源码前后指纹一致、无残留进程。独审001在DTO grammar范围内无确定发现；002增补两条正向round-trip，后续独审收据单列。此处仅证明地址输入校验、响应序列化及既有501行为，不证明产物存在、读取或持久化，不据此勾选2.2/7.2整体门。
+
+
+### 2026-10-22 URI grammar 拒绝出口（部分收口）
+
+- 公共 grammar 不再将非法 URI、segment、scope/kind 输入或产物 ID 拼入公开拒绝文本；保留原异常类、reason_code、校验顺序与 cause。真实资源导航 HTTP 和同步/异步文件工具继续消费同一错误源，无响应端正则脱敏或第二 codec。闭集校验后的规则名称仍用于解释语法，合法 URI 字节不变。
+- 固定最终 tree `56404a1ba11e1d962612da95cb7ebaa2c1c5e512`：`uri-grammar-errors-http-005` 正式 matrix 1 passed/58.40秒、exit0，七类非法输入均400且 owner/code/request_id 精确，原生根不回显、文件与 SQLite 注册完整行不变，随后中文文件 URI 读取成功。列表投影每次生成的 checked_at 单独核时间可解析/不倒退，其余字段完整相等。`unit-002` 为406 passed/14.66秒；最终逐字段错误码强化由 `static-unit-003` 217 passed/1.20秒补验，生产与其余工具测试字节未变，限定复用见 `uri-grammar-errors-final-proof-005.json`。Ruff/compileall通过、三次源码前后一致且无残留；独审001/004无阻断。
+- 原生产完整archive负例 `red-001` 为55 failed/1 passed，实际区分回显；HTTP001的无效query与003的动态观察时间预期错误、004在pytest前触发嵌套runner内存上限冲突，原件保留，均不计产品通过。准确命令、raw、指纹与退出码位于本任务artifacts/runs。仅关闭该出口，不代替2.2/7.2全量不变量审计。

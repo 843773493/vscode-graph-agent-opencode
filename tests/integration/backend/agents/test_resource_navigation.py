@@ -6,6 +6,7 @@ import hashlib
 import json
 import sqlite3
 from contextlib import closing
+from datetime import datetime
 from pathlib import Path
 from uuid import uuid4
 
@@ -13,13 +14,13 @@ import httpx
 import pytest
 
 from app.core.resource_uri import parse_resource_uri, resource_display_uri
+from tests.support.ports import integration_port_block_for_file
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
     acquire_gateway_guest,
     close_gateway_process,
     start_gateway_process,
 )
-from tests.support.ports import integration_port_block_for_file
 from tests.support.workspaces import prepare_default_test_workspace
 
 
@@ -308,5 +309,58 @@ async def test_real_workspace_gateway_navigation_is_fixed_lightweight_and_contai
             assert after == before
             assert (await client.get(raw_path)).json()["data"] == publication
             (artifacts / "navigation-receipts.json").write_text(json.dumps(receipts, ensure_ascii=False, indent=2) + "\n")
+    finally:
+        close_gateway_process(gateway)
+
+
+async def test_real_gateway_navigation_grammar_errors_do_not_echo_native_input(
+    request: pytest.FixtureRequest, integration_workspace_config_path: str, navigation_files,
+) -> None:
+    assert Path(integration_workspace_config_path).is_file()
+    workspace, home, artifacts, outside = navigation_files
+    original = outside.read_bytes()
+    port = integration_port_block_for_file(Path(request.node.path)).port(12)
+    gateway = start_gateway_process(workspace_root=workspace, default_backend_url=None, port=port,
+        boxteam_home=home, artifacts_dir=artifacts / "grammar-errors-gateway")
+    try:
+        async with httpx.AsyncClient(base_url=f"http://127.0.0.1:{port}", headers=LOCAL_TOKEN_HEADERS,
+                                     timeout=60, trust_env=False) as client:
+            await acquire_gateway_guest(client)
+            workspace_id = (await client.get("/api/v1/workspace")).json()["data"]["workspace_id"]
+            registered = (await client.get("/api/gateway/workspaces", params={"check_health": False})).json()["data"]
+            registry = home / "state/gateway/gateway.sqlite"
+            with closing(sqlite3.connect(f"{registry.as_uri()}?mode=ro", uri=True)) as connection:
+                registry_before = connection.execute("SELECT * FROM gateway_workspace_registry ORDER BY workspace_id").fetchall()
+            endpoint = f"/api/v1/workspaces/{workspace_id}/resources/navigation"
+            cases = [
+                (str(outside), "unknown_scheme"), (outside.as_uri(), "unknown_scheme"),
+                (r"C:\native-uri-marker\secret", "backslash_rejected"),
+                (r"\\native-uri-marker\share\secret", "backslash_rejected"),
+                ("file:///private/native-uri-marker/secret", "unknown_scheme"),
+                ("boxteam://workspace/root/resources/files/root/x?path=/native-uri-marker", "query_rejected"),
+                ("boxteam://workspace/root/resources/files/root/native-uri-marker%2Fsecret", "invalid_character"),
+            ]
+            receipts = []
+            for uri, code in cases:
+                response = await client.post(endpoint, json={"uri": uri, "operation": "read"})
+                receipts.append({"status": response.status_code, "body": response.json()})
+                assert response.status_code == 400, response.text
+                body = response.json()
+                assert body["request_id"] == response.headers["X-Request-ID"]
+                assert body["detail"]["owner"] == "resource_uri_grammar" and body["detail"]["code"] == code
+                assert body["detail"]["message"]
+                assert all(value not in response.text for value in (str(workspace), str(home), str(outside), "native-uri-marker"))
+            after = (await client.get("/api/gateway/workspaces", params={"check_health": False})).json()["data"]
+            # checked_at 是每次列表投影生成的观察时间，不是注册表状态。
+            for before_item, after_item in zip(registered["items"], after["items"], strict=True):
+                assert datetime.fromisoformat(after_item.pop("checked_at")) >= datetime.fromisoformat(before_item.pop("checked_at"))
+            assert after == registered
+            with closing(sqlite3.connect(f"{registry.as_uri()}?mode=ro", uri=True)) as connection:
+                assert connection.execute("SELECT * FROM gateway_workspace_registry ORDER BY workspace_id").fetchall() == registry_before
+            assert outside.read_bytes() == original
+            file_uri = resource_display_uri(scope="workspace", scope_id=workspace_id, kind="files", tail_segments=("root", "src", "中文 文件.v2.md"))
+            success = await client.post(endpoint, json={"uri": file_uri, "operation": "read"})
+            assert success.status_code == 200 and success.json()["data"]["content"] == "工作区源码 Ω\n"
+            (artifacts / "grammar-error-receipts.json").write_text(json.dumps(receipts, ensure_ascii=False, indent=2) + "\n")
     finally:
         close_gateway_process(gateway)
