@@ -113,6 +113,9 @@ from app.services.infrastructure.resource_platform.registry.context_source_react
 from app.services.infrastructure.resource_platform.registry.semantic_registry import (
     ResourceRegistry,
 )
+from app.services.infrastructure.rollout_context.checkpoint.codec.message_channel import (
+    acheckpoint_messages,
+)
 from app.services.infrastructure.rollout_context.checkpoint.durable.queries import (
     RolloutCheckpointQueriesMixin,
 )
@@ -1406,7 +1409,8 @@ async def test_real_runner_compaction_seals_candidates_then_continues_and_forks_
         assert "历史段5：" not in str([message.content for message in messages])
     with session_thread_owner_scope(MutationIntentOwner(session_id, thread_id), langgraph_thread_id=thread_id):
         checkpoint = await cold.aget_tuple(build_checkpoint_config(thread_id))
-    values = checkpoint.checkpoint["channel_values"]
+        restored_messages = await acheckpoint_messages(cold, checkpoint)
+    values = {**checkpoint.checkpoint["channel_values"], "messages": restored_messages}
     event = values["_summarization_event"]
     prefix_ids = {message.id for message in event["cache_prefix_messages"]}
     compacted_messages = [message for message in values["messages"][:event["cutoff_index"]] if message.id not in prefix_ids]
@@ -1469,8 +1473,9 @@ async def test_real_runner_compaction_seals_candidates_then_continues_and_forks_
         ) == (session_id, thread_id, history.turn_id)
     with session_thread_owner_scope(MutationIntentOwner(session_id, thread_id), langgraph_thread_id=thread_id):
         before_second = await cold.aget_tuple(build_checkpoint_config(thread_id))
+        before_second_messages = await acheckpoint_messages(cold, before_second)
     assert before_second.checkpoint["channel_values"]["_summarization_event"] == event
-    assert before_second.checkpoint["channel_values"]["messages"][:event["cutoff_index"]] == values["messages"][:event["cutoff_index"]]
+    assert before_second_messages[:event["cutoff_index"]] == values["messages"][:event["cutoff_index"]]
     phase = "compact"
     summary_round = 2
     compaction_calls = 0
@@ -1556,7 +1561,8 @@ async def test_real_runner_compaction_seals_candidates_then_continues_and_forks_
     with session_thread_owner_scope(MutationIntentOwner(session_id, thread_id), langgraph_thread_id=thread_id):
         repeated_checkpoint = await recovered.aget_tuple(build_checkpoint_config(thread_id))
         assert (await recovered.aget_tuple(checkpoint.config)).checkpoint == checkpoint.checkpoint
-    repeated_values = repeated_checkpoint.checkpoint["channel_values"]
+        repeated_messages = await acheckpoint_messages(recovered, repeated_checkpoint)
+    repeated_values = {**repeated_checkpoint.checkpoint["channel_values"], "messages": repeated_messages}
     repeated_event = repeated_values["_summarization_event"]
     assert repeated_event["summary_message"].content == latest_summary.payload["summary"]
     assert repeated_event["cutoff_index"] > event["cutoff_index"]
@@ -1629,7 +1635,8 @@ async def test_real_runner_compaction_seals_candidates_then_continues_and_forks_
     fork_deadlines.complete(fork_deadline)
     with session_thread_owner_scope(MutationIntentOwner(session_id, forked.thread_id), langgraph_thread_id=forked.thread_id):
         fork_head = await recovered.aget_tuple(build_checkpoint_config(forked.thread_id))
-    fork_values = fork_head.checkpoint["channel_values"]
+        fork_messages = await acheckpoint_messages(recovered, fork_head)
+    fork_values = {**fork_head.checkpoint["channel_values"], "messages": fork_messages}
     assert "_summarization_event" not in fork_values and "_force_cache_compaction" not in fork_values
     assert [message.content for message in fork_values["messages"]].count(latest_summary.payload["summary"]) == 1
     assert summary_text not in str([message.content for message in fork_values["messages"]])

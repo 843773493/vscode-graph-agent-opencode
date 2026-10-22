@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sqlite3
 from collections.abc import Callable
 from pathlib import Path
 
@@ -29,6 +30,7 @@ from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
 from app.services.infrastructure.rollout_context.store import RolloutContextStore
+from tests.support.rollout_view_mutations import mutate_view_members
 
 SESSION_ID = "ses_019c3635a6c278efb831fe265bdcd656"
 
@@ -80,6 +82,7 @@ def _put_checkpoint(
     checkpoint_id: str,
     messages: list[object],
     step: int,
+    summarization_event: dict[str, object] | None = None,
 ) -> object:
     thread = saver._storage.storage.main_thread_id(SESSION_ID)
     if step == 1:
@@ -99,11 +102,17 @@ def _put_checkpoint(
         session_thread_owner_scope(MutationIntentOwner(SESSION_ID, thread), langgraph_thread_id=thread),
         execution_admission_scope(admission, langgraph_thread_id=thread),
     ):
+        checkpoint = _checkpoint(checkpoint_id, messages, str(step))
+        versions = {"messages": str(step)}
+        if summarization_event is not None:
+            checkpoint["channel_values"]["_summarization_event"] = summarization_event
+            checkpoint["channel_versions"]["_summarization_event"] = str(step)
+            versions["_summarization_event"] = str(step)
         return saver.put(
             config,
-            _checkpoint(checkpoint_id, messages, str(step)),
+            checkpoint,
             {"source": "job", "step": step},
-            {"messages": str(step)},
+            versions,
         )
 
 
@@ -213,6 +222,47 @@ def test_safe_cutoffs_reject_out_of_range_candidate(
             state_messages=[user, call, result],
             cutoff_indexes=[4],
         )
+
+
+@pytest.mark.parametrize("checkpoint_ns", ["", "model:provider-call"])
+@pytest.mark.parametrize("summary_visible", [True, False])
+def test_repeated_compaction_validates_event_summary_in_active_history(
+    tmp_path: Path, session_bundle_factory, checkpoint_ns: str, summary_visible: bool,
+) -> None:
+    saver = _make_saver(tmp_path, session_bundle_factory)
+    state = list(_seed_closed_tool_group(saver))
+    storage = saver._storage.storage
+    thread = storage.main_thread_id(SESSION_ID)
+    summary = HumanMessage(content="已完成读取准备", id="first-compaction-summary")
+    # 摘要只存入 event 并投影到 active view；raw channel 保留原始 cutoff 坐标。
+    _put_checkpoint(
+        saver, build_checkpoint_config(thread), "checkpoint-compacted", state, 3,
+        {"cutoff_index": 1, "cutoff_message_id": state[0].id, "summary_message": summary},
+    )
+    if not summary_visible:
+        with sqlite3.connect(storage.root(SESSION_ID, thread_id=thread) / "index.sqlite") as connection:
+            mutate_view_members(
+                connection,
+                "UPDATE context_view_items SET visible=0 WHERE item_id=?",
+                (f"item-{summary.id}",),
+            )
+    with storage.read_connection(SESSION_ID, thread, "") as connection:
+        before = tuple(connection.iterdump())
+    before_jsonl = storage.jsonl_path(SESSION_ID, thread_id=thread).read_bytes()
+    if summary_visible:
+        assert saver.safe_compaction_prefix_cutoffs(
+            SESSION_ID, thread, checkpoint_ns=checkpoint_ns,
+            state_messages=state, cutoff_indexes=[0, 1, 2, 3],
+        ) == frozenset({0, 1, 3})
+    else:
+        with pytest.raises(RuntimeError, match="已冻结摘要脱离 active history"):
+            saver.safe_compaction_prefix_cutoffs(
+                SESSION_ID, thread, checkpoint_ns=checkpoint_ns,
+                state_messages=state, cutoff_indexes=[1, 3],
+            )
+    with storage.read_connection(SESSION_ID, thread, "") as connection:
+        assert tuple(connection.iterdump()) == before
+    assert storage.jsonl_path(SESSION_ID, thread_id=thread).read_bytes() == before_jsonl
 
 
 @pytest.mark.parametrize("checkpoint_ns", ["", "model:provider-call"])

@@ -192,8 +192,14 @@ class RolloutCompactionPreflightOwnerMixin:
                 if cutoff_id is not None and (previous_cutoff == 0 or
                     codec.message_id(frozen_messages[previous_cutoff - 1], previous_cutoff - 1) != cutoff_id):
                     raise RuntimeError("compaction preflight 已冻结 cutoff identity 与 raw channel 不一致")
-                summary_id = codec.message_id(event.get("summary_message"), 0)
-                if message_sequences.get(summary_id) not in active_sequences:
+                # 摘要由 event 投影，不占 raw messages 通道的 cutoff 坐标；
+                # 按其 canonical locator 校验 active membership，不能在 raw 中查找。
+                summary_message = event.get("summary_message")
+                summary_locator = find_message_locator(
+                    connection, codec.message_id(summary_message, 0),
+                    item_id=canonical_message_anchor(codec.to_dict(summary_message)),
+                )
+                if summary_locator is None or summary_locator[0] not in active_sequences:
                     raise RuntimeError("compaction preflight 已冻结摘要脱离 active history")
             state_sequences: list[int | None] = []
             durable_cutoffs = [0]
