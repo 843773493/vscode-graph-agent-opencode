@@ -12,6 +12,10 @@ export function resolveGatewaySupervisorSocketPath(boxteamHome) {
     return null;
   }
   const resolvedHome = path.resolve(boxteamHome);
+  const homeDigest = createHash("sha256").update(resolvedHome).digest("hex").slice(0, 32);
+  if (process.platform === "win32") {
+    return `\\\\.\\pipe\\boxteam-gateway-supervisor-${homeDigest}`;
+  }
   const socketPath = path.join(
     resolvedHome,
     "state",
@@ -20,10 +24,6 @@ export function resolveGatewaySupervisorSocketPath(boxteamHome) {
   // Unix domain socket 的路径有系统上限；长测试输出目录或用户目录不能
   // 让 supervisor 在 listen 后因 chmod 找不到实际 socket 而失败。
   if (Buffer.byteLength(socketPath) <= 100) return socketPath;
-  const homeDigest = createHash("sha256")
-    .update(resolvedHome)
-    .digest("hex")
-    .slice(0, 32);
   return path.join(tmpdir(), `boxteam-gateway-supervisor-${homeDigest}.sock`);
 }
 
@@ -75,14 +75,16 @@ export function createGatewaySupervisorControl({ socketPath, onHandoff }) {
   });
   return {
     async listen() {
-      mkdirSync(path.dirname(socketPath), { recursive: true, mode: 0o700 });
-      rmSync(socketPath, { force: true });
+      if (process.platform !== "win32") {
+        mkdirSync(path.dirname(socketPath), { recursive: true, mode: 0o700 });
+        rmSync(socketPath, { force: true });
+      }
       await listenServer(server, socketPath);
       if (process.platform !== "win32") chmodSync(socketPath, 0o600);
     },
     async close() {
       await closeServer(server);
-      rmSync(socketPath, { force: true });
+      if (process.platform !== "win32") rmSync(socketPath, { force: true });
     },
   };
 }
