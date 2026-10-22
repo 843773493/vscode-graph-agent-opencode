@@ -159,6 +159,44 @@ describe("浏览器检查点配额", () => {
 });
 
 describe("浏览器产物不含真实路径", () => {
+  test.each(["目录创建", "正文保存"])("下载%s失败保留原异常且不发布存储路径", async (stage) => {
+    const store = await createBrowserStateStoreForTest();
+    const diagnostics = spyOn(console, "error").mockImplementation(() => undefined);
+    const original = new Error(`download.saveAs: 无法写入 ${store.downloadDir}`);
+    if (stage === "目录创建") {
+      await mkdir(store.stateDir, { recursive: true });
+      await writeFile(store.downloadDir, "保留原文件");
+    }
+    let saveCalls = 0;
+    const download = {
+      suggestedFilename: () => "report.txt",
+      saveAs: async () => { saveCalls += 1; throw original; },
+      url: () => "https://example.test/report.txt",
+    };
+    const failure = await store.writeDownload("browser_download", download).catch(error => error);
+    expect(failure).toBeInstanceOf(Error);
+    expect(failure.message).toContain(`browser_id=browser_download, download_id=download_`);
+    expect(failure.message).toContain(`stage=${stage}, code=${failure.code}`);
+    expect(failure.message).not.toContain(store.workspaceRoot);
+    expect(failure.cause).toBeInstanceOf(Error);
+    expect(diagnostics.mock.calls[0][2]).toBe(failure.cause);
+    expect(diagnostics.mock.calls[0][1].filePath).toContain(store.downloadDir);
+    expect(saveCalls).toBe(stage === "目录创建" ? 0 : 1);
+    if (stage === "正文保存") {
+      expect(failure.cause).toBe(original);
+      expect(failure.code).toBe("browser_download_write_failed");
+    } else {
+      expect(["EEXIST", "ENOTDIR"]).toContain(failure.cause.code);
+      expect(failure.code).toBe(failure.cause.code);
+      await rm(store.downloadDir);
+    }
+    const recovered = await store.writeDownload("browser_download", {
+      ...download, saveAs: async file => writeFile(file, "真实保存正文"),
+    });
+    expect(recovered.status).toBe("completed");
+    expect(recovered.filename).toBe("report.txt");
+  });
+
   test("下载与截图的持久记录只承载身份，调用栈内才重推导真实路径", async () => {
     const store = await createBrowserStateStoreForTest();
     const download = await store.writeDownload("browser_artifact", {

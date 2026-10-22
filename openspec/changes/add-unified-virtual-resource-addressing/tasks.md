@@ -220,3 +220,10 @@
 - `ToolOutputReferencePayload.path/read_path` 在事件发布前共用中央 session artifact URI parser，并限定为 `tool-results`。拒绝原生/相对路径、旧 scheme、普通文件及附件 URI；不检查目标存在性，保留合法远端 authority、字段形状与 writer 生成的规范 URI。没有另建 parser 或响应端脱敏。
 - 固定代码候选002 tree `f0928d79d7406bd00378ffad13d9d1942cfe2380` 的 `tool-output-uri-static-unit-002` 为71 passed/3.00秒、exit0，Ruff及compileall通过。覆盖真实 `ToolOutputStore.bound` 落盘回执到DTO、合法联邦悬空URI的durable listener/内存历史/订阅队列完整round-trip，以及两字段各六类非法引用在任何交付前拒绝。完整archive仅恢复旧事件schema的 `red-002` 为12 failed/1 passed，失败均为未拒绝非法输入；首轮装具误传part_id的失败保留，不算红证。
 - 独立只读审查 `tool-output-uri-review-001.json` 未发现此三文件切片的剩余问题；候选目录是Git archive，版本以记录的tree及文件blob核验，不用向上检索所得的主仓HEAD代表候选。准确命令、前后源码指纹、raw、退出码位于本任务artifacts/runs；最终仅追加本收据，复用不变代码的71项结果。本切片不代替完整执行、Gateway/Web、Windows或2.2/7.2全局审计，两项继续未勾。
+
+
+### 2026-10-22 Browser下载错误出口（部分收口）
+
+- 实际下载存储owner在目录创建及正文保存处生成browser/download身份、阶段和错误码，原系统路径与异常保留在服务端诊断及cause；既有Session下载事件消费者只持久化该错误文本，不增加正则脱敏或第二错误链。成功下载记录和目标不变，失败后可显式重试。
+- 固定完整tree `0c76e46e8652bf045944126e8b4d12535cf0b176`：`browser-download-errors-static-unit-001` Ruff/compileall/Node语法通过，12项Bun测试通过；`http-001` 为1 passed/13.00秒、exit0，真实Chromium下载事件经Node HTTP触发目录冲突，核原冲突文件不变、零成功下载发布，Node响应、Python资源GET和browsers.json的download_error一致且无原生路径，同一request_id；服务stderr保原存储位置。修复目录后再次通过真实下载事件保存并逐字核正文。
+- 完整archive仅恢复旧存储producer的`red-001`两项均失败，区分目录创建及saveAs原路径回显。各run源码前后一致、无运行组残留；准确命令/指纹/raw/退出码均保存在 `out/tests/temp/openspec_takeover/artifacts/runs/browser-download-errors-*`。本切片只覆盖下载错误产生及消费链，Browser file URL合同仍待裁定，其它producer及2.2/7.2整体门继续未勾。

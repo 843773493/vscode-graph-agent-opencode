@@ -337,13 +337,25 @@ export class BrowserStateStore {
   /** @returns {Promise<BrowserSavedDownload>} */
   async writeDownload(browserId, download) {
     const browserDownloadDir = path.join(this.downloadDir, browserId);
-    await mkdir(browserDownloadDir, { recursive: true });
     // 非 canonical 身份：Node 进程生成的 download_/* 本地 id 允许继续使用 v4。
     const downloadId = `download_${randomUUID().replaceAll("-", "")}`;
     const suggestedName = path.basename(download.suggestedFilename() || "download");
     const storedName = `${downloadId}-${suggestedName}`;
     const filePath = path.join(browserDownloadDir, storedName);
-    await download.saveAs(filePath);
+    let stage = "目录创建";
+    try {
+      await mkdir(browserDownloadDir, { recursive: true });
+      stage = "正文保存";
+      await download.saveAs(filePath);
+    } catch (error) {
+      console.error("[browser-state-store] 保存浏览器下载失败", { browserId, downloadId, filePath, stage }, error);
+      const wrapped = new Error(
+        `保存浏览器下载失败: browser_id=${browserId}, download_id=${downloadId}, stage=${stage}, code=${error?.code || "browser_download_write_failed"}`,
+        { cause: error },
+      );
+      wrapped.code = error?.code || "browser_download_write_failed";
+      throw wrapped;
+    }
     return {
       download_id: downloadId,
       filename: suggestedName,
