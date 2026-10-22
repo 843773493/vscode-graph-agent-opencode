@@ -61,6 +61,29 @@ test("终端的持久相对路径覆盖相对子目录、越界绝对路径、�
   );
 });
 
+test("无效工作目录公开拒绝不含原生路径，原始原因留在诊断和 cause", (t) => {
+  const root = createTerminalTestWorkspace();
+  const file = path.join(root, "not-a-directory.txt");
+  writeFileSync(file, "原件不变");
+  const diagnostic = t.mock.method(console, "error", () => {});
+  for (const cwd of ["missing", path.join(root, "absolute-missing"), file, "bad\0directory"]) {
+    assert.throws(() => resolveTerminalCwd(root, cwd), (error) => {
+      assert.equal(error.message, cwd.includes("\0")
+        ? "终端工作目录检查失败" : "终端工作目录不存在或不是目录");
+      assert.equal(error.message.includes(root), false);
+      assert.equal(error.message.includes(cwd), false);
+      const last = diagnostic.mock.calls.at(-1).arguments;
+      assert.equal(last[1].cwd, path.resolve(root, cwd));
+      if (cwd !== file) {
+        assert.equal(error.cause, last[2]);
+        assert.equal(error.cause.code, cwd.includes("\0") ? "ERR_INVALID_ARG_VALUE" : "ENOENT");
+      }
+      return true;
+    });
+  }
+  assert.equal(diagnostic.mock.callCount(), 4);
+});
+
 test("Terminal owner 拒绝旧记录格式且不迁移或覆盖原始数据", async () => {
   const root = createTerminalTestWorkspace();
   const workspaceId = "00000000-0000-4000-8000-000000000001";

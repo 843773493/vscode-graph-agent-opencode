@@ -200,3 +200,10 @@
 - 公共 grammar 不再将非法 URI、segment、scope/kind 输入或产物 ID 拼入公开拒绝文本；保留原异常类、reason_code、校验顺序与 cause。真实资源导航 HTTP 和同步/异步文件工具继续消费同一错误源，无响应端正则脱敏或第二 codec。闭集校验后的规则名称仍用于解释语法，合法 URI 字节不变。
 - 固定最终 tree `56404a1ba11e1d962612da95cb7ebaa2c1c5e512`：`uri-grammar-errors-http-005` 正式 matrix 1 passed/58.40秒、exit0，七类非法输入均400且 owner/code/request_id 精确，原生根不回显、文件与 SQLite 注册完整行不变，随后中文文件 URI 读取成功。列表投影每次生成的 checked_at 单独核时间可解析/不倒退，其余字段完整相等。`unit-002` 为406 passed/14.66秒；最终逐字段错误码强化由 `static-unit-003` 217 passed/1.20秒补验，生产与其余工具测试字节未变，限定复用见 `uri-grammar-errors-final-proof-005.json`。Ruff/compileall通过、三次源码前后一致且无残留；独审001/004无阻断。
 - 原生产完整archive负例 `red-001` 为55 failed/1 passed，实际区分回显；HTTP001的无效query与003的动态观察时间预期错误、004在pytest前触发嵌套runner内存上限冲突，原件保留，均不计产品通过。准确命令、raw、指纹与退出码位于本任务artifacts/runs。仅关闭该出口，不代替2.2/7.2全量不变量审计。
+
+
+### 2026-10-22 终端原生路径错误出口（部分收口）
+
+- 唯一 cwd 解析仍按目标端原生路径解释相对/绝对目录；stat 失败、非目录与 PTY 启动失败在 producer 发布固定阶段及终端 ID，原始异常/cause、cwd、command 留在服务诊断。Worker/退出清理的 release_reason 只保存阶段，不再把原生错误正文写入状态或广播；unknown、创建失败回收和原状态码保留，无响应端正则脱敏。
+- 最终候选 tree `9527d2a8dc826bd6e79b93226a496f22bc1ba351` 的 `terminal-errors-http-tool-002` 为7 passed/71.21秒、exit0：真实 Node HTTP 五类拒绝逐项覆盖sync/async、500与完整错误正文，核零终端发布/原文件不变及服务日志保原原因；真实工具读取工作区外兄弟目录，核原目标、退出码、模型结果无绝对路径；既有PTY输入输出/租约/崩溃恢复通过。`static-node-001` Ruff/Node语法与37项Node测试通过；003与002的产品/Node测试逐字一致，复用原结果。旧生产完整archive的`red-001`四项全部失败，明确区分四处回显。
+- 首轮`http-tool-001`首个HTTP用例通过，后续因模块工作区复用上例直接准入留下的无冻结队列执行，5个setup和1个子进程启动失败；改为每例完整fixture副本及相同配置后002全通过，不放宽生产恢复校验、不替测试补队列或终态。独审002/003无finding，前者独立Node37项通过；Bun的node:test mock不支持导致的审查尝试失败另存，不能算产品失败。各次准确命令/raw/指纹/退出码及原件在本任务artifacts/runs，限定复用和产品证据SHA见`terminal-errors-final-proof-003.json`。无运行组残留，未验证Gateway/Web或Windows，本项不关闭2.2/7.2整体。

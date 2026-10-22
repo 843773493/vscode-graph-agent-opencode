@@ -47,6 +47,62 @@ function completedSession(t, overrides = {}) {
   });
 }
 
+test("PTY 启动失败只公开终端身份，保留底层 cause 和原生启动诊断", async (t) => {
+  const session = completedSession(t, { status: "created" });
+  const original = new Error(`spawn ${session.cwd}/private-shell EACCES`);
+  const diagnostic = t.mock.method(console, "error", () => {});
+  t.mock.method(IsolatedPtyProcess.prototype, "start", async () => { throw original; });
+  try {
+    await assert.rejects(session.start(), (error) => {
+      assert.equal(error.message, `终端 PTY 启动失败: terminal_id=${session.id}`);
+      assert.equal(error.cause, original);
+      return true;
+    });
+    assert.equal(session.status, "created");
+    const [message, context, error] = diagnostic.mock.calls[0].arguments;
+    assert.equal(message, `[terminal-session] 终端 PTY 启动失败: terminal_id=${session.id}`);
+    assert.deepEqual(context, { cwd: session.cwd, command: session.command });
+    assert.equal(error, original);
+  } finally {
+    await session.dispose();
+  }
+});
+
+test("Worker 错误不进入持久状态，仍保留 unknown 与原始诊断", async (t) => {
+  const session = completedSession(t);
+  const original = new Error(`EIO: ${session.cwd}/private-worker`);
+  const diagnostic = t.mock.method(console, "error", () => {});
+  await session.handlePtyExit({ exitCode: -1, signal: 0, workerExit: true, error: original });
+  assert.equal(session.snapshot().release_reason, "pty_worker_error");
+  assert.equal(session.snapshot().status, "exited");
+  assert.equal(session.snapshot().reconciliation_status, "unknown");
+  assert.equal(JSON.stringify(session.toRecord()).includes(session.cwd), false);
+  assert.equal(diagnostic.mock.calls[0].arguments[1], original);
+});
+
+test("退出清理失败只广播阶段，原始异常只留在诊断", async (t) => {
+  const session = completedSession(t);
+  const original = new Error(`EIO: ${session.cwd}/private-cleanup`);
+  const diagnostic = t.mock.method(console, "error", () => {});
+  const events = [];
+  t.mock.method(session, "broadcast", (event) => events.push(event));
+  t.mock.method(IsolatedPtyProcess.prototype, "start", async () => ({ pid: null }));
+  t.mock.method(session, "handlePtyExit", async () => { throw original; });
+  try {
+    await session.start();
+    session.ptyProcess._emitExit({ exitCode: -1, signal: 0, workerExit: true });
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(session.toRecord().release_reason, "pty_exit_cleanup_failed");
+    assert.equal(session.snapshot().status, "exited");
+    assert.equal(events.length, 1);
+    assert.equal(events[0].error, "pty_exit_cleanup_failed");
+    assert.equal(JSON.stringify([session.snapshot(), events]).includes(session.cwd), false);
+    assert.equal(diagnostic.mock.calls[0].arguments[1], original);
+  } finally {
+    await session.dispose();
+  }
+});
+
 test("只有返回给模型的后台 execution 可以 claim steering", (t) => {
   const session = completedSession(t);
   const identity = { completionEventId: session.completionEventId, commandStartSequence: session.commandStartSequence };

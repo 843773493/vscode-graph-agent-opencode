@@ -6,12 +6,15 @@ import subprocess
 from collections.abc import AsyncIterator
 from pathlib import Path
 from textwrap import dedent
+from urllib.error import HTTPError
+from uuid import uuid4
 
 import pytest
 
 from app.agents.tools.terminal import create_exec_command_tool, create_write_stdin_tool
 from app.core.mounted_workspaces import MountedWorkspace
 from app.core.workspace_identity import load_or_create_workspace_id
+from app.services.infrastructure.terminal_manager_client import TerminalManagerClient
 from tests.harness.python.run_context import TestRunContext
 from tests.harness.python.terminal_backend import start_terminal_backend
 from tests.support.ports import integration_port_block_for_file
@@ -20,15 +23,38 @@ from tests.support.workspace_tool_runtime import (
     WorkspaceToolRuntime,
     workspace_tool_runtime,
 )
+from tests.support.workspaces import (
+    install_test_workspace_config,
+    prepare_default_test_workspace,
+)
+
+
+@pytest.fixture
+def terminal_workspace_root_path(
+    integration_workspace_root_path: str,
+    integration_config_path: str,
+) -> str:
+    """每例启动完整 runtime，不能继承另一例手工准入留下的执行状态。"""
+    project = Path.cwd()
+    root = prepare_default_test_workspace(
+        workspace_root=Path(integration_workspace_root_path) / uuid4().hex,
+        template_root=project / "tests/fixtures/workspaces/default_test_workspace",
+        shared_skill_root=project / "resources/skills",
+    )
+    install_test_workspace_config(
+        workspace_root=root, config_path=Path(integration_config_path),
+        schema_path=project / "configs/workspace_schema.jsonc",
+    )
+    return str(root)
 
 
 @pytest.fixture
 async def terminal_runtime(
     request: pytest.FixtureRequest,
-    integration_workspace_root_path: str,
+    terminal_workspace_root_path: str,
     monkeypatch: pytest.MonkeyPatch,
 ) -> AsyncIterator[WorkspaceToolRuntime]:
-    root = Path(integration_workspace_root_path)
+    root = Path(terminal_workspace_root_path)
     port = integration_port_block_for_file(Path(request.node.path)).port(40)
     process = start_terminal_backend(backend_port=port, workspace_root=str(root), artifacts_dir=TestRunContext.from_test_file(Path(__file__)).artifacts_dir)
     try:
@@ -38,6 +64,97 @@ async def terminal_runtime(
             yield runtime
     finally:
         terminate_process(process)
+
+
+@pytest.mark.asyncio
+async def test_real_terminal_http_failures_keep_native_details_in_server_diagnostics(
+    request: pytest.FixtureRequest,
+    terminal_runtime: WorkspaceToolRuntime,
+) -> None:
+    container, _session_id, _context = terminal_runtime
+    owner = container.terminal_resource_owner
+    root = owner.workspace_root
+    port = integration_port_block_for_file(Path(request.node.path)).port(40)
+    client = TerminalManagerClient(
+        backend_url=f"http://127.0.0.1:{port}", workspace_id=owner.workspace_id,
+    )
+    not_directory = root / "not-a-terminal-directory.txt"
+    not_directory.write_text("原件不能被终端创建改写", encoding="utf-8")
+    missing_command = root / "missing-native-shell"
+    cases = [
+        ("missing-relative-cwd", None, "终端工作目录不存在或不是目录"),
+        (str(root / "missing-absolute-cwd"), None, "终端工作目录不存在或不是目录"),
+        (str(not_directory), None, "终端工作目录不存在或不是目录"),
+        ("bad\0directory", None, "终端工作目录检查失败"),
+        (str(root), str(missing_command), "终端 PTY 启动失败"),
+    ]
+    for mode in ("sync", "async"):
+        for cwd, command, reason in cases:
+            terminal_id = f"term_{uuid4().hex}"
+            payload = {
+                "workspace_id": owner.workspace_id,
+                "terminal_id": terminal_id,
+                "owner_revision": 1,
+                "cwd": cwd,
+            }
+            if command is not None:
+                payload["command"] = command
+                payload["args"] = []
+            with pytest.raises(RuntimeError) as rejected:
+                if mode == "sync":
+                    await asyncio.to_thread(
+                        client._json_request_sync, "POST", "/api/terminals", payload,
+                    )
+                else:
+                    await client._json_request("POST", "/api/terminals", payload)
+            error = rejected.value
+            assert isinstance(error.__cause__, HTTPError)
+            assert error.__cause__.code == 500
+            detail = json.loads(str(error).split("detail=", 1)[1])
+            expected = f"{reason}: terminal_id={terminal_id}" if command else reason
+            assert detail == {"error": expected}
+            assert str(root) not in str(error)
+            assert str(missing_command) not in str(error)
+            assert await client.list_resources() == []
+    assert not_directory.read_text(encoding="utf-8") == "原件不能被终端创建改写"
+    state = json.loads((root / ".boxteam/terminal-manager/terminals.json").read_text())
+    assert state["terminals"] == []
+    assert await owner.list_resources() == []
+    logs = TestRunContext.from_test_file(Path(__file__)).artifacts_dir
+    diagnostic = "\n".join(path.read_text() for path in logs.glob("terminal-backend-*.stderr.log"))
+    assert str(not_directory) in diagnostic
+    assert str(missing_command) in diagnostic
+    assert "ENOENT" in diagnostic
+
+
+@pytest.mark.asyncio
+async def test_real_terminal_tool_preserves_native_external_workdir(
+    terminal_runtime: WorkspaceToolRuntime,
+) -> None:
+    container, session_id, context = terminal_runtime
+    owner = container.terminal_resource_owner
+    # 兄弟目录仍在本文件的正式隔离工作区内，不依赖宿主机的固定目录。
+    root = owner.workspace_root
+    external = root.with_name(f"external-{uuid4().hex}")
+    external.mkdir()
+    probe = external / "terminal-cwd-probe.txt"
+    probe.write_text("BOXTEAM_NATIVE_EXTERNAL_CWD", encoding="utf-8")
+    execute = create_exec_command_tool(
+        session_id, terminal_owner=owner, invocation_context=context,
+    )
+    try:
+        result = await execute.ainvoke({
+            "cmd": "cat terminal-cwd-probe.txt", "workdir": str(external),
+            "yield_time_ms": 1000,
+        })
+        assert "BOXTEAM_NATIVE_EXTERNAL_CWD" in result["output"]
+        assert result["exit_code"] == 0
+        assert str(root) not in json.dumps(result)
+        assert str(external) not in json.dumps(result)
+        assert probe.read_text(encoding="utf-8") == "BOXTEAM_NATIVE_EXTERNAL_CWD"
+    finally:
+        probe.unlink()
+        external.rmdir()
 
 
 @pytest.mark.asyncio
@@ -91,7 +208,7 @@ async def test_real_tool_acceptance_owner_lease_pty_and_final_receipt(
 @pytest.mark.asyncio
 async def test_actual_python_crash_stopped_pty_settles_persisted_lease_and_allows_cleanup(
     request: pytest.FixtureRequest,
-    integration_workspace_root_path: str,
+    terminal_workspace_root_path: str,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from app.container import WorkspaceContainerRegistry
@@ -99,7 +216,7 @@ async def test_actual_python_crash_stopped_pty_settles_persisted_lease_and_allow
     from app.core.path_utils import catalog_provider_scope
     from app.core.workspace_identity import load_or_create_workspace_id
 
-    root = Path(integration_workspace_root_path)
+    root = Path(terminal_workspace_root_path)
     port = integration_port_block_for_file(Path(request.node.path)).port(40)
     process = start_terminal_backend(backend_port=port, workspace_root=str(root), artifacts_dir=TestRunContext.from_test_file(Path(__file__)).artifacts_dir)
     child = dedent(r"""

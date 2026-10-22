@@ -2,7 +2,7 @@ import {
   readProcessStat,
   terminateTerminalProcessTree,
 } from "./terminalProcessUtils.js";
-import { existsSync, statSync } from "node:fs";
+import { statSync } from "node:fs";
 import path from "node:path";
 import { IsolatedPtyProcess } from "./isolatedPtyProcess.js";
 import { TerminalOutputMultiplexer } from "./output/terminalOutputMultiplexer.js";
@@ -25,10 +25,19 @@ export function resolveTerminalCwd(workspaceRoot, cwdRelative) {
     ? cwdRelative.trim()
     : ".";
   const resolved = path.resolve(workspaceRoot, rawCwd);
-  if (!existsSync(resolved) || !statSync(resolved).isDirectory()) {
-    throw new Error(
-      `终端工作目录不存在或不是目录: cwd_relative=${rawCwd}, resolved=${resolved}`,
-    );
+  let directoryStat;
+  try {
+    directoryStat = statSync(resolved);
+  } catch (error) {
+    console.error("[terminal-session] 终端工作目录检查失败", { cwd: resolved }, error);
+    const message = new Set(["ENOENT", "ENOTDIR"]).has(error.code)
+      ? "终端工作目录不存在或不是目录"
+      : "终端工作目录检查失败";
+    throw new Error(message, { cause: error });
+  }
+  if (!directoryStat.isDirectory()) {
+    console.error("[terminal-session] 终端工作目录不是目录", { cwd: resolved });
+    throw new Error("终端工作目录不存在或不是目录");
   }
   return resolved;
 }
@@ -204,9 +213,7 @@ export class TerminalSession {
         this.status = "exited";
         this.endedAt = nowIso();
         this.ptyProcess = null;
-        this.releaseReason = `pty_exit_cleanup_failed: ${
-          error instanceof Error ? error.message : String(error)
-        }`;
+        this.releaseReason = "pty_exit_cleanup_failed";
         if (this.lastCommandStatus === "running") {
           this.lastCommandStatus = "exited";
           this.lastCommandCompletedAt = this.endedAt;
@@ -251,9 +258,13 @@ export class TerminalSession {
         },
       });
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
+      console.error(
+        `[terminal-session] 终端 PTY 启动失败: terminal_id=${this.id}`,
+        { cwd: resolvedCwd ?? this.cwd, command: this.command },
+        error,
+      );
       throw new Error(
-        `终端 PTY 启动失败: terminal_id=${this.id}, cwd=${resolvedCwd ?? this.cwd}, command=${this.command}; ${message}`,
+        `终端 PTY 启动失败: terminal_id=${this.id}`,
         { cause: error },
       );
     }
@@ -293,8 +304,11 @@ export class TerminalSession {
     this.endedAt = nowIso();
     if (workerExit || cleanupResult === "still_running" || cleanupResult === "cleanup_failed") {
       this.markReconciliationStatus("unknown");
+      if (error) {
+        console.error(`[terminal-session] PTY Worker 失败: terminal_id=${this.id}`, error);
+      }
       this.releaseReason = error
-        ? `pty_worker_error: ${error.message}`
+        ? "pty_worker_error"
         : workerExit
           ? "pty_worker_exit"
           : `pty_cleanup_${cleanupResult}`;
