@@ -5213,17 +5213,16 @@ async def test_child_capture_missing_final_locator_is_not_rebuilt(
     assert (_main_thread_node(context, source.session_id) / "rollout/rollout.jsonl").read_bytes() == source_jsonl
 
 
+@pytest.mark.parametrize("fork_execution_source", [True], indirect=True)
 @pytest.mark.asyncio
 @pytest.mark.parametrize("cleanup_phase", ["capture_aborted", "directories_removed"])
 async def test_child_aborted_capture_resumes_original_cleanup_without_rebuilding(
-    fork_provider_prepare, production_fork_container: AppContainer,
+    fork_execution_source: SessionDTO, production_fork_container: AppContainer,
     monkeypatch: pytest.MonkeyPatch, fork_gateway_request_context: None, cleanup_phase: str,
 ) -> None:
     """资源已中止、creation 尚 preparing 的真实崩溃窗口继续清理，不创建目录。"""
     context = _production_fork_context(production_fork_container)
-    source, _ = await _seed_retry_tool_source(
-        context, fork_provider_prepare, attachment_store=production_fork_container.attachment_blob_store,
-    )
+    source = fork_execution_source
     parent = await context.sessions.create(SessionCreateRequest(title="原 cleanup 目标 owner"))
     request = await _fork_request(
         context, source.session_id, creation_kind="new_child_thread", mode="full_rollout_copy",
@@ -5298,17 +5297,16 @@ async def test_child_aborted_capture_resumes_original_cleanup_without_rebuilding
         assert (_main_thread_node(recovered, source.session_id) / "rollout/rollout.jsonl").read_bytes() == source_jsonl
 
 
+@pytest.mark.parametrize("fork_execution_source", [True], indirect=True)
 @pytest.mark.asyncio
 @pytest.mark.parametrize("fault", ["operation_id", "target_session", "target_thread", "creation_preimage", "capture_preimage"])
 async def test_main_fork_conflicting_capture_is_preserved_before_abort(
-    fork_provider_prepare, production_fork_container: AppContainer,
+    fork_execution_source: SessionDTO, production_fork_container: AppContainer,
     monkeypatch: pytest.MonkeyPatch, fork_gateway_request_context: None, fault: str,
 ) -> None:
     """真实恢复拒绝冲突 capture 后，附件、catalog 和私有快照都不能被错误清理。"""
     context = _production_fork_context(production_fork_container)
-    source, _ = await _seed_retry_tool_source(
-        context, fork_provider_prepare, attachment_store=production_fork_container.attachment_blob_store,
-    )
+    source = fork_execution_source
     request = await _fork_request(context, source.session_id, creation_kind="new_session_main", mode="full_rollout_copy")
     key = context.forks._creation_key(request.idempotency_key)
     observer = fork_owner.observe_phase
@@ -5375,17 +5373,40 @@ async def test_main_fork_conflicting_capture_is_preserved_before_abort(
         ).fetchall() == claims
     assert (source_node / "rollout/rollout.jsonl").read_bytes() == source_jsonl
 
+    # 已证明冲突不会被错误 owner 清理；只撤销本测试注入，再交还原 operation。
+    with sqlite3.connect(catalog.database_path) as connection:
+        restored = connection.execute(
+            "UPDATE fork_source_captures SET copy_operation_id=?,target_session_id=?,target_thread_id=?,"
+            "request_json=?,preimage_hash=? WHERE creation_key=?",
+            (capture.copy_operation_id, capture.target_session_id, capture.target_thread_id,
+             capture.request_json, capture.preimage_hash, capture.creation_key),
+        )
+        assert restored.rowcount == 1
+    cleanup_container = _build_owned_container(context.workspace, monkeypatch)
+    _isolate_non_navigation_services(cleanup_container, monkeypatch)
+    recovered = _production_fork_context(cleanup_container)
 
+    async def forbid_recapture(**_kwargs: object):
+        pytest.fail("撤销测试注入后仍须复用原冻结 capture")
+
+    monkeypatch.setattr(recovered.saver.forks.source, "_capture_fork_source_snapshot", forbid_recapture)
+    async with main.lifespan(main.app):
+        published = recovered.sessions.path_resolver.catalog_store.get_creation_record(key)
+        assert published.state == "published" and published.preimage_hash == frozen.preimage_hash
+        replay = await recovered.forks.fork(request)
+        assert (replay.session.session_id, replay.thread_id) == (frozen.session_id, frozen.main_thread_id)
+        assert (source_node / "rollout/rollout.jsonl").read_bytes() == source_jsonl
+
+
+@pytest.mark.parametrize("fork_execution_source", [True], indirect=True)
 @pytest.mark.asyncio
 async def test_main_fork_abort_rejects_rebound_creation_capability(
-    fork_provider_prepare, production_fork_container: AppContainer,
+    fork_execution_source: SessionDTO, production_fork_container: AppContainer,
     monkeypatch: pytest.MonkeyPatch, fork_gateway_request_context: None,
 ) -> None:
     """同 key 的伪造 record 不能先清附件，再由下游 creation owner 才发现身份冲突。"""
     context = _production_fork_context(production_fork_container)
-    source, _ = await _seed_retry_tool_source(
-        context, fork_provider_prepare, attachment_store=production_fork_container.attachment_blob_store,
-    )
+    source = fork_execution_source
     request = await _fork_request(context, source.session_id, creation_kind="new_session_main", mode="full_rollout_copy")
     key = context.forks._creation_key(request.idempotency_key)
     observer = fork_owner.observe_phase
@@ -5428,6 +5449,18 @@ async def test_main_fork_abort_rejects_rebound_creation_capability(
     assert [tuple(row) for row in production_fork_container.attachment_blob_store._catalog._connected().execute(
         "SELECT * FROM fork_attachment_claims WHERE copy_operation_id=?", (key,),
     )] == claims
+
+    # 错误 capability 的零副作用已核验；原 owner 必须在原期限内完成合法中止。
+    await context.forks._abort_if_unpublished(frozen, "capability 负例结束后由原 owner 清理")
+    assert catalog.get_creation_record(key).state == "aborted"
+    terminal_capture = catalog.get_fork_source_capture(copy_operation_id=key)
+    assert terminal_capture is not None and terminal_capture.state == "aborted"
+    assert not root.exists()
+    assert [tuple(row) for row in production_fork_container.attachment_blob_store._catalog._connected().execute(
+        "SELECT state FROM fork_attachment_claims WHERE copy_operation_id=?", (key,),
+    )] == [("aborted",)]
+    with pytest.raises(RuntimeError, match="已中止"):
+        await context.forks.fork(request)
 
 
 @pytest.mark.asyncio
@@ -6073,7 +6106,7 @@ async def test_remote_aborted_main_capture_resumes_cleanup_after_restart(
     ],
 )
 async def test_remote_fork_source_release_waits_for_durable_target_abort(
-    fork_provider_prepare,
+    fork_execution_source: SessionDTO,
     production_fork_container: AppContainer,
     remote_fork_target: tuple[AppContainer, SourceForkOwnerTransport],
     monkeypatch: pytest.MonkeyPatch,
@@ -6081,7 +6114,7 @@ async def test_remote_fork_source_release_waits_for_durable_target_abort(
     release_receipt_fault: str,
 ) -> None:
     source_context = _production_fork_context(production_fork_container)
-    source = await _seed_source(source_context, fork_provider_prepare)
+    source = fork_execution_source
     target, transport = remote_fork_target
     context = _production_fork_context(target)
     parent = await target.session_service.create(SessionCreateRequest(title="失败清理目标"))
@@ -6183,6 +6216,16 @@ async def test_remote_fork_source_release_waits_for_durable_target_abort(
         assert source_terminal is not None and source_terminal.state == "aborted"
         assert not capture_directory(source_context.saver._storage.storage.sessions_dir, source_terminal).exists()
         assert not await target.job_service.list()
+        if release_receipt_fault != "none":
+            # 保留坏回执被拒绝及 pending 的原断言，再恢复传输并由 release owner 重试。
+            monkeypatch.setattr(transport, "fork_transfer", original_transfer)
+            await context.forks.retry_pending_remote_exports()
+            assert catalog.get_fork_export_release(key) == ("confirmed", None)
+            assert [(call.action, call.release_state) for call in transport.calls if call.action == "release"] == [
+                ("release", "aborted"), ("release", "aborted"),
+            ]
+            with pytest.raises(RuntimeError, match="已中止"):
+                await context.forks.fork(request)
     finally:
         finish_cleanup.set()
         if not operation.done():
