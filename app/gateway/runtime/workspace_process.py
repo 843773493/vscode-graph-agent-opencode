@@ -59,56 +59,77 @@ def resolve_python_executable() -> Path:
 def resolve_backend_workspace_id(project_root: Path, workspace_root: Path, *, initialize: bool = True) -> str:
     """通过 Workspace CLI 取得 UUID；恢复必须只读，不得重建缺失身份。"""
 
-    resolved_project_root = project_root.expanduser().resolve(strict=True)
-    resolved_workspace_root = workspace_root.expanduser().resolve(strict=True)
-    if not resolved_workspace_root.is_dir():
-        raise NotADirectoryError(f"工作区根不是目录: {resolved_workspace_root}")
-    result = subprocess.run(
-        [
-            str(resolve_python_executable()),
-            "-m",
-            "app.core.workspace_identity",
-            "--workspace-root",
-            str(resolved_workspace_root),
-            *([] if initialize else ["--read-only"]),
-        ],
-        cwd=resolved_project_root,
-        env=_local_child_environment(),
-        capture_output=True,
-        text=True,
-        timeout=30,
-        check=False,
-    )
-    if result.returncode != 0:
-        raise RuntimeError(
-            "Workspace backend UUID CLI 执行失败: "
-            f"workspace_root={resolved_workspace_root}, exit={result.returncode}, "
-            f"stderr={result.stderr!r}, stdout={result.stdout!r}"
-        )
-    if result.stderr:
-        raise RuntimeError(
-            "Workspace backend UUID CLI 成功时 stderr 必须为空: "
-            f"workspace_root={resolved_workspace_root}, stderr={result.stderr!r}"
-        )
-    if not result.stdout.endswith("\n") or result.stdout.count("\n") != 1:
-        raise TypeError(
-            "Workspace backend UUID CLI 必须只输出一行 UUID: "
-            f"workspace_root={resolved_workspace_root}, stdout={result.stdout!r}"
-        )
-    workspace_id = result.stdout[:-1]
     try:
-        parsed_workspace_id = UUID(workspace_id)
-    except ValueError as error:
-        raise ValueError(
-            "Workspace backend UUID CLI 返回非 UUID: "
-            f"workspace_root={resolved_workspace_root}, workspace_id={workspace_id!r}"
-        ) from error
-    if str(parsed_workspace_id) != workspace_id:
-        raise ValueError(
-            "Workspace backend UUID CLI 返回非标准 UUID 文本: "
-            f"workspace_root={resolved_workspace_root}, workspace_id={workspace_id!r}"
+        resolved_project_root = project_root.expanduser().resolve(strict=True)
+        resolved_workspace_root = workspace_root.expanduser().resolve(strict=True)
+    except OSError as error:
+        logger.exception("Workspace backend UUID CLI 目录访问失败")
+        raise type(error)(error.errno, "Workspace backend UUID CLI 目录访问失败") from error
+    if not resolved_workspace_root.is_dir():
+        logger.error("工作区根不是目录: %s", resolved_workspace_root)
+        raise NotADirectoryError("工作区根不是目录")
+    try:
+        result = subprocess.run(
+            [
+                str(resolve_python_executable()),
+                "-m",
+                "app.core.workspace_identity",
+                "--workspace-root",
+                str(resolved_workspace_root),
+                *([] if initialize else ["--read-only"]),
+            ],
+            cwd=resolved_project_root,
+            env=_local_child_environment(),
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
         )
-    return workspace_id
+    except OSError as error:
+        logger.exception("Workspace backend UUID CLI 启动失败")
+        raise type(error)(error.errno, "Workspace backend UUID CLI 启动失败") from error
+    except subprocess.TimeoutExpired as error:
+        logger.exception(
+            "Workspace backend UUID CLI 超时: stdout=%r, stderr=%r",
+            error.stdout, error.stderr,
+        )
+        raise subprocess.TimeoutExpired("Workspace backend UUID CLI", error.timeout) from error
+    try:
+        if result.returncode != 0:
+            raise RuntimeError(
+                "Workspace backend UUID CLI 执行失败: "
+                f"exit={result.returncode}"
+            )
+        if result.stderr:
+            raise RuntimeError(
+                "Workspace backend UUID CLI 成功时 stderr 必须为空: "
+                "收到非空诊断输出"
+            )
+        if not result.stdout.endswith("\n") or result.stdout.count("\n") != 1:
+            raise TypeError(
+                "Workspace backend UUID CLI 必须只输出一行 UUID: "
+                "输出行数或换行符不符合协议"
+            )
+        workspace_id = result.stdout[:-1]
+        try:
+            parsed_workspace_id = UUID(workspace_id)
+        except ValueError as error:
+            raise ValueError(
+                "Workspace backend UUID CLI 返回非 UUID: "
+                "输出成员身份不符合协议"
+            ) from error
+        if str(parsed_workspace_id) != workspace_id:
+            raise ValueError(
+                "Workspace backend UUID CLI 返回非标准 UUID 文本: "
+                "输出成员身份不符合协议"
+            )
+        return workspace_id
+    except (RuntimeError, TypeError, ValueError):
+        logger.error(
+            "Workspace backend UUID CLI 输出无效: roots=%s, exit=%s, stdout=%r, stderr=%r",
+            resolved_workspace_root, result.returncode, result.stdout, result.stderr,
+        )
+        raise
 
 
 async def wait_for_http_ok(

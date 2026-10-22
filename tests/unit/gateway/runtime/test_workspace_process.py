@@ -1,5 +1,7 @@
+import errno
 import json
 import os
+import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -80,31 +82,38 @@ def test_resolve_backend_workspace_id_consumes_canonical_single_line_cli_output(
     ]
     assert calls[0][1]["cwd"] == tmp_path.resolve()
 
+    assert resolve_backend_workspace_id(tmp_path, tmp_path, initialize=False) == expected_id
+    assert calls[1][0] == [*calls[0][0], "--read-only"]
+
 
 @pytest.mark.parametrize(
-    ("returncode", "stdout", "stderr", "message"),
+    ("returncode", "stdout", "stderr", "message", "error_type"),
     [
-        (2, "", "invalid workspace\n", "执行失败"),
+        (2, "/private/stdout-marker", "/private/stderr-marker\n", "执行失败", RuntimeError),
         (
             0,
             "00000000-0000-4000-8000-000000000001\n",
-            "warning\n",
+            "/private/stderr-marker\n",
             "stderr 必须为空",
+            RuntimeError,
         ),
-        (0, "00000000-0000-4000-8000-000000000001", "", "只输出一行"),
+        (0, "00000000-0000-4000-8000-000000000001", "", "只输出一行", TypeError),
         (
             0,
             "00000000-0000-4000-8000-000000000001\nextra\n",
             "",
             "只输出一行",
+            TypeError,
         ),
         (
             0,
             "00000000-0000-4000-8000-000000000001\n",
             "unexpected output",
             "stderr 必须为空",
+            RuntimeError,
         ),
-        (0, "00000000-0000-4000-8000-00000000000A\n", "", "非标准 UUID 文本"),
+        (0, "00000000-0000-4000-8000-00000000000A\n", "", "非标准 UUID 文本", ValueError),
+        (0, "/private/identity-marker\n", "", "非 UUID", ValueError),
     ],
 )
 def test_resolve_backend_workspace_id_rejects_invalid_cli_output(
@@ -114,6 +123,8 @@ def test_resolve_backend_workspace_id_rejects_invalid_cli_output(
     stdout: str,
     stderr: str,
     message: str,
+    error_type: type[Exception],
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     monkeypatch.setattr(
         "app.gateway.runtime.workspace_process.resolve_python_executable",
@@ -128,8 +139,66 @@ def test_resolve_backend_workspace_id_rejects_invalid_cli_output(
         ),
     )
 
-    with pytest.raises((RuntimeError, TypeError, ValueError), match=message):
+    with pytest.raises(error_type, match=message) as caught:
         resolve_backend_workspace_id(tmp_path, tmp_path)
+    assert str(tmp_path) not in str(caught.value)
+    assert "/private/" not in str(caught.value)
+    assert str(tmp_path) in caplog.text
+    assert repr(stdout) in caplog.text
+    assert repr(stderr) in caplog.text
+    if returncode:
+        assert f"exit={returncode}" in str(caught.value)
+
+
+@pytest.mark.parametrize("scope", ["project", "workspace", "not-directory"])
+def test_identity_cli_directory_failure_retains_diagnostics_without_public_path(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture, scope: str,
+) -> None:
+    invalid = tmp_path / "private-root"
+    if scope == "not-directory":
+        invalid.write_text("file", encoding="utf-8")
+    project = invalid if scope == "project" else tmp_path
+    workspace = tmp_path if scope == "project" else invalid
+    expected = NotADirectoryError if scope == "not-directory" else FileNotFoundError
+    with pytest.raises(expected) as caught:
+        resolve_backend_workspace_id(project, workspace)
+    assert str(tmp_path) not in str(caught.value)
+    assert "private-root" not in str(caught.value)
+    assert str(invalid) in caplog.text
+    if scope != "not-directory":
+        assert caught.value.errno == errno.ENOENT
+        assert isinstance(caught.value.__cause__, FileNotFoundError)
+
+
+@pytest.mark.parametrize("failure", ["spawn", "timeout"])
+def test_identity_cli_process_failure_retains_type_and_private_log(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture, failure: str,
+) -> None:
+    private_command = [str(tmp_path / "private-python"), str(tmp_path / "private-root")]
+    original = (
+        OSError(errno.ENOENT, "missing executable", private_command[0])
+        if failure == "spawn" else
+        subprocess.TimeoutExpired(private_command, 30, output="private-output", stderr="private-error")
+    )
+
+    def fail(*_args: object, **_kwargs: object) -> None:
+        raise original
+
+    monkeypatch.setattr("app.gateway.runtime.workspace_process.subprocess.run", fail)
+    with pytest.raises(type(original)) as caught:
+        resolve_backend_workspace_id(tmp_path, tmp_path)
+    assert caught.value.__cause__ is original
+    assert str(tmp_path) not in str(caught.value)
+    assert str(tmp_path) in caplog.text
+    if isinstance(original, subprocess.TimeoutExpired):
+        assert caught.value.timeout == original.timeout
+        assert caught.value.output is None
+        assert caught.value.stderr is None
+        assert "private-output" in caplog.text
+        assert "private-error" in caplog.text
+    else:
+        assert caught.value.errno == original.errno
 
 
 def test_workspace_backend_has_bounded_connection_drain_timeout(
