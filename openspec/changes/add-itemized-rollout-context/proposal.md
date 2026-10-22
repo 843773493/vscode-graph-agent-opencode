@@ -6,6 +6,8 @@
 
 ## What Changes
 
+- 持久执行队列统一落在各 Thread 的 rollout SQLite，与原 canonical acceptance/internal admission 在同一事务提交；删除 Session pending JSON 正常读写，Session 只聚合各 Thread 控制投影。领取、启动和终态恢复使用原 Job/admission 身份，fork 不继承来源待执行任务。
+
 - 普通业务集成与 Web 验收复用现有 `model_stream`，删除重复 SSE 拼装；专用 HTTP/SDK 和同步/异步测试保留各自真实边界，共享响应资产与协议编码。执行、fork、恢复的完整验收通过产品入口生成关键业务状态；手工历史仅证明明确范围内的局部行为。
 
 - 补齐主窗口主聊天区域的正式“跳到指定轮次”页面入口：按当前 workspace/Session/thread 的稳定 Turn ID 复用 around history 与虚拟列表，统一主动跳转和浏览位置恢复；支持重复定位、切换目标取消、暂停跟随及明确错误。浏览位置按 `(user_id, workspace_id, session_id)` 持久化，仅适用于 Session 主线程，不按 `thread_id` 分区；新建 Session（包括 fork）不继承源 Session 的浏览位置。无 Turn 锚点时保存当前 `scrollTop`，恢复时回到最新尾部并忽略该像素偏移。正式 Web E2E 使用同一用户入口定位，专项滚动验收保留真实滚动；右侧侧边栏独立 child 对话的跳转控件留待后续。

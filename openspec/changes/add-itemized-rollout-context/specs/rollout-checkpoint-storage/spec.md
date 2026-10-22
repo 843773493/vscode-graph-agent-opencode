@@ -265,7 +265,13 @@ storage resolver MUST 在读取catalog或构造路径前用共享canonical valid
 - rollout 物理节点、`index.sqlite`、`rollout.jsonl` 与 thread 级 control state MUST 位于 `(session_id, thread_id)` 解析出的 thread node 下，相对 session node 的 locator 对 main thread 恰为 `threads/{main_thread_id}`、对非 main durable thread 恰为 `threads/YYYY/MM/DD/{thread_id}`；`RolloutStorage` 的 `root()`/`index_path()`/`jsonl_path()` MUST 接受 `(session_id, thread_id)` 并解析到 `<thread_node>/rollout`，MUST NOT 继续解析到 `<session_node>/rollout`，也 MUST NOT 把裸 `session_id` 或 `checkpoint_ns` 当作 thread identity 使用。
 - 每个 thread MUST 拥有各自的 `index.sqlite` 与 `rollout.jsonl`；`database_meta` 的单行 `singleton_id=1` 语义只在该 thread 自己的 DB 内成立。不同 thread MUST NOT 共享同一 rollout DB、`committed_jsonl_offset`、`last_item_sequence`、`source_overlay_epoch` 或 `last_control_sequence`；线程级隔离 MUST 由「每 thread 独立数据库文件」实现，MUST NOT 退化为在单一 Session 级 DB 内用 `thread_id` 列区分同一份 control 状态的第二套形态；同一 Session 的 main/child 之间任一 control 状态的变化都不得被另一方观察到。
 - detail store 与 context source control 的 rollout 根 MUST 来自唯一 thread node，MUST NOT 来自 session node；detail_relative_path 只解析原单份正文，不保留 protected_detail_relative_path、ContextDetailKeyStore、redaction key 或第二密文落点。
-- Session 级物理存储（message stream、trace、LLM request log、pending request）MUST 继续由 Session node 作为唯一物理 owner 并按 session 定位，MUST NOT 移动、拆分或复制为 thread node 下的独立物理存储。message stream 与 trace 为暴露和校验实际 thread 身份所需的 API/SSE/cursor/cache/index 逻辑引用 MUST 携带 `thread_id`；这类逻辑身份隔离不改变其 Session 物理路径和 owner。Trace 的 Job 归属复用已提交创建/启动索引事实，不新增可变归属表；缺失、冲突或跨 Session 的归属明确失败，不能默认分配给 main。thread 化物理范围以本条落点清单为界。
+- `ThreadExecutionQueue` 的调度控制 MUST 位于精确 Thread 的 `<thread_node>/rollout/index.sqlite`，与该 entry 的 canonical acceptance/internal admission 及原 `storage_commits.commit_id` 在同一 SQLite 事务提交。Session pending API 只聚合权威已发布 Thread 的队列投影，不维护 Session 级 JSON、第二队列数据库或双写副本；正文和附件只通过原 canonical/admission 引用读取。跨 Thread 聚合顺序仅用于展示，不建立 Session 全局执行 FIFO。
+- Session 级物理存储（message stream、trace、LLM request log）MUST 继续由 Session node 作为唯一物理 owner 并按 session 定位，MUST NOT 移动、拆分或复制为 thread node 下的独立物理存储。message stream 与 trace 为暴露和校验实际 thread 身份所需的 API/SSE/cursor/cache/index 逻辑引用 MUST 携带 `thread_id`；这类逻辑身份隔离不改变其 Session 物理路径和 owner。Trace 的 Job 归属复用已提交创建/启动索引事实，不新增可变归属表；缺失、冲突或跨 Session 的归属明确失败，不能默认分配给 main。thread 化物理范围以本条落点清单为界。
+
+#### Scenario: 执行输入与待执行控制在同一 Thread 事务发布
+
+- **WHEN** 真实用户或内部消息入口接受一个需要新 execution 的请求，或在 acceptance 提交、领取、创建 task、执行终态的任一边界进程退出
+- **THEN** 未提交的输入和队列控制共同不可见，已提交 entry 按原 admission commit cursor/Job identity 恢复；领取尚未启动不能永久丢失，旧 generation 不得重复执行或误结算新 holder，且没有 Session pending JSON 正常读写
 
 #### Scenario: main 与 child thread 的 rollout 落点互不重叠
 
