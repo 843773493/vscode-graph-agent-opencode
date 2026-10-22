@@ -1,6 +1,6 @@
 import { afterEach, expect, test } from "bun:test";
 
-import { getSessionGoal } from "../../api";
+import { clearSessionGoal, getSessionGoal } from "../../api";
 import { invalidateGatewayToken, invalidateGatewayUserSession } from "../http";
 
 const originalFetch = globalThis.fetch;
@@ -108,4 +108,12 @@ test("Goal GET 缺少 data 字段时快速失败", async () => {
   await expect(getSessionGoal(49_102, "ses_invalid_goal")).rejects.toThrow(
     "后端响应缺少 data 字段",
   );
+});
+
+test("Goal DELETE 返回权威 main Thread 身份与清除结果", async () => {
+  const result = { session_id: "ses_goal", thread_id: "thr_main", cleared: true };
+  installGatewayBarrierFetch(49_103, (url, method) =>
+    method === "DELETE" && url.pathname === "/api/v1/sessions/ses_goal/goal"
+      ? Response.json({ code: 0, data: result, request_id: "req_goal_clear" }) : undefined);
+  expect(await clearSessionGoal(49_103, "ses_goal")).toEqual(result);
 });

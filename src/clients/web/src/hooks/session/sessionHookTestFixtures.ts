@@ -634,6 +634,7 @@ export async function mountSessionGoalController(options: {
     const [currentState, setState] = React.useState(() => initial);
     latestState = currentState;
     controller = useSessionGoalController({
+      currentMainThreadId: currentState.currentSession?.thread_id ?? null,
       apiPort: 49_406,
       currentSessionId: currentState.currentSession?.session_id ?? null,
       currentWorkspaceId: currentState.currentSessionWorkspaceId,
@@ -927,6 +928,7 @@ export function useGoalControllerHarness(options: {
     latestState = current;
     applyUpdate = setState;
     controller = useSessionGoalController({
+      currentMainThreadId: current.currentSession?.thread_id ?? null,
       apiPort: options.apiPort,
       currentSessionId: current.currentSession?.session_id ?? null,
       currentWorkspaceId: current.currentSessionWorkspaceId,

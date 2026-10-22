@@ -4,7 +4,7 @@ from app.schemas.internal_v2.goal import GoalStatus
 from app.services.business.session_goal_service import SessionGoalService
 
 
-class _SessionService:
+class _GoalSessionServiceFake:
     async def get(self, session_id: str):
         return {"session_id": session_id}
 
@@ -12,7 +12,7 @@ class _SessionService:
         return f"thr_{session_id}"
 
 
-class _Store:
+class _GoalStoreFake:
     def __init__(self):
         self.goal = None
 
@@ -31,7 +31,7 @@ class _Store:
         return [] if self.goal is None else [self.goal]
 
 
-class _Bus:
+class _GoalEventBusFake:
     def __init__(self):
         self.events = []
 
@@ -40,9 +40,16 @@ class _Bus:
 
 
 @pytest.fixture
-def goal_service():
+def goal_store() -> _GoalStoreFake:
+    return _GoalStoreFake()
+
+
+@pytest.fixture
+def goal_service(goal_store: _GoalStoreFake) -> SessionGoalService:
     return SessionGoalService(
-        store=_Store(), session_service=_SessionService(), job_event_bus=_Bus()
+        store=goal_store,
+        session_service=_GoalSessionServiceFake(),
+        job_event_bus=_GoalEventBusFake(),
     )
 
 
@@ -160,7 +167,10 @@ async def test_accounting_does_not_override_non_active_status(goal_service):
 
 
 @pytest.mark.asyncio
-async def test_goal_responses_carry_authoritative_main_thread(goal_service):
+async def test_goal_responses_carry_authoritative_main_thread(
+    goal_service: SessionGoalService,
+    goal_store: _GoalStoreFake,
+) -> None:
     """Goal 只属于 main thread；响应必须暴露解析出的 thread 身份。"""
     created = await goal_service.set("sess_1", objective="目标")
 
@@ -168,5 +178,29 @@ async def test_goal_responses_carry_authoritative_main_thread(goal_service):
     read = await goal_service.get("sess_1")
     assert read is not None
     assert read.thread_id == "thr_sess_1"
-    # Goal 的持久化载荷不落第二 main 指针。
-    assert goal_service._store.goal.thread_id is None
+    # store 的内存 DTO 保留归属；goal.json 排除该派生字段由 store 测试证明。
+    assert goal_store.goal.thread_id == "thr_sess_1"
+
+
+@pytest.mark.asyncio
+async def test_accounting_continuation_and_clear_keep_main_owner(goal_service):
+    goal = await goal_service.set("sess_1", objective="目标")
+    accounted = await goal_service.account_job("sess_1", job_id="job_1", tokens=3, elapsed_seconds=2)
+    assert accounted.thread_id == goal.thread_id == "thr_sess_1"
+    events = goal_service._job_event_bus.events
+    assert all(event["payload"]["thread_id"] == goal.thread_id for event in events)
+    assert all(event["payload"]["goal"]["thread_id"] == goal.thread_id for event in events)
+    continued = []
+
+    async def dispatch(current):
+        continued.append(current)
+
+    assert await goal_service.dispatch_continuation_if_active("sess_1", "job_1", dispatch)
+    assert [current.thread_id for current in continued] == [goal.thread_id]
+    cleared = await goal_service.clear("sess_1")
+    assert cleared.model_dump() == {"session_id": "sess_1", "thread_id": goal.thread_id, "cleared": True}
+    assert events[-1]["payload"] == {"session_id": "sess_1", "thread_id": goal.thread_id}
+    event_count = len(events)
+    empty = await goal_service.clear("sess_1")
+    assert empty.thread_id == goal.thread_id and not empty.cleared
+    assert len(events) == event_count

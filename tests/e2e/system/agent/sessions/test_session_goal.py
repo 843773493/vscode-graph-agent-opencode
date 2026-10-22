@@ -13,6 +13,7 @@ async def test_goal_api_persistence_replace_events_and_clear(
 ):
     created = await client.post("/api/v1/sessions", json={"title": "Goal E2E"})
     session_id = created.json()["data"]["session_id"]
+    main = created.json()["data"]["thread_id"]
 
     oversized = await client.put(
         f"/api/v1/sessions/{session_id}/goal",
@@ -27,6 +28,8 @@ async def test_goal_api_persistence_replace_events_and_clear(
     assert response.status_code == 200
     first = response.json()["data"]
     assert first["status"] == "paused"
+    assert first["thread_id"] == main
+    assert (await client.get(f"/api/v1/sessions/{session_id}/goal")).json()["data"] == first
     goal_path = (
         get_session_path_resolver(
             Path(e2e_workspace_root_path) / ".boxteam" / "sessions"
@@ -34,6 +37,7 @@ async def test_goal_api_persistence_replace_events_and_clear(
         / "goal.json"
     )
     assert goal_path.is_file()
+    assert '"thread_id"' not in goal_path.read_text(encoding="utf-8")
 
     edited = await client.put(
         f"/api/v1/sessions/{session_id}/goal",
@@ -53,12 +57,15 @@ async def test_goal_api_persistence_replace_events_and_clear(
         item["type"] == "goal_updated"
         for item in traces.json()["data"]["items"]
     )
+    updates = [item for item in traces.json()["data"]["items"] if item["type"] == "goal_updated"]
+    assert all(item["thread_id"] == item["raw"]["payload"]["thread_id"] == item["raw"]["payload"]["goal"]["thread_id"] == main for item in updates)
 
     messages = await client.get(f"/api/v1/sessions/{session_id}/messages")
     assert messages.json()["data"]["items"] == []
 
     cleared = await client.delete(f"/api/v1/sessions/{session_id}/goal")
     assert cleared.json()["data"]["cleared"] is True
+    assert cleared.json()["data"]["thread_id"] == main
     assert (await client.get(f"/api/v1/sessions/{session_id}/goal")).json()[
         "data"
     ] is None
@@ -67,3 +74,5 @@ async def test_goal_api_persistence_replace_events_and_clear(
         item["type"] == "goal_cleared"
         for item in traces.json()["data"]["items"]
     )
+    clears = [item for item in traces.json()["data"]["items"] if item["type"] == "goal_cleared"]
+    assert all(item["thread_id"] == item["raw"]["payload"]["thread_id"] == main for item in clears)

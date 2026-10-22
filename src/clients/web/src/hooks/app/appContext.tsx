@@ -80,10 +80,10 @@ export interface AppContextType {
   refreshGoal: () => Promise<SessionGoal | null>;
   updateGoal: (
     payload: SessionGoalUpdateRequest,
-    target?: { sessionId: string; workspaceId: string | null },
+    target?: { sessionId: string; threadId: string; workspaceId: string | null },
   ) => Promise<SessionGoal>;
   clearGoal: (
-    target?: { sessionId: string; workspaceId: string | null },
+    target?: { sessionId: string; threadId: string; workspaceId: string | null },
   ) => Promise<void>;
   switchAgent: (agentId: string) => Promise<void>;
   switchModel: (providerId: string) => Promise<void>;

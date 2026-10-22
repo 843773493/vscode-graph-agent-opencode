@@ -141,11 +141,13 @@ class AgentStepPayload(BaseModel):
 
 class GoalUpdatedPayload(BaseModel):
     session_id: str
+    thread_id: str
     goal: dict[str, Any]
 
 
 class GoalClearedPayload(BaseModel):
     session_id: str
+    thread_id: str
 
 
 class ModelTokenUsagePayload(BaseModel):

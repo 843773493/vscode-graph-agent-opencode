@@ -1213,6 +1213,7 @@ message SessionGenerationOriginDTO {
 message SessionGoalClearResultDTO {
   string session_id = 1;
   bool cleared = 2;
+  string thread_id = 3;
 }
 
 message SessionSkillUntrackRequest {
@@ -1259,6 +1260,8 @@ message SessionGoalDTO {
   optional string last_accounted_job_id = 11;
   optional string last_continued_job_id = 12;
   optional google.protobuf.Struct accounted_jobs = 13;
+  // 由权威 catalog 解析的 main Thread；不作为 goal.json 中的第二指针。
+  string thread_id = 14;
 }
 
 message SessionGoalSetRequest {

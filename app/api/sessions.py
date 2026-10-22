@@ -220,7 +220,7 @@ async def clear_session_goal(
     except (KeyError, NotFoundError) as error:
         raise not_found_http_error(error) from error
     return APIResponse(
-        data=SessionGoalClearResultDTO(session_id=session_id, cleared=cleared),
+        data=cleared,
         request_id=request_id,
     )
 

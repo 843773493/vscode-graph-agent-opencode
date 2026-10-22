@@ -130,6 +130,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     setState,
   });
   const { refreshGoal, updateGoal, clearGoal } = useSessionGoalController({
+    currentMainThreadId: state.currentSession?.thread_id ?? null,
     apiPort: state.apiPort ?? DEFAULT_BACKEND_PORT,
     currentSessionId,
     currentWorkspaceId: currentSessionGatewayWorkspaceId,

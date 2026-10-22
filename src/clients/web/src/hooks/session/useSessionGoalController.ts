@@ -8,9 +8,11 @@ import type { SessionGoal, SessionGoalUpdateRequest } from "../../types/backend"
 import type { SetAppState } from "../contentViewLoaderTypes";
 import { errorMessage } from "../../utils/errorMessage";
 import { trackInFlightRequest } from "../runtime/inFlightRequests";
+import { assertGoalOwner } from "../../state/sessionGoal";
 
 interface GoalTarget {
   sessionId: string;
+  threadId: string;
   workspaceId: string | null;
 }
 
@@ -24,13 +26,15 @@ function goalRequestKey(apiPort: number, target: GoalTarget): string {
 export function useSessionGoalController({
   apiPort,
   currentSessionId,
+  currentMainThreadId,
   currentWorkspaceId,
   setState,
 }: {
   apiPort: number;
   currentSessionId: string | null;
+  currentMainThreadId: string | null;
   currentWorkspaceId: string | null;
-    setState: SetAppState;
+  setState: SetAppState;
 }) {
   const inFlightGoalRequestsRef = useRef<Map<string, Promise<SessionGoal | null>>>(
     new Map(),
@@ -56,6 +60,7 @@ export function useSessionGoalController({
   const refreshGoal = useCallback(async (
     target: GoalTarget = {
       sessionId: currentSessionId ?? "",
+      threadId: currentMainThreadId ?? "",
       workspaceId: currentWorkspaceId,
     },
     options: { silent?: boolean } = {},
@@ -89,10 +94,12 @@ export function useSessionGoalController({
           target.sessionId,
           target.workspaceId,
         );
+        if (goal) assertGoalOwner(goal, { session_id: target.sessionId, thread_id: target.threadId });
         setState((previous) => {
           if (previous.currentSession?.session_id !== target.sessionId) {
             return previous;
           }
+          if (previous.currentSessionWorkspaceId !== target.workspaceId) return previous;
           return {
             ...previous,
             currentGoal: goal,
@@ -105,7 +112,8 @@ export function useSessionGoalController({
       } catch (error) {
         const message = errorMessage(error);
         setState((previous) => {
-          if (previous.currentSession?.session_id !== target.sessionId) {
+          if (previous.currentSession?.session_id !== target.sessionId
+            || previous.currentSessionWorkspaceId !== target.workspaceId) {
             return previous;
           }
           return {
@@ -119,7 +127,7 @@ export function useSessionGoalController({
     })();
     trackInFlightRequest(inFlightGoalRequestsRef.current, requestKey, request);
     return request;
-  }, [apiPort, currentSessionId, currentWorkspaceId, setState]);
+  }, [apiPort, currentSessionId, currentMainThreadId, currentWorkspaceId, setState]);
 
   const reconcileAfterFailure = useCallback(async (
     target: GoalTarget,
@@ -140,6 +148,7 @@ export function useSessionGoalController({
     payload: SessionGoalUpdateRequest,
     target: GoalTarget = {
       sessionId: currentSessionId ?? "",
+      threadId: currentMainThreadId ?? "",
       workspaceId: currentWorkspaceId,
     },
   ): Promise<SessionGoal> => {
@@ -156,10 +165,12 @@ export function useSessionGoalController({
         payload,
         target.workspaceId,
       );
+      assertGoalOwner(goal, { session_id: target.sessionId, thread_id: target.threadId });
       setState((previous) => {
         if (
           !isLatestGoalWrite(requestKey, writeSeq)
           || previous.currentSession?.session_id !== target.sessionId
+          || previous.currentSessionWorkspaceId !== target.workspaceId
         ) {
           return previous;
         }
@@ -179,6 +190,7 @@ export function useSessionGoalController({
     apiPort,
     beginGoalWrite,
     currentSessionId,
+    currentMainThreadId,
     currentWorkspaceId,
     isLatestGoalWrite,
     reconcileAfterFailure,
@@ -188,6 +200,7 @@ export function useSessionGoalController({
   const clearGoal = useCallback(async (
     target: GoalTarget = {
       sessionId: currentSessionId ?? "",
+      threadId: currentMainThreadId ?? "",
       workspaceId: currentWorkspaceId,
     },
   ): Promise<void> => {
@@ -198,11 +211,13 @@ export function useSessionGoalController({
     const writeSeq = beginGoalWrite(requestKey);
     setState((previous) => ({ ...previous, goalLoading: true, goalError: null }));
     try {
-      await apiClearSessionGoal(apiPort, target.sessionId, target.workspaceId);
+      const result = await apiClearSessionGoal(apiPort, target.sessionId, target.workspaceId);
+      assertGoalOwner(result, { session_id: target.sessionId, thread_id: target.threadId });
       setState((previous) => {
         if (
           !isLatestGoalWrite(requestKey, writeSeq)
           || previous.currentSession?.session_id !== target.sessionId
+          || previous.currentSessionWorkspaceId !== target.workspaceId
         ) {
           return previous;
         }
@@ -221,6 +236,7 @@ export function useSessionGoalController({
     apiPort,
     beginGoalWrite,
     currentSessionId,
+    currentMainThreadId,
     currentWorkspaceId,
     isLatestGoalWrite,
     reconcileAfterFailure,

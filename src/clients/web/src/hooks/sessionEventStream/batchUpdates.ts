@@ -53,6 +53,10 @@ function updateCurrentSessionFromEvents(
     ) {
       return previous;
     }
+    const owner = {
+      session_id: context.sessionId, thread_id: previous.currentSession.thread_id ?? "",
+    };
+    const goalMutations = events.map((event) => goalStreamMutation(event, owner));
     const next = cloneMaps(previous);
     next.traceEvents = appendBoundedLiveTraceEvents(next.traceEvents, traceEvents);
     updateAttachmentSummariesFromTraces(
@@ -75,8 +79,7 @@ function updateCurrentSessionFromEvents(
       context.sessionCacheKey,
       true,
     );
-    for (const event of events) {
-      const mutation = goalStreamMutation(event);
+    for (const mutation of goalMutations) {
       if (mutation?.kind === "updated") {
         next.currentGoal = mutation.goal;
         next.currentGoalSessionId = context.sessionId;

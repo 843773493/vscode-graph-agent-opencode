@@ -287,8 +287,12 @@ def test_goal_trace_owner_is_explicitly_main_without_job_binding(
     store, _ = trace_event_store_factory(session_id)
     event = GoalClearedEvent(
         event_id="evt_goal_main", job_id=f"goal:{session_id}", timestamp=datetime.now(UTC),
-        payload=GoalClearedPayload(session_id=session_id),
+        payload=GoalClearedPayload(session_id=session_id, thread_id=get_session_path_resolver(tmp_path).main_thread_id(session_id)),
     )
     assert store.event_threads(session_id, [event]) == {
         event.event_id: get_session_path_resolver(tmp_path).main_thread_id(session_id),
     }
+    for drift in ({"session_id": "ses_foreign"}, {"thread_id": "thr_child"}):
+        wrong = event.model_copy(update={"payload": event.payload.model_copy(update=drift)})
+        with pytest.raises(ValueError, match="main Thread 不一致"):
+            store.event_threads(session_id, [wrong])

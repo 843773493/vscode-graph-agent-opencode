@@ -753,7 +753,15 @@ TODO（pending 恢复的硬错误重试，2026-10-20）：本轮完成调用者�
 - 验证原件：`out/tests/temp/openspec_takeover/artifacts/runs/` 下 `thread-trace-python-004` 为282 passed/112.62秒，`thread-trace-web-final-001` 为85 pass/348 assertions，`thread-trace-types-004` 与 `thread-trace-web-build-001` 均exit0；Ruff（仓库既有Depends例外B008）、JS静态、Buf格式与breaking检查均exit0，协议/快照已生成。Trace测试重组经辅助只读核对：原47用例全部保留，无逐用例断言减少，新增3项归属/cursor测试。
 - 产品入口：`thread-trace-product-002` 正式matrix（focus=`basic_chat,child`、model_stream replay）exit0，312.77秒。真实Chromium→Gateway→Workspace生成main/child历史，冷读精确Trace集合与聚合集合子集一致、无重复、游标前进，三种跨范围复用均410，随后cold/runtime与GraphBinding断言通过。该证据属于模型回放下的真实产品浏览器验收，不表示真实Provider验证；原件封存在该attempt的`product-artifacts-with-source-drift/`。运行前后Trace相关源码指纹一致，同期3个无关测试/fixture脚本变化详列manifest，未宣称全树不变。初次运行仅因负向协议请求产生预期410浏览器console而红；现复用同一Gateway请求客户端执行负向请求，仍精确核验状态/code/request_id，页面console检查未放宽。
 - 性能TODO：`trace-owner-index-measurement.json` 为查询索引基准，非全链路验收；1 Job查询1k/10k/100k行的5次中位为14.1/140.2/1461.2ms。调用已移出事件循环；后续在同一索引增加Job定位，禁止新增可变归属事实。
-- 8.6尚未整体完成：SessionInterruptState与普通中断入口仍需按精确Thread迁齐，继续下一纵向切片。
+- 8.6尚未整体完成：SessionInterruptState与普通中断入口已由后续 Thread 中断切片迁齐；各项共享合同仍须整体核验，不能用局部通过替代完整验收。
+
+### 2026-10-22 8.6 Goal main Thread 身份闭包（部分收口，未勾整项）
+
+- Goal DTO、clear 响应与 updated/cleared payload 必须携带精确 main Thread。Store 从唯一 catalog 指针投影，写入时拒绝 child，goal.json 不保存第二指针；account_job、continuation 与启动恢复复用同一 read/list 链路。fork preparing 使用创建 intent 冻结的目标 main，不提前读取未发布 catalog。
+- Trace 校验 payload owner；Web 在应用完整 HTTP/SSE 对象前同时核对 Session/main Thread，并拒绝跨 workspace 迟到成功和失败。Composer 新建会话后设置 Goal 也冻结真实 Thread；clear 保留完整后端回执。
+- `goal-thread-owner-unit-001` 48 passed；`goal-thread-api-contract-001` 116 passed。Web 定向 `goal-thread-web-unit-final-002` 为21 passed，另 `goal-thread-web-sse-final-001` 8 passed，合计29项；前者误写的不存在 SSE 文件没有执行，已以真实路径单独补齐，不虚报覆盖。HTTP 产品入口 `goal-thread-http-product-001` 1 passed；真实 Gateway/Web `goal-thread-web-product-002` 1 passed/106.64秒，通过暂停 Goal 的读取、弹窗编辑、刷新和清除，逐次核对 main 身份及 request_id。该场景不调用模型，不表述为 Goal 自动执行验收。
+- `goal-thread-fork-product-003` 正式 matrix 1 passed/14 deselected/118.66秒：真实来源 Goal 计量及暂停、B→A→C fork preparing/发布、目标新 main/新 Goal ID/用量清零、用户编辑后原 key 重试、来源离线后冷读及新输入通过。原 fork deadline 保留；001在 fixture setup 的可选 faulthandler 转储时 exit139，002因其遗留隔离 sshd 占端口而零业务执行。核对原任务 PID、启动时间与配置后回收，只关闭可选栈转储再运行003；外置超时/内存保护与产品 deadline 均未放宽。
+- Ruff `goal-thread-static-final-003`、真实 tsc `goal-thread-types-final-005`、协议 lint/build/breaking 与生成、OpenAPI 生成均 exit0；最终 Web build 由同批真实 Web 产品用例完成。Ruff 仅对 sessions.py 既有路由 Depends 默认参数登记 B008 忽略，不改变该批路由。非作者审查发现的跨 workspace 迟到错误已修复并复核；证据与源码指纹位于 `out/tests/temp/openspec_takeover/artifacts/runs/`，浏览器失败001和成功002的业务原件均已单独封存。8.6整体及8.13完整default尚未关闭。
 
 
 ### 2026-10-22 8.13 pending-tools 重启续接的持久化次序

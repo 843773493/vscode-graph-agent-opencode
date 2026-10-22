@@ -50,6 +50,7 @@ describe("Goal Slash Command", () => {
     const goal: SessionGoal = {
       goal_id: "goal_1",
       session_id: "ses_1",
+      thread_id: "thr_main",
       objective: "完成目标",
       status: "active",
       token_budget: 100,
@@ -58,19 +59,33 @@ describe("Goal Slash Command", () => {
       created_at: "2026-07-27T00:00:00Z",
       updated_at: "2026-07-27T00:01:00Z",
     };
+    const owner = { session_id: "ses_1", thread_id: "thr_main" };
     expect(goalStreamMutation({
-      type: "goal_updated",
-      raw: { payload: { goal } },
-    })).toEqual({ kind: "updated", goal });
-    expect(goalStreamMutation({ type: "goal_cleared" })).toEqual({
+      type: "goal_updated", ...owner,
+      raw: { payload: { ...owner, goal } },
+    }, owner)).toEqual({ kind: "updated", goal });
+    expect(goalStreamMutation({ type: "goal_cleared", ...owner, raw: { payload: owner } }, owner)).toEqual({
       kind: "cleared",
     });
   });
 
   test("Goal SSE 缺少权威字段时快速失败", () => {
     expect(() => goalStreamMutation({
-      type: "goal_updated",
-      payload: { goal: { goal_id: "goal_broken" } },
-    })).toThrow("goal_updated 事件中的 goal 字段无效");
+      type: "goal_updated", session_id: "ses_1", thread_id: "thr_main",
+      payload: { session_id: "ses_1", thread_id: "thr_main", goal: { goal_id: "goal_broken" } },
+    }, { session_id: "ses_1", thread_id: "thr_main" })).toThrow("goal_updated 事件中的 goal 字段无效");
+  });
+
+  test("Goal SSE 拒绝 child、其它 Session 及内外 owner 不一致", () => {
+    const owner = { session_id: "ses_1", thread_id: "thr_main" };
+    const event = { type: "goal_cleared", ...owner, raw: { payload: owner } };
+    for (const invalid of [
+      { ...event, thread_id: "thr_child" },
+      { ...event, session_id: "ses_foreign" },
+      { ...event, raw: { payload: { ...owner, thread_id: "thr_child" } } },
+      { ...event, raw: { payload: { ...owner, session_id: "ses_foreign" } } },
+    ]) {
+      expect(() => goalStreamMutation(invalid, owner)).toThrow("main Thread 不一致");
+    }
   });
 });

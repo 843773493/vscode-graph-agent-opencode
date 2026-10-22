@@ -259,13 +259,16 @@ class TraceEventStore:
         job_ids = {event.job_id for event in events if event.type not in {"goal_updated", "goal_cleared"}}
         with self._file_lock(session_id):
             owners = TraceTurnIndex(self._trace_file(session_id).parent).job_threads(session_id, job_ids)
-        return {
-            event.event_id: (
-                self._path_resolver.main_thread_id(session_id)
-                if event.type in {"goal_updated", "goal_cleared"} else owners[event.job_id]
-            )
-            for event in events
-        }
+        result = {}
+        for event in events:
+            if event.type in {"goal_updated", "goal_cleared"}:
+                main = self._path_resolver.main_thread_id(session_id)
+                if event.payload.session_id != session_id or event.payload.thread_id != main:
+                    raise ValueError("Goal 事件归属与 Session main Thread 不一致")
+                result[event.event_id] = main
+            else:
+                result[event.event_id] = owners[event.job_id]
+        return result
 
     def read_message_events(
         self,

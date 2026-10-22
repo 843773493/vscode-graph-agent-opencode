@@ -1,6 +1,7 @@
 import type {
   APIResponse,
   SessionGoal,
+  SessionGoalClearResultDTO,
   SessionGoalUpdateRequest,
 } from "../../types/backend";
 import {
@@ -47,10 +48,10 @@ export async function clearSessionGoal(
   port: number,
   sessionId: string,
   workspaceId?: string | null,
-): Promise<void> {
-  await requestJson<APIResponse<unknown>>(
+): Promise<SessionGoalClearResultDTO> {
+  return unwrapApiData(await requestJson<APIResponse<SessionGoalClearResultDTO>>(
     port,
     `/api/v1/sessions/${encodeURIComponent(sessionId)}/goal`,
     { method: "DELETE", headers: workspaceHeader(workspaceId) },
-  );
+  ));
 }

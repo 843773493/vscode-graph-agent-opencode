@@ -138,6 +138,7 @@ export type SessionGoalStatus =
 export interface SessionGoal {
   goal_id: string;
   session_id: string;
+  thread_id: string;
   objective: string;
   status: SessionGoalStatus;
   token_budget: number | null;
@@ -147,6 +148,8 @@ export interface SessionGoal {
   /** 当前 Goal 记录最近一次写入时刻，含设置、用量记账和续跑标记写入或失败回滚；fork 初值取目标 Session 冻结创建时刻。revision 仅随普通设置更新递增。 */
   updated_at: string;
 }
+
+export type { SessionGoalClearResultDTO } from "./protocol_generated/boxteam/workspace/v2/public";
 
 export interface SessionGoalUpdateRequest {
   objective?: string;

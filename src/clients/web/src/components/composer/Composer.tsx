@@ -324,10 +324,12 @@ function Composer() {
     if (!targetSession) {
       targetSession = await createSession(objective.slice(0, 80));
     }
+    const targetThreadId = targetSession.thread_id;
+    if (!targetThreadId) throw new Error("Goal 目标会话缺少 main Thread 身份");
     await runGoalMutation(
       () => updateGoal(
         { objective, status: "active", replace: true },
-        { sessionId: targetSession.session_id, workspaceId: targetWorkspaceId },
+        { sessionId: targetSession.session_id, threadId: targetThreadId, workspaceId: targetWorkspaceId },
       ),
       "Goal 已开始",
     );

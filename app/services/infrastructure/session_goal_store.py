@@ -18,7 +18,11 @@ class SessionGoalStore:
     def __init__(self, path_resolver: SessionCatalogPathResolver) -> None:
         self._path_resolver = path_resolver
 
-    def _path(self, session_id: str, creation: SessionCreationRecord | None = None) -> Path:
+    def _goal_file_path(
+        self,
+        session_id: str,
+        creation: SessionCreationRecord | None = None,
+    ) -> Path:
         if creation is not None:
             if creation.session_id != session_id or creation.purpose != "context_fork" or creation.state != "preparing":
                 raise RuntimeError("fork Goal 缺少精确 preparing main creation capability")
@@ -26,16 +30,20 @@ class SessionGoalStore:
         return self._path_resolver.resolve_session_node(session_id) / self.FILE_NAME
 
     def read(self, session_id: str, *, creation: SessionCreationRecord | None = None) -> SessionGoalDTO | None:
-        path = self._path(session_id, creation)
-        if not path.exists():
+        goal_file_path = self._goal_file_path(session_id, creation)
+        if not goal_file_path.exists():
             return None
-        raw = json.loads(path.read_text(encoding="utf-8"))
-        return SessionGoalDTO.model_validate(raw)
+        raw = json.loads(goal_file_path.read_text(encoding="utf-8"))
+        thread_id = creation.main_thread_id if creation is not None else self._path_resolver.main_thread_id(session_id)
+        return SessionGoalDTO.model_validate({**raw, "thread_id": thread_id})
 
     def write(self, goal: SessionGoalDTO, *, creation: SessionCreationRecord | None = None) -> None:
-        path = self._path(goal.session_id, creation)
+        goal_file_path = self._goal_file_path(goal.session_id, creation)
+        thread_id = creation.main_thread_id if creation is not None else self._path_resolver.main_thread_id(goal.session_id)
+        if goal.thread_id != thread_id:
+            raise ValueError("Goal 只能写入权威 main Thread")
         atomic_write_bytes(
-            path,
+            goal_file_path,
             json.dumps(
                 goal.model_dump(mode="json", exclude=set(self._DERIVED_KEYS)),
                 ensure_ascii=False,
@@ -44,10 +52,10 @@ class SessionGoalStore:
         )
 
     def clear(self, session_id: str) -> bool:
-        path = self._path(session_id)
-        if not path.exists():
+        goal_file_path = self._goal_file_path(session_id)
+        if not goal_file_path.exists():
             return False
-        path.unlink()
+        goal_file_path.unlink()
         return True
 
     def list_existing(self) -> list[SessionGoalDTO]:
@@ -55,12 +63,7 @@ class SessionGoalStore:
         for node in self._path_resolver.list_nodes():
             if node.kind != "session":
                 continue
-            path = (
-                self._path_resolver.resolve_session_node(node.node_id)
-                / self.FILE_NAME
-            )
-            if path.is_file():
-                goals.append(
-                    SessionGoalDTO.model_validate_json(path.read_text(encoding="utf-8"))
-                )
+            goal = self.read(node.node_id)
+            if goal is not None:
+                goals.append(goal)
         return goals

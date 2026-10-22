@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import React from "react";
 import { act } from "react-test-renderer";
 import type { AppState } from "../../types/frontend";
@@ -22,6 +22,7 @@ function state(): AppState {
   return {
     currentSession: {
       session_id: "session-test",
+      thread_id: "thr_goal_main",
       workspace_id: "workspace-test",
       title: "测试会话",
       current_agent_id: "default",
@@ -36,17 +37,20 @@ function state(): AppState {
   } as unknown as AppState;
 }
 
-/** 会话目标控制器的 GB 级装配由 mountSessionGoalController 统一提供。 */
-function installBrowserGlobals(): void {
+/** 安装会话 Goal 控制器需要的 Gateway window 与可见性 document 桩。 */
+function installSessionGoalControllerGlobals(): void {
   installTestWindow(GOAL_PORT);
   installTestDocument();
 }
+
+beforeEach(installSessionGoalControllerGlobals);
 
 /** 标准 Goal 响应体，用例只覆盖自己关心的字段。 */
 function goalResponse(overrides: Record<string, unknown> = {}): Response {
   return apiResponse({
     goal_id: "goal-test",
     session_id: "session-test",
+    thread_id: "thr_goal_main",
     objective: "验证请求合并",
     status: "active",
     token_budget: null,
@@ -72,8 +76,45 @@ async function mountGoalHarness(options: {
 }
 
 describe("useSessionGoalController 请求合并", () => {
+  test("同名会话切到另一工作区后拒绝迟到的 Goal 读取错误", async () => {
+    let rejectGoal!: (error: Error) => void;
+    installGatewayFetch(({ path }) => path.endsWith("/goal")
+      ? new Promise<Response>((_, reject) => { rejectGoal = reject; }) : undefined);
+    const mounted = await mountGoalHarness({ initial: state() });
+    let pending!: Promise<unknown>;
+    await act(async () => {
+      pending = mounted.controller().refreshGoal().catch((error: unknown) => error);
+      await Promise.resolve();
+    });
+    await act(async () => {
+      mounted.setState((previous) => ({
+        ...previous, currentSessionWorkspaceId: "workspace-other", goalError: null,
+      }));
+      await Promise.resolve();
+    });
+    await act(async () => {
+      rejectGoal(new Error("旧工作区读取失败"));
+      expect(await pending).toBeInstanceOf(Error);
+    });
+    expect(mounted.state().currentSessionWorkspaceId).toBe("workspace-other");
+    expect(mounted.state().goalError).toBeNull();
+    mounted.unmount();
+  });
+
+  test("后端返回 child Goal 时拒绝写入 main 镜像并显示错误", async () => {
+    installGatewayFetch(({ path }) => path.endsWith("/goal")
+      ? goalResponse({ thread_id: "thr_child" }) : undefined);
+    const mounted = await mountSessionGoalController({ initial: state() });
+    let failure: unknown;
+    await act(async () => {
+      failure = await mounted.controller().refreshGoal().catch((error: unknown) => error);
+    });
+    expect(failure).toBeInstanceOf(Error);
+    expect(mounted.state().currentGoal).toBeNull();
+    expect(mounted.state().goalError).toContain("main Thread 不一致");
+    mounted.unmount();
+  });
   test("并发的初始读取、聚焦校准共享同一个 Goal 请求", async () => {
-    installBrowserGlobals();
     let releaseGoal!: (response: Response) => void;
     let goalRequests = 0;
     installGatewayFetch(({ path }) => {
@@ -107,7 +148,6 @@ describe("useSessionGoalController 请求合并", () => {
   });
 
   test("读取 Goal 失败时把原始错误文本写入 goalError", async () => {
-    installBrowserGlobals();
     installGatewayFetch(({ path }) => {
       if (path.includes("/api/v1/sessions/session-test/goal")) {
         throw new TypeError("读取 Goal 的网络请求失败");
@@ -129,7 +169,6 @@ describe("useSessionGoalController 请求合并", () => {
   });
 
   test("重取校准再次失败时把二次错误的原始文本拼进抛出的错误", async () => {
-    installBrowserGlobals();
     let goalRequests = 0;
     installGatewayFetch(({ path }) => {
       if (path.includes("/api/v1/sessions/session-test/goal")) {
@@ -160,6 +199,7 @@ describe("useSessionGoalController 请求合并", () => {
 describe("useSessionGoalController 跨会话守卫", () => {
   const sessionA = {
     session_id: "ses_a",
+    thread_id: "thr_goal_main",
     workspace_id: "workspace-test",
     title: "会话 A",
     current_agent_id: "default",
@@ -169,7 +209,6 @@ describe("useSessionGoalController 跨会话守卫", () => {
   const sessionB = { ...sessionA, session_id: "ses_b", title: "会话 B" };
 
   test("在途读取回包前切走会话时不得把旧 Goal 写进新会话", async () => {
-    installBrowserGlobals();
     let releaseGoal!: (response: Response) => void;
     installGatewayFetch(({ path }) => {
       if (path.includes("/api/v1/sessions/ses_a/goal")) {
@@ -196,6 +235,7 @@ describe("useSessionGoalController 跨会话守卫", () => {
     await act(async () => {
       pending = mounted.controller().refreshGoal({
         sessionId: "ses_a",
+        threadId: "thr_goal_main",
         workspaceId: "workspace-test",
       });
       await Promise.resolve();
@@ -211,7 +251,7 @@ describe("useSessionGoalController 跨会话守卫", () => {
     });
     expect(mounted.state().currentSession?.session_id).toBe("ses_b");
 
-    releaseGoal(goalResponse({ goal_id: "goal_a", objective: "A 的目标" }));
+    releaseGoal(goalResponse({ goal_id: "goal_a", session_id: "ses_a", objective: "A 的目标" }));
     await act(async () => {
       await pending!.catch(() => undefined);
     });
@@ -224,12 +264,11 @@ describe("useSessionGoalController 跨会话守卫", () => {
   });
 
   test("先设置后清除 Goal 时，迟到的设置回包不得复活已清除的 Goal", async () => {
-    installBrowserGlobals();
     let releaseUpdate!: () => void;
     installGatewayFetch(({ path, method }) => {
       if (path.includes("/api/v1/sessions/session-test/goal")) {
         if (method === "DELETE") {
-          return apiResponse({ cleared: true });
+          return apiResponse({ session_id: "session-test", thread_id: "thr_goal_main", cleared: true });
         }
         if (method === "POST" || method === "PATCH" || method === "PUT") {
           return new Promise<Response>((resolve) => {
@@ -268,7 +307,6 @@ describe("useSessionGoalController 跨会话守卫", () => {
 
 describe("useSessionGoalController 会话身份守卫", () => {
   test("目标会话为空时 refreshGoal 清空残留 Goal 状态并短路，绝不发请求", async () => {
-    installBrowserGlobals();
     let goalRequests = 0;
     installGatewayFetch(({ path }) => {
       if (path.includes("/api/v1/sessions/")) {
@@ -299,6 +337,7 @@ describe("useSessionGoalController 会话身份守卫", () => {
         currentGoal: {
           goal_id: "goal_stale",
           session_id: "ses_stale",
+          thread_id: "thr_goal_main",
           objective: "上一个会话的目标",
           status: "active",
           token_budget: null,
@@ -316,7 +355,7 @@ describe("useSessionGoalController 会话身份守卫", () => {
 
     let result: unknown = "unset";
     await act(async () => {
-      result = await mounted.controller().refreshGoal({ sessionId: "", workspaceId: null });
+      result = await mounted.controller().refreshGoal({ sessionId: "", threadId: "", workspaceId: null });
     });
 
     // sessionless 目标必须清空 Goal 状态并短路返回 null，绝不能残留上一个会话。

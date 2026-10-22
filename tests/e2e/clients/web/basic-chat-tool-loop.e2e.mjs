@@ -26,6 +26,7 @@ function section8ScenarioRegistry(surfaces, facts) {
   const teamTarget = async () => foreign ??= await createProductSession(surfaces.b, "团队拒绝跨 Session 目标");
   return {
     basic_chat: { default: true, run: () => runBasicChat(surfaces.a) },
+    goal_owner: { default: true, run: () => runGoalOwner(surfaces.a) },
     session_page_selection: { default: true, run: () => runSessionPageSelection(surfaces.a) },
     child: { default: true, run: () => runChildFifoAndResidency(surfaces.a) },
     runtime_shared_resources: { default: true, run: () => runRuntimeSharedResources(surfaces.a) },
@@ -1803,6 +1804,66 @@ async function waitForCompletedTurn(page, prompt, finalText, expectedReasoning) 
     toolText: await completedTool.innerText(),
     userCount: await page.locator(".chat-user-text").filter({ hasText: prompt }).count(),
   };
+}
+
+async function runGoalOwner(surface) {
+  const owner = await createProductSession(surface, "Goal main Thread 身份");
+  const path = `/api/v1/sessions/${owner.sessionId}/goal`;
+  const expectedOwner = { session_id: owner.sessionId, thread_id: owner.threadId };
+  const assertOwner = (goal) => {
+    assert.deepEqual({ session_id: goal.session_id, thread_id: goal.thread_id }, expectedOwner);
+  };
+  const initial = (await ownerApi(owner, path, {
+    method: "PUT", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ objective: "编辑前的暂停目标", status: "paused" }),
+  })).data;
+  assertOwner(initial);
+  await openOwner(owner);
+  const input = owner.page.getByTestId("composer-input");
+  const command = async (text) => {
+    await input.fill(text);
+    await input.press("Enter");
+  };
+  const responseFor = (method) => owner.page.waitForResponse((response) =>
+    new URL(response.url()).pathname === path && response.request().method() === method);
+  const readResponse = async (pending) => {
+    const response = await pending;
+    assert.equal(response.status(), 200);
+    const envelope = await response.json();
+    assert.equal(envelope.request_id, response.headers()["x-request-id"]);
+    assertOwner(envelope.data);
+    return envelope.data;
+  };
+  const refresh = responseFor("GET");
+  await command("/goal");
+  await readResponse(refresh);
+  await waitUntil(async () => (await owner.page.locator(".composer-attachment-notice").innerText())
+    .includes(initial.objective), "主窗口显示暂停 Goal");
+  await command("/goal edit");
+  const dialog = owner.page.getByRole("dialog", { name: "编辑 Goal", exact: true });
+  await dialog.getByRole("textbox").fill("浏览器已编辑的暂停目标");
+  const update = responseFor("PUT");
+  await dialog.getByRole("button", { name: "保存 Goal", exact: true }).click();
+  const edited = await readResponse(update);
+  assert.equal(edited.goal_id, initial.goal_id);
+  assert.equal(edited.status, "paused");
+  assert.equal(edited.objective, "浏览器已编辑的暂停目标");
+  await dialog.waitFor({ state: "hidden" });
+  await owner.page.reload({ waitUntil: "domcontentloaded" });
+  await selectSession(owner.page, owner.sessionId);
+  const reread = responseFor("GET");
+  await command("/goal");
+  assert.deepEqual(await readResponse(reread), edited);
+  await waitUntil(async () => (await owner.page.locator(".composer-attachment-notice").innerText())
+    .includes(edited.objective), "刷新后显示后端 Goal");
+  const clear = responseFor("DELETE");
+  await command("/goal clear");
+  const cleared = await readResponse(clear);
+  assert.equal(cleared.cleared, true);
+  assert.equal((await ownerApi(owner, path)).data, null);
+  await waitUntil(async () => (await owner.page.locator(".composer-attachment-notice").innerText())
+    .includes("Goal 已清除"), "主窗口清除 Goal");
+  return { ...expectedOwner, initial, edited, cleared };
 }
 
 async function runBasicChat(surface) {

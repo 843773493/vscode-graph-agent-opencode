@@ -31,12 +31,10 @@ function isGoalStatus(value: unknown): value is SessionGoalStatus {
 }
 
 export function goalStreamMutation(
-  event: { type: string; payload?: Record<string, unknown>; raw?: Record<string, unknown> },
+  event: { type: string; session_id?: string; thread_id?: string; payload?: Record<string, unknown>; raw?: Record<string, unknown> },
+  owner: { session_id: string; thread_id: string },
 ): GoalStreamMutation {
-  if (event.type === "goal_cleared") {
-    return { kind: "cleared" };
-  }
-  if (event.type !== "goal_updated") {
+  if (event.type !== "goal_updated" && event.type !== "goal_cleared") {
     return null;
   }
   const rawPayload = event.raw?.payload;
@@ -44,6 +42,11 @@ export function goalStreamMutation(
     ?? (rawPayload && typeof rawPayload === "object"
       ? rawPayload as Record<string, unknown>
       : undefined);
+  assertGoalOwner(event, owner);
+  assertGoalOwner(payload ?? {}, owner);
+  if (event.type === "goal_cleared") {
+    return { kind: "cleared" };
+  }
   const value = payload?.goal;
   if (!value || typeof value !== "object") {
     throw new Error("goal_updated 事件缺少 goal 对象");
@@ -52,6 +55,7 @@ export function goalStreamMutation(
   if (
     typeof goal.goal_id !== "string"
     || typeof goal.session_id !== "string"
+    || typeof goal.thread_id !== "string"
     || typeof goal.objective !== "string"
     || !isGoalStatus(goal.status)
     || (goal.token_budget !== null && typeof goal.token_budget !== "number")
@@ -62,20 +66,21 @@ export function goalStreamMutation(
   ) {
     throw new Error("goal_updated 事件中的 goal 字段无效");
   }
+  assertGoalOwner(goal, owner);
   return {
     kind: "updated",
-    goal: {
-      goal_id: goal.goal_id,
-      session_id: goal.session_id,
-      objective: goal.objective,
-      status: goal.status,
-      token_budget: goal.token_budget,
-      tokens_used: goal.tokens_used,
-      time_used_seconds: goal.time_used_seconds,
-      created_at: goal.created_at,
-      updated_at: goal.updated_at,
-    },
+    goal: goal as unknown as SessionGoal,
   };
+}
+
+/** Goal 镜像只能应用权威 Session main Thread 的完整响应或事件。 */
+export function assertGoalOwner(
+  value: { session_id?: unknown; thread_id?: unknown },
+  owner: { session_id: string; thread_id: string },
+): void {
+  if (!owner.thread_id || value.session_id !== owner.session_id || value.thread_id !== owner.thread_id) {
+    throw new Error("Goal 归属与 Session main Thread 不一致");
+  }
 }
 
 export const GOAL_STATUS_LABELS: Record<SessionGoalStatus, string> = {

@@ -13,6 +13,7 @@ from app.schemas.internal_v2.goal import (
     MAX_GOAL_OBJECTIVE_CHARS,
     GoalJobAccountingDTO,
     GoalStatus,
+    SessionGoalClearResultDTO,
     SessionGoalDTO,
 )
 from app.services.business.session_service import SessionService
@@ -63,12 +64,9 @@ class SessionGoalService:
             raise ValueError("Goal 只属于 Session main thread，child thread 不得读取、创建或修改 Goal")
 
     async def get(self, session_id: str) -> SessionGoalDTO | None:
-        thread_id = await self._session_service.resolve_main_thread(session_id)
+        await self._session_service.resolve_main_thread(session_id)
         async with self.lock_for(session_id):
-            goal = self._store.read(session_id)
-        if goal is None:
-            return None
-        return goal.model_copy(update={"thread_id": thread_id})
+            return self._store.read(session_id)
 
     async def install_fork_goal(self, record: SessionCreationRecord) -> str | None:
         """发布前消费冻结目标；恢复只复验，不重置已发布后用户修改的 Goal。"""
@@ -82,6 +80,7 @@ class SessionGoalService:
         created_at = datetime.fromisoformat(record.created_at)
         goal = SessionGoalDTO(
             goal_id=snapshot["goal_id"], session_id=record.session_id,
+            thread_id=record.main_thread_id,
             objective=_normalize_objective(snapshot["objective"]), status=GoalStatus.paused,
             token_budget=snapshot["token_budget"], created_at=created_at, updated_at=created_at,
         )
@@ -120,6 +119,7 @@ class SessionGoalService:
                 current = SessionGoalDTO(
                     goal_id=create_prefixed_id("goal"),
                     session_id=session_id,
+                    thread_id=thread_id,
                     objective=normalized,
                     status=status or GoalStatus.active,
                     token_budget=None if token_budget is _UNSET else token_budget,
@@ -150,9 +150,8 @@ class SessionGoalService:
                     update={"status": GoalStatus.budget_limited}
                 )
             self._store.write(current)
-            projected = current.model_copy(update={"thread_id": thread_id})
-            await self._publish_updated(projected)
-            return projected
+            await self._publish_updated(current)
+            return current
 
     async def create_for_agent(
         self, session_id: str, objective: str, token_budget: int | None
@@ -168,6 +167,7 @@ class SessionGoalService:
             goal = SessionGoalDTO(
                 goal_id=create_prefixed_id("goal"),
                 session_id=session_id,
+                thread_id=thread_id,
                 objective=_normalize_objective(objective),
                 status=GoalStatus.active,
                 token_budget=token_budget,
@@ -175,9 +175,8 @@ class SessionGoalService:
                 updated_at=now,
             )
             self._store.write(goal)
-            projected = goal.model_copy(update={"thread_id": thread_id})
-            await self._publish_updated(projected)
-            return projected
+            await self._publish_updated(goal)
+            return goal
 
     async def update_for_agent(
         self, session_id: str, status: GoalStatus
@@ -186,18 +185,18 @@ class SessionGoalService:
             raise ValueError("Agent 只能将 Goal 更新为 complete 或 blocked")
         return await self.set(session_id, status=status)
 
-    async def clear(self, session_id: str) -> bool:
-        await self._session_service.resolve_main_thread(session_id)
+    async def clear(self, session_id: str) -> SessionGoalClearResultDTO:
+        thread_id = await self._session_service.resolve_main_thread(session_id)
         async with self.lock_for(session_id):
             cleared = self._store.clear(session_id)
             if cleared:
                 await self._job_event_bus.publish(
                     job_id=f"goal:{session_id}",
                     event_type=EventType.GOAL_CLEARED,
-                    payload={"session_id": session_id},
+                    payload={"session_id": session_id, "thread_id": thread_id},
                     agent_id="goal_service",
                 )
-            return cleared
+            return SessionGoalClearResultDTO(session_id=session_id, thread_id=thread_id, cleared=cleared)
 
     async def account_job(
         self,
@@ -290,6 +289,7 @@ class SessionGoalService:
             event_type=EventType.GOAL_UPDATED,
             payload={
                 "session_id": goal.session_id,
+                "thread_id": goal.thread_id,
                 "goal": goal.model_dump(mode="json"),
             },
             agent_id="goal_service",

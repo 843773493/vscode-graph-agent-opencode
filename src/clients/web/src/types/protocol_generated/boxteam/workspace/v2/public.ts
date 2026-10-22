@@ -1210,6 +1210,7 @@ export interface SessionGenerationOriginDTO {
 export interface SessionGoalClearResultDTO {
   session_id: string;
   cleared: boolean;
+  thread_id: string;
 }
 
 export interface SessionSkillUntrackRequest {
@@ -1265,7 +1266,11 @@ export interface SessionGoalDTO {
   updated_at: string | undefined;
   last_accounted_job_id?: string | undefined;
   last_continued_job_id?: string | undefined;
-  accounted_jobs?: { [key: string]: any } | undefined;
+  accounted_jobs?:
+    | { [key: string]: any }
+    | undefined;
+  /** 由权威 catalog 解析的 main Thread；不作为 goal.json 中的第二指针。 */
+  thread_id: string;
 }
 
 export interface SessionGoalSetRequest {
@@ -10348,7 +10353,7 @@ export const SessionGenerationOriginDTO: MessageFns<SessionGenerationOriginDTO> 
 };
 
 function createBaseSessionGoalClearResultDTO(): SessionGoalClearResultDTO {
-  return { session_id: "", cleared: false };
+  return { session_id: "", cleared: false, thread_id: "" };
 }
 
 export const SessionGoalClearResultDTO: MessageFns<SessionGoalClearResultDTO> = {
@@ -10356,6 +10361,7 @@ export const SessionGoalClearResultDTO: MessageFns<SessionGoalClearResultDTO> = 
     return {
       session_id: isSet(object.session_id) ? globalThis.String(object.session_id) : "",
       cleared: isSet(object.cleared) ? globalThis.Boolean(object.cleared) : false,
+      thread_id: isSet(object.thread_id) ? globalThis.String(object.thread_id) : "",
     };
   },
 
@@ -10367,6 +10373,9 @@ export const SessionGoalClearResultDTO: MessageFns<SessionGoalClearResultDTO> = 
     if (message.cleared !== false) {
       obj.cleared = message.cleared;
     }
+    if (message.thread_id !== "") {
+      obj.thread_id = message.thread_id;
+    }
     return obj;
   },
 
@@ -10377,6 +10386,7 @@ export const SessionGoalClearResultDTO: MessageFns<SessionGoalClearResultDTO> = 
     const message = createBaseSessionGoalClearResultDTO();
     message.session_id = object.session_id ?? "";
     message.cleared = object.cleared ?? false;
+    message.thread_id = object.thread_id ?? "";
     return message;
   },
 };
@@ -10556,6 +10566,7 @@ function createBaseSessionGoalDTO(): SessionGoalDTO {
     last_accounted_job_id: undefined,
     last_continued_job_id: undefined,
     accounted_jobs: undefined,
+    thread_id: "",
   };
 }
 
@@ -10579,6 +10590,7 @@ export const SessionGoalDTO: MessageFns<SessionGoalDTO> = {
         ? globalThis.String(object.last_continued_job_id)
         : undefined,
       accounted_jobs: isObject(object.accounted_jobs) ? object.accounted_jobs : undefined,
+      thread_id: isSet(object.thread_id) ? globalThis.String(object.thread_id) : "",
     };
   },
 
@@ -10623,6 +10635,9 @@ export const SessionGoalDTO: MessageFns<SessionGoalDTO> = {
     if (message.accounted_jobs !== undefined) {
       obj.accounted_jobs = message.accounted_jobs;
     }
+    if (message.thread_id !== "") {
+      obj.thread_id = message.thread_id;
+    }
     return obj;
   },
 
@@ -10644,6 +10659,7 @@ export const SessionGoalDTO: MessageFns<SessionGoalDTO> = {
     message.last_accounted_job_id = object.last_accounted_job_id ?? undefined;
     message.last_continued_job_id = object.last_continued_job_id ?? undefined;
     message.accounted_jobs = object.accounted_jobs ?? undefined;
+    message.thread_id = object.thread_id ?? "";
     return message;
   },
 };

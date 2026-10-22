@@ -5296,6 +5296,11 @@ export declare type SessionGoalClearResultDTO = Message<"boxteam.workspace.v2.Se
    * @generated from field: bool cleared = 2;
    */
   cleared: boolean;
+
+  /**
+   * @generated from field: string thread_id = 3;
+   */
+  threadId: string;
 };
 
 /**
@@ -5491,6 +5496,13 @@ export declare type SessionGoalDTO = Message<"boxteam.workspace.v2.SessionGoalDT
    * @generated from field: optional google.protobuf.Struct accounted_jobs = 13;
    */
   accountedJobs?: JsonObject | undefined;
+
+  /**
+   * 由权威 catalog 解析的 main Thread；不作为 goal.json 中的第二指针。
+   *
+   * @generated from field: string thread_id = 14;
+   */
+  threadId: string;
 };
 
 /**

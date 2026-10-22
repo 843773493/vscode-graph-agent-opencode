@@ -279,7 +279,9 @@ async def test_active_short_write_endpoints_keep_their_contracts(
 
     cleared = await harness.client.delete(f"/api/v1/sessions/{session_id}/goal")
     assert cleared.status_code == 200, cleared.text
-    assert cleared.json()["data"] == {"session_id": session_id, "cleared": True}
+    main = harness.workspace.resolver.main_thread_id(session_id)
+    assert created.json()["data"]["thread_id"] == updated.json()["data"]["thread_id"] == main
+    assert cleared.json()["data"] == {"session_id": session_id, "thread_id": main, "cleared": True}
     assert await harness.goal_service.get(session_id) is None
     assert harness.runtime.calls == ["ensure", "apply", "ensure", "settle"]
 
