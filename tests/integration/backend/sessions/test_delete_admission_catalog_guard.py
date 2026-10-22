@@ -1,19 +1,26 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import shutil
 import sqlite3
 from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager, closing
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+from time import perf_counter
 
 import pytest
 
 from app.core.background_message_bus import BackgroundMessageBus
 from app.core.exceptions import NotFoundError
 from app.core.job_event_bus import JobEventBus
-from app.core.session_lifecycle_gate import SessionDeletionPendingError
+from app.core.session_lifecycle_gate import (
+    NavigationTopologyGate,
+    SessionDeletionPendingError,
+)
+from app.core.session_subtree_delete import SessionSubtreeDeleteService
 from app.domain.itemized.execution_queue import ExecutionQueueInput
 from app.schemas.internal_v2.common import JobStatus, MessageRole
 from app.schemas.internal_v2.message import MessageDTO
@@ -29,6 +36,7 @@ from app.services.infrastructure.rollout_context.checkpoint.saver import (
 from app.services.infrastructure.trace_event_store import TraceEventStore
 from tests.harness.python.run_context import TestRunContext
 from tests.support.message_service import build_message_service
+from tests.support.workspaces import prepare_test_workspace
 from tests.unit.core.catalog_workspace_helper import (
     CatalogWorkspaceContext,
     build_catalog_workspace,
@@ -60,6 +68,154 @@ class _AdmissionHarness:
     input_owner: MessageService
     saver: RolloutCheckpointSaver
     guard_calls: list[str]
+
+
+@pytest.fixture
+def scale_workspace(request: pytest.FixtureRequest):
+    context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
+    output = context.output_root / "workspace" / "large-subtree"
+    prepare_test_workspace(
+        workspace_root=output / "workspace",
+        template_root=Path.cwd() / "tests/fixtures/workspaces/default_test_workspace",
+        template_items=(),
+    )
+    with build_catalog_workspace(output) as workspace:
+        yield context, workspace
+
+
+@pytest.mark.asyncio
+async def test_large_subtree_delete_commits_one_visibility_transition(
+    scale_workspace, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """真实创建513个节点；锁等待、预检和隔离耗时只作测量，不降低删除合同。"""
+    context, workspace = scale_workspace
+    root = workspace.create_folder("规模删除")
+    nodes = [root]
+    sessions: list[str] = []
+    for branch in range(64):
+        parent = workspace.create_folder(f"分支{branch}", root)
+        nodes.append(parent)
+        for depth in range(3):
+            parent = workspace.create_folder(f"层级{depth}", parent)
+            nodes.append(parent)
+        for number in range(4):
+            sessions.append(await workspace.create_session(f"会话{number}", parent))
+    outsider = await workspace.create_session("树外对照")
+    original = {node: workspace.store.get_node(node) for node in [*nodes, *sessions]}
+    assert len(original) == 513
+    assert len(sessions) == 256
+    outside_before = workspace.store.get_node(outsider)
+    locators = {session: workspace.session_dir(session) for session in sessions}
+    catalog = workspace.store.connection
+    database = workspace.sessions_root.parent / "navigation/session-catalog.sqlite"
+    metrics: dict[str, object] = {"nodes": len(original), "sessions": len(sessions)}
+    gate_attempted = asyncio.Event()
+    waits: list[float] = []
+
+    class MeasuredTopologyGate(NavigationTopologyGate):
+        @asynccontextmanager
+        async def exclusive(self):
+            started = perf_counter()
+            gate_attempted.set()
+            async with super().exclusive():
+                waits.append(perf_counter() - started)
+                yield
+
+    checks: list[str] = []
+    preflight_seconds = 0.0
+    read_claims = workspace.store.list_pinned_claims_for_source
+
+    def measure_claims(session_id: str, *, connection):
+        nonlocal preflight_seconds
+        started = perf_counter()
+        try:
+            return read_claims(session_id, connection=connection)
+        finally:
+            preflight_seconds += perf_counter() - started
+            checks.append(session_id)
+
+    monkeypatch.setattr(workspace.store, "list_pinned_claims_for_source", measure_claims)
+    marks: list[str] = []
+    finishes: list[str] = []
+
+    def states(connection) -> dict[str, str]:
+        return dict(connection.execute("SELECT node_id,state FROM nodes"))
+
+    def mark_hook(connection, record) -> None:
+        assert record.state == "deleting"
+        assert set(record.frozen_session_locators) == set(sessions)
+        inside = states(connection)
+        assert {inside[node] for node in original} == {"deleting"}
+        with closing(sqlite3.connect(database.as_uri() + "?mode=ro", uri=True)) as reader:
+            committed = states(reader)
+        assert {committed[node] for node in original} == {"active"}
+        marks.append(record.state)
+
+    def finish_hook(connection, record) -> None:
+        assert record.state == "completed"
+        assert set(states(connection)).isdisjoint(original)
+        with closing(sqlite3.connect(database.as_uri() + "?mode=ro", uri=True)) as reader:
+            committed = states(reader)
+        assert {committed[node] for node in original} == {"deleting"}
+        finishes.append(record.state)
+
+    drained: list[str] = []
+
+    async def drain(session_id: str) -> None:
+        assert set(checks) == set(sessions)
+        assert marks == ["deleting"]
+        snapshot = states(catalog)
+        assert {snapshot[node] for node in original} == {"deleting"}
+        drained.append(session_id)
+
+    service = SessionSubtreeDeleteService(
+        store=workspace.store, sessions_root=workspace.sessions_root,
+        workspace_id=workspace.workspace_id,
+        gate=MeasuredTopologyGate(workspace.sessions_root), session_drain_callback=drain,
+    )
+    started = perf_counter()
+    operation = None
+    try:
+        async with NavigationTopologyGate(workspace.sessions_root).shared():
+            operation = asyncio.create_task(service.delete(
+                idempotency_key="large-subtree", root_node_id=root,
+                mark_transaction_hook=mark_hook, finish_transaction_hook=finish_hook,
+            ))
+            await asyncio.wait_for(gate_attempted.wait(), timeout=5)
+            assert not operation.done()
+            assert checks == [] and marks == []
+            snapshot = states(catalog)
+            assert {snapshot[node] for node in original} == {"active"}
+        result = await operation
+    finally:
+        if operation is not None:
+            if not operation.done():
+                operation.cancel()
+            await asyncio.gather(operation, return_exceptions=True)
+    metrics.update({
+        "delete_seconds": perf_counter() - started,
+        "topology_wait_seconds": waits,
+        "retention_preflight_seconds": preflight_seconds,
+        "retention_preflight_count": len(checks),
+        "mark_transactions": len(marks), "finish_transactions": len(finishes),
+    })
+    assert result.record_state == "completed"
+    assert set(result.frozen_node_ids) == set(original)
+    assert set(result.drained_session_ids) == set(sessions) == set(drained)
+    assert len(checks) == len(sessions) == len(drained)
+    assert marks == ["deleting"] and finishes == ["completed"]
+    assert len(waits) == 2 and all(wait >= 0 for wait in waits)
+    assert set(states(catalog)).isdisjoint(original)
+    assert workspace.store.get_node(outsider) == outside_before
+    for session, directory in locators.items():
+        assert not directory.exists()
+        isolated = workspace.sessions_root / ".deleting/large-subtree" / session
+        assert (isolated / "session-control.sqlite").is_file()
+    assert workspace.session_dir(outsider).is_dir()
+    (context.artifacts_dir / "large-subtree-metrics.json").write_text(
+        json.dumps(metrics, ensure_ascii=False, indent=2) + "\n", encoding="utf-8",
+    )
+
 
 
 @pytest.fixture
