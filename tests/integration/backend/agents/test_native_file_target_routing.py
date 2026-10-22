@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import re
 import sqlite3
 from contextlib import closing
 
@@ -20,7 +21,7 @@ from tests.integration.backend.sessions.test_session_communication_pipeline impo
     communication_triad as communication_triad,  # noqa: PLC0414 - fixture 按当前文件隔离
 )
 
-# TODO：目前只配置 Linux 目标；接入真实 Windows Gateway 后补验盘符、UNC 和盘符相对路径拒绝，不能用本机字符串测试代替。
+# TODO：Linux 跨 Gateway 三输入与 Windows 本机 Gateway 盘符读写/盘符相对路径拒绝已实测；跨平台联邦及真实 UNC 共享仍需验收。
 
 
 async def test_remote_file_api_resolves_native_and_uri_targets_on_target_machine(communication_triad):
@@ -101,14 +102,14 @@ async def test_remote_file_api_resolves_native_and_uri_targets_on_target_machine
     (artifacts / "native-file-target-routing.json").write_text(json.dumps(evidence, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
-async def test_file_responses_and_durable_events_keep_uri_for_unregistered_directory(
+async def test_native_file_uri_events(
     communication_case: CommunicationCase,
 ) -> None:
     case = communication_case
     external = case.workspace.parent / ("serialization-native-sentinel-" + create_prefixed_id("op"))
     external.mkdir()
     file = case.workspace / "src/serialization.txt"
-    file.write_text("三个输入的同一正文 Ω\n", encoding="utf-8")
+    file.write_bytes("三个输入的同一正文 Ω\n".encode())
     uri = resource_display_uri(scope="workspace", scope_id=case.backend.workspace_id, kind="files",
         tail_segments=("root", "src", file.name))
     records = []
@@ -120,13 +121,29 @@ async def test_file_responses_and_durable_events_keep_uri_for_unregistered_direc
 
     registered = registry()
 
+    def assert_no_native_paths(text):
+        # JSON 会转义 Windows 反斜杠；归一分隔符后再核对，避免漏掉已序列化的真实路径。
+        normalized = re.sub(r"[\\/]+", "/", text).casefold()
+        for native in (case.workspace, external):
+            assert re.sub(r"[\\/]+", "/", str(native)).casefold() not in normalized
+
     def checked(response, status=200):
         assert response.status_code == status, response.text
-        assert str(case.workspace) not in response.text and str(external) not in response.text
+        assert_no_native_paths(response.text)
         body = response.json()
         assert response.headers["X-Request-ID"] == body["request_id"]
         records.append(body)
         return body.get("data")
+
+    async def wait_operation(receipt):
+        async with asyncio.timeout(10):
+            while True:
+                terminal, = checked(await case.client.get("/api/v1/workspace/files/operations", params={
+                    "operation_id": receipt["operation_id"], "expected_workspace_id": case.backend.workspace_id,
+                }))["operations"]
+                if terminal["state"] in {"committed", "rejected", "cancelled", "dependency_failed"}:
+                    return terminal
+                await asyncio.sleep(0.02)
 
     roots = checked(await case.client.get("/api/v1/workspace/files/roots"))
     assert roots["workspace_uri"] == uri.rsplit("/src/", 1)[0]
@@ -137,9 +154,26 @@ async def test_file_responses_and_durable_events_keep_uri_for_unregistered_direc
     assert references[:3] == [uri] * 3
     external_uri = references[3]
     assert parse_resource_uri(external_uri).scope_id == case.gateway_id
-    for value in ("src/" + file.name, str(file), uri):
+    values = ("src/" + file.name, str(file), uri)
+    for value in values:
         content = checked(await case.client.get("/api/v1/workspace/files/content", params={"path": value}))
-        assert (content["path"], content["content"]) == (uri, file.read_text(encoding="utf-8"))
+        assert (content["path"], content["content"]) == (uri, file.read_bytes().decode("utf-8"))
+    revision = content["revision"]
+    for index, value in enumerate(values):
+        saved_text = f"三种输入实际保存 {index} Ω\n"
+        saved = checked(await case.client.put("/api/v1/workspace/files/content", params={"path": value}, json={
+            "content": saved_text, "expected_revision": revision,
+        }))
+        assert (saved["path"], saved["content"]) == (uri, saved_text)
+        assert file.read_bytes() == saved_text.encode("utf-8")
+        revision = saved["revision"]
+        for other in values:
+            reread = checked(await case.client.get("/api/v1/workspace/files/content", params={"path": other}))
+            assert (reread["path"], reread["content"], reread["revision"]) == (uri, saved_text, revision)
+    if file.drive:
+        checked(await case.client.get("/api/v1/workspace/files/content", params={
+            "path": file.drive + "serialization.txt",
+        }), status=400)
     directory = checked(await case.client.get("/api/v1/workspace/files", params={"path": str(external)}))
     assert directory["path"] == directory["directory_key"]["path"] == external_uri
     created_name = "真实创建 Ω.txt"
@@ -149,14 +183,7 @@ async def test_file_responses_and_durable_events_keep_uri_for_unregistered_direc
             "directory_key": directory["directory_key"], "expected_directory_revision": directory["directory_revision"],
         },
     }), status=202)
-    async with asyncio.timeout(10):
-        while True:
-            terminal, = checked(await case.client.get("/api/v1/workspace/files/operations", params={
-                "operation_id": receipt["operation_id"], "expected_workspace_id": case.backend.workspace_id,
-            }))["operations"]
-            if terminal["state"] in {"committed", "rejected", "cancelled", "dependency_failed"}:
-                break
-            await asyncio.sleep(0.02)
+    terminal = await wait_operation(receipt)
     assert (terminal["state"], terminal["effect"]) == ("committed", "complete")
     assert (external / created_name).is_file() and not (external / ".boxteam").exists()
     async with asyncio.timeout(10):
@@ -167,7 +194,7 @@ async def test_file_responses_and_durable_events_keep_uri_for_unregistered_direc
             async for line in response.aiter_lines():
                 if line.startswith("data: "):
                     event = json.loads(line[6:])
-                    assert str(case.workspace) not in line and str(external) not in line
+                    assert_no_native_paths(line)
                     assert event["event_id"] > 0
                     snapshot, = event["snapshots"]
                     assert snapshot["path"] == external_uri
@@ -177,6 +204,37 @@ async def test_file_responses_and_durable_events_keep_uri_for_unregistered_direc
                     break
             else:
                 raise AssertionError("文件事件流未返回已持久化的创建结果")
+    external_file = external / created_name
+    external_file_uri, = checked(await case.client.post("/api/v1/workspace/files/references", json={
+        "paths": [str(external_file)],
+    }))["uris"]
+    external_read = checked(await case.client.get("/api/v1/workspace/files/content", params={"path": external_file_uri}))
+    for index, value in enumerate((str(external_file), external_file_uri)):
+        text = f"工作区外真实保存 {index} Ω\n"
+        saved = checked(await case.client.put("/api/v1/workspace/files/content", params={"path": value}, json={
+            "content": text, "expected_revision": external_read["revision"],
+        }))
+        assert saved["path"] == external_file_uri and saved["content"] == text
+        assert external_file.read_bytes() == text.encode("utf-8")
+        external_read = checked(await case.client.get("/api/v1/workspace/files/content", params={"path": external_file_uri}))
+        assert (external_read["content"], external_read["revision"]) == (text, saved["revision"])
+    directory = checked(await case.client.get("/api/v1/workspace/files", params={"path": external_uri}))
+    upload_intent = {"client_operation_id": create_prefixed_id("op"), "client_sequence": 2,
+        "directory_key": directory["directory_key"], "expected_directory_revision": directory["directory_revision"]}
+    uploaded = checked(await case.client.post("/api/v1/workspace/files/upload", params={"path": external_uri},
+        data={"relative_paths": "上传 Ω.txt", "intent": json.dumps(upload_intent)},
+        files={"files": ("upload.txt", b"uploaded original bytes\n", "text/plain")}), status=202)
+    upload_terminal = await wait_operation(uploaded)
+    assert (upload_terminal["state"], upload_terminal["effect"]) == ("committed", "complete")
+    assert (external / "上传 Ω.txt").read_bytes() == b"uploaded original bytes\n"
+    # terminal 先发布，暂存清理随后执行；有界等待真实清理，不把终态当作清理完成。
+    async with asyncio.timeout(10):
+        while list((case.workspace / ".boxteam/navigation/workspace-files-staging").iterdir()):
+            status = checked(await case.client.get("/api/v1/workspace/files/operations", params={
+                "operation_id": uploaded["operation_id"], "expected_workspace_id": case.backend.workspace_id,
+            }))
+            assert status["worker_state"] != "failed", status
+            await asyncio.sleep(0.02)
     checked(await case.client.get("/api/v1/workspace/files/content", params={"path": "missing-native-sentinel"}), status=404)
     checked(await case.client.get("/api/v1/workspace/files", params={
         "path": uri.replace(case.backend.workspace_id, "different-workspace"),
@@ -184,9 +242,9 @@ async def test_file_responses_and_durable_events_keep_uri_for_unregistered_direc
     database = case.workspace / ".boxteam/navigation/workspace-files.sqlite"
     with closing(sqlite3.connect(database.as_uri() + "?mode=ro", uri=True)) as connection:
         dump = "\n".join(connection.iterdump())
-    assert str(case.workspace) not in dump and str(external) not in dump
+    assert_no_native_paths(dump)
     assert registry() == registered
     assert not list(case.replay.artifacts.glob("*.json"))
     with case.replay.control._condition:
         assert not any(key.startswith("model_call/") for key in case.replay.control._counters)
-    case.record("file-uri-serialization", {"responses": records, "terminal": terminal})
+    case.record("file-uri-serialization", {"responses": records, "terminal": terminal, "upload_terminal": upload_terminal})

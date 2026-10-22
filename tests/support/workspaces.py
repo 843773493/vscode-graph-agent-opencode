@@ -7,6 +7,8 @@ from pathlib import Path
 
 import commentjson
 
+from app.core.atomic_fs import native_io_path
+
 
 @lru_cache(maxsize=16)
 def render_test_workspace_config(source_text: str) -> str:
@@ -27,7 +29,7 @@ def prepare_test_workspace(
     """从只读模板创建全新的隔离测试工作区。"""
 
     if workspace_root.exists():
-        shutil.rmtree(workspace_root)
+        shutil.rmtree(native_io_path(workspace_root))
     workspace_root.mkdir(parents=True, exist_ok=True)
 
     for relative_item in template_items:

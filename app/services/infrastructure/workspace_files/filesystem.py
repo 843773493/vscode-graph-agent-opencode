@@ -9,7 +9,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import BinaryIO
 
-from app.core.atomic_fs import fsync_directory, fsync_file
+from app.core.atomic_fs import fsync_directory, fsync_file, native_io_path
 from app.services.infrastructure.workspace_files.runtime import (
     rename_entry_exclusive,
 )
@@ -23,28 +23,30 @@ class FileEffectUnverifiedError(RuntimeError):
 def content_manifest(path: Path, *, validate: Callable[[Path], None] | None = None) -> dict:
     if validate is not None:
         validate(path)
-    if path.is_symlink():
+    physical = native_io_path(path)
+    if physical.is_symlink():
         raise ValueError(f"暂不支持复制符号链接: {path.name}")
-    if path.is_file():
+    if physical.is_file():
         hasher = hashlib.sha256()
         size = 0
-        with path.open("rb") as stream:
+        with physical.open("rb") as stream:
             while chunk := stream.read(1024 * 1024):
                 hasher.update(chunk)
                 size += len(chunk)
         return {"kind": "file", "size": size, "hash": hasher.hexdigest()}
-    if not path.is_dir():
+    if not physical.is_dir():
         raise FileNotFoundError(f"复制来源不是文件或目录: {path.name}")
     children = {}
-    for child in sorted(path.iterdir(), key=lambda item: item.name):
-        children[child.name] = content_manifest(child, validate=validate)
+    for child in sorted(physical.iterdir(), key=lambda item: item.name):
+        children[child.name] = content_manifest(path / child.name, validate=validate)
     return {"kind": "directory", "children": children}
 
 
 def captured_source(path: Path, *, validate: Callable[[Path], None] | None = None) -> dict:
-    before = path.stat(follow_symlinks=False)
+    physical = native_io_path(path)
+    before = physical.stat(follow_symlinks=False)
     manifest = content_manifest(path, validate=validate)
-    after = path.stat(follow_symlinks=False)
+    after = physical.stat(follow_symlinks=False)
     if (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns) != (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns):
         raise RuntimeError(f"捕获复制来源时源发生变化: {path.name}")
     return {"device": after.st_dev, "inode": after.st_ino, "mtime_ns": after.st_mtime_ns,
@@ -52,6 +54,7 @@ def captured_source(path: Path, *, validate: Callable[[Path], None] | None = Non
 
 
 def write_upload(path: Path, stream: BinaryIO) -> dict:
+    path = native_io_path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     hasher = hashlib.sha256()
     size = 0
@@ -67,6 +70,7 @@ def write_upload(path: Path, stream: BinaryIO) -> dict:
 
 
 def sync_tree(path: Path) -> None:
+    path = native_io_path(path)
     if path.is_dir():
         for child in path.iterdir():
             sync_tree(child)
@@ -77,6 +81,8 @@ def sync_tree(path: Path) -> None:
 
 def stage_step(*, stage_root: Path, operation_id: str, request_hash: str,
                source: Path | None, kind: str) -> tuple[Path, dict]:
+    stage_root = native_io_path(stage_root)
+    source = native_io_path(source) if source is not None else None
     marker = {"operation_id": operation_id, "request_hash": request_hash}
     if stage_root.exists():
         marker_path = stage_root / "owner.json"
@@ -120,6 +126,7 @@ def stage_step(*, stage_root: Path, operation_id: str, request_hash: str,
 
 
 def verify_published(target: Path, proof: dict) -> bool:
+    target = native_io_path(target)
     if not target.exists() and not target.is_symlink():
         return False
     if target.is_symlink():
@@ -136,7 +143,7 @@ def publish_step(stage_entry: Path, target: Path, kind: str) -> None:
 
 def cleanup_steps(steps: list[dict], *, operation_id: str, request_hash: str) -> None:
     for step in steps:
-        root = Path(step["stage_root"])
+        root = native_io_path(Path(step["stage_root"]))
         if not root.exists():
             continue
         marker = root / "owner.json"

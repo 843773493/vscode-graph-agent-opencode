@@ -79,7 +79,19 @@ def test_atomic_write_creates_parent_directory(tmp_path: Path) -> None:
 
 
 def test_fsync_directory_observable(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """fsync_directory 必须真的对目录描述符调用 os.fsync。"""
+    """目录同步必须实际到达平台屏障。"""
+    if os.name == "nt":
+        directories: list[Path] = []
+        original = atomic_fs._flush_windows_directory
+
+        def recording_flush(directory: Path) -> None:
+            directories.append(directory)
+            original(directory)
+
+        monkeypatch.setattr(atomic_fs, "_flush_windows_directory", recording_flush)
+        atomic_fs.fsync_directory(tmp_path)
+        assert directories == [tmp_path]
+        return
     calls: list[int] = []
     real_fsync = os.fsync
 
@@ -90,6 +102,19 @@ def test_fsync_directory_observable(tmp_path: Path, monkeypatch: pytest.MonkeyPa
     monkeypatch.setattr(atomic_fs.os, "fsync", recording_fsync)
     atomic_fs.fsync_directory(tmp_path)
     assert len(calls) == 1
+
+
+def test_fsync_missing_directory_fails(tmp_path: Path) -> None:
+    with pytest.raises(FileNotFoundError):
+        atomic_fs.fsync_directory(tmp_path / "missing")
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows 原生路径表示")
+def test_windows_io_path_keeps_drive_and_unc_targets(tmp_path: Path) -> None:
+    assert str(atomic_fs.native_io_path(tmp_path)) == "\\\\?\\" + str(tmp_path)
+    unc = Path(r"\\server\share\中文\file.txt")
+    assert str(atomic_fs.native_io_path(unc)) == r"\\?\UNC\server\share\中文\file.txt"
+    assert atomic_fs.native_io_path(atomic_fs.native_io_path(tmp_path)) == atomic_fs.native_io_path(tmp_path)
 
 
 def test_fsync_file_observable(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

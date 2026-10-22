@@ -13,7 +13,7 @@ from threading import RLock
 from typing import BinaryIO
 from uuid import uuid4
 
-from app.core.atomic_fs import fsync_directory
+from app.core.atomic_fs import fsync_directory, native_io_path
 from app.core.exceptions import ForbiddenError
 from app.core.path_utils import safe_join
 from app.core.resource_uri import parse_resource_uri
@@ -258,9 +258,9 @@ class WorkspaceFileOperations:
                     if not paths:
                         raise ValueError("上传内容不能为空")
                     candidate = self._incoming / (intent.client_operation_id + "-" + uuid4().hex)
-                    candidate.mkdir(parents=True)
+                    native_io_path(candidate).mkdir(parents=True)
                     incoming = candidate
-                    with (incoming / "owner.json").open("x", encoding="utf-8") as marker:
+                    with native_io_path(incoming / "owner.json").open("x", encoding="utf-8") as marker:
                         marker.write(canonical_json({"workspace_id": self.workspace_id,
                                                      "operation_id": intent.client_operation_id}))
                         marker.flush()
@@ -285,7 +285,7 @@ class WorkspaceFileOperations:
                 if incoming is not None and not accepted:
                     original_error = sys.exception()
                     try:
-                        shutil.rmtree(incoming)
+                        shutil.rmtree(native_io_path(incoming))
                         fsync_directory(incoming.parent)
                     except OSError as cleanup_error:
                         if original_error is not None:
@@ -297,13 +297,13 @@ class WorkspaceFileOperations:
                  intent: WorkspaceFileMutationIntentDTO, actor: str, data: dict,
                  incoming: Path | None, request_hash: str) -> dict:
         if intent.created_by_operation_id is None:
-            if not target.exists():
+            if not native_io_path(target).exists():
                 raise FileNotFoundError(f"目标目录不存在: {key.path or '.'}")
-            if not target.is_dir():
+            if not native_io_path(target).is_dir():
                 raise NotADirectoryError(f"目标路径不是目录: {key.path or '.'}")
         entries = []
         preconditions = []
-        if target.is_dir():
+        if native_io_path(target).is_dir():
             observation = self.observe_directories([(key, target)])[0]
             preconditions.append({"key": key.model_dump(), "path": key.path,
                                   "revision": intent.expected_directory_revision or observation.directory_revision})
@@ -318,25 +318,26 @@ class WorkspaceFileOperations:
             paths = [self._resolve(raw, scope=source_scope, allow_empty=False) for raw in raw_paths]
             for source, uri in paths:
                 proof = captured_source(source, validate=self.paths.require_public_path)
-                if not source.name or (source.is_dir() and target.is_relative_to(source)):
+                if not source.name or (native_io_path(source).is_dir() and target.is_relative_to(source)):
                     raise ValueError(f"不能把目录复制到自身内部或复制文件系统根: {uri}")
                 entries.append({"relative_path": source.name, "kind": proof["manifest"]["kind"],
                                 "source": {"uri": uri}, "source_proof": proof})
         else:
             body = incoming / "body"
+            physical_body = native_io_path(body)
             groups = set()
-            for source in body.rglob("*"):
+            for source in physical_body.rglob("*"):
                 if not source.is_file():
                     continue
-                relative = source.relative_to(body)
+                relative = source.relative_to(physical_body)
                 parent = target
                 first_missing = None
                 for index, part in enumerate(relative.parts[:-1]):
                     parent /= part
-                    if not parent.exists():
+                    if not native_io_path(parent).exists():
                         first_missing = Path(*relative.parts[:index + 1])
                         break
-                    if parent.is_symlink() or not parent.is_dir():
+                    if native_io_path(parent).is_symlink() or not native_io_path(parent).is_dir():
                         raise ValueError(f"上传父路径不是普通目录: {file_uri_child(key.path, *parent.relative_to(target).parts)}")
                 groups.add(str(first_missing or relative))
             for relative in sorted(groups):
@@ -345,7 +346,7 @@ class WorkspaceFileOperations:
                 entries.append({"relative_path": relative, "kind": proof["manifest"]["kind"],
                                 "source": {"upload": relative}, "source_proof": proof})
                 parent = (target / relative).parent
-                if parent != target and parent.is_dir():
+                if parent != target and native_io_path(parent).is_dir():
                     parent_uri = file_uri_child(key.path, *parent.relative_to(target).parts)
                     parent_key, _ = self.directory_key(parent_uri, key.scope)
                     version = self.observe_directories([(parent_key, parent)])[0]
@@ -357,7 +358,7 @@ class WorkspaceFileOperations:
             self._validate_destination(destination, manifest)
             if destination in destinations:
                 raise FileExistsError(f"多个来源具有相同名称: {destination.name}")
-            if destination.exists() or destination.is_symlink():
+            if native_io_path(destination).exists() or native_io_path(destination).is_symlink():
                 raise FileExistsError(f"目标已存在: {file_uri_child(key.path, *Path(entry['relative_path']).parts)}")
             destinations.add(destination)
         payload = {"workspace_id": self.workspace_id, "actor": actor, "directory_key": key.model_dump(),
@@ -372,7 +373,7 @@ class WorkspaceFileOperations:
         payload = record.payload
         key = WorkspaceDirectoryKeyDTO.model_validate(payload["directory_key"])
         resolved, _ = self._resolve(key.path, scope=key.scope, allow_empty=True)
-        if key.path != payload["target"] or not resolved.is_dir():
+        if key.path != payload["target"] or not native_io_path(resolved).is_dir():
             raise WorkspaceFileOperationConflictError("文件 operation 的原目录路径事实已失效")
         intent = WorkspaceFileMutationIntentDTO.model_validate(payload["intent"])
         if intent.created_by_operation_id is not None:
@@ -383,7 +384,7 @@ class WorkspaceFileOperations:
                 raise WorkspaceFileOperationConflictError("原创建结果没有后继目录的唯一发布证明")
             step, relative = proofs[0]
             original = step["proof"]["directories"].get(relative)
-            actual = resolved.stat(follow_symlinks=False)
+            actual = native_io_path(resolved).stat(follow_symlinks=False)
             if original != {"device": actual.st_dev, "inode": actual.st_ino}:
                 raise WorkspaceFileOperationConflictError("原创建目录或子目录已被替换，拒绝使用当前同名路径")
         expectations = list(payload["preconditions"])
@@ -403,7 +404,7 @@ class WorkspaceFileOperations:
                 raise WorkspaceFileOperationConflictError(f"文件目录 revision 冲突: {directory_key.path}, expected={expected}, actual={observed.directory_revision}")
         for entry in payload["entries"]:
             target = self.paths.native(file_uri_child(payload["target"], *Path(entry["relative_path"]).parts))
-            if target.exists() or target.is_symlink():
+            if native_io_path(target).exists() or native_io_path(target).is_symlink():
                 raise WorkspaceFileOperationConflictError(f"执行前目标已存在: {file_uri_child(key.path, *Path(entry['relative_path']).parts)}")
             if entry["source"] is not None and self._capture_source(self._source_path(record, entry), entry) != entry["source_proof"]:
                 raise WorkspaceFileOperationConflictError(f"执行前原来源事实已变化: {entry['source']}")
@@ -563,12 +564,13 @@ class WorkspaceFileOperations:
     def _cleanup_incoming(self, record: FileOperationRecord) -> None:
         if record.payload["incoming"] is not None:
             root = self._incoming_path(record)
-            if root.exists():
+            physical = native_io_path(root)
+            if physical.exists():
                 expected = canonical_json({"workspace_id": self.workspace_id, "operation_id": record.operation_id})
-                marker = root / "owner.json"
-                if root.parent != self._incoming or root.is_symlink() or not marker.is_file() or marker.read_text(encoding="utf-8") != expected:
+                marker = physical / "owner.json"
+                if root.parent != self._incoming or physical.is_symlink() or not marker.is_file() or marker.read_text(encoding="utf-8") != expected:
                     raise RuntimeError(f"文件上传暂存的原 owner 证明失效: {root}")
-                shutil.rmtree(root)
+                shutil.rmtree(physical)
                 fsync_directory(root.parent)
 
     def _cleanup(self, record: FileOperationRecord) -> None:
@@ -578,13 +580,14 @@ class WorkspaceFileOperations:
         self.store.complete_cleanup(record)
 
     def _prune_unaccepted_uploads(self) -> None:
-        if not self._incoming.exists():
+        physical = native_io_path(self._incoming)
+        if not physical.exists():
             return
         retained = {self._incoming_path(record) for operation_id, actor in self.store.staging_records()
                     if (record := self.store.get(operation_id, actor)).payload["incoming"] is not None}
         # 只清本 owner 专用 staging；未接受请求没有业务效果，不扫描工作区树。
-        for path in self._incoming.iterdir():
-            if path in retained:
+        for path in physical.iterdir():
+            if self._incoming / path.name in retained:
                 continue
             if path.is_symlink() or not path.is_dir():
                 raise RuntimeError(f"上传 staging 包含未知条目: {path}")

@@ -60,7 +60,7 @@ async def _plan_communication_calls(
         main = await client.get(f"/api/v1/sessions/{session_id}/main-thread")
         assert main.status_code == 200, main.text
         thread_id = main.json()["data"]["thread_id"]
-    config = commentjson.loads((workspace / ".boxteam/workspace.jsonc").read_text())
+    config = commentjson.loads((workspace / ".boxteam/workspace.jsonc").read_text(encoding="utf-8"))
     endpoint = next(provider["endpoint"] for provider in config["llm"]["providers"] if provider["id"] == "primary")
     interactions = [build_cassette(
         asset_id="session-communication", model="e2e-stub-model", url=endpoint + "/chat/completions",
@@ -76,7 +76,7 @@ async def _plan_communication_calls(
 def _communication_request(
     replay: ModelStreamReplay, planned_calls: dict[str, dict[str, str]], call: str,
 ) -> dict[str, object]:
-    artifact = json.loads((replay.artifacts / (call + ".json")).read_text())
+    artifact = json.loads((replay.artifacts / (call + ".json")).read_text(encoding="utf-8"))
     assert artifact["identity"] == planned_calls[call]
     assert artifact["request"]["stream"] is True
     return artifact["request"]
@@ -106,6 +106,7 @@ class CommunicationCase:
     def record(self, name: str, value: object) -> None:
         (self.artifacts / (name + ".json")).write_text(
             json.dumps(value, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
         )
 
     async def session_node(self, session_id: str) -> Path:
@@ -155,7 +156,7 @@ def _prepare_workspace(context: TestRunContext, model_port: int, gateway_port: i
         workspace_root=workspace, config_path=Path.cwd() / "configs/tests/workspace/default.jsonc",
         schema_path=Path.cwd() / "configs/workspace_schema.jsonc",
     )
-    config = commentjson.loads(config_path.read_text())
+    config = commentjson.loads(config_path.read_text(encoding="utf-8"))
     config.setdefault("runtime", {}).setdefault("gateway", {}).setdefault("connection", {})["url"] = f"http://127.0.0.1:{gateway_port}"
     for provider in config["llm"]["providers"]:
         provider.update({
@@ -170,7 +171,7 @@ def _prepare_workspace(context: TestRunContext, model_port: int, gateway_port: i
     for agent in config["agents"].values():
         agent["model"]["fallback_providers"] = []
         agent.setdefault("execution", {})["require_delegated_report"] = False
-    config_path.write_text(json.dumps(config, ensure_ascii=False, indent=2) + "\n")
+    config_path.write_text(json.dumps(config, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     return workspace
 
 
@@ -451,7 +452,7 @@ async def test_c2_hard_restart_proactively_binds_accepted_inbox(communication_ca
     async with asyncio.timeout(20):
         while not (case.artifacts / "before-source.json").exists():
             await asyncio.sleep(0.02)
-    barrier = json.loads((case.artifacts / "before-source.json").read_text())
+    barrier = json.loads((case.artifacts / "before-source.json").read_text(encoding="utf-8"))
     assert barrier["state"] == "target_accepted" and barrier["job_id"] is None and barrier["execution_id"] is None
     assert barrier["communication_id"] == results["receipt"]["communication_id"]
     target_node = await case.session_node(target_session)
@@ -526,14 +527,14 @@ async def test_communication_crash_windows_keep_original_identity(communication_
     async with asyncio.timeout(40):
         while not marker_path.exists():
             await asyncio.sleep(0.02)
-    marker = json.loads(marker_path.read_text())
+    marker = json.loads(marker_path.read_text(encoding="utf-8"))
     communication_id = marker["communication_id"]
     if case.barrier_stage == "after_receipt":
         target_marker_path = case.artifacts / "before-source.json"
         async with asyncio.timeout(40):
             while not target_marker_path.exists():
                 await asyncio.sleep(0.02)
-        target_marker = json.loads(target_marker_path.read_text())
+        target_marker = json.loads(target_marker_path.read_text(encoding="utf-8"))
         assert target_marker["communication_id"] == communication_id
         assert target_marker["state"] == "target_accepted"
         assert target_marker["job_id"] is None and target_marker["execution_id"] is None
@@ -663,7 +664,7 @@ async def communication_triad(request: pytest.FixtureRequest) -> AsyncIterator[F
             try:
                 yield case
             finally:
-                (artifacts / "provider-wire.json").write_text(json.dumps(case.requests(), ensure_ascii=False, indent=2) + "\n")
+                (artifacts / "provider-wire.json").write_text(json.dumps(case.requests(), ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
 @pytest.mark.asyncio
@@ -730,6 +731,6 @@ async def test_c3_real_reverse_channel_question_and_reply(communication_triad) -
         (artifacts / "c3-actual.json").write_text(json.dumps({
             "question": asdict(question), "reply": asdict(answer), "tools": results, "channels": channels,
             "source_job": source_job, "target_job": target_job, "reply_job": reply_job,
-        }, ensure_ascii=False, indent=2) + "\n")
+        }, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     hub_catalog = await nodes["a"].client.get("/api/v1/session-catalog/export")
     assert hub_catalog.status_code == 200 and hub_catalog.json()["data"]["items"] == []
