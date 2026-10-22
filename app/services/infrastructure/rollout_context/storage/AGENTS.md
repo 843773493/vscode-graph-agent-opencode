@@ -23,3 +23,5 @@
 - Fork 来源冻结、未发布目标 capability 作用域及其 Session/Thread 节点解析由 `fork/path_scope.py` 独占；storage 只消费该 owner 的 `thread_identity` / `main_thread_id` / `session_node` / `thread_node`，不保留私有路径分支或转发入口。
 
 - 备份/离线恢复的无状态校验只归 `rollout_offline_restore.py`；目录及已存在文件的 durability 屏障复用 `app/core/atomic_fs.py`，不得恢复 filesystem mixin 或基础 facade 的私有转发。
+
+- SQLite 连接的文件形态校验、打开方式及 PRAGMA 初始化由 `primitives.py` 的 `_RolloutSQLiteConnection.open` 独占；facade 仅校验 namespace、冻结来源准入和解析目标路径，不复制连接实现。

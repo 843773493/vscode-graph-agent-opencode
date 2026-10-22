@@ -14,7 +14,6 @@ from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import AbstractContextManager, contextmanager
 from pathlib import Path
 from typing import Protocol
-from urllib.parse import quote
 
 from app.core.path_utils import get_session_path_resolver
 from app.core.session_thread_context import require_current_session_thread_owner
@@ -213,50 +212,10 @@ class RolloutStorage(
         index_path = self.index_path(
             session_id, checkpoint_ns, thread_id=owner_thread_id
         )
-        rollout_root = index_path.parent
-        if rollout_root.is_symlink():
-            raise RuntimeError(f"rollout 目录不能是符号链接: {rollout_root}")
-        if rollout_root.exists() and not rollout_root.is_dir():
-            raise RuntimeError(f"rollout 路径必须是普通目录: {rollout_root}")
-        if index_path.is_symlink():
-            raise RuntimeError(f"rollout index.sqlite 不能是符号链接: {index_path}")
-        if index_path.exists() and not index_path.is_file():
-            raise RuntimeError(f"rollout index.sqlite 必须是普通文件: {index_path}")
-        # 不能裸 open/read/close 数据库文件：POSIX close 会释放同进程
-        # 其它 SQLite 连接的文件锁。格式校验由下方 SQLite schema 查询完成。
-        if read_only:
-            # mode=ro 在连接层拒绝业务写入，但在线 WAL 读取仍会更新 SHM read-mark。
-            # SHM 是 SQLite 协调状态；数据库、WAL 与 canonical 正文不得被读取链改写。
-            # 仅冻结 source snapshot 使用 immutable，在线源必须读到已提交 WAL。
-            connection = sqlite3.connect(
-                f"file:{quote(str(index_path), safe='/')}?mode=ro"
-                + ("&immutable=1" if self.fork_paths.source_snapshot(session_id) is not None else ""),
-                uri=True,
-                timeout=30,
-                check_same_thread=False,
-                factory=_RolloutSQLiteConnection,
-            )
-        else:
-            connection = sqlite3.connect(
-                index_path,
-                timeout=30,
-                check_same_thread=False,
-                factory=_RolloutSQLiteConnection,
-            )
-        try:
-            # 先做只读 schema 探测，避免对损坏的 index.sqlite 直接执行
-            # journal_mode=WAL；SQLite 可能因此创建一个看似可用的空数据库。
-            connection.execute("SELECT name FROM sqlite_master LIMIT 1").fetchone()
-            if read_only:
-                connection.execute("PRAGMA query_only = ON")
-            else:
-                connection.execute("PRAGMA journal_mode = WAL")
-            connection.execute("PRAGMA foreign_keys = ON")
-            connection.execute("PRAGMA busy_timeout = 30000")
-        except BaseException:
-            connection.close()
-            raise
-        return connection
+        return _RolloutSQLiteConnection.open(
+            index_path, read_only=read_only,
+            frozen_source=self.fork_paths.source_snapshot(session_id) is not None,
+        )
 
     @staticmethod
     def _snapshot_connection(snapshot: RolloutReadSnapshot) -> sqlite3.Connection:

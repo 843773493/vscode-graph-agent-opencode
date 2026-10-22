@@ -943,3 +943,9 @@ pending 恢复的硬错误重试已闭合（2026-10-22）：进程内装载阶�
 
 - main选择与Thread identity校验迁入既有`ForkPathScope`，storage公开main查询仅委托owner；activation、执行准入/恢复、part、来源控制、fork lineage及一次性import/staging消费者全部直接迁齐，旧私有入口零调用。main选择AST完全等价，身份校验在内联同一main选择后AST等价；别名拒绝、精确child与capability优先级不变，未增加class/mixin/路径实现，storage facade降为404行。
 - 固定候选tree `59ca07afd634112b743b8cf8b99d0be545b59594`：`thread-identity-owner-unit-001` 145 passed/48.94秒，正式`integration-001` 141 passed/259.75秒，覆盖四模块迁移/原件/崩溃恢复、terminal原子性和带附件main/child冷恢复；Ruff、compileall及strict全部exit0。四组源码前后一致且无残留；独审001的目录说明P3已在002关闭，最终生产/测试blob仍等于被测候选，仅修说明并补本收据。准确命令/raw与AST/独审/最终证明均在同任务artifacts；不替代7.5-F其余门、UVAR全量不变量或完整default Web验收。
+
+
+### 2026-10-22 7.5-F SQLite 连接职责归属（部分收口）
+
+- 普通 rollout 连接的文件形态校验、打开方式、schema 探测及 PRAGMA 初始化从 storage facade 原样迁入既有 `_RolloutSQLiteConnection.open`；facade 只保留 namespace/冻结来源准入与 Thread 路径解析。无新增 class/mixin、第二连接链路、SQL 或 schema 变化；参数替换后 AST 完全等价，facade 降为363行，连接原语678行，storage直接Python文件仍20。
+- 固定候选 tree `275b084afa3fd13dded29d2d9ca44abc1e3ccd26`：受保护 `sqlite-connection-owner-recovery-002` 中103项恢复/定位用例通过，4项fork因缺正式matrix watchdog在fixture setup报错（exit1）；正式 `fork-003` 补验 preflight/full-copy × idle/transaction reader，4 passed/69.09秒、exit0，原业务断言不变。Ruff/compileall `static-002` exit0；三组源码前后一致、运行组无残留，AST及独审001无finding。准确命令、raw和失败原件保留于同任务artifacts；仅闭合本切片，不代替7.5-F总门、完整Web或Windows实机重验。
