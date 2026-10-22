@@ -964,3 +964,10 @@ pending 恢复的硬错误重试已闭合（2026-10-22）：进程内装载阶�
 - 用户已授权同步本机凭据；完整HEAD archive候选仅链接本机.env，未向源码、profile、回执或Git写入凭据值。真实pending错误HTTP、Runner取消/恢复及Job Trace owner三个正式文件集中验证，保留原有身份、FIFO、终态、工具配对和冷恢复断言。发现恢复child的测试finally缺显式workspace上下文，主断言通过后清理失败；按生产lifespan相同方式绑定workspace_id/root/catalog后调用原force_interrupt_active及drain_finalizations，不改生产行为。
 - 固定完整tree `65009802a7092b98f602c5838df96164f5ab92b2` 的 `runner-workspace-teardown-001` Ruff/compileall通过，41 passed/105.44秒、exit0；源码前后相同且运行组无残留。前三次队列补验在端口18000预检失败，临时端口plugin最初只改分配函数未迁已导入引用，均零业务执行；修正本次隔离plugin后004为22 passed/1 failed，失败精确位于上述清理调用，不放宽断言或修改占用进程。最终验证改用31200/31300/31400隔离端口；这些装具仅在临时产物中。
 - 准确命令、指纹、raw及退出码位于 `out/tests/temp/openspec_takeover/artifacts/runs/queue-credential-validation-*` 与 `runs/runner-workspace-teardown-001/`。这是受控执行端口/模型资产Integration，不是外部Provider或完整进程恢复验收；解除旧收据中的缺凭据阻断，不据此勾选8.3或Section 8整体。
+
+
+### 2026-10-22 工具装具迁齐真实持久准入与执行锁
+
+- `workspace_tool_runtime`删除裸`accept_turn`前提，使用真实Session当前agent/provider、`MessageService.accept_user_message`和冻结`ExecutionQueueInput`原子创建canonical输入及队列，再领取、启动精确Thread的OS holder。装具仅执行资源工具；退出以cancelled结算自身任务，不伪造模型完成。准入成功即登记结算责任，读取admission/queue、建立作用域、领取或启动失败仍结算；终态写入返回False明确报错。工具、资源、终态、holder、admission按真实归属释放，异常和取消不跳过其余清理。
+- 完整Git归档tree `500e0b99e0b69fed68c47686f097b66f189ce0d7`的受保护定向验证：Ruff/compileall及28项生命周期单测通过（6.21秒）；Browser连续两次lifespan核canonical消息、started→cancelled队列、旧执行不再可调度及OS holder持有/释放，并连续通过真实截图/下载/checkpoint错误回归，共4 passed/23.58秒；Terminal真实owner/lease/PTY/最终回执参数化2 passed/23.32秒。三组exit0、源码前后相同、准确命令及raw保留于`out/tests/temp/openspec_takeover/artifacts/runs/workspace-tool-queue-*-005/`，汇总`workspace-tool-queue-proof-005.json`，独审`workspace-tool-queue-review-005.json`。
+- 本收据仅关闭共用资源工具装具的旧准入前提和准备失败窗口；不代替完整模型执行、Windows实机或全量Web验收，不据此勾选8.3/8.13或Section 8整体。

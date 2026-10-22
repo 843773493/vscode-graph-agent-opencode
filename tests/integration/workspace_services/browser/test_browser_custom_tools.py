@@ -1146,3 +1146,45 @@ async def test_screenshot_failure_reports_stage_and_recovers_through_tool(
             destination.unlink()
         deleted = await _detach_delete(integration_client, browser_id, browser_context)
         assert deleted.status_code == 200, deleted.text
+
+
+@pytest.mark.asyncio
+async def test_tool_runtime_reentry_retains_cancelled_queue_and_releases_holder(
+    integration_workspace_root_path: str, integration_startup_mount: MountedWorkspace,
+) -> None:
+    from app.core.execution_admission_context import require_current_execution_admission
+    from app.core.session_lifecycle_gate import ThreadExecutionHolderGate
+
+    workspace = Path(integration_workspace_root_path)
+    previous = None
+    facts = []
+    for _attempt in range(2):
+        async with workspace_tool_runtime(workspace, startup_mount=integration_startup_mount) as (container, session_id, invocation):
+            thread_id = invocation.thread_binding.thread_id
+            admission = require_current_execution_admission(langgraph_thread_id=thread_id)
+            record = container.checkpointer.execution_queue_record(session_id, thread_id, admission.job_id)
+            assert record.phase == "started"
+            assert record.cursor.admission == admission
+            assert record.input.agent_id == (await container.session_service.get(session_id)).current_agent_id
+            accepted = container.checkpointer.accepted_user_message(
+                session_id, thread_id=thread_id, job_id=admission.job_id,
+                message_id=record.input.message_id,
+            )
+            assert accepted.id == record.input.message_id
+            assert accepted.content == "运行真实 工作区资源工具"
+            async with ThreadExecutionHolderGate(workspace / ".boxteam/sessions").lock_for(session_id, thread_id) as competing:
+                assert competing.acquired is False
+            if previous is not None:
+                prior_session, prior_thread, prior_job = previous
+                settled = container.checkpointer.execution_queue_record(prior_session, prior_thread, prior_job)
+                assert (settled.phase, settled.outcome) == ("terminal", "cancelled")
+                assert await container.pending_request_store.records(session_id=prior_session) == ()
+            facts.append({"session_id": session_id, "thread_id": thread_id, "job_id": admission.job_id,
+                          "message_id": record.input.message_id, "claim_generation": record.claim_generation})
+            previous = session_id, thread_id, admission.job_id
+        async with ThreadExecutionHolderGate(workspace / ".boxteam/sessions").lock_for(session_id, thread_id) as released:
+            assert released.acquired is True
+    artifacts = TestRunContext.from_test_file(Path(__file__)).artifacts_dir
+    (artifacts / f"tool-runtime-reentry-{time.time_ns()}.json").write_text(
+        json.dumps(facts, ensure_ascii=False, indent=2), encoding="utf-8",
+    )

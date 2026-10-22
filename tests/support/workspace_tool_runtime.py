@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 from contextlib import AsyncExitStack, ExitStack, asynccontextmanager
+from datetime import UTC, datetime
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -24,9 +25,12 @@ from app.core.turn_execution_scope import (
     set_current_turn_execution_scope,
 )
 from app.core.workspace_identity import load_or_create_workspace_id
+from app.domain.itemized.execution_queue import ExecutionQueueInput
 from app.domain.itemized.mutation_intents import MutationIntentOwner
 from app.main import _workspace_lifespan
+from app.schemas.internal_v2.message import MessageDTO
 from app.schemas.internal_v2.session import SessionCreateRequest
+from app.services.business.job.service import JobService
 
 WorkspaceToolRuntime = tuple[AppContainer, str, ToolInvocationContext]
 
@@ -70,33 +74,57 @@ async def workspace_tool_runtime(
                     langgraph_thread_id=thread_id,
                 ):
                     message_id = create_prefixed_id("msg")
-                    accepted = container.checkpointer.accept_turn(
-                        session.session_id,
-                        thread_id=thread_id,
-                        accepted_ingress_id=message_id,
-                        acceptance_idempotency_key=f"workspace-tool:{message_id}",
-                        job_id=create_prefixed_id("job"),
-                        admission_idempotency_key=create_prefixed_id("adm"),
-                        payload="运行真实 工作区资源工具",
-                        payload_kind="text",
-                        turn_id=create_prefixed_id("turn"),
-                        root_item_id=f"item-{message_id}",
+                    identity = JobService.reserve_user_execution_identity()
+                    now = datetime.now(UTC)
+                    container.message_service.accept_user_message(
+                        MessageDTO(
+                            message_id=message_id, session_id=session.session_id,
+                            thread_id=thread_id, role="user", content="运行真实 工作区资源工具",
+                            created_at=now, updated_at=now,
+                        ),
+                        execution_identity=identity,
+                        queue_input=ExecutionQueueInput(
+                            execution_binding=identity, message_id=message_id,
+                            agent_id=session.current_agent_id, provider_id=session.current_provider_id,
+                            delivery_policy="after_turn", gateway_id=None, request_id=None,
+                            created_at=now.isoformat(),
+                        ),
                     )
-                    admission = container.checkpointer.execution_admission(
-                        session.session_id,
-                        thread_id=thread_id,
-                        execution_id=accepted["execution_id"],
-                    )
-                    scope = TurnExecutionScope(admission.execution_id)
-                    scope_token = set_current_turn_execution_scope(scope)
-                    call_token = context.set_tool_call_id("workspace-real-tool")
-                    with execution_admission_scope(
-                        admission, langgraph_thread_id=thread_id
+                    def cancel_accepted_execution() -> None:
+                        if not container.checkpointer.mark_job_terminal_status(
+                            session_id=session.session_id, thread_id=thread_id,
+                            job_id=identity.job_id, status="cancelled",
+                        ):
+                            raise RuntimeError(
+                                f"工作区工具装具未结算自身执行: job_id={identity.job_id}"
+                            )
+
+                    async with (
+                        AsyncExitStack() as ownership_cleanup,
+                        AsyncExitStack() as thread_cleanup,
                     ):
-                        async with AsyncExitStack() as thread_cleanup:
-                            thread_cleanup.push_async_callback(container.terminal_resource_owner.cleanup_session, session.session_id)
-                            thread_cleanup.push_async_callback(container.browser_resource_owner.cleanup_session, session.session_id)
-                            thread_cleanup.push_async_callback(scope.close)
-                            thread_cleanup.callback(reset_current_turn_execution_scope, scope_token)
-                            thread_cleanup.callback(context.reset_tool_call_id, call_token)
-                            yield container, session.session_id, context
+                        # 准入成功即承担结算责任；始终先取消执行，再释放holder和admission。
+                        thread_cleanup.callback(cancel_accepted_execution)
+                        admission = container.checkpointer.execution_admission_for_job(
+                            session.session_id, thread_id=thread_id, job_id=identity.job_id,
+                        )
+                        ownership_cleanup.enter_context(execution_admission_scope(
+                            admission, langgraph_thread_id=thread_id,
+                        ))
+                        record = container.checkpointer.execution_queue_record(
+                            session.session_id, thread_id, identity.job_id,
+                        )
+                        claim = await container.pending_request_store.claim(record)
+                        if claim is None:
+                            raise RuntimeError("工作区工具装具未取得新建Thread的执行权")
+                        ownership_cleanup.push_async_callback(claim.close)
+                        await claim.start()
+                        thread_cleanup.push_async_callback(container.terminal_resource_owner.cleanup_session, session.session_id)
+                        thread_cleanup.push_async_callback(container.browser_resource_owner.cleanup_session, session.session_id)
+                        scope = TurnExecutionScope(admission.execution_id)
+                        thread_cleanup.push_async_callback(scope.close)
+                        scope_token = set_current_turn_execution_scope(scope)
+                        thread_cleanup.callback(reset_current_turn_execution_scope, scope_token)
+                        call_token = context.set_tool_call_id("workspace-real-tool")
+                        thread_cleanup.callback(context.reset_tool_call_id, call_token)
+                        yield container, session.session_id, context
