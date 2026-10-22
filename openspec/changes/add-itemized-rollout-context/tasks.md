@@ -910,3 +910,11 @@ pending 恢复的硬错误重试已闭合（2026-10-22）：进程内装载阶�
 
 - `test_message_revisions.py` 的旧库链补齐显式23→24执行队列迁移，仍逐字段核原messages locator、JSONL原字节、全部迁移记录、冷Saver读旧checkpoint与追加独立修订；不改生产DDL/schema版本，不放宽原断言。
 - 固定候选002 tree `d8fc59d42c06e097e57b1a8ed53ba043fd428b98`：`schema20-current-migration-002` Ruff通过，整文件12 passed/18.03秒、exit0，修复 `domain-plan-split-sharing-004` 的唯一失败。该历史套件其余189个case的实现与测试未变，沿用原次实际通过证据，不虚报为新的整套运行；原失败保留。本条不替代7.5或8.13其余门。
+
+
+### 2026-10-22 7.5-F 恢复与 fork 的 durability 单一原语（部分收口）
+
+- 删除 `storage/maintenance_fs_safety.py`、对应 mixin 和10个无消费者的 facade 私有转发；四个无状态校验/helper只由 `rollout_offline_restore.py` 持有，AST逐项等价。fork捕获、原字节安装、debug快照和离线恢复统一使用既有 `app/core/atomic_fs.py`，物理删除重复目录/文件fsync实现，保留原屏障顺序与错误传播。POSIX目录描述符保持O_DIRECTORY约束，新增普通文件拒绝反例；Windows继续消费已有原生屏障，本轮不声称Windows实机重验。
+- 固定候选002 tree `85934a9a58918be9e4fc01915b66d5b48d5671d5`：`maintenance-fs-unit-002` 11 passed、1 skipped/0.73秒、exit0；Ruff `static-002` 与严格OpenSpec `openspec-002` exit0。正式matrix `integration-002` 明确记录7个备份/离线恢复/schema/fsync故障用例、三模式×两目标的6个公开debug fork和配置漂移拒绝均PASSED；后续损坏capture组的6个new_session_main也PASSED，但child组已有5个FAIL、末例未完成并被监督组以143结束，**不记整组通过**。
+- 旧测试问题如实保留：`unit-001` 的两条测试仍要求已取消的真实路径输出（生产与测试均与base逐字相同）；`integration-001`/`diagnostic-002/004` 的debug恢复在删除source时因手填 `job-turn-2` 缺冻结execution_queue失败，fixture后续被原60秒watchdog终止，不放宽准入/期限。003诊断在runner拒绝绝对源码清单阶段退出，004仅添加即时封存pytest原始report的诊断插件。原始trace、退出码、源码前后与独立归因均保留，下一切片迁移产品执行来源和修正测试locator。
+- `maintenance-fs-architecture-002.json` 核storage根目录由21降为20个直接Python文件；独审002关闭POSIX描述符P2且未发现悬空调用/屏障顺序变化。`service.py`路径/连接等职责仍待迁移，本条不关闭7.5-F/8.13或完整Web验收。所有原件位于 `out/tests/temp/openspec_takeover/artifacts/` 及同前缀 `runs/`。

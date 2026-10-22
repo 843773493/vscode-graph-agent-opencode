@@ -3338,7 +3338,7 @@ def test_sqlite_backup_restores_authoritative_checkpoint_state(
         assert restore_manifest["quarantined"] == [
             {
                 "name": "index.sqlite",
-                "sha256": storage.storage._file_hash(quarantine / "index.sqlite"),
+                "sha256": hashlib.sha256((quarantine / "index.sqlite").read_bytes()).hexdigest(),
             }
         ]
         restored = RolloutCheckpointSaver(sessions_dir).get_tuple(config)

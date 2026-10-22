@@ -11,6 +11,7 @@ from contextlib import closing
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
+from app.core.atomic_fs import fsync_directory
 from app.core.session_control_primitives import CONTROL_DATABASE_NAME
 from app.services.infrastructure.attachment_blob_catalog.records import (
     ForkAttachmentSnapshot,
@@ -255,7 +256,7 @@ def capture_fork_rollout_snapshot(
         stream.write(manifest_bytes)
         stream.flush()
         os.fsync(stream.fileno())
-    _fsync_directory(captured_root)
+    fsync_directory(captured_root)
     return ForkRolloutSourceSnapshot(
         source_session_id=source_session_id,
         source_thread_id=source_thread_id,
@@ -358,13 +359,6 @@ def _tree_manifest(
             )
     return tuple(sorted(files, key=lambda file: file.relative_path))
 
-
-def _fsync_directory(path: Path) -> None:
-    descriptor = os.open(path, os.O_RDONLY | os.O_DIRECTORY)
-    try:
-        os.fsync(descriptor)
-    finally:
-        os.close(descriptor)
 
 
 __all__ = [

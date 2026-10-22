@@ -130,3 +130,12 @@ def test_fsync_file_observable(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
     monkeypatch.setattr(atomic_fs.os, "fsync", recording_fsync)
     atomic_fs.fsync_file(path)
     assert len(calls) == 1
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX 原生目录描述符")
+def test_fsync_directory_rejects_regular_file(tmp_path: Path) -> None:
+    path = tmp_path / "index.sqlite"
+    path.write_bytes(b"original")
+    with pytest.raises(NotADirectoryError):
+        atomic_fs.fsync_directory(path)
+    assert path.read_bytes() == b"original"

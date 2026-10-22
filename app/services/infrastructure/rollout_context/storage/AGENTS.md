@@ -21,3 +21,5 @@
 - 附件引用与系统生成块的消息投影归 checkpoint/projection；基础 storage 不持有附件 projector 或提供转发方法。
 
 - Fork 来源冻结与未发布目标 capability 作用域由 `fork/path_scope.py` 独占；storage 只消费该作用域解析出的 owner 节点，不保留旧入口。
+
+- 备份/离线恢复的无状态校验只归 `rollout_offline_restore.py`；目录及已存在文件的 durability 屏障复用 `app/core/atomic_fs.py`，不得恢复 filesystem mixin 或基础 facade 的私有转发。

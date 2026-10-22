@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import sqlite3
@@ -13,6 +14,7 @@ from datetime import (
 from pathlib import Path
 from uuid import uuid4
 
+from app.core.atomic_fs import fsync_directory, fsync_file
 from app.services.infrastructure.rollout_context.storage.primitives import (
     RolloutReadSnapshot,
 )
@@ -67,7 +69,7 @@ class RolloutOfflineRestoreMixin:
         thread_id: str,
         checkpoint_ns: str,
     ) -> str:
-        source_hash = self._file_hash(source_path)
+        source_hash = _file_hash(source_path)
         with (
             closing(
                 sqlite3.connect(
@@ -85,13 +87,12 @@ class RolloutOfflineRestoreMixin:
                 )
             source.backup(candidate)
             candidate.commit()
-        if self._file_hash(source_path) != source_hash:
+        if _file_hash(source_path) != source_hash:
             raise RuntimeError(
                 f"SQLite offline restore source 在验证期间发生变化: {source_path}"
             )
         os.chmod(candidate_path, 0o600)
-        with candidate_path.open("rb") as stream:
-            os.fsync(stream.fileno())
+        fsync_file(candidate_path)
         with closing(
             sqlite3.connect(
                 f"{candidate_path.as_uri()}?mode=ro&cache=private",
@@ -115,7 +116,7 @@ class RolloutOfflineRestoreMixin:
                 )
         for suffix in ("-wal", "-shm", "-journal"):
             sidecar = Path(f"{source_path}{suffix}")
-            self._require_regular_file(
+            _require_regular_file(
                 sidecar, field=f"SQLite offline restore source{suffix}"
             )
             if sidecar.exists():
@@ -166,7 +167,7 @@ class RolloutOfflineRestoreMixin:
         source_path = self._host.index_path(
             session_id, checkpoint_ns, thread_id=thread_id
         )
-        self._require_regular_file(source_path, field="SQLite backup source")
+        _require_regular_file(source_path, field="SQLite backup source")
         target_path = (
             Path(destination).absolute()
             if destination
@@ -174,7 +175,7 @@ class RolloutOfflineRestoreMixin:
         )
         if target_path == source_path:
             raise ValueError("SQLite backup 目标不能覆盖当前 index")
-        self._require_regular_file(target_path, field="SQLite backup target")
+        _require_regular_file(target_path, field="SQLite backup target")
         target_path.parent.mkdir(parents=True, exist_ok=True)
         temporary_path = target_path.with_name(f".{target_path.name}.{uuid4().hex}.tmp")
         try:
@@ -210,7 +211,7 @@ class RolloutOfflineRestoreMixin:
         if not isinstance(checkpoint_ns, str):
             raise TypeError("restore.checkpoint_ns 必须是字符串")
         source_path = Path(backup_path).absolute()
-        self._require_regular_file(source_path, field="SQLite restore source")
+        _require_regular_file(source_path, field="SQLite restore source")
         if not source_path.is_file():
             raise FileNotFoundError(source_path)
         with self._host._lock(thread_id, checkpoint_ns, session_id=session_id):
@@ -236,7 +237,7 @@ class RolloutOfflineRestoreMixin:
         if not isinstance(checkpoint_ns, str):
             raise TypeError("offline_restore.checkpoint_ns 必须是字符串")
         source_path = Path(backup_path).absolute()
-        self._require_regular_file(source_path, field="SQLite offline restore source")
+        _require_regular_file(source_path, field="SQLite offline restore source")
         if not source_path.is_file():
             raise FileNotFoundError(source_path)
         self._require_standalone_offline_restore_source(source_path)
@@ -250,7 +251,7 @@ class RolloutOfflineRestoreMixin:
         quarantine_path = quarantine_root / operation_id
 
         with self._host._lock(thread_id, checkpoint_ns, session_id=session_id):
-            self._require_regular_file(
+            _require_regular_file(
                 target_path, field="SQLite offline restore target"
             )
             if not target_path.is_file():
@@ -266,7 +267,7 @@ class RolloutOfflineRestoreMixin:
                     "SQLite offline restore source 与 target 不能是同一文件: "
                     f"{source_path} -> {target_path}"
                 )
-            self._require_offline_restore_target(target_path)
+            _require_offline_restore_target(target_path)
             moved: list[tuple[Path, Path]] = []
             installed = False
             try:
@@ -277,7 +278,7 @@ class RolloutOfflineRestoreMixin:
                     thread_id=thread_id,
                     checkpoint_ns=checkpoint_ns,
                 )
-                self._require_plain_directory(
+                _require_plain_directory(
                     quarantine_root,
                     field="SQLite offline restore quarantine root",
                 )
@@ -289,17 +290,17 @@ class RolloutOfflineRestoreMixin:
                     Path(f"{target_path}-shm"),
                     Path(f"{target_path}-journal"),
                 ):
-                    self._require_regular_file(
+                    _require_regular_file(
                         original, field="SQLite offline restore quarantined artifact"
                     )
                     if original.exists():
                         quarantined = quarantine_path / original.name
                         os.replace(original, quarantined)
                         moved.append((original, quarantined))
-                self._fsync_directory(quarantine_path)
+                fsync_directory(quarantine_path)
                 os.replace(candidate_path, target_path)
                 installed = True
-                self._fsync_directory(target_root)
+                fsync_directory(target_root)
                 with closing(
                     sqlite3.connect(
                         f"{target_path.as_uri()}?mode=ro&cache=private",
@@ -320,11 +321,11 @@ class RolloutOfflineRestoreMixin:
                     "checkpoint_ns": checkpoint_ns,
                     "created_at": datetime.now(UTC).isoformat(),
                     "source_sha256": source_hash,
-                    "installed_sha256": self._file_hash(target_path),
+                    "installed_sha256": _file_hash(target_path),
                     "quarantined": [
                         {
                             "name": quarantined.name,
-                            "sha256": self._file_hash(quarantined),
+                            "sha256": _file_hash(quarantined),
                         }
                         for _, quarantined in moved
                     ],
@@ -336,8 +337,8 @@ class RolloutOfflineRestoreMixin:
                 )
                 with manifest_path.open("rb") as stream:
                     os.fsync(stream.fileno())
-                self._fsync_directory(quarantine_path)
-                self._fsync_directory(quarantine_root)
+                fsync_directory(quarantine_path)
+                fsync_directory(quarantine_root)
             except BaseException:
                 if installed and target_path.exists():
                     failed_target = quarantine_path / "failed-installed-index.sqlite"
@@ -347,7 +348,7 @@ class RolloutOfflineRestoreMixin:
                         os.replace(quarantined, original)
                 if quarantine_path.is_dir() and not any(quarantine_path.iterdir()):
                     quarantine_path.rmdir()
-                self._fsync_directory(target_root)
+                fsync_directory(target_root)
                 raise
             finally:
                 if candidate_path.exists() or candidate_path.is_symlink():
@@ -368,7 +369,7 @@ class RolloutOfflineRestoreMixin:
         )
         source_path = source_path.absolute()
         for role, path in (("source", source_path), ("target", target_path)):
-            self._require_regular_file(path, field=f"SQLite restore {role}")
+            _require_regular_file(path, field=f"SQLite restore {role}")
             for component in path.parents:
                 if component.is_symlink():
                     raise RuntimeError(
@@ -376,7 +377,7 @@ class RolloutOfflineRestoreMixin:
                     )
             # SQLite 自己管理 sidecar；不能跟随符号链接，也不能清除它们。
             for suffix in ("-wal", "-shm", "-journal"):
-                self._require_regular_file(
+                _require_regular_file(
                     Path(f"{path}{suffix}"), field=f"SQLite restore {role}{suffix}"
                 )
         if source_path.samefile(target_path):
@@ -444,3 +445,40 @@ class RolloutOfflineRestoreMixin:
                 "未替换数据库文件或手动清除 WAL/SHM"
             )
             raise
+
+
+def _require_regular_file(path: Path, *, field: str) -> None:
+    if path.is_symlink():
+        raise RuntimeError(f"{field} 不能是符号链接: {path}")
+    if path.exists() and not path.is_file():
+        raise RuntimeError(f"{field} 必须是普通文件: {path}")
+
+def _file_hash(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for block in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+def _require_plain_directory(path: Path, *, field: str) -> None:
+    if path.is_symlink():
+        raise RuntimeError(f"{field} 不能是符号链接: {path}")
+    if path.exists() and not path.is_dir():
+        raise RuntimeError(f"{field} 必须是普通目录: {path}")
+
+def _require_offline_restore_target(target_path: Path) -> None:
+    try:
+        with closing(
+            sqlite3.connect(
+                f"{target_path.as_uri()}?mode=ro&cache=private",
+                uri=True,
+                timeout=0,
+            )
+        ) as target:
+            target.execute("SELECT name FROM sqlite_master LIMIT 1").fetchone()
+    except sqlite3.DatabaseError:
+        return
+    raise RuntimeError(
+        "SQLite offline restore 只允许恢复无法打开的损坏 target；"
+        "可打开的 target 请使用 restore_index_backup"
+    )

@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 from uuid import uuid4
 
+from app.core.atomic_fs import fsync_directory, fsync_file
 from app.core.resource_uri import parse_resource_uri
 from app.core.sqlite_state import load_sql, utc_now_text
 from app.services.infrastructure.rollout_context.fork.copy_items import (
@@ -325,12 +326,12 @@ def recover_target_snapshot_publication(
                 rollback.rename(target)
                 if stage.exists():
                     shutil.rmtree(stage)
-                storage._fsync_directory(target.parent)
+                fsync_directory(target.parent)
             elif stage.exists():
                 raise RuntimeError("fork 发布恢复出现冲突的 target/stage/rollback")
         elif stage.exists():
             shutil.rmtree(stage)
-            storage._fsync_directory(target.parent)
+            fsync_directory(target.parent)
 
 
 def publish_target_snapshot(
@@ -342,15 +343,15 @@ def publish_target_snapshot(
     rollback = target.with_name(f".fork-{materialization_id}.rollback")
     with storage._lock(target_thread_id, checkpoint_ns, session_id=target_session_id):
         target.rename(rollback)
-        storage._fsync_directory(target.parent)
+        fsync_directory(target.parent)
         try:
             stage.rename(target)
-            storage._fsync_directory(target.parent)
+            fsync_directory(target.parent)
         except BaseException:
             if target.exists():
                 shutil.rmtree(target)
             rollback.rename(target)
-            storage._fsync_directory(target.parent)
+            fsync_directory(target.parent)
             raise
 
 
@@ -363,16 +364,11 @@ def finalize_target_snapshot_publication(
     with storage._lock(target_thread_id, checkpoint_ns, session_id=target_session_id):
         if rollback.exists():
             shutil.rmtree(rollback)
-            storage._fsync_directory(target.parent)
+            fsync_directory(target.parent)
 
 
 def _fsync_tree(root: Path) -> None:
     for directory, _, names in os.walk(root, topdown=False):
         for name in names:
-            with (Path(directory) / name).open("rb") as stream:
-                os.fsync(stream.fileno())
-        descriptor = os.open(directory, os.O_RDONLY | os.O_DIRECTORY)
-        try:
-            os.fsync(descriptor)
-        finally:
-            os.close(descriptor)
+            fsync_file(Path(directory) / name)
+        fsync_directory(Path(directory))

@@ -1,12 +1,4 @@
-"""rollout storage 备份/恢复/schema 迁移/维护/启动 owner（由 RolloutStorage 组合）。
-
-这些能力需要同时理解 JSONL durability barrier、SQLite commit chain、备份文件、读取快照
-生命周期与启动自检，原分处 5 个 mixin。方法体逐字平移，只把对 host 锁/连接/路径薄壳的
-self.X 调用改写为 self._host.X；SQL、事务边界、锁序与错误文案保持不变。
-本模块保留 owner 组合类、宿主薄壳、schema 迁移入口与启动初始化；其余方法族拆到
-同目录的 fs safety / schema introspection / offline restore / fork recovery /
-index reads / active view 六个 mixin，经同一 self 组合装配。
-"""
+"""rollout 的 schema 迁移、启动自检与维护协调；备份/恢复和索引各归既有 owner。"""
 
 from __future__ import annotations
 
@@ -28,9 +20,6 @@ from app.services.infrastructure.rollout_context.storage.catalog.view_items.stor
 )
 from app.services.infrastructure.rollout_context.storage.format_dispatch import (
     require_v2_runtime,
-)
-from app.services.infrastructure.rollout_context.storage.maintenance_fs_safety import (
-    RolloutMaintenanceFsSafetyMixin,
 )
 from app.services.infrastructure.rollout_context.storage.primitives import (
     RolloutManifest,
@@ -103,7 +92,6 @@ __all__ = ["RolloutMaintenanceOwner"]
 
 
 class RolloutMaintenanceOwner(
-    RolloutMaintenanceFsSafetyMixin,
     RolloutSchemaIntrospectionMixin,
     RolloutOfflineRestoreMixin,
     RolloutIndexMixin,

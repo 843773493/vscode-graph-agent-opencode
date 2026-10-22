@@ -391,44 +391,14 @@ class RolloutStorage(
             with self.open_read_snapshot(session_id, thread_id, checkpoint_ns) as owned:
                 yield owned.connection
 
-    def _require_regular_file(self, path: Path, *, field: str) -> None:
-        return self._maintenance_owner._require_regular_file(path, field=field)
-
-    def _file_hash(self, path: Path) -> str:
-        return self._maintenance_owner._file_hash(path)
-
-    def _fsync_directory(self, path: Path) -> None:
-        return self._maintenance_owner._fsync_directory(path)
-
-    def _require_plain_directory(self, path: Path, *, field: str) -> None:
-        return self._maintenance_owner._require_plain_directory(path, field=field)
-
-    def _validate_offline_restore_candidate(self, connection: sqlite3.Connection, *, session_id: str, thread_id: str, checkpoint_ns: str) -> None:
-        return self._maintenance_owner._validate_offline_restore_candidate(connection, session_id=session_id, thread_id=thread_id, checkpoint_ns=checkpoint_ns)
-
-    def _prepare_offline_restore_candidate(self, source_path: Path, candidate_path: Path, *, session_id: str, thread_id: str, checkpoint_ns: str) -> str:
-        return self._maintenance_owner._prepare_offline_restore_candidate(source_path, candidate_path, session_id=session_id, thread_id=thread_id, checkpoint_ns=checkpoint_ns)
-
-    def _require_standalone_offline_restore_source(self, source_path: Path) -> None:
-        return self._maintenance_owner._require_standalone_offline_restore_source(source_path)
-
-    def _require_offline_restore_target(self, target_path: Path) -> None:
-        return self._maintenance_owner._require_offline_restore_target(target_path)
-
     def backup_index(self, thread_id: str, checkpoint_ns: str='', *, session_id: str, destination: str | Path | None=None) -> Path:
         return self._maintenance_owner.backup_index(thread_id, checkpoint_ns, session_id=session_id, destination=destination)
-
-    def _backup_index_unlocked(self, thread_id: str, checkpoint_ns: str, *, session_id: str, destination: str | Path | None) -> Path:
-        return self._maintenance_owner._backup_index_unlocked(thread_id, checkpoint_ns, session_id=session_id, destination=destination)
 
     def restore_index_backup(self, thread_id: str, backup_path: str | Path, checkpoint_ns: str='', *, session_id: str) -> RolloutReadSnapshot:
         return self._maintenance_owner.restore_index_backup(thread_id, backup_path, checkpoint_ns, session_id=session_id)
 
     def restore_index_backup_offline(self, thread_id: str, backup_path: str | Path, checkpoint_ns: str='', *, session_id: str) -> RolloutReadSnapshot:
         return self._maintenance_owner.restore_index_backup_offline(thread_id, backup_path, checkpoint_ns, session_id=session_id)
-
-    def _restore_index_backup_unlocked(self, thread_id: str, checkpoint_ns: str, source_path: Path, *, session_id: str) -> None:
-        return self._maintenance_owner._restore_index_backup_unlocked(thread_id, checkpoint_ns, source_path, session_id=session_id)
 
     def _recover_fork_materialization(
         self,

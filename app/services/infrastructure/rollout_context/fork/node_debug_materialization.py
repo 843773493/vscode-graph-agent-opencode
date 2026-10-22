@@ -10,6 +10,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from app.core.atomic_fs import fsync_directory, fsync_file
 from app.domain.itemized.hashing import canonical_json_bytes
 from app.schemas.internal_v2.node_debug import (
     NodeDebugConfigurationDTO,
@@ -72,7 +73,7 @@ def _stage_target_snapshot(
         temporary = target_path.with_name(f".{target_path.name}.{os.getpid()}.tmp")
         temporary.write_text(configuration.model_dump_json(indent=2), encoding="utf-8")
         os.replace(temporary, target_path)
-        _fsync_file(target_path)
+        fsync_file(target_path)
     source_manifest = NodeDebugSessionManifestDTO.model_validate_json(
         snapshot.manifest_bytes
     )
@@ -90,27 +91,16 @@ def _stage_target_snapshot(
     temporary = manifest_path.with_name(f".{manifest_path.name}.{os.getpid()}.tmp")
     temporary.write_text(target_manifest.model_dump_json(indent=2), encoding="utf-8")
     os.replace(temporary, manifest_path)
-    _fsync_file(manifest_path)
-    _fsync_directory(configurations_root)
-    _fsync_directory(staging_root)
-    _fsync_directory(staging_root.parent)
+    fsync_file(manifest_path)
+    fsync_directory(configurations_root)
+    fsync_directory(staging_root)
+    fsync_directory(staging_root.parent)
     manifest_sha256 = hashlib.sha256(manifest_path.read_bytes()).hexdigest()
     if manifest_sha256 != expected_manifest_sha256:
         raise RuntimeError("fork debug staging manifest hash 与 prepared journal 不一致")
     return configuration_id_map, manifest_sha256
 
 
-def _fsync_file(path: Path) -> None:
-    with path.open("rb") as stream:
-        os.fsync(stream.fileno())
-
-
-def _fsync_directory(path: Path) -> None:
-    descriptor = os.open(path, os.O_RDONLY | os.O_DIRECTORY)
-    try:
-        os.fsync(descriptor)
-    finally:
-        os.close(descriptor)
 
 
 def _target_manifest_sha256(
@@ -251,8 +241,8 @@ def publish_target_snapshot(staging_root: Path, target_node: Path) -> Path:
     debug_root.mkdir(exist_ok=True)
     target_root = debug_root / "node"
     staging_root.rename(target_root)
-    _fsync_directory(debug_root)
-    _fsync_directory(target_node)
+    fsync_directory(debug_root)
+    fsync_directory(target_node)
     materialization_root = staging_root.parent
     if materialization_root.exists() and not any(materialization_root.iterdir()):
         materialization_root.rmdir()

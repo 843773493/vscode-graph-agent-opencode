@@ -54,7 +54,7 @@ def fsync_directory(directory: Path) -> None:
     if os.name == "nt":
         _flush_windows_directory(directory)
         return
-    descriptor = os.open(directory, os.O_RDONLY)
+    descriptor = os.open(directory, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
     try:
         os.fsync(descriptor)
     finally:

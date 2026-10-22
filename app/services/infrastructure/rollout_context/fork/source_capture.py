@@ -9,6 +9,7 @@ import shutil
 from dataclasses import asdict
 from pathlib import Path
 
+from app.core.atomic_fs import fsync_directory, fsync_file
 from app.core.session_catalog_store.contracts import (
     ForkSourceCaptureRecord,
     fork_source_capture_relative_locator,
@@ -26,7 +27,6 @@ from app.services.infrastructure.rollout_context.fork.source_snapshot import (
     ForkRolloutSourceSnapshot,
     ForkSnapshotFile,
     ForkSourceSnapshot,
-    _fsync_directory,
     _tree_manifest,
 )
 
@@ -90,17 +90,16 @@ def publish_captured_snapshot(record: ForkSourceCaptureRecord, snapshot: ForkSou
             path = Path(directory) / name
             if path.is_symlink() or not path.is_file():
                 raise RuntimeError("fork captured snapshot 含非普通文件")
-            with path.open("rb") as stream:
-                os.fsync(stream.fileno())
-        _fsync_directory(Path(directory))
+            fsync_file(path)
+        fsync_directory(Path(directory))
     temporary = root / "captured.preparing"
     with temporary.open("xb") as stream:
         stream.write(encoded)
         stream.flush()
         os.fsync(stream.fileno())
     os.replace(temporary, root / "captured.json")
-    _fsync_directory(root)
-    _fsync_directory(root.parent)
+    fsync_directory(root)
+    fsync_directory(root.parent)
     return hashlib.sha256(encoded).hexdigest()
 
 
@@ -178,4 +177,4 @@ def remove_captured_snapshot(sessions_root: Path, record: ForkSourceCaptureRecor
         raise RuntimeError("fork capture 清理拒绝符号链接")
     if root.exists():
         shutil.rmtree(root)
-        _fsync_directory(root.parent)
+        fsync_directory(root.parent)
