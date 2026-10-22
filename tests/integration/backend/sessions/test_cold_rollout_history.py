@@ -173,6 +173,39 @@ async def test_public_history_cancellation_withdraws_read_admission(
     assert response.status_code == 200, response.text
 
 
+async def test_item_projection_reads_exact_thread_with_same_item_identity(
+    runtime_case: RuntimeCase, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session_id, main_thread = await _session(runtime_case.runner)
+    child_thread = await _child(runtime_case, session_id)
+    saver = runtime_case.runner.saver
+    storage = saver._storage.storage
+    for thread_id, payload in ((main_thread, "main 的真实输入"), (child_thread, "child 的真实输入")):
+        saver.accept_turn(
+            session_id, thread_id=thread_id, accepted_ingress_id="same-ingress",
+            acceptance_idempotency_key="same-acceptance", job_id="same-job",
+            admission_idempotency_key="same-admission", payload=payload,
+            turn_id="same-turn", root_item_id="same-root", initial_execution_id="same-execution",
+        )
+
+    original_open = type(storage.sessions_dir).open
+    jsonl_paths = {storage.jsonl_path(session_id, thread_id=thread_id)
+                   for thread_id in (main_thread, child_thread)}
+
+    def forbid_body(path, *args, **kwargs):
+        if path in jsonl_paths:
+            pytest.fail("轻量投影读取不得打开任一Thread的canonical正文")
+        return original_open(path, *args, **kwargs)
+
+    monkeypatch.setattr(type(storage.sessions_dir), "open", forbid_body)
+    for thread_id, payload in ((main_thread, "main 的真实输入"), (child_thread, "child 的真实输入")):
+        rows = storage.read_item_projections(session_id, thread_id, item_ids=("same-root",))
+        assert len(rows) == 1
+        assert rows[0]["item_id"] == "same-root"
+        assert rows[0]["turn_id"] == "same-turn"
+        assert rows[0]["content"] == payload
+
+
 async def test_idle_child_public_history_does_not_materialize_rollout(
     runtime_case: RuntimeCase, history_client: httpx.AsyncClient,
 ) -> None:
@@ -191,11 +224,14 @@ async def test_idle_child_public_history_does_not_materialize_rollout(
     assert main_root.is_dir() and main_lock.is_file()
     main_authority = (main_root / "index.sqlite", main_root / "rollout.jsonl", main_lock)
     main_before = {path: hashlib.sha256(path.read_bytes()).hexdigest() for path in main_authority}
-    main_projections = storage.read_item_projections(session_id)
+    main_projections = storage.read_item_projections(session_id, _main)
     assert main_projections
     root = storage.root(session_id, thread_id=child)
     lock = root.parent / ".rollout.write.lock"
     assert not root.exists() and not lock.exists()
+    assert storage.read_item_projections(session_id, child) == []
+    with pytest.raises(KeyError, match="item projection 缺少请求的 canonical item: main-root"):
+        storage.read_item_projections(session_id, child, item_ids=("main-root",))
 
     response = await history_client.post(
         f"/api/v1/sessions/{session_id}/threads/{child}/history", json={},
@@ -221,9 +257,9 @@ async def test_idle_child_public_history_does_not_materialize_rollout(
     assert saver._storage.checkpoints.read_context_source_rebuild_rows(session_id, child, checkpoint_ns="") is None
     with pytest.raises(RolloutNotMaterializedError):
         saver._storage.checkpoints.pending_writes(session_id, child, "", "checkpoint-missing")
-    assert storage.read_item_projections(session_id) == main_projections
+    assert storage.read_item_projections(session_id, _main) == main_projections
     with pytest.raises(KeyError, match="item projection 缺少请求的 canonical item: item-missing"):
-        storage.read_item_projections(session_id, item_ids=("item-missing",))
+        storage.read_item_projections(session_id, _main, item_ids=("item-missing",))
     assert {path: hashlib.sha256(path.read_bytes()).hexdigest() for path in main_authority} == main_before
     assert not root.exists() and not lock.exists()
     assert runtime_case.compiled == []

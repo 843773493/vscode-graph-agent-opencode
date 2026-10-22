@@ -747,7 +747,7 @@ def test_item_projection_read_rejects_catalog_hash_drift(
         connection.commit()
 
     with pytest.raises(RuntimeError, match="item projection 与 canonical catalog"):
-        saver._storage.storage.read_item_projections(SESSION_ID, item_ids=("item-user-1",))
+        saver._storage.storage.read_item_projections(SESSION_ID, saver._storage.storage.main_thread_id(SESSION_ID), item_ids=("item-user-1",))
 
 
 @pytest.mark.parametrize(
@@ -778,7 +778,7 @@ def test_item_projection_read_rejects_typed_or_identity_drift(
         connection.commit()
 
     with pytest.raises(RuntimeError, match="item_projections|item projection"):
-        saver._storage.storage.read_item_projections(SESSION_ID, item_ids=("item-user-1",))
+        saver._storage.storage.read_item_projections(SESSION_ID, saver._storage.storage.main_thread_id(SESSION_ID), item_ids=("item-user-1",))
 
 
 def test_execution_lost_resume_creates_execution_without_a_new_user_root(

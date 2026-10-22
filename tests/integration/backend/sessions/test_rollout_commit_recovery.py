@@ -302,9 +302,9 @@ def test_startup_does_not_rebuild_optional_item_projections(
     storage.storage.initialize(rollout.session_id)
     # 合同允许只保留最小 catalog；启动不创建第二套事实，也不自动重建可选索引。
     assert rollout.jsonl.read_bytes() == rollout.committed
-    assert storage.storage.read_item_projections(rollout.session_id) == []
+    assert storage.storage.read_item_projections(rollout.session_id, storage.storage.main_thread_id(rollout.session_id)) == []
     with pytest.raises(KeyError, match="item projection 缺少"):
-        storage.storage.read_item_projections(rollout.session_id, item_ids=(item_id,))
+        storage.storage.read_item_projections(rollout.session_id, storage.storage.main_thread_id(rollout.session_id), item_ids=(item_id,))
 
 
 def test_summary_reads_never_open_jsonl_body(
@@ -321,7 +321,7 @@ def test_summary_reads_never_open_jsonl_body(
 
     monkeypatch.setattr(Path, "open", forbid_jsonl_body)
     storage = RolloutCheckpointSaver(rollout.sessions)._storage
-    projections = storage.storage.read_item_projections(rollout.session_id)
+    projections = storage.storage.read_item_projections(rollout.session_id, storage.storage.main_thread_id(rollout.session_id))
     assert len(projections) == 1
     thread_id = storage.storage.main_thread_id(rollout.session_id)
     with storage.storage.open_read_snapshot(rollout.session_id, thread_id) as snapshot:
@@ -346,7 +346,7 @@ def test_bounded_projection_preserves_original_text_length(
         payload_kind=PayloadKind.TEXT,
     )
     projections = saver._storage.storage.read_item_projections(
-        rollout.session_id, item_ids=(accepted["root_input_item_id"],)
+        rollout.session_id, saver._storage.storage.main_thread_id(rollout.session_id), item_ids=(accepted["root_input_item_id"],)
     )
     assert len(projections) == 1
     assert projections[0]["content"] == "界" * min(text_length, 65536)

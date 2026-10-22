@@ -258,17 +258,16 @@ class RolloutProjectionMixin:
 
     def read_item_projections(
         self,
+        session_id: str,
         thread_id: str,
         *,
         checkpoint_ns: str = "",
         item_ids: Iterable[str] | None = None,
     ) -> list[dict[str, object]]:
         """读取 item 级轻量 projection，不打开 JSONL 正文。"""
-        session_id = thread_id
-        owner_thread_id = self.main_thread_id(session_id)
         values = tuple(dict.fromkeys(item_ids or ()))
         try:
-            with self.read_connection(session_id, owner_thread_id, checkpoint_ns) as connection:
+            with self.read_connection(session_id, thread_id, checkpoint_ns) as connection:
                 self._require_v2_runtime(connection)
                 columns = "item_sequence, item_id, id, semantic_kind, payload_kind, status, turn_id, turn_scope, message_group_id, wire_role, content, content_length, content_truncated, has_reasoning, has_tool_calls, phase, content_hash, projection_version, created_at, updated_at"
                 invalid = connection.execute(

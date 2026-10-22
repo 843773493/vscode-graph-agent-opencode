@@ -387,7 +387,7 @@ async def test_user_interrupt_injects_system_reminder_before_task_cancel(
     assert event_bus.events
     assert event_bus.events[-1]["event_type"] == "session_interrupted"
 
-    projections = saver._storage.storage.read_item_projections(session_id)
+    projections = saver._storage.storage.read_item_projections(session_id, binding.thread_id)
     reminders = [
         projection
         for projection in projections
@@ -486,7 +486,7 @@ async def test_user_interrupt_submits_reminder_without_existing_checkpoint(
     assert result.job_id == job_id
     assert job_service.control_requests
     assert SessionInterruptState.get(session_id, thread_id=binding.thread_id).user_interrupt_reminder_injected is True
-    projections = saver._storage.storage.read_item_projections(session_id)
+    projections = saver._storage.storage.read_item_projections(session_id, binding.thread_id)
     reminders = [
         projection
         for projection in projections

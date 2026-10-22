@@ -1332,9 +1332,9 @@ def test_unmaterialized_main_item_projections_do_not_create_rollout(
         root = storage.root(SESSION_ID, thread_id=owner.thread_id)
         lock = root.parent / ".rollout.write.lock"
         assert not root.exists() and not lock.exists()
-        assert storage.read_item_projections(SESSION_ID) == []
+        assert storage.read_item_projections(SESSION_ID, owner.thread_id) == []
         with pytest.raises(KeyError, match="item projection 缺少请求的 canonical item: item-missing"):
-            storage.read_item_projections(SESSION_ID, item_ids=("item-missing",))
+            storage.read_item_projections(SESSION_ID, owner.thread_id, item_ids=("item-missing",))
         assert not root.exists() and not lock.exists()
 
 
