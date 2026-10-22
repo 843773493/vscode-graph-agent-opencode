@@ -22,4 +22,6 @@ message TraceEvent {
   // 来源事件的带时区时间，Trace 映射保留其时刻与显式时区偏移，不在投影时重新取时；历史工具事件沿对应 canonical 消息/item 时间。
   google.protobuf.Timestamp timestamp = 13;
   google.protobuf.Struct raw = 14;
+  // 事件实际所属的 Thread；物理日志仍由 Session 持有。
+  string thread_id = 15;
 }

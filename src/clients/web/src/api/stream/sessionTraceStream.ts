@@ -41,10 +41,12 @@ export async function listSessionTraceHistory(
     cursor?: string | null;
     limit?: number;
     signal?: AbortSignal;
+    threadId?: string;
   } = {},
 ): Promise<CursorPage<TraceEvent>> {
   const params = new URLSearchParams({ limit: String(options.limit ?? 100) });
   if (options.cursor) params.set("cursor", options.cursor);
+  if (options.threadId) params.set("thread_id", options.threadId);
   try {
     const result = await requestJson<APIResponse<CursorPage<TraceEvent>>>(
       port,
@@ -55,7 +57,11 @@ export async function listSessionTraceHistory(
         signal: options.signal,
       },
     );
-    return unwrapApiData(result);
+    const page = unwrapApiData(result);
+    for (const item of page.items) {
+      validateTraceOwner(item, sessionId, options.threadId);
+    }
+    return page;
   } catch (error) {
     if (error instanceof HttpRequestError && error.status === 410) {
       throw new TraceCursorGoneError(options.cursor ?? "");
@@ -69,6 +75,7 @@ export async function streamSessionEvents(
   sessionId: string,
   options?: {
     workspaceId?: string | null;
+    threadId?: string;
     afterCursor?: string | null;
     onEvent?: (event: SessionStreamEvent, cursor: string) => void;
     onError?: (error: unknown) => void;
@@ -85,6 +92,7 @@ export async function streamSessionEvents(
   try {
     await consumeWorkspaceObservation(port, workspaceHeader(options?.workspaceId), () => ({
       kind: "session_trace", session_id: sessionId, trace_after: afterCursor, paths: [],
+      thread_id: options?.threadId,
     }), {
       signal: options?.signal,
       idleTimeoutMs,
@@ -102,10 +110,7 @@ export async function streamSessionEvents(
               throw new Error(`SSE trace 重复 cursor: ${frame.id}`);
             }
             deliveredCursors.add(frame.id);
-            const event = validateTraceEvent(decodeJsonSseData(data, frame));
-            if (event.session_id !== sessionId) {
-              throw new Error(`SSE trace owner 不匹配: 请求 ${sessionId}，收到 ${event.session_id}`);
-            }
+            const event = validateTraceOwner(decodeJsonSseData(data, frame), sessionId, options?.threadId);
             return {
               cursor: frame.id,
               event,
@@ -126,4 +131,12 @@ export async function streamSessionEvents(
     if (connected) options?.onError?.(error);
     throw error;
   }
+}
+
+function validateTraceOwner(value: unknown, sessionId: string, threadId?: string): SessionStreamEvent {
+  const event = validateTraceEvent(value);
+  if (event.session_id !== sessionId || (threadId !== undefined && event.thread_id !== threadId)) {
+    throw new Error(`Trace owner 不匹配: 请求 ${sessionId}/${threadId ?? "*"}，收到 ${event.session_id}/${event.thread_id}`);
+  }
+  return event;
 }

@@ -8003,6 +8003,7 @@ async function runChildFifoAndResidency(surface) {
   assert.deepEqual(coldHistory.items, terminalHistory.items);
   const coldDetail = await loadThreadHistory(child, { turn_ids: [first.turnId] });
   assert.deepEqual(coldDetail.items, [terminalHistory.items[0]], "cold detail 必须沿权威 history 读取同一 Turn");
+  const traceIdentity = await assertColdThreadTraceIdentity(child, owner.threadId);
   const coldRuntime = (await ownerApi(child, `/api/v1/sessions/${child.sessionId}/child-threads`)).data.items.find((item) => item.thread_id === child.threadId).runtime;
   assert.equal(coldRuntime.residency, "cold", "cold history 不能唤醒 graph");
   assert.deepEqual(await graphBinding(child), bindingBefore);
@@ -8021,8 +8022,62 @@ async function runChildFifoAndResidency(surface) {
   return { sessionId: child.sessionId, mainThreadId: owner.threadId, threadId: child.threadId, creation, startupHistory, initialHistory, first, second,
     pending, queuedDom, terminalHistory, secondRoot, requests: { firstContinuation: request, successors },
     runtime: { withBlocker: withBlocker.runtime, stillActive: stillActive.runtime, beforeDeadline: beforeDeadline.runtime, coldRuntime },
-    interleaved, bindingBefore, bindingAfter, coldHistory, coldDetail, rehydrated,
+    interleaved, bindingBefore, bindingAfter, coldHistory, coldDetail, traceIdentity, rehydrated,
     graph: { initiallyResident, reused, siblingGraph, mainGraph, released, rebuilt, idleRuntime }, siblingCreation, siblingHistory };
+}
+
+async function assertColdThreadTraceIdentity(owner, mainThreadId) {
+  const base = `/api/v1/sessions/${owner.sessionId}/traces`;
+  async function pages(threadId) {
+    const events = [];
+    let cursor = null;
+    let firstCursor = null;
+    let emptyPages = 0;
+    let pageCount = 0;
+    const seenCursors = new Set();
+    do {
+      const query = new URLSearchParams({ limit: "11" });
+      if (threadId) query.set("thread_id", threadId);
+      if (cursor) query.set("cursor", cursor);
+      const page = (await ownerApi(owner, `${base}?${query}`)).data;
+      for (const event of page.items) {
+        assert.equal(event.session_id, owner.sessionId);
+        canonicalUuid7(event.thread_id, "thr");
+        if (threadId) assert.equal(event.thread_id, threadId);
+        events.push({ event_id: event.event_id, job_id: event.job_id, thread_id: event.thread_id, type: event.type });
+      }
+      pageCount += 1;
+      if (page.items.length === 0) emptyPages += 1;
+      cursor = page.next_cursor;
+      assert.equal(page.has_more, Boolean(cursor));
+      if (cursor) {
+        assert.ok(!seenCursors.has(cursor), "稀疏 Trace 页必须推进游标");
+        seenCursors.add(cursor);
+        firstCursor ??= cursor;
+      }
+    } while (cursor);
+    assert.equal(new Set(events.map((event) => event.event_id)).size, events.length);
+    return { events, firstCursor, emptyPages, pageCount };
+  }
+  const aggregate = await pages(null);
+  const child = await pages(owner.threadId);
+  const main = await pages(mainThreadId);
+  assert.ok(child.events.length > 0 && main.events.length > 0, "真实产品流程必须生成 main 和 child Trace");
+  for (const [threadId, filtered] of [[owner.threadId, child], [mainThreadId, main]]) {
+    assert.deepEqual(filtered.events.map((event) => event.event_id).sort(),
+      aggregate.events.filter((event) => event.thread_id === threadId).map((event) => event.event_id).sort());
+  }
+  assert.ok(child.firstCursor, "真实历史应跨越 Trace 分页");
+  async function rejectedCursor(path) {
+    const response = await ownerApiResponse(owner, path);
+    assert.equal(response.status, 410);
+    assert.equal(response.body.detail.code, "trace_cursor_gone");
+    return response.body.detail;
+  }
+  const wrongThread = await rejectedCursor(`${base}?${new URLSearchParams({ thread_id: mainThreadId, cursor: child.firstCursor })}`);
+  const wrongScope = await rejectedCursor(`${base}?${new URLSearchParams({ cursor: child.firstCursor })}`);
+  const wrongPurpose = await rejectedCursor(`${base}/stream?${new URLSearchParams({ thread_id: owner.threadId, after_event_id: child.firstCursor })}`);
+  return { aggregate, child, main, wrongThread, wrongScope, wrongPurpose };
 }
 
 function softwareOperation(operation, owner, modelCallId, providerCallId) {

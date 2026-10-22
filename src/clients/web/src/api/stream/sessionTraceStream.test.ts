@@ -74,6 +74,7 @@ function traceEvent(eventId: string): SessionStreamEvent {
     event_id: eventId,
     part_id: null,
     session_id: "ses_stream_test",
+    thread_id: "thr_00000000700070008000000000000001",
     job_id: "job_stream_test",
     step_id: null,
     timestamp: "2026-07-24T00:00:00Z",
@@ -191,8 +192,29 @@ describe("会话 SSE 客户端", () => {
     const received: SessionStreamEvent[] = [];
     await expect(streamSessionEvents(port, "ses_stream_test", {
       idleTimeoutMs: 50, onEvent: (event) => { received.push(event); },
-    })).rejects.toThrow("SSE trace owner 不匹配: 请求 ses_stream_test，收到 ses_foreign");
+    })).rejects.toThrow("Trace owner 不匹配: 请求 ses_stream_test/*，收到 ses_foreign/");
     expect(received).toEqual([]);
+  });
+
+  test("指定 Thread 的观察者拒绝同 Session 的其它 Thread，且不交付事件", async () => {
+    const port = 49_009;
+    installStreamBackend(port, () => streamResponse([traceBlock(traceEvent("evt_sibling"))]));
+    const received: SessionStreamEvent[] = [];
+    await expect(streamSessionEvents(port, "ses_stream_test", {
+      threadId: "thr_00000000700070008000000000000002",
+      idleTimeoutMs: 50, onEvent: (event) => { received.push(event); },
+    })).rejects.toThrow("Trace owner 不匹配");
+    expect(received).toEqual([]);
+  });
+
+  test("聚合观察者也拒绝缺少 Thread 身份的事件", async () => {
+    const port = 49_010;
+    const event: Record<string, unknown> = { ...traceEvent("evt_missing_thread") };
+    delete event.thread_id;
+    installStreamBackend(port, () => streamResponse([`id: scope\nevent: trace\ndata: ${JSON.stringify(event)}\n\n`]));
+    await expect(streamSessionEvents(port, "ses_stream_test", {
+      idleTimeoutMs: 50,
+    })).rejects.toThrow("thread_id");
   });
 
   test("连接建立时暴露 Gateway 工作区路由代次", async () => {
@@ -241,11 +263,11 @@ describe("会话 SSE 客户端", () => {
       port,
       "ses_stream_test",
       "gw_stream_test",
-      { cursor: "opaque cursor", limit: 100 },
+      { cursor: "opaque cursor", limit: 100, threadId: "thr_00000000700070008000000000000001" },
     );
 
     expect(requestedUrls).toEqual([
-      "/api/v1/sessions/ses_stream_test/traces?limit=100&cursor=opaque+cursor",
+      "/api/v1/sessions/ses_stream_test/traces?limit=100&cursor=opaque+cursor&thread_id=thr_00000000700070008000000000000001",
     ]);
     expect(page.next_cursor).toBe("older-2");
     expect(page.has_more).toBe(true);
@@ -276,5 +298,24 @@ describe("会话 SSE 客户端", () => {
         { cursor: "evt_expired" },
       ),
     ).rejects.toBeInstanceOf(TraceCursorGoneError);
+  });
+
+  test("精确 Thread 历史拒绝错归属响应，聚合历史仍接受实际 Thread", async () => {
+    const port = 49_013;
+    const event = { ...traceEvent("evt_history_owner"), content: "" };
+    globalThis.fetch = Object.assign(async (...args: Parameters<typeof fetch>) => {
+      const url = new URL(String(args[0]));
+      if (url.pathname === "/api/gateway/auth/local-credential") return localCredentialResponse(port);
+      return Response.json({ request_id: "req_owner", data: {
+        items: [event], next_cursor: null, has_more: false,
+      } });
+    }, { preconnect: originalFetch.preconnect });
+    const page = await listSessionTraceHistory(port, event.session_id);
+    expect(page.items).toEqual([event]);
+    await expect(listSessionTraceHistory(port, event.session_id, undefined, {
+      threadId: "thr_sibling",
+    })).rejects.toThrow("Trace owner 不匹配");
+    await expect(listSessionTraceHistory(port, "ses_other"))
+      .rejects.toThrow("Trace owner 不匹配");
   });
 });

@@ -4,7 +4,7 @@ from typing import Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from app.schemas.canonical_params import CanonicalSessionId
+from app.schemas.canonical_params import CanonicalSessionId, CanonicalThreadId
 
 
 class WorkspaceObservationSubscription(BaseModel):
@@ -13,6 +13,7 @@ class WorkspaceObservationSubscription(BaseModel):
     subscription_id: str = Field(min_length=1)
     kind: Literal["session_activity", "session_trace", "workspace_files"]
     session_id: CanonicalSessionId | None = None
+    thread_id: CanonicalThreadId | None = None
     activity_after: int | None = Field(default=None, ge=0)
     trace_after: str | None = Field(default=None, min_length=1)
     paths: list[str] = Field(default_factory=list)
@@ -23,8 +24,8 @@ class WorkspaceObservationSubscription(BaseModel):
         if self.kind == "session_trace":
             if self.session_id is None:
                 raise ValueError("Trace 观察者必须指定 session_id")
-        elif self.session_id is not None or self.trace_after is not None:
-            raise ValueError("仅 Trace 观察者可以指定 session_id/trace_after")
+        elif self.session_id is not None or self.trace_after is not None or self.thread_id is not None:
+            raise ValueError("仅 Trace 观察者可以指定 session_id/thread_id/trace_after")
         if self.kind != "session_activity" and self.activity_after is not None:
             raise ValueError("仅会话活动观察者可以指定 activity_after")
         if self.kind != "workspace_files" and (self.paths or self.files_after is not None):

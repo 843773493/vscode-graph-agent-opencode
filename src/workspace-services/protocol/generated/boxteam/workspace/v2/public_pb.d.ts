@@ -8555,6 +8555,13 @@ export declare type TraceEventDTO = Message<"boxteam.workspace.v2.TraceEventDTO"
    * @generated from field: optional google.protobuf.Struct raw = 14;
    */
   raw?: JsonObject | undefined;
+
+  /**
+   * 事件实际所属的 Thread；物理日志仍由 Session 持有。
+   *
+   * @generated from field: string thread_id = 15;
+   */
+  threadId: string;
 };
 
 /**
@@ -10717,6 +10724,13 @@ export declare type WorkspaceObservationSubscription = Message<"boxteam.workspac
    * @generated from field: optional int64 files_after = 7;
    */
   filesAfter?: bigint | undefined;
+
+  /**
+   * 仅 Trace 观察者使用；省略时保留 Session 聚合视图。
+   *
+   * @generated from field: optional string thread_id = 8;
+   */
+  threadId?: string | undefined;
 };
 
 /**

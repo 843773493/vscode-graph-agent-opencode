@@ -2,6 +2,7 @@ import asyncio
 import json
 import sqlite3
 from collections.abc import Iterator
+from datetime import UTC, datetime
 from pathlib import Path
 from time import perf_counter
 
@@ -20,6 +21,7 @@ from app.core.path_utils import (
     workspace_context,
 )
 from app.core.workspace_identity import load_or_create_workspace_id
+from app.schemas.event import JobStartedEvent, JobStartedPayload
 from app.schemas.internal_v2.session import (
     SessionCreateRequest,
     SessionUpdateRequest,
@@ -587,6 +589,10 @@ class TestSessionService:
     @pytest.mark.asyncio
     async def test_list_trace_events_returns_event_union(self):
         created = await self.service.create(SessionCreateRequest(title="Trace Session"))
+        await self.service._trace_event_store.append(created.session_id, JobStartedEvent(
+            event_id="evt_owner", job_id="job_1", timestamp=datetime(2024, 3, 9, 11, tzinfo=UTC),
+            payload=JobStartedPayload(session_id=created.session_id, thread_id=created.thread_id),
+        ))
 
         trace_dir = get_session_path(created.session_id) / "logs" / "traces"
         trace_dir.mkdir(parents=True, exist_ok=True)
@@ -606,15 +612,16 @@ class TestSessionService:
             },
         }
 
-        trace_file.write_text(
+        with trace_file.open("a", encoding="utf-8") as stream:
+            stream.write(
             json.dumps(trace_event, ensure_ascii=False) + "\n",
-            encoding="utf-8",
-        )
+            )
 
         page = await self.service.list_trace_events(created.session_id)
 
-        assert len(page.items) == 1
-        event = page.items[0]
+        assert len(page.items) == 2
+        event = page.items[1]
+        assert event.thread_id == created.thread_id
         assert event.type == "agent_start"
         assert event.event_id == "evt_1"
         assert event.job_id == "job_1"
@@ -648,6 +655,10 @@ class TestSessionService:
     @pytest.mark.asyncio
     async def test_stream_trace_events_emits_existing_and_new_events(self):
         created = await self.service.create(SessionCreateRequest(title="Stream Trace Session"))
+        await self.service._trace_event_store.append(created.session_id, JobStartedEvent(
+            event_id="evt_owner", job_id="job_1", timestamp=datetime(2024, 3, 9, 11, tzinfo=UTC),
+            payload=JobStartedPayload(session_id=created.session_id, thread_id=created.thread_id),
+        ))
 
         trace_dir = get_session_path(created.session_id) / "logs" / "traces"
         trace_dir.mkdir(parents=True, exist_ok=True)
@@ -662,12 +673,14 @@ class TestSessionService:
             "type": "agent_start",
             "payload": {"message": "hello", "agent_id": "deep_agent"},
         }
-        trace_file.write_text(
+        with trace_file.open("a", encoding="utf-8") as stream:
+            stream.write(
             json.dumps(first_event, ensure_ascii=False) + "\n",
-            encoding="utf-8",
-        )
+            )
 
         stream = self.service.stream_trace_events(created.session_id)
+        owner_trace, _ = await asyncio.wait_for(anext(stream), timeout=1)
+        assert owner_trace.thread_id == created.thread_id
 
         first_trace, first_cursor = await asyncio.wait_for(
             stream.__anext__(),
@@ -675,7 +688,7 @@ class TestSessionService:
         )
         assert first_trace.event_id == "evt_1"
         assert first_trace.type == "agent_start"
-        assert first_cursor.startswith("tc1.")
+        assert first_cursor.startswith("ts2.")
 
         second_event = {
             "event_id": "evt_2",
@@ -706,7 +719,7 @@ class TestSessionService:
         assert second.tool_name == "search_files"
         assert second.content == "正在调用 search_files"
         assert second.skill_names == []
-        assert second_cursor.startswith("tc1.")
+        assert second_cursor.startswith("ts2.")
 
     @pytest.mark.asyncio
     async def test_trace_event_mapper_maps_tool_events(self):
@@ -724,6 +737,7 @@ class TestSessionService:
                 "payload": {"tool_name": "search_files"},
             },
             session_id="ses_1",
+            thread_id="thr_019bef80066f7038ae8e88ccb2e5e2ea",
         )
 
         assert event is not None
@@ -754,6 +768,7 @@ class TestSessionService:
                 },
             },
             session_id="ses_1",
+            thread_id="thr_019bef80066f7038ae8e88ccb2e5e2ea",
         )
 
         assert event is not None

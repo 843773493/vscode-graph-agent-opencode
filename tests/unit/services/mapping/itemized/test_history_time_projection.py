@@ -28,7 +28,8 @@ def history_detail() -> Callable[[list[BaseMessage], dict[str, object]], TurnDet
     def build(messages: list[BaseMessage], projection: dict[str, object]) -> TurnDetailDTO:
         return build_detail(
             "session-time", 1, messages,
-            turn_id="turn-time", job_id="job-time", root_logical_item_ordinal=1,
+            turn_id="turn-time", thread_id="thr_00000000700070008000000000000001",
+            job_id="job-time", root_logical_item_ordinal=1,
             source_view_id="view-time", source_view_revision=1,
             projection=projection, include_final=False,
         )

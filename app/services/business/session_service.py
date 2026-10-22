@@ -30,6 +30,7 @@ from app.core.session_lifecycle_gate import (
     SessionLifecycleGate,
     SessionOperationLease,
 )
+from app.core.shielded_cleanup import run_sync_shielded
 from app.core.workspace_identity import validate_workspace_id
 from app.domain.itemized.hashing import sha256_jcs
 from app.schemas.internal_v2.common import CursorPage
@@ -50,6 +51,10 @@ from app.services.business.session_context_resource import (
 )
 from app.services.infrastructure.config_service import ConfigService
 from app.services.infrastructure.trace_event_store import TraceEventStore
+from app.services.infrastructure.turn_history.trace_cursor import (
+    bind_trace_cursor,
+    unbind_trace_cursor,
+)
 from app.services.mapping.trace_event_mapper import TraceEventMapper
 
 
@@ -347,7 +352,10 @@ class SessionService:
 
     async def resolve_thread(self, session_id: str, thread_id: str) -> str:
         await self.get(session_id)
-        self._path_resolver.resolve_thread_node(session_id, thread_id)
+        try:
+            self._path_resolver.resolve_thread_node(session_id, thread_id)
+        except KeyError as error:
+            raise NotFoundError(f"SessionThread {session_id}/{thread_id} not found") from error
         return thread_id
 
     async def resolve_main_thread(self, session_id: str) -> str:
@@ -796,38 +804,68 @@ class SessionService:
         *,
         cursor: str | None = None,
         limit: int = 100,
+        thread_id: str | None = None,
     ) -> CursorPage[TraceEventDTO]:
         await self.get(session_id)
+        if thread_id is not None:
+            await self.resolve_thread(session_id, thread_id)
+        storage_cursor = unbind_trace_cursor(cursor, session_id=session_id, thread_id=thread_id, kind="page")
         page = self._trace_event_store.read_trace_page(
             session_id,
-            cursor=cursor,
+            cursor=storage_cursor,
             limit=limit,
         )
         mapper = TraceEventMapper()
+        owners = await run_sync_shielded(self._trace_event_store.event_threads, session_id, page.events)
+        items = []
+        for event in page.events:
+            owner = owners[event.event_id]
+            if thread_id is not None and owner != thread_id:
+                continue
+            dto = mapper.map_one(event.model_dump(), session_id=session_id, thread_id=owner)
+            if dto is not None:
+                items.append(dto)
         return CursorPage(
-            items=mapper.map_many(
-                [event.model_dump() for event in page.events],
-                session_id=session_id,
-            ),
-            next_cursor=page.next_cursor,
+            items=sorted(items, key=lambda item: item.timestamp),
+            next_cursor=bind_trace_cursor(page.next_cursor, session_id=session_id, thread_id=thread_id, kind="page"),
             has_more=page.has_more,
         )
 
     async def ensure_trace_cursor(
-        self, session_id: str, after_event_id: str | None
+        self, session_id: str, after_event_id: str | None, *, thread_id: str | None = None,
     ) -> None:
         await self.get(session_id)
-        self._trace_event_store.ensure_cursor(session_id, after_event_id)
+        if thread_id is not None:
+            await self.resolve_thread(session_id, thread_id)
+        storage_cursor = unbind_trace_cursor(after_event_id, session_id=session_id, thread_id=thread_id, kind="stream")
+        self._trace_event_store.ensure_cursor(session_id, storage_cursor)
 
     async def stream_trace_events(
-        self, session_id: str, after_event_id: str | None = None
+        self, session_id: str, after_event_id: str | None = None, *, thread_id: str | None = None,
     ):
         await self.get(session_id)
+        if thread_id is not None:
+            await self.resolve_thread(session_id, thread_id)
+        storage_cursor = unbind_trace_cursor(after_event_id, session_id=session_id, thread_id=thread_id, kind="stream")
         mapper = TraceEventMapper()
+        owners: dict[str, str] = {}
         async for record in self._trace_event_store.stream_events(
             session_id,
-            after_event_id,
+            storage_cursor,
         ):
-            dto = mapper.map_one(record.event.model_dump(), session_id=session_id)
+            event = record.event
+            owner = owners.get(event.job_id)
+            if owner is None:
+                resolved = await run_sync_shielded(self._trace_event_store.event_threads, session_id, [event])
+                owner = resolved[event.event_id]
+                if len(owners) >= 256:
+                    del owners[next(iter(owners))]
+                owners[event.job_id] = owner
+            explicit = getattr(event.payload, "thread_id", owner)
+            if explicit != owner:
+                raise RuntimeError(f"Trace Job 的 Thread 归属漂移: job_id={event.job_id}")
+            if thread_id is not None and owner != thread_id:
+                continue
+            dto = mapper.map_one(event.model_dump(), session_id=session_id, thread_id=owner)
             if dto is not None:
-                yield dto, record.cursor
+                yield dto, bind_trace_cursor(record.cursor, session_id=session_id, thread_id=thread_id, kind="stream")

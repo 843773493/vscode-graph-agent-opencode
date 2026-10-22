@@ -22,6 +22,7 @@ import {
 } from "./turnTimeline";
 
 const SESSION_ID = "ses_turns";
+const THREAD_ID = "thr_018f0000000070008000000000000001";
 const SCOPE_KEY = `workspace::${SESSION_ID}`;
 
 function summary(
@@ -99,6 +100,7 @@ function projectedToolDetail(
       event_id: `${turnId}:tool_call`,
       part_id: "call_1",
       session_id: SESSION_ID,
+      thread_id: THREAD_ID,
       job_id: turnId,
       type: "tool_call_start",
       phase: "tool",
@@ -236,6 +238,7 @@ describe("Turn timeline revision 合并", () => {
         event_id: "job_2:tool_summary:0",
         part_id: "call_1",
         session_id: SESSION_ID,
+        thread_id: THREAD_ID,
         job_id: "job_2",
         type: "tool_call_start" as const,
         phase: "tool" as const,
@@ -252,6 +255,7 @@ describe("Turn timeline revision 合并", () => {
         event_id: "job_2:tool_summary:1",
         part_id: "call_1",
         session_id: SESSION_ID,
+        thread_id: THREAD_ID,
         job_id: "job_2",
         type: "tool_call_end" as const,
         phase: "tool" as const,

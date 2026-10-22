@@ -35,10 +35,10 @@ class _MissingSessionStore:
 
 
 class _MissingSessionService:
-    async def ensure_trace_cursor(self, session_id: str, after_event_id) -> None:
+    async def ensure_trace_cursor(self, session_id: str, after_event_id, *, thread_id=None) -> None:
         raise NOT_FOUND
 
-    def stream_trace_events(self, session_id: str, after_event_id=None):
+    def stream_trace_events(self, session_id: str, after_event_id=None, *, thread_id=None):
         raise AssertionError("会话缺失时不得进入事件流生成")
 
 

@@ -130,6 +130,7 @@ describe("待处理消息状态", () => {
         assistantMessages: [],
         events: [{
           event_id: "evt_failed",
+          thread_id: "thr_018f0000000070008000000000000001",
           session_id: "ses_failed",
           job_id: "job_failed",
           type: "job_failed",

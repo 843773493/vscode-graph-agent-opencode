@@ -20,6 +20,29 @@ class TraceCursorGoneError(RuntimeError):
         super().__init__(f"Trace 事件游标不存在: session_id={session_id}, cursor={cursor}")
 
 
+def bind_trace_cursor(cursor: str | None, *, session_id: str, thread_id: str | None, kind: str) -> str | None:
+    """公开游标绑定查询身份；内部文件偏移仍复用唯一的现有校验链路。"""
+    if cursor is None:
+        return None
+    payload = json.dumps([session_id, thread_id, kind, cursor], separators=(",", ":")).encode()
+    return "ts2." + base64.urlsafe_b64encode(payload).decode("ascii").rstrip("=")
+
+
+def unbind_trace_cursor(cursor: str | None, *, session_id: str, thread_id: str | None, kind: str) -> str | None:
+    if cursor is None:
+        return None
+    try:
+        if not cursor.startswith("ts2."):
+            raise ValueError("Trace scope cursor 前缀无效")
+        encoded = cursor[4:]
+        value = json.loads(base64.urlsafe_b64decode(encoded + "=" * (-len(encoded) % 4)))
+        if not isinstance(value, list) or len(value) != 4 or value[:3] != [session_id, thread_id, kind] or not isinstance(value[3], str) or not value[3]:
+            raise ValueError("Trace scope cursor 的 Session/Thread/用途不匹配")
+        return value[3]
+    except (ValueError, TypeError, UnicodeError) as error:
+        raise TraceCursorGoneError(session_id, cursor) from error
+
+
 @dataclass(frozen=True, slots=True)
 class TraceStreamRecord:
     event: Event

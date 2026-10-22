@@ -264,6 +264,7 @@ export function buildTraceEvent(event: SessionStreamEvent): TraceEvent {
     event_id: event.event_id,
     part_id: event.part_id ?? normalizedRaw?.part_id ?? null,
     session_id: event.session_id,
+    thread_id: event.thread_id,
     job_id: event.job_id,
     step_id: event.step_id ?? null,
     agent_id: normalizedRaw?.agent_id ?? null,

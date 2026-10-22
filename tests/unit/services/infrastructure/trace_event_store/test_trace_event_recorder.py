@@ -73,10 +73,11 @@ def step_event_flow() -> tuple[tuple[str, dict[str, object]], ...]:
 
 
 @pytest.mark.asyncio
-async def test_recorder_persists_job_events(tmp_path: Path, session_bundle_factory):
-    session_bundle_factory(tmp_path, "ses_019ba1bfed0773fc80049132b9745deb")
+async def test_recorder_persists_job_events(tmp_path: Path, trace_event_store_factory):
+    session_id = "ses_019ba1bfed0773fc80049132b9745deb"
+    store, _ = trace_event_store_factory(session_id)
+    main_thread_id = get_session_path_resolver(tmp_path).main_thread_id(session_id)
     bus = JobEventBus()
-    store = TraceEventStore(sessions_dir=tmp_path)
     recorder = TraceEventRecorder(bus=bus, store=store)
     await recorder.start()
 
@@ -84,13 +85,13 @@ async def test_recorder_persists_job_events(tmp_path: Path, session_bundle_facto
         await bus.publish(
             job_id="job_1",
             event_type=EventType.JOB_CREATED,
-            payload={"session_id": "ses_019ba1bfed0773fc80049132b9745deb", "thread_id": get_session_path_resolver(tmp_path).main_thread_id("ses_019ba1bfed0773fc80049132b9745deb"), "message": "hi", "agent_id": "default"},
+            payload={"session_id": session_id, "thread_id": main_thread_id, "message": "hi", "agent_id": "default"},
             agent_id="test",
         )
         await bus.publish(
             job_id="job_1",
             event_type=EventType.JOB_STARTED,
-            payload={"session_id": "ses_019ba1bfed0773fc80049132b9745deb", "thread_id": get_session_path_resolver(tmp_path).main_thread_id("ses_019ba1bfed0773fc80049132b9745deb")},
+            payload={"session_id": session_id, "thread_id": main_thread_id},
             agent_id="job_service",
         )
         await bus.publish(
@@ -100,7 +101,7 @@ async def test_recorder_persists_job_events(tmp_path: Path, session_bundle_facto
             agent_id="default",
         )
 
-        events = store.read_events("ses_019ba1bfed0773fc80049132b9745deb")
+        events = store.read_events(session_id)
         assert [event.type for event in events] == [
             "job_created",
             "job_started",
@@ -113,12 +114,13 @@ async def test_recorder_persists_job_events(tmp_path: Path, session_bundle_facto
 @pytest.mark.asyncio
 async def test_recorder_resolves_lifecycle_event_without_job_created_mapping(
     tmp_path: Path,
-    session_bundle_factory,
+    trace_event_store_factory,
     step_event_flow: tuple[tuple[str, dict[str, object]], ...],
 ):
-    session_bundle_factory(tmp_path, "ses_019b9b92ef127e83870baac3f15d7bc4")
+    session_id = "ses_019b9b92ef127e83870baac3f15d7bc4"
+    store, _ = trace_event_store_factory(session_id)
+    main_thread_id = get_session_path_resolver(tmp_path).main_thread_id(session_id)
     bus = JobEventBus()
-    store = TraceEventStore(sessions_dir=tmp_path)
     recorder = TraceEventRecorder(bus=bus, store=store)
     await recorder.start()
 
@@ -126,7 +128,7 @@ async def test_recorder_resolves_lifecycle_event_without_job_created_mapping(
         await bus.publish(
             job_id="job_direct",
             event_type=EventType.JOB_STARTED,
-            payload={"session_id": "ses_019b9b92ef127e83870baac3f15d7bc4", "thread_id": get_session_path_resolver(tmp_path).main_thread_id("ses_019b9b92ef127e83870baac3f15d7bc4")},
+            payload={"session_id": session_id, "thread_id": main_thread_id},
             agent_id="job_service",
         )
         publisher = StepEventPublisher(bus, job_id="job_direct", agent_id="default")
@@ -136,14 +138,14 @@ async def test_recorder_resolves_lifecycle_event_without_job_created_mapping(
             job_id="job_direct",
             event_type=EventType.JOB_FAILED,
             payload={
-                "session_id": "ses_019b9b92ef127e83870baac3f15d7bc4",
+            "session_id": session_id,
                 "error": "startup timeout",
                 "code": "job_startup_timeout",
             },
             agent_id="job_service",
         )
 
-        events = store.read_events("ses_019b9b92ef127e83870baac3f15d7bc4")
+        events = store.read_events(session_id)
         assert [event.type for event in events] == [
             "job_started", *[event_type for event_type, _ in step_event_flow], "job_failed",
         ]

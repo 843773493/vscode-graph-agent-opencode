@@ -25,6 +25,7 @@ function traceItem(index: number): FrontendReceivedEvent {
     event: {
       event_id: `evt_${index}`,
       session_id: "ses_events",
+      thread_id: "thr_00000000700070008000000000000001",
       job_id: "job_events",
       type: "job_started",
       phase: "job",

@@ -254,6 +254,19 @@ class TraceEventStore:
                 max_bytes=max_bytes,
             )
 
+    def event_threads(self, session_id: str, events: list[Event]) -> dict[str, str]:
+        """Session 文件内按已提交 Job 事实投影 Thread 身份，Goal 明确归 main。"""
+        job_ids = {event.job_id for event in events if event.type not in {"goal_updated", "goal_cleared"}}
+        with self._file_lock(session_id):
+            owners = TraceTurnIndex(self._trace_file(session_id).parent).job_threads(session_id, job_ids)
+        return {
+            event.event_id: (
+                self._path_resolver.main_thread_id(session_id)
+                if event.type in {"goal_updated", "goal_cleared"} else owners[event.job_id]
+            )
+            for event in events
+        }
+
     def read_message_events(
         self,
         session_id: str,

@@ -13,6 +13,7 @@ from app.api import workspace_observation as api
 from app.schemas.internal_v2.workspace_observation import WorkspaceObservationRequest
 
 SESSION_ID = "ses_019bef80066f7038ae8e88ccb2e5e2ea"
+THREAD_ID = "thr_018f0000000070008000000000000001"
 
 
 @pytest.fixture
@@ -37,8 +38,8 @@ def observation_sources(monkeypatch: pytest.MonkeyPatch):
         calls.append(("activity", after))
         return frames("activity")
 
-    async def trace(session_id, cursor, session_service, config_service):
-        calls.append(("trace", session_id, cursor))
+    async def trace(session_id, cursor, session_service, config_service, *, thread_id=None):
+        calls.append(("trace", session_id, cursor, thread_id))
         if cursor == "expired":
             raise HTTPException(410, detail={"code": "trace_cursor_gone", "requested_cursor": cursor})
         return frames("trace")
@@ -80,7 +81,7 @@ async def test_observations_keep_independent_cursors_and_original_frames(
 ):
     response = await open_observations([
         {"subscription_id": "catalog", "kind": "session_activity", "activity_after": 8},
-        {"subscription_id": "trace", "kind": "session_trace", "session_id": SESSION_ID, "trace_after": "tc1.old"},
+        {"subscription_id": "trace", "kind": "session_trace", "session_id": SESSION_ID, "thread_id": THREAD_ID, "trace_after": "tc1.old"},
         {"subscription_id": "files", "kind": "workspace_files", "paths": ["shortcut"]},
     ])
     stream = response.body_iterator
@@ -88,7 +89,7 @@ async def test_observations_keep_independent_cursors_and_original_frames(
         ready = [await read_envelope(stream) for _ in range(3)]
         assert {item["subscription_id"] for item in ready} == {"catalog", "trace", "files"}
         assert next(item for item in ready if item["subscription_id"] == "files")["cursor"] == "27"
-        assert observation_sources.calls == [("activity", 8), ("trace", SESSION_ID, "tc1.old"), ("files", ["shortcut"], 27)]
+        assert observation_sources.calls == [("activity", 8), ("trace", SESSION_ID, "tc1.old", THREAD_ID), ("files", ["shortcut"], 27)]
         original = "id: tc1.new\nevent: trace\ndata: {\"text\":\"中文\"}\n\n"
         await observation_sources.queues["trace"].put(original)
         assert await read_envelope(stream) == {"subscription_id": "trace", "state": "frame", "frame": original}
@@ -158,6 +159,8 @@ async def test_owner_runtime_error_is_visible_and_other_owner_keeps_streaming(
     [{"subscription_id": "missing", "kind": "session_trace"}],
     [{"subscription_id": "mixed", "kind": "session_activity", "files_after": 2}],
     [{"subscription_id": "bad", "kind": "session_trace", "session_id": "invalid"}],
+    [{"subscription_id": "bad", "kind": "session_trace", "session_id": SESSION_ID, "thread_id": "invalid"}],
+    [{"subscription_id": "bad", "kind": "session_activity", "thread_id": THREAD_ID}],
 ])
 def test_observation_request_rejects_ambiguous_or_invalid_scope(subscriptions):
     with pytest.raises(ValidationError):

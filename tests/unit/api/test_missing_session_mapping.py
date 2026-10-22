@@ -63,7 +63,7 @@ class _FakeChangesService:
 
 
 class _FakeTraceSessionService:
-    async def list_trace_events(self, session_id: str, *, cursor, limit):
+    async def list_trace_events(self, session_id: str, *, cursor, limit, thread_id=None):
         raise NotFoundError(f"Session {session_id} not found")
 
 

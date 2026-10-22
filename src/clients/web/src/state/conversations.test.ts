@@ -32,7 +32,7 @@ test("附件摘要保留同 ID 跨工作区归属并拒绝其它会话的 Trace"
   expect(summaries.get("gateway_a::ses_same")?.names).toEqual(["A.txt"]);
   expect(summaries.get("gateway_b::ses_same")?.names).toEqual(["B.txt"]);
   const event = (sessionId: string, name: string): TraceEvent => ({
-    event_id: `evt_${sessionId}`, session_id: sessionId, job_id: "job_attachments",
+    event_id: `evt_${sessionId}`, session_id: sessionId, thread_id: "thr_018f0000000070008000000000000001", job_id: "job_attachments",
     type: "message_created", phase: "message", title: "创建消息", content: "",
     timestamp: "2026-10-14T00:00:02Z",
     payload: { session_id: sessionId, attachments: [attachment(sessionId, name)] },
@@ -181,7 +181,7 @@ test("消息流 active_state 直接映射为对应的阶段状态", () => {
 test("Job 终态先移除 live Turn，历史视图不会与实时视图并存", () => {
   const sessionId = "ses_terminal_projection";
   const jobId = "job_terminal_projection";
-  const liveConversation: ConversationView = { threadId: "thr_conversation",
+  const liveConversation: ConversationView = { threadId: "thr_018f0000000070008000000000000001",
     conversationId: "msg_terminal_projection",
     displayMode: "live",
     sessionId,
@@ -199,6 +199,7 @@ test("Job 终态先移除 live Turn，历史视图不会与实时视图并存", 
   const terminalEvent: TraceEvent = {
     event_id: "evt_terminal_projection",
     session_id: sessionId,
+    thread_id: "thr_018f0000000070008000000000000001",
     job_id: jobId,
     type: "job_completed",
     phase: "job",
@@ -227,6 +228,7 @@ test("历史提交期间的终态 live Turn 不会被空 pending 快照删除", 
     events: [{
       event_id: "evt_pending_commit_done",
       session_id: sessionId,
+      thread_id: "thr_018f0000000070008000000000000001",
       job_id: jobId,
       type: "job_completed",
       phase: "job",
@@ -277,6 +279,7 @@ test("历史 stale_turn_reference 期间保留超时回合及可见错误", () =
   const timeoutEvent: TraceEvent = {
     event_id: "evt_timeout_fallback",
     session_id: sessionId,
+    thread_id: "thr_conversation",
     job_id: jobId,
     type: "job_failed",
     phase: "job",
@@ -538,6 +541,7 @@ test("切入已有 active Job 后立即把流式文本和工具事件合入 Turn
         event_id: "evt_live_text",
         part_id: "part_live",
         session_id: sessionId,
+        thread_id: timeline.threadId,
         job_id: jobId,
         type: "text_delta",
         phase: "text",
@@ -549,6 +553,7 @@ test("切入已有 active Job 后立即把流式文本和工具事件合入 Turn
       {
         event_id: "evt_live_tool",
         session_id: sessionId,
+        thread_id: timeline.threadId,
         job_id: jobId,
         type: "tool_call_start",
         phase: "tool",
@@ -626,7 +631,7 @@ test("活动 Turn 的正反和重复快照顺序只消费当前视图坐标并�
     thinkingBlocks: [{ kind: "reasoning", text: "已收到的实时思考" }],
     responseParts: [],
     events: [{
-      event_id: "evt_active_identity", session_id: sessionId, job_id: jobId,
+      event_id: "evt_active_identity", session_id: sessionId, thread_id: "thr_018f0000000070008000000000000001", job_id: jobId,
       type: "text_delta", phase: "text", title: "文本增量", content: "实时事件正文",
       timestamp: "2026-10-09T00:00:02Z",
     }],
@@ -1011,6 +1016,7 @@ test("Job failed 镜像优先于迟到的 open message stream", () => {
   const failure: TraceEvent = {
     event_id: "evt_failed_job_mirror",
     session_id: sessionId,
+    thread_id: "thr_conversation",
     job_id: jobId,
     type: "job_failed",
     phase: "job",
@@ -1072,6 +1078,7 @@ test("终态事件之后的迟到 running 事件不能恢复转圈", () => {
     {
       event_id: "evt_terminal_first",
       session_id: "ses_terminal_priority",
+      thread_id: "thr_018f0000000070008000000000000001",
       job_id: "job_terminal_priority",
       type: "job_failed",
       phase: "job",
@@ -1082,6 +1089,7 @@ test("终态事件之后的迟到 running 事件不能恢复转圈", () => {
     {
       event_id: "evt_late_running",
       session_id: "ses_terminal_priority",
+      thread_id: "thr_018f0000000070008000000000000001",
       job_id: "job_terminal_priority",
       type: "status_change",
       phase: "job",

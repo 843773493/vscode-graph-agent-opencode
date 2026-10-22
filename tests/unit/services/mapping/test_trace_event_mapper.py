@@ -1,29 +1,34 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 
 from app.services.mapping.trace_event_mapper import TraceEventMapper
+
+_THREAD_ID = "thr_00000000700070008000000000000001"
 
 
 def _event() -> dict[str, object]:
     return {
         "event_id": "evt_1",
         "job_id": "job_1",
-        "timestamp": datetime(2026, 7, 14, tzinfo=timezone.utc),
+        "timestamp": datetime(2026, 7, 14, tzinfo=UTC),
         "type": "agent_start",
         "payload": {"agent_id": "default", "message": "start"},
     }
 
 
 def test_mapper_uses_explicit_session_scope_and_preserves_ids() -> None:
-    mapped = TraceEventMapper().map_one(_event(), session_id="ses_1")
+    mapped = TraceEventMapper().map_one(
+        _event(), session_id="ses_1", thread_id=_THREAD_ID,
+    )
 
     assert mapped is not None
     assert mapped.event_id == "evt_1"
     assert mapped.job_id == "job_1"
     assert mapped.session_id == "ses_1"
+    assert mapped.thread_id == _THREAD_ID
 
 
 @pytest.mark.parametrize("field", ["event_id", "job_id", "timestamp"])
@@ -32,20 +37,25 @@ def test_mapper_rejects_missing_authoritative_fields(field: str) -> None:
     event.pop(field)
 
     with pytest.raises((TypeError, ValueError), match=field):
-        TraceEventMapper().map_one(event, session_id="ses_1")
+        TraceEventMapper().map_one(event, session_id="ses_1", thread_id=_THREAD_ID)
 
 
 def test_mapper_rejects_missing_session_scope() -> None:
     with pytest.raises(ValueError, match="session_id"):
-        TraceEventMapper().map_one(_event())
+        TraceEventMapper().map_one(_event(), thread_id=_THREAD_ID)
+
+
+def test_mapper_rejects_empty_thread_scope() -> None:
+    with pytest.raises(ValueError):
+        TraceEventMapper().map_one(_event(), session_id="ses_1", thread_id="")
 
 
 def test_mapper_rejects_naive_timestamp() -> None:
     event = _event()
-    event["timestamp"] = datetime(2026, 7, 14)
+    event["timestamp"] = datetime(2026, 7, 14)  # noqa: DTZ001 - 明确验证缺少时区时拒绝。
 
     with pytest.raises(ValueError, match="必须包含时区"):
-        TraceEventMapper().map_one(event, session_id="ses_1")
+        TraceEventMapper().map_one(event, session_id="ses_1", thread_id=_THREAD_ID)
 
 
 def test_mapper_marks_failed_tool_result_as_failed() -> None:
@@ -59,7 +69,7 @@ def test_mapper_marks_failed_tool_result_as_failed() -> None:
         "failed": True,
     }
 
-    mapped = TraceEventMapper().map_one(event, session_id="ses_1")
+    mapped = TraceEventMapper().map_one(event, session_id="ses_1", thread_id=_THREAD_ID)
 
     assert mapped is not None
     assert mapped.title == "工具失败"
@@ -77,7 +87,7 @@ def test_mapper_preserves_model_failure_details() -> None:
         "error": "Rate limit exceeded",
     }
 
-    mapped = TraceEventMapper().map_one(event, session_id="ses_1")
+    mapped = TraceEventMapper().map_one(event, session_id="ses_1", thread_id=_THREAD_ID)
 
     assert mapped is not None
     assert mapped.phase == "llm"
@@ -97,7 +107,7 @@ def test_mapper_exposes_process_exit_as_execution_lost() -> None:
         "message": "工作区后端重启，无法安全续接原 AgentLoop 执行",
     }
 
-    mapped = TraceEventMapper().map_one(event, session_id="ses_1")
+    mapped = TraceEventMapper().map_one(event, session_id="ses_1", thread_id=_THREAD_ID)
 
     assert mapped is not None
     assert mapped.phase == "session"

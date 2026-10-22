@@ -24,6 +24,7 @@ def _trace_event() -> TraceEventDTO:
     return TraceEventDTO(
         event_id="evt_sse_heartbeat",
         session_id="ses_019bef80066f7038ae8e88ccb2e5e2ea",
+        thread_id="thr_019bef80066f7038ae8e88ccb2e5e2ea",
         job_id="job_sse_heartbeat",
         type="job_started",
         phase="job",
@@ -57,6 +58,7 @@ async def test_trace_sse_emits_complete_event_block() -> None:
 
     assert chunk.startswith("id: tc1.heartbeat\nevent: trace\ndata: ")
     assert '"session_id":"ses_019bef80066f7038ae8e88ccb2e5e2ea"' in chunk
+    assert '"thread_id":"thr_019bef80066f7038ae8e88ccb2e5e2ea"' in chunk
     assert chunk.endswith("\n\n")
     await stream.aclose()
 

@@ -40,7 +40,7 @@ from app.core.exceptions import NotFoundError
 from app.core.resource_uri import parse_session_thread_uri
 from app.core.session_lifecycle_gate import SessionDeletionPendingError
 from app.protocol.codecs.workspace_events import trace_to_json, trace_to_proto
-from app.schemas.canonical_params import CanonicalSessionId
+from app.schemas.canonical_params import CanonicalSessionId, CanonicalThreadId
 from app.schemas.internal_v2.common import APIResponse, CursorPage
 from app.schemas.internal_v2.goal import (
     SessionGoalClearResultDTO,
@@ -488,6 +488,7 @@ async def fork_session_context(
 )
 async def list_session_traces(
     session_id: CanonicalSessionId,
+    thread_id: CanonicalThreadId | None = None,
     cursor: str | None = Query(default=None),
     limit: int = Query(default=100, ge=1, le=200),
     _: str = Depends(verify_local_token),
@@ -499,6 +500,7 @@ async def list_session_traces(
             session_id,
             cursor=cursor,
             limit=limit,
+            thread_id=thread_id,
         )
     except TraceCursorGoneError as exc:
         raise _trace_cursor_gone_http_error(exc) from exc
@@ -665,6 +667,7 @@ async def control_session_resource(
 )
 async def stream_session_traces(
     session_id: CanonicalSessionId,
+    thread_id: CanonicalThreadId | None = None,
     after_event_id: str | None = Query(default=None),
     last_event_id: str | None = Header(default=None, alias="Last-Event-ID"),
     _: str = Depends(verify_local_token),
@@ -682,7 +685,7 @@ async def stream_session_traces(
         )
     cursor = last_event_id or after_event_id
     return StreamingResponse(
-        await open_session_trace_sse(session_id, cursor, session_service, config_service),
+        await open_session_trace_sse(session_id, cursor, session_service, config_service, thread_id=thread_id),
         media_type="text/event-stream",
         headers=SSE_NO_CACHE_HEADERS,
     )
@@ -693,9 +696,11 @@ async def open_session_trace_sse(
     cursor: str | None,
     session_service: SessionService,
     config_service: ConfigService,
+    *,
+    thread_id: str | None = None,
 ) -> AsyncIterator[str]:
     try:
-        await session_service.ensure_trace_cursor(session_id, cursor)
+        await session_service.ensure_trace_cursor(session_id, cursor, thread_id=thread_id)
     except TraceCursorGoneError as exc:
         raise _trace_cursor_gone_http_error(exc) from exc
     except (KeyError, NotFoundError) as exc:
@@ -704,7 +709,7 @@ async def open_session_trace_sse(
         raise not_found_http_error(exc) from exc
 
     return _stream_trace_sse(
-        session_service.stream_trace_events(session_id, cursor),
+        session_service.stream_trace_events(session_id, cursor, thread_id=thread_id),
         heartbeat_interval_seconds=(
             config_service.get_trace_stream_heartbeat_interval_seconds()
         ),

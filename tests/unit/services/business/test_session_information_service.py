@@ -117,6 +117,7 @@ def _trace_event(
     phase: str | None = None,
 ) -> TraceEventDTO:
     return TraceEventDTO(
+        thread_id="thr_019bef80066f7038ae8e88ccb2e5e2ea",
         event_id=event_id,
         session_id="ses_information",
         job_id=job_id,

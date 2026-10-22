@@ -21,8 +21,9 @@ from app.agents.graph_binding import (
     DEEP_AGENT_GRAPH_BINDING,
     compute_capability_profile_hash,
 )
-from app.api.deps import get_event_service
+from app.api.deps import get_config_service, get_event_service, get_session_service
 from app.api.jobs import router as jobs_router
+from app.api.sessions import router as sessions_router
 from app.core.identifier import create_prefixed_id
 from app.core.job_event_bus import EventType, JobEventBus
 from app.core.trace_middleware import TraceMiddleware
@@ -31,7 +32,9 @@ from app.schemas.internal_v2.common import MessageRole
 from app.schemas.internal_v2.message import MessageDTO
 from app.services.business.job.service import JobService
 from app.services.business.message_service import MessageService
+from app.services.business.session_service import SessionService
 from app.services.event_service import EventService
+from app.services.infrastructure.config_service import ConfigService
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
@@ -41,7 +44,6 @@ from app.services.orchestration.owner_thread_creation_factory import (
     OwnerThreadCreationFactory,
 )
 from tests.harness.python.run_context import TestRunContext
-from tests.support.workspaces import prepare_default_test_workspace
 from tests.unit.core.catalog_workspace_helper import build_catalog_workspace
 
 
@@ -62,6 +64,7 @@ class TraceProducerCase:
     thread_ids: tuple[str, str]
     trace_dir: Path
     artifacts_dir: Path
+    sessions: SessionService
 
 
 @pytest.fixture
@@ -71,11 +74,10 @@ async def producer_case(request: pytest.FixtureRequest) -> AsyncIterator[TracePr
         f"{request.node.name}-{datetime.now(UTC).strftime('%Y%m%dT%H%M%S%f')}"
     )
     artifacts_dir.mkdir(parents=True)
-    workspace_root = prepare_default_test_workspace(
-        workspace_root=context.workspace_root,
-        template_root=Path.cwd() / "tests/fixtures/workspaces/default_test_workspace",
-    )
-    shutil.rmtree(workspace_root / ".boxteam")
+    workspace_root = context.workspace_root
+    if workspace_root.exists():
+        shutil.rmtree(workspace_root)
+    workspace_root.mkdir(parents=True)
     workspace = build_catalog_workspace(
         context.output_root, workspace_id=load_or_create_workspace_id(workspace_root),
     )
@@ -118,6 +120,11 @@ async def producer_case(request: pytest.FixtureRequest) -> AsyncIterator[TracePr
         session_lifecycle_guard=assert_active, input_owner=input_owner,
         terminal_status_writer=saver,
     )
+    sessions = SessionService(
+        config_service=ConfigService(), trace_event_store=store,
+        workspace_id=workspace.workspace_id, path_resolver=workspace.resolver,
+        creation_service=workspace.creation_service,
+    )
     await recorder.start()
     try:
         yield TraceProducerCase(
@@ -125,6 +132,7 @@ async def producer_case(request: pytest.FixtureRequest) -> AsyncIterator[TracePr
             (main_thread_id, child_thread_id),
             workspace.session_dir(session_id) / "logs" / "traces",
             artifacts_dir,
+            sessions,
         )
     finally:
         tasks = [job.task for job in jobs._jobs.values() if job.task is not None]
@@ -143,8 +151,11 @@ async def job_events_client(
     application = FastAPI()
     application.add_middleware(TraceMiddleware)
     application.include_router(jobs_router, prefix="/api/v1")
+    application.include_router(sessions_router, prefix="/api/v1")
     event_service = EventService(bus=producer_case.bus)
     application.dependency_overrides[get_event_service] = lambda: event_service
+    application.dependency_overrides[get_session_service] = lambda: producer_case.sessions
+    application.dependency_overrides[get_config_service] = lambda: ConfigService()
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=application), base_url="http://workspace.test",
         headers={"X-Local-Token": "local-dev-token"},
@@ -211,6 +222,65 @@ async def test_real_job_created_preserves_main_and_child_thread_in_durable_trace
         assert published[0]["job_id"] == job_id
         assert published[0]["payload"]["session_id"] == case.session_id
         assert published[0]["payload"]["thread_id"] == thread_id
+
+    tasks = [job.task for job in case.jobs._jobs.values() if job.task is not None]
+    await asyncio.wait_for(asyncio.gather(*tasks), timeout=5)
+    # 冷重开读取端，不能依赖 Recorder 或 JobService 的进程内 owner map。
+    cold_store = TraceEventStore(sessions_dir=case.store._sessions_dir)
+    case.sessions._trace_event_store = cold_store
+    base = f"/api/v1/sessions/{case.session_id}/traces"
+    aggregate = await job_events_client.get(base)
+    assert aggregate.status_code == 200, aggregate.text
+    all_items = aggregate.json()["data"]["items"]
+    assert {item["thread_id"] for item in all_items} == set(case.thread_ids)
+    assert {item["job_id"] for item in all_items} == set(expected)
+    for item in all_items:
+        assert item["thread_id"] == expected[item["job_id"]]
+
+    for thread_id in case.thread_ids:
+        # limit 限定物理扫描条数，稀疏页即使为空也必须按 Session 水位向前。
+        params = {"thread_id": thread_id, "limit": 1}
+        collected = []
+        first_cursor = None
+        while True:
+            response = await job_events_client.get(base, params=params)
+            assert response.status_code == 200, response.text
+            page = response.json()["data"]
+            collected.extend(page["items"])
+            cursor = page["next_cursor"]
+            if cursor is None:
+                break
+            first_cursor = first_cursor or cursor
+            params["cursor"] = cursor
+        assert {item["event_id"] for item in collected} == {
+            item["event_id"] for item in all_items if item["thread_id"] == thread_id
+        }
+        assert all(item["thread_id"] == thread_id for item in collected)
+        assert len({item["event_id"] for item in collected}) == len(collected)
+        other = next(value for value in case.thread_ids if value != thread_id)
+        rejected = await job_events_client.get(base, params={"thread_id": other, "cursor": first_cursor})
+        assert rejected.status_code == 410, rejected.text
+        aggregate_rejected = await job_events_client.get(base, params={"cursor": first_cursor})
+        assert aggregate_rejected.status_code == 410
+
+        stream = case.sessions.stream_trace_events(case.session_id, thread_id=thread_id)
+        first, stream_cursor = await asyncio.wait_for(anext(stream), timeout=2)
+        assert first.thread_id == thread_id
+        await stream.aclose()
+        await case.sessions.ensure_trace_cursor(case.session_id, stream_cursor, thread_id=thread_id)
+        resumed = case.sessions.stream_trace_events(case.session_id, stream_cursor, thread_id=thread_id)
+        second, _ = await asyncio.wait_for(anext(resumed), timeout=2)
+        assert second.event_id != first.event_id
+        assert second.thread_id == thread_id
+        await resumed.aclose()
+        wrong_stream = await job_events_client.get(
+            base + "/stream", params={"thread_id": other, "after_event_id": stream_cursor},
+        )
+        assert wrong_stream.status_code == 410, wrong_stream.text
+        page_as_stream = await job_events_client.get(
+            base + "/stream", params={"thread_id": thread_id, "after_event_id": first_cursor},
+        )
+        assert page_as_stream.status_code == 410
 
 
 @pytest.mark.asyncio

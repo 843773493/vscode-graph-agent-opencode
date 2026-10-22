@@ -9,6 +9,7 @@ from app.services.mapping.itemized.history_turns.detail import build_detail
 from app.services.mapping.itemized.history_turns.tools import tool_items
 
 NOW = datetime(2026, 10, 16, tzinfo=UTC)
+THREAD_ID = "thr_00000000700070008000000000000001"
 
 
 def _tool_projection(*items: dict[str, object]) -> dict[str, object]:
@@ -29,6 +30,7 @@ def _build_detail(
         1,
         [],
         turn_id="turn-1",
+        thread_id=THREAD_ID,
         job_id="job-1",
         root_logical_item_ordinal=0,
         source_view_id="view-1",
@@ -67,6 +69,7 @@ def test_tool_result_without_id_is_rejected_instead_of_fifo_pairing(
             "turn-1",
             messages,
             job_id="job-1",
+            thread_id=THREAD_ID,
             fallback_timestamp=NOW,
         )
 
@@ -87,6 +90,7 @@ def test_ai_tool_call_without_id_is_rejected_instead_of_synthesizing_one() -> No
             "turn-1",
             messages,
             job_id="job-1",
+            thread_id=THREAD_ID,
             fallback_timestamp=NOW,
         )
 
@@ -141,6 +145,7 @@ def test_reused_raw_id_keeps_model_call_scope_and_exact_name_enrichment() -> Non
         "turn-1",
         messages,
         job_id="job-1",
+        thread_id=THREAD_ID,
         fallback_timestamp=NOW,
     )
 
@@ -182,6 +187,7 @@ def test_tool_call_selector_keeps_reused_raw_id_within_model_call_scope() -> Non
         "turn-1",
         messages,
         job_id="job-1",
+        thread_id=THREAD_ID,
         fallback_timestamp=NOW,
         tool_call_ids=frozenset({"model-b:tool-call:reused"}),
     )
@@ -212,6 +218,7 @@ def test_tool_call_selector_skips_unselected_malformed_calls_and_results() -> No
         "turn-1",
         messages,
         job_id="job-1",
+        thread_id=THREAD_ID,
         fallback_timestamp=NOW,
         tool_call_ids=frozenset({"target"}),
     )
@@ -238,5 +245,6 @@ def test_projected_tool_selector_skips_malformed_unselected_items() -> None:
         tool_call_ids=frozenset({"model-b:tool-call:reused"}),
     )
 
+    assert all(item.thread_id == THREAD_ID for item in detail.items)
     assert [item.tool_name for item in detail.tool_summary] == ["selected"]
     assert [item.part_id for item in detail.items] == ["model-b:tool-call:reused"]

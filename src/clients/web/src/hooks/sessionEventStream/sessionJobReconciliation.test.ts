@@ -64,6 +64,7 @@ function pendingConversation(): ConversationView {
     conversationId: "msg_user_active",
     displayMode: "live",
     sessionId: SESSION_ID,
+    threadId: "thr_018f0000000070008000000000000001",
     userMessage: null,
     events: [],
     status: "running",
@@ -78,6 +79,7 @@ function completedTrace(): TraceEvent {
   return {
     event_id: "evt_job_completed",
     session_id: SESSION_ID,
+    thread_id: "thr_018f0000000070008000000000000001",
     job_id: ACTIVE_JOB_ID,
     type: "job_completed",
     phase: "job",
@@ -94,6 +96,7 @@ function textDeltaTrace(): TraceEvent {
     event_id: "evt_text_delta_recovered",
     part_id: "part_recovered",
     session_id: SESSION_ID,
+    thread_id: "thr_018f0000000070008000000000000001",
     job_id: ACTIVE_JOB_ID,
     type: "text_delta",
     phase: "text",

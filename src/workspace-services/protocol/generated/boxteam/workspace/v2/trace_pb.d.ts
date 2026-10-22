@@ -88,6 +88,13 @@ export declare type TraceEvent = Message<"boxteam.workspace.v2.TraceEvent"> & {
    * @generated from field: google.protobuf.Struct raw = 14;
    */
   raw?: JsonObject | undefined;
+
+  /**
+   * 事件实际所属的 Thread；物理日志仍由 Session 持有。
+   *
+   * @generated from field: string thread_id = 15;
+   */
+  threadId: string;
 };
 
 /**

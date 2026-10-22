@@ -74,6 +74,7 @@ async def stream_workspace_observation(
                 assert subscription.session_id is not None
                 return OpenedWorkspaceObservation(await open_session_trace_sse(
                     subscription.session_id, subscription.trace_after, session_service, config_service,
+                    thread_id=subscription.thread_id,
                 ))
             cursor = subscription.files_after
             if cursor is None:

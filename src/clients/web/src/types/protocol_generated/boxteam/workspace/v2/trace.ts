@@ -26,7 +26,11 @@ export interface TraceEvent {
     | undefined;
   /** 来源事件的带时区时间，Trace 映射保留其时刻与显式时区偏移，不在投影时重新取时；历史工具事件沿对应 canonical 消息/item 时间。 */
   timestamp: string | undefined;
-  raw: { [key: string]: any } | undefined;
+  raw:
+    | { [key: string]: any }
+    | undefined;
+  /** 事件实际所属的 Thread；物理日志仍由 Session 持有。 */
+  thread_id: string;
 }
 
 function createBaseTraceEvent(): TraceEvent {
@@ -45,6 +49,7 @@ function createBaseTraceEvent(): TraceEvent {
     step_id: undefined,
     timestamp: undefined,
     raw: undefined,
+    thread_id: "",
   };
 }
 
@@ -67,6 +72,7 @@ export const TraceEvent: MessageFns<TraceEvent> = {
       step_id: isSet(object.step_id) ? globalThis.String(object.step_id) : undefined,
       timestamp: isSet(object.timestamp) ? globalThis.String(object.timestamp) : undefined,
       raw: isObject(object.raw) ? object.raw : undefined,
+      thread_id: isSet(object.thread_id) ? globalThis.String(object.thread_id) : "",
     };
   },
 
@@ -114,6 +120,9 @@ export const TraceEvent: MessageFns<TraceEvent> = {
     if (message.raw !== undefined) {
       obj.raw = message.raw;
     }
+    if (message.thread_id !== "") {
+      obj.thread_id = message.thread_id;
+    }
     return obj;
   },
 
@@ -136,6 +145,7 @@ export const TraceEvent: MessageFns<TraceEvent> = {
     message.step_id = object.step_id ?? undefined;
     message.timestamp = object.timestamp ?? undefined;
     message.raw = object.raw ?? undefined;
+    message.thread_id = object.thread_id ?? "";
     return message;
   },
 };

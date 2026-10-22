@@ -6,6 +6,7 @@ function event(payload: Record<string, unknown>): TraceEvent {
   return {
     event_id: "evt-file-change",
     session_id: "ses-file-change",
+    thread_id: "thr_00000000700070008000000000000001",
     job_id: "job-file-change",
     type: "tool_call_end",
     timestamp: "2026-07-27T00:00:00Z",

@@ -16,6 +16,7 @@ from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
 from app.services.infrastructure.trace_event_store import TraceEventStore
+from app.services.infrastructure.turn_history.trace_cursor import bind_trace_cursor
 
 _BOOTSTRAP_ACTIVE_JOB_LIMIT = 8
 
@@ -98,7 +99,10 @@ class SessionTurnHistoryService:
                 active_jobs_truncated=len(active_page) < active_job_count,
                 projection_state="ready",
                 older_cursor=older_cursor,
-                event_cursor=self._trace_event_store.latest_event_cursor(session_id),
+                event_cursor=bind_trace_cursor(
+                    self._trace_event_store.latest_event_cursor(session_id),
+                    session_id=session_id, thread_id=None, kind="stream",
+                ),
                 projection_epoch=projection_epoch,
             )
 

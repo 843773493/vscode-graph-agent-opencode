@@ -186,6 +186,17 @@ main-thread history bootstrap、pending 队列和 active Job 展示 SHALL 消费
 - **WHEN** child thread完成任务并向parent main thread汇报
 - **THEN** main历史只显示带child来源引用的汇报item，用户可从该引用进入右侧侧边栏查看child原始历史；系统不得把child的全部Turn或工具结果展开复制到main时间线
 
+### Requirement: Trace 保留 Session 诊断聚合并支持精确 Thread 查询
+
+Session Trace 的历史与 SSE 入口 SHALL 默认保留 Session 诊断聚合范围；可选 `thread_id` SHALL 经权威 resolver 验证并只返回该 Thread 的事件。每个公开事件 MUST 携带真实 `session_id + thread_id`，历史 mapper、SSE codec 和 Web 消费者 MUST 校验归属；主聊天不得仅按 job/message 或单个 pending 槽接收 sibling 的事件。Goal 事件按其既有 main-only 合同定位。
+
+公开 Trace cursor MUST 绑定 Session、可选 Thread、聚合或精确范围及分页或流用途，跨范围复用 SHALL 明确返回 `410 trace_cursor_gone`。分页保留有界物理扫描预算，精确 Thread 过滤后允许空页带有 `next_cursor`；调用方 MUST 按游标继续读取，不能以空 items 判断结束。查询或读取 cold Thread 的 Trace MUST NOT 物化 Agent runtime。cursor 只定义恢复范围，不代替鉴权。
+
+#### Scenario: 同一 Session 的 main 与 cold child 分别读取 Trace
+
+- **WHEN** 产品入口在 main 与 child 生成执行历史，然后分别读取聚合、main 和 child 的分页或 SSE
+- **THEN** 每个精确范围只返回聚合历史中归属相同 Thread 的事件，身份与顺序不变且不重复；稀疏页仍推进游标，跨 Thread、聚合范围或游标用途复用均明确失败，cold child 保持未物化
+
 ### Requirement: 基础 Web tool-loop E2E 必须验收完整 Session 协作场景
 
 仓库 SHALL 在已有 `tests/e2e/clients/web/test_basic_chat_tool_loop.py` 内保留基础两轮聊天/工具循环验收，并在同一 pytest 模块内增加多 Session main thread、Session内durable child、resident runtime回收、跨workspace/server send/read/wait、Session内team状态及右侧侧边栏child对话的分离用例。该模块是这一组跨change业务场景的唯一Web E2E owner；可拆成多个test function并调用共享Python/Node helper，但pytest collection、场景fixture和PASS/FAIL gate必须位于该模块，不得把唯一断言放进未被pytest收集的脚本，也不得在其它E2E中另造一套不同语义的验收流程。进程内`LifetimeScope`的释放合同、共享watch及外部资源lease由`add-context-injection-lifecycle`唯一拥有；本change只验证thread residency owner调用该合同后的可观察结果，不建立第二套dispose/ResourceManager。

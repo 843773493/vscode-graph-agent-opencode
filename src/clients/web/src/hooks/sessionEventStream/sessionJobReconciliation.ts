@@ -89,6 +89,7 @@ function terminalEventForJob(job: Job): TraceEvent {
   return {
     event_id: `reconciled:${job.job_id}:${eventType}`,
     session_id: job.session_id,
+    thread_id: job.thread_id,
     job_id: job.job_id,
     type: eventType,
     phase: "job",

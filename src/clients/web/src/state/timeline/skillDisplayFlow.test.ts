@@ -20,6 +20,7 @@ function event(
     event_id: `evt_${index}`,
     part_id: partId,
     session_id: "ses_skill_display",
+    thread_id: "thr_00000000700070008000000000000001",
     job_id: "job_skill_display",
     type,
     phase: type.startsWith("tool_") ? "tool" : "text",

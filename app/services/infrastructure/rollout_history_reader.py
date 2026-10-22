@@ -268,6 +268,7 @@ class RolloutHistoryReader(HistoryPageReadMixin):
             span.ordinal,
             messages,
             turn_id=span.turn_id,
+            thread_id=snapshot.thread_id,
             job_id=job_id,
             root_logical_item_ordinal=span.root_logical_item_ordinal,
             source_view_id=self._context_reader.context_view_id(chain),

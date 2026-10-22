@@ -19,6 +19,7 @@ export interface TraceEventDTO {
   event_id: string;
   part_id?: string | null;
   session_id: string;
+  thread_id: string;
   job_id: string;
   type: string;
   phase: string;

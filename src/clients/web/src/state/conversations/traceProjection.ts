@@ -67,6 +67,7 @@ export function conversationMatchesTraceEvent(
   conversation: ConversationView,
   event: TraceEvent,
 ): boolean {
+  if (!conversationOwnsTraceEvent(conversation, event)) return false;
   const eventJobId = traceJobId(event);
   if (eventJobId && conversation.jobId === eventJobId) {
     return true;
@@ -75,6 +76,11 @@ export function conversationMatchesTraceEvent(
   const eventMessageId = tracePayloadString(event, "message_id");
   const conversationMessageId = conversation.userMessage?.message_id ?? "";
   return Boolean(eventMessageId && conversationMessageId === eventMessageId);
+}
+
+function conversationOwnsTraceEvent(conversation: ConversationView, event: TraceEvent): boolean {
+  return conversation.sessionId === event.session_id
+    && (conversation.threadId ?? conversation.userMessage?.thread_id) === event.thread_id;
 }
 
 export function appendTraceEventsToPendingConversations(
@@ -98,6 +104,7 @@ export function appendTraceEventsToPendingConversations(
       pendingIndex === -1
       && fallbackToSinglePending
       && pendingList.length === 1
+      && conversationOwnsTraceEvent(pendingList[0], traceEvent)
     ) {
       pendingIndex = 0;
     }

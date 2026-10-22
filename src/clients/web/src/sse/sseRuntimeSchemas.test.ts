@@ -50,6 +50,7 @@ describe("生成的 SSE runtime validator", () => {
     expect(() => validateTraceEvent({
       event_id: "evt_bad_time",
       session_id: "ses_1",
+      thread_id: "thr_00000000700070008000000000000001",
       job_id: "job_1",
       type: "job_started",
       phase: "job",
@@ -57,6 +58,19 @@ describe("生成的 SSE runtime validator", () => {
       content: "开始",
       timestamp: "not-a-date",
     })).toThrow("不是有效日期时间");
+  });
+
+  test("Trace 正文允许空串，但仍必须显式提供", () => {
+    const event = {
+      event_id: "evt_empty_content", session_id: "ses_empty_content",
+      thread_id: "thr_00000000700070008000000000000001", job_id: "job_empty_content",
+      type: "job_started", phase: "job", title: "任务开始", content: "",
+      timestamp: "2026-10-21T00:00:00Z",
+    };
+    expect(validateTraceEvent(event).content).toBe("");
+    for (const content of [undefined, null, 0]) {
+      expect(() => validateTraceEvent({ ...event, content })).toThrow("content 必须是字符串");
+    }
   });
 
   test("SSE error 使用生成 schema 校验", () => {

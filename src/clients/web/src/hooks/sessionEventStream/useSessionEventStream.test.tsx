@@ -21,7 +21,7 @@ test("真实 SSE 批次按完整 owner 写附件摘要并排除其它会话的 p
     currentSessionWorkspaceId: "gateway_a", eventQueuesBySession: new Map(), pendingConversations: new Map(),
     sessionAttachmentSummaries: new Map([[otherScope, { count: 1, names: ["B.txt"], latestAt: null }]]), traceEvents: [] };
   const event = (payloadSession: string, name: string): SessionStreamEvent => ({
-    event_id: `event_${payloadSession}`, session_id: sessionId, job_id: "job_attachment", type: "message_created",
+    event_id: `event_${payloadSession}`, session_id: sessionId, thread_id: "thr_00000000700070008000000000000001", job_id: "job_attachment", type: "message_created",
     phase: "message", title: "创建消息", content: "", timestamp: "2026-10-14T00:00:00Z",
     raw: { payload: { session_id: payloadSession, attachments: [{ file_id: name, name }] } },
   });
@@ -197,7 +197,7 @@ for (const entry of ["session", "workspace"] as const) {
       expect(subscriptions).toHaveLength(1);
       expect(invalidations).toBe(0);
       act(() => original.onEvent({
-        event_id: "evt_selection_a", session_id: sessionA.session_id, job_id: "job_selection_a",
+        event_id: "evt_selection_a", session_id: sessionA.session_id, thread_id: "thr_00000000700070008000000000000001", job_id: "job_selection_a",
         type: "model_text_delta", phase: "model", title: "模型增量", content: "A 仍接收事件",
         timestamp: "2026-10-14T00:00:00Z", raw: {},
       }, "cursor_selection_a"));

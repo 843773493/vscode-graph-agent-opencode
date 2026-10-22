@@ -31,16 +31,7 @@ class TraceEventMapper:
         "goal_cleared",
     })
 
-    def map_many(self, events: list[dict[str, Any]], session_id: str = "") -> list[TraceEventDTO]:
-        mapped: list[TraceEventDTO] = []
-        for event in events:
-            dto = self.map_one(event, session_id=session_id)
-            if dto is not None:
-                mapped.append(dto)
-        mapped.sort(key=lambda item: item.timestamp)
-        return mapped
-
-    def map_one(self, event: dict[str, Any], session_id: str = "") -> TraceEventDTO | None:
+    def map_one(self, event: dict[str, Any], session_id: str = "", *, thread_id: str) -> TraceEventDTO | None:
         event_type = event.get("type")
         if event_type not in self._SUPPORTED_TYPES:
             return None
@@ -53,6 +44,10 @@ class TraceEventMapper:
 
         if not session_id:
             raise ValueError("Trace 映射缺少存储范围 session_id")
+        if payload.get("session_id") not in {None, session_id}:
+            raise ValueError("Trace 事件的 Session 与存储归属不一致")
+        if payload.get("thread_id") not in {None, thread_id}:
+            raise ValueError("Trace 事件的 Thread 与持久归属不一致")
         event_id = event.get("event_id")
         if not isinstance(event_id, str) or not event_id:
             raise ValueError(f"Trace 事件缺少 event_id: event_type={event_type}")
@@ -71,6 +66,7 @@ class TraceEventMapper:
             event_id=event_id,
             part_id=event.get("part_id"),
             session_id=session_id,
+            thread_id=thread_id,
             job_id=job_id,
             type=event_type,
             phase=phase,

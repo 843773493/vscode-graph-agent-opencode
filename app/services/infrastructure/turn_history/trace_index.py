@@ -245,6 +245,38 @@ class TraceTurnIndex:
     def snapshot(self) -> TraceTurnIndexManifest | None:
         return self._recover() if self._load_manifest() is not None else None
 
+    def job_threads(self, session_id: str, job_ids: set[str]) -> dict[str, str]:
+        """只从已提交的 Job 创建/启动事实取得归属，不读取历史请求正文。"""
+        if not job_ids:
+            return {}
+        manifest = self.snapshot()
+        if manifest is None or manifest.has_unindexed_prefix:
+            raise RuntimeError("Trace 缺少完整的归属索引，请显式重建 turn-events index")
+        owners: dict[str, str] = {}
+        # TODO: 10 万条合成索引归属查询中位约 1.46s（8.6 测量收据）；
+        # 后续复用现有索引增加按 Job 的定位，不得另存可变归属。调用端已移出事件循环。
+        with self._index_path.open("rb") as stream:
+            while stream.tell() < manifest.committed_index_offset:
+                line = stream.readline(MAX_COMPACT_LINE_BYTES + 1)
+                if not line.endswith(b"\n") or stream.tell() > manifest.committed_index_offset:
+                    raise RuntimeError("Trace 归属索引越过已提交边界")
+                entry = TraceTurnIndexEntry.model_validate_json(line)
+                if entry.job_id not in job_ids or entry.event_type not in {"job_created", "job_started", "message_created"}:
+                    continue
+                event = _AnyEvent.model_validate(entry.compact_event).root
+                payload = event.payload
+                owner_session = getattr(payload, "session_id", None)
+                thread_id = getattr(payload, "thread_id", None)
+                if owner_session != session_id or not isinstance(thread_id, str) or not thread_id:
+                    raise RuntimeError(f"Trace Job 归属与 Session 不一致: job_id={entry.job_id}")
+                previous = owners.setdefault(entry.job_id, thread_id)
+                if previous != thread_id:
+                    raise RuntimeError(f"Trace Job 的 Thread 归属漂移: job_id={entry.job_id}")
+        missing = job_ids - owners.keys()
+        if missing:
+            raise RuntimeError(f"Trace Job 缺少持久 Thread 归属: session_id={session_id}, job_ids={sorted(missing)}")
+        return owners
+
     def trace_offset_after_event(
         self,
         event_id: str,

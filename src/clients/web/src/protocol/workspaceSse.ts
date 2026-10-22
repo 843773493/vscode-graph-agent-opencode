@@ -23,10 +23,11 @@ function requiredString(
   key: string,
   path: string,
   name = "SSE Protobuf",
+  allowEmpty = false,
 ): string {
   const value = record[key];
-  if (typeof value !== "string" || value.length === 0) {
-    throw new Error(`${name} 校验失败: ${path}/${key} 必须是非空字符串`);
+  if (typeof value !== "string" || (!allowEmpty && value.length === 0)) {
+    throw new Error(`${name} 校验失败: ${path}/${key} 必须是${allowEmpty ? "字符串" : "非空字符串"}`);
   }
   return value;
 }
@@ -65,11 +66,12 @@ export function parseTraceEvent(value: unknown): TraceEvent {
   const proto: JsonObject = {
     eventId: requiredString(source, "event_id", "/", "TraceEventDTO"),
     sessionId: requiredString(source, "session_id", "/", "TraceEventDTO"),
+    threadId: requiredString(source, "thread_id", "/", "TraceEventDTO"),
     jobId: requiredString(source, "job_id", "/", "TraceEventDTO"),
     type: requiredString(source, "type", "/", "TraceEventDTO"),
     phase: requiredString(source, "phase", "/", "TraceEventDTO"),
     title: requiredString(source, "title", "/", "TraceEventDTO"),
-    content: requiredString(source, "content", "/", "TraceEventDTO"),
+    content: requiredString(source, "content", "/", "TraceEventDTO", true),
     timestamp,
     skillNames: Array.isArray(source.skill_names) ? source.skill_names : [],
     raw: asRecord(source.raw ?? {}, "/raw") as JsonObject,

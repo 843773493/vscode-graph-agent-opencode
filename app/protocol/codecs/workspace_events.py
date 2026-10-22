@@ -5,7 +5,7 @@ from typing import cast
 
 from google.protobuf import json_format
 
-from app.protocol.canonical import validate_session_id
+from app.protocol.canonical import validate_session_id, validate_thread_id
 from app.protocol.codecs.json import struct_from_mapping, struct_to_mapping
 from app.protocol.generated.boxteam.workspace.v2 import file_events_pb2, trace_pb2
 from app.schemas.internal_v2.workspace_file_operations import (
@@ -87,15 +87,17 @@ def sse_error_to_json(value: file_events_pb2.SseError) -> dict[str, object]:
 
 
 def trace_to_proto(value: Mapping[str, object]) -> trace_pb2.TraceEvent:
-    required = ("event_id", "session_id", "job_id", "type", "phase", "title", "content")
+    required = ("event_id", "session_id", "thread_id", "job_id", "type", "phase", "title", "content")
     for field_name in required:
         if not isinstance(value.get(field_name), str):
             raise TypeError(f"Trace 事件缺少字段: {field_name}")
     # 2.1：wire 上的 session_id 必须过唯一 canonical 验证器（encode 边界）。
     validate_session_id(cast(str, value["session_id"]))
+    validate_thread_id(cast(str, value["thread_id"]))
     result = trace_pb2.TraceEvent(
         event_id=cast(str, value["event_id"]),
         session_id=cast(str, value["session_id"]),
+        thread_id=cast(str, value["thread_id"]),
         job_id=cast(str, value["job_id"]),
         type=cast(str, value["type"]),
         phase=cast(str, value["phase"]),
@@ -130,6 +132,7 @@ def trace_to_json(value: object) -> dict[str, object]:
         "event_id": value.event_id,
         "part_id": value.part_id if value.HasField("part_id") else None,
         "session_id": value.session_id,
+        "thread_id": value.thread_id,
         "job_id": value.job_id,
         "type": value.type,
         "phase": value.phase,

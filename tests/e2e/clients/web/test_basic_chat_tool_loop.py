@@ -471,6 +471,16 @@ async def test_basic_chat_tool_loop_through_real_web_surface(
             assert child["mainThreadId"] != child["threadId"]
             for name in ("initialHistory", "pending", "terminalHistory", "coldHistory", "coldDetail"):
                 assert child[name]["thread_id"] == child["threadId"]
+            trace = child["traceIdentity"]
+            assert trace["aggregate"]["events"]
+            for name, owner in (("child", child["threadId"]), ("main", child["mainThreadId"])):
+                actual = trace[name]["events"]
+                assert actual and {event["thread_id"] for event in actual} == {owner}
+                assert {event["event_id"] for event in actual} == {
+                    event["event_id"] for event in trace["aggregate"]["events"] if event["thread_id"] == owner
+                }
+            for name in ("wrongThread", "wrongScope", "wrongPurpose"):
+                assert trace[name]["code"] == "trace_cursor_gone"
             assert child["startupHistory"]["items"] == []
             assert child["initialHistory"]["items"] == []
             (initial,) = child["initialHistory"]["internal_executions"]

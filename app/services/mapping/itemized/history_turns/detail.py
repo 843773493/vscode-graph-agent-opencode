@@ -43,6 +43,7 @@ def build_detail(
     messages: list[BaseMessage],
     *,
     turn_id: str,
+    thread_id: str,
     job_id: str,
     root_logical_item_ordinal: int,
     source_view_id: str,
@@ -128,6 +129,7 @@ def build_detail(
         turn_id,
         messages,
         job_id=job_id,
+        thread_id=thread_id,
         fallback_timestamp=created_at,
         tool_call_ids=tool_call_ids,
     )
@@ -179,6 +181,7 @@ def build_detail(
                     timestamp=created_at,
                     raw={},
                     session_id=session_id,
+                    thread_id=thread_id,
                 )
             )
     has_materialized_tool_result = any(

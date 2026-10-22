@@ -5,11 +5,14 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
+from app.schemas.canonical_params import CanonicalThreadId
+
 
 class TraceEventDTO(BaseModel):
     event_id: str
     part_id: str | None = Field(default=None, description="来源路径提供的部件引用；历史工具路径在已知 emitting ModelCall 时使用其限定的聚合引用，通用 Trace 不承诺所有 part_id 都遵循该格式。")
     session_id: str
+    thread_id: CanonicalThreadId = Field(description="事件实际所属的 Thread；物理日志仍由 Session 持有。")
     job_id: str
     type: Literal[
         "agent_start",

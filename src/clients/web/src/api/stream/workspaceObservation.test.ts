@@ -72,7 +72,7 @@ function activity(cursor: number): string {
 }
 
 function trace(cursor: string): string {
-  return `id: ${cursor}\nevent: trace\ndata: ${JSON.stringify({ event_id: cursor, session_id: "session", job_id: "job",
+  return `id: ${cursor}\nevent: trace\ndata: ${JSON.stringify({ event_id: cursor, session_id: "session", thread_id: "thr_00000000700070008000000000000001", job_id: "job",
     timestamp: "2026-10-12T00:00:00Z", type: "job_started", phase: "job", title: "开始", content: "开始", raw: {} })}\n\n`;
 }
 

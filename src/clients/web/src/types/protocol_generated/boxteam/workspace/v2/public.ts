@@ -1974,7 +1974,11 @@ export interface TraceEventDTO {
     | undefined;
   /** 来源事件的带时区时间，Trace 映射保留其时刻与显式时区偏移，不在投影时重新取时；历史工具事件沿对应 canonical 消息/item 时间。 */
   timestamp: string | undefined;
-  raw?: { [key: string]: any } | undefined;
+  raw?:
+    | { [key: string]: any }
+    | undefined;
+  /** 事件实际所属的 Thread；物理日志仍由 Session 持有。 */
+  thread_id: string;
 }
 
 export interface TraceObservedExecutionEventDTO {
@@ -2499,7 +2503,11 @@ export interface WorkspaceObservationSubscription {
   activity_after?: number | undefined;
   trace_after?: string | undefined;
   paths: string[];
-  files_after?: number | undefined;
+  files_after?:
+    | number
+    | undefined;
+  /** 仅 Trace 观察者使用；省略时保留 Session 聚合视图。 */
+  thread_id?: string | undefined;
 }
 
 export interface WorkspaceObservationRequest {
@@ -15028,6 +15036,7 @@ function createBaseTraceEventDTO(): TraceEventDTO {
     step_id: undefined,
     timestamp: undefined,
     raw: undefined,
+    thread_id: "",
   };
 }
 
@@ -15050,6 +15059,7 @@ export const TraceEventDTO: MessageFns<TraceEventDTO> = {
       step_id: isSet(object.step_id) ? globalThis.String(object.step_id) : undefined,
       timestamp: isSet(object.timestamp) ? globalThis.String(object.timestamp) : undefined,
       raw: isObject(object.raw) ? object.raw : undefined,
+      thread_id: isSet(object.thread_id) ? globalThis.String(object.thread_id) : "",
     };
   },
 
@@ -15097,6 +15107,9 @@ export const TraceEventDTO: MessageFns<TraceEventDTO> = {
     if (message.raw !== undefined) {
       obj.raw = message.raw;
     }
+    if (message.thread_id !== "") {
+      obj.thread_id = message.thread_id;
+    }
     return obj;
   },
 
@@ -15119,6 +15132,7 @@ export const TraceEventDTO: MessageFns<TraceEventDTO> = {
     message.step_id = object.step_id ?? undefined;
     message.timestamp = object.timestamp ?? undefined;
     message.raw = object.raw ?? undefined;
+    message.thread_id = object.thread_id ?? "";
     return message;
   },
 };
@@ -18192,6 +18206,7 @@ function createBaseWorkspaceObservationSubscription(): WorkspaceObservationSubsc
     trace_after: undefined,
     paths: [],
     files_after: undefined,
+    thread_id: undefined,
   };
 }
 
@@ -18207,6 +18222,7 @@ export const WorkspaceObservationSubscription: MessageFns<WorkspaceObservationSu
         ? object.paths.map((e: any) => globalThis.String(e))
         : [],
       files_after: isSet(object.files_after) ? globalThis.Number(object.files_after) : undefined,
+      thread_id: isSet(object.thread_id) ? globalThis.String(object.thread_id) : undefined,
     };
   },
 
@@ -18233,6 +18249,9 @@ export const WorkspaceObservationSubscription: MessageFns<WorkspaceObservationSu
     if (message.files_after !== undefined) {
       obj.files_after = Math.round(message.files_after);
     }
+    if (message.thread_id !== undefined) {
+      obj.thread_id = message.thread_id;
+    }
     return obj;
   },
 
@@ -18252,6 +18271,7 @@ export const WorkspaceObservationSubscription: MessageFns<WorkspaceObservationSu
     message.trace_after = object.trace_after ?? undefined;
     message.paths = object.paths?.map((e) => e) || [];
     message.files_after = object.files_after ?? undefined;
+    message.thread_id = object.thread_id ?? undefined;
     return message;
   },
 };

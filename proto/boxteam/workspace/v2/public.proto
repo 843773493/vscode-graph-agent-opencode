@@ -1959,6 +1959,8 @@ message TraceEventDTO {
   // 来源事件的带时区时间，Trace 映射保留其时刻与显式时区偏移，不在投影时重新取时；历史工具事件沿对应 canonical 消息/item 时间。
   google.protobuf.Timestamp timestamp = 13;
   optional google.protobuf.Struct raw = 14;
+  // 事件实际所属的 Thread；物理日志仍由 Session 持有。
+  string thread_id = 15;
 }
 
 message TraceObservedExecutionEventDTO {
@@ -2460,6 +2462,8 @@ message WorkspaceObservationSubscription {
   optional string trace_after = 5;
   repeated string paths = 6;
   optional int64 files_after = 7;
+  // 仅 Trace 观察者使用；省略时保留 Session 聚合视图。
+  optional string thread_id = 8;
 }
 
 message WorkspaceObservationRequest {

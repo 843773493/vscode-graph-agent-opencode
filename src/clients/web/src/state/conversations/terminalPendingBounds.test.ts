@@ -5,6 +5,7 @@ import {
   preservePendingTerminalConversation,
   writePendingSnapshot,
 } from "./pendingQueue";
+import { appendTraceEventsToPendingConversations, conversationMatchesTraceEvent } from "./traceProjection";
 
 const SESSION = "ses_terminal_pending_growth";
 
@@ -12,6 +13,7 @@ function terminalEvent(jobId: string): TraceEvent {
   return {
     event_id: `reconciled:${jobId}:job_completed`,
     session_id: SESSION,
+    thread_id: "thr_terminal_pending",
     job_id: jobId,
     type: "job_completed",
     phase: "job",
@@ -86,4 +88,26 @@ describe("pending 镜像中终态回合的保留必须是有界的", () => {
     expect(retained.some((conversation) => conversation.jobId === "job_59")).toBe(true);
     expect(retained.some((conversation) => conversation.jobId === "job_0")).toBe(false);
   });
+});
+
+test("聚合 Trace 即使 Job 或消息相同也不能进入其它 Session/Thread 的 pending", () => {
+  const conversation = liveConversation(1);
+  const matching = terminalEvent("job_1");
+  const byMessage = { ...matching, job_id: "job_other", payload: { message_id: "msg_1" } };
+  expect(conversationMatchesTraceEvent(conversation, matching)).toBe(true);
+  expect(conversationMatchesTraceEvent(conversation, byMessage)).toBe(true);
+  for (const event of [matching, byMessage, terminalEvent("job_unmatched")]) {
+    for (const changed of [{ thread_id: "thr_sibling" }, { session_id: "ses_other" }]) {
+      const foreign = { ...event, ...changed };
+      expect(conversationMatchesTraceEvent(conversation, foreign)).toBe(false);
+      const pending = new Map([[SESSION, [conversation]]]);
+      appendTraceEventsToPendingConversations(pending, SESSION, [foreign], SESSION, true);
+      expect(pending.get(SESSION)?.[0]).toBe(conversation);
+      expect(pending.get(SESSION)?.[0]?.pending).toBe(true);
+    }
+  }
+  const pending = new Map([[SESSION, [conversation]]]);
+  appendTraceEventsToPendingConversations(pending, SESSION, [matching], SESSION, true);
+  expect(pending.get(SESSION)?.[0]?.events).toEqual([matching]);
+  expect(pending.get(SESSION)?.[0]?.pending).toBe(false);
 });

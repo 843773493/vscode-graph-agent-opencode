@@ -38,6 +38,7 @@ def tool_items(
     messages: list[BaseMessage],
     *,
     job_id: str,
+    thread_id: str,
     fallback_timestamp: datetime,
     tool_call_ids: frozenset[str] | None = None,
 ) -> list[TraceEventDTO]:
@@ -98,6 +99,7 @@ def tool_items(
                             }
                         },
                         session_id=session_id,
+                        thread_id=thread_id,
                     )
                 )
         elif isinstance(message, ToolMessage):
@@ -130,6 +132,7 @@ def tool_items(
                         }
                     },
                     session_id=session_id,
+                    thread_id=thread_id,
                 )
             )
     return items
@@ -146,11 +149,13 @@ def tool_event(
     timestamp: datetime,
     raw: dict[str, object],
     session_id: str,
+    thread_id: str,
 ) -> TraceEventDTO:
     return TraceEventDTO(
         event_id=event_id,
         part_id=part_id,
         session_id=session_id,
+        thread_id=thread_id,
         job_id=job_id,
         type=event_type,
         phase="tool",
