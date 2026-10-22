@@ -264,10 +264,7 @@ def _checkpoint(
     checkpoint = empty_checkpoint()
     checkpoint["id"] = checkpoint_id
     checkpoint["channel_values"] = {"messages": messages}
-    checkpoint["channel_versions"] = {
-        channel: str(index + 1)
-        for index, channel in enumerate(checkpoint["channel_values"])
-    }
+    checkpoint["channel_versions"] = {"messages": checkpoint_id}
     checkpoint["updated_channels"] = list(checkpoint["channel_values"])
     return checkpoint
 
@@ -283,7 +280,7 @@ def _put_checkpoint(
         config,
         _checkpoint(checkpoint_id, messages),
         {"source": "job", "step": step},
-        {"messages": str(step)},
+        {"messages": checkpoint_id},
     )
 
 
