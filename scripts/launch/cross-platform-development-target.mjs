@@ -223,7 +223,7 @@ export async function runTargetCommand(args, { projectRoot = process.cwd() } = {
     return;
   }
   if (command === "test") {
-    await runTargetAction({
+    const result = await runTargetAction({
       target,
       projectRoot: configuration.projectRoot,
       action: "test",
@@ -236,6 +236,8 @@ export async function runTargetCommand(args, { projectRoot = process.cwd() } = {
         ...options.passthrough,
       ],
     });
+    if (result.stdout) process.stdout.write(`${result.stdout}\n`);
+    if (result.stderr) process.stderr.write(`${result.stderr}\n`);
     return;
   }
   if (command === "collect") {

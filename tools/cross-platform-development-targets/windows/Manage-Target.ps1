@@ -136,12 +136,12 @@ function Invoke-TargetAction([string[]]$Arguments) {
                 Assert-NativeCommand "uv sync"
                 bun install --frozen-lockfile
                 Assert-NativeCommand "bun install"
-                # TODO: 获得 VMware Windows 资源后验证 node-pty 原生模块重建路径。
-                node -e 'require("node-pty")'
+                # 使用 ESM 单引号参数，避免 PowerShell 5.1 重写原生命令中的双引号。
+                node --input-type=module -e 'import(''node-pty'')'
                 if ($LASTEXITCODE -ne 0) {
                     bun install --force --frozen-lockfile
                     Assert-NativeCommand "bun install --force"
-                    node -e 'require("node-pty")'
+                    node --input-type=module -e 'import(''node-pty'')'
                 }
                 if ($LASTEXITCODE -ne 0) { Fail-Target "node-pty Windows 原生模块不可用" }
                 bun install --cwd src/clients/web --frozen-lockfile
@@ -205,7 +205,10 @@ function Invoke-TargetAction([string[]]$Arguments) {
             $TestArgs = @($Values | Select-Object -Skip 5)
             $env:BOXTEAM_HOME = Resolve-ProfileHome $TargetHome $Profile $HomeOverride
             $env:WORKSPACE_ROOT = if ($WorkspaceOverride) { $WorkspaceOverride } else { Join-Path $env:BOXTEAM_HOME "boxteam_workspace" }
-            & (Join-Path $Repository ".venv\Scripts\python.exe") -m pytest @TestArgs
+            Push-Location $Repository
+            try {
+                & (Join-Path $Repository ".venv\Scripts\python.exe") tools/cross-platform-development-targets/windows/run-tests.py @TestArgs
+            } finally { Pop-Location }
             Assert-NativeCommand "pytest"
         }
         "prepare-collect" {
