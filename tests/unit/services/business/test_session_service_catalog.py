@@ -158,7 +158,8 @@ async def test_create_and_get_reads_title_and_parent_from_resolver(
 
     # child thread 列表读 owner control store：普通 Session 无控制库 →
     # 空列表（delegated child Session manifest 不再参与投影）。
-    threads = await service.list_child_threads(parent.session_id)
+    async with service.session_read_admission(parent.session_id):
+        threads = await service.list_child_threads(parent.session_id)
     assert threads.total == 0
     assert threads.items == []
 

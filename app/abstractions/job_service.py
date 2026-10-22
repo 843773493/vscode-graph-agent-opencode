@@ -91,7 +91,9 @@ class JobServiceProtocol(Protocol):
         *,
         limit: int,
         thread_id: str | None = None,
-    ) -> PendingRequestSummaryListDTO: ...
+    ) -> PendingRequestSummaryListDTO:
+        """在调用方持有的 Session 读准入内查询；不建立写入或执行准入。"""
+        ...
 
     async def update_pending_policy(
         self,

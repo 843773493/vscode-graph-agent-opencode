@@ -142,12 +142,11 @@ class SessionService:
 
     @asynccontextmanager
     async def session_read_admission(self, session_id: str) -> AsyncIterator[None]:
-        """冷读的全部 handle 持有 shared guard；删除不能提前标记或隔离。"""
-        async with (
-            self._navigation_topology_gate.shared(),
-            self._session_lifecycle_gate.shared(session_id),
-        ):
-            self.assert_session_active(session_id)
+        """短 topology 准入后以 Session shared guard 保护全部读取句柄。"""
+        async with AsyncExitStack() as admission:
+            async with self._navigation_topology_gate.shared():
+                await admission.enter_async_context(self._session_lifecycle_gate.shared(session_id))
+                self.assert_session_active(session_id)
             yield
 
     @asynccontextmanager
@@ -406,73 +405,74 @@ class SessionService:
         数据来自 owner ``session-control.sqlite```：thread_catalog 的
         child row 是唯一可见性提交点产物，collaboration ledger/member 提供
         delegation 语义，initial execution intent 提供 admission 状态。
+        调用方持有 session_read_admission，覆盖控制库读取及后续团队/运行态投影；
+        本方法不再取得第二次准入，避免持 Session guard 时反向等待 topology。
         旧 delegated child Session 链路已下线，不再读 manifest。
         """
         await self.get(session_id)
-        async with self.session_read_admission(session_id):
-            control_database = (
-                self._path_resolver.resolve_session_node(session_id)
-                / "session-control.sqlite"
-            )
-            if not control_database.is_file():
-                # 无控制库 = 该 Session 尚无 child thread（不建库、零副作用）。
-                return ChildThreadListDTO(parent_session_id=session_id, items=[], total=0)
-            with closing(SessionControlStore(control_database)) as control, control.read_transaction():
-                threads = control.list_child_thread_rows()
-                members = {
-                    member.child_thread_id: member
-                    for member in control.list_collaboration_members(
-                        coordinator_session_id=session_id
-                    )
-                }
-                intents = {
-                    intent.thread_id: intent
-                    for intent in control.list_initial_execution_intents()
-                }
-                forks = {
-                    record.child_thread_id: record
-                    for record in control.list_fork_thread_creations(state="published")
-                }
-            items: list[ChildThreadSummaryDTO] = []
-            for thread in threads:
-                self._path_resolver.resolve_thread_node(session_id, thread.thread_id)
-                member = members.get(thread.thread_id)
-                intent = intents.get(thread.thread_id)
-                fork = forks.get(thread.thread_id)
-                items.append(
-                    ChildThreadSummaryDTO(
-                        thread_id=thread.thread_id,
-                        created_at=thread.created_at,
-                        delegation_id=(
-                            member.delegation_id if member is not None else None
-                        ),
-                        role=member.role if member is not None else None,
-                        subagent_type=(
-                            member.subagent_type if member is not None else None
-                        ),
-                        title=(
-                            member.title if member is not None else
-                            json.loads(fork.request_intent_json)["display_title"]
-                            if fork is not None and fork.request_intent_json is not None else None
-                        ),
-                        collaboration_state=(member.state if member is not None else None),
-                        admission_state=(intent.state if intent is not None else None),
-                        report_execution_id=intent.execution_binding_id if intent is not None else None,
-                        status=(
-                            "running"
-                            if intent is not None and intent.state == "bound"
-                            else "failed"
-                            if member is not None and member.state == "cancelled"
-                            else "idle" if fork is not None else "pending"
-                        ),
-                    )
+        control_database = (
+            self._path_resolver.resolve_session_node(session_id)
+            / "session-control.sqlite"
+        )
+        if not control_database.is_file():
+            # 无控制库 = 该 Session 尚无 child thread（不建库、零副作用）。
+            return ChildThreadListDTO(parent_session_id=session_id, items=[], total=0)
+        with closing(SessionControlStore(control_database)) as control, control.read_transaction():
+            threads = control.list_child_thread_rows()
+            members = {
+                member.child_thread_id: member
+                for member in control.list_collaboration_members(
+                    coordinator_session_id=session_id
                 )
-            items.sort(key=lambda item: (item.created_at, item.thread_id), reverse=True)
-            return ChildThreadListDTO(
-                parent_session_id=session_id,
-                items=items,
-                total=len(items),
+            }
+            intents = {
+                intent.thread_id: intent
+                for intent in control.list_initial_execution_intents()
+            }
+            forks = {
+                record.child_thread_id: record
+                for record in control.list_fork_thread_creations(state="published")
+            }
+        items: list[ChildThreadSummaryDTO] = []
+        for thread in threads:
+            self._path_resolver.resolve_thread_node(session_id, thread.thread_id)
+            member = members.get(thread.thread_id)
+            intent = intents.get(thread.thread_id)
+            fork = forks.get(thread.thread_id)
+            items.append(
+                ChildThreadSummaryDTO(
+                    thread_id=thread.thread_id,
+                    created_at=thread.created_at,
+                    delegation_id=(
+                        member.delegation_id if member is not None else None
+                    ),
+                    role=member.role if member is not None else None,
+                    subagent_type=(
+                        member.subagent_type if member is not None else None
+                    ),
+                    title=(
+                        member.title if member is not None else
+                        json.loads(fork.request_intent_json)["display_title"]
+                        if fork is not None and fork.request_intent_json is not None else None
+                    ),
+                    collaboration_state=(member.state if member is not None else None),
+                    admission_state=(intent.state if intent is not None else None),
+                    report_execution_id=intent.execution_binding_id if intent is not None else None,
+                    status=(
+                        "running"
+                        if intent is not None and intent.state == "bound"
+                        else "failed"
+                        if member is not None and member.state == "cancelled"
+                        else "idle" if fork is not None else "pending"
+                    ),
+                )
             )
+        items.sort(key=lambda item: (item.created_at, item.thread_id), reverse=True)
+        return ChildThreadListDTO(
+            parent_session_id=session_id,
+            items=items,
+            total=len(items),
+        )
 
     async def create(self, session: SessionCreateRequest) -> SessionDTO:
         return await self._create(

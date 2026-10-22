@@ -649,14 +649,10 @@ class JobService:
         limit: int,
         thread_id: str | None = None,
     ) -> PendingRequestSummaryListDTO:
-        async def list_prepared() -> PendingRequestSummaryListDTO:
-            return await self._pending_requests.list_summaries(
-                session_id,
-                limit=limit,
-                thread_id=thread_id,
-            )
-
-        return await self.run_session_preparation(session_id, list_prepared)
+        """调用方的 Session 读准入覆盖摘要；只读查询不再次申请新业务准入。"""
+        return await self._pending_requests.list_summaries(
+            session_id, limit=limit, thread_id=thread_id,
+        )
 
     async def update_pending_policy(
         self,

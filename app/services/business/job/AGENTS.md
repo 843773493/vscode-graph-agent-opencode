@@ -19,6 +19,7 @@
 - 队列、active 槽、幂等准入和恢复保持精确 thread 归属；会话查询、删除和排空仍聚合该 Session 的全部 thread。
 - 持久化能力通过 abstractions 协议注入。
 - 所有队列状态变更必须在调度锁内完成。
+- bootstrap 的待处理摘要由外层 Session 读准入保护，只读摘要不再通过新消息 preparation 检查 active；已准入历史允许在 catalog deleting 后、原 guard 释放前完成。
 - 恢复始终刷新 SQLite 权威队列的内存投影，不能用已装载标志忽略新 acceptance；刷新不得替换原 active Job、claim 或 task。取队首、落盘及创建任务按精确 thread 串行；硬错误重试沿用原活动槽和 Job，不能重放已启动 sibling。
 - 没有运行任务体的取消共用收尾：canonical 取消成功后才发布内存终态、事件并唤醒原 thread 的 FIFO；落盘硬错误保留 cancelling 和原活动槽，允许原 Job 重试。
 - 没有运行任务体的取消共用收尾：canonical 取消成功后才发布内存终态、事件并唤醒原 thread 的 FIFO；落盘硬错误保留 cancelling 和原活动槽，允许原 Job 重试。

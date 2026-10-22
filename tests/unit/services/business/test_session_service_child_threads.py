@@ -366,7 +366,11 @@ async def test_list_child_threads_is_a_guarded_sqlite_snapshot_during_real_publi
 
     def read_child_threads() -> None:
         try:
-            reader_results.append(asyncio.run(service.list_child_threads(parent.session_id)))
+            async def read_guarded():
+                async with service.session_read_admission(parent.session_id):
+                    return await service.list_child_threads(parent.session_id)
+
+            reader_results.append(asyncio.run(read_guarded()))
         except Exception as error:  # noqa: BLE001 - 将读取线程异常传回主测试线程。
             reader_errors.append(error)
 
@@ -398,7 +402,8 @@ async def test_list_child_threads_is_a_guarded_sqlite_snapshot_during_real_publi
     assert not publication_finished_while_reader_paused
     assert len(reader_results) == 1
     assert reader_results[0].items == []
-    result_after_publish = await service.list_child_threads(parent.session_id)
+    async with service.session_read_admission(parent.session_id):
+        result_after_publish = await service.list_child_threads(parent.session_id)
     assert result_after_publish.total == 1
 
 
@@ -609,7 +614,8 @@ async def test_list_child_threads_projects_control_store_state(
     finally:
         control.close()
 
-    result = await service.list_child_threads(parent.session_id)
+    async with service.session_read_admission(parent.session_id):
+        result = await service.list_child_threads(parent.session_id)
 
     assert result.parent_session_id == parent.session_id
     assert result.total == 1
@@ -679,7 +685,8 @@ async def test_list_child_threads_derives_one_authoritative_status(
     finally:
         control.close()
 
-    result = await service.list_child_threads(parent.session_id)
+    async with service.session_read_admission(parent.session_id):
+        result = await service.list_child_threads(parent.session_id)
 
     assert result.total == 3
     assert {item.thread_id: item.status for item in result.items} == {
@@ -697,7 +704,8 @@ async def test_list_child_threads_empty_without_control_database(
 ) -> None:
     parent = await service.create(SessionCreateRequest(title="无子会话"))
 
-    result = await service.list_child_threads(parent.session_id)
+    async with service.session_read_admission(parent.session_id):
+        result = await service.list_child_threads(parent.session_id)
 
     assert result.parent_session_id == parent.session_id
     assert result.items == []
@@ -709,7 +717,8 @@ async def test_list_child_threads_parent_not_found(
 ) -> None:
     session_id = create_prefixed_id("ses")
     with pytest.raises(NotFoundError, match=session_id):
-        await service.list_child_threads(session_id)
+        async with service.session_read_admission(session_id):
+            await service.list_child_threads(session_id)
 
 
 async def test_list_child_threads_orders_by_created_at_desc(
@@ -740,7 +749,8 @@ async def test_list_child_threads_orders_by_created_at_desc(
     finally:
         control.close()
 
-    result = await service.list_child_threads(parent.session_id)
+    async with service.session_read_admission(parent.session_id):
+        result = await service.list_child_threads(parent.session_id)
 
     assert [item.thread_id for item in result.items] == [later, earlier]
     # 无 member 的 child row 仍可见，并保留 owner 创建的 pending intent。
@@ -801,7 +811,8 @@ async def test_child_creation_rejects_foreign_coordinator_identity(
     finally:
         verification.close()
 
-    result = await service.list_child_threads(parent.session_id)
+    async with service.session_read_admission(parent.session_id):
+        result = await service.list_child_threads(parent.session_id)
 
     # owner 不接受外部 coordinator 身份，失败前不产生 child/member。
     assert result.total == 1

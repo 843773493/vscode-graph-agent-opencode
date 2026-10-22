@@ -815,10 +815,12 @@ async def test_real_catalog_delete_closes_exact_session_graphs_before_isolation(
 
 
 async def test_real_initialized_child_file_tool_reaches_canonical_commit(
-    runtime_case: RuntimeCase, monkeypatch: pytest.MonkeyPatch,
+    runtime_case: RuntimeCase, monkeypatch: pytest.MonkeyPatch, runner_gateway_context: None,
+    gateway_skill_publication,
 ) -> None:
     """真实委派 child 初始化后的文件工具必须提交同一实时 canonical result。"""
     case = runtime_case
+    assert gateway_skill_publication is case.runner.container.resource_platform.gateway_skill_sources
     session_id, main_thread_id = await _session(case.runner)
     (case.runner.workspace / "runtime-tool-probe.txt").write_text("真实文件工具结果。\n")
     phases: list[tuple[str, str]] = []
@@ -873,7 +875,8 @@ async def test_real_initialized_child_file_tool_reaches_canonical_commit(
     monkeypatch.setattr(event_processor, "iter_agent_events", record_events)
     case.response_chunks = model_reply
     await _complete_job(case, session_id, main_thread_id, timeout_seconds=20)
-    children = await case.runner.container.session_service.list_child_threads(session_id)
+    async with case.runner.container.session_service.session_read_admission(session_id):
+        children = await case.runner.container.session_service.list_child_threads(session_id)
     assert len(children.items) == 1
     thread_id = children.items[0].thread_id
     initial_job = next(job for job in case.runner.container.job_service._jobs.values() if job.thread_id == thread_id)
@@ -885,6 +888,7 @@ async def test_real_initialized_child_file_tool_reaches_canonical_commit(
     assert len(case.model_requests) == 5
     assert len(case.compiled) == 2
     assert case.tracker.snapshot(session_id, thread_id).generation == initial_generation
+    assert {job.gateway_id for job in case.runner.container.job_service._jobs.values()} == {COMPACTION_GATEWAY_ID}
     tool_messages = [message for message in case.model_requests[-1]["messages"] if message.get("role") == "tool"]
     assert len(tool_messages) == 1 and "真实文件工具结果。" in tool_messages[0]["content"]
     call_id = case.model_dispatches[-2].callback_model_call_id
@@ -1275,19 +1279,24 @@ def compaction_runtime_call_profile(request: pytest.FixtureRequest, monkeypatch:
 
 
 @pytest.fixture
-def runner_compaction_gateway_context(
-    runtime_case: RuntimeCase, monkeypatch: pytest.MonkeyPatch,
-) -> Iterator[None]:
+def runner_gateway_context() -> Iterator[None]:
+    """直接服务入口显式绑定调用方 Gateway 与请求身份，再由 Job 冻结传递。"""
     gateway_token = set_current_gateway_id(COMPACTION_GATEWAY_ID)
     request_token = set_current_request_id("compaction-fork-request")
-    for kind in ("terminal", "browser"):
-        provider = runtime_case.runner.container.session_resource_service._provider_registry.get(kind)
-        monkeypatch.setattr(provider._owner._transport, "list_resources", AsyncMock(return_value=[]))
     try:
         yield
     finally:
         reset_current_request_id(request_token)
         reset_current_gateway_id(gateway_token)
+
+
+@pytest.fixture
+def runner_compaction_gateway_context(
+    runtime_case: RuntimeCase, monkeypatch: pytest.MonkeyPatch, runner_gateway_context: None,
+) -> None:
+    for kind in ("terminal", "browser"):
+        provider = runtime_case.runner.container.session_resource_service._provider_registry.get(kind)
+        monkeypatch.setattr(provider._owner._transport, "list_resources", AsyncMock(return_value=[]))
 
 
 async def test_real_runner_compaction_seals_candidates_then_continues_and_forks_selected_context(

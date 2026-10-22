@@ -32,6 +32,7 @@ from app.core.session_catalog_store import SessionCatalogStore
 from app.core.session_control_store import SessionControlStore
 from app.core.session_thread_context import session_thread_owner_scope
 from app.core.thread_creation import ThreadCreationService
+from app.core.trace_middleware import get_current_gateway_id, get_current_request_id
 from app.domain.itemized.epoch.tool_set import ToolSetSnapshot
 from app.domain.itemized.execution_admission import (
     ExecutionAdmission,
@@ -159,7 +160,8 @@ async def _start_job(case: RunnerCase, origin: str, session_id: str, thread_id: 
             queued_message,
             execution_identity=binding, queue_input=ExecutionQueueInput(
             execution_binding=binding, message_id=queued_message.message_id, agent_id="default",
-            provider_id=None, delivery_policy="after_turn", gateway_id=None, request_id=None,
+            provider_id=None, delivery_policy="after_turn", gateway_id=get_current_gateway_id(),
+            request_id=get_current_request_id(),
             created_at=queued_message.created_at.isoformat(),
         ),
         )
