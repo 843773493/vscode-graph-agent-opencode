@@ -29,6 +29,7 @@ function section8ScenarioRegistry(surfaces, facts) {
     goal_owner: { default: true, run: () => runGoalOwner(surfaces.a) },
     session_page_selection: { default: true, run: () => runSessionPageSelection(surfaces.a) },
     child: { default: true, run: () => runChildFifoAndResidency(surfaces.a) },
+    background_mailbox: { default: true, run: () => runBackgroundMailboxRecovery(surfaces.a) },
     runtime_shared_resources: { default: true, run: () => runRuntimeSharedResources(surfaces.a) },
     team_turn: { default: true, run: async () => runTeamActivation(surfaces.a, "turn", await teamTarget()) },
     team_model_call: { default: true, run: async () => runTeamActivation(surfaces.c, "model_call", await teamTarget()) },
@@ -7750,6 +7751,155 @@ async function runRealCompaction(surface) {
   assert.ok((await display.innerText()).includes("README"));
   return { sessionId: owner.sessionId, prepared, actual, summary: summaries[0], archiveRead,
     compactedRequest: compactedRequest.identity, activity: turn.activity_stats };
+}
+
+async function runBackgroundMailboxRecovery(surface) {
+  const main = await createProductSession(surface, "后台任务与子线程邮箱恢复");
+  const childThread = `thr_${await testControl({ action: "next_uuid", namespace: "thr" })}`;
+  await planChatCalls(main.sessionId, childThread, [finalResponse("background-child-ready", "后台任务子线程已就绪。")]);
+  await completeOwnerTurn(main, "创建负责后台时间消息的持久子线程。", [
+    toolResponse("background-delegate", "task", { description: "初始化后等待直接指令。", subagent_type: "general-purpose" }),
+    finalResponse("background-delegated", "子线程已经创建。"),
+    finalResponse("background-report", "子线程初始化报告已处理。"),
+  ]);
+  const child = { ...main, threadId: childThread, child: true };
+  const childRuntime = async () => (await ownerApi(child, `/api/v1/sessions/${child.sessionId}/child-threads`))
+    .data.items.find((item) => item.thread_id === child.threadId).runtime;
+  await waitUntil(async () => {
+    const items = (await ownerApi(main, `/api/v1/sessions/${main.sessionId}/child-threads`)).data.items;
+    return items.some((item) => item.thread_id === childThread && ["completed", "completed_empty"].includes(item.report_status));
+  }, "后台任务 child 初始 execution 完成", 120_000);
+  const bindingBefore = await graphBinding(child);
+  const sourceId = `background:${childThread}`;
+  // 首条立即发送；第二条前杀死实际 backend，以真实 checkpoint 恢复而不改业务时钟。
+  const emitted = await completeOwnerTurn(child, "每隔30秒发送两条系统时间消息。", [
+    toolResponse("background-emit", "emit_system_time_messages", { source_id: sourceId, interval_seconds: 30, message_count: 2 }),
+    finalResponse("background-emitting", "后台时间任务已启动。"),
+  ], [], { verifyHistory: false });
+  const emitResult = assertBoundToolResult(child, emitted.sent, emitted.turn, emitted.calls[0], "background-emit", "emit_system_time_messages");
+  const taskId = JSON.parse(emitResult.result).task_id;
+  const node = await sessionCatalogNode(child);
+  const taskRows = () => readFrozenControl(child, node,
+    "SELECT * FROM background_tasks WHERE task_id=?", [taskId]);
+  const mailboxRows = () => readFrozenControl(child, node,
+    "SELECT message_id,session_id,thread_id,agent_id,source_id,message_json FROM background_mailbox ORDER BY sequence");
+  let beforeTask;
+  await waitUntil(async () => {
+    [beforeTask] = await taskRows();
+    return beforeTask?.status === "running" && JSON.parse(beforeTask.checkpoint_json).next_index === 1;
+  }, "真实 emitting tool 已提交首条消息和 checkpoint");
+  const firstMailbox = await mailboxRows();
+  assert.deepEqual(firstMailbox.map((item) => item.message_id), [`${taskId}:message:0`]);
+  await testControl({ action: "advance_residency", seconds: 1800 });
+  const blockedRuntime = await childRuntime();
+  assert.equal(blockedRuntime.residency, "resident");
+  assert.ok(blockedRuntime.blockers.some((blocker) => blocker.kind === "background_task"));
+  const blockerDisplay = child.page.locator(`.child-thread-item[data-thread-id="${childThread}"] .child-thread-runtime`);
+  await waitUntil(async () => {
+    const text = await blockerDisplay.innerText();
+    return blockedRuntime.blockers.every((blocker) => text.includes(blocker.reason));
+  }, "右侧 child 列表展示真实非空后台任务 blocker");
+  const blockerText = await blockerDisplay.innerText();
+  assert.ok(!blockerText.includes(taskId) && !blockerText.includes(sourceId), "blocker 不得泄露内部任务或来源身份");
+  const blockerEvidence = { text: blockerText, reasons: blockedRuntime.blockers.map((blocker) => blocker.reason) };
+  const [activeLease] = await readFrozenControl(child, node,
+    "SELECT lease_id,state,operation_identity FROM session_operation_leases WHERE lease_id=?", [beforeTask.lease_id]);
+  assert.equal(activeLease.state, "active");
+  assert.equal(activeLease.operation_identity, taskId);
+  const graphBefore = await graphLifecycle(child);
+  const reopen = await replaceNodePage(surface, [main, child]);
+  const killed = await testControl({ action: "process", name: surface.name, operation: "kill" });
+  const restarted = await testControl({ action: "process", name: surface.name, operation: "start" });
+  assert.notEqual(killed.before_pid, restarted.after_pid);
+  await reopen();
+  let afterTask;
+  await waitUntil(async () => {
+    [afterTask] = await taskRows();
+    return afterTask?.status === "completed";
+  }, "backend 重启沿原任务 checkpoint 完成第二条消息", 120_000);
+  assert.equal(afterTask.task_id, beforeTask.task_id);
+  assert.equal(afterTask.lease_id, beforeTask.lease_id);
+  assert.equal(afterTask.descriptor_json, beforeTask.descriptor_json);
+  assert.ok(afterTask.fencing_token > beforeTask.fencing_token, "实际恢复必须领取新 token");
+  assert.equal(JSON.parse(afterTask.checkpoint_json).next_index, 2);
+  const mailbox = await mailboxRows();
+  const messageIds = [0, 1].map((index) => `${taskId}:message:${index}`);
+  assert.deepEqual(mailbox.map((item) => item.message_id), messageIds, "跨进程恢复不能重复逻辑消息");
+  for (const message of mailbox) {
+    assert.equal(message.session_id, child.sessionId);
+    assert.equal(message.thread_id, child.threadId, "后台输出不得落入 main thread");
+    assert.equal(message.source_id, sourceId);
+  }
+  const [settledLease] = await readFrozenControl(child, node,
+    "SELECT lease_id,state,operation_identity FROM session_operation_leases WHERE lease_id=?", [afterTask.lease_id]);
+  assert.equal(settledLease.state, "completed");
+  const resources = (await ownerApi(child, `/api/v1/sessions/${child.sessionId}/resources`)).data.items;
+  const resource = resources.find((item) => item.resource_id === taskId);
+  assert.equal(resource.status, "completed");
+  assert.equal(resource.metadata.thread_id, child.threadId);
+  const coldRuntime = await childRuntime();
+  assert.equal(coldRuntime.residency, "cold");
+  const graphCold = await graphLifecycle(child);
+  assert.equal(graphCold.compiled.length, graphBefore.compiled.length, "冷任务/资源读取不得构建 graph");
+  const bindingAfter = await graphBinding(child);
+  assert.deepEqual(bindingAfter, bindingBefore);
+
+  const label = "background-collect";
+  const calls = await planChatCalls(child.sessionId, child.threadId, [
+    toolResponse(label, "collect_background_messages", { source_id: sourceId, timeout_seconds: 1, poll_interval_seconds: 0.01 }),
+    finalResponse("background-collected", "恢复后的两条时间消息已收集。"),
+  ]);
+  const consumptionId = softwareOperation("background_collect", child, calls[0], label);
+  const barrier = { operation_id: `${calls[0]}:tool-call:${label}`, phase: "canonical.tool_result.before_commit" };
+  await testControl({ action: "arm", ...barrier });
+  await openOwner(child);
+  const sent = await sendOwnerPrompt(child, "收集本子线程的后台时间消息。");
+  await testControl({ action: "acknowledged", ...barrier });
+  const consumptionRows = () => readFrozenControl(child, node,
+    "SELECT * FROM background_consumptions WHERE consumption_id=?", [consumptionId]);
+  const [consumptionBefore] = await consumptionRows();
+  assert.equal(consumptionBefore.acknowledged, 0, "工具返回但 canonical 未提交时禁止 ack");
+  const batch = JSON.parse(consumptionBefore.batch_json);
+  assert.equal(batch.thread_id, child.threadId);
+  assert.deepEqual(batch.messages.map((item) => item.message_id), messageIds);
+  const canonicalResults = () => readRollout(child,
+    "SELECT item_id,semantic_kind,status,tool_call_id,projection_manifest_json FROM item_catalog WHERE semantic_kind='tool_result' AND json_extract(projection_manifest_json,'$.projection_identity.model_call_id')=?", [calls[0]]);
+  const canonicalBefore = await canonicalResults();
+  assert.deepEqual(canonicalBefore, []);
+  await testControl({ action: "release", ...barrier });
+  await waitForJobStatus(child, sent.jobId);
+  await waitForPlannedExecutions(child, calls);
+  const turn = await assertAcceptedTurn(child, sent);
+  const collected = assertBoundToolResult(child, sent, turn, calls[0], label, "collect_background_messages");
+  assert.deepEqual(JSON.parse(collected.result), batch, "canonical ToolResult 必须保留原冻结 batch");
+  const [consumptionAfter] = await consumptionRows();
+  assert.equal(consumptionAfter.acknowledged, 1);
+  assert.equal(consumptionAfter.batch_json, consumptionBefore.batch_json);
+  const canonicalAfter = await canonicalResults();
+  // stream attempt 与 checkpoint ToolMessage 是既有的两类载体；同类不能重复，公开投影只选一条。
+  const carrierKinds = canonicalAfter.map((item) => {
+    const identity = JSON.parse(item.projection_manifest_json).projection_identity;
+    assert.equal(identity.model_call_id, calls[0]);
+    assert.equal(item.status, "completed");
+    assert.ok([label, barrier.operation_id].includes(item.tool_call_id));
+    return identity.projection_message_id ? "checkpoint" : "attempt";
+  });
+  assert.equal(new Set(carrierKinds).size, canonicalAfter.length, "同一精确 tool call 的同类 canonical 载体不能重复");
+  assert.equal(canonicalAfter.filter((item) => item.item_id === collected.source.item_id).length, 1,
+    "唯一公开 ToolResult 必须精确关联已提交 canonical identity");
+  const history = await verifyOwnerTurns(child);
+  const mainHistory = await loadThreadHistory(main);
+  assert.ok(mainHistory.items.every((item) => item.response_parts.every((part) =>
+    !["emit_system_time_messages", "collect_background_messages"].includes(part.tool_name))), "main history 不得混入 child 工具");
+  const graphCollected = await graphLifecycle(child);
+  assert.equal(graphCollected.compiled.length, graphBefore.compiled.length + 1, "真实消费才重新构建 child graph");
+  assert.deepEqual(await graphBinding(child), bindingBefore);
+  return { sessionId: main.sessionId, mainThreadId: main.threadId, threadId: child.threadId, taskId,
+    beforeTask, afterTask, firstMailbox, mailbox, activeLease, settledLease, blockedRuntime, blockerEvidence, coldRuntime,
+    resource, killed, restarted, bindingBefore, bindingAfter, consumptionBefore, consumptionAfter,
+    canonicalBefore, canonicalAfter, projectedResultItemId: collected.source.item_id, batch, collectedBatch: JSON.parse(collected.result),
+    graphCounts: { before: graphBefore.compiled.length, cold: graphCold.compiled.length, collected: graphCollected.compiled.length },
+    emittingTurnId: emitted.sent.turnId, collectingTurnId: sent.turnId, history };
 }
 
 async function runRuntimeSharedResources(surface) {

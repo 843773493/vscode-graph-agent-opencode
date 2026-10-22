@@ -549,6 +549,49 @@ async def test_basic_chat_tool_loop_through_real_web_surface(
             assert rebuilt["details"]["generation"] > generation
             own, sibling = graph["initiallyResident"]["compiled"][0], graph["siblingGraph"]["compiled"][0]
             assert own["pid"] == sibling["pid"] and own["details"]["compiled_graph_object_id"] != sibling["details"]["compiled_graph_object_id"]
+        if "background_mailbox" in selected:
+            mailbox = result["section8"]["background_mailbox"]
+            assert mailbox["mainThreadId"] != mailbox["threadId"]
+            before, after = mailbox["beforeTask"], mailbox["afterTask"]
+            assert before["task_id"] == after["task_id"] == mailbox["taskId"]
+            assert before["thread_id"] == after["thread_id"] == mailbox["threadId"]
+            assert before["lease_id"] == after["lease_id"]
+            assert before["descriptor_json"] == after["descriptor_json"]
+            assert before["status"] == "running" and after["status"] == "completed"
+            assert after["fencing_token"] > before["fencing_token"]
+            assert json.loads(before["checkpoint_json"])["next_index"] == 1
+            assert json.loads(after["checkpoint_json"])["next_index"] == 2
+            assert mailbox["activeLease"]["state"] == "active"
+            assert mailbox["settledLease"]["state"] == "completed"
+            assert mailbox["killed"]["before_pid"] != mailbox["restarted"]["after_pid"]
+            expected_ids = [f"{mailbox['taskId']}:message:{index}" for index in range(2)]
+            assert [item["message_id"] for item in mailbox["firstMailbox"]] == expected_ids[:1]
+            assert [item["message_id"] for item in mailbox["mailbox"]] == expected_ids
+            assert all(item["thread_id"] == mailbox["threadId"] and item["session_id"] == mailbox["sessionId"]
+                       for item in mailbox["mailbox"])
+            assert mailbox["blockedRuntime"]["residency"] == "resident"
+            assert any(blocker["kind"] == "background_task" for blocker in mailbox["blockedRuntime"]["blockers"])
+            blocker = mailbox["blockerEvidence"]
+            assert blocker["reasons"] == [entry["reason"] for entry in mailbox["blockedRuntime"]["blockers"]]
+            assert blocker["reasons"] and all(reason in blocker["text"] for reason in blocker["reasons"])
+            assert mailbox["beforeTask"]["task_id"] not in blocker["text"]
+            assert mailbox["coldRuntime"]["residency"] == "cold"
+            assert mailbox["bindingBefore"] == mailbox["bindingAfter"]
+            counts = mailbox["graphCounts"]
+            assert counts["cold"] == counts["before"] and counts["collected"] == counts["before"] + 1
+            assert mailbox["consumptionBefore"]["acknowledged"] == 0
+            assert mailbox["consumptionAfter"]["acknowledged"] == 1
+            assert mailbox["consumptionBefore"]["batch_json"] == mailbox["consumptionAfter"]["batch_json"]
+            assert mailbox["canonicalBefore"] == []
+            canonical = mailbox["canonicalAfter"]
+            carrier_kinds = [bool(json.loads(item["projection_manifest_json"])["projection_identity"].get("projection_message_id"))
+                             for item in canonical]
+            assert len(set(carrier_kinds)) == len(canonical)
+            assert sum(item["item_id"] == mailbox["projectedResultItemId"] for item in canonical) == 1
+            assert all(item["status"] == "completed" for item in canonical)
+            assert mailbox["batch"] == mailbox["collectedBatch"]
+            assert [item["message_id"] for item in mailbox["batch"]["messages"]] == expected_ids
+            assert mailbox["batch"]["thread_id"] == mailbox["threadId"]
         if "skill_untrack" in selected:
             skill = result["section8"]["skill_untrack"]
             assert set(skill["skillLoadSummaries"]) == {"agent", "events", "requests"}

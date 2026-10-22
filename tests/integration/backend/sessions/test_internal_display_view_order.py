@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import base64
 import hashlib
+import json
 import os
 import sqlite3
 from collections.abc import Callable, Iterator
@@ -93,6 +95,21 @@ def test_cold_execution_selector_is_exact_and_has_frozen_bounded_continuation(hi
             environment.session_id, environment.thread_id,
             TurnHistoryLoadRequest(direction="before", execution_id="sibling-report", cursor=page.before_cursor),
         )
+    for field, wrong, message in (
+        ("session_id", "other-session", "当前 rollout"),
+        ("thread_id", "other-thread", "当前 rollout"),
+        ("checkpoint_ns", "other-namespace", "当前 rollout"),
+        ("rollout_id", "other-rollout", "当前 rollout"),
+        ("view_id", "other-view", "当前 context view"),
+    ):
+        payload = environment.history_reader._decode_cursor_payload(page.before_cursor)
+        payload[field] = wrong
+        cursor = base64.urlsafe_b64encode(json.dumps(payload, separators=(",", ":")).encode()).decode().rstrip("=")
+        with pytest.raises(InvalidTurnCursorError, match=message):
+            environment.history_reader.load(
+                environment.session_id, environment.thread_id,
+                TurnHistoryLoadRequest(direction="before", execution_id="report-owner", cursor=cursor),
+            )
 
 
 @dataclass(frozen=True, slots=True)

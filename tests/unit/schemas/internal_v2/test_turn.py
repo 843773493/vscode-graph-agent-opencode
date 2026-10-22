@@ -11,11 +11,24 @@ from app.schemas.internal_v2.turn import (
     TurnCursorDTO,
     TurnDetailBatchRequest,
     TurnDetailDTO,
+    TurnHistoryLoadRequest,
     TurnHistoryPageDTO,
     TurnSummaryDTO,
     TurnThinkingBlockDTO,
     TurnUserMessageSummaryDTO,
 )
+
+
+@pytest.mark.parametrize("conflict", [
+    {"turn_ids": ["turn_1"]}, {"tool_call_ids": ["call_1"]},
+    {"anchor_turn_id": "turn_1"}, {"turns": 1},
+    {"before_turns": 0}, {"after_turns": 1},
+    {"direction": "head"}, {"direction": "after"}, {"direction": "around"},
+    {"direction": "older"}, {"include": ["text"]}, {"include": []},
+])
+def test_execution_report_rejects_mixed_selectors_and_non_internal_include(conflict: dict[str, object]) -> None:
+    with pytest.raises(ValidationError, match="execution_id"):
+        TurnHistoryLoadRequest.model_validate({"execution_id": "report_1", **conflict})
 
 
 def _turn_fields() -> dict[str, object]:
