@@ -28,7 +28,10 @@
 
 ## 4. 持久化与迁移
 
-- [ ] 4.1 盘点只描述单工作区前提的旧持久化字段，按用户授权显式失效并删除旧读取分支，保留新写字段与单一读路径，不双读、不留别名。
+- [x] 4.1 盘点只描述单工作区前提的旧持久化字段，按用户授权显式失效并删除旧读取分支，保留新写字段与单一读路径，不双读、不留别名。
+  - 2026-10-22 固定 `192f679e` 的 writer/reader/失效清单见 `out/tests/temp/openspec_takeover/artifacts/mounted-persisted-fields-review-002.json`：registry v13 的 owner/namespace/connection/generation 不再推断，旧 SSH 直连字段显式拒绝；managed Backend 成员只存注册身份与 Backend UUID，根从原生 Gateway 唯一 binding 解析。旧版本、不完整成员或身份不符均在重写/启动前失败。Gateway active selection、local root binding 属控制面；desired_running、system_default、name_customized 是当前控制面状态，不能当作旧 Backend 单根别名删除。启动 mount manifest 是临时输入，不是第二持久根。
+  - Workspace config 只消费已提交 active snapshot 或实际 JSONC；无 active snapshot 时解析失败不退到旧 SQLite payload。Session catalog 只读 SQLite；只有旧 JSON 时明确报错，不导入、不双读、不扫盘。workspace identity/resource records 按显式工作区身份校验。旧 source_path/backup_path 列已由具名 SQL/配置 owner 迁移物理删除；显式安装命令的旧用户目录搬迁不属于 Backend 启动回退。
+  - 复用未变实现的原始验收：`config-source-authority-final-002` 75 passed、`registry-identity-final-002` 111 passed、`registry-identity-native-003` 真实冷恢复 1 passed，全部 exit0，相关静态检查通过；源码自该固定版本以来仅变更开发启动器。只读独审未发现本项代码缺口；准确命令、指纹、raw 与退出码保留在同目录 `runs/`。本项不代替 4.2 的停止 writer/精确清理回执、4.3 的真实路径闭包或 8.2 的整体实现核验。
 - [ ] 4.2 核验旧开发运行数据清理与新 writer 切换：停止对应写入后清理不兼容开发数据，保普通源码及独有未集成改动；不新增旧数据迁移/扫描/回填，fresh writer 与精确恢复错误必须修复并验证。
 - [ ] 4.3 校验**真实路径 / real path** 不变量（**三层分离 / three-layer separation**）：业务持久化记录、普通 API/Workspace DTO、解析结果、模型载荷与联邦资源投影 MUST NOT 出现 real path，只允许 `资源身份 / ResourceIdentity` + `资源 URI`（+ 独立 revision 字段）；工作区根例外是按 requirement「工作区物理根必须绑定到唯一原生 Gateway」持久化在原生 Gateway registry 的 root binding，该根不得复制到普通输出。
 - [x] 4.4 记录代码、数据与生成快照的回滚边界及不可回滚点：旧开发数据按授权失效/清理，不承诺恢复；新形态数据不能交旧 reader。原零 URI、无装配、seal 恒为空是历史取证，A01 `16f09ee7` 已接通真实 activation freeze/seal/restore，不重复派发已完成接线，不虚构旧 URI 迁移。
