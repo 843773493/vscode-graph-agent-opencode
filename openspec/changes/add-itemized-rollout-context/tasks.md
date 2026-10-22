@@ -949,3 +949,10 @@ pending 恢复的硬错误重试已闭合（2026-10-22）：进程内装载阶�
 
 - 普通 rollout 连接的文件形态校验、打开方式、schema 探测及 PRAGMA 初始化从 storage facade 原样迁入既有 `_RolloutSQLiteConnection.open`；facade 只保留 namespace/冻结来源准入与 Thread 路径解析。无新增 class/mixin、第二连接链路、SQL 或 schema 变化；参数替换后 AST 完全等价，facade 降为363行，连接原语678行，storage直接Python文件仍20。
 - 固定候选 tree `275b084afa3fd13dded29d2d9ca44abc1e3ccd26`：受保护 `sqlite-connection-owner-recovery-002` 中103项恢复/定位用例通过，4项fork因缺正式matrix watchdog在fixture setup报错（exit1）；正式 `fork-003` 补验 preflight/full-copy × idle/transaction reader，4 passed/69.09秒、exit0，原业务断言不变。Ruff/compileall `static-002` exit0；三组源码前后一致、运行组无残留，AST及独审001无finding。准确命令、raw和失败原件保留于同任务artifacts；仅闭合本切片，不代替7.5-F总门、完整Web或Windows实机重验。
+
+
+### 2026-10-22 7.5-F 当前架构与单一 owner 静态子门
+
+- 固定 HEAD `10dce8e8` 的完整Git归档 AST/import 清单覆盖 `domain/itemized`、`rollout_context` 与 `mapping/itemized`：250个Python文件、35个有源码目录、2382条import边，直接Python文件均≤20、单文件均≤800、所有目录含四段AGENTS；storage无LangChain/mapping import、mapping无I/O import，canonical item/plan/contribution/ToolSetRef及两facade各只有一个定义，v1 reader调用仅位于显式migration中，旧plan/owner聚合路径不存在。准确命令及exit0在`runs/rollout-current-architecture-003/`，逐文件SHA/符号/基类/方法/import图在`rollout-current-architecture-003.json`。
+- 独立静态owner审查`rollout-architecture-owner-review-002.json`核定domain plan、assembly registry/store、Saver/context owner、storage连接/维护及migration的唯一职责，无明确双writer/projector/schema/事实源或临时shim。受审`a3ccef84`到当前HEAD上述源码逐字不变。此前把公开委托、规范要求的thread-qualified路径端口误当多领域实现的finding已撤销：锁/冻结source准入/借用连接校验仍属于design1.1允许的storage访问与事务边界，不为降低行数新增owner。
+- 本收据关闭7.5-F的当前文件/职责/owner/import/规模静态子门，不把静态检查当作动态运行证明，不代替7.5-A–E、完整Provider/Web、线程恢复、URI全出口或Windows验收；7.5整项继续未勾。历史时点的越限记录留存，但不再作为当前重复拆分派单。
