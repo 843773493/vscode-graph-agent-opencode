@@ -12,7 +12,7 @@ function Assert-NativeCommand([string]$Label) {
 }
 
 function Require-AbsolutePath([string]$Value) {
-    if (-not [System.IO.Path]::IsPathFullyQualified($Value)) {
+    if ($Value -notmatch '^(?:[A-Za-z]:[\\/]|[\\/]{2}[^\\/]+[\\/][^\\/]+(?:[\\/]|$))') {
         Fail-Target "必须使用绝对路径: $Value"
     }
 }

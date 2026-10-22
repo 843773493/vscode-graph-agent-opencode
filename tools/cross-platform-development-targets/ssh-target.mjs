@@ -114,9 +114,17 @@ export async function runTargetAction({
     scriptPath,
     "utf8",
   )}`;
+  // 整体解析脚本；PowerShell 5.1 的逐行 stdin 模式可能吞掉解析失败并以 0 退出。
+  const bootstrap = [
+    "$ErrorActionPreference='Stop'",
+    "[Console]::InputEncoding=[Text.UTF8Encoding]::new($false)",
+    "[Console]::OutputEncoding=[Text.UTF8Encoding]::new($false)",
+    "try { $script=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String([Console]::ReadLine())); & ([scriptblock]::Create($script)); exit 0 } catch { [Console]::Error.WriteLine($_.ToString()); exit 1 }",
+  ].join("; ");
+  const encodedBootstrap = Buffer.from(bootstrap, "utf16le").toString("base64");
   return runCheckedWithInput(
-    sshCommand(target, "powershell.exe -NoLogo -NoProfile -NonInteractive -Command -"),
-    input,
+    sshCommand(target, `powershell.exe -NoLogo -NoProfile -NonInteractive -EncodedCommand ${encodedBootstrap}`),
+    `${Buffer.from(input, "utf8").toString("base64")}\n`,
     { cwd: projectRoot, label: `目标 ${target.id} Windows 动作 ${action}` },
   );
 }
