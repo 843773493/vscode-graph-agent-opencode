@@ -59,7 +59,9 @@ export function sshDestination(target) {
 }
 
 export function sshCommand(target, remoteCommand) {
-  return ["ssh", ...sshOptions(target), sshDestination(target), remoteCommand];
+  const command = ["ssh", ...sshOptions(target), sshDestination(target)];
+  if (remoteCommand !== undefined) command.push(remoteCommand);
+  return command;
 }
 
 export function scpCommand(target, localPath, remotePath) {
@@ -130,14 +132,25 @@ export async function runTargetAction({
 }
 
 function gitSshCommand(target) {
+  if (target.platform === "windows") {
+    const settings = JSON.stringify({
+      options: sshOptions(target),
+      destination: sshDestination(target),
+      repository: target.paths.repository.replaceAll("\\", "/"),
+    });
+    return [process.execPath, path.join(import.meta.dir, "windows-git-ssh.mjs"), settings]
+      .map(shellQuote).join(" ");
+  }
   return ["ssh", ...sshOptions(target)].map(shellQuote).join(" ");
 }
 
 function gitRemoteUrl(target) {
   if (target.platform === "windows") {
-    // TODO: 在真实 VMware Windows OpenSSH 环境验证盘符路径经 git-receive-pack 的转义规则。
+    // SCP 风格保留盘符；远端 shell 的引号由 Windows Git SSH 入口转换。
     const windowsPath = target.paths.repository.replaceAll("\\", "/");
-    return `ssh://${encodeURIComponent(target.ssh.user)}@${target.ssh.host}:${target.ssh.port}/${windowsPath}`;
+    const host = target.ssh.host.includes(":") && !target.ssh.host.startsWith("[")
+      ? `[${target.ssh.host}]` : target.ssh.host;
+    return `${target.ssh.user}@${host}:${windowsPath}`;
   }
   return `ssh://${encodeURIComponent(target.ssh.user)}@${target.ssh.host}:${target.ssh.port}${target.paths.repository}`;
 }
@@ -146,6 +159,7 @@ export function pushSnapshot({ target, projectRoot, snapshot }) {
   const environment = {
     ...process.env,
     GIT_SSH_COMMAND: gitSshCommand(target),
+    ...(target.platform === "windows" ? { GIT_SSH_VARIANT: "simple" } : {}),
   };
   return runChecked(
     ["git", "push", "--force", gitRemoteUrl(target), `${snapshot.commit}:${snapshot.ref}`],
