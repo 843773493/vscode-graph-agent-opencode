@@ -75,6 +75,10 @@ from app.services.infrastructure.rollout_context.activation.body import (
 from app.services.infrastructure.rollout_context.checkpoint.boundary.tool_protocol_boundary import (
     ToolProtocolBoundaryConflict,
 )
+from app.services.infrastructure.rollout_context.checkpoint.codec.message_channel import (
+    acheckpoint_messages,
+    checkpoint_messages,
+)
 from app.services.infrastructure.rollout_context.checkpoint.message_codec import (
     LangChainMessageCodec,
 )
@@ -403,8 +407,16 @@ async def test_native_http_tool_loop_replays_canonical_call_and_result(
             )
             for snapshot in snapshots
         ]
-        restored = restarted.get_tuple(build_checkpoint_config(saver._storage.storage.main_thread_id(session_id)))
-        restored_messages = restored.checkpoint["channel_values"]["messages"]
+        config = build_checkpoint_config(restarted._storage.storage.main_thread_id(session_id))
+        if mode == "sync":
+            restored = await asyncio.to_thread(restarted.get_tuple, config)
+            assert restored is not None
+            restored_messages = await asyncio.to_thread(checkpoint_messages, restarted, restored)
+        else:
+            restored = await restarted.aget_tuple(config)
+            assert restored is not None
+            restored_messages = await acheckpoint_messages(restarted, restored)
+        assert [message.id for message in restored_messages] == [message.id for message in result["messages"]]
         (assistant,) = [message for message in restored_messages if isinstance(message, AIMessage) and message.tool_calls]
         (tool_result,) = [message for message in restored_messages if isinstance(message, ToolMessage)]
         codec = LangChainMessageCodec()

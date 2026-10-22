@@ -837,3 +837,9 @@ pending 恢复的硬错误重试已闭合（2026-10-22）：进程内装载阶�
 - 用户明确选择各 Thread rollout SQLite 的单事务队列，替换早先 pending 物理存储留 Session 的限制；proposal/design/两份规范与本任务落点清单同步修正。此为规范裁定，不计实现或验收完成，8.3/8.5仍未勾。
 - 下一优先级为完整纵向切片：原 acceptance/internal admission 与控制引用原子发布 → 原 commit cursor FIFO/active claim → task 启动及终态/取消 → 冷恢复及 Session 聚合 → fork 不继承来源队列；迁齐所有 writer/reader 后删除 pending JSON 与内存独立排序。结构和实际版本迁移按 SQL 资产合同实施；当前受支持v5仅作显式一次性输入、验证失败保留原件，未受支持旧正文格式仍拒绝。性能长尾另行测量TODO，不能跳过领取窗口或原子性。
 - 验收通过真实消息、内部入口和 child binder 生成输入，覆盖 acceptance提交/claim/task创建/终态各进程硬退出、同Thread并发 FIFO、sibling并行、取消/策略冲突、重启原Job身份与一次执行、Session/main/child冷摘要及fork目标零来源队列。不得给helper手填metadata代替入口证明，也不得用静态validate勾选实现。
+
+
+### 2026-10-22 真实 HTTP 工具循环的 Delta 恢复验收修正
+
+- 复核此前 line408 的失败：测试直接遍历 raw `CheckpointTuple.channel_values["messages"]`，未消费官方 Delta 基准/增量恢复合同。真实 Saver 的该值可以为 `_DeltaSnapshot` 或省略，不能据此认定产品丢失工具历史。现按 sync/async 分别通过既有 `checkpoint_messages`/`acheckpoint_messages` 恢复，新增完整消息 ID 与实际 agent result 的有序相等断言；原工具配对、reasoning、canonical carrier、model-call 归属与 HTTP wire/hash 断言全部保留。
+- 固定候选 `047a81cc825450f95845d74d5ec47f1232f0adcc` 的 `http-delta-restore-focused-001` 为2 passed/17.86s、exit0，覆盖两种真实 SDK/TCP HTTP 工具循环及冷 Saver；`http-delta-restore-static-001` Ruff exit0。非作者只读审查无阻断，未独立复跑，见 `out/tests/temp/openspec_takeover/artifacts/http-delta-restore-review-001.json`。这纠正了上一条“恢复正确性缺口”的暂定归因，不代表7.5/8.13完整验收结束。
