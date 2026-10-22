@@ -27,7 +27,7 @@ from app.container import AppContainer, build_app_container
 from app.core.checkpoint_config import build_checkpoint_config
 from app.core.execution_admission_context import execution_admission_scope
 from app.core.identifier import create_prefixed_id
-from app.core.path_utils import get_session_path_resolver
+from app.core.path_utils import get_session_path_resolver, workspace_context
 from app.core.session_catalog_store import SessionCatalogStore
 from app.core.session_control_store import SessionControlStore
 from app.core.session_thread_context import session_thread_owner_scope
@@ -797,8 +797,12 @@ async def test_restart_restores_original_child_before_provider_dispatch(
         ]
         assert _facts(runner_case, session_id, child.child_thread_id)[1] == []
     finally:
-        await runner_case.container.job_service.force_interrupt_active(reason="test_recovery_teardown")
-        await runner_case.container.job_service.drain_finalizations()
+        with workspace_context(
+            runner_case.container.workspace_id, runner_case.workspace,
+            session_catalog=runner_case.container.session_catalog,
+        ):
+            await runner_case.container.job_service.force_interrupt_active(reason="test_recovery_teardown")
+            await runner_case.container.job_service.drain_finalizations()
 
 
 @pytest.fixture

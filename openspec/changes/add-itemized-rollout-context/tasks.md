@@ -957,3 +957,10 @@ pending 恢复的硬错误重试已闭合（2026-10-22）：进程内装载阶�
 - 固定 HEAD `10dce8e8` 的完整Git归档 AST/import 清单覆盖 `domain/itemized`、`rollout_context` 与 `mapping/itemized`：250个Python文件、35个有源码目录、2382条import边，直接Python文件均≤20、单文件均≤800、所有目录含四段AGENTS；storage无LangChain/mapping import、mapping无I/O import，canonical item/plan/contribution/ToolSetRef及两facade各只有一个定义，v1 reader调用仅位于显式migration中，旧plan/owner聚合路径不存在。准确命令及exit0在`runs/rollout-current-architecture-003/`，逐文件SHA/符号/基类/方法/import图在`rollout-current-architecture-003.json`。
 - 独立静态owner审查`rollout-architecture-owner-review-002.json`核定domain plan、assembly registry/store、Saver/context owner、storage连接/维护及migration的唯一职责，无明确双writer/projector/schema/事实源或临时shim。受审`a3ccef84`到当前HEAD上述源码逐字不变。此前把公开委托、规范要求的thread-qualified路径端口误当多领域实现的finding已撤销：锁/冻结source准入/借用连接校验仍属于design1.1允许的storage访问与事务边界，不为降低行数新增owner。
 - 本收据关闭7.5-F的当前文件/职责/owner/import/规模静态子门，不把静态检查当作动态运行证明，不代替7.5-A–E、完整Provider/Web、线程恢复、URI全出口或Windows验收；7.5整项继续未勾。历史时点的越限记录留存，但不再作为当前重复拆分派单。
+
+
+### 2026-10-22 持久队列调用方补验（部分收口）
+
+- 用户已授权同步本机凭据；完整HEAD archive候选仅链接本机.env，未向源码、profile、回执或Git写入凭据值。真实pending错误HTTP、Runner取消/恢复及Job Trace owner三个正式文件集中验证，保留原有身份、FIFO、终态、工具配对和冷恢复断言。发现恢复child的测试finally缺显式workspace上下文，主断言通过后清理失败；按生产lifespan相同方式绑定workspace_id/root/catalog后调用原force_interrupt_active及drain_finalizations，不改生产行为。
+- 固定完整tree `65009802a7092b98f602c5838df96164f5ab92b2` 的 `runner-workspace-teardown-001` Ruff/compileall通过，41 passed/105.44秒、exit0；源码前后相同且运行组无残留。前三次队列补验在端口18000预检失败，临时端口plugin最初只改分配函数未迁已导入引用，均零业务执行；修正本次隔离plugin后004为22 passed/1 failed，失败精确位于上述清理调用，不放宽断言或修改占用进程。最终验证改用31200/31300/31400隔离端口；这些装具仅在临时产物中。
+- 准确命令、指纹、raw及退出码位于 `out/tests/temp/openspec_takeover/artifacts/runs/queue-credential-validation-*` 与 `runs/runner-workspace-teardown-001/`。这是受控执行端口/模型资产Integration，不是外部Provider或完整进程恢复验收；解除旧收据中的缺凭据阻断，不据此勾选8.3或Section 8整体。
