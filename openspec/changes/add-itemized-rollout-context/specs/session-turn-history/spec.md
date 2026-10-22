@@ -176,6 +176,13 @@ main-thread history bootstrap、pending 队列和 active Job 展示 SHALL 消费
 - **WHEN** 产品准入已生成 main 与 child 的持久 pending 请求，恢复在装载后保存、取队首后保存或任务创建阶段发生硬错误，调用方在同进程重试
 - **THEN** 原错误明确返回；重试沿用原 Job、execution binding、活动槽和 FIFO，不重装覆盖已加载队列，也不重复启动已经运行的 sibling。恢复完成标记只在落盘及各 thread 派发结算后发布；同一 thread 的并发重试只创建一个任务，原取消收敛和删除 preparation 边界保持有效
 
+#### Scenario: 取消派发失败且没有执行任务的活动 Job
+
+- **WHEN** 恢复取出队首后在保存或创建任务阶段发生硬错误，用户直接取消这个尚无执行任务的活动 Job、运行时排空这些请求，或重试此前落盘失败的取消
+- **THEN** 取消必须先由 canonical owner 提交终态，再发布内存终态和一次取消事件、释放原 thread 的活动槽并唤醒原 FIFO 后继；冷 owner 读取仍为 cancelled，残留队列引用不得复活该请求
+- **AND** 终态落盘失败时明确返回原错误，保留 cancelling、原 Job 和原活动槽，后继不得提前执行；重试使用同一条收尾链路，不需要重新准入或重新装载队列
+- **AND** 排空按原请求逐项提交取消与事件，后续项失败不得丢失先前成功项的事件；排空不启动后继，重试不重复取消已终结项
+
 #### Scenario: 在右侧侧边栏查看 cold child 历史
 
 - **WHEN** 用户在当前Session右侧侧边栏选择一个已经卸载运行资源的child thread

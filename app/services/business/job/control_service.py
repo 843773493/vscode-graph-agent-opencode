@@ -110,7 +110,7 @@ class JobControlService:
         self._dispatch_lock = dispatch_lock
         self._start_job_task = start_job_task
         self._persist_terminal_status = persist_terminal_status
-        # 把「暂停中的 Job 被取消」接入与权威取消终态写入点同一条收尾链路：
+        # 没有运行任务体的取消统一走权威终态收尾：
         # 终态写入与活动槽释放、FIFO 唤醒必须成对发生。
         self._schedule_after_cancel = schedule_after_cancel
 
@@ -169,35 +169,17 @@ class JobControlService:
                     error_message="任务被用户取消",
                 )
                 pending_session_id = job.session_id
-            elif job.status == JobStatus.paused:
-                transition_job_status(
-                    job,
-                    JobStatus.cancelled,
-                    error_message="任务被用户取消",
-                )
-                # paused 的执行任务在暂停时刻即已结束（finally 已跑完），
-                # 之后不会再有任何代码释放活动槽；必须在此把终态与槽释放
-                # 放在同一条链路上，否则会话 FIFO 队首永久无人消费。
-                job_to_finalize = job
-            elif job.status == JobStatus.cancelling:
+            elif job.status in ACTIVE_JOB_STATUSES | {JobStatus.paused, JobStatus.cancelling}:
+                was_paused = job.status == JobStatus.paused
+                transition_job_status(job, JobStatus.cancelling)
                 if job.task is not None and not job.task.done():
                     task_to_cancel = job.task
+                    if was_paused:
+                        job_to_finalize = job
                 else:
-                    transition_job_status(
-                        job,
-                        JobStatus.cancelled,
-                        error_message="任务被用户取消",
-                    )
-            elif job.status in ACTIVE_JOB_STATUSES:
-                if job.task is not None and not job.task.done():
-                    transition_job_status(job, JobStatus.cancelling)
-                    task_to_cancel = job.task
-                else:
-                    transition_job_status(
-                        job,
-                        JobStatus.cancelled,
-                        error_message="任务被用户取消",
-                    )
+                    # 暂停或启动失败后已无任务体负责 finally；统一写入权威
+                    # 终态后再释放槽。落盘失败时保留 cancelling 以允许重试。
+                    job_to_finalize = job
             else:
                 raise JobControlValueError.terminal_job(
                     job_id,
@@ -225,9 +207,14 @@ class JobControlService:
                 self._resume_job_locked(job)
                 result = self._response(job_id, job, control_request)
         if job_to_finalize is not None:
+            if task_to_cancel is not None:
+                # 暂停任务可能仍在退出；先让其任务体/回调结算，保持 paused
+                # 取消返回终态的合同，同时避免两个收尾者并发发布事件。
+                await asyncio.gather(task_to_cancel, return_exceptions=True)
             # 在锁外等待收尾：control 返回时活动槽必已释放、FIFO 队首已被唤醒，
             # 不会留下「已 terminal 但槽未释放」的可观察中间态。
             await self._schedule_after_cancel(job_to_finalize)
+            result = self._response(job_id, job_to_finalize, control_request)
         if pending_session_id is not None:
             await self._pending_requests.persist(
                 await self._pending_requests.list(pending_session_id)

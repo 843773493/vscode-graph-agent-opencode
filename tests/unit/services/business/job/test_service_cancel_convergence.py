@@ -274,8 +274,9 @@ class _BlockFirstThenFast:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("wait_for_paused_task", [False, True])
 async def test_cancel_paused_after_task_done_releases_slot_and_wakes_fifo(
-    session_lifecycle_guard,
+    session_lifecycle_guard, wait_for_paused_task: bool,
 ) -> None:
     """P-1 回归：暂停后等执行任务彻底结束再取消，槽必须释放且 FIFO 队首被唤醒。
 
@@ -312,14 +313,17 @@ async def test_cancel_paused_after_task_done_releases_slot_and_wakes_fifo(
         first.job_id,
         JobControlRequest(action=ControlAction.pause),
     )
-    await _wait_job_task_done(service, first.job_id)
+    if wait_for_paused_task:
+        await _wait_job_task_done(service, first.job_id)
+    else:
+        assert not service._jobs[first.job_id].task.done()
 
-    await service.control(
+    response = await service.control(
         first.job_id,
         JobControlRequest(action=ControlAction.cancel),
     )
 
-    assert service._jobs[first.job_id].status == JobStatus.cancelled
+    assert response.status == service._jobs[first.job_id].status == JobStatus.cancelled
     # paused 被取消后活动槽必须立刻让位：要么空队列时清空，要么直接交给
     # 下一条 FIFO 队首；绝不允许仍停留在已终态的 first.job_id。
     assert service._thread_current_job.get((session_id, job_fixture_thread_id(session_id))) != first.job_id, (
@@ -334,6 +338,8 @@ async def test_cancel_paused_after_task_done_releases_slot_and_wakes_fifo(
         f"FIFO 队首未被唤醒: {service._jobs[second.job_id].status.value}"
     )
     await _wait_slot_cleared(service, session_id)
+    events = await service._bus.list_events(first.job_id)
+    assert [event.type for event in events].count("job_cancelled") == 1
 
 
 @pytest.mark.asyncio
@@ -370,3 +376,45 @@ async def test_force_interrupt_paused_releases_slot(session_lifecycle_guard) -> 
     assert service._thread_current_job.get((session_id, job_fixture_thread_id(session_id))) is None, (
         "排空 paused Job 后活动槽必须已释放"
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("task_finished", [False, True])
+async def test_cancel_active_without_live_task_releases_slot(
+    session_lifecycle_guard, monkeypatch: pytest.MonkeyPatch, task_finished: bool,
+) -> None:
+    service, executor = _make_service(session_lifecycle_guard)
+    session_id = "session_taskless_cancel"
+    identity = service.reserve_user_execution_identity()
+
+    async def finished() -> None:
+        return
+
+    def interrupted_start(job) -> None:
+        if task_finished:
+            job.task = asyncio.create_task(finished())
+            return
+        raise OSError("injected task start failure")
+
+    monkeypatch.setattr(service, "_start_job_task", interrupted_start)
+
+    async def start() -> None:
+        await service.start_job(
+            session_id, "第一条", message_id="msg_taskless",
+            message_created_at=datetime.now(UTC).isoformat(),
+            thread_id=job_fixture_thread_id(session_id), execution_binding=identity,
+        )
+
+    if task_finished:
+        await start()
+        await service._jobs[identity.job_id].task
+    else:
+        with pytest.raises(OSError, match="injected task start"):
+            await start()
+    result = await service.control(identity.job_id, JobControlRequest(action=ControlAction.cancel))
+    assert result.status == service._jobs[identity.job_id].status == JobStatus.cancelled
+    assert service._jobs[identity.job_id].ended_at is not None
+    assert (session_id, job_fixture_thread_id(session_id)) not in service._thread_current_job
+    assert executor.ran == 0
+    events = await service._bus.list_events(identity.job_id)
+    assert [event.type for event in events].count("job_cancelled") == 1

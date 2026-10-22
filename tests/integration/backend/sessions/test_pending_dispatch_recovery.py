@@ -18,8 +18,9 @@ from app.agents.graph_binding import (
 )
 from app.core.identifier import create_prefixed_id
 from app.core.job_event_bus import JobEventBus
+from app.core.path_utils import workspace_context
 from app.core.workspace_identity import load_or_create_workspace_id
-from app.schemas.internal_v2.common import MessageRole
+from app.schemas.internal_v2.common import JobStatus, MessageRole
 from app.schemas.internal_v2.job import JobControlRequest
 from app.schemas.internal_v2.message import MessageDTO
 from app.services.business.job.service import JobService
@@ -69,6 +70,8 @@ class PendingRecoveryCase:
     jobs: JobService
     executor: _HeldExecutor
     store: PendingRequestStore
+    workspace_id: str
+    workspace_root: Path
 
 
 @pytest.fixture
@@ -143,7 +146,10 @@ async def pending_recovery_case(request: pytest.FixtureRequest) -> AsyncIterator
         # 只关闭旧运行面；队列正文和控制引用全部来自上面的真实准入与派发入口。
         await _stop_jobs(source)
         assert [item.job_id for item in await store.load(session_id)] == [job for group in queued for job in group]
-        yield PendingRecoveryCase(session_id, threads, tuple(queued), cold, cold_executor, store)
+        yield PendingRecoveryCase(
+            session_id, threads, tuple(queued), cold, cold_executor, store,
+            workspace.workspace_id, workspace_root,
+        )
     finally:
         await _stop_jobs(source)
         await _stop_jobs(cold)
@@ -201,3 +207,107 @@ async def test_real_pending_queue_retries_without_replacing_or_replaying_sibling
     assert {thread: case.jobs._thread_current_job[(case.session_id, thread)] for thread in case.threads} == {
         thread: group[0] for thread, group in zip(case.threads, case.queued, strict=True)
     }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", ["dispatch_save", "task_start"])
+@pytest.mark.parametrize("operation,terminal_write_fails,fail_queued", [
+    ("cancel", False, False), ("cancel", True, False),
+    ("force_interrupt", False, False), ("force_interrupt", True, False),
+    ("force_interrupt", True, True),
+])
+async def test_cancel_unstarted_recovery_commits_terminal_and_wakes_original_fifo(
+    pending_recovery_case: PendingRecoveryCase, monkeypatch: pytest.MonkeyPatch,
+    failure: str, terminal_write_fails: bool, operation: str, fail_queued: bool,
+) -> None:
+    """派发硬错误后直接取消；冷 owner 必须看到取消，不能恢复成原请求。"""
+    case = pending_recovery_case
+    references = {item.job_id: item for item in await case.store.load(case.session_id)}
+    original_save = case.jobs._pending_requests.persist_current
+    original_start = case.jobs._start_job_task
+    saves = 0
+    starts: list[str] = []
+
+    async def fail_dispatch_save(session_id: str) -> None:
+        nonlocal saves
+        saves += 1
+        if failure == "dispatch_save" and saves == 2:
+            raise OSError("injected dispatch save failure")
+        await original_save(session_id)
+
+    def fail_task_start(job) -> None:
+        if failure == "task_start" and job.job_id == case.queued[0][0]:
+            raise OSError("injected task start failure")
+        starts.append(job.job_id)
+        original_start(job)
+
+    monkeypatch.setattr(case.jobs._pending_requests, "persist_current", fail_dispatch_save)
+    monkeypatch.setattr(case.jobs, "_start_job_task", fail_task_start)
+    with pytest.raises(OSError, match="injected"):
+        await case.jobs.list_pending(case.session_id)
+    first, successor = case.queued[0]
+    job = case.jobs._jobs[first]
+    successor_job = case.jobs._jobs[successor]
+    assert job.status == JobStatus.running and job.task is None
+    assert starts == []
+    writer = case.jobs._terminal_status_writer
+    original_terminal = writer.mark_job_terminal_status
+    terminal_failed = False
+
+    def fail_terminal_once(**kwargs):
+        nonlocal terminal_failed
+        fault_target = case.queued[1][0] if fail_queued else first
+        if terminal_write_fails and not terminal_failed and kwargs["job_id"] == fault_target:
+            terminal_failed = True
+            raise OSError("injected terminal write failure")
+        return original_terminal(**kwargs)
+
+    monkeypatch.setattr(writer, "mark_job_terminal_status", fail_terminal_once)
+
+    async def cancel():
+        if operation == "force_interrupt":
+            with workspace_context(case.workspace_id, case.workspace_root):
+                return await case.jobs.force_interrupt_active(reason="runtime_restart")
+        return await case.jobs.control(first, JobControlRequest(action="cancel"))
+
+    if terminal_write_fails:
+        with pytest.raises(OSError, match="injected terminal write"):
+            await cancel()
+        assert job.status == JobStatus.cancelling
+        assert case.jobs._thread_current_job[(case.session_id, case.threads[0])] == first
+        assert case.jobs._input_owner.accepted_job_outcome(references[first]) == "unknown"
+        assert starts == []
+        if fail_queued:
+            assert successor_job.status == JobStatus.cancelled
+            events = await case.jobs._bus.list_events(successor)
+            assert [event.type for event in events].count("job_cancelled") == 1
+    result = await cancel()
+    assert job.status == JobStatus.cancelled
+    assert job.ended_at is not None
+    assert case.jobs._jobs[successor] is successor_job
+    if operation == "cancel":
+        assert result.status == JobStatus.cancelled
+        assert case.jobs._thread_current_job[(case.session_id, case.threads[0])] == successor
+        assert starts == [successor]
+        assert await asyncio.wait_for(case.executor.started.get(), 5) == successor
+    else:
+        assert result == (3 if fail_queued else 1 if terminal_write_fails else 4)
+        assert all(item.status == JobStatus.cancelled for item in case.jobs._jobs.values())
+        assert case.jobs._thread_current_job == {}
+        assert starts == []
+    events = await case.jobs._bus.list_events(first)
+    assert [event.type for event in events].count("job_cancelled") == 1
+    cold_saver = RolloutCheckpointSaver(sessions_dir=case.store._sessions_dir)
+    admission = cold_saver.execution_admission_for_job(
+        case.session_id, thread_id=case.threads[0], job_id=first,
+    )
+    assert cold_saver.runtime_execution_outcome(
+        case.session_id, case.threads[0], admission.execution_id,
+    ) == "cancelled"
+    remaining = await case.store.load(case.session_id)
+    assert [item.job_id for item in remaining] == (list(case.queued[1]) if operation == "cancel" else [])
+    if operation == "force_interrupt":
+        for identity, reference in references.items():
+            assert case.jobs._input_owner.accepted_job_outcome(reference) == "cancelled"
+            events = await case.jobs._bus.list_events(identity)
+            assert [event.type for event in events].count("job_cancelled") == 1

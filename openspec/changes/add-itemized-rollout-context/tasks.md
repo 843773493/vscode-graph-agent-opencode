@@ -798,3 +798,12 @@ pending 恢复的硬错误重试已闭合（2026-10-22）：进程内装载阶�
 - 局部验收 `attachment-fork-staging-focused-005` 为8 passed/3.31s，覆盖 preparing保留、三类终态、活 writer、同blob其它operation隔离、物理删除失败及GC重试。初轮001/003的新增fixture分别遗漏mode/gateway前置和JSON tuple/list归一比较，均在业务完整验收前修正；原失败输出保留，不计通过。固定候选 `552464af75d13169a9dd59216541c59e152dac17` 排除接手前其它代理改动。`attachment-fork-staging-entry-006` 100 passed/125.02s；正式matrix `attachment-fork-staging-fork-007` 6 passed/26.37s，覆盖main/child上传pin结算及两模式发布失败的精确保活释放；`attachment-fork-staging-static-008` Ruff/compileall/43项严格OpenSpec校验exit0。真实三端HTTP/SSH `attachment-fork-staging-network-004` 2 passed/224.92s：产品入口生成消息、附件、fork，import_staged处终止真实target进程，仅在停机后删除尚未冻结的captured marker注入故障；main/child启动恢复均按原creation/claim终结、清理staging，重复重启不改身份，source正文不受影响。该网络运行使用candidate001，其生产源码与网络测试逐字等于candidate003；两者只差新增局部unit fixture的修正。原件、准确命令、source指纹及退出码在本任务artifacts/runs；8.3总项继续保留未勾。
 
 - 非作者固定候选审查无阻塞，报告 `attachment-fork-staging-review/current-worktree-review.md`。独立完整tree导出仅变异collector的holder未取得分支为继续删除，受保护用例明确变红（1 failed/2.80s，删除活writer staging后空结果断言失败），原件由review目录保存。最终提交相较candidate003只整理design段落位置/AGENTS空白并登记本收据，产品源码与测试不变。
+
+
+### 2026-10-22 8.3 启动失败后的取消与排空收尾
+
+- 恢复取队首后的保存或任务创建硬错误会保留原 taskless active Job；用户取消、paused 取消及任务体未进入时的取消统一先提交 canonical 终态，再发布内存终态、一次取消事件并交还原 thread FIFO。终态写入失败保留 cancelling/原活动槽，原 Job 可重试；paused task 尚在退出时先等它结算，取消响应仍返回终态。
+- 运行时排空的 queued 项逐条写 canonical、移除该项并发布事件，不再整 Session 清空；中途写失败不丢此前成功项事件，不提前运行后继。paused/taskless active 复用上述收尾，事件总线缺失在副作用前报错。
+- 固定候选 `e692f22339ab03e2306c27099d7c9a33e397881b` 的 Job 全目录 `taskless-cancel-unit-final-004` 为99 passed/36.54s，运行时/排空相邻 `taskless-cancel-runtime-adjacent-001` 为22 passed/4.94s；Ruff `taskless-cancel-static-003` exit0。`taskless-cancel-entry-004` 为14 passed/97.33s：产品 Session/child、canonical acceptance、Job 准入生成双 thread 队列，覆盖两个派发故障、取消/排空及 active/queued 终态落盘失败重试、冷 Saver outcome、原 FIFO/Job 身份与一次事件。该项为重开调度器和替换执行端口，不是整进程/Provider 验收；007→008 service 与集成文件逐字相同，008仅补 paused 活任务等待分支及其单测，复用依据为 `taskless-cancel-validation-reuse-001.json`。
+- 完整候选导出后仅恢复旧 control 的 `taskless-cancel-mutation-red-001` 为1 failed/0.43s，明确在活动槽未释放处失败。非作者只读复核确认 queued 中途失败漏事件问题已修、当前 durable listeners 无反向等待 dispatch_lock 的路径。最终 compileall/43项严格 OpenSpec 检查另行保留收据。初轮 `taskless-cancel-entry-003` 的4失败来自新排空测试遗漏显式 workspace context，8项通过；补齐上下文后由004覆盖，不把003记为全绿。
+- 8.3保持未勾：独审确认 admission/queue 的原子排序和 claim→task start 的进程崩溃窗口尚未闭合，继续下一核心切片，不把本项同进程重试当作完整持久队列验收。准确命令、源码指纹、raw、退出码、候选及变异原件位于 `out/tests/temp/openspec_takeover/artifacts/`。

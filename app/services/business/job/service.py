@@ -313,6 +313,8 @@ class JobService:
         blockers = await self.drain_blockers()
         if not blockers:
             return 0
+        if self._bus is None:
+            raise RuntimeError("JobService 未绑定 JobEventBus")
 
         active_blockers: list[JobDrainBlocker] = []
         sessions_with_queued_jobs: set[str] = set()
@@ -328,6 +330,7 @@ class JobService:
                 job.cancellation_reason = reason
                 if job.status in {JobStatus.accepted, JobStatus.queued}:
                     was_queued = job.status == JobStatus.queued
+                    await self._persist_terminal_execution_status(job, "cancelled")
                     transition_job_status(
                         job,
                         JobStatus.cancelled,
@@ -337,17 +340,19 @@ class JobService:
                     if was_queued:
                         sessions_with_queued_jobs.add(job.session_id)
                         queued_blocker_ids.add(job.job_id)
+                        self._pending_queue.remove(job.session_id, job.job_id)
+                    # 每项成功后立即完成事件；后续项失败不得漏掉此前取消。
+                    await self._bus.publish(
+                        job_id=job.job_id, event_type=EventType.JOB_CANCELLED,
+                        payload={"session_id": job.session_id}, agent_id="job_service",
+                    )
                     continue
                 transition_job_status(job, JobStatus.cancelling, now=now)
                 if job.task is not None and not job.task.done():
                     tasks.append(job.task)
-            for session_id in sessions_with_queued_jobs:
-                self._pending_queue.clear(session_id)
 
         if not active_blockers:
             return 0
-        if self._bus is None:
-            raise RuntimeError("JobService 未绑定 JobEventBus")
         for blocker in active_blockers:
             if blocker.job_id in queued_blocker_ids:
                 continue
@@ -367,21 +372,11 @@ class JobService:
             task.cancel()
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
-        ended_at = datetime.now()  # noqa: DTZ005
         for blocker in active_blockers:
             job = self._jobs.get(blocker.job_id)
             if job is None or job.status != JobStatus.cancelling:
                 continue
-            transition_job_status(
-                job,
-                JobStatus.cancelled,
-                error_message=reason,
-                now=ended_at,
-            )
-            # 被排空的 Job 若执行任务早已结束（例如 paused 后任务体已跑完
-            # finally），其 finally 不会再触发调度；必须在写入终态的同一链路
-            # 上释放活动槽并唤醒 FIFO 队首，否则会话永久无人消费。
-            await self._schedule_next_job_if_needed(job)
+            await self._finalize_cancelled_without_task_body(job)
         for session_id in sessions_with_queued_jobs:
             await self._pending_requests.persist(
                 await self._pending_requests.list(session_id)
@@ -1073,10 +1068,10 @@ class JobService:
     ) -> None:
         """任务体未进入 try 就被取消时补齐取消终态并交还会话。
 
-        唯一权威终态写入点仍是 ``_run_job_background`` 的 except
-        CancelledError 分支。只有任务以 cancelled 结束、且 Job 仍处于
-        ``cancelling``（说明任务体从未进入 try，权威写入点没有机会执行）时
-        才在此补写。其它情况一律不写：
+        已进入任务体的取消由 ``_run_job_background`` 的 except
+        CancelledError 分支负责；任务体未进入时，与 taskless Job 共用
+        ``_finalize_cancelled_without_task_body``，先写 canonical 再提交内存终态。
+        其它情况一律不写：
 
         - 已进入任务体的取消由权威写入点负责，此处看到终态后跳过；
         - ``paused`` 是用户可 resume 显式持有的非终态，任务结束但语义未
@@ -1092,8 +1087,7 @@ class JobService:
             return
         transition_job_status(
             job,
-            JobStatus.cancelled,
-            error_message=job.cancellation_reason or "任务被用户取消",
+            JobStatus.cancelling,
         )
         logger.info(
             "[job_service] 任务体未启动即被取消，补写取消终态: job_id=%s session_id=%s",
@@ -1106,15 +1100,27 @@ class JobService:
 
     async def _finalize_cancelled_without_task_body(self, job: JobState) -> None:
         """补齐权威写入点在取消路径上会做的收尾：Turn 终态、事件、交还会话。"""
-        await self._persist_terminal_execution_status(job, "cancelled")
-        if self._bus is not None:
-            await self._bus.publish(
-                job_id=job.job_id,
-                event_type=EventType.JOB_CANCELLED,
-                payload={"session_id": job.session_id},
-                agent_id="job_service",
-            )
-        await self._schedule_next_job_if_needed(job)
+        async def finalize() -> None:
+            async with self._dispatch_lock:
+                if job.status != JobStatus.cancelled:
+                    await self._persist_terminal_execution_status(job, "cancelled")
+                    transition_job_status(
+                        job, JobStatus.cancelled,
+                        error_message=job.cancellation_reason or "任务被用户取消",
+                    )
+                    publish_cancelled = True
+                else:
+                    publish_cancelled = False
+            if publish_cancelled and self._bus is not None:
+                await self._bus.publish(
+                    job_id=job.job_id,
+                    event_type=EventType.JOB_CANCELLED,
+                    payload={"session_id": job.session_id},
+                    agent_id="job_service",
+                )
+            await self._schedule_next_job_if_needed(job)
+
+        await run_cleanup_shielded(finalize)
 
     async def _enqueue_or_dispatch(
         self,
