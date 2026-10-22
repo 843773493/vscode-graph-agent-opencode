@@ -659,6 +659,7 @@ class CheckpointForkOwner:
         capture = self._storage.forks._catalog_store().get_fork_source_capture(creation_key=record.thread_creation_idempotency_key)
         if capture is not None and self.source.attachment_store is not None:
             await self.source.attachment_store.finalize_copy_attachments(capture, publication_preimage_hash=record.preimage_hash)
+            await self.source.attachment_store.recover_idle_session(capture.target_session_id, messages=self.source._checkpoint)
 
     async def abort_prepared_child_fork(self, target_session_id: str, record: ThreadCreationRecord) -> bool:
         if record.state != "preparing" or record.purpose != "fork":
@@ -675,7 +676,9 @@ class CheckpointForkOwner:
         self.require_target_capture(capture, creation=record)
         final = self._storage.storage._path_resolver.resolve_session_node(target_session_id) / record.final_relative_locator
         if capture.state == "aborted" and not (final.exists() or final.is_symlink()):
-            # catalog 中止前附件和 retention 已终结；目录清理后的重入只补删私有快照。
+            # 中止已 durable 也须重试上传 pin 收敛，前次可能在定点恢复前中断。
+            if self.source.attachment_store is not None:
+                await self.source.attachment_store.recover_idle_session(target_session_id, messages=self.source._checkpoint)
             remove_captured_snapshot(self._storage.storage.sessions_dir, capture)
             return False
         with self._storage.storage.prepared_child_fork_target_scope(target_session_id, record):
@@ -700,6 +703,8 @@ class CheckpointForkOwner:
                 if self.source.attachment_store is not None:
                     self.source.attachment_store.abort_copy_attachments(capture, record)
                 catalog.abort_unpublished_fork_capture(capture, creation=record, reason="child publication failed")
+            if self.source.attachment_store is not None:
+                await self.source.attachment_store.recover_idle_session(target_session_id, messages=self.source._checkpoint)
             remove_captured_snapshot(self._storage.storage.sessions_dir, capture)
             return has_rollout
 
@@ -712,6 +717,7 @@ class CheckpointForkOwner:
         capture = self._storage.forks._catalog_store().get_fork_source_capture(creation_key=record.session_creation_idempotency_key)
         if capture is not None and self.source.attachment_store is not None:
             await self.source.attachment_store.finalize_copy_attachments(capture, publication_preimage_hash=record.preimage_hash)
+            await self.source.attachment_store.recover_idle_session(capture.target_session_id, messages=self.source._checkpoint)
 
     def abort_prepared_capture(self, record: SessionCreationRecord, reason: str) -> None:
         if record.state != "preparing" or record.purpose != "context_fork":

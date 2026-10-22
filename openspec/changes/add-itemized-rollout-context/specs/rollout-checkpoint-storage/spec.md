@@ -292,6 +292,18 @@ pin与workspace ingest MUST以稳定operation identity形成显式跨库saga，�
 
 相同 digest 的后续上传 MUST 复用既有 blob 和首次 locator，不得按上传日期复制。删除 Session/thread/item 时只移除相应 reference；存在 canonical item、active execution、sealed assembly、checkpoint/operation pin 或其它有效 owner reference 时不得删除正文。满足零引用与 retention 后，GC MUST 先原子提交 tombstone/availability，再删除物理 blob；失败可幂等重试。canonical `attachment_ref` 与外部 API不得包含物理 locator，访问必须同时校验 workspace、session、thread、item/view membership、hash/length 和 capability。
 
+上传 MUST 先冻结消息 ID，并将其绑定到原 pin 的恢复引用和 preimage。正文发布不得提前完成 pin；用户 acceptance 或内部 notice admission 提交后，canonical owner MUST 核验原始接受提交及同一 item 的附件使用索引，再结算该消息的 pin。恢复 MUST 先排空消息准备 holder 并取得 Session gate；未接受消息的引用只有在同 Session 所有已发布 Thread 均无 canonical 使用且无 fork 保活时才可定点释放，禁止释放整个 Thread/Session。fork 准备期仍有 claim/mapping 保活时 MUST 保留原 pin，直至发布或撤销后重新核验。fork 发布、中止或目标 Thread 删除后，必须在释放事务和 Session gate 后触发同一定点恢复，不依赖下次进程启动；活上传 holder 仍不得被抢占。缺少消息身份、正文/索引或接受提交不一致 MUST 明确失败；不建立第二份消息正文或附件使用事实。
+
+#### Scenario: 正文已发布但消息尚未接受时崩溃
+
+- **WHEN** 上传已发布 owner reference，但消息尚未通过用户 acceptance 或内部 notice admission，随后进程退出
+- **THEN** pin 仍非终态；恢复只释放该失败消息无其他 canonical 使用及 fork 保活的精确引用，再终结原 pin，不改变同 Thread 已接受消息或共享 blob 的其他 owner
+
+#### Scenario: 消息已接受但 pin 尚未结算时崩溃
+
+- **WHEN** canonical 接受事务已提交，进程在 pin active 或 settling 状态退出
+- **THEN** 恢复验证原消息、接受提交和附件使用索引后结算原 pin，保留附件读取；旧 fencing token 不能再次回调，索引损坏时不得视为消息未接受而释放引用
+
 #### Scenario: 相同正文跨日期并发上传
 
 - **WHEN**两个ingest在UTC日期边界两侧完成相同正文的hash并竞争digest claim

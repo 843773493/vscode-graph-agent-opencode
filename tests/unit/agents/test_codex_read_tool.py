@@ -15,6 +15,7 @@ from langchain_core.messages import ToolMessage
 from pydantic import ValidationError
 
 from app.agents.workspace_backend import build_workspace_backend
+from app.core.identifier import create_uuid_hex
 from app.core.resource_uri import parse_session_artifact_uri, resource_display_uri
 from app.core.trace_middleware import get_current_gateway_id
 from app.core.workspace_identity import bind_workspace_id
@@ -420,7 +421,7 @@ async def attachment_tools(configure_filesystem_tools, tmp_path: Path, session_b
     session_bundle_factory(tmp_path / ".boxteam" / "sessions", session_id)
     store = AttachmentBlobStore(tmp_path)
     data = b"\x89PNG\r\n\x1a\nattachment"
-    ref = (await store.persist_inline(session_id, [AttachmentRef(file_id="inline:abc.png", name="abc.png", content_type="image/png", data_url="data:image/png;base64," + base64.b64encode(data).decode())], thread_id=store._path_resolver.main_thread_id(session_id)))[0]
+    ref = (await store.persist_inline(session_id, [AttachmentRef(file_id="inline:abc.png", name="abc.png", content_type="image/png", data_url="data:image/png;base64," + base64.b64encode(data).decode())], thread_id=store._path_resolver.main_thread_id(session_id), message_id="msg_" + create_uuid_hex(namespace="message")))[0]
 
     def read(file_id, max_bytes):
         if parse_session_artifact_uri(file_id).tail_segments[0] != session_id:

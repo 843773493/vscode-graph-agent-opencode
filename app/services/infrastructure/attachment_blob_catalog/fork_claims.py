@@ -232,7 +232,8 @@ class ForkAttachmentClaimsMixin:
             for row in rows:
                 snapshot = _claim_snapshot(row)
                 current = row["state"]
-                if current == state:
+                if current == state or (current == "aborted" and state == "target_deleted"):
+                    # 删除可清理已经中止操作的残留 alias，但不得改写终态或释放别人的引用。
                     continue
                 if current in {"aborted", "target_deleted"} or (state == "committed" and current != "owner_reserved") or (state == "aborted" and current == "committed"):
                     raise RuntimeError("fork attachment claim 终态 CAS 冲突")
@@ -250,6 +251,9 @@ class ForkAttachmentClaimsMixin:
                 if state != "committed":
                     connection.execute("UPDATE attachment_owner_refs SET state = 'released', released_reason = ?, updated_at = ? WHERE owner_ref_id = ? AND state = 'active'", (state, datetime.now(UTC).isoformat(), row["target_owner_ref_id"]))
                 connection.execute("UPDATE fork_attachment_claims SET state = ? WHERE claim_id = ?", (state, row["claim_id"]))
+            if state in {"aborted", "target_deleted"}:
+                # 未发布或已删除目标不再拥有 alias，尤其不能留下无 claim 的 main 引用保活。
+                connection.execute("DELETE FROM fork_attachment_mappings WHERE copy_operation_id=?", (copy_operation_id,))
 
     def fork_attachment_claim_ids(self, copy_operation_id: str) -> tuple[str, ...]:
         rows = self._connected().execute("SELECT claim_id FROM fork_attachment_claims WHERE copy_operation_id = ? ORDER BY claim_id", (copy_operation_id,)).fetchall()
@@ -272,9 +276,11 @@ class ForkAttachmentClaimsMixin:
 
     def fork_attachment_operations_for_target(self, target_session_id: str, *, target_thread_id: str | None = None) -> tuple[str, ...]:
         rows = self._connected().execute(
-            "SELECT DISTINCT copy_operation_id FROM fork_attachment_claims WHERE target_session_id=? "
-            "AND (? IS NULL OR target_thread_id=?) AND state NOT IN ('aborted','target_deleted') ORDER BY copy_operation_id",
-            (target_session_id, target_thread_id, target_thread_id),
+            "SELECT copy_operation_id FROM fork_attachment_claims WHERE target_session_id=? "
+            "AND (? IS NULL OR target_thread_id=?) AND state NOT IN ('aborted','target_deleted') "
+            "UNION SELECT copy_operation_id FROM fork_attachment_mappings WHERE target_session_id=? "
+            "AND (? IS NULL OR target_thread_id=?) ORDER BY copy_operation_id",
+            (target_session_id, target_thread_id, target_thread_id, target_session_id, target_thread_id, target_thread_id),
         ).fetchall()
         return tuple(row[0] for row in rows)
 

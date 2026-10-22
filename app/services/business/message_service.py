@@ -143,10 +143,11 @@ class MessageService(MessageContentProjectionMixin):
                 "委派、跨会话和团队消息的来源请写入 metadata"
             )
         thread_id = thread_id or self._resolve_main_thread_id(session_id)
+        message_id = create_prefixed_id("msg")
         attachments = message_create.attachments
         if self._attachment_store is not None:
             attachments = await self._attachment_store.persist_inline(
-                session_id, attachments, thread_id=thread_id,
+                session_id, attachments, thread_id=thread_id, message_id=message_id,
             )
         if attachments:
             content_service = AttachmentContentService(
@@ -155,7 +156,7 @@ class MessageService(MessageContentProjectionMixin):
             attachments = [content_service.resolve_reference(attachment) for attachment in attachments]
         now = datetime.now(UTC)
         return MessageDTO(
-            message_id=create_prefixed_id("msg"),
+            message_id=message_id,
             session_id=session_id,
             thread_id=thread_id,
             role=message_create.role,
@@ -204,6 +205,11 @@ class MessageService(MessageContentProjectionMixin):
             root_item_id=f"item-{message.message_id}",
             extensions=message_annotations(response),
         )
+        if self._attachment_store is not None:
+            self._attachment_store.complete_message_ingests(
+                message.session_id, thread_id=message.thread_id, message_id=message.message_id,
+                messages=self._checkpointer,
+            )
 
     def accept_job_input(self, job: JobRuntimeStateProtocol) -> None:
         """真实 Job 入队前完成唯一次准入；已有输入只按完整 identity 核验。"""
@@ -224,6 +230,10 @@ class MessageService(MessageContentProjectionMixin):
                     or admission.admission_idempotency_key != binding.admission_idempotency_key
                     or dto.content != job.message or dto.attachments != job.attachments):
                 raise ValueError("Job 入队请求与已接受用户输入不一致")
+            if self._attachment_store is not None:
+                self._attachment_store.complete_message_ingests(
+                    job.session_id, thread_id=job.thread_id, message_id=job.message_id, messages=saver,
+                )
             return
         if not isinstance(binding, InternalExecutionIntent):
             raise TypeError("Job input owner 只接受 typed execution binding")
@@ -251,6 +261,11 @@ class MessageService(MessageContentProjectionMixin):
                 id=job.message_id, content=job.message, response_metadata=response,
             )),
         )
+        if self._attachment_store is not None:
+            self._attachment_store.complete_message_ingests(
+                job.session_id, thread_id=job.thread_id, message_id=job.message_id,
+                messages=saver,
+            )
 
     def accepted_job_message(
         self, reference: PendingRequestControl, *, display: bool,

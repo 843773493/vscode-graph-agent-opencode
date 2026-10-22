@@ -1,12 +1,12 @@
 # 目录用途
 
-`app/services/infrastructure/attachment_blob_catalog/` 承载 workspace 级附件正文 content-addressed blob store 这条垂直链路的唯一实现：`blob_identity.py` 定义 `blb_[0-9a-f]{64}` 身份与日期分桶 locator 原语；`locator.py` 是受检 relative locator（blob 与 staging 两类）的唯一生产者/解析者；`store.py` 编排 pin 与 workspace ingest 的跨库 saga、统一正文完整性校验、读取、定点恢复与引用感知 GC。`fork_store.py` 提供宿主唯一使用的 fork 方法族，消费统一资源目标决策并区分消费 Thread 与实际正文保活 owner；`fork_claims.py` 负责冻结 alias、精确 operation claim、引用预留和终结，不复制附件字节。
+`app/services/infrastructure/attachment_blob_catalog/` 承载 workspace 级附件正文 content-addressed blob store 这条垂直链路的唯一实现：`blob_identity.py` 定义 `blb_[0-9a-f]{64}` 身份与日期分桶 locator 原语；`locator.py` 是受检 relative locator（blob 与 staging 两类）的唯一生产者/解析者；`store.py` 编排 pin 与 workspace ingest 的跨库 saga、统一正文完整性校验、读取与引用感知 GC；`recovery.py` 唯一负责消息接受结算、定点恢复与删除收敛。`fork_store.py` 提供宿主唯一使用的 fork 方法族，消费统一资源目标决策并区分消费 Thread 与实际正文保活 owner；`fork_claims.py` 负责冻结 alias、精确 operation claim、引用预留和终结，不复制附件字节。
 
 catalog 侧原先的单文件 `catalog.py` 已按垂直链路拆入本包，facade 落在本包 `__init__.py`：只保留 `AttachmentBlobCatalog` 的类声明（组合 `IngestMixin`/`BlobsMixin`/`QueriesMixin` 三个 mixin）、`SCHEMA_VERSION` 与连接生命周期方法（`__init__`/`connection`/`close`/`_connected`/`_connect`/`_initialize`/`write_transaction`），并按原名再导出模块级公开符号。表 DDL/索引/触发器与种子唯一定义在 `sql/`，`schema.py` 显式加载并保留必需表清单与两个形态工具；不可变行投影与 `derive_attachment_id` 在 `records.py`；ingest record + digest claim 链在 `ingest.py`；blob availability + owner reference 链在 `blobs.py`；引用感知 tombstone/GC 链在 `queries.py`。
 
 # 可修改内容
 
-- 可以维护 `blob_identity.py` 的身份原语、`locator.py` 的 locator 形态与预算校验、`sql/` 的表/索引/触发器/种子及 `schema.py` 的加载、必需表清单与形态工具、`records.py` 的行投影与身份派生、`ingest.py`/`blobs.py`/`queries.py` 的方法体、facade `__init__.py` 的类声明与生命周期，以及 `store.py` 的写入 saga、统一正文校验、读取、`recover_session`、引用释放和 `collect_garbage`；fork 捕获、目标保活与发布方法仅维护在 `fork_store.py`，SQLite alias/claim 事务仅维护在 `fork_claims.py`。
+- 可以维护 `blob_identity.py` 的身份原语、`locator.py` 的 locator 形态与预算校验、`sql/` 的表/索引/触发器/种子及 `schema.py` 的加载、必需表清单与形态工具、`records.py` 的行投影与身份派生、`ingest.py`/`blobs.py`/`queries.py` 的方法体、facade `__init__.py` 的类声明与生命周期，以及 `store.py` 的写入 saga、统一正文校验、读取和 `collect_garbage`，以及 `recovery.py` 的接受结算、`recover_session` 与引用释放；fork 捕获、目标保活与发布方法仅维护在 `fork_store.py`，SQLite alias/claim 事务仅维护在 `fork_claims.py`。
 - 可以维护随本包落地的四段式 `AGENTS.md`。
 - 可以维护对应的单元测试（放在 `tests/unit/services/infrastructure/`）。
 

@@ -42,10 +42,6 @@ from app.core.path_utils import get_session_path_resolver
 from app.core.resource_uri import parse_session_artifact_uri, session_artifact_uri
 from app.core.session_catalog_resolver import SessionCatalogPathResolver
 from app.core.session_control_store import SessionControlStore
-from app.core.session_control_store.copy_attachment_settlement import (
-    read_copy_attachment_settlements,
-    transition_copy_attachment_settlement,
-)
 from app.core.session_lifecycle_gate import (
     OperationHolderGate,
     SessionDeletionPendingError,
@@ -74,6 +70,9 @@ from app.services.infrastructure.attachment_blob_catalog.locator import (
     resolve_blob_path,
     resolve_staging_path,
 )
+from app.services.infrastructure.attachment_blob_catalog.recovery import (
+    AttachmentIngestRecoveryMixin,
+)
 
 __all__ = [
     "ATTACHMENT_ROOT_DIRECTORY_NAME",
@@ -99,7 +98,7 @@ def parse_logical_file_id(session_id: str, file_id: str) -> str:
     return parsed.tail_segments[2]
 
 
-class AttachmentBlobStore(ForkAttachmentStoreMixin):
+class AttachmentBlobStore(ForkAttachmentStoreMixin, AttachmentIngestRecoveryMixin):
     """workspace 级内容寻址附件 store（唯一权威是 catalog.sqlite）。"""
 
     def __init__(
@@ -147,11 +146,14 @@ class AttachmentBlobStore(ForkAttachmentStoreMixin):
         attachments: Sequence[AttachmentRef],
         *,
         thread_id: str,
+        message_id: str,
     ) -> list[AttachmentRef]:
         """持久化带 `data_url` 的内联附件，返回逻辑引用。
 
-        调用方传入本次消息所属的权威 thread；ingest、pin、发布和逻辑引用共用它。
+        调用方先冻结消息身份；pin 保留到该消息的 canonical 接受提交完成。
         """
+        if not isinstance(message_id, str) or not message_id or ":" in message_id:
+            raise ValueError("附件上传必须绑定非空且不含冒号的 message_id")
         if not attachments:
             return []
         persisted: list[AttachmentRef] = []
@@ -161,11 +163,11 @@ class AttachmentBlobStore(ForkAttachmentStoreMixin):
                 if not attachment.data_url:
                     persisted.append(attachment)
                     continue
-                persisted.append(await self._persist_one(session_id, thread_id, attachment))
+                persisted.append(await self._persist_one(session_id, thread_id, message_id, attachment))
         return persisted
 
     async def _persist_one(
-        self, session_id: str, thread_id: str, attachment: AttachmentRef
+        self, session_id: str, thread_id: str, message_id: str, attachment: AttachmentRef
     ) -> AttachmentRef:
         content_type, data = _parse_data_url(attachment.data_url or "")
         declared_type = attachment.content_type or content_type
@@ -184,7 +186,7 @@ class AttachmentBlobStore(ForkAttachmentStoreMixin):
         ingest_id = "ing_" + _sha256_hex(idempotency_key)[:32]
         staging_locator = ingest_staging_relative_locator(ingest_id)
         preimage_hash = _sha256_hex(
-            f"{session_id}|{thread_id}|{identity.digest}|{identity.length}"
+            f"{session_id}|{thread_id}|{message_id}|{identity.digest}|{identity.length}"
         )
 
         control = self._open_control_store(session_id)
@@ -192,6 +194,7 @@ class AttachmentBlobStore(ForkAttachmentStoreMixin):
             pin = await self._acquire_pin(
                 session_id=session_id,
                 thread_id=thread_id,
+                message_id=message_id,
                 control=control,
                 operation_identity=idempotency_key,
                 preimage_hash=preimage_hash,
@@ -265,6 +268,7 @@ class AttachmentBlobStore(ForkAttachmentStoreMixin):
         *,
         session_id: str,
         thread_id: str,
+        message_id: str,
         control: SessionControlStore,
         operation_identity: str,
         preimage_hash: str,
@@ -277,7 +281,7 @@ class AttachmentBlobStore(ForkAttachmentStoreMixin):
                 operation_identity=operation_identity,
                 preimage_hash=preimage_hash,
                 expected_generation=generation,
-                recovery_ref=f"attachment:{session_id}:{thread_id}",
+                recovery_ref=f"attachment:{session_id}:{thread_id}:{message_id}",
             )
 
     async def _publish(
@@ -326,9 +330,7 @@ class AttachmentBlobStore(ForkAttachmentStoreMixin):
                 mime_type=content_type,
                 max_bytes=MAX_ATTACHMENT_BYTES,
             )
-            # TODO: 把 pin 的成功终态延后到消息 acceptance durable；当前只覆盖上传主体。
-            # 主体已经 durable；两步结算任一失败均保留原 published 事实供恢复。
-            self._settle_pin(control, pin, outcome="completed")
+            # 正文已发布，但对应消息尚未接受；pin 继续保留到 canonical 提交。
         return ref
 
     # ------------------------------------------------------------------
@@ -454,97 +456,6 @@ class AttachmentBlobStore(ForkAttachmentStoreMixin):
             raise RuntimeError(f"附件正文在完整性校验期间发生变化: blob_id={blob_id}, path={path}")
         self._verified_blob_signatures[key] = signature
 
-    def recover_session(self, session_id: str) -> tuple[str, ...]:
-        """holder 已退出且持有 Session gate 的 owner 按持久记录定点恢复。"""
-        actions: list[str] = []
-        control = self._open_control_store(session_id)
-        try:
-            # copy 附件 lease 由唯一 fork settlement owner 处理，不能混入上传。
-            pins = tuple(pin for pin in control.list_non_terminal_leases()
-                         if pin.operation_kind == "attachment" and pin.operation_identity.startswith("attkey_"))
-            pending = self._catalog.list_non_terminal_ingest_records(owner_session_id=session_id)
-            if {record.ingest_idempotency_key for record in pending} - {pin.operation_identity for pin in pins}:
-                raise RuntimeError(f"非终态附件 ingest 缺少对应有效 pin: session_id={session_id}")
-            for pin in pins:
-                try:
-                    record = self._catalog.get_ingest_record(pin.operation_identity)
-                except KeyError:
-                    record = None
-                if record is not None and (
-                    record.owner_session_id != session_id or record.pin_lease_id != pin.lease_id
-                    or record.preimage_hash != pin.preimage_hash
-                    or record.pin_captured_generation != pin.captured_lifecycle_generation
-                    or record.pin_fencing_token > pin.fencing_token
-                    or pin.recovery_ref != f"attachment:{session_id}:{record.owner_thread_id}"
-                ):
-                    raise RuntimeError(f"附件 pin 与 ingest 冻结身份不一致: lease_id={pin.lease_id}")
-                outcome = "completed" if record is not None and record.state == "published" else "failed"
-                if record is not None and record.state not in {"published", "aborted"}:
-                    _remove_file(resolve_staging_path(self._attachments_root, record.staging_relative_locator))
-                    self._catalog.abort_ingest_record(
-                        ingest_idempotency_key=record.ingest_idempotency_key,
-                        reason="恢复：上传 holder 已停止，未发布 ingest 明确终止",
-                    )
-                    actions.append("aborted-ingest")
-                recovered_pin = control.takeover_lease(
-                    lease_id=pin.lease_id, expected_fencing_token=pin.fencing_token,
-                )
-                self._settle_pin(control, recovered_pin, outcome=outcome)
-                actions.append("settled-pin")
-        finally:
-            control.close()
-        # TODO: 按唯一 claim 协调未发布正文的回收与同 digest 后续上传，不能扫盘或误删其它 owner。
-        return tuple(actions)
-
-    async def recover_pending_ingests(self) -> int:
-        """启动时以权威 Session catalog 枚举，绝不抢占仍持 holder 的上传。"""
-        _, nodes = self._path_resolver.catalog_store.read_nodes_snapshot()
-        count = 0
-        for node in nodes:
-            if node.kind != "session" or node.state != "active":
-                continue
-            async with self.deletion_holder.lock_for(node.node_id, wait=False) as holder:
-                if not holder.acquired:
-                    continue
-                async with self._gate.exclusive(node.node_id):
-                    # 等 gate 期间删除可能已关闭准入，由删除 owner 收敛其 pin。
-                    if self._path_resolver.catalog_store.get_node(node.node_id).state == "active":
-                        count += self.recover_session(node.node_id).count("settled-pin")
-        return count
-
-    def release_session_references(self, session_id: str) -> tuple[str, ...]:
-        """删除 drain：释放该 session 的 owner reference 并收敛其 ingest（定点）。"""
-        self._release_copy_attachment_claims(session_id)
-        released = self._catalog.release_owner_refs_for_session(
-            owner_session_id=session_id, reason="owner session 删除"
-        )
-        actions = self.recover_session(session_id)
-        return tuple(ref.attachment_id for ref in released) + actions
-
-    def release_thread_references(self, session_id: str, thread_id: str) -> None:
-        """Thread 删除持有目标 Session gate 时释放精确引用，不释放复用的 main 引用。"""
-        self._release_copy_attachment_claims(session_id, thread_id=thread_id)
-        self._catalog.release_owner_refs_for_session(
-            owner_session_id=session_id, owner_thread_id=thread_id, reason="owner thread 删除",
-        )
-
-    def _release_copy_attachment_claims(self, session_id: str, *, thread_id: str | None = None) -> None:
-        control = self._open_control_store(session_id)
-        try:
-            records = tuple(record for record in read_copy_attachment_settlements(control)
-                            if thread_id is None or record.target_thread_id == thread_id)
-            operations = {record.copy_operation_id: record.claim_ids for record in records if record.state != "aborted"}
-            for operation in self._catalog.fork_attachment_operations_for_target(session_id, target_thread_id=thread_id):
-                operations.setdefault(operation, self._catalog.fork_attachment_claim_ids(operation))
-            for operation, claim_ids in operations.items():
-                if claim_ids:
-                    self._catalog.settle_fork_attachment_claims(copy_operation_id=operation, claim_ids=claim_ids, state="target_deleted")
-            for record in records:
-                if record.state not in {"aborted", "target_deleted"}:
-                    transition_copy_attachment_settlement(control, record, state="target_deleted")
-        finally:
-            control.close()
-
     def collect_garbage(self, *, retention: timedelta) -> tuple[str, ...]:
         """引用感知 GC：零引用 + retention 后先提交 tombstone 再删物理 blob。"""
         if not isinstance(retention, timedelta):
@@ -653,20 +564,6 @@ class AttachmentBlobStore(ForkAttachmentStoreMixin):
         _fsync_directory(final_path.parent)
         self._verify_blob_content(final_path, identity.digest, identity.length, identity.blob_id)
 
-    def _settle_pin(self, control: SessionControlStore, pin: SessionOperationLease, *, outcome: str) -> None:
-        """只结算当前 token；已完成可幂等确认，冲突与数据库故障必须暴露。"""
-        current = control.get_lease(pin.lease_id)
-        if current.fencing_token != pin.fencing_token:
-            raise RuntimeError(f"附件 pin 结算 token 已失效: lease_id={pin.lease_id}")
-        if current.state == outcome:
-            return
-        if current.state == "active":
-            current = control.mark_lease_settling(
-                lease_id=pin.lease_id, expected_fencing_token=pin.fencing_token
-            )
-        control.settle_lease(
-            lease_id=pin.lease_id, expected_fencing_token=pin.fencing_token, outcome=outcome,
-        )
 
 
 def _verify_content(data: bytes | Path, digest: str, length: int, blob_id: str) -> None:

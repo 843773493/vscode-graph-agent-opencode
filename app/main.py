@@ -244,7 +244,7 @@ async def _workspace_lifespan(container: AppContainer):
             if recovered:
                 logger.info("已恢复 %s 个未发布 context fork", recovered)
             with _workspace_startup_stage(container, "attachment_blob_store.recover_pending_ingests"):
-                recovered_ingests = await container.attachment_blob_store.recover_pending_ingests()
+                recovered_ingests = await container.attachment_blob_store.recover_pending_ingests(messages=container.checkpointer)
             if recovered_ingests:
                 logger.info("已按持久 operation 收敛 %s 个附件上传 pin", recovered_ingests)
             with _workspace_startup_stage(container, "attachment_blob_store.collect_garbage"):

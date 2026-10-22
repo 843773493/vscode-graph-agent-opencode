@@ -11,6 +11,7 @@ from langchain_core.messages import HumanMessage
 
 from app.abstractions.internal_message import PreparedInternalMessage
 from app.abstractions.turn_terminal_status import ToolResultCompletion
+from app.core.resource_uri import parse_session_artifact_uri
 from app.core.session_control_primitives import CONTROL_DATABASE_NAME
 from app.core.session_control_store import SessionControlStore
 from app.domain.itemized.enums import SemanticKind, TurnScope
@@ -35,6 +36,9 @@ from app.services.infrastructure.rollout_context.runtime.context_sources.models 
 from app.services.infrastructure.rollout_context.storage.catalog.history_scope import (
     require_historical_scope,
 )
+from app.services.infrastructure.rollout_context.storage.primitives import (
+    RolloutNotMaterializedError,
+)
 from app.services.mapping.itemized.thread_seed import (
     THREAD_SEED_DISPLAY_CONTENT,
     frozen_thread_seed,
@@ -42,6 +46,75 @@ from app.services.mapping.itemized.thread_seed import (
 
 
 class RuntimeExecutionOwnerMixin:
+    def attachment_message_references(self, session_id: str, thread_id: str, message_id: str) -> tuple[str, ...] | None:
+        """精确读取已接受消息的附件使用；缺消息与损坏提交必须区分。"""
+        storage = self._storage.storage
+        item_id = f"item-{message_id}"
+        try:
+            with storage.read_connection(session_id, thread_id) as connection:
+                row = connection.execute(
+                    "SELECT execution_id FROM item_catalog WHERE item_id=?", (item_id,),
+                ).fetchone()
+                if row is None:
+                    return None
+                item = storage._read_canonical_item_from_catalog(
+                    connection, session_id=session_id, thread_id=thread_id, checkpoint_ns="", item_id=item_id,
+                )
+                if item.semantic_kind not in {SemanticKind.USER_INPUT, SemanticKind.RUNTIME_NOTICE} or item.producer_ref["producer_id"] != message_id:
+                    raise RuntimeError("附件消息身份与 canonical 输入不一致")
+                admission = self._storage.executions._read_execution_admission_connection(
+                    connection, session_id=session_id, thread_id=thread_id, execution_id=row[0], checkpoint_ns="",
+                )
+                cursor = self._storage.executions.execution_admission_cursor(admission, connection=connection)
+                if admission.execution_origin == "user_turn":
+                    accepted = connection.execute(
+                        "SELECT root_input_item_id FROM turn_records WHERE turn_id=?", (admission.turn_id,),
+                    ).fetchone()
+                else:
+                    accepted = connection.execute(
+                        "SELECT json_extract(metadata_json, '$.notice_item_id') FROM storage_commits WHERE commit_id=?",
+                        (cursor.commit_id,),
+                    ).fetchone()
+                if accepted != (item_id,):
+                    raise RuntimeError("附件消息未绑定原始 canonical 接受提交")
+                references = tuple(uri for (uri,) in connection.execute(
+                    "SELECT resource_uri FROM item_resource_references WHERE item_id=? "
+                    "AND resource_kind='attachment' ORDER BY reference_ordinal", (item_id,),
+                ))
+                attachments = item.payload.get("attachments", []) if isinstance(item.payload, Mapping) else []
+                if references != tuple(entry["file_id"] for entry in attachments):
+                    raise RuntimeError("canonical 附件正文与使用索引不一致")
+                projected = storage.project_attachment_payload(session_id, thread_id, {"attachments": list(attachments)})
+                return tuple(entry["file_id"] for entry in projected["attachments"])
+        except RolloutNotMaterializedError:
+            return None
+
+    def attachment_reference_in_use(self, session_id: str, thread_id: str, attachment_id: str) -> bool:
+        """查询该 Session 各已发布 Thread 的 canonical 使用，含 fork 和隐藏 notice。"""
+        storage = self._storage.storage
+        resolver = storage._path_resolver
+        with closing(SessionControlStore(resolver.resolve_session_node(session_id) / CONTROL_DATABASE_NAME)) as control:
+            threads = (resolver.main_thread_id(session_id), *(row.thread_id for row in control.list_child_thread_rows()))
+        if thread_id not in threads:
+            raise RuntimeError("附件 owner Thread 不属于权威 Session catalog")
+        for candidate in threads:
+            try:
+                with storage.read_connection(session_id, candidate) as connection:
+                    references = tuple(uri for (uri,) in connection.execute(
+                        "SELECT DISTINCT resource_uri FROM item_resource_references WHERE resource_kind='attachment'",
+                    ))
+                    projected = storage.project_attachment_payload(session_id, candidate, {
+                        "attachments": [{"file_id": uri} for uri in references],
+                    })
+                    for entry in projected["attachments"]:
+                        parsed = parse_session_artifact_uri(entry["file_id"])
+                        # 未继承的外部引用可以保留在历史中，不归本 Session owner。
+                        if parsed.tail_segments == (session_id, "attachments", attachment_id):
+                            return True
+            except RolloutNotMaterializedError:
+                continue
+        return False
+
     def accepted_user_message(
         self, session_id: str, *, thread_id: str, job_id: str, message_id: str,
         checkpoint_ns: str = "",

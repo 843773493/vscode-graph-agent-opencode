@@ -83,6 +83,8 @@ class RolloutLangGraphAsyncMixin:
     async def adelete_thread(self, thread_id: str) -> None:
         owner = require_current_session_thread_owner(langgraph_thread_id=thread_id)
         await self._storage.forks.delete_thread(owner.session_id, thread_id=owner.thread_id, attachment_store=self._attachment_store)
+        if self._attachment_store is not None:
+            await self._attachment_store.recover_idle_session(owner.session_id, messages=self)
 
     async def arewind(
         self,

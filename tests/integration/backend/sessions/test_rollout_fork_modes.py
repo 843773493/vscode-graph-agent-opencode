@@ -45,6 +45,7 @@ from app.container import AppContainer, WorkspaceContainerRegistry
 from app.core import session_subtree_delete
 from app.core.checkpoint_config import build_checkpoint_config
 from app.core.execution_admission_context import execution_admission_scope
+from app.core.identifier import create_uuid_hex
 from app.core.mounted_workspaces import MountedWorkspace, MountedWorkspaceRegistry
 from app.core.resource_uri import (
     parse_resource_uri,
@@ -241,7 +242,10 @@ from tests.support.session_navigation_queue import (
     create_catalog_intent,
     submit_catalog_intent,
 )
-from tests.support.workspaces import prepare_default_test_workspace
+from tests.support.workspaces import (
+    prepare_default_test_workspace,
+    render_test_workspace_config,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -333,6 +337,15 @@ def production_fork_container(request: pytest.FixtureRequest,
                               fork_gateway_request_context: None) -> AppContainer:
     """fork/creation/admission 使用真实生产装配，只隔离无关 lifespan 外部服务。"""
     workspace = prepare_rollout_workspace(request)
+    # 本文件通过冻结请求验证存储/fork，不调用外部模型；干净 Git 快照也不能依赖个人密钥。
+    config = json.loads(render_test_workspace_config(
+        (Path.cwd() / "configs/tests/workspace/default.jsonc").read_text(),
+    ))
+    for provider in config["llm"]["providers"]:
+        provider["api_key"] = "fork-contract-unused-key"
+        provider["endpoint"] = "http://127.0.0.1:1/v1"
+        provider.pop("auth", None)
+    (workspace / ".boxteam/workspace.jsonc").write_text(json.dumps(config, ensure_ascii=False) + "\n")
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
     monkeypatch.setenv("WORKSPACE_ROOT", str(workspace))
     monkeypatch.setenv("BOXTEAM_HOME", str(context.boxteam_home))
@@ -1520,11 +1533,12 @@ async def test_child_message_ingest_keeps_exact_attachment_owner_through_source_
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("input_kind", ["user", "internal"])
 @pytest.mark.parametrize("creation_kind", ["new_child_thread", "new_session_main"])
 @pytest.mark.parametrize("mode", ["view_prefix_fork", "full_rollout_copy"])
 async def test_fork_attachment_retention_uses_real_owner_and_cold_target_tool(
     production_fork_container: AppContainer, fork_provider_prepare, creation_kind: SessionForkCreationKind,
-    mode: SessionForkMode,
+    mode: SessionForkMode, input_kind: str,
 ) -> None:
     """真实 fork 证明 main 复用、独立保活、删除源后冷读和目标新工具 capability。"""
     context = _production_fork_context(production_fork_container)
@@ -1533,27 +1547,50 @@ async def test_fork_attachment_retention_uses_real_owner_and_cold_target_tool(
     source_thread = _main_thread_id(context, source.session_id)
     source_node = _main_thread_node(context, source.session_id)
     body = b"fork attachment original bytes\n"
-    ref = (await store.persist_inline(source.session_id, [AttachmentRef(
-        file_id="inline:fork-source.txt", name="fork-source.txt", content_type="text/plain",
-        data_url="data:text/plain;base64," + base64.b64encode(body).decode("ascii"),
-    )], thread_id=source_thread))[0]
-    attachments = [ref.model_dump(mode="json", exclude={"data_url"})]
-    accepted = context.saver.accept_turn(
-        source.session_id, thread_id=source_thread, accepted_ingress_id="resource-source-input",
-        acceptance_idempotency_key="resource-source-accept", job_id="resource-source-job",
-        admission_idempotency_key="resource-source-admission", root_item_id="item-resource-source-input",
-        payload=user_input_payload("附件源问题", attachments), payload_kind="structured_content",
-    )
-    source_admission = context.saver.execution_admission(
-        source.session_id, thread_id=source_thread, execution_id=accepted["initial_execution_id"],
-    )
+    messages = production_fork_container.message_service
+    prepared = internal_message_factory.build(
+        kind="generated_session_result", control="处理附带的结果文件。",
+        sections=(PromptSection("control_context", {"source_session_id": source.session_id}),
+                  PromptSection("generated_session_result", "附件内部正文")),
+        display_content="结果文件已就绪。",
+    ) if input_kind == "internal" else None
+    message = await messages.create(source.session_id, MessageCreateRequest(
+        content=prepared.content if prepared is not None else "附件源问题",
+        metadata=prepared.metadata if prepared is not None else {},
+        attachments=[AttachmentRef(
+            file_id="inline:fork-source.txt", name="fork-source.txt", content_type="text/plain",
+            data_url="data:text/plain;base64," + base64.b64encode(body).decode("ascii"),
+        )],
+    ), thread_id=source_thread)
+    ref = message.attachments[0]
+    if prepared is None:
+        identity = production_fork_container.job_service.reserve_user_execution_identity()
+        messages.accept_user_message(message, execution_identity=identity)
+        job_id = identity.job_id
+        frozen = context.saver.accepted_user_message(
+            source.session_id, thread_id=source_thread, job_id=job_id, message_id=message.message_id,
+        )
+    else:
+        intent = InternalExecutionIntent(
+            message_id=message.message_id, execution_id=create_uuid_hex(namespace="execution"),
+            admission_idempotency_key=create_uuid_hex(namespace="admission"),
+        )
+        job_id = create_uuid_hex(namespace="job")
+        messages.accept_job_input(SimpleNamespace(
+            session_id=source.session_id, thread_id=source_thread, job_id=job_id,
+            execution_binding=intent, message_id=message.message_id, message=message.content,
+            attachments=message.attachments, message_metadata=message.metadata,
+            message_created_at=message.created_at.isoformat(),
+        ))
+        frozen = context.saver.accepted_internal_message(
+            source.session_id, thread_id=source_thread, job_id=job_id, message_id=message.message_id, intent=intent,
+        )
+    source_admission = context.saver.execution_admission_for_job(source.session_id, thread_id=source_thread, job_id=job_id)
     with (session_thread_owner_scope(MutationIntentOwner(source.session_id, source_thread), langgraph_thread_id=source_thread),
           execution_admission_scope(source_admission, langgraph_thread_id=source_thread)):
         await context.saver.aput(
-            build_checkpoint_config(source_thread), _checkpoint("resource-source-cp", [HumanMessage(
-                content="附件源问题", id="resource-source-input",
-                response_metadata={"turn_id": accepted["turn_id"], "attachments": attachments},
-            )]), {"source": "input", "step": 1, "parents": {}}, {"messages": "1", "counter": "1"},
+            build_checkpoint_config(source_thread), _checkpoint("resource-source-cp", [frozen]),
+            {"source": "input", "step": 1, "parents": {}}, {"messages": "1", "counter": "1"},
         )
     fork_provider_prepare(
         context, source.session_id, source_admission.execution_id,
@@ -1561,12 +1598,12 @@ async def test_fork_attachment_retention_uses_real_owner_and_cold_target_tool(
         "resource-source", attempt=1, outcome="completed_empty",
     )
     context.saver.converge_execution(
-        source.session_id, thread_id=source_thread, turn_id=accepted["turn_id"],
-        execution_id=source_admission.execution_id, outcome="completed_empty", turn_status="completed_empty",
+        source.session_id, thread_id=source_thread, turn_id=source_admission.turn_id,
+        execution_id=source_admission.execution_id, outcome="completed_empty", turn_status="completed_empty" if source_admission.turn_id is not None else None,
     )
     original = context.saver._storage.storage.read_items(source.session_id, source_thread)
     result = await context.forks.fork(await _fork_request(
-        context, source.session_id, creation_kind=creation_kind, mode=mode, item_id="item-resource-source-input",
+        context, source.session_id, creation_kind=creation_kind, mode=mode, item_id="item-" + message.message_id,
     ))
     assert len(result.resources) == 1
     receipt = result.resources[0]
@@ -1621,10 +1658,18 @@ async def test_fork_attachment_retention_uses_real_owner_and_cold_target_tool(
                 messages=[AIMessage(content="", id="lc_run--" + prepared["snapshot"].model_call_id,
                     tool_calls=[{"id": "read-inherited-attachment", "name": "read_file", "args": {"path": receipt.target_uri}, "type": "tool_call"}])],
             )
-            assert cold.read_tool_call_attachment(
-                result.session.session_id, thread_id=result.thread_id, tool_call_id="read-inherited-attachment",
-                model_call_id=prepared["snapshot"].model_call_id, file_id=receipt.target_uri,
-            ).data == body
+            if input_kind == "internal":
+                # 后继用户 acceptance 已消费 pending notice，其私有附件不能泄入新工具能力。
+                with pytest.raises(PermissionError, match="原始 assembly"):
+                    cold.read_tool_call_attachment(
+                        result.session.session_id, thread_id=result.thread_id, tool_call_id="read-inherited-attachment",
+                        model_call_id=prepared["snapshot"].model_call_id, file_id=receipt.target_uri,
+                    )
+            else:
+                assert cold.read_tool_call_attachment(
+                    result.session.session_id, thread_id=result.thread_id, tool_call_id="read-inherited-attachment",
+                    model_call_id=prepared["snapshot"].model_call_id, file_id=receipt.target_uri,
+                ).data == body
             if creation_kind == "new_child_thread":
                 await cold.adelete_thread(result.thread_id)
         if creation_kind == "new_child_thread":
@@ -1642,6 +1687,76 @@ async def test_fork_attachment_retention_uses_real_owner_and_cold_target_tool(
             )] == ["target_deleted"]
     finally:
         cold_store.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("outcome", ["published", "aborted"])
+async def test_fork_settlement_retries_retained_upload_pin_without_restart(
+    production_fork_container: AppContainer, fork_provider_prepare, monkeypatch, outcome: str,
+) -> None:
+    """先在真实 fork 准备窗口保留 pin，再由发布或中止入口定点恢复。"""
+    from app.services.infrastructure.rollout_context.checkpoint import fork_owner
+
+    container = production_fork_container
+    context = _production_fork_context(container)
+    store = container.attachment_blob_store
+    source = await context.sessions.create(SessionCreateRequest(title="pin 来源"))
+    target = await context.sessions.create(SessionCreateRequest(title="pin 目标"))
+    source_thread, target_thread = _main_thread_id(context, source.session_id), _main_thread_id(context, target.session_id)
+    body = b"fork keeps original upload recovery identity"
+    request = MessageCreateRequest(content="附件", attachments=[AttachmentRef(
+        file_id="inline:pin", name="pin.txt", content_type="text/plain",
+        data_url="data:text/plain;base64," + base64.b64encode(body).decode(),
+    )])
+    message = await container.message_service.create(source.session_id, request, thread_id=source_thread)
+    identity = container.job_service.reserve_user_execution_identity()
+    container.message_service.accept_user_message(message, execution_identity=identity)
+    admission = container.message_service.execution_admission_for_job(source.session_id, thread_id=source_thread, job_id=identity.job_id)
+    frozen = context.saver.accepted_user_message(source.session_id, thread_id=source_thread,
+        job_id=identity.job_id, message_id=message.message_id)
+    with (session_thread_owner_scope(MutationIntentOwner(source.session_id, source_thread), langgraph_thread_id=source_thread),
+          execution_admission_scope(admission, langgraph_thread_id=source_thread)):
+        await context.saver.aput(build_checkpoint_config(source_thread), _checkpoint("pin-source-cp", [frozen]),
+            {"source": "input", "step": 1, "parents": {}}, {"messages": "1", "counter": "1"})
+    fork_provider_prepare(context, source.session_id, admission.execution_id,
+        ContextSourceManager(owner=ContextSourceOwnerKey(source.session_id, source_thread), control_state_port=context.saver),
+        "pin-source", attempt=1, outcome="completed_empty")
+    context.saver.converge_execution(source.session_id, thread_id=source_thread, turn_id=admission.turn_id,
+        execution_id=admission.execution_id, outcome="completed_empty", turn_status="completed_empty")
+    abandoned = await container.message_service.create(target.session_id, request, thread_id=target_thread)
+    with closing(store._open_control_store(target.session_id)) as control:
+        (pin,) = control.list_non_terminal_leases()
+    fork_request = await _fork_request(context, source.session_id, creation_kind="new_child_thread",
+        item_id="item-" + message.message_id, target_container_uri=resource_display_uri(scope="workspace", scope_id=target.workspace_id,
+            kind="session", tail_segments=(target.session_id,)))
+    original_observer = fork_owner.observe_phase
+    retained = []
+
+    async def after_capture(operation_id: str, phase: str, **kwargs: object) -> None:
+        if phase == "copy.source.captured":
+            retained.extend(await store.recover_idle_session(target.session_id, messages=context.saver))
+            assert retained == ["retained-pin"]
+            with closing(store._open_control_store(target.session_id)) as control:
+                assert control.get_lease(pin.lease_id) == pin
+            if outcome == "aborted":
+                raise ValueError("注入 fork 准备失败")
+        await original_observer(operation_id, phase, **kwargs)
+
+    monkeypatch.setattr(fork_owner, "observe_phase", after_capture)
+    if outcome == "aborted":
+        with pytest.raises(ValueError, match="注入 fork 准备失败"):
+            await context.forks.fork(fork_request)
+        with pytest.raises(FileNotFoundError):
+            store.read(target.session_id, abandoned.attachments[0].file_id)
+    else:
+        result = await context.forks.fork(fork_request)
+        assert result.resources[0].action == "reuse_reference"
+        assert store.read(target.session_id, message.attachments[0].file_id, owner_thread_id=result.thread_id).data == body
+    assert retained == ["retained-pin"]
+    with closing(store._open_control_store(target.session_id)) as control:
+        settled = control.get_lease(pin.lease_id)
+        assert settled.state == "failed" and settled.fencing_token == pin.fencing_token + 1
+    assert store.read(source.session_id, message.attachments[0].file_id).data == body
 
 
 @pytest.mark.asyncio
@@ -6775,7 +6890,7 @@ async def _seed_retry_tool_source(
         attachments = await attachment_store.persist_inline(source.session_id, [AttachmentRef(
             file_id="inline:fork-source", name='source-&"attachment.txt', content_type="text/plain",
             data_url="data:text/plain;base64," + base64.b64encode("文件内容".encode()).decode("ascii"),
-        )], thread_id=owner.thread_id)
+        )], thread_id=owner.thread_id, message_id="msg_" + create_uuid_hex(namespace="message"))
         content = UserContentBuilder(attachment_service=AttachmentContentService(
             workspace_root=context.workspace, attachment_store=attachment_store,
         )).build("检查工作区，保留正文中的源 URI " + attachments[0].file_id, attachments).content

@@ -303,3 +303,35 @@ class BlobsMixin:
                 (owner_session_id, owner_thread_id, owner_thread_id),
             ).fetchall()
             return tuple(_owner_ref_from_row(row) for row in released)
+
+    def release_unused_owner_ref(
+        self, *, attachment_id: str, owner_session_id: str, owner_thread_id: str,
+    ) -> bool:
+        """恢复 owner 已排空消息 holder 并核无 canonical 使用，只释放此精确引用。
+
+        fork 的冻结保活与 alias 在同一 catalog 事务内复验，不能随失败上传释放。
+        """
+        with self.write_transaction() as connection:
+            row = connection.execute(
+                "SELECT owner_ref_id FROM attachment_owner_refs WHERE attachment_id=? "
+                "AND owner_session_id=? AND owner_thread_id=? AND state='active'",
+                (attachment_id, owner_session_id, owner_thread_id),
+            ).fetchone()
+            if row is None:
+                return False
+            retained = connection.execute(
+                "SELECT 1 FROM fork_attachment_claims WHERE state IN ('preparing','owner_reserved') "
+                "AND (source_attachment_id=? OR target_owner_ref_id=?) "
+                "UNION ALL SELECT 1 FROM fork_attachment_mappings "
+                "WHERE json_extract(snapshot_json, '$.target_owner_ref_id')=? "
+                "AND json_extract(snapshot_json, '$.availability')='available' LIMIT 1",
+                (attachment_id, row["owner_ref_id"], row["owner_ref_id"]),
+            ).fetchone()
+            if retained is not None:
+                return False
+            connection.execute(
+                "UPDATE attachment_owner_refs SET state='released', released_reason=?, updated_at=? "
+                "WHERE owner_ref_id=?",
+                ("上传消息未被接受且无 canonical 使用", datetime.now(UTC).isoformat(), row["owner_ref_id"]),
+            )
+            return True
