@@ -18,9 +18,6 @@ from app.domain.itemized.mutation_intents import MutationIntentOwner
 from app.services.infrastructure.rollout_context.checkpoint.message_codec import (
     LangChainMessageCodec,
 )
-from app.services.infrastructure.rollout_context.checkpoint.message_commit.prepare import (
-    _compare_group,
-)
 from app.services.orchestration.execution_step.model_call import StepModelCallAdapter
 
 
@@ -432,7 +429,7 @@ def test_final_convergence_matches_checkpoint_typed_identity_and_extensions(
         timestamp=item.created_at,
         model_call_id=codec.model_call_id(message),
     )
-    _compare_group(checkpoint_items, (item,))
+    assert [candidate.to_dict() for candidate in checkpoint_items] == [item.to_dict()]
     replay = codec.from_dict(codec.project_message(checkpoint_items))
     replayed_items = codec.items_for_message(
         replay,
@@ -442,7 +439,7 @@ def test_final_convergence_matches_checkpoint_typed_identity_and_extensions(
         execution_id="execution_1",
         timestamp=item.created_at,
     )
-    _compare_group(replayed_items, (item,))
+    assert [candidate.to_dict() for candidate in replayed_items] == [item.to_dict()]
 
 
 def test_conflicting_message_model_call_identity_fails_before_convergence(
