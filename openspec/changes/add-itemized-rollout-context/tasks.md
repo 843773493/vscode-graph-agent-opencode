@@ -905,3 +905,8 @@ pending 恢复的硬错误重试已闭合（2026-10-22）：进程内装载阶�
 - 删除 `domain/itemized/request_plan.py`，贡献值对象、来源绑定与解析归 `plans/contributions.py`，计划 owner/顺序/封存校验归 `plans/request.py`；生产、测试、子进程脚本与 monkeypatch 导入全迁，不保留旧模块垫片。六个原定义的 AST 与 `07723ebc` 完全一致，见 `out/tests/temp/openspec_takeover/artifacts/domain-plan-split-ast-proof-004.json`；两文件390/445行，职责拆分并非仅为行数。
 - 固定候选004 tree `a4b78556f511648e1ddaf465f0ce9349e951a84c`：`domain-plan-split-domain-007` Ruff通过、1462 passed/7.03秒；正式matrix `domain-plan-split-owner-matrix-006` 63 passed/56.74秒，含typed贡献seal→fork→冷读及preflight/dispatch。独审003发现两处测试旧模块引用，004已关闭，无新finding；不外推storage/Saver facade或7.5-F整体完成。
 - 失败与范围保留：unit003及sharing003的错误CLI选项、unit004的旧module collection、unit005超时及contracts006缺正式fork watchdog均有原件；owner-matrix005受四个未改动测试的旧导入阻断，006仅排除这些无关collection路径、保持相关测试与断言。共享历史 `sharing-004` 为189 passed、1 failed/258.44秒：未改动的schema20升级测试只迁到23，而现行storage要求24；单独修正该迁移验收，不能把本次共享历史门记为全绿。所有命令、源码指纹、raw与实际退出码保留在本任务 `artifacts/runs/`。
+
+### 2026-10-22 共享历史 schema20 迁移验收补齐
+
+- `test_message_revisions.py` 的旧库链补齐显式23→24执行队列迁移，仍逐字段核原messages locator、JSONL原字节、全部迁移记录、冷Saver读旧checkpoint与追加独立修订；不改生产DDL/schema版本，不放宽原断言。
+- 固定候选002 tree `d8fc59d42c06e097e57b1a8ed53ba043fd428b98`：`schema20-current-migration-002` Ruff通过，整文件12 passed/18.03秒、exit0，修复 `domain-plan-split-sharing-004` 的唯一失败。该历史套件其余189个case的实现与测试未变，沿用原次实际通过证据，不虚报为新的整套运行；原失败保留。本条不替代7.5或8.13其余门。
