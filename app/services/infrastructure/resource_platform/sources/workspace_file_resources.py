@@ -168,7 +168,7 @@ class WorkspaceFileResourceRegistry:
         if any(
             registered_uri != uri
             and handle.descriptor.entry_identity == entry_identity
-            for registered_uri, handle in self._file_handles_by_uri.items()
+            for registered_uri, handle in tuple(self._file_handles_by_uri.items())
         ):
             raise ValueError(f"文件来源 entry_identity 冲突: entry_identity={entry_identity}")
         allowed_root = self._allowed_root_for(resolved_path, reference=uri)
@@ -519,12 +519,12 @@ class WorkspaceFileResourceRegistry:
                             # 只对已登记文件和固定 Skill 一层边界对账。
                             paths = tuple(
                                 self._handle_path(handle)
-                                for handle in self._file_handles_by_uri.values()
+                                for handle in tuple(self._file_handles_by_uri.values())
                             )
                         else:
                             paths = tuple(
                                 self._handle_path(handle)
-                                for handle in self._file_handles_by_uri.values()
+                                for handle in tuple(self._file_handles_by_uri.values())
                                 if any(self._handle_path(handle).is_relative_to(changed) for changed in changed_paths)
                             )
                         for uri, handle in tuple(self._file_handles_by_uri.items()):
@@ -615,7 +615,7 @@ class WorkspaceFileResourceRegistry:
                 return
             affected = tuple(
                 (directory_id, handle)
-                for directory_id, handle in self._skill_directories.items()
+                for directory_id, handle in tuple(self._skill_directories.items())
                 if any(
                     root == handle.root
                     or root.is_relative_to(handle.root)
@@ -661,7 +661,7 @@ class WorkspaceFileResourceRegistry:
         roots = {(root, True) for root in self._watch_roots if root.is_dir()}
         gateway_directories = tuple(
             (directory_id, handle)
-            for directory_id, handle in self._skill_directories.items()
+            for directory_id, handle in tuple(self._skill_directories.items())
             if handle.scope == "gateway"
         )
         gateway_root = self._gateway_skills_root
@@ -684,12 +684,13 @@ class WorkspaceFileResourceRegistry:
     def _is_relevant_change(self, change: WorkspaceFileChange) -> bool:
         """在 watcher 入队/溢出判断前屏蔽与已登记来源无关的文件事件。"""
         changed = Path(change.path)
+        # 编译线程可同时登记来源；先冻结 handle 集合，再执行可能跨线程交错的路径读取。
         if any(
             path == changed or path.is_relative_to(changed)
-            for path in (self._handle_path(handle) for handle in self._file_handles_by_uri.values())
+            for path in (self._handle_path(handle) for handle in tuple(self._file_handles_by_uri.values()))
         ):
             return True
-        for handle in self._skill_directories.values():
+        for handle in tuple(self._skill_directories.values()):
             root = handle.root
             if root == changed or root.is_relative_to(changed):
                 return True

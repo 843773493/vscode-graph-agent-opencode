@@ -10,6 +10,7 @@ from app.services.infrastructure.resource_platform.sources.workspace_file_resour
     WorkspaceFileResourceSnapshot,
 )
 from app.services.infrastructure.workspace_file_watch_service import (
+    WorkspaceFileChange,
     WorkspaceFileWatchService,
 )
 
@@ -642,3 +643,34 @@ def test_register_file_rejects_uri_bound_to_a_different_path(tmp_path: Path) -> 
         _register_file(registry, uri=uri, path=second_path, owner_id="path-binding-skill")
 
     assert registry.snapshot(uri) is first
+
+
+def test_watch_filter_keeps_registered_target_during_new_file_registration(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    watcher = WorkspaceFileWatchService(workspace_root=workspace)
+    registry = WorkspaceFileResourceRegistry(workspace_root=workspace, watch_service=watcher)
+    paths = [workspace / name for name in ("first.md", "target.md", "new.md")]
+    for index, path in enumerate(paths):
+        path.write_text(f"正文 {index}\n", encoding="utf-8")
+    for index in range(2):
+        _register_file(registry, uri=f"boxteam://workspace/test/resources/files/root/{paths[index].name}",
+                       path=paths[index], owner_id=f"watch-race-{index}")
+    original = registry._handle_path
+    registered = False
+
+    def register_during_path_read(handle):
+        nonlocal registered
+        if not registered:
+            registered = True
+            _register_file(registry, uri="boxteam://workspace/test/resources/files/root/new.md",
+                           path=paths[2], owner_id="watch-race-2")
+        return original(handle)
+
+    # 精确模拟编译线程在过滤器读取路径期间登记来源；不靠概率重跑竞争。
+    monkeypatch.setattr(registry, "_handle_path", register_during_path_read)
+    assert registry._is_relevant_change(WorkspaceFileChange(kind="edit", path=str(paths[1])))
+    assert registry._is_relevant_change(WorkspaceFileChange(kind="edit", path=str(paths[2])))
+    assert registry.snapshot("boxteam://workspace/test/resources/files/root/new.md").content == "正文 2\n"
