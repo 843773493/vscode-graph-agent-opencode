@@ -12,7 +12,7 @@ from app.domain.itemized.hashing import (
     canonical_json_bytes,
     canonical_json_bytes_and_hash,
 )
-from app.domain.itemized.request_plan import ContextRequestPlan
+from app.domain.itemized.plans.request import ContextRequestPlan
 from app.domain.itemized.serde.plan import unsealed_context_plan_from_dict
 from app.services.infrastructure.rollout_context.assembly.content_store import (
     load_snapshot,

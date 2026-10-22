@@ -10,7 +10,7 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 
 from app.domain.itemized.hashing import sha256_jcs
-from app.domain.itemized.request_plan import ContextRequestPlan
+from app.domain.itemized.plans.request import ContextRequestPlan
 from app.schemas.internal_v2.session_context import SessionContextResourceDTO
 from app.services.mapping.itemized.selection import validate_projection_selection
 

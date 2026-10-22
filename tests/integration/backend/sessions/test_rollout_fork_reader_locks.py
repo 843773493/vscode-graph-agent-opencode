@@ -82,7 +82,7 @@ def forbid_parent_sqlite_copy(protected_source, monkeypatch):
 _WRITER = """
 import sys
 from pathlib import Path
-from app.domain.itemized.request_plan import ContextRequestPlan
+from app.domain.itemized.plans.request import ContextRequestPlan
 from app.services.infrastructure.rollout_context.checkpoint.saver import RolloutCheckpointSaver
 from tests.support.session_catalog_owner import fixture_catalog_scope
 

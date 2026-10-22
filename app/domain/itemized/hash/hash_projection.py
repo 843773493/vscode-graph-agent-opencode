@@ -7,7 +7,8 @@ from typing import TYPE_CHECKING
 from app.domain.itemized.identity.refs import ContextRef, selection_ref_identity
 
 if TYPE_CHECKING:
-    from app.domain.itemized.request_plan import ContextContribution, ContextRequestPlan
+    from app.domain.itemized.plans.contributions import ContextContribution
+    from app.domain.itemized.plans.request import ContextRequestPlan
 
 
 def hash_scope_for_plan(

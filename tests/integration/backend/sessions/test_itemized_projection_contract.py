@@ -23,8 +23,8 @@ from app.domain.itemized.hashing import (
     sha256_jcs,
 )
 from app.domain.itemized.identity.refs import ContextRef, selection_ref_identity
+from app.domain.itemized.plans.contributions import ContextContribution, SourceBinding
 from app.domain.itemized.records import CanonicalItemRecord
-from app.domain.itemized.request_plan import ContextContribution, SourceBinding
 from app.services.infrastructure.rollout_context.assembly.detail_identity import (
     detail_ref_key,
 )

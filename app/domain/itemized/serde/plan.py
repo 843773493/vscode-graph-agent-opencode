@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 
 from app.domain.itemized.errors import FormatDispatchError, ItemSchemaError
-from app.domain.itemized.request_plan import ContextRequestPlan
+from app.domain.itemized.plans.request import ContextRequestPlan
 from app.domain.itemized.serde.registry import (
     _optional_string,
     _required_non_negative_int,

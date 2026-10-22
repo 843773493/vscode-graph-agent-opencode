@@ -16,11 +16,9 @@ from app.domain.itemized.hashing import (
 )
 from app.domain.itemized.identity.detail_ref import DetailRef
 from app.domain.itemized.identity.refs import ContextRef, selection_ref_identity
+from app.domain.itemized.plans.contributions import resolve_contribution_for_ref
+from app.domain.itemized.plans.request import ContextRequestPlan
 from app.domain.itemized.records import CanonicalItemRecord
-from app.domain.itemized.request_plan import (
-    ContextRequestPlan,
-    resolve_contribution_for_ref,
-)
 from app.domain.itemized.resource_activation import ResourceActivationSnapshotRef
 from app.schemas.internal_v2.session_context import SessionContextResourceDTO
 from app.services.infrastructure.rollout_context.runtime.detail_store import (

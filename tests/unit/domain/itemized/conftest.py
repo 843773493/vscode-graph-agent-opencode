@@ -18,8 +18,8 @@ from app.domain.itemized.identity.item_projection import (
     ItemSourceManifest,
 )
 from app.domain.itemized.identity.refs import ContextRef, ToolSetRef
+from app.domain.itemized.plans.request import ContextRequestPlan
 from app.domain.itemized.records import CanonicalItemRecord
-from app.domain.itemized.request_plan import ContextRequestPlan
 from app.domain.itemized.selection import ContextSelectionEntry
 
 

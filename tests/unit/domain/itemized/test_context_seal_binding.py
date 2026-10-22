@@ -36,7 +36,7 @@ from app.domain.itemized.hash.request_hash import (
 )
 from app.domain.itemized.hashing import sha256_jcs
 from app.domain.itemized.identity.refs import ToolSetRef
-from app.domain.itemized.request_plan import ContextRequestPlan
+from app.domain.itemized.plans.request import ContextRequestPlan
 from app.domain.itemized.selection import ContextSelectionEntry
 from app.domain.itemized.serde.epoch import (
     context_seal_binding_from_dict,

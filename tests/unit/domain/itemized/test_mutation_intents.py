@@ -21,7 +21,8 @@ from app.domain.itemized.mutation_intents import (
     RebuildContextEpochIntent,
     intent_kind,
 )
-from app.domain.itemized.request_plan import ContextContribution, ContextRequestPlan
+from app.domain.itemized.plans.contributions import ContextContribution
+from app.domain.itemized.plans.request import ContextRequestPlan
 from app.domain.itemized.selection import ContextSelectionEntry
 from app.domain.itemized.serde.plan import unsealed_context_plan_from_dict
 

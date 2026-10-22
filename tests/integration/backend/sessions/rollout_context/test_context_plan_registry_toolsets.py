@@ -16,7 +16,7 @@ from app.domain.itemized.identity.refs import (
     ToolSetRef,
     selection_ref_identity,
 )
-from app.domain.itemized.request_plan import ContextRequestPlan
+from app.domain.itemized.plans.request import ContextRequestPlan
 from app.services.infrastructure.rollout_context.assembly.plans.manifest import (
     validate_sealed_plan,
 )

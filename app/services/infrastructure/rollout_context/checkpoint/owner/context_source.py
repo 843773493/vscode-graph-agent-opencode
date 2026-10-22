@@ -9,7 +9,7 @@ owner 中，避免 source registration 和 history revision 共用一份生命�
 from __future__ import annotations
 
 from app.domain.itemized.hashing import canonical_json_bytes, contribution_content_hash
-from app.domain.itemized.request_plan import ContextContribution, SourceBinding
+from app.domain.itemized.plans.contributions import ContextContribution, SourceBinding
 
 
 class ContextSourceOverlayMixin:

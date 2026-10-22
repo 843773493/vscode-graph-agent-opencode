@@ -12,7 +12,7 @@ import pytest
 
 from app.domain.itemized.errors import ItemSchemaError
 from app.domain.itemized.hashing import contribution_content_hash
-from app.domain.itemized.request_plan import ContextContribution
+from app.domain.itemized.plans.contributions import ContextContribution
 from app.domain.itemized.serde.registry import parse_contribution
 
 BODY = "selection role typed body"
@@ -56,7 +56,7 @@ def test_typed_fields_round_trip(
 def contribution_to_manifest(contribution: ContextContribution) -> dict:
     from dataclasses import replace
 
-    from app.domain.itemized.request_plan import ContextRequestPlan
+    from app.domain.itemized.plans.request import ContextRequestPlan
     from app.domain.itemized.serde.plan import unsealed_context_plan_from_dict
 
     plan = ContextRequestPlan(

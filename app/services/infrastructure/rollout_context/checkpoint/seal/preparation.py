@@ -25,7 +25,7 @@ from app.domain.itemized.epoch.prefix_epoch import (
 from app.domain.itemized.epoch.tool_set import ToolSetSnapshot
 from app.domain.itemized.hashing import canonical_json_bytes, sha256_jcs
 from app.domain.itemized.identity.refs import ContextRef, selection_ref_identity
-from app.domain.itemized.request_plan import resolve_contribution_for_ref
+from app.domain.itemized.plans.contributions import resolve_contribution_for_ref
 from app.domain.itemized.resource_activation import ResourceActivationSnapshotRef
 from app.domain.itemized.serialization import normalize_wire_request
 from app.services.business.resource_derivations.team import (

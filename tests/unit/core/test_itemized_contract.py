@@ -28,8 +28,9 @@ from app.domain.itemized.identity.item_projection import (
     ProjectionPartRef,
 )
 from app.domain.itemized.identity.refs import ContextRef
+from app.domain.itemized.plans.contributions import ContextContribution
+from app.domain.itemized.plans.request import ContextRequestPlan
 from app.domain.itemized.records import CanonicalItemRecord
-from app.domain.itemized.request_plan import ContextContribution, ContextRequestPlan
 from app.domain.itemized.selection import ContextSelectionEntry
 from app.services.infrastructure.rollout_context.checkpoint.message_codec import (
     LangChainMessageCodec,

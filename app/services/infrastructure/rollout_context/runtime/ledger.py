@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Iterable
 from dataclasses import dataclass, replace
 
-from app.domain.itemized.request_plan import ContextContribution
+from app.domain.itemized.plans.contributions import ContextContribution
 from app.domain.itemized.runtime import ItemDraft, ProvenanceEdge
 
 

@@ -87,17 +87,14 @@ from app.domain.itemized.identity.refs import (
     unique_ref_identities,
 )
 from app.domain.itemized.parts import ContentPart, ContentPartAnchor
+from app.domain.itemized.plans.contributions import ContextContribution, SourceBinding
+from app.domain.itemized.plans.request import ContextRequestPlan
 from app.domain.itemized.records import (
     CanonicalItemRecord,
     InternalDisplayPart,
     InternalDisplayProvenance,
     ProducerRef,
     RuntimeNoticePayload,
-)
-from app.domain.itemized.request_plan import (
-    ContextContribution,
-    ContextRequestPlan,
-    SourceBinding,
 )
 from app.domain.itemized.runtime import (
     ExecutionRecord,

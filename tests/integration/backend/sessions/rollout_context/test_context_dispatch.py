@@ -30,8 +30,9 @@ from app.domain.itemized.identity.item_projection import (
 )
 from app.domain.itemized.identity.refs import selection_ref_identity
 from app.domain.itemized.mutation_intents import MutationIntentOwner
+from app.domain.itemized.plans.contributions import ContextContribution
+from app.domain.itemized.plans.request import ContextRequestPlan
 from app.domain.itemized.records import CanonicalItemRecord
-from app.domain.itemized.request_plan import ContextContribution, ContextRequestPlan
 from app.services.infrastructure.rollout_context.assembly.detail_identity import (
     detail_ref_key,
 )

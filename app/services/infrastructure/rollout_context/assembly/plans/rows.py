@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import sqlite3
 
-from app.domain.itemized.request_plan import ContextRequestPlan
+from app.domain.itemized.plans.request import ContextRequestPlan
 from app.services.infrastructure.rollout_context.storage.serialization import (
     canonical_json_text as json_text,
 )

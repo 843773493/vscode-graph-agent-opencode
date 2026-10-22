@@ -13,7 +13,7 @@ if TYPE_CHECKING:
     from langchain_core.messages import BaseMessage
 
     from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
-    from app.domain.itemized.request_plan import ContextRequestPlan
+    from app.domain.itemized.plans.request import ContextRequestPlan
     from app.domain.itemized.resource_activation import ResourceActivationSnapshotRef
 
 from app.schemas.gateway.workspaces import GatewayWorkspaceListDTO

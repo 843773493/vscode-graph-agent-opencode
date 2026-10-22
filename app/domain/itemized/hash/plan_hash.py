@@ -13,7 +13,7 @@ from app.domain.itemized.serialization import (
 )
 
 if TYPE_CHECKING:
-    from app.domain.itemized.request_plan import ContextRequestPlan
+    from app.domain.itemized.plans.request import ContextRequestPlan
 
 
 def context_plan_hash(plan: ContextRequestPlan) -> str:

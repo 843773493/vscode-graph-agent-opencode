@@ -15,7 +15,6 @@ from dataclasses import replace
 
 import pytest
 
-from app.domain.itemized import request_plan
 from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
 from app.domain.itemized.errors import ItemSchemaError
 from app.domain.itemized.identity.refs import (
@@ -25,8 +24,9 @@ from app.domain.itemized.identity.refs import (
     selection_ref_identity,
     unique_ref_identities,
 )
+from app.domain.itemized.plans import request as request_plan
+from app.domain.itemized.plans.request import ContextRequestPlan
 from app.domain.itemized.records import CanonicalItemRecord
-from app.domain.itemized.request_plan import ContextRequestPlan
 from app.domain.itemized.selection import ContextSelectionEntry
 from app.domain.itemized.serialization import ordered_selection
 

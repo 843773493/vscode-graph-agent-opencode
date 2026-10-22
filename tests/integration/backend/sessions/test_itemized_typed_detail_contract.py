@@ -11,7 +11,7 @@ import pytest
 from app.domain.itemized.epoch.tool_set import ToolSetSnapshot
 from app.domain.itemized.hashing import contribution_content_hash, sha256_jcs
 from app.domain.itemized.identity.detail_ref import DetailRef
-from app.domain.itemized.request_plan import ContextContribution
+from app.domain.itemized.plans.contributions import ContextContribution
 from app.services.infrastructure.rollout_context.assembly.detail_identity import (
     detail_ref_from_key,
     detail_ref_key,

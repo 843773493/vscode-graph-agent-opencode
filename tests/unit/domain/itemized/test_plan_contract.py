@@ -17,13 +17,13 @@ from app.domain.itemized.hashing import (
 )
 from app.domain.itemized.identity.detail_ref import DetailRef
 from app.domain.itemized.identity.refs import ContextRef, ToolSetRef
-from app.domain.itemized.records import CanonicalItemRecord
-from app.domain.itemized.request_plan import (
+from app.domain.itemized.plans.contributions import (
     ContextContribution,
-    ContextRequestPlan,
     SourceBinding,
     resolve_contribution_for_ref,
 )
+from app.domain.itemized.plans.request import ContextRequestPlan
+from app.domain.itemized.records import CanonicalItemRecord
 from app.domain.itemized.selection import ContextSelectionEntry
 
 

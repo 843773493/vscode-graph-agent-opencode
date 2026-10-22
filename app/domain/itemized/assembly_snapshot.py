@@ -22,12 +22,12 @@ from app.domain.itemized.identity.refs import (
     ToolSetRef,
     selection_ref_identity,
 )
-from app.domain.itemized.request_plan import (
+from app.domain.itemized.plans.contributions import (
     ContextContribution,
-    ContextRequestPlan,
     resolve_contribution_for_ref,
     validate_included_overlay_chain,
 )
+from app.domain.itemized.plans.request import ContextRequestPlan
 from app.domain.itemized.selection import ContextSelectionEntry
 from app.domain.itemized.serde.assembly import (
     context_assembly_snapshot_from_dict,

@@ -8,7 +8,7 @@ from collections.abc import Mapping
 from typing import TYPE_CHECKING
 
 from app.core.sqlite_state import utc_now_text as _now
-from app.domain.itemized.request_plan import (
+from app.domain.itemized.plans.contributions import (
     ContextContribution,
     parse_contribution_binding_manifest,
 )

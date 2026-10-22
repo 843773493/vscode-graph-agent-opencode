@@ -24,11 +24,11 @@ from app.domain.itemized.identity.refs import (
     ToolSetRef,
     selection_ref_identity,
 )
-from app.domain.itemized.request_plan import (
+from app.domain.itemized.plans.contributions import (
     ContextContribution,
-    ContextRequestPlan,
     resolve_contribution_for_ref,
 )
+from app.domain.itemized.plans.request import ContextRequestPlan
 from app.domain.itemized.selection import ContextSelectionEntry
 from app.domain.itemized.serialization import normalize_wire_request
 from app.services.infrastructure.rollout_context.assembly.manifest import (

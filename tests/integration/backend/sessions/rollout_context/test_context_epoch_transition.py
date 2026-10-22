@@ -42,7 +42,7 @@ from app.domain.itemized.mutation_intents import (
     MutationIntentOwner,
     RebuildContextEpochIntent,
 )
-from app.domain.itemized.request_plan import SourceBinding
+from app.domain.itemized.plans.contributions import SourceBinding
 from app.services.infrastructure.resource_platform.registry.context_source_reactor import (
     ContextSourceReactor,
 )

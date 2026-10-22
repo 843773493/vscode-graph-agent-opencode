@@ -49,11 +49,8 @@ from app.domain.itemized.identity.refs import (
     ToolSetRef,
     selection_ref_identity,
 )
-from app.domain.itemized.request_plan import (
-    ContextContribution,
-    ContextRequestPlan,
-    SourceBinding,
-)
+from app.domain.itemized.plans.contributions import ContextContribution, SourceBinding
+from app.domain.itemized.plans.request import ContextRequestPlan
 from app.domain.itemized.selection import ContextSelectionEntry
 from app.services.infrastructure.rollout_context.assembly.manifest import (
     ContextAssemblyManifestMixin,

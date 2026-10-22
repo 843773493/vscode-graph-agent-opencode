@@ -15,7 +15,7 @@ import pytest
 
 from app.core.identifier import create_uuid_hex
 from app.domain.itemized.identity.refs import ToolSetRef
-from app.domain.itemized.request_plan import ContextRequestPlan
+from app.domain.itemized.plans.request import ContextRequestPlan
 from app.services.infrastructure.rollout_context.assembly.plans.manifest import (
     draft_manifest,
 )

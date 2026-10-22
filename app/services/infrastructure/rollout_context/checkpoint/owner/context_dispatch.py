@@ -24,8 +24,8 @@ from app.domain.itemized.identity.tool_call_identity import (
     matches_tool_call_id,
     provider_tool_call_id,
 )
+from app.domain.itemized.plans.request import ContextRequestPlan
 from app.domain.itemized.records import parse_item_projection_manifest
-from app.domain.itemized.request_plan import ContextRequestPlan
 from app.domain.itemized.resource_activation import ResourceActivationSnapshotRef
 from app.schemas.internal_v2.session_context import SessionContextResourceDTO
 from app.services.infrastructure.rollout_context.assembly.plans.registry import (

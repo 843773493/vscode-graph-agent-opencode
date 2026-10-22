@@ -12,8 +12,8 @@ from app.domain.itemized.identity.refs import (
     selection_ref_identity,
 )
 from app.domain.itemized.identity.tool_call_identity import provider_tool_call_id
+from app.domain.itemized.plans.request import ContextRequestPlan
 from app.domain.itemized.records import CanonicalItemRecord
-from app.domain.itemized.request_plan import ContextRequestPlan
 from app.services.infrastructure.rollout_context.provider.toolset_request_bridge import (
     project_tool_set_ref,
 )

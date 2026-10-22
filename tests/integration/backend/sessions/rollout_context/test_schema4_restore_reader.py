@@ -15,7 +15,7 @@ from pathlib import Path
 import pytest
 
 from app.core.identifier import create_uuid_hex
-from app.domain.itemized.request_plan import ContextRequestPlan
+from app.domain.itemized.plans.request import ContextRequestPlan
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )

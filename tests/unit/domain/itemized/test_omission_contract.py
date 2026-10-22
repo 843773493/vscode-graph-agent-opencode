@@ -9,11 +9,8 @@ from app.domain.itemized.hash.request_hash import context_request_hash
 from app.domain.itemized.hashing import contribution_content_hash
 from app.domain.itemized.identity.detail_ref import DetailRef
 from app.domain.itemized.identity.refs import ContextRef, ToolSetRef
-from app.domain.itemized.request_plan import (
-    ContextContribution,
-    ContextRequestPlan,
-    SourceBinding,
-)
+from app.domain.itemized.plans.contributions import ContextContribution, SourceBinding
+from app.domain.itemized.plans.request import ContextRequestPlan
 from app.domain.itemized.selection import ContextSelectionEntry
 
 
@@ -125,7 +122,7 @@ def test_available_omitted_overlay_seals_without_resolving_contribution(
     def forbid_resolution(*args: object, **kwargs: object) -> None:
         pytest.fail("omitted entry 不得调用 active contribution resolver")
 
-    for module in ("request_plan", "assembly_snapshot"):
+    for module in ("plans.request", "assembly_snapshot"):
         monkeypatch.setattr(
             f"app.domain.itemized.{module}.resolve_contribution_for_ref",
             forbid_resolution,

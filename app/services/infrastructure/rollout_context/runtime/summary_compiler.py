@@ -22,12 +22,9 @@ from app.domain.itemized.epoch.prefix_epoch import (
 from app.domain.itemized.epoch.seal_binding import ContextSealPreparation
 from app.domain.itemized.hashing import contribution_content_hash
 from app.domain.itemized.identity.refs import ContextRef
+from app.domain.itemized.plans.contributions import ContextContribution, SourceBinding
+from app.domain.itemized.plans.request import ContextRequestPlan
 from app.domain.itemized.records import CanonicalItemRecord
-from app.domain.itemized.request_plan import (
-    ContextContribution,
-    ContextRequestPlan,
-    SourceBinding,
-)
 from app.services.mapping.itemized.canonical_langchain import (
     project_summary_source,
     summary_retry_variants,

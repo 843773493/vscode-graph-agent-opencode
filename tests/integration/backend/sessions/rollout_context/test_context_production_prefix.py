@@ -30,7 +30,7 @@ from app.domain.itemized.hashing import sha256_jcs
 from app.domain.itemized.identity.detail_ref import DetailRef
 from app.domain.itemized.identity.refs import selection_ref_identity
 from app.domain.itemized.mutation_intents import MutationIntentOwner
-from app.domain.itemized.request_plan import ContextRequestPlan
+from app.domain.itemized.plans.request import ContextRequestPlan
 from app.domain.itemized.serialization import normalize_wire_request
 from app.services.infrastructure.rollout_context.assembly import (
     reader as assembly_reader,

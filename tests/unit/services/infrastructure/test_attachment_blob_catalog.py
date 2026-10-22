@@ -50,8 +50,8 @@ from app.domain.itemized.epoch.tool_set import ToolSetSnapshot
 from app.domain.itemized.hashing import sha256_jcs
 from app.domain.itemized.identity.refs import ContextRef
 from app.domain.itemized.mutation_intents import MutationIntentOwner
+from app.domain.itemized.plans.request import ContextRequestPlan
 from app.domain.itemized.records import user_input_payload
-from app.domain.itemized.request_plan import ContextRequestPlan
 from app.schemas.internal_v2.message import AttachmentRef
 from app.schemas.internal_v2.session import SessionForkRequest
 from app.schemas.internal_v2.turn import TurnHistoryLoadRequest

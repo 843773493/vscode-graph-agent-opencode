@@ -9,7 +9,7 @@ from app.agents.providers.wire_finalize import ChatWireProfile, ResponsesWirePro
 from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
 from app.domain.itemized.epoch.seal_binding import ContextSealPreparation
 from app.domain.itemized.identity.detail_ref import DetailRef
-from app.domain.itemized.request_plan import ContextRequestPlan
+from app.domain.itemized.plans.request import ContextRequestPlan
 from app.domain.itemized.resource_activation import (
     ResourceActivationSnapshotRef,
 )

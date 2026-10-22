@@ -11,8 +11,8 @@ from app.domain.itemized.hashing import (
     sha256_jcs,
 )
 from app.domain.itemized.identity.refs import ref_identity
+from app.domain.itemized.plans.request import ContextRequestPlan
 from app.domain.itemized.records import CanonicalItemRecord
-from app.domain.itemized.request_plan import ContextRequestPlan
 from app.domain.itemized.selection import ContextSelectionEntry
 from app.domain.itemized.serialization import ordered_selection
 

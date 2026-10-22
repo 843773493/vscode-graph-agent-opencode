@@ -17,8 +17,9 @@ from app.domain.itemized.identity.refs import (
     ToolSetRef,
     selection_ref_identity,
 )
+from app.domain.itemized.plans.contributions import ContextContribution
+from app.domain.itemized.plans.request import ContextRequestPlan
 from app.domain.itemized.records import CanonicalItemRecord
-from app.domain.itemized.request_plan import ContextContribution, ContextRequestPlan
 from app.services.mapping.itemized.canonical_langchain import (
     project_canonical_items as _project_canonical_items,
 )

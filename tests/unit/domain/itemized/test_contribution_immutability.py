@@ -11,7 +11,8 @@ from app.domain.itemized.epoch.prefix_epoch import (
 )
 from app.domain.itemized.hashing import canonical_json_bytes, contribution_content_hash
 from app.domain.itemized.identity.refs import ToolSetRef
-from app.domain.itemized.request_plan import ContextContribution, ContextRequestPlan
+from app.domain.itemized.plans.contributions import ContextContribution
+from app.domain.itemized.plans.request import ContextRequestPlan
 from app.domain.itemized.serde.registry import parse_contribution
 
 

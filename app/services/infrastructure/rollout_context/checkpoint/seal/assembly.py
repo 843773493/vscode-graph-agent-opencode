@@ -18,8 +18,8 @@ from app.domain.itemized.enums import SemanticKind
 from app.domain.itemized.hash.request_hash import _context_request_hash_preimage
 from app.domain.itemized.hashing import canonical_json_bytes, sha256_jcs
 from app.domain.itemized.identity.refs import ref_identity
+from app.domain.itemized.plans.request import ContextRequestPlan
 from app.domain.itemized.records import CanonicalItemRecord
-from app.domain.itemized.request_plan import ContextRequestPlan
 from app.domain.itemized.resource_activation import ResourceActivationSnapshotRef
 from app.domain.itemized.serialization import normalize_wire_request
 from app.services.infrastructure.rollout_context.assembly.plans.registry import (

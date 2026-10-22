@@ -18,10 +18,8 @@ from app.domain.itemized.identity.refs import (
     ToolSetRef,
     selection_ref_identity,
 )
-from app.domain.itemized.request_plan import (
-    ContextRequestPlan,
-    resolve_contribution_for_ref,
-)
+from app.domain.itemized.plans.contributions import resolve_contribution_for_ref
+from app.domain.itemized.plans.request import ContextRequestPlan
 
 
 def draft_manifest(plan: ContextRequestPlan) -> dict[str, object]:

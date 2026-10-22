@@ -40,7 +40,7 @@ from app.domain.itemized.identity.detail_ref import DetailRef
 from app.domain.itemized.identity.item_projection import (
     ItemProjectionIdentity,
 )
-from app.domain.itemized.request_plan import (
+from app.domain.itemized.plans.contributions import (
     ContextContribution,
     SourceBinding,
     resolve_contribution_for_ref,

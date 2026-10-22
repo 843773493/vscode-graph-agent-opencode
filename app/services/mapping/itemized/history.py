@@ -6,8 +6,8 @@ from collections.abc import Mapping, Sequence
 
 from langchain_core.messages import BaseMessage
 
+from app.domain.itemized.plans.request import ContextRequestPlan
 from app.domain.itemized.records import CanonicalItemRecord
-from app.domain.itemized.request_plan import ContextRequestPlan
 from app.services.mapping.itemized.canonical_langchain import project_canonical_items
 from app.services.mapping.itemized.langchain import project_context_plan
 

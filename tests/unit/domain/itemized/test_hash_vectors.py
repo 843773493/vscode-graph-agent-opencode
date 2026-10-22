@@ -23,8 +23,8 @@ from app.domain.itemized.hashing import (
     sha256_jcs,
 )
 from app.domain.itemized.identity.refs import ContextRef, ToolSetRef
+from app.domain.itemized.plans.request import ContextRequestPlan
 from app.domain.itemized.records import CanonicalItemRecord
-from app.domain.itemized.request_plan import ContextRequestPlan
 
 
 @pytest.mark.parametrize("input_kind", ["binary64", "json", "integer"])

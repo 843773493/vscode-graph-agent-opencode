@@ -23,11 +23,8 @@ from app.domain.itemized.hashing import (
     sha256_jcs,
 )
 from app.domain.itemized.mutation_intents import MutationIntentOwner
-from app.domain.itemized.request_plan import (
-    ContextContribution,
-    ContextRequestPlan,
-    SourceBinding,
-)
+from app.domain.itemized.plans.contributions import ContextContribution, SourceBinding
+from app.domain.itemized.plans.request import ContextRequestPlan
 from app.services.infrastructure.rollout_context.assembly.detail_identity import (
     detail_ref_from_key,
     detail_ref_key,

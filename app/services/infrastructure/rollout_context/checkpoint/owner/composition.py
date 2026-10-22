@@ -10,12 +10,9 @@ from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
 from app.domain.itemized.enums import BaseDeltaRole, SemanticKind
 from app.domain.itemized.epoch.tool_set import ToolSetSnapshot
 from app.domain.itemized.identity.refs import ContextRef
+from app.domain.itemized.plans.contributions import ContextContribution, SourceBinding
+from app.domain.itemized.plans.request import ContextRequestPlan
 from app.domain.itemized.records import CanonicalItemRecord
-from app.domain.itemized.request_plan import (
-    ContextContribution,
-    ContextRequestPlan,
-    SourceBinding,
-)
 from app.services.infrastructure.rollout_context.runtime.composer import (
     ContextPlanComposer,
 )

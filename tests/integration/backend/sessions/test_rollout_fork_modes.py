@@ -102,8 +102,8 @@ from app.domain.itemized.identity.item_projection import (
     ItemProvenanceRelation,
 )
 from app.domain.itemized.mutation_intents import MutationIntentOwner
+from app.domain.itemized.plans.contributions import ContextContribution
 from app.domain.itemized.records import CanonicalItemRecord, user_input_payload
-from app.domain.itemized.request_plan import ContextContribution
 from app.domain.itemized.resource_activation import ResourceActivationPolicySnapshot
 from app.gateway.federation.grants import ForkGrantTarget
 from app.prompting.factory import PromptSection, internal_message_factory

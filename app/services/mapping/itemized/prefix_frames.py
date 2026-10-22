@@ -20,8 +20,8 @@ from app.domain.itemized.epoch.prefix_epoch import (
 from app.domain.itemized.epoch.seal_binding import ContextSealBinding
 from app.domain.itemized.hashing import canonical_json_bytes, contribution_content_hash
 from app.domain.itemized.identity.refs import selection_ref_identity
+from app.domain.itemized.plans.request import ContextRequestPlan
 from app.domain.itemized.records import CanonicalItemRecord
-from app.domain.itemized.request_plan import ContextRequestPlan
 from app.services.mapping.itemized.canonical_langchain import (
     project_canonical_items,
     project_summary_source,

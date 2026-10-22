@@ -6,7 +6,7 @@ import pytest
 
 from app.domain.itemized.errors import ItemSchemaError
 from app.domain.itemized.hashing import canonical_json_bytes, contribution_content_hash
-from app.domain.itemized.request_plan import (
+from app.domain.itemized.plans.contributions import (
     ContextContribution,
     SourceBinding,
     parse_contribution_binding_manifest,

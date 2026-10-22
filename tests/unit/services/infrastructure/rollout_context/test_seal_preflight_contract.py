@@ -25,8 +25,8 @@ from app.domain.itemized.identity.item_projection import (
     ItemProjectionIdentity,
 )
 from app.domain.itemized.identity.refs import ContextRef
+from app.domain.itemized.plans.contributions import ContextContribution, SourceBinding
 from app.domain.itemized.records import CanonicalItemRecord
-from app.domain.itemized.request_plan import ContextContribution, SourceBinding
 from app.domain.itemized.selection import ContextSelectionEntry
 from app.services.infrastructure.rollout_context.assembly.seal_preflight import (
     ContextAssemblySealPreflightError,

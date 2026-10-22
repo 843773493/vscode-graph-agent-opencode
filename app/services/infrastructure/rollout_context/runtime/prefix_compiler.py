@@ -30,13 +30,13 @@ from app.domain.itemized.hashing import (
     payload_content_length,
 )
 from app.domain.itemized.identity.refs import selection_ref_identity
-from app.domain.itemized.records import CanonicalItemRecord
-from app.domain.itemized.request_plan import (
+from app.domain.itemized.plans.contributions import (
     ContextContribution,
-    ContextRequestPlan,
     SourceBinding,
     resolve_contribution_for_ref,
 )
+from app.domain.itemized.plans.request import ContextRequestPlan
+from app.domain.itemized.records import CanonicalItemRecord
 from app.services.business.resource_derivations.team import TEAM_SOURCE_IDS
 from app.services.infrastructure.mcp.catalog_activation import MCP_GUIDANCE_SOURCE_ID
 from app.services.infrastructure.rollout_context.runtime.context_sources.models import (

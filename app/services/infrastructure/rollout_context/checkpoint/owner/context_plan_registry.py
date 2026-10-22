@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from app.domain.itemized.request_plan import ContextRequestPlan
+from app.domain.itemized.plans.request import ContextRequestPlan
 from app.services.infrastructure.rollout_context.assembly.plans.registry import (
     ContextPlanRegistration,
 )

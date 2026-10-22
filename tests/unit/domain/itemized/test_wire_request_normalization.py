@@ -9,7 +9,7 @@ import pytest
 from app.domain.itemized.hash.request_hash import context_request_hash
 from app.domain.itemized.hashing import sha256_jcs
 from app.domain.itemized.identity.refs import ToolSetRef
-from app.domain.itemized.request_plan import ContextRequestPlan
+from app.domain.itemized.plans.request import ContextRequestPlan
 from app.domain.itemized.serialization import _hash_safe_value, normalize_wire_request
 
 
