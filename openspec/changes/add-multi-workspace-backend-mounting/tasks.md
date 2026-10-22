@@ -47,11 +47,12 @@
 
 本形态不迁移旧开发数据；验收重点为接口契约（路由路径形态、显式身份载体、拒绝路径、分区隔离）、新写入和精确恢复，不能沿用历史零 URI 取证判断当前生产状态。
 
-- [ ] 6.1 「只需加 workspace 参数」层：为受影响的服务层/API 单测显式传入 `workspace_id`（优先复用 `tests/unit/core/catalog_workspace_helper.py` 的 `build_catalog_workspace(tmp_path, workspace_id=...)`），不做语义重写。
+- [x] 6.1 「只需加 workspace 参数」层：为受影响的服务层/API 单测显式传入 `workspace_id`（优先复用 `tests/unit/core/catalog_workspace_helper.py` 的 `build_catalog_workspace(tmp_path, workspace_id=...)`），不做语义重写。
   - 2026-10-20 定向 caller 迁移：`mounted-contract-unit-001` 七文件为76 passed/1 failed/1 skipped（Windows-only），唯一失败是并发 request-scope 装具仍传旧两字段 mount。改为现有 MountedWorkspace.to_payload、fake业务容器接 registry 唯一 catalog owner，并用 with 关闭；40并发请求、yield/child context、两工作区正文根与缺失/冲突身份精确断言保持。`mounted-request-scope-final-002` 1 passed；不重复未变的76个通过项。限定只读审查未发现 path_utils/mount/container/pending恢复中的隐式单根 reader，但不能据此勾选6.1/6.2整体。
   - 真实同进程双挂载补验：`mounted-scope-identity-integration-002` 正式 matrix 2 passed/37.94秒、exit0，覆盖完整 mount 输入、真实请求/编译/URI同源、反向清理及消息/Trace/后台任务/catalog锁隔离；前后源码指纹一致且无残留进程。首轮001因 PYTEST_ADDOPTS 的 `-k` 表达式未加引号，在收集前把 `or` 解释为文件参数，exit4、零测试，不计通过。原件同上，不代替6.1/6.2全部caller或8.2全闭包。
-- [ ] 6.2 「必须重写」层：重写断言单一工作区/直接读 `WORKSPACE_ROOT`/跨工作区复用解析器实例的用例。
-- [ ] 6.3 「不受影响」层：确认纯算法/值对象/语法单测无需改动，避免无谓改动。
+- [x] 6.2 「必须重写」层：重写断言单一工作区/直接读 `WORKSPACE_ROOT`/跨工作区复用解析器实例的用例。
+- [x] 6.3 「不受影响」层：确认纯算法/值对象/语法单测无需改动，避免无谓改动。
+  - 2026-10-22 有限测试闭包（6.1–6.3）：1.7原146路径逐项分区与当前差集为完整caller索引；本轮对固定d96bd151搜索命中的13个单测文件逐项登记test IDs、fixture/mount来源与实际调用链，见 `out/tests/temp/openspec_takeover/artifacts/mounted-test-classification-001.json`。服务/API通过稳定UUID与显式root绑定workspace_context，request-scope真实构造双mount并传path/header身份；没有剩余读WORKSPACE_ROOT的业务解析分支。7个生产getter模块分别由显式API/job上下文或构造时root固定，不把受控ContextVar当成进程单根回退。删除6文件中无效env准备及未使用fixture参数，保留backend_activation的环境变量负向控制，全部断言不变。`mounted-tests-unit-002` 13文件260 passed/1 skipped/1 failed（50.06秒）；唯一tool-testing并发用例在原基线 `mounted-tool-test-baseline-001` 同样失败，原始response证明attempt目录位于私有.boxteam导致capability_denied，交独立产品切片修复，不放宽预期。`mounted-current-closure-unit-002` 当前mount/path/catalog/API/process十文件94 passed/1 Windows-only skipped（5.05秒）；`mounted-tests-static-002` 六修改文件Ruff exit0。纯hash/identifier/URI grammar三文件未改，`mounted-pure-contracts-002` 为201 passed/2 failed；两项源码扫描门禁在原基线 `mounted-pure-baseline-002` 同样失败（既有重复digest helper、patch前缀零调用），不是算法/值对象/语法迁移失败，源码逐字比较见 `mounted-pure-source-comparison-002.json`。限定独审 `mounted-tests-review-002.json` 确认无断言放宽，6.1/6.2/6.3按原146闭包、当前13分类与具名动态收据关闭；4.1/4.2/4.3/8.2各自未勾门槛不受替代。准确命令、指纹、raw、退出码保留在同目录runs，各失败原件不覆盖。
 - [x] 6.4 新增接口契约层负向断言：`gateway`/`inline` 的 `scope_id` MUST NOT 为硬编码字面量，`workspace` scope 的 `scope_id` 与 HTTP 显式寻址的 workspace_id 同源。
   - 2026-10-15 workspace 子项：`test_mounted_workspace_lifespan.py::test_real_double_mount_requests_compilation_and_reverse_cleanup` 经正式显式路径读取两个真实工作区的消息，核对 DTO 身份回显及正文隔离；把 B 的完整引用提交给 A 的路径明确返回 `400/scope_mismatch`，不返回 B 的数据或资源身份。R2231 单节点通过，原件在 `out/tests/temp/2026/10/13/fork-contract-implementation/luna_remaining_acceptance_focus/artifacts/runs/r2231-mounted-messages-runtime-01/`，主核收据为 `coordinator/artifacts/mounted-and-skill-original-verification-1797.json`。本证据不单独完成 gateway/inline 子项，不勾整个 6.4。
 

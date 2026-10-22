@@ -251,8 +251,7 @@ class _FakeSessionService:
 
 
 @pytest.mark.asyncio
-async def test_orchestrator_uses_session_current_agent_when_request_omits_agent(monkeypatch, tmp_path, attachment_holder):
-    monkeypatch.setenv("WORKSPACE_ROOT", str(tmp_path))
+async def test_orchestrator_uses_session_current_agent_when_request_omits_agent(attachment_holder):
 
     captured: dict[str, str] = {}
 
@@ -524,8 +523,7 @@ async def test_orchestrator_forwards_cross_session_delivery_policy(attachment_ho
 
 
 @pytest.mark.asyncio
-async def test_orchestrator_prefers_request_agent_over_session_agent(monkeypatch, tmp_path, attachment_holder):
-    monkeypatch.setenv("WORKSPACE_ROOT", str(tmp_path))
+async def test_orchestrator_prefers_request_agent_over_session_agent(attachment_holder):
 
     captured: dict[str, str] = {}
 

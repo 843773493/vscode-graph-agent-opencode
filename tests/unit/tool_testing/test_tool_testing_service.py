@@ -342,7 +342,6 @@ def test_model_tool_parameters_excludes_tool_runtime() -> None:
 @pytest.mark.asyncio
 async def test_tool_tests_run_models_concurrently_and_each_model_serially(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     workspace_root = tmp_path / "workspace"
     workspace_root.mkdir()
@@ -350,7 +349,6 @@ async def test_tool_tests_run_models_concurrently_and_each_model_serially(
     seed_root = asset_root / "apply_patch" / "update"
     seed_root.mkdir(parents=True)
     (seed_root / "target.txt").write_text("alpha\nbeta\n", encoding="utf-8")
-    monkeypatch.setenv("WORKSPACE_ROOT", str(workspace_root))
     concurrency = {
         "provider_a": 0,
         "provider_b": 0,

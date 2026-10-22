@@ -42,8 +42,7 @@ def sessions_root(tmp_path: Path) -> Path:
 
 
 @pytest.fixture
-def storage(sessions_root: Path, monkeypatch: pytest.MonkeyPatch) -> RolloutContextStore:
-    monkeypatch.setenv("WORKSPACE_ROOT", str(sessions_root.parent.parent))
+def storage(sessions_root: Path) -> RolloutContextStore:
     return RolloutContextStore(sessions_root)
 
 

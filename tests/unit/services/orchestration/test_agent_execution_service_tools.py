@@ -261,8 +261,7 @@ def test_mcp_catalog_definition_uses_extension_group_metadata():
 
 
 @pytest.mark.asyncio
-async def test_agent_includes_background_message_collection_tool(text_mutations_factory, communication_probe, monkeypatch, tmp_path):
-    monkeypatch.setenv("WORKSPACE_ROOT", str(tmp_path))
+async def test_agent_includes_background_message_collection_tool(text_mutations_factory, communication_probe, tmp_path):
     background_message_bus = _BlueprintBackgroundService()
     background_task_registry = _BlueprintBackgroundService()
     job_event_bus = _FakeJobEventBus()
@@ -312,8 +311,7 @@ async def test_agent_includes_background_message_collection_tool(text_mutations_
 
 
 @pytest.mark.asyncio
-async def test_agent_omits_test_tool_without_development_config(text_mutations_factory, communication_probe, monkeypatch, tmp_path):
-    monkeypatch.setenv("WORKSPACE_ROOT", str(tmp_path))
+async def test_agent_omits_test_tool_without_development_config(text_mutations_factory, communication_probe, tmp_path):
     tools = build_default_tools(text_mutations=text_mutations_factory(tmp_path), session_communication_service=communication_probe,
         session_id="session_production",
         background_task_registry=_BlueprintBackgroundService(),
@@ -336,8 +334,7 @@ async def test_agent_omits_test_tool_without_development_config(text_mutations_f
 
 
 @pytest.mark.asyncio
-async def test_single_agent_tool_set_omits_team_board_tools(text_mutations_factory, communication_probe, monkeypatch, tmp_path):
-    monkeypatch.setenv("WORKSPACE_ROOT", str(tmp_path))
+async def test_single_agent_tool_set_omits_team_board_tools(text_mutations_factory, communication_probe, tmp_path):
     tools = build_default_tools(text_mutations=text_mutations_factory(tmp_path), session_communication_service=communication_probe,
         session_id="session_single_agent",
         background_task_registry=_BlueprintBackgroundService(),
@@ -371,8 +368,7 @@ async def test_single_agent_tool_set_omits_team_board_tools(text_mutations_facto
 
 
 @pytest.mark.asyncio
-async def test_agent_tool_denylist_filters_direct_and_middleware_tools(text_mutations_factory, communication_probe, monkeypatch, tmp_path):
-    monkeypatch.setenv("WORKSPACE_ROOT", str(tmp_path))
+async def test_agent_tool_denylist_filters_direct_and_middleware_tools(text_mutations_factory, communication_probe, tmp_path):
     job_event_bus = _FakeJobEventBus()
 
     class _DenylistConfigService(_DummyConfigService):
@@ -433,7 +429,6 @@ async def test_emit_system_time_messages_tool_emits_periodic_messages(
     tmp_path,
     session_bundle_factory,
 ):
-    monkeypatch.setenv("WORKSPACE_ROOT", str(tmp_path))
     sessions_dir = tmp_path / ".boxteam" / "sessions"
     session_bundle_factory(sessions_dir, "ses_019bca51019973818b63e9d44c0e94f5")
     background_message_bus = BackgroundMessageBus(store=BackgroundWorkStore(sessions_dir=sessions_dir))

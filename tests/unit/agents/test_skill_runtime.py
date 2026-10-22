@@ -138,7 +138,6 @@ def test_build_workspace_skill_catalog_empty_layers_publishes_empty_revision(
     tmp_path,
     monkeypatch,
 ):
-    monkeypatch.setenv("WORKSPACE_ROOT", str(tmp_path))
     monkeypatch.setenv("BOXTEAM_HOME", str(tmp_path / "boxteam-home"))
     monkeypatch.delenv("BOXTEAM_DEFAULT_SKILL_GROUPS", raising=False)
 

@@ -110,9 +110,7 @@ def native_bindings(tmp_path):
 @pytest.fixture
 def workspace_service(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> WorkspaceService:
-    monkeypatch.setenv("WORKSPACE_ROOT", str(tmp_path))
     return WorkspaceService(config_service=_workspace_config_service_mock(), workspace_root=tmp_path)
 
 
@@ -327,14 +325,12 @@ def test_resolve_raw_file_rejects_path_outside_workspace(
 
 @pytest.mark.asyncio
 async def test_filesystem_scope_lists_and_reads_absolute_path(
-    monkeypatch: pytest.MonkeyPatch,
     native_bindings,
     tmp_path: Path,
 ) -> None:
     filesystem_scope_root = tmp_path / "filesystem_scope"
     workspace_root = filesystem_scope_root / "project"
     workspace_root.mkdir(parents=True)
-    monkeypatch.setenv("WORKSPACE_ROOT", str(workspace_root))
     workspace_service = WorkspaceService(
         config_service=_workspace_config_service_mock(), workspace_root=workspace_root, native_directories=native_bindings,
     )
@@ -403,7 +399,6 @@ async def test_directory_listing_rejects_invalid_cursor(
 @pytest.fixture
 async def file_manager_service(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
     native_bindings,
 ):
     project_root = prepare_default_test_workspace(
@@ -412,7 +407,6 @@ async def file_manager_service(
     )
     source_root = tmp_path / "clipboard"
     source_root.mkdir()
-    monkeypatch.setenv("WORKSPACE_ROOT", str(project_root))
     service = WorkspaceService(config_service=_workspace_config_service_mock(), workspace_root=project_root, native_directories=native_bindings)
     await service.start()
     yield service, project_root, source_root
