@@ -185,7 +185,8 @@ function Invoke-TargetAction([string[]]$Arguments) {
                 # dev 的 launcher 自己分离 manager 并等待就绪；外层不得提前返回成功。
                 Push-Location $Repository
                 try {
-                    & bun.exe run scripts/launch/dev.mjs --only-launch
+                    # SSH Job 仅允许显式 breakaway；先脱离再交给现有 launcher 等待就绪。
+                    & $Python -c 'import subprocess,sys;sys.exit(subprocess.run(sys.argv[1:],creationflags=subprocess.CREATE_BREAKAWAY_FROM_JOB).returncode)' bun.exe run scripts/launch/dev.mjs --only-launch
                     Assert-NativeCommand "开发服务启动"
                 } finally { Pop-Location }
             } else {
