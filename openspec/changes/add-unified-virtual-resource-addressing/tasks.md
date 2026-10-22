@@ -188,3 +188,8 @@
 - 独审 `uri-owner-final-independent-20261022-001.json` 确认main启动日志→Gateway diagnostics tail→federation diagnostics泄漏链；真实启动再发现env加载及共享watcher正常日志输出物理路径。一并从producer移除真实位置参数，保留阶段、owner ID、监听选项、耗时与原异常传播，不添加响应端通用脱敏或第二日志链路。
 - 固定候选003 tree `72a33d56e5f1734783882cf4d12d5f7307ff3700`：`startup-root-product-003` Ruff通过、真实Gateway启动managed Backend后核本地/联邦两个诊断响应，1 passed/25.97秒；后端UUID与Gateway导航ID分别核实，tail非空且含实际启动阶段，roots、独立BOXTEAM_HOME及项目根均不出现，request ID一致。`startup-root-owners-003` 18 passed/2.19秒，覆盖env、watcher、diagnostics既有行为。
 - 001测试保留失败原件：首先误用Gateway ID匹配Backend日志，原输出同时揭示env/watch路径，002修正producer与精确身份后通过；独审002发现独立BOXTEAM_HOME测试遗漏，003补齐。owners002误写不存在文件路径退出4，003按真实文件补验。原始命令、指纹、raw和退出码均在 `out/tests/temp/openspec_takeover/artifacts/runs/`；异常栈/自由文本等全producer闭包仍需继续审计，不据本条勾选2.2/7.2整体门。
+
+### 2026-10-22 产物响应地址合同（部分收口）
+
+- `ArtifactDTO.path` 复用中央资源 URI grammar，拒绝原生 POSIX/盘符/UNC、相对路径、file/http 与带 query 的非法地址，错误文本不回显输入。合法悬空本地及联邦 URI 保留规范编码，成功 APIResponse 经真实序列化对账；未实现的产物服务仍明确返回501，不新增存储或 URI kind。
+- 固定候选002 tree `c39b1cfb300e97d5ffe554da2fecbe536910972b`：`runs/artifact-uri-contract-final-002` Ruff通过、14 passed/3.75秒、exit0，源码前后指纹一致、无残留进程。独审001在DTO grammar范围内无确定发现；002增补两条正向round-trip，后续独审收据单列。此处仅证明地址输入校验、响应序列化及既有501行为，不证明产物存在、读取或持久化，不据此勾选2.2/7.2整体门。
