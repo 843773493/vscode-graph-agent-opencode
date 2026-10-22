@@ -3,14 +3,14 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from app.services.infrastructure.rollout_context.execution.admissions import (
-    RolloutExecutionAdmissionMixin,
-)
 from app.services.infrastructure.rollout_context.execution.dispatch import (
     RolloutExecutionDispatchMixin,
 )
 from app.services.infrastructure.rollout_context.execution.executions import (
     RolloutExecutionsMixin,
+)
+from app.services.infrastructure.rollout_context.execution.internal_admission import (
+    RolloutInternalExecutionAdmissionMixin,
 )
 from app.services.infrastructure.rollout_context.execution.internal_convergence import (
     RolloutInternalConvergenceMixin,
@@ -57,7 +57,7 @@ class RolloutExecutionStore(
     RolloutReplayMixin,
     RolloutTurnIndexMixin,
     RolloutExecutionsMixin,
-    RolloutExecutionAdmissionMixin,
+    RolloutInternalExecutionAdmissionMixin,
     RolloutExecutionDispatchMixin,
     RolloutExecutionRecoveryMixin,
     RolloutTerminalProjectionMixin,
