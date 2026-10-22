@@ -307,6 +307,70 @@ def fork_attachment_projection(fork_capture, tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_fork_capture_accepts_historical_gateway_uri_with_no_ambient_context(
+    attachment_tool_owner, fork_capture,
+):
+    case = attachment_tool_owner
+    _, record = fork_capture
+    storage = case.saver._storage.storage
+    with storage._connect(case.owner.thread_id, "", session_id=SESSION_A) as connection:
+        canonical_refs = tuple(row[0] for row in connection.execute(
+            "SELECT DISTINCT resource_uri FROM item_resource_references WHERE resource_kind='attachment'",
+        ))
+    assert canonical_refs == (case.ref.file_id,)
+
+    parsed = parse_session_artifact_uri(canonical_refs[0])
+    historical_gateway = "gateway_6c8c19e583c1f236c73a80810503bc7e"
+    historical_uri = session_artifact_uri(
+        parsed.scope_id, SESSION_A, "attachments", parsed.tail_segments[-1],
+        gateway_authority=historical_gateway,
+    )
+    gateway_token = set_current_gateway_id(None)
+    try:
+        assert get_current_gateway_id() is None
+        with pytest.raises(ValueError, match="本工作区 owner"):
+            case.store._parse_logical_file_id(SESSION_A, historical_uri)
+        snapshots = case.store.capture_fork_attachments(
+            record, references=((historical_uri, True),), same_storage_owner=True,
+        )
+    finally:
+        reset_current_gateway_id(gateway_token)
+
+    (snapshot,) = snapshots
+    assert snapshot.source_session_id == SESSION_A
+    assert snapshot.source_thread_id == case.owner.thread_id
+    assert snapshot.source_attachment_id == parsed.tail_segments[-1]
+    assert snapshot.source_file_id == historical_uri
+    assert snapshot.availability == "available"
+    assert snapshot.claim_id is not None
+
+    wrong_session_uri = session_artifact_uri(
+        parsed.scope_id, SESSION_B, "attachments", parsed.tail_segments[-1],
+        gateway_authority=historical_gateway,
+    )
+    with pytest.raises(ValueError, match="本工作区 owner"):
+        case.store._freeze_fork_attachment_candidates(
+            source_session_id=SESSION_A,
+            source_thread_id=case.owner.thread_id,
+            target_session_id=SESSION_B,
+            target_thread_id=case.store._path_resolver.main_thread_id(SESSION_B),
+            references=((wrong_session_uri, True),),
+        )
+    missing_owner_uri = session_artifact_uri(
+        parsed.scope_id, SESSION_A, "attachments", "att_" + "9" * 32,
+        gateway_authority=historical_gateway,
+    )
+    with pytest.raises(RuntimeError, match="缺少 owner ref"):
+        case.store._freeze_fork_attachment_candidates(
+            source_session_id=SESSION_A,
+            source_thread_id=case.owner.thread_id,
+            target_session_id=SESSION_B,
+            target_thread_id=case.store._path_resolver.main_thread_id(SESSION_B),
+            references=((missing_owner_uri, True),),
+        )
+
+
+@pytest.mark.asyncio
 async def test_attachment_capability_uses_original_model_call_after_new_ingress(attachment_tool_owner):
     case = attachment_tool_owner
     read = {"thread_id": case.owner.thread_id, "tool_call_id": case.call_id, "model_call_id": case.model_call_id}

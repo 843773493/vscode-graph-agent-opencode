@@ -6356,12 +6356,21 @@ async def test_production_lifespan_recovers_unpublished_fork(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("creation_kind", ["new_session_main", "new_child_thread"])
+@pytest.mark.parametrize("fork_execution_source", [True], indirect=True)
 async def test_qualified_local_fork_lifespan_recovers_without_http_context(
-    fork_provider_prepare, production_fork_container: AppContainer,
+    fork_execution_source: SessionDTO, production_fork_container: AppContainer,
     monkeypatch: pytest.MonkeyPatch, creation_kind: SessionForkCreationKind,
 ) -> None:
     context = _production_fork_context(production_fork_container)
-    source = await _seed_source(context, fork_provider_prepare)
+    source = fork_execution_source
+    source_owner = context.saver.forks.source.resolve_main_thread_owner(source.session_id)
+    source_checkpoint = await _get_tuple(context, source.session_id)
+    assert source_checkpoint is not None
+    with session_thread_owner_scope(source_owner, langgraph_thread_id=source_owner.thread_id):
+        source_messages = await acheckpoint_messages(context.saver, source_checkpoint)
+    (attachment,) = source_messages[0].response_metadata["attachments"]
+    attachment_uri = attachment["file_id"]
+    assert parse_resource_uri(attachment_uri).gateway_authority == "gateway_bc453186347b952303da1c0634d46150"
     gateway_token = set_current_gateway_id("gateway_bc453186347b952303da1c0634d46150")
     request_token = set_current_request_id("qualified-local-fork-preparation")
     try:
@@ -6479,8 +6488,22 @@ async def test_qualified_local_fork_lifespan_recovers_without_http_context(
             owner = recovered.saver.forks.source.resolve_thread_owner(session_id, thread_id)
             with session_thread_owner_scope(owner, langgraph_thread_id=thread_id):
                 restored = await recovered.saver.aget_tuple(build_checkpoint_config(thread_id))
+                assert restored is not None
+                restored_messages = await acheckpoint_messages(recovered.saver, restored)
             assert restored is not None
-            assert [message.content for message in restored.checkpoint["channel_values"]["messages"]] == ["问题一", "回答一"]
+            assert [message_to_dict(message) for message in restored_messages] == [message_to_dict(message) for message in source_messages]
+            projected = restarted.attachment_blob_store.project_attachment(session_id, thread_id, attachment_uri)
+            assert projected["availability"] == "available"
+            # 冷恢复可消费内部冻结引用；普通读取仍需携带目标 Gateway 的真实请求身份。
+            with pytest.raises(ValueError, match="本工作区 owner"):
+                restarted.attachment_blob_store.read(session_id, projected["file_id"], owner_thread_id=thread_id)
+            read_token = set_current_gateway_id(result.target_gateway_id)
+            try:
+                assert restarted.attachment_blob_store.read(
+                    session_id, projected["file_id"], owner_thread_id=thread_id,
+                ).data == "冷恢复附件正文".encode()
+            finally:
+                reset_current_gateway_id(read_token)
     finally:
         reset_current_request_id(cold_request_token)
         reset_current_gateway_id(cold_gateway_token)
