@@ -37,6 +37,7 @@ from urllib.parse import unquote_to_bytes
 from PIL import Image, ImageOps
 
 from app.abstractions.resource_file_content import ResourceFileContent
+from app.core.identifier import create_uuid_hex
 from app.core.path_utils import get_session_path_resolver
 from app.core.resource_uri import parse_session_artifact_uri, session_artifact_uri
 from app.core.session_catalog_resolver import SessionCatalogPathResolver
@@ -178,9 +179,8 @@ class AttachmentBlobStore(ForkAttachmentStoreMixin):
                 f"附件超过 {MAX_ATTACHMENT_BYTES // (1024 * 1024)} MiB 限制"
             )
         identity = compute_blob_identity(data)
-        idempotency_key = "attkey_" + _sha256_hex(
-            f"{session_id}|{thread_id}|{identity.digest}"
-        )[:32]
+        # 上传尝试与正文身份分开；失败尝试终态不可重开，同内容新上传仍可复用 blob。
+        idempotency_key = "attkey_" + create_uuid_hex(namespace="attachment_ingest")
         ingest_id = "ing_" + _sha256_hex(idempotency_key)[:32]
         staging_locator = ingest_staging_relative_locator(ingest_id)
         preimage_hash = _sha256_hex(
@@ -208,18 +208,6 @@ class AttachmentBlobStore(ForkAttachmentStoreMixin):
                 staging_relative_locator=staging_locator,
                 max_bytes=MAX_ATTACHMENT_BYTES,
             )
-            if record.state == "published":
-                ref = self._attachment_ref_for_record(
-                    session_id, thread_id, record.blob_id, attachment, content_type
-                )
-                self._resolve_published(session_id, ref.file_id, owner_thread_id=thread_id)
-                self._settle_pin(control, pin, outcome="completed")
-                return ref
-            if record.state == "aborted":
-                raise RuntimeError(
-                    "ingest record 已 aborted，拒绝复用: "
-                    f"key={idempotency_key!r}, reason={record.abort_reason!r}"
-                )
             staging_path = resolve_staging_path(
                 self._attachments_root, record.staging_relative_locator
             )
@@ -240,6 +228,9 @@ class AttachmentBlobStore(ForkAttachmentStoreMixin):
                 else:
                     # 并发相同 digest 的失败方：定点清理自身 staging 并复用胜出 blob。
                     _remove_file(staging_path)
+                # 所有发布者都复验冻结正文；非胜者不能把尚未落盘的 claim 当作可用内容。
+                published_path = self._verified_blob_path(identity.blob_id, claim.final_relative_locator)
+                self._verify_blob_content(published_path, identity.digest, identity.length, identity.blob_id)
                 await self._publish(
                     session_id=session_id,
                     thread_id=thread_id,

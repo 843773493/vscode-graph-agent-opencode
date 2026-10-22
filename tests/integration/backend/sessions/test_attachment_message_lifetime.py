@@ -11,12 +11,17 @@ from threading import Event
 from types import SimpleNamespace
 
 import pytest
+from fastapi import FastAPI
+from httpx import ASGITransport, AsyncClient
 
+from app.api import messages as messages_api
+from app.api.deps import get_session_orchestrator, verify_local_token
 from app.core.identifier import create_prefixed_id
 from app.core.job_event_bus import JobEventBus
 from app.core.resource_uri import resource_display_uri
 from app.core.session_thread_context import session_thread_owner_scope
 from app.core.trace_middleware import (
+    TraceMiddleware,
     get_current_gateway_id,
     reset_current_gateway_id,
     set_current_gateway_id,
@@ -120,6 +125,85 @@ def message_lifetime_case(integration_workspace_root_path, session_bundle_factor
             identity, started_jobs,
         )
     store.close()
+
+
+@pytest.fixture
+def message_lifetime_app(message_lifetime_case):
+    application = FastAPI()
+    application.add_middleware(TraceMiddleware)
+    application.include_router(messages_api.router, prefix="/api/v1")
+    application.dependency_overrides[verify_local_token] = lambda: "test-token"
+    application.dependency_overrides[get_session_orchestrator] = lambda: message_lifetime_case.orchestrator
+    return application
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("boundary", ["staging", "hashed", "renamed"])
+async def test_message_http_retry_accepts_same_attachment_after_failed_upload(
+    message_lifetime_case, message_lifetime_app, integration_workspace_root_path, monkeypatch, boundary,
+):
+    """经真实路由重发原请求；仅 Job 执行由 probe 代替，不代替 canonical 准入。"""
+    case = message_lifetime_case
+    session_id, thread_id = case.owner.session_id, case.owner.thread_id
+    body = BODY + b":" + session_id.encode() + b":" + boundary.encode()
+    request = MessageRunRequest(run=RunOptions(), message=MessageCreateRequest(
+        content="读取附件", attachments=[AttachmentRef(
+            file_id="inline:retry", name="retry.txt", content_type="text/plain",
+            data_url="data:text/plain;base64," + base64.b64encode(body).decode(),
+        )],
+    )).model_dump(mode="json", by_alias=True)
+    method = "_write_staging" if boundary == "staging" else "_commit_staged_blob"
+    original = getattr(case.store, method)
+
+    def fail_once(*args, **kwargs):
+        if boundary != "hashed":
+            original(*args, **kwargs)
+        raise OSError("注入上传失败")
+
+    transport = ASGITransport(app=message_lifetime_app, raise_app_exceptions=False)
+    async with AsyncClient(transport=transport, base_url="http://workspace") as client:
+        path = f"/api/v1/sessions/{session_id}/threads/{thread_id}/messages"
+        with monkeypatch.context() as patch:
+            patch.setattr(case.store, method, fail_once)
+            failed = await client.post(path, json=request)
+        assert failed.status_code == 500, failed.text
+        assert case.started_jobs == []
+        assert case.saver.read_canonical_items(session_id) == ()
+        (old,) = case.store._catalog.connection.execute(
+            "SELECT * FROM attachment_ingest_records WHERE owner_session_id=?", (session_id,),
+        ).fetchall()
+        old = dict(old)
+        assert old["state"] == "aborted"
+        response = await client.post(path, json=request)
+        assert response.status_code == 200, response.text
+        envelope = response.json()
+        assert envelope["request_id"] == response.headers["x-request-id"]
+        accepted = envelope["data"]
+        assert accepted["dispatch"]["session_id"] == session_id
+        assert accepted["thread_id"] == thread_id
+        assert case.started_jobs == [accepted["message_id"]]
+        assert dict(case.store._catalog.connection.execute(
+            "SELECT * FROM attachment_ingest_records WHERE ingest_idempotency_key=?",
+            (old["ingest_idempotency_key"],),
+        ).fetchone()) == old
+        records = case.store._catalog.connection.execute(
+            "SELECT state FROM attachment_ingest_records WHERE owner_session_id=?", (session_id,),
+        ).fetchall()
+        assert sorted(row["state"] for row in records) == ["aborted", "published"]
+        frozen = case.saver.accepted_user_message(
+            session_id, thread_id=thread_id,
+            job_id=accepted["job_id"], message_id=accepted["message_id"],
+        )
+        (attachment,) = frozen.response_metadata["attachments"]
+        assert "data_url" not in attachment
+        assert case.store.read(session_id, attachment["file_id"], owner_thread_id=thread_id).data == body
+        with RolloutCheckpointSaver(
+            Path(integration_workspace_root_path) / ".boxteam" / "sessions", attachment_store=case.store,
+        ) as cold:
+            assert cold.accepted_user_message(
+                session_id, thread_id=thread_id,
+                job_id=accepted["job_id"], message_id=accepted["message_id"],
+            ) == frozen
 
 
 @pytest.mark.asyncio

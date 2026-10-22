@@ -696,6 +696,79 @@ async def test_persist_inline_deduplicates_and_reuses_first_locator(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("boundary", ["staging", "hashed", "renamed"])
+async def test_failed_upload_can_retry_same_body_without_reopening_old_ingest(
+    tmp_path, session_bundle_factory, monkeypatch, boundary,
+) -> None:
+    store = _store(tmp_path, session_bundle_factory, SESSION_A)
+    thread = store._path_resolver.main_thread_id(SESSION_A)
+    attachment = _attach("retry.txt", "text/plain", b"retry-identical-content")
+    method = "_write_staging" if boundary == "staging" else "_commit_staged_blob"
+    original = getattr(store, method)
+
+    def fail_once(*args, **kwargs):
+        if boundary != "hashed":
+            original(*args, **kwargs)
+        raise OSError("注入上传失败")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(store, method, fail_once)
+        with pytest.raises(OSError, match="注入上传失败"):
+            await store.persist_inline(SESSION_A, [attachment], thread_id=thread)
+    (failed,) = store._catalog.connection.execute("SELECT * FROM attachment_ingest_records").fetchall()
+    failed_before = dict(failed)
+    assert failed_before["state"] == "aborted"
+    claims = store._catalog.connection.execute("SELECT * FROM attachment_blob_commit_claims").fetchall()
+    frozen_locator = claims[0]["final_relative_locator"] if claims else None
+
+    result = (await store.persist_inline(SESSION_A, [attachment], thread_id=thread))[0]
+    assert store.read(SESSION_A, result.file_id).data == b"retry-identical-content"
+    assert dict(store._catalog.connection.execute(
+        "SELECT * FROM attachment_ingest_records WHERE ingest_idempotency_key = ?",
+        (failed_before["ingest_idempotency_key"],),
+    ).fetchone()) == failed_before
+    records = store._catalog.connection.execute("SELECT * FROM attachment_ingest_records").fetchall()
+    assert sorted(row["state"] for row in records) == ["aborted", "published"]
+    (claim,) = store._catalog.connection.execute("SELECT * FROM attachment_blob_commit_claims").fetchall()
+    assert claim["state"] == "published"
+    assert claim["winning_ingest_id"] != failed_before["ingest_id"]
+    if frozen_locator is not None:
+        assert claim["final_relative_locator"] == frozen_locator
+    assert len(_blob_files(tmp_path)) == 1
+    store.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("damage", ["missing", "corrupt"])
+async def test_repeated_upload_does_not_publish_missing_or_corrupt_winner(
+    tmp_path, session_bundle_factory, damage,
+) -> None:
+    store = _store(tmp_path, session_bundle_factory, SESSION_A)
+    attachment = _attach("winner.txt", "text/plain", b"winner-content")
+    thread = store._path_resolver.main_thread_id(SESSION_A)
+    try:
+        (first,) = await store.persist_inline(SESSION_A, [attachment], thread_id=thread)
+        (path,) = _blob_files(tmp_path)
+        if damage == "missing":
+            path.unlink()
+        else:
+            path.write_bytes(b"wrong-content!")
+        refs_before = store._catalog.list_owner_refs_for_session(SESSION_A, active_only=True)
+        error_type = FileNotFoundError if damage == "missing" else RuntimeError
+        error_text = "附件正文缺失" if damage == "missing" else "hash/length 不一致"
+        with pytest.raises(error_type, match=error_text):
+            await store.persist_inline(SESSION_A, [attachment], thread_id=thread)
+        records = store._catalog.connection.execute("SELECT state FROM attachment_ingest_records").fetchall()
+        assert sorted(row["state"] for row in records) == ["aborted", "published"]
+        assert store._catalog.list_owner_refs_for_session(SESSION_A, active_only=True) == refs_before
+        assert refs_before[0].attachment_id == parse_logical_file_id(SESSION_A, first.file_id)
+        if damage == "corrupt":
+            assert path.read_bytes() == b"wrong-content!", "不得用重试覆盖损坏的已发布正文"
+    finally:
+        store.close()
+
+
+@pytest.mark.asyncio
 async def test_same_digest_across_sessions_reuses_single_physical_blob(
     tmp_path, session_bundle_factory
 ) -> None:
@@ -841,7 +914,8 @@ def _catalog(tmp_path: Path) -> AttachmentBlobCatalog:
     )
 
 
-def test_mark_hashed_claims_single_locator_per_digest(tmp_path: Path) -> None:
+@pytest.mark.parametrize("abort_first", [False, True])
+def test_mark_hashed_claims_single_locator_per_digest(tmp_path: Path, abort_first: bool) -> None:
     """并发相同 digest：唯一 claim 冻结首次日期与 locator，不产生第二 locator。"""
     catalog = _catalog(tmp_path)
     identity = compute_blob_identity(b"same")
@@ -868,13 +942,20 @@ def test_mark_hashed_claims_single_locator_per_digest(tmp_path: Path) -> None:
     _first_record, first_claim = catalog.mark_ingest_hashed(
         ingest_idempotency_key="attkey_first", identity=identity
     )
+    if abort_first:
+        catalog.abort_ingest_record(ingest_idempotency_key="attkey_first", reason="上传失败")
+    frozen_first = catalog.get_ingest_record("attkey_first")
     _second_record, second_claim = catalog.mark_ingest_hashed(
         ingest_idempotency_key="attkey_second", identity=identity
     )
 
     assert first_claim.winning_ingest_id == "ing_a7937b64b8caa58f03721bb6bacf5c78"
     assert second_claim.final_relative_locator == first_claim.final_relative_locator
-    assert second_claim.winning_ingest_id == "ing_a7937b64b8caa58f03721bb6bacf5c78"
+    assert second_claim.winning_ingest_id == (
+        "ing_16367aacb67a4a017c8da8ab95682ccb" if abort_first else first_claim.winning_ingest_id
+    )
+    assert second_claim.first_claim_utc_date == first_claim.first_claim_utc_date
+    assert catalog.get_ingest_record("attkey_first") == frozen_first
     assert len(catalog.list_non_terminal_claims()) == 1
     catalog.close()
 

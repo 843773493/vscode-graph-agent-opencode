@@ -211,6 +211,21 @@ class IngestMixin:
                     f"length={identity.length}, max_bytes={record.max_bytes}"
                 )
             claim = _claim_blob_identity(connection, identity=identity, winning_ingest_id=record.ingest_id, now=now)
+            if claim.state == "claimed" and claim.winning_ingest_id != record.ingest_id:
+                winner = connection.execute(
+                    "SELECT state FROM attachment_ingest_records WHERE ingest_id = ?",
+                    (claim.winning_ingest_id,),
+                ).fetchone()
+                # 只接管已明确终止的上传；活跃胜者和 fork 导入 claim 不由这里推断死亡。
+                if winner is not None and winner["state"] == "aborted":
+                    connection.execute(
+                        "UPDATE attachment_blob_commit_claims SET winning_ingest_id = ?, updated_at = ? "
+                        "WHERE digest = ? AND winning_ingest_id = ? AND state = 'claimed'",
+                        (record.ingest_id, now_text, identity.digest, claim.winning_ingest_id),
+                    )
+                    claim = _claim_from_row(connection.execute(
+                        "SELECT * FROM attachment_blob_commit_claims WHERE digest = ?", (identity.digest,),
+                    ).fetchone())
             _update_ingest_record_identity(
                 connection,
                 ingest_idempotency_key=ingest_idempotency_key,
