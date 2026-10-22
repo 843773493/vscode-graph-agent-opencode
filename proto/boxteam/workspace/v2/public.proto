@@ -193,6 +193,8 @@ message JobControlResponseDTO {
   string job_id = 1;
   string status = 2;
   string control_state = 3;
+  string session_id = 4;
+  string thread_id = 5;
 }
 
 message JobDTO {

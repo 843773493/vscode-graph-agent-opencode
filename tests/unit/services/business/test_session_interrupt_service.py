@@ -93,6 +93,8 @@ class FakeJobService:
         self.control_requests.append(control_request)
         return JobControlResponseDTO(
             job_id=job_id,
+            session_id=self.job.session_id,
+            thread_id=self.job.thread_id,
             status=self.control_status,
             control_state="cancelling",
         )

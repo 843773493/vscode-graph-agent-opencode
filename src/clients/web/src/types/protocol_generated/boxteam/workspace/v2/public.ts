@@ -193,6 +193,8 @@ export interface JobControlResponseDTO {
   job_id: string;
   status: string;
   control_state: string;
+  session_id: string;
+  thread_id: string;
 }
 
 export interface JobDTO {
@@ -3786,7 +3788,7 @@ export const JobControlRequest: MessageFns<JobControlRequest> = {
 };
 
 function createBaseJobControlResponseDTO(): JobControlResponseDTO {
-  return { job_id: "", status: "", control_state: "" };
+  return { job_id: "", status: "", control_state: "", session_id: "", thread_id: "" };
 }
 
 export const JobControlResponseDTO: MessageFns<JobControlResponseDTO> = {
@@ -3795,6 +3797,8 @@ export const JobControlResponseDTO: MessageFns<JobControlResponseDTO> = {
       job_id: isSet(object.job_id) ? globalThis.String(object.job_id) : "",
       status: isSet(object.status) ? globalThis.String(object.status) : "",
       control_state: isSet(object.control_state) ? globalThis.String(object.control_state) : "",
+      session_id: isSet(object.session_id) ? globalThis.String(object.session_id) : "",
+      thread_id: isSet(object.thread_id) ? globalThis.String(object.thread_id) : "",
     };
   },
 
@@ -3809,6 +3813,12 @@ export const JobControlResponseDTO: MessageFns<JobControlResponseDTO> = {
     if (message.control_state !== "") {
       obj.control_state = message.control_state;
     }
+    if (message.session_id !== "") {
+      obj.session_id = message.session_id;
+    }
+    if (message.thread_id !== "") {
+      obj.thread_id = message.thread_id;
+    }
     return obj;
   },
 
@@ -3820,6 +3830,8 @@ export const JobControlResponseDTO: MessageFns<JobControlResponseDTO> = {
     message.job_id = object.job_id ?? "";
     message.status = object.status ?? "";
     message.control_state = object.control_state ?? "";
+    message.session_id = object.session_id ?? "";
+    message.thread_id = object.thread_id ?? "";
     return message;
   },
 };

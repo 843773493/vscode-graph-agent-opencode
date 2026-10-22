@@ -243,6 +243,8 @@ class JobControlService:
     ) -> JobControlResponseDTO:
         return JobControlResponseDTO(
             job_id=job_id,
+            session_id=job.session_id,
+            thread_id=job.thread_id,
             status=job.status,
             control_state=(
                 f"Action {control_request.action.value} applied successfully"

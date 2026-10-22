@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 import os
 import shutil
 import threading
@@ -14,16 +15,20 @@ import httpx
 import pytest
 from fastapi import FastAPI
 
-from app.api import messages, session_turns
+from app.api import jobs, messages, session_turns
 from app.api.deps import (
+    get_event_service,
+    get_job_service,
     get_message_service,
     get_request_id,
     get_session_orchestrator,
+    get_session_service,
     get_session_turn_history_service,
     get_session_turn_replay_service,
     verify_local_token,
 )
 from app.core.checkpoint_config import build_checkpoint_config
+from app.core.execution_admission_context import require_current_execution_admission
 from app.core.path_utils import workspace_context
 from app.core.session_thread_context import session_thread_owner_scope
 from app.domain.itemized.enums import PayloadKind
@@ -35,6 +40,7 @@ from app.services.infrastructure.rollout_context.storage.primitives import (
     RolloutNotMaterializedError,
     _RolloutFileLock,
 )
+from app.services.orchestration.message_stream_runtime import MessageStreamRuntime
 from tests.integration.backend.sessions.test_thread_runtime_runner import (
     RuntimeCase,
     _child,
@@ -54,7 +60,11 @@ async def history_client(runtime_case: RuntimeCase) -> AsyncIterator[httpx.Async
     application = FastAPI()
     application.include_router(session_turns.router, prefix="/api/v1")
     application.include_router(messages.router, prefix="/api/v1")
+    application.include_router(jobs.router, prefix="/api/v1")
     container = runtime_case.runner.container
+    application.dependency_overrides[get_job_service] = lambda: container.job_service
+    application.dependency_overrides[get_event_service] = lambda: container.event_service
+    application.dependency_overrides[get_session_service] = lambda: container.session_service
     application.dependency_overrides[get_message_service] = lambda: container.message_service
     application.dependency_overrides[get_session_orchestrator] = lambda: container.session_orchestrator
     application.dependency_overrides[get_session_turn_replay_service] = lambda: container.session_turn_replay_service
@@ -152,6 +162,119 @@ async def materialized_history_owner(runtime_case: RuntimeCase) -> tuple[str, st
     admission = await _complete_job(runtime_case, session_id, thread_id)
     assert admission.turn_id is not None
     return session_id, thread_id, admission.turn_id
+
+
+async def test_public_pending_and_job_control_preserve_real_thread_owner(
+    runtime_case: RuntimeCase, history_client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """真实 main/child 并行执行时，队列聚合、定点修改与取消保持原 owner。"""
+    case = runtime_case
+    container = case.runner.container
+    session_id, main = await _session(case.runner)
+    child = await _child(case, session_id)
+    base = f"/api/v1/sessions/{session_id}"
+    entered = {thread: asyncio.Event() for thread in (main, child)}
+    release = asyncio.Event()
+    start_tool = MessageStreamRuntime.start_tool
+    (case.runner.workspace / "queue-owner.txt").write_text("真实队列归属验证。\n")
+
+    def model_reply(_payload):
+        thread = require_current_execution_admission().thread_id
+        return [
+            {"choices": [{"index": 0, "delta": {"role": "assistant", "tool_calls": [{
+                "index": 0, "id": f"queue-owner-{thread}", "type": "function",
+                "function": {"name": "read_file", "arguments": json.dumps({"path": "queue-owner.txt"})},
+            }]}}]},
+            {"choices": [{"index": 0, "delta": {}, "finish_reason": "tool_calls"}]},
+        ]
+
+    async def hold_started(runtime, **kwargs):
+        result = await start_tool(runtime, **kwargs)
+        entered[runtime.writer.thread_id].set()
+        await release.wait()
+        return result
+
+    case.response_chunks = model_reply
+    monkeypatch.setattr(MessageStreamRuntime, "start_tool", hold_started)
+    active = {}
+    queued = {}
+
+    async def send(thread: str, content: str):
+        endpoint = base + ("" if thread == main else f"/threads/{thread}") + "/messages"
+        response = await history_client.post(endpoint, json={"message": {"content": content}, "run": {}})
+        assert response.status_code == 200, response.text
+        data = response.json()["data"]
+        assert data["thread_id"] == data["dispatch"]["thread_id"] == thread
+        return data
+
+    async def request(method: str, endpoint: str, **kwargs):
+        response = await history_client.request(method, endpoint, **kwargs)
+        assert response.status_code == 200, response.text
+        return response.json()["data"]
+
+    with workspace_context(container.workspace_id, case.runner.workspace, session_catalog=container.session_catalog):
+        try:
+            for thread in (main, child):
+                active[thread] = await send(thread, "执行真实工具并等待用户控制。")
+                await asyncio.wait_for(entered[thread].wait(), 15)
+                queued[thread] = await send(thread, "保留精确 Thread 的排队消息。")
+                assert queued[thread]["status"] == "queued"
+            child_tail = await send(child, "通过 Job ID 取消的 child 队尾。")
+            aggregate = await request("GET", base + "/pending-requests")
+            assert aggregate["thread_id"] is None
+            expected = {queued[thread]["message_id"]: thread for thread in (main, child)}
+            expected[child_tail["message_id"]] = child
+            assert {row["message_id"]: row["thread_id"] for row in aggregate["requests"]} == expected
+            main_pending = await request("GET", base + "/main-thread/pending-requests")
+            assert main_pending["thread_id"] == main
+            assert [row["message_id"] for row in main_pending["requests"]] == [queued[main]["message_id"]]
+            assert main_pending["requests"][0]["thread_id"] == main
+
+            changed = await request("PATCH", base + f"/pending-requests/{queued[child]['message_id']}/policy", json={
+                "delivery_policy": "after_tool_result", "expected_snapshot_version": aggregate["snapshot_version"],
+            })
+            policies = {row["message_id"]: (row["thread_id"], row["delivery_policy"]) for row in changed["requests"]}
+            assert policies[queued[child]["message_id"]] == (child, "after_tool_result")
+            assert policies[queued[main]["message_id"]] == (main, "after_turn")
+            removed = await request("DELETE", base + f"/pending-requests/{queued[main]['message_id']}")
+            assert {row["message_id"]: row["thread_id"] for row in removed["requests"]} == {
+                queued[child]["message_id"]: child, child_tail["message_id"]: child,
+            }
+
+            cancelled = await request("POST", f"/api/v1/jobs/{child_tail['job_id']}/control", json={"action": "cancel"})
+            assert (cancelled["session_id"], cancelled["thread_id"], cancelled["job_id"], cancelled["status"]) == (
+                session_id, child, child_tail["job_id"], "cancelled",
+            )
+            remaining = await request("GET", base + "/pending-requests")
+            assert [(row["message_id"], row["thread_id"]) for row in remaining["requests"]] == [(queued[child]["message_id"], child)]
+            cleared = await request("DELETE", base + "/pending-requests")
+            assert cleared["thread_id"] is None and cleared["requests"] == []
+            for thread, accepted in [(main, queued[main]), (child, queued[child]), (child, child_tail)]:
+                record = case.runner.saver.execution_queue_record(session_id, thread, accepted["job_id"])
+                assert record.phase == "terminal" and record.outcome == "cancelled"
+
+            for thread in (main, child):
+                job_id = active[thread]["job_id"]
+                detail = await request("GET", f"/api/v1/jobs/{job_id}")
+                assert (detail["session_id"], detail["thread_id"], detail["job_id"]) == (session_id, thread, job_id)
+                events = await request("GET", f"/api/v1/jobs/{job_id}/events")
+                assert events and {event["job_id"] for event in events} == {job_id}
+                owners = [event["payload"] for event in events if event["type"] in {"job_created", "job_started"}]
+                assert owners and {(row["session_id"], row["thread_id"]) for row in owners} == {(session_id, thread)}
+            main_job = container.job_service._jobs[active[main]["job_id"]]
+            original_main_task = main_job.task
+            for thread in (child, main):
+                job_id = active[thread]["job_id"]
+                result = await request("POST", f"/api/v1/jobs/{job_id}/control", json={"action": "cancel"})
+                assert (result["session_id"], result["thread_id"], result["job_id"]) == (session_id, thread, job_id)
+                task = container.job_service._jobs[job_id].task
+                await asyncio.wait_for(asyncio.gather(task, return_exceptions=True), 10)
+                assert container.job_service._jobs[job_id].status.value == "cancelled"
+                if thread == child:
+                    assert main_job.task is original_main_task and not original_main_task.done()
+                    assert main_job.status.value in {"running", "streaming"}
+        finally:
+            release.set()
 
 
 async def _history_request(

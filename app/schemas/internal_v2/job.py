@@ -84,5 +84,7 @@ class JobControlRequest(BaseModel):
 
 class JobControlResponseDTO(BaseModel):
     job_id: str
+    session_id: str = Field(min_length=1)
+    thread_id: str = Field(min_length=1)
     status: JobStatus
     control_state: str

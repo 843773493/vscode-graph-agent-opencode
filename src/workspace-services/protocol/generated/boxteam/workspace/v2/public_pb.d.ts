@@ -800,6 +800,16 @@ export declare type JobControlResponseDTO = Message<"boxteam.workspace.v2.JobCon
    * @generated from field: string control_state = 3;
    */
   controlState: string;
+
+  /**
+   * @generated from field: string session_id = 4;
+   */
+  sessionId: string;
+
+  /**
+   * @generated from field: string thread_id = 5;
+   */
+  threadId: string;
 };
 
 /**
