@@ -14,12 +14,17 @@ import httpx
 import pytest
 from fastapi import FastAPI
 
-from app.api import session_turns
+from app.api import messages, session_turns
 from app.api.deps import (
+    get_message_service,
     get_request_id,
+    get_session_orchestrator,
     get_session_turn_history_service,
+    get_session_turn_replay_service,
     verify_local_token,
 )
+from app.core.checkpoint_config import build_checkpoint_config
+from app.core.path_utils import workspace_context
 from app.core.session_thread_context import session_thread_owner_scope
 from app.domain.itemized.enums import PayloadKind
 from app.domain.itemized.mutation_intents import MutationIntentOwner
@@ -48,6 +53,11 @@ from tests.integration.backend.sessions.test_thread_runtime_runner import (
 async def history_client(runtime_case: RuntimeCase) -> AsyncIterator[httpx.AsyncClient]:
     application = FastAPI()
     application.include_router(session_turns.router, prefix="/api/v1")
+    application.include_router(messages.router, prefix="/api/v1")
+    container = runtime_case.runner.container
+    application.dependency_overrides[get_message_service] = lambda: container.message_service
+    application.dependency_overrides[get_session_orchestrator] = lambda: container.session_orchestrator
+    application.dependency_overrides[get_session_turn_replay_service] = lambda: container.session_turn_replay_service
     application.dependency_overrides[get_session_turn_history_service] = (
         lambda: runtime_case.runner.container.session_turn_history_service
     )
@@ -59,17 +69,89 @@ async def history_client(runtime_case: RuntimeCase) -> AsyncIterator[httpx.Async
         yield client
 
 
+async def test_public_session_history_and_replay_stay_on_main_with_real_child(
+    runtime_case: RuntimeCase, history_client: httpx.AsyncClient,
+) -> None:
+    """真实消息入口生成两条线程历史；默认读取与重放不能改投 child。"""
+    case = runtime_case
+    container = case.runner.container
+    session_id, main = await _session(case.runner)
+    child = await _child(case, session_id)
+    base = f"/api/v1/sessions/{session_id}"
+    accepted = {main: [], child: []}
+    with workspace_context(container.workspace_id, case.runner.workspace, session_catalog=container.session_catalog):
+        for thread_id in (main, child):
+            for index in range(2):
+                endpoint = base + ("" if thread_id == main else f"/threads/{thread_id}")
+                response = await history_client.post(endpoint + "/messages", json={
+                    "message": {"content": f"{thread_id} 第 {index + 1} 条真实输入"}, "run": {},
+                })
+                assert response.status_code == 200, response.text
+                data = response.json()["data"]
+                assert data["thread_id"] == thread_id
+                assert data["dispatch"]["thread_id"] == thread_id
+                job = container.job_service._jobs[data["job_id"]]
+                await asyncio.wait_for(asyncio.shield(job.task), 20)
+                assert job.status.value == "completed", job.error_message
+                accepted[thread_id].append(data)
+
+        bootstrap = await history_client.get(base + "/bootstrap")
+        assert bootstrap.status_code == 200, bootstrap.text
+        assert bootstrap.json()["data"]["thread_id"] == main
+        assert bootstrap.json()["data"]["latest_turn"]["turn_id"] == accepted[main][-1]["turn_id"]
+        visible = await history_client.get(base + "/messages")
+        assert visible.status_code == 200, visible.text
+        visible_items = visible.json()["data"]["items"]
+        assert visible_items and {item["thread_id"] for item in visible_items} == {main}
+        visible_ids = {item["message_id"] for item in visible_items}
+        assert {item["message_id"] for item in accepted[main]} <= visible_ids
+        assert not {item["message_id"] for item in accepted[child]} & visible_ids
+
+        pages = {}
+        for thread_id in (main, child):
+            endpoint = base + ("" if thread_id == main else f"/threads/{thread_id}") + "/history"
+            response = await history_client.post(endpoint, json={"turns": 1})
+            assert response.status_code == 200, response.text
+            page = response.json()["data"]
+            assert page["thread_id"] == thread_id
+            assert [turn["turn_id"] for turn in page["items"]] == [accepted[thread_id][-1]["turn_id"]]
+            assert page["has_before"] and page["before_cursor"]
+            pages[thread_id] = page
+        for target, source in ((main, child), (child, main)):
+            endpoint = base + ("" if target == main else f"/threads/{target}") + "/history"
+            response = await history_client.post(endpoint, json={
+                "direction": "before", "cursor": pages[source]["before_cursor"],
+            })
+            assert response.status_code == 400, response.text
+            assert response.json() == {"detail": "历史游标不属于当前 rollout"}
+
+        before = {}
+        for thread_id in (main, child):
+            with session_thread_owner_scope(
+                MutationIntentOwner(session_id=session_id, thread_id=thread_id), langgraph_thread_id=thread_id,
+            ):
+                before[thread_id] = await case.runner.saver.aget_tuple(build_checkpoint_config(thread_id))
+        child_target = accepted[child][0]
+        for selector, target_id in (("messages", child_target["message_id"]), ("turns", child_target["turn_id"])):
+            response = await history_client.post(base + f"/{selector}/{target_id}/replay", json={
+                "action": "edit_and_continue", "content": "不得写入 main 或 child", "acknowledge_context_only": True,
+            })
+            assert response.status_code == 409, response.text
+            assert "当前有效上下文" in response.text
+        for thread_id in (main, child):
+            with session_thread_owner_scope(
+                MutationIntentOwner(session_id=session_id, thread_id=thread_id), langgraph_thread_id=thread_id,
+            ):
+                assert await case.runner.saver.aget_tuple(build_checkpoint_config(thread_id)) == before[thread_id]
+        assert len(case.model_admissions) == 4
+
+
 @pytest.fixture
-async def materialized_history_owner(runtime_case: RuntimeCase) -> tuple[str, str]:
+async def materialized_history_owner(runtime_case: RuntimeCase) -> tuple[str, str, str]:
     session_id, thread_id = await _session(runtime_case.runner)
-    runtime_case.runner.saver.accept_turn(
-        session_id, thread_id=thread_id, accepted_ingress_id="ingress-await-safe-history",
-        acceptance_idempotency_key="acceptance-await-safe-history", job_id="job-await-safe-history",
-        admission_idempotency_key="admission-await-safe-history", payload="真实异步历史读取",
-        payload_kind=PayloadKind.TEXT, turn_id="turn-await-safe-history", root_item_id="item-await-safe-history",
-        initial_execution_id="execution-await-safe-history",
-    )
-    return session_id, thread_id
+    admission = await _complete_job(runtime_case, session_id, thread_id)
+    assert admission.turn_id is not None
+    return session_id, thread_id, admission.turn_id
 
 
 async def _history_request(
@@ -95,9 +177,9 @@ async def _wait_for_rollout_readers(lock: _RolloutFileLock, size: int) -> None:
 @pytest.mark.parametrize("entry", ["bootstrap", "history"])
 async def test_public_history_awaits_writer_without_blocking_holder_task(
     runtime_case: RuntimeCase, history_client: httpx.AsyncClient,
-    materialized_history_owner: tuple[str, str], entry: str,
+    materialized_history_owner: tuple[str, str, str], entry: str,
 ) -> None:
-    session_id, thread_id = materialized_history_owner
+    session_id, thread_id, turn_id = materialized_history_owner
     storage = runtime_case.runner.saver._storage.storage
     original = storage.jsonl_path(session_id, thread_id=thread_id).read_bytes()
     holder = storage.read_lock(session_id, thread_id)
@@ -128,9 +210,9 @@ async def test_public_history_awaits_writer_without_blocking_holder_task(
             data = response.json()["data"]
             assert data["thread_id"] == thread_id
             if entry == "bootstrap":
-                assert data["latest_turn"]["turn_id"] == "turn-await-safe-history"
+                assert data["latest_turn"]["turn_id"] == turn_id
             else:
-                assert data["items"][0]["turn_id"] == "turn-await-safe-history"
+                assert data["items"][0]["turn_id"] == turn_id
         finally:
             holder.release()
             release_writer.set()
@@ -155,9 +237,9 @@ async def test_public_history_awaits_writer_without_blocking_holder_task(
 @pytest.mark.parametrize("entry", ["bootstrap", "history"])
 async def test_public_history_cancellation_withdraws_read_admission(
     runtime_case: RuntimeCase, history_client: httpx.AsyncClient,
-    materialized_history_owner: tuple[str, str], entry: str,
+    materialized_history_owner: tuple[str, str, str], entry: str,
 ) -> None:
-    session_id, thread_id = materialized_history_owner
+    session_id, thread_id, _turn_id = materialized_history_owner
     storage = runtime_case.runner.saver._storage.storage
     async with storage._lock(thread_id, "", session_id=session_id) as holder:
         admission = holder._admission
