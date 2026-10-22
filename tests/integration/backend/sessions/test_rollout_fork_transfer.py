@@ -26,6 +26,11 @@ from app.schemas.internal_v2.session_fork_transfer import FORK_TRANSFER_CHUNK_BY
 from app.services.business.session_context_resource import (
     workspace_session_inventory_uri,
 )
+from app.services.infrastructure.attachment_blob_catalog.locator import (
+    fork_import_ingest_id,
+    ingest_staging_relative_locator,
+    resolve_staging_path,
+)
 from app.testing.model_stream import build_cassette, chat_completion_frames
 from tests.harness.python.run_context import TestRunContext
 from tests.integration.backend.sessions.test_session_communication_pipeline import (
@@ -1251,7 +1256,7 @@ async def test_real_partial_source_capture_recovery_preserves_owner_error(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("creation_kind", ["new_session_main", "new_child_thread"])
-@pytest.mark.parametrize("failure_window", ["prepared_before_capture", "source_release_reply_lost"])
+@pytest.mark.parametrize("failure_window", ["prepared_before_capture", "source_release_reply_lost", "attachment_staged_marker_lost"])
 async def test_real_fork_delivery_trace_survives_owner_failure(
     transfer_triad, creation_kind: str, failure_window: str,
 ):
@@ -1297,7 +1302,9 @@ async def test_real_fork_delivery_trace_survives_owner_failure(
     (artifacts / "fork-request.json").write_text(json.dumps(request, ensure_ascii=False, indent=2) + "\n")
     key = "fork-" + hashlib.sha256(request["idempotency_key"].encode()).hexdigest()
     first_request_id = f"req-first-{failure_window}-{creation_kind}"
-    phase = "copy.target.prepared" if failure_window == "prepared_before_capture" else "copy.source.released"
+    phase = {"prepared_before_capture": "copy.target.prepared",
+             "source_release_reply_lost": "copy.source.released",
+             "attachment_staged_marker_lost": "copy.attachments.import_staged"}[failure_window]
     control.arm(key, phase)
     deadline = _fork_deadline(target, request, fork_deadlines)
     provider_requests_before_fork = _provider_call_count(model)
@@ -1321,9 +1328,19 @@ async def test_real_fork_delivery_trace_survives_owner_failure(
         assert frozen["fork_delivery_request_id"] == first_request_id
         assert frozen["request_intent_json"] is not None
         lifecycle = {}
-        if failure_window == "prepared_before_capture":
+        if failure_window in {"prepared_before_capture", "attachment_staged_marker_lost"}:
             assert frozen["state"] == "preparing"
-            assert _capture_record(target, key) is None
+            if failure_window == "prepared_before_capture":
+                assert _capture_record(target, key) is None
+            else:
+                target_capture = _capture_record(target, key)
+                (staged_claim,) = _attachment_claims(target, key)
+                assert staged_claim["state"] == "preparing"
+                snapshot = json.loads(staged_claim["snapshot_json"])
+                staged = resolve_staging_path(target.workspace / ".boxteam/attachments", ingest_staging_relative_locator(
+                    fork_import_ingest_id(key, snapshot["blob_id"])))
+                assert staged.read_bytes() == attachment_body
+                assert target_capture["snapshot_sha256"] is None and target_capture["marker_sha256"] is None
             deadline.set_stage("kill_target_backend_before_capture")
             lifecycle["target_kill"] = target.restart_backend("kill")
             deadline.set_stage("release_phase_barrier")
@@ -1331,6 +1348,11 @@ async def test_real_fork_delivery_trace_survives_owner_failure(
             response = await deadline.wait(fork_call, "interrupted_http_response")
             assert response.status_code >= 400, response.text
             (artifacts / "interrupted-response.json").write_text(response.text)
+            if failure_window == "attachment_staged_marker_lost":
+                # 关键状态均由真实 POST 创建；只在进程终止后注入 marker 丢失故障。
+                assert staged.read_bytes() == attachment_body
+                marker = target.workspace / ".boxteam/navigation" / target_capture["snapshot_relative_locator"] / "captured.json"
+                marker.unlink()
             deadline.set_stage("restart_target_backend_for_recovery")
             lifecycle["target_start"] = target.restart_backend("start")
             assert lifecycle["target_kill"]["before_pid"] != lifecycle["target_start"]["after_pid"]
@@ -1362,6 +1384,33 @@ async def test_real_fork_delivery_trace_survives_owner_failure(
             if not task.done():
                 task.cancel()
         await asyncio.gather(fork_call, reached, return_exceptions=True)
+
+    if failure_window == "attachment_staged_marker_lost":
+        aborted = _creation_record(target, key, child_session_node)
+        assert aborted["state"] == "aborted"
+        thread_field = "child_thread_id" if child_session_id is not None else "main_thread_id"
+        for field in ("preimage_hash", "request_intent_json", "fork_delivery_request_id", thread_field):
+            assert aborted[field] == frozen[field]
+        (settled_claim,) = _attachment_claims(target, key)
+        assert settled_claim == {**staged_claim, "state": "aborted"}
+        assert not staged.exists()
+        assert _capture_record(target, key)["state"] == "aborted"
+        assert _attachment_claims(source, key) == []
+        assert _provider_call_count(model) == provider_requests_before_fork
+        lifecycle["target_second_start"] = await deadline.wait(asyncio.to_thread(target.restart_backend), "retry_terminal_staging_cleanup")
+        assert _creation_record(target, key, child_session_node) == aborted
+        assert _attachment_claims(target, key) == [settled_claim] and not staged.exists()
+        original_content = await deadline.wait(source.client.get(
+            f"/api/v1/sessions/{source_session_id}/attachments/content",
+            params={"file_id": attachment_source["resource_uri"], "variant": "original"},
+        ), "source_attachment_survives_target_abort")
+        assert original_content.status_code == 200 and original_content.content == attachment_body
+        (artifacts / "aborted-import-staging.json").write_text(json.dumps({
+            "creation": aborted, "claim": settled_claim, "staging": str(staged), "staging_exists": staged.exists(),
+        }, ensure_ascii=False, indent=2) + "\n")
+        (artifacts / "backend-lifecycle.json").write_text(json.dumps(lifecycle, ensure_ascii=False, indent=2) + "\n")
+        deadline.complete()
+        return
 
     retry = await _post_fork(
         target, source_session_id, request, deadline, stage="same_operation_recovery_retry",

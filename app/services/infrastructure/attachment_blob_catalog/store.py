@@ -114,6 +114,7 @@ class AttachmentBlobStore(ForkAttachmentStoreMixin, AttachmentIngestRecoveryMixi
         self._workspace_root = workspace_root.expanduser().resolve()
         self._verified_blob_signatures: dict[tuple[str, str, str, int], tuple[int, int, int, int, int]] = {}
         self._sessions_root = self._workspace_root / ".boxteam" / "sessions"
+        self._fork_imports = OperationHolderGate(self._sessions_root, namespace="attachment_fork_import")
         self._blob_commits = OperationHolderGate(self._sessions_root, namespace="attachment_blob_commit")
         self._attachments_root = (
             self._workspace_root / ".boxteam" / ATTACHMENT_ROOT_DIRECTORY_NAME
@@ -465,6 +466,7 @@ class AttachmentBlobStore(ForkAttachmentStoreMixin, AttachmentIngestRecoveryMixi
         """定点回收无操作依赖的正文；不等待正在提交的 digest 分片。"""
         if not isinstance(retention, timedelta):
             raise TypeError(f"retention 必须是 timedelta: {retention!r}")
+        await self.collect_fork_import_staging()
         before = datetime.now(UTC) - retention
         collected: list[str] = []
         for claim in self._catalog.list_unpublished_gc_claims(before=before):

@@ -9,7 +9,6 @@ from collections.abc import Callable, Sequence
 from dataclasses import replace
 from pathlib import Path
 
-from app.abstractions.session_context import SessionForkTransportProtocol
 from app.core.phase_observer import observe_phase
 from app.core.resource_uri import session_artifact_uri
 from app.core.session_catalog_resolver import SessionCatalogPathResolver
@@ -29,7 +28,6 @@ from app.core.session_lifecycle_gate import (
 from app.core.trace_middleware import get_current_gateway_id
 from app.core.workspace_identity import read_workspace_id
 from app.schemas.internal_v2.session import (
-    SessionForkRequest,
     SessionForkResourceSourceDTO,
 )
 from app.schemas.internal_v2.session_fork_transfer import (
@@ -37,17 +35,15 @@ from app.schemas.internal_v2.session_fork_transfer import (
     ForkSourceCaptureDTO,
     SessionForkTransferResultDTO,
 )
-from app.services.infrastructure.attachment_blob_catalog.blob_identity import (
-    BlobIdentity,
-)
 from app.services.infrastructure.attachment_blob_catalog.catalog import (
     AttachmentBlobCatalog,
     derive_attachment_id,
 )
+from app.services.infrastructure.attachment_blob_catalog.fork_import import (
+    ForkAttachmentImportMixin,
+)
 from app.services.infrastructure.attachment_blob_catalog.locator import (
-    ingest_staging_relative_locator,
     resolve_blob_path,
-    resolve_staging_path,
 )
 from app.services.infrastructure.attachment_blob_catalog.records import (
     ForkAttachmentSnapshot,
@@ -60,12 +56,9 @@ from app.services.infrastructure.resource_platform.virtual_resources.values impo
     ResourceTargetContext,
     ResourceTargetFacts,
 )
-from app.services.infrastructure.rollout_context.fork.transfer import (
-    receive_transfer_file,
-)
 
 
-class ForkAttachmentStoreMixin:
+class ForkAttachmentStoreMixin(ForkAttachmentImportMixin):
     """宿主显式提供唯一 catalog、locator、gate、正文验证及控制库端口。"""
 
     _catalog: AttachmentBlobCatalog
@@ -293,60 +286,6 @@ class ForkAttachmentStoreMixin:
             raise RuntimeError(f"fork attachment 正文不得是符号链接: blob_id={snapshot.blob_id}, path={path}")
         self._verify_blob_content(path, snapshot.digest, snapshot.length, snapshot.blob_id)
 
-    async def accept_fork_import(
-        self, capture: ForkSourceCaptureRecord, snapshots: tuple[ForkAttachmentSnapshot, ...],
-        *, transport: SessionForkTransportProtocol, request: SessionForkRequest,
-    ) -> None:
-        """来源 receipt 与冻结 snapshot 已完整校验；只为本 target 创建 reserved claim。"""
-        if any((snapshot.target_session_id, snapshot.target_thread_id) != (capture.target_session_id, capture.target_thread_id)
-               for snapshot in snapshots):
-            raise RuntimeError("fork imported 附件 snapshot 不属于本 target owner")
-        for snapshot in snapshots:
-            if self._parse_logical_file_id(capture.target_session_id, snapshot.target_file_id) != snapshot.target_attachment_id:
-                raise RuntimeError("fork imported 附件 URI 与冻结 target identity 不一致")
-        self._catalog.prepare_fork_attachment_claims(
-            copy_operation_id=capture.copy_operation_id, source_snapshot_id=capture.snapshot_id,
-            operation_preimage_hash=capture.preimage_hash, snapshots=snapshots,
-            imported_locators={snapshot.blob_id: None for snapshot in snapshots if snapshot.availability == "available"},
-        )
-        for snapshot in snapshots:
-            if snapshot.availability != "available":
-                continue
-            ingest_id, locator = self._catalog.reserve_fork_blob_import(capture.copy_operation_id, snapshot)
-            final_path = resolve_blob_path(self._attachments_root, locator)
-            async with self._blob_commits.lock_for(snapshot.blob_id):
-                if final_path.is_symlink():
-                    raise RuntimeError("fork imported 附件正文不得是符号链接")
-                if final_path.is_file():
-                    self._verify_blob_content(final_path, snapshot.digest, snapshot.length, snapshot.blob_id)
-                    self._catalog.prepare_fork_attachment_claims(
-                        copy_operation_id=capture.copy_operation_id, source_snapshot_id=capture.snapshot_id,
-                        operation_preimage_hash=capture.preimage_hash, snapshots=(snapshot,),
-                        imported_locators={snapshot.blob_id: locator},
-                    )
-                    continue
-            staging = resolve_staging_path(self._attachments_root, ingest_staging_relative_locator(ingest_id))
-            if staging.is_symlink():
-                raise RuntimeError("fork imported 附件 staging 不得是符号链接")
-            staging.unlink(missing_ok=True)
-            try:
-                # 网络接收只受原 fork claim 保活，不占正文提交分片或 Session gate。
-                await receive_transfer_file(
-                    transport, request, capture, path=staging, size_bytes=snapshot.length,
-                    action="attachment_chunk", blob_id=snapshot.blob_id,
-                )
-                self._verify_blob_content(staging, snapshot.digest, snapshot.length, snapshot.blob_id)
-                async with self._blob_commits.lock_for(snapshot.blob_id):
-                    self._commit_staged_blob(staging_path=staging, final_path=final_path,
-                                             identity=BlobIdentity(snapshot.blob_id, snapshot.digest, snapshot.length))
-                    self._catalog.prepare_fork_attachment_claims(
-                        copy_operation_id=capture.copy_operation_id, source_snapshot_id=capture.snapshot_id,
-                        operation_preimage_hash=capture.preimage_hash, snapshots=(snapshot,),
-                        imported_locators={snapshot.blob_id: locator},
-                    )
-            finally:
-                staging.unlink(missing_ok=True)
-
     def export_fork_attachment_chunk(self, capture: ForkSourceCaptureRecord, blob_id: str, offset: int) -> SessionForkTransferResultDTO:
         snapshots = tuple(snapshot for snapshot in self._catalog.fork_attachment_snapshots(
             capture.copy_operation_id, target_session_id=capture.target_session_id, target_thread_id=capture.target_thread_id,
@@ -476,8 +415,7 @@ class ForkAttachmentStoreMixin:
         finally:
             control.close()
 
-    def abort_copy_attachments(self, capture: ForkSourceCaptureRecord, creation: SessionCreationRecord | ThreadCreationRecord) -> None:
-        # TODO: fork import 硬退出后最终中止时，按原 operation 清理 staging，并先证明旧 writer 已停止。
+    async def abort_copy_attachments(self, capture: ForkSourceCaptureRecord, creation: SessionCreationRecord | ThreadCreationRecord) -> None:
         if isinstance(creation, ThreadCreationRecord):
             directory = self._path_resolver.resolve_session_node(capture.target_session_id)
             control = SessionControlStore(directory / "session-control.sqlite")
@@ -498,3 +436,4 @@ class ForkAttachmentStoreMixin:
                     transition_copy_attachment_settlement(control, record, state="aborted")
         finally:
             control.close()
+        await self.collect_fork_import_staging(capture.copy_operation_id)

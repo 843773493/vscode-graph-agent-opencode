@@ -790,3 +790,11 @@ TODO（pending 恢复的硬错误重试，2026-10-20）：本轮完成调用者�
 - 正式 matrix `attachment-claim-exact-fork-003` 为11 passed/42.79s、exit0，覆盖用户/内部通知、main/child、fork发布/撤销定点恢复及冷工具权限。真实 B→A→C 网络专项 `attachment-claim-exact-transfer-004` 为1 passed/131.57s、exit0，关键状态由真实产品入口生成，覆盖跨工作区附件传输、来源离线后的目标冷读/续聊和删除GC。`attachment-claim-exact-static-005` Ruff/compileall/43项 strict OpenSpec均exit0。准确命令、指纹、raw及退出码位于本任务 `artifacts/runs/`。
 - 完整Git tree导出后仅将正文竞争段变异回旧winner/loser逻辑；`attachment-claim-mutation-red-006` 为1 failed/14.50s、exit1，第二上传以“胜者正文不存在”失败，证明新用例能区分原缺陷。独审见 `attachment-claim-review/review.md`；最终源码相较已验候选仅增加下述TODO注释，AST一致。
 - 8.3仍未整体勾选。独审确认另一具体缺口：fork import硬退出后若最终abort而不重试，其operation专属staging可能残留。普通claim回收不扫描或猜测这些路径；后续由fork settlement在证明旧writer停止后按冻结operation+blob精确清理，代码已登记TODO。Thread定位/队列等8.3其余验收仍按原任务保留。
+
+
+### 2026-10-22 8.3 fork import 终态 staging 清理（部分收口）
+
+- 跨域附件导入物理移到唯一 `fork_import.py`，删除原 store 内实现。复用固定分片 `OperationHolderGate(namespace="attachment_fork_import")` 覆盖同 operation 的全部接收与 staging 写入；与短时 digest 提交锁分离，不等待 Session gate。中止入口迁为 async，迁齐 main/child owner 与直接业务调用。终态 claim 的冻结 snapshot 是清理依据，mappings 删除不丢定位；仅在非阻塞取得 holder、重查无 preparing/owner_reserved claim 后，按原 operation/blob preimage 删除 staging。错误暴露，GC/startup 可重试；不扫盘、不改 schema、不增加状态副本。
+- 局部验收 `attachment-fork-staging-focused-005` 为8 passed/3.31s，覆盖 preparing保留、三类终态、活 writer、同blob其它operation隔离、物理删除失败及GC重试。初轮001/003的新增fixture分别遗漏mode/gateway前置和JSON tuple/list归一比较，均在业务完整验收前修正；原失败输出保留，不计通过。固定候选 `552464af75d13169a9dd59216541c59e152dac17` 排除接手前其它代理改动。`attachment-fork-staging-entry-006` 100 passed/125.02s；正式matrix `attachment-fork-staging-fork-007` 6 passed/26.37s，覆盖main/child上传pin结算及两模式发布失败的精确保活释放；`attachment-fork-staging-static-008` Ruff/compileall/43项严格OpenSpec校验exit0。真实三端HTTP/SSH `attachment-fork-staging-network-004` 2 passed/224.92s：产品入口生成消息、附件、fork，import_staged处终止真实target进程，仅在停机后删除尚未冻结的captured marker注入故障；main/child启动恢复均按原creation/claim终结、清理staging，重复重启不改身份，source正文不受影响。该网络运行使用candidate001，其生产源码与网络测试逐字等于candidate003；两者只差新增局部unit fixture的修正。原件、准确命令、source指纹及退出码在本任务artifacts/runs；8.3总项继续保留未勾。
+
+- 非作者固定候选审查无阻塞，报告 `attachment-fork-staging-review/current-worktree-review.md`。独立完整tree导出仅变异collector的holder未取得分支为继续删除，受保护用例明确变红（1 failed/2.80s，删除活writer staging后空结果断言失败），原件由review目录保存。最终提交相较candidate003只整理design段落位置/AGENTS空白并登记本收据，产品源码与测试不变。

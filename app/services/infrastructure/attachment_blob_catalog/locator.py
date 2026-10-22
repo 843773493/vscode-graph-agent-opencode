@@ -12,6 +12,7 @@ locator 与最终 blob locator 是两个互不重叠的命名空间：staging �
 
 from __future__ import annotations
 
+import hashlib
 import re
 from pathlib import Path
 
@@ -22,6 +23,7 @@ from app.services.infrastructure.attachment_blob_catalog.blob_identity import (
 
 __all__ = [
     "STAGING_DIRECTORY_NAME",
+    "fork_import_ingest_id",
     "ingest_staging_relative_locator",
     "resolve_blob_path",
     "resolve_staging_path",
@@ -78,3 +80,8 @@ def resolve_staging_path(attachments_root: Path, relative_locator: str) -> Path:
     validate_ingest_staging_relative_locator(relative_locator)
     validate_path_budget(attachments_root, relative_locator)
     return attachments_root / relative_locator
+
+
+def fork_import_ingest_id(copy_operation_id: str, blob_id: str) -> str:
+    """导入与清理共用原 operation/blob preimage，不改写已有 staging 身份。"""
+    return "ing_" + hashlib.sha256(f"fork-import:{copy_operation_id}:{blob_id}".encode()).hexdigest()[:32]

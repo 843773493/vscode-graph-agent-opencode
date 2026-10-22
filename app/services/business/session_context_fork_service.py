@@ -978,7 +978,7 @@ class SessionContextForkService:
             raise ValueError("fork_owner_overlap: main 清理的 creation capability 与当前原件不一致")
         if current.state != "preparing":
             return
-        self._checkpointer.forks.abort_prepared_capture(current, reason)
+        await self._checkpointer.forks.abort_prepared_capture(current, reason)
         await self._checkpointer.forks.recovery.release_prepared_fork_retentions(current)
         await self._session_service.abort_prepared_context_fork(current, reason)
 

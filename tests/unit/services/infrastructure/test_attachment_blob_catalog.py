@@ -9,11 +9,12 @@ pin/fence 发布复核、上传与删除竞态、定点恢复与引用感知 GC�
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import json
 import os
 from contextlib import closing
-from dataclasses import replace
+from dataclasses import asdict, replace
 from datetime import UTC, datetime, timedelta
 from io import BytesIO
 from pathlib import Path
@@ -66,8 +67,10 @@ from app.services.infrastructure.attachment_blob_catalog.catalog import (
     BlobIdentityConflictError,
 )
 from app.services.infrastructure.attachment_blob_catalog.locator import (
+    fork_import_ingest_id,
     ingest_staging_relative_locator,
     resolve_blob_path,
+    resolve_staging_path,
 )
 from app.services.infrastructure.attachment_blob_catalog.store import (
     AttachmentBlobStore,
@@ -1412,3 +1415,138 @@ async def test_preview_cache_io_error_keeps_uri_and_errno_in_generated_diagnosti
         assert built.content[1]["metadata"]["preview_status"] == "failed"
     finally:
         store.close()
+
+
+@pytest.fixture
+async def fork_import_target(fork_capture, tmp_path, session_bundle_factory):
+    """局部导入/清理测试用真实上传与冻结资源决策，不伪造 claim 行。"""
+    source, initial = fork_capture
+    body = b"fork-import-staging-lifecycle"
+    (ref,) = await source.persist_inline(SESSION_A, [_attach("source.txt", "text/plain", body)],
+        thread_id=initial.source_thread_id, message_id="msg_import_staging")
+    root = tmp_path / "import-target"
+    root.mkdir()
+    target = _store(root, session_bundle_factory, SESSION_B)
+    thread = target._path_resolver.main_thread_id(SESSION_B)
+    source_domain = source._path_resolver.catalog_store.get_node(SESSION_A).workspace_id
+    target_domain = target._path_resolver.catalog_store.get_node(SESSION_B).workspace_id
+    request = SessionForkRequest(
+        idempotency_key="import-staging", mode="context_fork", source_view_id="source-view", source_view_revision=0,
+        source_uri=f"boxteam://workspace/{source_domain}/resources/session/{SESSION_A}/threads/{initial.source_thread_id}",
+        target_container_uri=f"boxteam://workspace/{target_domain}/resources/workspace_sessions",
+        creation_kind="new_session_main", resources=[{"resource_uri": ref.file_id, "action": "copy_snapshot"}],
+    )
+    record = replace(initial, target_thread_id=thread, request_json=json.dumps({
+        **request.model_dump(mode="json"), "target_main_thread_id": thread,
+        "source_storage_domain_id": source_domain, "target_storage_domain_id": target_domain,
+        "target_gateway_id": get_current_gateway_id(),
+    }))
+    snapshots = source.capture_fork_attachments(record, same_storage_owner=False, references=((ref.file_id, True),))
+    try:
+        yield SimpleNamespace(source=source, target=target, record=record, snapshots=snapshots, request=request, body=body)
+    finally:
+        target.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("terminal", ["preparing", "aborted", "target_deleted", "committed"])
+async def test_fork_staging_gc_uses_terminal_claim_and_exact_operation(fork_import_target, terminal):
+    case = fork_import_target
+    target, record = case.target, case.record
+    (snapshot,) = case.snapshots
+    # 已存在目标正文走真实 import 复用，collector 只验证终态残留文件，不代替完整 fork。
+    await target.persist_inline(SESSION_B, [_attach("target.txt", "text/plain", case.body)],
+        thread_id=record.target_thread_id, message_id="msg_existing_staging")
+    transport = SimpleNamespace(fork_transfer=AsyncMock(side_effect=AssertionError("已有正文不得发起网络请求")))
+    await target.accept_fork_import(record, case.snapshots, transport=transport, request=case.request)
+    staging_id = fork_import_ingest_id(record.copy_operation_id, snapshot.blob_id)
+    staging = resolve_staging_path(target._attachments_root, ingest_staging_relative_locator(staging_id))
+    other = resolve_staging_path(target._attachments_root, ingest_staging_relative_locator(
+        fork_import_ingest_id("other-operation", snapshot.blob_id)))
+    staging.parent.mkdir(parents=True, exist_ok=True)
+    staging.write_bytes(b"incomplete")
+    other.write_bytes(b"other-operation-writer")
+    if terminal == "committed":
+        target._catalog.reserve_fork_attachment_owners(copy_operation_id=record.copy_operation_id, claim_ids=(snapshot.claim_id,))
+    if terminal != "preparing":
+        target._catalog.settle_fork_attachment_claims(copy_operation_id=record.copy_operation_id,
+            claim_ids=(snapshot.claim_id,), state=terminal)
+    # 删除 owner 可能已持 Session gate；清理不得阻塞等待 importer。
+    async with target._fork_imports.lock_for(record.copy_operation_id), target._gate.exclusive(SESSION_B):
+        assert await asyncio.wait_for(target.collect_fork_import_staging(), timeout=1) == ()
+        assert staging.read_bytes() == b"incomplete"
+    if terminal == "preparing":
+        assert await target.collect_fork_import_staging() == ()
+        assert staging.exists()
+    else:
+        assert await target.collect_fork_import_staging() == (staging_id,)
+        assert not staging.exists()
+        assert await target.collect_fork_import_staging() == ()
+    assert other.read_bytes() == b"other-operation-writer"
+    assert case.source.read(SESSION_A, snapshot.source_file_id).data == case.body
+    transport.fork_transfer.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_terminal_fork_staging_removal_failure_retries_without_scanning(fork_import_target, monkeypatch):
+    case = fork_import_target
+    target, record = case.target, case.record
+    (snapshot,) = case.snapshots
+    target._catalog.prepare_fork_attachment_claims(copy_operation_id=record.copy_operation_id,
+        source_snapshot_id=record.snapshot_id, operation_preimage_hash=record.preimage_hash,
+        snapshots=case.snapshots, imported_locators={snapshot.blob_id: None})
+    target._catalog.settle_fork_attachment_claims(copy_operation_id=record.copy_operation_id,
+        claim_ids=(snapshot.claim_id,), state="aborted")
+    staging_id = fork_import_ingest_id(record.copy_operation_id, snapshot.blob_id)
+    path = resolve_staging_path(target._attachments_root, ingest_staging_relative_locator(staging_id))
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b"partial")
+    unlink = Path.unlink
+    def interrupted(candidate, *args, **kwargs):
+        if candidate == path:
+            raise OSError("terminal staging deletion interrupted")
+        return unlink(candidate, *args, **kwargs)
+    with monkeypatch.context() as patch:
+        patch.setattr(Path, "unlink", interrupted)
+        with pytest.raises(OSError, match="deletion interrupted"):
+            await target.collect_garbage(retention=timedelta(0))
+    assert path.exists()
+    await target.collect_garbage(retention=timedelta(0))
+    assert not path.exists()
+    assert json.dumps([asdict(snapshot) for snapshot in target._catalog.terminal_fork_attachment_snapshots(record.copy_operation_id)], sort_keys=True) == json.dumps([asdict(snapshot) for snapshot in case.snapshots], sort_keys=True)
+
+
+@pytest.mark.asyncio
+async def test_fork_import_holds_writer_gate_while_receiving(fork_import_target):
+    case = fork_import_target
+    target, record = case.target, case.record
+    (snapshot,) = case.snapshots
+    received, release = asyncio.Event(), asyncio.Event()
+    async def receive(request):
+        assert request.action == "attachment_chunk" and request.blob_id == snapshot.blob_id
+        received.set()
+        await release.wait()
+        raise ConnectionError("import interrupted after settlement")
+    token = set_current_gateway_id("gateway_332f92ee6191880e797569a47e22922b")
+    importing = asyncio.create_task(target.accept_fork_import(record, case.snapshots,
+        transport=SimpleNamespace(fork_transfer=receive), request=case.request))
+    path = resolve_staging_path(target._attachments_root, ingest_staging_relative_locator(
+        fork_import_ingest_id(record.copy_operation_id, snapshot.blob_id)))
+    try:
+        await asyncio.wait_for(received.wait(), timeout=3)
+        assert path.is_file()
+        target._catalog.settle_fork_attachment_claims(copy_operation_id=record.copy_operation_id,
+            claim_ids=(snapshot.claim_id,), state="aborted")
+        assert await asyncio.wait_for(target.collect_fork_import_staging(), timeout=1) == ()
+        assert path.is_file()
+        async with target._fork_imports.lock_for(record.copy_operation_id, wait=False) as holder:
+            assert not holder.acquired
+    finally:
+        release.set()
+        try:
+            with pytest.raises(ConnectionError, match="import interrupted"):
+                await importing
+        finally:
+            reset_current_gateway_id(token)
+    assert not path.exists()
+    assert await target.collect_fork_import_staging() == ()

@@ -19,6 +19,9 @@ from app.services.infrastructure.attachment_blob_catalog.blobs import (
 from app.services.infrastructure.attachment_blob_catalog.ingest import (
     _claim_blob_identity,
 )
+from app.services.infrastructure.attachment_blob_catalog.locator import (
+    fork_import_ingest_id,
+)
 from app.services.infrastructure.attachment_blob_catalog.records import (
     AttachmentBlobRecord,
     AttachmentOwnerRef,
@@ -149,7 +152,7 @@ class ForkAttachmentClaimsMixin:
 
     def reserve_fork_blob_import(self, copy_operation_id: str, snapshot: ForkAttachmentSnapshot) -> tuple[str, str]:
         """正文 staging 属于本 operation；最终 locator 仍由唯一 digest claim 决定。"""
-        ingest_id = "ing_" + hashlib.sha256(f"fork-import:{copy_operation_id}:{snapshot.blob_id}".encode()).hexdigest()[:32]
+        ingest_id = fork_import_ingest_id(copy_operation_id, snapshot.blob_id)
         with self.write_transaction() as connection:
             row = connection.execute("SELECT * FROM attachment_blobs WHERE blob_id=?", (snapshot.blob_id,)).fetchone()
             if row is not None:
@@ -348,3 +351,20 @@ class ForkAttachmentClaimsMixin:
         ).fetchone()
         return {"file_id": source_file_id,
                 "availability": "available" if owner is not None and tuple(owner) == ("active", "available") else "unavailable"}
+
+    def terminal_fork_attachment_operations(self) -> tuple[str, ...]:
+        rows = self._connected().execute(
+            "SELECT copy_operation_id FROM fork_attachment_claims GROUP BY copy_operation_id "
+            "HAVING SUM(state IN ('preparing','owner_reserved'))=0 ORDER BY copy_operation_id",
+        ).fetchall()
+        return tuple(row[0] for row in rows)
+
+    def terminal_fork_attachment_snapshots(self, copy_operation_id: str) -> tuple[ForkAttachmentSnapshot, ...]:
+        """终结时 mappings 可已删除；只按仍保留的 claim 冻结事实定位。"""
+        rows = self._connected().execute(
+            "SELECT * FROM fork_attachment_claims WHERE copy_operation_id=? ORDER BY claim_id",
+            (copy_operation_id,),
+        ).fetchall()
+        if any(row["state"] in {"preparing", "owner_reserved"} for row in rows):
+            return ()
+        return tuple(_claim_snapshot(row) for row in rows)
