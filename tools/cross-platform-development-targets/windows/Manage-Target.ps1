@@ -180,7 +180,12 @@ function Invoke-TargetAction([string[]]$Arguments) {
                     BOXTEAM_ENABLE_GATEWAY_E2E_WORKSPACE = "0"
                 }
                 foreach ($Pair in $Environment.GetEnumerator()) { [Environment]::SetEnvironmentVariable($Pair.Key, $Pair.Value, "Process") }
-                Start-Process -FilePath "bun.exe" -ArgumentList @("run", "scripts/launch/dev.mjs", "--only-launch") -WorkingDirectory $Repository -RedirectStandardOutput $Log -RedirectStandardError "$Log.stderr" -WindowStyle Hidden
+                # dev 的 launcher 自己分离 manager 并等待就绪；外层不得提前返回成功。
+                Push-Location $Repository
+                try {
+                    & bun.exe run scripts/launch/dev.mjs --only-launch
+                    Assert-NativeCommand "开发服务启动"
+                } finally { Pop-Location }
             } else {
                 $env:BOXTEAM_HOME = $BoxTeamHome
                 $env:BOXTEAM_DEFAULT_USER_WORKSPACE_ROOT = $Workspace

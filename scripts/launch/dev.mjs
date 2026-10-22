@@ -487,8 +487,9 @@ async function main() {
     ]);
   }
   const processes = [];
-  const pendingGatewayRestart =
-    environment.BOXTEAM_CONFIG_CANDIDATE_REF?.trim() !== "";
+  const pendingGatewayRestart = Boolean(
+    environment.BOXTEAM_CONFIG_CANDIDATE_REF?.trim(),
+  );
   let gatewayProcess = null;
   if (serviceMode === "backend") {
     processes.push(
@@ -712,7 +713,7 @@ if (onlyLaunch) {
   if (restartDelayMs > 0) {
     await Bun.sleep(restartDelayMs);
   }
-  if (process.env.BOXTEAM_CONFIG_CANDIDATE_REF?.trim() !== "") {
+  if (process.env.BOXTEAM_CONFIG_CANDIDATE_REF?.trim()) {
     const handoff = await requestGatewayHandoff({
       boxteamHome,
       environment: process.env,
