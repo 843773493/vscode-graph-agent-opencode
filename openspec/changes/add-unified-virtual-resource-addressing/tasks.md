@@ -431,3 +431,9 @@
 - 远端来源 intent 的字段校验失败保持原错误类别与 cause；普通错误只保冻结 operation ID、来源 Gateway/Workspace、阶段及异常类型，原始畸形输入与异常链仅留诊断日志。不修改来源校验、creation/capture writer、发布次序、deadline 或 schema。
 - 固定完整 tree `94233a61f6b2bf27bfa7d03dbfa39a739ec7b4da`：正式 matrix 三项通过（20.31秒），覆盖 POSIX/drive/UNC 文本的结构化原异常、普通错误无原生输入、日志原对象、来源/目标零创建副作用，以及同一 request/key 修正后真实发布、export confirmed、幂等重放与一次 capture；既有默认 main/隐式安全 anchor 回归一项通过（13.73秒），Ruff/compileall通过。旧生产完整 archive 的三项反例均在普通错误的 private/native_path 检查失败（20.63秒）。
 - 首轮2通过/1失败由测试依赖 Pydantic 截断后的文本造成，改为 errors() 精确核完整原始输入并保留字段泄漏检查；未放宽产品行为。准确命令、4313项前后源码指纹、raw/SHA、实际退出与进程回收见 `out/tests/temp/fork_intent_validation_20261023/artifacts/validation-proof-002.json`。来源历史复用 seeded Saver 装具，transport 为显式替身；不称 Agent/HTTP/Web/Windows 实机验收，2.2/7.2 总门仍未勾。
+
+### 2026-10-23 Gateway fork wire 校验错误出口（2.2/7.2 部分收口）
+
+- Gateway fork transport 的成功回执解码和已识别 incomplete-capture 错误回执校验只向普通错误提供原 prefix、请求身份、目标 URI、action、阶段与异常类型；畸形原始字段留在原 cause 和日志。不改 HTTP status 归属、connection、request_id 漂移、capture identity 校验或未完成状态恢复合同。
+- 完整 tree `d42a107fd51759493022122a76ed13a032200f7e` 的新6项及原48项客户端单测合计54 passed/3.06秒；旧生产完整 archive 六项均在普通错误的 native_path/private 检查失败（1.43秒），涵盖两类回执×POSIX/drive/UNC 文本。修正回执后同一请求的 method/URL/headers/body 完全相同，有效 preparing capture 仍返回原 typed incomplete 异常，不伪造成功；Ruff/compileall通过。
+- 首轮Ruff要求显式 fixture 重导出说明，末次仅补4个noqa注释，AST等价复用原测试结果；原失败、准确命令、4314项源码指纹、退出码、日志SHA、无残留进程及限定审查见 `out/tests/temp/gateway_fork_protocol_errors_20261023/artifacts/validation-proof-002.json`。HTTP请求入口是显式stub，不代真实网络/Web/Windows；普通HTTP错误正文与连接异常仍需独立核验，2.2/7.2不勾总项。

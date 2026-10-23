@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
 from typing import TypeVar
 
@@ -40,6 +41,7 @@ from app.services.infrastructure.rollout_context.fork.transfer import (
 )
 
 ResponseDTO = TypeVar("ResponseDTO", bound=BaseModel)
+logger = logging.getLogger(__name__)
 
 
 class GatewaySessionContextClient:
@@ -122,7 +124,13 @@ class GatewaySessionContextClient:
             reply = self._decode_response(response, path=path, request_id=request_id, response_type=SessionForkTransferResultDTO)
             return reply.validate_for_request(request)
         except (KeyError, TypeError, ValueError) as error:
-            raise RuntimeError(f"fork_response_protocol_invalid: Gateway fork 回执协议无效: {error}") from error
+            detail = (
+                f"fork_response_protocol_invalid: Gateway fork 回执协议无效: "
+                f"request_id={request_id}, uri={request.fork_target.uri}, action={request.action}, "
+                f"stage=response_validation, error_type={type(error).__name__}"
+            )
+            logger.error("%s；完整诊断见异常链", detail, exc_info=error)
+            raise RuntimeError(detail) from error
 
     async def _request(
         self,
@@ -162,7 +170,13 @@ class GatewaySessionContextClient:
             if request.capture.state != "preparing" or capture.state != "preparing" or capture.snapshot_sha256 is not None or capture.marker_sha256 is not None or capture.abort_reason is not None:
                 raise ValueError("fork incomplete 回执不是未发布 marker 的 preparing capture")
         except (KeyError, TypeError, ValueError, RuntimeError) as error:
-            raise RuntimeError(f"fork_response_protocol_invalid: Gateway fork 错误回执协议无效: {error}") from error
+            detail = (
+                f"fork_response_protocol_invalid: Gateway fork 错误回执协议无效: "
+                f"request_id={request_id}, uri={request.fork_target.uri}, action={request.action}, "
+                f"stage=incomplete_capture_validation, error_type={type(error).__name__}"
+            )
+            logger.error("%s；完整诊断见异常链", detail, exc_info=error)
+            raise RuntimeError(detail) from error
         raise IncompleteForkSourceCaptureError(capture)
 
     async def _send_request(

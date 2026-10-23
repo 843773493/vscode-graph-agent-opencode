@@ -7,12 +7,13 @@
 gateway_clients/
 ├── conftest.py                              # 两类客户端共用的代理环境隔离
 ├── test_gateway_communication_client.py    # Gateway 与目标 Workspace 的启动就绪核验
+├── test_gateway_fork_protocol_errors.py    # fork 畸形回执的普通错误与原始诊断边界
 └── test_gateway_session_context_client.py   # 上下文查询与 fork relay 传输
 ```
 
 # 可修改内容
 
-- 可以维护上述两个客户端测试，分别覆盖通信就绪探测和会话上下文/fork relay 协议。
+- 可以维护通信就绪探测、会话上下文/fork relay 协议及其错误诊断边界测试。
 - 可以维护 `conftest.py` 中仅属于这些客户端测试的代理环境 fixture。
 - 可以按新增客户端测试扩展本目录，并同步更新本文件的职责树。
 
