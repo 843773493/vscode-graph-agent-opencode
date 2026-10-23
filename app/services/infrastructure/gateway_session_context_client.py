@@ -12,7 +12,10 @@ from app.core.trace_middleware import (
     require_current_gateway_id,
     require_current_request_id,
 )
-from app.gateway.federation.errors import FEDERATION_TARGET_OWNER_REJECTED
+from app.gateway.federation.errors import (
+    FEDERATION_ERROR_CODES,
+    FEDERATION_TARGET_OWNER_REJECTED,
+)
 from app.gateway.federation.grants import ContextGrantTarget
 from app.schemas.gateway.workspaces import GatewayWorkspaceListDTO
 from app.schemas.internal_v2.communication import ContextQueryRequest
@@ -32,6 +35,9 @@ from app.services.infrastructure.config_service import ConfigService
 from app.services.infrastructure.gateway_client_common import (
     MODEL_RECOVERABLE_HTTP_STATUSES,
     GatewayTransportConnection,
+)
+from app.services.infrastructure.resource_platform.virtual_resources.resolver import (
+    RESOURCE_URI_RESOLVE_REASON_CODES,
 )
 from app.services.infrastructure.rollout_context.fork.source_capture import (
     IncompleteForkSourceCaptureError,
@@ -119,7 +125,7 @@ class GatewaySessionContextClient:
         )
         if not response.is_success:
             self._raise_incomplete_capture(response, request=request, request_id=request_id)
-            self._raise_http_error(response, method="POST", path=path)
+            self._raise_http_error(response, method="POST", path=path, request_id=request_id)
         try:
             reply = self._decode_response(response, path=path, request_id=request_id, response_type=SessionForkTransferResultDTO)
             return reply.validate_for_request(request)
@@ -141,7 +147,7 @@ class GatewaySessionContextClient:
         json_body: dict[str, object] | None = None,
     ) -> ResponseDTO:
         response, request_id = await self._send_request(method, path, json_body=json_body)
-        self._raise_http_error(response, method=method, path=path)
+        self._raise_http_error(response, method=method, path=path, request_id=request_id)
         try:
             return self._decode_response(response, path=path, request_id=request_id, response_type=response_type)
         except (KeyError, TypeError, ValueError) as error:
@@ -204,26 +210,58 @@ class GatewaySessionContextClient:
                 timeout=self._connection.resolve_timeout_seconds(),
             )
         except httpx.RequestError as error:
-            raise WorkspaceSessionContextAccessError(
+            detail = (
                 "无法连接 Workspace Gateway: "
-                f"method={method}, path={path}, "
-                f"error_type={type(error).__name__}, error={error}"
-            ) from error
+                f"method={method}, path={path}, request_id={request_id}, "
+                f"stage=connection, error_type={type(error).__name__}"
+            )
+            logger.error("%s；完整诊断见异常链", detail, exc_info=error)
+            raise WorkspaceSessionContextAccessError(detail) from error
         return response, request_id
 
     @staticmethod
     def _raise_http_error(
-        response: httpx.Response, *, method: str, path: str,
+        response: httpx.Response, *, method: str, path: str, request_id: str | None,
     ) -> None:
         if not response.is_success:
             message = (
                 "Gateway 上下文查询失败: "
-                f"method={method}, path={path}, "
-                f"status={response.status_code}, detail={response.text[:2000]}"
+                f"method={method}, path={path}, request_id={request_id}, "
+                f"stage=http_response, status={response.status_code}"
             )
+            if response.status_code == 404:
+                message += "; Gateway 工作区不存在或目标资源不可访问"
+            message += GatewaySessionContextClient._http_error_codes(response)
+            logger.error("%s；原始响应=%s", message, response.text[:2000])
             if response.status_code in MODEL_RECOVERABLE_HTTP_STATUSES:
                 raise WorkspaceSessionContextAccessError(message)
             raise RuntimeError(message)
+
+    @staticmethod
+    def _http_error_codes(response: httpx.Response) -> str:
+        """只投影原 owner 登记的拒绝码，任意 message/detail 留在原始日志。"""
+        try:
+            payload = response.json()
+        except ValueError:
+            # 非 JSON 拒绝仍按原 HTTP status 抛错，不把正文升级为错误协议。
+            return ""
+        detail = payload.get("detail") if isinstance(payload, dict) else None
+        code = detail.get("code") if isinstance(detail, dict) else None
+        if not isinstance(code, str) or code not in FEDERATION_ERROR_CODES:
+            return ""
+        result = f", code={code}"
+        owner_detail = detail.get("detail")
+        if code != FEDERATION_TARGET_OWNER_REJECTED or not isinstance(owner_detail, dict):
+            return result
+        owner, owner_code = owner_detail.get("owner"), owner_detail.get("code")
+        if (
+            owner == "resource_uri_resolver" and isinstance(owner_code, str)
+            and owner_code in RESOURCE_URI_RESOLVE_REASON_CODES
+        ) or (owner == "context_revision" and owner_code == "snapshot_changed") or (
+            owner == IncompleteForkSourceCaptureError.owner and owner_code == IncompleteForkSourceCaptureError.code
+        ):
+            result += f", owner={owner}, owner_code={owner_code}"
+        return result
 
     @staticmethod
     def _decode_response(

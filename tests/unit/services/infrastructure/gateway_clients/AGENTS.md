@@ -8,6 +8,7 @@ gateway_clients/
 ├── conftest.py                              # 两类客户端共用的代理环境隔离
 ├── test_gateway_communication_client.py    # Gateway 与目标 Workspace 的启动就绪核验
 ├── test_gateway_context_protocol_errors.py # 上下文查询畸形回执的错误与诊断边界
+├── test_gateway_context_transport_errors.py # 上下文与 fork 传输拒绝的分类及原始诊断
 ├── test_gateway_fork_protocol_errors.py    # fork 畸形回执的普通错误与原始诊断边界
 └── test_gateway_session_context_client.py   # 上下文查询与 fork relay 传输
 ```

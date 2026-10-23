@@ -451,3 +451,10 @@
 - 普通 read/search/inventory 共用的唯一 HTTP 回执校验点将 JSON/envelope/DTO 校验失败归为不可恢复 RuntimeError，普通错误保留 method、API path、request_id、stage和异常类型；完整原始输入保留 cause及诊断日志。request_id漂移仍使用原拒绝；HTTP状态到可恢复/致命分类、联邦错误正文及连接错误出口不在此切片改动。
 - 固定完整tree `6ee3bd9866f14aa7d508953f8563ba794c17f325` 的6项新增及80项既有客户端/查询/target resolver单测合计86项通过，Ruff/compileall通过；覆盖read/search/inventory畸形DTO、JSON/envelope与request_id，修正回执后原method/URL/headers/body保持相同。旧生产完整archive三项均在普通错误中检出native_path原始输入，保留POSIX/drive/UNC的精确原cause校验。
 - 4317项源码前后指纹、raw/SHA、退出码、无残留进程及范围审查见 `out/tests/temp/gateway_context_protocol_errors_20261023/artifacts/validation-proof-002.json`。请求是显式HTTP stub，不冒充真实网络/Web/Windows；泛HTTP正文和连接错误仍需后续独立收口，2.2/7.2总门未勾。
+
+
+### 2026-10-23 Gateway 上下文/公开 fork 的传输错误出口（2.2/7.2 部分收口）
+
+- 唯一客户端的连接异常与HTTP失败不再把原始异常/响应message/detail复制到普通错误；连接保留原cause并记录异常日志，HTTP原始有界正文留日志。普通错误保留method/API path/request_id/stage/异常类别或status，明确404目标不可用，并只投影原联邦闭集及resolver/context-revision/fork-capture具名owner码。未改变共享可恢复状态集合、异常类别、fork incomplete严格身份校验或release uncertain outcome的pending责任，不新增兼容异常类或第二错误协议。
+- 完整tree `ff3cab98e874a71ca80c4bb61c2f31135b58f1ef`：30项新增与既有客户端/上下文查询/target resolver/fork service/API合计176 passed/4.60秒，Ruff/compileall exit0。旧生产与相同最终测试完整archive为30 failed/3.46秒，均明确检出普通错误原生路径；覆盖POSIX/drive/UNC连接异常及read/fork/inventory的404、409、500、503、redirect、非JSON和畸形码。核连接重试原method/URL/headers/body、原cause及原日志、HTTP分类和专用fork拒绝边界。
+- 4318项源码前后指纹、raw/SHA、退出码、无残留进程、独立只读审查及strict见 `out/tests/temp/gateway_context_transport_errors_20261023/artifacts/validation-proof-001.json`、`review-001.json`。请求为显式HTTP stub，不代真实网络/Web/Windows。通信client及其它普通响应出口另按原合同继续审计，2.2/7.2总门未勾。
