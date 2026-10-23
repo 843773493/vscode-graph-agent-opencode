@@ -7417,6 +7417,13 @@ async def test_fork_preserves_stream_member_time_across_checkpoint_carriers(
     with (session_thread_owner_scope(owner, langgraph_thread_id=owner.thread_id),
           execution_admission_scope(admission, langgraph_thread_id=owner.thread_id)):
         stream_items = stream.finalize(first_item_sequence=1)
+        if reverse_membership:
+            # 此分支只验证成员重排；交换的推理使用同一时刻，避免制造倒序时间。
+            stream_items = tuple(
+                replace(item, created_at=stream_items[0].created_at)
+                if item.semantic_kind == "reasoning" else item
+                for item in stream_items
+            )
         context.saver.append_items(source.session_id, stream_items, thread_id=owner.thread_id)
         completed_messages = [user, final]
         commit_fixture_output(context.saver, messages=completed_messages)

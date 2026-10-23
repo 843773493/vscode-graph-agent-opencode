@@ -86,10 +86,14 @@ def _finalize_activity_projection(projection: dict[str, object]) -> None:
 
 
 def _item_elapsed_ms(created_at: object, previous_at: object) -> int:
-    """当前与前一创建时刻之差取整数毫秒，负差为 0；两者必须带时区。"""
+    """按相邻逻辑成员计算整数毫秒；缺少时区或时间倒退都明确失败。"""
     current = _required_datetime(created_at, field="activity_item.created_at")
     previous = _required_datetime(previous_at, field="activity_item.previous_created_at")
-    return max(0, int((current - previous).total_seconds() * 1000))
+    if current < previous:
+        raise RuntimeError(
+            f"activity item 创建时间倒退: current={current.isoformat()}, previous={previous.isoformat()}"
+        )
+    return int((current - previous).total_seconds() * 1000)
 
 
 def _required_datetime(value: object, *, field: str) -> datetime:

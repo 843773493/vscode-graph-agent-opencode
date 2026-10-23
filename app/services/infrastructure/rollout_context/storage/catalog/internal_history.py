@@ -419,7 +419,8 @@ class InternalExecutionHistoryMixin:
                 logical_item_ordinal=strict_non_negative_int(
                     row[7], field="context_view_items.logical_item_ordinal"
                 ),
-                elapsed_ms=_item_elapsed_ms(
+                # notice 是执行的输入锚点，可能早于准入；它自身不是计时活动。
+                elapsed_ms=0 if items_by_id[strict_text(row[1], field="item_catalog.item_id")].semantic_kind == "runtime_notice" else _item_elapsed_ms(
                     items_by_id[strict_text(row[1], field="item_catalog.item_id")].created_at,
                     row[8],
                 ),

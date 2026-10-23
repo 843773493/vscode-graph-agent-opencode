@@ -246,22 +246,27 @@ def test_final_reasoning_scope_prevents_reused_part_cross_call_merge() -> None:
 
 
 @pytest.fixture
-def membership_projection_case(source_seal_case):
+def membership_projection_case(source_seal_case, request):
     case = source_seal_case
     owner, saver = case.owner, case.saver
     admission = saver.execution_admission(
         owner.session_id, thread_id=owner.thread_id,
         execution_id=str(case.accepted["initial_execution_id"]),
     )
+    root = next(item for item in saver._storage.storage.read_items(owner.session_id, owner.thread_id)
+                if item.semantic_kind == "user_input")
+    start = datetime.fromisoformat(root.created_at)
+    # 成员顺序用例会交换逻辑坐标；相同时刻不会把合法重排混成时间倒退。
+    offsets = getattr(request, "param", (1, 1))
     items = tuple(
         CanonicalItemRecord.create(
             item_sequence=number, item_id=f"membership-reasoning-{number}",
             semantic_kind="reasoning", payload_kind="text", status="completed",
             producer_ref={"producer_kind": "provider", "producer_id": f"call-{number}"},
-            payload=f"推理 {number}", created_at=f"2026-10-10T00:00:0{number}+00:00",
+            payload=f"推理 {number}", created_at=(start + timedelta(seconds=seconds)).isoformat(),
             turn_id=admission.turn_id, turn_scope="turn_member",
             projection_identity=ItemProjectionIdentity(model_call_id=f"call-{number}", block_id=f"block-{number}", block_index=0),
-        ) for number in (2, 3)
+        ) for number, seconds in zip((2, 3), offsets, strict=True)
     )
     with (
         session_thread_owner_scope(MutationIntentOwner(owner.session_id, owner.thread_id), langgraph_thread_id=owner.thread_id),
@@ -312,7 +317,25 @@ def test_projection_excludes_hidden_view_member(membership_projection_case):
     assert projection["activity_stats"]["item_count"] == 1
 
 
-def test_internal_elapsed_keeps_same_predecessor_across_pages(source_seal_case):
+@pytest.mark.parametrize("membership_projection_case", [(-1, 0), (2, 1), (2, 1.999999)], indirect=True)
+def test_history_rejects_activity_time_going_backwards(membership_projection_case):
+    case, admission, _items = membership_projection_case
+    storage = case.saver._storage.storage
+    with storage.open_read_snapshot(admission.session_id, admission.thread_id) as snapshot:
+        before = tuple(snapshot.connection.iterdump())
+    jsonl = storage.jsonl_path(admission.session_id, thread_id=admission.thread_id)
+    before_jsonl = jsonl.read_bytes()
+    # 冷 Saver 沿正式 history 入口读持久时间，不依赖热投影或测试提供的 metadata。
+    cold = RolloutCheckpointSaver(storage.sessions_dir)
+    with pytest.raises(RuntimeError, match="activity item 创建时间倒退"):
+        cold.load_history(admission.session_id, admission.thread_id, TurnHistoryLoadRequest())
+    with storage.open_read_snapshot(admission.session_id, admission.thread_id) as snapshot:
+        assert tuple(snapshot.connection.iterdump()) == before
+    assert jsonl.read_bytes() == before_jsonl
+
+
+@pytest.mark.parametrize("offsets", [(2, 5), (2, 1), (2, 1.999999)])
+def test_internal_elapsed_keeps_same_predecessor_across_pages(source_seal_case, offsets):
     case = source_seal_case
     owner, saver = case.owner, case.saver
     prepared = internal_message_factory.build(
@@ -352,7 +375,7 @@ def test_internal_elapsed_keeps_same_predecessor_across_pages(source_seal_case):
         wire_role="assistant",
         payload_kind="text", status="completed", producer_ref={"producer_kind": "runtime", "producer_id": admission.execution_id},
         payload=f"内部输出 {seconds}", created_at=(start + timedelta(seconds=seconds)).isoformat(),
-    ) for seconds in (2, 5))
+    ) for seconds in offsets)
     with (
         session_thread_owner_scope(MutationIntentOwner(owner.session_id, owner.thread_id), langgraph_thread_id=owner.thread_id),
         execution_admission_scope(admission, langgraph_thread_id=owner.thread_id),
@@ -362,12 +385,21 @@ def test_internal_elapsed_keeps_same_predecessor_across_pages(source_seal_case):
         reader = saver._context_reader
         chain = reader.resolve_chain(snapshot)
         bounds = reader.read_history_snapshot_bounds(snapshot, chain)
-        newest = reader.read_internal_execution_history_page(
-            snapshot, chain, direction="before", anchor_logical_item_ordinal=None,
-            lower_logical_item_ordinal=None, upper_logical_item_ordinal=bounds.upper_logical_item_ordinal,
-            snapshot_upper_logical_item_ordinal=bounds.upper_logical_item_ordinal,
-            limit=1, execution_id=admission.execution_id,
-        )
+        def read_page():
+            return reader.read_internal_execution_history_page(
+                snapshot, chain, direction="before", anchor_logical_item_ordinal=None,
+                lower_logical_item_ordinal=None, upper_logical_item_ordinal=bounds.upper_logical_item_ordinal,
+                snapshot_upper_logical_item_ordinal=bounds.upper_logical_item_ordinal,
+                limit=1, execution_id=admission.execution_id,
+            )
+
+        if offsets[1] < offsets[0]:
+            before = tuple(snapshot.connection.iterdump())
+            with pytest.raises(RuntimeError, match="activity item 创建时间倒退"):
+                read_page()
+            assert tuple(snapshot.connection.iterdump()) == before
+            return
+        newest = read_page()
         previous_page = reader.read_internal_execution_history_page(
             snapshot, chain, direction="before", anchor_logical_item_ordinal=newest.entries[0].logical_item_ordinal,
             lower_logical_item_ordinal=None, upper_logical_item_ordinal=bounds.upper_logical_item_ordinal,
@@ -378,6 +410,14 @@ def test_internal_elapsed_keeps_same_predecessor_across_pages(source_seal_case):
         assert newest.entries[0].elapsed_ms == 3000
         assert previous_page.entries[0].item.item_id == items[0].item_id
         assert previous_page.entries[0].elapsed_ms == 2000
+        notice_page = reader.read_internal_execution_history_page(
+            snapshot, chain, direction="before", anchor_logical_item_ordinal=previous_page.entries[0].logical_item_ordinal,
+            lower_logical_item_ordinal=None, upper_logical_item_ordinal=bounds.upper_logical_item_ordinal,
+            snapshot_upper_logical_item_ordinal=bounds.upper_logical_item_ordinal,
+            limit=1, execution_id=admission.execution_id,
+        )
+        assert notice_page.entries[0].item.semantic_kind == "runtime_notice"
+        assert notice_page.entries[0].elapsed_ms == 0
 
 
 @pytest.fixture
