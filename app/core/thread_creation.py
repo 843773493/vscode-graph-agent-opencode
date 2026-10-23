@@ -941,7 +941,8 @@ class ThreadCreationService:
     ) -> ThreadCreationRecord:
         key = record.thread_creation_idempotency_key
         try:
-            await before_publish(record)
+            with _thread_access(session_id, record.child_thread_id, "fork_materialize"):
+                await before_publish(record)
         except Exception as error:
             current = self._control_store.get_thread_creation_record(key)
             if current.state == "preparing":
@@ -949,7 +950,9 @@ class ThreadCreationService:
                     current, session_id=session_id, session_dir=session_dir, inventory=inventory,
                     before_abort=before_abort,
                 )
-                self._control_store.abort_thread_creation_record(key, str(error))
+                self._control_store.abort_thread_creation_record(
+                    key, _thread_failure_detail(session_id, record.child_thread_id, "fork_materialize", error),
+                )
             raise
         return self._control_store.get_thread_creation_record(key)
 

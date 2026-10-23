@@ -1055,3 +1055,9 @@ pending 恢复的硬错误重试已闭合（2026-10-22）：进程内装载阶�
 
 - 目录缺失阶段继续明确拒绝启动，冷读取逐字段核原 creation/capture、快照及来源正文不变；缓存已解析的 source node，避免失败 lifespan 关闭 catalog 后再解析。测试只 rename 隔离并恢复自己移走的目录，不补写业务状态；随后由原 owner 同键冷恢复完成发布。reserved 尚无快照时首次捕获恰一次，已有快照时零回读；默认未继承附件保持零 claim。
 - 完整候选 tree `f4b07b32c27ab05f97e76b911f760ec114b52a3a` 的 `fork-missing-locator-004` 为2 passed/19.89秒、exit0，Ruff static004与compile004均exit0；原不可延长60秒deadline保持。前轮002错误禁止reserved首次capture而143，003真实发布后被错误claim预期挡住而exit1，均保留原件。准确命令、全树指纹、raw/退出码及零残留核验见 `out/tests/temp/fork_integrity_acceptance_20261023/artifacts/`；非作者只读复核无finding，未独立跑测试。本切片不关闭7.5、8.3或default Web总门。
+
+
+### 2026-10-23 child fork 物化中止记录的错误归属
+
+- Thread creation 的唯一 before_publish 边界按原 owner/阶段处理 OSError，保留异常类型、errno/winerror 与原 cause；持久 abort reason 只记录 Session/Thread、fork_materialize 阶段和错误类别。领域 RuntimeError 仍按原对象抛出，完整原错归诊断日志；清理、aborted 终态及同键重放顺序不变，未改 schema 或新增 writer。
+- 固定完整 tree `86698f3fb2dd1e4cb36eb6a158ddf0d5bf96e73e`：新增六例通过（55.44秒），覆盖 POSIX、Windows 盘符与 UNC 字符串分别进入原生/领域错误，核 creation/capture 中止、目录清理、冷 control 记录及原来源字节不变；相邻恢复26例通过（244.98秒），包含 partial capture、损坏 proof 拒绝和合法中止。旧生产完整 archive 的相同六例全部失败；Ruff/compileall exit0，源码前后指纹相同且进程组零残留。只读非作者审查无 actionable finding，未独立跑测试。准确命令、raw、退出码和限定证明见 `out/tests/temp/fork_materialization_errors_20261023/artifacts/validation-proof-003.json`。不代表 OS 重启、完整 Web 或 Windows 实机；2.2/7.2、8.3 等总门保持未勾。
