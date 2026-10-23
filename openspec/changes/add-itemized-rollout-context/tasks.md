@@ -1049,3 +1049,9 @@ pending 恢复的硬错误重试已闭合（2026-10-22）：进程内装载阶�
 - 本项按A–H职责合取关闭：CIL2.3收据含143项Session/Thread全文件创建、94项删除/retention全文件、active-slot/source/OS锁、真实Gateway/Chromium child/lifecycle恢复；G另核enqueue/worker隔离，H沿用真实pending父子Folder、丢202、刷新/硬重启、IndexedDB拒绝、分页与删除settlement。创建/删除不是手工补关键状态，Gateway不补业务事实。
 - F在当前固定HEAD `449fc5d9e` 的完整tree `d4952143ed3a0017d479e5f2edc679c5b58ba372` 补跑catalog store全文件、SQLite integrity及启动目录，`catalog-f-current-002` 为310 passed/32.52秒、exit0，覆盖online backup并发snapshot generation/checksum、stale/损坏拒绝、schema/foreign-key及未知日期目录保原件；其余冻结journal/owner/event/schema沿各自具名收据核依赖。4306项源码前后相同、raw SHA/准确命令/退出码/零残留与非作者合取GO见 `out/tests/temp/catalog_owner_convergence_20261023/artifacts/validation-proof-001.json`、`review-001.json`。
 - 这是限定职责的分层验收，不是一场全部场景E2E。G旧focus-web-003保留exit1（最终404分类失败，后继精确分类与变异证据另核）；focus-web-007日期交互未完成，仍归default Web总门。H受控model_stream不等于真实Provider；本项不关闭8.13或其它未勾任务。F初次入口缺临时目录、未启动child，不作产品结论。
+
+
+### 2026-10-23 fork 缺失目标目录负例的真实终结
+
+- 目录缺失阶段继续明确拒绝启动，冷读取逐字段核原 creation/capture、快照及来源正文不变；缓存已解析的 source node，避免失败 lifespan 关闭 catalog 后再解析。测试只 rename 隔离并恢复自己移走的目录，不补写业务状态；随后由原 owner 同键冷恢复完成发布。reserved 尚无快照时首次捕获恰一次，已有快照时零回读；默认未继承附件保持零 claim。
+- 完整候选 tree `f4b07b32c27ab05f97e76b911f760ec114b52a3a` 的 `fork-missing-locator-004` 为2 passed/19.89秒、exit0，Ruff static004与compile004均exit0；原不可延长60秒deadline保持。前轮002错误禁止reserved首次capture而143，003真实发布后被错误claim预期挡住而exit1，均保留原件。准确命令、全树指纹、raw/退出码及零残留核验见 `out/tests/temp/fork_integrity_acceptance_20261023/artifacts/`；非作者只读复核无finding，未独立跑测试。本切片不关闭7.5、8.3或default Web总门。

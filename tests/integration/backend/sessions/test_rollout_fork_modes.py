@@ -5201,8 +5201,10 @@ async def test_child_capture_missing_final_locator_is_not_rebuilt(
     assert final.is_dir() and not staging.exists() and frozen.state == "preparing"
     root = capture_directory(context.saver._storage.storage.sessions_dir, capture)
     captured_bytes = {str(path.relative_to(root)): path.read_bytes() for path in root.rglob("*") if path.is_file()}
-    source_jsonl = (_main_thread_node(context, source.session_id) / "rollout/rollout.jsonl").read_bytes()
-    shutil.rmtree(final)
+    source_node = _main_thread_node(context, source.session_id)
+    source_jsonl = (source_node / "rollout/rollout.jsonl").read_bytes()
+    removed_target = context.workspace / "temporarily-removed-fork-target"
+    final.rename(removed_target)
     production_fork_container.workspace_activity_service.store.close()
     production_fork_container.session_catalog.close()
     restarted = _build_owned_container(context.workspace, monkeypatch)
@@ -5223,7 +5225,42 @@ async def test_child_capture_missing_final_locator_is_not_rebuilt(
     with closing(SessionControlStore(session_node / "session-control.sqlite", read_only=True)) as cold_control:
         assert cold_control.get_thread_creation_record(key) == frozen
     assert {str(path.relative_to(root)): path.read_bytes() for path in root.rglob("*") if path.is_file()} == captured_bytes
-    assert (_main_thread_node(context, source.session_id) / "rollout/rollout.jsonl").read_bytes() == source_jsonl
+    assert (source_node / "rollout/rollout.jsonl").read_bytes() == source_jsonl
+
+    # 撤销本测试制造的目录缺失，再由原 owner 在同一期限内恢复发布。
+    # 不补写 journal、附件 claim 或完成回执；已有快照禁止重新捕获。
+    removed_target.rename(final)
+    cleanup_container = _build_owned_container(context.workspace, monkeypatch)
+    _isolate_non_navigation_services(cleanup_container, monkeypatch)
+    cleanup = _production_fork_context(cleanup_container)
+    capture_source = cleanup.saver.forks.source._capture_fork_source_snapshot
+    captures = 0
+
+    async def resume_original_capture(**kwargs: object):
+        nonlocal captures
+        assert crash_phase == "copy.source.reserved" and captures == 0, "已有快照不得回读 live source"
+        captures += 1
+        return await capture_source(**kwargs)
+
+    monkeypatch.setattr(cleanup.saver.forks.source, "_capture_fork_source_snapshot", resume_original_capture)
+    async with main.lifespan(main.app):
+        terminal_capture = cleanup.sessions.path_resolver.catalog_store.get_fork_source_capture(copy_operation_id=key)
+        creation = cleanup.forks._threads.for_owner_session(source.session_id).control_store.get_thread_creation_record(key)
+        assert creation.state == "published"
+        assert replace(creation, state=frozen.state, abort_reason=frozen.abort_reason,
+                       fork_completion_json=frozen.fork_completion_json,
+                       record_updated_at=frozen.record_updated_at) == frozen
+        assert terminal_capture is not None
+        assert terminal_capture.state == "materialized"
+        assert not root.exists() and not staging.exists() and not removed_target.exists()
+        assert final.is_dir() and captures == int(crash_phase == "copy.source.reserved")
+        assert [tuple(row) for row in cleanup_container.attachment_blob_store._catalog._connected().execute(
+            "SELECT state FROM fork_attachment_claims WHERE copy_operation_id=?", (key,),
+        )] == [], "默认不继承附件，不得额外建立保活 claim"
+        result = await cleanup.forks.fork(request)
+        assert (result.session.session_id, result.thread_id) == (source.session_id, frozen.child_thread_id)
+        assert await cleanup.forks.recover_prepared_forks() == 0
+        assert (source_node / "rollout/rollout.jsonl").read_bytes() == source_jsonl
 
 
 @pytest.mark.parametrize("fork_execution_source", [True], indirect=True)
