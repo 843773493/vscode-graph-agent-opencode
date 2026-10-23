@@ -56,6 +56,7 @@ function section8ScenarioRegistry(surfaces, facts) {
     wait_recovery: { default: true, run: () => runWaitRecovery(surfaces) },
     observation_deletion: { default: true, run: () => runObservationDeletion(surfaces) },
     lifecycle_admission_deletion: { default: true, run: () => runLifecycleAdmissionDeletion(surfaces) },
+    lifecycle_execution_deletion: { default: true, run: () => runLifecycleExecutionDeletion(surfaces.a) },
     navigation_dates: { default: true, run: () => runNavigationDates(surfaces) },
     navigation_optimism: { default: true, run: () => runNavigationOptimism(surfaces) },
     initial_admission_recovery: { default: true, run: () => runInitialAdmissionRecovery(surfaces) },
@@ -3896,6 +3897,146 @@ async function runLifecycleAdmissionDeletion(surfaces) {
     for (const barrier of matches) await release(barrier);
     for (const barrier of held) await release(barrier);
   }
+}
+
+async function runLifecycleExecutionDeletion(surface) {
+  const facts = [];
+  for (const actor of ["execution", "rehydrate"]) {
+    for (const operationFirst of [true, false]) {
+      const owner = await createProductSession(surface, `I ${actor} ${operationFirst}`);
+      const node = await sessionCatalogNode(owner);
+      const binding = await graphBinding(owner);
+      let cold = null;
+      if (actor === "rehydrate") {
+        const warm = await completeOwnerTurn(owner, "完成一轮，为重新驻留建立真实历史。", [
+          finalResponse(`I-warm-${operationFirst}`, "本轮已完成。"),
+        ]);
+        const resident = await graphLifecycle(owner);
+        assert.equal(resident.built.length, 1);
+        await testControl({ action: "advance_residency", seconds: 1800 });
+        await waitUntil(async () => (await graphLifecycle(owner)).closed.length === 1,
+          "原 main runtime 到期后实际关闭 scope", residencyScanObservationTimeoutMs);
+        const history = await loadThreadHistory(owner);
+        assert.deepEqual(history.items, [warm.turn]);
+        assert.deepEqual(await graphBinding(owner), binding);
+        cold = { warm, graph: await graphLifecycle(owner), history };
+        assert.equal(cold.graph.built.length, 1, "cold history 不得重建 owner");
+      }
+      const index = await threadRolloutLocator(owner, node);
+      const readSnapshot = async (relativeIndex = index) => {
+        const entries = await testControl({ action: "read_directory", name: owner.name,
+          relative_path: relativeIndex.slice(0, -"/index.sqlite".length) });
+        if (entries === null) return null;
+        const read = (query) => testControl({ action: "read_sql", name: owner.name, relative_path: relativeIndex, query });
+        return {
+          executions: await read("SELECT * FROM executions ORDER BY execution_ordinal,execution_id"),
+          queue: await read("SELECT * FROM execution_queue ORDER BY admission_commit_id"),
+          counts: await read("SELECT (SELECT COUNT(*) FROM storage_commits) AS commits,(SELECT COUNT(*) FROM turn_records) AS roots,(SELECT COUNT(*) FROM model_calls) AS calls,(SELECT COUNT(*) FROM context_assemblies) AS assemblies"),
+        };
+      };
+      const operation = await prepareNavigationIntent(owner, { kind: "delete_session", target_node_id: owner.sessionId });
+      const deletion = { operation_id: operation.operationId, phase: "deletion.catalog_deleting" };
+      const actorBarrier = { barrier_id: `I-${Bun.randomUUIDv7()}`,
+        phase: actor === "rehydrate" ? "thread.runtime.built" : "thread.runtime.acquired",
+        details: { session_id: owner.sessionId, thread_id: owner.threadId } };
+      await testControl({ action: "arm", ...deletion });
+      let sent = null;
+      let queued = null;
+      let admitted = null;
+      try {
+        if (operationFirst) {
+          await planChatCalls(owner.sessionId, owner.threadId, [
+            finalResponse(`I-${actor}-active`, "原 execution 结束。"),
+            finalResponse(`I-${actor}-queued`, "排队 execution 结束。"),
+          ]);
+          await testControl({ action: "arm_match", ...actorBarrier });
+          await openOwner(owner);
+          sent = await sendOwnerPrompt(owner, `在 ${actor} 边界与删除竞争。`);
+          admitted = await testControl({ action: "acknowledged_match", ...actorBarrier });
+          if (actor === "rehydrate") assert.deepEqual(admitted.details.graph_binding, binding);
+          if (actor === "execution") queued = await sendOwnerPrompt(owner, "排队输入必须由同一次删除收敛。");
+        }
+        const before = await readSnapshot();
+        if (operationFirst) {
+          const active = before.executions.find((row) => row.job_id === sent.jobId);
+          assert.equal(active.session_id, owner.sessionId);
+          assert.equal(active.thread_id, owner.threadId);
+          assert.equal(active.turn_id, sent.turnId);
+          assert.equal(active.accepted_ingress_id, sent.accepted.message_id);
+          assert.equal(active.outcome, "unknown");
+          if (actor === "execution") {
+            assert.equal(admitted.details.execution_id, active.execution_id);
+            assert.equal(admitted.details.job_id, sent.jobId);
+            assert.equal(admitted.details.turn_id, sent.turnId);
+          }
+          assert.equal(before.queue.find((row) => row.job_id === sent.jobId).phase, "started");
+          if (queued) assert.equal(before.queue.find((row) => row.job_id === queued.jobId).phase, "queued");
+        }
+        await enqueueNavigationIntent(owner, operation);
+        await testControl({ action: "acknowledged", ...deletion });
+        const deleting = (await testControl({ action: "events" })).find((event) =>
+          event.operation_id === operation.operationId && event.phase === deletion.phase);
+        assert.ok(deleting);
+        assert.deepEqual(await readCatalog(owner, "SELECT state FROM nodes WHERE node_id=?", [owner.sessionId]), [{ state: "deleting" }]);
+        assert.deepEqual(await readFrozenControl(owner, node, "SELECT state,generation FROM lifecycle_fence WHERE id=1"), [{ state: "active", generation: 1 }]);
+        const denied = [];
+        for (const target of ["", `/threads/${owner.threadId}`]) {
+          const response = await ownerApiResponse(owner, `/api/v1/sessions/${owner.sessionId}${target}/messages`, {
+            method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ message: { content: "删除先行后不得创建新的 execution 或 runtime。" }, run: { agent_id: "default" } }),
+          });
+          assert.equal(response.status, 409, JSON.stringify(response));
+          assertSessionDeletionPending(response.body, owner.sessionId);
+          assert.deepEqual(await readSnapshot(), before, "catalog deleting 后的新准入必须零持久副作用");
+          denied.push({ target, ...response });
+        }
+        const graphBeforeDrain = (await testControl({ action: "events" })).filter((event) =>
+          GRAPH_PHASES.has(event.phase) && event.details?.session_id === owner.sessionId);
+        assert.equal(graphBeforeDrain.filter((event) => event.phase === "thread.runtime.built").length,
+          (cold ? 1 : 0) + Number(operationFirst), "只有删除之前准入的 execution 可以物化 owner");
+        if (admitted) {
+          assert.ok(deleting.at >= admitted.at);
+          await testControl({ action: "release_match", ...actorBarrier });
+        }
+        await testControl({ action: "release", ...deletion });
+        const terminal = await navigationTerminal(owner, operation);
+        const isolated = `.boxteam/sessions/.deleting/${operation.operationId}/${owner.sessionId}`;
+        const isolatedIndex = await threadRolloutLocator(owner, node, isolated);
+        const after = await readSnapshot(isolatedIndex);
+        if (!operationFirst) assert.deepEqual(after, before, "删除先行不得补建 execution、队列或历史");
+        else {
+          assert.deepEqual(after.executions.map((row) => row.execution_id), before.executions.map((row) => row.execution_id));
+          for (const accepted of [sent, queued].filter(Boolean)) {
+            const original = before.executions.find((row) => row.job_id === accepted.jobId);
+            const finished = after.executions.find((row) => row.job_id === accepted.jobId);
+            for (const key of ["execution_id", "session_id", "thread_id", "turn_id", "accepted_ingress_id", "admission_idempotency_key", "admission_payload_hash"]) assert.equal(finished[key], original[key]);
+            assert.notEqual(finished.outcome, "unknown", "物理隔离前必须结算原 execution");
+            assert.equal(after.queue.find((row) => row.job_id === accepted.jobId).phase, "terminal");
+          }
+          if (queued) assert.equal(after.executions.find((row) => row.job_id === queued.jobId).outcome, "cancelled");
+        }
+        const graphAfterDrain = (await testControl({ action: "events" })).filter((event) =>
+          GRAPH_PHASES.has(event.phase) && event.details?.session_id === owner.sessionId);
+        const builds = graphAfterDrain.filter((event) => event.phase === "thread.runtime.built");
+        assert.deepEqual(builds, graphBeforeDrain.filter((event) => event.phase === "thread.runtime.built"), "删除不能触发迟到建图");
+        for (const build of builds) {
+          assert.deepEqual(build.details.graph_binding, binding);
+          const closed = graphAfterDrain.filter((event) => event.phase === "thread.runtime.closed"
+            && event.details.scope_object_id === build.details.scope_object_id);
+          assert.equal(closed.length, 1, "原 runtime scope 必须实际关闭且仅关闭一次");
+          assert.equal(closed[0].details.scope_state, "closed");
+          assert.ok(closed[0].at >= build.at);
+        }
+        assert.equal(await testControl({ action: "read_directory", name: owner.name, relative_path: sessionLocator(node) }), null);
+        facts.push({ actor, operationFirst, sessionId: owner.sessionId, threadId: owner.threadId,
+          binding, cold, admitted, sent, queued, before, deleting, denied, terminal, after, graphBeforeDrain, graphAfterDrain });
+      } finally {
+        if (operationFirst) await testControl({ action: "release_match", ...actorBarrier });
+        await testControl({ action: "release", ...deletion });
+      }
+    }
+  }
+  return facts;
 }
 
 async function catalogMutation(surface, fields, expected = "committed") {

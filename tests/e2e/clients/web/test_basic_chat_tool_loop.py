@@ -444,6 +444,25 @@ async def test_basic_chat_tool_loop_through_real_web_surface(
             assert cold["fenceBeforeReadCompleted"] == [{"state": "active", "generation": 1}]
             assert cold["history"]["thread_id"] == cold["guarded"]["details"]["thread_id"]
             assert cold["journal"]["state"] == "completed"
+        if "lifecycle_execution_deletion" in selected:
+            lifecycle = result["section8"]["lifecycle_execution_deletion"]
+            assert {(item["actor"], item["operationFirst"]) for item in lifecycle} == {
+                (actor, first) for actor in ("execution", "rehydrate") for first in (True, False)
+            }
+            for item in lifecycle:
+                assert [reply["target"] for reply in item["denied"]] == ["", f"/threads/{item['threadId']}"]
+                for reply in item["denied"]:
+                    assert reply["status"] == 409
+                    assert reply["body"]["request_id"] == reply["requestId"]
+                assert item["terminal"]["state"] == "committed"
+                assert item["terminal"]["settlement"] == "settled"
+                if not item["operationFirst"]:
+                    assert item["after"] == item["before"]
+                else:
+                    assert item["deleting"]["at"] >= item["admitted"]["at"]
+                    assert all(row["phase"] == "terminal" for row in item["after"]["queue"])
+                if item["actor"] == "rehydrate":
+                    assert len(item["cold"]["graph"]["closed"]) == 1
         captures = {}
         for path in sorted((artifacts / "model-stream").glob("*.json")):
             capture = json.loads(path.read_text(encoding="utf-8"))

@@ -183,6 +183,8 @@ async def create_message_and_run(
 ):
     try:
         result = await session_orchestrator.create_message(session_id, payload)
+    except SessionDeletionPendingError as error:
+        raise state_conflict_http_error(error) from error
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
     except JobAdmissionClosedError as error:
@@ -202,6 +204,8 @@ async def create_thread_message_and_run(
 ):
     try:
         result = await session_orchestrator.create_message(session_id, payload, thread_id=thread_id)
+    except SessionDeletionPendingError as error:
+        raise state_conflict_http_error(error) from error
     except (KeyError, NotFoundError) as error:
         raise not_found_http_error(error) from error
     except ValueError as error:
