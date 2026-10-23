@@ -1153,7 +1153,7 @@ export class BrowserSession extends EventEmitter {
       void this.activatePage(pageId).catch((error) => {
         const message = error instanceof Error ? error.message : String(error);
         this.record.resource_transition_error = `激活浏览器对话框标签页失败: page_id=${pageId}, error=${message}`;
-        console.error(`[browser-session] ${this.record.resource_transition_error}`);
+        console.error(`[browser-session] ${this.record.resource_transition_error}`, error);
         return this.manager.persist();
       });
     });
@@ -1163,7 +1163,7 @@ export class BrowserSession extends EventEmitter {
       void this.activatePage(pageId).catch((error) => {
         const message = error instanceof Error ? error.message : String(error);
         this.record.resource_transition_error = `激活文件选择器标签页失败: page_id=${pageId}, error=${message}`;
-        console.error(`[browser-session] ${this.record.resource_transition_error}`);
+        console.error(`[browser-session] ${this.record.resource_transition_error}`, error);
         return this.manager.persist();
       });
     });
@@ -1172,9 +1172,9 @@ export class BrowserSession extends EventEmitter {
     });
     page.on("close", () => {
       void this.handlePageClosed(pageId, page).catch((error) => {
-        const message = error instanceof Error ? (error.stack || error.message) : String(error);
+        const message = error instanceof Error ? error.message : String(error);
         this.record.resource_transition_error = `处理标签页关闭事件失败: page_id=${pageId}, error=${message}`;
-        console.error(`[browser-session] ${this.record.resource_transition_error}`);
+        console.error(`[browser-session] ${this.record.resource_transition_error}`, error);
         return this.manager.persist();
       });
     });
@@ -1195,7 +1195,11 @@ export class BrowserSession extends EventEmitter {
     if (this.streaming && this.cdpSession) {
       await this.stopScreencast();
     }
-    await this.pointerController.reset();
+    try {
+      await this.pointerController.reset();
+    } catch (cause) {
+      throw browserRuntimeFailure({ browserId: this.id, pageId, stage: "reset_pointer", cause });
+    }
     this.activePageId = pageId;
     this.page = entry.page;
     this.cdpSession = entry.cdpSession;
@@ -1573,11 +1577,16 @@ export class BrowserSession extends EventEmitter {
   async syncPageState({ persist = true } = {}) {
     this.assertRunning();
     const activeEntry = this.pageEntries.get(this.activePageId);
-    const actualUrl = this.page.url();
-    this.record.url = visiblePageUrl(activeEntry, actualUrl);
-    this.record.actual_url = actualUrl;
-    this.record.navigation_error = activeEntry?.navigationError || null;
-    this.record.title = await this.page.title();
+    let actualUrl;
+    try {
+      actualUrl = this.page.url();
+      this.record.url = visiblePageUrl(activeEntry, actualUrl);
+      this.record.actual_url = actualUrl;
+      this.record.navigation_error = activeEntry?.navigationError || null;
+      this.record.title = await this.page.title();
+    } catch (cause) {
+      throw browserRuntimeFailure({ browserId: this.id, pageId: this.activePageId, stage: "sync_page", cause });
+    }
     if (activeEntry) {
       activeEntry.url = this.record.url;
       activeEntry.actualUrl = actualUrl;
@@ -1784,7 +1793,7 @@ export class BrowserSession extends EventEmitter {
     this.assertRunning();
     const settings = STREAM_PROFILES[profile];
     if (!settings) throw new Error(`未知浏览器流配置: ${profile}`);
-    await this.cdpSession.send("Page.startScreencast", {
+    await this.sendResourceCommand({ pageId: this.activePageId, cdpSession: this.cdpSession }, "Page.startScreencast", {
       format: "jpeg",
       quality: settings.quality,
       maxWidth: this.record.viewport?.width || DEFAULT_VIEWPORT.width,
@@ -1802,7 +1811,7 @@ export class BrowserSession extends EventEmitter {
 
   async stopScreencast() {
     this.assertRunning();
-    await this.cdpSession.send("Page.stopScreencast");
+    await this.sendResourceCommand({ pageId: this.activePageId, cdpSession: this.cdpSession }, "Page.stopScreencast");
     this.streaming = false;
     this.streamProfile = null;
     const entry = this.pageEntries.get(this.activePageId);
@@ -1939,7 +1948,7 @@ export class BrowserSession extends EventEmitter {
 
   async captureFrameScreenshot(entry, quality) {
     const frameViewport = this.frameViewport();
-    const screenshot = await entry.cdpSession.send("Page.captureScreenshot", {
+    const screenshot = await this.sendResourceCommand(entry, "Page.captureScreenshot", {
       format: "jpeg",
       quality,
       fromSurface: true,

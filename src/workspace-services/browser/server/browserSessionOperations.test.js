@@ -91,6 +91,34 @@ function transitionSession(onCommand = () => undefined) {
 }
 
 describe("浏览器资源生命周期错误归属", () => {
+  test.each(["Page.stopScreencast", "reset_pointer", "Page.startScreencast", "sync_page", "Page.captureScreenshot"])(
+    "标签页切换在实际失败阶段保留原因与已执行事实: %s", async (stage) => {
+      const cause = Object.assign(new Error("EACCES /private/browser/profile"), { code: "EACCES", statusCode: 503 });
+      const { browser } = transitionSession((_pageId, method) => { if (method === stage) throw cause; });
+      browser.clients.add({});
+      browser.streaming = true;
+      if (stage === "reset_pointer") browser.pointerController.reset = async () => { throw cause; };
+      if (stage === "sync_page") browser.pageEntries.get("page_second").page.title = async () => { throw cause; };
+      const logged = spyOn(console, "error").mockImplementation(() => undefined);
+      try {
+        const failure = await browser.activatePage("page_second").catch((error) => error);
+        expect(failure).toMatchObject({ cause, code: "EACCES", statusCode: 503 });
+        expect(failure.message).toContain(`stage=${stage}`);
+        expect(failure.message).not.toContain("/private/browser/profile");
+        expect(logged.mock.calls.some((args) => args.at(-1) === cause)).toBe(true);
+        expect(browser.activePageId).toBe(["Page.stopScreencast", "reset_pointer"].includes(stage) ? "page_first" : "page_second");
+        expect(browser.streaming).toBe(!["reset_pointer", "Page.startScreencast"].includes(stage));
+      } finally { logged.mockRestore(); }
+    },
+  );
+
+  test("标签页状态同步不改写持久化owner的错误归属", async () => {
+    const { browser } = transitionSession();
+    const cause = Object.assign(new Error("保存失败: stage=publish_state"), { code: "EACCES" });
+    browser.manager.persist = async () => { throw cause; };
+    await expect(browser.activatePage("page_second")).rejects.toBe(cause);
+  });
+
   test.each(["/private/chromium/profile", String.raw`C:\private\chromium\profile`, String.raw`\\host\share\profile`])(
     "冻结与回滚失败只向诊断交付原生位置: %s", async (nativePath) => {
       const primary = Object.assign(new Error(`冻结失败 ${nativePath}`), { code: "EACCES", statusCode: 500 });

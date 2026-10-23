@@ -275,3 +275,10 @@
 - 在保护检查、检查点采集/恢复、冻结/唤醒CDP及运行时释放的实际失败处发布browser/page身份与阶段，原异常只交cause和诊断，原code/statusCode保留。原冻结回滚、unknown阻断、context句柄及显式终态核实合同不变；导航/控件恢复仍保原恢复失败code及具名file页面URL，检查点存储发布错误不被覆盖。
 - 固定tree `9ad947ef565638d335de1bdbec2e503e259d975f`：`browser-lifecycle-static-unit-002` Node语法/Ruff通过，95项Bun/416断言通过；`integration-002`为7 passed/33.87秒，真实Chromium/HTTP验证sync/async及资源API、保护/冻结回滚/冷恢复/释放失败、request_id、持久错误与诊断、lease释放、unknown零执行和真实关闭后owner核实，并复验检查点发布失败及中文/空格/#/%的file页面URL在freeze/discard/wake与超时恢复中的保留。第三方故障为一次性注入，不声称真实系统EACCES。
 - 完整archive旧生产红测41 passed/18 failed，区分原路径正文/缺阶段及原cause丢失。首轮集成失败源于unknown用例直接detach而未先显式关闭，不放宽状态或目录精确断言；002通过真实Node关闭和owner stop核终态清理。准确命令/raw/前后指纹/退出码/无进程组残留及产品产物SHA见 `out/tests/temp/openspec_resume_20261023/artifacts/browser-lifecycle-proof-002.json`。不代替完整Gateway/Web、Windows或2.2/7.2；activatePage及部分事件回调仍待后续切片。
+
+
+### 2026-10-23 Browser标签页激活与事件错误出口（部分收口）
+
+- 标签页激活复用同一取帧/流控制CDP错误出口，pointer reset及页面状态读取按实际失败阶段保留cause/code/status；URL与title的更新顺序保持，存储错误继续由原store产生，不加外层包装。dialog/filechooser/close仅将安全message写入恢复记录，完整stack和cause交诊断；已完成的标签页切换与流状态不伪报回滚。
+- 最终tree `9f651f8a7adafa75a00c77fbaafa7f9df5949aff`：`browser-activation-static-regression-002` Node语法/Ruff、252项Bun及9项Node存储故障测试通过；`node-regression-002`另8项Node帧统计通过。`integration-002`为8 passed/37.02秒，新增真实冷恢复末步title失败，核完整释放后仍discarded/verified；复验上一批sync/async/API与file URL恢复。`form-state-002`三项真实Chromium场景通过，覆盖混合控件、storage、重排与大型匿名表单。该场景的Manager持久化为空操作，不替代HTTP落盘验收。
+- 完整archive旧生产红测78 passed/8 failed，分别区分激活五阶段及三种事件的原错误/stack写入。首轮扩大验证误将node:test文件交Bun，失败均为Bun未实现mock，002按原生运行器执行全部通过；不改测试或生产规避。001→002仅保持既有URL先于title更新的顺序，最终版本重新执行静态、回归与产品测试。独立真实producer复核002无finding，001关于persist原错误的假设已撤回，原件保留。准确命令/raw/指纹/退出码/零进程残留及产品证据SHA见 `out/tests/temp/openspec_resume_20261023/artifacts/browser-activation-proof-002.json`。其它Browser动作及2.2/7.2全量门仍未关闭。

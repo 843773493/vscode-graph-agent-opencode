@@ -1068,6 +1068,7 @@ async def test_injected_registration_failure_shares_safe_http_state_and_record(
     ("Page.setWebLifecycleState", "async", "freeze", "background", "verified"),
     ("Page.setWebLifecycleState", "api", "wake", "restoring", "unknown"),
     ("create_page", "async", "wake", "discarded", "verified"),
+    ("sync_page", "async", "wake", "discarded", "verified"),
     ("release_context", "api", "discard", "discarding", "unknown"),
 ])
 async def test_runtime_lifecycle_failure_keeps_native_cause_out_of_receipts(
@@ -1096,6 +1097,13 @@ async def test_runtime_lifecycle_failure_keeps_native_cause_out_of_receipts(
         code = "const original = context.close; context.close = async function (...args) { context.close = original; " + failure + " };"
     elif stage == "create_page":
         code = "const proto = Object.getPrototypeOf(context); const original = proto.newPage; proto.newPage = async function (...args) { proto.newPage = original; " + failure + " };"
+    elif stage == "sync_page":
+        code = (
+            "const originalPage = page; const proto = Object.getPrototypeOf(page); const original = proto.title;"
+            " proto.title = async function (...args) {"
+            f" if (this !== originalPage) {{ proto.title = original; {failure} }}"
+            " return await original.call(this, ...args); };"
+        )
     else:
         value = "active" if action == "wake" else "frozen"
         code = (
@@ -1109,7 +1117,7 @@ async def test_runtime_lifecycle_failure_keeps_native_cause_out_of_receipts(
     if action != "freeze":
         prepared = await integration_client.post(f"/api/v1/resources/{browser_id}/browser-operation", json={**command, "action": "freeze"})
         assert prepared.status_code == 200, prepared.text
-    if stage == "create_page":
+    if stage in {"create_page", "sync_page"}:
         prepared = await integration_client.post(f"/api/v1/resources/{browser_id}/browser-operation", json={**command, "action": "discard"})
         assert prepared.status_code == 200, prepared.text
     if mode == "api":

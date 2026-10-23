@@ -23,6 +23,38 @@ async function registeredPage(existingBrowser = null) {
   return { browser, page, entry };
 }
 
+describe("标签页事件失败的恢复记录", () => {
+  test.each(["dialog", "filechooser", "close"])("%s 只保存安全消息，完整原因留在诊断", async (event) => {
+    const { browser, page: target, entry: targetEntry } = await registeredPage();
+    const { page: active, entry: activeEntry } = await registeredPage(browser);
+    const nativePath = "/private/browser/profile";
+    const cause = new Error(`EACCES ${nativePath}`);
+    target.title = async () => { throw cause; };
+    browser.syncAndEmitState = BrowserSession.prototype.syncAndEmitState;
+    let saved;
+    const persisted = new Promise(resolve => { saved = resolve; });
+    browser.manager.persist = async () => { saved(browser.toRecord()); };
+    const logged = spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      if (event === "close") active.emit("close");
+      else if (event === "dialog") target.emit("dialog", {
+        type: () => "alert", message: () => "等待处理", defaultValue: () => "",
+      });
+      else target.emit("filechooser", {});
+      const record = await persisted;
+      expect(record.resource_transition_error).toContain("stage=sync_page");
+      expect(record.resource_transition_error).not.toContain(nativePath);
+      expect(record.resource_transition_error).not.toContain(".js:");
+      expect(logged.mock.calls.some(args => args.at(-1) === cause)).toBe(true);
+      expect(logged.mock.calls.some(args => args.at(-1)?.cause === cause)).toBe(true);
+      expect(browser.activePageId).toBe(targetEntry.pageId);
+      expect(browser.pageEntries.has(activeEntry.pageId)).toBe(event !== "close");
+      if (event === "dialog") expect(browser.pendingDialog.message).toBe("等待处理");
+      if (event === "filechooser") expect(browser.pendingFileChooser).not.toBeNull();
+    } finally { logged.mockRestore(); }
+  });
+});
+
 function request(url = "https://example.com/api", failureText = "net::ERR_ABORTED") {
   return {
     method: () => "GET",
