@@ -84,7 +84,8 @@ class TurnResponseSourceDTO(BaseModel):
     activity 列表相邻项的整数毫秒差，首项从 Turn projection.created_at 起算。
     final 使用 final_item_created_at，elapsed_ms 固定为 0。standalone internal
     则沿同 view、同 execution 的前一 visible/display_only 逻辑成员，首项从
-    execution.created_at 起算。负差钳为 0；streaming 可缺省这两个时间字段。
+    execution.created_at 起算；runtime notice 自身为输入锚点，elapsed_ms 为 0。
+    历史时间缺少时区或倒退时明确拒绝；streaming 可缺省这两个时间字段。
     """
 
     message_sequence: int = Field(ge=0)
@@ -148,8 +149,9 @@ class TurnActivityStatsDTO(BaseModel):
     """Turn 折叠行使用的可展开中间 item 统计，不包含 Item 正文。
 
     历史 duration_ms 取 Turn projection.created_at 到 updated_at 的整数毫秒差。
-    起止字符串缺失或非法时为 None，无时区按 UTC，负差钳为 0；这些是历史
-    投影起止时刻，不能统一解释为 acceptance 到 terminal，也不同于 Web live 计时。
+    已有历史投影的起止时刻必须合法、带时区且不倒退；无统计投影时为 None。
+    这些是历史投影起止时刻，不能统一解释为 acceptance 到 terminal，
+    也不同于 Web live 计时。
     """
 
     duration_ms: int | None = Field(default=None, ge=0)

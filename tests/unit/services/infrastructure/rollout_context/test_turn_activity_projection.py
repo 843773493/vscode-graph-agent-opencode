@@ -334,6 +334,33 @@ def test_history_rejects_activity_time_going_backwards(membership_projection_cas
     assert jsonl.read_bytes() == before_jsonl
 
 
+@pytest.mark.parametrize("delta", [timedelta(seconds=-1), timedelta(microseconds=-1)])
+def test_cold_history_rejects_turn_duration_time_going_backwards(source_seal_case, delta):
+    case = source_seal_case
+    owner = case.owner
+    storage = case.saver._storage.storage
+    with storage._connect(owner.thread_id, session_id=owner.session_id) as connection:
+        (created_at,) = connection.execute(
+            "SELECT created_at FROM turns WHERE turn_id=?", (case.accepted["turn_id"],),
+        ).fetchone()
+        connection.execute(
+            "UPDATE turns SET updated_at=? WHERE turn_id=?",
+            ((datetime.fromisoformat(created_at) + delta).isoformat(), case.accepted["turn_id"]),
+        )
+    with storage.open_read_snapshot(owner.session_id, owner.thread_id) as snapshot:
+        before = tuple(snapshot.connection.iterdump())
+    jsonl = storage.jsonl_path(owner.session_id, thread_id=owner.thread_id)
+    before_jsonl = jsonl.read_bytes()
+    with (
+        RolloutCheckpointSaver(storage.sessions_dir) as cold,
+        pytest.raises(ValueError, match="历史 Turn projection 结束时间早于创建时间"),
+    ):
+        cold.load_history(owner.session_id, owner.thread_id, TurnHistoryLoadRequest())
+    with storage.open_read_snapshot(owner.session_id, owner.thread_id) as snapshot:
+        assert tuple(snapshot.connection.iterdump()) == before
+    assert jsonl.read_bytes() == before_jsonl
+
+
 @pytest.mark.parametrize("offsets", [(2, 5), (2, 1), (2, 1.999999)])
 def test_internal_elapsed_keeps_same_predecessor_across_pages(source_seal_case, offsets):
     case = source_seal_case

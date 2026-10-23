@@ -1080,3 +1080,10 @@ pending 恢复的硬错误重试已闭合（2026-10-22）：进程内装载阶�
 - activity elapsed 在比较带时区的原时刻后再取整毫秒，倒退（包括1微秒）明确失败，不再钳零；相同时间仍为合法0。internal runtime notice 是准入前输入锚点，自身计0，输出仍沿同 view/execution 的原逻辑前驱计时，不受页边界影响。
 - 完整候选 `02b9bae474e4ba4f88d9e5bdd1427b53481d41a8` 的 `unit-001` 25 passed，冷 history 与内部分页均核损坏时只读失败及SQLite/JSONL不变；旧helper完整archive `red-001` 为5 failed/1 passed，精确捕获静默倒序。`history-integration-001` 为196 passed/2 failed；两失败均为旧装具手工反转成员却保留顺序创建时间，未放宽断言，改为仅被交换的reasoning使用同一合法时刻，保final时间和全部身份、成员顺序、fork冷读断言。修后完整候选 `fb44a56fdef42e37a37b7fc1769ffbc137466336` 的正式matrix `fork-membership-002` 4 passed/21.03秒；其余196项依赖未变复用，不把首轮混合结果改写为全绿。真实并行Skill/team工具与来源pending `parallel-source-002` 1 passed/27.62秒。
 - 独立交付候选 `68e6670de65b7b4ac69b61f6f7bbfe1596417065` 保留HEAD有效support import，不混入其它代理的目录迁移；`delivery-unit-001` 25 passed、`delivery-fork-002` 4 passed，Ruff/compileall通过。非作者只读审查及装具补审无阻断问题；准确命令、源码前后指纹、raw、退出码及保留失败在 `out/tests/temp/history_elapsed_integrity_20261023/artifacts/`。本切片不代替duration起止事件核对、8.3-C/D其余合同或完整Web刷新DOM门，8.3保持未勾。
+
+
+### 2026-10-23 8.3-D Turn 总耗时拒绝倒退
+
+- 历史详情复用原严格 projection 时间解析，起止倒退（含1微秒）明确失败，移除唯一调用的宽松 duration helper；合法零值和整数毫秒精度保持，摘要/详情沿同一统计。冷 history 负例核 SQLite dump 与 JSONL 原字节不变；协议注释与生成绑定同步说明，不再宣称负差钳零或缺时区按 UTC。
+- 完整候选 tree `3635c3b492f952fd533aadc7b98c2d7827d0150b` 的真实 HTTP 摘要、详情、双向分页、final pointer、未终结读取及 final 正文有界读取集中验证为5 passed/124.65秒、exit0；Ruff、TypeScript与Web build均exit0。运行时代码与已审独立delivery的48项通过逐字相同（冷读测试仅support import布局不同）；旧生产同一6个倒序负例全失败。准确命令、源码前后指纹、原始输出、退出码及证据复用在 `out/tests/temp/history_duration_integrity_20261023/artifacts/validation-proof-003.json`。
+- 环境缺凭据的28个setup错误、180秒整文件超时，以及两项主体通过但120秒退出124的运行均保留原始结果；后继009以同候选相关源码补齐成功收据。协议总生成在既有URI/catalog循环导入失败，Buf lint/build/breaking及后继直接生成、OpenAPI导出成功；此生成器问题留到下一纵向切片处理。本批不代表整文件或完整default Web通过，不据此关闭8.3总门。

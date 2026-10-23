@@ -28,22 +28,6 @@ def nonnegative_int(value: object) -> int:
     )
 
 
-def duration_milliseconds(start: object, end: object) -> int | None:
-    """投影起止字符串之差：整数毫秒；缺失/非法为 None，无时区按 UTC，负差为 0。"""
-    if not isinstance(start, str) or not isinstance(end, str):
-        return None
-    try:
-        started_at = datetime.fromisoformat(start)
-        ended_at = datetime.fromisoformat(end)
-    except ValueError:
-        return None
-    if started_at.tzinfo is None:
-        started_at = started_at.replace(tzinfo=UTC)
-    if ended_at.tzinfo is None:
-        ended_at = ended_at.replace(tzinfo=UTC)
-    return max(0, int((ended_at - started_at).total_seconds() * 1000))
-
-
 def message_id(message: BaseMessage, fallback: str) -> str:
     if isinstance(message.id, str) and message.id:
         return message.id

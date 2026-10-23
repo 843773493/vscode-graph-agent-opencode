@@ -2002,7 +2002,7 @@ export interface TraceObservedPayloadDTO {
 }
 
 export interface TurnActivityStatsDTO {
-  /** 历史值取 Turn projection.created_at 到 updated_at 的整数毫秒差；缺失或非法时为空，无时区按 UTC，负差钳为零。 */
+  /** 历史值取 Turn projection.created_at 到 updated_at 的整数毫秒差；已有投影的起止时刻必须合法、带时区且不倒退；无统计投影时为空。 */
   duration_ms?: number | undefined;
   item_count?:
     | number
@@ -2246,7 +2246,7 @@ export interface TurnResponseSourceDTO {
   created_at?:
     | string
     | undefined;
-  /** 历史 activity 首项从 Turn projection.created_at 起算，后续按逻辑 activity 顺序计算相邻 item 的整数毫秒差；final 固定为零；standalone internal 首项从 execution.created_at 起算，后续沿同 view、同 execution 的前一 visible/display_only 逻辑成员计算。负差钳为零；streaming 可缺省。 */
+  /** 历史 activity 首项从 Turn projection.created_at 起算，后续按逻辑 activity 顺序计算相邻 item 的整数毫秒差；final 固定为零；standalone internal 首项从 execution.created_at 起算，后续沿同 view、同 execution 的前一 visible/display_only 逻辑成员计算，runtime notice 自身固定为零。历史时间缺少时区或倒退时明确拒绝；streaming 可缺省。 */
   elapsed_ms?: number | undefined;
   logical_item_ordinal?: number | undefined;
 }

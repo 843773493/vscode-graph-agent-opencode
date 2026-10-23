@@ -113,3 +113,27 @@ def test_metadata_only_history_uses_projection_clock_and_keeps_source_text(
     assert detail.activity_stats.duration_ms == 2001
     assert detail.user_messages == []
     assert history_projection == original
+
+
+@pytest.mark.parametrize("delta", [timedelta(seconds=-1), timedelta(microseconds=-1)])
+@pytest.mark.parametrize("include_message", [False, True])
+def test_history_duration_rejects_projection_time_going_backwards(
+    history_detail, history_projection: dict[str, object], delta: timedelta, include_message: bool,
+) -> None:
+    start = datetime.fromisoformat(str(history_projection["created_at"]))
+    history_projection["updated_at"] = (start + delta).isoformat()
+    original = dict(history_projection)
+    messages = [HumanMessage(content="消息", response_metadata={"created_at": start})] if include_message else []
+    with pytest.raises(ValueError, match="历史 Turn projection 结束时间早于创建时间"):
+        history_detail(messages, history_projection)
+    assert history_projection == original
+
+
+@pytest.mark.parametrize("microseconds", [0, 1, 2001])
+def test_history_duration_keeps_valid_zero_and_millisecond_precision(
+    history_detail, history_projection: dict[str, object], microseconds: int,
+) -> None:
+    start = datetime.fromisoformat(str(history_projection["created_at"]))
+    history_projection["updated_at"] = (start + timedelta(microseconds=microseconds)).isoformat()
+    detail = history_detail([], history_projection)
+    assert detail.activity_stats.duration_ms == microseconds // 1000

@@ -18,7 +18,6 @@ from app.schemas.internal_v2.turn import (
     TurnToolSummaryDTO,
 )
 from app.services.mapping.itemized.history_turns.content import (
-    duration_milliseconds,
     final_message,
     is_internal,
     message_id,
@@ -194,14 +193,13 @@ def build_detail(
     )
     activity_stats = TurnActivityStatsDTO()
     raw_activity_stats = projection.get("activity_stats") if projection else None
-    if isinstance(raw_activity_stats, Mapping):
+    if projection is not None and isinstance(raw_activity_stats, Mapping):
         # 历史统计沿这份 Turn 消息投影的起止时间，不改用 acceptance/终态控制时间。
-        projection_duration_ms = duration_milliseconds(
-            projection.get("created_at") if projection else None,
-            projection.get("updated_at") if projection else None,
-        )
+        projection_seconds = (updated_at - projection_time(projection, "created_at")).total_seconds()
+        if projection_seconds < 0:
+            raise ValueError("历史 Turn projection 结束时间早于创建时间")
         activity_stats = TurnActivityStatsDTO(
-            duration_ms=projection_duration_ms,
+            duration_ms=int(projection_seconds * 1000),
             item_count=nonnegative_int(raw_activity_stats.get("item_count")),
             first_item_sequence=(
                 nonnegative_int(raw_activity_stats.get("first_item_sequence"))
