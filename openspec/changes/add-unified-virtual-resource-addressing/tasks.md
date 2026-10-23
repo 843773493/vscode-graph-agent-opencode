@@ -425,3 +425,9 @@
 - 固定完整 tree `20a7cfc1ea9e359adb48bf63994bed611dd73c1b`：正式 matrix 的三类传输失败/三种平台路径文本与 durable abort/坏回执相邻回归7项通过（73.02秒），Ruff/compileall通过；独立冷 catalog 与 SQL dump 核业务记录无位置、原日志对象保留、重试不重复 capture 或 Job。旧生产完整 archive 的3项反例均在原生路径或序列化 private 标记检查失败（24.02秒）。remote target fixture 同批复用源端已准备的隔离模型配置，不再依赖个人模型密钥。
 - 真实三端 Gateway/SSH、model_stream 与 Backend 的两项产品集成通过（263.02秒）：new Session/main 与 child 各自从真实消息生成来源，在来源已释放后硬杀造成回执丢失，核 HTTP pending/detail 与 SQLite 原件相等，两端重启后同操作确认；来源离线后目标冷读附件/历史、原请求重放与后续真实执行保持归属及冻结请求。51份产品原件独立封存；准确命令、4310项源码前后指纹、raw/SHA、退出码、进程回收与独审见 `out/tests/temp/fork_export_error_20261023/artifacts/validation-proof-003.json`、`review-003.json`。
 - 初轮非标准 runner 调用在 pytest 前因内存上限冲突退出97；第二轮3项在目标配置读取缺个人环境变量处失败，修正测试配置后重验，原件保留。服务级用例沿用既有 seeded history/RecordingDeadline，不称真实60秒验收；产品测试没有 Web UI 或真实外部模型网络，文本注入不代 Windows 实机。大文件拆分为非阻断结构建议；其它错误出口与2.2/7.2总门保持未勾。
+
+### 2026-10-23 Fork 来源 intent 校验错误出口（2.2/7.2 部分收口）
+
+- 远端来源 intent 的字段校验失败保持原错误类别与 cause；普通错误只保冻结 operation ID、来源 Gateway/Workspace、阶段及异常类型，原始畸形输入与异常链仅留诊断日志。不修改来源校验、creation/capture writer、发布次序、deadline 或 schema。
+- 固定完整 tree `94233a61f6b2bf27bfa7d03dbfa39a739ec7b4da`：正式 matrix 三项通过（20.31秒），覆盖 POSIX/drive/UNC 文本的结构化原异常、普通错误无原生输入、日志原对象、来源/目标零创建副作用，以及同一 request/key 修正后真实发布、export confirmed、幂等重放与一次 capture；既有默认 main/隐式安全 anchor 回归一项通过（13.73秒），Ruff/compileall通过。旧生产完整 archive 的三项反例均在普通错误的 private/native_path 检查失败（20.63秒）。
+- 首轮2通过/1失败由测试依赖 Pydantic 截断后的文本造成，改为 errors() 精确核完整原始输入并保留字段泄漏检查；未放宽产品行为。准确命令、4313项前后源码指纹、raw/SHA、实际退出与进程回收见 `out/tests/temp/fork_intent_validation_20261023/artifacts/validation-proof-002.json`。来源历史复用 seeded Saver 装具，transport 为显式替身；不称 Agent/HTTP/Web/Windows 实机验收，2.2/7.2 总门仍未勾。
