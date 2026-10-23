@@ -159,7 +159,9 @@ async def test_promotion_wins_against_due_reclaim_and_version_conflict_is_atomic
 
 
 @pytest.mark.asyncio
-async def test_unknown_delete_retains_discoverable_record_and_no_false_success(bundle: TerminalOwnerFixture) -> None:
+async def test_unknown_delete_retains_discoverable_record_and_no_false_success(
+    bundle: TerminalOwnerFixture, caplog: pytest.LogCaptureFixture,
+) -> None:
     resource = await bundle.create()
     rid = str(resource["resource_id"])
     await bundle.command(rid, action="detach", expected_revision=1, thread=ThreadRef(SESSION_A, THREAD_A))
@@ -169,7 +171,10 @@ async def test_unknown_delete_retains_discoverable_record_and_no_false_success(b
     result = (await bundle.owner.list_resources())[0]
     assert result["reconciliation_status"] == "unknown"
     assert result["status"] != "deleted"
-    assert "丢失回执" in result["error"]
+    assert result["error"] == (
+        "ConnectionError: 操作回执不可核实 (errno=None)；请查看工作区外部资源服务日志中的详细错误"
+    )
+    assert "删除请求发送后丢失回执" in caplog.text
     assert bundle.leases.leases_for_resource(rid) == []
 
 

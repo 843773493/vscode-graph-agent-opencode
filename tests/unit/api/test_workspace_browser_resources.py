@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import errno
+import json
+from urllib.error import URLError
 from urllib.request import Request as UrlRequest
 
 import pytest
@@ -134,20 +137,45 @@ def test_failed_transition_receipt_blocks_following_operation(
     assert len(browser_owner_bundle.transport.calls) == 1
 
 
-def test_lost_browser_action_receipt_is_unknown_and_error_redacts_real_path(
+@pytest.mark.parametrize("native_path", [
+    "/private/resource.sqlite",
+    r"C:\private\resource.sqlite",
+    r"\\server\share\private\resource.sqlite",
+    r"\\?\UNC\server\share\private\resource.sqlite",
+])
+@pytest.mark.parametrize("wrapped", [False, True], ids=["native", "url-reason"])
+def test_lost_browser_action_receipt_keeps_native_error_in_diagnostics(
     resource_api_client: TestClient, browser_owner_bundle: BrowserOwnerFixture,
+    native_path: str, wrapped: bool, caplog: pytest.LogCaptureFixture,
 ) -> None:
     resource = _create_browser_resource(resource_api_client)
     resource_id = resource["resource_id"]
-    browser_owner_bundle.transport.failure = ConnectionError(f"回执丢失: {browser_owner_bundle.root}/private/key")
+    native = ConnectionError(errno.EACCES, "回执丢失", native_path)
+    error = URLError(native) if wrapped else native
+    browser_owner_bundle.transport.failure = error
     failed = resource_api_client.post(f"/api/v1/resources/{resource_id}/browser-operation", json={
         "action": "run", "expected_revision": 1, "thread": resource["source_thread"], "payload": {},
     })
     assert failed.status_code == 503
-    assert str(browser_owner_bundle.root) not in failed.text
-    observed = resource_api_client.get(f"/api/v1/resources/{resource_id}").json()["data"]
-    assert observed["reconciliation_status"] == "unknown"
-    assert observed["available_actions"] == []
+    detail = failed.json()["detail"]
+    assert type(error).__name__ in detail
+    assert "resource.sqlite" not in detail
+    assert "errno=13" in detail
+    saved = json.loads((browser_owner_bundle.root / ".boxteam" / "browser-resources.json").read_text())
+    assert saved["records"][0]["error"] == detail
+    assert any(record.exc_info and record.exc_info[1] is error for record in caplog.records)
+    assert str(error) in caplog.text
+
+    browser_owner_bundle.restart()
+    observed = resource_api_client.get(f"/api/v1/resources/{resource_id}")
+    listed = resource_api_client.get("/api/v1/resources", params={"kind": "browser"})
+    assert observed.status_code == listed.status_code == 200
+    item = observed.json()["data"]
+    assert item["error"] == detail
+    assert item["reconciliation_status"] == "unknown"
+    assert item["available_actions"] == []
+    assert listed.json()["data"]["items"] == [item]
+    assert len(browser_owner_bundle.transport.calls) == 1
     assert browser_owner_bundle.leases.leases_for_resource(resource_id) == []
 
 

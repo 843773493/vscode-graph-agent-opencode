@@ -7,6 +7,7 @@ from collections.abc import Collection
 from dataclasses import asdict
 from datetime import datetime, timedelta
 from pathlib import Path
+from urllib.error import URLError
 
 from app.abstractions.workspace_resources import ResourceKind, ResourceSnapshot
 from app.schemas.internal_v2.workspace_resource import WorkspaceResourceDTO
@@ -94,6 +95,18 @@ def lease_status(record: OwnedResourceRecord) -> str:
 
 
 def public_error(error: BaseException) -> str:
+    if isinstance(error, OSError):
+        # 原生异常的正文及 filename 都可能携带路径，只发布系统错误事实，原异常由调用方记录。
+        native = error.reason if isinstance(error, URLError) and isinstance(error.reason, OSError) else error
+        details = [f"errno={native.errno}"]
+        winerror = getattr(native, "winerror", None)
+        if winerror is not None:
+            details.append(f"winerror={winerror}")
+        return (
+            f"{type(error).__name__}: 操作回执不可核实 ({', '.join(details)})；"
+            "请查看工作区外部资源服务日志中的详细错误"
+        )
+    # TODO: 其它 producer 尚未全部迁齐；完成具名错误合同后删除剩余的文本路径兜底。
     message = str(error)
     if _REAL_PATH.search(message):
         message = "操作回执不可核实；请查看工作区 外部资源 服务日志中的详细错误"
