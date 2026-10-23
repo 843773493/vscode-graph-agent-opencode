@@ -19,61 +19,77 @@ export class TerminalStateStore {
   }
 
   async readRecords() {
-    await mkdir(this.stateDir, { recursive: true });
-    let raw = null;
+    let stage = "目录创建";
     try {
-      raw = await readFile(this.stateFile, "utf8");
-    } catch (error) {
-      if (error?.code === "ENOENT") {
-        return null;
+      await mkdir(this.stateDir, { recursive: true });
+      stage = "正文读取";
+      const raw = await readFile(this.stateFile, "utf8");
+      stage = "正文解析";
+      const parsed = JSON.parse(raw);
+      stage = "记录核验";
+      if (parsed?.schema_version !== STATE_SCHEMA_VERSION) {
+        throw new Error(
+          `终端状态文件版本不受支持: expected=${STATE_SCHEMA_VERSION}, actual=${parsed?.schema_version ?? "missing"}`,
+        );
       }
-      throw error;
+      if (parsed?.workspace_id !== this.workspaceId) {
+        throw new Error(
+          `终端状态文件工作区身份不匹配: expected=${this.workspaceId}, actual=${parsed.workspace_id}`,
+        );
+      }
+      if (!Array.isArray(parsed.terminals)) {
+        throw new TypeError("终端状态文件缺少 terminals 数组");
+      }
+      return parsed.terminals;
+    } catch (error) {
+      if (stage === "正文读取" && error?.code === "ENOENT") return null;
+      throw this.operationError("读取", stage, error);
     }
-
-    const parsed = JSON.parse(raw);
-    if (parsed?.schema_version !== STATE_SCHEMA_VERSION) {
-      throw new Error(
-        `终端状态文件版本不受支持: expected=${STATE_SCHEMA_VERSION}, actual=${parsed?.schema_version ?? "missing"}`,
-      );
-    }
-    if (parsed?.workspace_id !== this.workspaceId) {
-      throw new Error(
-        `终端状态文件工作区身份不匹配: expected=${this.workspaceId}, actual=${parsed.workspace_id}`,
-      );
-    }
-    if (!Array.isArray(parsed.terminals)) {
-      throw new TypeError("终端状态文件缺少 terminals 数组");
-    }
-    return parsed.terminals;
   }
 
   /** @param {TerminalStateWriteSnapshot} stateSnapshot */
   async write(stateSnapshot) {
-    if (!Array.isArray(stateSnapshot.terminals)) {
-      throw new TypeError("终端状态写入必须包含 terminals 数组");
-    }
-    await mkdir(this.stateDir, { recursive: true });
     const temporaryFile = `${this.stateFile}.${process.pid}.tmp`;
-    const stateFilePayload = {
-      schema_version: STATE_SCHEMA_VERSION,
-      workspace_id: this.workspaceId,
-      updated_at: stateSnapshot.updated_at,
-      terminals: stateSnapshot.terminals,
-    };
+    let stage = "记录核验";
     try {
-      await writeFile(temporaryFile, `${JSON.stringify(stateFilePayload, null, 2)}\n`, "utf8");
+      if (!Array.isArray(stateSnapshot.terminals)) {
+        throw new TypeError("终端状态写入必须包含 terminals 数组");
+      }
+      stage = "目录创建";
+      await mkdir(this.stateDir, { recursive: true });
+      const stateFilePayload = {
+        schema_version: STATE_SCHEMA_VERSION,
+        workspace_id: this.workspaceId,
+        updated_at: stateSnapshot.updated_at,
+        terminals: stateSnapshot.terminals,
+      };
+      stage = "正文编码";
+      const serialized = `${JSON.stringify(stateFilePayload, null, 2)}\n`;
+      stage = "正文写入";
+      await writeFile(temporaryFile, serialized, "utf8");
+      stage = "文件发布";
       await rename(temporaryFile, this.stateFile);
     } catch (writeError) {
-      try {
-        await rm(temporaryFile, { force: true });
-      } catch (cleanupError) {
-        throw new AggregateError(
-          [writeError, cleanupError],
-          "终端状态写入失败，临时文件也未能清理",
-          { cause: writeError },
-        );
+      let cause = writeError;
+      if (stage === "正文写入" || stage === "文件发布") {
+        try {
+          await rm(temporaryFile, { force: true });
+        } catch (cleanupError) {
+          cause = new AggregateError([writeError, cleanupError], "终端状态写入失败，临时文件也未能清理", { cause: writeError });
+        }
       }
-      throw writeError;
+      throw this.operationError("写入", stage, writeError, cause);
     }
+  }
+
+  operationError(operation, stage, primary, cause = primary) {
+    const code = primary.code || (operation === "读取" ? "terminal_records_read_failed" : "terminal_records_write_failed");
+    console.error(`[terminal-state-store] ${operation}终端状态失败`, {
+      workspaceId: this.workspaceId, filePath: this.stateFile, stage,
+    }, cause);
+    return Object.assign(new Error(
+      `${operation}终端状态失败: workspace_id=${this.workspaceId}, artifact=terminal_records, stage=${stage}, code=${code}`,
+      { cause },
+    ), { code });
   }
 }

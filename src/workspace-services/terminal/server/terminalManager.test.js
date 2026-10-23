@@ -99,7 +99,11 @@ test("Terminal owner 拒绝旧记录格式且不迁移或覆盖原始数据", as
   await writeFile(stateFile, original, "utf8");
 
   const manager = new TerminalManager({ workspaceRoot: root, workspaceId });
-  await assert.rejects(manager.init(), /终端状态文件版本不受支持/);
+  await assert.rejects(manager.init(), (error) => {
+    assert(error.message.includes("stage=记录核验"));
+    assert.match(error.cause.message, /终端状态文件版本不受支持/);
+    return true;
+  });
   assert.equal(await readFile(stateFile, "utf8"), original);
 });
 
@@ -406,8 +410,78 @@ for (const failureStage of ["snapshot", "sync_writer", "async_writer"]) {
     const results = await Promise.allSettled([manager.persist(), manager.persist(), manager.persist()]);
 
     assert.equal(results.every((result) => result.status === "rejected" && result.reason === failure), true);
+    assert.equal(manager.persistRequested, true);
+    assert.equal(manager.persistPromise, null);
     shouldFail = false;
     await manager.persist();
     assert.deepEqual(saved, [{ version: 2 }]);
+    assert.equal(manager.persistRequested, false);
+  });
+}
+
+test("尺寸保存失败后的同值重试重新落盘，干净的同值请求不重复写入", async () => {
+  const manager = new TerminalManager({ workspaceRoot: createTerminalTestWorkspace(), workspaceId: "00000000-0000-4000-8000-000000000001" });
+  const session = new TerminalSession({ manager, record: {
+    terminal_id: "term_resize_retry", workspace_id: manager.workspaceId,
+    transport_owner_revision: 1, reconciliation_status: "verified", cwd_relative: ".",
+  } });
+  manager.terminalsById.set(session.id, session);
+  const failure = new Error("保存尺寸失败");
+  let attempts = 0;
+  const saved = [];
+  manager.stateStore.write = async (payload) => {
+    attempts += 1;
+    if (attempts === 1) throw failure;
+    saved.push(structuredClone(payload.terminals));
+  };
+
+  await assert.rejects(manager.resize(session.id, 120, 40), (error) => error === failure);
+  assert.equal(session.cols, 120);
+  assert.equal(session.rows, 40);
+  assert.equal(attempts, 1);
+  const retried = await manager.resize(session.id, 120, 40);
+  assert.equal(retried.cols, 120);
+  assert.equal(saved[0][0].cols, 120);
+  assert.equal(saved[0][0].rows, 40);
+  await manager.resize(session.id, 120, 40);
+  assert.equal(attempts, 2);
+});
+
+for (const fails of [false, true]) {
+  test(`同尺寸请求等待在途保存${fails ? "失败" : "成功"}，不提前返回`, async () => {
+    const manager = new TerminalManager({ workspaceRoot: createTerminalTestWorkspace(), workspaceId: "00000000-0000-4000-8000-000000000001" });
+    const session = new TerminalSession({ manager, record: {
+      terminal_id: "term_resize_pending", workspace_id: manager.workspaceId,
+      transport_owner_revision: 1, reconciliation_status: "verified", cwd_relative: ".",
+    } });
+    manager.terminalsById.set(session.id, session);
+    const entered = Promise.withResolvers();
+    const release = Promise.withResolvers();
+    const failure = new Error("在途保存失败");
+    let writes = 0;
+    let completed = 0;
+    manager.stateStore.write = async () => {
+      writes += 1;
+      entered.resolve();
+      await release.promise;
+      if (fails) throw failure;
+    };
+    const requests = [manager.resize(session.id, 120, 40)];
+    try {
+      await entered.promise;
+      requests.push(manager.resize(session.id, 120, 40));
+      const results = Promise.allSettled(requests.map((request) => request.finally(() => { completed += 1; })));
+      await Promise.resolve();
+      assert.equal(completed, 0);
+      release.resolve();
+      const settled = await results;
+      assert.equal(settled.every((result) => fails
+        ? result.status === "rejected" && result.reason === failure
+        : result.status === "fulfilled" && result.value.cols === 120), true);
+      assert.equal(writes, 1);
+    } finally {
+      release.resolve();
+      await Promise.allSettled(requests);
+    }
   });
 }

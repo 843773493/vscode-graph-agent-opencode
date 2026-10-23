@@ -141,6 +141,10 @@ export class TerminalManager {
           terminals: [...this.terminalsById.values()].map((session) => session.toRecord()),
         });
       }
+    } catch (error) {
+      // 保留尚未落盘的当前状态，交下一次显式请求保存，不自动重试。
+      this.persistRequested = true;
+      throw error;
     } finally {
       this.persistPromise = null;
     }
@@ -364,8 +368,10 @@ export class TerminalManager {
   async resize(id, cols, rows) {
     const session = this.get(id);
     const resized = session.resize(cols, rows);
-    if (resized) {
+    if (resized || this.persistRequested) {
       await this.persist();
+    } else if (this.persistPromise) {
+      await this.persistPromise;
     }
     return session.snapshot();
   }

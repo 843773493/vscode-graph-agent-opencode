@@ -328,3 +328,9 @@
 - Browser/Terminal原生producer迁移与固定HEAD调用图复核后，删除`public_error`的路径正则与临时TODO；保留OSError/URLError按类型及errno/winerror投影。非原生错误保留原owner发布的正文，不再把`/api/browsers/...`接口路由误判为本机文件路径，也不新增通用脱敏层。
 - 最终tree `1e357a50891693c319abd31986c5737c7c8ec9f7`：Ruff及122项API/owner/fork检查通过（4.08秒），8项真实Chromium/HTTP错误入口通过（36.92秒），复验检查点、文件选择和生命周期安全响应/记录/重试。新测试经真实BrowserManagerClient和受控urllib HTTPError证明code-only回执的路由信息保留到API、unknown记录与重启读取，零重放且释放lease；完整archive旧生产红测明确复现误吞。首次新测试误用完整应用error body合同，轻量API fixture只装middleware，002修为核实际header，原件保留。
 - 非作者只读审查未找到这些consumer仍需文本兜底才能阻止native locator的具体producer；不将任意用户脚本/自由正文泛化成资源引用。全部4283个blob、前后指纹与零进程组残留已核，收据 `out/tests/temp/openspec_resume_20261023/artifacts/resource-error-contract-proof-002.json`。Terminal直接HTTP/WS错误另行核查，不以本项关闭2.2/7.2。
+
+### 2026-10-23 Terminal状态存储错误与显式重试（部分收口）
+
+- 实际存储owner按读写阶段发布workspace/artifact/stage/code，完整位置和原异常只留日志/cause；仅正文读取ENOENT表示无状态。临时写入/发布失败才清理本次临时文件，清理次错按顺序保留且不覆盖主错。首次resize已生效但保存失败时保留既有待写标记，同尺寸显式重试完成落盘；在途同尺寸请求等待同一保存结果，干净同尺寸零重写，不自动重试PTY操作或伪报回滚。
+- 产品tree `a63b27772afac25a781a5804c60e7db7e9c17155`：Node语法/Ruff、33项存储/Manager单测及79项Session/输出/进程回归通过；真实PTY/HTTP集成1项通过（2.38秒），依次覆盖真实mkdir冲突、非特权Linux EACCES、rename发布失败，核安全响应、旧字节、内存已变化、同请求恢复后落盘和完整诊断。Windows/root不冒充chmod权限验收。旧Manager完整archive的新增3项红测均失败；旧StateStore真实HTTP红测回显原生存储位置。初次集成误用了另一聊天未提交fixture签名，修正后002明确复现同值重试不落盘，003修产品后通过，原件保留。
+- 非作者003只读独审无阻断finding；4284个blob、前后指纹与零进程组残留核验见 `out/tests/temp/openspec_resume_20261023/artifacts/terminal-state-contract-proof-003.json`。共享测试文件的既有fixture优化未纳入本切片。不代替完整Gateway/Web、Windows或2.2/7.2全量门。

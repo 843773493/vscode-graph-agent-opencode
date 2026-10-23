@@ -59,11 +59,11 @@ Session内部用`outputSequence`表示已产生的最后输出，`modelReadThrou
 
 ## 状态观察与恢复落盘
 
-Manager拥有唯一在途状态保存：先登记共享Promise，同轮请求合并，再取当前终端记录串行写入；写入期间新增请求由下一轮快照覆盖，所有等待方在排空后才成功。快照或writer的同步、异步异常原样交给等待方，并释放本次Promise，让后续显式保存可恢复；不能留下旧失败或自动重试。
+Manager拥有唯一在途状态保存：先登记共享Promise，同轮请求合并，再取当前终端记录串行写入；写入期间新增请求由下一轮快照覆盖，所有等待方在排空后才成功。快照或writer的同步、异步异常交给等待方，并释放本次Promise、保留待写标记，让后续显式保存可恢复；不缓存旧异常或自动重试。同尺寸resize也必须提交失败后尚未落盘的状态，或等待既有在途保存；干净的同尺寸请求不重复写入。
 
 StateStore的`TerminalStateWriteSnapshot`只承载Manager本轮恢复记录；`stateFilePayload`在此基础上加入权威工作区身份和文件schema。顶层`updated_at`在Manager开始组装本轮快照、逐条读取`toRecord()`之前生成，不是各资源的更新时间，也不表示写盘完成；类型直接引用Session的记录返回值，不复制一套字段定义。
 
-StateStore在临时写入或发布失败后清理本次临时文件，正式状态继续保留旧字节；单次写入失败原样抛出。清理也失败时，用`AggregateError`按发生顺序保留两份原异常，并将写入异常作为`cause`，不能覆盖主失败或伪报发布成功。这里只结束本次文件操作，Manager释放在途保存后仍允许下一次显式请求，不自动重试或恢复临时正文。
+StateStore按实际读写阶段发布workspace/artifact/stage/code，真实位置与完整原异常保留在日志和cause；只有读取正文的ENOENT表示尚无记录。在临时写入或发布失败后清理本次临时文件，正式状态继续保留旧字节。清理也失败时，用`AggregateError`按发生顺序保留两份原异常，并将写入异常作为`cause`，不能覆盖主失败或伪报发布成功。这里只结束本次文件操作，Manager释放在途保存后仍允许下一次显式请求，不自动重试或恢复临时正文。
 
 Session的`toRecord()`是恢复事实的唯一组装入口，供Manager落盘；原始输出只存`buffer`一份。`snapshot()`在该记录上补齐`display_buffer`、当前`client_count`和`pty_worker_pid`供HTTP/WebSocket/模型读取；这些派生或连接观察不写入状态文件。恢复时从原始输出计算展示、从当前句柄取得连接信息，不维护第二份展示正文或持久连接状态。
 
