@@ -23,13 +23,16 @@ import hashlib
 import json
 import sqlite3
 from dataclasses import dataclass
+from datetime import datetime
 
 from app.schemas.internal_v2.session_navigation.operations import (
     NAVIGATION_MUTATION_TERMINAL_STATES,
     AutoSessionTitleCommand,
     NavigationDeleteSettlement,
+    NavigationEventDTO,
     NavigationMutationIntentDTO,
     NavigationQueueCommand,
+    validate_operation_id,
 )
 
 __all__ = [
@@ -260,18 +263,37 @@ def _record_from_row(row: sqlite3.Row) -> NavigationMutationRecord:
 
 
 def _event_from_row(row: sqlite3.Row) -> NavigationEventRecord:
+    # 先按原始类型验证；不能把对象的key当node列表或把浮点序号截断为整数。
+    payload = dict(row)
+    payload["affected_node_ids"] = json.loads(payload.pop("affected_node_ids_json"))
+    payload["created_at"] = datetime.fromisoformat(row["created_at"])
+    event = NavigationEventDTO.model_validate(payload, strict=True)
+    validate_operation_id(event.operation_id)
+    for name in ("workspace_id", "gateway_id", "actor"):
+        if not isinstance(row[name], str) or not row[name]:
+            raise ValueError(f"navigation event {name} 必须是非空字符串")
+    if event.queue_seq < 1 or (
+        event.committed_catalog_revision is not None and event.committed_catalog_revision < 0
+    ):
+        raise ValueError("navigation event queue_seq或catalog revision越界")
+    if event.result_state not in NAVIGATION_MUTATION_TERMINAL_STATES:
+        raise ValueError("navigation event必须引用终态operation")
+    if event.created_at.tzinfo is None:
+        raise ValueError("navigation event created_at必须带时区")
+    if event.affected_node_ids != sorted(set(event.affected_node_ids)):
+        raise ValueError("navigation event affected_node_ids必须是有序唯一列表")
     return NavigationEventRecord(
-        workspace_id=str(row["workspace_id"]),
-        event_seq=int(row["event_seq"]),
-        operation_id=str(row["operation_id"]),
-        gateway_id=str(row["gateway_id"]),
-        actor=str(row["actor"]),
-        queue_seq=int(row["queue_seq"]),
-        kind=str(row["kind"]),
-        result_state=str(row["result_state"]),
-        committed_catalog_revision=row["committed_catalog_revision"],
-        affected_node_ids=tuple(json.loads(str(row["affected_node_ids_json"]))),
-        error_code=row["error_code"],
-        error_detail=row["error_detail"],
-        created_at=str(row["created_at"]),
+        workspace_id=event.workspace_id,
+        event_seq=event.event_seq,
+        operation_id=event.operation_id,
+        gateway_id=row["gateway_id"],
+        actor=row["actor"],
+        queue_seq=event.queue_seq,
+        kind=event.kind,
+        result_state=event.result_state,
+        committed_catalog_revision=event.committed_catalog_revision,
+        affected_node_ids=tuple(event.affected_node_ids),
+        error_code=event.error_code,
+        error_detail=event.error_detail,
+        created_at=row["created_at"],
     )

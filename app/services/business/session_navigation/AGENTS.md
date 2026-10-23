@@ -27,3 +27,4 @@
 - 损坏、重复或循环关系必须抛出详细错误。
 - 移动、重命名只更新 catalog，不搬目录或改变 locator；创建、删除由对应 owner 协调 catalog 与物理存储。所有路径读取经统一解析器，手工目录漂移必须向 API/UI 暴露错误。
 - `from app.services.business.session_navigation.queue_store import X` 的外部导入路径与导出名保持稳定，拆分产物不得反向依赖门面。
+- navigation终态事件的写入回读、分页和启动校验使用唯一row parser；事件与保留operation的冻结身份在同一SQLite快照核对，不以当前node重建历史，也不比较后续settlement可变的回执错误。

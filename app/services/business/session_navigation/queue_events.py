@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import sqlite3
 
+from app.core.session_catalog_store import CatalogMaintenanceRequiredError
 from app.services.business.session_navigation.queue_records import (
     _EVENT_COLUMNS,
     NavigationEventRecord,
@@ -20,6 +21,35 @@ from app.services.business.session_navigation.queue_records import (
 
 class NavigationEventOutboxMixin:
     """事件 outbox 的方法族（由 ``NavigationMutationQueueStore`` 继承）。"""
+
+    def _event_in(
+        self, connection: sqlite3.Connection, row: sqlite3.Row, *, workspace_id: str,
+    ) -> NavigationEventRecord:
+        """在原快照核事件和保留operation的冻结身份，不查询当前导航节点。"""
+        try:
+            event = self._event_from_row(row)
+            if event.workspace_id != workspace_id:
+                raise ValueError(f"事件workspace归属不符: expected={workspace_id!r}")
+            operation = self._fetch_record(
+                connection, event.gateway_id, event.workspace_id, event.actor, event.operation_id,
+            )
+            if operation is None:
+                raise ValueError("事件对应的保留operation不存在")
+            for field, value in (
+                ("queue_seq", event.queue_seq), ("kind", event.kind),
+                ("state", event.result_state),
+                ("committed_catalog_revision", event.committed_catalog_revision),
+            ):
+                if operation[field] != value:
+                    raise ValueError(f"事件{field}与保留operation不符")
+            # 删除的后续settlement可以改变回执错误；原终态事件不随之重写。
+            return event
+        except (TypeError, ValueError) as error:
+            raise CatalogMaintenanceRequiredError(
+                "navigation event 原始记录损坏，拒绝读取或恢复: "
+                f"path={self._store.database_path}, event_seq={row['event_seq']!r}, "
+                f"operation_id={row['operation_id']!r}, detail={error}"
+            ) from error
 
     @staticmethod
     def _next_event_seq(connection: sqlite3.Connection, workspace_id: str) -> int:
@@ -71,7 +101,7 @@ class NavigationEventOutboxMixin:
             "WHERE workspace_id = ? AND event_seq = ?",
             (record.workspace_id, event_seq),
         ).fetchone()
-        return self._event_from_row(row)
+        return self._event_in(connection, row, workspace_id=record.workspace_id)
 
     def list_events(
         self,
@@ -93,7 +123,7 @@ class NavigationEventOutboxMixin:
                 (workspace_id, after, limit),
             ).fetchall()
             watermark = self._event_watermark(connection, workspace_id)
-        return [self._event_from_row(row) for row in rows], watermark
+            return [self._event_in(connection, row, workspace_id=workspace_id) for row in rows], watermark
 
     def event_watermark_in(self, connection: sqlite3.Connection, workspace_id: str) -> int:
         """在调用方只读事务内取事件水位（供 snapshot 与 revision 同一快照）。"""

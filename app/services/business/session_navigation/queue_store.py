@@ -47,6 +47,7 @@ from app.services.business.session_navigation.queue_events import (
     NavigationEventOutboxMixin,
 )
 from app.services.business.session_navigation.queue_records import (
+    _EVENT_COLUMNS,
     _RECORD_COLUMNS,
     NAVIGATION_BACKPRESSURE_PENDING_LIMIT,
     NavigationBackpressureError,
@@ -109,8 +110,8 @@ class NavigationMutationQueueStore(
             raise TypeError(f"store 必须是 SessionCatalogStore: {store!r}")
         self._store = store
 
-    def verify_intent_records(self, *, workspace_id: str) -> None:
-        """启动worker前在同一只读快照核全部保留意图，包括终态重放记录。"""
+    def verify_retained_records(self, *, workspace_id: str) -> None:
+        """启动worker前在同一只读快照核保留意图、终态事件和冻结归属。"""
         with self._store.read_transaction() as connection:
             for row in connection.execute(f"SELECT {_RECORD_COLUMNS} FROM navigation_mutation_records"):
                 try:
@@ -124,6 +125,8 @@ class NavigationMutationQueueStore(
                         "navigation intent 原始记录损坏，拒绝恢复或改写: "
                         f"path={self._store.database_path}, operation_id={row['operation_id']!r}, detail={error}"
                     ) from error
+            for row in connection.execute(f"SELECT {_EVENT_COLUMNS} FROM navigation_events"):
+                self._event_in(connection, row, workspace_id=workspace_id)
 
     # ------------------------------------------------------------------
     # enqueue
