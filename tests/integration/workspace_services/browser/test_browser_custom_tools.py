@@ -1362,6 +1362,81 @@ await started;
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("stage", ["read_clipboard", "find_text"])
+async def test_text_query_failure_keeps_native_details_in_diagnostics_and_allows_retry(
+    stage: str, integration_client: httpx.AsyncClient, browser_context: CustomToolFactoryContext,
+    browser_runtime: WorkspaceToolRuntime, browser_manager_processes: tuple[int, int],
+) -> None:
+    container, _session, _invocation = browser_runtime
+    created = await integration_client.post("/api/v1/resources/browsers", json={
+        "session_id": browser_context.session_id,
+        "thread_id": browser_context.invocation_context.thread_binding.thread_id,
+        "url": "about:blank",
+    })
+    assert created.status_code == 200, created.text
+    resource = created.json()["data"]
+    browser_id = resource["resource_id"]
+    root = Path(container.workspace_root)
+    reason = f"injected EACCES: {root / '.boxteam/browser-manager/private-text-query'}"
+    transport = BrowserManagerClient(workspace_id=container.workspace_id, backend_url=f"http://127.0.0.1:{browser_manager_processes[0]}")
+    await transport.perform(browser_id, "run", {"code": """
+await page.setContent('<title>文本查询</title><input id="text" value="clipboard marker"><p>find marker</p>');
+await page.locator('#text').focus();
+await page.locator('#text').evaluate((input) => input.select());
+"""}, actor="agent")
+    grant = await _grant(integration_client, browser_id, browser_context)
+    async with websockets.connect(f"ws://127.0.0.1:{browser_manager_processes[0]}/browser?workspace_id={container.workspace_id}") as websocket:
+        await websocket.send(json.dumps({"type": "attach", "browserId": browser_id, "grantToken": grant["grant_token"]}))
+        assert (await _recv_ws_type(websocket, "attached"))["browserId"] == browser_id
+        # 原生采集只失败一次，原方法在抛错前恢复；不替产品写操作或恢复记录。
+        await transport.perform(browser_id, "run", {"code": (
+            "const original = page.evaluate; page.evaluate = async function (...args) {"
+            f" page.evaluate = original; throw Object.assign(new Error({json.dumps(reason)}), {{code: 'EACCES'}}); }};"
+        )}, actor="agent")
+        request = {"type": "readClipboard", "browserId": browser_id} if stage == "read_clipboard" else {
+            "type": "command", "name": "find", "query": "find marker", "browserId": browser_id,
+        }
+        await websocket.send(json.dumps(request))
+        receipt = await _recv_ws_type(websocket, "error")
+        assert receipt["code"] == "EACCES"
+        assert f"stage={stage}" in receipt["message"]
+        assert f"page_id={resource['metadata']['active_page_id']}" in receipt["message"]
+        assert str(root) not in json.dumps(receipt)
+        state = await transport.get_resource(browser_id)
+        assert state["reconciliation_status"] == "verified" and state["status"] == "running"
+        assert state["last_operation"]["status"] == "failed"
+        assert f"stage={stage}" in state["last_operation"]["error"]
+        assert str(root) not in json.dumps(state)
+        # clipboard是非可见交互，使用原policy writer验证其失败记录的序列化界限。
+        await transport.perform(browser_id, "resource-policy", {"policy": state["resource_policy"]}, actor="agent")
+        saved = json.loads((root / ".boxteam/browser-manager/browsers.json").read_text())
+        record, = [item for item in saved["browsers"] if item["browser_id"] == browser_id]
+        assert record["last_operation"] == state["last_operation"]
+        assert str(root) not in json.dumps(record)
+        await websocket.send(json.dumps(request))
+        retried = await _recv_ws_type(websocket, "clipboardText" if stage == "read_clipboard" else "commandResult")
+        if stage == "read_clipboard":
+            assert retried["text"] == "clipboard marker"
+        else:
+            assert retried["state"]["find_found"] is True
+            assert retried["state"]["find_query"] == "find marker"
+        await websocket.send(json.dumps({"type": "detach"}))
+        assert (await _recv_ws_type(websocket, "detached"))["browserId"] == browser_id
+    observed = (await integration_client.get(f"/api/v1/resources/{browser_id}")).json()["data"]
+    assert observed["reconciliation_status"] == "verified"
+    assert str(root) not in json.dumps(observed)
+    assert container.browser_resource_owner._leases.leases_for_resource(browser_id) == []
+    artifacts = TestRunContext.from_test_file(Path(__file__)).artifacts_dir
+    diagnostics = "\n".join(item.read_text() for item in artifacts.glob("browser-backend-*.stderr.log"))
+    assert reason in diagnostics and f"stage={stage}" in diagnostics
+    (artifacts / f"text-query-failure-{stage}-{time.time_ns()}.json").write_text(json.dumps({
+        "receipt": receipt, "node_record": record, "owner_projection": observed, "retried": retried,
+    }, ensure_ascii=False, indent=2), encoding="utf-8")
+    deleted = await _detach_delete(integration_client, browser_id, browser_context)
+    assert deleted.status_code == 200, deleted.text
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("stage", ["debug_dom", "debug_sources", "debug_title"])
 async def test_debug_snapshot_failure_keeps_native_details_in_diagnostics_and_allows_retry(
     stage: str, integration_client: httpx.AsyncClient, browser_context: CustomToolFactoryContext,

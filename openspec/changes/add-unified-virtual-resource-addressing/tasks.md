@@ -403,3 +403,10 @@
 - DOM、来源和标题采集在原生调用边界复用既有运行时错误 owner，公开 browser/page 身份、debug_dom/debug_sources/debug_title 阶段及原 code/status；完整原异常和位置保留诊断/cause，不复制进 WebSocket 错误或 last_operation。DOM/来源前缀限制及正常返回合同不变，失败不销毁页面，下一次显式请求仍可采集。
 - 固定完整 tree `43e6c2f6918a340247cd64eefabf553fe2e88af9`：132 项 Browser 操作/诊断单测、Ruff、JS 语法及 Python compile 通过；3 项真实 Chromium/Browser Manager HTTP/WebSocket 集成通过（19.53秒），覆盖三阶段一次性原生故障、安全响应/落盘记录、owner/lease、原日志原因和同连接重试。注入原生方法失败不冒充真实系统 EACCES。旧生产完整 archive 的新增3项单测全部失败，明确区分未包装的原异常。
 - 完整源码前后指纹、准确命令、raw/SHA、退出码、零进程组残留及只读审查见 `out/tests/temp/browser_debug_snapshot_20261023/artifacts/validation-proof-001.json`、`review-001.json`。Workspace API 使用 ASGI，Browser Manager 使用真实网络；不代替完整 Gateway/Web、进程重启或 Windows 实机，2.2/7.2 总门保持未勾。
+
+
+### 2026-10-23 Browser 文本查询失败与显式重试（2.2/7.2 部分收口）
+
+- 复制选中文本与页内查找在各自原生 evaluate 边界复用既有运行时错误 owner，调用前冻结 page 身份；普通响应及 last_operation 仅保存 browser/page、read_clipboard/find_text 阶段和原 code/status，完整异常与位置留诊断/cause。正常选中文本、window.find 参数与结果合同不变，不增加解析或执行链。
+- 固定完整 tree `ab0a39718ae19b1fc9d39192b5ee8da7b3aa5d79`：134 项操作/诊断单测、Ruff、JS 语法、Python compile 和 strict OpenSpec 通过；2 项真实 Chromium/Browser Manager HTTP/WebSocket 集成通过（18.41秒），核授权、安全错误与落盘记录、owner/lease、原日志原因，以及原页面重试后的精确复制文本和查找结果。旧生产完整 archive 的单测2项及集成2项全部失败，真实 WS 明确回显隔离 workspace 原生路径。
+- 准确命令、4310项源码前后指纹、raw/SHA、退出码、零进程组残留和只读审查见 `out/tests/temp/browser_text_query_20261023/artifacts/validation-proof-001.json`、`review-001.json`。故障为一次性原生方法注入；非可见 clipboard 失败记录经后续真实 policy writer 序列化，不声称该 writer 前硬退出仍耐久。Workspace API 使用 ASGI，不代完整 Gateway/Web 或 Windows 实机，2.2/7.2 保持未勾。

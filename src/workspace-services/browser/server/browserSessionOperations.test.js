@@ -271,6 +271,27 @@ describe("浏览器启动的运行时错误归属", () => {
 });
 
 describe("浏览器资源生命周期错误归属", () => {
+  test.each(["read_clipboard", "find_text"])(
+    "文本查询原生失败保留页面身份和原因，不复制到操作记录: %s", async (stage) => {
+      const { browser } = liveSession();
+      const cause = Object.assign(new Error("EACCES /private/browser/text-query"), { code: "EACCES", statusCode: 503 });
+      browser.page.evaluate = async () => { throw cause; };
+      const logged = spyOn(console, "error").mockImplementation(() => undefined);
+      try {
+        const failure = await browser.runInteractiveOperation({ actor: "user:test", action: stage },
+          () => stage === "read_clipboard" ? browser.readClipboardText() : browser.findText("marker"))
+          .catch((error) => error);
+        expect(failure).toMatchObject({ cause, code: "EACCES", statusCode: 503 });
+        expect(failure.message).toContain(`stage=${stage}`);
+        expect(failure.message).toContain("page_id=page_device");
+        expect(browser.record.last_operation).toMatchObject({ action: stage, status: "failed", error: failure.message });
+        expect(JSON.stringify(browser.toRecord())).not.toContain("/private/browser/text-query");
+        expect(browser.record.status).toBe("running");
+        expect(logged.mock.calls.some((args) => args.at(-1) === cause)).toBe(true);
+      } finally { logged.mockRestore(); }
+    },
+  );
+
   test.each(["debug_dom", "debug_sources", "debug_title"])(
     "调试快照原生失败保留采集阶段和原因，不复制到操作记录: %s", async (stage) => {
       const { browser } = liveSession();

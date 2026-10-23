@@ -2402,26 +2402,37 @@ export class BrowserSession extends EventEmitter {
 
   async readClipboardText() {
     this.assertRunning();
-    return await this.page.evaluate(() => {
-      const active = document.activeElement;
-      if (active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement) {
-        const start = active.selectionStart;
-        const end = active.selectionEnd;
-        if (typeof start === "number" && typeof end === "number" && end > start) {
-          return active.value.slice(start, end);
+    const pageId = this.activePageId;
+    try {
+      return await this.page.evaluate(() => {
+        const active = document.activeElement;
+        if (active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement) {
+          const start = active.selectionStart;
+          const end = active.selectionEnd;
+          if (typeof start === "number" && typeof end === "number" && end > start) {
+            return active.value.slice(start, end);
+          }
         }
-      }
-      return window.getSelection()?.toString() || "";
-    });
+        return window.getSelection()?.toString() || "";
+      });
+    } catch (cause) {
+      throw browserRuntimeFailure({ browserId: this.id, pageId, stage: "read_clipboard", cause });
+    }
   }
 
   async findText(query, backwards = false) {
     this.assertRunning();
-    // TODO: window.find 是 Chromium 集成浏览器的兼容接口，未来替换为可返回匹配计数的查找实现。
-    const found = await this.page.evaluate(
-      ({ text, searchBackwards }) => window.find(text, false, searchBackwards, true, false, false, false),
-      { text: query, searchBackwards: backwards },
-    );
+    const pageId = this.activePageId;
+    let found;
+    try {
+      // TODO: window.find 是 Chromium 集成浏览器的兼容接口，未来替换为可返回匹配计数的查找实现。
+      found = await this.page.evaluate(
+        ({ text, searchBackwards }) => window.find(text, false, searchBackwards, true, false, false, false),
+        { text: query, searchBackwards: backwards },
+      );
+    } catch (cause) {
+      throw browserRuntimeFailure({ browserId: this.id, pageId, stage: "find_text", cause });
+    }
     return { ...this.snapshot(), find_found: found, find_query: query };
   }
 
