@@ -444,3 +444,10 @@
 - 图片/视频预览保持既有 catch 类别及失败后继续发送附件清单的行为，唯一 Builder 错误生成点只提供附件 URI、stage、异常类别及 errno/winerror 数值；原异常及完整预览程序输出仅保留在原始诊断日志。不扩展日志例外，不增加持久诊断副本或第二条附件链路。
 - 固定完整 tree `3c2de0bee7358ed1db0e102488a57c006b089477`：2项集成从真实 Session 创建、inline 上传、消息准入、Agent 执行与 model_stream 回放生成 canonical/history/assembly/provider request，核预览失败仍完成、无 image block、正文可读、原日志对象、冷 Saver 字节/身份相等和 request_hash；18项相关单测、Ruff/compileall通过。相同最终测试在旧生产完整 archive 下2项集成均明确检出 canonical 原生路径，5项短单测均拒绝旧原文诊断。
 - 001误取未持久化 attachment_diagnostics、002的路径断言误命中系统提示普通词组及import格式失败均保留原件；修正为核真实canonical manifest和精确注入路径，不新增持久字段。4316项源码前后指纹、raw/SHA、退出码、进程回收与只读架构/行为审查见 `out/tests/temp/attachment_preview_errors_20261023/artifacts/validation-proof-003.json`、`review-003.json`。预览 I/O 与程序故障是受控注入，模型走现有异步回放；不代真实外部Provider、HTTP/Gateway/Web或Windows实机，2.2/7.2总门保持未勾。
+
+
+### 2026-10-23 Gateway 普通上下文回执校验错误（2.2/7.2 部分收口）
+
+- 普通 read/search/inventory 共用的唯一 HTTP 回执校验点将 JSON/envelope/DTO 校验失败归为不可恢复 RuntimeError，普通错误保留 method、API path、request_id、stage和异常类型；完整原始输入保留 cause及诊断日志。request_id漂移仍使用原拒绝；HTTP状态到可恢复/致命分类、联邦错误正文及连接错误出口不在此切片改动。
+- 固定完整tree `6ee3bd9866f14aa7d508953f8563ba794c17f325` 的6项新增及80项既有客户端/查询/target resolver单测合计86项通过，Ruff/compileall通过；覆盖read/search/inventory畸形DTO、JSON/envelope与request_id，修正回执后原method/URL/headers/body保持相同。旧生产完整archive三项均在普通错误中检出native_path原始输入，保留POSIX/drive/UNC的精确原cause校验。
+- 4317项源码前后指纹、raw/SHA、退出码、无残留进程及范围审查见 `out/tests/temp/gateway_context_protocol_errors_20261023/artifacts/validation-proof-002.json`。请求是显式HTTP stub，不冒充真实网络/Web/Windows；泛HTTP正文和连接错误仍需后续独立收口，2.2/7.2总门未勾。

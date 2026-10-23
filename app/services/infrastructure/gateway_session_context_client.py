@@ -142,7 +142,16 @@ class GatewaySessionContextClient:
     ) -> ResponseDTO:
         response, request_id = await self._send_request(method, path, json_body=json_body)
         self._raise_http_error(response, method=method, path=path)
-        return self._decode_response(response, path=path, request_id=request_id, response_type=response_type)
+        try:
+            return self._decode_response(response, path=path, request_id=request_id, response_type=response_type)
+        except (KeyError, TypeError, ValueError) as error:
+            detail = (
+                "Gateway 上下文查询回执协议无效: "
+                f"method={method}, path={path}, request_id={request_id}, "
+                f"stage=response_validation, error_type={type(error).__name__}"
+            )
+            logger.error("%s；完整诊断见异常链", detail, exc_info=error)
+            raise RuntimeError(detail) from error
 
     @staticmethod
     def _raise_incomplete_capture(
