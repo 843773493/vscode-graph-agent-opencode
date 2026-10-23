@@ -8656,7 +8656,7 @@ async function runReadRecovery(surfaces, reportOwners) {
   const targetEffects = "SELECT (SELECT COUNT(*) FROM remote_observations) AS observations,(SELECT COUNT(*) FROM remote_observation_pages) AS pages,(SELECT COUNT(*) FROM communication_inbox) AS inbox";
   const effectsBefore = await readControl(target, targetEffects);
   const cursor = firstPage.next_cursor;
-  assert.match(cursor, /^rc1\./);
+  assert.match(cursor, /^rc2\./);
   const tokenOffset = Math.floor(cursor.length / 2);
   const tampered = cursor.slice(0, tokenOffset) + (cursor[tokenOffset] === "A" ? "B" : "A") + cursor.slice(tokenOffset + 1);
   const negative = {};
