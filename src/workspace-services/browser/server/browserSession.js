@@ -2599,70 +2599,81 @@ export class BrowserSession extends EventEmitter {
     if (!entry) {
       throw new Error(`当前没有活动浏览器标签页: browser_id=${this.id}`);
     }
-    const elements = await entry.page.evaluate(() => {
-      const maxDepth = 5;
-      const maxChildren = 80;
-      const summarize = (node, path, depth) => {
-        if (!(node instanceof Element) || depth > maxDepth) return null;
-        const attributes = {};
-        const nodeAttributes = node.attributes;
-        const attributeCount = Math.min(nodeAttributes.length, 20);
-        for (let index = 0; index < attributeCount; index += 1) {
-          const attribute = nodeAttributes[index];
-          attributes[attribute.name] = attribute.value.slice(0, 300);
-        }
-        let text = "";
-        const childNodes = node.childNodes;
-        for (let index = 0; index < childNodes.length && text.length < 240; index += 1) {
-          const child = childNodes[index];
-          if (child.nodeType !== Node.TEXT_NODE) continue;
-          // 单次词段也限制为240字符；超长单词不必先完整匹配再截断。
-          for (const [word] of (child.textContent || "").matchAll(/\S{1,240}/g)) {
-            text = (text ? `${text} ${word}` : word).slice(0, 240);
-            if (text.length === 240) break;
+    let elements;
+    let sources;
+    let title;
+    let stage = "debug_dom";
+    try {
+      elements = await entry.page.evaluate(() => {
+        const maxDepth = 5;
+        const maxChildren = 80;
+        const summarize = (node, path, depth) => {
+          if (!(node instanceof Element) || depth > maxDepth) return null;
+          const attributes = {};
+          const nodeAttributes = node.attributes;
+          const attributeCount = Math.min(nodeAttributes.length, 20);
+          for (let index = 0; index < attributeCount; index += 1) {
+            const attribute = nodeAttributes[index];
+            attributes[attribute.name] = attribute.value.slice(0, 300);
           }
-        }
-        const children = [];
-        if (depth < maxDepth) {
-          const childElements = node.children;
-          const childCount = Math.min(childElements.length, maxChildren);
-          for (let index = 0; index < childCount; index += 1) {
-            children.push(summarize(childElements[index], `${path}.${index}`, depth + 1));
+          let text = "";
+          const childNodes = node.childNodes;
+          for (let index = 0; index < childNodes.length && text.length < 240; index += 1) {
+            const child = childNodes[index];
+            if (child.nodeType !== Node.TEXT_NODE) continue;
+            // 单次词段也限制为240字符；超长单词不必先完整匹配再截断。
+            for (const [word] of (child.textContent || "").matchAll(/\S{1,240}/g)) {
+              text = (text ? `${text} ${word}` : word).slice(0, 240);
+              if (text.length === 240) break;
+            }
           }
-        }
-        return {
-          node_id: path,
-          tag: node.tagName.toLowerCase(),
-          attributes,
-          text,
-          children,
+          const children = [];
+          if (depth < maxDepth) {
+            const childElements = node.children;
+            const childCount = Math.min(childElements.length, maxChildren);
+            for (let index = 0; index < childCount; index += 1) {
+              children.push(summarize(childElements[index], `${path}.${index}`, depth + 1));
+            }
+          }
+          return {
+            node_id: path,
+            tag: node.tagName.toLowerCase(),
+            attributes,
+            text,
+            children,
+          };
         };
-      };
-      return summarize(document.documentElement, "0", 0);
-    });
-    const sources = await entry.page.evaluate(() => {
-      const sourceTypes = new Set(["script", "stylesheet", "link", "css", "fetch", "xmlhttprequest"]);
-      const seen = new Set();
-      const sources = [];
-      for (const resource of performance.getEntriesByType("resource")) {
-        const url = resource.name;
-        if (!url || seen.has(url)
-          || !(sourceTypes.has(resource.initiatorType) || /\.(?:js|css|map)(?:$|\?)/i.test(url))) continue;
-        seen.add(url);
-        sources.push({
-          url,
-          type: resource.initiatorType || "resource",
-          duration_ms: Math.round(resource.duration),
-        });
-        // 保留前200个有效且唯一的来源，不为丢弃的后缀组装记录。
-        if (sources.length === 200) break;
-      }
-      return sources;
-    });
+        return summarize(document.documentElement, "0", 0);
+      });
+      stage = "debug_sources";
+      sources = await entry.page.evaluate(() => {
+        const sourceTypes = new Set(["script", "stylesheet", "link", "css", "fetch", "xmlhttprequest"]);
+        const seen = new Set();
+        const sources = [];
+        for (const resource of performance.getEntriesByType("resource")) {
+          const url = resource.name;
+          if (!url || seen.has(url)
+            || !(sourceTypes.has(resource.initiatorType) || /\.(?:js|css|map)(?:$|\?)/i.test(url))) continue;
+          seen.add(url);
+          sources.push({
+            url,
+            type: resource.initiatorType || "resource",
+            duration_ms: Math.round(resource.duration),
+          });
+          // 保留前200个有效且唯一的来源，不为丢弃的后缀组装记录。
+          if (sources.length === 200) break;
+        }
+        return sources;
+      });
+      stage = "debug_title";
+      title = entry.title || await entry.page.title();
+    } catch (cause) {
+      throw browserRuntimeFailure({ browserId: this.id, pageId: entry.pageId, stage, cause });
+    }
     return {
       page_id: entry.pageId,
-      title: entry.title || await this.page.title(),
-      url: entry.url || this.page.url(),
+      title,
+      url: entry.url || entry.page.url(),
       elements,
       sources,
       ...entry.diagnostics.snapshot(),

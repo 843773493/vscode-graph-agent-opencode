@@ -396,3 +396,10 @@
 - 原生 accept/dismiss 共用既有运行时错误 owner，公开 browser/page 身份、dialog.accept/dialog.dismiss 阶段及原 code/status；完整原异常保留诊断/cause。page 身份在原生调用前从 pending 冻结，失败保留原对话框，成功才清除；默认无参 accept、prompt 文本与取消语义保持。
 - 固定 tree `bc5d7c827493f0ba418ae06fd61db069d4a9c473`：21 项动作单测、8 项端口分配测试、JS 语法及 Ruff 通过；6 项真实 Chromium/HTTP 集成通过（30.16秒），覆盖同步/异步/工具/Workspace API、失败落盘、owner/lease、同一对话框重试及精确页面返回值。新增测试在旧生产完整 archive 中4项全失败，旧实现单测9项红；非作者只读独审 GO。现有213个集成文件超过旧200端口容量，沿既有分区公式扩至250，不混入共享树命名整理。
 - 首次集成止于端口容量，第二次因新测试误在 Node 访问 window 失败，修为 page.evaluate 后重验；命令、全源码前后指纹、raw/SHA、退出码及零残留见 `out/tests/temp/browser_native_dialog_20261023/artifacts/validation-proof-003.json`、`review-003.json`。Workspace API 使用 ASGI，不代完整 Gateway/Web 或 Windows 实机，2.2/7.2 总门保持未勾。
+
+
+### 2026-10-23 Browser 调试快照采集错误出口（2.2/7.2 部分收口）
+
+- DOM、来源和标题采集在原生调用边界复用既有运行时错误 owner，公开 browser/page 身份、debug_dom/debug_sources/debug_title 阶段及原 code/status；完整原异常和位置保留诊断/cause，不复制进 WebSocket 错误或 last_operation。DOM/来源前缀限制及正常返回合同不变，失败不销毁页面，下一次显式请求仍可采集。
+- 固定完整 tree `43e6c2f6918a340247cd64eefabf553fe2e88af9`：132 项 Browser 操作/诊断单测、Ruff、JS 语法及 Python compile 通过；3 项真实 Chromium/Browser Manager HTTP/WebSocket 集成通过（19.53秒），覆盖三阶段一次性原生故障、安全响应/落盘记录、owner/lease、原日志原因和同连接重试。注入原生方法失败不冒充真实系统 EACCES。旧生产完整 archive 的新增3项单测全部失败，明确区分未包装的原异常。
+- 完整源码前后指纹、准确命令、raw/SHA、退出码、零进程组残留及只读审查见 `out/tests/temp/browser_debug_snapshot_20261023/artifacts/validation-proof-001.json`、`review-001.json`。Workspace API 使用 ASGI，Browser Manager 使用真实网络；不代替完整 Gateway/Web、进程重启或 Windows 实机，2.2/7.2 总门保持未勾。

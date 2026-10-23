@@ -271,6 +271,35 @@ describe("浏览器启动的运行时错误归属", () => {
 });
 
 describe("浏览器资源生命周期错误归属", () => {
+  test.each(["debug_dom", "debug_sources", "debug_title"])(
+    "调试快照原生失败保留采集阶段和原因，不复制到操作记录: %s", async (stage) => {
+      const { browser } = liveSession();
+      const entry = browser.pageEntries.get(browser.activePageId);
+      const cause = Object.assign(new Error("EACCES /private/browser/debug-profile"), { code: "EACCES", statusCode: 503 });
+      let evaluations = 0;
+      entry.page.evaluate = async () => {
+        evaluations += 1;
+        if (stage === (evaluations === 1 ? "debug_dom" : "debug_sources")) throw cause;
+        return evaluations === 1 ? { node_id: "0" } : [];
+      };
+      entry.page.title = async () => { if (stage === "debug_title") throw cause; return "调试页面"; };
+      entry.page.url = () => "about:blank";
+      const logged = spyOn(console, "error").mockImplementation(() => undefined);
+      try {
+        const failure = await browser.runInteractiveOperation({ actor: "user:test", action: "debug-snapshot" },
+          () => browser.debugSnapshot()).catch((error) => error);
+        expect(failure).toMatchObject({ cause, code: "EACCES", statusCode: 503 });
+        expect(failure.message).toContain(`stage=${stage}`);
+        expect(failure.message).toContain("page_id=page_device");
+        expect(JSON.stringify(browser.toRecord())).not.toContain("/private/browser/debug-profile");
+        expect(browser.record.last_operation).toMatchObject({ action: "debug-snapshot", status: "failed", error: failure.message });
+        expect(browser.record.status).toBe("running");
+        expect(browser.pageEntries.size).toBe(1);
+        expect(logged.mock.calls.some((args) => args.at(-1) === cause)).toBe(true);
+      } finally { logged.mockRestore(); }
+    },
+  );
+
   test.each(["create_page", "close_page", "Page.stopLoading", "Page.captureScreenshot"])(
     "页面控制的原生错误保留身份、分类和原因: %s", async (stage) => {
       const cause = Object.assign(new Error(String.raw`EACCES C:\private\chromium\profile`), { code: "EACCES", statusCode: 503 });
