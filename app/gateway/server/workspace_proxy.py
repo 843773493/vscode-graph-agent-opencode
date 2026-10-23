@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import time
 from collections.abc import AsyncIterator, Callable
 from functools import partial
@@ -51,6 +52,7 @@ from app.services.infrastructure.resource_platform.virtual_resources.resolver im
 )
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 HISTORY_LOADING_HEADER = "x-boxteam-history-loading"
 BACKEND_WORKSPACE_ID_HEADER = "x-boxteam-backend-workspace-id"
@@ -578,6 +580,12 @@ async def _proxy_workspace_request(
                     response = None
                 if retry_upstream and attempt < len(retry_delays):
                     continue
+                logger.exception(
+                    "Gateway 工作区上游请求失败: request_id=%s, workspace_id=%s, "
+                    "method=%s, stage=upstream_request, error=%s",
+                    get_request_id(request), target.workspace_id,
+                    request.method, type(error).__name__,
+                )
                 raise HTTPException(
                     status_code=502,
                     detail=f"无法连接工作区后端 {target_url}: {error}",
@@ -585,6 +593,12 @@ async def _proxy_workspace_request(
             except TimeoutError as error:
                 if retry_upstream and attempt < len(retry_delays):
                     continue
+                logger.exception(
+                    "Gateway 工作区上游响应头等待超时: request_id=%s, workspace_id=%s, "
+                    "method=%s, stage=upstream_headers, timeout_seconds=%s",
+                    get_request_id(request), target.workspace_id,
+                    request.method, UPSTREAM_RESPONSE_HEADERS_TIMEOUT_SECONDS,
+                )
                 raise HTTPException(
                     status_code=504,
                     detail=(

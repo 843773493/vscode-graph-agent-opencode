@@ -346,6 +346,28 @@ async def test_basic_chat_tool_loop_through_real_web_surface(
             driver_seconds = 10800 if section8_selection_contract["mode"] == "default" else 3600
             returncode = await asyncio.to_thread(process.wait, timeout=driver_seconds)
             print(f"{datetime.now(UTC).isoformat()} browser_driver_end returncode={returncode}", file=phase_output, flush=True)
+        if returncode != 0:
+            # 先记录本 fixture 持有的进程，再让断言触发 teardown；不发送请求或信号。
+            owned_processes = []
+            for name, peer in section8_product_nodes.items():
+                for role, owner in (("backend", peer.backend), ("gateway", peer.gateway)):
+                    if owner is None:
+                        continue
+                    observed_returncode = owner.process.poll()
+                    owned_processes.append({
+                        "node": name, "role": role, "pid": owner.process.pid,
+                        "returncode": observed_returncode, "port": owner.port,
+                        "workspace_id": peer.workspace_id, "gateway_id": peer.gateway_id,
+                        "logs": {
+                            label: {"path": str(log.name), "bytes": os.fstat(log.fileno()).st_size}
+                            for label, log in (("stdout", owner.stdout_file), ("stderr", owner.stderr_file))
+                        },
+                    })
+            (artifacts / "basic-chat-tool-loop-process-failure.json").write_text(json.dumps({
+                "observed_at_utc": datetime.now(UTC).isoformat(),
+                "stage": "browser_exited_before_product_teardown", "browser_returncode": returncode,
+                "owned_processes": owned_processes,
+            }, ensure_ascii=False, indent=2) + "\n")
         assert returncode == 0, (
             "基础聊天工具循环 Web E2E 失败:\n"
             f"stdout:\n{browser_stdout_path.read_text()}\n"
