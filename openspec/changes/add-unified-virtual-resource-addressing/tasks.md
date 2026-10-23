@@ -417,3 +417,11 @@
 - 团队任务dispatch与逐recipient投递的唯一失败写口只保存Session/Thread/team/task或ledger revision、阶段、异常类别及可用errno/winerror/SQLite code；完整原异常留诊断，任务抛错保原cause，部分recipient失败仍以原ExceptionGroup聚合。失败任务/事件和recipient pending记录不再复制异常正文，无新schema、writer或错误文本过滤；原receipt/finalizer/lease及显式恢复顺序不变。
 - 最终完整tree `ecbfa0d267298b398f763558c8d80c0f56681d9b`：fanout集成全文件与团队business/infrastructure单测42项通过/61.21秒，Ruff及compileall通过。三种平台路径文本在回执后/任务绑定后与recipient故障共9项经真实TeamStore/ControlStore/Saver入口验证，另开read-only ControlStore核持久数据、DTO无位置，原日志/cause保原因，原Job与通知回执不重复，恢复只补失败recipient且冻结payload/hash/lease不漂移。完整旧生产archive的相同9项全部失败/13.53秒；Windows文本不代Windows实机，故障为受控原生异常注入。
 - 4311项源码前后指纹、准确命令/raw/SHA、退出码、零进程残留及非作者行为/架构审查见 `out/tests/temp/team_failure_boundaries_20261023/artifacts/validation-proof-004.json`、`review-003.json`。初次runner因隔离HOME目录尚未创建在child启动前拒绝，零测试；static003发现新增logger使旧BLE001 noqa无用，移除后AST不变且最终全回归通过，原件保留。仅为服务/SQLite与cold reader、fanout owner重建，不冒充真实HTTP/完整Web/OS重启，2.2/7.2总门仍未勾。
+
+
+### 2026-10-23 Fork 来源 export 释放失败与原操作恢复（2.2/7.2 部分收口）
+
+- 来源释放失败的唯一 writer 只向原 catalog 和普通 fork DTO 保存冻结 operation/目标 Session/Thread、阶段、异常类别与可用系统码，完整原异常留诊断；pending/confirmed、取消重新抛出、真实回执确认及原冻结请求重试合同不变，无新 schema 或第二链路。
+- 固定完整 tree `20a7cfc1ea9e359adb48bf63994bed611dd73c1b`：正式 matrix 的三类传输失败/三种平台路径文本与 durable abort/坏回执相邻回归7项通过（73.02秒），Ruff/compileall通过；独立冷 catalog 与 SQL dump 核业务记录无位置、原日志对象保留、重试不重复 capture 或 Job。旧生产完整 archive 的3项反例均在原生路径或序列化 private 标记检查失败（24.02秒）。remote target fixture 同批复用源端已准备的隔离模型配置，不再依赖个人模型密钥。
+- 真实三端 Gateway/SSH、model_stream 与 Backend 的两项产品集成通过（263.02秒）：new Session/main 与 child 各自从真实消息生成来源，在来源已释放后硬杀造成回执丢失，核 HTTP pending/detail 与 SQLite 原件相等，两端重启后同操作确认；来源离线后目标冷读附件/历史、原请求重放与后续真实执行保持归属及冻结请求。51份产品原件独立封存；准确命令、4310项源码前后指纹、raw/SHA、退出码、进程回收与独审见 `out/tests/temp/fork_export_error_20261023/artifacts/validation-proof-003.json`、`review-003.json`。
+- 初轮非标准 runner 调用在 pytest 前因内存上限冲突退出97；第二轮3项在目标配置读取缺个人环境变量处失败，修正测试配置后重验，原件保留。服务级用例沿用既有 seeded history/RecordingDeadline，不称真实60秒验收；产品测试没有 Web UI 或真实外部模型网络，文本注入不代 Windows 实机。大文件拆分为非阻断结构建议；其它错误出口与2.2/7.2总门保持未勾。

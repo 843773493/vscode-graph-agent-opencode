@@ -1377,7 +1377,17 @@ async def test_real_fork_delivery_trace_survives_owner_failure(
             (artifacts / "pending-release-response.json").write_text(response.text)
             assert response.status_code == 200, response.text
             assert response.json()["data"]["export_release"]["state"] == "pending"
-            assert response.json()["data"]["export_release"]["error"]
+            result = response.json()["data"]
+            detail = result["export_release"]["error"]
+            assert all(value in detail for value in (
+                f"operation_id={key}", f"session_id={result['session']['session_id']}",
+                f"thread_id={result['thread_id']}", "stage=source_export_release",
+                "error=WorkspaceSessionContextAccessError",
+            ))
+            assert all(str(node.workspace) not in response.text for node in nodes.values())
+            pending_capture = _capture_record(target, key)
+            assert pending_capture["export_release_state"] == "pending"
+            assert pending_capture["export_release_error"] == detail
             deadline.set_stage("restart_source_backend_for_release_recovery")
             lifecycle["source_start"] = source.restart_backend("start")
             deadline.set_stage("restart_target_backend_for_release_recovery")

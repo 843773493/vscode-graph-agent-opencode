@@ -1068,6 +1068,10 @@ async def remote_fork_target(
     shutil.rmtree(workspace / ".boxteam")
     workspace_id = (bind_workspace_id(workspace, production_fork_container.workspace_id)
                     if getattr(request, "param", False) else load_or_create_workspace_id(workspace))
+    shutil.copyfile(
+        production_fork_container.workspace_root / ".boxteam/workspace.jsonc",
+        workspace / ".boxteam/workspace.jsonc",
+    )
     registry = WorkspaceContainerRegistry(
         mounted_workspaces=MountedWorkspaceRegistry([MountedWorkspace(workspace_id, workspace)]),
         project_root=Path.cwd(),
@@ -6307,12 +6311,23 @@ async def test_remote_fork_source_release_waits_for_durable_target_abort(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("native_path", "failure_type"),
+    [
+        ("/private/export/snapshot.sqlite", WorkspaceSessionContextAccessError),
+        (r"C:\private\export\snapshot.sqlite", ConnectionError),
+        (r"\\source\private\export\snapshot.sqlite", TimeoutError),
+    ],
+)
 async def test_lifespan_retries_pending_remote_export_without_restart_or_fork_replay(
     fork_provider_prepare,
     production_fork_container: AppContainer,
     remote_fork_target: tuple[AppContainer, SourceForkOwnerTransport],
     monkeypatch: pytest.MonkeyPatch,
     live_resource_transport_factory,
+    caplog: pytest.LogCaptureFixture,
+    native_path: str,
+    failure_type: type[Exception],
 ) -> None:
     source_context = _production_fork_context(production_fork_container)
     source = await _seed_source(source_context, fork_provider_prepare)
@@ -6362,8 +6377,9 @@ async def test_lifespan_retries_pending_remote_export_without_restart_or_fork_re
     rejected_retry = request.model_copy(update={"resources": [_fork_live_choice(live_resource)]})
     original_transfer = transport.fork_transfer
     release_error = (
-        "Gateway 上下文查询失败: workspace_id=None, method=POST, "
-        "path=/api/gateway/federation/relay, status=409, detail={\"code\":\"source_owner_unavailable\"}"
+        WorkspaceSessionContextAccessError(f"来源不可用: {native_path}")
+        if failure_type is WorkspaceSessionContextAccessError
+        else failure_type(13, "来源不可用", native_path)
     )
     release_attempts = 0
     third_release_attempt = asyncio.Event()
@@ -6379,7 +6395,7 @@ async def test_lifespan_retries_pending_remote_export_without_restart_or_fork_re
             release_attempts += 1
             delivery_contexts.append((get_current_gateway_id(), get_current_request_id()))
             if release_attempts < 3:
-                raise WorkspaceSessionContextAccessError(release_error)
+                raise release_error
             third_release_attempt.set()
             await source_recovered.wait()
             result = await original_transfer(payload)
@@ -6414,9 +6430,23 @@ async def test_lifespan_retries_pending_remote_export_without_restart_or_fork_re
 
             assert result.export_release is not None
             assert result.export_release.state == "pending"
-            assert result.export_release.error == f"WorkspaceSessionContextAccessError: {release_error}"
+            detail = result.export_release.error
+            assert detail is not None
+            assert native_path not in detail and "private" not in result.model_dump_json()
+            assert all(value in detail for value in (
+                f"operation_id={key}", f"session_id={result.session.session_id}",
+                f"thread_id={result.thread_id}", "stage=source_export_release",
+                f"error={failure_type.__name__}",
+            ))
+            if isinstance(release_error, OSError):
+                assert "errno=13" in detail
+            assert any(record.exc_info and record.exc_info[1] is release_error for record in caplog.records)
 
             target_catalog = target_context.sessions.path_resolver.catalog_store
+            with closing(SessionCatalogStore(target_catalog.database_path, target_catalog.sessions_root)) as cold_catalog:
+                assert cold_catalog.get_fork_export_release(key) == ("pending", detail)
+                with cold_catalog.read_transaction() as connection:
+                    assert "private" not in "\n".join(connection.iterdump())
             published = target_catalog.get_creation_record(key)
             assert published.state == "published"
             assert published.fork_delivery_request_id == "frozen-export-delivery"

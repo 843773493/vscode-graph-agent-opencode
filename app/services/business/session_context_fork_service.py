@@ -784,9 +784,16 @@ class SessionContextForkService:
         )
 
         def record_pending(error: BaseException) -> None:
-            reason = f"{type(error).__name__}: {error}"
+            reason = (
+                f"fork 来源 export 释放待确认: operation_id={key}, "
+                f"session_id={capture.target_session_id}, thread_id={capture.target_thread_id}, "
+                f"stage=source_export_release, error={type(error).__name__}"
+            )
+            for name in ("errno", "winerror", "sqlite_errorcode"):
+                if isinstance(code := getattr(error, name, None), int):
+                    reason += f", {name}={code}"
             catalog.record_fork_export_release(capture, error=reason)
-            logger.error("fork 来源 export 释放待确认: operation_id=%s error=%s", key, reason, exc_info=error)
+            logger.error("%s；完整诊断见异常链", reason, exc_info=error)
 
         try:
             reply = await self._transport.fork_transfer(payload)
