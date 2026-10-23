@@ -75,7 +75,7 @@ Thread unload 是独立的、立即执行的清理路径：对临时资源，own
 
 ### 7. 外部资源引用承载身份与 URI，逐条消除已确证的 real path 持久化
 
-本 change 的工作区持久记录、API 响应体与模型可见载荷中，用于引用 owner 外部资源或产物位置的字段 MUST 按唯一寻址合同承载 `资源身份 / ResourceIdentity` 与 `资源 URI`（必要时加并列 revision 字段；D-A3 使用既有 API 端点），MUST NOT 承载 `真实路径 / real path` 或 provider locator。owner 主记录保存其自己创建管理的同一业务资源的身份及生命周期事实，边界引用本 change spec；运行态字段仍遵守 owner 规范化要求。该 prohibition 与 `add-unified-virtual-resource-addressing` 的 requirement「三层职责必须严格分离」同源；{scope} 闭集、`scope_id` 取值、URI 语法、kind 与 `拒绝码 / rejection code` 均引该 change，本 change 不复述、不自造。
+本 change 的工作区持久记录、API 响应体与模型可见载荷中，用于引用 owner 外部资源或产物位置的字段 MUST 按唯一寻址合同承载 `资源身份 / ResourceIdentity` 与 `资源 URI`（必要时加并列 revision 字段；D-A3 使用既有 API 端点），MUST NOT 承载 `真实路径 / real path` 或 provider locator。owner 主记录保存其自己创建管理的同一业务资源的身份及生命周期事实，边界引用本 change spec；运行态字段仍遵守 owner 规范化要求。 Gateway 原始诊断日志与 Browser 本地文件页面 URL 的具名例外只引用统一寻址 owner 的同名 requirements；checkpoint 文件本身、下载/截图产物位置仍按 D-A2/D-A3，不以页面 URL 例外扩大许可。该 prohibition 与 `add-unified-virtual-resource-addressing` 的 requirement「三层职责必须严格分离」同源；{scope} 闭集、`scope_id` 取值、URI 语法、kind 与 `拒绝码 / rejection code` 均引该 change，本 change 不复述、不自造。
 
 **已确证与「real path 不持久化」冲突的字段与行为（逐条给出修正方向）**：
 

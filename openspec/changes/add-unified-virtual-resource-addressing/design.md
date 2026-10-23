@@ -37,7 +37,7 @@
 
 - **ResourceIdentity**：持久化，无 revision，不依赖激活工作区 → 用于去重与 lineage。
 - **URI**：持久化，允许悬空，禁 revision/hash → 软件内部与模型可见载荷的默认引用形式。
-- **real path**：资源访问时仅在原生 owner 的最终 fs/sqlite 调用点及必要局部链路临时使用，不作为资源引用进入模型载荷、普通响应 DTO、解析结果或跨 Gateway 资源投影。原生目录选择/注册和普通文件原生路径是具名请求输入，不放宽输出/持久化边界。物理 workspace root 与用户显式选定的未注册目录根是两类具名控制面持久化例外，均只由原生 Gateway 持有；前者合同引用 `add-multi-workspace-backend-mounting`，后者见 D1b。
+- **real path**：资源访问时仅在原生 owner 的最终 fs/sqlite 调用点及必要局部链路临时使用，不作为资源引用进入模型载荷、普通响应 DTO、解析结果或跨 Gateway 资源投影。原生目录选择/注册和普通文件原生路径是具名请求输入，不放宽输出/持久化边界。物理 workspace root 与用户显式选定的未注册目录根是两类具名控制面持久化例外，均只由原生 Gateway 持有；前者合同引用 `add-multi-workspace-backend-mounting`，后者见 D1b。原始诊断日志和 Browser 页面 URL 的两项具名例外仅按 D1c 与对应 spec requirements 生效，不改变资源引用的三层职责。
 
 会话文件变更的修改对象保存 files URI，冷读索引和 reviewed map 使用与写入相同的引用校验。before/after/diff 快照由 session/edit 身份在存储 owner 内重推导，不保存等价相对 locator，也不在 DTO/事件重复输出；前端继续使用已有 diff_text 与 preview。移除旧字段及全部消费者，protobuf 保留已发布编号和名称，旧落盘字段明确失败而非双读迁移。
 
@@ -66,6 +66,17 @@ Gateway 在现有控制面 SQLite 中唯一保存目录 ID→原生根绑定，�
 Gateway 用户 profile 的文件预览与目录展开引用同样只保存文件 owner 已返回的 files URI；冷读和更新共用 DTO 校验，旧路径明确失败且保留原件。设置请求及冷读错误只报告字段与类别，不把原生输入或磁盘旧位置复制到普通响应。
 
 Gateway 只为目标端现有文件 owner 提供受认证的同机临时绑定，不执行 enumerate/read/write。首次请求与后台恢复都必须能按 URI 从原生控制面取得绑定；不能只依赖一次请求注入的缓存，也不能把根复制到业务库。实际执行继续复用 WorkspaceService/WorkspaceFileOperations；执行路由是服务归属，不改变资源归属。缺绑定明确失败，不回退当前工作区。实现同批迁齐所有直接/间接消费者后下线旧路径链，不留下 URI wrapper 与旧绝对路径两套执行。
+
+### D1c：原始诊断日志与 Browser 本地页面 URL 的具名例外
+
+2026-10-23 用户明确裁定，唯一寻址 owner 登记以下两项例外，消费者只引用对应 requirement：
+
+1. Gateway 原始诊断日志管理入口：用户主动打开、受现有管理权限保护的原始服务日志与异常堆栈可保留真实文件路径。联邦诊断传递同类原始日志沿用同一管理授权边界，不将日志文字转成资源引用、普通错误正文或解析结果。
+2. Browser 本地文件页面 URL：保留原生 `file:` 导航。用户明确打开的本地文件页面 URL 可保留在 Browser 地址栏、导航请求、相关错误、页面快照和恢复检查点，恢复时仍由冻结的目标机器按原生文件系统语义解释；中继与当前激活工作区不能改投目标。这里的恢复检查点许可只针对页面 URL，不包括 checkpoint 文件所在路径、下载/截图产物位置或其它 Browser 存储 locator。
+
+两项只豁免具名入口及列明字段，不为整个 Browser、Gateway diagnostics DTO、日志摘要、普通业务响应或其它持久记录提供路径许可，不新增 URI kind、解析器、文件操作链路或授权方式。普通文件的相对路径、绝对路径和资源 URI 继续按 D1a 在目标端统一解析并复用同一 owner。终端 cwd 的相对路径规范化合同保持。
+
+验收区分正反两面：管理入口本地/联邦原始日志保留原文字且遵守既有管理授权；Browser 页面 URL 经原生导航、失败、快照、重启恢复仍指向目标端原文件；同时核普通错误/资源引用、checkpoint 文件位置、下载/截图位置不借此获得真实路径许可。规范登记本身不代替这些产品验收。
 
 ### D2：保留既有段序，scope_id 全必填
 

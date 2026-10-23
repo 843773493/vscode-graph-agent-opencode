@@ -25,7 +25,8 @@
 - **配置来源地址与逻辑来源层由本 change 唯一裁定**：配置文件地址使用既有 `config` kind；URI 只标识可寻址来源文件，`layer` 与 `precedence` 是独立兄弟字段。具体逻辑 layer 闭集与 precedence 见 requirement「配置 layer 必须表示逻辑来源且与载体和快照分离」；SQLite 只作内部 carrier，`runtime_override` 可无 URI，`active_snapshot` / `pending_snapshot` 与 `sources[]` 分开。其他 change 只引用该定义，不新增 kind 或 URI 形态。
 - 固化**identity 独立于 URI**：同一逻辑名出现在两个不同 scope 时是两个不同 identity；跨来源等价/覆盖是独立 concern。
 - 固化**默认寻址政策**：配置/skill/状态/资源引用默认用 URI 传递；新增持久化字段若需定位资源，一律用 `identity + URI(+ 独立 revision 字段)`，不得存 real path。工作区根例外由 `add-multi-workspace-backend-mounting` 定义的原生 Gateway workspace-root binding；它不是资源引用，不得复制到 managed group、普通 DTO 或业务记录。
-- 建立**可机械检查的 real path 不变量**：持久化例外仅为上述 workspace-root binding 与本 owner 登记的原生目录根绑定；具名请求输入边界包括原生目录选择/注册和普通文件的原生路径输入。real path 不得作为资源引用进入业务持久化、普通 API 响应、联邦资源投影、解析结果或系统生成的模型载荷；路径输入只交固定目标解析与执行，中继不将其保存或转为资源数据。
+- 建立**可机械检查的 real path 不变量**：持久化例外包括上述 workspace-root binding、本 owner 登记的原生目录根绑定，以及本 spec 具名登记的 Gateway 原始诊断日志与 Browser 本地文件页面 URL；具名请求输入边界包括原生目录选择/注册和普通文件的原生路径输入。real path 不得作为资源引用进入业务持久化、普通 API 响应、联邦资源投影、解析结果或系统生成的模型载荷；路径输入只交固定目标解析与执行，中继不将其保存或转为资源数据。
+- 登记两项用户确认的具名例外：受既有管理授权保护、用户主动打开的 Gateway 原始服务日志/异常堆栈（含联邦诊断传递的同类原始日志）保留真实路径；用户明确打开的 Browser 本地文件页面保留原生 `file:` URL，允许地址栏、导航请求、相关错误、页面快照及恢复检查点保存原 URL，始终由目标机器解释。两项不扩大普通业务响应、资源引用和其它持久记录的许可，不改变普通文件相对/绝对/资源 URI 三输入与同一文件操作链路。
 - **普通文件路径输入合同（2026-10-20 用户裁定）**：相对路径、绝对路径、资源 URI 均为合法入口，内部统一解析后复用同一文件 owner。相对路径基于明确目标工作区/目录；绝对路径按目标机器原生语义解释，工作区外访问遵守既有能力和授权，不得重定向到工作区内或因 URI 化强制先注册工作区。Windows 盘符同样由目标平台解释；终端/shell 保留原生语义。该输入合同不放宽 URI 输出/持久引用政策，Gateway 管理目录入口也不限制普通文件绝对路径输入。
 - **未注册目录能力保留（2026-10-20 用户确认）**：文件树继续浏览、编辑未注册目录，保留快捷目录能力；不强制或暗中注册工作区，不伪造 workspace_id。本 owner 须补齐其规范寻址后迁移响应和快捷方式持久引用，不能靠删功能消除真实路径字段。
 - **真实路径外泄（已消除，保留为可机械复核的不变量）**：配置来源层记录曾以 `ConfigSourceLayerRecord.source_path`/`backup_path` 把真实路径落进 SQLite，配置来源列表 API 曾以 `ConfigSourceDTO.path`/`ConfigSourcesDTO.schema_path` 把真实路径写进响应体；两处已分别由 `50bffa45`（持久化改 URI）与 `76ed0089`（响应体改 URI）消除，详见 requirement「既有配置来源持久化必须按同一模式迁移为 URI 兄弟字段」。

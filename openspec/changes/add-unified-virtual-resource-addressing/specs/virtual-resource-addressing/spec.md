@@ -35,7 +35,7 @@
 
 - **资源身份 / ResourceIdentity**：不透明、稳定、**不含 revision**、**不依赖当前激活工作区**，持久化，用于去重与 lineage。
 - **资源 URI**：可解析的地址，持久化，**允许悬空**（指向已不存在的资源是合法值），**禁止编码 revision 或 hash**，是软件内部与模型可见载荷中传递资源的默认形式。
-- **真实路径 / real path**：业务资源访问时在机器本地临时使用，只在原生 owner 的最终 fs/sqlite 调用点及其必要的局部调用链中存在；除本 capability「原生目录根绑定必须由目标 Gateway 唯一持有」及「工作区物理根必须绑定到唯一原生 Gateway」定义的控制面根绑定外，MUST NOT 持久化。真实路径 MUST NOT 作为资源引用进入模型可见载荷、普通 API/Workspace 响应 DTO、解析结果或跨 Gateway 资源投影。具名输入边界有两类：该 root-binding requirement 授权的原生目录选择/工作区注册，以及本 capability「普通文件入口必须保留原生路径输入并统一目标解析」登记的普通文件路径输入。输入许可不扩大真实路径输出或持久化例外。
+- **真实路径 / real path**：业务资源访问时在机器本地临时使用，只在原生 owner 的最终 fs/sqlite 调用点及其必要的局部调用链中存在；除本 capability「原生目录根绑定必须由目标 Gateway 唯一持有」及「工作区物理根必须绑定到唯一原生 Gateway」定义的控制面根绑定，以及下述「Gateway 原始诊断日志管理入口保留原文」和「Browser 本地文件页面 URL 保留原生语义」具名例外外，MUST NOT 持久化。真实路径 MUST NOT 作为资源引用进入模型可见载荷、普通 API/Workspace 响应 DTO、解析结果或跨 Gateway 资源投影。具名输入边界有两类：该 root-binding requirement 授权的原生目录选择/工作区注册，以及本 capability「普通文件入口必须保留原生路径输入并统一目标解析」登记的普通文件路径输入。输入许可不扩大真实路径输出或持久化例外。
 
 #### Scenario: 业务资源 real path 只在本地访问链中存在
 
@@ -44,7 +44,7 @@
 
 #### Scenario: real path 外泄即缺陷
 
-- **WHEN** 除上述两类原生 Gateway 控制面根绑定外，API 响应体、业务持久化记录、解析结果、跨 Gateway 资源投影或系统生成的模型资源引用中出现 real path
+- **WHEN** API 响应体、业务持久化记录、解析结果、跨 Gateway 资源投影或系统生成的模型资源引用中出现 real path，且不属于上述控制面根绑定或两个具名入口例外
 - **THEN** 系统 MUST 将其判定为缺陷并显式失败，不得以 `display_uri`、日志脱敏或截断静默掩盖；root binding 也 MUST NOT 出现在上述输出中
 
 #### Scenario: 工作区根绑定只在原生控制面持久化
@@ -148,15 +148,47 @@
 - **WHEN** 文件 operation 已受理后 Backend 重启，或 watch/快捷方式在新进程恢复，而请求内根缓存已消失
 - **THEN** owner 按原 URI 向同一原生 Gateway 取绑定并继续原操作的恢复合同；绑定缺失明确失败，原 operation 身份、冲突前置和效果知识边界保持不变，不复制真实路径到业务存储
 
+### Requirement: Gateway 原始诊断日志管理入口保留原文
+
+用户主动打开、受现有管理权限保护的 Gateway 原始服务日志与异常堆栈 MAY 保留真实文件路径，MUST 保留原始排错信息。经联邦诊断入口传递的同类原始日志适用本例外，MUST 沿用既有管理授权与目标路由边界，不降低权限要求。
+
+本例外仅覆盖该管理入口的原始日志/堆栈及其传输，不授权把其中路径作为资源引用、普通业务错误字段、解析结果或其它持久业务记录使用。普通业务响应与资源投影继续遵守三层职责和位置判据，MUST NOT 将任意诊断摘要或整个 diagnostics 对象视为例外。
+
+#### Scenario: 本地与联邦管理诊断保留原始堆栈
+
+- **WHEN** 用户通过既有管理权限主动打开本地 Gateway 原始日志，或通过联邦诊断打开目标 Gateway 同类日志
+- **THEN** 日志与堆栈可以包含原始真实路径，保留原文及目标来源；联邦入口继续遵守同一管理授权边界，不借此开放普通资源读取或绕过授权
+
+#### Scenario: 原始日志例外不扩大普通错误响应
+
+- **WHEN** 同一原生错误需要形成普通业务响应、资源引用或持久业务状态
+- **THEN** 普通链路仍按原 owner 合同报告资源身份、失败阶段与原因，不把原始日志路径复制到这些记录；完整异常仍可供具名管理日志入口排错
+
+### Requirement: Browser 本地文件页面 URL 保留原生语义
+
+系统 MUST 保留 Browser 原生 `file:` 导航能力。用户明确打开的本地文件页面 URL MAY 原样保留在 Browser 地址栏、导航请求、该页面相关错误、页面快照及恢复检查点中。该 URL MUST 始终由目标机器按原生文件系统语义解释，包括 Windows 盘符与路径分隔符；中继、source 机器和当前激活工作区 MUST NOT 改写其目标或在自身文件系统解释该 URL。
+
+本例外仅覆盖上述页面 URL 字段，不授权保存或输出 checkpoint 文件位置、下载/截图产物位置、其它 Browser 内部存储 locator、普通业务响应或资源引用。`file:` 页面 URL 不成为第二套资源 URI，不改变资源 identity、授权、普通文件三种输入和同一文件 owner/操作链路，也不新增 URI kind 或解析器。
+
+#### Scenario: 本地页面导航与恢复保持目标端原 URL
+
+- **WHEN** 用户在明确的目标 Browser 打开本地文件页面，随后读取地址栏/页面快照、查看导航错误或保存并恢复检查点
+- **THEN** 这些入口可以保留原 `file:` 页面 URL，原目标机器按本机文件系统语义执行或明确报告原目标失败，不改投中继或当前工作区同名文件
+
+#### Scenario: 页面 URL 例外不豁免 Browser 产物位置
+
+- **WHEN** Browser 保存页面 URL 的同时写入恢复检查点、下载或截图产物
+- **THEN** 页面 URL 按本例外保留，但 checkpoint 文件本身的位置和下载/截图文件位置仍按唯一位置判据由 owner 身份推导或既有引用访问，不借页面 URL 例外落盘或输出真实路径
+
 ### Requirement: 「位置」必须有可机械判定的统一判据
 
 资源引用中的「位置 / location」判定 MUST 使用如下**可机械判定**的统一判据，MUST NOT 各 change 自行解释：一个字段承载的是「位置」，当且仅当它（或由它经确定性推导得到的值）可直接用于 `open`/`stat`/`join` 等文件系统或 sqlite 访问，且指向本体位于持久化记录 owner 之外的资源或产物。据此：
 
-- **控制面根绑定例外**：工作区物理根按 requirement「工作区物理根必须绑定到唯一原生 Gateway」持久化；用户显式选定的未注册目录根按本 capability「原生目录根绑定必须由目标 Gateway 唯一持有」持久化。两类根均只由目标原生 Gateway 持有，均不属于业务资源记录，不改变下述位置判据，也不授权其它 real path 落盘。
+- **控制面根绑定例外**：工作区物理根按 requirement「工作区物理根必须绑定到唯一原生 Gateway」持久化；用户显式选定的未注册目录根按本 capability「原生目录根绑定必须由目标 Gateway 唯一持有」持久化。两类根均只由目标原生 Gateway 持有，均不属于业务资源记录，不改变下述位置判据，也不授权其它 real path 落盘。两个具名日志/Browser 页面 URL requirement 的例外按其精确边界优先适用，不改变未命中字段的位置判定。
 - **可判定为「位置」⇒ MUST NOT 落盘**：任何「位置」MUST 由 `资源身份 / ResourceIdentity` 加 `资源 URI`（必要时加并列 revision 字段）表达；当且仅当该位置可由 owner 身份（资源 id 与工作区身份）确定性推导时，MUST NOT 落盘，改为在该次 fs/进程调用栈内由 owner 身份重推导。
 - **不可由 owner 身份推导、但必须对外可寻址 ⇒ MUST 用既有 API 端点引用**，MUST NOT 落盘 real path、MUST NOT 为此自造 URI kind、MUST NOT 裸拼接 URI。
-- **唯一例外边界**：owner **自身**的运行态字段（典型为终端 shell 的当前工作目录）表达的是 owner 的运行状态而非「资源所在位置」，MUST NOT 被当作位置引用或位置表达；此类字段 MUST 以**相对于工作区根的原生相对路径**持久化，允许以 `..` 表达工作区外 cwd 并保留原目标，MUST NOT 落盘绝对路径或工作区根路径。
-- **real path 出现在一般持久化记录、API 响应体或系统生成的模型资源引用中 ⇒ 缺陷**：持久化例外仅为上述两类原生 Gateway 控制面根绑定。原生目录选择/注册与普通文件路径请求的具名输入边界引用前述 requirements，不授权将真实路径复制到业务记录、普通响应 DTO、解析结果或联邦资源投影。违反时 MUST 显式失败，MUST NOT 以脱敏、截断或 `display_uri` 静默掩盖。
+- **一般 owner 运行态字段**：除上述 Browser 页面 URL 的具名例外外，owner **自身**的运行态字段（典型为终端 shell 的当前工作目录）表达的是 owner 的运行状态而非「资源所在位置」，MUST NOT 被当作位置引用或位置表达；此类字段 MUST 以**相对于工作区根的原生相对路径**持久化，允许以 `..` 表达工作区外 cwd 并保留原目标，MUST NOT 落盘绝对路径或工作区根路径。
+- **real path 出现在一般持久化记录、API 响应体或系统生成的模型资源引用中 ⇒ 缺陷**：具名例外除上述两类原生 Gateway 控制面根绑定外，仅包括 requirement「Gateway 原始诊断日志管理入口保留原文」与「Browser 本地文件页面 URL 保留原生语义」明确列出的入口和字段；未命中者仍受本条约束。原生目录选择/注册与普通文件路径请求的具名输入边界引用前述 requirements，不授权将真实路径复制到业务记录、普通响应 DTO、解析结果或联邦资源投影。违反时 MUST 显式失败，MUST NOT 以脱敏、截断或 `display_uri` 静默掩盖。
 
 以上判据 MUST 是「位置 vs 非位置」的唯一判定来源；`add-workspace-persistent-resource-management` 的 D-A2/D-A3 与 owner 运行态字段例外 MUST 引用本 requirement，MUST NOT 另立一套判据。
 
@@ -564,7 +596,7 @@ ResourceIdentity MUST 不透明、稳定且 revision-free。同一逻辑名出�
 
 ### Requirement: 默认寻址政策必须以 URI 为默认形式
 
-软件内部的配置、skill、状态与资源引用 MUST 默认以 URI 传递；real path MUST 只在最后访问点出现。任何新增持久化字段若需定位资源，MUST 使用 `identity + URI(+ 独立 revision 字段)` 组合，MUST NOT 存储 real path。
+软件内部的配置、skill、状态与资源引用 MUST 默认以 URI 传递；real path MUST 只在最后访问点出现。任何新增持久化字段若需定位资源，MUST 使用 `identity + URI(+ 独立 revision 字段)` 组合，MUST NOT 存储 real path。 本政策按本 capability 具名登记的根绑定、Gateway 原始诊断日志和 Browser 本地文件页面 URL requirements 划界，例外不构成普通资源引用。
 
 该寻址义务只适用于需要定位资源的引用；内部语义聚合是否拥有可访问地址，MUST 按本 capability 的 requirement「内部语义聚合资源不得伪造 URI」处理，不得把稳定身份误当可访问地址。
 
