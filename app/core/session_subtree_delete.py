@@ -38,10 +38,11 @@
   active**、不向 UI 逐个暴露已删/未删混合状态、不扫盘猜测目标；
   ``.deleting/`` 下无 record 对应的残留目录不属于本流，不触碰、不吸收
   （对齐 app/core/AGENTS.md「不得扫描磁盘并静默吸收改动」）。
-- **简化边界（如实记录）**：read guard/旧 lease/通信/附件收敛等待属
-  8.1-C/8.8——当前进程内无跨进程 reader 与 waiter，drain 不实现等待段；
-  跨进程 topology/lifecycle 文件锁与 shared/exclusive gate 语义归 8.1-C
-  （``NavigationTopologyGate`` 为进程内原语）。**8.1-D**：整树 catalog
+- **排空与跨进程锁**：topology/lifecycle gate 使用稳定 inode 的 OS 文件锁。
+  catalog deleting 先拒绝新准入；drain 在 gate 外结算 retention/creation，
+  等旧 operation holder 退出，再取得单个 Session exclusive gate 等待读者
+  释放并执行资源排空、fence CAS 与目录隔离，不持等待者结算所需的 gate。
+  **8.1-D**：整树 catalog
   deleting 提交前的 pinned ``ForkRetentionClaim`` 预检已落在
   ``SessionCatalogStore.mark_subtree_deleting`` 的单写事务内——冻结集合
   内任一 session 存在未释放（preparing/active）claim 即在提交前抛
@@ -52,7 +53,7 @@
 - **并发边界**：进程内同 key 并发由 per-key ``asyncio.Lock`` 串行收敛到
   同一结果；同 key 的 preimage 是 (workspace_id, root_node_id)，不同
   preimage 冲突；子树闭包由 gate 纪律与 mark CAS（revision 漂移即拒绝）
-  保证，跨进程并发写归 8.1-C。
+  保证；跨进程由 topology/lifecycle OS 锁与 SQLite 事务共同串行化。
 
 错误分类约定（沿用 ``session_catalog_store.py``）：``TypeError`` 类型错、
 ``ValueError`` 形态非法、``KeyError`` 目标不存在、``RuntimeError`` 语义
