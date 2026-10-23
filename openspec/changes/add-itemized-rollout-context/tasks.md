@@ -1021,3 +1021,9 @@ pending 恢复的硬错误重试已闭合（2026-10-22）：进程内装载阶�
 
 - 附件接受恢复先查权威删除 journal；删除 owner 已接管时不再解析已隔离节点，保留原 finalizer 已提交的 fork 回执。无删除原件的缺失仍明确失败。新增 8 个真实消息执行来源的 HTTP 场景，覆盖 main/child、首次/已发布重试、finalizer/删除双顺序；旧生产完整归档中两个新增场景错误返回 404。续写改走同一 model_stream、消息准入和执行队列，Delta 检查点通过既有恢复接口读取，未放宽身份和历史断言。
 - 固定完整候选 tree `981f0a921a278808a5bec57546b2c42e8c2aef2a`：产品竞态 8 passed/75.01秒；原相邻组首次 14 passed/1 failed，失败为旧装具 provider 配置及直接读取 Delta 消息载荷；迁齐后精确失败场景 1 passed/26.63秒。共用执行装具调用方 8 passed/86.14秒、冷恢复 5 passed/60.26秒、附件恢复与消息生命周期 121 passed/144.12秒，Ruff/compileall 均 exit0。已有通过场景仅按实际依赖复用，不把首次非零改写为整组绿。准确命令、原始输出、源码指纹、退出码及只读复审 `review-final-002.json` 保留于 `out/tests/temp/fork_reply_deletion_20261023/artifacts/`；本切片不代替 7.5、8.3 或完整 Web 门。
+
+
+### 2026-10-23 上下文控制 lease 的 topology 准入
+
+- `session_context_control_admission` 在同一 topology shared → Session exclusive 临界区内核 catalog active、精确 Thread 和 active fence generation，并持久 create-or-get 原 context-control lease、推进 settling；随后释放 topology，仅保留 Session gate 覆盖原本地 mutation/settlement。删除可继续标记 catalog，但不能早于 lease 建立；锁释放点取消也按原 identity 结算 failed，不改通用写准入或引入第二 owner。
+- 完整旧生产 tree `a13072fefe8e5e5841f35a3416f707056e3ed44e` 的真实 Skill tracked→HTTP untrack 竞争稳定失败（1 failed/24.13秒），精确证明删除已提交但 lease 尚未建立。完整修复 tree `9a9d5e1d996d8e3287bec7ad04b90491ddc2e6d1` 的 main/child×完成/取消 4项通过/56.62秒，相邻 Skill 动态跟踪、冻结恢复及删除拒绝4项通过/97.10秒；Ruff、compileall与44项 strict OpenSpec均exit0。4294项源码前后指纹一致，无运行组残留；准确命令/raw/退出码、只读独审及架构审查保留于 `out/tests/temp/context_control_topology_20261023/artifacts/`。本收据关闭具体准入窗口，不代替8.1/8.3/8.13总门或完整Web。

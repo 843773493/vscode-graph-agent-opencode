@@ -205,58 +205,71 @@ class SessionService:
             "kind": payload.get("kind"), "recovery_ref": recovery_ref,
         }
         await observe_phase(operation_id, "context.control.before_admission", details=details)
-        async with self.session_write_admission(session_id):
+        async with AsyncExitStack() as admission:
+            lease: SessionOperationLease | None = None
             try:
-                self._path_resolver.resolve_thread_node(session_id, thread_id)
-            except KeyError as error:
-                raise NotFoundError(
-                    f"SessionThread 不存在: session_id={session_id}, thread_id={thread_id}"
-                ) from error
-            with closing(SessionControlStore(
-                self._path_resolver.resolve_session_node(session_id) / "session-control.sqlite",
-            )) as control:
-                lease = control.create_or_get_lease(
-                    operation_kind="context_control",
-                    operation_identity=f"context-control:{operation_id}",
-                    preimage_hash=sha256_jcs({
-                        "session_id": session_id, "thread_id": thread_id,
-                        "operation_id": operation_id, "input": dict(payload),
-                    }).rsplit(":", 1)[1],
-                    recovery_ref=recovery_ref,
-                )
-                if lease.state == "active":
-                    lease = control.mark_lease_settling(
+                async with self._navigation_topology_gate.shared():
+                    await admission.enter_async_context(self._session_lifecycle_gate.exclusive(session_id))
+                    self.assert_session_active(session_id)
+                    try:
+                        self._path_resolver.resolve_thread_node(session_id, thread_id)
+                    except KeyError as error:
+                        raise NotFoundError(
+                            f"SessionThread 不存在: session_id={session_id}, thread_id={thread_id}"
+                        ) from error
+                    control = admission.enter_context(closing(SessionControlStore(
+                        self._path_resolver.resolve_session_node(session_id) / CONTROL_DATABASE_NAME,
+                    )))
+                    fence_state, generation = control.get_fence()
+                    if fence_state != "active":
+                        raise SessionDeletionPendingError(
+                            "session_deletion_pending: Session fence 已关闭，拒绝新控制操作: "
+                            f"session_id={session_id}, generation={generation}"
+                        )
+                    lease = control.create_or_get_lease(
+                        operation_kind="context_control",
+                        operation_identity=f"context-control:{operation_id}",
+                        preimage_hash=sha256_jcs({
+                            "session_id": session_id, "thread_id": thread_id,
+                            "operation_id": operation_id, "input": dict(payload),
+                        }).rsplit(":", 1)[1],
+                        expected_generation=generation,
+                        recovery_ref=recovery_ref,
+                    )
+                    if lease.state == "active":
+                        lease = control.mark_lease_settling(
+                            lease_id=lease.lease_id, expected_fencing_token=lease.fencing_token,
+                        )
+                    if lease.state not in {"settling", "completed"}:
+                        raise RuntimeError(
+                            "context-control-recovery-failed: 原控制操作已经终结，拒绝重放: "
+                            f"operation_id={operation_id}, state={lease.state}"
+                        )
+                # lease 已 durable 才释放 topology；本地 mutation 与结算仍由 Session gate 保护。
+                await observe_phase(operation_id, "context.control.admitted", details={
+                    **details,
+                    "lease_id": lease.lease_id,
+                    "captured_lifecycle_generation": lease.captured_lifecycle_generation,
+                })
+                yield
+            except BaseException:
+                # 释放 topology 时取消也必须结算已建立的 lease。
+                if lease is not None and lease.state == "settling":
+                    control.settle_lease(
                         lease_id=lease.lease_id, expected_fencing_token=lease.fencing_token,
+                        outcome="failed",
                     )
-                if lease.state not in {"settling", "completed"}:
-                    raise RuntimeError(
-                        "context-control-recovery-failed: 原控制操作已经终结，拒绝重放: "
-                        f"operation_id={operation_id}, state={lease.state}"
+                raise
+            else:
+                if lease.state == "settling":
+                    control.settle_lease(
+                        lease_id=lease.lease_id, expected_fencing_token=lease.fencing_token,
+                        outcome="completed",
                     )
-                try:
-                    await observe_phase(operation_id, "context.control.admitted", details={
-                        **details,
-                        "lease_id": lease.lease_id,
-                        "captured_lifecycle_generation": lease.captured_lifecycle_generation,
-                    })
-                    yield
-                except BaseException:
-                    if lease.state == "settling":
-                        control.settle_lease(
-                            lease_id=lease.lease_id, expected_fencing_token=lease.fencing_token,
-                            outcome="failed",
-                        )
-                    raise
-                else:
-                    if lease.state == "settling":
-                        control.settle_lease(
-                            lease_id=lease.lease_id, expected_fencing_token=lease.fencing_token,
-                            outcome="completed",
-                        )
-                    await observe_phase(operation_id, "context.control.settled", details={
-                        **details, "lease_id": lease.lease_id,
-                        "captured_lifecycle_generation": lease.captured_lifecycle_generation,
-                    })
+                await observe_phase(operation_id, "context.control.settled", details={
+                    **details, "lease_id": lease.lease_id,
+                    "captured_lifecycle_generation": lease.captured_lifecycle_generation,
+                })
 
     def settle_abandoned_context_controls(self, session_id: str) -> int:
         """调用者已持 Session exclusive；遗留短写不能有仍存活的 holder。"""
