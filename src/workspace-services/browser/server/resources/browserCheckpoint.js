@@ -1,75 +1,81 @@
+import { browserRuntimeFailure } from "../browserRuntime.js";
+
 const CHECKPOINT_VERSION = 1;
 
-async function capturePageState(entry) {
-  const pageState = await entry.page.evaluate(() => {
-    // 本次同步采集内按父节点索引一次兄弟顺序；后一次采集必须重新读取DOM。
-    const siblingIndexesByParent = new WeakMap();
-    function selectorFor(element) {
-      if (element.id) return `#${CSS.escape(element.id)}`;
-      const segments = [];
-      let current = element;
-      while (current instanceof Element && current !== document.documentElement) {
-        const tag = current.tagName.toLowerCase();
-        const parent = current.parentElement;
-        let siblings = parent ? siblingIndexesByParent.get(parent) : null;
-        if (parent && !siblings) {
-          siblings = { counts: new Map(), positions: new Map() };
-          for (const child of parent.children) {
-            const position = (siblings.counts.get(child.tagName) || 0) + 1;
-            siblings.counts.set(child.tagName, position);
-            siblings.positions.set(child, position);
+async function capturePageState(session, entry) {
+  try {
+    const pageState = await entry.page.evaluate(() => {
+      // 本次同步采集内按父节点索引一次兄弟顺序；后一次采集必须重新读取DOM。
+      const siblingIndexesByParent = new WeakMap();
+      function selectorFor(element) {
+        if (element.id) return `#${CSS.escape(element.id)}`;
+        const segments = [];
+        let current = element;
+        while (current instanceof Element && current !== document.documentElement) {
+          const tag = current.tagName.toLowerCase();
+          const parent = current.parentElement;
+          let siblings = parent ? siblingIndexesByParent.get(parent) : null;
+          if (parent && !siblings) {
+            siblings = { counts: new Map(), positions: new Map() };
+            for (const child of parent.children) {
+              const position = (siblings.counts.get(child.tagName) || 0) + 1;
+              siblings.counts.set(child.tagName, position);
+              siblings.positions.set(child, position);
+            }
+            siblingIndexesByParent.set(parent, siblings);
           }
-          siblingIndexesByParent.set(parent, siblings);
+          const suffix = siblings && siblings.counts.get(current.tagName) > 1
+            ? `:nth-of-type(${siblings.positions.get(current)})`
+            : "";
+          segments.unshift(`${tag}${suffix}`);
+          current = current.parentElement;
         }
-        const suffix = siblings && siblings.counts.get(current.tagName) > 1
-          ? `:nth-of-type(${siblings.positions.get(current)})`
-          : "";
-        segments.unshift(`${tag}${suffix}`);
-        current = current.parentElement;
+        return segments.join(" > ");
       }
-      return segments.join(" > ");
-    }
 
-    const controls = [...document.querySelectorAll("input, textarea, select")].map((element) => ({
-      selector: selectorFor(element),
-      value: element.value,
-      checked: element instanceof HTMLInputElement ? element.checked : null,
-      selected_values: element instanceof HTMLSelectElement
-        ? [...element.selectedOptions].map((option) => option.value)
-        : null,
-    }));
-    let sessionStorageState;
-    try {
-      sessionStorageState = {
-        available: true,
-        origin: location.origin,
-        entries: Object.entries(sessionStorage),
-        error: null,
+      const controls = [...document.querySelectorAll("input, textarea, select")].map((element) => ({
+        selector: selectorFor(element),
+        value: element.value,
+        checked: element instanceof HTMLInputElement ? element.checked : null,
+        selected_values: element instanceof HTMLSelectElement
+          ? [...element.selectedOptions].map((option) => option.value)
+          : null,
+      }));
+      let sessionStorageState;
+      try {
+        sessionStorageState = {
+          available: true,
+          origin: location.origin,
+          entries: Object.entries(sessionStorage),
+          error: null,
+        };
+      } catch (error) {
+        sessionStorageState = {
+          available: false,
+          origin: location.origin,
+          entries: [],
+          error: error instanceof Error ? error.message : String(error),
+        };
+      }
+      return {
+        scroll_x: window.scrollX,
+        scroll_y: window.scrollY,
+        controls,
+        session_storage: sessionStorageState,
       };
-    } catch (error) {
-      sessionStorageState = {
-        available: false,
-        origin: location.origin,
-        entries: [],
-        error: error instanceof Error ? error.message : String(error),
-      };
-    }
+    });
     return {
-      scroll_x: window.scrollX,
-      scroll_y: window.scrollY,
-      controls,
-      session_storage: sessionStorageState,
+      page_id: entry.pageId,
+      title: await entry.page.title(),
+      url: entry.page.url(),
+      requested_url: entry.requestedUrl || entry.page.url(),
+      navigation_error: entry.navigationError || null,
+      created_at: entry.createdAt,
+      ...pageState,
     };
-  });
-  return {
-    page_id: entry.pageId,
-    title: await entry.page.title(),
-    url: entry.page.url(),
-    requested_url: entry.requestedUrl || entry.page.url(),
-    navigation_error: entry.navigationError || null,
-    created_at: entry.createdAt,
-    ...pageState,
-  };
+  } catch (cause) {
+    throw browserRuntimeFailure({ browserId: session.id, pageId: entry.pageId, stage: "capture_page", cause });
+  }
 }
 
 export function checkpointRestoreUrl(pageState) {
@@ -88,18 +94,25 @@ export function checkpointRestoreUrl(pageState) {
 export async function captureBrowserCheckpoint(session) {
   const pages = [];
   for (const entry of session.pageEntries.values()) {
-    if (!entry.page.isClosed()) pages.push(await capturePageState(entry));
+    if (!entry.page.isClosed()) pages.push(await capturePageState(session, entry));
   }
   if (pages.length === 0) {
     throw new Error(`浏览器没有可写入检查点的标签页: browser_id=${session.id}`);
+  }
+  const createdAt = new Date().toISOString();
+  let storageState;
+  try {
+    storageState = await session.context.storageState({ indexedDB: true });
+  } catch (cause) {
+    throw browserRuntimeFailure({ browserId: session.id, stage: "capture_context", cause });
   }
   // TODO: 改为流式写入临时文件并在序列化过程中执行20MiB上限，避免超大 storageState 先完整驻留内存。
   return {
     version: CHECKPOINT_VERSION,
     browser_id: session.id,
-    created_at: new Date().toISOString(),
+    created_at: createdAt,
     active_page_id: session.activePageId,
-    storage_state: await session.context.storageState({ indexedDB: true }),
+    storage_state: storageState,
     pages,
     capabilities: {
       cookies: true,
@@ -155,39 +168,51 @@ export async function restoreBrowserCheckpoint(session, checkpoint) {
   if (!Array.isArray(checkpoint.pages) || checkpoint.pages.length === 0) {
     throw new Error(`浏览器检查点没有标签页: browser_id=${session.id}`);
   }
-  const runtime = await session.manager.runtimePool.acquireContext({
-    viewport: session.record.viewport,
-    deviceScaleFactor: 1,
-    ignoreHTTPSErrors: true,
-    storageState: checkpoint.storage_state,
-  });
+  let runtime;
+  try {
+    runtime = await session.manager.runtimePool.acquireContext({
+      viewport: session.record.viewport,
+      deviceScaleFactor: 1,
+      ignoreHTTPSErrors: true,
+      storageState: checkpoint.storage_state,
+    });
+  } catch (cause) {
+    throw browserRuntimeFailure({ browserId: session.id, stage: "acquire_context", cause });
+  }
   session.assignRuntime(runtime);
   try {
     for (const pageState of checkpoint.pages) {
-      const page = await session.context.newPage();
-      const initScript = sessionStorageInitScript(pageState.session_storage);
-      if (initScript) {
-        await page.addInitScript(initScript, {
-          expectedOrigin: pageState.session_storage.origin,
-          entries: pageState.session_storage.entries,
-        });
-      }
-      const entry = await session.registerPage(page, {
-        pageId: pageState.page_id,
-        activate: false,
-      });
-      entry.createdAt = pageState.created_at;
-      entry.requestedUrl = pageState.requested_url;
       const restoreUrl = checkpointRestoreUrl(pageState);
+      let stage = "create_page";
       try {
+        const page = await session.context.newPage();
+        const initScript = sessionStorageInitScript(pageState.session_storage);
+        if (initScript) {
+          stage = "restore_session_storage";
+          await page.addInitScript(initScript, {
+            expectedOrigin: pageState.session_storage.origin,
+            entries: pageState.session_storage.entries,
+          });
+        }
+        stage = "register_page";
+        const entry = await session.registerPage(page, {
+          pageId: pageState.page_id,
+          activate: false,
+        });
+        entry.createdAt = pageState.created_at;
+        entry.requestedUrl = pageState.requested_url;
+        stage = "restore_navigation";
         await page.goto(restoreUrl, { waitUntil: "domcontentloaded" });
+        stage = "restore_controls";
         await restorePageState(page, pageState);
-      } catch (error) {
-        const wrapped = new Error(
-          `恢复浏览器标签页失败: browser_id=${session.id}, page_id=${pageState.page_id}, url=${restoreUrl}, error=${error instanceof Error ? error.message : String(error)}`,
-        );
-        wrapped.code = "browser_checkpoint_page_restore_failed";
-        throw wrapped;
+      } catch (cause) {
+        const error = browserRuntimeFailure({ browserId: session.id, pageId: pageState.page_id, stage, cause });
+        if (stage === "restore_navigation" || stage === "restore_controls") {
+          // 页面URL是具名例外；第三方异常中的其它位置仍只保留在诊断中。
+          error.message += `, url=${restoreUrl}`;
+          error.code = "browser_checkpoint_page_restore_failed";
+        }
+        throw error;
       }
     }
     session.bindContextPageEvents();

@@ -268,3 +268,10 @@
 - 注册owner的共享promise只发布browser/page身份和register_page阶段，保留原cause、code与statusCode，原异常写诊断。context-page观察者消费同一错误正文写error_message并emit完整state，不再把原生正文或自身stack复制到普通快照；初始启动、页面创建、恢复和HTTP/WS调用方继续沿既有注册链消费，不改页面发布或运行状态合同。
 - tree `cc2ab0e790be68a5ff093947da89e07b643e9654`：`browser-registration-static-unit-001` Node语法/Ruff通过，73项Bun/299断言通过；`integration-001`为3 passed/22.37秒，真实Chromium/HTTP验证sync/async失败、WS state、资源API/request_id、failed operation及error_message落盘、verified/lease释放、显式重试成功，并复核正常超时恢复。注入第三方newCDPSession的失败覆盖pageEntries发布前；独立popup观察者本身没有新增持久化，落盘由真实HTTP操作finish证明。pendingRegistration成功后的独立activatePage失败仍归激活链，不以此声称全部注册/激活错误已闭合。
 - 旧生产完整archive红测46 passed/1 failed，明确区分原生异常未转换；非作者只读复核无finding，未独立跑测试。准确命令/raw/前后指纹/退出码/零进程残留及产品回执SHA见 `out/tests/temp/openspec_resume_20261023/artifacts/browser-registration-proof-001.json`。不替代完整Gateway/Web、Windows或2.2/7.2，其它producer继续推进。
+
+
+### 2026-10-23 Browser冻结、冷恢复与释放错误出口（部分收口）
+
+- 在保护检查、检查点采集/恢复、冻结/唤醒CDP及运行时释放的实际失败处发布browser/page身份与阶段，原异常只交cause和诊断，原code/statusCode保留。原冻结回滚、unknown阻断、context句柄及显式终态核实合同不变；导航/控件恢复仍保原恢复失败code及具名file页面URL，检查点存储发布错误不被覆盖。
+- 固定tree `9ad947ef565638d335de1bdbec2e503e259d975f`：`browser-lifecycle-static-unit-002` Node语法/Ruff通过，95项Bun/416断言通过；`integration-002`为7 passed/33.87秒，真实Chromium/HTTP验证sync/async及资源API、保护/冻结回滚/冷恢复/释放失败、request_id、持久错误与诊断、lease释放、unknown零执行和真实关闭后owner核实，并复验检查点发布失败及中文/空格/#/%的file页面URL在freeze/discard/wake与超时恢复中的保留。第三方故障为一次性注入，不声称真实系统EACCES。
+- 完整archive旧生产红测41 passed/18 failed，区分原路径正文/缺阶段及原cause丢失。首轮集成失败源于unknown用例直接detach而未先显式关闭，不放宽状态或目录精确断言；002通过真实Node关闭和owner stop核终态清理。准确命令/raw/前后指纹/退出码/无进程组残留及产品产物SHA见 `out/tests/temp/openspec_resume_20261023/artifacts/browser-lifecycle-proof-002.json`。不代替完整Gateway/Web、Windows或2.2/7.2；activatePage及部分事件回调仍待后续切片。

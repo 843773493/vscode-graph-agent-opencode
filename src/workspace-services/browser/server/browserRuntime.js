@@ -2,6 +2,17 @@ export const DEFAULT_VIEWPORT = Object.freeze({ width: 1280, height: 800 });
 export const NAVIGATION_TIMEOUT_MS = 30000;
 export const TOOL_TIMEOUT_MS = 10000;
 
+export function browserRuntimeFailure({ browserId, pageId = null, stage, cause }) {
+  const error = new Error(
+    `浏览器运行时操作失败: browser_id=${browserId}, page_id=${pageId}, stage=${stage}, code=${cause?.code || "unknown"}`,
+    { cause },
+  );
+  error.code = cause?.code;
+  error.statusCode = cause?.statusCode;
+  console.error("[browser-runtime] 资源生命周期操作失败", { browser_id: browserId, page_id: pageId, stage }, cause);
+  return error;
+}
+
 export class BrowserToolTimeoutError extends Error {
   constructor(label, timeoutMs) {
     super(`${label} 超时: ${timeoutMs}ms；浏览器页面已重置，可重试`);

@@ -1063,6 +1063,111 @@ async def test_injected_registration_failure_shares_safe_http_state_and_record(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(("stage", "mode", "action", "expected_state", "reconciliation"), [
+    ("capture_context", "sync", "freeze", "background", "verified"),
+    ("Page.setWebLifecycleState", "async", "freeze", "background", "verified"),
+    ("Page.setWebLifecycleState", "api", "wake", "restoring", "unknown"),
+    ("create_page", "async", "wake", "discarded", "verified"),
+    ("release_context", "api", "discard", "discarding", "unknown"),
+])
+async def test_runtime_lifecycle_failure_keeps_native_cause_out_of_receipts(
+    stage: str, mode: str, action: str, expected_state: str, reconciliation: str,
+    integration_client: httpx.AsyncClient, browser_context: CustomToolFactoryContext,
+    browser_runtime: WorkspaceToolRuntime, browser_manager_processes: tuple[int, int],
+) -> None:
+    container, _session, _invocation = browser_runtime
+    created = await integration_client.post("/api/v1/resources/browsers", json={
+        "session_id": browser_context.session_id,
+        "thread_id": browser_context.invocation_context.thread_binding.thread_id,
+        "url": "about:blank",
+    })
+    assert created.status_code == 200, created.text
+    resource = created.json()["data"]
+    browser_id = resource["resource_id"]
+    root = Path(container.workspace_root)
+    reason = f"injected EACCES: {root / '.boxteam/browser-manager/private-runtime-profile'}"
+    transport = BrowserManagerClient(workspace_id=container.workspace_id, backend_url=f"http://127.0.0.1:{browser_manager_processes[0]}")
+    command = {"expected_revision": resource["owner_revision"], "thread": resource["source_thread"]}
+    failure = f"throw Object.assign(new Error({json.dumps(reason)}), {{code: 'EACCES'}});"
+    # 仅替换真实Playwright边界，触发一次后恢复原方法；状态转换、回滚与落盘由产品执行。
+    if stage == "capture_context":
+        code = "const original = context.storageState; context.storageState = async function (...args) { context.storageState = original; " + failure + " };"
+    elif stage == "release_context":
+        code = "const original = context.close; context.close = async function (...args) { context.close = original; " + failure + " };"
+    elif stage == "create_page":
+        code = "const proto = Object.getPrototypeOf(context); const original = proto.newPage; proto.newPage = async function (...args) { proto.newPage = original; " + failure + " };"
+    else:
+        value = "active" if action == "wake" else "frozen"
+        code = (
+            "const cdp = await context.newCDPSession(page); const proto = Object.getPrototypeOf(cdp);"
+            " const original = proto.send; await cdp.detach();"
+            " proto.send = async function (method, params) {"
+            f" if (method === 'Page.setWebLifecycleState' && params.state === '{value}') {{ proto.send = original; {failure} }}"
+            " return await original.call(this, method, params); };"
+        )
+    await transport.perform(browser_id, "run", {"code": code}, actor="agent")
+    if action != "freeze":
+        prepared = await integration_client.post(f"/api/v1/resources/{browser_id}/browser-operation", json={**command, "action": "freeze"})
+        assert prepared.status_code == 200, prepared.text
+    if stage == "create_page":
+        prepared = await integration_client.post(f"/api/v1/resources/{browser_id}/browser-operation", json={**command, "action": "discard"})
+        assert prepared.status_code == 200, prepared.text
+    if mode == "api":
+        response = await integration_client.post(f"/api/v1/resources/{browser_id}/browser-operation", json={**command, "action": action})
+        assert response.status_code == 500, response.text
+        assert response.headers["X-Request-ID"]
+        receipt = response.json()
+    else:
+        with pytest.raises(BrowserRequestError) as caught:
+            if mode == "sync":
+                await asyncio.to_thread(transport._json_request_sync, "POST", f"/api/browsers/{browser_id}/{action}", {})
+            else:
+                await transport._json_request("POST", f"/api/browsers/{browser_id}/{action}", {})
+        assert caught.value.status == 500
+        assert caught.value.code == "EACCES"
+        receipt = caught.value.payload
+    assert f"stage={stage}" in json.dumps(receipt)
+    assert str(root) not in json.dumps(receipt)
+    observed = (await integration_client.get(f"/api/v1/resources/{browser_id}")).json()["data"]
+    assert observed["reconciliation_status"] == reconciliation
+    assert observed["metadata"]["resource_state"] == expected_state
+    assert f"stage={stage}" in observed["metadata"]["resource_transition_error"]
+    assert container.browser_resource_owner._leases.leases_for_resource(browser_id) == []
+    synchronous = await asyncio.to_thread(transport._json_request_sync, "GET", f"/api/browsers/{browser_id}", None)
+    assert synchronous["data"]["resource_transition_error"] == (await transport.get_resource(browser_id))["resource_transition_error"]
+    records = json.loads((root / ".boxteam/browser-manager/browsers.json").read_text())
+    record, = [item for item in records["browsers"] if item["browser_id"] == browser_id]
+    assert str(root) not in json.dumps(record)
+    assert record["resource_transition_error"] == observed["metadata"]["resource_transition_error"]
+    artifacts = TestRunContext.from_test_file(Path(__file__)).artifacts_dir
+    diagnostics = "\n".join(item.read_text() for item in artifacts.glob("browser-backend-*.stderr.log"))
+    assert reason in diagnostics
+    assert "[browser-runtime] 资源生命周期操作失败" in diagnostics
+    if reconciliation == "unknown":
+        rejected = await integration_client.post(f"/api/v1/resources/{browser_id}/browser-operation", json={
+            **command, "action": "run", "payload": {"code": "throw new Error('must-not-execute');"},
+        })
+        assert rejected.status_code == 409, rejected.text
+        # 未核实状态不能直接解除关联；先显式关闭实际运行时，再由owner核实终态。
+        closed = await transport.stop_resource(browser_id)
+        assert closed["browser"]["status"] == "closed"
+        assert closed["browser"]["reconciliation_status"] == "verified"
+        reconciled = await integration_client.post(f"/api/v1/resources/{browser_id}/stop", json={
+            "expected_revision": observed["owner_revision"],
+        })
+        assert reconciled.status_code == 200, reconciled.text
+        assert reconciled.json()["data"]["reconciliation_status"] == "verified"
+    elif action == "freeze":
+        retried = await integration_client.post(f"/api/v1/resources/{browser_id}/browser-operation", json={**command, "action": action})
+        assert retried.status_code == 200, retried.text
+    (artifacts / f"runtime-lifecycle-{stage}-{mode}-{time.time_ns()}.json").write_text(json.dumps({
+        "receipt": receipt, "owner_projection": observed, "node_record": record,
+    }, ensure_ascii=False, indent=2), encoding="utf-8")
+    deleted = await _detach_delete(integration_client, browser_id, browser_context)
+    assert deleted.status_code == 200, deleted.text
+
+
+@pytest.mark.asyncio
 async def test_native_file_page_url_survives_checkpoint_and_timeout_recovery(
     integration_client: httpx.AsyncClient, browser_context: CustomToolFactoryContext,
     browser_runtime: WorkspaceToolRuntime, browser_manager_processes: tuple[int, int],

@@ -90,6 +90,48 @@ function transitionSession(onCommand = () => undefined) {
   return { browser, commands, persisted, states };
 }
 
+describe("浏览器资源生命周期错误归属", () => {
+  test.each(["/private/chromium/profile", String.raw`C:\private\chromium\profile`, String.raw`\\host\share\profile`])(
+    "冻结与回滚失败只向诊断交付原生位置: %s", async (nativePath) => {
+      const primary = Object.assign(new Error(`冻结失败 ${nativePath}`), { code: "EACCES", statusCode: 500 });
+      const rollback = new Error(`回滚失败 ${nativePath}`);
+      const logged = spyOn(console, "error").mockImplementation(() => undefined);
+      try {
+        const { browser, persisted } = transitionSession((pageId, method, params) => {
+          if (pageId === "page_second" && method === "Emulation.setScriptExecutionDisabled" && params.value) throw primary;
+          if (pageId === "page_first" && method === "Page.setWebLifecycleState" && params.state === "active") throw rollback;
+        });
+        const failure = await browser.freeze().catch((error) => error);
+        expect(failure).toBeInstanceOf(AggregateError);
+        expect(failure.errors.map((error) => error.cause)).toEqual([primary, rollback]);
+        expect(failure.errors[0]).toMatchObject({ code: "EACCES", statusCode: 500 });
+        expect(logged.mock.calls.some((args) => args.at(-1) === primary)).toBe(true);
+        expect(logged.mock.calls.some((args) => args.at(-1) === rollback)).toBe(true);
+        expect(failure.message).not.toContain(nativePath);
+        expect(JSON.stringify(browser.toRecord())).not.toContain(nativePath);
+        expect(persisted.at(-1)).toMatchObject({ reconciliation_status: "unknown", resource_state: "freezing" });
+        expect(persisted.at(-1).resource_transition_error).toBe(failure.message);
+      } finally { logged.mockRestore(); }
+    },
+  );
+
+  test("保护检查失败仍阻止冻结，保护码与恢复记录不复制原异常", async () => {
+    const { browser } = transitionSession();
+    const cause = new Error("检查失败 /private/chromium/profile");
+    browser.inspectResourceSnapshot = BrowserSession.prototype.inspectResourceSnapshot;
+    browser.inspectPageEntryProtectionReasons = BrowserSession.prototype.inspectPageEntryProtectionReasons;
+    for (const entry of browser.pageEntries.values()) entry.page.evaluate = async () => { throw cause; };
+    const logged = spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      await expect(browser.freeze()).rejects.toMatchObject({ code: "browser_resource_protected" });
+      expect(browser.snapshot().resource_hard_protection_reasons).toEqual(["protection_inspection_failed:stage=inspect_protection"]);
+      expect(JSON.stringify(browser.toRecord())).not.toContain(cause.message);
+      expect(logged.mock.calls.some((args) => args.at(-1).cause === cause)).toBe(true);
+      expect(browser.record.reconciliation_status).toBe("verified");
+    } finally { logged.mockRestore(); }
+  });
+});
+
 describe("浏览器统一操作队列", () => {
   test.each([false, true])("冻结中途失败只有已核实恢复才能保留 verified: rollback_failed=%s", async (rollbackFailed) => {
     const { browser, persisted, states } = transitionSession((pageId, method, params) => {
@@ -100,7 +142,7 @@ describe("浏览器统一操作队列", () => {
         throw new Error("第一页恢复失败");
       }
     });
-    await expect(browser.freeze()).rejects.toThrow("第二页冻结失败");
+    await expect(browser.freeze()).rejects.toThrow("Emulation.setScriptExecutionDisabled");
     expect(states.get("page_second")).toEqual({ lifecycle: "active", disabled: false });
     expect(persisted.at(-1).reconciliation_status).toBe(rollbackFailed ? "unknown" : "verified");
     expect(persisted.at(-1).resource_state).toBe(rollbackFailed ? "freezing" : "background");
@@ -108,7 +150,7 @@ describe("浏览器统一操作队列", () => {
       expect(states.get("page_first")).toEqual({ lifecycle: "active", disabled: false });
       return;
     }
-    expect(persisted.at(-1).resource_transition_error).toContain("第一页恢复失败");
+    expect(persisted.at(-1).resource_transition_error).toContain("Page.setWebLifecycleState");
     let calls = 0;
     await expect(browser.enqueueOperation({ actor: "agent", action: "read" }, () => { calls += 1; }))
       .rejects.toMatchObject({ code: "browser_resource_unknown" });
@@ -131,7 +173,7 @@ describe("浏览器统一操作队列", () => {
     });
     await browser.freeze();
     waking = true;
-    await expect(browser.wake()).rejects.toThrow("第二页唤醒失败");
+    await expect(browser.wake()).rejects.toThrow("Page.setWebLifecycleState");
     expect(states.get("page_first")).toEqual({ lifecycle: "active", disabled: false });
     expect(states.get("page_second").lifecycle).toBe("frozen");
     expect(persisted.at(-1)).toMatchObject({ resource_state: "restoring", reconciliation_status: "unknown" });
@@ -167,13 +209,13 @@ describe("浏览器统一操作队列", () => {
         if (releaseFailed) throw new Error("运行时释放失败");
       },
     };
-    await expect(browser.wake()).rejects.toThrow("新页恢复失败");
+    await expect(browser.wake()).rejects.toThrow("stage=create_page");
     expect(releases).toBe(1);
     expect(persisted.at(-1)).toMatchObject({
       resource_state: releaseFailed ? "restoring" : "discarded",
       reconciliation_status: releaseFailed ? "unknown" : "verified",
     });
-    if (releaseFailed) expect(persisted.at(-1).resource_transition_error).toContain("运行时释放失败");
+    if (releaseFailed) expect(persisted.at(-1).resource_transition_error).toContain("stage=release_context");
   });
 
   test.each(["close", "delete", "discard"])("%s 的 context 释放失败保留同一真实句柄和 unknown，显式关闭重试才核终态", async (action) => {
@@ -195,7 +237,7 @@ describe("浏览器统一操作队列", () => {
       ] });
     }
     const release = action === "discard" ? browser.discard() : browser.close({ status: action === "delete" ? "deleted" : "closed" });
-    await expect(release).rejects.toThrow("context 关闭失败");
+    await expect(release).rejects.toThrow("stage=release_context");
     expect(browser.context).toBe(context);
     expect(pool.contexts.has(context)).toBe(true);
     expect(persisted.at(-1)).toMatchObject({ status: "running", reconciliation_status: "unknown" });

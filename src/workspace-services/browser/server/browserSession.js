@@ -19,6 +19,7 @@ import {
   DEFAULT_VIEWPORT,
   NAVIGATION_TIMEOUT_MS,
   TOOL_TIMEOUT_MS,
+  browserRuntimeFailure,
   withTimeout,
 } from "./browserRuntime.js";
 import {
@@ -397,26 +398,30 @@ export class BrowserSession extends EventEmitter {
   }
 
   async inspectPageEntryProtectionReasons(entry) {
-    const reasons = [];
-    if (entry.page.isClosed()) return reasons;
-    const state = await entry.page.evaluate(() => {
-      const mediaElements = [...document.querySelectorAll("audio, video")];
-      const playingMedia = mediaElements.some((element) => !element.paused && !element.ended);
-      const liveMediaStream = mediaElements.some((element) => {
-        const stream = element.srcObject;
-        return stream instanceof MediaStream
-          && stream.getTracks().some((track) => track.readyState === "live");
+    try {
+      const reasons = [];
+      if (entry.page.isClosed()) return reasons;
+      const state = await entry.page.evaluate(() => {
+        const mediaElements = [...document.querySelectorAll("audio, video")];
+        const playingMedia = mediaElements.some((element) => !element.paused && !element.ended);
+        const liveMediaStream = mediaElements.some((element) => {
+          const stream = element.srcObject;
+          return stream instanceof MediaStream
+            && stream.getTracks().some((track) => track.readyState === "live");
+        });
+        return {
+          playingMedia,
+          liveMediaStream,
+          pictureInPicture: document.pictureInPictureElement !== null,
+        };
       });
-      return {
-        playingMedia,
-        liveMediaStream,
-        pictureInPicture: document.pictureInPictureElement !== null,
-      };
-    });
-    if (state.playingMedia) reasons.push(`media_playing:${entry.pageId}`);
-    if (state.liveMediaStream) reasons.push(`webrtc_media_live:${entry.pageId}`);
-    if (state.pictureInPicture) reasons.push(`picture_in_picture:${entry.pageId}`);
-    return reasons;
+      if (state.playingMedia) reasons.push(`media_playing:${entry.pageId}`);
+      if (state.liveMediaStream) reasons.push(`webrtc_media_live:${entry.pageId}`);
+      if (state.pictureInPicture) reasons.push(`picture_in_picture:${entry.pageId}`);
+      return reasons;
+    } catch (cause) {
+      throw browserRuntimeFailure({ browserId: this.id, pageId: entry.pageId, stage: "inspect_protection", cause });
+    }
   }
 
   async inspectPageProtectionReasons() {
@@ -477,8 +482,8 @@ export class BrowserSession extends EventEmitter {
         softReasons.push(...inspectedSoftReasons);
         this.protectionInspectionFailureExpiresAtUnixMs = 0;
       } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        hardReasons.push(`protection_inspection_failed:${message}`);
+        console.error("[browser-session] 资源保护检查失败", { browser_id: this.id }, error);
+        hardReasons.push("protection_inspection_failed:stage=inspect_protection");
         this.protectionInspectionFailureExpiresAtUnixMs = Date.now() + PROTECTION_INSPECTION_RETRY_MS;
       }
     } else if (this.record.resource_state === "frozen") {
@@ -618,11 +623,11 @@ export class BrowserSession extends EventEmitter {
           if (!allowHardProtection) {
             this.assertNoHardProtectionDuringTransition("before_lifecycle_freeze");
           }
-          await entry.cdpSession.send("Page.setWebLifecycleState", { state: "frozen" });
+          await this.sendResourceCommand(entry, "Page.setWebLifecycleState", { state: "frozen" });
           if (!allowHardProtection) {
             this.assertNoHardProtectionDuringTransition("before_disable_script");
           }
-          await entry.cdpSession.send("Emulation.setScriptExecutionDisabled", { value: true });
+          await this.sendResourceCommand(entry, "Emulation.setScriptExecutionDisabled", { value: true });
         }
       } catch (error) {
         const rollback = await Promise.allSettled(
@@ -860,30 +865,38 @@ export class BrowserSession extends EventEmitter {
   }
 
   async suspendPageRendering(entry) {
-    await entry.cdpSession.send("DOM.enable");
-    await entry.cdpSession.send("CSS.enable");
+    await this.sendResourceCommand(entry, "DOM.enable");
+    await this.sendResourceCommand(entry, "CSS.enable");
     if (!entry.freezeStyleSheetId) {
-      const frameTree = await entry.cdpSession.send("Page.getFrameTree");
-      const created = await entry.cdpSession.send("CSS.createStyleSheet", {
+      const frameTree = await this.sendResourceCommand(entry, "Page.getFrameTree");
+      const created = await this.sendResourceCommand(entry, "CSS.createStyleSheet", {
         frameId: frameTree.frameTree.frame.id,
       });
       entry.freezeStyleSheetId = created.styleSheetId;
     }
-    await entry.cdpSession.send("CSS.setStyleSheetText", {
+    await this.sendResourceCommand(entry, "CSS.setStyleSheetText", {
       styleSheetId: entry.freezeStyleSheetId,
       text: "*,*::before,*::after{animation-play-state:paused!important;transition:none!important;caret-color:transparent!important}",
     });
   }
 
   async resumePageRendering(entry) {
-    await entry.cdpSession.send("Emulation.setScriptExecutionDisabled", { value: false });
-    await entry.cdpSession.send("Page.setWebLifecycleState", { state: "active" });
+    await this.sendResourceCommand(entry, "Emulation.setScriptExecutionDisabled", { value: false });
+    await this.sendResourceCommand(entry, "Page.setWebLifecycleState", { state: "active" });
     if (entry.freezeStyleSheetId) {
-      await entry.cdpSession.send("CSS.setStyleSheetText", {
+      await this.sendResourceCommand(entry, "CSS.setStyleSheetText", {
         styleSheetId: entry.freezeStyleSheetId,
         text: "",
       });
       entry.freezeStyleSheetId = null;
+    }
+  }
+
+  async sendResourceCommand(entry, method, params) {
+    try {
+      return await entry.cdpSession.send(method, params);
+    } catch (cause) {
+      throw browserRuntimeFailure({ browserId: this.id, pageId: entry.pageId, stage: method, cause });
     }
   }
 
@@ -988,10 +1001,13 @@ export class BrowserSession extends EventEmitter {
     this.streamRelaxTimer = null;
     this.streamProfile = null;
     this.frameObservations = [];
+    let stage = "reset_pointer";
     try {
       await this.pointerController.reset();
+      stage = "release_context";
       if (context) await this.manager.runtimePool.releaseContext(context);
-    } catch (error) {
+    } catch (cause) {
+      const error = browserRuntimeFailure({ browserId: this.id, stage, cause });
       this.record.reconciliation_status = "unknown";
       await this.exposeResourceTransitionFailure(error);
       throw error;
