@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING
 
 from app.core.identifier import create_uuid_hex
 from app.core.session_catalog_store.contracts import (
+    CatalogMaintenanceRequiredError,
     ForkSourceCaptureRecord,
     SessionCreationRecord,
     fork_source_capture_relative_locator,
@@ -29,13 +30,51 @@ if TYPE_CHECKING:
     from app.core.session_control_store import ThreadCreationRecord
 
 
+def _capture_request_preimage(request: dict[str, object]) -> tuple[str, str]:
+    """冻结请求的唯一编码/hash 合同，供 writer 与原始记录读取共用。"""
+    if not isinstance(request, dict):
+        raise TypeError("fork capture request 必须是对象")
+    encoded = json.dumps(request, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return encoded, hashlib.sha256(encoded.encode()).hexdigest()
+
+
+def _validate_capture_identity(record: ForkSourceCaptureRecord) -> None:
+    """只核冻结记录自身，不用当前 source、target 或配置猜测历史。"""
+    for value in (record.copy_operation_id, record.fork_id, record.materialization_id):
+        validate_operation_idempotency_key(value)
+    if record.creation_key is not None:
+        validate_operation_idempotency_key(record.creation_key)
+    validate_session_id(record.source_session_id)
+    validate_session_id(record.target_session_id)
+    validate_thread_id(record.source_thread_id)
+    validate_thread_id(record.target_thread_id)
+    if record.snapshot_relative_locator != fork_source_capture_relative_locator(record.snapshot_id):
+        raise RuntimeError("fork capture 内部 locator 与冻结 snapshot identity 不一致")
+    encoded, preimage_hash = _capture_request_preimage(json.loads(record.request_json))
+    if (record.request_json, record.preimage_hash) != (encoded, preimage_hash):
+        raise RuntimeError("fork capture request/preimage owner 冲突")
+
+
 class ForkSourceCaptureMixin:
     """fork source capture 方法族（唯一实现点）。"""
+
+    def verify_fork_source_captures(self, *, connection: sqlite3.Connection) -> None:
+        """启动同一快照遍历所有状态，不将已终结 capture 视为可丢弃缓存。"""
+        for row in connection.execute("SELECT * FROM fork_source_captures"):
+            try:
+                self._fork_capture_from_row(row)
+            except (TypeError, ValueError, RuntimeError) as error:
+                raise CatalogMaintenanceRequiredError(
+                    "fork source capture 冻结身份损坏，须进入维护模式核对并保留原数据: "
+                    f"copy_operation_id={row['copy_operation_id']}"
+                ) from error
 
     @staticmethod
     def _fork_capture_from_row(row: sqlite3.Row) -> ForkSourceCaptureRecord:
         """只投影冻结 capture；目标本地释放状态不进入来源前像。"""
-        return ForkSourceCaptureRecord(**{field.name: row[field.name] for field in fields(ForkSourceCaptureRecord)})
+        record = ForkSourceCaptureRecord(**{field.name: row[field.name] for field in fields(ForkSourceCaptureRecord)})
+        _validate_capture_identity(record)
+        return record
 
     def reserve_fork_source_capture(
         self, *, copy_operation_id: str, creation_key: str | None,
@@ -58,8 +97,7 @@ class ForkSourceCaptureMixin:
                 raise TypeError("fork snapshot_id 必须是字符串")
             if len(snapshot_id) != 32 or any(char not in "0123456789abcdef" for char in snapshot_id):
                 raise ValueError(f"fork snapshot_id 必须是 32 位小写 hex artifact ID: {snapshot_id!r}")
-        request_json = json.dumps(request, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-        preimage_hash = hashlib.sha256(request_json.encode()).hexdigest()
+        request_json, preimage_hash = _capture_request_preimage(request)
         with self.write_transaction() as connection:
             existing = connection.execute(
                 "SELECT * FROM fork_source_captures WHERE copy_operation_id = ?",
@@ -241,9 +279,9 @@ class ForkSourceCaptureMixin:
 
         if capture.creation_key is None:
             raise RuntimeError("fork abort 缺少 prepared creation capability")
+        _validate_capture_identity(capture)
         request = json.loads(capture.request_json)
-        if (capture.copy_operation_id != capture.creation_key
-            or hashlib.sha256(capture.request_json.encode()).hexdigest() != capture.preimage_hash):
+        if capture.copy_operation_id != capture.creation_key:
             raise RuntimeError("fork abort 的 capture operation/preimage 与原创建 owner 冲突")
         child_owner = None
         if isinstance(creation, ThreadCreationRecord):

@@ -53,7 +53,10 @@ from app.core.resource_uri import (
     resource_display_uri,
     thread_resource_uri,
 )
-from app.core.session_catalog_store import SessionCatalogStore
+from app.core.session_catalog_store import (
+    CatalogMaintenanceRequiredError,
+    SessionCatalogStore,
+)
 from app.core.session_catalog_store.contracts import (
     ForkSourceCaptureRecord,
     SessionGenerationOriginDTO,
@@ -5350,22 +5353,43 @@ async def test_main_fork_conflicting_capture_is_preserved_before_abort(
             connection.execute("UPDATE fork_source_captures SET request_json=?,preimage_hash=? WHERE creation_key=?", (encoded, hashlib.sha256(encoded.encode()).hexdigest(), key))
         else:
             connection.execute("UPDATE fork_source_captures SET preimage_hash=? WHERE creation_key=?", ("0" * 64, key))
-    conflicting = catalog.get_fork_source_capture(creation_key=key)
-    assert conflicting is not None
+    with closing(sqlite3.connect(catalog.database_path)) as connection:
+        frozen_row = connection.execute("SELECT * FROM fork_source_captures WHERE creation_key=?", (key,)).fetchone()
+    if fault == "capture_preimage":
+        with pytest.raises(RuntimeError, match="request/preimage owner 冲突"):
+            catalog.get_fork_source_capture(creation_key=key)
+        # 仅为直接 abort 能力的负向调用构造坏输入；不让读取链返回已知损坏记录。
+        conflicting = replace(capture, preimage_hash="0" * 64)
+    else:
+        conflicting = catalog.get_fork_source_capture(creation_key=key)
+        assert conflicting is not None
     # 直接事务入口也必须核原 creation，不能只因同 key 仍 preparing 就取得清理权限。
     with pytest.raises(RuntimeError, match="owner 冲突"):
         catalog.abort_unpublished_fork_capture(conflicting, creation=frozen, reason="不得清理冲突 owner")
-    assert catalog.get_fork_source_capture(creation_key=key) == conflicting
+    if fault == "capture_preimage":
+        with pytest.raises(RuntimeError, match="request/preimage owner 冲突"):
+            catalog.get_fork_source_capture(creation_key=key)
+    else:
+        assert catalog.get_fork_source_capture(creation_key=key) == conflicting
     production_fork_container.workspace_activity_service.store.close()
     production_fork_container.session_catalog.close()
-    restarted = _build_owned_container(context.workspace, monkeypatch)
-    _isolate_non_navigation_services(restarted, monkeypatch)
-    with pytest.raises(ValueError, match="fork_owner_overlap"):
-        async with main.lifespan(main.app):
-            pytest.fail("冲突 capture 不得让 startup ready")
+    if fault == "capture_preimage":
+        with pytest.raises(CatalogMaintenanceRequiredError, match="fork source capture 冻结身份损坏"):
+            _build_owned_container(context.workspace, monkeypatch)
+    else:
+        restarted = _build_owned_container(context.workspace, monkeypatch)
+        _isolate_non_navigation_services(restarted, monkeypatch)
+        with pytest.raises(ValueError, match="fork_owner_overlap"):
+            async with main.lifespan(main.app):
+                pytest.fail("冲突 capture 不得让 startup ready")
     with closing(SessionCatalogStore(catalog.database_path, catalog.sessions_root)) as cold_catalog:
         assert cold_catalog.get_creation_record(key) == frozen
-        assert cold_catalog.get_fork_source_capture(creation_key=key) == conflicting
+        if fault == "capture_preimage":
+            with pytest.raises(RuntimeError, match="request/preimage owner 冲突"):
+                cold_catalog.get_fork_source_capture(creation_key=key)
+        else:
+            assert cold_catalog.get_fork_source_capture(creation_key=key) == conflicting
+        assert tuple(cold_catalog.connection.execute("SELECT * FROM fork_source_captures WHERE creation_key=?", (key,)).fetchone()) == frozen_row
     assert {str(path.relative_to(root)): path.read_bytes() for path in root.rglob("*") if path.is_file()} == captured_bytes
     with closing(sqlite3.connect(attachment_catalog_path.as_uri() + "?mode=ro", uri=True)) as connection:
         assert connection.execute(
