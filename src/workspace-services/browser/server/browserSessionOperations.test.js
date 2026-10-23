@@ -921,13 +921,14 @@ describe("浏览器统一操作队列", () => {
     expect(browser.pageEntries.has("page_replacement")).toBe(true);
   });
 
-  test("导航失败保留用户请求地址并暴露详细错误", async () => {
+  test.each(["url", "reload", "back", "forward"])("%s 导航失败保留目标与错误码，原生位置只留诊断", async (type) => {
     const browser = session();
     const pageId = "page_navigation_failure";
+    const nativePath = String.raw`C:\private\browser\profile`;
+    const cause = Object.assign(new Error(`page.goto: net::ERR_CONNECTION_REFUSED ${nativePath}\n\u001b[2mCall log\u001b[22m`), { statusCode: 503 });
+    const method = { url: "goto", reload: "reload", back: "goBack", forward: "goForward" }[type];
     browser.page = {
-      goto: async () => {
-        throw new Error("page.goto: net::ERR_CONNECTION_REFUSED\n\u001b[2mCall log\u001b[22m");
-      },
+      [method]: async () => { throw cause; },
       url: () => "chrome-error://chromewebdata/",
       title: async () => "",
     };
@@ -939,22 +940,86 @@ describe("浏览器统一操作队列", () => {
       pageId,
       page: browser.page,
       documentRevision: 0,
-      requestedUrl: "about:blank",
+      requestedUrl: "file:///user/opened.html",
       navigationError: null,
       url: "about:blank",
       actualUrl: "about:blank",
       title: "",
     });
 
-    await expect(browser.goto("http://127.0.0.1:1/")).rejects.toThrow("ERR_CONNECTION_REFUSED");
+    const logged = spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      const failure = await browser.navigate(type, "file:///user/opened.html").catch(error => error);
+      expect(failure).toMatchObject({ cause, statusCode: 503 });
+      expect(failure.message).toContain(`stage=page.${method}`);
+      expect(failure.message).toContain("ERR_CONNECTION_REFUSED");
+      expect(failure.message).not.toContain(nativePath);
+      expect(logged.mock.calls.some(args => args.at(-1) === cause)).toBe(true);
+      const snapshot = browser.snapshot();
+      expect(snapshot.url).toBe("file:///user/opened.html");
+      expect(snapshot.actual_url).toBe("chrome-error://chromewebdata/");
+      expect(snapshot.navigation_error.message).toBe(failure.message);
+      expect(snapshot.navigation_error.message).not.toContain("\u001b");
+      expect(snapshot.pages[0].url).toBe("file:///user/opened.html");
+      expect(snapshot.pages[0].actual_url).toBe("chrome-error://chromewebdata/");
+      expect(JSON.stringify(browser.toRecord())).not.toContain(nativePath);
+    } finally { logged.mockRestore(); }
+  });
 
-    const snapshot = browser.snapshot();
-    expect(snapshot.url).toBe("http://127.0.0.1:1/");
-    expect(snapshot.actual_url).toBe("chrome-error://chromewebdata/");
-    expect(snapshot.navigation_error.message).toContain("ERR_CONNECTION_REFUSED");
-    expect(snapshot.navigation_error.message).not.toContain("\u001b");
-    expect(snapshot.pages[0].url).toBe("http://127.0.0.1:1/");
-    expect(snapshot.pages[0].actual_url).toBe("chrome-error://chromewebdata/");
+  test.each(["back", "forward"])("%s 无历史时保留已有导航错误", async (type) => {
+    const { browser } = transitionSession();
+    const entry = browser.pageEntries.get(browser.activePageId);
+    const failure = { message: "已有请求失败", requested_url: "https://example.test/failed" };
+    entry.navigationError = failure;
+    browser.page[type === "back" ? "goBack" : "goForward"] = async () => null;
+    await browser.navigate(type);
+    expect(browser.record.navigation_error).toBe(failure);
+    expect(entry.navigationError).toBe(failure);
+  });
+
+  test.each(["read_navigation_url", "sync_navigation_state", "capture_navigation_frame"])(
+    "导航和%s同时失败保留两份原因及主错误分类", async (stage) => {
+      const { browser } = transitionSession();
+      const primary = Object.assign(new Error("导航失败 /private/profile"), { code: "EACCES", statusCode: 503 });
+      const secondary = new Error("状态发布失败 /private/second-profile");
+      browser.page.goto = async () => { throw primary; };
+      if (stage === "read_navigation_url") browser.page.url = () => { throw secondary; };
+      else if (stage === "sync_navigation_state") browser.page.title = async () => { throw secondary; };
+      else {
+        browser.clients.add({});
+        browser.cdpSession.send = async () => { throw secondary; };
+      }
+      const logged = spyOn(console, "error").mockImplementation(() => undefined);
+      try {
+        const failure = await browser.goto("file:///user/opened.html").catch(error => error);
+        expect(failure).toBeInstanceOf(AggregateError);
+        expect(failure).toMatchObject({ code: "EACCES", statusCode: 503 });
+        expect(failure.cause).toBe(failure.errors[0]);
+        expect(failure.errors.map(error => error.cause)).toEqual([primary, secondary]);
+        expect(failure.message).toContain("file:///user/opened.html");
+        expect(failure.message).not.toContain("/private/");
+      } finally { logged.mockRestore(); }
+    },
+  );
+
+  test("导航失败归属发起标签页，切换后的页面不接收旧错误", async () => {
+    const { browser } = transitionSession();
+    const sourceEntry = browser.pageEntries.get(browser.activePageId);
+    const cause = new Error("导航失败 /private/browser/profile");
+    let rejectNavigation;
+    sourceEntry.page.goto = () => new Promise((_resolve, reject) => { rejectNavigation = reject; });
+    const logged = spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      const navigation = browser.goto("https://example.test/slow").catch(error => error);
+      await browser.activatePage("page_second");
+      rejectNavigation(cause);
+      const failure = await navigation;
+      expect(failure.cause).toBe(cause);
+      expect(failure.message).toContain(`page_id=${sourceEntry.pageId}`);
+      expect(sourceEntry.navigationError.page_id).toBe(sourceEntry.pageId);
+      expect(browser.pageEntries.get("page_second").navigationError).toBeUndefined();
+      expect(browser.record.navigation_error).toBeNull();
+    } finally { logged.mockRestore(); }
   });
 
   test("冷回收会话不再依赖已释放的共享运行时", async () => {

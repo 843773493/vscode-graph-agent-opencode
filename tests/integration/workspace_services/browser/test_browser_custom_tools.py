@@ -1063,6 +1063,75 @@ async def test_injected_registration_failure_shares_safe_http_state_and_record(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(("navigation_type", "method", "mode"), [
+    ("url", "goto", "sync"), ("reload", "reload", "async"),
+    ("back", "goBack", "api"), ("forward", "goForward", "async"),
+])
+async def test_navigation_failure_keeps_native_details_in_diagnostics(
+    navigation_type: str, method: str, mode: str, integration_client: httpx.AsyncClient,
+    browser_context: CustomToolFactoryContext, browser_runtime: WorkspaceToolRuntime,
+    browser_manager_processes: tuple[int, int],
+) -> None:
+    container, _session, _invocation = browser_runtime
+    created = await integration_client.post("/api/v1/resources/browsers", json={
+        "session_id": browser_context.session_id,
+        "thread_id": browser_context.invocation_context.thread_binding.thread_id,
+        "url": "about:blank",
+    })
+    assert created.status_code == 200, created.text
+    resource = created.json()["data"]
+    browser_id = resource["resource_id"]
+    root = Path(container.workspace_root)
+    reason = f"injected EACCES: {root / '.boxteam/browser-manager/private-navigation-profile'}"
+    transport = BrowserManagerClient(workspace_id=container.workspace_id, backend_url=f"http://127.0.0.1:{browser_manager_processes[0]}")
+    # 一次性替换第三方导航边界；收据、状态更新和持久化仍由真实产品入口完成。
+    await transport.perform(browser_id, "run", {"code": (
+        f"const original = page.{method}; page.{method} = async function (...args) {{ page.{method} = original;"
+        f" throw Object.assign(new Error({json.dumps(reason)}), {{code: 'EACCES'}}); }};"
+    )}, actor="agent")
+    payload = {"type": navigation_type, "url": "https://example.test/navigation-target"}
+    if mode == "api":
+        failed = await integration_client.post(f"/api/v1/resources/{browser_id}/browser-operation", json={
+            "expected_revision": resource["owner_revision"], "thread": resource["source_thread"],
+            "action": "navigate", "payload": payload,
+        })
+        assert failed.status_code == 500, failed.text
+        assert failed.headers["X-Request-ID"]
+        receipt = failed.json()
+    else:
+        with pytest.raises(BrowserRequestError) as caught:
+            if mode == "sync":
+                await asyncio.to_thread(transport._json_request_sync, "POST", f"/api/browsers/{browser_id}/navigate", payload)
+            else:
+                await transport.perform(browser_id, "navigate", payload, actor="agent")
+        assert caught.value.status == 500
+        assert caught.value.code == "EACCES"
+        receipt = caught.value.payload
+    assert f"stage=page.{method}" in json.dumps(receipt)
+    assert str(root) not in json.dumps(receipt)
+    observed = (await integration_client.get(f"/api/v1/resources/{browser_id}")).json()["data"]
+    assert observed["reconciliation_status"] == "verified"
+    assert container.browser_resource_owner._leases.leases_for_resource(browser_id) == []
+    state = await transport.get_resource(browser_id)
+    assert state["navigation_error"]["message"] == state["last_operation"]["error"]
+    assert f"stage=page.{method}" in state["navigation_error"]["message"]
+    records = json.loads((root / ".boxteam/browser-manager/browsers.json").read_text())
+    record, = [item for item in records["browsers"] if item["browser_id"] == browser_id]
+    assert str(root) not in json.dumps(record)
+    artifacts = TestRunContext.from_test_file(Path(__file__)).artifacts_dir
+    diagnostics = "\n".join(item.read_text() for item in artifacts.glob("browser-backend-*.stderr.log"))
+    assert reason in diagnostics
+    retried = await transport.perform(browser_id, "navigate", {"type": "url", "url": "about:blank"}, actor="agent")
+    assert retried["operation"]["status"] == "completed"
+    assert (await transport.get_resource(browser_id))["navigation_error"] is None
+    (artifacts / f"navigation-failure-{method}-{mode}-{time.time_ns()}.json").write_text(json.dumps({
+        "receipt": receipt, "node_record": record, "owner_projection": observed, "retried": retried,
+    }, ensure_ascii=False, indent=2), encoding="utf-8")
+    deleted = await _detach_delete(integration_client, browser_id, browser_context)
+    assert deleted.status_code == 200, deleted.text
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(("stage", "mode", "action", "expected_state", "reconciliation"), [
     ("capture_context", "sync", "freeze", "background", "verified"),
     ("Page.setWebLifecycleState", "async", "freeze", "background", "verified"),

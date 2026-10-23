@@ -282,3 +282,10 @@
 - 标签页激活复用同一取帧/流控制CDP错误出口，pointer reset及页面状态读取按实际失败阶段保留cause/code/status；URL与title的更新顺序保持，存储错误继续由原store产生，不加外层包装。dialog/filechooser/close仅将安全message写入恢复记录，完整stack和cause交诊断；已完成的标签页切换与流状态不伪报回滚。
 - 最终tree `9f651f8a7adafa75a00c77fbaafa7f9df5949aff`：`browser-activation-static-regression-002` Node语法/Ruff、252项Bun及9项Node存储故障测试通过；`node-regression-002`另8项Node帧统计通过。`integration-002`为8 passed/37.02秒，新增真实冷恢复末步title失败，核完整释放后仍discarded/verified；复验上一批sync/async/API与file URL恢复。`form-state-002`三项真实Chromium场景通过，覆盖混合控件、storage、重排与大型匿名表单。该场景的Manager持久化为空操作，不替代HTTP落盘验收。
 - 完整archive旧生产红测78 passed/8 failed，分别区分激活五阶段及三种事件的原错误/stack写入。首轮扩大验证误将node:test文件交Bun，失败均为Bun未实现mock，002按原生运行器执行全部通过；不改测试或生产规避。001→002仅保持既有URL先于title更新的顺序，最终版本重新执行静态、回归与产品测试。独立真实producer复核002无finding，001关于persist原错误的假设已撤回，原件保留。准确命令/raw/指纹/退出码/零进程残留及产品证据SHA见 `out/tests/temp/openspec_resume_20261023/artifacts/browser-activation-proof-002.json`。其它Browser动作及2.2/7.2全量门仍未关闭。
+
+
+### 2026-10-23 Browser普通导航错误出口（部分收口）
+
+- goto/reload/back/forward与主文档requestfailed事件共用导航错误DTO，只发布请求/实际页面URL、browser/page身份、阶段及结构化错误码或提取的Chromium net错误码；原生调用日志只留cause和诊断。保留file页面URL具名例外，普通导航与启动失败仍保原code/status分类。异步导航冻结发起page，切换标签页不把旧失败交给新页面；发布失败状态又遇到URL读取/同步/取帧失败时按主错、次错顺序保留AggregateError，主分类不被次错覆盖。
+- 最终tree `586b0528e1afe79bad2d1b0790fb09cd16399331`：`browser-navigation-static-regression-002` Node语法/Ruff及262项Bun/1556断言、17项Node通过；`integration-002`为6 passed/28.93秒，真实Chromium/HTTP验证四种导航经sync/async/API失败、request_id、错误落盘无原生位置、完整原因诊断、verified与lease释放、再次导航成功和显式删除，并复验file页面URL恢复/失败、真实unsafe-port启动失败及原page.goto/Chromium错误码。一次性第三方注入不冒充真实系统EACCES。
+- 旧生产完整archive红测区分普通导航原正文、发起page误归属和次生失败覆盖主错；准确数量见`runs/browser-navigation-red-002`原件。001六项HTTP已通过，独审后002恢复no-history back/forward保留旧错误的成功行为，并增加原错/次错和并发切换断言；002全部重新验证。独立只读复核002无finding，结构化原code的有意保留已明确，不将其误作仅限Chromium码。准确命令/raw/指纹/退出码/零进程残留及产品SHA见 `out/tests/temp/openspec_resume_20261023/artifacts/browser-navigation-proof-002.json`。不代替完整Gateway/Web、Windows或2.2/7.2全量门。

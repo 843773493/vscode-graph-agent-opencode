@@ -24,6 +24,26 @@ async function registeredPage(existingBrowser = null) {
 }
 
 describe("标签页事件失败的恢复记录", () => {
+  test("主文档请求失败保留Chromium错误码与页面URL，不复制原生位置", async () => {
+    const { browser, page, entry } = await registeredPage();
+    const requestedUrl = "file:///user/opened.html";
+    const nativePath = String.raw`\\host\share\profile`;
+    const failureText = `net::ERR_ACCESS_DENIED ${nativePath}`;
+    browser.manager.schedulePersist = () => undefined;
+    const logged = spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      page.emit("requestfailed", {
+        ...request(requestedUrl, failureText), isNavigationRequest: () => true, frame: () => page,
+      });
+      expect(entry.navigationError.requested_url).toBe(requestedUrl);
+      expect(entry.navigationError.message).toContain(requestedUrl);
+      expect(entry.navigationError.message).toContain("ERR_ACCESS_DENIED");
+      expect(entry.navigationError.message).toContain("stage=request_failed");
+      expect(entry.navigationError.message).not.toContain(nativePath);
+      expect(logged.mock.calls.some(args => args[0].includes(failureText))).toBe(true);
+    } finally { logged.mockRestore(); }
+  });
+
   test.each(["dialog", "filechooser", "close"])("%s 只保存安全消息，完整原因留在诊断", async (event) => {
     const { browser, page: target, entry: targetEntry } = await registeredPage();
     const { page: active, entry: activeEntry } = await registeredPage(browser);

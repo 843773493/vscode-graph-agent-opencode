@@ -1,6 +1,5 @@
 import { EventEmitter } from "node:events";
 import { randomUUID } from "node:crypto";
-import { stripVTControlCharacters } from "node:util";
 import { normalizeBrowserUrl, nowIso } from "./url.js";
 import { BrowserPointerController, dispatchKey, insertText } from "./operations/browserInput.js";
 import {
@@ -52,13 +51,16 @@ const STREAM_PROFILES = Object.freeze({
   relaxed: Object.freeze({ quality: 50, everyNthFrame: 4 }),
 });
 
-function navigationFailure({ pageId, requestedUrl, actualUrl, error }) {
-  const detail = stripVTControlCharacters(error instanceof Error ? error.message : String(error));
+function navigationFailure({ browserId, pageId, requestedUrl, actualUrl, stage, error }) {
+  // 保留结构化错误码；Chromium仅提供文本时提取net错误码，不复制原生调用日志。
+  const message = error instanceof Error ? error.message : String(error);
+  const code = error?.code || /\bnet::(ERR_[A-Z0-9_]+)\b/.exec(message)?.[1]
+    || (error?.name === "TimeoutError" ? "navigation_timeout" : "navigation_failed");
   return {
     page_id: pageId,
     requested_url: requestedUrl,
     actual_url: actualUrl,
-    message: `打开 ${requestedUrl} 失败: ${detail}`,
+    message: `打开 ${requestedUrl} 失败: browser_id=${browserId}, page_id=${pageId}, stage=${stage}, code=${code}`,
     occurred_at: nowIso(),
   };
 }
@@ -1119,10 +1121,12 @@ export class BrowserSession extends EventEmitter {
       const errorText = request.failure()?.errorText || "未知网络错误";
       entry.requestedUrl = requestedUrl;
       entry.navigationError = navigationFailure({
+        browserId: this.id,
         pageId,
         requestedUrl,
         actualUrl: page.url(),
         error: errorText,
+        stage: "request_failed",
       });
       console.error(
         `[browser-session] 主文档导航失败: browser_id=${this.id} page_id=${pageId} url=${requestedUrl} error=${errorText}`,
@@ -1611,7 +1615,9 @@ export class BrowserSession extends EventEmitter {
   async goto(rawUrl) {
     this.assertRunning();
     const url = normalizeBrowserUrl(rawUrl);
-    const activeEntry = this.pageEntries.get(this.activePageId);
+    const page = this.page;
+    const pageId = this.activePageId;
+    const activeEntry = this.pageEntries.get(pageId);
     if (activeEntry) {
       activeEntry.requestedUrl = url;
       activeEntry.navigationError = null;
@@ -1620,32 +1626,15 @@ export class BrowserSession extends EventEmitter {
     this.record.navigation_error = null;
     try {
       if (url === "about:blank") {
-        await this.page.goto(url);
+        await page.goto(url);
       } else {
-        await this.page.goto(url, {
+        await page.goto(url, {
           waitUntil: "domcontentloaded",
           timeout: NAVIGATION_TIMEOUT_MS,
         });
       }
-    } catch (error) {
-      const failure = navigationFailure({
-        pageId: this.activePageId,
-        requestedUrl: url,
-        actualUrl: this.page.url(),
-        error,
-      });
-      if (activeEntry) {
-        activeEntry.navigationError = failure;
-      }
-      this.record.navigation_error = failure;
-      console.error(
-        `[browser-session] 导航命令失败: browser_id=${this.id} page_id=${this.activePageId} url=${url} error=${failure.message}`,
-      );
-      await this.syncAndEmitState();
-      if (this.clients.size > 0 && activeEntry) {
-        await this.captureCurrentPageFrame(activeEntry);
-      }
-      throw error;
+    } catch (cause) {
+      await this.failNavigation({ pageId, page, entry: activeEntry, stage: "page.goto", requestedUrl: url, cause });
     }
     if (activeEntry) {
       activeEntry.navigationError = null;
@@ -1657,15 +1646,50 @@ export class BrowserSession extends EventEmitter {
     return state;
   }
 
+  async failNavigation({ pageId, page, entry, stage, requestedUrl, cause }) {
+    const failure = navigationFailure({
+      browserId: this.id, pageId, requestedUrl,
+      actualUrl: null, stage, error: cause,
+    });
+    const error = browserRuntimeFailure({ browserId: this.id, pageId, stage, cause });
+    error.message = failure.message;
+    let reportingStage = "read_navigation_url";
+    try {
+      failure.actual_url = page.url();
+      if (entry) entry.navigationError = failure;
+      if (this.activePageId === pageId) this.record.navigation_error = failure;
+      reportingStage = "sync_navigation_state";
+      await this.syncAndEmitState();
+      if (this.clients.size > 0 && entry) {
+        reportingStage = "capture_navigation_frame";
+        await this.captureCurrentPageFrame(entry);
+      }
+    } catch (reportingCause) {
+      const reportingError = reportingStage === "read_navigation_url"
+        ? browserRuntimeFailure({ browserId: this.id, pageId, stage: reportingStage, cause: reportingCause })
+        : reportingCause;
+      const combined = new AggregateError([error, reportingError],
+        `${error.message}；发布导航失败状态时发生错误: ${reportingError.message}`, { cause: error });
+      combined.code = error.code;
+      combined.statusCode = error.statusCode;
+      throw combined;
+    }
+    throw error;
+  }
+
   async navigate(type = "url", url = null) {
     this.assertRunning();
     await this.runPageActionWithModalDetection(async () => {
-      if (type === "reload") {
-        await this.page.reload({ waitUntil: "domcontentloaded", timeout: NAVIGATION_TIMEOUT_MS });
-      } else if (type === "back") {
-        await this.page.goBack({ waitUntil: "domcontentloaded", timeout: NAVIGATION_TIMEOUT_MS });
-      } else if (type === "forward") {
-        await this.page.goForward({ waitUntil: "domcontentloaded", timeout: NAVIGATION_TIMEOUT_MS });
+      if (["reload", "back", "forward"].includes(type)) {
+        const method = { reload: "reload", back: "goBack", forward: "goForward" }[type];
+        const page = this.page;
+        const pageId = this.activePageId;
+        const entry = this.pageEntries.get(pageId);
+        try {
+          await page[method]({ waitUntil: "domcontentloaded", timeout: NAVIGATION_TIMEOUT_MS });
+        } catch (cause) {
+          await this.failNavigation({ pageId, page, entry, stage: `page.${method}`, requestedUrl: entry?.requestedUrl || this.record.url, cause });
+        }
       } else if (type === "url") {
         if (!url) {
           throw new Error("navigate type=url 需要 url");
