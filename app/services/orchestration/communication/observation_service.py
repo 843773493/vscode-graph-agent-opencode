@@ -259,6 +259,10 @@ class CommunicationObservationService:
             # 原结果重放仍经过新授权，source/target gate 与网络等待完全分离。
             try:
                 transport_request = request.model_copy(update={"terminal_replay": previous is not None})
+                await observe_phase(source_call_id, "observation.source.before_request", details={
+                    "operation": operation, "observation_id": observation_id,
+                    "page_identity": page_id, "page_ordinal": ordinal,
+                })
                 target_result = await service._transport.operation(operation=operation, target=request.target, body=transport_request.model_dump(mode="json"), timeout=max(budget or 0, 0) + 15 if operation == "wait" else None)
             except RemoteObservationError as error:
                 if deleted and previous is not None and error.code == "target-deleted" and observation_error_code(previous.get("error")) == "target-deleted":
