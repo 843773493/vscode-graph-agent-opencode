@@ -316,3 +316,9 @@
 - 目标机器原生文件路径与客户端内存文件仍按各自输入合同进入同一次Playwright `setFiles`；实际选择失败按chooser所属page发布browser/page身份、select_files阶段及原code/status，完整异常与路径保留在诊断及cause。失败不清空chooser，显式重试仍操作原选择器；不将用户绝对路径改写为工作区路径。
 - 最终产品tree `83ebf8eb5ae1387f410ad152f640605664ab3349`：297项Bun/1857断言、17项Node及语法检查通过（与003相同JS限定复用），最终Python Ruff通过；`integration-005`为3 passed/22.44秒，真实Chromium/HTTP/WS覆盖真实ENOENT的sync/async/工具/API错误、request_id、无路径落盘/正文、lease释放与verified、本机中文空格文件重试后的精确名称/正文、客户端内存上传、既有工具动作和file页面恢复。完整archive旧生产真实红测明确回显缺失文件绝对路径；独立小型红绿为新12通过、旧2失败/10通过。
 - 001新测试误读result层级、integration-003与红测并行产生端口冲突、004新测试participantId不合协议，原件保留；005已修新测试并串行通过。等待WS helper遇error立即失败，不再忽略协议拒绝后等超时。WS失败的payload分支由单测覆盖，真实网络故障来自native输入；不扩大证明范围。4283个blob、前后指纹和零进程组残留均核验，限定证据见 `out/tests/temp/openspec_resume_20261023/artifacts/browser-file-selection-proof-004.json`。本切片不代替2.2/7.2、完整Web或Windows验收。
+
+### 2026-10-23 Browser截图与下载读取错误出口（部分收口）
+
+- 两类产物共用同一FileHandle的open/stat/stream/close链，普通文件核验在响应头前完成；实际文件系统失败只发布browser/artifact/kind/stage/code，完整位置及原异常保留诊断/cause。缺失文件维持404；流开始后失败明确销毁响应，关闭次错不覆盖主错分类，并按顺序保留AggregateError。成功响应头、中文空格文件名与原始字节不变。
+- 最终tree `289963883cda5ab9cd0e278db0fa85436781d97e`：Node语法/Ruff通过，7项真实Chromium/HTTP集成通过（34.54秒），覆盖两类产物的真实ENOENT/ENOTDIR/EISDIR/EACCES、安全错误和不变恢复记录、文件恢复后的精确字节/头，以及流、关闭、双失败和响应销毁后的重试。后三类为一次性文件句柄/流注入，不声称真实磁盘EIO/EBADF。已有截图故障用例不再假定截图目录未创建，而是保留/恢复既有目录；首次扩大回归的准备阶段失败原件保留，最终同批复验通过。
+- 完整archive旧生产两项真实红测回显截图/下载原生位置。非作者002只读复核无finding，003仅调整负例顺序并完整重验；4283个blob、前后指纹与零进程组残留均核验，限定收据见 `out/tests/temp/openspec_resume_20261023/artifacts/browser-artifact-read-proof-003.json`。不代替完整Web、Windows或2.2/7.2全量门。

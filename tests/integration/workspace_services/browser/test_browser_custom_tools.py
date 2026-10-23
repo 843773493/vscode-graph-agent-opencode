@@ -1163,6 +1163,205 @@ async def test_page_control_failure_keeps_native_details_in_diagnostics(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["stream", "close", "stream_close"])
+async def test_artifact_stream_and_close_failures_keep_server_available(
+    mode: str, integration_client: httpx.AsyncClient, browser_context: CustomToolFactoryContext,
+    browser_manager_processes: tuple[int, int], browser_runtime: WorkspaceToolRuntime,
+) -> None:
+    container, _session, _invocation = browser_runtime
+    created = await integration_client.post("/api/v1/resources/browsers", json={
+        "session_id": browser_context.session_id,
+        "thread_id": browser_context.invocation_context.thread_binding.thread_id, "url": "about:blank",
+    })
+    assert created.status_code == 200, created.text
+    browser_id = created.json()["data"]["resource_id"]
+    saved = _json_tool_result(await create_screenshot_page_tool(browser_context).ainvoke({"pageId": browser_id}))
+    artifact_id = saved["screenshot_id"]
+    root = Path(container.workspace_root)
+    file = root / ".boxteam/browser-manager/screenshots" / f"{browser_id}-{artifact_id}.png"
+    expected = file.read_bytes()
+    transport = BrowserManagerClient(workspace_id=container.workspace_id, backend_url=f"http://127.0.0.1:{browser_manager_processes[0]}")
+    # 一次性注入文件句柄/流故障；HTTP、pipeline、响应销毁及真实句柄关闭均走产品链路。
+    await transport.perform(browser_id, "run", {"code": f"""
+const fs = (await import('node:fs')).default;
+const {{syncBuiltinESMExports}} = await import('node:module');
+const {{Readable}} = await import('node:stream');
+const originalOpen = fs.promises.open;
+context.__artifactOriginalOpen = originalOpen;
+fs.promises.open = async (...args) => {{
+  if (args[0] !== {json.dumps(str(file))}) return originalOpen(...args);
+  fs.promises.open = originalOpen; syncBuiltinESMExports();
+  const handle = await originalOpen(...args);
+  if ({json.dumps(mode)}.startsWith('stream')) {{
+    handle.createReadStream = () => Readable.from((async function* () {{
+      yield Buffer.from('partial');
+      await new Promise(resolve => setTimeout(resolve, 25));
+      throw Object.assign(new Error('injected stream EIO ' + args[0]), {{code: 'EIO'}});
+    }})());
+  }}
+  const originalClose = handle.close.bind(handle);
+  handle.close = async () => {{
+    await originalClose();
+    console.error('artifact-test-original-handle-closed', {json.dumps(artifact_id)});
+    if ({json.dumps(mode)}.includes('close')) throw Object.assign(
+      new Error('injected close EBADF ' + args[0]), {{code: 'EBADF'}});
+  }};
+  return handle;
+}};
+syncBuiltinESMExports(); return 'armed';
+"""}, actor="agent")
+    url = f"http://127.0.0.1:{browser_manager_processes[0]}{saved['screenshot_url']}?workspace_id={container.workspace_id}"
+    artifacts = TestRunContext.from_test_file(Path(__file__)).artifacts_dir
+    try:
+        async with httpx.AsyncClient(timeout=8) as client:
+            if mode.startswith("stream"):
+                with pytest.raises(httpx.RemoteProtocolError):
+                    await client.get(url)
+            else:
+                completed = await client.get(url)
+                assert completed.status_code == 200 and completed.content == expected
+            deadline = time.monotonic() + 8
+            while True:
+                diagnostics = "\n".join(item.read_text() for item in artifacts.glob("browser-backend-*.stderr.log"))
+                marker = f"读取浏览器产物失败: browser_id={browser_id}, artifact_id={artifact_id}, kind=screenshot, stage="
+                stage, code = ("stream", "EIO") if mode.startswith("stream") else ("close", "EBADF")
+                if marker + f"{stage}, code={code}" in diagnostics:
+                    break
+                assert time.monotonic() < deadline, "未收到流/关闭失败诊断"
+                await asyncio.sleep(0.05)
+            assert f"artifact-test-original-handle-closed {artifact_id}" in diagnostics
+            assert "[browser-backend] 响应开始后传输失败" in diagnostics
+            if mode.startswith("stream"):
+                assert "injected stream EIO " + str(file) in diagnostics
+            if "close" in mode:
+                assert "injected close EBADF " + str(file) in diagnostics
+            if mode == "stream_close":
+                assert "AggregateError: 产物读取及关闭失败" in diagnostics
+            retried = await client.get(url)
+            assert retried.status_code == 200 and retried.content == expected
+        assert (await transport.get_resource(browser_id))["reconciliation_status"] == "verified"
+    finally:
+        await transport.perform(browser_id, "run", {"code": """
+const fs = (await import('node:fs')).default;
+fs.promises.open = context.__artifactOriginalOpen;
+delete context.__artifactOriginalOpen;
+(await import('node:module')).syncBuiltinESMExports(); return 'restored';
+"""}, actor="agent")
+        deleted = await _detach_delete(integration_client, browser_id, browser_context)
+        assert deleted.status_code == 200, deleted.text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["screenshot", "download"])
+async def test_browser_artifact_read_failure_reports_identity_and_allows_retry(
+    kind: str, integration_client: httpx.AsyncClient, browser_context: CustomToolFactoryContext,
+    browser_manager_processes: tuple[int, int], browser_runtime: WorkspaceToolRuntime,
+) -> None:
+    container, _session, _invocation = browser_runtime
+    created = await integration_client.post("/api/v1/resources/browsers", json={
+        "session_id": browser_context.session_id,
+        "thread_id": browser_context.invocation_context.thread_binding.thread_id, "url": "about:blank",
+    })
+    assert created.status_code == 200, created.text
+    browser_id = created.json()["data"]["resource_id"]
+    root = Path(container.workspace_root)
+    transport = BrowserManagerClient(workspace_id=container.workspace_id, backend_url=f"http://127.0.0.1:{browser_manager_processes[0]}")
+    if kind == "screenshot":
+        saved = _json_tool_result(await create_screenshot_page_tool(browser_context).ainvoke({"pageId": browser_id}))
+        artifact_id = saved["screenshot_id"]
+        file = root / ".boxteam/browser-manager/screenshots" / f"{browser_id}-{artifact_id}.png"
+        route = saved["screenshot_url"]
+        expected_type = "image/png"
+    else:
+        await transport.perform(browser_id, "run", {"code": """
+const started = page.waitForEvent('download');
+await page.evaluate(() => {
+  const anchor = document.createElement('a');
+  anchor.href = URL.createObjectURL(new Blob(['真实下载正文'], {type: 'text/plain'}));
+  anchor.download = '下载 文件.txt'; anchor.click();
+});
+await started;
+"""}, actor="agent")
+        deadline = time.monotonic() + 10
+        while True:
+            state = await transport.get_resource(browser_id)
+            if state.get("downloads"):
+                break
+            assert time.monotonic() < deadline, "真实下载未完成"
+            await asyncio.sleep(0.05)
+        saved, = state["downloads"]
+        artifact_id = saved["download_id"]
+        file = root / ".boxteam/browser-manager/downloads" / browser_id / f"{artifact_id}-{saved['filename']}"
+        route = f"/api/browsers/{browser_id}/downloads/{artifact_id}"
+        expected_type = "application/octet-stream"
+    expected = file.read_bytes()
+    if kind == "screenshot":
+        assert expected.startswith(b"\x89PNG")
+    else:
+        assert expected.decode() == "真实下载正文"
+    state_file = root / ".boxteam/browser-manager/browsers.json"
+    state_before = state_file.read_bytes()
+    url = f"http://127.0.0.1:{browser_manager_processes[0]}{route}?workspace_id={container.workspace_id}"
+    receipts: list[dict[str, object]] = []
+    async with httpx.AsyncClient(timeout=8) as client:
+        for mode, status, code in [
+            ("parent_file", 500, "ENOTDIR"), ("missing", 404, "browser_artifact_not_found"),
+            ("directory", 500, "EISDIR"), ("permission", 500, "EACCES"),
+        ]:
+            if mode == "permission" and os.name == "nt":
+                continue  # Windows权限失败由目标ACL验收，不用chmod冒充。
+            if mode == "missing":
+                file.unlink()
+            elif mode == "parent_file":
+                parked = file.parent.with_name(f"{file.parent.name}-artifact-read-backup")
+                file.parent.rename(parked)
+                file.parent.write_bytes(b"not-a-directory")
+            elif mode == "directory":
+                file.unlink()
+                file.mkdir()
+            else:
+                file.chmod(0)
+            try:
+                failed = await client.get(url)
+                assert failed.status_code == status, failed.text
+                receipt = failed.json()
+                assert receipt["code"] == code
+                assert f"browser_id={browser_id}" in receipt["error"]
+                assert f"artifact_id={artifact_id}" in receipt["error"]
+                assert f"kind={kind}" in receipt["error"]
+                assert str(root) not in failed.text
+                assert state_file.read_bytes() == state_before
+                receipts.append(receipt)
+            finally:
+                if mode == "missing":
+                    file.write_bytes(expected)
+                elif mode == "parent_file":
+                    file.parent.unlink()
+                    parked.rename(file.parent)
+                elif mode == "directory":
+                    file.rmdir()
+                    file.write_bytes(expected)
+                else:
+                    file.chmod(0o600)
+            recovered = await client.get(url)
+            assert recovered.status_code == 200, recovered.text
+            assert recovered.content == expected
+            assert recovered.headers["content-type"] == expected_type
+            assert int(recovered.headers["content-length"]) == len(expected)
+            if kind == "download":
+                assert recovered.headers["content-disposition"] == "attachment; filename*=UTF-8''" + quote(saved["filename"], safe="")
+    artifacts = TestRunContext.from_test_file(Path(__file__)).artifacts_dir
+    diagnostics = "\n".join(item.read_text() for item in artifacts.glob("browser-backend-*.stderr.log"))
+    assert str(file) in diagnostics and "ENOTDIR" in diagnostics
+    assert (await transport.get_resource(browser_id))["reconciliation_status"] == "verified"
+    (artifacts / f"artifact-read-failure-{kind}-{time.time_ns()}.json").write_text(json.dumps({
+        "receipts": receipts, "artifact_id": artifact_id, "byte_length": len(expected),
+    }, ensure_ascii=False, indent=2), encoding="utf-8")
+    deleted = await _detach_delete(integration_client, browser_id, browser_context)
+    assert deleted.status_code == 200, deleted.text
+
+
+@pytest.mark.asyncio
 async def test_file_selection_failure_keeps_native_path_in_diagnostics_and_allows_retry(
     integration_client: httpx.AsyncClient, browser_context: CustomToolFactoryContext,
     browser_manager_processes: tuple[int, int], browser_runtime: WorkspaceToolRuntime,
@@ -1985,7 +2184,9 @@ async def test_screenshot_failure_reports_stage_and_recovers_through_tool(
     browser_id = created.json()["data"]["resource_id"]
     root = Path(container.workspace_root)
     destination = root / ".boxteam/browser-manager/screenshots"
-    destination.write_bytes(b"existing-directory-conflict")
+    parked = destination.with_name(f"{destination.name}-{browser_id}-backup")
+    if destination.exists():
+        destination.rename(parked)
     transport = BrowserManagerClient(
         workspace_id=container.workspace_id,
         backend_url=f"http://127.0.0.1:{browser_manager_processes[0]}",
@@ -1993,6 +2194,7 @@ async def test_screenshot_failure_reports_stage_and_recovers_through_tool(
     failures: list[dict[str, object]] = []
     screenshot_page = create_screenshot_page_tool(browser_context)
     try:
+        destination.write_bytes(b"existing-directory-conflict")
         for mode in ("sync", "async", "tool"):
             with pytest.raises(BrowserRequestError) as caught:
                 if mode == "sync":
@@ -2025,6 +2227,8 @@ async def test_screenshot_failure_reports_stage_and_recovers_through_tool(
         assert "[browser-state-store] 保存浏览器截图失败" in diagnostics
         assert str(destination) in diagnostics
         destination.unlink()
+        if parked.exists():
+            parked.rename(destination)
         saved = _json_tool_result(await screenshot_page.ainvoke({"pageId": browser_id}))
         assert saved["mime_type"] == "image/png"
         assert str(root) not in json.dumps(saved)
@@ -2041,6 +2245,8 @@ async def test_screenshot_failure_reports_stage_and_recovers_through_tool(
     finally:
         if destination.is_file():
             destination.unlink()
+        if parked.exists():
+            parked.rename(destination)
         deleted = await _detach_delete(integration_client, browser_id, browser_context)
         assert deleted.status_code == 200, deleted.text
 

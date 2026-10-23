@@ -1,7 +1,7 @@
 import http from "node:http";
 import { randomUUID } from "node:crypto";
-import { createReadStream } from "node:fs";
-import { stat } from "node:fs/promises";
+import { open } from "node:fs/promises";
+import { pipeline } from "node:stream/promises";
 import { stripVTControlCharacters } from "node:util";
 import { WebSocket, WebSocketServer } from "ws";
 import { BrowserFrameFlow } from "./transport/browserFrameFlow.js";
@@ -66,31 +66,56 @@ function notFound(response) {
   sendJson(response, 404, { error: "not_found" });
 }
 
-async function sendDownload(response, file, mediaType = "application/octet-stream") {
-  let fileStat;
-  try {
-    fileStat = await stat(file.path);
-  } catch (error) {
-    if (error?.code === "ENOENT") {
-      // 产物文件缺失：定位信息只进服务端日志，响应体回稳定错误码，绝不回吐真实路径。
-      console.error(`[browser-backend] 浏览器产物文件缺失: file=${file.path}`);
-      const missing = new Error("浏览器产物文件不存在");
-      missing.code = "browser_artifact_not_found";
-      throw missing;
-    }
-    throw error;
-  }
-  const headers = {
-    "content-type": mediaType,
-    "content-length": fileStat.size,
-    "access-control-allow-origin": "*",
+async function sendDownload(response, file, { browserId, artifactId, kind, mediaType = "application/octet-stream" }) {
+  let handle;
+  let stage = "open";
+  let failure = null;
+  const artifactFailure = (cause, failedStage) => {
+    console.error("[browser-backend] 读取浏览器产物失败", {
+      browser_id: browserId, artifact_id: artifactId, kind, stage: failedStage, path: file.path,
+    }, cause);
+    const missing = failedStage === "open" && cause.code === "ENOENT";
+    const error = new Error(
+      `读取浏览器产物失败: browser_id=${browserId}, artifact_id=${artifactId}, kind=${kind}, stage=${failedStage}, code=${cause.code || "unknown"}`,
+      { cause },
+    );
+    error.code = missing ? "browser_artifact_not_found" : cause.code;
+    error.statusCode = missing ? 404 : 500;
+    return error;
   };
-  if (typeof file.filename === "string" && file.filename) {
-    headers["content-disposition"] =
-      `attachment; filename*=UTF-8''${encodeURIComponent(file.filename)}`;
+  try {
+    handle = await open(file.path, "r");
+    stage = "stat";
+    const fileStat = await handle.stat();
+    if (!fileStat.isFile()) {
+      throw Object.assign(new Error("浏览器产物不是普通文件"), { code: fileStat.isDirectory() ? "EISDIR" : "EINVAL" });
+    }
+    const headers = {
+      "content-type": mediaType,
+      "content-length": fileStat.size,
+      "access-control-allow-origin": "*",
+    };
+    if (typeof file.filename === "string" && file.filename) {
+      headers["content-disposition"] =
+        `attachment; filename*=UTF-8''${encodeURIComponent(file.filename)}`;
+    }
+    response.writeHead(200, headers);
+    stage = "stream";
+    await pipeline(handle.createReadStream({ autoClose: false }), response);
+  } catch (cause) {
+    failure = artifactFailure(cause, stage);
+  } finally {
+    if (handle) {
+      try {
+        await handle.close();
+      } catch (cause) {
+        const cleanup = artifactFailure(cause, "close");
+        if (failure) failure.cause = new AggregateError([failure.cause, cause], "产物读取及关闭失败", { cause: failure.cause });
+        else failure = cleanup;
+      }
+    }
   }
-  response.writeHead(200, headers);
-  createReadStream(file.path).pipe(response);
+  if (failure) throw failure;
 }
 
 function parsePositiveInt(value, fieldName) {
@@ -271,7 +296,9 @@ async function main() {
 
       const downloadMatch = pathname.match(/^\/api\/browsers\/([^/]+)\/downloads\/([^/]+)$/);
       if (request.method === "GET" && downloadMatch) {
-        await sendDownload(response, manager.download(downloadMatch[1], downloadMatch[2]));
+        await sendDownload(response, manager.download(downloadMatch[1], downloadMatch[2]), {
+          browserId: downloadMatch[1], artifactId: downloadMatch[2], kind: "download",
+        });
         return;
       }
 
@@ -280,7 +307,7 @@ async function main() {
         await sendDownload(
           response,
           manager.screenshot(screenshotMatch[1], screenshotMatch[2]),
-          "image/png",
+          { browserId: screenshotMatch[1], artifactId: screenshotMatch[2], kind: "screenshot", mediaType: "image/png" },
         );
         return;
       }
@@ -488,6 +515,11 @@ async function main() {
 
       notFound(response);
     } catch (error) {
+      if (response.headersSent || response.destroyed) {
+        console.error("[browser-backend] 响应开始后传输失败", error);
+        response.destroy(error);
+        return;
+      }
       if (error instanceof BrowserTransportGrantRejected) {
         sendJson(response, 409, {
           error: error.message,
