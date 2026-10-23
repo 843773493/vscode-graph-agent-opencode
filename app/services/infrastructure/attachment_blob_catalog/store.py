@@ -42,6 +42,7 @@ from PIL import Image, ImageOps
 from app.abstractions.resource_file_content import ResourceFileContent
 from app.core.identifier import create_uuid_hex
 from app.core.path_utils import get_session_path_resolver
+from app.core.phase_observer import observe_phase
 from app.core.resource_uri import parse_session_artifact_uri, session_artifact_uri
 from app.core.session_catalog_resolver import SessionCatalogPathResolver
 from app.core.session_control_store import SessionControlStore
@@ -146,6 +147,21 @@ class AttachmentBlobStore(ForkAttachmentStoreMixin, AttachmentIngestRecoveryMixi
             raise ValueError("附件资源引用不属于本工作区 owner")
         return parse_logical_file_id(session_id, file_id)
 
+    def _parse_canonical_attachment_id(self, session_id: str, file_id: str) -> str:
+        """解析已接受的历史引用；历史 Gateway 身份不充当本地正文访问路由。
+
+        调用方仍须用精确 catalog owner ref/pin 核验使用事实；外部请求继续走
+        _parse_logical_file_id 的当前 Gateway 校验，不能借此访问远端引用。
+        """
+        parsed = parse_session_artifact_uri(file_id)
+        if (
+            parsed.scope_id != read_workspace_id(self._workspace_root)
+            or parsed.session_artifact_kind != "attachments"
+            or parsed.tail_segments[0] != session_id
+        ):
+            raise ValueError("附件资源引用不属于本工作区 owner")
+        return parse_logical_file_id(session_id, file_id)
+
     def close(self) -> None:
         """关闭 catalog 连接。"""
         self._catalog.close()
@@ -213,6 +229,11 @@ class AttachmentBlobStore(ForkAttachmentStoreMixin, AttachmentIngestRecoveryMixi
                 operation_identity=idempotency_key,
                 preimage_hash=preimage_hash,
             )
+            phase_details = {
+                "session_id": session_id, "thread_id": thread_id, "message_id": message_id,
+                "blob_id": identity.blob_id, "lease_id": pin.lease_id,
+            }
+            await observe_phase(idempotency_key, "attachment.ingest.pin_acquired", details=phase_details)
             record = self._catalog.create_or_get_ingest_record(
                 ingest_idempotency_key=idempotency_key,
                 ingest_id=ingest_id,
@@ -225,15 +246,18 @@ class AttachmentBlobStore(ForkAttachmentStoreMixin, AttachmentIngestRecoveryMixi
                 staging_relative_locator=staging_locator,
                 max_bytes=MAX_ATTACHMENT_BYTES,
             )
+            await observe_phase(idempotency_key, "attachment.ingest.preparing", details=phase_details)
             staging_path = resolve_staging_path(
                 self._attachments_root, record.staging_relative_locator
             )
             try:
                 self._write_staging(staging_path, data)
+                await observe_phase(idempotency_key, "attachment.ingest.staging_durable", details=phase_details)
                 async with self._blob_commits.lock_for(identity.blob_id):
                     _record, claim = self._catalog.mark_ingest_hashed(
                         ingest_idempotency_key=idempotency_key, identity=identity
                     )
+                    await observe_phase(idempotency_key, "attachment.ingest.hashed", details=phase_details)
                     blob = self._catalog.get_blob(identity.blob_id)
                     if blob is None or blob.availability == "tombstoned":
                         # 同内容 staging 可完成原 claim；首次日期、locator 和活 winner 不变。
@@ -247,6 +271,7 @@ class AttachmentBlobStore(ForkAttachmentStoreMixin, AttachmentIngestRecoveryMixi
                         published_path = self._verified_blob_path(identity.blob_id, claim.final_relative_locator)
                         self._verify_blob_content(published_path, identity.digest, identity.length, identity.blob_id)
                         _remove_file(staging_path)
+                    await observe_phase(idempotency_key, "attachment.ingest.blob_committed", details=phase_details)
                 # hashed record 在 GC 事务中保活；释放正文锁后才取得 Session gate。
                 await self._publish(
                     session_id=session_id,
@@ -259,6 +284,7 @@ class AttachmentBlobStore(ForkAttachmentStoreMixin, AttachmentIngestRecoveryMixi
                     attachment=attachment,
                     content_type=content_type,
                 )
+                await observe_phase(idempotency_key, "attachment.ingest.published", details=phase_details)
             except BaseException:
                 # catalog 是 durable 主体；发布后的结算失败不能倒写为 failed。
                 if self._catalog.get_ingest_record(idempotency_key).state == "published":

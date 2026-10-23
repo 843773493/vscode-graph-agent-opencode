@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import json
+import sqlite3
 from contextlib import closing
 from contextvars import ContextVar
 from pathlib import Path
@@ -19,11 +21,15 @@ from app.api.deps import (
     get_session_context_fork_service,
     verify_local_token,
 )
-from app.core.path_utils import workspace_context
+from app.core.path_utils import get_session_path_resolver, workspace_context
 from app.core.session_control_store import SessionControlStore
 from app.core.session_lifecycle_gate import (
     SessionDeletionPendingError,
     _CrossProcessFileLock,
+)
+from app.services.infrastructure.attachment_blob_catalog.locator import (
+    resolve_blob_path,
+    resolve_staging_path,
 )
 from tests.integration.backend.sessions.test_cold_rollout_history import (
     history_client as history_client,  # noqa: PLC0414
@@ -31,6 +37,13 @@ from tests.integration.backend.sessions.test_cold_rollout_history import (
 from tests.integration.backend.sessions.test_rollout_fork_modes import (
     _fork_request,
     _production_fork_context,
+)
+from tests.integration.backend.sessions.test_session_communication_pipeline import (
+    CommunicationCase,
+    _completed,
+)
+from tests.integration.backend.sessions.test_session_communication_pipeline import (
+    communication_case as communication_case,  # noqa: PLC0414
 )
 from tests.integration.backend.sessions.test_thread_runtime_runner import (
     RuntimeCase,
@@ -51,6 +64,8 @@ from tests.integration.backend.sessions.test_thread_runtime_runner import (
 from tests.integration.backend.sessions.test_thread_runtime_runner import (
     runtime_case as runtime_case,  # noqa: PLC0414
 )
+from tests.support.api_helpers import create_session
+from tests.support.e2e_control.harness import control_request
 
 
 def _exclusive_available(path: Path) -> bool:
@@ -435,3 +450,163 @@ async def test_product_fork_reply_follows_attachment_commit_before_target_delete
         assert not observed["path"].exists()
         assert case.runner.saver.read_canonical_items(source, source_thread) == source_items
         assert len(case.model_admissions) == 1
+
+
+def _upload_state(case: CommunicationCase, session: str) -> dict[str, list[dict[str, object]]]:
+    """仅核对真实 owner 已提交的事实，不替上传或恢复生成状态。"""
+    node = case.main_thread_node(session)
+    session_node = get_session_path_resolver(case.workspace / ".boxteam/sessions").resolve_session_node(session)
+    queries = {
+        session_node / "session-control.sqlite": {
+            "pins": "SELECT * FROM session_operation_leases WHERE operation_kind='attachment' ORDER BY lease_id",
+        },
+        case.workspace / ".boxteam/attachments/catalog.sqlite": {
+            "ingests": "SELECT * FROM attachment_ingest_records ORDER BY ingest_id",
+            "claims": "SELECT * FROM attachment_blob_commit_claims ORDER BY digest",
+            "refs": "SELECT * FROM attachment_owner_refs ORDER BY attachment_id",
+            "blobs": "SELECT * FROM attachment_blobs ORDER BY blob_id",
+        },
+        node / "rollout/index.sqlite": {
+            "acceptances": "SELECT * FROM turn_acceptances ORDER BY created_at,turn_id",
+            "roots": "SELECT item_id,item_sequence,turn_id,content_hash FROM item_catalog "
+                     "WHERE semantic_kind='user_input' ORDER BY item_sequence",
+            "queue_identity": "SELECT job_id,execution_id,admission_commit_id,input_hash,input_json,created_at "
+                              "FROM execution_queue ORDER BY admission_commit_id",
+            "queue": "SELECT job_id,phase FROM execution_queue ORDER BY admission_commit_id",
+        },
+    }
+    state = {}
+    for database, tables in queries.items():
+        if database == node / "rollout/index.sqlite":
+            # 上传接受前允许尚未物化 rollout；显式记录缺库，不能靠读探针创建业务库。
+            state["rollout_database"] = [{"exists": database.exists()}]
+            if not database.exists():
+                state.update({name: [] for name in tables})
+                continue
+        with sqlite3.connect(database.as_uri() + "?mode=ro", uri=True) as connection:
+            connection.row_factory = sqlite3.Row
+            state.update({name: [dict(row) for row in connection.execute(query)] for name, query in tables.items()})
+    return state
+
+
+@pytest.mark.parametrize("boundary", [
+    "pin_acquired", "preparing", "staging_durable", "hashed", "blob_committed", "published", "accepted",
+])
+async def test_gateway_attachment_upload_recovers_after_process_loss(
+    communication_case: CommunicationCase, boundary: str,
+) -> None:
+    """从 Gateway 上传到真实 Agent，硬退出后只恢复原接受事实。"""
+    case = communication_case
+    control = case.replay.control
+    session = await create_session(case.client, "附件上传进程恢复")
+    call, = await case.plan(session, [{"content": "attachment-recovered-result"}])
+    thread = case.planned_calls[call]["thread_id"]
+    session_node = await case.session_node(session)
+    barrier = "upload-durable-boundary"
+    control.arm_match(barrier, "attachment.ingest." + boundary, {"session_id": session, "thread_id": thread})
+    body = b"gateway-attachment-durable-recovery"
+    payload = {"run": {}, "message": {"content": "读取恢复后的附件", "attachments": [{
+        "file_id": "inline:process-loss", "name": "recovery.txt", "content_type": "text/plain",
+        "data_url": "data:text/plain;base64," + base64.b64encode(body).decode(),
+    }]}}
+    upload = asyncio.create_task(case.client.post(f"/api/v1/sessions/{session}/messages", json=payload))
+    try:
+        crash = await asyncio.to_thread(control.acknowledged_match, barrier)
+        assert crash["pid"] == case.backend.process.pid
+        assert set(crash["details"]) == {"session_id", "thread_id", "message_id", "blob_id", "lease_id"}
+        before = _upload_state(case, session)
+        pin, = before["pins"]
+        assert pin["state"] == "active"
+        assert pin["lease_id"] == crash["details"]["lease_id"]
+        assert pin["operation_identity"] == crash["operation_id"]
+        assert pin["recovery_ref"] == f"attachment:{session}:{thread}:{crash['details']['message_id']}"
+        accepted = boundary == "accepted"
+        published = boundary in {"published", "accepted"}
+        assert before["rollout_database"] == [{"exists": accepted}]
+        assert len(before["acceptances"]) == len(before["roots"]) == len(before["queue_identity"]) == int(accepted)
+        assert len(before["refs"]) == len(before["blobs"]) == int(published)
+        assert before["queue"] == ([{"job_id": before["queue_identity"][0]["job_id"], "phase": "queued"}] if accepted else [])
+        attachments_root = case.workspace / ".boxteam/attachments"
+        staging = None
+        if boundary == "pin_acquired":
+            assert before["ingests"] == before["claims"] == []
+        else:
+            ingest, = before["ingests"]
+            assert ingest["pin_lease_id"] == pin["lease_id"]
+            assert ingest["owner_session_id"] == session and ingest["owner_thread_id"] == thread
+            assert ingest["state"] == ("published" if published else "hashed" if boundary in {"hashed", "blob_committed"} else "preparing")
+            staging = resolve_staging_path(attachments_root, ingest["staging_relative_locator"])
+            assert staging.exists() == (boundary in {"staging_durable", "hashed"})
+        if before["claims"]:
+            claim, = before["claims"]
+            blob_path = resolve_blob_path(attachments_root, claim["final_relative_locator"])
+            assert blob_path.exists() == (boundary in {"blob_committed", "published", "accepted"})
+            if blob_path.exists():
+                assert blob_path.read_bytes() == body
+        assert not (case.replay.artifacts / (call + ".json")).exists()
+        case.record("upload-before-crash", {"boundary": boundary, "state": before, "ack": crash})
+
+        # accepted 屏障位于同步准入调用内；由 pytest 硬杀，不向被屏障阻塞的 Backend 发 HTTP。
+        await case.hard_restart()
+        response, = await asyncio.gather(upload, return_exceptions=True)
+        assert isinstance(response, httpx.TransportError) or isinstance(response, httpx.Response) and response.status_code >= 500
+        after = _upload_state(case, session)
+        recovered, = after["pins"]
+        for field in ("lease_id", "operation_identity", "preimage_hash", "captured_lifecycle_generation", "recovery_ref", "created_at"):
+            assert recovered[field] == pin[field], field
+        assert recovered["fencing_token"] == pin["fencing_token"] + 1
+        assert recovered["state"] == ("completed" if accepted else "failed")
+        assert not staging or not staging.exists()
+        assert len(after["ingests"]) == len(before["ingests"])
+        if after["ingests"]:
+            assert after["ingests"][0]["ingest_id"] == before["ingests"][0]["ingest_id"]
+            assert after["ingests"][0]["state"] == ("published" if published else "aborted")
+        assert [ref["state"] for ref in after["refs"]] == (["active" if accepted else "released"] if published else [])
+        for name in ("acceptances", "roots", "queue_identity"):
+            assert after[name] == before[name], name
+        case.record("upload-recovered", {"boundary": boundary, "state": after})
+        if accepted:
+            job_id = before["queue_identity"][0]["job_id"]
+        else:
+            assert not (case.replay.artifacts / (call + ".json")).exists()
+            # 未接受的上传明确失败，重新走相同产品入口上传，不能替产品补写准入。
+            retry = await case.client.post(f"/api/v1/sessions/{session}/messages", json=payload)
+            assert retry.status_code == 200, retry.text
+            job_id = retry.json()["data"]["job_id"]
+        await _completed(case.client, job_id)
+        history = await case.client.post(f"/api/v1/sessions/{session}/history", json={"direction": "head", "turns": 1})
+        assert history.status_code == 200, history.text
+        turn, = history.json()["data"]["items"]
+        message, = turn["user_messages"]
+        attachment, = message["attachments"]
+        assert history.json()["data"]["thread_id"] == thread and turn["job_id"] == job_id
+        assert turn["final_response"] == "attachment-recovered-result"
+        assert message["content"] == payload["message"]["content"]
+        assert (message["message_id"] == crash["details"]["message_id"]) == accepted
+        assert "data_url" not in attachment
+        file_id = attachment["file_id"]
+        content = await case.client.get(f"/api/v1/sessions/{session}/attachments/content", params={"file_id": file_id})
+        assert content.status_code == 200 and content.content == body
+        assert file_id in json.dumps(case.request(call)["messages"], ensure_ascii=False)
+        final = _upload_state(case, session)
+        assert len(final["acceptances"]) == len(final["roots"]) == len(final["queue"]) == 1
+        assert final["queue"] == [{"job_id": job_id, "phase": "terminal"}]
+        assert len(final["blobs"]) == len(final["claims"]) == 1
+        assert len([ref for ref in final["refs"] if ref["state"] == "active"]) == 1
+        assert all(row["state"] in {"failed", "completed"} for row in final["pins"])
+        assert len(final["pins"]) == (1 if accepted else 2)
+
+        await case.hard_restart()
+        assert _upload_state(case, session) == final
+        content = await case.client.get(f"/api/v1/sessions/{session}/attachments/content", params={"file_id": file_id})
+        assert content.status_code == 200 and content.content == body
+        assert [event["operation_id"] for event in control.events if event["phase"] == "model.response_ready"] == [call]
+        assert session_node.exists()
+        case.record("upload-terminal-after-second-restart", {"state": final, "history": history.json()})
+    finally:
+        control_request(json.loads(control.environment["BOXTEAM_E2E_TEST_CONTROL"]), {
+            "action": "release_match", "barrier_id": barrier,
+        })
+        if not upload.done():
+            upload.cancel()
+        await asyncio.gather(upload, return_exceptions=True)

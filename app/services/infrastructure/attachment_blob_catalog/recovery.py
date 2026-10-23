@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 from typing import Protocol
 
+from app.core.phase_observer import observe_phase_sync
 from app.core.session_control_store import SessionControlStore
 from app.core.session_control_store.copy_attachment_settlement import (
     read_copy_attachment_settlements,
@@ -71,7 +72,7 @@ class AttachmentIngestRecoveryMixin:
             references = messages.attachment_message_references(session_id, thread_id, message_id)
             if references is None:
                 raise RuntimeError(f"附件消息尚未被 canonical owner 接受: message_id={message_id}")
-            attachment_ids = {self._parse_logical_file_id(session_id, uri) for uri in references}
+            attachment_ids = {self._parse_canonical_attachment_id(session_id, uri) for uri in references}
             for pin in pins:
                 record = self._catalog.get_ingest_record(pin.operation_identity)
                 self._validate_upload_pin(session_id, pin, record)
@@ -79,6 +80,10 @@ class AttachmentIngestRecoveryMixin:
                     blob_id=record.blob_id, owner_session_id=session_id, owner_thread_id=thread_id,
                 ) not in attachment_ids:
                     raise RuntimeError(f"消息接受事实与已发布附件不一致: lease_id={pin.lease_id}")
+                observe_phase_sync(pin.operation_identity, "attachment.ingest.accepted", details={
+                    "session_id": session_id, "thread_id": thread_id, "message_id": message_id,
+                    "blob_id": record.blob_id, "lease_id": pin.lease_id,
+                })
                 self._settle_pin(control, pin, outcome="completed")
         finally:
             control.close()
@@ -120,7 +125,7 @@ class AttachmentIngestRecoveryMixin:
                         raise RuntimeError(f"已发布 ingest 缺少一致的 owner reference: lease_id={pin.lease_id}")
                     references = messages.attachment_message_references(session_id, owner_thread, message_id)
                     if references is not None:
-                        if ref.state != "active" or attachment_id not in {self._parse_logical_file_id(session_id, uri) for uri in references}:
+                        if ref.state != "active" or attachment_id not in {self._parse_canonical_attachment_id(session_id, uri) for uri in references}:
                             raise RuntimeError(f"消息接受事实缺少 pin 指定附件: lease_id={pin.lease_id}")
                         outcome = "completed"
                     elif not messages.attachment_reference_in_use(session_id, owner_thread, attachment_id):

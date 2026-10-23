@@ -10,7 +10,7 @@ from dataclasses import replace
 from pathlib import Path
 
 from app.core.phase_observer import observe_phase
-from app.core.resource_uri import parse_session_artifact_uri, session_artifact_uri
+from app.core.resource_uri import session_artifact_uri
 from app.core.session_catalog_resolver import SessionCatalogPathResolver
 from app.core.session_catalog_store import SessionCreationRecord
 from app.core.session_catalog_store.contracts import ForkSourceCaptureRecord
@@ -68,7 +68,7 @@ class ForkAttachmentStoreMixin(ForkAttachmentImportMixin):
     _gate: SessionLifecycleGate
     _topology_gate: NavigationTopologyGate
     _blob_commits: OperationHolderGate
-    _parse_logical_file_id: Callable[[str, str], str]
+    _parse_canonical_attachment_id: Callable[[str, str], str]
     _assert_session_active: Callable[[str, str], int]
     _open_control_store: Callable[[str], SessionControlStore]
     _verify_blob_content: Callable[[Path, str, int, str], None]
@@ -106,7 +106,7 @@ class ForkAttachmentStoreMixin(ForkAttachmentImportMixin):
                 aliases.update((file_id, projected["file_id"]))
                 unavailable[inherited.target_attachment_id] = previous, aliases, previous_required or required
                 continue
-            source_id = self._parse_frozen_source_attachment_id(source_session_id, projected["file_id"])
+            source_id = self._parse_canonical_attachment_id(source_session_id, projected["file_id"])
             aliases, previous_required, previous = grouped.setdefault(source_id, (set(), False, inherited))
             if previous != inherited:
                 raise RuntimeError("fork attachment alias 的 backing owner 冻结 metadata 冲突")
@@ -150,21 +150,6 @@ class ForkAttachmentStoreMixin(ForkAttachmentImportMixin):
                 required=required, claim_id=None,
             ), aliases, required))
         return candidates
-
-    def _parse_frozen_source_attachment_id(self, session_id: str, file_id: str) -> str:
-        """解析 canonical 历史附件引用；owner 由随后精确 catalog ref 校验。"""
-        parsed = parse_session_artifact_uri(file_id)
-        workspace_id = read_workspace_id(self._workspace_root)
-        if (
-            parsed.session_artifact_kind != "attachments"
-            or parsed.scope_id != workspace_id
-            or parsed.tail_segments[0] != session_id
-        ):
-            raise ValueError("附件资源引用不属于本工作区 owner")
-        local_uri = session_artifact_uri(
-            workspace_id, session_id, "attachments", parsed.tail_segments[2],
-        )
-        return self._parse_logical_file_id(session_id, local_uri)
 
     def project_fork_attachment_sources(
         self, *, source_session_id: str, source_thread_id: str,

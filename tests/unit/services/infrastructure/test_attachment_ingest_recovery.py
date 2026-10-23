@@ -47,7 +47,9 @@ import asyncio
 import base64
 import os
 import sys
+from datetime import datetime
 from pathlib import Path
+from unittest.mock import patch
 
 from app.core.path_utils import build_session_catalog_components, catalog_provider_scope
 from app.core.identifier import create_prefixed_id
@@ -59,7 +61,11 @@ from app.services.business.message_service import MessageService
 from app.services.infrastructure.attachment_blob_catalog.store import AttachmentBlobStore
 from app.services.infrastructure.rollout_context.checkpoint.saver import RolloutCheckpointSaver
 
-root, session, boundary = sys.argv[1:]
+root, session, boundary = sys.argv[1:4]
+if len(sys.argv) == 5:
+    # 仅冻结 claim owner 的时间；上传、锁和接受仍经过真实产品链路。
+    clock = patch("app.services.infrastructure.attachment_blob_catalog.ingest.datetime", wraps=datetime).start()
+    clock.now.return_value = datetime.fromisoformat(sys.argv[4])
 components = build_session_catalog_components(Path(root) / ".boxteam" / "sessions", read_workspace_id(Path(root)))
 with catalog_provider_scope(components):
     store = AttachmentBlobStore(Path(root), path_resolver=components.resolver)
@@ -405,9 +411,10 @@ async def upload_process_factory(ingest_case):
     """进程只从真实 MessageService 入口创建并接受附件消息，fixture 负责排空。"""
     processes = []
 
-    async def start(session_id, boundary):
+    async def start(session_id, boundary, *, claim_time=None):
         process = await asyncio.create_subprocess_exec(
             sys.executable, "-c", _UPLOAD_WORKER, str(ingest_case.root), session_id, boundary,
+            *([claim_time] if claim_time is not None else []),
             stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
         )
         processes.append(process)
@@ -425,15 +432,19 @@ async def upload_process_factory(ingest_case):
 async def test_concurrent_processes_join_one_claim_before_rename(
     ingest_case, session_bundle_factory, upload_process_factory, crash_winner,
 ):
-    """胜者停在 claim 后；第二个真实进程不能因正文未落盘提前失败。"""
+    """跨 UTC 午夜竞争同一正文；后到进程复用首次日期，胜者崩溃也不换 locator。"""
     case = ingest_case
     other = "ses_019b781159d47374805bc4427d081a15"
     session_bundle_factory(case.root / ".boxteam/sessions", other)
-    winner = await upload_process_factory(SESSION, "concurrent-winner")
+    winner = await upload_process_factory(SESSION, "concurrent-winner", claim_time="2026-10-23T23:59:59+00:00")
     assert await asyncio.wait_for(winner.stdout.readline(), timeout=20) == b"claimed\n"
     (frozen,) = case.store._catalog.list_non_terminal_claims()
-    contender = await upload_process_factory(other, "concurrent-contender")
+    assert frozen.first_claim_utc_date == "2026-10-23"
+    assert frozen.final_relative_locator == f"2026/10/23/{frozen.blob_id}"
+    contender = await upload_process_factory(other, "concurrent-contender", claim_time="2026-10-24T00:00:01+00:00")
     assert await asyncio.wait_for(contender.stdout.readline(), timeout=20) == b"staged\n"
+    contender_ingest, = case.store._catalog.list_non_terminal_ingest_records(owner_session_id=other)
+    assert contender_ingest.created_at == "2026-10-24T00:00:01+00:00"
     try:
         await asyncio.wait_for(contender.wait(), timeout=0.2)
     except TimeoutError:
@@ -457,11 +468,16 @@ async def test_concurrent_processes_join_one_claim_before_rename(
         frozen.final_relative_locator, frozen.first_claim_utc_date, frozen.winning_ingest_id,
     )
     assert await case.store.recover_pending_ingests(messages=case.saver) == int(crash_winner)
-    for session_id in (other,) if crash_winner else (SESSION, other):
-        (ref,) = case.store._catalog.list_owner_refs_for_session(session_id, active_only=True)
-        assert case.store.read(session_id, case.store.reference(session_id, ref.attachment_id)).data == BODY
-        assert case.saver.attachment_reference_in_use(session_id, ref.owner_thread_id, ref.attachment_id)
-    assert len(tuple(case.store._attachments_root.glob("*/*/*/blb_*"))) == 1
+    with closing(AttachmentBlobStore(case.root)) as cold:
+        for session_id in (other,) if crash_winner else (SESSION, other):
+            (ref,) = cold._catalog.list_owner_refs_for_session(session_id, active_only=True)
+            assert cold.read(session_id, cold.reference(session_id, ref.attachment_id)).data == BODY
+            assert case.saver.attachment_reference_in_use(session_id, ref.owner_thread_id, ref.attachment_id)
+        assert cold._catalog.connection.execute("SELECT COUNT(*) FROM attachment_blob_commit_claims").fetchone()[0] == 1
+        assert cold._catalog.connection.execute("SELECT COUNT(*) FROM attachment_blobs").fetchone()[0] == 1
+    assert tuple(case.store._attachments_root.glob("*/*/*/blb_*")) == (
+        resolve_blob_path(case.store._attachments_root, frozen.final_relative_locator),
+    )
     assert await case.store.collect_garbage(retention=timedelta(0)) == ()
 
 
