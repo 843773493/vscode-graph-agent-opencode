@@ -90,6 +90,104 @@ function transitionSession(onCommand = () => undefined) {
   return { browser, commands, persisted, states };
 }
 
+describe("浏览器帧回调与关闭的生命周期", () => {
+  function pendingFrame() {
+    const { browser } = liveSession();
+    const entry = browser.pageEntries.get(browser.activePageId);
+    let closed = false;
+    let finishAck;
+    let failAck;
+    let ackCount = 0;
+    const ack = new Promise((resolve, reject) => { finishAck = resolve; failAck = reject; });
+    entry.page.isClosed = () => closed;
+    entry.page.close = async () => { closed = true; };
+    browser.manager.runtimePool = { releaseContext: async () => { closed = true; } };
+    entry.cdpSession.send = async (method) => {
+      if (method === "Page.screencastFrameAck") { ackCount += 1; await ack; }
+    };
+    const event = { data: Buffer.from("jpeg").toString("base64"), metadata: {}, sessionId: 1 };
+    browser.receiveScreencastFrame(event, entry);
+    return { browser, entry, event, finishAck, failAck,
+      isClosed: () => closed, ackCount: () => ackCount };
+  }
+
+  test.each(["runtime", "page"])("%s关闭先排空已接纳帧，拒绝退役页面新帧", async (scope) => {
+    const { browser, entry, event, finishAck, isClosed, ackCount } = pendingFrame();
+    const closing = scope === "runtime" ? browser.releaseRuntime() : browser.closePage(entry.pageId);
+    expect(entry.retiring).toBe(true);
+    expect(browser.screencastFrames.size).toBe(1);
+    browser.receiveScreencastFrame(event, entry);
+    expect(ackCount()).toBe(1);
+    expect(isClosed()).toBe(false);
+    finishAck();
+    await closing;
+    expect(isClosed()).toBe(true);
+    expect(browser.screencastFrames.size).toBe(0);
+  });
+
+  test("意外帧ACK错误明确发布；关闭排空失败保留context并报告未知", async () => {
+    const { browser, entry, failAck, isClosed } = pendingFrame();
+    const context = browser.context;
+    const states = [];
+    browser.on("state", (state) => states.push(state));
+    const cause = Object.assign(new Error("Target closed /private/chromium"), { code: "EIO" });
+    const diagnostics = spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      const closing = browser.releaseRuntime().catch((error) => error);
+      failAck(cause);
+      const failure = await closing;
+      expect(failure.message).toContain("stage=drain_screencast_frames");
+      expect(failure.cause.errors[0].cause).toBe(cause);
+      expect(failure.message).not.toContain("/private/chromium");
+      expect(browser.context).toBe(context);
+      expect(isClosed()).toBe(false);
+      expect(browser.record.reconciliation_status).toBe("unknown");
+      expect(states.some((state) => state.stream_error?.includes("stage=screencast_frame"))).toBe(true);
+      expect(browser.record.stream_error).not.toContain("/private/chromium");
+      expect(diagnostics.mock.calls.some((args) => args.at(-1) === cause)).toBe(true);
+      expect(entry.retiring).toBe(true);
+    } finally { diagnostics.mockRestore(); }
+  });
+
+  test("帧排空有界超时不关闭context，迟到旧页面错误不污染新页面", async () => {
+    const { browser, entry, finishAck, isClosed } = pendingFrame();
+    await expect(browser.drainScreencastFrames([entry], 1))
+      .rejects.toMatchObject({ code: "browser_frame_drain_timeout" });
+    expect(isClosed()).toBe(false);
+    expect(browser.screencastFrames.size).toBe(1);
+    finishAck();
+    await Promise.allSettled([...browser.screencastFrames.keys()]);
+    const cause = new Error("意外断开 /private/chromium");
+    entry.retiring = false;
+    entry.cdpSession.send = async () => { throw cause; };
+    const diagnostics = spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      browser.receiveScreencastFrame({ data: "", metadata: {}, sessionId: 2 }, entry);
+      const executions = [...browser.screencastFrames.keys()];
+      browser.pageEntries.set(entry.pageId, { ...entry });
+      browser.record.stream_error = "新页面的状态";
+      await Promise.allSettled(executions);
+      expect(browser.record.stream_error).toBe("新页面的状态");
+      expect(diagnostics.mock.calls.some((args) => args.at(-1) === cause)).toBe(true);
+    } finally { diagnostics.mockRestore(); }
+  });
+
+  test("关闭单页的排空超时保留页面并报告未知", async () => {
+    const { browser, entry, finishAck, isClosed } = pendingFrame();
+    const drain = browser.drainScreencastFrames.bind(browser);
+    browser.drainScreencastFrames = (entries) => drain(entries, 1);
+    const diagnostics = spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      await expect(browser.closePage(entry.pageId)).rejects.toMatchObject({ code: "browser_frame_drain_timeout" });
+      expect(browser.record.reconciliation_status).toBe("unknown");
+      expect(isClosed()).toBe(false);
+      expect(entry.retiring).toBe(true);
+      finishAck();
+      await Promise.allSettled([...browser.screencastFrames.keys()]);
+    } finally { diagnostics.mockRestore(); }
+  });
+});
+
 describe("浏览器启动的运行时错误归属", () => {
   function startingSession(stage, cause, cleanupCause = null) {
     const browser = session();
@@ -557,6 +655,135 @@ describe("浏览器统一操作队列", () => {
     } finally {
       diagnostics.mockRestore();
     }
+  });
+
+  test.each([
+    ["Network.setCacheDisabled", true], ["Network.setBypassServiceWorker", true],
+    ["device_profile_goto", true], ["restore_device_page_url", true],
+    ["Network.setBypassServiceWorker", false], ["Network.setCacheDisabled", false],
+  ])("动态设备设置在原生边界保留原因且恢复所有已尝试的开关: %s/%s", async (stage, enabling) => {
+    const { browser, cdpCalls } = liveSession();
+    const entry = browser.pageEntries.get(browser.activePageId);
+    entry.url = "https://example.test/device";
+    const cause = Object.assign(new Error(String.raw`EACCES C:\private\device-profile`), { code: "EACCES", statusCode: 503 });
+    let injected = false;
+    const failOnce = () => { if (!injected) { injected = true; throw cause; } };
+    entry.cdpSession.send = async (method, params) => {
+      cdpCalls.push({ method, params });
+      if (method === stage && (params.cacheDisabled ?? params.bypass) === enabling) failOnce();
+    };
+    if (stage === "device_profile_goto") entry.page.goto = async () => failOnce();
+    if (stage === "restore_device_page_url") entry.page.evaluate = async () => failOnce();
+    const diagnostics = spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      const failure = await browser.setDeviceProfile("pixel-7").catch((error) => error);
+      expect(injected).toBe(true);
+      expect(failure).toMatchObject({ cause, code: "EACCES", statusCode: 503 });
+      expect(failure.message).toContain(`stage=${stage}`);
+      expect(failure.message).not.toContain("private");
+      expect(browser.record.device_profile).toBe("desktop");
+      expect(browser.record.reconciliation_status).toBe(enabling ? "verified" : "unknown");
+      expect(cdpCalls.some(({ method, params }) => method === "Network.setCacheDisabled" && params.cacheDisabled === false)).toBe(true);
+      if (stage !== "Network.setCacheDisabled" || !enabling) {
+        expect(cdpCalls.some(({ method, params }) => method === "Network.setBypassServiceWorker" && params.bypass === false)).toBe(true);
+      }
+      expect(diagnostics.mock.calls.some((args) => args.at(-1) === cause)).toBe(true);
+      if (enabling) {
+        await browser.setDeviceProfile("pixel-7");
+        expect(browser.record.device_profile).toBe("pixel-7");
+      } else {
+        expect(() => browser.assertReconciled()).toThrow("外部状态尚未核实");
+      }
+    } finally { diagnostics.mockRestore(); }
+  });
+
+  test("设备导航、两项缓存恢复和多页回滚失败保留有序因果链并继续清理", async () => {
+    const { browser, cdpCalls } = liveSession();
+    const entry = browser.pageEntries.get(browser.activePageId);
+    const primary = Object.assign(new Error("导航 /private/device"), { code: "EACCES", statusCode: 503 });
+    const bypass = new Error("worker /private/device");
+    const cache = new Error("cache /private/device");
+    const rollback = new Error("viewport /private/device");
+    let navigating = false;
+    let siblingRestored = false;
+    entry.page.goto = async () => { navigating = true; throw primary; };
+    entry.page.setViewportSize = async () => { if (navigating) throw rollback; };
+    entry.cdpSession.send = async (method, params) => {
+      cdpCalls.push({ method, params });
+      if (method === "Network.setBypassServiceWorker" && params.bypass === false) throw bypass;
+      if (method === "Network.setCacheDisabled" && params.cacheDisabled === false) throw cache;
+    };
+    browser.pageEntries.set("sibling", { ...entry, pageId: "sibling", page: {
+      ...entry.page, setViewportSize: async () => { if (navigating) siblingRestored = true; },
+    } });
+    const diagnostics = spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      const failure = await browser.setDeviceProfile("pixel-7").catch((error) => error);
+      expect(failure).toBeInstanceOf(AggregateError);
+      expect(failure).toMatchObject({ cause: failure.errors[0], code: "EACCES", statusCode: 503 });
+      expect(failure.errors[0].errors.map((error) => error.cause)).toEqual([primary, bypass, cache]);
+      expect(failure.errors[1].cause).toBe(rollback);
+      expect(siblingRestored).toBe(true);
+      expect(failure.message).not.toContain("/private/device");
+      expect(browser.record.reconciliation_status).toBe("unknown");
+      for (const cause of [primary, bypass, cache, rollback]) {
+        expect(diagnostics.mock.calls.some((args) => args.at(-1) === cause)).toBe(true);
+      }
+    } finally { diagnostics.mockRestore(); }
+  });
+
+  test.each([false, true])("设备失败恢复已有帧流，恢复失败保留主错并明确未知: %s", async (restartFails) => {
+    const { browser, cdpCalls } = liveSession();
+    const entry = browser.pageEntries.get(browser.activePageId);
+    browser.streaming = true;
+    browser.streamProfile = "relaxed";
+    browser.clients.add({});
+    const primary = Object.assign(new Error("导航 /private/device"), { code: "EACCES" });
+    const restart = Object.assign(new Error("流 /private/device"), { code: "EIO" });
+    entry.page.goto = async () => { throw primary; };
+    entry.cdpSession.send = async (method, params) => {
+      cdpCalls.push({ method, params });
+      if (method === "Page.startScreencast" && restartFails) throw restart;
+    };
+    const diagnostics = spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      const failure = await browser.setDeviceProfile("pixel-7").catch((error) => error);
+      expect(failure.code).toBe("EACCES");
+      expect(failure.message).not.toContain("/private/device");
+      expect(cdpCalls.filter(({ method }) => method.includes("Screencast")).map(({ method }) => method))
+        .toEqual(["Page.stopScreencast", "Page.startScreencast"]);
+      expect(browser.record.device_profile).toBe("desktop");
+      if (restartFails) {
+        expect(failure.errors.map((error) => error.cause)).toEqual([primary, restart]);
+        expect(browser.record.reconciliation_status).toBe("unknown");
+        expect(browser.streaming).toBe(false);
+      } else {
+        expect(failure.cause).toBe(primary);
+        expect(browser.record.reconciliation_status).toBe("verified");
+        expect(browser.streaming).toBe(true);
+        expect(browser.streamProfile).toBe("relaxed");
+      }
+    } finally { diagnostics.mockRestore(); }
+  });
+
+  test("设备重载保留一次网络变化重试和原页面URL", async () => {
+    const { browser, cdpCalls } = liveSession();
+    const entry = browser.pageEntries.get(browser.activePageId);
+    entry.url = "file:///tmp/device%20page.html";
+    const urls = [];
+    let restored;
+    entry.page.goto = async (url) => {
+      urls.push(url);
+      if (urls.length === 1) throw new Error("net::ERR_NETWORK_CHANGED");
+    };
+    entry.page.evaluate = async (_fn, url) => { restored = url; };
+    await browser.setDeviceProfile("pixel-7");
+    expect(urls).toHaveLength(2);
+    expect(urls[0]).toBe(urls[1]);
+    expect(new URL(urls[0]).searchParams.get("__boxteam_device_profile")).toContain("pixel-7-portrait-");
+    expect(restored).toBe(entry.url);
+    expect(cdpCalls.filter(({ method }) => method === "Network.setCacheDisabled").map(({ params }) => params.cacheDisabled)).toEqual([true, false]);
+    expect(browser.record.reconciliation_status).toBe("verified");
   });
 
   test("设备型号切换更新设备参数并重新应用页面布局", async () => {

@@ -1161,6 +1161,153 @@ async def test_page_control_failure_keeps_native_details_in_diagnostics(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(("stage", "enabling"), [
+    ("Network.setCacheDisabled", True), ("Network.setBypassServiceWorker", True),
+    ("device_profile_goto", True), ("restore_device_page_url", True),
+    ("Network.setBypassServiceWorker", False), ("Network.setCacheDisabled", False),
+    ("multiple", False), ("stream_restart", False),
+])
+async def test_device_switch_failure_preserves_primary_and_cleanup_details(
+    stage: str, enabling: bool, integration_client: httpx.AsyncClient,
+    browser_context: CustomToolFactoryContext, browser_runtime: WorkspaceToolRuntime,
+    browser_manager_processes: tuple[int, int],
+) -> None:
+    container, _session, _invocation = browser_runtime
+    root = Path(container.workspace_root)
+    native_page = root / "设备 切换 #100%.html"
+    native_page.write_text('<!doctype html><meta charset="utf-8"><title>设备切换页面</title>'
+                          '<body><script>setInterval(() => {document.body.textContent = String(Date.now())}, 50)</script>', encoding="utf-8")
+    url = native_page.as_uri()
+    created = await integration_client.post("/api/v1/resources/browsers", json={
+        "session_id": browser_context.session_id,
+        "thread_id": browser_context.invocation_context.thread_binding.thread_id, "url": url,
+    })
+    assert created.status_code == 200, created.text
+    resource = created.json()["data"]
+    browser_id = resource["resource_id"]
+    transport = BrowserManagerClient(workspace_id=container.workspace_id, backend_url=f"http://127.0.0.1:{browser_manager_processes[0]}")
+    private_path = str(root / ".boxteam/browser-manager/private-device-profile")
+    reason = f"injected EACCES: {private_path}"
+    failure = f"throw Object.assign(new Error({json.dumps(reason)}), {{code: 'EACCES'}});"
+    if stage in {"device_profile_goto", "multiple", "stream_restart"}:
+        code = "let rollbackPending = false; const original = page.goto; page.goto = async function (...args) { page.goto = original; rollbackPending = true; " + failure + " };"
+        if stage == "multiple":
+            code += (
+                " const viewport = page.setViewportSize; page.setViewportSize = async function (...args) {"
+                " if (rollbackPending) { page.setViewportSize = viewport;"
+                f" throw Object.assign(new Error({json.dumps(reason + '-rollback')}), {{code: 'EIO'}}); }}"
+                " return await viewport.apply(this, args); };"
+            )
+    elif stage == "restore_device_page_url":
+        code = (
+            "const original = page.evaluate; page.evaluate = async function (fn, arg, ...args) {"
+            " if (typeof arg === 'string' && arg.startsWith('file:')) { page.evaluate = original; " + failure + " }"
+            " return await original.call(this, fn, arg, ...args); };"
+        )
+    else:
+        code = ""
+    if stage == "stream_restart":
+        code += (
+            " const cdp = await context.newCDPSession(page); const proto = Object.getPrototypeOf(cdp);"
+            " const send = proto.send; await cdp.detach(); proto.send = async function (method, params) {"
+            " if (method === 'Page.startScreencast' && rollbackPending) { proto.send = send;"
+            f" throw Object.assign(new Error({json.dumps(reason + '-stream')}), {{code: 'EIO'}}); }}"
+            " return await send.call(this, method, params); };"
+        )
+    elif stage.startswith("Network.") or stage == "multiple":
+        method = "Network.setBypassServiceWorker" if stage == "multiple" else stage
+        injected = failure if stage != "multiple" else f"throw Object.assign(new Error({json.dumps(reason + '-cleanup')}), {{code: 'EIO'}});"
+        code += (
+            " const cdp = await context.newCDPSession(page); const proto = Object.getPrototypeOf(cdp);"
+            " const send = proto.send; await cdp.detach(); proto.send = async function (method, params) {"
+            f" if (method === '{method}' && (params.cacheDisabled ?? params.bypass) === {json.dumps(enabling)}) {{ proto.send = send; {injected} }}"
+            " return await send.call(this, method, params); };"
+        )
+    grant = await _grant(integration_client, browser_id, browser_context)
+    expected_status = "verified" if enabling else "unknown"
+    async with websockets.connect(f"ws://127.0.0.1:{browser_manager_processes[0]}/browser?workspace_id={container.workspace_id}") as websocket:
+        await websocket.send(json.dumps({"type": "attach", "browserId": browser_id, "grantToken": grant["grant_token"]}))
+        assert (await _recv_ws_type(websocket, "attached"))["browserId"] == browser_id
+        await transport.perform(browser_id, "run", {"code": code}, actor="agent")
+        command = {"type": "deviceProfile", "browserId": browser_id, "profileId": "pixel-7", "clientOperationId": "device-switch"}
+        await websocket.send(json.dumps(command))
+        receipt = await _recv_ws_type(websocket, "error")
+        assert receipt["code"] == "EACCES"
+        assert f"stage={'device_profile_goto' if stage in {'multiple', 'stream_restart'} else stage}" in receipt["message"]
+        assert private_path not in json.dumps(receipt)
+        state = await transport.get_resource(browser_id)
+        assert state["status"] == "running"
+        assert state["reconciliation_status"] == expected_status
+        assert state["device_profile"] == "desktop"
+        assert state["last_operation"]["status"] == "failed"
+        if stage == "restore_device_page_url":
+            # 页面已提交而replaceState失败，verified只证明运行时身份，不承诺撤销导航。
+            assert state["url"].split("?")[0] == url
+            assert "__boxteam_device_profile=" in state["url"]
+        else:
+            assert state["url"] == url
+        records = json.loads((root / ".boxteam/browser-manager/browsers.json").read_text())
+        record, = [item for item in records["browsers"] if item["browser_id"] == browser_id]
+        assert record["last_operation"] == state["last_operation"]
+        assert private_path not in json.dumps(record)
+        if enabling:
+            assert state["stream_metrics"]["profile"] is not None
+            after_failure = time.time()
+            deadline = time.monotonic() + 8
+            while time.monotonic() < deadline:
+                raw = await asyncio.wait_for(websocket.recv(), timeout=max(0.1, deadline - time.monotonic()))
+                if isinstance(raw, str):
+                    assert json.loads(raw)["type"] != "error", raw
+                    continue
+                header_length = int.from_bytes(raw[:4], "big")
+                frame = json.loads(raw[4:4 + header_length])
+                assert frame["browserId"] == browser_id
+                assert raw[4 + header_length:][:2] == b"\xff\xd8"
+                await websocket.send(json.dumps({"type": "frameAck", "browserId": browser_id, "frameId": frame["frameId"]}))
+                if frame["timestamp"] >= after_failure:
+                    break
+            else:
+                raise AssertionError("设备回滚后没有收到新产生的画面帧")
+            await websocket.send(json.dumps(command))
+            ack = await _recv_ws_type(websocket, "operationAck")
+            assert ack["clientOperationId"] == command["clientOperationId"]
+            assert ack["operation"]["status"] == "completed"
+            assert (await transport.get_resource(browser_id))["device_profile"] == "pixel-7"
+        await websocket.send(json.dumps({"type": "detach"}))
+        assert (await _recv_ws_type(websocket, "detached"))["browserId"] == browser_id
+    observed = (await integration_client.get(f"/api/v1/resources/{browser_id}")).json()["data"]
+    assert observed["reconciliation_status"] == expected_status
+    assert container.browser_resource_owner._leases.leases_for_resource(browser_id) == []
+    artifacts = TestRunContext.from_test_file(Path(__file__)).artifacts_dir
+    diagnostics = "\n".join(item.read_text() for item in artifacts.glob("browser-backend-*.stderr.log"))
+    assert reason in diagnostics
+    if stage == "multiple":
+        assert reason + "-cleanup" in diagnostics
+        assert reason + "-rollback" in diagnostics
+        assert "stage=Network.setBypassServiceWorker" in record["last_operation"]["error"]
+        assert "stage=set_viewport" in record["last_operation"]["error"]
+    if stage == "stream_restart":
+        assert reason + "-stream" in diagnostics
+        assert "stage=Page.startScreencast" in record["last_operation"]["error"]
+    if expected_status == "unknown":
+        rejected = await integration_client.post(f"/api/v1/resources/{browser_id}/browser-operation", json={
+            "action": "run", "payload": {"code": "throw new Error('must-not-execute');"},
+            "expected_revision": observed["owner_revision"], "thread": resource["source_thread"],
+        })
+        assert rejected.status_code == 409, rejected.text
+        assert rejected.json()["request_id"] == rejected.headers["X-Request-ID"]
+        await transport.stop_resource(browser_id)
+        reconciled = await integration_client.post(f"/api/v1/resources/{browser_id}/stop", json={"expected_revision": observed["owner_revision"]})
+        assert reconciled.status_code == 200, reconciled.text
+        assert reconciled.json()["data"]["reconciliation_status"] == "verified"
+    (artifacts / f"device-switch-failure-{stage}-{enabling}-{time.time_ns()}.json").write_text(json.dumps({
+        "receipt": receipt, "node_record": record, "owner_projection": observed,
+    }, ensure_ascii=False, indent=2), encoding="utf-8")
+    deleted = await _detach_delete(integration_client, browser_id, browser_context)
+    assert deleted.status_code == 200, deleted.text
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("stage", [
     "acquire_context", "create_page", "read_browser_defaults", "set_viewport", "Emulation.setDeviceMetricsOverride",
 ])

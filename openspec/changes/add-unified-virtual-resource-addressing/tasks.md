@@ -302,3 +302,11 @@
 - 启动、冷恢复、普通建页与超时恢复共用实际newPage错误入口，保留原cause/code/status及诊断；close_page、停止加载与客户端截图在原生操作边界发布安全身份/阶段。超时恢复继续保留reset_page公开合同，因果链精确为reset_page→create_page→原异常；原页面、流、状态和持久化时机不变。
 - 最终tree `a7296e51cb17da2762aec80c31f2a55a2fbd15b2`：280项Bun/1713断言、17项Node及Node语法通过（JS与002逐字相同限定复用），最终Python Ruff通过；18项真实Chromium/HTTP/WS集成通过（81.87秒），覆盖四控制边界经sync/API/WS失败、request_id、原page/页数/verified与lease、失败重试和PNG字节，并复验启动/冷恢复/file URL/超时恢复。截图为既有不立即落盘的并发操作，测试经原resource-policy入口发布后精确核相同失败operation_id，未改变持久化合同。
 - 完整archive旧生产红测87 passed/5 failed；001选错pytest node未执行，002遗漏WS browserId，003错误假设并发截图立即落盘，均保留原件并按真实合同修新测试。最终候选4283个blob逐一核实；独立004只读审查无finding，未独立跑测试。准确命令/raw/指纹/退出码、零进程组残留及四份产品证据SHA见 `out/tests/temp/openspec_resume_20261023/artifacts/browser-page-controls-proof-004.json`。第三方故障为一次性注入，不声称真实系统EACCES；不代替完整Gateway/Web、Windows或2.2/7.2全量门。
+
+
+### 2026-10-23 Browser动态设备切换与帧关闭屏障（部分收口）
+
+- 动态切换的Network开关、导航和URL恢复按实际阶段发布错误，保留原cause/code/status与完整诊断；命令先登记逆序恢复，逐项尝试全部清理和逐页设备回滚，主错不被次错覆盖。失败后为仍连接的用户恢复原帧流；恢复失败加入同一因果链并置unknown。页面导航已提交时不伪报文档回滚，replaceState失败保留真实当前页面URL，file页面URL例外不扩大到原生存储位置。
+- 集成001的最终Node记录与stderr共同确认：context关闭时在途帧ACK触发unhandled rejection，导致后续检查级联失败，并非12个独立产品失败。现在以具体page entry登记回调，关闭前阻止新接纳并排空既有截图/ACK，再释放page/context；默认5秒超时或排空失败明确unknown并保留句柄，迟到旧entry错误只留诊断、不污染新页。回调失败明确发布stream_error/state，未用TargetClosed字符串吞错。超时脚本恢复原有中断旧页行为保持，由entry归属隔离迟到帧失败。
+- 最终产品tree `0cffd5d78c0dcbe262c78f2cbbba50821569fa49`：295项Bun/1835断言、17项Node、Node语法与Ruff通过；14项真实Chromium/HTTP/WS集成通过（70.12秒），覆盖8种设备失败、失败后新JPEG帧、恢复失败unknown阻断、精确URL、重试、持久记录/诊断/lease、附加状态删除存活与file恢复。003扩大回归18项通过（88.16秒），其启动路径不变；004新增单页drain失败分支重新单测与集成验证。完整archive旧生产红测85 passed/14 failed；前后指纹、全部blob和零进程组残留均核验。
+- 非作者004只读审查无finding；准确命令、原始输出、退出码、候选SHA和产品回执见 `out/tests/temp/openspec_resume_20261023/artifacts/browser-device-switch-proof-004.json`。一次性原生故障注入不冒充真实系统EACCES；底层永久悬挂的CDP任务仍保留供诊断，上层有界返回。本组不代替完整Gateway/Web、Windows或2.2/7.2全量门。

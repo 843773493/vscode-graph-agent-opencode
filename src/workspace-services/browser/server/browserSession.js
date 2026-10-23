@@ -131,6 +131,7 @@ export class BrowserSession extends EventEmitter {
     });
     this.lastFrame = null;
     this.pageEntries = new Map();
+    this.screencastFrames = new Map();
     this.activePageId = null;
     this.pageRegistrationPromises = new WeakMap();
     this.pointerController = new BrowserPointerController();
@@ -1019,21 +1020,23 @@ export class BrowserSession extends EventEmitter {
 
   async releaseRuntime() {
     const context = this.context;
-    this.browser = null;
-    this.browserHandle = null;
-    this.page = null;
-    this.cdpSession = null;
-    this.deviceEmulationApplied = false;
-    this.streaming = false;
-    this.pageEntries.clear();
-    this.activePageId = null;
-    this.lastFrame = null;
-    if (this.streamRelaxTimer) clearTimeout(this.streamRelaxTimer);
-    this.streamRelaxTimer = null;
-    this.streamProfile = null;
-    this.frameObservations = [];
-    let stage = "reset_pointer";
+    let stage = "drain_screencast_frames";
     try {
+      await this.drainScreencastFrames([...this.pageEntries.values()]);
+      this.browser = null;
+      this.browserHandle = null;
+      this.page = null;
+      this.cdpSession = null;
+      this.deviceEmulationApplied = false;
+      this.streaming = false;
+      this.pageEntries.clear();
+      this.activePageId = null;
+      this.lastFrame = null;
+      if (this.streamRelaxTimer) clearTimeout(this.streamRelaxTimer);
+      this.streamRelaxTimer = null;
+      this.streamProfile = null;
+      this.frameObservations = [];
+      stage = "reset_pointer";
       await this.pointerController.reset();
       stage = "release_context";
       if (context) await this.manager.runtimePool.releaseContext(context);
@@ -1110,7 +1113,7 @@ export class BrowserSession extends EventEmitter {
     entry.diagnostics = new BrowserPageDiagnostics(page);
     this.pageEntries.set(pageId, entry);
     cdpSession.on("Page.screencastFrame", (event) => {
-      void this.handleScreencastFrame(event, entry);
+      this.receiveScreencastFrame(event, entry);
     });
     cdpSession.on("Network.webSocketCreated", ({ requestId }) => {
       entry.webSockets.add(requestId);
@@ -1307,8 +1310,17 @@ export class BrowserSession extends EventEmitter {
       throw new Error(`浏览器标签页不存在: ${pageId}`);
     }
     try {
+      await this.drainScreencastFrames([entry]);
+    } catch (cause) {
+      const error = browserRuntimeFailure({ browserId: this.id, pageId, stage: "drain_screencast_frames", cause });
+      this.record.reconciliation_status = "unknown";
+      await this.exposeResourceTransitionFailure(error);
+      throw error;
+    }
+    try {
       await entry.page.close();
     } catch (cause) {
+      entry.retiring = false;
       throw browserRuntimeFailure({ browserId: this.id, pageId, stage: "close_page", cause });
     }
     return this.snapshot();
@@ -1953,6 +1965,47 @@ export class BrowserSession extends EventEmitter {
     this.emit("frame", frame);
   }
 
+  receiveScreencastFrame(event, entry) {
+    if (entry.retiring || this.pageEntries.get(entry.pageId) !== entry) return;
+    const execution = this.handleScreencastFrame(event, entry);
+    this.screencastFrames.set(execution, entry);
+    void execution.then(() => this.screencastFrames.delete(execution), (cause) => {
+      this.screencastFrames.delete(execution);
+      const error = browserRuntimeFailure({ browserId: this.id, pageId: entry.pageId, stage: "screencast_frame", cause });
+      if (this.pageEntries.get(entry.pageId) === entry) {
+        this.record.stream_error = error.message;
+        this.emit("state", this.snapshot());
+      }
+    });
+  }
+
+  async drainScreencastFrames(entries, timeoutMs = SHUTDOWN_OPERATION_DRAIN_MS) {
+    // Page.stopScreencast 的回执不代表此前帧的截图和 ACK 已经完成。
+    const retiring = new Set(entries);
+    for (const entry of retiring) entry.retiring = true;
+    let timer;
+    let results;
+    try {
+      results = await Promise.race([
+        Promise.allSettled([...this.screencastFrames]
+          .filter(([, entry]) => retiring.has(entry)).map(([execution]) => execution)),
+        new Promise((_, reject) => {
+          timer = setTimeout(() => {
+            const error = new Error(`浏览器帧回调排空超时: browser_id=${this.id}, timeout_ms=${timeoutMs}`);
+            error.code = "browser_frame_drain_timeout";
+            reject(error);
+          }, timeoutMs);
+        }),
+      ]);
+    } finally {
+      clearTimeout(timer);
+    }
+    const failures = results.flatMap((result) => result.status === "rejected" ? [result.reason] : []);
+    if (failures.length > 0) {
+      throw new AggregateError(failures, `浏览器帧回调排空失败: browser_id=${this.id}`, { cause: failures[0] });
+    }
+  }
+
   async handleScreencastFrame(event, entry = this.pageEntries.get(this.activePageId)) {
     if (!entry || entry.page.isClosed()) {
       return;
@@ -1979,7 +2032,7 @@ export class BrowserSession extends EventEmitter {
       timestamp: event.metadata.timestamp || Date.now() / 1000,
     };
     if (entry.pageId !== this.activePageId) {
-      await entry.cdpSession.send("Page.screencastFrameAck", {
+      await this.sendResourceCommand(entry, "Page.screencastFrameAck", {
         sessionId: event.sessionId,
       });
       return;
@@ -1987,7 +2040,7 @@ export class BrowserSession extends EventEmitter {
     this.lastFrame = entry.lastFrame;
     this.recordFrameObservation(this.lastFrame.jpeg.byteLength);
     this.emit("frame", this.lastFrame);
-    await entry.cdpSession.send("Page.screencastFrameAck", {
+    await this.sendResourceCommand(entry, "Page.screencastFrameAck", {
       sessionId: event.sessionId,
     });
   }
@@ -2079,6 +2132,67 @@ export class BrowserSession extends EventEmitter {
       orientation,
       resetProfileSettings: true,
     });
+  }
+
+  async reloadDevicePage(entry) {
+    const targetUrl = entry.actualUrl || entry.url || this.record.url || "about:blank";
+    const restorations = [];
+    let failure;
+    try {
+      // TODO: 动态切换 UA 后 Chromium 可能复用桌面文档缓存，仍需强制重新获取页面。
+      // 命令抛错也可能已生效；先登记恢复，失败后仍尝试其余恢复。
+      restorations.unshift(["Network.setCacheDisabled", { cacheDisabled: false }]);
+      await this.sendResourceCommand(entry, "Network.setCacheDisabled", { cacheDisabled: true });
+      restorations.unshift(["Network.setBypassServiceWorker", { bypass: false }]);
+      await this.sendResourceCommand(entry, "Network.setBypassServiceWorker", { bypass: true });
+      const navigationUrl = targetUrl === "about:blank" ? targetUrl : (() => {
+        const url = new URL(targetUrl);
+        url.searchParams.set("__boxteam_device_profile",
+          `${this.record.device_profile}-${this.record.device_orientation}-${Date.now()}`);
+        return url.toString();
+      })();
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        try {
+          await entry.page.goto(navigationUrl, { timeout: NAVIGATION_TIMEOUT_MS, waitUntil: "domcontentloaded" });
+          break;
+        } catch (cause) {
+          if (attempt === 1 || !String(cause?.message ?? cause).includes("ERR_NETWORK_CHANGED")) {
+            throw browserRuntimeFailure({ browserId: this.id, pageId: entry.pageId, stage: "device_profile_goto", cause });
+          }
+          await new Promise((resolve) => setTimeout(resolve, 250));
+        }
+      }
+      await new Promise((resolve) => setTimeout(resolve, 250));
+      if (navigationUrl !== targetUrl) {
+        try {
+          await entry.page.evaluate((url) => window.history.replaceState(null, document.title, url), targetUrl);
+        } catch (cause) {
+          throw browserRuntimeFailure({ browserId: this.id, pageId: entry.pageId, stage: "restore_device_page_url", cause });
+        }
+      }
+    } catch (error) {
+      failure = error;
+    }
+    const cleanupErrors = [];
+    for (const [method, params] of restorations) {
+      try {
+        await this.sendResourceCommand(entry, method, params);
+      } catch (error) {
+        cleanupErrors.push(error);
+      }
+    }
+    if (cleanupErrors.length > 0) {
+      this.record.reconciliation_status = "unknown";
+      const errors = failure ? [failure, ...cleanupErrors] : cleanupErrors;
+      if (errors.length === 1) throw errors[0];
+      const [primary] = errors;
+      const combined = new AggregateError(errors,
+        `浏览器设备页面恢复未核实: ${errors.map((item) => item.message).join("; ")}`, { cause: primary });
+      combined.code = primary.code;
+      combined.statusCode = primary.statusCode;
+      throw combined;
+    }
+    if (failure) throw failure;
   }
 
   async setDeviceSettings(settings = {}) {
@@ -2191,6 +2305,7 @@ export class BrowserSession extends EventEmitter {
       },
     );
     const shouldStream = this.streaming || this.clients.size > 0;
+    const previousStreamProfile = this.streamProfile || "interactive";
     try {
       if (this.streaming) {
         await this.stopScreencast();
@@ -2204,47 +2319,7 @@ export class BrowserSession extends EventEmitter {
         || previousEffectiveState.hasTouch !== this.effectiveDeviceState().hasTouch;
       if (deviceEmulationChanged) {
         for (const entry of this.pageEntries.values()) {
-          const targetUrl = entry.actualUrl || entry.url || this.record.url || "about:blank";
-          // TODO: 动态切换 UA 后 Chromium 可能复用切换前的桌面文档缓存，必须强制重新获取页面。
-          await entry.cdpSession.send("Network.setCacheDisabled", { cacheDisabled: true });
-          await entry.cdpSession.send("Network.setBypassServiceWorker", { bypass: true });
-          try {
-            const navigationUrl = targetUrl === "about:blank"
-              ? targetUrl
-              : (() => {
-                const url = new URL(targetUrl);
-                url.searchParams.set(
-                  "__boxteam_device_profile",
-                  `${this.record.device_profile}-${this.record.device_orientation}-${Date.now()}`,
-                );
-                return url.toString();
-              })();
-            let navigated = false;
-            for (let attempt = 0; attempt < 2 && !navigated; attempt += 1) {
-              try {
-                await entry.page.goto(navigationUrl, {
-                  timeout: NAVIGATION_TIMEOUT_MS,
-                  waitUntil: "domcontentloaded",
-                });
-                navigated = true;
-              } catch (error) {
-                const message = error instanceof Error ? error.message : String(error);
-                if (attempt === 1 || !message.includes("ERR_NETWORK_CHANGED")) {
-                  throw error;
-                }
-                await new Promise((resolve) => setTimeout(resolve, 250));
-              }
-            }
-            await new Promise((resolve) => setTimeout(resolve, 250));
-            if (navigationUrl !== targetUrl) {
-              await entry.page.evaluate((url) => {
-                window.history.replaceState(null, document.title, url);
-              }, targetUrl);
-            }
-          } finally {
-            await entry.cdpSession.send("Network.setBypassServiceWorker", { bypass: false });
-            await entry.cdpSession.send("Network.setCacheDisabled", { cacheDisabled: false });
-          }
+          await this.reloadDevicePage(entry);
         }
       }
       if (shouldStream) {
@@ -2256,18 +2331,30 @@ export class BrowserSession extends EventEmitter {
       }
       return await this.syncAndEmitState();
     } catch (error) {
-      this.record.device_profile = previousSettings.device_profile;
-      this.record.device_orientation = previousSettings.device_orientation;
-      this.record.viewport_override = previousSettings.viewport_override;
-      this.record.device_scale_factor_override = previousSettings.device_scale_factor_override;
-      this.record.user_agent_override = previousSettings.user_agent_override;
-      this.record.touch_simulation_override = previousSettings.touch_simulation_override;
-      this.record.network_profile_id = previousSettings.network_profile_id;
+      Object.assign(this.record, previousSettings);
       this.syncDeviceStateRecord();
+      const rollbackErrors = [];
       for (const entry of this.pageEntries.values()) {
-        await this.applyDeviceEmulation(entry);
+        try {
+          await this.applyDeviceEmulation(entry);
+        } catch (rollbackError) {
+          rollbackErrors.push(rollbackError);
+        }
       }
-      throw error;
+      if (shouldStream && this.clients.size > 0) {
+        try {
+          await this.startScreencast(previousStreamProfile);
+        } catch (rollbackError) {
+          rollbackErrors.push(rollbackError);
+        }
+      }
+      if (rollbackErrors.length === 0) throw error;
+      this.record.reconciliation_status = "unknown";
+      const failure = new AggregateError([error, ...rollbackErrors],
+        `浏览器设备设置失败且回滚未核实: ${[error, ...rollbackErrors].map((item) => item.message).join("; ")}`, { cause: error });
+      failure.code = error.code;
+      failure.statusCode = error.statusCode;
+      throw failure;
     }
   }
 
