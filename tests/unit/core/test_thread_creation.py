@@ -671,8 +671,10 @@ async def test_create_rejects_artifact_path_budget_exceeded(
     同时留下半成品 staging，重入永久 fail closed。
     """
     too_long = {"a" * 300 + "/f.txt": "x"}
-    with pytest.raises(ValueError, match="路径组件超出预算"):
+    with pytest.raises(ValueError, match="stage=path_budget") as caught:
         await do_create(service, owner, artifacts=too_long)
+    assert "路径组件超出预算" in str(caught.value.__cause__)
+    assert str(owner.session_dir) not in str(caught.value)
     assert count_rows(owner.control, "thread_creation_records") == 0
     assert not (owner.session_dir / ".staging" / "key-1").exists()
 
@@ -682,8 +684,10 @@ async def test_create_rejects_oversized_idempotency_key(
     owner: OwnerSession,
 ) -> None:
     """staging 目录名（幂等键）超路径组件预算 → 准入前明确拒绝。"""
-    with pytest.raises(ValueError, match="路径组件超出预算"):
+    with pytest.raises(ValueError, match="stage=path_budget") as caught:
         await do_create(service, owner, key="k" * 300)
+    assert "路径组件超出预算" in str(caught.value.__cause__)
+    assert str(owner.session_dir) not in str(caught.value)
     assert count_rows(owner.control, "thread_creation_records") == 0
 
 
@@ -2073,10 +2077,10 @@ def test_materialized_node_debug_keeps_directory_boundary(
     options = {"published": published, "materialized_rollout": not published}
     inventory = child_node_inventory(record, owner, artifacts)
     if fault is None:
-        assert verify_node_directory(node_dir, inventory, stage="debug owner 复验", **options)
+        assert verify_node_directory(node_dir, inventory, session_id=owner.session_id, thread_id=record.child_thread_id, stage="debug owner 复验", **options)
     else:
         with pytest.raises(RuntimeError, match="symlink|目录集|文件集"):
-            verify_node_directory(node_dir, inventory, stage="debug owner 负向", **options)
+            verify_node_directory(node_dir, inventory, session_id=owner.session_id, thread_id=record.child_thread_id, stage="debug owner 负向", **options)
 
 
 @pytest.mark.parametrize("symlink_kind", ["directory", "file"])
@@ -2106,7 +2110,7 @@ def test_node_directory_rejects_symlink(
         verify_node_directory(
             staging_dir,
             child_node_inventory(record, owner, make_artifacts()),
-            stage=f"symlink {symlink_kind} 负向",
+            session_id=owner.session_id, thread_id=record.child_thread_id, stage=f"symlink {symlink_kind} 负向",
         )
 
 

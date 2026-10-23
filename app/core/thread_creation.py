@@ -73,10 +73,12 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import logging
 import os
 import re
 import shutil
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -425,106 +427,119 @@ def expected_node_directory_names(
     return directories
 
 
+logger = logging.getLogger(__name__)
+
+
+@contextmanager
+def _thread_access(
+    session_id: str, thread_id: str | None, stage: str, *, runtime_error: bool = False,
+) -> Iterator[None]:
+    """物理创建操作只公开逻辑身份与系统码，原错留给管理诊断。"""
+    try:
+        yield
+    except OSError as error:
+        detail = (f"Thread 创建存储失败: session_id={session_id}, thread_id={thread_id}, "
+                  f"stage={stage}, error={type(error).__name__}, errno={error.errno}")
+        if (winerror := getattr(error, "winerror", None)) is not None:
+            detail += f", winerror={winerror}"
+        logger.error("%s；完整诊断见异常链", detail, exc_info=error)
+        if runtime_error:
+            raise RuntimeError(detail) from error
+        failure = type(error)(error.errno, detail)
+        if (winerror := getattr(error, "winerror", None)) is not None:
+            failure.winerror = winerror
+        raise failure from error
+
+
+def _thread_conflict(
+    session_id: str, thread_id: str, stage: str, reason: str, **diagnostics: object,
+) -> RuntimeError:
+    """未知目录/正文只进原始日志，校验失败继续保留现场。"""
+    detail = f"{stage}: {reason}: session_id={session_id}, thread_id={thread_id}"
+    logger.error("%s；原始诊断=%r", detail, diagnostics)
+    return RuntimeError(detail)
+
+
 def verify_node_directory(
     directory: Path,
     inventory: dict[str, str],
     *,
+    session_id: str,
+    thread_id: str,
     stage: str,
     published: bool = False,
     partial: bool = False,
     materialized_rollout: bool = False,
 ) -> bool:
-    """逐文件校验 staging/final 目录与预期一致；不一致 fail closed。
+    """按冻结清单校验目录、正文及符号链接；冲突保留现场，不吸收未知项。"""
+    def reject_walk_error(error: OSError) -> None:
+        # os.walk 默认吞掉 scandir 错误；创建核验必须暴露原生失败。
+        raise error
 
-    校验面：目录集、文件集（含 symlink 拒绝）、每个文件 sha256、
-    ``artifact-manifest.json`` 字节。无 record 对应的目录（外部放置）
-    因内容不一致被拒绝——不吸收。
-    """
-    if not directory.is_dir() or directory.is_symlink():
-        raise RuntimeError(
-            f"{stage}: 目录缺失或不是目录（外部改动，fail closed）: {directory}"
-        )
-    expected_file_set = set(inventory) | {_ARTIFACT_MANIFEST_NAME}
-    expected_dir_set = expected_node_directory_names(inventory)
-    runtime_paths = {"rollout", "debug/node"} if published or materialized_rollout else set()
-    if published:
-        runtime_paths.add("runs")
-    atomic_temporary_present = False
-    actual_files: dict[str, bytes] = {}
-    actual_dirs: set[str] = set()
-    for root, dir_names, file_names in os.walk(directory, followlinks=False):
-        root_path = Path(root)
-        # 只让已发布或已确认物化的领域 owner 管理精确 runtime 子树。
-        # debug/node 的共享父目录仍在闭集内，不能吸收未知兄弟或文件。
-        for dir_name in tuple(dir_names):
-            dir_entry = root_path / dir_name
-            if dir_entry.is_symlink():
-                raise RuntimeError(
-                    f"{stage}: 发现 symlink 目录（外部改动，fail closed）: {dir_entry}"
-                )
-            relative = dir_entry.relative_to(directory).as_posix()
-            if relative in runtime_paths:
-                dir_names.remove(dir_name)
-                if relative == "debug/node":
-                    expected_dir_set.add("debug")
-                continue
-            actual_dirs.add(relative)
-        for file_name in file_names:
-            file_entry = root_path / file_name
-            if file_entry.is_symlink():
-                raise RuntimeError(
-                    f"{stage}: 发现 symlink 文件（外部改动，fail closed）: {file_entry}"
-                )
-            relative = file_entry.relative_to(directory).as_posix()
-            if (published or materialized_rollout) and relative == ".rollout.write.lock":
-                if not file_entry.is_file():
-                    raise RuntimeError(f"{stage}: rollout 写锁必须是普通文件: {file_entry}")
-                continue
-            if partial:
-                # atomic_write_bytes 的 replace 前崩溃只会留下同目录的
-                # .<冻结目标名>.<八位 tempfile suffix>；不把未知文件归入本操作。
-                parent, _, leaf = relative.rpartition("/")
-                if any(
-                    expected.rpartition("/")[0] == parent
-                    and re.fullmatch(re.escape("." + expected.rpartition("/")[2] + ".") + r"[a-z0-9_]{8}", leaf)
-                    for expected in expected_file_set
-                ):
-                    if not file_entry.is_file():
-                        raise RuntimeError(f"{stage}: 原子写临时项不是普通文件: {file_entry}")
-                    atomic_temporary_present = True
+    with _thread_access(session_id, thread_id, stage):
+        if not directory.is_dir() or directory.is_symlink():
+            raise _thread_conflict(session_id, thread_id, stage, "目录缺失或不是目录（外部改动，fail closed）", path=directory)
+        expected_file_set = set(inventory) | {_ARTIFACT_MANIFEST_NAME}
+        expected_dir_set = expected_node_directory_names(inventory)
+        runtime_paths = {"rollout", "debug/node"} if published or materialized_rollout else set()
+        if published:
+            runtime_paths.add("runs")
+        atomic_temporary_present = False
+        actual_files: dict[str, bytes] = {}
+        actual_dirs: set[str] = set()
+        for root, dir_names, file_names in os.walk(directory, followlinks=False, onerror=reject_walk_error):
+            root_path = Path(root)
+            # 只跳过对应 owner 已发布的精确 runtime 子树；debug 未知兄弟仍校验。
+            for dir_name in tuple(dir_names):
+                entry = root_path / dir_name
+                if entry.is_symlink():
+                    raise _thread_conflict(session_id, thread_id, stage, "发现 symlink 目录（外部改动，fail closed）", path=entry)
+                relative = entry.relative_to(directory).as_posix()
+                if relative in runtime_paths:
+                    dir_names.remove(dir_name)
+                    if relative == "debug/node":
+                        expected_dir_set.add("debug")
                     continue
-            actual_files[relative] = file_entry.read_bytes()
-    if not (actual_dirs <= expected_dir_set if partial else actual_dirs == expected_dir_set):
-        raise RuntimeError(
-            f"{stage}: 目录集与预期不一致（外部改动或上次准备中断，fail "
-            f"closed）: path={directory}, "
-            f"expected={sorted(expected_dir_set)}, "
-            f"actual={sorted(actual_dirs)}"
-        )
-    if not (set(actual_files) <= expected_file_set if partial else set(actual_files) == expected_file_set):
-        raise RuntimeError(
-            f"{stage}: 文件集与预期不一致（外部改动或上次准备中断，fail "
-            f"closed）: path={directory}, "
-            f"expected={sorted(expected_file_set)}, "
-            f"actual={sorted(actual_files)}"
-        )
-    for rel_path in sorted(inventory):
-        if partial and rel_path not in actual_files:
-            continue
-        if hashlib.sha256(actual_files[rel_path]).hexdigest() != inventory[rel_path]:
-            raise RuntimeError(
-                f"{stage}: {rel_path} sha256 与预期不一致（外部改动，fail "
-                f"closed）: path={directory / rel_path}"
-            )
-    if partial and _ARTIFACT_MANIFEST_NAME not in actual_files:
-        return False
-    actual_manifest_bytes = actual_files[_ARTIFACT_MANIFEST_NAME]
-    if actual_manifest_bytes != serialize_artifact_manifest_bytes(inventory):
-        raise RuntimeError(
-            f"{stage}: artifact-manifest.json 字节与预期不一致（外部改动，"
-            f"fail closed）: path={directory / _ARTIFACT_MANIFEST_NAME}"
-        )
-    return actual_dirs == expected_dir_set and set(actual_files) == expected_file_set and not atomic_temporary_present
+                actual_dirs.add(relative)
+            for file_name in file_names:
+                entry = root_path / file_name
+                if entry.is_symlink():
+                    raise _thread_conflict(session_id, thread_id, stage, "发现 symlink 文件（外部改动，fail closed）", path=entry)
+                relative = entry.relative_to(directory).as_posix()
+                if (published or materialized_rollout) and relative == ".rollout.write.lock":
+                    if not entry.is_file():
+                        raise _thread_conflict(session_id, thread_id, stage, "rollout 写锁必须是普通文件", path=entry)
+                    continue
+                if partial:
+                    # 只识别原子写在 replace 前遗留的冻结目标临时项。
+                    parent, _, leaf = relative.rpartition("/")
+                    if any(
+                        expected.rpartition("/")[0] == parent
+                        and re.fullmatch(re.escape("." + expected.rpartition("/")[2] + ".") + r"[a-z0-9_]{8}", leaf)
+                        for expected in expected_file_set
+                    ):
+                        if not entry.is_file():
+                            raise _thread_conflict(session_id, thread_id, stage, "原子写临时项不是普通文件", path=entry)
+                        atomic_temporary_present = True
+                        continue
+                actual_files[relative] = entry.read_bytes()
+        if not (actual_dirs <= expected_dir_set if partial else actual_dirs == expected_dir_set):
+            raise _thread_conflict(session_id, thread_id, stage, "目录集与预期不一致（外部改动或上次准备中断，fail closed）",
+                                   path=directory, expected=sorted(expected_dir_set), actual=sorted(actual_dirs))
+        if not (set(actual_files) <= expected_file_set if partial else set(actual_files) == expected_file_set):
+            raise _thread_conflict(session_id, thread_id, stage, "文件集与预期不一致（外部改动或上次准备中断，fail closed）",
+                                   path=directory, expected=sorted(expected_file_set), actual=sorted(actual_files))
+        for rel_path in sorted(inventory):
+            if partial and rel_path not in actual_files:
+                continue
+            if hashlib.sha256(actual_files[rel_path]).hexdigest() != inventory[rel_path]:
+                raise _thread_conflict(session_id, thread_id, stage, "文件 sha256 与预期不一致（外部改动，fail closed）", path=directory / rel_path)
+        if partial and _ARTIFACT_MANIFEST_NAME not in actual_files:
+            return False
+        if actual_files[_ARTIFACT_MANIFEST_NAME] != serialize_artifact_manifest_bytes(inventory):
+            raise _thread_conflict(session_id, thread_id, stage, "artifact-manifest.json 字节与预期不一致（外部改动，fail closed）",
+                                   path=directory / _ARTIFACT_MANIFEST_NAME)
+        return actual_dirs == expected_dir_set and set(actual_files) == expected_file_set and not atomic_temporary_present
 
 
 async def settle_thread_creations_for_deletion(
@@ -753,7 +768,7 @@ class ThreadCreationService:
                 # staging，且 record 已按同 preimage 冻结、重入永久 fail
                 # closed。故在冻结 record 前（任何状态变更之前）明确拒绝。
                 self._validate_filesystem_budget(
-                    session_dir=session_dir,
+                    session_dir=session_dir, session_id=session_id,
                     idempotency_key=idempotency_key,
                     artifact_manifest=artifact_manifest,
                 )
@@ -814,6 +829,8 @@ class ThreadCreationService:
                 artifact_manifest=artifact_manifest,
             )
             inventory = build_thread_node_inventory(expected_files)
+            with _thread_access(session_id, record.child_thread_id, "locate"):
+                final_exists = final_dir.exists() or final_dir.is_symlink()
             if record.purpose == "fork" and record.state == "preparing":
                 capture = self._store.get_fork_source_capture(creation_key=idempotency_key)
                 if capture is not None:
@@ -833,15 +850,13 @@ class ThreadCreationService:
                             idempotency_key, capture.abort_reason or "fork capture 已中止",
                         )
                         raise ThreadCreationAbortedError(aborted)
-                    if not (final_dir.exists() or final_dir.is_symlink()):
+                    if not final_exists:
                         # capture 只能在 final rename 后预留，缺目录不是创建前的合法窗口。
                         raise RuntimeError(
                             "fork child 已预留 capture 但最终 locator 目录缺失（外部删除，拒绝重建）: "
-                            f"key={idempotency_key!r}, final={final_dir}, staging={staging_dir}"
+                            f"session_id={session_id}, thread_id={record.child_thread_id}"
                         )
-            if record.state == "published" and not (
-                final_dir.exists() or final_dir.is_symlink()
-            ):
+            if record.state == "published" and not final_exists:
                 # published 的 record 其 final 目录已被外部删除：**不重建**。
                 # rename 先于 publish，协议内崩溃点不可能产生该状态；重建
                 # 等于静默吸收外部对可见性产物的改动（对齐会话目录「绕过
@@ -849,9 +864,9 @@ class ThreadCreationService:
                 raise RuntimeError(
                     "thread creation record 已 published 但最终 locator 目录"
                     "缺失（外部删除可见性产物，fail closed，拒绝重建）: "
-                    f"key={idempotency_key!r}, final={final_dir}"
+                    f"session_id={session_id}, thread_id={record.child_thread_id}"
                 )
-            if final_dir.exists() or final_dir.is_symlink():
+            if final_exists:
                 # rename 后、publish 前崩溃的恢复窗口：目标内容一致才继续。
                 if record.purpose == "fork" and record.state == "preparing":
                     if before_publish is None:
@@ -863,15 +878,17 @@ class ThreadCreationService:
                 verify_node_directory(
                     final_dir,
                     inventory,
-                    stage="恢复(最终 locator 已存在)",
+                    session_id=session_id, thread_id=record.child_thread_id, stage="恢复(最终 locator 已存在)",
                     published=record.state == "published",
                     materialized_rollout=self._has_fork_completion(record, session_id),
                 )
-                if staging_dir.exists() or staging_dir.is_symlink():
+                with _thread_access(session_id, record.child_thread_id, "locate"):
+                    staging_exists = staging_dir.exists() or staging_dir.is_symlink()
+                if staging_exists:
                     raise RuntimeError(
                         "最终 locator 与 staging 同时存在（外部改动，fail "
                         f"closed）: key={idempotency_key!r}, "
-                        f"final={final_dir}, staging={staging_dir}"
+                        f"session_id={session_id}, thread_id={record.child_thread_id}"
                     )
                 return await self._publish_and_finalize(
                     record,
@@ -882,12 +899,12 @@ class ThreadCreationService:
                     before_abort=before_abort,
                     on_published=on_published,
                 )
-            self._prepare_staging(staging_dir, session_dir, expected_files, inventory)
+            self._prepare_staging(staging_dir, session_dir, expected_files, inventory, record, session_id)
             self._rename_staging_to_final(
                 staging_dir,
                 final_dir,
                 session_dir,
-                inventory,
+                inventory, record, session_id,
             )
             if record.purpose == "fork":
                 if before_publish is None:
@@ -1002,6 +1019,7 @@ class ThreadCreationService:
         self,
         *,
         session_dir: Path,
+        session_id: str,
         idempotency_key: str,
         artifact_manifest: dict[str, object],
     ) -> None:
@@ -1019,13 +1037,20 @@ class ThreadCreationService:
         ``thread_id``（恒定 36 字符）与日期桶（恒定 10 字符）长度固定，用
         等长占位符即可精确复现总长预算。
         """
-        validate_path_budget(session_dir, f"{_STAGING_DIR_NAME}/{idempotency_key}")
-        node_locator = "threads/0000/00/00/" + "thr_" + "0" * 32
-        for rel_path in artifact_manifest:
-            validate_path_budget(
-                session_dir,
-                f"{node_locator}/{_ARTIFACTS_DIR_NAME}/{rel_path}",
-            )
+        with _thread_access(session_id, None, "path_budget"):
+            try:
+                validate_path_budget(session_dir, f"{_STAGING_DIR_NAME}/{idempotency_key}")
+                node_locator = "threads/0000/00/00/" + "thr_" + "0" * 32
+                for rel_path in artifact_manifest:
+                    validate_path_budget(
+                        session_dir,
+                        f"{node_locator}/{_ARTIFACTS_DIR_NAME}/{rel_path}",
+                    )
+            except (ValueError, RuntimeError) as error:
+                detail = (f"Thread 创建路径预算校验失败: session_id={session_id}, "
+                          f"stage=path_budget, error={type(error).__name__}")
+                logger.error("%s；完整预算与位置见异常链", detail, exc_info=error)
+                raise type(error)(detail) from error
 
     def _key_lock(self, idempotency_key: str) -> asyncio.Lock:
         """按 key 取进程内串行锁（固定分片，同 key 恒命中同一把）。"""
@@ -1119,40 +1144,40 @@ class ThreadCreationService:
         session_dir: Path,
         expected_files: dict[str, bytes],
         inventory: dict[str, str],
+        record: ThreadCreationRecord,
+        session_id: str,
     ) -> None:
         """staging 已存在 → 逐文件校验复用；不存在 → 完整准备 + barrier。"""
-        if staging_dir.exists() or staging_dir.is_symlink():
+        with _thread_access(session_id, record.child_thread_id, "staging_prepare"):
+            staging_exists = staging_dir.exists() or staging_dir.is_symlink()
+        if staging_exists:
             if verify_node_directory(
-                staging_dir,
-                inventory,
-                stage="staging 复验",
-                partial=True,
+                staging_dir, inventory, session_id=session_id, thread_id=record.child_thread_id,
+                stage="staging 复验", partial=True,
             ):
                 return
             # 原 holder 已取得；合法准备中断只按本 record 的 staging 重建。
-            shutil.rmtree(staging_dir)
+            with _thread_access(session_id, record.child_thread_id, "staging_rebuild"):
+                shutil.rmtree(staging_dir)
+                _fsync_directory(staging_dir.parent)
+        with _thread_access(session_id, record.child_thread_id, "staging_prepare"):
+            staging_dir.mkdir(parents=True, exist_ok=False)
+            for dir_name in _EXPECTED_NODE_DIRS:
+                (staging_dir / dir_name).mkdir(exist_ok=False)
+            for rel_path, payload in expected_files.items():
+                _atomic_write_bytes(staging_dir / rel_path, payload)
+            _atomic_write_bytes(
+                staging_dir / _ARTIFACT_MANIFEST_NAME,
+                serialize_artifact_manifest_bytes(inventory),
+            )
+            # 文件原子写已 fsync；补目录与父挂点 durability barrier。
+            for dir_name in _EXPECTED_NODE_DIRS:
+                _fsync_directory(staging_dir / dir_name)
+            _fsync_directory(staging_dir)
             _fsync_directory(staging_dir.parent)
-        staging_dir.mkdir(parents=True, exist_ok=False)
-        for dir_name in _EXPECTED_NODE_DIRS:
-            (staging_dir / dir_name).mkdir(exist_ok=False)
-        for rel_path, payload in expected_files.items():
-            _atomic_write_bytes(staging_dir / rel_path, payload)
-        _atomic_write_bytes(
-            staging_dir / _ARTIFACT_MANIFEST_NAME,
-            serialize_artifact_manifest_bytes(inventory),
-        )
-        # durability barrier：文件已各自 fsync（原子写）；此处补目录树
-        # fsync（新建目录条目的持久性，含新建的 .staging 挂点本身）。
-        for dir_name in _EXPECTED_NODE_DIRS:
-            _fsync_directory(staging_dir / dir_name)
-        _fsync_directory(staging_dir)
-        _fsync_directory(staging_dir.parent)
-        _fsync_directory(session_dir)
-        # 落盘后对账：实际内容清单必须与 record 冻结值一致（fail loud
-        # 捕获文件系统异常，不留静默漂移）。
+            _fsync_directory(session_dir)
         verify_node_directory(
-            staging_dir,
-            inventory,
+            staging_dir, inventory, session_id=session_id, thread_id=record.child_thread_id,
             stage="staging 落盘对账",
         )
 
@@ -1166,38 +1191,37 @@ class ThreadCreationService:
         final_dir: Path,
         session_dir: Path,
         inventory: dict[str, str],
+        record: ThreadCreationRecord,
+        session_id: str,
     ) -> None:
         """staging 原子 rename 到冻结最终 locator（父目录链 mkdir + fsync）。"""
         stage = "rename 到最终 locator"
-        if not staging_dir.is_dir() or staging_dir.is_symlink():
-            raise RuntimeError(f"{stage}: staging 缺失或不是目录: {staging_dir}")
-        if final_dir.exists() or final_dir.is_symlink():
-            # 校验与 rename 之间目标被外部放置：内容一致 → 视为 rename
-            # 已完成（清理已校验一致的冗余 staging 副本后继续 publish）；
-            # 不一致 → fail closed。
-            verify_node_directory(final_dir, inventory, stage=stage)
-            shutil.rmtree(staging_dir)
+        with _thread_access(session_id, record.child_thread_id, "rename_prepare"):
+            if not staging_dir.is_dir() or staging_dir.is_symlink():
+                raise _thread_conflict(session_id, record.child_thread_id, stage, "staging 缺失或不是目录", path=staging_dir)
+            final_exists = final_dir.exists() or final_dir.is_symlink()
+        if final_exists:
+            # 外部放置的同内容 final 可复用；先核实，再清理冗余 staging。
+            verify_node_directory(final_dir, inventory, session_id=session_id, thread_id=record.child_thread_id, stage=stage)
+            with _thread_access(session_id, record.child_thread_id, "rename_redundant_staging"):
+                shutil.rmtree(staging_dir)
+                _fsync_directory(staging_dir.parent)
+                _fsync_directory(session_dir)
+            return
+        with _thread_access(session_id, record.child_thread_id, "rename_prepare"):
+            final_dir.parent.mkdir(parents=True, exist_ok=True)
+        with _thread_access(session_id, record.child_thread_id, "rename", runtime_error=True):
+            os.rename(staging_dir, final_dir)
+        # rename 后沿新父目录链 fsync 到 owner Session，不越过共享祖先。
+        with _thread_access(session_id, record.child_thread_id, "rename_durability"):
+            chain: Path = final_dir.parent
+            while True:
+                _fsync_directory(chain)
+                if chain == session_dir or chain.parent == chain:
+                    break
+                chain = chain.parent
             _fsync_directory(staging_dir.parent)
             _fsync_directory(session_dir)
-            return
-        final_dir.parent.mkdir(parents=True, exist_ok=True)
-        try:
-            os.rename(staging_dir, final_dir)
-        except OSError as error:
-            raise RuntimeError(
-                f"{stage}: staging rename 失败: {staging_dir} -> {final_dir}: {error}"
-            ) from error
-        # durability barrier：rename 后沿 threads/YYYY/MM/DD 父目录链逐级
-        # fsync 到 session 目录（新建条目的持久性边界 = owner session 目录，
-        # 不越过 session_dir 向上 fsync 共享祖先）。
-        chain: Path = final_dir.parent
-        while True:
-            _fsync_directory(chain)
-            if chain == session_dir or chain.parent == chain:
-                break
-            chain = chain.parent
-        _fsync_directory(staging_dir.parent)
-        _fsync_directory(session_dir)
 
     async def _publish_and_finalize(
         self,
@@ -1241,18 +1265,19 @@ class ThreadCreationService:
         # publish 后 staging 残留 = 外部改动（本流不变量：rename 后 staging
         # 必已不在，见 create 主流程）→ fail closed。
         staging_dir = session_dir / published.staging_locator
-        if staging_dir.exists() or staging_dir.is_symlink():
-            raise RuntimeError(
-                "publish 后 staging 仍残留（外部改动，fail closed）: "
-                f"key={published.thread_creation_idempotency_key!r}, "
-                f"staging={staging_dir}"
-            )
+        with _thread_access(session_id, published.child_thread_id, "published_staging"):
+            if staging_dir.exists() or staging_dir.is_symlink():
+                raise RuntimeError(
+                    "publish 后 staging 仍残留（外部改动，fail closed）: "
+                    f"key={published.thread_creation_idempotency_key!r}, "
+                    f"session_id={session_id}, thread_id={published.child_thread_id}"
+                )
         # 复验最终目录与唯一可见性提交点产物（published 幂等返回的统一
         # 收敛出口）。
         verify_node_directory(
             final_dir,
             inventory,
-            stage="published 复验",
+            session_id=session_id, thread_id=published.child_thread_id, stage="published 复验",
             published=True,
         )
         self._control_store.mark_thread_creation_published(
@@ -1426,19 +1451,20 @@ class ThreadCreationService:
                 raise RuntimeError("fork child 清理缺少资源 owner 回调")
             materialized_rollout = await before_abort(record)
         for directory, label in targets:
-            if not (directory.exists() or directory.is_symlink()):
+            with _thread_access(session_id, record.child_thread_id, "cleanup_verify"):
+                exists = directory.exists() or directory.is_symlink()
+            if not exists:
                 continue
             if inventory is None:
-                raise RuntimeError(f"未冻结清单的创建已有目录: key={record.thread_creation_idempotency_key!r}, path={directory}")
+                raise _thread_conflict(session_id, record.child_thread_id, stage, "未冻结清单的创建已有目录", path=directory)
             verify_node_directory(
-                directory,
-                inventory,
-                stage=f"{stage}({label})",
-                partial=label == "staging",
+                directory, inventory, session_id=session_id, thread_id=record.child_thread_id,
+                stage=f"{stage}({label})", partial=label == "staging",
                 materialized_rollout=label == "final" and materialized_rollout,
             )
-        for directory, _label in targets:
-            if not (directory.exists() or directory.is_symlink()):
-                continue
-            shutil.rmtree(directory)
-            _fsync_directory(directory.parent)
+        with _thread_access(session_id, record.child_thread_id, "cleanup"):
+            for directory, _label in targets:
+                if not (directory.exists() or directory.is_symlink()):
+                    continue
+                shutil.rmtree(directory)
+                _fsync_directory(directory.parent)
