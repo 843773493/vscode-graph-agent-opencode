@@ -411,8 +411,8 @@ async def test_binder_failure_is_durable_and_restart_uses_original_admission(
             await asyncio.sleep(0)
     with closing(case.service._store(case.target)) as store:
         original = store.get_communication_inbox(receipt.communication_id)
-        assert original.state == "target_accepted" and "原 binder 故障" in original.last_error
-    with pytest.raises(RuntimeError, match="原 binder 故障"):
+        assert original.state == "target_accepted" and "stage=execution_binding, error_type=RuntimeError" in original.last_error
+    with pytest.raises(RuntimeError, match="stage=execution_binding, error_type=RuntimeError"):
         await case.service.stop()
     case.restore()
     recovered_probe = _AdmissionProbe(case.sessions)

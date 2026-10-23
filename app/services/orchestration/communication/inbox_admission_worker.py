@@ -22,9 +22,11 @@ inbox，按 admission_id/wakeup key 幂等 admit。本 worker：
 from __future__ import annotations
 
 import asyncio
+import logging
+import sqlite3
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol
 
 from app.core.phase_observer import observe_phase
 from app.core.session_control_primitives import validate_claim_fields
@@ -36,7 +38,11 @@ from app.core.session_lifecycle_gate import (
     SessionDeletionPendingError,
     SessionOperationLease,
 )
-from app.services.business.communication.ledger import SessionLeaseSettlement
+
+if TYPE_CHECKING:
+    from app.services.business.communication.ledger import SessionLeaseSettlement
+
+logger = logging.getLogger(__name__)
 
 __all__ = [
     "InboxAdmissionAttempt",
@@ -96,13 +102,13 @@ class InboxAdmissionAttempt:
 class InboxAdmissionError(RuntimeError):
     """单轮消费存在显式失败（binder 异常 / identity 非法 / store 拒绝）。
 
-    失败明细已逐条写入 inbox last_error；本异常是显式暴露通道。
+    失败事实写入 inbox last_error；记录本身失败也经本异常显式暴露。
     """
 
     def __init__(self, failures: Sequence[str]) -> None:
         super().__init__(
-            "inbox admission 单轮消费存在显式失败（已记录 last_error，"
-            f"不静默吞掉）: {'; '.join(failures)}"
+            "inbox admission 单轮消费存在显式失败（原 admission 保留待恢复）: "
+            f"{'; '.join(failures)}"
         )
 
 
@@ -233,8 +239,16 @@ class InboxAdmissionWorker:
         except asyncio.CancelledError:
             await self._record_failure(communication_id, lease, "inbox worker 已停止，原 admission 保留待恢复")
             raise
-        except Exception as error:  # noqa: BLE001 —— 记录后显式暴露
-            return await self._record_failure(communication_id, lease, f"{type(error).__name__}: {error}")
+        except Exception as error:
+            message = (
+                f"inbox admission 失败: session_id={self._session_id}, communication_id={communication_id}, "
+                f"stage=execution_binding, error_type={type(error).__name__}"
+            )
+            for name in ("errno", "winerror", "sqlite_errorcode"):
+                if isinstance(system_code := getattr(error, name, None), int):
+                    message += f", {name}={system_code}"
+            logger.error("%s；完整诊断见异常链", message, exc_info=error)
+            return await self._record_failure(communication_id, lease, message)
         return InboxAdmissionAttempt(
             communication_id=communication_id,
             outcome="bound",
@@ -266,8 +280,13 @@ class InboxAdmissionWorker:
                     claim_generation=self._claim_generation,
                     last_error=message,
                 )
-        except (RuntimeError, KeyError) as record_error:
-            message = f"{message}（record failure 本身失败: {record_error}）"
+        except (RuntimeError, KeyError, OSError, sqlite3.Error) as record_error:
+            detail = f"stage=failure_record, record_error_type={type(record_error).__name__}"
+            logger.error(
+                "inbox 失败记录未提交: session_id=%s, communication_id=%s, %s；完整诊断见异常链",
+                self._session_id, communication_id, detail, exc_info=record_error,
+            )
+            message = f"{message}（失败记录未提交: {detail}）"
         return InboxAdmissionAttempt(
             communication_id=communication_id,
             outcome="error",

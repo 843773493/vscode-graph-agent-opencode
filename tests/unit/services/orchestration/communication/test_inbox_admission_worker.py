@@ -263,12 +263,12 @@ async def test_binder_failure_keeps_recoverable_then_retries(
         binder=FakeBinder(fail_message="job service 暂不可用"),
     )
     failing.start()
-    with pytest.raises(RuntimeError, match="job service 暂不可用"):
+    with pytest.raises(RuntimeError, match="stage=execution_binding, error_type=RuntimeError"):
         (await failing.admit_pending_once())
     current = harness.store.get_communication_inbox(inbox.communication_id)
     assert current.state == "target_accepted"
     assert current.last_error is not None
-    assert "job service 暂不可用" in current.last_error
+    assert "stage=execution_binding, error_type=RuntimeError" in current.last_error
     # 失败后重试：同 owner 同 generation claim 幂等重入，绑定成功。
     recovered = InboxAdmissionWorker(session_id=harness.session_id, lease_settlement=harness.lease_settlement,
         store=harness.store,

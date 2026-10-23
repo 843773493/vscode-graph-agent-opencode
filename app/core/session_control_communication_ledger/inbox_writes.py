@@ -376,11 +376,9 @@ class InboxWritesMixin:
     ) -> CommunicationInboxRecord:
         """记录明确错误并保留 target_accepted 可恢复事实（不推进 state）。"""
         validate_claim_fields(claim_owner, claim_generation)
-        # 只校验非空，不设长度上限：本列是诊断真值，全库既有口径是在
-        # 展示/传输边界截断（session_information_service._truncate_text
-        # 对 last_error 走 _DIAGNOSTIC_TEXT_LIMIT=2048 并带 _truncated
-        # 标志；bounded_json 在边界加截断标记），store 层写入不截断以免
-        # 丢失可诊断信息。若将来要限长，应统一在边界层做，而不是在此处。
+        # 调用方提交明确的失败阶段、异常类型与系统码；原始异常只留诊断日志。
+        # 本列只校验非空，不截断失败事实。展示/传输继续按既有统一预算标注截断，
+        # 不以截断任意异常正文代替编排 owner 的安全投影。
         if not isinstance(last_error, str) or not last_error:
             raise ValueError(f"last_error 不能为空: {last_error!r}")
         with self._write_transaction() as connection:
