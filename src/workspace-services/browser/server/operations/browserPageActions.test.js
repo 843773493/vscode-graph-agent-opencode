@@ -67,6 +67,37 @@ describe("用户处理浏览器文件选择", () => {
   });
 });
 
+describe("原生对话框失败与重试", () => {
+  for (const nativePath of ["/private/browser/dialog", "C:\\private\\dialog", "\\\\server\\private\\dialog"]) {
+    test.each([
+      ["dismiss", { acceptModal: false }, undefined, "已取消"],
+      ["accept", {}, undefined, "已接受"],
+      ["accept", { promptText: "新的输入" }, "新的输入", "已接受"],
+    ])(`%s失败保留原对话框和诊断：${nativePath}`, async (method, args, expectedText, summary) => {
+      const cause = Object.assign(new Error(`EACCES ${nativePath}`), { code: "EACCES", statusCode: 503 });
+      let fail = true;
+      const calls = [];
+      const dialog = { [method]: async (...values) => { calls.push(values); if (fail) throw cause; } };
+      const pending = { pageId: "dialog_page", message: "原生提示", dialog };
+      const session = { id: "browser_dialog", activePageId: "another_page", pendingDialog: pending };
+      const diagnostics = spyOn(console, "error").mockImplementation(() => undefined);
+      try {
+        const failure = await handleDialog(session, args).catch((error) => error);
+        expect(failure).toMatchObject({ cause, code: "EACCES", statusCode: 503 });
+        expect(failure.message).toContain(`stage=dialog.${method}`);
+        expect(failure.message).toContain("browser_id=browser_dialog, page_id=dialog_page");
+        expect(failure.message).not.toContain(nativePath);
+        expect(session.pendingDialog).toBe(pending);
+        expect(diagnostics.mock.calls[0].at(-1)).toBe(cause);
+        fail = false;
+        expect((await handleDialog(session, args)).summary).toBe(`${summary}对话框: 原生提示`);
+        expect(session.pendingDialog).toBeNull();
+        expect(calls).toEqual([expectedText === undefined ? [] : [expectedText], expectedText === undefined ? [] : [expectedText]]);
+      } finally { diagnostics.mockRestore(); }
+    });
+  }
+});
+
 describe("失效元素 ref", () => {
   test("目标已移除时立即返回专用错误", async () => {
     const locator = {

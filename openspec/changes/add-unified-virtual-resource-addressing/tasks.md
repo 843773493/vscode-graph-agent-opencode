@@ -389,3 +389,10 @@
 - 发布阶段的 deletion/CAS 失败与已非 preparing 出口使用 Session/Thread、阶段和异常类型，完整原异常保留日志/cause；删除中仍为 SessionDeletionPendingError，并保留稳定 session_deletion_pending 标识。定点清理失败仍 preparing，published/aborted 不进入再次清理。成员完整性失败只把稳定身份/阶段写入中止原因，原异常作为诊断与精确 cause；先提交原 operation/member 终结，再抛错误的顺序保持。原始系统码格式由 Thread 创建唯一错误投影共用，无新存储或 schema 变化。
 - 固定 tree `b0a487ef1820080e376a7185e994a8dfc7f16be8` 的集成文件35项通过（33.72秒），9项正式委派入口覆盖三种平台位置文本×deletion/CAS/membership，核即时异常、原cause/log、冷重开中止原因、成员cancelled、零child/intent及同delegation拒绝换绑；另核已aborted保留final原件。001的289项Thread/ControlStore单测通过，002仅修正9项委派重试测试预期，生产与既有单测逐字相同，复用其单测结果和compile，不称为一次324项全绿。Ruff通过；旧生产完整archive的10项红测准确检出位置外泄。001的9项失败均源于测试错把cancelled-member先拒绝预期为后置ThreadCreationAbortedError，按实际既有合同修正，未修改生产来迎合测试。
 - 命令、全源码前后指纹、raw/SHA、退出码、零残留及非作者审查见 `out/tests/temp/thread_failure_publication_20261023/artifacts/validation-proof-002.json`、`review-002.json`。仅覆盖发布阶段和成员中止原因；fork物化callback/capture中止原因、其它owner与URI 2.2/7.2总门仍未关闭，不代替真实Gateway/Web、进程重启或Windows实机。
+
+
+### 2026-10-23 Browser 原生对话框失败与重试（2.2/7.2 部分收口）
+
+- 原生 accept/dismiss 共用既有运行时错误 owner，公开 browser/page 身份、dialog.accept/dialog.dismiss 阶段及原 code/status；完整原异常保留诊断/cause。page 身份在原生调用前从 pending 冻结，失败保留原对话框，成功才清除；默认无参 accept、prompt 文本与取消语义保持。
+- 固定 tree `bc5d7c827493f0ba418ae06fd61db069d4a9c473`：21 项动作单测、8 项端口分配测试、JS 语法及 Ruff 通过；6 项真实 Chromium/HTTP 集成通过（30.16秒），覆盖同步/异步/工具/Workspace API、失败落盘、owner/lease、同一对话框重试及精确页面返回值。新增测试在旧生产完整 archive 中4项全失败，旧实现单测9项红；非作者只读独审 GO。现有213个集成文件超过旧200端口容量，沿既有分区公式扩至250，不混入共享树命名整理。
+- 首次集成止于端口容量，第二次因新测试误在 Node 访问 window 失败，修为 page.evaluate 后重验；命令、全源码前后指纹、raw/SHA、退出码及零残留见 `out/tests/temp/browser_native_dialog_20261023/artifacts/validation-proof-003.json`、`review-003.json`。Workspace API 使用 ASGI，不代完整 Gateway/Web 或 Windows 实机，2.2/7.2 总门保持未勾。

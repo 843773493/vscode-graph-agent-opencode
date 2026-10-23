@@ -1362,6 +1362,89 @@ await started;
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(("method", "mode", "arguments"), [
+    ("dismiss", "sync", {"acceptModal": False}),
+    ("accept", "async", {}),
+    ("accept", "tool", {"promptText": "重试后的输入"}),
+    ("dismiss", "api", {"acceptModal": False}),
+])
+async def test_dialog_failure_keeps_native_details_in_diagnostics_and_allows_retry(
+    method: str, mode: str, arguments: dict[str, object], integration_client: httpx.AsyncClient,
+    browser_context: CustomToolFactoryContext, browser_runtime: WorkspaceToolRuntime,
+    browser_manager_processes: tuple[int, int],
+) -> None:
+    container, _session, _invocation = browser_runtime
+    created = await integration_client.post("/api/v1/resources/browsers", json={
+        "session_id": browser_context.session_id,
+        "thread_id": browser_context.invocation_context.thread_binding.thread_id,
+        "url": "about:blank",
+    })
+    assert created.status_code == 200, created.text
+    resource = created.json()["data"]
+    browser_id = resource["resource_id"]
+    root = Path(container.workspace_root)
+    reason = f"injected EACCES: {root / '.boxteam/browser-manager/private-dialog-profile'}"
+    transport = BrowserManagerClient(workspace_id=container.workspace_id, backend_url=f"http://127.0.0.1:{browser_manager_processes[0]}")
+    # 由真实页面生成对话框；仅第三方 accept/dismiss 方法一次失败，不替产品写 pending 状态。
+    opened = await transport.perform(browser_id, "run", {"code": (
+        "page.once('dialog', dialog => {"
+        f" const original = dialog.{method}; dialog.{method} = async function (...args) {{"
+        f" this.{method} = original; throw Object.assign(new Error({json.dumps(reason)}), {{code: 'EACCES'}}); }};"
+        " }); await page.evaluate(() => { window.dialogResult = window.prompt('原生提示', '原输入'); });"
+    )}, actor="agent")
+    assert opened["browser"]["pending_dialog"]["message"] == "原生提示"
+    page_id = opened["browser"]["active_page_id"]
+    handle_dialog = create_handle_dialog_tool(browser_context)
+    if mode == "api":
+        failed = await integration_client.post(f"/api/v1/resources/{browser_id}/browser-operation", json={
+            "expected_revision": resource["owner_revision"], "thread": resource["source_thread"],
+            "action": "dialog", "payload": arguments,
+        })
+        assert failed.status_code == 500, failed.text
+        assert failed.headers["X-Request-ID"] == failed.json()["request_id"]
+        receipt = failed.json()
+    else:
+        with pytest.raises(BrowserRequestError) as caught:
+            if mode == "sync":
+                await asyncio.to_thread(transport._json_request_sync, "POST", f"/api/browsers/{browser_id}/dialog", arguments)
+            elif mode == "async":
+                await transport.perform(browser_id, "dialog", arguments, actor="agent")
+            else:
+                await handle_dialog.ainvoke({"pageId": browser_id, **arguments})
+        assert caught.value.status == 500 and caught.value.code == "EACCES"
+        receipt = caught.value.payload
+    assert f"stage=dialog.{method}" in json.dumps(receipt)
+    assert f"page_id={page_id}" in json.dumps(receipt)
+    assert str(root) not in json.dumps(receipt)
+    state = await transport.get_resource(browser_id)
+    assert state["pending_dialog"] == opened["browser"]["pending_dialog"]
+    assert state["last_operation"]["status"] == "failed"
+    assert f"stage=dialog.{method}" in state["last_operation"]["error"]
+    records = json.loads((root / ".boxteam/browser-manager/browsers.json").read_text())
+    record, = [item for item in records["browsers"] if item["browser_id"] == browser_id]
+    assert record["last_operation"] == state["last_operation"]
+    assert str(root) not in json.dumps(record)
+    observed = (await integration_client.get(f"/api/v1/resources/{browser_id}")).json()["data"]
+    assert observed["reconciliation_status"] == "verified"
+    assert str(root) not in json.dumps(observed)
+    assert container.browser_resource_owner._leases.leases_for_resource(browser_id) == []
+    retried = _json_tool_result(await handle_dialog.ainvoke({"pageId": browser_id, **arguments}))
+    assert retried["summary"] == f"已{'取消' if method == 'dismiss' else '接受'}对话框: 原生提示"
+    assert (await transport.get_resource(browser_id))["pending_dialog"] is None
+    result = await transport.perform(browser_id, "run", {"code": "return await page.evaluate(() => window.dialogResult);"}, actor="agent")
+    assert result["result"] == (None if method == "dismiss" else arguments.get("promptText", ""))
+    artifacts = TestRunContext.from_test_file(Path(__file__)).artifacts_dir
+    diagnostics = "\n".join(item.read_text() for item in artifacts.glob("browser-backend-*.stderr.log"))
+    assert reason in diagnostics and f"dialog.{method}" in diagnostics
+    (artifacts / f"dialog-failure-{method}-{mode}-{time.time_ns()}.json").write_text(json.dumps({
+        "receipt": receipt, "state": state, "node_record": record,
+        "owner_projection": observed, "retried": retried, "result": result,
+    }, ensure_ascii=False, indent=2), encoding="utf-8")
+    deleted = await _detach_delete(integration_client, browser_id, browser_context)
+    assert deleted.status_code == 200, deleted.text
+
+
+@pytest.mark.asyncio
 async def test_file_selection_failure_keeps_native_path_in_diagnostics_and_allows_retry(
     integration_client: httpx.AsyncClient, browser_context: CustomToolFactoryContext,
     browser_manager_processes: tuple[int, int], browser_runtime: WorkspaceToolRuntime,

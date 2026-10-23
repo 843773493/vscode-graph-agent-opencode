@@ -606,20 +606,20 @@ export async function handleDialog(session, {
   if (!session.pendingDialog) {
     throw new Error("当前页面没有待处理的浏览器对话框");
   }
-  const dialog = session.pendingDialog.dialog;
-  const dialogMessage = session.pendingDialog.message;
-  if (acceptModal === false) {
-    await dialog.dismiss();
-    session.pendingDialog = null;
-    return { summary: `已取消对话框: ${dialogMessage}` };
-  }
-  if (typeof promptText === "string") {
-    await dialog.accept(promptText);
-  } else {
-    await dialog.accept();
+  const { dialog, message: dialogMessage, pageId } = session.pendingDialog;
+  const dismiss = acceptModal === false;
+  try {
+    if (dismiss) await dialog.dismiss();
+    else if (typeof promptText === "string") await dialog.accept(promptText);
+    else await dialog.accept();
+  } catch (cause) {
+    throw browserRuntimeFailure({
+      browserId: session.id, pageId,
+      stage: dismiss ? "dialog.dismiss" : "dialog.accept", cause,
+    });
   }
   session.pendingDialog = null;
-  return { summary: `已接受对话框: ${dialogMessage}` };
+  return { summary: `已${dismiss ? "取消" : "接受"}对话框: ${dialogMessage}` };
 }
 
 export async function screenshotPage(page, refSelectors, {
