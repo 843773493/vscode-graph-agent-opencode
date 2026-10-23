@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import json
+import logging
+from io import BytesIO
 from typing import Self
 from unittest.mock import Mock, patch
 
@@ -93,6 +96,42 @@ async def test_revision_and_one_use_grant_consume_internal_owner_transport(
         ("POST", f"/api/terminals/{TERMINAL_ID}/owner-revision", {"owner_revision": 4}),
         ("POST", f"/api/terminals/{TERMINAL_ID}/transport-grant", {"owner_revision": 4, "association": "session/thread"}),
     ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation, data, stage", [
+    ("list", "/private/terminal", "list.data"),
+    ("list", ["/private/terminal"], "list.item"),
+    ("get", "/private/terminal", "record.data"),
+    ("read", "/private/terminal", "envelope.data"),
+    ("read", {"terminal": "/private/terminal"}, "envelope.terminal"),
+    ("grant", "/private/terminal", "grant.data"),
+    ("get", _terminal_record("/private/terminal"), "terminal"),
+])
+async def test_response_protocol_failures_preserve_diagnostics_and_fail_at_the_client(
+    terminal_manager_client: TerminalManagerClient, monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture, operation: str, data: object, stage: str,
+) -> None:
+    response = {"data": data}
+    monkeypatch.setattr(
+        "app.services.infrastructure.terminal_manager_client.urlopen",
+        lambda *_args, **_kwargs: BytesIO(json.dumps(response).encode()),
+    )
+    with caplog.at_level(logging.ERROR), pytest.raises(TypeError) as caught:
+        if operation == "list":
+            await terminal_manager_client.list_resources()
+        elif operation == "read":
+            await terminal_manager_client.read_terminal(TERMINAL_ID)
+        elif operation == "grant":
+            await terminal_manager_client.issue_transport_grant(TERMINAL_ID, owner_revision=3, association=None)
+        else:
+            await terminal_manager_client.get_resource(TERMINAL_ID)
+    assert str(caught.value) == f"终端管理器响应协议错误: stage={stage}；请查看工作区终端服务日志"
+    diagnostic = data if stage == "terminal" else response
+    assert any(isinstance(record.args, tuple) and record.args[-1] == diagnostic for record in caplog.records)
+    if stage == "terminal":
+        assert isinstance(caught.value.__cause__, TypeError)
+        assert str(caught.value.__cause__) == "Terminal 状态不在协议范围内: /private/terminal"
 
 
 class _JsonResponse:

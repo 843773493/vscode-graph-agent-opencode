@@ -244,3 +244,9 @@
 - Browser状态读取/发布仍由同一store负责，在正文读取、解析、记录核验及目录创建、正文写入、文件发布的实际失败处生成workspace身份、artifact、阶段和原错误码。原生存储位置与完整异常只留在cause和服务诊断；发布失败只清本次临时文件，清理同样失败时保留两份原异常，主错误码不被覆盖。不以响应正则掩盖路径，也不把持久化失败伪报为内存回滚。
 - 固定代码候选004 tree `0af3ed741574e11792144e99bb1ecf166958d893`：复用逐字相同的003产品/JS测试blob，`browser-record-errors-static-unit-003` 为20项Bun/132断言与5项Node通过；004补精简应用注册现有产品HTTP异常处理器，`browser-record-errors-static-004` Ruff/compileall/Node语法exit0。`browser-record-errors-http-004` 为2 passed/15.03秒、exit0：真实API创建Browser，同步/异步Node HTTP与资源API均遇到真实发布目录冲突，核完整安全错误、同一request_id、原状态字节不变、零临时残留、owner仍verified及lease释放，恢复原文件后同一操作显式重试成功；同时复验既有checkpoint失败/恢复链。
 - 完整archive只恢复旧read/write producer的`browser-record-errors-red-001`为6 failed，分别区分原路径回显及缺错误归属。首轮003真实HTTP的sync/async已通过，后续因精简应用漏注册生产HTTP异常处理器而缺request_id，不算整轮通过；候选002构造及输入缺失失败均保留原件。准确命令/源码指纹/raw/退出码、产品原件SHA与复用范围见本任务`browser-record-errors-proof-004.json`及`runs/browser-record-errors-*`。不代替Gateway/Web、Windows或2.2/7.2整体门，其它producer与Browser file URL边界仍独立处理。
+
+### 2026-10-23 Terminal响应协议错误出口（部分收口）
+
+- HTTP成功但响应JSON/UTF-8、顶层结构、列表成员、授权data或Terminal记录损坏时，实际client解码边界只发布固定阶段，完整响应和原异常留服务诊断及cause；读取与删除/停止/steering共用envelope解析。保留ValueError类API400、TypeError/OverflowError类API500、unknown、lease释放和禁止自动重放；HTTP失败仍沿用原TerminalRequestError合同，无响应端路径正则新增。
+- 最终tree `bca0891bfc0a21c5d87f3cc2891b7984b1a106be`：`terminal-protocol-api-004`为36 passed/4.11秒，覆盖POSIX、盘符、UNC、扩展UNC、原始cause对象、重启GET/list及仅一次DELETE；`integration-004`为4 passed/35.92秒，真实PTY核同步/异步HTTP错误、工作区外原生cwd及真实工具准入/lease/最终回执。Ruff004通过；003其余57项client/owner/codec测试全部通过且相关生产与测试字节到004不变，限定复用；003整体77 passed/16 failed，16项为新增400场景误用500响应字段的测试预期错误，004只修fixture既有detail形状，不改生产状态码。
+- 完整archive旧producer的`red-001`为24 failed/4 passed，区分旧正文回显或缺失协议失败阶段；001静态导入排版及002曾将ValueError误归TypeError的候选不计最终通过。非作者只读复核004无剩余finding，未独立跑测试。各run原件、准确命令、前后指纹、退出码、零进程残留与限定复用记录在 `out/tests/temp/openspec_resume_20261023/artifacts/terminal-protocol-proof-004.json`。不替代Gateway/Web、Windows或2.2/7.2全量不变量；Browser自由错误正文及其它producer仍待迁齐。

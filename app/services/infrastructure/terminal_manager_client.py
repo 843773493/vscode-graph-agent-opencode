@@ -78,11 +78,11 @@ class TerminalManagerClient:
         response = await self._json_request("GET", path)
         data = response.get("data")
         if not isinstance(data, list):
-            raise TypeError(f"终端管理器返回格式错误: {response}")
+            raise self._protocol_error("list.data", response)
         result: list[dict[str, object]] = []
         for item in data:
             if not isinstance(item, dict):
-                raise TypeError(f"终端管理器列表包含非对象记录: {response}")
+                raise self._protocol_error("list.item", response)
             result.append(self._normalize_terminal_record(item))
         return result
 
@@ -90,12 +90,7 @@ class TerminalManagerClient:
         response = await self._json_request(
             "POST", f"/api/terminals/{terminal_id}/read"
         )
-        data = response.get("data")
-        if not isinstance(data, dict) or not isinstance(data.get("terminal"), dict):
-            raise TypeError(f"终端管理器读取输出返回格式错误: {response}")
-        terminal_envelope = dict(data)
-        terminal_envelope["terminal"] = self._normalize_terminal_record(data["terminal"])
-        return terminal_envelope
+        return self._require_terminal_envelope(response)
 
     async def mark_terminal_backgrounded(self, terminal_id: str) -> dict[str, object]:
         response = await self._json_request(
@@ -179,7 +174,7 @@ class TerminalManagerClient:
         )
         data = result.get("data")
         if not isinstance(data, dict):
-            raise TypeError("Terminal 传输授权缺少完整结果")
+            raise self._protocol_error("grant.data", result)
         return data
 
     def _require_normalized_terminal_record(
@@ -187,25 +182,39 @@ class TerminalManagerClient:
     ) -> dict[str, object]:
         data = response.get("data")
         if not isinstance(data, dict):
-            raise TypeError(f"终端管理器返回格式错误: {response}")
+            raise self._protocol_error("record.data", response)
         return self._normalize_terminal_record(data)
 
     def _require_terminal_envelope(self, response: dict[str, object]) -> dict[str, object]:
         data = response.get("data")
         if not isinstance(data, dict):
-            raise TypeError(f"终端管理器返回格式错误: {response}")
+            raise self._protocol_error("envelope.data", response)
         terminal = data.get("terminal")
         if not isinstance(terminal, dict):
-            raise TypeError(f"终端管理器返回缺少 terminal: {response}")
+            raise self._protocol_error("envelope.terminal", response)
         terminal_envelope = dict(data)
         terminal_envelope["terminal"] = self._normalize_terminal_record(terminal)
         return terminal_envelope
 
-    @staticmethod
-    def _normalize_terminal_record(data: dict[str, object]) -> dict[str, object]:
-        normalized = terminal_session_to_json(terminal_session_to_proto(data))
+    def _normalize_terminal_record(self, data: dict[str, object]) -> dict[str, object]:
+        try:
+            normalized = terminal_session_to_json(terminal_session_to_proto(data))
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise self._protocol_error("terminal", data, cause=exc) from exc
         normalized.pop("attach_url", None)
         return normalized
+
+    @staticmethod
+    def _protocol_error(
+        stage: str, response: object, *, cause: Exception | None = None,
+    ) -> TypeError | ValueError | OverflowError:
+        logger.error("终端传输响应协议错误: stage=%s response=%r", stage, response, exc_info=cause)
+        message = f"终端管理器响应协议错误: stage={stage}；请查看工作区终端服务日志"
+        if isinstance(cause, ValueError):
+            return ValueError(message)
+        if isinstance(cause, OverflowError):
+            return OverflowError(message)
+        return TypeError(message)
 
     async def _json_request(
         self,
@@ -234,7 +243,7 @@ class TerminalManagerClient:
         )
         try:
             with urlopen(request, timeout=10) as response:
-                return json.loads(response.read().decode("utf-8"))
+                response_body = response.read()
         except HTTPError as exc:
             detail = exc.read().decode("utf-8", errors="replace")
             logger.exception(
@@ -244,3 +253,10 @@ class TerminalManagerClient:
             raise TerminalRequestError(
                 method=method, path=path, status=exc.code, response_body=detail,
             ) from exc
+        try:
+            result = json.loads(response_body.decode("utf-8"))
+        except ValueError as exc:
+            raise self._protocol_error("json", response_body, cause=exc) from exc
+        if not isinstance(result, dict):
+            raise self._protocol_error("response", result)
+        return result

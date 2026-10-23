@@ -20,9 +20,16 @@ from tests.support.resource_owners.terminal import TerminalOwnerFixture
     "/private/workspace/key", r"C:\Users\owner\secret.key",
     r"\\server\share\secret.key", r"\\?\UNC\server\share\secret.key",
 ])
-def test_http_error_body_stays_in_diagnostics_after_owner_restart(
+@pytest.mark.parametrize("failure, stage", [
+    ("http", None), ("data", "envelope.data"),
+    ("terminal", "envelope.terminal"), ("status", "terminal"),
+    ("missing_status", "terminal"), ("status_type", "terminal"),
+    ("json", "json"), ("utf8", "json"), ("response", "response"),
+])
+def test_transport_error_body_stays_in_diagnostics_after_owner_restart(
     resource_api_client: TestClient, terminal_owner_bundle: TerminalOwnerFixture,
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, native_path: str,
+    failure: str, stage: str | None,
 ) -> None:
     created = resource_api_client.post("/api/v1/resources/terminals", json={"session_id": SESSION_A})
     assert created.status_code == 200, created.text
@@ -35,24 +42,79 @@ def test_http_error_body_stays_in_diagnostics_after_owner_restart(
     resource = detached.json()["data"]
     transport = TerminalManagerClient(backend_url="http://terminal.test", workspace_id=WORKSPACE_ID)
     attempted: list[tuple[str, str]] = []
-    body = json.dumps({"error": f"读取失败: {native_path}", "cwd": native_path}, ensure_ascii=False)
+    diagnostic: object
+    if failure == "data":
+        diagnostic = {"data": native_path}
+    elif failure == "terminal":
+        diagnostic = {"data": {"terminal": native_path}}
+    elif failure in {"status", "missing_status", "status_type"}:
+        diagnostic = {**terminal_owner_bundle.transport.records[rid], "status": native_path}
+        if failure == "missing_status":
+            del diagnostic["status"]
+            diagnostic["diagnostic"] = native_path
+        elif failure == "status_type":
+            diagnostic["status"] = [native_path]
+    else:
+        diagnostic = [native_path] if failure == "response" else {"error": f"读取失败: {native_path}", "cwd": native_path}
+    envelope = {"data": {"terminal": diagnostic}} if stage == "terminal" else diagnostic
+    body = json.dumps(envelope, ensure_ascii=False).encode()
+    if failure == "json":
+        body += b" trailing"
+    elif failure == "utf8":
+        body += b"\xff"
+    if failure in {"json", "utf8"}:
+        diagnostic = body
+    elif failure == "http":
+        diagnostic = body.decode()
 
-    def rejected(request: Request, *, timeout: int) -> None:
+    def rejected(request: Request, *, timeout: int) -> BytesIO:
         assert timeout == 10
         attempted.append((request.method, request.full_url))
-        raise HTTPError(request.full_url, 500, "Internal Server Error", {}, BytesIO(body.encode()))
+        if failure == "http":
+            raise HTTPError(request.full_url, 500, "Internal Server Error", {}, BytesIO(body))
+        return BytesIO(body)
 
     monkeypatch.setattr("app.services.infrastructure.terminal_manager_client.urlopen", rejected)
     monkeypatch.setattr(terminal_owner_bundle.transport, "delete_resource", transport.delete_resource)
     command = {"expected_revision": resource["owner_revision"]}
     with caplog.at_level(logging.ERROR):
         failed = resource_api_client.post(f"/api/v1/resources/{rid}/delete", json=command)
-    assert failed.status_code == 500
-    expected = "TerminalRequestError: 终端管理器请求失败: method=DELETE, status=500；请查看工作区终端服务日志"
-    assert failed.json()["message"] == expected
-    assert failed.headers["X-Request-ID"] == failed.json()["request_id"]
+    value_error = failure in {"json", "utf8", "missing_status", "status_type"}
+    assert failed.status_code == (400 if value_error else 500), failed.text
+    error_type = "ValueError" if value_error else "TypeError"
+    expected = (
+        "TerminalRequestError: 终端管理器请求失败: method=DELETE, status=500；请查看工作区终端服务日志"
+        if failure == "http" else
+        f"{error_type}: 终端管理器响应协议错误: stage={stage}；请查看工作区终端服务日志"
+    )
+    if value_error:
+        assert failed.json() == {"detail": expected}
+        assert failed.headers["X-Request-ID"]
+    else:
+        assert failed.json()["message"] == expected
+        assert failed.headers["X-Request-ID"] == failed.json()["request_id"]
     assert native_path not in failed.text
-    assert body in caplog.text
+    diagnostic_records = [
+        record for record in caplog.records
+        if record.name == "app.services.infrastructure.terminal_manager_client"
+        and isinstance(record.args, tuple) and record.args[-1] == diagnostic
+    ]
+    assert len(diagnostic_records) == 1
+    cause_types = {
+        "http": HTTPError, "status": TypeError,
+        "missing_status": ValueError, "status_type": ValueError,
+        "json": json.JSONDecodeError, "utf8": UnicodeDecodeError,
+    }
+    if failure in cause_types:
+        diagnostic_record = diagnostic_records[0]
+        assert diagnostic_record.exc_info is not None
+        cause = diagnostic_record.exc_info[1]
+        assert type(cause) is cause_types[failure]
+        assert any(
+            record.exc_info is not None and record.exc_info[1].__cause__ is cause
+            for record in caplog.records
+            if record.name == "app.services.business.workspace_resources.owner"
+        )
     terminal_owner_bundle.restart()
     observed = resource_api_client.get(f"/api/v1/resources/{rid}")
     assert observed.status_code == 200, observed.text
