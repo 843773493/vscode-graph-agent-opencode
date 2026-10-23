@@ -1063,6 +1063,92 @@ async def test_injected_registration_failure_shares_safe_http_state_and_record(
 
 
 @pytest.mark.asyncio
+async def test_native_file_page_url_survives_checkpoint_and_timeout_recovery(
+    integration_client: httpx.AsyncClient, browser_context: CustomToolFactoryContext,
+    browser_runtime: WorkspaceToolRuntime, browser_manager_processes: tuple[int, int],
+) -> None:
+    container, _session, _invocation = browser_runtime
+    root = Path(container.workspace_root)
+    native_page = root / "native-pages" / "本地 页面 #100%.html"
+    native_page.parent.mkdir()
+    native_page.write_text(
+        '<!doctype html><meta charset="utf-8"><title>本机文件页面</title>'
+        '<input id="value" value="initial"><p>native-file-target</p>', encoding="utf-8",
+    )
+    url = native_page.as_uri()
+    created = await integration_client.post("/api/v1/resources/browsers", json={
+        "session_id": browser_context.session_id,
+        "thread_id": browser_context.invocation_context.thread_binding.thread_id,
+        "url": url,
+    })
+    assert created.status_code == 200, created.text
+    resource = created.json()["data"]
+    browser_id = resource["resource_id"]
+    assert resource["metadata"]["url"] == url
+    assert resource["metadata"]["actual_url"] == url
+    transport = BrowserManagerClient(
+        workspace_id=container.workspace_id,
+        backend_url=f"http://127.0.0.1:{browser_manager_processes[0]}",
+    )
+    synchronous = await asyncio.to_thread(transport._json_request_sync, "GET", f"/api/browsers/{browser_id}", None)
+    assert synchronous["data"]["url"] == url
+    assert (await transport.get_resource(browser_id))["url"] == url
+    command = {"expected_revision": resource["owner_revision"], "thread": resource["source_thread"]}
+    edited = await integration_client.post(f"/api/v1/resources/{browser_id}/browser-operation", json={
+        **command, "action": "run", "payload": {"code": "await page.locator('#value').fill('restored-value'); return await page.title();"},
+    })
+    assert edited.status_code == 200, edited.text
+    assert edited.json()["data"]["result"] == "本机文件页面"
+    frozen = await integration_client.post(f"/api/v1/resources/{browser_id}/browser-operation", json={**command, "action": "freeze"})
+    assert frozen.status_code == 200, frozen.text
+    checkpoint = json.loads((root / ".boxteam/browser-manager/checkpoints" / f"{browser_id}.json").read_text())
+    page, = checkpoint["pages"]
+    assert page["url"] == url
+    assert page["requested_url"] == url
+    discarded = await integration_client.post(f"/api/v1/resources/{browser_id}/browser-operation", json={**command, "action": "discard"})
+    assert discarded.status_code == 200, discarded.text
+    assert discarded.json()["data"]["browser"]["metadata"]["resource_state"] == "discarded"
+    awakened = await integration_client.post(f"/api/v1/resources/{browser_id}/browser-operation", json={**command, "action": "wake"})
+    assert awakened.status_code == 200, awakened.text
+    restored = await transport.perform(browser_id, "run", {"code": (
+        "return {url: page.url(), title: await page.title(), value: await page.locator('#value').inputValue(),"
+        " text: await page.locator('p').textContent()};"
+    )}, actor="agent")
+    assert restored["result"] == {"url": url, "title": "本机文件页面", "value": "restored-value", "text": "native-file-target"}
+
+    missing_url = (native_page.parent / "不存在的页面.html").as_uri()
+    missing = await integration_client.post(f"/api/v1/resources/{browser_id}/browser-operation", json={
+        **command, "action": "navigate", "payload": {"type": "url", "url": missing_url},
+    })
+    assert missing.status_code == 500, missing.text
+    assert missing_url in missing.text
+    failed_page = await transport.get_resource(browser_id)
+    assert failed_page["navigation_error"]["requested_url"] == missing_url
+    assert missing_url in failed_page["navigation_error"]["message"]
+    assert failed_page["pages"][0]["navigation_error"]["requested_url"] == missing_url
+    await transport.perform(browser_id, "navigate", {"type": "url", "url": url}, actor="agent")
+    with pytest.raises(BrowserRequestError) as caught:
+        await transport.perform(browser_id, "run", {"code": "await new Promise(() => undefined);", "timeoutMs": 25}, actor="agent")
+    assert caught.value.status == 408
+    assert caught.value.code == "browser_tool_timeout"
+    recovered = await transport.perform(browser_id, "run", {"code": "return {url: page.url(), title: await page.title()};"}, actor="agent")
+    assert recovered["result"] == {"url": url, "title": "本机文件页面"}
+    records = json.loads((root / ".boxteam/browser-manager/browsers.json").read_text())
+    record, = [item for item in records["browsers"] if item["browser_id"] == browser_id]
+    assert record["url"] == url
+    # 只豁免完整页面URL，不能让同一记录中的其它字段携带产物或存储位置。
+    assert str(root) not in json.dumps(record).replace(json.dumps(url), '"file-page-url"')
+    artifacts = TestRunContext.from_test_file(Path(__file__)).artifacts_dir
+    (artifacts / f"native-file-url-lifecycle-{time.time_ns()}.json").write_text(json.dumps({
+        "created": resource, "checkpoint": checkpoint, "restored": restored,
+        "navigation_failure": missing.json(), "failed_page": failed_page,
+        "timeout": caught.value.payload, "recovered": recovered, "record": record,
+    }, ensure_ascii=False, indent=2), encoding="utf-8")
+    deleted = await _detach_delete(integration_client, browser_id, browser_context)
+    assert deleted.status_code == 200, deleted.text
+
+
+@pytest.mark.asyncio
 async def test_new_browser_page_allows_minimal_actions_without_explicit_timeout(
     browser_manager_processes: tuple[int, int],
     integration_client: httpx.AsyncClient,
