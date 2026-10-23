@@ -155,6 +155,8 @@ async def _recv_ws_type(websocket, expected_type: str) -> dict[str, object]:
         message = json.loads(raw)
         if message.get("type") == expected_type:
             return message
+        if message.get("type") == "error":
+            raise AssertionError(f"等待 {expected_type} 时 Browser 拒绝消息: {message}")
     raise TimeoutError(f"未收到浏览器 WebSocket 消息: {expected_type}")
 
 
@@ -1158,6 +1160,103 @@ async def test_page_control_failure_keeps_native_details_in_diagnostics(
     }, ensure_ascii=False, indent=2), encoding="utf-8")
     deleted = await _detach_delete(integration_client, browser_id, browser_context)
     assert deleted.status_code == 200, deleted.text
+
+
+@pytest.mark.asyncio
+async def test_file_selection_failure_keeps_native_path_in_diagnostics_and_allows_retry(
+    integration_client: httpx.AsyncClient, browser_context: CustomToolFactoryContext,
+    browser_manager_processes: tuple[int, int], browser_runtime: WorkspaceToolRuntime,
+) -> None:
+    container, _session, _invocation = browser_runtime
+    created = await integration_client.post("/api/v1/resources/browsers", json={
+        "session_id": browser_context.session_id,
+        "thread_id": browser_context.invocation_context.thread_binding.thread_id,
+        "url": "about:blank",
+    })
+    assert created.status_code == 200, created.text
+    resource = created.json()["data"]
+    browser_id = resource["resource_id"]
+    root = Path(container.workspace_root)
+    missing = root / "不存在的上传 文件.txt"
+    selected = root / "本机上传 文件.txt"
+    selected.write_text("目标机器上的文件正文", encoding="utf-8")
+    assert not missing.exists()
+    transport = BrowserManagerClient(workspace_id=container.workspace_id, backend_url=f"http://127.0.0.1:{browser_manager_processes[0]}")
+    chooser_code = "await page.setContent('<input id=upload type=file>'); await page.locator('#upload').click();"
+    opened = await transport.perform(browser_id, "run", {"code": chooser_code}, actor="agent")
+    assert opened["browser"]["pending_file_chooser"] is True
+    page_id = opened["browser"]["active_page_id"]
+    handle_dialog = create_handle_dialog_tool(browser_context)
+    receipts: list[dict[str, object]] = []
+    payload = {"selectFiles": [str(missing)]}
+    for mode in ("sync", "async", "tool", "api"):
+        if mode == "api":
+            failed = await integration_client.post(f"/api/v1/resources/{browser_id}/browser-operation", json={
+                "expected_revision": resource["owner_revision"], "thread": resource["source_thread"],
+                "action": "dialog", "payload": payload,
+            })
+            assert failed.status_code == 500, failed.text
+            assert failed.headers["X-Request-ID"] == failed.json()["request_id"]
+            receipt = failed.json()
+        else:
+            with pytest.raises(BrowserRequestError) as caught:
+                if mode == "sync":
+                    await asyncio.to_thread(transport._json_request_sync, "POST", f"/api/browsers/{browser_id}/dialog", payload)
+                elif mode == "async":
+                    await transport.perform(browser_id, "dialog", payload, actor="agent")
+                else:
+                    await handle_dialog.ainvoke({"pageId": browser_id, **payload})
+            assert caught.value.status == 500
+            assert caught.value.code == "ENOENT"
+            receipt = caught.value.payload
+        assert "stage=select_files" in json.dumps(receipt)
+        assert "code=ENOENT" in json.dumps(receipt)
+        assert f"page_id={page_id}" in json.dumps(receipt)
+        assert str(root) not in json.dumps(receipt)
+        state = await transport.get_resource(browser_id)
+        assert state["pending_file_chooser"] is True
+        assert state["last_operation"]["status"] == "failed"
+        records = json.loads((root / ".boxteam/browser-manager/browsers.json").read_text())
+        record, = [item for item in records["browsers"] if item["browser_id"] == browser_id]
+        assert record["last_operation"] == state["last_operation"]
+        assert str(root) not in json.dumps(record)
+        receipts.append(receipt)
+    observed = (await integration_client.get(f"/api/v1/resources/{browser_id}")).json()["data"]
+    assert observed["reconciliation_status"] == "verified"
+    assert container.browser_resource_owner._leases.leases_for_resource(browser_id) == []
+    retried = _json_tool_result(await handle_dialog.ainvoke({"pageId": browser_id, "selectFiles": [str(selected)]}))
+    assert retried["summary"] == "已选择 1 个文件"
+    assert (await transport.get_resource(browser_id))["pending_file_chooser"] is False
+    read_file_code = "return await page.locator('#upload').evaluate(async e => ({name: e.files[0].name, text: await e.files[0].text()}));"
+    native_file = await transport.perform(browser_id, "run", {"code": read_file_code}, actor="agent")
+    assert native_file["result"] == {"name": selected.name, "text": selected.read_text(encoding="utf-8")}
+    await transport.perform(browser_id, "run", {"code": chooser_code}, actor="agent")
+    grant = await _grant(integration_client, browser_id, browser_context)
+    async with websockets.connect(f"ws://127.0.0.1:{browser_manager_processes[0]}/browser?workspace_id={container.workspace_id}", proxy=None) as websocket:
+        await websocket.send(json.dumps({"type": "attach", "browserId": browser_id, "participantId": "user_file_selection_client", "grantToken": grant["grant_token"]}))
+        await _recv_ws_type(websocket, "attached")
+        await websocket.send(json.dumps({
+            "type": "selectFiles", "browserId": browser_id, "clientOperationId": "upload-client-file",
+            "files": [{"name": "客户端 文件.txt", "mimeType": "text/plain", "data": "5a6i5oi356uv5q2j5paH"}],
+        }))
+        completed = await _recv_ws_type(websocket, "operationAck")
+        assert completed["clientOperationId"] == "upload-client-file"
+        assert completed["operation"]["status"] == "completed"
+        uploaded = await transport.perform(browser_id, "run", {"code": read_file_code}, actor="agent")
+        assert uploaded["result"] == {"name": "客户端 文件.txt", "text": "客户端正文"}
+        await websocket.send(json.dumps({"type": "detach"}))
+        await _recv_ws_type(websocket, "detached")
+    artifacts = TestRunContext.from_test_file(Path(__file__)).artifacts_dir
+    diagnostics = "\n".join(item.read_text() for item in artifacts.glob("browser-backend-*.stderr.log"))
+    assert str(missing) in diagnostics and "ENOENT" in diagnostics
+    assert "stage: 'select_files'" in diagnostics
+    (artifacts / f"file-selection-failure-{time.time_ns()}.json").write_text(json.dumps({
+        "receipts": receipts, "node_record": record, "owner_projection": observed,
+        "native_file": native_file, "uploaded_file": uploaded,
+    }, ensure_ascii=False, indent=2), encoding="utf-8")
+    deleted = await _detach_delete(integration_client, browser_id, browser_context)
+    assert deleted.status_code == 200, deleted.text
+    assert (await integration_client.get(f"/api/v1/sessions/{browser_context.session_id}/resources")).status_code == 200
 
 
 @pytest.mark.asyncio

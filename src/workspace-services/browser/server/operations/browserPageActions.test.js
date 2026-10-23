@@ -8,11 +8,44 @@ import {
 import { withTimeout } from "../browserRuntime.js";
 
 describe("用户处理浏览器文件选择", () => {
+  test.each(["selectFiles", "filePayloads"])("%s失败保留原原因与选择器，重试复用同一原生入口", async (input) => {
+    const cause = Object.assign(new Error("ENOENT /private/selected-file"), { code: "ENOENT", statusCode: 503 });
+    const calls = [];
+    let fail = true;
+    const page = {};
+    const chooser = { page: () => page, setFiles: async (files) => { calls.push(files); if (fail) throw cause; } };
+    const session = {
+      id: "browser_files", activePageId: "another_page", pendingFileChooser: chooser,
+      pageEntries: new Map([["page_files", { pageId: "page_files", page }]]),
+    };
+    const selected = input === "selectFiles" ? ["/private/selected-file"]
+      : [{ name: "selected.txt", data: Buffer.from("文件正文").toString("base64") }];
+    const diagnostics = spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      const failure = await handleDialog(session, { [input]: selected }).catch((error) => error);
+      expect(failure).toMatchObject({ cause, code: "ENOENT", statusCode: 503 });
+      expect(failure.message).toContain("stage=select_files");
+      expect(failure.message).toContain("page_id=page_files");
+      expect(failure.message).not.toContain("another_page");
+      expect(failure.message).not.toContain("/private/selected-file");
+      expect(session.pendingFileChooser).toBe(chooser);
+      expect(diagnostics.mock.calls[0].at(-1)).toBe(cause);
+      fail = false;
+      expect((await handleDialog(session, { [input]: selected })).summary).toContain("1 个文件");
+      expect(session.pendingFileChooser).toBeNull();
+      expect(calls).toHaveLength(2);
+      if (input === "selectFiles") expect(calls[1]).toBe(selected);
+      else expect(calls[1][0].buffer.toString("utf8")).toBe("文件正文");
+    } finally { diagnostics.mockRestore(); }
+  });
+
   test("将用户设备文件以内存载荷交给 Playwright", async () => {
     let selectedFiles = null;
     const session = {
       pendingDialog: null,
+      pageEntries: new Map(),
       pendingFileChooser: {
+        page: () => ({}),
         setFiles: async (files) => {
           selectedFiles = files;
         },

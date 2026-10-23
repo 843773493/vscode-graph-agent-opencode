@@ -310,3 +310,9 @@
 - 集成001的最终Node记录与stderr共同确认：context关闭时在途帧ACK触发unhandled rejection，导致后续检查级联失败，并非12个独立产品失败。现在以具体page entry登记回调，关闭前阻止新接纳并排空既有截图/ACK，再释放page/context；默认5秒超时或排空失败明确unknown并保留句柄，迟到旧entry错误只留诊断、不污染新页。回调失败明确发布stream_error/state，未用TargetClosed字符串吞错。超时脚本恢复原有中断旧页行为保持，由entry归属隔离迟到帧失败。
 - 最终产品tree `0cffd5d78c0dcbe262c78f2cbbba50821569fa49`：295项Bun/1835断言、17项Node、Node语法与Ruff通过；14项真实Chromium/HTTP/WS集成通过（70.12秒），覆盖8种设备失败、失败后新JPEG帧、恢复失败unknown阻断、精确URL、重试、持久记录/诊断/lease、附加状态删除存活与file恢复。003扩大回归18项通过（88.16秒），其启动路径不变；004新增单页drain失败分支重新单测与集成验证。完整archive旧生产红测85 passed/14 failed；前后指纹、全部blob和零进程组残留均核验。
 - 非作者004只读审查无finding；准确命令、原始输出、退出码、候选SHA和产品回执见 `out/tests/temp/openspec_resume_20261023/artifacts/browser-device-switch-proof-004.json`。一次性原生故障注入不冒充真实系统EACCES；底层永久悬挂的CDP任务仍保留供诊断，上层有界返回。本组不代替完整Gateway/Web、Windows或2.2/7.2全量门。
+
+### 2026-10-23 Browser文件选择错误出口（部分收口）
+
+- 目标机器原生文件路径与客户端内存文件仍按各自输入合同进入同一次Playwright `setFiles`；实际选择失败按chooser所属page发布browser/page身份、select_files阶段及原code/status，完整异常与路径保留在诊断及cause。失败不清空chooser，显式重试仍操作原选择器；不将用户绝对路径改写为工作区路径。
+- 最终产品tree `83ebf8eb5ae1387f410ad152f640605664ab3349`：297项Bun/1857断言、17项Node及语法检查通过（与003相同JS限定复用），最终Python Ruff通过；`integration-005`为3 passed/22.44秒，真实Chromium/HTTP/WS覆盖真实ENOENT的sync/async/工具/API错误、request_id、无路径落盘/正文、lease释放与verified、本机中文空格文件重试后的精确名称/正文、客户端内存上传、既有工具动作和file页面恢复。完整archive旧生产真实红测明确回显缺失文件绝对路径；独立小型红绿为新12通过、旧2失败/10通过。
+- 001新测试误读result层级、integration-003与红测并行产生端口冲突、004新测试participantId不合协议，原件保留；005已修新测试并串行通过。等待WS helper遇error立即失败，不再忽略协议拒绝后等超时。WS失败的payload分支由单测覆盖，真实网络故障来自native输入；不扩大证明范围。4283个blob、前后指纹和零进程组残留均核验，限定证据见 `out/tests/temp/openspec_resume_20261023/artifacts/browser-file-selection-proof-004.json`。本切片不代替2.2/7.2、完整Web或Windows验收。

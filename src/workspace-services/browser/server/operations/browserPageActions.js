@@ -1,4 +1,4 @@
-import { TOOL_TIMEOUT_MS, normalizeToolResult, withTimeout } from "../browserRuntime.js";
+import { TOOL_TIMEOUT_MS, browserRuntimeFailure, normalizeToolResult, withTimeout } from "../browserRuntime.js";
 
 const PLAYWRIGHT_ACTION_TIMEOUT_RESERVE_MS = 250;
 const STALE_SELECTOR_WAIT_TIMEOUT_MS = 1_500;
@@ -580,31 +580,28 @@ export async function handleDialog(session, {
   selectFiles = undefined,
   filePayloads = undefined,
 }) {
-  if (filePayloads !== undefined) {
-    if (!Array.isArray(filePayloads)) {
-      throw new Error("filePayloads 必须是文件数组");
+  if (filePayloads !== undefined || (selectFiles !== undefined && selectFiles !== null)) {
+    const fromClient = filePayloads !== undefined;
+    const selected = fromClient ? filePayloads : selectFiles;
+    if (!Array.isArray(selected)) {
+      throw new Error(fromClient ? "filePayloads 必须是文件数组" : "selectFiles 必须是文件路径数组");
     }
-    if (!session.pendingFileChooser) {
-      throw new Error("当前页面没有待处理的文件选择对话框");
-    }
-    await session.pendingFileChooser.setFiles(filePayloads.map((file) => ({
+    const chooser = session.pendingFileChooser;
+    if (!chooser) throw new Error("当前页面没有待处理的文件选择对话框");
+    const chooserPage = chooser.page();
+    const pageId = [...session.pageEntries.values()].find((entry) => entry.page === chooserPage)?.pageId ?? null;
+    const files = fromClient ? selected.map((file) => ({
       name: file.name,
       mimeType: file.mimeType || "application/octet-stream",
       buffer: Buffer.from(file.data, "base64"),
-    })));
-    session.pendingFileChooser = null;
-    return { summary: `已从用户设备选择 ${filePayloads.length} 个文件` };
-  }
-  if (selectFiles !== undefined && selectFiles !== null) {
-    if (!Array.isArray(selectFiles)) {
-      throw new Error("selectFiles 必须是文件路径数组");
+    })) : selected;
+    try {
+      await chooser.setFiles(files);
+    } catch (cause) {
+      throw browserRuntimeFailure({ browserId: session.id, pageId, stage: "select_files", cause });
     }
-    if (!session.pendingFileChooser) {
-      throw new Error("当前页面没有待处理的文件选择对话框");
-    }
-    await session.pendingFileChooser.setFiles(selectFiles);
     session.pendingFileChooser = null;
-    return { summary: `已选择 ${selectFiles.length} 个文件` };
+    return { summary: fromClient ? `已从用户设备选择 ${selected.length} 个文件` : `已选择 ${selected.length} 个文件` };
   }
   if (!session.pendingDialog) {
     throw new Error("当前页面没有待处理的浏览器对话框");
