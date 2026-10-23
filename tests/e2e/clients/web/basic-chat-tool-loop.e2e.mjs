@@ -247,6 +247,7 @@ async function waitUntil(predicate, label, timeout = 30_000) {
 
 async function ensureGuest(page, url = baseUrl) {
   await page.controlledRestartCdpSetup;
+  await drainPageResponseBodies(page);
   await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30_000 });
   const current = await page.evaluate(async () => {
     const response = await fetch("/api/gateway/users/current");
@@ -258,6 +259,7 @@ async function ensureGuest(page, url = baseUrl) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ tracking: { source: "basic-chat-tool-loop-e2e" } }),
     });
+    await drainPageResponseBodies(page);
     await page.reload({ waitUntil: "domcontentloaded" });
   } else if (current.status !== 200) {
     throw new Error(`检查游客访问失败: ${current.status} ${current.body}`);
@@ -1854,6 +1856,7 @@ async function runGoalOwner(surface) {
   assert.equal(edited.status, "paused");
   assert.equal(edited.objective, "浏览器已编辑的暂停目标");
   await dialog.waitFor({ state: "hidden" });
+  await drainPageResponseBodies(owner.page);
   await owner.page.reload({ waitUntil: "domcontentloaded" });
   await selectSession(owner.page, owner.sessionId);
   const reread = responseFor("GET");
@@ -1876,6 +1879,7 @@ async function runBasicChat(surface) {
   const rootOwner = await createSessionThroughGateway(page, surface.gatewayWorkspaceId);
   result.threadId = rootOwner.threadId;
   result.sessionId = rootOwner.sessionId;
+  await drainPageResponseBodies(page);
   await page.reload({ waitUntil: "domcontentloaded" });
   await selectSession(page, result.sessionId);
   await waitForStreamCount(rootOwner, "trace", 1);
@@ -1889,6 +1893,7 @@ async function runBasicChat(surface) {
   );
   result.firstJob = await waitForJobStatus(rootOwner, firstSend.jobId);
 
+  await drainPageResponseBodies(page);
   await page.reload({ waitUntil: "domcontentloaded" });
   await selectSession(page, result.sessionId);
   await waitForStreamCount(rootOwner, "trace", 2);
@@ -2201,6 +2206,7 @@ async function loadCompleteThreadHistory(owner, options = {}, timing = null) {
 }
 
 async function openOwner(owner) {
+  await drainPageResponseBodies(owner.page);
   await owner.page.reload({ waitUntil: "domcontentloaded" });
   try {
     await openCatalogWorkspace(owner);
@@ -4110,6 +4116,7 @@ async function runNavigationOptimism(surfaces) {
     assert.deepEqual(await readCatalog(surface, "SELECT node_id,parent_node_id,revision FROM nodes WHERE node_id IN (?,?,?,?) ORDER BY node_id", sourceRows.map((node) => node.node_id)), sourceRows, "pending 投影不能预先改写 SQLite 父链");
     const beforeExport = (await ownerApi(surface, "/api/v1/session-catalog/export")).data;
     assert.ok(!beforeExport.items.some((node) => node.name === rootName || node.name === childName), "Gateway 不得将 client_ref 投影当作 CSM 权威节点");
+    await drainPageResponseBodies(surface.page);
     await surface.page.reload({ waitUntil: "domcontentloaded" });
     await openCatalogWorkspace(surface);
     const diskAfterReload = await browserCatalogOutbox(surface);
@@ -4274,6 +4281,7 @@ async function runNavigationOptimism(surfaces) {
 
     const eventPageUrl = peerPage.url();
     // 先结束旧文档的请求，再开启拦截并走真实页面初始化，避免 reload 撤销已暂停的旧请求。
+    await drainPageResponseBodies(peerPage);
     await peerPage.goto("about:blank", { waitUntil: "load" });
     const eventWire = { activitySseDropped: [], pages: [], transportErrors: [] };
     facts.eventRecovery = { eventWire };
@@ -4354,6 +4362,7 @@ async function runNavigationOptimism(surfaces) {
       { urlPattern: "*/api/v1/session-catalog/navigation-events*", requestStage: "Response" },
       { urlPattern: "*/api/v1/session-catalog/snapshot*", requestStage: "Response" },
     ] });
+    await drainPageResponseBodies(peerPage);
     await peerPage.goto(eventPageUrl, { waitUntil: "domcontentloaded" });
     await openCatalogWorkspace(peer);
     await namedCatalogRow(peer, independentName).waitFor({ state: "visible" });
@@ -4414,6 +4423,7 @@ async function runNavigationOptimism(surfaces) {
     await eventTransport.send("Fetch.disable");
     await eventTransport.detach();
     eventTransport = null;
+    await Promise.all(peerContext.pages().map(drainPageResponseBodies));
     await peerContext.close();
     peerContext = null;
     const pinned = await forkOwner(first, { mode: "context_fork", relationship: "pinned" });
@@ -4565,7 +4575,10 @@ async function runNavigationOptimism(surfaces) {
       page.off("request", request);
       page.off("response", response);
     }
-    if (peerContext) await cleanup(() => peerContext.close());
+    if (peerContext) {
+      await cleanup(() => Promise.all(peerContext.pages().map(drainPageResponseBodies)));
+      await cleanup(() => peerContext.close());
+    }
     if (cleanupErrors.length > 0) {
       throw new AggregateError(scenarioError === undefined ? cleanupErrors : [scenarioError, ...cleanupErrors],
         "导航验收清理失败；保留场景和全部资源释放错误");
@@ -4736,6 +4749,7 @@ async function runNavigationDates(surfaces) {
     assert.deepEqual(await readFrozenControl(second, secondNode, "SELECT state,generation FROM lifecycle_fence WHERE id=1"), [{ state: "active", generation: 1 }]);
     await assert.rejects(stat(`${surface.workspace}/${sessionLocator(firstNode)}`), { code: "ENOENT" });
     assert.ok((await stat(`${surface.workspace}/${sessionLocator(secondNode)}`)).isDirectory());
+    await drainPageResponseBodies(childPage);
     await childPage.close();
     const reopen = await replaceNodePage(surface, [first, second, fork.owner]);
     const killed = await testControl({ action: "process", name: surface.name, operation: "kill" });
@@ -4757,7 +4771,10 @@ async function runNavigationDates(surfaces) {
     return { first: firstNode, second: secondNode, fork: forkNode, folderRows, creation, lineage, nestedBreadcrumb, breadcrumb, completed, mutations, nonRecursive, cycle, crossWorkspace, deletion, frozen, killed, restarted, terminal, recovered };
   } finally {
     for (const barrier of held) await testControl({ action: "release", ...barrier });
-    if (childPage) await childPage.close();
+    if (childPage) {
+      await drainPageResponseBodies(childPage);
+      await childPage.close();
+    }
     await testControl({ action: "identifier_date", utc: initialClock.wait_utc });
   }
 }
@@ -4813,10 +4830,15 @@ function forkOperationId(request) {
 async function closeForkPeerContexts(contexts, primaryError, hasPrimaryError) {
   const closeErrors = [];
   for (const peerContext of [...contexts].reverse()) {
-    try {
-      await peerContext.close();
-    } catch (error) {
-      closeErrors.push(error);
+    for (const cleanup of [
+      () => Promise.all(peerContext.pages().map(drainPageResponseBodies)),
+      () => peerContext.close(),
+    ]) {
+      try {
+        await cleanup();
+      } catch (error) {
+        closeErrors.push(error);
+      }
     }
   }
   if (closeErrors.length === 0) return;
@@ -4840,6 +4862,7 @@ async function runForkPeerContextCleanupSelfTest() {
   const closeErrors = [new Error("peer C already closed"), new Error("peer A close failed")];
   const closeOrder = [];
   const contexts = ["A", "B", "C"].map((name) => ({
+    pages: () => [],
     async close() {
       closeOrder.push(name);
       if (name === "C") throw closeErrors[0];
@@ -4867,7 +4890,7 @@ async function runForkPeerContextCleanupSelfTest() {
 
   const standaloneCloseError = new Error("peer context close failed");
   await assert.rejects(
-    closeForkPeerContexts([{ close: async () => { throw standaloneCloseError; } }], undefined, false),
+    closeForkPeerContexts([{ pages: () => [], close: async () => { throw standaloneCloseError; } }], undefined, false),
     (error) => error === standaloneCloseError,
   );
 }
@@ -6446,6 +6469,7 @@ async function runCopyCaptureLifecycle(surface, owners, activeSessionId) {
   await testControl({ action: "release", ...heldCas });
   const heldReply = await heldPending;
   assert.equal(heldReply.error, undefined, heldReply.error);
+  await drainPageResponseBodies(heldRequestSurface.page);
   await heldRequestSurface.page.close();
   const heldTarget = await publishedForkOwner(heldSource, heldRequest, heldReply.value.data, heldHistory);
   owners.push(heldTarget.owner);
@@ -6851,6 +6875,7 @@ async function runCopyAttachmentLifecycle(surface, owners) {
     assert.equal(missingAttachment.body.detail, phase === "copy.attachments.before_finalize"
       ? `附件引用尚未完成发布: ${targetFile}`
       : `Session ${target.sessionId} not found`);
+    await drainPageResponseBodies(requestSurface.page);
     await requestSurface.page.close();
     const reopen = await replaceNodePage(surface, owners);
     const killed = await testControl({ action: "process", name: surface.name, operation: "kill" });
@@ -7027,6 +7052,7 @@ async function runCopyAttachmentDeletionRace(surface, owners) {
     assert.deepEqual(deletedSettlement, [{ ...publishedSettlement[0], state: "target_deleted" }]);
     const lease = await readCopyTargetControl(surface, capture, "SELECT state FROM session_operation_leases WHERE lease_id=?", [publishedSettlement[0].lease_id]);
     assert.deepEqual(lease, [{ state: finalizerFirst ? "completed" : "cancelled" }], "删除必须消费 finalizer 成功终态，或取消原 reserved owner lease");
+    await drainPageResponseBodies(requestSurface.page);
     await requestSurface.page.close();
     const reopen = await replaceNodePage(surface, owners);
     const killed = await testControl({ action: "process", name: surface.name, operation: "kill" });
@@ -8430,6 +8456,7 @@ async function replaceNodePage(surface, owners, restartWindow = null) {
     assert.equal(controlledRestartPageBinding(restartWindow, surface.page.diagnosticId)?.role,
       "foreground-before-restart", "受控重启必须保留被替换页面的原始身份");
   }
+  await drainPageResponseBodies(surface.page);
   await surface.page.close();
   return async () => {
     surface.page = await browserStartup("recovery_peer_page", () => peerContext.newPage());
@@ -9845,6 +9872,7 @@ async function runTeamActivation(surface, boundary, foreign) {
     const negative = { foreignMember, statePayload };
     return { sessionId: owner.sessionId, teamId, boundary, setup, initial, first, queued, queuedMember, activeMember, queuedMutation, activeMutation, afterQueued, afterActive, current, displayed, negative };
   } finally {
+    await drainPageResponseBodies(operatorPage);
     await operatorPage.close();
   }
 }
@@ -10443,10 +10471,42 @@ const historyLiveProofs = [];
 const historyTurnNavigationProofs = [];
 const transcriptDomFailures = [];
 const navigationReads = new Set();
-async function drainControlledRestartResponseBodies(page) {
-  while (page.controlledRestartResponseBodies.size > 0) {
-    await Promise.all([...page.controlledRestartResponseBodies]);
-  }
+const diagnosticPageTransitions = [];
+function trackDiagnosticResponseBody(page, read, fact) {
+  fact.bodyReadStartedAt = Date.now();
+  navigationReads.add(read);
+  page.diagnosticResponseBodies.add(read);
+  void read.then(() => {
+    fact.bodyReadCompletedAt = Date.now();
+    navigationReads.delete(read);
+    page.diagnosticResponseBodies.delete(read);
+  });
+}
+async function drainPageResponseBodies(page) {
+  // 正文属于原页面；主动刷新、导航或关闭前采完，不能用新请求补造旧响应。
+  const transition = { pageId: page.diagnosticId, documentId: page.diagnosticDocumentId,
+    startedAt: Date.now(), pendingBodies: page.diagnosticResponseBodies.size };
+  diagnosticPageTransitions.push(transition);
+  await waitUntil(() => page.diagnosticResponseBodies.size === 0, "原页面诊断响应正文采集");
+  transition.completedAt = Date.now();
+}
+async function runDiagnosticResponseDrainSelfTest() {
+  const page = { diagnosticId: "drain-self-test", diagnosticDocumentId: 1,
+    diagnosticResponseBodies: new Set() };
+  let finish;
+  const fact = {};
+  const read = new Promise((resolve) => { finish = resolve; });
+  trackDiagnosticResponseBody(page, read, fact);
+  let transitioned = false;
+  const drain = drainPageResponseBodies(page).then(() => { transitioned = true; });
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.equal(transitioned, false, "原正文未完成时不得开始页面转换");
+  finish();
+  await drain;
+  assert.equal(transitioned, true);
+  assert.equal(page.diagnosticResponseBodies.size, 0);
+  assert.equal(navigationReads.has(read), false);
+  assert.ok(fact.bodyReadCompletedAt >= fact.bodyReadStartedAt);
 }
 async function closeControlledRestartRequestPage(page, window) {
   // 保留发起请求的页面，直到被杀后端恢复，避免关闭页面截断错误正文或 SSE 恢复证据。
@@ -10478,7 +10538,7 @@ async function closeControlledRestartRequestPage(page, window) {
       && hasConnectedObservationTargets(response, original.body.subscriptions)),
     "受控重启后，原请求页面必须重新连上全部原观察目标");
   }
-  await drainControlledRestartResponseBodies(page);
+  await drainPageResponseBodies(page);
   await page.close();
 }
 
@@ -10490,7 +10550,7 @@ async function runControlledRestartPageCloseSelfTest() {
     origin: "http://127.0.0.1:19001", backendRestart: { startedAt: 100 },
     pageBindings: [{ pageId: -1, role: "copy-request", documentIds: [1], observationRequests: [request] }] };
   let closed = false;
-  const page = { diagnosticId: -1, controlledRestartResponseBodies: new Set(),
+  const page = { diagnosticId: -1, diagnosticResponseBodies: new Set(),
     close: async () => { closed = true; } };
   const responseCount = controlledRestartResponses.length;
   const failureCount = failedRequests.length;
@@ -10751,13 +10811,14 @@ function classifyConsoleErrors(input = {}) {
 
 function installPageDiagnostics(page) {
   page.controlledRestartWindow = null;
-  page.controlledRestartResponseBodies = new Set();
+  page.diagnosticResponseBodies = new Set();
   page.diagnosticId = ++diagnosticPageId;
   page.diagnosticDocumentId = 0;
   page.diagnosticSessionIds = new Set();
   page.diagnosticObservationRequests = new Map();
   const requestDocuments = new WeakMap();
   const streamResponseByRequest = new WeakMap();
+  const diagnosticResponseFacts = new WeakMap();
   const cdpStreamCaptures = new Map();
   const pendingCdpRequests = [];
   const pendingPlaywrightRequests = [];
@@ -10983,9 +11044,15 @@ page.on("request", (request) => {
     expectedUnauthorizedProbeCount += 1;
   }
 });
-page.on("requestfinished", (request) => page.diagnosticObservationRequests.delete(request));
+page.on("requestfinished", (request) => {
+  page.diagnosticObservationRequests.delete(request);
+  const fact = diagnosticResponseFacts.get(request);
+  if (fact) fact.requestFinishedAt = Date.now();
+});
 page.on("requestfailed", (request) => {
   page.diagnosticObservationRequests.delete(request);
+  const fact = diagnosticResponseFacts.get(request);
+  if (fact) fact.requestFailure = { error: request.failure()?.errorText, failedAt: Date.now() };
   if (isExpectedBrowserAbort(request)) return;
   const failedAt = Date.now();
   const requestDocument = requestDocuments.get(request);
@@ -11079,6 +11146,7 @@ page.on("response", (response) => {
         controlledRestartResponses.push(responseFact);
       }
       bindBadGatewayResponse();
+      diagnosticResponseFacts.set(request, responseFact);
       const read = response.text().then((bodyText) => {
         responseFact.bodyText = bodyText;
         try {
@@ -11088,12 +11156,7 @@ page.on("response", (response) => {
           responseFact.bodyError = String(error);
         }
       }, (error) => { responseFact.bodyError = String(error); });
-      navigationReads.add(read);
-      page.controlledRestartResponseBodies.add(read);
-      void read.then(() => {
-        navigationReads.delete(read);
-        page.controlledRestartResponseBodies.delete(read);
-      });
+      trackDiagnosticResponseBody(page, read, responseFact);
     }
   }
   const streamTarget = messageStreamTarget(response.url());
@@ -11127,10 +11190,10 @@ page.on("response", (response) => {
     messageStreamResponses.push(fact);
     streamResponseByRequest.set(request, fact);
     if (fact.status === 404) {
+      diagnosticResponseFacts.set(request, fact);
       const read = readBoundedMessageStreamErrorBody(response, fact)
         .catch((error) => { fact.bodyError = String(error); });
-      navigationReads.add(read);
-      void read.then(() => navigationReads.delete(read));
+      trackDiagnosticResponseBody(page, read, fact);
     }
   }
   const history = /^\/api\/v1\/sessions\/([^/]+)\/(?:(bootstrap|history)|threads\/([^/]+)\/history)$/.exec(url.pathname);
@@ -11180,12 +11243,12 @@ page.on("response", (response) => {
     else if (fact.status === 200) historyRecoveryResponses.push(fact);
     else if (history) historyErrorResponses.push(fact);
     else lifecycleErrorResponses.push(fact);
+    diagnosticResponseFacts.set(request, fact);
     const read = response.json().then((body) => {
       fact.body = fact.status !== 200 || job || admission ? body : { request_id: body.request_id, sessionId: body.data?.session?.session_id,
         threadId: body.data?.thread_id, projectionEpoch: body.data?.projection_epoch };
     }, (error) => { fact.bodyError = String(error); });
-    navigationReads.add(read);
-    void read.then(() => navigationReads.delete(read));
+    trackDiagnosticResponseBody(page, read, fact);
   }
   if (url.pathname === "/api/gateway/workspaces" || /^\/api\/gateway\/workspaces\/[^/]+\/activate$/.test(url.pathname)
       || url.pathname === "/api/v1/workspace" || url.pathname === "/api/v1/session-catalog/children") {
@@ -11193,9 +11256,9 @@ page.on("response", (response) => {
       workspaceHeader: response.request().headers()["x-boxteam-workspace-id"] ?? null,
       requestId: response.headers()["x-request-id"] ?? null, receivedAt: Date.now() };
     navigationResponses.push(fact);
+    diagnosticResponseFacts.set(response.request(), fact);
     const read = response.json().then((body) => { fact.body = body; }, (error) => { fact.bodyError = String(error); });
-    navigationReads.add(read);
-    void read.then(() => navigationReads.delete(read));
+    trackDiagnosticResponseBody(page, read, fact);
   }
   if (
     response.status() !== 401
@@ -11214,7 +11277,7 @@ const result = {
   secondTurn: null,
   persisted: null,
   streams: { trace: 0, message: 0 },
-  diagnostics: { pageErrors, consoleErrors, consoleErrorFacts, failedRequests,
+  diagnostics: { pageErrors, consoleErrors, consoleErrorFacts, failedRequests, diagnosticPageTransitions,
     controlledRestartWindows, controlledRestartRequests, controlledRestartResponses, controlledRestartStreamDiagnostics, badGatewayConsoleAudit },
   messageStreamResponses,
   navigationResponses,
@@ -11256,12 +11319,14 @@ function runDeletionReadClassifierSelfTest() {
   assert.deepEqual(classify(refusal, [{ ...proof, remaining: [sessionId] }]).unhandledConsoleErrors, [text]);
   assert.deepEqual(classify(refusal, [{ ...proof, workspaceHeader: "workspace-other" }]).unhandledConsoleErrors, [text]);
   assert.deepEqual(classify({ ...refusal, body: { ...refusal.body, request_id: "request-other" } }).unhandledConsoleErrors, [text]);
+  assert.deepEqual(classify({ ...refusal, body: undefined, bodyError: "Network.getResponseBody: No data found" }).unhandledConsoleErrors, [text], "缺少原响应正文不能由删除终态补造");
   assert.deepEqual(classify({ ...refusal, body: { ...refusal.body, detail: `会话物理目录缺失: ${sessionId}, path=/private/session` } }).unhandledConsoleErrors, [text]);
 }
 
 if (messageStreamDiagnosticsSelfTest) {
   runMessageStreamDiagnosticsSelfTest();
   runDeletionReadClassifierSelfTest();
+  await runDiagnosticResponseDrainSelfTest();
   process.stdout.write("message stream diagnostics self-test passed\n");
 } else if (forkDeadlineClassifierSelfTest) {
   await runForkDeadlineClassifierSelfTest();
