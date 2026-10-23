@@ -382,3 +382,10 @@
 - 唯一物理创建链在准备/读取/rename/目录耐久/定点清理处公开 Session/Thread 身份、stage、错误类型和系统码，原生位置、未知条目及原异常保留诊断日志/cause；六处正式目录校验与所有直接测试调用方同批迁齐显式 owner，无缺省身份或旧签名。partial 复用、未知项拒绝、先全部校验再删除、清理失败不 abort、原生异常类型与 rename 的 RuntimeError 分类保持；os.walk 的扫描失败改为明确抛出，不再静默当作空目录。路径预算的 ValueError、原生 OSError 及 resolve 的 RuntimeError 均在 record 冻结前报告逻辑身份。
 - 固定 tree `d5dd074c8779eef2925da102d3103456fefb4b84` 的 Session/Thread 两个单测全文件与新增集成全文件共168项通过（30.95秒），Ruff/compileall通过。通过真实 Session/child 创建覆盖三种平台位置文本×prepare/read/walk/rename/cleanup、5类实际目录损坏、partial staging重建删除、同内容final的冗余staging删除、rename后fsync及真实POSIX自指symlink循环；核 preparing、零发布、原件、精确cause与同key恢复。旧生产完整archive的rename三项红测准确复现位置外泄。001的审查遗漏resolve RuntimeError已修并在003重验，不能把Windows文本注入称为Windows实机。
 - 原始命令、全源码指纹、raw/SHA、实际退出码及零进程残留见 `out/tests/temp/thread_creation_uri_errors_20261023/artifacts/validation-proof-003.json` 和 `review-003.json`。相邻fork的直接pytest因规定的matrix watchdog前置条件产生15项setup错误；改用正式matrix后遇到既有测试从已关闭catalog owner再次解析源路径的失败，继而被未终结fork期限watchdog以143退出，该组不计通过。任意publish/物化callback错误写abort_reason、其它owner出口及2.2/7.2总门仍未关闭；本项不代替完整Gateway/Web、进程重启或Windows验收。
+
+
+### 2026-10-23 Thread 发布失败与成员中止原因（2.2/7.2 部分收口）
+
+- 发布阶段的 deletion/CAS 失败与已非 preparing 出口使用 Session/Thread、阶段和异常类型，完整原异常保留日志/cause；删除中仍为 SessionDeletionPendingError，并保留稳定 session_deletion_pending 标识。定点清理失败仍 preparing，published/aborted 不进入再次清理。成员完整性失败只把稳定身份/阶段写入中止原因，原异常作为诊断与精确 cause；先提交原 operation/member 终结，再抛错误的顺序保持。原始系统码格式由 Thread 创建唯一错误投影共用，无新存储或 schema 变化。
+- 固定 tree `b0a487ef1820080e376a7185e994a8dfc7f16be8` 的集成文件35项通过（33.72秒），9项正式委派入口覆盖三种平台位置文本×deletion/CAS/membership，核即时异常、原cause/log、冷重开中止原因、成员cancelled、零child/intent及同delegation拒绝换绑；另核已aborted保留final原件。001的289项Thread/ControlStore单测通过，002仅修正9项委派重试测试预期，生产与既有单测逐字相同，复用其单测结果和compile，不称为一次324项全绿。Ruff通过；旧生产完整archive的10项红测准确检出位置外泄。001的9项失败均源于测试错把cancelled-member先拒绝预期为后置ThreadCreationAbortedError，按实际既有合同修正，未修改生产来迎合测试。
+- 命令、全源码前后指纹、raw/SHA、退出码、零残留及非作者审查见 `out/tests/temp/thread_failure_publication_20261023/artifacts/validation-proof-002.json`、`review-002.json`。仅覆盖发布阶段和成员中止原因；fork物化callback/capture中止原因、其它owner与URI 2.2/7.2总门仍未关闭，不代替真实Gateway/Web、进程重启或Windows实机。

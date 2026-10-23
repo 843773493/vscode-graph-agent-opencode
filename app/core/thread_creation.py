@@ -430,6 +430,20 @@ def expected_node_directory_names(
 logger = logging.getLogger(__name__)
 
 
+def _thread_failure_detail(
+    session_id: str, thread_id: str | None, stage: str, error: BaseException,
+) -> str:
+    """持久失败记录只保存 owner 与阶段，原始异常归诊断日志。"""
+    detail = (f"Thread 创建失败: session_id={session_id}, thread_id={thread_id}, "
+              f"stage={stage}, error={type(error).__name__}")
+    if isinstance(error, OSError):
+        detail += f", errno={error.errno}"
+        if (winerror := getattr(error, "winerror", None)) is not None:
+            detail += f", winerror={winerror}"
+    logger.error("%s；完整诊断见异常链", detail, exc_info=error)
+    return detail
+
+
 @contextmanager
 def _thread_access(
     session_id: str, thread_id: str | None, stage: str, *, runtime_error: bool = False,
@@ -438,11 +452,7 @@ def _thread_access(
     try:
         yield
     except OSError as error:
-        detail = (f"Thread 创建存储失败: session_id={session_id}, thread_id={thread_id}, "
-                  f"stage={stage}, error={type(error).__name__}, errno={error.errno}")
-        if (winerror := getattr(error, "winerror", None)) is not None:
-            detail += f", winerror={winerror}"
-        logger.error("%s；完整诊断见异常链", detail, exc_info=error)
+        detail = _thread_failure_detail(session_id, thread_id, stage, error)
         if runtime_error:
             raise RuntimeError(detail) from error
         failure = type(error)(error.errno, detail)
@@ -1341,6 +1351,9 @@ class ThreadCreationService:
         except SessionDeletionPendingError as error:
             # 2.3-D：删除先行的收敛 = 定点清理 + abort（取消原 operation），
             # 错误类型原样传播（调用方据此终止，不换 key 重放）。
+            reason = "session_deletion_pending: " + _thread_failure_detail(
+                session_id, record.child_thread_id, "publish", error,
+            )
             current = self._control_store.get_thread_creation_record(idempotency_key)
             if current.state == "preparing":
                 await self._cleanup_after_failed_publish(
@@ -1351,15 +1364,16 @@ class ThreadCreationService:
                     before_abort=before_abort,
                 )
                 self._control_store.abort_thread_creation_record(
-                    idempotency_key, str(error)
+                    idempotency_key, reason
                 )
-            raise
+            raise SessionDeletionPendingError(reason) from error
         except RuntimeError as error:
             # TODO(8.5): 本 except 目前把**全部** RuntimeError 视为确定性
             # publish 冲突并走定点清理 + abort；8.5 扩展 publish 错误面
             # （引入可重试错误）时必须收窄捕获范围——可用
             # ``type(error) is RuntimeError`` 精确捕获确定性冲突，让
             # RuntimeError 子类（可重试类）向调用方传播而不误 abort 换 key。
+            reason = _thread_failure_detail(session_id, record.child_thread_id, "publish", error)
             current = self._control_store.get_thread_creation_record(idempotency_key)
             if current.state == "published":
                 # 跨执行根（多进程 GUI/worker/CLI）重复投递同一
@@ -1389,7 +1403,7 @@ class ThreadCreationService:
                 raise RuntimeError(
                     "thread creation publish 失败且 record 已非 preparing"
                     f"（state={current.state!r}），不执行定点清理: "
-                    f"key={idempotency_key!r}: {error}"
+                    f"key={idempotency_key!r}: {reason}"
                 ) from error
             # CAS 失败：不发布、不重基——按 record 定点清理 staging/final
             # 目录（清理失败保持 record preparing 并直接抛错，人工核账），
@@ -1402,12 +1416,12 @@ class ThreadCreationService:
                 before_abort=before_abort,
             )
             self._control_store.abort_thread_creation_record(
-                idempotency_key, str(error)
+                idempotency_key, reason
             )
             raise RuntimeError(
                 "thread creation publish CAS 失败，已定点清理 record 列出的"
                 "目录并 abort record，调用方须换新 idempotency_key 重试: "
-                f"key={idempotency_key!r}: {error}"
+                f"key={idempotency_key!r}: {reason}"
             ) from error
         return published
 

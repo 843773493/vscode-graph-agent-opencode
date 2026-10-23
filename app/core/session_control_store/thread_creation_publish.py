@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from datetime import UTC, datetime
 
 from app.core.session_catalog_store.validators import validate_thread_id
@@ -385,6 +386,7 @@ class ThreadCreationPublishMixin:
         if not reason:
             raise ValueError("abort reason 不能为空")
         integrity_error: RuntimeError | None = None
+        integrity_cause: KeyError | RuntimeError | None = None
         with self._write_transaction() as connection:
             row = self._fetch_thread_creation_record(connection, idempotency_key)
             if row is None:
@@ -407,10 +409,13 @@ class ThreadCreationPublishMixin:
                     self.get_collaboration_member(str(row["delegation_id"]))
                 except (KeyError, RuntimeError) as error:
                     # 损坏不阻止终结原 operation；提交后仍显式报告，绝不重基。
+                    integrity_cause = error
                     integrity_error = RuntimeError(
                         "thread creation abort 已终结原 operation，但 membership 完整性失败: "
-                        f"key={idempotency_key!r}, delegation={row['delegation_id']!r}: {error}"
+                        f"key={idempotency_key!r}, delegation={row['delegation_id']!r}, "
+                        f"thread_id={row['child_thread_id']}, stage=abort_membership, error={type(error).__name__}"
                     )
+                    logging.getLogger(__name__).error("%s；完整诊断见异常链", integrity_error, exc_info=error)
             connection.execute(
                 "UPDATE thread_creation_records "
                 "SET state = 'aborted', abort_reason = ?, record_updated_at = ? "
@@ -441,7 +446,7 @@ class ThreadCreationPublishMixin:
                 )
             aborted = self._thread_creation_record_from_row(updated)
         if integrity_error is not None:
-            raise integrity_error
+            raise integrity_error from integrity_cause
         return aborted
 
     def mark_thread_creation_published(

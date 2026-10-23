@@ -18,6 +18,7 @@ from app.agents.graph_binding import (
 from app.container import AppContainer
 from app.core import thread_creation
 from app.core.session_control_store import SessionControlStore
+from app.core.session_lifecycle_gate import SessionDeletionPendingError
 from app.core.thread_creation import ThreadCreationService
 from app.schemas.internal_v2.session import SessionCreateRequest
 from tests.integration.backend.sessions.test_catalog_startup_identity import (
@@ -273,3 +274,103 @@ async def test_child_budget_rejects_real_symlink_loop_without_freezing_record(
     assert not service.control_store.list_child_thread_rows()
     staging.unlink()
     assert (await create()).record_state == "published"
+
+
+@pytest.mark.parametrize("locator", ["/private/control.sqlite", r"C:\private\control.sqlite", r"\\server\private\control.sqlite"])
+@pytest.mark.parametrize("failure_kind", ["cas", "deletion", "membership"])
+async def test_delegated_publication_failure_keeps_safe_durable_reason(
+    startup_container: AppContainer, child_creation, monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture, locator: str, failure_kind: str,
+) -> None:
+    session_id, service, create = child_creation
+    session = await startup_container.session_service.get(session_id)
+    parent_thread_id = await startup_container.session_service.resolve_main_thread(session_id)
+    directory = startup_container.session_service.path_resolver.resolve_session_node(session_id)
+    original_error = (SessionDeletionPendingError if failure_kind == "deletion" else RuntimeError)(f"发布冲突 {locator}")
+    member_error = RuntimeError(f"成员读取失败 {locator}")
+    get_member = service.control_store.get_collaboration_member
+    publishing = False
+
+    def refuse_publish(*args, **kwargs):
+        nonlocal publishing
+        publishing = True
+        raise original_error
+
+    def refuse_member(delegation_id):
+        if publishing and failure_kind == "membership":
+            raise member_error
+        return get_member(delegation_id)
+
+    async def delegate():
+        # 创建、冻结身份和成员登记都由正式委派入口完成；故障先于 Job binding。
+        return await startup_container.session_subagent_service.delegate(
+            parent_session_id=session_id, parent_thread_id=parent_thread_id,
+            parent_agent_id=session.current_agent_id, parent_job_id="job-publication-failure",
+            parent_tool_call_id="tool-publication-failure", description="验证发布失败",
+            subagent_type="general-purpose",
+        )
+
+    error_type = SessionDeletionPendingError if failure_kind == "deletion" else RuntimeError
+    with monkeypatch.context() as failure, caplog.at_level(logging.ERROR):
+        failure.setattr(service.control_store, "publish_thread_creation_record", refuse_publish)
+        failure.setattr(service.control_store, "get_collaboration_member", refuse_member)
+        with pytest.raises(error_type) as caught:
+            await delegate()
+    record, = [service.control_store.get_thread_creation_record(row[0]) for row in
+               service.control_store.connection.execute("SELECT thread_creation_idempotency_key FROM thread_creation_records")]
+    assert record.state == "aborted" and record.abort_reason
+    for detail in (str(caught.value), record.abort_reason):
+        assert locator not in detail and str(directory) not in detail
+        assert session_id in detail or "stage=abort_membership" in detail
+        assert record.child_thread_id in detail
+    assert caught.value.__cause__ is (member_error if failure_kind == "membership" else original_error)
+    assert any(log.exc_info and log.exc_info[1] is original_error for log in caplog.records)
+    if failure_kind == "membership":
+        assert any(log.exc_info and log.exc_info[1] is member_error for log in caplog.records)
+    if failure_kind == "deletion":
+        assert "session_deletion_pending" in str(caught.value) and "session_deletion_pending" in record.abort_reason
+    assert not (directory / record.staging_locator).exists()
+    assert not (directory / record.final_relative_locator).exists()
+    assert not service.control_store.list_child_thread_rows()
+    assert not service.control_store.list_initial_execution_intents()
+    member = service.control_store.get_collaboration_member(record.delegation_id)
+    assert member.state == "cancelled" and member.child_thread_id == record.child_thread_id
+    with closing(SessionControlStore(service.control_store.database_path)) as cold:
+        assert cold.get_thread_creation_record(record.thread_creation_idempotency_key) == record
+        assert cold.get_collaboration_member(record.delegation_id) == member
+    # 委派重试首先校验不可重用的 cancelled member，不能换绑原 delegation。
+    with pytest.raises(RuntimeError, match="collaboration member.*已取消") as repeated:
+        await delegate()
+    assert locator not in str(repeated.value)
+    assert service.control_store.get_thread_creation_record(record.thread_creation_idempotency_key) == record
+    assert (await create("fresh-after-failed-publication")).record_state == "published"
+
+
+async def test_already_aborted_publication_failure_does_not_clean_again(
+    startup_container: AppContainer, child_creation, monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    session_id, service, create = child_creation
+    original_error = RuntimeError(r"发布后查询失败 C:\private\control.sqlite")
+
+    def abort_then_fail(key, **kwargs):
+        service.control_store.abort_thread_creation_record(key, "原 operation 已中止")
+        raise original_error
+
+    with monkeypatch.context() as failure, caplog.at_level(logging.ERROR):
+        failure.setattr(service.control_store, "publish_thread_creation_record", abort_then_fail)
+        with pytest.raises(RuntimeError, match="已非 preparing") as caught:
+            await create()
+    record = service.control_store.get_thread_creation_record("child-physical-error")
+    directory = startup_container.session_service.path_resolver.resolve_session_node(session_id)
+    final = directory / record.final_relative_locator
+    assert record.state == "aborted" and record.abort_reason == "原 operation 已中止"
+    assert r"C:\private" not in str(caught.value) and caught.value.__cause__ is original_error
+    assert session_id in str(caught.value) and record.child_thread_id in str(caught.value)
+    assert final.is_dir() and (final / "artifacts/notes/plan.md").read_text() == "原始计划"
+    assert any(log.exc_info and log.exc_info[1] is original_error for log in caplog.records)
+    assert not service.control_store.list_child_thread_rows()
+    assert not service.control_store.list_initial_execution_intents()
+    with pytest.raises(thread_creation.ThreadCreationAbortedError) as repeated:
+        await create()
+    assert repeated.value.record == record and final.is_dir()
