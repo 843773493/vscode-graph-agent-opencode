@@ -185,7 +185,7 @@ class SessionCatalogOperationsService:
                     self._worker_task = None
             self._worker_error = conflict
             self._worker_state = "failed"
-            raise self._worker_failure_error() from error
+            raise conflict from error
         if self._worker_error is not None:
             raise self._worker_failure_error() from self._worker_error
         if self._worker_state != "running":
@@ -261,10 +261,10 @@ class SessionCatalogOperationsService:
         self._worker_ready.set()
 
     def _worker_failure_error(self) -> NavigationQueueOwnerError:
-        detail = repr(self._worker_error)
         return NavigationQueueOwnerError(
             "导航 queue worker 已失败，工作区导航队列不可用: "
-            f"workspace_id={self._workspace_id}, error={detail}"
+            f"workspace_id={self._workspace_id}, stage=queue_worker, "
+            f"reason={type(self._worker_error).__name__}"
         )
 
     def _require_worker_ready(self) -> None:

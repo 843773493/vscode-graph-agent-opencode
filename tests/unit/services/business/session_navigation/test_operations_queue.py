@@ -1187,12 +1187,15 @@ async def test_worker_failure_is_visible_to_status_snapshot_and_events(
             raise AssertionError("worker 故障未在有限时间内暴露")
         await asyncio.sleep(0.01)
 
-    with pytest.raises(NavigationQueueOwnerError, match="测试注入的 worker 故障"):
+    with pytest.raises(NavigationQueueOwnerError, match="stage=queue_worker, reason=RuntimeError") as status_error:
         stack.service.status([operation_id("worker_failed_status")], stack.scope)
-    with pytest.raises(NavigationQueueOwnerError, match="测试注入的 worker 故障"):
+    with pytest.raises(NavigationQueueOwnerError, match="stage=queue_worker, reason=RuntimeError") as snapshot_error:
         stack.service.snapshot()
-    with pytest.raises(NavigationQueueOwnerError, match="测试注入的 worker 故障"):
+    with pytest.raises(NavigationQueueOwnerError, match="stage=queue_worker, reason=RuntimeError") as events_error:
         stack.service.events(after=0)
+    for failure in (status_error, snapshot_error, events_error):
+        assert str(failure.value.__cause__) == "测试注入的 worker 故障"
+        assert "测试注入的 worker 故障" not in str(failure.value)
     await stack.service.stop()
 
 

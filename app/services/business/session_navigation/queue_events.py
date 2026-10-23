@@ -9,6 +9,7 @@ terminal 在**同一个** SQLite 写事务提交）、``event_seq`` cursor 分�
 from __future__ import annotations
 
 import json
+import logging
 import sqlite3
 
 from app.core.session_catalog_store import CatalogMaintenanceRequiredError
@@ -17,6 +18,8 @@ from app.services.business.session_navigation.queue_records import (
     NavigationEventRecord,
     NavigationMutationRecord,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class NavigationEventOutboxMixin:
@@ -29,7 +32,7 @@ class NavigationEventOutboxMixin:
         try:
             event = self._event_from_row(row)
             if event.workspace_id != workspace_id:
-                raise ValueError(f"事件workspace归属不符: expected={workspace_id!r}")
+                raise ValueError("事件workspace归属不符")
             operation = self._fetch_record(
                 connection, event.gateway_id, event.workspace_id, event.actor, event.operation_id,
             )
@@ -45,10 +48,11 @@ class NavigationEventOutboxMixin:
             # 删除的后续settlement可以改变回执错误；原终态事件不随之重写。
             return event
         except (TypeError, ValueError) as error:
+            logger.exception("navigation event原始记录损坏: path=%s, event_seq=%r, operation_id=%r",
+                             self._store.database_path, row["event_seq"], row["operation_id"])
             raise CatalogMaintenanceRequiredError(
                 "navigation event 原始记录损坏，拒绝读取或恢复: "
-                f"path={self._store.database_path}, event_seq={row['event_seq']!r}, "
-                f"operation_id={row['operation_id']!r}, detail={error}"
+                f"artifact=navigation_events, stage=validate, rule={error}"
             ) from error
 
     @staticmethod

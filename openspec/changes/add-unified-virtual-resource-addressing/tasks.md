@@ -341,3 +341,10 @@
 - raw与download共用唯一准备入口，移除旧resolve_raw_file及其消费者；目标解析、stat、临时归档及延迟open/read/close在实际I/O边界发布URI/阶段/异常类型/errno/winerror，原生位置和原异常保留诊断/cause。复用Starlette的Range和响应头实现，首body前保留响应头，首读失败可返回原request_id错误；流开始后失败中断连接，不拼接错误正文。临时ZIP在成功、非法Range、传输失败和取消时清理，主错与清理次错按序保留。
 - 固定产品tree `76111cb761d89d9e60aaaf7c502a88c58ba06953`：Ruff通过（API原有27项B008与HEAD完全一致，未新增，限定检查显式忽略）；60项文件/API定向回归通过，14项真实HTTP测试通过（10.22秒），核三种输入原字节、中文空格百分号文件名、单/多Range、目录ZIP、原件保持、真实非特权POSIX EACCES、注入stat/归档/延迟读取失败及流中断/显式重试。传输与清理双失败、close及取消由定点单测覆盖，不冒充真实磁盘EIO。
 - 完整旧HEAD archive加新HTTP回归5项失败，其中stat两路、mkstemp及归档write回显原生路径；归档检查项因旧链无该阶段返回200，只计行为区分。固定001的测试import排版诊断已修，002仅import格式化，7个相关Python AST等价，复用60项通过结果；共享测试目录重组与helper调整不纳入本切片。4287个blob、前后指纹、无残留进程组及独立只读审查见 `out/tests/temp/openspec_resume_20261023/artifacts/workspace-download-proof-001.json`。不以此关闭2.2/7.2或声称完整Gateway/Web/Windows验收。
+
+
+### 2026-10-23 导航队列原始记录错误出口（2.2/7.2 部分收口）
+
+- 唯一行投影在JSON、原始时间及typed模型校验的实际失败点发布固定schema字段/校验类别，不将损坏输入、额外键名或validator正文复制到普通响应。保留原TypeError/ValueError分类；启动核验与事件错误仅报告artifact/stage/rule，物理DB位置、原值和异常链留服务端日志/cause。后台worker失败只公开异常类型，启动超时继续公开明确的owner等待原因；不改HTTP 400/500/503、序号、事务或schema，参数编码/preimage函数AST相同。
+- 固定完整tree `87cde2fd6f3e34b2d7185eeb6b4892c2020cccb0`：11项新增真实API/worker/SQLite的ASGI与冷启动集成通过（24.14秒），111项相邻意图/事件/owner/元数据/worker/路由回归通过（173.45秒），Ruff/compile/strict44项均通过。相同新增测试在完整旧生产archive下11项全部失败，明确复现响应与启动错误复制原生路径。首轮邻居68失败含候选遗漏.env导致的Provider环境缺失，以及worker旧全文断言；补候选依赖后，unit改核三个入口的安全摘要及精确原cause，启动超时保留原有原因，未放宽身份、顺序和原件断言。
+- 非作者005只读独审GO，无finding、未独立复跑；4302项全源码前后指纹、raw/SHA、实际退出码、零进程组残留与准确命令见 `out/tests/temp/navigation_public_errors_20261023/artifacts/validation-proof-005.json` 及runs。该集成不代表真实网络、完整Gateway/Web或Windows；不据此关闭2.2/7.2。完整Web rc2断言已另提，后继default在共享资源场景因后端连接退出失败，继续按原件诊断，不混记为本批通过。

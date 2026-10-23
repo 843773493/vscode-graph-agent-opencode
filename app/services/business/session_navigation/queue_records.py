@@ -21,9 +21,13 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import sqlite3
 from dataclasses import dataclass
 from datetime import datetime
+from typing import TypeVar
+
+from pydantic import BaseModel, ValidationError
 
 from app.schemas.internal_v2.session_navigation.operations import (
     NAVIGATION_MUTATION_TERMINAL_STATES,
@@ -48,6 +52,44 @@ __all__ = [
 
 # 单 workspace 未终态 operation 上限：超过即返回明确可重试的背压，绝不静默丢命令。
 NAVIGATION_BACKPRESSURE_PENDING_LIMIT = 1000
+
+logger = logging.getLogger(__name__)
+_RecordModel = TypeVar("_RecordModel", bound=BaseModel)
+
+
+def _record_json(row: sqlite3.Row, field: str) -> object:
+    try:
+        return json.loads(row[field])
+    except (TypeError, ValueError) as error:
+        logger.exception("navigation 原始JSON无效: field=%s, value=%r", field, row[field])
+        error_type = TypeError if isinstance(error, TypeError) else ValueError
+        raise error_type(f"navigation {field} JSON无效: reason={type(error).__name__}") from error
+
+
+def _record_time(row: sqlite3.Row, field: str, *, owner: str) -> datetime:
+    try:
+        return datetime.fromisoformat(row[field])
+    except (TypeError, ValueError) as error:
+        logger.exception("navigation 原始时间无效: owner=%s, field=%s, value=%r", owner, field, row[field])
+        error_type = TypeError if isinstance(error, TypeError) else ValueError
+        raise error_type(f"navigation {owner} {field}时间无效: reason={type(error).__name__}") from error
+
+
+def _record_model(model: type[_RecordModel], payload: dict[str, object]) -> _RecordModel:
+    try:
+        return model.model_validate(payload, strict=True)
+    except (TypeError, ValueError) as error:
+        logger.exception("navigation 原始typed字段无效: model=%s, payload=%r", model.__name__, payload)
+        # 只发布schema字段和校验类别；原输入、额外键名和validator正文仅留在诊断中。
+        rules = type(error).__name__
+        if isinstance(error, ValidationError):
+            rules = ", ".join(
+                f"{issue['loc'][0] if issue['loc'] and issue['loc'][0] in model.model_fields else 'model'}:{issue['type']}"
+                for issue in error.errors(include_input=False, include_context=False, include_url=False)
+            )
+        error_type = TypeError if isinstance(error, TypeError) else ValueError
+        raise error_type(f"navigation typed字段无效: model={model.__name__}, rule={rules}") from error
+
 
 _RECORD_COLUMNS = (
     "gateway_id, workspace_id, actor, operation_id, client_sequence, queue_seq, "
@@ -236,7 +278,7 @@ def _require_record_metadata(row: sqlite3.Row) -> None:
         if row[name] is not None and not isinstance(row[name], str):
             raise TypeError(f"navigation operation {name}必须为null或字符串")
     for name in ("created_at", "updated_at"):
-        if datetime.fromisoformat(row[name]).tzinfo is None:
+        if _record_time(row, name, owner="operation").tzinfo is None:
             raise ValueError(f"navigation operation {name}必须带时区")
     if row["pending_settlement"] and (
         row["kind"] not in ("delete_folder", "delete_session") or row["state"] != "committed"
@@ -248,7 +290,7 @@ def _require_record_metadata(row: sqlite3.Row) -> None:
 
 def _record_from_row(row: sqlite3.Row) -> NavigationMutationRecord:
     # 读取、幂等重放与启动使用同一 typed 合同，不从当前节点或配置重建历史意图。
-    params = json.loads(row["params_json"])
+    params = _record_json(row, "params_json")
     if not isinstance(params, dict):
         raise TypeError("navigation intent params 必须是对象")
     for name in ("gateway_id", "workspace_id", "actor"):
@@ -258,17 +300,17 @@ def _record_from_row(row: sqlite3.Row) -> NavigationMutationRecord:
         if name not in params or params[name] != row[name]:
             raise ValueError(f"navigation intent 冻结 {name} 与记录身份不符")
     command_type = AutoSessionTitleCommand if row["kind"] == "auto_title_session" else NavigationMutationIntentDTO
-    intent = command_type.model_validate({
+    intent = _record_model(command_type, {
         **params,
         "client_operation_id": row["operation_id"],
         "client_sequence": row["client_sequence"],
         "kind": row["kind"],
-        "depends_on": json.loads(row["depends_on_json"]),
-    }, strict=True)
+        "depends_on": _record_json(row, "depends_on_json"),
+    })
     if params != json.loads(_params_json(intent)):
         raise ValueError("navigation intent 冻结参数字段不完整或与 typed intent 不符")
     if compute_intent_preimage_hash(intent) != row["preimage_hash"]:
-        raise ValueError(f"navigation intent preimage 不符: operation_id={row['operation_id']!r}")
+        raise ValueError(f"navigation intent preimage 不符: operation_id={intent.client_operation_id!r}")
     _require_record_metadata(row)
     return NavigationMutationRecord(
         gateway_id=row["gateway_id"],
@@ -302,10 +344,15 @@ def _record_from_row(row: sqlite3.Row) -> NavigationMutationRecord:
 def _event_from_row(row: sqlite3.Row) -> NavigationEventRecord:
     # 先按原始类型验证；不能把对象的key当node列表或把浮点序号截断为整数。
     payload = dict(row)
-    payload["affected_node_ids"] = json.loads(payload.pop("affected_node_ids_json"))
-    payload["created_at"] = datetime.fromisoformat(row["created_at"])
-    event = NavigationEventDTO.model_validate(payload, strict=True)
-    validate_operation_id(event.operation_id)
+    payload.pop("affected_node_ids_json")
+    payload["affected_node_ids"] = _record_json(row, "affected_node_ids_json")
+    payload["created_at"] = _record_time(row, "created_at", owner="event")
+    event = _record_model(NavigationEventDTO, payload)
+    try:
+        validate_operation_id(event.operation_id)
+    except (TypeError, ValueError) as error:
+        logger.exception("navigation event operation_id无效")
+        raise ValueError("navigation event operation_id形态无效") from error
     for name in ("workspace_id", "gateway_id", "actor"):
         if not isinstance(row[name], str) or not row[name]:
             raise ValueError(f"navigation event {name} 必须是非空字符串")
@@ -343,8 +390,9 @@ def _owner_from_row(row: sqlite3.Row) -> NavigationQueueOwner:
             raise ValueError(f"navigation queue owner {name}必须是非空字符串")
     generation = row["owner_generation"]
     if type(generation) is not int or generation < 1:
-        raise ValueError(f"navigation queue owner generation必须是正整数: {generation!r}")
-    if datetime.fromisoformat(row["updated_at"]).tzinfo is None:
+        logger.error("navigation queue owner原始generation无效: value=%r", generation)
+        raise ValueError("navigation queue owner generation必须是正整数")
+    if _record_time(row, "updated_at", owner="queue owner").tzinfo is None:
         raise ValueError("navigation queue owner updated_at必须带时区")
     return NavigationQueueOwner(
         workspace_id=row["workspace_id"], owner_id=row["owner_id"], generation=generation,

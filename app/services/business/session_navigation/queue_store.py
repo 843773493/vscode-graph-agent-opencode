@@ -28,6 +28,7 @@ trigger 仅在 ``nodes`` 行实际变化时、同一事务内推进它；队列�
 from __future__ import annotations
 
 import json
+import logging
 import sqlite3
 
 from app.core.identifier import create_prefixed_id
@@ -76,6 +77,8 @@ __all__ = [
     "compute_intent_preimage_hash",
 ]
 
+logger = logging.getLogger(__name__)
+
 
 def read_catalog_revision(
     connection: sqlite3.Connection,
@@ -118,14 +121,14 @@ class NavigationMutationQueueStore(
             for row in connection.execute(f"SELECT {_RECORD_COLUMNS} FROM navigation_mutation_records"):
                 try:
                     if row["workspace_id"] != workspace_id:
-                        raise ValueError(
-                            f"workspace归属不符: expected={workspace_id!r}, actual={row['workspace_id']!r}"
-                        )
+                        raise ValueError("workspace归属不符")
                     self._record_from_row(row)
                 except (TypeError, ValueError) as error:
+                    logger.exception("navigation intent原始记录损坏: path=%s, operation_id=%r",
+                                     self._store.database_path, row["operation_id"])
                     raise CatalogMaintenanceRequiredError(
                         "navigation intent 原始记录损坏，拒绝恢复或改写: "
-                        f"path={self._store.database_path}, operation_id={row['operation_id']!r}, detail={error}"
+                        f"artifact=navigation_mutation_records, stage=validate, rule={error}"
                     ) from error
             for row in connection.execute(f"SELECT {_EVENT_COLUMNS} FROM navigation_events"):
                 self._event_in(connection, row, workspace_id=workspace_id)
@@ -133,11 +136,13 @@ class NavigationMutationQueueStore(
                 try:
                     owner = _owner_from_row(row)
                     if owner.workspace_id != workspace_id:
-                        raise ValueError(f"workspace归属不符: expected={workspace_id!r}")
+                        raise ValueError("workspace归属不符")
                 except (TypeError, ValueError) as error:
+                    logger.exception("navigation queue owner原始记录损坏: path=%s, record=%r",
+                                     self._store.database_path, dict(row))
                     raise CatalogMaintenanceRequiredError(
                         "navigation queue owner 原始记录损坏，拒绝接管或改写: "
-                        f"path={self._store.database_path}, workspace_id={row['workspace_id']!r}, detail={error}"
+                        f"artifact=navigation_queue_owners, stage=validate, rule={error}"
                     ) from error
 
     # ------------------------------------------------------------------
