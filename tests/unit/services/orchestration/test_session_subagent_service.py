@@ -20,6 +20,7 @@ from app.core.trace_middleware import (
     set_current_gateway_id,
     set_current_request_id,
 )
+from app.core.workspace_identity import load_or_create_workspace_id
 from app.schemas.internal_v2.session import SessionDTO
 from app.services.business.session_context_resource import (
     session_resource_identity,
@@ -41,8 +42,6 @@ from app.services.orchestration.session_subagent_service import (
 )
 from tests.support.graph_binding import TEST_THREAD_GRAPH_BINDING
 
-WORKSPACE_ID = "0197d9a3-7d2a-7c29-8d76-58b3cf3f8a21"
-
 
 class _ParentSessionReader:
     def __init__(self, parent_session: SessionDTO) -> None:
@@ -62,6 +61,11 @@ class _MismatchedParentSessionReader:
         return self.parent_session.model_copy(
             update={"current_agent_id": "other-agent"}
         )
+
+
+@pytest.fixture
+def workspace_id(tmp_path: Path) -> str:
+    return load_or_create_workspace_id(tmp_path)
 
 
 @pytest.fixture
@@ -86,11 +90,12 @@ def session_catalog_store(
 async def parent_session(
     session_catalog_store: SessionCatalogStore,
     sessions_root: Path,
+    workspace_id: str,
 ) -> SessionDTO:
     creation = SessionCreationService(
         store=session_catalog_store,
         sessions_root=sessions_root,
-        workspace_id=WORKSPACE_ID,
+        workspace_id=workspace_id,
         gate=NavigationTopologyGate(sessions_root),
     )
     record = await creation.prepare(
@@ -113,11 +118,11 @@ async def parent_session(
     return SessionDTO(
         session_id=created_session.session_id,
         thread_id=record.main_thread_id,
-        workspace_id=WORKSPACE_ID,
+        workspace_id=workspace_id,
         resource_identity=session_resource_identity(
-            WORKSPACE_ID, created_session.session_id
+            workspace_id, created_session.session_id
         ),
-        uri=session_resource_uri(WORKSPACE_ID, created_session.session_id),
+        uri=session_resource_uri(workspace_id, created_session.session_id),
         scope="workspace",
         title="父会话",
         current_agent_id="default",
@@ -127,12 +132,12 @@ async def parent_session(
 
 
 @pytest.fixture
-def owner_thread_creation_factory(sessions_root: Path) -> OwnerThreadCreationFactory:
-    resolver = get_session_path_resolver(sessions_root)
+def owner_thread_creation_factory(sessions_root: Path, workspace_id: str) -> OwnerThreadCreationFactory:
+    resolver = get_session_path_resolver(sessions_root, workspace_id=workspace_id)
     assert isinstance(resolver, SessionCatalogPathResolver)
     return OwnerThreadCreationFactory(
         sessions_root=sessions_root,
-        workspace_id=WORKSPACE_ID,
+        workspace_id=workspace_id,
         path_resolver=resolver,
     )
 
