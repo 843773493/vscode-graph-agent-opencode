@@ -14,6 +14,7 @@ from app.gateway.auth import verify_gateway_token
 from app.gateway.config import GatewayConfigReloadService, load_gateway_config
 from app.gateway.control.gateway_state import GatewayStateStore
 from app.gateway.routes.health_config import router
+from app.services.infrastructure.config.state import ConfigConflictError
 from configs.runtime import read_jsonc_object
 
 
@@ -39,6 +40,95 @@ def validation_owner(tmp_path: Path):
         application.state.gateway_config_reload = service
         application.dependency_overrides[verify_gateway_token] = lambda: "validation-test"
         yield application, service, store, config_path, schema_path, original
+
+
+@pytest.mark.parametrize("stage", ["apply", "promotion", "rollback"])
+@pytest.mark.parametrize("locator", ["/private/runtime/gateway.jsonc", r"C:\private\gateway.jsonc", r"\\server\private\gateway.jsonc"])
+async def test_runtime_failure_keeps_native_diagnostics_out_of_config_state(
+    validation_owner, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
+    stage: str, locator: str,
+) -> None:
+    application, service, store, config_path, _, original = validation_owner
+    active = store.get_active_config_snapshot("gateway")
+    initial = service.config
+    apply_error = OSError(13, "runtime source denied", locator)
+    promotion_error = ConfigConflictError(f"runtime promotion failed: {locator}")
+    rollback_error = RuntimeError(f"runtime rollback failed: {locator}")
+    calls: list[str] = []
+
+    async def apply(candidate, previous, fencing_token, fence_check):
+        assert previous is initial
+        assert candidate.revision != initial.revision
+        assert fencing_token
+        fence_check()
+        calls.append("apply")
+        if stage == "apply":
+            raise apply_error
+
+        async def rollback() -> None:
+            calls.append("rollback")
+            if stage == "rollback":
+                raise rollback_error
+
+        return rollback
+
+    def reject_promotion(*args, **kwargs):
+        raise promotion_error
+
+    monkeypatch.setattr(service, "_on_runtime_config", apply)
+    monkeypatch.setattr(store, "promote_active_config_snapshot", reject_promotion)
+    payload = json.loads(original)
+    payload["ui"] = {"theme": {"default_theme_id": "blue"}}
+    config_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises((OSError, RuntimeError)) as failure:
+        await service.reload()
+
+    pending = store.get_pending_config_candidate(config_domain="gateway")
+    assert pending is not None and pending.last_apply_id is not None
+    journal = store.get_config_apply_journal(apply_id=pending.last_apply_id)
+    assert journal is not None
+    expected_state = "conflict" if stage == "promotion" else "recovery_required"
+    assert pending.state == expected_state
+    assert journal.state == ("compensated" if stage == "promotion" else "recovery_required")
+    assert calls == (["apply"] if stage == "apply" else ["apply", "rollback"])
+    assert service.config is initial
+    assert store.get_active_config_snapshot("gateway") == active
+    assert store.get_config_apply_claim(config_domain="gateway") is None
+    assert len(service.list_events()) == 1
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=application), base_url="http://test",
+    ) as client:
+        responses = [await client.get(path, headers={"X-Request-ID": "runtime-failure"}) for path in (
+            "/api/gateway/config/reload-status", "/api/gateway/config/events",
+        )]
+    for response in responses:
+        assert response.status_code == 200, response.text
+        assert response.headers["X-Request-ID"] == response.json()["request_id"] == "runtime-failure"
+    assert responses[0].json()["data"]["healthy"] is False
+    assert responses[0].json()["data"]["state"] == expected_state
+    public_facts = json.dumps({
+        "status": responses[0].json(), "events": responses[1].json(),
+        "pending_error": pending.last_error, "journal": asdict(journal),
+        "raised_error": str(failure.value),
+    }, ensure_ascii=False, default=str)
+    assert "private" not in public_facts
+    # 冷重开同一事实库，确认安全正文来自 writer，而非响应层临时过滤。
+    store.close()
+    with GatewayStateStore(path=store.path) as reopened:
+        assert reopened.get_pending_config_candidate(config_domain="gateway") == pending
+        assert reopened.get_config_apply_journal(apply_id=pending.last_apply_id) == journal
+    original_error = apply_error if stage == "apply" else promotion_error
+    assert failure.value.__cause__ is original_error
+    assert any(record.exc_info and record.exc_info[1] is original_error for record in caplog.records)
+    assert str(original_error) in caplog.text
+    if stage == "rollback":
+        assert any(record.exc_info and record.exc_info[1] is rollback_error for record in caplog.records)
+    assert "stage=" in (pending.last_error or "")
+    assert type(original_error).__name__ in (pending.last_error or "")
+    if stage == "apply":
+        assert "errno=13" in (pending.last_error or "")
 
 
 @pytest.mark.parametrize(

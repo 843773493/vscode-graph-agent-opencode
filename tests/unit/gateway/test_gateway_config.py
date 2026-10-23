@@ -1451,8 +1451,10 @@ async def test_gateway_config_reload_compensates_runtime_apply_on_promotion_conf
             raise ConfigConflictError("模拟 promotion CAS 冲突")
 
         monkeypatch.setattr(state, "promote_active_config_snapshot", reject_promotion)
-        with pytest.raises(ConfigConflictError, match="模拟 promotion CAS 冲突"):
+        with pytest.raises(ConfigConflictError, match="stage=promotion") as failure:
             await service.reload()
+        assert isinstance(failure.value.__cause__, ConfigConflictError)
+        assert str(failure.value.__cause__) == "模拟 promotion CAS 冲突"
 
         assert [item[0] for item in applied] == ["apply", "rollback"]
         assert applied[0][1] != initial.revision

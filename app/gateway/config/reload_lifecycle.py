@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import logging
+import sqlite3
 from dataclasses import replace
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from app.gateway.control.gateway_state import GatewayStateStore
@@ -23,6 +25,21 @@ from .values import (
     GatewayConfigRuntimeApplier,
     GatewayConfigRuntimeRollback,
 )
+
+logger = logging.getLogger(__name__)
+
+
+def _apply_failure_detail(error: Exception, *, stage: str) -> str:
+    """运行时失败只发布阶段和系统错误事实，原始异常留在管理诊断日志。"""
+    detail = f"Gateway 配置应用失败: stage={stage}, error={type(error).__name__}"
+    if isinstance(error, OSError):
+        detail += f", errno={error.errno}"
+        if (winerror := getattr(error, "winerror", None)) is not None:
+            detail += f", winerror={winerror}"
+    elif isinstance(error, sqlite3.Error):
+        detail += f", sqlite_errorcode={getattr(error, 'sqlite_errorcode', None)}"
+    logger.error("%s；完整诊断见异常链", detail, exc_info=error)
+    return detail
 
 
 class ReloadLifecycleMixin:
@@ -46,7 +63,7 @@ class ReloadLifecycleMixin:
         self._on_runtime_config = on_runtime_config
         self._gateway_id = gateway_id
         self._watcher: ConfigFileWatcher | None = None
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         self._state_store.recover_expired_config_applies(
             config_domain=self._CONFIG_DOMAIN
         )
@@ -275,7 +292,7 @@ class ReloadLifecycleMixin:
         if watcher is not None:
             await watcher.stop()
     async def reload(self) -> None:
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         try:
             candidate = load_gateway_config(
                 config_path=self._config_path,
@@ -440,6 +457,7 @@ class ReloadLifecycleMixin:
                 return
             runtime_apply_started = False
             runtime_rollback: GatewayConfigRuntimeRollback | None = None
+            failure_stage = "runtime_apply"
             try:
                 if self._on_runtime_config is not None:
                     runtime_apply_started = True
@@ -458,6 +476,7 @@ class ReloadLifecycleMixin:
                             "changed_paths": list(changed_paths),
                         },
                     )
+                failure_stage = "promotion"
                 active = self._state_store.get_active_config_snapshot(
                     self._CONFIG_DOMAIN
                 )
@@ -522,41 +541,8 @@ class ReloadLifecycleMixin:
                         applied_paths=changed_paths,
                     ),
                 )
-            except ConfigConflictError as error:
-                (
-                    recovery_required,
-                    recovery_error,
-                ) = await self._handle_runtime_apply_failure(
-                    apply_id=claim.apply_id,
-                    runtime_apply_started=runtime_apply_started,
-                    runtime_rollback=runtime_rollback,
-                    error=error,
-                )
-                error_detail = recovery_error or str(error)
-                journal = self._state_store.get_config_apply_journal(
-                    apply_id=claim.apply_id
-                )
-                recovery_required = recovery_required or bool(
-                    journal and journal.side_effects and journal.state != "compensated"
-                )
-                if journal is not None and journal.state == "applying":
-                    self._state_store.update_config_apply_journal(
-                        apply_id=claim.apply_id,
-                        expected_state="applying",
-                        state=("recovery_required" if recovery_required else "failed"),
-                        last_error=error_detail,
-                    )
-                self._finish_gateway_candidate(
-                    pending,
-                    attempt_id=attempt_id,
-                    apply_id=apply_id,
-                    state=("recovery_required" if recovery_required else "conflict"),
-                    result=("recovery_required" if recovery_required else "conflict"),
-                    error=error_detail,
-                    changed_paths=changed_paths,
-                )
-                raise
             except Exception as error:
+                error_detail = _apply_failure_detail(error, stage=failure_stage)
                 (
                     recovery_required,
                     recovery_error,
@@ -564,9 +550,9 @@ class ReloadLifecycleMixin:
                     apply_id=claim.apply_id,
                     runtime_apply_started=runtime_apply_started,
                     runtime_rollback=runtime_rollback,
-                    error=error,
+                    error_detail=error_detail,
                 )
-                error_detail = recovery_error or str(error)
+                error_detail = recovery_error or error_detail
                 journal = self._state_store.get_config_apply_journal(
                     apply_id=claim.apply_id
                 )
@@ -580,18 +566,24 @@ class ReloadLifecycleMixin:
                         state=("recovery_required" if recovery_required else "failed"),
                         last_error=error_detail,
                     )
+                conflict = isinstance(error, ConfigConflictError)
                 self._finish_gateway_candidate(
                     pending,
                     attempt_id=attempt_id,
                     apply_id=apply_id,
-                    state=("recovery_required" if recovery_required else "rejected"),
+                    state=(
+                        "recovery_required" if recovery_required
+                        else "conflict" if conflict else "rejected"
+                    ),
                     result=(
-                        "recovery_required" if recovery_required else "apply_failed"
+                        "recovery_required" if recovery_required
+                        else "conflict" if conflict else "apply_failed"
                     ),
                     error=error_detail,
                     changed_paths=changed_paths,
                 )
-                raise
+                failure_type = ConfigConflictError if conflict else RuntimeError
+                raise failure_type(error_detail) from error
             finally:
                 claim_renewal_task.cancel()
                 await asyncio.gather(claim_renewal_task, return_exceptions=True)
@@ -642,7 +634,7 @@ class ReloadLifecycleMixin:
         apply_id: str,
         runtime_apply_started: bool,
         runtime_rollback: GatewayConfigRuntimeRollback | None,
-        error: Exception,
+        error_detail: str,
     ) -> tuple[bool, str | None]:
         """在 active promotion 失败时补偿已经发生的 Gateway 运行时变更。"""
 
@@ -653,34 +645,35 @@ class ReloadLifecycleMixin:
                 apply_id=apply_id,
                 expected_state="applying",
                 state="recovery_required",
-                last_error=(f"{error}; Gateway 运行时 apply 未提供可执行的回退句柄"),
+                last_error=(f"{error_detail}; Gateway 运行时 apply 未提供可执行的回退句柄"),
             )
             return (
                 True,
-                f"{error}; Gateway 运行时 apply 未提供可执行的回退句柄",
+                f"{error_detail}; Gateway 运行时 apply 未提供可执行的回退句柄",
             )
 
         self._state_store.update_config_apply_journal(
             apply_id=apply_id,
             expected_state="applying",
             state="recovery_required",
-            last_error=str(error),
+            last_error=error_detail,
         )
         try:
             await runtime_rollback()
         except Exception as rollback_error:  # noqa: BLE001 - 回退必须捕获所有运行时故障
+            rollback_detail = _apply_failure_detail(rollback_error, stage="runtime_rollback")
             self._state_store.record_config_apply_compensation(
                 apply_id=apply_id,
                 compensation={
                     "resource": "gateway-runtime-config",
                     "action": "rollback",
                     "status": "failed",
-                    "error": str(rollback_error),
+                    "error": rollback_detail,
                 },
             )
             return (
                 True,
-                (f"{error}; Gateway 运行时 apply 回退失败: {rollback_error}"),
+                f"{error_detail}; {rollback_detail}",
             )
         self._state_store.record_config_apply_compensation(
             apply_id=apply_id,
