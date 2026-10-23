@@ -30,6 +30,9 @@ from app.core.resource_uri import (
 )
 from app.core.session_catalog_store import SessionCreationRecord
 from app.core.session_catalog_store.contracts import SessionGenerationOriginDTO
+from app.core.session_catalog_store.creation_envelope import (
+    validate_session_creation_envelope,
+)
 from app.core.session_control_store import ThreadCreationRecord
 from app.core.thread_creation import ThreadCreationAbortedError
 from app.core.trace_middleware import (
@@ -854,6 +857,7 @@ class SessionContextForkService:
                 parent_node_id=parent_node_id, request_intent=intent,
                 fork_delivery_request_id=require_current_request_id("fork creation delivery") if intent["source_remote"] else None,
             )
+        validate_session_creation_envelope(record)
         if record.purpose != "context_fork" or record.request_intent_json is None:
             raise RuntimeError("fork key 不属于完整 context fork 创建意图")
         intent = json.loads(record.request_intent_json)

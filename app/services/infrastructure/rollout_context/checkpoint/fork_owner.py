@@ -19,8 +19,10 @@ from app.core.resource_uri import (
 )
 from app.core.session_catalog_store import SessionCreationRecord
 from app.core.session_catalog_store.contracts import ForkSourceCaptureRecord
+from app.core.session_catalog_store.creation_envelope import (
+    compute_session_creation_preimage_hash,
+)
 from app.core.session_control_store import SessionControlStore, ThreadCreationRecord
-from app.core.session_creation import compute_session_creation_preimage_hash
 from app.core.session_lifecycle_gate import NavigationTopologyGate, SessionLifecycleGate
 from app.core.thread_creation import compute_thread_creation_preimage_hash
 from app.core.trace_middleware import get_current_gateway_id

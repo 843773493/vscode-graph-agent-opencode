@@ -29,11 +29,15 @@ from app.core.identifier import (
 )
 from app.core.session_catalog_store._schema import _CREATION_RECORD_COLUMNS
 from app.core.session_catalog_store.contracts import (
+    CatalogMaintenanceRequiredError,
     ForkSourceCaptureRecord,
     SessionCatalogNode,
     SessionCreationPurpose,
     SessionCreationRecord,
     fork_source_capture_relative_locator,
+)
+from app.core.session_catalog_store.creation_envelope import (
+    validate_session_creation_envelope,
 )
 from app.core.session_catalog_store.validators import (
     validate_session_id,
@@ -45,6 +49,17 @@ from app.core.session_control_primitives import CONTROL_DATABASE_NAME
 
 class CreationJournalMixin:
     """creation record journal 方法族（唯一实现点）。"""
+
+    def verify_creation_record_envelopes(self, *, connection: sqlite3.Connection) -> None:
+        """启动核验全部冻结 intent；不将历史 envelope 与当前 node/配置重绑定。"""
+        for row in connection.execute(f"SELECT {_CREATION_RECORD_COLUMNS} FROM session_creation_records"):
+            try:
+                validate_session_creation_envelope(self._creation_record_from_row(row))
+            except (TypeError, ValueError, RuntimeError) as error:
+                raise CatalogMaintenanceRequiredError(
+                    "session creation record envelope 损坏，须进入维护模式核对并保留原数据: "
+                    f"operation_id={row['session_creation_idempotency_key']}"
+                ) from error
 
     @staticmethod
     def _fork_capture_from_row(row: sqlite3.Row) -> ForkSourceCaptureRecord:

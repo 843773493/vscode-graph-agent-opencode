@@ -210,3 +210,19 @@ async def test_copy_session_publication_recovers_original_attachment_settlement(
             "lease_before": old_lease.state, "lease_after": "completed", "claim_ids": committed.claim_ids,
             "history_sha256": hashlib.sha256(frozen_bytes).hexdigest(), "idempotent_replies": len(replies),
         }, ensure_ascii=False, indent=2), encoding="utf-8")
+        if window == "claims_committed":
+            # 启动后损坏已发布 envelope；相同语义仍不能绕过重放入口的 canonical 校验。
+            with cold_catalog.write_transaction() as connection:
+                connection.execute(
+                    "UPDATE session_creation_records SET session_metadata_json=? "
+                    "WHERE session_creation_idempotency_key=?",
+                    (json.dumps(json.loads(published.session_metadata_json), sort_keys=True, indent=2), key),
+                )
+            damaged = cold_catalog.get_creation_record(key)
+            with pytest.raises(RuntimeError, match="metadata 不是 canonical JSON"):
+                await recovered.forks.fork(fork_request)
+            assert cold_catalog.get_creation_record(key) == damaged
+            assert (cold_root / "threads" / frozen.main_thread_id / "rollout/rollout.jsonl").read_bytes() == frozen_bytes
+            assert [tuple(row) for row in restarted.attachment_blob_store._catalog._connected().execute(
+                "SELECT claim_id,state FROM fork_attachment_claims WHERE copy_operation_id=? ORDER BY claim_id", (key,),
+            )] == claims_before

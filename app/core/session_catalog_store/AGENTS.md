@@ -18,7 +18,7 @@ creation record journal（`creation_journal.py`）、subtree delete journal 与�
 
 - 可以维护 facade `__init__.py` 中的 `SessionCatalogStore` 类声明、连接生命周期方法、
   `SCHEMA_VERSION` 与 `__all__`/再导出面。
-- 可以维护各族 mixin 文件中的方法体与族内私有静态方法。
+- 可以维护各族 mixin 文件中的方法体与族内私有静态方法；`creation_envelope.py` 统一创建、恢复与启动读取的纯 metadata/请求意图/preimage 校验，不访问数据库或物理目录。
 - 可以维护 `_schema.py` 中的表 DDL、索引 DDL、版本-表绑定与 canonical ID/locator 形态正则；
   新增 DDL 常量时落在该模块，不在各族复制。
 - 可以维护随本包落地的四段式 `AGENTS.md`。

@@ -21,6 +21,9 @@ from app.core.session_catalog_store import (
     SessionCatalogStore,
     SessionCreationRecord,
 )
+from app.core.session_catalog_store.creation_envelope import (
+    compute_session_creation_preimage_hash,
+)
 from app.core.session_catalog_store.queries import _register_session_list_functions
 from app.core.session_control_store import SessionControlStore
 from app.core.session_creation import (
@@ -28,7 +31,6 @@ from app.core.session_creation import (
     SessionCreationResult,
     SessionCreationService,
     build_session_creation_manifest,
-    compute_session_creation_preimage_hash,
     serialize_session_creation_manifest,
 )
 from app.core.session_lifecycle_gate import NavigationTopologyGate
@@ -666,6 +668,32 @@ async def test_create_idempotent_three_times(
         build_session_creation_manifest(record, make_metadata())
     )
     assert count_rows(store, "nodes") == 1
+
+
+async def test_prepare_published_replay_rejects_frozen_title_preimage_conflict(
+    service: SessionCreationService,
+    store: SessionCatalogStore,
+    sessions_root: Path,
+) -> None:
+    """冻结标题被篡改但 hash 未变时，prepare 重放仍须核验原始前像。"""
+    await do_create(service)
+    record = store.get_creation_record("key-1")
+    directory = date_bucket_dir(sessions_root, record.storage_relative_locator)
+    manifest = (directory / "session.json").read_bytes()
+    with store.write_transaction() as connection:
+        connection.execute(
+            "UPDATE session_creation_records SET display_name=? "
+            "WHERE session_creation_idempotency_key=?",
+            ("被外部改写的创建标题", "key-1"),
+        )
+    damaged = store.get_creation_record("key-1")
+    with pytest.raises(RuntimeError, match="preimage 与 envelope 不一致"):
+        await service.prepare(
+            idempotency_key="key-1", title="测试会话", parent_node_id=None,
+            graph_binding=TEST_THREAD_GRAPH_BINDING, session_metadata=make_metadata(),
+        )
+    assert store.get_creation_record("key-1") == damaged
+    assert (directory / "session.json").read_bytes() == manifest
 
 
 async def test_create_conflicting_preimage_on_published_rejected(

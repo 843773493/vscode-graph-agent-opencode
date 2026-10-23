@@ -28,6 +28,10 @@ from app.core.session_catalog_store import (
     SessionCatalogStore,
     validate_session_id,
 )
+from app.core.session_catalog_store.creation_envelope import (
+    compute_session_creation_preimage_hash,
+    serialize_session_creation_metadata,
+)
 from app.core.session_control_store import SessionControlStore
 from app.core.session_creation import SessionCreationService
 from app.core.session_lifecycle_gate import NavigationTopologyGate
@@ -905,7 +909,19 @@ class TestStoreCreationRecordHonorsSessionId:
         resolver: SessionCatalogPathResolver,
         sessions_root: Path,
     ) -> None:
-        record = store.create_or_get_creation_record(**self._create_kwargs())
+        metadata = make_metadata()
+        kwargs = self._create_kwargs(
+            session_metadata_json=serialize_session_creation_metadata(metadata),
+            preimage_hash=compute_session_creation_preimage_hash(
+                workspace_id=WORKSPACE_ID,
+                parent_node_id=None,
+                title="指定ID会话",
+                purpose="normal",
+                graph_binding=TEST_THREAD_GRAPH_BINDING,
+                session_metadata=metadata,
+            ),
+        )
+        record = store.create_or_get_creation_record(**kwargs)
         staging = sessions_root / ".staging" / record.session_id
         staging.mkdir(parents=True)
         thread_node = staging / "threads" / record.main_thread_id
