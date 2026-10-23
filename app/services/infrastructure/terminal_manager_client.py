@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
+from app.abstractions.terminal_resources import TerminalRequestError
 from app.core.workspace_identity import validate_workspace_id
 from app.protocol.codecs.terminal import (
     terminal_session_to_json,
@@ -13,6 +15,7 @@ from app.protocol.codecs.terminal import (
 from app.services.infrastructure.config_service import ConfigService
 
 DEFAULT_TERMINAL_BACKEND_URL = "http://127.0.0.1:8012"
+logger = logging.getLogger(__name__)
 
 
 class TerminalManagerClient:
@@ -234,6 +237,10 @@ class TerminalManagerClient:
                 return json.loads(response.read().decode("utf-8"))
         except HTTPError as exc:
             detail = exc.read().decode("utf-8", errors="replace")
-            raise RuntimeError(
-                f"终端管理器请求失败: method={method}, path={path}, status={exc.code}, detail={detail}"
+            logger.exception(
+                "终端传输 HTTP 请求失败: method=%s path=%s status=%s response=%s",
+                method, path, exc.code, detail,
+            )
+            raise TerminalRequestError(
+                method=method, path=path, status=exc.code, response_body=detail,
             ) from exc

@@ -11,6 +11,7 @@ from uuid import uuid4
 
 import pytest
 
+from app.abstractions.terminal_resources import TerminalRequestError
 from app.agents.tools.terminal import create_exec_command_tool, create_write_stdin_tool
 from app.core.mounted_workspaces import MountedWorkspace
 from app.core.workspace_identity import load_or_create_workspace_id
@@ -100,7 +101,7 @@ async def test_real_terminal_http_failures_keep_native_details_in_server_diagnos
             if command is not None:
                 payload["command"] = command
                 payload["args"] = []
-            with pytest.raises(RuntimeError) as rejected:
+            with pytest.raises(TerminalRequestError) as rejected:
                 if mode == "sync":
                     await asyncio.to_thread(
                         client._json_request_sync, "POST", "/api/terminals", payload,
@@ -110,7 +111,8 @@ async def test_real_terminal_http_failures_keep_native_details_in_server_diagnos
             error = rejected.value
             assert isinstance(error.__cause__, HTTPError)
             assert error.__cause__.code == 500
-            detail = json.loads(str(error).split("detail=", 1)[1])
+            assert (error.method, error.path, error.status) == ("POST", "/api/terminals", 500)
+            detail = json.loads(error.response_body)
             expected = f"{reason}: terminal_id={terminal_id}" if command else reason
             assert detail == {"error": expected}
             assert str(root) not in str(error)

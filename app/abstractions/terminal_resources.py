@@ -9,6 +9,19 @@ from app.abstractions.workspace_resources import ResourceTransport
 TerminalSnapshot = dict[str, object]
 
 
+class TerminalRequestError(RuntimeError):
+    """PTY 服务的 HTTP 失败；响应正文只供诊断，不能投影为业务错误。"""
+
+    def __init__(self, *, method: str, path: str, status: int, response_body: str) -> None:
+        self.method = method
+        self.path = path
+        self.status = status
+        self.response_body = response_body
+        super().__init__(
+            f"终端管理器请求失败: method={method}, status={status}；请查看工作区终端服务日志"
+        )
+
+
 class TerminalTransport(ResourceTransport, Protocol):
     async def create_terminal(
         self, *, terminal_id: str, owner_revision: int, title: str, cwd: str,
