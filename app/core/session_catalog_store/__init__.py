@@ -4,11 +4,12 @@
 与生命周期栅栏（``validators.py``）、DTO/错误/记录解析 helper
 （``contracts.py``）、nodes 表读写（``nodes.py``）、fork retention claim
 （``fork_retention.py``）、creation record journal（``creation_journal.py``）、
+fork source capture（``fork_source_capture.py``）、
 subtree delete journal 与空 folder 删除（``subtree_delete.py``）、只读查询
 （``queries.py``）、备份与目录一致性（``backup.py``），共享 DDL 与列清单收敛在
 ``_schema.py``。
 
-本 facade 只保留 ``SessionCatalogStore`` 的类声明（六个既有 mixin）与连接
+本 facade 只保留 ``SessionCatalogStore`` 的类声明（七个本包 mixin）与连接
 生命周期方法（``__init__``/``connection``/``close``/``_ensure_open``/
 ``_connect``/``_initialize``/``_verify_quick_integrity``/
 ``_require_tables_present``/``write_transaction``/``_bump_generation``/
@@ -63,6 +64,7 @@ from app.core.session_catalog_store.contracts import (
 )
 from app.core.session_catalog_store.creation_journal import CreationJournalMixin
 from app.core.session_catalog_store.fork_retention import ForkRetentionMixin
+from app.core.session_catalog_store.fork_source_capture import ForkSourceCaptureMixin
 from app.core.session_catalog_store.nodes import CatalogNodesMixin
 from app.core.session_catalog_store.queries import (
     CatalogQueriesMixin,
@@ -109,6 +111,7 @@ class SessionCatalogStore(
     CatalogNodesMixin,
     ForkRetentionMixin,
     CreationJournalMixin,
+    ForkSourceCaptureMixin,
     SubtreeDeleteMixin,
     CatalogQueriesMixin,
     CatalogBackupMixin,
