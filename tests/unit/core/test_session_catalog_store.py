@@ -922,7 +922,7 @@ def test_verify_consistency_detects_cross_workspace(
         (tree.session_s2,),
     )
     with pytest.raises(RuntimeError, match="workspace 不一致"):
-        store.verify_workspace_consistency()
+        store.verify_workspace_consistency(workspace_id=WORKSPACE_ID)
 
 
 def test_verify_consistency_detects_cycle(
@@ -934,7 +934,7 @@ def test_verify_consistency_detects_cycle(
         (tree.session_s3, tree.folder_a),
     )
     with pytest.raises(RuntimeError, match="循环"):
-        store.verify_workspace_consistency()
+        store.verify_workspace_consistency(workspace_id=WORKSPACE_ID)
 
 
 def test_verify_consistency_detects_missing_parent(
@@ -954,13 +954,13 @@ def test_verify_consistency_detects_missing_parent(
     finally:
         connection.close()
     with pytest.raises(RuntimeError, match="父节点缺失"):
-        store.verify_workspace_consistency()
+        store.verify_workspace_consistency(workspace_id=WORKSPACE_ID)
 
 
 def test_verify_consistency_passes_healthy_tree(
     store: SessionCatalogStore, tree: CatalogTree
 ) -> None:
-    store.verify_workspace_consistency()
+    store.verify_workspace_consistency(workspace_id=WORKSPACE_ID)
 
 
 # ----------------------------------------------------------------------

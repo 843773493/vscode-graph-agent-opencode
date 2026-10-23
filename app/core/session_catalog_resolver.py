@@ -284,7 +284,7 @@ class SessionCatalogPathResolver:
         """首次读取前做一次全表一致性校验。"""
         if self._consistency_verified:
             return
-        self._store.verify_workspace_consistency()
+        self._store.verify_workspace_consistency(workspace_id=self._workspace_id)
         self._consistency_verified = True
 
     def _list_all_catalog_nodes(
@@ -353,7 +353,7 @@ class SessionCatalogPathResolver:
         store 已构造即视为可读；启动装配仍显式调用本方法，确保工作区
         catalog 在业务服务接管前通过完整性校验。
         """
-        self._store.verify_workspace_consistency()
+        self._store.verify_workspace_consistency(workspace_id=self._workspace_id)
         _, nodes = self._store.read_nodes_snapshot()
         for node in nodes:
             if node.kind != "session" or node.state != "active":

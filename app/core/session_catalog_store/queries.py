@@ -26,6 +26,7 @@ from app.core.session_catalog_store._schema import (
 from app.core.session_catalog_store.contracts import (
     CatalogMaintenanceRequiredError,
     SessionCatalogNode,
+    _validate_workspace_id,
 )
 from app.core.session_catalog_store.validators import (
     validate_path_budget,
@@ -281,9 +282,26 @@ class CatalogQueriesMixin:
                 )
             return self._node_from_row(row)
 
-    def verify_workspace_consistency(self) -> None:
-        """同一快照核父链与已发布/待发布 Session 的冻结存储身份。"""
+    def verify_workspace_consistency(self, *, workspace_id: str) -> None:
+        """同一快照核本工作区全部保留记录、父链与冻结存储身份。"""
+        _validate_workspace_id(workspace_id)
         with self.read_transaction() as connection:
+            mismatch = connection.execute(
+                "SELECT 'nodes' AS owner, node_id AS record_id, workspace_id FROM nodes WHERE workspace_id != ? "
+                "UNION ALL SELECT 'session_creation_records', session_creation_idempotency_key, workspace_id "
+                "FROM session_creation_records WHERE workspace_id != ? "
+                "UNION ALL SELECT 'subtree_delete_records', subtree_delete_idempotency_key, workspace_id "
+                "FROM subtree_delete_records WHERE workspace_id != ? "
+                "UNION ALL SELECT 'fork_retention_claims', fork_retention_claim_id, workspace_id "
+                "FROM fork_retention_claims WHERE workspace_id != ? LIMIT 1",
+                (workspace_id,) * 4,
+            ).fetchone()
+            if mismatch is not None:
+                raise CatalogMaintenanceRequiredError(
+                    "session catalog workspace 不一致，须进入维护模式核对并保留原数据: "
+                    f"owner={mismatch['owner']}, record_id={mismatch['record_id']}, "
+                    f"record_workspace={mismatch['workspace_id']!r}, backend_workspace={workspace_id!r}"
+                )
             self.verify_subtree_delete_records(connection=connection)
             self.verify_creation_record_envelopes(connection=connection)
             rows = connection.execute(
@@ -319,14 +337,6 @@ class CatalogQueriesMixin:
                 raise RuntimeError(
                     "会话目录父节点缺失: "
                     f"node_id={row['node_id']}, parent_node_id={parent_node_id}"
-                )
-            if str(parent["workspace_id"]) != str(row["workspace_id"]):
-                raise RuntimeError(
-                    "会话目录父子节点 workspace 不一致: "
-                    f"node_id={row['node_id']}, "
-                    f"node_workspace={row['workspace_id']}, "
-                    f"parent_node_id={parent_node_id}, "
-                    f"parent_workspace={parent['workspace_id']}"
                 )
         for row in rows:
             visited: set[str] = set()
