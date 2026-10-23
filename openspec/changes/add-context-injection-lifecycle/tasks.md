@@ -277,3 +277,10 @@
   - 2026-10-20 第8组验收：普通文件工具复用公共导航 owner，旧 Skill 虚拟挂载和读取白名单没有恢复；debugging Skill 的旧通用读取禁令已改成“读取不激活或追踪，不能替代 skill_load”。`skill-read-activation-http-001` 两项真实 Gateway/Backend 与模型协议桩通过：模型经返回 URI 读取 SKILL.md、多层 references/scripts；普通工具前后来源控制完整行、activation计数以及每次 assembly 引用的 snapshot/hash/provenance 相同。进程外测试在发起 skill_load 的 Provider 请求已封存后改写真实文件，并等待 Gateway 发布新正文和版本；实际工具仍返回原正文 hash及冻结revision。不是外部真实模型 E2E。
   - `skill-read-bulk-http-002` 在相同真实工具链加257文件扫描后通过，未逐文件登记身份/来源/activation；`skill-read-activation-unit-001` 115项通过，覆盖同步/异步读取、编码/权限、来源冻结、同名覆盖及显式rebind。`skill-read-rebind-regression-001` 扩展回归为48通过、2失败：失败分别是测试仍探测旧 create_agent 编译符号及旧双订阅数量；按现行 create_model_call_agent 和 execution catalog 唯一发布合同迁移后，`skill-read-runtime-fixture-002` 两项通过，保留原冻正文、raw revision、重启恢复、generation与关闭后不发布等断言。另5处同文件编译探针已一并迁移，`skill-read-compiler-hooks-003` 的7个完成/失败/编译重试/清理fence场景全部通过，未改原错误、先后顺序或owner断言。
   - `skill-read-debug-flow-001` 在产品执行前因固定端口9000被占用而 setup失败，未终止未知进程、改环境或把该流程称为通过。上述原始命令、源码指纹、输出和退出码在 `out/tests/temp/openspec_takeover/artifacts/runs/`；完整Web/外部Provider及本change其它未勾任务未由本组替代。
+
+
+### 2026-10-23 canonical append 整批重复准入原子性
+
+- 修复首个 append intent 已提交整批、后续成员才因已消费 key 拒绝的窗口。唯一 facade 在 Saver 锁内先校验整批 owner、分支和历史/批内重复，再登记 in-flight batch 并沿原单事务提交；重复消费继续明确拒绝，不新增 writer 或持久事实源。
+- 完整 Git 归档红证 tree `7ee3567cd81b8f235664ee549eeb88f6109446cf` 的 `append-batch-red-002` 为 3 failed/1 passed：新成员排在已消费成员前会报错但改变 SQLite/JSONL；批内同 ID 的同/异正文重复误入 SQL UNIQUE 错误。最终产品 tree `7d623a669ba785699fecbffc127186d3ca26703c` 的 `append-batch-green-001` 为 42 passed/3.80秒，核两种排列、原 SQLite 全量逻辑行及 JSONL 字节不变、冷 owner 读原事实、去掉重复后原 identity 可重试；Ruff/compileall exit0。
+- `append-batch-regression-001` 为 59 passed/3 setup errors（109.17秒），三项 full-copy 装具要求正式 matrix watchdog；由 `append-batch-fork-001` 按原断言补验，3 passed/2552 deselected/57.02秒、exit0。没有把首次非零改写为通过。准确命令、raw、退出码、全树前后指纹和只读独审 `review-001.json` 保留于 `out/tests/temp/cil_append_batch_20261023/artifacts/`；本收据只关闭 append 批失败的具体缺口，不代替 CIL 2.3-A–G、itemized 7.5 或完整 Web 门。

@@ -1003,3 +1003,10 @@ pending 恢复的硬错误重试已闭合（2026-10-22）：进程内装载阶�
 - 固定完整Git归档tree `cf413e7628b38f3e689254a182e5343b8a783237` 的 `web-lifecycle-refusal-evidence-003` 经真实Gateway、多workspace和Web初始化、原model_stream资产执行，仅focus lifecycle_admission_deletion，正式matrix为1 passed/495.61秒、exit0；原result含17个实际409响应、15个删除proof，未归属console/request均0，pageerror0。`web-response-lifetime-static-003`的Node语法、message-stream诊断、fork deadline、peer清理和controlled-restart四个self-test均exit0。命令、源码前后指纹、raw和result在`out/tests/temp/openspec_takeover/artifacts/runs/`同名目录；独审`web-response-lifetime-review-002.json`。
 - 此前`web-response-lifetime-tail-002`虽然9个focus阶段结束，最终仍1 failed/1451.50秒：两个history POST409缺少可核的完整响应原件而未归属。本次focus采得具名session_deletion_pending正文并通过，不反推旧失败已解决。此前`full-default-current-003`为1 failed/5263.18秒，Playwright target detach的`_disposeRecursively`触发OOM，数据段4,193,692kB、RSS约658MiB；driver不响应TERM，经核身份后SIGKILL，真实returncode -9。原件`full-default-driver-oom-003/`和独审`default-driver-oom-review-003.json`保留。
 - TODO（按用户性能后置裁定）：基于上述测量继续定位完整default的driver内存长尾；APIResponse释放只消除已知保留点，尚无完整default复跑证据，不能宣称OOM解决。保留原完整Web验收门未完成，不以阶段结束、定向通过或文档校验勾选8.13/9.7/Section 8整体。
+
+
+### 2026-10-23 canonical append 整批重复准入原子性
+
+- 修复首个 append intent 已提交整批、后续成员才因已消费 key 拒绝的窗口。唯一 facade 在 Saver 锁内先校验整批 owner、分支和历史/批内重复，再登记 in-flight batch 并沿原单事务提交；重复消费继续明确拒绝，不新增 writer 或持久事实源。
+- 完整 Git 归档红证 tree `7ee3567cd81b8f235664ee549eeb88f6109446cf` 的 `append-batch-red-002` 为 3 failed/1 passed：新成员排在已消费成员前会报错但改变 SQLite/JSONL；批内同 ID 的同/异正文重复误入 SQL UNIQUE 错误。最终产品 tree `7d623a669ba785699fecbffc127186d3ca26703c` 的 `append-batch-green-001` 为 42 passed/3.80秒，核两种排列、原 SQLite 全量逻辑行及 JSONL 字节不变、冷 owner 读原事实、去掉重复后原 identity 可重试；Ruff/compileall exit0。
+- `append-batch-regression-001` 为 59 passed/3 setup errors（109.17秒），三项 full-copy 装具要求正式 matrix watchdog；由 `append-batch-fork-001` 按原断言补验，3 passed/2552 deselected/57.02秒、exit0。没有把首次非零改写为通过。准确命令、raw、退出码、全树前后指纹和只读独审 `review-001.json` 保留于 `out/tests/temp/cil_append_batch_20261023/artifacts/`；本收据只关闭 append 批失败的具体缺口，不代替 CIL 2.3-A–G、itemized 7.5 或完整 Web 门。

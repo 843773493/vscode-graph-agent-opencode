@@ -276,6 +276,8 @@ class RolloutCheckpointSaver(
         )
         with self._lock:
             facade = self._mutation_intent_facade(owner)
+            # 首个 intent 会提交整批，必须先排除后续重复项，避免已落盘后才拒绝。
+            facade.validate_batch(intents)
             batch = _AppendIntentBatch(
                 owner=owner,
                 checkpoint_ns=checkpoint_ns,

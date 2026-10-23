@@ -54,7 +54,7 @@ def saver(tmp_path: Path, session_bundle_factory) -> Iterator[RolloutCheckpointS
             yield owner
 
 
-def _tool_call_item(item_id: str) -> CanonicalItemRecord:
+def _tool_call_item(item_id: str, *, name: str = "get_goal") -> CanonicalItemRecord:
     return CanonicalItemRecord.create(
         item_sequence=1,
         item_id=item_id,
@@ -65,7 +65,7 @@ def _tool_call_item(item_id: str) -> CanonicalItemRecord:
         producer_ref={"producer_kind": "provider", "producer_id": "model-call-1"},
         payload={
             "tool_call_id": "model-call-1:tool-call:call-1",
-            "name": "get_goal",
+            "name": name,
             "args": {"path": "goal.json"},
         },
         turn_id="turn-1",
@@ -139,6 +139,56 @@ def test_append_items_duplicate_replay_fails_loudly(
     )
     stored = saver.read_canonical_items(SESSION_ID, saver._storage.storage.main_thread_id(SESSION_ID))
     assert [item.item_id for item in stored] == ["item-ingress-1", "item-call-1"]
+
+
+def _committed_state(saver: RolloutCheckpointSaver) -> tuple[bytes, tuple[str, ...]]:
+    storage = saver._storage.storage
+    thread = storage.main_thread_id(SESSION_ID)
+    with storage.read_connection(SESSION_ID, thread) as connection:
+        rows = tuple(connection.iterdump())
+    return storage.jsonl_path(SESSION_ID, thread_id=thread).read_bytes(), rows
+
+
+@pytest.mark.parametrize("duplicate_first", (False, True), ids=("new-before-duplicate", "duplicate-before-new"))
+def test_append_batch_with_consumed_member_rejects_before_any_commit(
+    saver: RolloutCheckpointSaver, duplicate_first: bool,
+) -> None:
+    thread = saver._storage.storage.main_thread_id(SESSION_ID)
+    call, result = _tool_call_item("item-call-1"), _tool_result_item("item-result-1")
+    saver.append_items(SESSION_ID, (call,), thread_id=thread)
+    before = _committed_state(saver)
+    batch = (call, result) if duplicate_first else (result, call)
+    with pytest.raises(MutationIntentDuplicateConsumption) as error:
+        saver.append_items(SESSION_ID, batch, thread_id=thread)
+    assert error.value.idempotency_key == f"append:{SESSION_ID}:{thread}:item-call-1"
+    assert _committed_state(saver) == before
+    with RolloutCheckpointSaver(sessions_dir=saver._storage.storage.sessions_dir) as cold:
+        assert [item.item_id for item in cold.read_canonical_items(SESSION_ID, thread)] == [
+            "item-ingress-1", "item-call-1",
+        ]
+    # 拒绝不能污染消费记录；移除重复项后同一 owner 可以提交尚未消费的结果。
+    assert len(saver.append_items(SESSION_ID, (result,), thread_id=thread)) == 1
+    assert [item.item_id for item in saver.read_canonical_items(SESSION_ID, thread)] == [
+        "item-ingress-1", "item-call-1", "item-result-1",
+    ]
+
+
+@pytest.mark.parametrize("conflicting_payload", (False, True), ids=("same-record", "different-record"))
+def test_append_batch_repeated_identity_rejects_before_consuming_prefix(
+    saver: RolloutCheckpointSaver, conflicting_payload: bool,
+) -> None:
+    thread = saver._storage.storage.main_thread_id(SESSION_ID)
+    call, result = _tool_call_item("item-call-1"), _tool_result_item("item-result-1")
+    duplicate = _tool_call_item(call.item_id, name="read") if conflicting_payload else call
+    before = _committed_state(saver)
+    with pytest.raises(MutationIntentDuplicateConsumption) as error:
+        saver.append_items(SESSION_ID, (call, result, duplicate), thread_id=thread)
+    assert error.value.idempotency_key == f"append:{SESSION_ID}:{thread}:item-call-1"
+    assert _committed_state(saver) == before
+    assert len(saver.append_items(SESSION_ID, (call, result), thread_id=thread)) == 1
+    assert [item.item_id for item in saver.read_canonical_items(SESSION_ID, thread)] == [
+        "item-ingress-1", "item-call-1", "item-result-1",
+    ]
 
 
 def test_append_items_port_failure_keeps_zero_half_state_and_retry(

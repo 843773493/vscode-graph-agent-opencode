@@ -18,6 +18,7 @@ applied 以同一 assembly binding 为唯一事实。epoch intent 由 durable �
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Collection, Sequence
 from dataclasses import dataclass
 from typing import Protocol
 
@@ -127,11 +128,16 @@ class SessionThreadMutationIntents:
         """已成功消费的幂等键；仅供合同测试与诊断，不参与业务判断。"""
         return tuple(sorted(self._consumed_keys))
 
-    def consume(
-        self,
-        intent: ContextMutationIntent,
-    ) -> MutationIntentConsumptionReceipt:
-        """校验 owner/幂等后把 intent 交给唯一 owner 端口消费。"""
+    def validate_batch(self, intents: Sequence[ContextMutationIntent]) -> None:
+        """提交整批前校验全部 intent；失败不调用端口或登记消费成功。"""
+        batch_keys: set[str] = set()
+        for intent in intents:
+            self._validate_intent(intent, batch_keys)
+            batch_keys.add(intent.idempotency_key)
+
+    def _validate_intent(
+        self, intent: ContextMutationIntent, batch_keys: Collection[str] = (),
+    ) -> str:
         kind = intent_kind(intent)
         if intent.owner != self._owner:
             raise MutationIntentOwnerMismatch(
@@ -145,12 +151,21 @@ class SessionThreadMutationIntents:
                 "携同一 SQLite connection 直接交 owner；不能通过 facade 提前缓存成功"
             )
         key = intent.idempotency_key
-        if key in self._consumed_keys:
+        if key in self._consumed_keys or key in batch_keys:
             raise MutationIntentDuplicateConsumption(
                 "mutation-intent-duplicate: 同一幂等键的 intent 已被本 owner 消费: "
                 f"kind={kind}, idempotency_key={key}",
                 idempotency_key=key,
             )
+        return kind
+
+    def consume(
+        self,
+        intent: ContextMutationIntent,
+    ) -> MutationIntentConsumptionReceipt:
+        """校验 owner/幂等后把 intent 交给唯一 owner 端口消费。"""
+        kind = self._validate_intent(intent)
+        key = intent.idempotency_key
         try:
             self._port.consume_mutation_intent(intent)
         except MutationIntentPortError:
