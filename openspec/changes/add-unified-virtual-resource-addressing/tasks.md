@@ -368,3 +368,10 @@
 - 唯一 reload owner 在 runtime apply/promotion/rollback 边界发布固定阶段、错误类型和可用的 errno/winerror/SQLite code，pending、journal、compensation、事件、状态响应与抛出异常共用该事实；完整原异常及 cause 保留于具名管理诊断日志。合并原有 conflict/普通失败的重复处理，保留 conflict/recovery_required/compensated、旧 active 与 claim 释放行为。未按路径文本过滤，也未增加第二写入链。
 - 固定 tree `6df77f001bd766d7bd9167a6e60ddc7a9bcc1375` 的 `runtime-state-final-004` 为9 passed/18 deselected、exit0，覆盖三阶段×POSIX/盘符/UNC，经真实配置 loader、runtime callback、SQLite、ASGI status/events 及关闭原 owner 后冷重开。003 的三个相关测试文件131 passed/2 failed；两个失败是新日志断言未考虑 OSError.filename 的 repr 转义，004仅修该断言并重跑9项，生产逐字相同，复用其余124项既有通过用例，不表述为一次133项全绿。完整旧实现 red002 的9项均检出路径泄露；red001的datetime序列化错误、green002的测试重开锁冲突原件保留，不计通过。
 - 最终Ruff exit0，compileall沿未变生产复用003；4306项源码前后指纹、raw/SHA、实际退出码、零进程组残留与非作者只读复核见 `out/tests/temp/gateway_config_runtime_errors_20261023/artifacts/validation-proof-004.json`、`review-004.json`。仅为ASGI及控制库冷重开，不代替真实网络/OS重启/Windows；其它producer及2.2/7.2全局门保持未勾。
+
+
+### 2026-10-23 Session 创建存储与 prepared 校验错误出口（2.2/7.2 部分收口）
+
+- 创建 owner 在准备、读取、发布 rename 与隔离的实际 I/O 边界公开 workspace/session 身份、stage、错误类型及系统数值码，完整原异常留诊断日志/cause；prepared 目录、manifest、GraphBinding 与 fence 冲突不再复制未经校验的条目、正文或物理位置。路径预算仍在持久创建前拒绝，原准备/耐久失败的异常类型与补偿、保留现场、冻结身份及显式重试合同不变，无 schema 变更。
+- 固定 tree `a6e55a609d978edf89eb3ac33500875693b18c51` 的新增集成文件21项通过，覆盖四阶段×POSIX/盘符/UNC注入、7类真实prepared损坏、真实sessions路由/TraceMiddleware的400/500及后继显式重试。002的189项创建/Thread/启动/SessionService回归通过；003只新增HTTP测试和import排序，生产/unit逐字相同，复用其余170项与compile，不表述为一次191项全绿。Ruff通过；旧生产完整archive的12项红测准确检出路径外泄。001的3项失败源于测试注入同时拦截补偿rename，收窄注入目标后重验，原件保留。
+- 全4307项源码前后指纹、raw/SHA、实际退出码、零进程残留与非作者只读审查见 `out/tests/temp/session_creation_uri_errors_20261023/artifacts/validation-proof-003.json`、`review-002.json`。仅ASGI与SQLite冷重开，Windows文本注入不代替Windows实机；其它stat/catalog/Thread/fork出口及2.2/7.2总门保持未勾。

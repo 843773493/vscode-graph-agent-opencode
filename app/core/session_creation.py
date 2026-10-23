@@ -44,9 +44,11 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import logging
 import os
 import sqlite3
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -101,6 +103,49 @@ _ORPHANED_DIR_NAME = "orphaned"
 _ORPHANED_CREATION_DIR_NAME = "session-creation"
 _SESSION_ID_PATH_PLACEHOLDER = "ses_00000000000070008000000000000000"
 _THREAD_ID_PATH_PLACEHOLDER = "thr_00000000000070008000000000000000"
+
+logger = logging.getLogger(__name__)
+
+
+@contextmanager
+def _creation_access(
+    record: SessionCreationRecord, stage: str, *, runtime_error: bool = True,
+) -> Iterator[None]:
+    """存储调用只发布逻辑 owner 和系统错误码，完整原错供管理诊断排查。"""
+    try:
+        yield
+    except (OSError, sqlite3.Error) as error:
+        detail = (f"Session 创建存储失败: workspace_id={record.workspace_id}, "
+                  f"session_id={record.session_id}, stage={stage}, error={type(error).__name__}")
+        if isinstance(error, OSError):
+            detail += f", errno={error.errno}"
+            if (winerror := getattr(error, "winerror", None)) is not None:
+                detail += f", winerror={winerror}"
+        else:
+            detail += f", sqlite_errorcode={getattr(error, 'sqlite_errorcode', None)}"
+        logger.error("%s；完整诊断见异常链", detail, exc_info=error)
+        if not runtime_error:
+            if isinstance(error, OSError):
+                failure = type(error)(error.errno, detail)
+                if (winerror := getattr(error, "winerror", None)) is not None:
+                    failure.winerror = winerror
+                raise failure from error
+            failure = type(error)(detail)
+            for attribute in ("sqlite_errorcode", "sqlite_errorname"):
+                if hasattr(error, attribute):
+                    setattr(failure, attribute, getattr(error, attribute))
+            raise failure from error
+        raise RuntimeError(detail) from error
+
+
+def _creation_conflict(
+    record: SessionCreationRecord, stage: str, reason: str, **diagnostics: object,
+) -> RuntimeError:
+    """校验失败公开逻辑身份，未通过校验的目录和正文只进入原始诊断。"""
+    detail = f"{stage}: {reason}: workspace_id={record.workspace_id}, session_id={record.session_id}"
+    logger.error("%s；原始诊断=%r", detail, diagnostics)
+    return RuntimeError(detail)
+
 
 @dataclass(frozen=True, slots=True)
 class ForkCompletionProof:
@@ -289,7 +334,7 @@ class SessionCreationService:
                     raise RuntimeError(
                         "prepared 日期桶与 staging 同时存在（外部改动，"
                         "fail closed）: "
-                        f"key={idempotency_key!r}, target={target}, staging={staging}"
+                        f"session_id={record.session_id}"
                     )
                 prepared = staging
             elif target.exists() or target.is_symlink():
@@ -340,8 +385,7 @@ class SessionCreationService:
             elif prepared != target:
                 raise RuntimeError(
                     "prepared Session path 与冻结 locator 不一致（fail closed）: "
-                    f"session_id={current.session_id}, prepared={prepared}, "
-                    f"target={target}"
+                    f"session_id={current.session_id}"
                 )
             async with self._gate.exclusive(), self._session_gate.exclusive(current.session_id):
                 try:
@@ -534,18 +578,18 @@ class SessionCreationService:
         if staging_exists and target_exists:
             raise RuntimeError(
                 "prepared 日期桶与 staging 同时存在（外部改动，fail closed）: "
-                f"session_id={record.session_id}, target={target}, staging={staging}"
+                f"session_id={record.session_id}"
             )
         if not staging_exists and not target_exists:
             raise RuntimeError(
                 "durable preparing record 对应的物理 Session 缺失: "
-                f"session_id={record.session_id}, target={target}, staging={staging}"
+                f"session_id={record.session_id}"
             )
         directory = staging if staging_exists else target
         if not directory.is_dir() or directory.is_symlink():
             raise RuntimeError(
                 "prepared Session 不是普通目录（fail closed）: "
-                f"session_id={record.session_id}, path={directory}"
+                f"session_id={record.session_id}"
             )
         return directory
 
@@ -581,29 +625,34 @@ class SessionCreationService:
 
     def _validate_filesystem_budget(self) -> None:
         """在 creation record 前校验固定形态目录与 SQLite 主库/sidecar。"""
-        session_id = _SESSION_ID_PATH_PLACEHOLDER
-        relative_directories = (
-            (self._sessions_root, f"{_STAGING_DIR_NAME}/{session_id}"),
-            (self._sessions_root, f"1970/01/01/{session_id}"),
-            (
-                self._sessions_root.parent,
-                f"{_ORPHANED_DIR_NAME}/{_ORPHANED_CREATION_DIR_NAME}/{session_id}",
-            ),
-        )
-        for base, relative_directory in relative_directories:
-            relative_database = f"{relative_directory}/{CONTROL_DATABASE_NAME}"
-            for suffix in ("", "-journal", "-wal", "-shm"):
-                validate_path_budget(base, f"{relative_database}{suffix}")
-            validate_sqlite_path_budget(base / relative_database)
-
-        rollout_database = (
-            f"1970/01/01/{session_id}/threads/{_THREAD_ID_PATH_PLACEHOLDER}/rollout/index.sqlite"
-        )
-        for suffix in ("", "-journal", "-wal", "-shm"):
-            validate_path_budget(
-                self._sessions_root, f"{rollout_database}{suffix}"
+        try:
+            session_id = _SESSION_ID_PATH_PLACEHOLDER
+            relative_directories = (
+                (self._sessions_root, f"{_STAGING_DIR_NAME}/{session_id}"),
+                (self._sessions_root, f"1970/01/01/{session_id}"),
+                (
+                    self._sessions_root.parent,
+                    f"{_ORPHANED_DIR_NAME}/{_ORPHANED_CREATION_DIR_NAME}/{session_id}",
+                ),
             )
-        validate_sqlite_path_budget(self._sessions_root / rollout_database)
+            for base, relative_directory in relative_directories:
+                relative_database = f"{relative_directory}/{CONTROL_DATABASE_NAME}"
+                for suffix in ("", "-journal", "-wal", "-shm"):
+                    validate_path_budget(base, f"{relative_database}{suffix}")
+                validate_sqlite_path_budget(base / relative_database)
+
+            rollout_database = (
+                f"1970/01/01/{session_id}/threads/{_THREAD_ID_PATH_PLACEHOLDER}/rollout/index.sqlite"
+            )
+            for suffix in ("", "-journal", "-wal", "-shm"):
+                validate_path_budget(
+                    self._sessions_root, f"{rollout_database}{suffix}"
+                )
+            validate_sqlite_path_budget(self._sessions_root / rollout_database)
+        except ValueError as error:
+            detail = f"Session 创建路径预算校验失败: workspace_id={self._workspace_id}, stage=path_budget"
+            logger.error("%s；完整预算与位置见异常链", detail, exc_info=error)
+            raise ValueError(detail) from error
 
     def _date_bucket_dir(self, storage_relative_locator: str) -> Path:
         relative = storage_relative_locator[len("sessions/"):]
@@ -643,22 +692,23 @@ class SessionCreationService:
             )
             return
         manifest_bytes = self._expected_manifest_bytes(record, session_metadata)
-        staging.mkdir(parents=True, exist_ok=False)
-        # 准备中断（任一步骤抛错）：不删除现场（无法与外部篡改区分），
-        # 保留不完整 staging 供人工核账，重入 fail closed（见模块
-        # docstring「准备中断窗口」）。
-        _atomic_write_bytes(staging / _SESSION_MANIFEST_NAME, manifest_bytes)
-        self._initialize_control_database(staging, record)
-        threads_root = staging / "threads"
-        threads_root.mkdir()
-        main_thread = threads_root / record.main_thread_id
-        main_thread.mkdir()
-        _fsync_directory(main_thread)
-        _fsync_directory(threads_root)
-        # durability barrier：session.json、控制库与唯一 main thread 节点均已
-        # 持久化；此处补 staging 目录与 .staging 父目录 fsync。
-        _fsync_directory(staging)
-        _fsync_directory(staging.parent)
+        with _creation_access(record, "staging/prepare", runtime_error=False):
+            staging.mkdir(parents=True, exist_ok=False)
+            # 准备中断（任一步骤抛错）：不删除现场（无法与外部篡改区分），
+            # 保留不完整 staging 供人工核账，重入 fail closed（见模块
+            # docstring「准备中断窗口」）。
+            _atomic_write_bytes(staging / _SESSION_MANIFEST_NAME, manifest_bytes)
+            self._initialize_control_database(staging, record)
+            threads_root = staging / "threads"
+            threads_root.mkdir()
+            main_thread = threads_root / record.main_thread_id
+            main_thread.mkdir()
+            _fsync_directory(main_thread)
+            _fsync_directory(threads_root)
+            # durability barrier：session.json、控制库与唯一 main thread 节点均已
+            # 持久化；此处补 staging 目录与 .staging 父目录 fsync。
+            _fsync_directory(staging)
+            _fsync_directory(staging.parent)
 
     def _initialize_control_database(
         self,
@@ -672,17 +722,23 @@ class SessionCreationService:
         日期桶）之前初始化并校验完毕。
         """
         control_path = staging / CONTROL_DATABASE_NAME
-        store = SessionControlStore(control_path)
         try:
-            store.initialize_main_thread(
-                record.main_thread_id,
-                datetime.fromisoformat(record.created_at),
-                graph_binding=record.graph_binding,
-            )
-            store.initialize_fence("active", 1)
-            store.verify_matches_catalog_main_thread(record.main_thread_id)
-        finally:
-            store.close()
+            store = SessionControlStore(control_path)
+            try:
+                store.initialize_main_thread(
+                    record.main_thread_id,
+                    datetime.fromisoformat(record.created_at),
+                    graph_binding=record.graph_binding,
+                )
+                store.initialize_fence("active", 1)
+                store.verify_matches_catalog_main_thread(record.main_thread_id)
+            finally:
+                store.close()
+        except RuntimeError as error:
+            detail = (f"Session 控制库初始化失败: workspace_id={record.workspace_id}, "
+                      f"session_id={record.session_id}, stage=control_initialize, error={type(error).__name__}")
+            logger.error("%s；完整诊断见异常链", detail, exc_info=error)
+            raise RuntimeError(detail) from error
         _fsync_file(control_path)
         _fsync_directory(staging)
 
@@ -698,80 +754,59 @@ class SessionCreationService:
         *,
         stage: str,
     ) -> None:
-        """逐文件校验 staging/日期桶目录与预期一致；不一致 fail closed。"""
+        """逐文件校验 staging/日期桶目录与预期一致；不一致保留现场。"""
         if not directory.is_dir() or directory.is_symlink():
-            raise RuntimeError(
-                f"{stage}: 目录缺失或不是目录（外部改动，fail closed）: "
-                f"{directory}"
-            )
-        entries = sorted(entry.name for entry in directory.iterdir())
-        required_entries = {
-            _SESSION_MANIFEST_NAME,
-            CONTROL_DATABASE_NAME,
-            "threads",
-        }
+            raise _creation_conflict(record, stage, "目录缺失或不是目录（外部改动，fail closed）", directory=directory)
+        with _creation_access(record, f"{stage}/list"):
+            entries = sorted(entry.name for entry in directory.iterdir())
+        required_entries = {_SESSION_MANIFEST_NAME, CONTROL_DATABASE_NAME, "threads"}
         allowed_entries = required_entries
         if (record.purpose == "context_fork" and record.request_intent_json is not None
             and json.loads(record.request_intent_json)["goal_snapshot"] is not None):
             allowed_entries = allowed_entries | {"goal.json"}
         if not required_entries.issubset(entries) or set(entries) - allowed_entries:
-            raise RuntimeError(
-                f"{stage}: 条目集与预期不一致（外部改动或上次准备中断，"
-                f"fail closed）: path={directory}, "
-                f"required={sorted(required_entries)}, actual={entries}"
+            raise _creation_conflict(
+                record, stage, "条目集与预期不一致（外部改动或上次准备中断，fail closed）",
+                directory=directory, required=sorted(required_entries), actual=entries,
             )
         goal_path = directory / "goal.json"
         if goal_path.is_symlink() or (goal_path.exists() and not goal_path.is_file()):
-            raise RuntimeError(f"{stage}: Goal 必须是普通文件: {goal_path}")
-
+            raise _creation_conflict(record, stage, "Goal 必须是普通文件", path=goal_path)
         threads_root = directory / "threads"
         if threads_root.is_symlink() or not threads_root.is_dir():
-            raise RuntimeError(
-                f"{stage}: threads 必须是普通目录: "
-                f"path={threads_root}"
-            )
-        thread_entries = sorted(entry.name for entry in threads_root.iterdir())
+            raise _creation_conflict(record, stage, "threads 必须是普通目录", path=threads_root)
+        with _creation_access(record, f"{stage}/threads/list"):
+            thread_entries = sorted(entry.name for entry in threads_root.iterdir())
         if thread_entries != [record.main_thread_id]:
-            raise RuntimeError(
-                f"{stage}: prepared Session 必须只含冻结的 main thread: "
-                f"path={threads_root}, expected={record.main_thread_id}, actual={thread_entries}"
+            raise _creation_conflict(
+                record, stage, "prepared Session 必须只含冻结的 main thread",
+                path=threads_root, expected=record.main_thread_id, actual=thread_entries,
             )
         main_thread = threads_root / record.main_thread_id
         if main_thread.is_symlink() or not main_thread.is_dir():
-            raise RuntimeError(f"{stage}: main thread 必须是普通目录: {main_thread}")
-        main_entries = {entry.name for entry in main_thread.iterdir()}
+            raise _creation_conflict(record, stage, "main thread 必须是普通目录", path=main_thread)
+        with _creation_access(record, f"{stage}/main-thread/list"):
+            main_entries = {entry.name for entry in main_thread.iterdir()}
         allowed_main_entries = {"rollout", ".rollout.write.lock", "debug"} if record.purpose == "context_fork" else set()
         if main_entries - allowed_main_entries:
-            raise RuntimeError(
-                f"{stage}: prepared main thread 条目集与预期不一致: "
-                f"path={main_thread}, actual={sorted(main_entries)}"
+            raise _creation_conflict(
+                record, stage, "prepared main thread 条目集与预期不一致",
+                path=main_thread, actual=sorted(main_entries),
             )
-        rollout_lock = main_thread / ".rollout.write.lock"
-        if rollout_lock.is_symlink() or (rollout_lock.exists() and not rollout_lock.is_file()):
-            raise RuntimeError(f"{stage}: rollout lock 必须是普通文件: {rollout_lock}")
-        debug_root = main_thread / "debug"
-        if debug_root.is_symlink() or (debug_root.exists() and not debug_root.is_dir()):
-            raise RuntimeError(f"{stage}: debug 必须是普通目录: {debug_root}")
-        rollout_root = main_thread / "rollout"
-        if rollout_root.is_symlink() or (rollout_root.exists() and not rollout_root.is_dir()):
-            raise RuntimeError(
-                f"{stage}: prepared main thread rollout 必须是普通目录: path={rollout_root}"
-            )
+        for name, required_directory in ((".rollout.write.lock", False), ("debug", True), ("rollout", True)):
+            artifact = main_thread / name
+            if artifact.is_symlink() or (artifact.exists() and not (artifact.is_dir() if required_directory else artifact.is_file())):
+                raise _creation_conflict(record, stage, f"prepared main thread {name} 类型非法", path=artifact)
         manifest_path = directory / _SESSION_MANIFEST_NAME
         expected_bytes = self._expected_manifest_bytes(record, session_metadata)
-        try:
+        with _creation_access(record, f"{stage}/session.json/read"):
             actual_bytes = manifest_path.read_bytes()
-        except OSError as error:
-            raise RuntimeError(
-                f"{stage}: session.json 无法读取: {manifest_path}: {error}"
-            ) from error
         expected_sha = hashlib.sha256(expected_bytes).hexdigest()
         actual_sha = hashlib.sha256(actual_bytes).hexdigest()
         if actual_sha != expected_sha:
-            raise RuntimeError(
-                f"{stage}: session.json sha256 与预期不一致（外部改动，"
-                f"fail closed）: path={manifest_path}, "
-                f"expected={expected_sha}, actual={actual_sha}"
+            raise _creation_conflict(
+                record, stage, "session.json sha256 与预期不一致（外部改动，fail closed）",
+                path=manifest_path, expected=expected_sha, actual=actual_sha,
             )
         self._verify_control_database(directory, record, stage=stage)
 
@@ -782,55 +817,34 @@ class SessionCreationService:
         *,
         stage: str,
     ) -> None:
-        """只读复验 session-control：唯一 main row == record.main_thread_id
-        且 fence == (active, 1)（对齐 R12 迁移机器的只读校验模式）。"""
+        """只读复验唯一 main row、冻结 GraphBinding 与初始 active fence。"""
         control_path = session_dir / CONTROL_DATABASE_NAME
         if not control_path.is_file():
-            raise RuntimeError(
-                f"{stage}: session-control.sqlite 缺失: {control_path}"
-            )
-        try:
+            raise _creation_conflict(record, stage, "session-control.sqlite 缺失", path=control_path)
+        with _creation_access(record, f"{stage}/session-control.sqlite/open"):
             connection = sqlite3.connect(control_path)
-        except sqlite3.Error as error:
-            raise RuntimeError(
-                f"{stage}: session-control.sqlite 无法打开: "
-                f"{control_path}: {error}"
-            ) from error
         try:
-            rows = connection.execute(
-                "SELECT thread_id, graph_id, graph_revision, graph_schema_hash, "
-                "capability_profile_hash FROM thread_catalog WHERE kind = 'main'"
-            ).fetchall()
-            if len(rows) != 1 or str(rows[0][0]) != record.main_thread_id:
-                raise RuntimeError(
-                    f"{stage}: session-control main row 与 record 不一致: "
-                    f"path={control_path}, "
-                    f"rows={[str(row[0]) for row in rows]}, "
-                    f"expected={record.main_thread_id!r}"
-                )
-            if tuple(rows[0][1:]) != record.graph_binding.as_tuple():
-                raise RuntimeError(
-                    f"{stage}: session-control GraphBinding 与冻结 record 不一致: "
-                    f"path={control_path}, actual={tuple(rows[0][1:])!r}, "
-                    f"expected={record.graph_binding.as_tuple()!r}"
-                )
-            fence_rows = connection.execute(
-                "SELECT state, generation FROM lifecycle_fence WHERE id = 1"
-            ).fetchall()
-            if (
-                len(fence_rows) != 1
-                or str(fence_rows[0][0]) != "active"
-                or int(fence_rows[0][1]) != 1
-            ):
-                raise RuntimeError(
-                    f"{stage}: session-control fence 与期望 (active, 1) "
-                    f"不一致: path={control_path}, rows={fence_rows!r}"
-                )
-        except sqlite3.Error as error:
-            raise RuntimeError(
-                f"{stage}: session-control.sqlite 读取失败: "
-                f"{control_path}: {error}"
-            ) from error
+            with _creation_access(record, f"{stage}/session-control.sqlite/read"):
+                rows = connection.execute(
+                    "SELECT thread_id, graph_id, graph_revision, graph_schema_hash, "
+                    "capability_profile_hash FROM thread_catalog WHERE kind = 'main'"
+                ).fetchall()
+                if len(rows) != 1 or str(rows[0][0]) != record.main_thread_id:
+                    raise _creation_conflict(
+                        record, stage, "session-control main row 与 record 不一致",
+                        path=control_path, actual=[str(row[0]) for row in rows], expected=record.main_thread_id,
+                    )
+                if tuple(rows[0][1:]) != record.graph_binding.as_tuple():
+                    raise _creation_conflict(
+                        record, stage, "session-control GraphBinding 与冻结 record 不一致",
+                        path=control_path, actual=tuple(rows[0][1:]), expected=record.graph_binding.as_tuple(),
+                    )
+                fence_rows = connection.execute("SELECT state, generation FROM lifecycle_fence WHERE id = 1").fetchall()
+                if len(fence_rows) != 1 or str(fence_rows[0][0]) != "active" or int(fence_rows[0][1]) != 1:
+                    raise _creation_conflict(
+                        record, stage, "session-control fence 与期望 (active, 1) 不一致",
+                        path=control_path, actual=fence_rows,
+                    )
         finally:
             connection.close()
 
@@ -902,24 +916,21 @@ class SessionCreationService:
         staging = self._staging_dir(record.session_id)
         if not staging.is_dir() or staging.is_symlink():
             raise RuntimeError(
-                f"{stage}: staging 缺失或不是目录: {staging}"
+                f"{stage}: staging 缺失或不是目录: session_id={record.session_id}"
             )
         target = self._date_bucket_dir(record.storage_relative_locator)
         if target.exists() or target.is_symlink():
             raise RuntimeError(
                 f"{stage}: 目标日期桶已存在，拒绝覆盖或丢弃 staging: "
-                f"target={target}, staging={staging}"
+                f"session_id={record.session_id}"
             )
-        target.parent.mkdir(parents=True, exist_ok=True)
-        try:
+        with _creation_access(record, f"{stage}/mkdir", runtime_error=False):
+            target.parent.mkdir(parents=True, exist_ok=True)
+        with _creation_access(record, stage):
             os.rename(staging, target)
-        except OSError as error:
-            raise RuntimeError(
-                f"{stage}: staging rename 到日期桶失败: "
-                f"{staging} -> {target}: {error}"
-            ) from error
-        _fsync_directory(target.parent)
-        _fsync_directory(staging.parent)
+        with _creation_access(record, f"{stage}/durability", runtime_error=False):
+            _fsync_directory(target.parent)
+            _fsync_directory(staging.parent)
 
     def _quarantine_prepared(
         self,
@@ -934,27 +945,24 @@ class SessionCreationService:
         if staging_exists and target_exists:
             raise RuntimeError(
                 f"{stage}: staging 与冻结日期桶同时存在，拒绝隔离: "
-                f"staging={staging}, target={target}"
+                f"session_id={record.session_id}"
             )
         if not staging_exists and not target_exists:
             return
         source = staging if staging_exists else target
         if not source.is_dir() or source.is_symlink():
             raise RuntimeError(
-                f"{stage}: prepared 目录缺失或不是普通目录: {source}"
+                f"{stage}: prepared 目录缺失或不是普通目录: session_id={record.session_id}"
             )
         quarantine_target = self._orphaned_dir(record.session_id)
         if quarantine_target.exists() or quarantine_target.is_symlink():
             raise RuntimeError(
-                f"{stage}: 隔离目标已存在，拒绝覆盖: {quarantine_target}"
+                f"{stage}: 隔离目标已存在，拒绝覆盖: session_id={record.session_id}"
             )
-        quarantine_target.parent.mkdir(parents=True, exist_ok=True)
-        try:
+        with _creation_access(record, f"{stage}/mkdir", runtime_error=False):
+            quarantine_target.parent.mkdir(parents=True, exist_ok=True)
+        with _creation_access(record, stage):
             os.rename(source, quarantine_target)
-        except OSError as error:
-            raise RuntimeError(
-                f"{stage}: prepared 目录隔离失败: {source} -> "
-                f"{quarantine_target}: {error}"
-            ) from error
-        _fsync_directory(quarantine_target.parent)
-        _fsync_directory(source.parent)
+        with _creation_access(record, f"{stage}/durability", runtime_error=False):
+            _fsync_directory(quarantine_target.parent)
+            _fsync_directory(source.parent)

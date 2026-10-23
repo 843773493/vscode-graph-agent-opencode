@@ -272,8 +272,11 @@ async def test_deep_sessions_root_rejected_before_record_or_staging(
         gate=NavigationTopologyGate(sessions_root),
     )
     try:
-        with pytest.raises(ValueError, match="SQLite 绝对路径"):
+        with pytest.raises(ValueError, match="stage=path_budget") as failure:
             await do_create(service)
+        assert str(sessions_root) not in str(failure.value)
+        assert isinstance(failure.value.__cause__, ValueError)
+        assert "SQLite 绝对路径" in str(failure.value.__cause__)
         assert count_rows(store, "session_creation_records") == 0
         assert not sessions_root.exists()
         assert not (
@@ -313,8 +316,11 @@ async def test_rollout_index_path_budget_checked_before_record_or_staging(
         gate=NavigationTopologyGate(sessions_root),
     )
     try:
-        with pytest.raises(ValueError, match=r"rollout/index\.sqlite"):
+        with pytest.raises(ValueError, match="stage=path_budget") as failure:
             await do_create(service)
+        assert str(sessions_root) not in str(failure.value)
+        assert isinstance(failure.value.__cause__, ValueError)
+        assert "rollout/index.sqlite" in str(failure.value.__cause__)
         assert validated_rollouts == [rollout_database]
         assert count_rows(store, "session_creation_records") == 0
         assert not sessions_root.exists()
