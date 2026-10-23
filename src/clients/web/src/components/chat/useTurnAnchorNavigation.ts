@@ -60,6 +60,8 @@ export function useTurnAnchorNavigation({
     anchorRef.current = null;
     scopeRef.current = scopeKey;
     restoredScopeRef.current = null;
+    // 已取消的定位状态与任务一起失效，返回原 owner 时不能重新显示。
+    setNavigation(null);
     followsLatestRef.current = true;
   }
 

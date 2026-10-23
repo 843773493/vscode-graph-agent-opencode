@@ -394,6 +394,24 @@ describe("正式轮次定位与位置恢复", () => {
     expect(harness.scrolls.every((location) => location.index === "LAST")).toBe(true);
   });
 
+  test("离开并返回原 owner 不会恢复已取消的定位状态", () => {
+    const items = [turn("turn-1", 1), turn("turn-2", 2)];
+    const harness = navigationHarness(items, undefined, false);
+    act(() => harness.state().navigateToTurn("turn-1"));
+    harness.flush();
+    expect(harness.state().navigation?.phase).toBe("positioning");
+    harness.update([], "workspace/session/unresolved-thread");
+    expect(harness.state().navigation).toBeNull();
+    harness.update(items, "workspace/session/thread");
+    harness.settle();
+    expect(harness.state().navigation).toBeNull();
+    expect(harness.positions).toEqual([]);
+    act(() => harness.state().navigateToTurn("turn-2"));
+    harness.scroller.mountedId = "turn-2";
+    harness.settle();
+    expect(harness.state().navigation?.message).toBe("已定位第 2 轮");
+  });
+
   test("pending和internal不伪装为Turn，缺失与后端错误可原ID重试", async () => {
     let failed = false;
     const internal: ChatTranscriptItem = { kind: "internal_execution", key: "internal:item-report", executionId: "execution-report",
