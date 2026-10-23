@@ -1063,6 +1063,104 @@ async def test_injected_registration_failure_shares_safe_http_state_and_record(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("stage", [
+    "acquire_context", "create_page", "read_browser_defaults", "set_viewport", "Emulation.setDeviceMetricsOverride",
+])
+async def test_browser_startup_failure_keeps_native_details_in_diagnostics(
+    stage: str, integration_client: httpx.AsyncClient, browser_context: CustomToolFactoryContext,
+    browser_runtime: WorkspaceToolRuntime, browser_manager_processes: tuple[int, int],
+) -> None:
+    container, _session, _invocation = browser_runtime
+    command = {
+        "session_id": browser_context.session_id,
+        "thread_id": browser_context.invocation_context.thread_binding.thread_id,
+        "url": "about:blank",
+    }
+    seeded = await integration_client.post("/api/v1/resources/browsers", json=command)
+    assert seeded.status_code == 200, seeded.text
+    seed_id = seeded.json()["data"]["resource_id"]
+    root = Path(container.workspace_root)
+    reason = f"injected EACCES: {root / '.boxteam/browser-manager/private-startup-profile'}"
+    transport = BrowserManagerClient(workspace_id=container.workspace_id, backend_url=f"http://127.0.0.1:{browser_manager_processes[0]}")
+    failure = f"throw Object.assign(new Error({json.dumps(reason)}), {{code: 'EACCES'}});"
+    # 只在第三方边界注入一次故障；新资源接纳、启动、清理和失败落盘仍由产品入口完成。
+    if stage == "acquire_context":
+        code = (
+            "const proto = Object.getPrototypeOf(context.browser()); const original = proto.newContext;"
+            " proto.newContext = async function (...args) { proto.newContext = original; " + failure + " };"
+        )
+    elif stage == "create_page":
+        code = (
+            "const proto = Object.getPrototypeOf(context); const original = proto.newPage;"
+            " proto.newPage = async function (...args) { proto.newPage = original; " + failure + " };"
+        )
+    elif stage in {"read_browser_defaults", "set_viewport"}:
+        method = "evaluate" if stage == "read_browser_defaults" else "setViewportSize"
+        condition = "this !== originalPage"
+        if stage == "read_browser_defaults":
+            condition += " && String(args[0]).includes('navigator.userAgent')"
+        code = (
+            f"const originalPage = page; const proto = Object.getPrototypeOf(page); const original = proto.{method};"
+            f" proto.{method} = async function (...args) {{ if ({condition}) {{ proto.{method} = original; {failure} }}"
+            " return await original.call(this, ...args); };"
+        )
+    else:
+        code = (
+            "const cdp = await context.newCDPSession(page); const proto = Object.getPrototypeOf(cdp);"
+            " const original = proto.send; await cdp.detach(); proto.send = async function (method, params) {"
+            f" if (method === '{stage}') {{ proto.send = original; {failure} }}"
+            " return await original.call(this, method, params); };"
+        )
+    await transport.perform(seed_id, "run", {"code": code}, actor="agent")
+    failed = await integration_client.post("/api/v1/resources/browsers", json=command)
+    assert failed.status_code == 500, failed.text
+    assert failed.headers["X-Request-ID"] == failed.json()["request_id"]
+    assert f"stage={stage}" in failed.text
+    assert str(root) not in failed.text
+    listed = await integration_client.get(f"/api/v1/sessions/{browser_context.session_id}/resources")
+    listed_failure, = [item for item in listed.json()["data"]["items"] if item["kind"] == "browser" and item["resource_id"] != seed_id]
+    assert listed_failure["available_actions"] == []
+    browser_id = listed_failure["resource_id"]
+    observed = (await integration_client.get(f"/api/v1/resources/{browser_id}")).json()["data"]
+    assert observed["status"] == "failed"
+    assert observed["reconciliation_status"] == "verified"
+    assert "stop" in observed["available_actions"]
+    assert f"stage={stage}" in observed["metadata"]["error_message"]
+    assert container.browser_resource_owner._leases.leases_for_resource(browser_id) == []
+    state = await transport.get_resource(browser_id)
+    synchronous = await asyncio.to_thread(transport._json_request_sync, "GET", f"/api/browsers/{browser_id}", None)
+    assert synchronous["data"]["error_message"] == state["error_message"]
+    assert state["reconciliation_status"] == "verified"
+    assert state["pages"] == []
+    records = json.loads((root / ".boxteam/browser-manager/browsers.json").read_text())
+    record, = [item for item in records["browsers"] if item["browser_id"] == browser_id]
+    assert record["error_message"] == state["error_message"]
+    assert str(root) not in json.dumps(record)
+    assert str(root) not in json.dumps(observed)
+    artifacts = TestRunContext.from_test_file(Path(__file__)).artifacts_dir
+    diagnostics = "\n".join(item.read_text() for item in artifacts.glob("browser-backend-*.stderr.log"))
+    assert reason in diagnostics
+    # 首次creating观察采用Node已核实的失败事实；仍通过显式stop关闭资源，再解除关联。
+    reconciled = await integration_client.post(f"/api/v1/resources/{browser_id}/stop", json={
+        "expected_revision": observed["owner_revision"],
+    })
+    assert reconciled.status_code == 200, reconciled.text
+    assert reconciled.json()["data"]["reconciliation_status"] == "verified"
+    assert container.browser_resource_owner._leases.leases_for_resource(browser_id) == []
+    # 故障不会破坏共享Chromium，也不让已失败资源占据实际context。
+    retried = await integration_client.post("/api/v1/resources/browsers", json=command)
+    assert retried.status_code == 200, retried.text
+    assert retried.json()["data"]["status"] == "running"
+    (artifacts / f"startup-failure-{stage}-{time.time_ns()}.json").write_text(json.dumps({
+        "receipt": failed.json(), "owner_projection": observed, "node_record": record,
+        "synchronous": synchronous, "retried": retried.json(),
+    }, ensure_ascii=False, indent=2), encoding="utf-8")
+    for resource_id in [browser_id, seed_id, retried.json()["data"]["resource_id"]]:
+        deleted = await _detach_delete(integration_client, resource_id, browser_context)
+        assert deleted.status_code == 200, deleted.text
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(("navigation_type", "method", "mode"), [
     ("url", "goto", "sync"), ("reload", "reload", "async"),
     ("back", "goBack", "api"), ("forward", "goForward", "async"),

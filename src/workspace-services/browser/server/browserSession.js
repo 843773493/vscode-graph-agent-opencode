@@ -936,18 +936,27 @@ export class BrowserSession extends EventEmitter {
         this.record.viewport_override,
         this.deviceStateOverrides(),
       );
-      const runtime = await this.manager.runtimePool.acquireContext({
+      await this.acquireRuntime({
         ...deviceOptions,
         ignoreHTTPSErrors: true,
       });
-      this.assignRuntime(runtime);
-      const initialPage = await this.context.newPage();
+      let initialPage;
+      try {
+        initialPage = await this.context.newPage();
+      } catch (cause) {
+        throw browserRuntimeFailure({ browserId: this.id, pageId: this.id, stage: "create_page", cause });
+      }
       await this.registerPage(initialPage, { pageId: this.id, activate: true });
       if (!deviceOptions.isMobile) {
-        const browserDefaults = await initialPage.evaluate(() => ({
-          userAgent: navigator.userAgent,
-          platform: navigator.platform,
-        }));
+        let browserDefaults;
+        try {
+          browserDefaults = await initialPage.evaluate(() => ({
+            userAgent: navigator.userAgent,
+            platform: navigator.platform,
+          }));
+        } catch (cause) {
+          throw browserRuntimeFailure({ browserId: this.id, pageId: this.id, stage: "read_browser_defaults", cause });
+        }
         this.baseUserAgent = browserDefaults.userAgent;
         this.basePlatform = browserDefaults.platform;
       }
@@ -962,12 +971,29 @@ export class BrowserSession extends EventEmitter {
       return this.snapshot();
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      await this.failStartup(message);
+      try {
+        await this.failStartup(message);
+      } catch (cleanupError) {
+        const failure = new AggregateError(
+          [error, cleanupError],
+          `浏览器启动失败且清理失败: ${message}; ${cleanupError.message}`,
+          { cause: error },
+        );
+        failure.code = error.code;
+        failure.statusCode = error.statusCode;
+        throw failure;
+      }
       throw error;
     }
   }
 
-  assignRuntime(runtime) {
+  async acquireRuntime(options) {
+    let runtime;
+    try {
+      runtime = await this.manager.runtimePool.acquireContext(options);
+    } catch (cause) {
+      throw browserRuntimeFailure({ browserId: this.id, stage: "acquire_context", cause });
+    }
     this.browser = runtime.browser;
     this.browserHandle = runtime.browserHandle;
     this.context = runtime.context;
@@ -2000,8 +2026,12 @@ export class BrowserSession extends EventEmitter {
           : {}),
       },
     );
-    await entry.page.setViewportSize({ width: emulation.width, height: emulation.height });
-    await entry.cdpSession.send("Emulation.setDeviceMetricsOverride", {
+    try {
+      await entry.page.setViewportSize({ width: emulation.width, height: emulation.height });
+    } catch (cause) {
+      throw browserRuntimeFailure({ browserId: this.id, pageId: entry.pageId, stage: "set_viewport", cause });
+    }
+    await this.sendResourceCommand(entry, "Emulation.setDeviceMetricsOverride", {
       width: emulation.width,
       height: emulation.height,
       deviceScaleFactor: emulation.deviceScaleFactor,
@@ -2010,20 +2040,20 @@ export class BrowserSession extends EventEmitter {
       screenHeight: emulation.screenHeight,
       screenOrientation: emulation.screenOrientation,
     });
-    await entry.cdpSession.send("Emulation.setTouchEmulationEnabled", {
+    await this.sendResourceCommand(entry, "Emulation.setTouchEmulationEnabled", {
       enabled: emulation.touchEnabled,
       ...(emulation.touchEnabled ? { maxTouchPoints: emulation.maxTouchPoints } : {}),
     });
-    await entry.cdpSession.send("Emulation.setEmitTouchEventsForMouse", {
+    await this.sendResourceCommand(entry, "Emulation.setEmitTouchEventsForMouse", {
       enabled: emulation.touchEnabled,
       configuration: emulation.touchEnabled ? "mobile" : "desktop",
     });
-    await entry.cdpSession.send("Emulation.setUserAgentOverride", {
+    await this.sendResourceCommand(entry, "Emulation.setUserAgentOverride", {
       userAgent: emulation.userAgent,
       platform: emulation.platform,
     });
     const network = getBrowserNetworkProfile(this.record.network_profile_id);
-    await entry.cdpSession.send("Network.emulateNetworkConditions", {
+    await this.sendResourceCommand(entry, "Network.emulateNetworkConditions", {
       offline: network.offline,
       latency: network.latency,
       downloadThroughput: network.downloadThroughput,

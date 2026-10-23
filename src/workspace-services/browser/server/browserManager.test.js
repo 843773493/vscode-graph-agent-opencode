@@ -501,6 +501,9 @@ describe("浏览器状态持久化", () => {
 
     await expect(second).rejects.toMatchObject({ code: "browser_workspace_logical_limit_exceeded" });
     rejectFirstStart(new Error("结束并发创建测试"));
-    await expect(first).rejects.toThrow("结束并发创建测试");
+    await expect(first).rejects.toMatchObject({
+      message: expect.stringContaining("stage=acquire_context"),
+      cause: expect.objectContaining({ message: "结束并发创建测试" }),
+    });
   });
 });

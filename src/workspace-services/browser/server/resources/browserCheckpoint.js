@@ -168,18 +168,12 @@ export async function restoreBrowserCheckpoint(session, checkpoint) {
   if (!Array.isArray(checkpoint.pages) || checkpoint.pages.length === 0) {
     throw new Error(`浏览器检查点没有标签页: browser_id=${session.id}`);
   }
-  let runtime;
-  try {
-    runtime = await session.manager.runtimePool.acquireContext({
-      viewport: session.record.viewport,
-      deviceScaleFactor: 1,
-      ignoreHTTPSErrors: true,
-      storageState: checkpoint.storage_state,
-    });
-  } catch (cause) {
-    throw browserRuntimeFailure({ browserId: session.id, stage: "acquire_context", cause });
-  }
-  session.assignRuntime(runtime);
+  await session.acquireRuntime({
+    viewport: session.record.viewport,
+    deviceScaleFactor: 1,
+    ignoreHTTPSErrors: true,
+    storageState: checkpoint.storage_state,
+  });
   try {
     for (const pageState of checkpoint.pages) {
       const restoreUrl = checkpointRestoreUrl(pageState);

@@ -90,6 +90,88 @@ function transitionSession(onCommand = () => undefined) {
   return { browser, commands, persisted, states };
 }
 
+describe("浏览器启动的运行时错误归属", () => {
+  function startingSession(stage, cause, cleanupCause = null) {
+    const browser = session();
+    const persisted = [];
+    const calls = [];
+    const at = async (operation, value) => {
+      calls.push(operation);
+      if (stage === operation) throw cause;
+      return value;
+    };
+    const page = Object.assign(new EventEmitter(), {
+      url: () => "about:blank", title: async () => "初始页面", isClosed: () => false,
+      goto: async () => undefined,
+      evaluate: () => at("read_browser_defaults", { userAgent: "desktop-agent", platform: "Linux" }),
+      setViewportSize: () => at("set_viewport"),
+    });
+    const cdp = Object.assign(new EventEmitter(), { send: (method) => at(method) });
+    const context = Object.assign(new EventEmitter(), {
+      newPage: () => at("create_page", page), newCDPSession: async () => cdp,
+    });
+    browser.record.status = "created";
+    browser.manager.persist = async () => { persisted.push(browser.toRecord()); };
+    browser.manager.runtimePool = {
+      acquireContext: () => at("acquire_context", { browser: {}, context, chromiumInstanceGeneration: 7 }),
+      releaseContext: async () => { calls.push("release_context"); if (cleanupCause) throw cleanupCause; },
+    };
+    return { browser, persisted, calls, context };
+  }
+
+  test.each([
+    "acquire_context", "create_page", "read_browser_defaults", "set_viewport",
+    "Emulation.setDeviceMetricsOverride", "Emulation.setTouchEmulationEnabled",
+    "Emulation.setEmitTouchEventsForMouse", "Emulation.setUserAgentOverride", "Network.emulateNetworkConditions",
+  ])("启动失败由实际阶段产生错误并释放已取得的context: %s", async (stage) => {
+    const cause = Object.assign(new Error("EACCES /private/chromium/profile"), { code: "EACCES", statusCode: 503 });
+    const { browser, persisted, calls } = startingSession(stage, cause);
+    const logged = spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      const failure = await browser.start().catch((error) => error);
+      expect(failure).toMatchObject({ cause, code: "EACCES", statusCode: 503 });
+      expect(failure.message).toContain(`stage=${stage}`);
+      expect(failure.message).toContain(browser.id);
+      expect(failure.message).not.toContain("/private/chromium/profile");
+      expect(logged.mock.calls.some((args) => args.at(-1) === cause)).toBe(true);
+      expect(persisted.at(-1)).toMatchObject({ status: "failed", error_message: failure.message, reconciliation_status: "verified" });
+      expect(JSON.stringify(persisted)).not.toContain("/private/chromium/profile");
+      expect(calls.filter((call) => call === "release_context")).toHaveLength(stage === "acquire_context" ? 0 : 1);
+      expect(browser.context).toBeNull();
+      expect(browser.pageEntries.size).toBe(0);
+    } finally { logged.mockRestore(); }
+  });
+
+  test.each(["/private/chromium/profile", String.raw`C:\private\chromium\profile`, String.raw`\\host\share\profile`])(
+    "启动和清理同时失败保留原错分类、两个原因及未知句柄: %s", async (nativePath) => {
+      const primary = Object.assign(new Error(`启动 ${nativePath}`), { code: "EACCES", statusCode: 503 });
+      const cleanup = Object.assign(new Error(`关闭 ${nativePath}`), { code: "EIO", statusCode: 500 });
+      const { browser, context, persisted } = startingSession("create_page", primary, cleanup);
+      const logged = spyOn(console, "error").mockImplementation(() => undefined);
+      try {
+        const failure = await browser.start().catch((error) => error);
+        expect(failure).toBeInstanceOf(AggregateError);
+        expect(failure.errors.map((error) => error.cause)).toEqual([primary, cleanup]);
+        expect(failure).toMatchObject({ cause: failure.errors[0], code: "EACCES", statusCode: 503 });
+        expect(failure.message).not.toContain(nativePath);
+        expect(persisted.at(-1)).toMatchObject({ status: "failed", reconciliation_status: "unknown" });
+        expect(JSON.stringify(persisted)).not.toContain(nativePath);
+        expect(browser.context).toBe(context);
+      } finally { logged.mockRestore(); }
+    },
+  );
+
+  test("启动成功保留原生默认UA及运行时代际，再次start复用同一context", async () => {
+    const { browser, calls } = startingSession(null);
+    expect(await browser.start()).toMatchObject({ status: "running", runtime_generation: 7 });
+    expect(browser.baseUserAgent).toBe("desktop-agent");
+    expect(browser.basePlatform).toBe("Linux");
+    await browser.start();
+    expect(calls.filter((call) => call === "acquire_context")).toHaveLength(1);
+    expect(calls).not.toContain("release_context");
+  });
+});
+
 describe("浏览器资源生命周期错误归属", () => {
   test.each(["Page.stopScreencast", "reset_pointer", "Page.startScreencast", "sync_page", "Page.captureScreenshot"])(
     "标签页切换在实际失败阶段保留原因与已执行事实: %s", async (stage) => {
