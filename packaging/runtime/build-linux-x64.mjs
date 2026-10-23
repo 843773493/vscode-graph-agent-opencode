@@ -235,7 +235,18 @@ async function main() {
   const applicationRoot = path.join(runtimePackageRoot, "application");
   mkdirSync(applicationRoot, { recursive: true });
   copyApplicationSources(projectRoot, applicationRoot);
+  // 内建 SQLite 不导出 C 符号；探针只使用连接注入的 SQLite extension API。
+  run("cc", [
+    "-shared", "-fPIC", "-O2", "-Wall", "-Wextra", "-Werror",
+    "-o", path.join(applicationRoot, "app/core/sqlite_vfs_probe.so"),
+    path.join(applicationRoot, "app/core/sqlite_vfs_probe.c"),
+  ]);
   installPythonDependencies(pythonExecutable);
+  run(pythonExecutable, [
+    "-c",
+    "from app.core.sqlite_state import sqlite_vfs_max_pathname; " +
+      "print('SQLite VFS mxPathname:', sqlite_vfs_max_pathname())",
+  ], { cwd: applicationRoot });
   installNodeDependencies(applicationRoot);
 
   run("bun", ["run", "build"], {

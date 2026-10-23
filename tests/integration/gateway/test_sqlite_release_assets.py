@@ -102,3 +102,61 @@ print(json.dumps({"loaded": core.__file__, "schema": 17}))
     missing = run("staged-missing-asset")
     assert missing.returncode != 0 and "FileNotFoundError" in missing.stderr
     assert "001.sql" in missing.stderr
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="Linux standalone Python 的原生探针")
+def test_builtin_sqlite_vfs_probe_uses_current_connection_api(
+    staged_application: Path, tmp_path: Path,
+):
+    probe_root = staged_application / "app/core"
+    compiled = subprocess.run([
+        "cc", "-shared", "-fPIC", "-O2", "-Wall", "-Wextra", "-Werror",
+        "-o", str(probe_root / "sqlite_vfs_probe.so"),
+        str(probe_root / "sqlite_vfs_probe.c"),
+    ], capture_output=True, text=True, timeout=30, check=False)
+    (tmp_path / "compile-probe.json").write_text(json.dumps({
+        "argv": compiled.args, "exit_code": compiled.returncode,
+        "stdout": compiled.stdout, "stderr": compiled.stderr,
+    }, ensure_ascii=False, indent=2))
+    assert compiled.returncode == 0, compiled.stderr
+    script = '''
+import _sqlite3
+import sqlite3
+from contextlib import closing
+from pathlib import Path
+from app.core.sqlite_state import sqlite_vfs_max_pathname, validate_sqlite_path_budget
+
+# 用同一解释器的原生符号结果核验 extension API；分支不读取扩展文件。
+expected = sqlite_vfs_max_pathname()
+_sqlite3.__spec__.origin = "built-in"
+_sqlite3.__file__ = None
+assert sqlite_vfs_max_pathname() == expected
+database = Path("state/native.sqlite")
+validate_sqlite_path_budget(database)
+database.parent.mkdir(parents=True)
+with closing(sqlite3.connect(database)) as connection:
+    assert connection.execute("PRAGMA journal_mode=WAL").fetchone()[0] == "wal"
+    connection.execute("CREATE TABLE probe (value TEXT)")
+    connection.execute("INSERT INTO probe VALUES ('发行版 Ω')")
+    connection.commit()
+with closing(sqlite3.connect(database)) as connection:
+    assert connection.execute("SELECT value FROM probe").fetchone()[0] == "发行版 Ω"
+Path("app/core/sqlite_vfs_probe.so").unlink()
+try:
+    sqlite_vfs_max_pathname()
+except sqlite3.OperationalError:
+    pass
+else:
+    raise AssertionError("探针缺失必须报错，不能查询另一份 SQLite")
+print(expected)
+'''
+    result = subprocess.run([
+        sys.executable, "-c", script,
+    ], cwd=staged_application,
+        env={**os.environ, "PYTHONPATH": str(staged_application)},
+        capture_output=True, text=True, timeout=30, check=False)
+    (tmp_path / "builtin-sqlite-probe.json").write_text(json.dumps({
+        "argv": result.args, "cwd": str(staged_application), "exit_code": result.returncode,
+        "stdout": result.stdout, "stderr": result.stderr,
+    }, ensure_ascii=False, indent=2))
+    assert result.returncode == 0, result.stderr

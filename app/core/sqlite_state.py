@@ -6,6 +6,7 @@ import os
 import re
 import sqlite3
 from collections.abc import Callable
+from contextlib import closing
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from importlib.resources import files
@@ -35,6 +36,17 @@ class _SQLiteVFSHeader(ctypes.Structure):
 def sqlite_vfs_max_pathname() -> int:
     """返回当前 Python SQLite 默认 VFS 的路径上限，能力不可用时明确报错。"""
     extension_path = getattr(_sqlite3, "__file__", None)
+    if _sqlite3.__spec__ is not None and _sqlite3.__spec__.origin == "built-in":
+        # standalone Python 隐藏了静态 SQLite 符号；扩展通过当前连接提供的
+        # SQLite API 查询同一 VFS，不能加载系统中另一份 SQLite 代替它。
+        probe = files("app.core").joinpath("sqlite_vfs_probe.so")
+        with closing(sqlite3.connect(":memory:")) as connection:
+            connection.enable_load_extension(True)
+            try:
+                connection.load_extension(str(probe))
+            finally:
+                connection.enable_load_extension(False)
+            return int(connection.execute("SELECT boxteam_vfs_max_pathname()").fetchone()[0])
     if not isinstance(extension_path, str) or not extension_path:
         raise RuntimeError(
             "无法定位当前 Python SQLite 扩展，不能读取默认 VFS mxPathname: "
