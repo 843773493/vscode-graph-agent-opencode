@@ -8,11 +8,10 @@ from contextvars import ContextVar, Token
 from dataclasses import dataclass
 from pathlib import Path
 
+from app.core.identifier import validate_session_id, validate_thread_id
 from app.core.session_catalog_resolver import SessionCatalogPathResolver
 from app.core.session_catalog_store import (
     SessionCreationRecord,
-    validate_session_id,
-    validate_thread_id,
 )
 from app.core.session_control_store import SessionControlStore, ThreadCreationRecord
 

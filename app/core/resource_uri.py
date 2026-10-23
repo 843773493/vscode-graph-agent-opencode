@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from typing import Final, Literal
 from urllib.parse import quote, unquote
 
-from app.core.session_catalog_store.validators import validate_session_id
+from app.core.identifier import validate_session_id
 
 _SCHEME: Final = "boxteam://"
 _SCOPE_KEYWORDS: Final = frozenset({"workspace", "user", "gateway", "inline"})

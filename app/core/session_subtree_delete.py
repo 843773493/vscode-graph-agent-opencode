@@ -75,12 +75,12 @@ from pathlib import Path
 from app.core.atomic_fs import (
     fsync_directory as _fsync_directory,
 )
+from app.core.identifier import validate_session_id
 from app.core.key_lock_pool import KeyLockPool
 from app.core.phase_observer import observe_phase
 from app.core.session_catalog_store import (
     SessionCatalogStore,
     SubtreeDeleteRecord,
-    validate_session_id,
 )
 from app.core.session_catalog_store.contracts import (
     CatalogTransactionHook,

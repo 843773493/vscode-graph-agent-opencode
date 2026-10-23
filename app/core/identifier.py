@@ -42,6 +42,44 @@ IdentifierPrefix = Literal[
 _GATEWAY_ID_PATTERN = re.compile(r"gateway_[0-9a-f]{32}")
 
 
+# Session/Thread 形态是纯身份合同，不依赖 catalog、SQL 或业务运行时。
+_SESSION_ID_PATTERN = re.compile(r"ses_[0-9a-f]{32}")
+_THREAD_ID_PATTERN = re.compile(r"thr_[0-9a-f]{32}")
+_UUID_VERSION_HEX_INDEX = 12
+_UUID_VARIANT_HEX_INDEX = 16
+_UUID_VARIANT_HEX_CHARS = "89ab"
+
+
+def validate_session_id(value: str) -> None:
+    """校验 canonical session_id：``ses_`` 前缀 + 32 位小写 hex + UUIDv7 位 profile。
+
+    斜杠、反斜杠、Unicode、``.``/``..``、大小写错误、前缀错误、长度错误及
+    非 v7 位 profile 一律直接拒绝，不得清洗或截断。
+    """
+    if not isinstance(value, str):
+        raise TypeError(f"session_id 必须是字符串: {value!r}")
+    if _SESSION_ID_PATTERN.fullmatch(value) is None:
+        raise ValueError(f"session_id 形态非法: {value!r}")
+    _validate_uuid_payload(value[4:])
+
+
+def validate_thread_id(value: str) -> None:
+    """校验 canonical thread_id：``thr_`` 前缀 + 32 位小写 hex + UUIDv7 位 profile。"""
+    if not isinstance(value, str):
+        raise TypeError(f"thread_id 必须是字符串: {value!r}")
+    if _THREAD_ID_PATTERN.fullmatch(value) is None:
+        raise ValueError(f"thread_id 形态非法: {value!r}")
+    _validate_uuid_payload(value[4:])
+
+
+def _validate_uuid_payload(payload: str) -> None:
+    """校验 32 位 hex payload 的 UUIDv7 version/variant 位。"""
+    if payload[_UUID_VERSION_HEX_INDEX] != "7":
+        raise ValueError(f"ID payload 的 UUID version 位非法: {payload!r}")
+    if payload[_UUID_VARIANT_HEX_INDEX] not in _UUID_VARIANT_HEX_CHARS:
+        raise ValueError(f"ID payload 的 UUID variant 位非法: {payload!r}")
+
+
 def validate_gateway_id(value: str) -> str:
     """Gateway 持久身份只接受随机不透明 ID，不接受地址、端口或通道标识。"""
     if not isinstance(value, str) or _GATEWAY_ID_PATTERN.fullmatch(value) is None:

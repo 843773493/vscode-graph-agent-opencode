@@ -22,6 +22,8 @@ from app.core.identifier import (
     create_prefixed_id,
     to_epoch_ms,
     uuid7_datetime_from_hex,
+    validate_session_id,
+    validate_thread_id,
 )
 from app.core.session_catalog_store._schema import _CREATION_RECORD_COLUMNS
 from app.core.session_catalog_store.contracts import (
@@ -39,9 +41,7 @@ from app.core.session_catalog_store.creation_record_rows import (
 )
 from app.core.session_catalog_store.validators import (
     validate_operation_idempotency_key,
-    validate_session_id,
     validate_session_storage_identity,
-    validate_thread_id,
 )
 
 

@@ -7,7 +7,7 @@ from google.protobuf import json_format
 from google.protobuf.message import Message
 from pydantic import BaseModel
 
-from app.protocol.canonical import validate_session_id
+from app.core.identifier import validate_session_id
 from app.protocol.codecs.json import (
     struct_from_mapping,
     struct_to_mapping,

@@ -35,8 +35,8 @@ from typing import Self
 
 import portalocker
 
+from app.core.identifier import validate_session_id
 from app.core.key_lock_pool import KEY_LOCK_SHARDS
-from app.core.session_catalog_store.validators import validate_session_id
 
 
 class SessionDeletionPendingError(RuntimeError):

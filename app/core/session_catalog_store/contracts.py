@@ -21,8 +21,8 @@ from pydantic import BaseModel, ConfigDict
 if TYPE_CHECKING:
     from app.core.session_control_store.contracts import ThreadGraphBindingRecord
 
+from app.core.identifier import validate_session_id
 from app.core.session_catalog_store.validators import (
-    validate_session_id,
     validate_storage_relative_locator,
 )
 

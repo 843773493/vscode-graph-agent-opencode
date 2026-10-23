@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from app.core.session_catalog_store import validate_session_id, validate_thread_id
+from app.core.identifier import validate_session_id, validate_thread_id
 from app.services.business.communication.errors import CommunicationContractError
 
 

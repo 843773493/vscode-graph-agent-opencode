@@ -1,14 +1,10 @@
 """协议层 canonical ID 形态常量（OpenSpec 2.1）。
 
-唯一实现在 app.core.session_catalog_store（验证器与形态正则）；本模块是
-协议层（API/Proto 编解码）的复用面，只冻结形态常量并再导出验证器，
-不建立第二套正则或清洗逻辑。新增携带 session/thread ID 的 wire 字段时
-必须经本表面校验，不得在 codec 内自行拼接规则。
+本模块只冻结线格式常量。携带 Session/Thread ID 的 wire 字段统一使用
+app.core.identifier 的验证器，不在协议层再导出或复制校验规则。
 """
 
 from __future__ import annotations
-
-from app.core.session_catalog_store import validate_session_id, validate_thread_id
 
 __all__ = [
     "CANONICAL_ID_HEX_PAYLOAD_LENGTH",
@@ -16,8 +12,6 @@ __all__ = [
     "CANONICAL_ID_TOTAL_LENGTH",
     "CANONICAL_SESSION_ID_PREFIX",
     "CANONICAL_THREAD_ID_PREFIX",
-    "validate_session_id",
-    "validate_thread_id",
 ]
 
 # 36-byte ASCII 形态：4 字节前缀（ses_/thr_）+ 32 位小写 hex；

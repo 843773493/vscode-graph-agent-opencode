@@ -8,7 +8,7 @@ import sqlite3
 from dataclasses import asdict, fields
 from typing import TYPE_CHECKING
 
-from app.core.identifier import create_uuid_hex
+from app.core.identifier import create_uuid_hex, validate_session_id, validate_thread_id
 from app.core.session_catalog_store.contracts import (
     CatalogMaintenanceRequiredError,
     ForkSourceCaptureRecord,
@@ -21,8 +21,6 @@ from app.core.session_catalog_store.creation_record_rows import (
 )
 from app.core.session_catalog_store.validators import (
     validate_operation_idempotency_key,
-    validate_session_id,
-    validate_thread_id,
 )
 from app.core.session_control_primitives import CONTROL_DATABASE_NAME
 

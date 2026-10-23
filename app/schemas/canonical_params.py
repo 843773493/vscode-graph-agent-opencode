@@ -6,7 +6,7 @@ from typing import Annotated, cast
 
 from pydantic import BeforeValidator
 
-from app.core.session_catalog_store import validate_session_id, validate_thread_id
+from app.core.identifier import validate_session_id, validate_thread_id
 
 __all__ = ["CanonicalSessionId", "CanonicalThreadId"]
 

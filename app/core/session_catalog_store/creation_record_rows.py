@@ -4,11 +4,11 @@ from __future__ import annotations
 
 import sqlite3
 
+from app.core.identifier import validate_session_id
 from app.core.session_catalog_store._schema import _CREATION_RECORD_COLUMNS
 from app.core.session_catalog_store.contracts import SessionCreationRecord
 from app.core.session_catalog_store.validators import (
     validate_operation_journal_metadata,
-    validate_session_id,
 )
 
 

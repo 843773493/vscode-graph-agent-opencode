@@ -8,7 +8,7 @@ from contextvars import ContextVar
 from dataclasses import dataclass
 from uuid import UUID
 
-from app.core.session_catalog_store import validate_session_id, validate_thread_id
+from app.core.identifier import validate_session_id, validate_thread_id
 
 from .errors import ModelStreamMatchError
 

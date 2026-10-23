@@ -1,6 +1,6 @@
-"""session-catalog.sqlite 的 DDL、形态正则与共享列清单（单点定义）。
+"""session-catalog.sqlite 的 DDL、locator 正则与共享列清单（单点定义）。
 
-本模块只承载表结构常量与 canonical ID / locator 形态正则，不含任何读写
+本模块只承载表结构常量与 locator 形态正则，不含任何读写
 逻辑；各垂直链路模块与 facade 从这里取用，不重复定义 DDL。
 
 错误分类沿用宿主约定：``TypeError`` 输入类型错误、``ValueError`` 输入形态
@@ -13,19 +13,11 @@ import re
 
 from app.core.sqlite_state import load_sql
 
-# canonical ID profile：前缀 + 32 位小写 hex，恰好 36 个 ASCII byte。
-_SESSION_ID_PATTERN = re.compile(r"ses_[0-9a-f]{32}")
-_THREAD_ID_PATTERN = re.compile(r"thr_[0-9a-f]{32}")
 # storage locator 形态：sessions/YYYY/MM/DD/{session_id}。
 _STORAGE_LOCATOR_PATTERN = re.compile(
     r"sessions/([0-9]{4})/([0-9]{2})/([0-9]{2})/(ses_[0-9a-f]{32})"
 )
 
-# UUIDv7 位 profile：payload 第 13 个 hex（0 基 index 12）固定为 '7'，
-# 第 17 个 hex（index 16）必须属于 variant 一组 '8'|'9'|'a'|'b'。
-_UUID_VERSION_HEX_INDEX = 12
-_UUID_VARIANT_HEX_INDEX = 16
-_UUID_VARIANT_HEX_CHARS = "89ab"
 
 # 路径预算：每组件 ≤255 bytes、总长 ≤4096 bytes（落盘前由 resolver 校验）。
 _MAX_PATH_COMPONENT_BYTES = 255

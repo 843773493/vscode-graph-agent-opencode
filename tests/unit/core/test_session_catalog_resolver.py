@@ -17,7 +17,7 @@ from pathlib import Path
 
 import pytest
 
-from app.core.identifier import create_prefixed_id, create_uuid_hex
+from app.core.identifier import create_prefixed_id, create_uuid_hex, validate_session_id
 from app.core.session_catalog_resolver import (
     SessionCatalogFolderProjection,
     SessionCatalogPathResolver,
@@ -26,7 +26,6 @@ from app.core.session_catalog_resolver import (
 )
 from app.core.session_catalog_store import (
     SessionCatalogStore,
-    validate_session_id,
 )
 from app.core.session_catalog_store.creation_envelope import (
     compute_session_creation_preimage_hash,

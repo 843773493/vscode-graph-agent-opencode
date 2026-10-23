@@ -15,6 +15,7 @@ import sqlite3
 from contextlib import nullcontext
 from datetime import datetime
 
+from app.core.identifier import validate_session_id, validate_thread_id
 from app.core.session_catalog_store._schema import (
     _LOCATOR_PREFIX,
     _NODE_COLUMNS,
@@ -26,9 +27,7 @@ from app.core.session_catalog_store.contracts import (
 )
 from app.core.session_catalog_store.validators import (
     validate_path_budget,
-    validate_session_id,
     validate_session_storage_identity,
-    validate_thread_id,
 )
 
 

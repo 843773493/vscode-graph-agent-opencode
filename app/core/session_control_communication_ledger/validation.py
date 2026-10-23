@@ -2,10 +2,7 @@
 
 from __future__ import annotations
 
-from app.core.session_catalog_store.validators import (
-    validate_session_id,
-    validate_thread_id,
-)
+from app.core.identifier import validate_session_id, validate_thread_id
 
 from .records import CommunicationInboxRecord, CommunicationOutboxRecord
 from .schema import _COMMUNICATION_KINDS

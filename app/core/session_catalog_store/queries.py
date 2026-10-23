@@ -17,6 +17,7 @@ import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
 
+from app.core.identifier import validate_thread_id
 from app.core.session_catalog_store._schema import (
     _LOCATOR_PREFIX,
     _NODE_COLUMNS,
@@ -32,7 +33,6 @@ from app.core.session_catalog_store.validators import (
     validate_path_budget,
     validate_session_storage_identity,
     validate_storage_relative_locator,
-    validate_thread_id,
 )
 
 # 根级 active session 直接可见；其它候选只有完整 active 祖先链到根才可见。

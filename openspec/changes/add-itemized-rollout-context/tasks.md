@@ -1087,3 +1087,10 @@ pending 恢复的硬错误重试已闭合（2026-10-22）：进程内装载阶�
 - 历史详情复用原严格 projection 时间解析，起止倒退（含1微秒）明确失败，移除唯一调用的宽松 duration helper；合法零值和整数毫秒精度保持，摘要/详情沿同一统计。冷 history 负例核 SQLite dump 与 JSONL 原字节不变；协议注释与生成绑定同步说明，不再宣称负差钳零或缺时区按 UTC。
 - 完整候选 tree `3635c3b492f952fd533aadc7b98c2d7827d0150b` 的真实 HTTP 摘要、详情、双向分页、final pointer、未终结读取及 final 正文有界读取集中验证为5 passed/124.65秒、exit0；Ruff、TypeScript与Web build均exit0。运行时代码与已审独立delivery的48项通过逐字相同（冷读测试仅support import布局不同）；旧生产同一6个倒序负例全失败。准确命令、源码前后指纹、原始输出、退出码及证据复用在 `out/tests/temp/history_duration_integrity_20261023/artifacts/validation-proof-003.json`。
 - 环境缺凭据的28个setup错误、180秒整文件超时，以及两项主体通过但120秒退出124的运行均保留原始结果；后继009以同候选相关源码补齐成功收据。协议总生成在既有URI/catalog循环导入失败，Buf lint/build/breaking及后继直接生成、OpenAPI导出成功；此生成器问题留到下一纵向切片处理。本批不代表整文件或完整default Web通过，不据此关闭8.3总门。
+
+
+### 2026-10-23 7.5-F / URI 身份校验依赖闭包
+
+- Session/Thread 纯身份校验移入现有 `app.core.identifier`，三个函数 AST 与旧定义一致；catalog 只保留 locator/storage 规则。全迁生产、测试与三个协议 codec 的调用，删除 catalog/protocol 两处再导出；URI grammar 冷导入不再加载 catalog 与 itemized 业务存储，解除完整协议生成的循环依赖，不改变 ID 规则、错误合同或数据库结构。
+- 完整候选 `31e588e3ff5cf24e72b7c7082fa0388cf56b06b8` 的 `identity-codecs-004` 64 passed/9.27秒，覆盖独立解释器冷导入、canonical ID 矩阵及真实 codec 序列化；Ruff `identity-static-004` 与完整 `gen:protocol`（含 lint/build/breaking/SSE 导出）`identity-protocol-004` 均exit0，生成绑定和SSE schema逐字不变。旧完整候选冷导入1 failed，精确复现部分初始化模块 ImportError；最终 AST 审计旧导入与 facade export 均为零。
+- 更广的身份/catalog 回归为646 passed/3 failed：两个静态前缀/注释锚点问题在旧候选同样失败，UUID同毫秒密集生成排序失败涉及未改变的 factory，旧候选相关项通过，未宣称该波动已解决。扩展 API/schema 契约在90秒外部超时124、仅输出27个完成点，未计通过；本批不依赖其为完成证明。准确命令、全树指纹、raw、退出码及只读独审保留于 `out/tests/temp/resource_uri_import_20261023/artifacts/`。本收据只闭合该导入/调用方链路，不代替7.5、URI全出口、完整Web或Windows总门。

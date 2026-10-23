@@ -319,10 +319,7 @@ class WorkspaceSessionMainPort:
         return SessionContextSearchResultDTO.model_validate(data)
 
     async def resolve_main_thread(self, *, gateway_id: str, workspace_id: str, session_id: str) -> str:
-        from app.core.session_catalog_store import (
-            validate_session_id,
-            validate_thread_id,
-        )
+        from app.core.identifier import validate_session_id, validate_thread_id
         validate_session_id(session_id)
         data = await self._request(workspace_id=workspace_id, method="GET", path=SESSION_MAIN_THREAD_ENDPOINT.format(session_id=session_id), origin=gateway_id)
         if data.get("session_id") != session_id:

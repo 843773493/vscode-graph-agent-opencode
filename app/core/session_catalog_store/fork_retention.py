@@ -14,6 +14,7 @@ import sqlite3
 from contextlib import nullcontext
 from datetime import UTC, datetime
 
+from app.core.identifier import validate_session_id
 from app.core.session_catalog_store._schema import _FORK_RETENTION_CLAIM_COLUMNS
 from app.core.session_catalog_store.contracts import (
     CatalogMaintenanceRequiredError,
@@ -24,7 +25,6 @@ from app.core.session_catalog_store.contracts import (
 )
 from app.core.session_catalog_store.validators import (
     validate_journal_timestamps,
-    validate_session_id,
 )
 
 

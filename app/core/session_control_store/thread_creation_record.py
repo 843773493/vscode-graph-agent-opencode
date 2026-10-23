@@ -23,8 +23,6 @@ from app.core.identifier import (
     create_prefixed_id,
     to_epoch_ms,
     uuid7_datetime_from_hex,
-)
-from app.core.session_catalog_store.validators import (
     validate_session_id,
     validate_thread_id,
 )

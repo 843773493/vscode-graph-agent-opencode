@@ -18,7 +18,7 @@ import sqlite3
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
-from app.core.session_catalog_store.validators import validate_session_id
+from app.core.identifier import validate_session_id
 from app.core.session_control_primitives import validate_thread_creation_key
 from app.core.session_control_store.sql import (
     SELECT_COLLABORATION_LEDGER_REVISION,

@@ -13,12 +13,10 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from app.core.identifier import to_epoch_ms
+from app.core.identifier import to_epoch_ms, validate_session_id, validate_thread_id
 from app.core.session_catalog_store import (
     SessionCatalogNode,
     SessionCatalogStore,
-    validate_session_id,
-    validate_thread_id,
 )
 from app.core.session_catalog_store.contracts import (
     SessionGenerationOriginDTO,

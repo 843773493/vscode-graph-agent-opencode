@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Literal
 
 from app.abstractions.workspace_resources import ResourceKind, RetentionScope
-from app.core.session_catalog_store import validate_session_id, validate_thread_id
+from app.core.identifier import validate_session_id, validate_thread_id
 from app.core.workspace_identity import validate_workspace_id
 
 

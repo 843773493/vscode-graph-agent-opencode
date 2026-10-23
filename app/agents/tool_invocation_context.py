@@ -13,12 +13,11 @@ from langchain_core.messages import AIMessage, ToolMessage
 from langgraph.prebuilt.tool_node import ToolCallRequest
 from langgraph.types import Command
 
-from app.core.identifier import uuid7_datetime_from_hex
+from app.core.identifier import uuid7_datetime_from_hex, validate_thread_id
 from app.core.model_delta_context import (
     get_current_model_delta_sink,
     model_tool_invocation_scope,
 )
-from app.core.session_catalog_store import validate_thread_id
 from app.core.shielded_cleanup import run_cleanup_shielded
 from app.core.turn_execution_scope import (
     ScopeCancelledError,

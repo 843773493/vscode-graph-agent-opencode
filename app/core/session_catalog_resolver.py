@@ -31,12 +31,12 @@ from datetime import datetime
 from pathlib import Path
 from typing import Literal, TypeAlias
 
+from app.core.identifier import validate_thread_id
 from app.core.session_catalog_store import (
     SessionCatalogNode,
     SessionCatalogStore,
     SessionCreationRecord,
     SubtreeDeleteRecord,
-    validate_thread_id,
 )
 from app.core.session_catalog_store.contracts import (
     CatalogTransactionHook,

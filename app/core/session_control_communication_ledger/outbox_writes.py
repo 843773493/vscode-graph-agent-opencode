@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from app.core.session_catalog_store.validators import validate_session_id
+from app.core.identifier import validate_session_id
 from app.core.session_control_primitives import SHA256_HEX_PATTERN
 
 from .reads import (

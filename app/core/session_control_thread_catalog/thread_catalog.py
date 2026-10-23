@@ -28,9 +28,9 @@ import sqlite3
 from dataclasses import dataclass
 from datetime import date, datetime
 
+from app.core.identifier import validate_thread_id
 from app.core.session_catalog_store.validators import (
     uuid7_embedded_utc_date,
-    validate_thread_id,
 )
 from app.core.session_control_store.contracts import ThreadGraphBindingRecord
 from app.core.sqlite_state import load_sql

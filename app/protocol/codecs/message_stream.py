@@ -7,7 +7,7 @@ from typing import Any, cast
 from google.protobuf import json_format
 from google.protobuf.message import Message
 
-from app.protocol.canonical import validate_session_id, validate_thread_id
+from app.core.identifier import validate_session_id, validate_thread_id
 from app.protocol.codecs.json import message_to_json, timestamp_from_datetime
 from app.protocol.generated.boxteam.workspace.message.v1 import message_stream_pb2
 

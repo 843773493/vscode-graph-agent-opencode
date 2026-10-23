@@ -11,14 +11,16 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
-from tests.support.graph_binding import TEST_THREAD_GRAPH_BINDING
 
-from app.core.identifier import create_prefixed_id, create_uuid_hex
+from app.core.identifier import (
+    create_prefixed_id,
+    create_uuid_hex,
+    validate_session_id,
+    validate_thread_id,
+)
 from app.core.session_catalog_store import (
     validate_path_budget,
-    validate_session_id,
     validate_storage_relative_locator,
-    validate_thread_id,
 )
 from app.core.session_control_store import (
     SessionControlStore,
@@ -32,6 +34,7 @@ from app.protocol.canonical import (
     CANONICAL_THREAD_ID_PREFIX,
 )
 from tests.support.canonical_id_at import session_id_at, thread_id_at
+from tests.support.graph_binding import TEST_THREAD_GRAPH_BINDING
 
 
 def make_session_id() -> str:

@@ -8,7 +8,7 @@
 `write_transaction`/`_bump_generation`/`current_generation`/`read_transaction`），并按原名
 再导出模块级公开符号。其余方法按垂直链路逐字搬迁到同包各 mixin，由多继承装配。
 
-本包承载的族：canonical 校验器与生命周期栅栏（`validators.py`）、不可变投影 DTO 与错误类
+本包承载的族：locator 校验器与生命周期栅栏（`validators.py`）、不可变投影 DTO 与错误类
 （`contracts.py`）、nodes 表读写（`nodes.py`）、fork retention claim（`fork_retention.py`）、
 creation record journal（`creation_journal.py`）、fork source capture journal（`fork_source_capture.py`）、
 共享创建行读取/投影（`creation_record_rows.py`）、subtree delete journal 与空 folder 删除
@@ -26,7 +26,7 @@ creation record journal（`creation_journal.py`）、fork source capture journal
 - 可以维护 facade `__init__.py` 中的 `SessionCatalogStore` 类声明、连接生命周期方法、
   `SCHEMA_VERSION` 与 `__all__`/再导出面。
 - 可以维护各族 mixin 文件中的方法体与族内私有静态方法；`creation_envelope.py` 统一创建、恢复与启动读取的纯 metadata/请求意图/preimage 校验，不访问数据库或物理目录；`creation_record_rows.py` 是创建与 capture 共用的唯一行读取和投影，不持有连接或发起事务。
-- 可以维护 `_schema.py` 中的表 DDL、索引 DDL、版本-表绑定与 canonical ID/locator 形态正则；
+- 可以维护 `_schema.py` 中的表 DDL、索引 DDL、版本-表绑定与 locator 形态正则；
   新增 DDL 常量时落在该模块，不在各族复制。
 - 可以维护随本包落地的四段式 `AGENTS.md`。
 - 可以维护对应的单元测试；测试仍放在 `tests/unit/core/` 下。
@@ -37,7 +37,8 @@ creation record journal（`creation_journal.py`）、fork source capture journal
   路径 `app.core.session_catalog_store.SessionCatalogStore`，以及 `__init__.py` 对
   `SessionCatalogNode`/`SessionCreationRecord`/`SubtreeDeleteRecord`/`ForkRetentionClaim`/
   `CatalogBackupManifest`/`CatalogIntegrityReport`/`SessionLifecycleFence`/各错误类与全部
-  `validate_*`/`uuid7_embedded_utc_date` 的再导出，均 MUST 保持不变。
+  目录/存储相关 `validate_*`/`uuid7_embedded_utc_date` 的再导出，均 MUST 保持不变。
+  Session/Thread 纯身份校验统一在 `app.core.identifier`；调用方直接导入，不保留旧再导出。
 - 不得为兼容旧调用点保留转发方法、旧模块 shim 或双套实现；有状态跨族协作必须走同一宿主 `self`；纯行读取/投影由中立模块直接导入，不添加宿主转发方法。
 - 不得静默改动搬迁方法的异常类型、错误消息或注释；搬迁必须逐字保留语义（禁止把
   `RuntimeError` 改成 `TypeError` 之类）。

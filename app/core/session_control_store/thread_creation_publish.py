@@ -15,7 +15,7 @@ import json
 import logging
 from datetime import UTC, datetime
 
-from app.core.session_catalog_store.validators import validate_thread_id
+from app.core.identifier import validate_thread_id
 from app.core.session_control_primitives import (
     SHA256_HEX_PATTERN,
     validate_thread_creation_key,

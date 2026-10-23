@@ -26,9 +26,7 @@ from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
-from app.core.session_catalog_store.validators import (
-    validate_thread_id as validate_thread_id,
-)
+from app.core.identifier import validate_thread_id as validate_thread_id
 from app.core.session_control_communication_ledger.communication_ledger import (
     CommunicationInboxRecord,
     CommunicationLedgerMixin,

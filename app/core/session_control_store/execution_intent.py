@@ -17,10 +17,7 @@ import sqlite3
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
-from app.core.session_catalog_store.validators import (
-    validate_session_id,
-    validate_thread_id,
-)
+from app.core.identifier import validate_session_id, validate_thread_id
 from app.core.session_control_primitives import (
     EXECUTION_BINDING_ID_PATTERN,
     EXECUTION_JOB_ID_PATTERN,

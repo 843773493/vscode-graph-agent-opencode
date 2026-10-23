@@ -19,7 +19,7 @@ from pathlib import Path
 
 import pytest
 
-from app.core.identifier import create_uuid_hex
+from app.core.identifier import create_uuid_hex, validate_session_id, validate_thread_id
 from app.core.session_catalog_store import (
     CatalogBackupManifest,
     CatalogMaintenanceRequiredError,
@@ -33,9 +33,7 @@ from app.core.session_catalog_store import (
     SourceRetentionOperationPendingError,
     SubtreeDeleteRecord,
     validate_path_budget,
-    validate_session_id,
     validate_storage_relative_locator,
-    validate_thread_id,
 )
 from app.core.session_lifecycle_gate import NavigationTopologyGate, SessionLifecycleGate
 from tests.support.canonical_id_at import (

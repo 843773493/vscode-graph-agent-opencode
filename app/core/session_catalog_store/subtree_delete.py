@@ -15,6 +15,7 @@ import json
 import sqlite3
 from datetime import UTC, datetime
 
+from app.core.identifier import validate_session_id
 from app.core.session_catalog_store._schema import _SUBTREE_DELETE_RECORD_COLUMNS
 from app.core.session_catalog_store.contracts import (
     CatalogMaintenanceRequiredError,
@@ -30,7 +31,6 @@ from app.core.session_catalog_store.contracts import (
 from app.core.session_catalog_store.validators import (
     validate_operation_idempotency_key,
     validate_operation_journal_metadata,
-    validate_session_id,
     validate_storage_relative_locator,
 )
 

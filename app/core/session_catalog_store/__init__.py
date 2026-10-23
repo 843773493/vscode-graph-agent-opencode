@@ -78,9 +78,7 @@ from app.core.session_catalog_store.validators import (
     SessionLifecycleFence,
     uuid7_embedded_utc_date,
     validate_path_budget,
-    validate_session_id,
     validate_storage_relative_locator,
-    validate_thread_id,
 )
 from app.core.sqlite_state import (
     SQLITE_BUSY_TIMEOUT_MS,
@@ -104,9 +102,7 @@ __all__ = [
     "SubtreeFrozenNode",
     "uuid7_embedded_utc_date",
     "validate_path_budget",
-    "validate_session_id",
     "validate_storage_relative_locator",
-    "validate_thread_id",
 ]
 
 

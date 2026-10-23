@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Protocol
 
-from app.core.session_catalog_store import validate_thread_id
+from app.core.identifier import validate_thread_id
 
 if TYPE_CHECKING:
     from app.schemas.internal_v2.session import SessionDTO

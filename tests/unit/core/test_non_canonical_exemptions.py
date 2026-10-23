@@ -25,8 +25,11 @@ from uuid import uuid4
 
 import pytest
 
-from app.core.identifier import IdentifierPrefix
-from app.core.session_catalog_store import validate_session_id, validate_thread_id
+from app.core.identifier import (
+    IdentifierPrefix,
+    validate_session_id,
+    validate_thread_id,
+)
 
 
 @dataclass(frozen=True, slots=True)
