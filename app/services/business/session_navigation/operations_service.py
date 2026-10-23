@@ -114,6 +114,7 @@ class SessionCatalogOperationsService:
             raise TypeError(f"store 必须是 SessionCatalogStore: {store!r}")
         if not isinstance(workspace_id, str) or not workspace_id:
             raise ValueError(f"workspace_id 不能为空: {workspace_id!r}")
+        queue.verify_intent_records(workspace_id=workspace_id)
         self._store = store
         self._workspace_id = workspace_id
         self._queue = queue

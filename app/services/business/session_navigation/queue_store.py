@@ -109,6 +109,22 @@ class NavigationMutationQueueStore(
             raise TypeError(f"store 必须是 SessionCatalogStore: {store!r}")
         self._store = store
 
+    def verify_intent_records(self, *, workspace_id: str) -> None:
+        """启动worker前在同一只读快照核全部保留意图，包括终态重放记录。"""
+        with self._store.read_transaction() as connection:
+            for row in connection.execute(f"SELECT {_RECORD_COLUMNS} FROM navigation_mutation_records"):
+                try:
+                    if row["workspace_id"] != workspace_id:
+                        raise ValueError(
+                            f"workspace归属不符: expected={workspace_id!r}, actual={row['workspace_id']!r}"
+                        )
+                    self._record_from_row(row)
+                except (TypeError, ValueError) as error:
+                    raise CatalogMaintenanceRequiredError(
+                        "navigation intent 原始记录损坏，拒绝恢复或改写: "
+                        f"path={self._store.database_path}, operation_id={row['operation_id']!r}, detail={error}"
+                    ) from error
+
     # ------------------------------------------------------------------
     # enqueue
     # ------------------------------------------------------------------
@@ -155,12 +171,13 @@ class NavigationMutationQueueStore(
                 connection, gateway_id, workspace_id, actor, intent.client_operation_id
             )
             if existing is not None:
-                if existing["preimage_hash"] != preimage_hash:
+                record = self._record_from_row(existing)
+                if record.preimage_hash != preimage_hash:
                     raise NavigationMutationConflictError(
                         "同一 client_operation_id 携带不同 preimage，明确冲突: "
                         f"operation_id={intent.client_operation_id}"
                     )
-                receipts.append(self._record_from_row(existing))
+                receipts.append(record)
                 continue
             self._require_batch_dependencies_precede(
                 connection,

@@ -19,6 +19,7 @@
 # 规范
 
 - 本业务owner只消费core catalog已初始化并校验的队列结构，不保留补建函数、SQL副本或第二schema标记。
+- operation栈装配在worker启动前，以queue唯一行投影核全部保留intent的原始typed参数、镜像身份、workspace归属及既有preimage；正常查询/重放/worker也消费同一投影，不按当前nodes重建历史或改变hash字段集。
 
 - 权威 SQLite catalog 保存稳定 ID、显示名、导航父链和 Session 冻结 locator；Folder 无物理目录或 manifest，`session.json` 只保存不可变创建 metadata。
 - `parent_session_id` 只从 catalog 最近祖先 Session 派生，不回写 manifest；fork、delegation、上下文来源和生成器 lineage 与导航父链分离。

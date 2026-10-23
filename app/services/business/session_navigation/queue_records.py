@@ -3,8 +3,8 @@
 本模块是「记录模型」这一条垂直链的唯一承载点：
 
 - ``NavigationMutationRecord`` / ``NavigationEventRecord`` 精确对应两张旁挂表的行形态；
-- ``_record_from_row`` / ``_event_from_row`` 是两个投影的唯一构造点（逐字段
-  ``str()``/``int()`` 归一，可空列还原为 None），调用方统一经由
+- ``_record_from_row`` / ``_event_from_row`` 是两个投影的唯一构造点；前者在
+  投影前按原 typed intent 重验冻结参数、镜像身份与 preimage，调用方统一经由
   ``NavigationMutationQueueStore`` 上的同名静态方法入口使用；
 - ``compute_intent_preimage_hash`` 是跨进程幂等哈希，字段集与字节序是冲突判定
   的判据，不得改动；``_params_json`` 冻结 receipt 可见参数；
@@ -28,6 +28,7 @@ from app.schemas.internal_v2.session_navigation.operations import (
     NAVIGATION_MUTATION_TERMINAL_STATES,
     AutoSessionTitleCommand,
     NavigationDeleteSettlement,
+    NavigationMutationIntentDTO,
     NavigationQueueCommand,
 )
 
@@ -207,6 +208,28 @@ def _params_json(intent: NavigationQueueCommand) -> str:
 
 
 def _record_from_row(row: sqlite3.Row) -> NavigationMutationRecord:
+    # 读取、幂等重放与启动使用同一 typed 合同，不从当前节点或配置重建历史意图。
+    params = json.loads(row["params_json"])
+    if not isinstance(params, dict):
+        raise TypeError("navigation intent params 必须是对象")
+    for name in ("gateway_id", "workspace_id", "actor"):
+        if not isinstance(row[name], str) or not row[name]:
+            raise ValueError(f"navigation intent {name} 必须是非空字符串")
+    for name in ("target_node_id", "created_by_operation_id"):
+        if name not in params or params[name] != row[name]:
+            raise ValueError(f"navigation intent 冻结 {name} 与记录身份不符")
+    command_type = AutoSessionTitleCommand if row["kind"] == "auto_title_session" else NavigationMutationIntentDTO
+    intent = command_type.model_validate({
+        **params,
+        "client_operation_id": row["operation_id"],
+        "client_sequence": row["client_sequence"],
+        "kind": row["kind"],
+        "depends_on": json.loads(row["depends_on_json"]),
+    }, strict=True)
+    if params != json.loads(_params_json(intent)):
+        raise ValueError("navigation intent 冻结参数字段不完整或与 typed intent 不符")
+    if compute_intent_preimage_hash(intent) != row["preimage_hash"]:
+        raise ValueError(f"navigation intent preimage 不符: operation_id={row['operation_id']!r}")
     return NavigationMutationRecord(
         gateway_id=str(row["gateway_id"]),
         workspace_id=str(row["workspace_id"]),
@@ -216,9 +239,9 @@ def _record_from_row(row: sqlite3.Row) -> NavigationMutationRecord:
         queue_seq=int(row["queue_seq"]),
         kind=str(row["kind"]),
         state=str(row["state"]),
-        params=json.loads(str(row["params_json"])),
+        params=params,
         preimage_hash=str(row["preimage_hash"]),
-        depends_on=tuple(json.loads(str(row["depends_on_json"]))),
+        depends_on=tuple(intent.depends_on),
         created_by_operation_id=row["created_by_operation_id"],
         target_node_id=row["target_node_id"],
         reserved_node_id=row["reserved_node_id"],
