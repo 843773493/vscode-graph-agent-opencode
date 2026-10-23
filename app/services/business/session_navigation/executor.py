@@ -239,7 +239,6 @@ class NavigationMutationExecutor:
                 if operation is None:
                     raise
                 self._record_delete_settlement_failure(operation, error)
-                logger.exception("递归删除恢复排空失败，原回执需修复: operation_id=%s", operation.operation_id)
             else:
                 recovered.append(result)
         return recovered
@@ -463,23 +462,12 @@ class NavigationMutationExecutor:
             if committed is None:
                 return self._reject(claimed, error, claim=False)
             committed = self._record_delete_settlement_failure(committed, error)
-            logger.error(
-                "递归删除已逻辑提交但物理 settlement 失败，原回执需修复: "
-                "operation_id=%s, error=%s",
-                claimed.operation_id,
-                error,
-            )
             return self._terminal_outcome(committed)
         except Exception as error:
             committed = self._read_committed_delete(claimed)
             if committed is None:
                 raise
             committed = self._record_delete_settlement_failure(committed, error)
-            logger.exception(
-                "递归删除已逻辑提交但物理 settlement 异常，原回执需修复: "
-                "operation_id=%s",
-                claimed.operation_id,
-            )
             return self._terminal_outcome(committed)
 
         settled = result.record_state == "completed"
@@ -594,13 +582,25 @@ class NavigationMutationExecutor:
     ) -> NavigationMutationRecord:
         """正常执行与启动恢复共享原 receipt 的失败结算写口。"""
         owner = self._require_owner()
+        detail = (
+            "递归删除物理收尾失败: "
+            f"operation_id={record.operation_id}, target_node_id={record.target_node_id}, "
+            f"artifact=session-subtree, stage=delete_settlement, error={type(error).__name__}"
+        )
+        if isinstance(error, OSError):
+            detail += f", errno={error.errno}"
+            if (winerror := getattr(error, "winerror", None)) is not None:
+                detail += f", winerror={winerror}"
+        elif isinstance(error, sqlite3.Error):
+            detail += f", sqlite_errorcode={getattr(error, 'sqlite_errorcode', None)}"
+        logger.error("%s；完整诊断见异常链", detail, exc_info=error)
         with self._store.write_transaction() as connection:
             self._queue.require_owner_generation(
                 connection, workspace_id=self._workspace_id,
                 owner_id=owner.owner_id, generation=owner.generation,
             )
             return self._queue.mark_delete_repair_required_in(
-                connection, record=record, detail=f"{type(error).__name__}: {error}",
+                connection, record=record, detail=detail,
                 now=utc_now_text(),
             )
 

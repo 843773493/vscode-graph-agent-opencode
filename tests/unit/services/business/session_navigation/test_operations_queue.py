@@ -1227,6 +1227,7 @@ async def test_lifespan_owner_recovers_a_persisted_running_operation(
 @pytest.mark.asyncio
 async def test_delete_mark_commits_before_physical_drain_and_recovers_settlement(
     navigation_workspace: Path,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     stack = _Stack(navigation_workspace / ".boxteam" / "sessions")
     created = stack.create_folder_intent(
@@ -1278,7 +1279,10 @@ async def test_delete_mark_commits_before_physical_drain_and_recovers_settlement
         assert failed.state == "committed"
         assert failed.settlement == "repair_required"
         assert failed.error_code == "delete_settlement_repair_required"
-        assert "mark 后 drain 失败" in failed.error_detail
+        assert "stage=delete_settlement" in failed.error_detail
+        assert "error=RuntimeError" in failed.error_detail
+        assert "mark 后 drain 失败" not in failed.error_detail
+        assert "mark 后 drain 失败" in caplog.text
         assert "pending_settlement" not in failed.model_dump()
         assert stack.store.get_subtree_delete_record(delete.client_operation_id).state == "deleting"
         with stack.store.read_transaction() as connection:

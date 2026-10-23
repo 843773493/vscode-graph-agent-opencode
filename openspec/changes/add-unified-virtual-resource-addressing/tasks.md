@@ -348,3 +348,10 @@
 - 唯一行投影在JSON、原始时间及typed模型校验的实际失败点发布固定schema字段/校验类别，不将损坏输入、额外键名或validator正文复制到普通响应。保留原TypeError/ValueError分类；启动核验与事件错误仅报告artifact/stage/rule，物理DB位置、原值和异常链留服务端日志/cause。后台worker失败只公开异常类型，启动超时继续公开明确的owner等待原因；不改HTTP 400/500/503、序号、事务或schema，参数编码/preimage函数AST相同。
 - 固定完整tree `87cde2fd6f3e34b2d7185eeb6b4892c2020cccb0`：11项新增真实API/worker/SQLite的ASGI与冷启动集成通过（24.14秒），111项相邻意图/事件/owner/元数据/worker/路由回归通过（173.45秒），Ruff/compile/strict44项均通过。相同新增测试在完整旧生产archive下11项全部失败，明确复现响应与启动错误复制原生路径。首轮邻居68失败含候选遗漏.env导致的Provider环境缺失，以及worker旧全文断言；补候选依赖后，unit改核三个入口的安全摘要及精确原cause，启动超时保留原有原因，未放宽身份、顺序和原件断言。
 - 非作者005只读独审GO，无finding、未独立复跑；4302项全源码前后指纹、raw/SHA、实际退出码、零进程组残留与准确命令见 `out/tests/temp/navigation_public_errors_20261023/artifacts/validation-proof-005.json` 及runs。该集成不代表真实网络、完整Gateway/Web或Windows；不据此关闭2.2/7.2。完整Web rc2断言已另提，后继default在共享资源场景因后端连接退出失败，继续按原件诊断，不混记为本批通过。
+
+
+### 2026-10-23 删除物理收尾错误出口（2.2/7.2 部分收口）
+
+- 删除正常执行与启动恢复复用唯一 repair 回执写口，只持久化 operation/target 身份、artifact/stage、异常类别及适用的 errno/winerror/SQLite 数值码；完整异常及 cause 统一记入服务端日志。逻辑 committed、物理 repair_required、原 journal/冻结集合、owner generation、回执修订幂等与成功重试清错保持原合同，不改 schema。
+- 固定完整 tree `35401f289d9e41a8e3332acd0f892b1bd77ba990`：6 项新增 ASGI/API、worker 与 SQLite 集成通过，覆盖 Session/目录删除与 RuntimeError/原生文件/SQLite 故障；44 项相邻导航回归通过，Ruff、compileall、strict OpenSpec 全部通过。相同最终测试在旧生产完整 archive 下 6 项全部失败，检出原路径泄露。非作者只读独审 GO，未独立复跑。首轮测试错误地把 SQLite 的正常 WAL/SHM 旁文件当成业务变更，随后按普通文件精确字节及 SQLite 完整逻辑 dump 核对；Windows 路径日志按异常的标准转义表示精确核对，未放宽原件、身份、顺序或恢复断言。
+- 4303 项源码前后指纹、原始输出 SHA、实际退出码与零进程残留见 `out/tests/temp/delete_settlement_errors_20261023/artifacts/validation-proof-003.json`；只证明 ASGI 跨模块与 worker stop/start，不代真实网络、OS 进程重启、完整 Web 或 Windows 实机。2.2/7.2 保持未勾。
