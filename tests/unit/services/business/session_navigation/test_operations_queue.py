@@ -252,12 +252,15 @@ async def test_running_queue_head_blocks_later_candidate(
     first = stack.create_folder_intent(seed="running_head", sequence=1, name="队首")
     second = stack.create_folder_intent(seed="running_next", sequence=2, name="后继")
     _enqueue_without_worker(stack, [first, second])
-    with stack.store.write_transaction() as connection:
-        connection.execute(
-            "UPDATE navigation_mutation_records SET state = 'running', "
-            "holder_id = 'old-owner:1' WHERE operation_id = ?",
-            (first.client_operation_id,),
-        )
+    async with stack.executor.queue_owner() as owner:
+        with stack.store.write_transaction() as connection:
+            head = stack.queue.next_runnable(connection, stack.workspace_id)
+            assert head is not None and head.operation_id == first.client_operation_id
+            claimed = stack.queue.claim_running(
+                connection, record=head, holder_id=owner.holder_id,
+                owner_id=owner.owner_id, owner_generation=owner.generation, now=utc_now_text(),
+            )
+            assert claimed is not None and claimed.state == "running"
 
     with stack.store.read_transaction() as connection:
         candidate = stack.queue.next_runnable(connection, stack.workspace_id)

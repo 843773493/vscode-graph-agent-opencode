@@ -212,6 +212,40 @@ def _params_json(intent: NavigationQueueCommand) -> str:
     )
 
 
+def _require_record_metadata(row: sqlite3.Row) -> None:
+    """恢复与正常读取共用原始控制字段合同，不截断序号或把任意值转成真。"""
+    for name, minimum, nullable in (
+        ("queue_seq", 1, False), ("fencing_token", 0, False),
+        ("receipt_revision", 1, False), ("result_node_revision", 1, True),
+        ("committed_catalog_revision", 0, True),
+    ):
+        value = row[name]
+        if value is None and nullable:
+            continue
+        if type(value) is not int or value < minimum:
+            raise ValueError(f"navigation operation {name}必须是至少{minimum}的整数")
+    if type(row["pending_settlement"]) is not int or row["pending_settlement"] not in (0, 1):
+        raise ValueError("navigation operation pending_settlement必须是0或1")
+    if row["state"] not in ("queued", "running", *NAVIGATION_MUTATION_TERMINAL_STATES):
+        raise ValueError("navigation operation state不在状态闭集中")
+    for name in ("reserved_node_id", "result_node_id", "holder_id"):
+        value = row[name]
+        if value is not None and (not isinstance(value, str) or not value):
+            raise ValueError(f"navigation operation {name}必须为null或非空字符串")
+    for name in ("error_code", "error_detail"):
+        if row[name] is not None and not isinstance(row[name], str):
+            raise TypeError(f"navigation operation {name}必须为null或字符串")
+    for name in ("created_at", "updated_at"):
+        if datetime.fromisoformat(row[name]).tzinfo is None:
+            raise ValueError(f"navigation operation {name}必须带时区")
+    if row["pending_settlement"] and (
+        row["kind"] not in ("delete_folder", "delete_session") or row["state"] != "committed"
+    ):
+        raise ValueError("navigation operation只有committed删除可以等待settlement")
+    if row["state"] == "running" and (row["holder_id"] is None or row["fencing_token"] < 1):
+        raise ValueError("navigation operation running缺少holder或fencing token")
+
+
 def _record_from_row(row: sqlite3.Row) -> NavigationMutationRecord:
     # 读取、幂等重放与启动使用同一 typed 合同，不从当前节点或配置重建历史意图。
     params = json.loads(row["params_json"])
@@ -235,17 +269,18 @@ def _record_from_row(row: sqlite3.Row) -> NavigationMutationRecord:
         raise ValueError("navigation intent 冻结参数字段不完整或与 typed intent 不符")
     if compute_intent_preimage_hash(intent) != row["preimage_hash"]:
         raise ValueError(f"navigation intent preimage 不符: operation_id={row['operation_id']!r}")
+    _require_record_metadata(row)
     return NavigationMutationRecord(
-        gateway_id=str(row["gateway_id"]),
-        workspace_id=str(row["workspace_id"]),
-        actor=str(row["actor"]),
-        operation_id=str(row["operation_id"]),
-        client_sequence=int(row["client_sequence"]),
-        queue_seq=int(row["queue_seq"]),
-        kind=str(row["kind"]),
-        state=str(row["state"]),
+        gateway_id=row["gateway_id"],
+        workspace_id=row["workspace_id"],
+        actor=row["actor"],
+        operation_id=row["operation_id"],
+        client_sequence=intent.client_sequence,
+        queue_seq=row["queue_seq"],
+        kind=intent.kind,
+        state=row["state"],
         params=params,
-        preimage_hash=str(row["preimage_hash"]),
+        preimage_hash=row["preimage_hash"],
         depends_on=tuple(intent.depends_on),
         created_by_operation_id=row["created_by_operation_id"],
         target_node_id=row["target_node_id"],
@@ -255,12 +290,12 @@ def _record_from_row(row: sqlite3.Row) -> NavigationMutationRecord:
         committed_catalog_revision=row["committed_catalog_revision"],
         error_code=row["error_code"],
         error_detail=row["error_detail"],
-        pending_settlement=bool(row["pending_settlement"]),
+        pending_settlement=row["pending_settlement"] == 1,
         holder_id=row["holder_id"],
-        fencing_token=int(row["fencing_token"]),
-        receipt_revision=int(row["receipt_revision"]),
-        created_at=str(row["created_at"]),
-        updated_at=str(row["updated_at"]),
+        fencing_token=row["fencing_token"],
+        receipt_revision=row["receipt_revision"],
+        created_at=row["created_at"],
+        updated_at=row["updated_at"],
     )
 
 
