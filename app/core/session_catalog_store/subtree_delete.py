@@ -17,6 +17,7 @@ from datetime import UTC, datetime
 
 from app.core.session_catalog_store._schema import _SUBTREE_DELETE_RECORD_COLUMNS
 from app.core.session_catalog_store.contracts import (
+    CatalogMaintenanceRequiredError,
     CatalogTransactionHook,
     SubtreeDeleteMarkRejectedError,
     SubtreeDeleteRecord,
@@ -50,7 +51,7 @@ class SubtreeDeleteMixin:
     def _subtree_delete_record_from_row(
         row: sqlite3.Row,
     ) -> SubtreeDeleteRecord:
-        return SubtreeDeleteRecord(
+        record = SubtreeDeleteRecord(
             subtree_delete_idempotency_key=str(
                 row["subtree_delete_idempotency_key"]
             ),
@@ -70,6 +71,33 @@ class SubtreeDeleteMixin:
                 str(row["drained_session_ids"])
             ),
         )
+        frozen_ids = {item.node_id for item in record.frozen_node_ids}
+        session_ids = set(record.frozen_session_locators)
+        drained_ids = set(record.drained_session_ids)
+        # 只核冻结记录自身；preparing/aborted 的原子树可能已经合法移动或删除。
+        if (record.root_node_id not in frozen_ids or not session_ids <= frozen_ids
+                or not drained_ids <= session_ids
+                or any(locator.rsplit("/", 1)[1] != session_id
+                       for session_id, locator in record.frozen_session_locators.items())
+                or (record.state in ("preparing", "deleting") and drained_ids)
+                or (record.state == "draining" and not drained_ids)
+                or (record.state == "completed" and drained_ids != session_ids)):
+            raise CatalogMaintenanceRequiredError(
+                "subtree delete record 冻结身份或进度关系损坏，须进入维护模式核对并保留原数据: "
+                f"operation_id={record.subtree_delete_idempotency_key}"
+            )
+        return record
+
+    def verify_subtree_delete_records(self, *, connection: sqlite3.Connection) -> None:
+        """启动在调用方的同一读快照核全部删除 journal，terminal 记录也保护恢复归属。"""
+        for row in connection.execute(f"SELECT {_SUBTREE_DELETE_RECORD_COLUMNS} FROM subtree_delete_records"):
+            try:
+                self._subtree_delete_record_from_row(row)
+            except (TypeError, ValueError, RuntimeError) as error:
+                raise CatalogMaintenanceRequiredError(
+                    "subtree delete record 损坏，须进入维护模式核对并保留原数据: "
+                    f"operation_id={row['subtree_delete_idempotency_key']}"
+                ) from error
 
     @staticmethod
     def _subtree_rows(

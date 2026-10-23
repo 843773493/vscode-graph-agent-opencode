@@ -284,6 +284,7 @@ class CatalogQueriesMixin:
     def verify_workspace_consistency(self) -> None:
         """同一快照核父链与已发布/待发布 Session 的冻结存储身份。"""
         with self.read_transaction() as connection:
+            self.verify_subtree_delete_records(connection=connection)
             rows = connection.execute(
                 "SELECT node_id, parent_node_id, workspace_id FROM nodes"
             ).fetchall()
