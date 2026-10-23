@@ -40,6 +40,8 @@ from app.core.session_catalog_store.creation_envelope import (
     validate_session_creation_envelope,
 )
 from app.core.session_catalog_store.validators import (
+    validate_operation_idempotency_key,
+    validate_operation_journal_metadata,
     validate_session_id,
     validate_session_storage_identity,
     validate_thread_id,
@@ -79,7 +81,7 @@ class CreationJournalMixin:
         validate_session_id(target_session_id)
         validate_thread_id(source_thread_id)
         validate_thread_id(target_thread_id)
-        self._validate_idempotency_key(copy_operation_id)
+        validate_operation_idempotency_key(copy_operation_id)
         if source_external and target_external:
             raise ValueError("fork capture 必须由实际 source 或 target owner 登记")
         if snapshot_id is not None:
@@ -323,6 +325,19 @@ class CreationJournalMixin:
 
     @staticmethod
     def _creation_record_from_row(row: sqlite3.Row) -> SessionCreationRecord:
+        validate_operation_journal_metadata(
+            idempotency_key=row["session_creation_idempotency_key"], state=row["state"],
+            abort_reason=row["abort_reason"], record_created_at=row["record_created_at"],
+            record_updated_at=row["record_updated_at"],
+        )
+        parent_id, parent_revision = row["parent_node_id"], row["parent_revision"]
+        if parent_id is None:
+            if parent_revision is not None:
+                raise ValueError("根级 creation record 不得携带 parent_revision")
+        else:
+            validate_session_id(parent_id)
+            if not isinstance(parent_revision, int) or parent_revision < 1:
+                raise ValueError("creation record 必须保留正整数冻结 parent_revision")
         return SessionCreationRecord(
             session_creation_idempotency_key=str(
                 row["session_creation_idempotency_key"]
@@ -365,15 +380,6 @@ class CreationJournalMixin:
             fork_delivery_request_id=row["fork_delivery_request_id"],
         )
 
-    @staticmethod
-    def _validate_idempotency_key(idempotency_key: str) -> None:
-        if not isinstance(idempotency_key, str):
-            raise TypeError(
-                f"idempotency_key 必须是字符串: {idempotency_key!r}"
-            )
-        if not idempotency_key:
-            raise ValueError("idempotency_key 不能为空")
-
     def create_or_get_creation_record(
         self,
         *,
@@ -414,7 +420,7 @@ class CreationJournalMixin:
 
         if not isinstance(graph_binding, ThreadGraphBindingRecord):
             raise TypeError("graph_binding 必须是 ThreadGraphBindingRecord")
-        self._validate_idempotency_key(idempotency_key)
+        validate_operation_idempotency_key(idempotency_key)
         self._validate_common_fields(workspace_id, display_name)
         if title_source not in ("default", "user", "auto"):
             raise ValueError(f"title_source 非法: {title_source!r}")
@@ -629,7 +635,7 @@ class CreationJournalMixin:
 
     def get_creation_record(self, idempotency_key: str) -> SessionCreationRecord:
         """按幂等键返回 creation record 投影；不存在抛 KeyError。"""
-        self._validate_idempotency_key(idempotency_key)
+        validate_operation_idempotency_key(idempotency_key)
         with self.read_transaction() as connection:
             row = self._fetch_creation_record(connection, idempotency_key)
             if row is None:
@@ -686,7 +692,7 @@ class CreationJournalMixin:
         来自 record 冻结值）并把 record 推进为 ``published``。任何失败回滚
         整个事务：node 不发布、record 保持 preparing。
         """
-        self._validate_idempotency_key(idempotency_key)
+        validate_operation_idempotency_key(idempotency_key)
         if expected_purpose not in ("normal", "context_fork"):
             raise ValueError(
                 f"session creation purpose 非法: {expected_purpose!r}"
@@ -808,7 +814,7 @@ class CreationJournalMixin:
         ``published`` 不可撤销（RuntimeError）；已 aborted 幂等返回既有
         record（不覆盖原 abort_reason）。
         """
-        self._validate_idempotency_key(idempotency_key)
+        validate_operation_idempotency_key(idempotency_key)
         if not isinstance(reason, str):
             raise TypeError(f"abort reason 必须是字符串: {reason!r}")
         if not reason:

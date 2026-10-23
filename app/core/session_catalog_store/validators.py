@@ -28,6 +28,31 @@ from app.core.session_catalog_store._schema import (
 )
 
 
+def validate_operation_idempotency_key(idempotency_key: str) -> None:
+    """操作 key 只作非空账本身份；不清洗，也不参与物理路径。"""
+    if not isinstance(idempotency_key, str):
+        raise TypeError(f"idempotency_key 必须是字符串: {idempotency_key!r}")
+    if not idempotency_key:
+        raise ValueError("idempotency_key 不能为空")
+
+
+def validate_operation_journal_metadata(
+    *, idempotency_key: str, state: str, abort_reason: str | None,
+    record_created_at: str, record_updated_at: str,
+) -> None:
+    """创建/删除 journal 共用记账合同；不按墙钟先后推断状态转换。"""
+    validate_operation_idempotency_key(idempotency_key)
+    if state == "aborted":
+        if not isinstance(abort_reason, str) or not abort_reason:
+            raise ValueError("aborted journal 必须保留非空 abort_reason")
+    elif abort_reason is not None:
+        raise ValueError("非 aborted journal 不得携带 abort_reason")
+    for field, value in (("record_created_at", record_created_at), ("record_updated_at", record_updated_at)):
+        moment = datetime.fromisoformat(value)
+        if moment.tzinfo is None:
+            raise ValueError(f"journal {field} 必须带时区: {value!r}")
+
+
 def validate_session_id(value: str) -> None:
     """校验 canonical session_id：``ses_`` 前缀 + 32 位小写 hex + UUIDv7 位 profile。
 

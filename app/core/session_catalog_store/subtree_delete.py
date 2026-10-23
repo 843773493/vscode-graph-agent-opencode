@@ -28,6 +28,8 @@ from app.core.session_catalog_store.contracts import (
     _validate_workspace_id,
 )
 from app.core.session_catalog_store.validators import (
+    validate_operation_idempotency_key,
+    validate_operation_journal_metadata,
     validate_session_id,
     validate_storage_relative_locator,
 )
@@ -51,6 +53,11 @@ class SubtreeDeleteMixin:
     def _subtree_delete_record_from_row(
         row: sqlite3.Row,
     ) -> SubtreeDeleteRecord:
+        validate_operation_journal_metadata(
+            idempotency_key=row["subtree_delete_idempotency_key"], state=row["state"],
+            abort_reason=row["abort_reason"], record_created_at=row["record_created_at"],
+            record_updated_at=row["record_updated_at"],
+        )
         record = SubtreeDeleteRecord(
             subtree_delete_idempotency_key=str(
                 row["subtree_delete_idempotency_key"]
@@ -144,7 +151,7 @@ class SubtreeDeleteMixin:
           ``state='preparing'``。本方法**不做任何节点状态变更**——整树
           deleting 由 :meth:`mark_subtree_deleting` 的单事务 CAS 完成。
         """
-        self._validate_idempotency_key(idempotency_key)
+        validate_operation_idempotency_key(idempotency_key)
         _validate_workspace_id(workspace_id)
         validate_session_id(root_node_id)
         with self.write_transaction() as connection:
@@ -278,7 +285,7 @@ class SubtreeDeleteMixin:
         revision+1、record 推进为 ``deleting``。任何失败整体回滚：子树
         保持 active、record 保持 preparing。
         """
-        self._validate_idempotency_key(idempotency_key)
+        validate_operation_idempotency_key(idempotency_key)
         with self.write_transaction() as connection:
             row = self._fetch_subtree_delete_record(connection, idempotency_key)
             if row is None:
@@ -365,7 +372,7 @@ class SubtreeDeleteMixin:
         已记录过 → 幂等 no-op。进度存 ``drained_session_ids``（JSON 数组
         追加），保证 drain 中途崩溃重入按 record 定点继续、不重查当前树。
         """
-        self._validate_idempotency_key(idempotency_key)
+        validate_operation_idempotency_key(idempotency_key)
         validate_session_id(session_id)
         with self.write_transaction() as connection:
             row = self._fetch_subtree_delete_record(connection, idempotency_key)
@@ -417,7 +424,7 @@ class SubtreeDeleteMixin:
         nodes 表全部冻结行（tombstone=行删除；深度序满足 ``parent_node_id``
         自引用外键）并把 record 推进为 ``completed``。
         """
-        self._validate_idempotency_key(idempotency_key)
+        validate_operation_idempotency_key(idempotency_key)
         with self.write_transaction() as connection:
             row = self._fetch_subtree_delete_record(connection, idempotency_key)
             if row is None:
@@ -519,7 +526,7 @@ class SubtreeDeleteMixin:
         active」，节点保持 deleting 待人工/新操作处置；本方法只终结
         record，不动 nodes 表。
         """
-        self._validate_idempotency_key(idempotency_key)
+        validate_operation_idempotency_key(idempotency_key)
         if not isinstance(reason, str):
             raise TypeError(f"abort reason 必须是字符串: {reason!r}")
         if not reason:
@@ -557,7 +564,7 @@ class SubtreeDeleteMixin:
 
     def get_subtree_delete_record(self, idempotency_key: str) -> SubtreeDeleteRecord:
         """按幂等键返回 subtree delete record 投影；不存在抛 KeyError。"""
-        self._validate_idempotency_key(idempotency_key)
+        validate_operation_idempotency_key(idempotency_key)
         with self.read_transaction() as connection:
             row = self._fetch_subtree_delete_record(connection, idempotency_key)
             if row is None:
