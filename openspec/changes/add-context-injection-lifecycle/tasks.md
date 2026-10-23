@@ -301,3 +301,10 @@
 
 
 - 2026-10-23 独立 Skill/ToolSet 控制准入：现有唯一 `session_context_control_admission` 在 topology shared 内取得 Session exclusive，校验 catalog/thread/active fence generation 后以 expected_generation 建立并 durable 推进原控制 lease，再释放 topology；取消仍在 Session gate 内结清原 lease。真实 Agent skill_load 产生 tracked 状态，HTTP untrack 的 main/child×完成/取消4项及相邻4项均通过，旧生产新增竞争场景失败。固定tree `9a9d5e1d996d8e3287bec7ad04b90491ddc2e6d1` 的Ruff/compileall/44项strict全部exit0，源码前后一致。完整raw、命令、指纹、退出码和独审在 `out/tests/temp/context_control_topology_20261023/artifacts/`；仅关闭6.8/7.1相关具体窗口，不替代完整产品门。
+
+
+### 2026-10-23 6.5-B 恢复与尾部 Web 的限定合取
+
+- retention preflight与SQLite事务失败按唯一owner合取：当前catalog全文件310项、删除/OS读锁/retention94项、Folder后代claim82项、真实fork/delete commit前后中断4项和513节点/256Session规模入口1项均有成功原件。active/preparing阻断、released放行、catalog deleting先行且local fence仍active时拒绝新claim，以及真实deferred-FK COMMIT失败的rollback/代际不变/连接复用均已验证。当前文件SHA及相关delete/_drain/_drain_session函数AST与各run逐项核对，详见 `out/tests/temp/lifecycle_execution_deletion_20261023/artifacts/retention-fingerprint-join-005.json`、`cil-6_5-closure-audit-006.json`。
+- commit窗口4项为BaseException注入及冷owner恢复，不称OS硬杀；`navigation-active-web-002`另证明partial fence/目录隔离后OS硬杀及正式backend/lifespan恢复，只按其具名窗口复用。owner测试的deleting未drain、部分drain、rename后进度前和all-drained/finish前补充持久记录恢复，部分状态由测试构造，不冒充产品入口生成。没有因6.5仍未勾而扩大为未登记的全笛卡尔积测试。6.5总项继续按全部原合同验收，此收据不替完整Web总门。
+- 正式尾部Web `default-tail-002` 为1 passed/886.78秒、exit0，七focus核导航optimistic、初始准入恢复、internal history、Turn导航、untrack、冷读恢复及cursor过期。4311项源码前后相同、进程组清空，1648份产品原件独立封存；准确命令/raw/退出码与清单见 `out/tests/temp/turn_navigation_resume_20261023/artifacts/default-tail-proof-002.json`。它不是完整default；旧完整轮的驱动内存TODO及7.3总门保留，未以局部通过替代。

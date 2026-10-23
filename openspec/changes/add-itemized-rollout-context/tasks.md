@@ -1067,3 +1067,10 @@ pending 恢复的硬错误重试已闭合（2026-10-22）：进程内装载阶�
 
 - 真实 `navigation_dates` 失败原件捕获输入后控件重建、草稿被清空；同 Session 刷新重建历史窗口时改为保留该 scope 已确认的不可变 main thread ID。旧 Turn/cursor 仍清空，跨 workspace/Session 不继承 owner，后续 bootstrap 返回不同 thread 仍明确拒绝。不新增 owner 副本或兼容链；Web driver 仅补失败时 owner、输入、坐标的持久诊断，原业务断言不变。
 - 完整候选 tree `de296946521dc0c67357973945d25f827b759ee7`：两项新回归通过，旧生产完整 archive 同两项均在 owner 变 null 处失败；相邻历史/队列/控件47项及滚动定位26项通过，真实 TypeScript 与 strict OpenSpec exit0。唯一 Web owner 的 `owner-web-navigation-dates-001` 为1 passed/265.16秒、exit0，含 fixture Web build、跨 UTC 日期 Session/child/fork、活跃 main/child 目录移动与封存字节不变、live/refresh 正式 Turn 跳转、递归删除及 Backend 硬重启恢复。非作者独立复跑新回归2项通过且只读审查无 finding；全源码前后指纹一致、运行组零残留。准确命令/raw/退出码和限定证明位于 `out/tests/temp/turn_navigation_resume_20261023/artifacts/validation-proof-owner-001.json`。本条不替代完整 default、8.13/9.7 总门或 Windows 实机。
+
+
+### 2026-10-23 尾部 Web 场景与 8.13-S 功能证据合取
+
+- 正式 matrix `default-tail-002` 为1 passed/886.78秒、exit0；固定完整tree `47ffaf0eaae8ba25e9d2c0c924a1d20d3907c335`，4311项源码前后相同、进程组清空。七个focus为navigation_optimism、initial_admission_recovery、generated_internal_history、turn_navigation、skill_untrack、read_recovery、read_cursor_expiry。准确命令/raw/退出码及1648份产品原件的SHA清单见 `out/tests/temp/turn_navigation_resume_20261023/artifacts/default-tail-proof-002.json` 与对应run的product-evidence；001仅在focus顺序预检退出4，零业务测试。
+- 8.13-S的reader/DTO/Web/真实SQL功能合同已有合取证据：同一产品internal execution的527项membership重建524个response part，三页为256/256/12个unique record；首部257个part归256个record，按record限额。默认include、安全notice/私有输入隔离、零Turn/root、dense around、首尾notice、fork坐标顺序、live/refresh，以及stale409/跨owner400均通过。九个关键reader/catalog/SQL/test/Web文件与该run及当前提交逐字一致；SQL专项77项、正式fork专项和最终SQL加载路径20项按各自源码范围复用，非作者只读合取未发现剩余可观察功能缺口，详见同目录 `history-s-closure-review-002.json`。
+- 此条登记S的已验功能范围，S总项继续未勾。SQLite页外replacement/survivor扫描仍随冻结历史增长，307成员首/余页0.628/0.094秒的测量与源码TODO保持；Python返回/正文有界不等于数据库检查行数恒定。完整default曾在5102.79秒因Bun驱动内存不足失败，该性能TODO也未解决；七focus成功不替完整default或8.13总门，不重复已验功能测试。
