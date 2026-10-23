@@ -17,6 +17,7 @@ from langgraph.checkpoint.base import (
 )
 
 from app.core.session_thread_context import require_current_session_thread_owner
+from app.core.shielded_cleanup import run_sync_shielded
 from app.services.infrastructure.rollout_context.storage.primitives import (
     RolloutTurnAnchor,
 )
@@ -26,12 +27,12 @@ class RolloutLangGraphAsyncMixin:
     """异步等待 Saver port 的真实准入，不复制 checkpoint 业务规则。"""
 
     async def aget_tuple(self, config: RunnableConfig) -> CheckpointTuple | None:
-        return await asyncio.to_thread(self.get_tuple, config)
+        return await run_sync_shielded(self.get_tuple, config)
 
     async def aget_delta_channel_history(
         self, *, config: RunnableConfig, channels: Sequence[str],
     ) -> dict[str, DeltaChannelHistory]:
-        return await asyncio.to_thread(self.get_delta_channel_history, config=config, channels=channels)
+        return await run_sync_shielded(self.get_delta_channel_history, config=config, channels=channels)
 
     async def alist(
         self,

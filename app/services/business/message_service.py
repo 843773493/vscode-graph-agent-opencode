@@ -1,7 +1,6 @@
 """MessageService：从 LangGraph checkpoint 读取会话历史。"""
 from __future__ import annotations
 
-import asyncio
 import json
 from collections.abc import Callable, Mapping, Sequence
 from datetime import UTC, datetime
@@ -19,6 +18,7 @@ from app.agents.summarization.projection import apply_summarization_event
 from app.core.checkpoint_config import build_checkpoint_config
 from app.core.identifier import create_prefixed_id
 from app.core.session_thread_context import session_thread_owner_scope
+from app.core.shielded_cleanup import run_sync_shielded
 from app.domain.itemized.execution_admission import (
     InternalExecutionIntent,
     UserExecutionIdentity,
@@ -323,7 +323,7 @@ class MessageService(MessageContentProjectionMixin):
     ) -> list[dict[str, object]]:
         raw_messages = await self._load_raw_messages(session_id, strict=strict)
         if self._canonical_item_reader is not None:
-            canonical_items = await asyncio.to_thread(
+            canonical_items = await run_sync_shielded(
                 self._canonical_item_reader,
                 session_id,
                 self._resolve_main_thread_id(session_id),

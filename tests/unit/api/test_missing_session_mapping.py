@@ -7,6 +7,8 @@
 
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
+
 import pytest
 from fastapi import HTTPException
 
@@ -45,6 +47,16 @@ class _FakeMessageService:
 
     async def get_agent_state_messages(self, *, session_id: str):
         raise CATALOG_KEY_ERROR
+
+
+@pytest.fixture
+def read_session_service():
+    class ReadSessionService:
+        @asynccontextmanager
+        async def session_read_admission(self, session_id: str):
+            yield
+
+    return ReadSessionService()
 
 
 class _FakeGoalService:
@@ -113,7 +125,7 @@ async def test_clear_pending_requests_maps_missing_session_to_404() -> None:
 
 
 @pytest.mark.asyncio
-async def test_list_messages_maps_missing_session_to_404() -> None:
+async def test_list_messages_maps_missing_session_to_404(read_session_service) -> None:
     with pytest.raises(HTTPException) as captured:
         await messages_api.list_messages(
             MISSING,
@@ -122,13 +134,14 @@ async def test_list_messages_maps_missing_session_to_404() -> None:
             _="local",
             request_id="req",
             message_service=_FakeMessageService(),
+            session_service=read_session_service,
         )
 
     assert captured.value.status_code == 404
 
 
 @pytest.mark.asyncio
-async def test_get_message_maps_missing_session_to_404() -> None:
+async def test_get_message_maps_missing_session_to_404(read_session_service) -> None:
     with pytest.raises(HTTPException) as captured:
         await messages_api.get_message(
             MISSING,
@@ -136,19 +149,21 @@ async def test_get_message_maps_missing_session_to_404() -> None:
             _="local",
             request_id="req",
             message_service=_FakeMessageService(),
+            session_service=read_session_service,
         )
 
     assert captured.value.status_code == 404
 
 
 @pytest.mark.asyncio
-async def test_agent_state_messages_maps_missing_session_to_404() -> None:
+async def test_agent_state_messages_maps_missing_session_to_404(read_session_service) -> None:
     with pytest.raises(HTTPException) as captured:
         await messages_api.get_agent_state_messages(
             MISSING,
             _="local",
             request_id="req",
             message_service=_FakeMessageService(),
+            session_service=read_session_service,
         )
 
     assert captured.value.status_code == 404

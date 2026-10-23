@@ -281,6 +281,7 @@ async def observe_communication(
 )
 async def list_messages(
     session_id: CanonicalSessionId,
+    session_service: Annotated[TurnSessionLookupProtocol, Depends(get_session_service)],
     limit: int = Query(default=50, ge=1, le=200),
     cursor: str | None = None,
     _: str = Depends(verify_local_token),
@@ -288,13 +289,16 @@ async def list_messages(
     message_service: MessageService = Depends(get_message_service),
 ):
     try:
-        result = await message_service.list(
-            session_id=session_id,
-            limit=limit,
-            cursor=cursor,
-        )
+        async with session_service.session_read_admission(session_id):
+            result = await message_service.list(
+                session_id=session_id,
+                limit=limit,
+                cursor=cursor,
+            )
     except (KeyError, NotFoundError) as error:
         raise not_found_http_error(error) from error
+    except SessionDeletionPendingError as error:
+        raise state_conflict_http_error(error) from error
     except ValueError as error:
         raise state_conflict_http_error(error) from error
     return APIResponse(data=result, request_id=request_id)
@@ -346,14 +350,18 @@ async def get_session_attachment_content(
 )
 async def get_agent_state_messages(
     session_id: CanonicalSessionId,
+    session_service: Annotated[TurnSessionLookupProtocol, Depends(get_session_service)],
     _: str = Depends(verify_local_token),
     request_id: str = Depends(get_request_id),
     message_service: MessageService = Depends(get_message_service),
 ):
     try:
-        result = await message_service.get_agent_state_messages(session_id=session_id)
+        async with session_service.session_read_admission(session_id):
+            result = await message_service.get_agent_state_messages(session_id=session_id)
     except (KeyError, NotFoundError) as error:
         raise not_found_http_error(error) from error
+    except SessionDeletionPendingError as error:
+        raise state_conflict_http_error(error) from error
     return APIResponse(data=result, request_id=request_id)
 
 
@@ -365,16 +373,20 @@ async def get_agent_state_messages(
 async def get_message(
     session_id: CanonicalSessionId,
     message_id: str,
+    session_service: Annotated[TurnSessionLookupProtocol, Depends(get_session_service)],
     _: str = Depends(verify_local_token),
     request_id: str = Depends(get_request_id),
     message_service: MessageService = Depends(get_message_service),
 ):
     try:
-        result = await message_service.get(
-            session_id=session_id, message_id=message_id
-        )
+        async with session_service.session_read_admission(session_id):
+            result = await message_service.get(
+                session_id=session_id, message_id=message_id
+            )
     except (KeyError, NotFoundError) as error:
         raise not_found_http_error(error) from error
+    except SessionDeletionPendingError as error:
+        raise state_conflict_http_error(error) from error
     except ValueError as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
     return APIResponse(data=result, request_id=request_id)

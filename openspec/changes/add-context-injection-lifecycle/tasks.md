@@ -284,3 +284,9 @@
 - 修复首个 append intent 已提交整批、后续成员才因已消费 key 拒绝的窗口。唯一 facade 在 Saver 锁内先校验整批 owner、分支和历史/批内重复，再登记 in-flight batch 并沿原单事务提交；重复消费继续明确拒绝，不新增 writer 或持久事实源。
 - 完整 Git 归档红证 tree `7ee3567cd81b8f235664ee549eeb88f6109446cf` 的 `append-batch-red-002` 为 3 failed/1 passed：新成员排在已消费成员前会报错但改变 SQLite/JSONL；批内同 ID 的同/异正文重复误入 SQL UNIQUE 错误。最终产品 tree `7d623a669ba785699fecbffc127186d3ca26703c` 的 `append-batch-green-001` 为 42 passed/3.80秒，核两种排列、原 SQLite 全量逻辑行及 JSONL 字节不变、冷 owner 读原事实、去掉重复后原 identity 可重试；Ruff/compileall exit0。
 - `append-batch-regression-001` 为 59 passed/3 setup errors（109.17秒），三项 full-copy 装具要求正式 matrix watchdog；由 `append-batch-fork-001` 按原断言补验，3 passed/2552 deselected/57.02秒、exit0。没有把首次非零改写为通过。准确命令、raw、退出码、全树前后指纹和只读独审 `review-001.json` 保留于 `out/tests/temp/cil_append_batch_20261023/artifacts/`；本收据只关闭 append 批失败的具体缺口，不代替 CIL 2.3-A–G、itemized 7.5 或完整 Web 门。
+
+### 2026-10-23 消息冷读与 Session 删除的句柄闭包
+
+- 三个普通消息 GET 在既有 topology→Session shared 读准入内完成唯一 MessageService 读取；catalog 已 deleting 时明确返回 409，原缺失会话仍为 404。Saver 的 tuple/delta 和 agent-state canonical 同步读取复用 `run_sync_shielded`，请求重复取消也须等 worker 及 SQLite/JSONL 句柄关闭后才能释放准入。
+- 固定完整 Git tree `177a9b45130e2dc423b6d9511e9f743504fb2837`：`message-cancel-integration-003` 12 passed/78.22秒、`message-cancel-regression-001` 179 passed/120.02秒，均 exit0；Ruff `message-cancel-static-004`（沿用既有 API Depends 默认参数的 B008 排除）及 compileall `message-cancel-compile-001` exit0。产品消息入口生成历史后验证 deleting 新读拒绝、topology 及时释放、正常及重复取消时删除等待真实 snapshot 关闭、零 runtime 编译；增量取消为独立 Saver 入口，不冒充普通消息 API 的增量读取。回归覆盖同步/异步官方 Delta、消息身份/顺序和 API 合同。
+- 裸 `to_thread` 完整归档反例 `message-cancel-red-001` 的 checkpoint 场景及 `message-cancel-red-002` 的 canonical/delta 两场均按预期失败。早期增量装具错配造成的失败保留原件，不计通过。四次最终运行源码前后指纹一致、运行组清空；非作者只读审查 `review-cancel-final-001.json` 无阻断，未独立复跑测试。准确命令、raw、指纹、退出码与审查位于 `out/tests/temp/cil_message_read_guard_20261023/artifacts/`。本收据仅关闭 2.3-E 的消息读取句柄缺口，不代替 2.3-A–G 或完整 Web 门。
