@@ -437,3 +437,10 @@
 - Gateway fork transport 的成功回执解码和已识别 incomplete-capture 错误回执校验只向普通错误提供原 prefix、请求身份、目标 URI、action、阶段与异常类型；畸形原始字段留在原 cause 和日志。不改 HTTP status 归属、connection、request_id 漂移、capture identity 校验或未完成状态恢复合同。
 - 完整 tree `d42a107fd51759493022122a76ed13a032200f7e` 的新6项及原48项客户端单测合计54 passed/3.06秒；旧生产完整 archive 六项均在普通错误的 native_path/private 检查失败（1.43秒），涵盖两类回执×POSIX/drive/UNC 文本。修正回执后同一请求的 method/URL/headers/body 完全相同，有效 preparing capture 仍返回原 typed incomplete 异常，不伪造成功；Ruff/compileall通过。
 - 首轮Ruff要求显式 fixture 重导出说明，末次仅补4个noqa注释，AST等价复用原测试结果；原失败、准确命令、4314项源码指纹、退出码、日志SHA、无残留进程及限定审查见 `out/tests/temp/gateway_fork_protocol_errors_20261023/artifacts/validation-proof-002.json`。HTTP请求入口是显式stub，不代真实网络/Web/Windows；普通HTTP错误正文与连接异常仍需独立核验，2.2/7.2不勾总项。
+
+
+### 2026-10-23 附件预览失败的 canonical 与模型输入（2.2/7.2 部分收口）
+
+- 图片/视频预览保持既有 catch 类别及失败后继续发送附件清单的行为，唯一 Builder 错误生成点只提供附件 URI、stage、异常类别及 errno/winerror 数值；原异常及完整预览程序输出仅保留在原始诊断日志。不扩展日志例外，不增加持久诊断副本或第二条附件链路。
+- 固定完整 tree `3c2de0bee7358ed1db0e102488a57c006b089477`：2项集成从真实 Session 创建、inline 上传、消息准入、Agent 执行与 model_stream 回放生成 canonical/history/assembly/provider request，核预览失败仍完成、无 image block、正文可读、原日志对象、冷 Saver 字节/身份相等和 request_hash；18项相关单测、Ruff/compileall通过。相同最终测试在旧生产完整 archive 下2项集成均明确检出 canonical 原生路径，5项短单测均拒绝旧原文诊断。
+- 001误取未持久化 attachment_diagnostics、002的路径断言误命中系统提示普通词组及import格式失败均保留原件；修正为核真实canonical manifest和精确注入路径，不新增持久字段。4316项源码前后指纹、raw/SHA、退出码、进程回收与只读架构/行为审查见 `out/tests/temp/attachment_preview_errors_20261023/artifacts/validation-proof-003.json`、`review-003.json`。预览 I/O 与程序故障是受控注入，模型走现有异步回放；不代真实外部Provider、HTTP/Gateway/Web或Windows实机，2.2/7.2总门保持未勾。

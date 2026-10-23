@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from html import escape
 from pathlib import Path
@@ -13,6 +14,22 @@ from app.services.infrastructure.attachment_content_service import (
 )
 
 ATTACHMENT_BLOCK_SCHEMA_VERSION = 1
+logger = logging.getLogger(__name__)
+
+
+def _preview_failure(attachment: AttachmentRef, stage: str, error: Exception) -> str:
+    detail = (
+        f"附件预览生成失败: file_id={attachment.file_id}, "
+        f"stage={stage}, error={type(error).__name__}"
+    )
+    if isinstance(error, OSError):
+        for name in ("errno", "winerror"):
+            value = getattr(error, name, None)
+            if isinstance(value, int):
+                detail += f", {name}={value}"
+    # 原生位置和预览程序输出只进原始诊断，不复制到 canonical 内容及模型输入。
+    logger.error("%s", detail, exc_info=error)
+    return detail
 
 
 def build_human_response_metadata(
@@ -94,7 +111,7 @@ class UserContentBuilder:
                     )
                 except (FileNotFoundError, OSError, ValueError) as error:
                     preview_status = "failed"
-                    preview_error = str(error)
+                    preview_error = _preview_failure(attachment, "image_preview", error)
                     diagnostics.append(
                         {
                             "kind": "preview_generation_failed",
@@ -126,7 +143,7 @@ class UserContentBuilder:
                     )
                 except (FileNotFoundError, OSError, RuntimeError, ValueError) as error:
                     preview_status = "failed"
-                    preview_error = str(error)
+                    preview_error = _preview_failure(attachment, "video_preview", error)
                     diagnostics.append(
                         {
                             "kind": "preview_generation_failed",

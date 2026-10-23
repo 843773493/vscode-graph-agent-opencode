@@ -281,3 +281,45 @@ def test_user_content_builder_reports_preview_failure_without_losing_path(empty_
     assert 'name="危险&quot;文件.png"' in str(manifest["text"])
     assert not any(block.get("type") == "image_url" for block in content)
     assert str(workspace_root) not in str(content)
+
+
+@pytest.mark.parametrize("media,error_kind", [
+    ("image", "native"), ("image", "invalid"),
+    ("video", "native"), ("video", "invalid"), ("video", "runtime"),
+])
+def test_preview_diagnostics_keep_uri_and_original_error_in_logs(
+    empty_workspace_scope, monkeypatch, caplog, media, error_kind,
+):
+    from app.services.infrastructure.attachment_content_service import (
+        AttachmentContentService,
+    )
+
+    root = empty_workspace_scope[1]
+    (root / "preview.bin").write_bytes(b"preview")
+    private = r"\\private\preview\input.bin"
+    if error_kind == "native":
+        error = OSError(13, f"预览拒绝 {private}", private)
+        error.winerror = 5
+    else:
+        error = (ValueError if error_kind == "invalid" else RuntimeError)(f"预览失败 {private}")
+
+    def fail_preview(_service, _attachment):
+        raise error
+
+    monkeypatch.setattr(AttachmentContentService,
+        "image_preview_data_url" if media == "image" else "video_preview_data_urls", fail_preview)
+    built = UserContentBuilder(workspace_root=root).build("请检查附件", [AttachmentRef(
+        file_id="preview.bin", content_type="image/png" if media == "image" else "video/mp4",
+    )])
+    (diagnostic,) = built.diagnostics
+    uri = built.attachments[0].file_id
+    detail = diagnostic["detail"]
+    assert diagnostic == {"kind": "preview_generation_failed", "file_id": uri, "detail": detail}
+    assert f"file_id={uri}" in detail and f"stage={media}_preview" in detail
+    assert f"error={type(error).__name__}" in detail
+    if error_kind == "native":
+        assert "errno=13" in detail and "winerror=5" in detail
+    assert "private" not in str(built)
+    (log,) = [record for record in caplog.records if record.name == "app.services.business.user_content_builder"]
+    assert log.exc_info and log.exc_info[1] is error and private in str(log.exc_info[1])
+    assert log.exc_text and private in log.exc_text
