@@ -322,3 +322,9 @@
 - 两类产物共用同一FileHandle的open/stat/stream/close链，普通文件核验在响应头前完成；实际文件系统失败只发布browser/artifact/kind/stage/code，完整位置及原异常保留诊断/cause。缺失文件维持404；流开始后失败明确销毁响应，关闭次错不覆盖主错分类，并按顺序保留AggregateError。成功响应头、中文空格文件名与原始字节不变。
 - 最终tree `289963883cda5ab9cd0e278db0fa85436781d97e`：Node语法/Ruff通过，7项真实Chromium/HTTP集成通过（34.54秒），覆盖两类产物的真实ENOENT/ENOTDIR/EISDIR/EACCES、安全错误和不变恢复记录、文件恢复后的精确字节/头，以及流、关闭、双失败和响应销毁后的重试。后三类为一次性文件句柄/流注入，不声称真实磁盘EIO/EBADF。已有截图故障用例不再假定截图目录未创建，而是保留/恢复既有目录；首次扩大回归的准备阶段失败原件保留，最终同批复验通过。
 - 完整archive旧生产两项真实红测回显截图/下载原生位置。非作者002只读复核无finding，003仅调整负例顺序并完整重验；4283个blob、前后指纹与零进程组残留均核验，限定收据见 `out/tests/temp/openspec_resume_20261023/artifacts/browser-artifact-read-proof-003.json`。不代替完整Web、Windows或2.2/7.2全量门。
+
+### 2026-10-23 外部资源错误投影移除文本路径兜底（部分收口）
+
+- Browser/Terminal原生producer迁移与固定HEAD调用图复核后，删除`public_error`的路径正则与临时TODO；保留OSError/URLError按类型及errno/winerror投影。非原生错误保留原owner发布的正文，不再把`/api/browsers/...`接口路由误判为本机文件路径，也不新增通用脱敏层。
+- 最终tree `1e357a50891693c319abd31986c5737c7c8ec9f7`：Ruff及122项API/owner/fork检查通过（4.08秒），8项真实Chromium/HTTP错误入口通过（36.92秒），复验检查点、文件选择和生命周期安全响应/记录/重试。新测试经真实BrowserManagerClient和受控urllib HTTPError证明code-only回执的路由信息保留到API、unknown记录与重启读取，零重放且释放lease；完整archive旧生产红测明确复现误吞。首次新测试误用完整应用error body合同，轻量API fixture只装middleware，002修为核实际header，原件保留。
+- 非作者只读审查未找到这些consumer仍需文本兜底才能阻止native locator的具体producer；不将任意用户脚本/自由正文泛化成资源引用。全部4283个blob、前后指纹与零进程组残留已核，收据 `out/tests/temp/openspec_resume_20261023/artifacts/resource-error-contract-proof-002.json`。Terminal直接HTTP/WS错误另行核查，不以本项关闭2.2/7.2。

@@ -19,7 +19,6 @@ from app.services.infrastructure.resource_platform.virtual_resources.values impo
 
 ORPHAN_GRACE_SECONDS = 30 * 60
 STOPPED_STATUSES = frozenset({"completed", "exited", "terminated", "closed", "deleted"})
-_REAL_PATH = re.compile(r"""(?:^|[\s'"=(])(?:/[^\s'"]+|[A-Za-z]:[\\/][^\s'"]+)""")
 
 
 def resource_target_facts(snapshot: ResourceSnapshot) -> ResourceTargetFacts:
@@ -106,11 +105,7 @@ def public_error(error: BaseException) -> str:
             f"{type(error).__name__}: 操作回执不可核实 ({', '.join(details)})；"
             "请查看工作区外部资源服务日志中的详细错误"
         )
-    # TODO: 其它 producer 尚未全部迁齐；完成具名错误合同后删除剩余的文本路径兜底。
-    message = str(error)
-    if _REAL_PATH.search(message):
-        message = "操作回执不可核实；请查看工作区 外部资源 服务日志中的详细错误"
-    return f"{type(error).__name__}: {message}"
+    return f"{type(error).__name__}: {error}"
 
 
 def resource_projection(

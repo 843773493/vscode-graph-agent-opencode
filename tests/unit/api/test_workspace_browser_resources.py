@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import errno
 import json
-from urllib.error import URLError
+from io import BytesIO
+from urllib.error import HTTPError, URLError
 from urllib.request import Request as UrlRequest
 
 import pytest
@@ -176,6 +177,41 @@ def test_lost_browser_action_receipt_keeps_native_error_in_diagnostics(
     assert item["available_actions"] == []
     assert listed.json()["data"]["items"] == [item]
     assert len(browser_owner_bundle.transport.calls) == 1
+    assert browser_owner_bundle.leases.leases_for_resource(resource_id) == []
+
+
+def test_transport_failure_preserves_api_route_without_treating_it_as_native_path(
+    resource_api_client: TestClient, browser_owner_bundle: BrowserOwnerFixture,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    resource = _create_browser_resource(resource_api_client)
+    resource_id = resource["resource_id"]
+    transport = BrowserManagerClient(workspace_id=WORKSPACE_ID, backend_url="http://browser.test")
+    attempted: list[str] = []
+
+    def rejected(request: UrlRequest, **_options: object) -> None:
+        attempted.append(request.full_url)
+        raise HTTPError(request.full_url, 500, "failure", {}, BytesIO(b'{"code":"browser_read_failed"}'))
+
+    monkeypatch.setattr("app.services.infrastructure.browser_manager_client.urlopen", rejected)
+    monkeypatch.setattr(browser_owner_bundle.transport, "perform", transport.perform)
+    command = {"action": "read", "expected_revision": 1, "thread": resource["source_thread"]}
+    failed = resource_api_client.post(f"/api/v1/resources/{resource_id}/browser-operation", json=command)
+    assert failed.status_code == 500, failed.text
+    assert failed.headers["X-Request-ID"]
+    detail = failed.json()["detail"]
+    assert detail == (
+        f"BrowserRequestError: 浏览器管理器请求失败: method=GET, path=/api/browsers/{resource_id}/read, "
+        "status=500 (code=browser_read_failed)"
+    )
+    saved = json.loads((browser_owner_bundle.root / ".boxteam" / "browser-resources.json").read_text())
+    assert saved["records"][0]["error"] == detail
+    browser_owner_bundle.restart()
+    observed = resource_api_client.get(f"/api/v1/resources/{resource_id}").json()["data"]
+    assert observed["error"] == detail
+    assert observed["reconciliation_status"] == "unknown"
+    assert observed["available_actions"] == []
+    assert attempted == [f"http://browser.test/api/browsers/{resource_id}/read"]
     assert browser_owner_bundle.leases.leases_for_resource(resource_id) == []
 
 
