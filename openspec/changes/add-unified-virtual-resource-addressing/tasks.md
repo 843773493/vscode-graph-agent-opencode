@@ -295,3 +295,10 @@
 - 启动和冷恢复共用Session的acquireRuntime，移除assignRuntime及重复获取包装；初始newPage、默认UA/platform读取、viewport和五条设备模拟CDP在实际操作处产生带身份/阶段/code/status的错误，原异常保留cause与诊断。启动清理再次失败时保留主错分类和有序AggregateError，不丢失unknown事实及context句柄；原注册、导航、存储错误owner与成功顺序保持。
 - 最终tree `a74570cc071e53930edb717625bcca92cbbfc74f`：Node语法/Ruff、275项Bun/1672断言、17项Node通过；13项真实Chromium/HTTP集成通过（60.45秒），覆盖五种启动失败、资源API/request_id、sync/async读取、落盘与完整诊断、首次creating观察采用Node已核实failed事实、operation lease释放、显式stop/删除和再次创建；复验冷恢复六阶段、file URL与真实unsafe-port启动失败。第三方一次性注入不声称真实系统EACCES，cleanup双失败限单测。001误读会话简表、002混淆首次creating与既有unknown，均只修正新测试；持久unknown不因普通GET核实的原约束未改。
 - 完整archive旧生产红测95 passed/13 failed；执行单测与003相同，区分原异常正文、阶段缺失和cleanup覆盖主错。独立003只读审查无finding；归档无.git，不能以向上发现的主仓HEAD判断其tree，已逐blob核验完整候选内容。准确命令/raw/指纹/退出码、零进程组残留及产品SHA见 `out/tests/temp/openspec_resume_20261023/artifacts/browser-startup-proof-003.json`。普通标签页/其它动作及2.2/7.2全量门继续推进。
+
+
+### 2026-10-23 Browser标签页与基本控制错误出口（部分收口）
+
+- 启动、冷恢复、普通建页与超时恢复共用实际newPage错误入口，保留原cause/code/status及诊断；close_page、停止加载与客户端截图在原生操作边界发布安全身份/阶段。超时恢复继续保留reset_page公开合同，因果链精确为reset_page→create_page→原异常；原页面、流、状态和持久化时机不变。
+- 最终tree `a7296e51cb17da2762aec80c31f2a55a2fbd15b2`：280项Bun/1713断言、17项Node及Node语法通过（JS与002逐字相同限定复用），最终Python Ruff通过；18项真实Chromium/HTTP/WS集成通过（81.87秒），覆盖四控制边界经sync/API/WS失败、request_id、原page/页数/verified与lease、失败重试和PNG字节，并复验启动/冷恢复/file URL/超时恢复。截图为既有不立即落盘的并发操作，测试经原resource-policy入口发布后精确核相同失败operation_id，未改变持久化合同。
+- 完整archive旧生产红测87 passed/5 failed；001选错pytest node未执行，002遗漏WS browserId，003错误假设并发截图立即落盘，均保留原件并按真实合同修新测试。最终候选4283个blob逐一核实；独立004只读审查无finding，未独立跑测试。准确命令/raw/指纹/退出码、零进程组残留及四份产品证据SHA见 `out/tests/temp/openspec_resume_20261023/artifacts/browser-page-controls-proof-004.json`。第三方故障为一次性注入，不声称真实系统EACCES；不代替完整Gateway/Web、Windows或2.2/7.2全量门。

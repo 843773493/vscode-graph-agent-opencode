@@ -940,12 +940,7 @@ export class BrowserSession extends EventEmitter {
         ...deviceOptions,
         ignoreHTTPSErrors: true,
       });
-      let initialPage;
-      try {
-        initialPage = await this.context.newPage();
-      } catch (cause) {
-        throw browserRuntimeFailure({ browserId: this.id, pageId: this.id, stage: "create_page", cause });
-      }
+      const initialPage = await this.createRuntimePage(this.id);
       await this.registerPage(initialPage, { pageId: this.id, activate: true });
       if (!deviceOptions.isMobile) {
         let browserDefaults;
@@ -998,6 +993,14 @@ export class BrowserSession extends EventEmitter {
     this.browserHandle = runtime.browserHandle;
     this.context = runtime.context;
     this.chromiumInstanceGeneration = runtime.chromiumInstanceGeneration;
+  }
+
+  async createRuntimePage(pageId = null) {
+    try {
+      return await this.context.newPage();
+    } catch (cause) {
+      throw browserRuntimeFailure({ browserId: this.id, pageId, stage: "create_page", cause });
+    }
   }
 
   bindContextPageEvents() {
@@ -1286,7 +1289,7 @@ export class BrowserSession extends EventEmitter {
 
   async createPage(url = "about:blank") {
     this.assertRunning();
-    const page = await this.context.newPage();
+    const page = await this.createRuntimePage();
     const registration = this.pageRegistrationPromises.get(page);
     const entry = registration
       ? await registration
@@ -1303,7 +1306,11 @@ export class BrowserSession extends EventEmitter {
     if (!entry) {
       throw new Error(`浏览器标签页不存在: ${pageId}`);
     }
-    await entry.page.close();
+    try {
+      await entry.page.close();
+    } catch (cause) {
+      throw browserRuntimeFailure({ browserId: this.id, pageId, stage: "close_page", cause });
+    }
     return this.snapshot();
   }
 
@@ -1730,7 +1737,7 @@ export class BrowserSession extends EventEmitter {
 
   async stopLoading() {
     this.assertRunning();
-    await this.cdpSession.send("Page.stopLoading");
+    await this.sendResourceCommand({ pageId: this.activePageId, cdpSession: this.cdpSession }, "Page.stopLoading");
     return await this.syncAndEmitState();
   }
 
@@ -2492,7 +2499,7 @@ export class BrowserSession extends EventEmitter {
 
   async captureClientScreenshot() {
     this.assertRunning();
-    const screenshot = await this.cdpSession.send("Page.captureScreenshot", {
+    const screenshot = await this.sendResourceCommand({ pageId: this.activePageId, cdpSession: this.cdpSession }, "Page.captureScreenshot", {
       format: "png",
       fromSurface: true,
     });
@@ -2633,7 +2640,7 @@ export class BrowserSession extends EventEmitter {
         // 超时只会取消工具暴露的 signal，用户脚本本身可能仍在 Playwright
         // 调用中。必须先隔离出新 Page，再关闭旧 Page，避免恢复导航与旧脚本
         // 并发操作同一个页面，导致下一次短调用继续卡住或收到旧错误。
-        const replacementPage = await this.context.newPage();
+        const replacementPage = await this.createRuntimePage();
         const registration = this.pageRegistrationPromises.get(replacementPage);
         const replacementEntry = registration
           ? await registration

@@ -173,6 +173,46 @@ describe("浏览器启动的运行时错误归属", () => {
 });
 
 describe("浏览器资源生命周期错误归属", () => {
+  test.each(["create_page", "close_page", "Page.stopLoading", "Page.captureScreenshot"])(
+    "页面控制的原生错误保留身份、分类和原因: %s", async (stage) => {
+      const cause = Object.assign(new Error(String.raw`EACCES C:\private\chromium\profile`), { code: "EACCES", statusCode: 503 });
+      const { browser } = liveSession();
+      const fail = async () => { throw cause; };
+      browser.context.newPage = fail;
+      browser.page.close = fail;
+      browser.cdpSession.send = fail;
+      const operations = {
+        create_page: () => browser.createPage(), close_page: () => browser.closePage(browser.activePageId),
+        "Page.stopLoading": () => browser.stopLoading(), "Page.captureScreenshot": () => browser.captureClientScreenshot(),
+      };
+      const logged = spyOn(console, "error").mockImplementation(() => undefined);
+      try {
+        const failure = await operations[stage]().catch((error) => error);
+        expect(failure).toMatchObject({ cause, code: "EACCES", statusCode: 503 });
+        expect(failure.message).toContain(`browser_id=${browser.id}`);
+        expect(failure.message).toContain(`stage=${stage}`);
+        expect(failure.message).toContain(`page_id=${stage === "create_page" ? null : "page_device"}`);
+        expect(failure.message).not.toContain(String.raw`C:\private\chromium\profile`);
+        expect(logged.mock.calls.some((args) => args.at(-1) === cause)).toBe(true);
+        expect(browser.record.status).toBe("running");
+        expect(browser.activePageId).toBe("page_device");
+        expect(browser.pageEntries.size).toBe(1);
+      } finally { logged.mockRestore(); }
+    },
+  );
+
+  test("客户端截图仍返回原始PNG字节，停止加载不改变活动标签页", async () => {
+    const { browser, cdpCalls } = liveSession();
+    const png = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
+    browser.cdpSession.send = async (method, params) => {
+      cdpCalls.push({ method, params });
+      return { data: png.toString("base64") };
+    };
+    expect(await browser.captureClientScreenshot()).toEqual(png);
+    expect(await browser.stopLoading()).toMatchObject({ status: "running", active_page_id: "page_device" });
+    expect(cdpCalls.map((call) => call.method)).toEqual(["Page.captureScreenshot", "Page.stopLoading"]);
+  });
+
   test.each(["Page.stopScreencast", "reset_pointer", "Page.startScreencast", "sync_page", "Page.captureScreenshot"])(
     "标签页切换在实际失败阶段保留原因与已执行事实: %s", async (stage) => {
       const cause = Object.assign(new Error("EACCES /private/browser/profile"), { code: "EACCES", statusCode: 503 });
@@ -827,7 +867,9 @@ describe("浏览器统一操作队列", () => {
       expect(failure.code).toBe("browser_tool_timeout");
       const barrierFailure = await browser.timeoutRecovery.catch((error) => error);
       expect(barrierFailure.message).toBe(`浏览器页面恢复失败: browser_id=${browser.id}, page_id=page_failed_recovery, stage=reset_page`);
-      expect(barrierFailure.cause).toBe(cause);
+      const creationFailure = barrierFailure.cause;
+      expect(creationFailure.message).toContain("stage=create_page");
+      expect(creationFailure.cause).toBe(cause);
       expect(failure.cause).toBe(barrierFailure);
       expect(failure.recovery).toBe("page_reset_failed");
       let executed = false;
@@ -838,8 +880,9 @@ describe("浏览器统一操作队列", () => {
       expect(executed).toBe(false);
       expect(browser.pendingOperations).toBe(0);
       expect(browser.recoveringTimedOutPageIds.size).toBe(0);
-      expect(diagnostics).toHaveBeenCalledTimes(1);
-      expect(diagnostics.mock.calls[0][2]).toBe(barrierFailure);
+      expect(diagnostics).toHaveBeenCalledTimes(2);
+      expect(diagnostics.mock.calls[0][2]).toBe(cause);
+      expect(diagnostics.mock.calls[1][2]).toBe(barrierFailure);
     } finally {
       diagnostics.mockRestore();
     }

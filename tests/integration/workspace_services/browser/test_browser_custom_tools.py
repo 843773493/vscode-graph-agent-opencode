@@ -1063,6 +1063,104 @@ async def test_injected_registration_failure_shares_safe_http_state_and_record(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(("stage", "mode"), [
+    ("create_page", "sync"), ("close_page", "api"),
+    ("Page.stopLoading", "websocket"), ("Page.captureScreenshot", "websocket"),
+])
+async def test_page_control_failure_keeps_native_details_in_diagnostics(
+    stage: str, mode: str, integration_client: httpx.AsyncClient, browser_context: CustomToolFactoryContext,
+    browser_runtime: WorkspaceToolRuntime, browser_manager_processes: tuple[int, int],
+) -> None:
+    container, _session, _invocation = browser_runtime
+    created = await integration_client.post("/api/v1/resources/browsers", json={
+        "session_id": browser_context.session_id,
+        "thread_id": browser_context.invocation_context.thread_binding.thread_id,
+        "url": "about:blank",
+    })
+    assert created.status_code == 200, created.text
+    resource = created.json()["data"]
+    browser_id = resource["resource_id"]
+    transport = BrowserManagerClient(workspace_id=container.workspace_id, backend_url=f"http://127.0.0.1:{browser_manager_processes[0]}")
+    prepared = await transport.perform(browser_id, "navigate", {"type": "new_tab", "url": "about:blank"}, actor="agent")
+    page_id = prepared["created_page_id"]
+    root = Path(container.workspace_root)
+    reason = f"injected EACCES: {root / '.boxteam/browser-manager/private-page-control-profile'}"
+    failure = f"throw Object.assign(new Error({json.dumps(reason)}), {{code: 'EACCES'}});"
+    if stage == "create_page":
+        code = "const original = context.newPage; context.newPage = async function (...args) { context.newPage = original; " + failure + " };"
+    elif stage == "close_page":
+        code = "const original = page.close; page.close = async function (...args) { page.close = original; " + failure + " };"
+    else:
+        code = (
+            "const cdp = await context.newCDPSession(page); const proto = Object.getPrototypeOf(cdp);"
+            " const original = proto.send; await cdp.detach(); proto.send = async function (method, params) {"
+            f" if (method === '{stage}') {{ proto.send = original; {failure} }}"
+            " return await original.call(this, method, params); };"
+        )
+    navigation = {"type": "new_tab", "url": "about:blank"} if stage == "create_page" else {"type": "close_tab", "tab_id": page_id}
+    api_command = {"action": "navigate", "payload": navigation, "expected_revision": resource["owner_revision"], "thread": resource["source_thread"]}
+    ws_command = {"type": "captureScreenshot", "browserId": browser_id} if stage == "Page.captureScreenshot" else {"type": "command", "name": "stop", "browserId": browser_id}
+    grant = await _grant(integration_client, browser_id, browser_context)
+    async with websockets.connect(f"ws://127.0.0.1:{browser_manager_processes[0]}/browser?workspace_id={container.workspace_id}") as websocket:
+        await websocket.send(json.dumps({"type": "attach", "browserId": browser_id, "grantToken": grant["grant_token"]}))
+        assert (await _recv_ws_type(websocket, "attached"))["browserId"] == browser_id
+        # attach的首帧已完成，故障只在接下来的用户操作原生边界触发一次。
+        await transport.perform(browser_id, "run", {"code": code}, actor="agent")
+        if mode == "sync":
+            with pytest.raises(BrowserRequestError) as caught:
+                await asyncio.to_thread(transport._json_request_sync, "POST", f"/api/browsers/{browser_id}/navigate", navigation)
+            assert caught.value.code == "EACCES"
+            assert caught.value.status == 500
+            receipt = caught.value.payload
+        elif mode == "api":
+            response = await integration_client.post(f"/api/v1/resources/{browser_id}/browser-operation", json=api_command)
+            assert response.status_code == 500, response.text
+            assert response.headers["X-Request-ID"] == response.json()["request_id"]
+            receipt = response.json()
+        else:
+            await websocket.send(json.dumps(ws_command))
+            receipt = await _recv_ws_type(websocket, "error")
+            assert receipt["code"] == "EACCES"
+        assert f"stage={stage}" in json.dumps(receipt)
+        assert str(root) not in json.dumps(receipt)
+        state = await transport.get_resource(browser_id)
+        assert state["status"] == "running"
+        assert state["reconciliation_status"] == "verified"
+        assert state["active_page_id"] == page_id
+        assert len(state["pages"]) == 2
+        assert state["last_operation"]["status"] == "failed"
+        if stage == "Page.captureScreenshot":
+            # 并发截图不立即落盘；通过原控制入口发布状态，不替换失败操作事实。
+            await transport.perform(browser_id, "resource-policy", {"policy": state["resource_policy"]}, actor="agent")
+        records = json.loads((root / ".boxteam/browser-manager/browsers.json").read_text())
+        record, = [item for item in records["browsers"] if item["browser_id"] == browser_id]
+        assert record["last_operation"]["operation_id"] == state["last_operation"]["operation_id"]
+        assert f"stage={stage}" in record["last_operation"]["error"]
+        assert str(root) not in json.dumps(record)
+        if mode == "websocket":
+            await websocket.send(json.dumps(ws_command))
+            retried = await _recv_ws_type(websocket, "screenshotResult" if stage == "Page.captureScreenshot" else "commandResult")
+            if stage == "Page.captureScreenshot":
+                assert retried["data"].startswith("iVBORw0KGgo")
+        else:
+            retried = await transport.perform(browser_id, "navigate", navigation, actor="agent")
+            assert retried["operation"]["status"] == "completed"
+            assert len(retried["browser"]["pages"]) == (3 if stage == "create_page" else 1)
+        await websocket.send(json.dumps({"type": "detach"}))
+        assert (await _recv_ws_type(websocket, "detached"))["browserId"] == browser_id
+    observed = (await integration_client.get(f"/api/v1/resources/{browser_id}")).json()["data"]
+    assert observed["reconciliation_status"] == "verified"
+    assert container.browser_resource_owner._leases.leases_for_resource(browser_id) == []
+    artifacts = TestRunContext.from_test_file(Path(__file__)).artifacts_dir
+    assert reason in "\n".join(item.read_text() for item in artifacts.glob("browser-backend-*.stderr.log"))
+    (artifacts / f"page-control-failure-{stage}-{mode}-{time.time_ns()}.json").write_text(json.dumps({
+        "receipt": receipt, "node_record": record, "owner_projection": observed, "retried": retried,
+    }, ensure_ascii=False, indent=2), encoding="utf-8")
+    deleted = await _detach_delete(integration_client, browser_id, browser_context)
+    assert deleted.status_code == 200, deleted.text
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("stage", [
     "acquire_context", "create_page", "read_browser_defaults", "set_viewport", "Emulation.setDeviceMetricsOverride",
 ])

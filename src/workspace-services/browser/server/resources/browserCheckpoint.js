@@ -177,12 +177,11 @@ export async function restoreBrowserCheckpoint(session, checkpoint) {
   try {
     for (const pageState of checkpoint.pages) {
       const restoreUrl = checkpointRestoreUrl(pageState);
-      let stage = "create_page";
+      const page = await session.createRuntimePage(pageState.page_id);
+      let stage = "restore_session_storage";
       try {
-        const page = await session.context.newPage();
         const initScript = sessionStorageInitScript(pageState.session_storage);
         if (initScript) {
-          stage = "restore_session_storage";
           await page.addInitScript(initScript, {
             expectedOrigin: pageState.session_storage.origin,
             entries: pageState.session_storage.entries,
