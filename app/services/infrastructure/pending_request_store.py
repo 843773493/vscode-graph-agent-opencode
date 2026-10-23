@@ -11,6 +11,7 @@ from typing import Protocol
 from uuid import uuid4
 
 from app.core.path_utils import get_session_path_resolver
+from app.core.phase_observer import observe_phase
 from app.core.session_lifecycle_gate import ThreadExecutionHolderGate
 from app.domain.itemized.execution_admission import UserExecutionIdentity
 from app.domain.itemized.execution_queue import (
@@ -63,6 +64,10 @@ class ExecutionQueueClaim:
             self._owner.start_execution_queue, admission.session_id, admission.thread_id,
             job_id=admission.job_id, claim_owner=record.claim_owner, claim_generation=record.claim_generation,
         )
+        await observe_phase(admission.job_id, "execution.queue.started", details={
+            "session_id": admission.session_id, "thread_id": admission.thread_id,
+            "execution_id": admission.execution_id, "claim_generation": record.claim_generation,
+        })
 
     async def close(self) -> None:
         if not self._closed:
@@ -201,6 +206,10 @@ class PendingRequestStore:
                 self._owner.claim_execution_queue, admission.session_id, admission.thread_id,
                 job_id=admission.job_id, claim_owner=self._claim_owner, previous_generation=record.claim_generation,
             )
+            await observe_phase(admission.job_id, "execution.queue.claimed", details={
+                "session_id": admission.session_id, "thread_id": admission.thread_id,
+                "execution_id": admission.execution_id, "claim_generation": claimed.claim_generation,
+            })
         except BaseException:
             await holder.__aexit__(None, None, None)
             raise

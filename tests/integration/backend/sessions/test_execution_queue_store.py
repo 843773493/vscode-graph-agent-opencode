@@ -12,6 +12,7 @@ import pytest
 from langchain_core.messages import HumanMessage
 
 from app.core.identifier import create_prefixed_id
+from app.core.workspace_identity import load_or_create_workspace_id
 from app.domain.itemized.execution_admission import InternalExecutionIntent
 from app.domain.itemized.execution_queue import ExecutionQueueInput
 from app.prompting import internal_message_factory
@@ -78,7 +79,7 @@ async def store_case(request: pytest.FixtureRequest) -> AsyncIterator[StoreCase]
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
     if context.workspace_root.exists():
         shutil.rmtree(context.workspace_root)
-    workspace = build_catalog_workspace(context.output_root)
+    workspace = build_catalog_workspace(context.output_root, workspace_id=load_or_create_workspace_id(context.workspace_root))
     session = await workspace.create_session("执行队列存储验收")
     saver = RolloutCheckpointSaver(sessions_dir=workspace.sessions_root)
     messages = MessageService(main_thread_resolver=workspace.resolver.main_thread_id, checkpointer=saver,

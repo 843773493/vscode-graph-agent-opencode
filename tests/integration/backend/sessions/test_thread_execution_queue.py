@@ -13,6 +13,7 @@ import pytest
 from app.core.identifier import create_prefixed_id
 from app.core.job_event_bus import JobEventBus
 from app.core.path_utils import workspace_context
+from app.core.workspace_identity import load_or_create_workspace_id
 from app.domain.itemized.execution_queue import ExecutionQueueInput
 from app.schemas.internal_v2.common import JobStatus, MessageRole
 from app.schemas.internal_v2.message import MessageDTO
@@ -80,7 +81,7 @@ async def queue_case(request: pytest.FixtureRequest) -> AsyncIterator[QueueCase]
     if workspace_root.exists():
         shutil.rmtree(workspace_root)
     shutil.copytree(Path.cwd() / "tests/fixtures/workspaces/default_test_workspace", workspace_root)
-    workspace = build_catalog_workspace(context.output_root)
+    workspace = build_catalog_workspace(context.output_root, workspace_id=load_or_create_workspace_id(context.workspace_root))
     session_id = await workspace.create_session("事务 FIFO 验证")
     thread_id = workspace.resolver.main_thread_id(session_id)
     saver = RolloutCheckpointSaver(sessions_dir=workspace.sessions_root)
