@@ -2407,6 +2407,10 @@ async function visitTranscriptIndex(owner, index, expected, timeoutMs = TRANSCRI
   if (expected.kind === "turn") {
     const form = owner.page.getByRole("form", { name: "跳到指定轮次", exact: true });
     const input = form.getByLabel("轮次 ID", { exact: true });
+    // Session shell 可先于目标 thread timeline 挂载；控件按完整 owner 隔离草稿。
+    await owner.page.locator(`.chat-stream-virtual-shell[data-owner-session-id="${owner.sessionId}"][data-owner-thread-id="${owner.threadId}"]`)
+      .waitFor({ state: "visible", timeout: timeoutMs });
+    await waitUntil(() => input.isEnabled(), "目标 owner 的历史投影就绪后才输入轮次", timeoutMs);
     await input.fill(expected.turnId);
     await form.getByRole("button", { name: "跳到指定轮次", exact: true }).click();
     if (navigationEvidence) navigationEvidence.counts[navigationEvidence.stage] += 1;
@@ -3972,6 +3976,21 @@ async function catalogFolderDialog(surface, { name, parentName = null, renameNam
   return dialog;
 }
 
+async function navigationContextState(owner, calls) {
+  const [binding, leases, sources, toolSets, epochs, sealed, lifecycle] = await Promise.all([
+    graphBinding(owner),
+    readControl(owner, "SELECT * FROM session_operation_leases ORDER BY lease_id"),
+    readRollout(owner, "SELECT * FROM context_source_control_states ORDER BY source_id"),
+    readRollout(owner, "SELECT * FROM tool_set_snapshots ORDER BY plan_id,tool_set_snapshot_id"),
+    readRollout(owner, "SELECT * FROM context_epoch_transitions ORDER BY transition_id"),
+    mcpAssemblies(owner, calls),
+    graphLifecycle(owner),
+  ]);
+  // 进程关闭可以释放 scope；只有实际执行才可新增建图与 acquire 事实。
+  return { binding, leases, sources, toolSets, epochs, sealed,
+    runtime: { compiled: lifecycle.compiled, built: lifecycle.built, acquired: lifecycle.acquired } };
+}
+
 async function runNavigationOptimism(surfaces) {
   const surface = surfaces.a;
   const label = `Q-${Bun.randomUUIDv7()}`;
@@ -4069,13 +4088,16 @@ async function runNavigationOptimism(surfaces) {
     await openCatalogWorkspace(surface);
     const first = await createProductSession(surface, `${label} 会话一`);
     const second = await createProductSession(surface, `${label} 会话二`);
-    await completeOwnerTurn(first, "为真实 pinned fork 留下已完成的 source assembly。", [finalResponse(`${label}-source-ready`, "原会话上下文已完成。")]);
+    const sourceTurn = await completeOwnerTurn(first, "为真实 pinned fork 留下已完成的 source assembly。", [finalResponse(`${label}-source-ready`, "原会话上下文已完成。")]);
     await openOwner(first);
     const folderOne = await createCanonicalFolder(`${label} 文件夹一`);
     const folderTwo = await createCanonicalFolder(`${label} 文件夹二`);
     const independent = await createCanonicalFolder(`${label} 独立文件夹`);
     const host = await createCanonicalFolder(`${label} 冲突宿主`);
     const sourceRows = await readCatalog(surface, "SELECT node_id,parent_node_id,revision FROM nodes WHERE node_id IN (?,?,?,?) ORDER BY node_id", [first.sessionId, second.sessionId, folderOne.nodeId, folderTwo.nodeId]);
+    const isolation = { owner: { sessionId: first.sessionId, threadId: first.threadId },
+      before: await navigationContextState(first, sourceTurn.calls) };
+    facts.isolation = isolation;
     const firstPage = (await ownerApi(surface, "/api/v1/session-catalog/children?limit=1")).data;
     assert.equal(typeof firstPage.cursor, "string");
     const rootName = `${label} pending 父文件夹`;
@@ -4117,6 +4139,8 @@ async function runNavigationOptimism(surfaces) {
     assert.deepEqual(sequences, [...sequences].sort((left, right) => left - right));
     assert.equal(new Set(sequences).size, pending.length);
     assert.deepEqual(await readCatalog(surface, "SELECT node_id,parent_node_id,revision FROM nodes WHERE node_id IN (?,?,?,?) ORDER BY node_id", sourceRows.map((node) => node.node_id)), sourceRows, "pending 投影不能预先改写 SQLite 父链");
+    isolation.pending = await navigationContextState(first, sourceTurn.calls);
+    assert.deepEqual(isolation.pending, isolation.before, "队列入队和乐观父链不能产生 lease、source、ToolSet、epoch 或 runtime 副作用");
     const beforeExport = (await ownerApi(surface, "/api/v1/session-catalog/export")).data;
     assert.ok(!beforeExport.items.some((node) => node.name === rootName || node.name === childName), "Gateway 不得将 client_ref 投影当作 CSM 权威节点");
     await drainPageResponseBodies(surface.page);
@@ -4141,6 +4165,8 @@ async function runNavigationOptimism(surfaces) {
       pending.map((operation) => ["operation_id", operation.operationId]),
     )}`)).data;
     facts.pendingReload = { diskBeforeReload, diskAfterReload, restoredReceipts };
+    isolation.afterReload = await navigationContextState(first, sourceTurn.calls);
+    assert.deepEqual(isolation.afterReload, isolation.before, "页面重载和回执恢复不能物化 owner 或改变封存上下文");
     for (const record of restoredPending) {
       const operation = record.operation;
       const original = originalPending.find((item) => item.operation.client_operation_id === operation.client_operation_id);
@@ -4211,6 +4237,8 @@ async function runNavigationOptimism(surfaces) {
     await expandCatalogRow(namedCatalogRow(surface, childName));
     facts.pendingRecovery = { pending, reserved, enqueued, diskBeforeReload, diskAfterReload, restoredReceipts,
       killed, restarted, terminals, queueAfter, parents, breadcrumb, rootChildren };
+    isolation.afterRestart = await navigationContextState(first, sourceTurn.calls);
+    assert.deepEqual(isolation.afterRestart, isolation.before, "worker 重启完成纯导航不能重建 graph 或修改冻结上下文");
 
     const peerStorage = await surface.page.context().storageState();
     peerContext = await browserStartup("navigation_peer_context", () => browser.newContext({ storageState: peerStorage, viewport: { width: 1920, height: 1100 } }));
@@ -4431,14 +4459,21 @@ async function runNavigationOptimism(surfaces) {
     peerContext = null;
     const pinned = await forkOwner(first, { mode: "context_fork", relationship: "pinned" });
     await openOwner(first);
+    isolation.beforeRejectedDelete = await navigationContextState(first, sourceTurn.calls);
     const blocked = await match("navigation.before_commit", { kind: "delete_folder", target_node_id: canonicalRoot }, "blocked-subtree-delete");
     const rejectedDelete = await localOperation(surface, () => catalogFolderDialog(surface, { deleteName: rootName }), (intent) => intent.kind === "delete_folder" && intent.target_node_id === canonicalRoot, "有 pinned blocker 的递归删除");
     assert.equal((await acknowledge(blocked)).operation_id, rejectedDelete.operationId);
     assert.equal(await catalogRow(surface, first.sessionId).count(), 0, "pending 递归删除应隐藏后代");
     assert.equal(await surface.page.locator("#input").isVisible(), true, "pending 不能关闭已打开聊天");
+    isolation.pendingDelete = await navigationContextState(first, sourceTurn.calls);
+    assert.deepEqual(isolation.pendingDelete, isolation.beforeRejectedDelete, "未提交删除不能关闭已提交 active owner 的准入或创建业务 lease");
+    const pendingHistory = await loadCompleteThreadHistory(first);
+    assert.equal(pendingHistory.items.length, 1, "仅排队删除时 cold history 仍按已提交 active 状态正常准入");
     await release(blocked);
     const rejectedReceipt = await navigationTerminal(surface, rejectedDelete, "rejected");
     assert.equal(rejectedReceipt.error_code, "source_retained_by_fork");
+    isolation.rejectedDelete = await navigationContextState(first, sourceTurn.calls);
+    assert.deepEqual(isolation.rejectedDelete, isolation.beforeRejectedDelete, "删除被 retention 拒绝后上下文和原有 lease 不变");
     await namedCatalogRow(surface, rootName).waitFor({ state: "visible" });
     await expandCatalogRow(namedCatalogRow(surface, rootName));
     await expandCatalogRow(namedCatalogRow(surface, childName));
@@ -4516,7 +4551,11 @@ async function runNavigationOptimism(surfaces) {
       return repairReceipt?.settlement === "repair_required";
     }, "真实目录隔离失败的 repair_required 回执");
     assert.equal(repairReceipt.state, "committed", "排空失败不能把已提交的删除伪装成拒绝");
-    assert.match(repairReceipt.error_detail, /日期桶目录隔离失败|Permission denied/);
+    assert.equal(repairReceipt.error_code, "delete_settlement_repair_required");
+    for (const value of [repairDelete.operationId, repairFolder.nodeId, "artifact=session-subtree", "stage=delete_settlement", "error=RuntimeError"]) {
+      assert.ok(repairReceipt.error_detail.includes(value), `repair 回执缺少明确诊断身份或类别: ${value}`);
+    }
+    assert.ok(!repairReceipt.error_detail.includes(dateDirectory), "普通 durable repair 回执不能复制原生目录");
     assert.ok(repairReceipt.receipt_revision > repairPendingReceipt.receipt_revision);
     const repairStatus = surface.page.locator(".workbench-status-text").filter({ hasText: repairDelete.operationId });
     await repairStatus.filter({ hasText: /删除已提交但排空失败|需修复/ }).waitFor({ state: "visible", timeout: 30_000 });
@@ -4656,7 +4695,8 @@ async function runNavigationDates(surfaces) {
       await testControl({ action: "acknowledged", ...barrier });
       const items = await readRollout(owner, "SELECT item_id,content_hash,item_sequence,execution_id,turn_id FROM item_catalog ORDER BY item_sequence");
       const assemblies = await readRollout(owner, "SELECT assembly_id,request_hash,plan_hash,status FROM context_assemblies ORDER BY assembly_id");
-      active.push({ owner, calls, sent, barrier, items, assemblies, binding: await graphBinding(owner), request: await modelRequest(calls[0]) });
+      active.push({ owner, calls, sent, barrier, items, assemblies, binding: await graphBinding(owner),
+        sealed: await mcpAssemblies(owner, [calls[0]]), request: await modelRequest(calls[0]) });
     }
     const mutations = [];
     mutations.push(await catalogMutation(surface, { kind: "move_node", target_node_id: first.sessionId, parent_node_id: inner.nodeId }));
@@ -4686,6 +4726,8 @@ async function runNavigationDates(surfaces) {
       assert.deepEqual(await readRollout(execution.owner, "SELECT item_id,content_hash,item_sequence,execution_id,turn_id FROM item_catalog ORDER BY item_sequence"), execution.items);
       assert.deepEqual(await readRollout(execution.owner, "SELECT assembly_id,request_hash,plan_hash,status FROM context_assemblies ORDER BY assembly_id"), execution.assemblies);
       assert.deepEqual(await graphBinding(execution.owner), execution.binding);
+      assert.deepEqual(await mcpAssemblies(execution.owner, [execution.calls[0]]), execution.sealed,
+        "活跃 main/child 的纯导航不能修改原始封存 bytes、重建 frames 或 ToolSet");
       // 此时模型响应仍被 barrier 阻塞；历史跳转在下方 Turn 完成后由 verifyOwnerTurns 验证。
       const current = await assertAcceptedTurn(execution.owner, execution.sent);
       assert.equal(current.turn_id, execution.sent.turnId, "目录变化保留运行中的 Turn 身份");
@@ -10657,11 +10699,19 @@ function classifyConsoleErrors(input = {}) {
       let nodeId = refusal.nodeId ?? refusal.sessionId;
       let jobOwnerRequestId;
       const detail = refusal.body?.detail;
-      const expectedRead = ["bootstrap", "pending", "breadcrumb", "main_thread", "session", "file_tree_settings", "goal", "attachment_content", "job"].includes(refusal.kind) && refusal.method === "GET"
+      const catalogNodeRead = ["breadcrumb", "catalog_children"].includes(refusal.kind);
+      const expectedRead = ["bootstrap", "pending", "breadcrumb", "catalog_children", "main_thread", "session", "file_tree_settings", "goal", "attachment_content", "job"].includes(refusal.kind) && refusal.method === "GET"
         || refusal.kind === "history" && refusal.method === "POST";
       if (!expectedRead || refusal.status !== status || !refusal.requestId || refusal.body?.request_id !== refusal.requestId
           || typeof detail !== "string") return null;
-      if (status === 404 && (refusal.kind === "breadcrumb" && detail !== `会话目录节点不存在: ${nodeId}`
+      if (refusal.kind === "catalog_children") {
+        const url = new URL(refusal.url);
+        if (status !== 404 || url.pathname !== "/api/v1/session-catalog/children"
+            || url.searchParams.size !== 2 || url.searchParams.get("limit") !== "100"
+            || url.searchParams.getAll("parent_node_id").length !== 1
+            || url.searchParams.get("parent_node_id") !== nodeId) return null;
+      }
+      if (status === 404 && (catalogNodeRead && detail !== `会话目录节点不存在: ${nodeId}`
           || ["bootstrap", "main_thread", "session", "goal"].includes(refusal.kind) && detail !== `Session ${nodeId} not found`
           || refusal.kind === "file_tree_settings" && detail !== `会话不存在: ${nodeId}`
           || refusal.kind === "attachment_content" && (typeof refusal.attachmentFileId !== "string"
@@ -10690,14 +10740,14 @@ function classifyConsoleErrors(input = {}) {
         nodeId = owners[0].sessionId;
         jobOwnerRequestId = owners[0].requestId;
       } else if (typeof nodeId !== "string" || !detail.includes(nodeId)) return null;
-      if (status === 409 && (refusal.kind === "breadcrumb" || !detail.startsWith("session_deletion_pending:"))) return null;
+      if (status === 409 && (catalogNodeRead || !detail.startsWith("session_deletion_pending:"))) return null;
       const lifecycleProofIndex = deletionProofs.findIndex((proof) => proof.origin === new URL(refusal.url).origin
         && proof.workspaceHeader === refusal.workspaceHeader && proof.terminalRequestId
         && proof.journal.state === "completed" && proof.remaining.length === 0
         && proof.verifiedAt >= refusal.receivedAt
-        && (refusal.kind === "breadcrumb" ? proof.nodeIds : proof.sessionIds).includes(nodeId)
+        && (catalogNodeRead ? proof.nodeIds : proof.sessionIds).includes(nodeId)
         && proof.absentDomNodeIds.includes(nodeId)
-        && (refusal.kind === "breadcrumb" || proof.absentChatSessionIds.includes(nodeId)));
+        && (catalogNodeRead || proof.absentChatSessionIds.includes(nodeId)));
       if (lifecycleProofIndex < 0) return null;
       const proof = deletionProofs[lifecycleProofIndex];
       return { refusalRequestId: refusal.requestId, deletionOperationId: proof.operationId,
@@ -11203,6 +11253,8 @@ page.on("response", (response) => {
   const historyKind = history?.[2] ?? (history?.[3] ? "history" : null);
   const pending = /^\/api\/v1\/sessions\/([^/]+)\/main-thread\/pending-requests$/.exec(url.pathname);
   const breadcrumb = /^\/api\/v1\/session-catalog\/breadcrumb\/([^/]+)$/.exec(url.pathname);
+  const catalogChildren = url.pathname === "/api/v1/session-catalog/children"
+    && url.searchParams.has("parent_node_id");
   const mainThread = /^\/api\/v1\/sessions\/([^/]+)\/main-thread$/.exec(url.pathname);
   const session = /^\/api\/v1\/sessions\/([^/]+)$/.exec(url.pathname);
   const fileTreeSettings = /^\/api\/v1\/sessions\/([^/]+)\/file-tree-settings$/.exec(url.pathname);
@@ -11212,20 +11264,20 @@ page.on("response", (response) => {
   const admission = /^\/api\/v1\/sessions\/([^/]+)\/(?:threads\/([^/]+)\/)?messages$/.exec(url.pathname);
   const forkContext = /^\/api\/v1\/sessions\/([^/]+)\/fork-context$/.exec(url.pathname);
   if (response.status() === 409 || history && [200, 404].includes(response.status())
-      || (pending || breadcrumb || mainThread) && response.status() === 404
+      || (pending || breadcrumb || catalogChildren || mainThread) && response.status() === 404
       || (session || fileTreeSettings || goal || attachmentContent) && response.status() === 404
       || job && [200, 404].includes(response.status())
       || admission && response.request().method() === "POST" && response.status() === 200) {
     const request = response.request();
     const fact = { url: response.url(), method: request.method(), status: response.status(),
       pageId: page.diagnosticId, ...requestDocuments.get(request),
-      kind: historyKind ?? (pending ? "pending" : breadcrumb ? "breadcrumb"
+      kind: historyKind ?? (pending ? "pending" : breadcrumb ? "breadcrumb" : catalogChildren ? "catalog_children"
         : mainThread ? "main_thread" : session ? "session" : fileTreeSettings ? "file_tree_settings"
           : goal ? "goal" : attachmentContent ? "attachment_content" : job ? "job"
             : admission ? "admission" : forkContext ? "fork_context" : null),
       sessionId: history?.[1] ?? pending?.[1] ?? mainThread?.[1] ?? session?.[1] ?? fileTreeSettings?.[1]
         ?? goal?.[1] ?? attachmentContent?.[1] ?? admission?.[1] ?? forkContext?.[1] ?? null,
-      nodeId: breadcrumb?.[1] ?? null, jobId: job?.[1] ?? null,
+      nodeId: breadcrumb?.[1] ?? (catalogChildren ? url.searchParams.get("parent_node_id") : null), jobId: job?.[1] ?? null,
       attachmentFileId: attachmentContent ? url.searchParams.get("file_id") : null,
       threadId: history?.[3] ?? admission?.[2] ?? null,
       parameters: historyKind === "history" && request.method() === "POST" ? request.postDataJSON() : null,
@@ -11255,6 +11307,10 @@ page.on("response", (response) => {
   }
   if (url.pathname === "/api/gateway/workspaces" || /^\/api\/gateway\/workspaces\/[^/]+\/activate$/.test(url.pathname)
       || url.pathname === "/api/v1/workspace" || url.pathname === "/api/v1/session-catalog/children") {
+    const existing = diagnosticResponseFacts.get(response.request());
+    if (existing) {
+      navigationResponses.push(existing);
+    } else {
     const fact = { url: response.url(), method: response.request().method(), status: response.status(),
       workspaceHeader: response.request().headers()["x-boxteam-workspace-id"] ?? null,
       requestId: response.headers()["x-request-id"] ?? null, receivedAt: Date.now() };
@@ -11262,6 +11318,7 @@ page.on("response", (response) => {
     diagnosticResponseFacts.set(response.request(), fact);
     const read = response.json().then((body) => { fact.body = body; }, (error) => { fact.bodyError = String(error); });
     trackDiagnosticResponseBody(page, read, fact);
+    }
   }
   if (
     response.status() !== 401
@@ -11324,6 +11381,57 @@ function runDeletionReadClassifierSelfTest() {
   assert.deepEqual(classify({ ...refusal, body: { ...refusal.body, request_id: "request-other" } }).unhandledConsoleErrors, [text]);
   assert.deepEqual(classify({ ...refusal, body: undefined, bodyError: "Network.getResponseBody: No data found" }).unhandledConsoleErrors, [text], "缺少原响应正文不能由删除终态补造");
   assert.deepEqual(classify({ ...refusal, body: { ...refusal.body, detail: `会话物理目录缺失: ${sessionId}, path=/private/session` } }).unhandledConsoleErrors, [text]);
+
+  // export 后删除可先于 children 到达；只接受原响应与同一不可复用 node 的完整删除证据。
+  const nodeId = "folder-deletion-classifier";
+  const childrenUrl = `http://127.0.0.1:19000/api/v1/session-catalog/children?limit=100&parent_node_id=${nodeId}`;
+  const notFoundText = "Failed to load resource: the server responded with a status of 404 (Not Found)";
+  const children = { ...refusal, url: childrenUrl, kind: "catalog_children", status: 404,
+    nodeId, sessionId: null,
+    body: { request_id: refusal.requestId, detail: `会话目录节点不存在: ${nodeId}` } };
+  const deletion = { ...proof, sessionIds: [], nodeIds: [nodeId], absentDomNodeIds: [nodeId], absentChatSessionIds: [] };
+  const consoleFact = { index: 0, url: childrenUrl, text: notFoundText, pageId: 7, documentId: 8 };
+  const classifyChildren = (response = children, proofs = [deletion], errors = [consoleFact], responses = [response]) => classifyConsoleErrors({
+    consoleErrorFacts: errors, consoleErrors: errors.map((error) => error.text), failedRequests: [],
+    conflictResponses: [], lifecycleErrorResponses: responses, lifecycleDeletionProofs: proofs,
+    historyErrorResponses: [], forkDeletionRaceFacts: [], messageStreamResponses: [],
+    jobOwnerResponses: [], turnNavigationMissingTurnProofs: [], historyLiveProofs: [], historyRecoveryResponses: [],
+    controlledRestartWindows: [], controlledRestartRequests: [], controlledRestartResponses: [],
+  });
+  assert.deepEqual(classifyChildren().unhandledConsoleErrors, [], "Folder children 不依赖伪造 Session/chat 证据");
+  for (const proofs of [[],
+    [{ ...deletion, nodeIds: ["other-node"] }],
+    [{ ...deletion, origin: "http://127.0.0.1:19001" }],
+    [{ ...deletion, workspaceHeader: "other-workspace" }],
+    [{ ...deletion, terminalRequestId: null }],
+    [{ ...deletion, journal: { state: "deleting" } }],
+    [{ ...deletion, remaining: [nodeId] }],
+    [{ ...deletion, absentDomNodeIds: [] }],
+    [{ ...deletion, verifiedAt: 99 }],
+  ]) {
+    assert.deepEqual(classifyChildren(children, proofs).unhandledConsoleErrors, [notFoundText]);
+  }
+  for (const response of [
+    { ...children, method: "POST" },
+    { ...children, status: 409 },
+    { ...children, kind: null },
+    { ...children, nodeId: "other-node" },
+    { ...children, requestId: null },
+    { ...children, pageId: 9 },
+    { ...children, documentId: 9 },
+    { ...children, url: childrenUrl + "&parent_node_id=" + nodeId },
+    { ...children, url: childrenUrl + "&cursor=another-page" },
+    { ...children, url: childrenUrl + "&unexpected=true" },
+    { ...children, url: childrenUrl.replace("limit=100", "limit=50") },
+    { ...children, url: childrenUrl.replace("limit=100&", "") },
+    { ...children, body: undefined, bodyError: "response body unavailable" },
+    { ...children, body: { ...children.body, request_id: "other-request" } },
+    { ...children, body: { ...children.body, detail: `目录损坏: ${nodeId}` } },
+  ]) {
+    assert.deepEqual(classifyChildren(response).unhandledConsoleErrors, [notFoundText]);
+  }
+  assert.deepEqual(classifyChildren(children, [deletion], [consoleFact, { ...consoleFact, index: 1 }])
+    .unhandledConsoleErrors, [notFoundText], "重复 console 不能重复消费同一响应");
 }
 
 if (messageStreamDiagnosticsSelfTest) {

@@ -418,6 +418,23 @@ async def test_basic_chat_tool_loop_through_real_web_surface(
         assert isinstance(selected, list)
         assert result["focusedScenarios"] == requested
         assert set(result["section8"]) == set(selected)
+        if "navigation_optimism" in selected:
+            navigation = result["section8"]["navigation_optimism"]
+            isolation = navigation["isolation"]
+            baseline = isolation["before"]
+            assert baseline["sources"] and baseline["toolSets"] and baseline["sealed"]
+            assert baseline["runtime"]["built"] and baseline["runtime"]["acquired"]
+            for stage in ("pending", "afterReload", "afterRestart"):
+                assert isolation[stage] == baseline, f"导航 {stage} 不能修改上下文或物化运行时"
+            for stage in ("pendingDelete", "rejectedDelete"):
+                assert isolation[stage] == isolation["beforeRejectedDelete"]
+            recovery = navigation["pendingRecovery"]
+            assert recovery["killed"]["before_pid"] != recovery["restarted"]["after_pid"]
+            assert all(receipt["state"] == "committed" for receipt in recovery["terminals"])
+            assert navigation["deletion"]["rejectedReceipt"]["error_code"] == "source_retained_by_fork"
+            repair = navigation["repair"]["repairReceipt"]
+            assert repair["state"] == "committed" and repair["settlement"] == "repair_required"
+            assert repair["error_code"] == "delete_settlement_repair_required"
         if "lifecycle_admission_deletion" in selected:
             cold = result["section8"]["lifecycle_admission_deletion"]["cold"]
             assert cold["guarded"]["phase"] == "history.read.guarded"
