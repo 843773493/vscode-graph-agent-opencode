@@ -46,6 +46,7 @@ from app.core.resource_uri import parse_session_artifact_uri, session_artifact_u
 from app.core.session_catalog_resolver import SessionCatalogPathResolver
 from app.core.session_control_store import SessionControlStore
 from app.core.session_lifecycle_gate import (
+    NavigationTopologyGate,
     OperationHolderGate,
     SessionDeletionPendingError,
     SessionLifecycleGate,
@@ -132,6 +133,7 @@ class AttachmentBlobStore(ForkAttachmentStoreMixin, AttachmentIngestRecoveryMixi
             self._sessions_root
         )
         self._gate = SessionLifecycleGate(self._sessions_root)
+        self._topology_gate = NavigationTopologyGate(self._sessions_root)
         self.deletion_holder = OperationHolderGate(self._sessions_root, namespace="attachment_ingest")
 
     def reference(self, session_id: str, attachment_id: str) -> str:
@@ -286,7 +288,7 @@ class AttachmentBlobStore(ForkAttachmentStoreMixin, AttachmentIngestRecoveryMixi
         preimage_hash: str,
     ) -> SessionOperationLease:
         """gate 内 fresh 校验 + create-or-get durable `AttachmentOperationPin`。"""
-        async with self._gate.exclusive(session_id):
+        async with self._topology_gate.shared(), self._gate.exclusive(session_id):
             generation = self._assert_session_active(session_id, thread_id)
             return control.create_or_get_lease(
                 operation_kind="attachment",
@@ -310,7 +312,7 @@ class AttachmentBlobStore(ForkAttachmentStoreMixin, AttachmentIngestRecoveryMixi
         content_type: str,
     ) -> AttachmentOwnerRef:
         """再次取得同一 gate，复验 pin/fence/thread 后原子发布。"""
-        async with self._gate.exclusive(session_id):
+        async with self._topology_gate.shared(), self._gate.exclusive(session_id):
             if not control.verify_lease_token(
                 lease_id=pin.lease_id, fencing_token=pin.fencing_token
             ):

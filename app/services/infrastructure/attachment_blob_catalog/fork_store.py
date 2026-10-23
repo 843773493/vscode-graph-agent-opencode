@@ -21,6 +21,7 @@ from app.core.session_control_store.copy_attachment_settlement import (
     transition_copy_attachment_settlement,
 )
 from app.core.session_lifecycle_gate import (
+    NavigationTopologyGate,
     OperationHolderGate,
     SessionDeletionPendingError,
     SessionLifecycleGate,
@@ -65,6 +66,7 @@ class ForkAttachmentStoreMixin(ForkAttachmentImportMixin):
     _path_resolver: SessionCatalogPathResolver
     _attachments_root: Path
     _gate: SessionLifecycleGate
+    _topology_gate: NavigationTopologyGate
     _blob_commits: OperationHolderGate
     _parse_logical_file_id: Callable[[str, str], str]
     _assert_session_active: Callable[[str, str], int]
@@ -330,8 +332,10 @@ class ForkAttachmentStoreMixin(ForkAttachmentImportMixin):
         claim_ids = tuple(sorted(item.claim_id for item in snapshots if item.claim_id is not None))
         if not any(item.availability == "available" for item in snapshots):
             return
-        async with self._gate.exclusive(capture.target_session_id):
+        async with self._topology_gate.shared(), self._gate.exclusive(capture.target_session_id):
             if isinstance(creation, ThreadCreationRecord):
+                if self._path_resolver.catalog_store.get_node(capture.target_session_id).state != "active":
+                    raise SessionDeletionPendingError("copy child target Session catalog 已关闭，拒绝 reservation")
                 directory = self._path_resolver.resolve_session_node(capture.target_session_id)
             elif creation is None:
                 self._assert_session_active(capture.target_session_id, capture.target_thread_id)
@@ -370,7 +374,7 @@ class ForkAttachmentStoreMixin(ForkAttachmentImportMixin):
         claim_ids = self._catalog.fork_attachment_claim_ids(capture.copy_operation_id)
         if claim_ids:
             await observe_phase(capture.copy_operation_id, "copy.attachments.before_finalize")
-        async with self._gate.exclusive(capture.target_session_id):
+        async with self._topology_gate.shared(), self._gate.exclusive(capture.target_session_id):
             generation = self._assert_session_active(capture.target_session_id, capture.target_thread_id)
             # omit、不可用或 main 引用复用也必须由同一个目标 gate 决定发布先后。
             if not claim_ids:
