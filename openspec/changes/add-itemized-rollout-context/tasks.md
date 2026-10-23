@@ -1027,3 +1027,11 @@ pending 恢复的硬错误重试已闭合（2026-10-22）：进程内装载阶�
 
 - `session_context_control_admission` 在同一 topology shared → Session exclusive 临界区内核 catalog active、精确 Thread 和 active fence generation，并持久 create-or-get 原 context-control lease、推进 settling；随后释放 topology，仅保留 Session gate 覆盖原本地 mutation/settlement。删除可继续标记 catalog，但不能早于 lease 建立；锁释放点取消也按原 identity 结算 failed，不改通用写准入或引入第二 owner。
 - 完整旧生产 tree `a13072fefe8e5e5841f35a3416f707056e3ed44e` 的真实 Skill tracked→HTTP untrack 竞争稳定失败（1 failed/24.13秒），精确证明删除已提交但 lease 尚未建立。完整修复 tree `9a9d5e1d996d8e3287bec7ad04b90491ddc2e6d1` 的 main/child×完成/取消 4项通过/56.62秒，相邻 Skill 动态跟踪、冻结恢复及删除拒绝4项通过/97.10秒；Ruff、compileall与44项 strict OpenSpec均exit0。4294项源码前后指纹一致，无运行组残留；准确命令/raw/退出码、只读独审及架构审查保留于 `out/tests/temp/context_control_topology_20261023/artifacts/`。本收据关闭具体准入窗口，不代替8.1/8.3/8.13总门或完整Web。
+
+
+### 2026-10-23 8.13-S internal history 元数据有界分页（部分收口）
+
+- 唯一 catalog reader 在同一 SQLite snapshot 中按可见 display-only/internal membership 和 frozen upper 判断 typed projection-message/part 替代，再施加页锚、窗口、logical ordinal 排序及 LIMIT 257。移除全量 Python carrier DTO/parser、survivor ID JSON 和旧调用端口；候选与页外替代共用同一 SQL scope。正文最多读取256项，missing/conflicting part scope在正文前明确拒绝，历史owner校验和elapsed原逻辑保留。仅查询资产重组，无schema变化或数据迁移。
+- 完整旧实现tree `083db5443001ead7bd701bcb02e976ee76bad2dd` 的最终新增反例稳定失败：请求256条前返回307条carrier元数据（red-entry-002，1 failed/2.65秒）。修复tree `f3ab4be73384a8046a1ceecb726d64fe3fcac10b` 的green-regression-005为77 passed/46.66秒；正式matrix green-fork-matrix-005为1 passed/192 deselected、14.82秒。覆盖307成员跨页、final在窗口外仍替代、frozen upper排除final后旧carrier可读、scope损坏、membership visibility/source过滤、keyset/owner/cursor与runtime notice。较早tree `70578509339fa364545a0bfc13596e4b3caa2f70` 的完整sharing matrix另为193 passed/248.59秒；不冒充最终版全套重跑。
+- 最终tree `3899953f8008f196150f157ae135c62550f02946` 仅将三SQL原字节下沉至`storage/sql/internal_history/`并更新显式加载路径，带四段式AGENTS；20项真实SQL/正文专项通过/7.65秒，Ruff、compileall及44项strict validate均exit0。只读独审003/005及目录复核006无剩余本次finding，根SQL文件数恢复HEAD的25。全源码前后指纹、准确命令/raw/实际退出码及残留组核验保存在 `out/tests/temp/history_internal_paging_20261023/artifacts/`。
+- 性能TODO有界说明：307成员实测首256条0.628秒、余48条0.094秒，cursor向Python最大返回257行；SQLite页外替代扫描仍随冻结历史增长，未承诺固定SQL工作量，源码保留TODO。初版green-entry-001中测试把fixture非internal成员计入预期已改为核真实选定membership；首次相邻检查57项通过，另1项因缺matrix看门狗未执行，已由上述正式matrix补验。此收据只关闭具体有界读取缺口，完整Web、8.13-S其余产品门及8.13总门仍未勾选。

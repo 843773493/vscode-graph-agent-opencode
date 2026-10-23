@@ -3,6 +3,7 @@ from __future__ import annotations
 from contextlib import closing
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
+from time import perf_counter
 
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage
@@ -32,7 +33,13 @@ from app.services.infrastructure.rollout_context.storage.catalog.turn_projection
     _finalize_activity_projection,
     _logical_activity_key,
 )
+from app.services.infrastructure.rollout_context.storage.serialization import (
+    canonical_json_text,
+)
 from app.services.mapping.itemized.canonical_langchain import project_canonical_items
+from app.services.mapping.itemized.carrier_dedup import (
+    superseded_stream_content_item_ids,
+)
 from app.services.mapping.itemized.provider_history import (
     reasoning_projection_rows,
     visible_text,
@@ -374,7 +381,7 @@ def test_internal_elapsed_keeps_same_predecessor_across_pages(source_seal_case):
 
 
 @pytest.fixture
-def internal_content_carrier_case(source_seal_case):
+def internal_content_carrier_case(source_seal_case, request):
     """真实准入和 canonical commit 保留三份正文，以 typed 引用决定展示 survivor。"""
     case = source_seal_case
     saver, owner = case.saver, case.owner
@@ -433,11 +440,21 @@ def internal_content_carrier_case(source_seal_case):
         projection_identity=ItemProjectionIdentity(model_call_id=scope),
         payload="初始化报告的私有正文。", created_at=(stamp + timedelta(seconds=number + 1)).isoformat(),
     ) for number, scope in enumerate((model_call_id, "another-internal-model")))
+    fillers = tuple(CanonicalItemRecord.create(
+        item_sequence=1, item_id=f"internal-page-filler-{number}", semantic_kind="assistant_output",
+        wire_role="assistant", payload_kind="text", status="completed",
+        producer_ref={"producer_kind": "provider", "producer_id": model_call_id},
+        projection_identity=ItemProjectionIdentity(
+            model_call_id=model_call_id, block_id=f"{model_call_id}:block:independent-{number}",
+            block_index=number + 10,
+        ),
+        payload=f"独立输出 {number}", created_at=(stamp + timedelta(seconds=6)).isoformat(),
+    ) for number in range(getattr(request, "param", 0)))
     with (
         session_thread_owner_scope(MutationIntentOwner(owner.session_id, owner.thread_id), langgraph_thread_id=owner.thread_id),
         execution_admission_scope(admission, langgraph_thread_id=owner.thread_id),
     ):
-        saver.append_items(owner.session_id, (*independent, *stream, *checkpoint), thread_id=owner.thread_id)
+        saver.append_items(owner.session_id, (*independent, *stream, *checkpoint, *fillers), thread_id=owner.thread_id)
         saver.converge_execution(owner.session_id, thread_id=owner.thread_id, turn_id=None,
                                  execution_id=admission.execution_id, outcome="completed", turn_status=None,
                                  items=final_items)
@@ -446,6 +463,118 @@ def internal_content_carrier_case(source_seal_case):
     raw = saver._storage.storage.read_items(owner.session_id, owner.thread_id)
     final = next(item for item in raw if item.item_id == "item-internal-content-final")
     return case, admission, raw, final, independent
+
+
+@pytest.mark.parametrize("internal_content_carrier_case", [300], indirect=True)
+def test_internal_content_large_history_bounds_metadata_before_reading_bodies(
+    internal_content_carrier_case, monkeypatch,
+):
+    case, admission, raw, final, _independent = internal_content_carrier_case
+    storage, reader = case.saver._storage.storage, case.saver._context_reader
+    body_reads = []
+    original_read = storage.read_items
+
+    def bounded_read(*args, **kwargs):
+        body_reads.append(tuple(kwargs["item_ids"]))
+        return original_read(*args, **kwargs)
+
+    monkeypatch.setattr(storage, "read_items", bounded_read)
+    with reader.open_snapshot(admission.session_id, admission.thread_id) as snapshot:
+        chain = reader.resolve_chain(snapshot)
+        bound = reader.read_history_snapshot_bounds(snapshot, chain).upper_logical_item_ordinal
+        members = {row[0] for row in snapshot.connection.execute(
+            "SELECT item.item_id FROM item_catalog AS item JOIN context_view_items AS member "
+            "ON member.item_id=item.item_id WHERE member.view_id=? AND item.execution_id=? "
+            "AND member.visible=1 AND member.source_kind='display_only'",
+            (reader.context_view_id(chain), admission.execution_id),
+        )}
+        superseded = superseded_stream_content_item_ids([item for item in raw if item.item_id in members])
+        expected = members - superseded
+        assert len(expected) > 256 and len(superseded) >= 3
+        # 观察真实 SQLite cursor 返回的行，而非 mock storage 的分页结果。
+        rows_by_cursor = {}
+
+        def observe_row(cursor, row):
+            rows_by_cursor[cursor] = rows_by_cursor.get(cursor, 0) + 1
+            return row
+
+        snapshot.connection.row_factory = observe_row
+        seen = []
+        anchor = None
+        while True:
+            started = perf_counter()
+            page = reader.read_internal_execution_history_page(
+                snapshot, chain, direction="before", anchor_logical_item_ordinal=anchor,
+                lower_logical_item_ordinal=None, upper_logical_item_ordinal=bound,
+                snapshot_upper_logical_item_ordinal=bound,
+                execution_id=admission.execution_id, limit=256,
+            )
+            assert 0 < len(page.entries) <= 256
+            assert max(rows_by_cursor.values()) <= 257
+            print({"internal_members": len(members), "page_entries": len(page.entries),
+                   "max_cursor_rows": max(rows_by_cursor.values()), "seconds": perf_counter() - started})
+            seen[0:0] = [entry.item.item_id for entry in page.entries]
+            if not page.has_more:
+                break
+            anchor = page.entries[0].logical_item_ordinal
+        assert len(seen) == len(set(seen)) == len(expected)
+        assert set(seen) == expected
+        assert seen[-1] == final.item_id
+        # final 在窗口外时仍替代旧正文；冻结上界排除 final 时旧正文恢复可读。
+        final_ordinal = snapshot.connection.execute(
+            "SELECT logical_item_ordinal FROM context_view_items WHERE item_id=? AND view_id=?",
+            (final.item_id, reader.context_view_id(chain)),
+        ).fetchone()[0]
+        for frozen_upper, removed in ((bound, superseded), (final_ordinal - 1, set())):
+            page = reader.read_internal_execution_history_page(
+                snapshot, chain, direction="after", anchor_logical_item_ordinal=None,
+                lower_logical_item_ordinal=None, upper_logical_item_ordinal=final_ordinal - 1,
+                snapshot_upper_logical_item_ordinal=frozen_upper,
+                execution_id=admission.execution_id, limit=256,
+            )
+            ids = {entry.item.item_id for entry in page.entries}
+            assert ids.isdisjoint(removed)
+            if not removed:
+                assert superseded <= ids
+        assert max(rows_by_cursor.values()) <= 257
+    assert len(body_reads) >= 4
+    assert all(len(ids) <= 256 for ids in body_reads)
+
+
+@pytest.mark.parametrize("invalid_scope", ["missing", "conflicting"])
+def test_internal_content_invalid_part_scope_fails_before_body_read(
+    internal_content_carrier_case, invalid_scope, monkeypatch,
+):
+    case, admission, _raw, final, _independent = internal_content_carrier_case
+    storage, reader = case.saver._storage.storage, case.saver._context_reader
+    manifest = final.projection_manifest()
+    if invalid_scope == "missing":
+        manifest["projection_identity"].pop("model_call_id")
+        manifest["provenance_relations"] = []
+    else:
+        manifest["provenance_relations"][0]["target_model_call_id"] = "conflicting-model-call"
+    with closing(storage._connect(admission.thread_id, session_id=admission.session_id)) as connection:
+        connection.execute("UPDATE item_catalog SET projection_manifest_json=? WHERE item_id=?",
+                           (canonical_json_text(manifest), final.item_id))
+        connection.commit()
+        before = list(connection.iterdump())
+
+    def reject_body_read(*args, **kwargs):
+        pytest.fail("损坏的 part scope 应在 canonical 正文读取前明确拒绝")
+
+    monkeypatch.setattr(storage, "read_items", reject_body_read)
+    with reader.open_snapshot(admission.session_id, admission.thread_id) as snapshot:
+        chain = reader.resolve_chain(snapshot)
+        bound = reader.read_history_snapshot_bounds(snapshot, chain).upper_logical_item_ordinal
+        with pytest.raises(ValueError, match="唯一 typed model-call scope"):
+            reader.read_internal_execution_history_page(
+                snapshot, chain, direction="before", anchor_logical_item_ordinal=None,
+                lower_logical_item_ordinal=None, upper_logical_item_ordinal=bound,
+                snapshot_upper_logical_item_ordinal=bound,
+                execution_id=admission.execution_id, limit=1,
+            )
+    with closing(storage._connect(admission.thread_id, session_id=admission.session_id)) as connection:
+        assert list(connection.iterdump()) == before
 
 
 def test_internal_content_survivor_is_selected_before_keyset_and_body_reads(

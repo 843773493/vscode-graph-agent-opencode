@@ -19,9 +19,6 @@ from app.services.infrastructure.rollout_context.storage.primitives import (
     RolloutTurnAnchor,
 )
 from app.services.infrastructure.rollout_context.store import RolloutContextStore
-from app.services.mapping.itemized.carrier_dedup import (
-    superseded_stream_content_item_ids,
-)
 
 
 @dataclass(frozen=True, slots=True)
@@ -368,25 +365,16 @@ class RolloutContextReader:
         limit: int,
         execution_id: str | None = None,
     ) -> InternalExecutionHistoryPage:
-        """同一 view/snapshot 先按 typed 内容身份择一，再读取有界正文页。"""
-        view_id = self.context_view_id(chain)
-        # TODO: 将 carrier 择一改为同快照内的有界查询；当前正文页已限流，但每页仍
-        # 读取冻结上界内全部 carrier 元数据。优化须保留跨页 final/replaces 的去重语义。
-        carriers = self._storage.storage.read_internal_content_carriers(
-            snapshot, view_id,
-            upper_logical_item_ordinal=snapshot_upper_logical_item_ordinal,
-            execution_id=execution_id,
-        )
-        superseded = superseded_stream_content_item_ids(carriers)
+        """同一 view/snapshot 在 SQL 中择一，再读取有界元数据与正文页。"""
         return self._storage.storage.read_internal_execution_history_page(
             snapshot,
-            view_id,
+            self.context_view_id(chain),
             direction=direction,
             anchor_logical_item_ordinal=anchor_logical_item_ordinal,
             lower_logical_item_ordinal=lower_logical_item_ordinal,
             upper_logical_item_ordinal=upper_logical_item_ordinal,
+            snapshot_upper_logical_item_ordinal=snapshot_upper_logical_item_ordinal,
             limit=limit,
-            selected_item_ids=frozenset(item.item_id for item in carriers if item.item_id not in superseded),
             execution_id=execution_id,
         )
 
