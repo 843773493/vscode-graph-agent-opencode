@@ -967,10 +967,8 @@ export class BrowserSession extends EventEmitter {
       }
       const registration = this.registerPage(page, { activate: true });
       void registration.catch((error) => {
-        const message = error instanceof Error ? (error.stack || error.message) : String(error);
-        this.record.error_message = `注册新标签页失败: ${message}`;
+        this.record.error_message = error.message;
         this.emit("state", this.snapshot());
-        console.error("[browser-session] 注册新标签页失败:", message);
       });
     });
   }
@@ -1012,7 +1010,14 @@ export class BrowserSession extends EventEmitter {
       }
       return existing;
     }
-    const registration = this._registerPage(page, { pageId, activate });
+    const registration = this._registerPage(page, { pageId, activate }).catch((cause) => {
+      const error = new Error(`注册浏览器标签页失败: browser_id=${this.id}, page_id=${pageId}, stage=register_page`, { cause });
+      // 原有协议拒绝码与HTTP分类不因原生异常正文退出普通响应而改变。
+      error.code = cause?.code;
+      error.statusCode = cause?.statusCode;
+      console.error("[browser-session] 注册浏览器标签页失败", { browser_id: this.id, page_id: pageId }, cause);
+      throw error;
+    });
     this.pageRegistrationPromises.set(page, registration);
     try {
       return await registration;

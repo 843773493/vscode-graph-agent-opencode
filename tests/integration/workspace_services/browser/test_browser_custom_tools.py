@@ -965,6 +965,104 @@ async def test_injected_page_recovery_failure_keeps_native_cause_in_diagnostics(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["sync", "async"])
+async def test_injected_registration_failure_shares_safe_http_state_and_record(
+    mode: str, integration_client: httpx.AsyncClient,
+    browser_context: CustomToolFactoryContext, browser_runtime: WorkspaceToolRuntime,
+    browser_manager_processes: tuple[int, int],
+) -> None:
+    container, _session, _invocation = browser_runtime
+    created = await integration_client.post("/api/v1/resources/browsers", json={
+        "session_id": browser_context.session_id,
+        "thread_id": browser_context.invocation_context.thread_binding.thread_id,
+        "url": "about:blank",
+    })
+    assert created.status_code == 200, created.text
+    resource = created.json()["data"]
+    browser_id = resource["resource_id"]
+    root = Path(container.workspace_root)
+    reason = f"injected EACCES: {root / '.boxteam/browser-manager/native-profile'}"
+    transport = BrowserManagerClient(
+        workspace_id=container.workspace_id,
+        backend_url=f"http://127.0.0.1:{browser_manager_processes[0]}",
+    )
+    # 通过脚本入口仅替换第三方CDP连接创建；真实注册、事件、HTTP与落盘保持产品实现。
+    installed = await transport.perform(browser_id, "run", {"code": (
+        "context.__testOriginalNewCDPSession = context.newCDPSession.bind(context);"
+        f"context.newCDPSession = async () => {{ throw new Error({json.dumps(reason)}); }};"
+        "return 'installed';"
+    )}, actor="agent")
+    assert installed["result"] == "installed"
+    grant = await _grant(integration_client, browser_id, browser_context)
+    states: list[dict[str, object]] = []
+    async with websockets.connect(
+        f"ws://127.0.0.1:{browser_manager_processes[0]}/browser?workspace_id={container.workspace_id}"
+    ) as websocket:
+        await websocket.send(json.dumps({"type": "attach", "browserId": browser_id, "grantToken": grant["grant_token"]}))
+        assert (await _recv_ws_type(websocket, "attached"))["browserId"] == browser_id
+        with pytest.raises(BrowserRequestError) as caught:
+            payload = {"type": "new_tab", "url": "about:blank"}
+            if mode == "sync":
+                await asyncio.to_thread(transport._json_request_sync, "POST", f"/api/browsers/{browser_id}/navigate", payload)
+            else:
+                await transport._json_request("POST", f"/api/browsers/{browser_id}/navigate", payload)
+        failure = caught.value
+        assert failure.status == 500
+        assert "stage=register_page" in str(failure)
+        assert browser_id in str(failure)
+        assert failure.payload["operation_outcome"] == "failed"
+        assert str(root) not in json.dumps(failure.payload)
+        async with asyncio.timeout(8):
+            while True:
+                state = (await _recv_ws_type(websocket, "state"))["state"]
+                states.append(state)
+                if "stage=register_page" in str(state.get("error_message")):
+                    break
+        assert all(str(root) not in json.dumps(state) for state in states)
+        assert state["status"] == "running"
+        assert len(state["pages"]) == 1
+        command = {
+            "action": "navigate", "payload": payload,
+            "expected_revision": resource["owner_revision"], "thread": resource["source_thread"],
+        }
+        api_failure = await integration_client.post(f"/api/v1/resources/{browser_id}/browser-operation", json=command)
+        assert api_failure.status_code == 500, api_failure.text
+        assert "stage=register_page" in api_failure.text
+        assert str(root) not in api_failure.text
+        assert api_failure.headers["X-Request-ID"]
+        await websocket.send(json.dumps({"type": "detach"}))
+        assert (await _recv_ws_type(websocket, "detached"))["browserId"] == browser_id
+
+    observed = (await integration_client.get(f"/api/v1/resources/{browser_id}")).json()["data"]
+    assert observed["reconciliation_status"] == "verified"
+    assert container.browser_resource_owner._leases.leases_for_resource(browser_id) == []
+    records = json.loads((root / ".boxteam/browser-manager/browsers.json").read_text())
+    record, = [item for item in records["browsers"] if item["browser_id"] == browser_id]
+    assert "stage=register_page" in record["error_message"]
+    assert record["last_operation"]["status"] == "failed"
+    assert str(root) not in json.dumps(record)
+    restored = await transport.perform(browser_id, "run", {"code": (
+        "context.newCDPSession = context.__testOriginalNewCDPSession;"
+        "delete context.__testOriginalNewCDPSession; return 'restored';"
+    )}, actor="agent")
+    assert restored["result"] == "restored"
+    retried = await transport.perform(browser_id, "navigate", payload, actor="agent")
+    assert retried["created_page_id"] != resource["metadata"]["active_page_id"]
+    assert len(retried["browser"]["pages"]) == 2
+    artifacts = TestRunContext.from_test_file(Path(__file__)).artifacts_dir
+    diagnostics = "\n".join(item.read_text() for item in artifacts.glob("browser-backend-*.stderr.log"))
+    assert "[browser-session] 注册浏览器标签页失败" in diagnostics
+    assert reason in diagnostics
+    (artifacts / f"registration-failure-{mode}-{time.time_ns()}.json").write_text(json.dumps({
+        "transport_payload": failure.payload, "states": states,
+        "api_body": api_failure.json(), "request_id": api_failure.headers["X-Request-ID"],
+        "owner_projection": observed, "node_record": record, "retried": retried,
+    }, ensure_ascii=False, indent=2), encoding="utf-8")
+    deleted = await _detach_delete(integration_client, browser_id, browser_context)
+    assert deleted.status_code == 200, deleted.text
+
+
+@pytest.mark.asyncio
 async def test_new_browser_page_allows_minimal_actions_without_explicit_timeout(
     browser_manager_processes: tuple[int, int],
     integration_client: httpx.AsyncClient,

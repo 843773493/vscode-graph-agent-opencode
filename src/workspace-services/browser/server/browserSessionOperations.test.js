@@ -321,6 +321,52 @@ describe("浏览器统一操作队列", () => {
     expect(browser.pageEntries.size).toBe(1);
   });
 
+  test("并发注册共享同一失败回执，原生异常只保留在 cause 和日志", async () => {
+    const browser = session();
+    const context = new EventEmitter();
+    const cause = Object.assign(new Error("EACCES: /private/browser/profile; C:\\Users\\test\\profile"), {
+      code: "EACCES", statusCode: 500,
+    });
+    let failRegistration;
+    let attempts = 0;
+    context.newCDPSession = () => {
+      attempts += 1;
+      return new Promise((_, reject) => { failRegistration = reject; });
+    };
+    browser.context = context;
+    browser.browser = {};
+    const states = [];
+    browser.on("state", (state) => states.push(state));
+    browser.bindContextPageEvents();
+    const page = {};
+    const diagnostics = spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      context.emit("page", page);
+      const shared = browser.pageRegistrationPromises.get(page);
+      const second = browser.registerPage(page, { pageId: "ignored_second_id" }).catch((error) => error);
+      failRegistration(cause);
+      const failure = await shared.catch((error) => error);
+      expect(await second).toBe(failure);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(failure).toMatchObject({ code: "EACCES", statusCode: 500, cause });
+      expect(failure.message).toContain(`browser_id=${browser.id}`);
+      expect(failure.message).toContain("stage=register_page");
+      expect(failure.message).not.toContain(cause.message);
+      expect(attempts).toBe(1);
+      expect(browser.record.status).toBe("running");
+      expect(browser.pageEntries.size).toBe(0);
+      expect(browser.pageRegistrationPromises.has(page)).toBe(false);
+      expect(browser.toRecord().error_message).toBe(failure.message);
+      expect(states).toHaveLength(1);
+      expect(states[0].error_message).toBe(failure.message);
+      expect(JSON.stringify(states)).not.toContain(cause.message);
+      expect(diagnostics).toHaveBeenCalledTimes(1);
+      expect(diagnostics.mock.calls[0][2]).toBe(cause);
+    } finally {
+      diagnostics.mockRestore();
+    }
+  });
+
   test("设备型号切换更新设备参数并重新应用页面布局", async () => {
     const { browser, cdpCalls, getNavigationCount } = liveSession();
 

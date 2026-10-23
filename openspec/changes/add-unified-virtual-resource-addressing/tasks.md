@@ -262,3 +262,9 @@
 - 超时恢复的同步throw、异步reject与延迟失败共用同一错误写入点，只发布恢复阶段，原异常保留在cause和服务诊断。Session的同一恢复屏障以browser/page身份与阶段报告失败，避免后续排队操作重新抛出原生异常；超时立即返回、后台恢复及原408/后续500分类保持，读取/截图/脚本调用方同批迁齐，不增加响应正则或第二恢复链。
 - 最终tree `8efc0d2156c828958cab02145ecfdf64b43fe2b1`：`browser-timeout-static-unit-002` Node语法/Ruff通过，56项Bun/268断言通过；`integration-001`为3 passed/23.02秒，真实Chromium/Node HTTP核sync/async的408/metadata、后续API阻止脚本及同request_id、verified/lease释放、持久记录不含原生路径、原异常诊断和显式删除，并复核正常恢复后的键盘/读取/截图。第三方newPage故障为测试注入，不声称真实系统EACCES；001与002产品/集成测试逐字一致限定复用，002只修新增Session单测装具缺cdpSession及补首次超时断言。
 - 旧生产完整archive红测52 passed/4 failed，四项均区分原正文或恢复屏障回显；首轮静态单测55 passed/1 failed源于装具未进入assertRunning，失败原件保留。非作者只读复核002无finding，未独立跑测试。准确命令/raw/前后指纹/退出码/复用范围见 `out/tests/temp/openspec_resume_20261023/artifacts/browser-timeout-proof-002.json`。不代替Gateway/Web、Windows或2.2/7.2，其他Browser producer仍待迁齐。
+
+### 2026-10-23 Browser标签页注册错误出口（部分收口）
+
+- 注册owner的共享promise只发布browser/page身份和register_page阶段，保留原cause、code与statusCode，原异常写诊断。context-page观察者消费同一错误正文写error_message并emit完整state，不再把原生正文或自身stack复制到普通快照；初始启动、页面创建、恢复和HTTP/WS调用方继续沿既有注册链消费，不改页面发布或运行状态合同。
+- tree `cc2ab0e790be68a5ff093947da89e07b643e9654`：`browser-registration-static-unit-001` Node语法/Ruff通过，73项Bun/299断言通过；`integration-001`为3 passed/22.37秒，真实Chromium/HTTP验证sync/async失败、WS state、资源API/request_id、failed operation及error_message落盘、verified/lease释放、显式重试成功，并复核正常超时恢复。注入第三方newCDPSession的失败覆盖pageEntries发布前；独立popup观察者本身没有新增持久化，落盘由真实HTTP操作finish证明。pendingRegistration成功后的独立activatePage失败仍归激活链，不以此声称全部注册/激活错误已闭合。
+- 旧生产完整archive红测46 passed/1 failed，明确区分原生异常未转换；非作者只读复核无finding，未独立跑测试。准确命令/raw/前后指纹/退出码/零进程残留及产品回执SHA见 `out/tests/temp/openspec_resume_20261023/artifacts/browser-registration-proof-001.json`。不替代完整Gateway/Web、Windows或2.2/7.2，其它producer继续推进。
