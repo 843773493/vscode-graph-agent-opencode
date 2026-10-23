@@ -58,6 +58,15 @@ _CREATION_RECORDS_TABLE_DDL = load_sql(__package__, "sql/session_creation_record
 
 _FORK_SOURCE_CAPTURES_TABLE_DDL = load_sql(__package__, "sql/fork_source_captures.sql")
 
+# 导航队列与node事实同库：物理结构由catalog一次初始化，业务owner不补建空表。
+_NAVIGATION_QUEUE_SCHEMA_OBJECTS = (
+    "navigation_mutation_records", "idx_navigation_mutation_queue",
+    "idx_navigation_mutation_pending", "navigation_events", "navigation_queue_owners",
+)
+_NAVIGATION_QUEUE_DDLS = tuple(
+    load_sql(__package__, f"sql/navigation_queue/{name}.sql") for name in _NAVIGATION_QUEUE_SCHEMA_OBJECTS
+)
+
 _IDX_CREATION_RECORDS_STATE_DDL = load_sql(__package__, "sql/idx_creation_records_state.sql")
 
 _CREATION_RECORD_COLUMNS = (
@@ -126,6 +135,9 @@ _REQUIRED_TABLES = (
     "subtree_delete_records",
     "fork_retention_claims",
     "catalog_metadata",
+    "navigation_mutation_records",
+    "navigation_events",
+    "navigation_queue_owners",
 )
 
 # 全新 catalog 的备份 generation 与导航 revision 都从 0 起。

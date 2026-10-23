@@ -11,7 +11,7 @@
   ``(workspace_id, event_seq)`` 唯一且单调。事件与 operation terminal 状态在
   **同一个** SQLite 写事务提交（见 ``executor.py``）。
 
-本模块是门面：物理 schema 在 ``queue_schema.py``，「记录模型」在
+本模块是门面：同库物理 schema 统一由 core catalog 初始化和校验，「记录模型」在
 ``queue_records.py``，事件表链在 ``queue_events.py``，依赖解析与失败传播在
 ``queue_dependencies.py``；本模块保留队列语义方法并原路径重导出全部对外符号，
 外部调用方的导入路径不随拆分改变。
@@ -59,9 +59,6 @@ from app.services.business.session_navigation.queue_records import (
     _params_json,
     _record_from_row,
     compute_intent_preimage_hash,
-)
-from app.services.business.session_navigation.queue_schema import (
-    ensure_navigation_queue_tables,
 )
 
 __all__ = [
@@ -111,7 +108,6 @@ class NavigationMutationQueueStore(
         if not isinstance(store, SessionCatalogStore):
             raise TypeError(f"store 必须是 SessionCatalogStore: {store!r}")
         self._store = store
-        ensure_navigation_queue_tables(self._store)
 
     # ------------------------------------------------------------------
     # enqueue

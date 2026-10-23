@@ -39,7 +39,6 @@ from app.core.session_catalog_store import SessionCatalogStore
 from app.core.session_control_store import SessionControlStore
 from app.gateway.control.gateway_state import GatewayStateStore
 from app.gateway.federation.store import federation_control_database
-from app.services.business.session_navigation.queue_schema import ensure_navigation_queue_tables
 from app.services.infrastructure.workspace_state_store import WorkspaceStateStore
 from app.services.infrastructure.workspace_files.store import WorkspaceFileStore
 from app.services.infrastructure.config.source_owner import WorkspaceSourceOwner
@@ -59,7 +58,7 @@ for _ in range(2):
         assert connection.execute("SELECT COUNT(*) FROM federation_replay_registry").fetchone()[0] == 0
         connection.close()
     with closing(SessionCatalogStore(Path("state/catalog.sqlite"), Path("state/sessions"))) as catalog:
-        ensure_navigation_queue_tables(catalog)
+        assert catalog.connection.execute("SELECT count(*) FROM navigation_mutation_records").fetchone()[0] == 0
         assert catalog.connection.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
     with closing(SessionControlStore(Path("state/session-control.sqlite"))) as control:
         assert control.connection.execute("PRAGMA integrity_check").fetchone()[0] == "ok"

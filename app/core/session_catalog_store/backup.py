@@ -24,6 +24,7 @@ from app.core.session_catalog_store.contracts import (
     _parse_frozen_session_locators,
 )
 from app.core.session_catalog_store.queries import _register_session_list_functions
+from app.core.session_catalog_store.schema_validation import require_catalog_schema
 from app.core.session_catalog_store.sqlite_integrity import (
     verify_catalog_sqlite_integrity,
 )
@@ -134,14 +135,19 @@ class CatalogBackupMixin:
                     raise CatalogMaintenanceRequiredError(
                         f"一致性备份 schema 不受支持: actual={schema}, required={self.SCHEMA_VERSION}"
                     )
+                require_catalog_schema(
+                    snapshot, database_path=resolved, current=schema, database_label="一致性备份",
+                )
                 row = snapshot.execute("SELECT generation FROM catalog_metadata WHERE singleton_id = 1").fetchone()
                 if row is None:
                     raise CatalogMaintenanceRequiredError("一致性备份缺少 generation，须进入维护模式核对")
                 copied_generation = int(row[0])
             finally:
                 snapshot.close()
-        except sqlite3.DatabaseError as error:
-            raise CatalogMaintenanceRequiredError("一致性备份损坏或结构不完整，须进入维护模式核对") from error
+        except (sqlite3.DatabaseError, RuntimeError) as error:
+            raise CatalogMaintenanceRequiredError(
+                f"一致性备份损坏或结构不完整，须进入维护模式核对: {error}"
+            ) from error
         if backup_generation != copied_generation:
             raise CatalogMaintenanceRequiredError(
                 "清单 generation 与备份正文不一致，须进入维护模式核对: "

@@ -12,7 +12,7 @@ subtree delete journal 与空 folder 删除（``subtree_delete.py``）、只读�
 本 facade 只保留 ``SessionCatalogStore`` 的类声明（七个本包 mixin）与连接
 生命周期方法（``__init__``/``connection``/``close``/``_ensure_open``/
 ``_connect``/``_initialize``/
-``_require_tables_present``/``write_transaction``/``_bump_generation``/
+``write_transaction``/``_bump_generation``/
 ``current_generation``/``current_navigation_revision``/``read_transaction``），
 并按原名再导出模块级公开符号，
 对外契约与导入路径保持不变：``app.core.session_catalog_store.SessionCatalogStore``。
@@ -41,10 +41,9 @@ from app.core.session_catalog_store._schema import (
     _IDX_NODES_SESSION_LIST_DDL,
     _IDX_NODES_WORKSPACE_DDL,
     _IDX_SUBTREE_DELETE_STATE_DDL,
+    _NAVIGATION_QUEUE_DDLS,
     _NAVIGATION_REVISION_TRIGGER_DDLS,
     _NODES_TABLE_DDL,
-    _REQUIRED_NAVIGATION_REVISION_TRIGGERS,
-    _REQUIRED_TABLES,
     _SUBTREE_DELETE_RECORDS_TABLE_DDL,
 )
 from app.core.session_catalog_store.backup import CatalogBackupMixin
@@ -70,6 +69,7 @@ from app.core.session_catalog_store.queries import (
     CatalogQueriesMixin,
     _register_session_list_functions,
 )
+from app.core.session_catalog_store.schema_validation import require_catalog_schema
 from app.core.session_catalog_store.sqlite_integrity import (
     verify_catalog_sqlite_integrity,
 )
@@ -248,7 +248,10 @@ class SessionCatalogStore(
                 verify_catalog_sqlite_integrity(
                     connection, database_path=self.database_path, database_label="session catalog",
                 )
-                self._require_tables_present(current)
+                require_catalog_schema(
+                    connection, database_path=self.database_path, current=current,
+                    database_label="session catalog",
+                )
         self._connection.execute("BEGIN IMMEDIATE")
         try:
             self._connection.execute(_NODES_TABLE_DDL)
@@ -267,6 +270,8 @@ class SessionCatalogStore(
                 self._connection.execute(_CATALOG_METADATA_SEED)
             for trigger_ddl in _NAVIGATION_REVISION_TRIGGER_DDLS:
                 self._connection.execute(trigger_ddl)
+            for queue_ddl in _NAVIGATION_QUEUE_DDLS:
+                self._connection.execute(queue_ddl)
             if current != self.SCHEMA_VERSION:
                 self._connection.execute(
                     f"PRAGMA user_version = {self.SCHEMA_VERSION}"
@@ -275,117 +280,6 @@ class SessionCatalogStore(
             self._connection.execute("ROLLBACK")
             raise
         self._connection.execute("COMMIT")
-
-    def _require_tables_present(self, current: int) -> None:
-        """校验当前 schema 的必需表确实存在；缺表说明库被外部改写。
-
-        绝不允许用 ``CREATE TABLE IF NOT EXISTS`` 把权威表当空表重建：
-        ``nodes`` 一空，所有会话位置与父子关系即静默丢失。缺表一律响亮
-        失败并列出缺失表名，交由用户从备份恢复或执行维护迁移。
-        """
-        present = {
-            str(row[0])
-            for row in self._connection.execute(
-                "SELECT name FROM sqlite_master WHERE type = 'table'"
-            ).fetchall()
-        }
-        missing = [
-            table
-            for table in _REQUIRED_TABLES
-            if table not in present
-        ]
-        if missing:
-            raise RuntimeError(
-                "session catalog 缺表，拒绝以空表重建（库被外部改写）: "
-                f"path={self.database_path}, user_version={current}, "
-                f"missing={missing}"
-            )
-        node_columns = {
-            str(row[1])
-            for row in self._connection.execute("PRAGMA table_info(nodes)").fetchall()
-        }
-        creation_columns = {
-            str(row[1])
-            for row in self._connection.execute(
-                "PRAGMA table_info(session_creation_records)"
-            ).fetchall()
-        }
-        if (
-            not {"title_source", "session_kind", "current_agent_id", "current_provider_id",
-                 "context_source_session_id", "generation_origin_json", "updated_at"}
-            <= node_columns
-            or not {"title_source", "purpose", "session_metadata_json", "request_intent_json",
-                    "graph_id", "graph_revision", "graph_schema_hash", "capability_profile_hash"}
-            <= creation_columns
-        ):
-            raise CatalogMaintenanceRequiredError(
-                "session catalog v8 缺少权威会话字段，拒绝自动修复: "
-                f"path={self.database_path}, nodes={sorted(node_columns)}, "
-                f"creation_records={sorted(creation_columns)}"
-            )
-        metadata_columns = {
-            str(row[1])
-            for row in self._connection.execute(
-                "PRAGMA table_info(catalog_metadata)"
-            ).fetchall()
-        }
-        missing_columns = {
-            "generation",
-            "navigation_revision",
-        } - metadata_columns
-        if missing_columns:
-            raise CatalogMaintenanceRequiredError(
-                "session catalog metadata 缺少必需列，拒绝自动修复: "
-                f"path={self.database_path}, missing={sorted(missing_columns)}"
-            )
-        metadata_row = self._connection.execute(
-            "SELECT 1 FROM catalog_metadata WHERE singleton_id = 1"
-        ).fetchone()
-        if metadata_row is None:
-            raise CatalogMaintenanceRequiredError(
-                "session catalog 缺少 catalog_metadata 单例行，"
-                "拒绝重置备份或导航 revision: "
-                f"path={self.database_path}"
-            )
-        canonical = sqlite3.connect(":memory:")
-        try:
-            canonical.execute(_NODES_TABLE_DDL)
-            canonical.execute(_CATALOG_METADATA_TABLE_DDL)
-            for trigger_ddl in _NAVIGATION_REVISION_TRIGGER_DDLS:
-                canonical.execute(trigger_ddl)
-            canonical_trigger_sql = {
-                str(row[0]): str(row[1])
-                for row in canonical.execute(
-                    "SELECT name, sql FROM sqlite_master WHERE type = 'trigger'"
-                ).fetchall()
-            }
-        finally:
-            canonical.close()
-
-        present_trigger_sql = {
-            str(row[0]): str(row[1])
-            for row in self._connection.execute(
-                "SELECT name, sql FROM sqlite_master WHERE type = 'trigger'"
-            ).fetchall()
-        }
-        missing_triggers = (
-            set(_REQUIRED_NAVIGATION_REVISION_TRIGGERS)
-            - present_trigger_sql.keys()
-        )
-        mismatched_triggers = {
-            name
-            for name in _REQUIRED_NAVIGATION_REVISION_TRIGGERS
-            if name in present_trigger_sql
-            and present_trigger_sql[name] != canonical_trigger_sql[name]
-        }
-        if missing_triggers or mismatched_triggers:
-            raise CatalogMaintenanceRequiredError(
-                "session catalog 缺少导航 revision triggers 或定义不符，"
-                "拒绝继续读写: "
-                f"path={self.database_path}, "
-                f"missing={sorted(missing_triggers)}, "
-                f"definition_mismatch={sorted(mismatched_triggers)}"
-            )
 
     @contextmanager
     def write_transaction(self) -> Iterator[sqlite3.Connection]:

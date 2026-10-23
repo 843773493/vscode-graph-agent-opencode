@@ -6,7 +6,7 @@
 
 - 权威会话索引的目录投影、revision、分页、搜索以及受控移动服务。
 - Session 稳定 ID、冻结 locator 的路径解析，以及 SQLite-only Folder 的导航投影规则。
-- 异步 mutation 队列持久层：`queue_store.py` 门面保留队列语义方法与 `NavigationMutationQueueStore` 类名，`queue_schema.py` 承载两张旁挂表的物理 schema 与幂等建表，`queue_records.py` 承载行投影与跨进程幂等 preimage，`queue_events.py` 承载事件 outbox 链，`queue_dependencies.py` 承载依赖解析与失败传播。
+- 异步 mutation 队列持久层：`queue_store.py` 门面保留队列语义方法与 `NavigationMutationQueueStore` 类名，`queue_records.py` 承载行投影与跨进程幂等 preimage，`queue_events.py` 承载事件 outbox 链，`queue_dependencies.py` 承载依赖解析与失败传播。同库3表/2索引的静态SQL、首次初始化和schema校验统一属于core catalog；业务模块不建表或修复缺失结构。
 
 # 不可修改内容
 
@@ -18,7 +18,7 @@
 
 # 规范
 
-- 静态结构 SQL 位于同包 `sql/`，所属 Python 模块只加载和协调原执行顺序；SQL 资产不自行提交事务，不保留内联结构副本。
+- 本业务owner只消费core catalog已初始化并校验的队列结构，不保留补建函数、SQL副本或第二schema标记。
 
 - 权威 SQLite catalog 保存稳定 ID、显示名、导航父链和 Session 冻结 locator；Folder 无物理目录或 manifest，`session.json` 只保存不可变创建 metadata。
 - `parent_session_id` 只从 catalog 最近祖先 Session 派生，不回写 manifest；fork、delegation、上下文来源和生成器 lineage 与导航父链分离。

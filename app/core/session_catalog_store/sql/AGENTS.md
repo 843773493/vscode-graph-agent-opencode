@@ -1,6 +1,7 @@
 # 目录用途
 
 保存所属 Session/导航存储 owner 的静态 SQLite 表、索引与触发器定义。
+`navigation_queue/` 保存同库导航队列的3表/2索引，物理结构仍由core catalog统一初始化和校验。
 
 # 可修改内容
 

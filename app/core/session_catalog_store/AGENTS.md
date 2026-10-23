@@ -4,7 +4,7 @@
 基础设施 `SessionCatalogStore` 的唯一实现点（原先的 `app/core/session_catalog_store.py`
 单文件已拆分入本包）。facade 落在本包 `__init__.py`，只保留 `SessionCatalogStore` 的类声明
 （七个本包 mixin）、连接生命周期与 schema 闸门方法（`__init__`/`connection`/`close`/
-`_ensure_open`/`_connect`/`_initialize`/`_require_tables_present`/
+`_ensure_open`/`_connect`/`_initialize`/
 `write_transaction`/`_bump_generation`/`current_generation`/`read_transaction`），并按原名
 再导出模块级公开符号。其余方法按垂直链路逐字搬迁到同包各 mixin，由多继承装配。
 
@@ -17,6 +17,9 @@ creation record journal（`creation_journal.py`）、fork source capture journal
 
 `sqlite_integrity.py` 是启动与只读备份共用的 SQLite 页、索引、约束和外键校验；
 调用方注册既有表达式索引函数并持同一读快照，不重建索引或修复数据。
+`schema_validation.py` 是这两个入口共用的只读schema闸门；既有当前版本缺表、
+导航队列结构或revision触发器不符时拒绝，不补空表。导航队列3表/2索引的物理DDL
+与其余catalog结构统一放在 `sql/`；业务队列的行语义与执行仍由business owner负责。
 
 # 可修改内容
 
@@ -41,6 +44,8 @@ creation record journal（`creation_journal.py`）、fork source capture journal
 - 不得改动 `write_transaction` 的事务边界与 `_bump_generation` 在 COMMIT 前的无条件调用
   顺序（8.1-F 缓存失效与 10.3b 的 `current_generation()` 正确性依赖此不变量）。
 - 不得在 `_initialize` 内把权威表当空表重建；缺表/版本未知必须 fail-closed。
+- 当前完整v10库保持原SQL结构与数据，不因DDL归属迁移升级版本；缺队列结构的开发半库
+  不能作为合法旧格式自动补建，仍须走显式维护。
 
 # 规范
 
