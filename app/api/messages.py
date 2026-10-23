@@ -230,6 +230,26 @@ async def dispatch_inter_agent_message(
     return APIResponse(data=result, request_id=request_id)
 
 
+@router.post(
+    "/{session_id}/communication-observations/rotate-cursor-key",
+    response_model=APIResponse[None],
+    summary="显式轮换会话冷观察分页认证密钥",
+)
+async def rotate_communication_cursor_key(
+    session_id: CanonicalSessionId,
+    _: Annotated[str, Depends(verify_local_token)],
+    request_id: Annotated[str, Depends(get_request_id)],
+    service: Annotated[SessionCommunicationService, Depends(get_session_communication_service)],
+):
+    try:
+        await service.observations.rotate_cursor_key(session_id)
+    except (KeyError, NotFoundError) as error:
+        raise not_found_http_error(error) from error
+    except SessionDeletionPendingError as error:
+        raise state_conflict_http_error(error) from error
+    return APIResponse(data=None, request_id=request_id)
+
+
 @router.post("/{session_id}/communication-observations")
 async def observe_communication(
     session_id: CanonicalSessionId, payload: CommunicationObservationRequest,

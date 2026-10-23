@@ -103,7 +103,7 @@ async def test_read_cursor_rechecks_target_policy_and_keeps_original_snapshot(
         dispatch = await _message(source, source_session, "分页读取目标的冻结历史")
         await asyncio.to_thread(control.acknowledged, first_call, tool_phase, 60)
         first_result = json.loads(case.tool_result(source_session, first_call)["content"])
-        assert first_result["next_cursor"].startswith("rc1.") and first_result["has_more"] is True
+        assert first_result["next_cursor"].startswith("rc2.") and first_result["has_more"] is True
         assert len(first_result["items"]) == 1
         assert "policy-frozen-question" in json.dumps(first_result["items"])
         source_node = await source.session_node(source_session)

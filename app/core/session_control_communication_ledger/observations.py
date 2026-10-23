@@ -75,6 +75,12 @@ class RemoteObservationPage:
     target_result: dict[str, object] | None
 
 
+@dataclass(frozen=True, slots=True)
+class ObservationCursorMaterial:
+    root_key: bytes
+    generation: bytes
+
+
 def _record(row: sqlite3.Row) -> RemoteObservation:
     return RemoteObservation(
         row["observation_id"], row["side"], json.loads(row["request_json"]),
@@ -117,15 +123,24 @@ class CommunicationObservationMixin:
             raise RemoteObservationError("operation-retry-expired")
         return _page(row)
 
-    def observation_cursor_key(self, *, create: bool = False) -> bytes:
+    def observation_cursor_material(self, *, create: bool = False) -> ObservationCursorMaterial:
         self._ensure_open()
         if create:
             with self._write_transaction() as connection:
-                connection.execute("INSERT INTO remote_observation_key VALUES(1,?) ON CONFLICT DO NOTHING", (secrets.token_bytes(32),))
-        row = self._connection.execute("SELECT cursor_key FROM remote_observation_key WHERE singleton_id=1").fetchone()
+                connection.execute("INSERT INTO remote_observation_key VALUES(1,?,?) ON CONFLICT DO NOTHING", (secrets.token_bytes(32), secrets.token_bytes(16)))
+        row = self._connection.execute("SELECT root_key,generation FROM remote_observation_key WHERE singleton_id=1").fetchone()
         if row is None:
             raise RemoteObservationError("read-snapshot-expired")
-        return bytes(row[0])
+        return ObservationCursorMaterial(bytes(row[0]), bytes(row[1]))
+
+    def rotate_observation_cursor_key(self) -> None:
+        """只切换当前派生密钥代次，不改写任何历史观察。"""
+        with self._write_transaction() as connection:
+            connection.execute(
+                "INSERT INTO remote_observation_key VALUES(1,?,?) "
+                "ON CONFLICT(singleton_id) DO UPDATE SET generation=excluded.generation",
+                (secrets.token_bytes(32), secrets.token_bytes(16)),
+            )
 
     def admit_remote_page(self, observation_id: str, *, side: str, page_identity: str, page_ordinal: int, request: dict[str, object]) -> dict[str, object] | None:
         submitted = canonical_json(request)

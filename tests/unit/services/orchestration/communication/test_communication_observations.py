@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager, closing
@@ -18,7 +19,10 @@ from app.core.session_control_communication_ledger.observations import (
 )
 from app.core.session_control_primitives import CONTROL_DATABASE_NAME
 from app.core.session_control_store import SessionControlStore
-from app.core.session_lifecycle_gate import SessionLifecycleGate
+from app.core.session_lifecycle_gate import (
+    SessionDeletionPendingError,
+    SessionLifecycleGate,
+)
 from app.core.trace_middleware import (
     reset_current_gateway_id,
     set_current_gateway_id,
@@ -330,7 +334,7 @@ async def test_read_pages_restore_same_snapshot_without_runtime(
     harness: _Harness, read_request: SessionContextReadRequest
 ) -> None:
     first = await harness.read("cop_page_0", read_request)
-    assert first.items[0].text == "第一页" and first.next_cursor.startswith("rc1.")
+    assert first.items[0].text == "第一页" and first.next_cursor.startswith("rc2.")
     harness.query.texts = ["稍后修改的内容"]
     harness.restore()
     second = await harness.read(
@@ -661,7 +665,7 @@ async def test_authenticated_cursor_binds_all_frozen_fields(harness: _Harness, r
             store,
             SOURCE,
             first.next_cursor,
-            prefix="rc1.",
+            prefix="rc2.",
             now=harness.clock.utc_now(),
         )
         assert set(binding) == {"o", "t", "r", "u", "p", "b", "k", "n", "c", "e", "f"}
@@ -681,7 +685,7 @@ async def test_authenticated_cursor_binds_all_frozen_fields(harness: _Harness, r
             store,
             SOURCE,
             binding,
-            prefix="rc1.",
+            prefix="rc2.",
         )
     with pytest.raises(ValueError, match="read-snapshot-mismatch"):
         await harness.read("cop_binding_1", read_request.model_copy(update={"cursor": cursor}))
@@ -883,3 +887,89 @@ async def test_expired_cold_source_keeps_committed_result_before_settling(
         with pytest.raises(RemoteObservationError, match="^operation-retry-expired$"):
             observation_persistence._require_current_observation_lease(store, old)
     assert len(harness.transport.requests) == 1
+
+
+@pytest.mark.parametrize("session_id", [SOURCE_SESSION, TARGET_SESSION])
+async def test_rotation_expires_old_pages_without_rewriting_observation(
+    harness: _Harness, read_request: SessionContextReadRequest, session_id: str,
+) -> None:
+    first = await harness.read("cop_rotate_0", read_request)
+    with closing(harness.store(session_id)) as store:
+        before = store.list_remote_observations()
+        pages = tuple(store.list_remote_pages(row.observation_id, side=row.side) for row in before)
+        leases = store.connection.execute("SELECT * FROM session_operation_leases ORDER BY lease_id").fetchall()
+        material = store.observation_cursor_material()
+    await harness.service.observations.rotate_cursor_key(session_id)
+    harness.restore()
+    with closing(harness.store(session_id)) as store:
+        current = store.observation_cursor_material()
+        assert current.root_key == material.root_key and current.generation != material.generation
+        assert store.list_remote_observations() == before
+        assert tuple(store.list_remote_pages(row.observation_id, side=row.side) for row in before) == pages
+        assert store.connection.execute("SELECT * FROM session_operation_leases ORDER BY lease_id").fetchall() == leases
+    with pytest.raises(RemoteObservationError, match="^read-snapshot-expired$"):
+        await harness.read("cop_rotate_1", read_request.model_copy(update={"cursor": first.next_cursor}))
+    fresh = await harness.read("cop_rotate_fresh", read_request)
+    second = await harness.read("cop_rotate_fresh_1", read_request.model_copy(update={"cursor": fresh.next_cursor}))
+    assert first.items == fresh.items and second.items[0].text == "第二页"
+    assert first.next_cursor != fresh.next_cursor
+
+
+@pytest.mark.parametrize("offset", [0, 16, -1])
+async def test_rotated_cursor_authenticates_before_reporting_expiry(
+    harness: _Harness, read_request: SessionContextReadRequest, offset: int,
+) -> None:
+    first = await harness.read("cop_rotate_auth", read_request)
+    await harness.service.observations.rotate_cursor_key(SOURCE_SESSION)
+    with closing(harness.store(SOURCE_SESSION)) as store:
+        with pytest.raises(RemoteObservationError, match="^read-snapshot-expired$"):
+            observation_cursor._decode_observation_cursor(
+                store, SOURCE, first.next_cursor, prefix="rc2.",
+                now=harness.clock.utc_now(), allow_expired=True,
+            )
+        raw = bytearray(base64.urlsafe_b64decode(first.next_cursor[4:]))
+        raw[offset] ^= 1
+        tampered = "rc2." + base64.urlsafe_b64encode(raw).decode()
+        with pytest.raises(RemoteObservationError, match="^read-snapshot-invalid$"):
+            observation_cursor._decode_observation_cursor(
+                store, SOURCE, tampered, prefix="rc2.",
+                now=harness.clock.utc_now(), allow_expired=True,
+            )
+
+
+@pytest.mark.parametrize("session_id", [SOURCE_SESSION, TARGET_SESSION])
+async def test_completed_page_replay_cannot_bypass_rotation(
+    harness: _Harness, read_request: SessionContextReadRequest, session_id: str,
+) -> None:
+    first = await harness.read("cop_rotate_replay_0", read_request)
+    continuation = read_request.model_copy(update={"cursor": first.next_cursor})
+    second = await harness.read("cop_rotate_replay_1", continuation)
+    assert second.items[0].text == "第二页"
+    with closing(harness.store(session_id)) as store:
+        before = store.list_remote_observations()
+        pages = tuple(store.list_remote_pages(row.observation_id, side=row.side) for row in before)
+    await harness.service.observations.rotate_cursor_key(session_id)
+    harness.restore()
+    with pytest.raises(RemoteObservationError, match="^read-snapshot-expired$"):
+        await harness.read("cop_rotate_replay_1", continuation)
+    with closing(harness.store(session_id)) as store:
+        assert store.list_remote_observations() == before
+        assert tuple(store.list_remote_pages(row.observation_id, side=row.side) for row in before) == pages
+
+
+async def test_rotation_rejects_deleting_session_without_changing_material(
+    harness: _Harness, read_request: SessionContextReadRequest, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    await harness.read("cop_rotate_delete", read_request)
+    with closing(harness.store(SOURCE_SESSION)) as store:
+        before = store.observation_cursor_material()
+
+    def deleting(session_id: str) -> None:
+        assert session_id == SOURCE_SESSION
+        raise SessionDeletionPendingError("Session 正在删除")
+
+    monkeypatch.setattr(harness.sessions, "assert_session_active", deleting)
+    with pytest.raises(SessionDeletionPendingError):
+        await harness.service.observations.rotate_cursor_key(SOURCE_SESSION)
+    with closing(harness.store(SOURCE_SESSION)) as store:
+        assert store.observation_cursor_material() == before

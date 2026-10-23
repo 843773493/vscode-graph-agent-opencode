@@ -567,7 +567,7 @@ async def test_real_http_cursor_errors_gateway_source_and_deleted_page(
     assert first["result"]["items"][0]["text"] == "目标原始问题"
     raw = bytearray(base64.urlsafe_b64decode(first["result"]["next_cursor"][4:]))
     raw[-1] ^= 1
-    tampered = "rt1." + base64.urlsafe_b64encode(raw).decode()
+    tampered = "rt2." + base64.urlsafe_b64encode(raw).decode()
     bad = request.model_copy(update={
         "source_call_id": "cop_http_bad", "page_identity": _observation_page_identity(source, "cop_http_bad"),
         "page_ordinal": 1, "query": {"read": read.model_copy(update={"cursor": tampered}).model_dump(mode="json")},

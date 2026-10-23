@@ -11,7 +11,9 @@ from dataclasses import asdict
 from datetime import datetime
 
 from cryptography.exceptions import InvalidTag
+from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 
 from app.core.session_control_communication_ledger.observations import (
     RemoteObservationError,
@@ -19,6 +21,13 @@ from app.core.session_control_communication_ledger.observations import (
 )
 from app.core.session_control_store import SessionControlStore
 from app.services.business.communication.addresses import GlobalThreadAddress
+
+
+def _cursor_key(root_key: bytes, generation: bytes) -> bytes:
+    return HKDF(
+        algorithm=hashes.SHA256(), length=32, salt=generation,
+        info=b"boxteam-observation-cursor-v2",
+    ).derive(root_key)
 
 
 def _encode_observation_cursor(
@@ -30,12 +39,13 @@ def _encode_observation_cursor(
 ) -> str:
     nonce = secrets.token_bytes(12)
     raw = zlib.compress(canonical_json(value).encode())
-    encrypted = AESGCM(store.observation_cursor_key(create=True)).encrypt(
+    material = store.observation_cursor_material(create=True)
+    encrypted = AESGCM(_cursor_key(material.root_key, material.generation)).encrypt(
         nonce,
         raw,
-        canonical_json([prefix, asdict(source)]).encode(),
+        canonical_json([prefix, asdict(source)]).encode() + material.generation,
     )
-    return prefix + base64.urlsafe_b64encode(nonce + encrypted).decode()
+    return prefix + base64.urlsafe_b64encode(material.generation + nonce + encrypted).decode()
 
 
 def _decode_observation_cursor(
@@ -55,15 +65,19 @@ def _decode_observation_cursor(
             altchars=b"-_",
             validate=True,
         )
-        associated_data = canonical_json([prefix, asdict(source)]).encode()
-        raw = AESGCM(store.observation_cursor_key()).decrypt(
-            encoded[:12],
-            encoded[12:],
+        if len(encoded) < 44:
+            raise ValueError("cursor 长度错误")
+        generation = encoded[:16]
+        material = store.observation_cursor_material()
+        associated_data = canonical_json([prefix, asdict(source)]).encode() + generation
+        raw = AESGCM(_cursor_key(material.root_key, generation)).decrypt(
+            encoded[16:28],
+            encoded[28:],
             associated_data,
         )
         value = json.loads(zlib.decompress(raw))
         fields = {"o", "t", "r", "u", "p", "b", "k", "n", "c", "e"}
-        if prefix == "rc1.":
+        if prefix == "rc2.":
             fields.add("f")
         if not isinstance(value, dict) or set(value) != fields:
             raise TypeError("cursor 结构错误")
@@ -74,7 +88,7 @@ def _decode_observation_cursor(
         if not isinstance(value["k"], str) or not isinstance(value["u"], list) or not isinstance(value["b"], list):
             raise TypeError("cursor offset/上界结构错误")
         GlobalThreadAddress(**value["t"])
-        if prefix == "rc1." and not isinstance(value["f"], str):
+        if prefix == "rc2." and not isinstance(value["f"], str):
             raise TypeError("cursor 原 page 结构错误")
         expires = datetime.fromisoformat(value["e"])
         if expires.tzinfo is None:
@@ -91,6 +105,6 @@ def _decode_observation_cursor(
         zlib.error,
     ) as error:
         raise RemoteObservationError("read-snapshot-invalid") from error
-    if not allow_expired and expires <= now:
+    if generation != material.generation or (not allow_expired and expires <= now):
         raise RemoteObservationError("read-snapshot-expired")
     return value

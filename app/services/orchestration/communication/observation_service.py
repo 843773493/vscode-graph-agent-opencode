@@ -143,6 +143,14 @@ class CommunicationObservationService:
             self._change_revision += 1
             self._changed.notify_all()
 
+    async def rotate_cursor_key(self, session_id: str) -> None:
+        sessions = self._communication._sessions
+        async with sessions.session_write_admission(session_id):
+            sessions.assert_session_active(session_id)
+            node = sessions.path_resolver.resolve_session_node(session_id)
+            with closing(SessionControlStore(node / CONTROL_DATABASE_NAME)) as store:
+                store.rotate_observation_cursor_key()
+
     async def on_event(self, event: Event) -> None:
         if event.type in {"job_created", "job_started", "job_completed", "job_failed", "job_cancelled", "status_change"}:
             await self.notify()
@@ -152,7 +160,7 @@ class CommunicationObservationService:
             store,
             source,
             cursor,
-            prefix="rc1.",
+            prefix="rc2.",
             now=self._clock.utc_now(),
         )
         observation_id, page_id = cast(str, value["o"]), cast(str, value["f"])
@@ -304,7 +312,7 @@ class CommunicationObservationService:
                                     store,
                                     source,
                                     {**cast(dict[str, object], target_result["binding"]), "f": page_id},
-                                    prefix="rc1.",
+                                    prefix="rc2.",
                                 )
                             result = set_exact_returned_chars(SessionContextReadResultDTO.model_validate(result), operation="read_context").model_dump(mode="json")
                             if result["returned_chars"] > query["max_chars"]:
@@ -363,7 +371,7 @@ class CommunicationObservationService:
                 store,
                 request.source,
                 read.cursor,
-                prefix="rt1.",
+                prefix="rt2.",
                 now=self._clock.utc_now(),
                 allow_expired=recovery,
             )
@@ -390,7 +398,7 @@ class CommunicationObservationService:
                 store,
                 request.source,
                 binding,
-                prefix="rt1.",
+                prefix="rt2.",
             )
         result = set_exact_returned_chars(SessionContextReadResultDTO.model_validate(result), operation="read_context").model_dump(mode="json")
         if result["returned_chars"] > remaining:
@@ -410,6 +418,13 @@ class CommunicationObservationService:
                     raise RemoteObservationError("target-deleted")
                 if observation.request != self._root_request(request):
                     raise RemoteObservationError("read-snapshot-mismatch")
+                if request.operation == "read":
+                    read = SessionContextReadRequest.model_validate(request.query["read"])
+                    if read.cursor is not None:
+                        _decode_observation_cursor(
+                            store, request.source, read.cursor, prefix="rt2.",
+                            now=self._clock.utc_now(),
+                        )
                 pages = store.list_remote_pages(request.observation_id, side="target")
                 page = next((page for page in pages if page.page_identity == request.page_identity), None)
                 if page is None:
