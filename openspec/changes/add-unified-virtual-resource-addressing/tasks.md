@@ -256,3 +256,9 @@
 - Browser client在JSON/UTF-8、顶层/data/envelope/list及codec解码失败处发布固定阶段，完整原响应和异常留诊断及cause，保留ValueError类400、TypeError/OverflowError类500。非JSON/非对象HTTP失败仍为原RuntimeError/API500，消息只保method和原HTTPstatus；结构化BrowserRequestError及其code/retryable/recovery/timeout_ms、verified失败回执保持原合同，未用新正则脱敏。合法file页面URL原样经过同一decoder。
 - 同链审查发现成功owner-revision空对象及残缺grant被当成功：sync现消费真实snapshot并核browser/workspace/revision；成功grant只核既有4字段完整性和ID/版本绑定，返回原回执，不另定token格式或过期策略。坏grant在owner内转unknown并释放lease，空sync阻止恢复完成，修复传输后可重新恢复。
 - 最终tree `ebb0d9d322dec44259dca76c6ad5e7c5655ed7f1`：`browser-protocol-unit-002`为116 passed/12.13秒，`integration-002`为4 passed/23.02秒，真实Chromium/Node HTTP验证sync/async检查点失败与显式重试、Agent锁定零callback、Playwright超时后操作及成功grant→WebSocket attach/delete；Ruff002通过。完整archive旧producer的red001为40 failed，区分原值回显/缺阶段或诊断；001通过103项但缺成功回执校验，不计本项最终闭合。非作者只读复核002无剩余finding，未独立运行。准确命令/raw/指纹/退出码/零残留及证据SHA见 `out/tests/temp/openspec_resume_20261023/artifacts/browser-protocol-proof-002.json`；不替代完整Gateway/Web、Windows或2.2/7.2，结构化自由错误及其它producer仍待迁齐。
+
+### 2026-10-23 Browser超时恢复错误出口（部分收口）
+
+- 超时恢复的同步throw、异步reject与延迟失败共用同一错误写入点，只发布恢复阶段，原异常保留在cause和服务诊断。Session的同一恢复屏障以browser/page身份与阶段报告失败，避免后续排队操作重新抛出原生异常；超时立即返回、后台恢复及原408/后续500分类保持，读取/截图/脚本调用方同批迁齐，不增加响应正则或第二恢复链。
+- 最终tree `8efc0d2156c828958cab02145ecfdf64b43fe2b1`：`browser-timeout-static-unit-002` Node语法/Ruff通过，56项Bun/268断言通过；`integration-001`为3 passed/23.02秒，真实Chromium/Node HTTP核sync/async的408/metadata、后续API阻止脚本及同request_id、verified/lease释放、持久记录不含原生路径、原异常诊断和显式删除，并复核正常恢复后的键盘/读取/截图。第三方newPage故障为测试注入，不声称真实系统EACCES；001与002产品/集成测试逐字一致限定复用，002只修新增Session单测装具缺cdpSession及补首次超时断言。
+- 旧生产完整archive红测52 passed/4 failed，四项均区分原正文或恢复屏障回显；首轮静态单测55 passed/1 failed源于装具未进入assertRunning，失败原件保留。非作者只读复核002无finding，未独立跑测试。准确命令/raw/前后指纹/退出码/复用范围见 `out/tests/temp/openspec_resume_20261023/artifacts/browser-timeout-proof-002.json`。不代替Gateway/Web、Windows或2.2/7.2，其他Browser producer仍待迁齐。

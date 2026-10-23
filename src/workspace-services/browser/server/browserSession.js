@@ -2264,7 +2264,7 @@ export class BrowserSession extends EventEmitter {
       timeoutMs,
       "浏览器页面读取",
       {
-        onTimeout: (error) => this.recoverAfterPlaywrightTimeout(execution, error),
+        onTimeout: () => this.recoverAfterPlaywrightTimeout(execution),
       },
     );
     this.record.url = result.url;
@@ -2393,7 +2393,7 @@ export class BrowserSession extends EventEmitter {
       timeoutMs,
       "浏览器截图",
       {
-        onTimeout: (error) => this.recoverAfterPlaywrightTimeout(execution, error),
+        onTimeout: () => this.recoverAfterPlaywrightTimeout(execution),
       },
     );
     const written = await this.manager.writeScreenshot(this.id, buffer);
@@ -2514,7 +2514,7 @@ export class BrowserSession extends EventEmitter {
         { page: this.page, context: this.context, browser: this.browserHandle },
         args,
         {
-          onTimeout: (error) => this.recoverAfterPlaywrightTimeout(execution, error),
+          onTimeout: () => this.recoverAfterPlaywrightTimeout(execution),
         },
       );
     });
@@ -2529,7 +2529,7 @@ export class BrowserSession extends EventEmitter {
     return result;
   }
 
-  async recoverAfterPlaywrightTimeout(execution, timeoutError) {
+  async recoverAfterPlaywrightTimeout(execution) {
     if (execution.recovery) return await execution.recovery;
     execution.recovery = (async () => {
       if (this.page !== execution.page || this.record.status !== "running") {
@@ -2572,16 +2572,11 @@ export class BrowserSession extends EventEmitter {
       } finally {
         this.recoveringTimedOutPageIds.delete(execution.pageId);
       }
-    })();
+    })().catch((cause) => {
+      // 后续操作也等待同一屏障；不能让原生异常从这条链重新进入普通响应。
+      throw new Error(`浏览器页面恢复失败: browser_id=${this.id}, page_id=${execution.pageId}, stage=reset_page`, { cause });
+    });
     this.timeoutRecovery = execution.recovery;
-    try {
-      await execution.recovery;
-    } catch (recoveryError) {
-      timeoutError.recovery = "page_reset_failed";
-      timeoutError.recovery_error = recoveryError instanceof Error
-        ? recoveryError.message
-        : String(recoveryError);
-      throw recoveryError;
-    }
+    await execution.recovery;
   }
 }

@@ -11,6 +11,14 @@ export class BrowserToolTimeoutError extends Error {
     this.retryable = true;
     this.recovery = "page_reset";
   }
+
+  recordRecoveryFailure(cause) {
+    this.recovery = "page_reset_failed";
+    this.recovery_error = "浏览器页面重置失败: stage=reset_page";
+    this.message = `${this.message}；${this.recovery_error}`;
+    this.cause = cause;
+    console.error("[browser-runtime] 页面超时恢复失败", { timeout_ms: this.timeout_ms }, cause);
+  }
 }
 
 export function browserLaunchArgs() {
@@ -54,19 +62,11 @@ export async function withTimeout(promise, timeoutMs, label, { onTimeout } = {})
         const recovery = onTimeout?.(error);
         if (recovery) {
           void Promise.resolve(recovery).catch((recoveryError) => {
-            error.recovery = "page_reset_failed";
-            error.recovery_error = recoveryError instanceof Error
-              ? recoveryError.message
-              : String(recoveryError);
-            error.message = `${error.message}；页面重置失败: ${error.recovery_error}`;
+            error.recordRecoveryFailure(recoveryError);
           });
         }
       } catch (recoveryError) {
-        error.recovery = "page_reset_failed";
-        error.recovery_error = recoveryError instanceof Error
-          ? recoveryError.message
-          : String(recoveryError);
-        error.message = `${error.message}；页面重置失败: ${error.recovery_error}`;
+        error.recordRecoveryFailure(recoveryError);
       }
       reject(error);
     }, timeoutMs);

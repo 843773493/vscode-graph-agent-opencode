@@ -611,6 +611,42 @@ describe("浏览器统一操作队列", () => {
     });
   });
 
+  test("恢复失败的同一屏障阻止后续操作，原生异常只留 cause 和诊断", async () => {
+    const browser = session();
+    const page = { isClosed: () => false };
+    const cause = new Error("EACCES: /private/browser/profile");
+    browser.page = page;
+    browser.browser = {};
+    browser.cdpSession = {};
+    browser.context = { newPage: async () => { throw cause; } };
+    browser.activePageId = "page_failed_recovery";
+    browser.pageEntries.set(browser.activePageId, { pageId: browser.activePageId, page });
+    const diagnostics = spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      const failure = await browser.runPlaywrightCode({
+        code: "await new Promise(() => undefined);", timeoutMs: 5,
+      }).catch((error) => error);
+      expect(failure.code).toBe("browser_tool_timeout");
+      const barrierFailure = await browser.timeoutRecovery.catch((error) => error);
+      expect(barrierFailure.message).toBe(`浏览器页面恢复失败: browser_id=${browser.id}, page_id=page_failed_recovery, stage=reset_page`);
+      expect(barrierFailure.cause).toBe(cause);
+      expect(failure.cause).toBe(barrierFailure);
+      expect(failure.recovery).toBe("page_reset_failed");
+      let executed = false;
+      const queuedFailure = await browser.enqueueOperation({ actor: "agent", action: "read" }, async () => {
+        executed = true;
+      }).catch((error) => error);
+      expect(queuedFailure).toBe(barrierFailure);
+      expect(executed).toBe(false);
+      expect(browser.pendingOperations).toBe(0);
+      expect(browser.recoveringTimedOutPageIds.size).toBe(0);
+      expect(diagnostics).toHaveBeenCalledTimes(1);
+      expect(diagnostics.mock.calls[0][2]).toBe(barrierFailure);
+    } finally {
+      diagnostics.mockRestore();
+    }
+  });
+
   test("readSummary 超时立即返回可重试错误并在下一次操作前恢复页面", async () => {
     const browser = session();
     let oldPageClosed = false;

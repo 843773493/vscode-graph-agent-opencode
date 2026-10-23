@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import {
   clickElement,
   handleDialog,
@@ -168,5 +168,38 @@ describe("Playwright 代码超时", () => {
     finishRecovery();
     await recovery;
     expect(recoveryFinished).toBe(true);
+  });
+
+  test.each(["sync", "async", "deferred"])("恢复失败只公开阶段，原异常保留在诊断与 cause: %s", async (mode) => {
+    const cause = new Error("EACCES: /private/browser/profile; C:\\Users\\test\\profile; \\\\host\\share\\profile");
+    const diagnostics = spyOn(console, "error").mockImplementation(() => undefined);
+    let rejectRecovery;
+    const recovery = new Promise((_, reject) => { rejectRecovery = reject; });
+    try {
+      const failure = await withTimeout(new Promise(() => undefined), 5, "Playwright 代码执行", {
+        onTimeout: () => {
+          if (mode === "sync") throw cause;
+          return mode === "async" ? Promise.reject(cause) : recovery;
+        },
+      }).catch((error) => error);
+      if (mode === "deferred") {
+        expect(failure.recovery).toBe("page_reset");
+        expect(diagnostics).not.toHaveBeenCalled();
+        rejectRecovery(cause);
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      }
+      expect(failure).toMatchObject({
+        code: "browser_tool_timeout", timeout_ms: 5, retryable: true,
+        recovery: "page_reset_failed",
+        recovery_error: "浏览器页面重置失败: stage=reset_page",
+      });
+      expect(failure.message).toContain("stage=reset_page");
+      expect(failure.message).not.toContain(cause.message);
+      expect(failure.cause).toBe(cause);
+      expect(diagnostics).toHaveBeenCalledTimes(1);
+      expect(diagnostics.mock.calls[0][2]).toBe(cause);
+    } finally {
+      diagnostics.mockRestore();
+    }
   });
 });

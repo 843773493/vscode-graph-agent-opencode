@@ -889,6 +889,82 @@ async def test_playwright_timeout_recovery_allows_immediate_page_actions(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["sync", "async"])
+async def test_injected_page_recovery_failure_keeps_native_cause_in_diagnostics(
+    mode: str, integration_client: httpx.AsyncClient,
+    browser_context: CustomToolFactoryContext, browser_runtime: WorkspaceToolRuntime,
+    browser_manager_processes: tuple[int, int],
+) -> None:
+    container, _session, _invocation = browser_runtime
+    created = await integration_client.post("/api/v1/resources/browsers", json={
+        "session_id": browser_context.session_id,
+        "thread_id": browser_context.invocation_context.thread_binding.thread_id,
+        "url": "about:blank",
+    })
+    assert created.status_code == 200, created.text
+    resource = created.json()["data"]
+    browser_id = resource["resource_id"]
+    root = Path(container.workspace_root)
+    native_path = str(root / ".boxteam/browser-manager" / f"injected-profile-{mode}")
+    reason = f"injected EACCES: {native_path}"
+    # 只替换第三方 Playwright 的建页边界；超时、队列、HTTP和持久化均走产品链路。
+    code = (
+        f"context.newPage = async () => {{ throw new Error({json.dumps(reason)}); }};"
+        "await new Promise(() => undefined);"
+    )
+    transport = BrowserManagerClient(
+        workspace_id=container.workspace_id,
+        backend_url=f"http://127.0.0.1:{browser_manager_processes[0]}",
+    )
+    with pytest.raises(BrowserRequestError) as caught:
+        payload = {"code": code, "timeoutMs": 25}
+        if mode == "sync":
+            await asyncio.to_thread(transport._json_request_sync, "POST", f"/api/browsers/{browser_id}/run", payload)
+        else:
+            await transport._json_request("POST", f"/api/browsers/{browser_id}/run", payload)
+    failure = caught.value
+    assert failure.status == 408
+    assert failure.code == "browser_tool_timeout"
+    assert failure.payload["retryable"] is True
+    assert failure.payload["timeout_ms"] == 25
+    assert failure.payload["recovery"] == "page_reset_failed"
+    assert failure.payload["recovery_error"] == "浏览器页面重置失败: stage=reset_page"
+    assert failure.payload["operation_outcome"] == "failed"
+    assert str(root) not in json.dumps(failure.payload)
+
+    # 恢复屏障失败应阻止新脚本，不把同一原生异常重新公开，也不伪报重试成功。
+    command = {
+        "action": "run", "expected_revision": resource["owner_revision"],
+        "thread": resource["source_thread"],
+        "payload": {"code": "return 'must-not-execute';", "timeoutMs": 100},
+    }
+    blocked = await integration_client.post(f"/api/v1/resources/{browser_id}/browser-operation", json=command)
+    assert blocked.status_code == 500, blocked.text
+    assert "stage=reset_page" in blocked.text
+    assert browser_id in blocked.text
+    assert str(root) not in blocked.text
+    assert blocked.headers["X-Request-ID"]
+    observed = (await integration_client.get(f"/api/v1/resources/{browser_id}")).json()["data"]
+    assert observed["reconciliation_status"] == "verified"
+    assert container.browser_resource_owner._leases.leases_for_resource(browser_id) == []
+    records = json.loads((root / ".boxteam/browser-manager/browsers.json").read_text())
+    record, = [item for item in records["browsers"] if item["browser_id"] == browser_id]
+    assert record["last_operation"]["status"] == "failed"
+    assert str(root) not in json.dumps(record)
+    artifacts = TestRunContext.from_test_file(Path(__file__)).artifacts_dir
+    diagnostics = "\n".join(item.read_text() for item in artifacts.glob("browser-backend-*.stderr.log"))
+    assert "[browser-runtime] 页面超时恢复失败" in diagnostics
+    assert reason in diagnostics
+    (artifacts / f"timeout-recovery-failure-{mode}-{time.time_ns()}.json").write_text(json.dumps({
+        "transport_payload": failure.payload, "api_status": blocked.status_code,
+        "api_body": blocked.json(), "request_id": blocked.headers["X-Request-ID"],
+        "owner_projection": observed, "node_record": record,
+    }, ensure_ascii=False, indent=2), encoding="utf-8")
+    deleted = await _detach_delete(integration_client, browser_id, browser_context)
+    assert deleted.status_code == 200, deleted.text
+
+
+@pytest.mark.asyncio
 async def test_new_browser_page_allows_minimal_actions_without_explicit_timeout(
     browser_manager_processes: tuple[int, int],
     integration_client: httpx.AsyncClient,
