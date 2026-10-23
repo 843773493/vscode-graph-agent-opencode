@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from dataclasses import asdict
 
 import httpx
@@ -11,12 +12,15 @@ from app.abstractions.session_context import WorkspaceSessionContextAccessError
 from app.core.resource_uri import parse_resource_uri
 from app.core.trace_middleware import require_current_request_id
 from app.gateway.auth import get_gateway_local_token
+from app.gateway.federation.errors import FEDERATION_ERROR_CODES
 from app.services.business.communication.addresses import (
     GlobalThreadAddress,
     ResolvedMainTargetBinding,
 )
 from app.services.infrastructure.config_service import ConfigService
 from app.services.infrastructure.gateway_client_common import GatewayTransportConnection
+
+logger = logging.getLogger(__name__)
 
 
 class GatewayCommunicationClient:
@@ -78,13 +82,23 @@ class GatewayCommunicationClient:
                 RemoteObservationError,
                 observation_error_code,
             )
+            message = f"Gateway 通信失败: path={path}, request_id={request_id}, stage=http_response, status={response.status_code}"
+            observation_code = None
             if response.headers.get("content-type", "").startswith("application/json"):
-                code = observation_error_code(response.json())
-                if code is not None:
-                    raise RemoteObservationError(code)
-            raise WorkspaceSessionContextAccessError(
-                f"Gateway 通信失败: path={path}, status={response.status_code}, detail={response.text[:2000]}"
-            )
+                try:
+                    payload = response.json()
+                except ValueError:
+                    # 错误正文损坏仍按原 HTTP 拒绝处理，不改变重试分类。
+                    payload = None
+                observation_code = observation_error_code(payload)
+                detail = payload.get("detail") if isinstance(payload, dict) else None
+                code = detail.get("code") if isinstance(detail, dict) else None
+                if isinstance(code, str) and code in FEDERATION_ERROR_CODES:
+                    message += f", code={code}"
+            logger.error("%s；原始响应=%s", message, response.text[:2000])
+            if observation_code is not None:
+                raise RemoteObservationError(observation_code)
+            raise WorkspaceSessionContextAccessError(message)
         data = response.json()
         if not isinstance(data, dict) or data.get("request_id") != request_id or not isinstance(data.get("data"), dict):
             raise RuntimeError("Gateway 通信响应缺少匹配的 request_id/data")

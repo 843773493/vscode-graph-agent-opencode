@@ -458,3 +458,9 @@
 - 唯一客户端的连接异常与HTTP失败不再把原始异常/响应message/detail复制到普通错误；连接保留原cause并记录异常日志，HTTP原始有界正文留日志。普通错误保留method/API path/request_id/stage/异常类别或status，明确404目标不可用，并只投影原联邦闭集及resolver/context-revision/fork-capture具名owner码。未改变共享可恢复状态集合、异常类别、fork incomplete严格身份校验或release uncertain outcome的pending责任，不新增兼容异常类或第二错误协议。
 - 完整tree `ff3cab98e874a71ca80c4bb61c2f31135b58f1ef`：30项新增与既有客户端/上下文查询/target resolver/fork service/API合计176 passed/4.60秒，Ruff/compileall exit0。旧生产与相同最终测试完整archive为30 failed/3.46秒，均明确检出普通错误原生路径；覆盖POSIX/drive/UNC连接异常及read/fork/inventory的404、409、500、503、redirect、非JSON和畸形码。核连接重试原method/URL/headers/body、原cause及原日志、HTTP分类和专用fork拒绝边界。
 - 4318项源码前后指纹、raw/SHA、退出码、无残留进程、独立只读审查及strict见 `out/tests/temp/gateway_context_transport_errors_20261023/artifacts/validation-proof-001.json`、`review-001.json`。请求为显式HTTP stub，不代真实网络/Web/Windows。通信client及其它普通响应出口另按原合同继续审计，2.2/7.2总门未勾。
+
+### 2026-10-23 Gateway 通信 HTTP 错误出口（2.2/7.2 部分收口）
+
+- discovery/send/read/wait 共用的客户端不再向普通错误复制 HTTP 原始正文；保留原 WorkspaceSessionContextAccessError 分类、HTTP status、API path、request_id 与登记过的联邦拒绝码。read/wait 的六类 observation 拒绝仍抛原 RemoteObservationError 和精确 code；原始正文只留有界诊断日志。标为 JSON 但正文损坏的拒绝继续按原 HTTP 状态分类，不以解码错误覆盖它；连接异常和成功回执合同不在本切片变更。
+- 固定完整 tree `4ef022a31e9b4f35bfeeb9eb4ab7d4cde1697c25`：131项客户端、50项 observation 消费方通过，Ruff/compileall exit0；覆盖四入口的404/409/500/503/502、非JSON、畸形码/正文与read/wait全部观察拒绝，失败后原URL/headers/JSON/timeout逐字段相同。旧生产完整 archive 配相同最终测试36项失败。首轮测试深拷贝HTTPX默认哨兵造成比较失败，修正为实际请求字段后集中重验，旧原件保留。
+- 4350项源码前后指纹、准确命令/raw/退出码与审查见 `out/tests/temp/gateway_communication_http_errors_20261023/artifacts/`。这些是HTTP stub及真实SQLite观察消费者验证，不代真实网络、完整Web或Windows实机；2.2/7.2总门继续未勾。
