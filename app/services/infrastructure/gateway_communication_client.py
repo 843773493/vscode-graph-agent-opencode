@@ -17,6 +17,7 @@ from app.services.business.communication.addresses import (
     GlobalThreadAddress,
     ResolvedMainTargetBinding,
 )
+from app.services.business.communication.errors import CommunicationContractError
 from app.services.infrastructure.config_service import ConfigService
 from app.services.infrastructure.gateway_client_common import GatewayTransportConnection
 
@@ -123,8 +124,19 @@ class GatewayCommunicationClient:
             "source": asdict(source), "session_id": session_id, "workspace_id": workspace_id,
             "gateway_id": gateway_id,
         })
-        target = GlobalThreadAddress(**data["target"])
-        return ResolvedMainTargetBinding(target.session_id, data["main_thread_id"], target)
+        try:
+            target = GlobalThreadAddress(**data["target"])
+            return ResolvedMainTargetBinding(target.session_id, data["main_thread_id"], target)
+        except (KeyError, TypeError, ValueError, CommunicationContractError) as error:
+            detail = (
+                "Gateway 通信发现回执无效: path=/api/gateway/federation/discovery, "
+                f"request_id={require_current_request_id('通信 discovery 回执')}, "
+                f"stage=discovery_response_validation, error_type={type(error).__name__}"
+            )
+            logger.error("%s；完整诊断见异常链", detail, exc_info=error)
+            if isinstance(error, CommunicationContractError):
+                raise CommunicationContractError(error.code, detail) from error
+            raise type(error)(detail) from error
 
     async def operation(
         self, *, operation: str, target: GlobalThreadAddress,

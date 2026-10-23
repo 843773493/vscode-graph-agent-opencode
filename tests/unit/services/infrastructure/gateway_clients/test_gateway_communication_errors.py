@@ -18,7 +18,7 @@ from app.services.business.communication.addresses import GlobalThreadAddress
 from app.services.infrastructure.gateway_communication_client import (
     GatewayCommunicationClient,
 )
-from tests.support.communication.probe import (
+from tests.support.communication import (
     SOURCE_SESSION,
     SOURCE_THREAD,
     WORKSPACE_ID,

@@ -464,3 +464,10 @@
 - discovery/send/read/wait 共用的客户端不再向普通错误复制 HTTP 原始正文；保留原 WorkspaceSessionContextAccessError 分类、HTTP status、API path、request_id 与登记过的联邦拒绝码。read/wait 的六类 observation 拒绝仍抛原 RemoteObservationError 和精确 code；原始正文只留有界诊断日志。标为 JSON 但正文损坏的拒绝继续按原 HTTP 状态分类，不以解码错误覆盖它；连接异常和成功回执合同不在本切片变更。
 - 固定完整 tree `4ef022a31e9b4f35bfeeb9eb4ab7d4cde1697c25`：131项客户端、50项 observation 消费方通过，Ruff/compileall exit0；覆盖四入口的404/409/500/503/502、非JSON、畸形码/正文与read/wait全部观察拒绝，失败后原URL/headers/JSON/timeout逐字段相同。旧生产完整 archive 配相同最终测试36项失败。首轮测试深拷贝HTTPX默认哨兵造成比较失败，修正为实际请求字段后集中重验，旧原件保留。
 - 4350项源码前后指纹、准确命令/raw/退出码与审查见 `out/tests/temp/gateway_communication_http_errors_20261023/artifacts/`。这些是HTTP stub及真实SQLite观察消费者验证，不代真实网络、完整Web或Windows实机；2.2/7.2总门继续未勾。
+
+
+### 2026-10-23 通信 discovery 回执校验错误（2.2/7.2 部分收口）
+
+- 成功 HTTP 回执的目标地址与 main pointer 在原 discovery 解码点校验，错误只公开 API path、request_id、阶段和异常类别；保留原内置异常类型或 CommunicationContractError/原code，完整原异常留cause与诊断日志。没有改变目标身份规则、HTTP分类、请求/响应身份校验或持久化。
+- 固定完整tree `7d5cd4abdc869b06b571146745d3429f09fde269` 的新增12项通过，覆盖未知目标字段、Session/Thread非法值及main pointer漂移×POSIX/drive/UNC，核精确cause对象、原code、日志及同请求修正后重试。相同生产的上一候选客户端/通信合同/观察回归221项通过，另12项中10通过、2因TypeError原文与repr转义比较错误失败；最终只修该cause断言并补验全部12项，不将混合运行改为全绿。真实Gateway/Backend/Agent与model_stream的C1 send→worker→wait→read为1 passed/53.73秒，Ruff最终exit0；旧生产完整archive的12项均检出普通错误原生路径。
+- 首次回归因HEAD测试误导入尚未提交的support模块新位置而收集失败，私有候选仅对齐实际HEAD平面support，保留共享树其它代理的搬迁；Ruff首次import格式及所有失败原件保留。准确命令、全树前后指纹、raw/退出码及只读独审见 `out/tests/temp/communication_discovery_errors_20261024/artifacts/`。真实C1验证正常发现与后继执行，畸形回执用显式HTTP stub；不代真实外部Provider、完整Web或Windows实机，2.2/7.2继续未勾。
