@@ -5,9 +5,11 @@ from __future__ import annotations
 import asyncio
 import json
 import sqlite3
+from collections.abc import Callable
 from contextlib import closing
 from dataclasses import asdict
 from pathlib import Path
+from typing import cast
 
 import pytest
 
@@ -148,3 +150,153 @@ async def test_hard_restart_replays_original_observation_and_one_tool_result(
         "target_frozen": asdict(frozen), "target_page": asdict(target_page),
         "job": recovered_job, "canonical_result": canonical, "history": history.json(),
     })
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("communication_case", [{"barrier": True}], indirect=True)
+@pytest.mark.parametrize("timeout_seconds,change_origin", [(60, False), (300, True)])
+async def test_hard_restart_preserves_unexpired_wait_budget_and_baseline(
+    communication_case: CommunicationCase, monkeypatch: pytest.MonkeyPatch,
+    timeout_seconds: int, change_origin: bool,
+) -> None:
+    """预算剩余十秒时重启，原等待不能重新获得60/300秒，也不能纳入新Job。"""
+    from app.services.business.communication.wait import MAX_WAIT_TIMEOUT_SECONDS
+
+    case = communication_case
+    source = await create_session(case.client, "等待预算恢复来源")
+    target = await create_session(case.client, "等待预算恢复目标")
+    await case.plan(target, [
+        {"content": "冻结后新增任务完成"}, {"content": "原通信任务完成"},
+    ])
+    arguments = {"target_session_id": target}
+    if timeout_seconds == 300:
+        arguments["timeout_seconds"] = timeout_seconds
+    _send, first, final = await case.plan(source, [
+        _tool("send_message_to_session", {
+            "target_session_id": target, "content": "保留待绑定通信", "kind": "result",
+        }, "wait-budget-send"),
+        _tool("wait_for_session", arguments, "wait-budget-source"),
+        {"content": "等待按原预算结束"},
+    ])
+    source_thread = case.planned_calls[first]["thread_id"]
+    source_call = software_tool_operation_id("wait", source, source_thread, first, "wait-budget-source")
+    source_phase = "observation.target.baseline_frozen"
+    case.replay.control.arm(source_call, source_phase)
+    deadlines: list[dict[str, object]] = []
+    dispatch_control = case.replay.control._dispatch
+
+    def observe_timer(
+        request: dict[str, object], *, disconnected: Callable[[], bool] | None = None,
+    ) -> object:
+        # 只观察既有外置timer的实际准入，不改变时钟、响应或业务存储。
+        if request["action"] == "deadline":
+            deadlines.append({key: request[key] for key in ("pid", "origin", "deadline_ns")})
+        return dispatch_control(request, disconnected=disconnected)
+
+    monkeypatch.setattr(case.replay.control, "_dispatch", observe_timer)
+    communication_id = None
+    restart = None
+    target_phase = "communication.inbox.claimed"
+    try:
+        source_dispatch = await _message(case, source, "等待当前已有任务")
+        await asyncio.to_thread(case.replay.control.acknowledged, source_call, source_phase, 60)
+        target_node = await case.session_node(target)
+        source_node = await case.session_node(source)
+        with closing(SessionControlStore(target_node / CONTROL_DATABASE_NAME)) as store:
+            frozen, = store.list_remote_observations()
+            assert frozen.side == "target" and frozen.snapshot is not None
+            page, = store.list_remote_pages(frozen.observation_id, side="target")
+            assert page.result is None
+            original_deadline = page.request["query"]["deadline"]
+            assert original_deadline["timeout_seconds"] == timeout_seconds
+            inbox, = store.list_target_accepted_communication_inboxes()
+            assert inbox.job_id is inbox.execution_id is None
+            communication_id = inbox.communication_id
+            assert frozen.snapshot["identities"] == [{"kind": "communication", "id": communication_id}]
+        # 初次在既有fixture的binder屏障暂停；重启由原claim phase挡住同一持久inbox。
+        case.replay.control.arm(communication_id, target_phase)
+        # 只用真实消息入口排队；这笔新工作不能进入原wait的冻结集合。
+        future = await _message(case, target, "冻结后排队的新目标任务")
+        await _completed(case.client, future["job_id"])
+        assert future["job_id"] not in json.dumps(frozen.snapshot)
+        case.replay.control.advance_wait(timeout_seconds - 10, change_origin=change_origin)
+        # startup会先恢复inbox；并行等待启动，让pytest可在它准入前推进原wait预算。
+        restart = asyncio.create_task(case.hard_restart())
+        await asyncio.to_thread(case.replay.control.acknowledged, communication_id, target_phase, 60)
+        recovery_pid = next(event["pid"] for event in reversed(case.replay.control.events)
+                            if event["operation_id"] == communication_id and event["phase"] == target_phase)
+        assert recovery_pid != case.backend.process.pid
+        resumed_clock = cast(dict[str, object], dispatch_control({"action": "clock"}))
+        wait_limit_ns = cast(int, resumed_clock["wait_ns"]) + MAX_WAIT_TIMEOUT_SECONDS * 1_000_000_000
+        case.replay.control.release(source_call, source_phase)
+        async with asyncio.timeout(30):
+            # 同端口还有一天后的观察记录GC；按最长合法wait预算筛选，重置为60/300秒仍会被捕获。
+            while not (resumed_timers := [
+                row for row in deadlines
+                if row["pid"] == recovery_pid and row["deadline_ns"] <= wait_limit_ns
+            ]):
+                await asyncio.sleep(0.01)
+        expected_ns = 10_000_000_000 if change_origin else timeout_seconds * 1_000_000_000
+        assert all(row["deadline_ns"] == expected_ns for row in resumed_timers)
+        assert all((row["origin"] != original_deadline["monotonic_origin_id"]) == change_origin for row in resumed_timers)
+        case.replay.control.advance_wait(9)
+        with closing(SessionControlStore(source_node / CONTROL_DATABASE_NAME)) as store:
+            source_before, = store.list_remote_observations()
+            assert source_before.request["envelope"]["query"]["deadline"] == original_deadline
+            pending, = store.list_remote_pages(frozen.observation_id, side="source")
+            assert pending.result is None
+        assert not (case.replay.artifacts / (final + ".json")).exists()
+        case.replay.control.advance_wait(1)
+        async with asyncio.timeout(10):
+            while True:
+                with closing(SessionControlStore(target_node / CONTROL_DATABASE_NAME)) as store:
+                    target_page, = store.list_remote_pages(frozen.observation_id, side="target")
+                    waiting_inbox = store.get_communication_inbox(communication_id)
+                if target_page.result is not None:
+                    break
+                await asyncio.sleep(0.01)
+        assert target_page.result["status"] == "timed_out"
+        assert waiting_inbox.job_id is waiting_inbox.execution_id is None
+        case.replay.control.release(communication_id, target_phase)
+        await restart
+        assert case.backend.process.pid == recovery_pid
+        recovered_job = await _completed(case.client, source_dispatch["job_id"])
+        with closing(SessionControlStore(source_node / CONTROL_DATABASE_NAME)) as store:
+            completed, = store.list_remote_pages(frozen.observation_id, side="source")
+            result = completed.result
+            assert result["status"] == "timed_out"
+            assert result["baseline_revision"] == frozen.snapshot["baseline_revision"]
+            assert [row["selector_id"] for row in result["observed"]] == [communication_id]
+            assert result["observed"][0]["state"] == "pending"
+            assert completed.request["envelope"]["query"]["deadline"] == original_deadline
+        with closing(SessionControlStore(target_node / CONTROL_DATABASE_NAME)) as store:
+            after = store.get_remote_observation(frozen.observation_id, side="target")
+            assert after.snapshot == frozen.snapshot and after.result == result
+            target_page, = store.list_remote_pages(frozen.observation_id, side="target")
+            assert target_page.request == page.request and target_page.result == result
+        tool_result, = [message for message in case.request(final)["messages"] if message["role"] == "tool" and message["name"] == "wait_for_session"]
+        assert tool_result["tool_call_id"] == "wait-budget-source"
+        assert json.loads(tool_result["content"]) == result
+        canonical, = _tool_results(case.main_thread_node(source) / "rollout/index.sqlite", first + ":tool-call:wait-budget-source")
+        assert canonical[1] == "completed"
+        case.record("wait-unexpired-restart-" + str(timeout_seconds), {
+            "deadline": original_deadline, "source_call_id": source_call,
+            "timers": resumed_timers, "baseline": asdict(frozen), "result": result,
+            "job": recovered_job, "canonical_result": canonical, "excluded_job_id": future["job_id"],
+            "inbox_pending": asdict(waiting_inbox),
+        })
+    finally:
+        case.record("wait-restart-timer-requests-" + str(timeout_seconds), deadlines)
+        case.replay.control.release(source_call, source_phase)
+        if communication_id is not None:
+            case.replay.control.release(communication_id, target_phase)
+        if restart is not None:
+            await restart
+    async with asyncio.timeout(60):
+        while True:
+            with closing(SessionControlStore(target_node / CONTROL_DATABASE_NAME)) as store:
+                bound = store.get_communication_inbox(communication_id)
+            if bound.state == "execution_bound":
+                break
+            await asyncio.sleep(0.05)
+    await _completed(case.client, bound.job_id)
