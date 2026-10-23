@@ -4,7 +4,7 @@
 基础设施 `SessionCatalogStore` 的唯一实现点（原先的 `app/core/session_catalog_store.py`
 单文件已拆分入本包）。facade 落在本包 `__init__.py`，只保留 `SessionCatalogStore` 的类声明
 （七个本包 mixin）、连接生命周期与 schema 闸门方法（`__init__`/`connection`/`close`/
-`_ensure_open`/`_connect`/`_initialize`/`_verify_quick_integrity`/`_require_tables_present`/
+`_ensure_open`/`_connect`/`_initialize`/`_require_tables_present`/
 `write_transaction`/`_bump_generation`/`current_generation`/`read_transaction`），并按原名
 再导出模块级公开符号。其余方法按垂直链路逐字搬迁到同包各 mixin，由多继承装配。
 
@@ -14,6 +14,9 @@ creation record journal（`creation_journal.py`）、fork source capture journal
 共享创建行读取/投影（`creation_record_rows.py`）、subtree delete journal 与空 folder 删除
 （`subtree_delete.py`）、只读查询（`queries.py`）、备份与目录一致性（`backup.py`），表 DDL 与
 共享列清单收敛在 `_schema.py`。
+
+`sqlite_integrity.py` 是启动与只读备份共用的 SQLite 页、索引、约束和外键校验；
+调用方注册既有表达式索引函数并持同一读快照，不重建索引或修复数据。
 
 # 可修改内容
 

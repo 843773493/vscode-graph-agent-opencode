@@ -11,7 +11,7 @@ subtree delete journal 与空 folder 删除（``subtree_delete.py``）、只读�
 
 本 facade 只保留 ``SessionCatalogStore`` 的类声明（七个本包 mixin）与连接
 生命周期方法（``__init__``/``connection``/``close``/``_ensure_open``/
-``_connect``/``_initialize``/``_verify_quick_integrity``/
+``_connect``/``_initialize``/
 ``_require_tables_present``/``write_transaction``/``_bump_generation``/
 ``current_generation``/``current_navigation_revision``/``read_transaction``），
 并按原名再导出模块级公开符号，
@@ -69,6 +69,9 @@ from app.core.session_catalog_store.nodes import CatalogNodesMixin
 from app.core.session_catalog_store.queries import (
     CatalogQueriesMixin,
     _register_session_list_functions,
+)
+from app.core.session_catalog_store.sqlite_integrity import (
+    verify_catalog_sqlite_integrity,
 )
 from app.core.session_catalog_store.subtree_delete import SubtreeDeleteMixin
 from app.core.session_catalog_store.validators import (
@@ -241,8 +244,11 @@ class SessionCatalogStore(
                     f"tables={[str(row[0]) for row in existing_tables]}"
                 )
         else:
-            self._verify_quick_integrity()
-            self._require_tables_present(current)
+            with self.read_transaction() as connection:
+                verify_catalog_sqlite_integrity(
+                    connection, database_path=self.database_path, database_label="session catalog",
+                )
+                self._require_tables_present(current)
         self._connection.execute("BEGIN IMMEDIATE")
         try:
             self._connection.execute(_NODES_TABLE_DDL)
@@ -269,22 +275,6 @@ class SessionCatalogStore(
             self._connection.execute("ROLLBACK")
             raise
         self._connection.execute("COMMIT")
-
-    def _verify_quick_integrity(self) -> None:
-        """启动期 ``PRAGMA quick_check``：catalog 损坏时 fail closed（8.1-F）。
-
-        只对已存在的库执行。返回非 ``ok`` 说明页级损坏，绝不允许继续以
-        半损坏的权威表读写——立刻抛错，由 operator 从备份恢复或进入维护
-        模式核对，不得扫盘重建。
-        """
-        result = self._connection.execute("PRAGMA quick_check").fetchone()
-        status = str(result[0]) if result is not None else "<empty>"
-        if status.lower() != "ok":
-            raise CatalogMaintenanceRequiredError(
-                "session catalog 完整性校验失败，拒绝打开（须从备份恢复或进入"
-                "维护模式核对，不得扫盘重建）: "
-                f"path={self.database_path}, quick_check={status!r}"
-            )
 
     def _require_tables_present(self, current: int) -> None:
         """校验当前 schema 的必需表确实存在；缺表说明库被外部改写。

@@ -23,6 +23,10 @@ from app.core.session_catalog_store.contracts import (
     CatalogMaintenanceRequiredError,
     _parse_frozen_session_locators,
 )
+from app.core.session_catalog_store.queries import _register_session_list_functions
+from app.core.session_catalog_store.sqlite_integrity import (
+    verify_catalog_sqlite_integrity,
+)
 from app.core.session_catalog_store.validators import validate_storage_relative_locator
 
 
@@ -120,9 +124,11 @@ class CatalogBackupMixin:
         try:
             snapshot = sqlite3.connect(resolved.as_uri() + "?mode=ro&immutable=1", uri=True)
             try:
-                statuses = [str(row[0]) for row in snapshot.execute("PRAGMA quick_check")]
-                if statuses != ["ok"]:
-                    raise CatalogMaintenanceRequiredError(f"一致性备份损坏，须进入维护模式核对: status={statuses}")
+                _register_session_list_functions(snapshot)
+                snapshot.execute("BEGIN DEFERRED")
+                verify_catalog_sqlite_integrity(
+                    snapshot, database_path=resolved, database_label="一致性备份",
+                )
                 schema = int(snapshot.execute("PRAGMA user_version").fetchone()[0])
                 if schema != self.SCHEMA_VERSION:
                     raise CatalogMaintenanceRequiredError(
