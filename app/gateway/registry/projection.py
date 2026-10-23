@@ -177,18 +177,18 @@ class RegistryProjectionMixin:
             self._remote_gateway_runtimes[connection.connection_id] = runtime
             if previous_runtime is not None and previous_runtime is not runtime:
                 if self._has_route_references_for_connection(connection.connection_id):
-                    self._retired_remote_gateway_runtimes.setdefault(
+                    self._register_retired_remote_gateway_runtime(
                         connection.connection_id,
-                        [],
-                    ).append(previous_runtime)
+                        previous_runtime,
+                    )
                 else:
                     try:
                         previous_runtime.close()
                     except Exception:
-                        self._retired_remote_gateway_runtimes.setdefault(
+                        self._register_retired_remote_gateway_runtime(
                             connection.connection_id,
-                            [],
-                        ).append(previous_runtime)
+                            previous_runtime,
+                        )
         if post_commit_error is not None:
             raise post_commit_error.with_traceback(post_commit_error.__traceback__)
     def apply_remote_projection_batch(
@@ -363,20 +363,20 @@ class RegistryProjectionMixin:
                 if defer_retiring_runtimes or self._has_route_references_for_connection(
                     connection_id
                 ):
-                    self._retired_remote_gateway_runtimes.setdefault(
+                    self._register_retired_remote_gateway_runtime(
                         connection_id,
-                        [],
-                    ).append(previous_runtime)
+                        previous_runtime,
+                    )
                 else:
                     try:
                         previous_runtime.close()
                     except Exception:
                         # 新 route 已经通过 registry CAS 提交；旧 tunnel 不能
                         # 影响新 runtime 的可用性，保留到 Gateway 关闭时再收尾。
-                        self._retired_remote_gateway_runtimes.setdefault(
+                        self._register_retired_remote_gateway_runtime(
                             connection_id,
-                            [],
-                        ).append(previous_runtime)
+                            previous_runtime,
+                        )
         for connection_id, previous_runtime in previous_remote_runtimes.items():
             if connection_id in runtimes:
                 continue
@@ -386,18 +386,18 @@ class RegistryProjectionMixin:
             if defer_retiring_runtimes or self._has_route_references_for_connection(
                 connection_id
             ):
-                self._retired_remote_gateway_runtimes.setdefault(
+                self._register_retired_remote_gateway_runtime(
                     connection_id,
-                    [],
-                ).append(previous_runtime)
+                    previous_runtime,
+                )
             else:
                 try:
                     previous_runtime.close()
                 except Exception:
-                    self._retired_remote_gateway_runtimes.setdefault(
+                    self._register_retired_remote_gateway_runtime(
                         connection_id,
-                        [],
-                    ).append(previous_runtime)
+                        previous_runtime,
+                    )
 
         retired_runtimes = tuple(
             (connection_id, runtime)

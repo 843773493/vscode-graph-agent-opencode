@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping, Sequence
+from heapq import nsmallest
 from typing import Literal
 
 from app.domain.itemized.identity.item_projection import ItemProjectionIdentity
@@ -325,6 +326,12 @@ def _enrich_activity_parts(
     projection: Mapping[str, object],
 ) -> list[TurnResponsePartDTO]:
     """用同 snapshot 的 typed scope 和显式坐标补充 canonical payload。"""
+    if not any(
+        part.kind in {"tool_call", "tool_result"} and part.tool_call_id is not None
+        for part in parts
+    ):
+        return parts
+
     calls, calls_by_identity, results = _tool_payloads(records)
     identities = {
         raw["item_id"]: ItemProjectionIdentity.from_dict(
@@ -476,7 +483,9 @@ def response_parts_from_records(
     )
     if final_part is not None:
         parts.append(final_part)
-    return sorted(parts, key=response_part_order)[:max_parts]
+    if max_parts < 0:
+        return sorted(parts, key=response_part_order)[:max_parts]
+    return nsmallest(max_parts, parts, key=response_part_order)
 
 
 def _internal_content_parts(

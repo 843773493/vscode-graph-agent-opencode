@@ -3,6 +3,7 @@ import React from "react";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import { useRef } from "react";
 import { useWorkspaceFileTreeDirectories } from "./useWorkspaceFileTreeDirectories";
+import { fileTreeNodeFixture as fileNode } from "./workspaceFileTreeTestFixtures";
 import { restoreGlobalDescriptor } from "../../../tests/testGlobals";
 
 const originalFetch = globalThis.fetch;
@@ -38,17 +39,6 @@ function apiResponse(data: unknown): Response {
 // 这里统一补一个基准再解析，避免把相对路径当成非法 URL。
 function requestUrl(input: RequestInfo | URL): URL {
   return new URL(input instanceof Request ? input.url : String(input), "http://127.0.0.1");
-}
-
-function fileNode(path: string): Record<string, unknown> {
-  return {
-    name: path.split("/").pop() ?? path,
-    path,
-    kind: "file",
-    has_children: false,
-    size: 1,
-    modified_at: null,
-  };
 }
 
 interface HarnessHandle {

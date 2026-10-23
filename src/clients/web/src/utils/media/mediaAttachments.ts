@@ -44,9 +44,12 @@ function normalizeDataUrlContentType(dataUrl: string, contentType: string): stri
   }
 
   const header = dataUrl.slice(0, commaIndex);
-  const payload = dataUrl.slice(commaIndex + 1);
   const encoding = header.includes(";base64") ? ";base64" : "";
-  return `data:${contentType}${encoding},${payload}`;
+  const normalizedHeader = `data:${contentType}${encoding}`;
+  if (header === normalizedHeader) {
+    return dataUrl;
+  }
+  return `${normalizedHeader},${dataUrl.slice(commaIndex + 1)}`;
 }
 
 function extensionFromName(name: string): string {
@@ -107,21 +110,21 @@ export function detectAttachmentMediaKind(file: File): AttachmentMediaKind {
 function generatedAttachmentName(
   file: File,
   mediaKind: AttachmentMediaKind,
+  contentType: string,
   index: number,
 ): string {
   if (file.name) {
     return file.name;
   }
 
-  const contentType = fallbackContentType(file, mediaKind);
-  const extension = contentType === "application/octet-stream"
+  const filenameExtension = contentType === "application/octet-stream"
     ? "bin"
     : contentType.split("/")[1] || (mediaKind === "image" ? "png" : "mp4");
   const timestamp = new Date()
     .toISOString()
     .replace(/:/g, "")
     .replace(/\.\d{3}Z$/, "Z");
-  return `clipboard-${mediaKind}-${timestamp}-${index + 1}.${extension}`;
+  return `clipboard-${mediaKind}-${timestamp}-${index + 1}.${filenameExtension}`;
 }
 
 function inlineAttachmentFileId(name: string, index: number): string {
@@ -140,8 +143,13 @@ export async function fileToSelectedAttachment(
   fallbackIndex = 0,
 ): Promise<SelectedAttachment> {
   const mediaKind = detectAttachmentMediaKind(file);
-  const name = generatedAttachmentName(file, mediaKind, fallbackIndex);
   const contentType = fallbackContentType(file, mediaKind);
+  const name = generatedAttachmentName(
+    file,
+    mediaKind,
+    contentType,
+    fallbackIndex,
+  );
   const dataUrl = normalizeDataUrlContentType(
     await readFileAsDataUrl(file),
     contentType,
@@ -156,23 +164,17 @@ export async function fileToSelectedAttachment(
   };
 }
 
-function isClipboardFile(item: DataTransferItem): boolean {
-  return item.kind === "file";
-}
-
-function isSupportedFile(file: File): boolean {
-  detectAttachmentMediaKind(file);
-  return true;
-}
-
 export function mediaFilesFromClipboard(data: DataTransfer): File[] {
-  const files = Array.from(data.files).filter(isSupportedFile);
-  if (files.length > 0) {
-    return files;
+  const filesFromFileList = Array.from(data.files);
+  if (filesFromFileList.length > 0) {
+    return filesFromFileList;
   }
 
-  return Array.from(data.items)
-    .filter(isClipboardFile)
-    .map((item) => item.getAsFile())
-    .filter((file): file is File => file !== null);
+  const filesFromItems: File[] = [];
+  for (const item of Array.from(data.items)) {
+    if (item.kind !== "file") continue;
+    const file = item.getAsFile();
+    if (file !== null) filesFromItems.push(file);
+  }
+  return filesFromItems;
 }

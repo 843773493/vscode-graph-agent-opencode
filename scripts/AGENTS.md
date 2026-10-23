@@ -6,12 +6,14 @@
 
 ```text
 scripts/
+├── git/                     Git worktree与索引隔离检查
+│   └── assert_isolated_index_commit.mjs
 ├── launch/                  开发服务和目标生命周期
 │   ├── dev.mjs              开发栈入口，负责安装调试模板
 │   └── debug-fixtures/      仅供开发启动器使用的只读调试模板
 ├── install/                 安装后处理
 ├── release/                 发布打包
-└── generate_*.{py,mjs}       协议、类型和测试数据生成入口
+└── generate_*.{py,mjs}      协议、类型和测试数据生成入口
 ```
 
 目录先按职责归属，再按该职责内的用途展开。仅被一个入口使用的模板放在该入口所属目录下；多个入口真正共用时才提升到共同上层，并迁移全部调用方。不要为了便于查找在不同层级保留同一模板的副本；生成结果写入各自的输出目录。

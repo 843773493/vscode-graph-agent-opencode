@@ -2,6 +2,24 @@
 
 `components/workspace/fileTree/` 存放工作区文件树族的实现：主组件 WorkspaceFileTree、右键菜单渲染 WorkspaceFileTreeContextMenu、右键菜单动作 hook useWorkspaceFileTreeContextMenu、目录缓存与懒加载 hook useWorkspaceFileTreeDirectories、路径语义纯逻辑 workspaceFileTreePaths、目录缓存纯逻辑 workspaceFileTreeCache、虚拟滚动行构建纯逻辑 workspaceFileTreeRows，以及对应测试。
 
+职责依赖树（当前文件仍平铺在同一目录；缩进表示调用/依赖关系）：
+
+```text
+WorkspaceFileTree.tsx
+├── useWorkspaceFileTreeDirectories.ts
+│   └── workspaceFileTreeCache.ts
+├── workspaceFileTreeRows.ts
+├── workspaceFileTreePaths.ts
+└── WorkspaceFileTreeContextMenu.tsx
+    └── useWorkspaceFileTreeContextMenu.ts
+        └── useWorkspaceFileOperations.ts
+
+*.test.ts(x)
+└── workspaceFileTreeTestFixtures.ts
+```
+
+测试 fixture 只集中构造通用文件/目录节点；每个测试继续负责自己的 Gateway 响应、请求时序和交互状态。
+
 文件分工：
 
 - `WorkspaceFileTree.tsx`：文件树组件外壳与交互编排（展开/选择状态、渲染行、恢复与文件变更消费）；只调用下面的 hook 与纯逻辑模块，不内联路径算法、目录缓存规则或菜单动作。
@@ -12,6 +30,7 @@
 - `workspaceFileTreePaths.ts`：已解析文件 URI 的父子关系、根内判断和剪贴板输入处理；根 URI 由固定目标后端提供，原生路径交目标机器解析，不在浏览器拼接真实路径。
 - `workspaceFileTreeCache.ts`：目录缓存条目结构与唯一构造入口（加载中/成功/失败/过期四种形态）、LRU 淘汰与按层恢复的并发控制。任何目录条目字面量都必须复用这里的工厂函数。
 - `workspaceFileTreeRows.ts`：唯一搜索匹配器和扁平行构建；组件的虚拟行和递归 DOM 共用同一个目录递归命中缓存。
+- `workspaceFileTreeTestFixtures.ts`：仅供本目录测试复用稳定的文件/目录节点字段，测试专属响应、状态和请求行为仍留在各自用例中。
 
 本目录与相邻子包的边界：
 

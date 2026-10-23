@@ -12,10 +12,8 @@ from urllib.request import Request
 
 import pytest
 
-from tests.support.processes import (
-    gateway as gateway_processes,
-    workspace as workspace_processes,
-)
+import tests.support.processes.gateway as gateway_processes
+import tests.support.processes.workspace as workspace_processes
 
 
 @dataclass

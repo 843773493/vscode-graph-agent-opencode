@@ -1,5 +1,4 @@
 import { useEffect } from "react";
-import { cloneMaps } from "../../state/appStateMaps";
 import { writeUnreadSessionKeys } from "../../state/storage";
 import type { SetAppState } from "../contentViewLoaderTypes";
 
@@ -31,9 +30,9 @@ export function useUnreadSessionTracking({
         if (!previous.unreadSessionKeys.has(currentSessionCacheKey)) {
           return previous;
         }
-        const next = cloneMaps(previous);
-        next.unreadSessionKeys.delete(currentSessionCacheKey);
-        return next;
+        const unreadSessionKeys = new Set(previous.unreadSessionKeys);
+        unreadSessionKeys.delete(currentSessionCacheKey);
+        return { ...previous, unreadSessionKeys };
       });
     };
     markCurrentSessionRead();

@@ -330,7 +330,7 @@ const encodedFrames = new WeakMap();
 export function encodeBinaryFrame(frame) {
   const cached = encodedFrames.get(frame);
   if (cached) return cached;
-  const metadata = Buffer.from(JSON.stringify({
+  const metadata = JSON.stringify({
     type: "frame",
     frameId: frame.frameId,
     browserId: frame.browserId,
@@ -341,10 +341,13 @@ export function encodeBinaryFrame(frame) {
     pixelHeight: frame.pixelHeight || frame.height,
     pageScaleFactor: frame.pageScaleFactor,
     timestamp: frame.timestamp,
-  }), "utf8");
-  const header = Buffer.allocUnsafe(4);
-  header.writeUInt32BE(metadata.byteLength, 0);
-  const encoded = Buffer.concat([header, metadata, frame.jpeg]);
+  });
+  const metadataByteLength = Buffer.byteLength(metadata, "utf8");
+  const jpegOffset = 4 + metadataByteLength;
+  const encoded = Buffer.allocUnsafe(jpegOffset + frame.jpeg.byteLength);
+  encoded.writeUInt32BE(metadataByteLength, 0);
+  encoded.write(metadata, 4, metadataByteLength, "utf8");
+  encoded.set(frame.jpeg, jpegOffset);
   encodedFrames.set(frame, encoded);
   return encoded;
 }

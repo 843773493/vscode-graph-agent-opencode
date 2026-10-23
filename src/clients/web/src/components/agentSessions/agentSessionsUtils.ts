@@ -125,7 +125,12 @@ function sessionSortTime(session: Session, sortMode: SessionSortMode): number {
 }
 
 export function sortSessions(sessions: Session[], sortMode: SessionSortMode): Session[] {
-  return [...sessions].sort((a, b) => sessionSortTime(b, sortMode) - sessionSortTime(a, sortMode));
+  const timestampedSessions = sessions.map((session) => ({
+    session,
+    timestamp: sessionSortTime(session, sortMode),
+  }));
+  timestampedSessions.sort((left, right) => right.timestamp - left.timestamp);
+  return timestampedSessions.map(({ session }) => session);
 }
 
 function workspaceSectionLabel(workspaceId: string, workspaceName: string): string {
@@ -143,7 +148,12 @@ export function buildWorkspaceSections(
   const groups = new Map<string, Session[]>();
   for (const session of sessions) {
     const workspaceId = session.workspace_id || 'workspace';
-    groups.set(workspaceId, [...(groups.get(workspaceId) ?? []), session]);
+    const workspaceSessions = groups.get(workspaceId);
+    if (workspaceSessions) {
+      workspaceSessions.push(session);
+    } else {
+      groups.set(workspaceId, [session]);
+    }
   }
 
   return [...groups.entries()].map(([workspaceId, groupSessions]) => {
@@ -213,10 +223,12 @@ export function buildVisibleWorkspaceTree(
       roots.push(workspace);
       continue;
     }
-    childrenByParent.set(parentWorkspaceId, [
-      ...(childrenByParent.get(parentWorkspaceId) ?? []),
-      workspace,
-    ]);
+    const siblings = childrenByParent.get(parentWorkspaceId);
+    if (siblings) {
+      siblings.push(workspace);
+    } else {
+      childrenByParent.set(parentWorkspaceId, [workspace]);
+    }
   }
 
   const result: VisibleWorkspaceNode[] = [];

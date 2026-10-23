@@ -48,21 +48,29 @@ class SkillFacetLoader:
         except SkillFrontmatterError as error:
             logging.getLogger(__name__).error(
                 "Skill frontmatter 解析失败: uri=%s error_code=%s error=%s",
-                self.entry.display_uri, error.error_code, error,
+                self.entry.display_uri,
+                error.error_code,
+                error,
             )
-            return SemanticPayload(available=False, error=f"Skill frontmatter 无效: {error.error_code}")
+            return SemanticPayload(
+                available=False, error=f"Skill frontmatter 无效: {error.error_code}"
+            )
         if parsed.name != self.entry.name:
             logging.getLogger(__name__).error(
                 "Skill name 与目录名不一致: uri=%s name=%r entry=%r",
-                self.entry.display_uri, parsed.name, self.entry.name,
+                self.entry.display_uri,
+                parsed.name,
+                self.entry.name,
             )
             return SemanticPayload(
                 available=False,
                 error=f"Skill name 必须与 entry 目录名一致: entry={self.entry.name!r}",
             )
         if self.facet == "activation":
-            return SemanticPayload(payload={"body": content[parsed.body_offset:]})
-        return SemanticPayload(payload={"name": parsed.name, "description": parsed.description})
+            return SemanticPayload(payload={"body": content[parsed.body_offset :]})
+        return SemanticPayload(
+            payload={"name": parsed.name, "description": parsed.description}
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -73,20 +81,30 @@ class SkillCatalogLoader:
     entries: tuple[SkillDerivationEntry, ...]
 
     def __call__(self, inputs: Mapping[str, SemanticInput]) -> SemanticPayload:
-        effective: dict[str, dict[str, str]] = {}
-        for layer in ("inline", "gateway", "workspace"):
-            for entry in self.entries:
-                if entry.layer != layer:
-                    continue
-                metadata_id = entry.resource_id("metadata")
-                activation_id = entry.resource_id("activation")
-                effective[entry.name] = {
-                    "name": entry.name, "layer": layer,
-                    "entry_identity": entry.entry_identity,
-                    "display_uri": entry.display_uri,
-                    "metadata_resource_id": metadata_id,
-                    "activation_resource_id": activation_id,
-                    "metadata_revision": inputs[metadata_id].revision,
-                    "activation_revision": inputs[activation_id].revision,
-                }
-        return SemanticPayload(payload={"entries": [effective[name] for name in sorted(effective)]})
+        layer_priority = {"inline": 0, "gateway": 1, "workspace": 2}
+        effective_by_name: dict[str, dict[str, str]] = {}
+        priority_by_name: dict[str, int] = {}
+        for entry in self.entries:
+            priority = layer_priority.get(entry.layer)
+            if priority is None or priority_by_name.get(entry.name, -1) > priority:
+                continue
+            metadata_id = entry.resource_id("metadata")
+            activation_id = entry.resource_id("activation")
+            effective_by_name[entry.name] = {
+                "name": entry.name,
+                "layer": entry.layer,
+                "entry_identity": entry.entry_identity,
+                "display_uri": entry.display_uri,
+                "metadata_resource_id": metadata_id,
+                "activation_resource_id": activation_id,
+                "metadata_revision": inputs[metadata_id].revision,
+                "activation_revision": inputs[activation_id].revision,
+            }
+            priority_by_name[entry.name] = priority
+        return SemanticPayload(
+            payload={
+                "entries": [
+                    effective_by_name[name] for name in sorted(effective_by_name)
+                ]
+            }
+        )

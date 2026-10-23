@@ -27,10 +27,11 @@ class WorkspaceNavigationStore:
         changed = self._synchronize_workspace_refs(nodes, targets)
         self._validate(nodes, {target.workspace_id for target in targets})
         ordered = self._ordered(nodes)
+        serialized_nodes = [node.model_dump(mode="json") for node in ordered]
         if changed:
-            self._save(ordered)
+            self._save(serialized_nodes)
         return WorkspaceNavigationTreeDTO(
-            revision=self._revision(ordered),
+            revision=self._revision(serialized_nodes),
             nodes=ordered,
         )
 
@@ -158,49 +159,52 @@ class WorkspaceNavigationStore:
         node = self._require_node(nodes, node_id)
         if node.kind != "workspace_folder":
             raise ValueError("只能删除工作区文件夹")
-        children = [item.node_id for item in nodes if item.parent_node_id == node_id]
-        if children and not recursive:
-            raise ValueError(
-                f"工作区文件夹非空，不能删除: node_id={node_id}, children={children}"
+        if not recursive:
+            children = [item.node_id for item in nodes if item.parent_node_id == node_id]
+            if children:
+                raise ValueError(
+                    f"工作区文件夹非空，不能删除: node_id={node_id}, children={children}"
+                )
+            return self._persist(
+                [item for item in nodes if item.node_id != node_id],
+                targets,
             )
-        if recursive:
-            folder_ids = {node_id}
-            pending = [node_id]
-            while pending:
-                parent_id = pending.pop()
-                for item in nodes:
-                    if (
-                        item.kind == "workspace_folder"
-                        and item.parent_node_id == parent_id
-                        and item.node_id not in folder_ids
-                    ):
-                        folder_ids.add(item.node_id)
-                        pending.append(item.node_id)
-            promoted_refs = [
+
+        children_by_parent: dict[str | None, list[WorkspaceNavigationNodeDTO]] = {}
+        for item in nodes:
+            children_by_parent.setdefault(item.parent_node_id, []).append(item)
+        folder_ids = {node_id}
+        pending = [node_id]
+        while pending:
+            parent_id = pending.pop()
+            for child in children_by_parent.get(parent_id, ()):
+                if child.kind == "workspace_folder" and child.node_id not in folder_ids:
+                    folder_ids.add(child.node_id)
+                    pending.append(child.node_id)
+        promoted_refs = sorted(
+            (
                 item
-                for item in self._ordered(nodes)
+                for item in nodes
                 if item.kind == "workspace_ref" and item.parent_node_id in folder_ids
-            ]
-            promoted_ref_ids = {item.node_id for item in promoted_refs}
-            remaining = [item for item in nodes if item.node_id not in folder_ids]
-            next_position = max(
-                (
-                    item.position
-                    for item in remaining
-                    if item.parent_node_id == node.parent_node_id
-                    and item.node_id not in promoted_ref_ids
-                ),
-                default=-1,
-            ) + 1
-            for workspace_ref in promoted_refs:
-                workspace_ref.parent_node_id = node.parent_node_id
-                workspace_ref.position = next_position
-                next_position += 1
-            return self._persist(remaining, targets)
-        return self._persist(
-            [item for item in nodes if item.node_id != node_id],
-            targets,
+            ),
+            key=lambda item: (item.parent_node_id or "", item.position, item.node_id),
         )
+        promoted_ref_ids = {item.node_id for item in promoted_refs}
+        remaining = [item for item in nodes if item.node_id not in folder_ids]
+        next_position = max(
+            (
+                item.position
+                for item in remaining
+                if item.parent_node_id == node.parent_node_id
+                and item.node_id not in promoted_ref_ids
+            ),
+            default=-1,
+        ) + 1
+        for workspace_ref in promoted_refs:
+            workspace_ref.parent_node_id = node.parent_node_id
+            workspace_ref.position = next_position
+            next_position += 1
+        return self._persist(remaining, targets)
 
     def breadcrumb(
         self,
@@ -235,9 +239,10 @@ class WorkspaceNavigationStore:
         valid_workspace_ids = {target.workspace_id for target in targets}
         self._validate(nodes, valid_workspace_ids)
         ordered = self._ordered(nodes)
-        self._save(ordered)
+        serialized_nodes = [node.model_dump(mode="json") for node in ordered]
+        self._save(serialized_nodes)
         return WorkspaceNavigationTreeDTO(
-            revision=self._revision(ordered),
+            revision=self._revision(serialized_nodes),
             nodes=ordered,
         )
 
@@ -253,12 +258,12 @@ class WorkspaceNavigationStore:
             )
         return [WorkspaceNavigationNodeDTO.model_validate(item) for item in raw_nodes]
 
-    def _save(self, nodes: list[WorkspaceNavigationNodeDTO]) -> None:
+    def _save(self, serialized_nodes: list[dict[str, object]]) -> None:
         atomic_write_json(
             self._storage_path,
             {
                 "schema_version": 1,
-                "nodes": [node.model_dump(mode="json") for node in nodes],
+                "nodes": serialized_nodes,
             },
         )
 
@@ -269,17 +274,18 @@ class WorkspaceNavigationStore:
     ) -> bool:
         changed = False
         targets_by_id = {target.workspace_id: target for target in targets}
-        for node in list(nodes):
-            if node.kind != "workspace_ref":
-                continue
-            if node.workspace_id not in targets_by_id:
-                nodes.remove(node)
-                changed = True
-                continue
-            target_name = targets_by_id[node.workspace_id].name
-            if node.name != target_name:
-                node.name = target_name
-                changed = True
+        retained_nodes: list[WorkspaceNavigationNodeDTO] = []
+        for node in nodes:
+            if node.kind == "workspace_ref":
+                target = targets_by_id.get(node.workspace_id)
+                if target is None:
+                    changed = True
+                    continue
+                if node.name != target.name:
+                    node.name = target.name
+                    changed = True
+            retained_nodes.append(node)
+        nodes[:] = retained_nodes
         existing_workspace_ids = {
             node.workspace_id for node in nodes if node.kind == "workspace_ref"
         }
@@ -322,6 +328,7 @@ class WorkspaceNavigationStore:
                 if node.workspace_id in workspace_refs:
                     raise ValueError(f"Gateway 工作区存在重复规范引用: {node.workspace_id}")
                 workspace_refs.add(node.workspace_id)
+        validated_acyclic_node_ids: set[str] = set()
         for node in nodes:
             if node.parent_node_id is not None:
                 parent = nodes_by_id.get(node.parent_node_id)
@@ -334,15 +341,18 @@ class WorkspaceNavigationStore:
                         f"Gateway 导航父节点不是工作区文件夹: {parent.node_id}"
                     )
             ancestor_id = node.parent_node_id
-            visited = {node.node_id}
+            current_chain_node_ids = {node.node_id}
             while ancestor_id is not None:
-                if ancestor_id in visited:
+                if ancestor_id in current_chain_node_ids:
                     raise ValueError(f"Gateway 工作区导航包含循环关系: {node.node_id}")
-                visited.add(ancestor_id)
+                if ancestor_id in validated_acyclic_node_ids:
+                    break
+                current_chain_node_ids.add(ancestor_id)
                 ancestor = nodes_by_id.get(ancestor_id)
                 if ancestor is None:
                     break
                 ancestor_id = ancestor.parent_node_id
+            validated_acyclic_node_ids.update(current_chain_node_ids)
 
     @staticmethod
     def _ordered(
@@ -373,9 +383,9 @@ class WorkspaceNavigationStore:
             node.position = position
 
     @staticmethod
-    def _revision(nodes: list[WorkspaceNavigationNodeDTO]) -> str:
+    def _revision(serialized_nodes: list[dict[str, object]]) -> str:
         encoded = json.dumps(
-            [node.model_dump(mode="json") for node in nodes],
+            serialized_nodes,
             ensure_ascii=False,
             sort_keys=True,
             separators=(",", ":"),

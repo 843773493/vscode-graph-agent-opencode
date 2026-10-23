@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import type { ChildThreadList, ChildThreadSummary } from "../../../types/backend";
 import { copyTextToClipboard } from "../../../utils/clipboard";
 import { formatDateTime } from "../../../utils/format";
@@ -54,6 +54,14 @@ export default function ChildThreadPanel({
 }) {
   const [notice, setNotice] = useState("");
   const [noticeError, setNoticeError] = useState(false);
+  const selectedThreadIdRef = useRef<string | null>(null);
+  selectedThreadIdRef.current = conversation.selectedThread?.thread_id ?? null;
+  const onForkFromThreadRef = useRef(onForkFromThread);
+  onForkFromThreadRef.current = onForkFromThread;
+  const forkSelectedThread = useCallback((point: ChildThreadForkPoint) => {
+    const selectedThreadId = selectedThreadIdRef.current;
+    if (selectedThreadId) onForkFromThreadRef.current?.(selectedThreadId, point);
+  }, []);
 
   const handleCopyThreadId = (threadId: string) => {
     void copyTextToClipboard(threadId)
@@ -260,7 +268,7 @@ export default function ChildThreadPanel({
       {!loading && !error && loadedAt && conversation.selectionIntent && !conversation.selectedThread
         ? <p role="alert">所选子线程已不可用，无法读取其历史或报告。</p> : null}
       {conversation.selectedThread ? <ChildThreadConversation thread={conversation.selectedThread} conversation={conversation}
-        onFork={onForkFromThread ? (point) => onForkFromThread(conversation.selectedThread!.thread_id, point) : undefined} /> : null}
+        onFork={onForkFromThread ? forkSelectedThread : undefined} /> : null}
     </section>
   );
 }

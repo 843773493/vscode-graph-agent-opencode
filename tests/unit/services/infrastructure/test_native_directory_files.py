@@ -16,6 +16,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+import app.services.infrastructure.workspace_service as workspace_service_module
 from app.api import workspace as workspace_api
 from app.api.deps import get_workspace_service, verify_local_token
 from app.core.exceptions import ForbiddenError
@@ -168,6 +169,80 @@ async def native_case(request, monkeypatch):
     case.registry.close()
     case.state.close()
     context.close()
+
+
+@pytest.mark.parametrize(
+    ("os_name", "system_platform", "expected_option"),
+    [
+        ("nt", "win32", {"creationflags": 0x200}),
+        ("posix", "darwin", {"start_new_session": True}),
+        ("posix", "linux", {"start_new_session": True}),
+    ],
+)
+def test_reveal_file_entry_uses_supported_process_isolation_options(
+    tmp_path,
+    monkeypatch,
+    os_name,
+    system_platform,
+    expected_option,
+):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    target = workspace / "same.txt"
+    target.write_text("workspace", encoding="utf-8")
+    service = WorkspaceService(
+        config_service=Mock(spec=ConfigService),
+        workspace_root=workspace,
+    )
+    null_device = object()
+    popen = Mock()
+    monkeypatch.setattr(
+        workspace_service_module,
+        "os",
+        SimpleNamespace(name=os_name),
+    )
+    monkeypatch.setattr(
+        workspace_service_module,
+        "sys",
+        SimpleNamespace(platform=system_platform),
+    )
+    monkeypatch.setattr(
+        workspace_service_module,
+        "subprocess",
+        SimpleNamespace(
+            DEVNULL=null_device,
+            CREATE_NEW_PROCESS_GROUP=0x200,
+            Popen=popen,
+        ),
+    )
+    monkeypatch.setattr(
+        workspace_service_module,
+        "shutil",
+        SimpleNamespace(
+            which=lambda name: (
+                "/usr/bin/xdg-open" if name == "xdg-open" else None
+            ),
+        ),
+    )
+
+    try:
+        displayed = service.reveal_file_entry(path="same.txt", scope="workspace")
+        assert service.file_paths.native(displayed) == target.resolve()
+        if os_name == "nt":
+            expected_command = ["explorer.exe", f"/select,{target}"]
+        elif system_platform == "darwin":
+            expected_command = ["open", "-R", str(target)]
+        else:
+            expected_command = ["/usr/bin/xdg-open", str(workspace)]
+        popen.assert_called_once_with(
+            expected_command,
+            stdin=null_device,
+            stdout=null_device,
+            stderr=null_device,
+            **expected_option,
+        )
+    finally:
+        service.close()
 
 
 async def test_native_binding_requires_token_loopback_and_local_workspace(native_case):

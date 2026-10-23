@@ -25,6 +25,17 @@ def _bounded_stream_text(value: str, max_chars: int) -> str:
     return f"{value[:head_chars]}{marker}{value[-tail_chars:]}"
 
 
+def _clone_json_tree(value: Any) -> Any:
+    """复制 JSON 状态树，保留提交与 replay 之间的快照隔离。"""
+    if type(value) is dict:
+        return {key: _clone_json_tree(item) for key, item in value.items()}
+    if type(value) is list:
+        return [_clone_json_tree(item) for item in value]
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    return copy.deepcopy(value)
+
+
 def validate_event_payload(event_type: str, payload: Mapping[str, Any]) -> None:
     """拒绝已下线的内部字段，禁止绕过公共协议改写消息流状态。
 
@@ -44,7 +55,6 @@ def apply_event(
     state: dict[str, Any],
     event: Mapping[str, Any],
 ) -> dict[str, Any]:
-    next_state = copy.deepcopy(state)
     event_type = str(event["type"])
     payload = event.get("payload")
     if not isinstance(payload, Mapping):
@@ -52,6 +62,13 @@ def apply_event(
             f"消息流事件 payload 必须是对象: type={event_type}"
         )
     validate_event_payload(event_type, payload)
+    snapshot = (
+        payload.get("snapshot", payload)
+        if event_type == "stream.snapshot"
+        else None
+    )
+    source_state = snapshot if isinstance(snapshot, Mapping) else state
+    next_state = _clone_json_tree(dict(source_state))
     if event_type == "stream.opened":
         next_state["stream_status"] = "open"
         next_state["active_state"] = None
@@ -255,7 +272,7 @@ def apply_event(
     elif event_type == "stream.failed":
         next_state["stream_status"] = "failed"
         next_state["agent_loop_status"] = "failed"
-        next_state["failure"] = copy.deepcopy(dict(payload))
+        next_state["failure"] = _clone_json_tree(dict(payload))
         next_state["resumable"] = bool(payload.get("resumable", False))
         _finish_running_model_calls(next_state, outcome="execution_lost")
         _finish_running_blocks(next_state, status="failed")
@@ -274,10 +291,6 @@ def apply_event(
             "resumable": bool(payload.get("resumable", False)),
         }
         _set_terminal_active_state(next_state, "failed", payload)
-    elif event_type == "stream.snapshot":
-        snapshot = payload.get("snapshot", payload)
-        if isinstance(snapshot, Mapping):
-            next_state = copy.deepcopy(dict(snapshot))
     _mark_event_lifecycle(next_state, event)
     return next_state
 
@@ -312,7 +325,7 @@ def _upsert_tool_call(
                 incoming.pop("arguments", None)
             tool_call.update(incoming)
             return
-    tool_calls.append(copy.deepcopy(dict(payload)))
+    tool_calls.append(_clone_json_tree(dict(payload)))
 
 
 def _find_tool_call(
@@ -726,11 +739,11 @@ def _apply_block_delta(
                     if operation == "item_patch":
                         items[index] = {**existing, **dict(item)}
                     else:
-                        items[index] = copy.deepcopy(dict(item))
+                        items[index] = _clone_json_tree(dict(item))
                     found = True
                     break
         if not found:
-            items.append(copy.deepcopy(dict(item)))
+            items.append(_clone_json_tree(dict(item)))
     if bool(payload.get("redacted", False)):
         block["redacted"] = True
 

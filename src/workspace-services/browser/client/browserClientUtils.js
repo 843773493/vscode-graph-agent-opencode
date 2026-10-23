@@ -66,16 +66,23 @@ export function pointerButtonName(button) {
   return "none";
 }
 
-export function remotePointFromEvent(canvas, event, viewport = null) {
-  const rect = canvas.getBoundingClientRect();
-  if (rect.width <= 0 || rect.height <= 0) {
+/**
+ * 从本地画布显示位置换算指针坐标，缩放和远端 DPR 不直接作为输入单位。
+ * @param {HTMLCanvasElement} canvas width/height 是画布后备像素，不一定等于 CSS 视口。
+ * @param {Pick<MouseEvent, "clientX" | "clientY">} event 当前 attach 页面的 CSS 像素坐标。
+ * @param {{width: number, height: number}|null} [remoteViewportCss=null] 正式输入链传入远端 CSS 视口；省略时按画布后备像素返回。
+ * @returns {{x: number, y: number}} 单位随目标尺寸，正式输入链为远端 CSS 像素。
+ */
+export function remotePointFromEvent(canvas, event, remoteViewportCss = null) {
+  const canvasDisplayRect = canvas.getBoundingClientRect();
+  if (canvasDisplayRect.width <= 0 || canvasDisplayRect.height <= 0) {
     throw new Error("canvas 尺寸无效，无法映射指针坐标");
   }
-  const width = viewport?.width || canvas.width;
-  const height = viewport?.height || canvas.height;
+  const width = remoteViewportCss?.width || canvas.width;
+  const height = remoteViewportCss?.height || canvas.height;
   return {
-    x: clamp(((event.clientX - rect.left) / rect.width) * width, 0, width),
-    y: clamp(((event.clientY - rect.top) / rect.height) * height, 0, height),
+    x: clamp(((event.clientX - canvasDisplayRect.left) / canvasDisplayRect.width) * width, 0, width),
+    y: clamp(((event.clientY - canvasDisplayRect.top) / canvasDisplayRect.height) * height, 0, height),
   };
 }
 

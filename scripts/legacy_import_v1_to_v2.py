@@ -17,12 +17,12 @@ from pathlib import Path
 # sys.path[0]；按项目约定从当前工作目录取得显式仓库根，禁止通过文件
 # 位置向上猜测根目录。
 if __package__ in {None, ""}:
-    _workspace_root = Path.cwd()
-    if not (_workspace_root / "app").is_dir():
+    _project_root = Path.cwd()
+    if not (_project_root / "app").is_dir():
         raise RuntimeError(
             "legacy_import_v1_to_v2 必须从项目根目录运行，且当前目录缺少 app/"
         )
-    sys.path.insert(0, str(_workspace_root))
+    sys.path.insert(0, str(_project_root))
 
 from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 

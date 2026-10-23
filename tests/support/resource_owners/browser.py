@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -80,10 +80,10 @@ class BrowserOwnerFixture:
     root: Path
     sessions: ResourceOwnerSessionsFake
     transport: BrowserTransportFake
-    leases: ExternalResourceLeaseLedger
-    owner: BrowserResourceOwner | None
     # 可由用例推进的owner时钟，不表示资源创建时间。
     now: datetime
+    leases: ExternalResourceLeaseLedger = field(init=False)
+    owner: BrowserResourceOwner | None = field(init=False)
 
     def restart(self) -> BrowserResourceOwner:
         self.leases = ExternalResourceLeaseLedger(state_path=self.root / ".boxteam" / "resources.json")
@@ -110,7 +110,11 @@ class BrowserOwnerFixture:
 def build_browser_owner_fixture(root: Path) -> BrowserOwnerFixture:
     workspace = root / "workspace"
     workspace.mkdir()
-    bundle = BrowserOwnerFixture(workspace, ResourceOwnerSessionsFake(workspace), BrowserTransportFake(),
-                           ExternalResourceLeaseLedger(), None, datetime(2026, 10, 5, tzinfo=UTC))
+    bundle = BrowserOwnerFixture(
+        root=workspace,
+        sessions=ResourceOwnerSessionsFake(workspace),
+        transport=BrowserTransportFake(),
+        now=datetime(2026, 10, 5, tzinfo=UTC),
+    )
     bundle.restart()
     return bundle

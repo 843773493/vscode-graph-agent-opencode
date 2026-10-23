@@ -7,6 +7,7 @@ import json
 import logging
 import time
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 
 import httpx
 from pydantic import ValidationError
@@ -58,12 +59,23 @@ class FederationSpokeDirectory:
         return self._provider()
 
 
+@dataclass(frozen=True, slots=True)
+class _WorkspaceBackendEndpoint:
+    backend_url: str
+    backend_workspace_id: str
+
+
 class WorkspaceCatalogPort:
     """按 backend_url 只读查询各本地工作区的 cold session catalog。"""
 
-    def __init__(self, *, request_timeout: float = 5.0) -> None:
+    def __init__(
+        self, *, http_client: httpx.AsyncClient, request_timeout: float = 5.0
+    ) -> None:
+        self._http_client = http_client
         self._request_timeout = request_timeout
-        self._backend_endpoints: dict[str, tuple[str, str]] = {}
+        self._backend_endpoint_by_gateway_workspace_id: dict[
+            str, _WorkspaceBackendEndpoint
+        ] = {}
 
     def project_workspaces(
         self,
@@ -71,37 +83,44 @@ class WorkspaceCatalogPort:
     ) -> None:
         """整体重建本地工作区路由表；远端子工作区不参与。"""
 
-        self._backend_endpoints = {
-            workspace_id: (backend_url.rstrip("/"), backend_workspace_id)
-            for workspace_id, backend_url, backend_workspace_id in workspaces
+        self._backend_endpoint_by_gateway_workspace_id = {
+            gateway_workspace_id: _WorkspaceBackendEndpoint(
+                backend_url=backend_url.rstrip("/"),
+                backend_workspace_id=backend_workspace_id,
+            )
+            for gateway_workspace_id, backend_url, backend_workspace_id in workspaces
         }
 
-    async def _export(self, *, workspace_id: str) -> dict[str, object]:
+    async def _fetch_session_catalog_export(
+        self, *, gateway_workspace_id: str
+    ) -> dict[str, object]:
         request_id = require_current_request_id("联邦 cold catalog")
-        backend_endpoint = self._backend_endpoints.get(workspace_id)
+        backend_endpoint = self._backend_endpoint_by_gateway_workspace_id.get(
+            gateway_workspace_id
+        )
         if backend_endpoint is None:
             raise FederationError(
                 FEDERATION_SESSION_MAIN_UNAVAILABLE,
-                f"本地工作区后端未连接，无法查询 cold catalog: {workspace_id}",
-                detail={"workspace_id": workspace_id},
+                "本地工作区后端未连接，无法查询 cold catalog: "
+                f"{gateway_workspace_id}",
+                detail={"workspace_id": gateway_workspace_id},
             )
-        backend_url, backend_workspace_id = backend_endpoint
-        async with httpx.AsyncClient(timeout=self._request_timeout, trust_env=False) as client:
-            response = await client.get(
-                f"{backend_url}/api/v1/session-catalog/export",
-                headers={
-                    "X-Local-Token": LOCAL_TOKEN,
-                    "X-BoxTeam-Workspace-Id": backend_workspace_id,
-                    "X-Request-ID": request_id,
-                    # 按请求注入 Gateway 自身稳定身份，取值与两条 HTTP 代理同源。
-                    "X-BoxTeam-Gateway-Id": load_proxy_gateway_id(),
-                },
-            )
+        response = await self._http_client.get(
+            f"{backend_endpoint.backend_url}/api/v1/session-catalog/export",
+            headers={
+                "X-Local-Token": LOCAL_TOKEN,
+                "X-BoxTeam-Workspace-Id": backend_endpoint.backend_workspace_id,
+                "X-Request-ID": request_id,
+                # 按请求注入 Gateway 自身稳定身份，取值与两条 HTTP 代理同源。
+                "X-BoxTeam-Gateway-Id": load_proxy_gateway_id(),
+            },
+            timeout=self._request_timeout,
+        )
         if response.status_code >= 400:
             raise FederationError(
                 FEDERATION_SESSION_MAIN_UNAVAILABLE,
                 f"工作区 cold catalog 查询失败: status={response.status_code}",
-                detail={"workspace_id": workspace_id},
+                detail={"workspace_id": gateway_workspace_id},
             )
         try:
             body = response.json()
@@ -120,16 +139,20 @@ class WorkspaceCatalogPort:
     async def local_session_workspaces(self, session_id: str) -> tuple[str, ...]:
         """返回包含该 session 的本地工作区；未授权与不存在不可区分。"""
 
-        found: list[str] = []
-        for workspace_id in sorted(self._backend_endpoints):
+        backend_workspace_ids: list[str] = []
+        for gateway_workspace_id in sorted(
+            self._backend_endpoint_by_gateway_workspace_id
+        ):
             try:
-                data = await self._export(workspace_id=workspace_id)
+                data = await self._fetch_session_catalog_export(
+                    gateway_workspace_id=gateway_workspace_id
+                )
             except FederationError:
                 raise
             except Exception as error:  # 不可达即显式失败，不静默
                 raise FederationError(
                     FEDERATION_SESSION_MAIN_UNAVAILABLE,
-                    f"本地工作区 cold catalog 不可达: {workspace_id}: {error}",
+                    f"本地工作区 cold catalog 不可达: {gateway_workspace_id}: {error}",
                 ) from error
             items = data.get("items")
             if not isinstance(items, list):
@@ -141,8 +164,12 @@ class WorkspaceCatalogPort:
                 isinstance(item, dict) and item.get("session_id") == session_id
                 for item in items
             ):
-                found.append(self._backend_endpoints[workspace_id][1])
-        return tuple(found)
+                backend_workspace_ids.append(
+                    self._backend_endpoint_by_gateway_workspace_id[
+                        gateway_workspace_id
+                    ].backend_workspace_id
+                )
+        return tuple(backend_workspace_ids)
 
 
 class WorkspaceSessionMainPort:

@@ -32,36 +32,41 @@ function turnOrdinal(value: number | undefined): number {
   return value;
 }
 
-function internalDisplayItems(
+function internalExecutionTranscriptItems(
   executions: readonly InternalExecutionHistory[],
 ): Extract<ChatTranscriptItem, { kind: "internal_execution" }>[] {
-  return executions.flatMap((execution) =>
-    execution.display_parts.map((displayPart) => ({
-      kind: "internal_execution" as const,
-      key: `internal:${displayPart.item_id}`,
-      executionId: execution.execution_id,
-      displayPart,
-    })),
-  );
+  const items: Extract<ChatTranscriptItem, { kind: "internal_execution" }>[] = [];
+  for (const execution of executions) {
+    for (const displayPart of execution.display_parts) {
+      items.push({
+        kind: "internal_execution",
+        key: `internal:${displayPart.item_id}`,
+        executionId: execution.execution_id,
+        displayPart,
+      });
+    }
+  }
+  return items;
 }
 
 export function chatTranscriptItems(
   conversations: readonly ConversationView[],
   executions: readonly InternalExecutionHistory[],
 ): ChatTranscriptItem[] {
-  const turnItems: Extract<ChatTranscriptItem, { kind: "turn" }>[] = conversations.map(
-    (conversation) => ({
+  const historyTurns: Extract<ChatTranscriptItem, { kind: "turn" }>[] = [];
+  const otherTurns: Extract<ChatTranscriptItem, { kind: "turn" }>[] = [];
+  for (const conversation of conversations) {
+    const item: Extract<ChatTranscriptItem, { kind: "turn" }> = {
       kind: "turn",
       key: conversationTurnKey(conversation),
       conversation,
-    }),
-  );
-  const historyTurns = turnItems.filter((item) =>
-    item.conversation.displayMode === "history" && !item.conversation.pending,
-  );
-  const otherTurns = turnItems.filter((item) =>
-    item.conversation.displayMode !== "history" || item.conversation.pending,
-  );
+    };
+    if (conversation.displayMode === "history" && !conversation.pending) {
+      historyTurns.push(item);
+    } else {
+      otherTurns.push(item);
+    }
+  }
   const sharedOrdinals = new Map<number, string>();
   const turnsByOrdinal = historyTurns
     .map((item) => ({
@@ -128,7 +133,7 @@ export function chatTranscriptItems(
   }
   const orderedHistory: ChatTranscriptItem[] = [
     ...historyTurns,
-    ...internalDisplayItems(executions),
+    ...internalExecutionTranscriptItems(executions),
   ];
   orderedHistory.sort((left, right) => {
     const leftOrdinal = left.kind === "turn"

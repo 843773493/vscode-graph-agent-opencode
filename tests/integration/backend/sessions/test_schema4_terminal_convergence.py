@@ -837,11 +837,12 @@ real_fsync = os.fsync
 
 def crash_after_jsonl_barrier(fd):
     real_fsync(fd)
-    try:
-        target = Path(f"/proc/{os.getpid()}/fd/{fd}").resolve()
-    except OSError:
-        return
-    if target == jsonl:
+    descriptor_stat = os.fstat(fd)
+    jsonl_stat = jsonl.stat()
+    if (descriptor_stat.st_dev, descriptor_stat.st_ino) == (
+        jsonl_stat.st_dev,
+        jsonl_stat.st_ino,
+    ):
         os._exit(83)
 
 os.fsync = crash_after_jsonl_barrier

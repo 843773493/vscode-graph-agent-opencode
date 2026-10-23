@@ -1,13 +1,13 @@
 ---
 name: team-collaboration-gpt-hierarchical
-description: 按通用三层模式协调核心 Sol 与辅助 Luna；用户指定时也支持本线程单人辅助外部核心 owner。仅整理技能时不启动业务团队。
+description: 协调 GPT 分层团队；外部核心 owner 自主推进时，可按需调度 Luna 处理外围小修，用户明确禁用代理时提供单人辅助。
 ---
 
 # GPT 分层团队协作
 
 主模型由用户选择。主线程接收用户指令、确定范围、处理协调层无法解决的裁决；交付协调层持续推进已授权任务。仅准备技能不授权继续历史实施，用户要求在某个功能边界停止时，不自动接下一闭包。
 
-本轮用户指定外部核心接管：外部 OpenSpec owner 自主贯穿核心实现、验证与交付；本线程单人辅助，不调用 subagent，当前团队已停用且不唤醒 Sol。用户可按任务指定本线程单人辅助并禁用 subagent；此模式只做无冲突边角修复、命名、工具、测试或文档，核心写面优先，非核心 finding 自行闭环，核心 finding 只交准确证据，不派核心返工、不阻断核心、不设逐批 GO 门，也不要求核心等待。本轮模式跳过下方普通团队的 Sol 创建/续派、Luna 派单、候选冻结与逐批 GO 规则；其它任务仍使用通用三层方案。
+外部核心模式：当用户指定外部 owner 自主负责核心实现、验证与交付时，本线程负责外围 Luna 辅助，可按需调度工具参数 `model="gpt-6-luna"`、`reasoning_effort="max"` 的代理完成无冲突边角修复及其验证；不得创建或唤醒本地 Sol，也不得干预外部核心。核心 finding 只报告准确证据。仅当用户明确要求禁用代理时，才由本线程单人辅助。该模式跳过普通团队的核心 Sol 创建/续派、核心候选冻结与逐批 GO 规则，保留外围 Luna 派单；其它任务仍使用通用三层方案。
 
 ## 团队结构
 
@@ -57,6 +57,8 @@ completed 成员用 continue/followup 唤醒；send/deliver 只补运行中任�
 普通团队模式下，未参与写入者基于固定候选的 manifest 和 Git tree 核完整调用链，GO 同时记录结论所依赖的源码 blob。最终提交 tree 仍按最终 manifest 机械核对。parent commit 或无关文档变化本身不撤销相关源码审查结论：依赖 blob 未变时复用 GO，只审新增或变化的相关依赖；依赖 blob 改变时补审受影响部分。审查疑点先查真实 caller 和错误路径，再决定是否阻断；附加标签、报告形式或尚无具体错误路径的精度猜测不自动成为新验收门。复用结论不放宽身份、顺序、冲突或错误归属断言。
 
 Git index 的创建、写入与状态变更由本轮唯一集成者负责，并使用绝对私有 `GIT_INDEX_FILE` 与 `GIT_OPTIONAL_LOCKS=0`，保留共享暂存。作者和审查者不建或写 Git index；审查者在固定候选审查中可设置 `GIT_OPTIONAL_LOCKS=0`，只读查询指定不可变 Git 对象（`rev-parse`、`show`、`cat-file`、`ls-tree`），无需建索引。只有本轮唯一集成者在用户已授权时执行普通提交与 push，并核提交树和远端 SHA；不 force、不改写历史。上游审查失败不能记作 GO；必要替代审查须保持作者独立性，并明确记录替代范围。
+
+任务明确禁止 Git 时，直接在指定写面工作：先保存修改前完整字节，再用 `difflib.unified_diff` 生成小 patch；不运行 `git status` 或 `git diff`，包括 `--no-index` 与 `--check`。`status` 即使作为只读检查也可能刷新 index stat-cache；没有起始 index 字节证据时，不得断言无写入，也不补偿恢复。主批完整 before 与后续补项分开留存，原件只新增、不覆盖。例证见[canonical 台账](../../../out/tests/temp/2026/10/19/core-coordination-owner22/coordinator/artifacts/CURRENT.md)及三批原件 `out/tests/temp/2026/10/21/luna-auxiliary-cleanup/{windows-default-shell,install-spawn-error-cause,build-source-version}/artifacts/`。
 
 集成者调用 [run_git.py](../team-collaboration-gpt/scripts/run_git.py) 自动接好私有索引；直接运行 `commit` 子命令时，入口先检查私有索引中的 Python blob，`--task-dir` 使用本批产物绝对路径：
 

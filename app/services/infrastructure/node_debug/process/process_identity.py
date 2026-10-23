@@ -6,7 +6,7 @@
 
 身份来源优先级：
 1. Linux ``/proc/<pid>/stat`` 的 ``starttime`` 字段 + ``/proc/sys/kernel/random/boot_id``；
-   ``/proc`` 条目存在时它是权威来源，``Z``（zombie）视为已终结，不再回落；
+   ``/proc`` 条目存在时它是权威来源，``Z``（zombie）和 ``X``/``x``（dead）视为已终结，不再回落；
 2. 其它平台通过必需依赖 ``psutil.Process.create_time()`` 取得进程创建时间。
 """
 
@@ -69,7 +69,7 @@ def probe_process_identity(pid: int) -> NodeDebugProcessIdentity | None:
     if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
         raise ValueError(f"进程 PID 必须是正整数: {pid!r}")
     if sys.platform == "linux":
-        # Linux 的 /proc 是权威来源：读取时发现 PID 消失或状态为 zombie 都表示已终结。
+        # Linux 的 /proc 是权威来源：读取时发现 PID 消失或状态为 zombie/dead 都表示已终结。
         # 不得回落到 psutil 或 kill(0)，否则刚停止但尚未 reap 的子进程会被误判为存活。
         return _probe_linux_proc_identity(pid)
     return _probe_psutil_identity(pid)
@@ -94,15 +94,13 @@ def _probe_linux_proc_identity(pid: int) -> NodeDebugProcessIdentity | None:
         raise RuntimeError(f"/proc/{pid}/stat 字段不足，无法解析进程起始身份: {raw!r}")
     state = fields[0]
     starttime_ticks = fields[19]
-    if state == "Z":
-        # zombie 已经不再执行，视为已终结。
+    if state in {"Z", "X", "x"}:
+        # zombie 与 dead 状态都已终止，不再查询可复用的启动身份。
         return None
     boot_id_path = _PROC_ROOT / "sys" / "kernel" / "random" / "boot_id"
-    boot_id = (
-        boot_id_path.read_text(encoding="utf-8").strip()
-        if boot_id_path.is_file()
-        else "unknown-boot"
-    )
+    boot_id = boot_id_path.read_text(encoding="utf-8").strip()
+    if not boot_id:
+        raise RuntimeError(f"Linux 启动 ID 为空，无法核实进程起始身份: {boot_id_path}")
     return NodeDebugProcessIdentity(
         pid=pid,
         source=IDENTITY_SOURCE_LINUX_PROC,

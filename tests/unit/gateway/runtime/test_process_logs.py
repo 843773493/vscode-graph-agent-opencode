@@ -45,7 +45,19 @@ def test_process_log_store_rotates_an_oversized_previous_log(tmp_path: Path) -> 
     ).stat().st_size == PROCESS_LOG_MAX_BYTES
 
 
-@pytest.mark.parametrize("file_name", ["", "../outside.log", "nested/log.log", "log.txt"])
+@pytest.mark.parametrize(
+    "file_name",
+    [
+        "",
+        "../outside.log",
+        "nested/log.log",
+        r"..\outside.log",
+        r"nested\log.log",
+        r"C:\outside.log",
+        r"\\server\share.log",
+        "log.txt",
+    ],
+)
 def test_process_log_store_rejects_invalid_file_name(
     tmp_path: Path,
     file_name: str,

@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import shutil
 import subprocess
 from collections.abc import Generator
 from pathlib import Path
@@ -45,6 +46,7 @@ CUSTOM_TOOL_WORKSPACE_TEMPLATE_ITEMS = (
     "AGENTS.md",
     ".boxteam/skills",
 )
+GATEWAY_CONTEXT_SKILL_NAME = "gateway-context"
 
 
 @pytest.fixture(scope="module")
@@ -61,7 +63,10 @@ def e2e_workspace_root_path(request: pytest.FixtureRequest) -> str:
         workspace_root=workspace_root,
         template_root=template_root,
         template_items=CUSTOM_TOOL_WORKSPACE_TEMPLATE_ITEMS,
-        shared_skill_root=project_root / "resources" / "skills",
+    )
+    shutil.copytree(
+        project_root / "resources" / "skills" / GATEWAY_CONTEXT_SKILL_NAME,
+        workspace_root / ".boxteam" / "skills" / GATEWAY_CONTEXT_SKILL_NAME,
     )
     return str(workspace_root)
 
@@ -545,7 +550,7 @@ async def test_custom_tool_reads_searches_and_expands_another_session_context(
     reader_session_id = reader_session_response.json()["data"]["session_id"]
 
     prompt = (
-        "先调用 skill_load，参数只能是 name=gateway-context；它不计入下面的业务步骤。"
+        f"先调用 skill_load，参数只能是 name={GATEWAY_CONTEXT_SKILL_NAME}；它不计入下面的业务步骤。"
         "随后严格完成以下三个业务调用，不要改写资源地址，也不要使用 boxteam://gateway："
         f"第一步调用 read_context，原样使用这些资源字段 {json.dumps(source_ref)}，view=overview。"
         "第二步调用 search_context，原样使用同一组 resource_identity、uri、scope，"
@@ -604,13 +609,13 @@ async def test_custom_tool_reads_searches_and_expands_another_session_context(
     assert expanded_result["revision"] == search_result["matches"][0]["revision"]
     assert source_marker in json.dumps(expanded_result, ensure_ascii=False)
 
-    skill_load_paths = [
+    loaded_skill_names = [
         get_trace_payload(trace).get("args", {}).get("name")
         for trace in traces
         if trace.get("type") == "tool_call_start"
         and get_trace_payload(trace).get("tool_name") == "skill_load"
     ]
-    assert skill_load_paths == ["gateway-context"]
+    assert loaded_skill_names == [GATEWAY_CONTEXT_SKILL_NAME]
     for custom_tool_name in ("read_context", "search_context"):
         custom_tool_start_dtos = [
             trace
@@ -620,7 +625,7 @@ async def test_custom_tool_reads_searches_and_expands_another_session_context(
         ]
         assert custom_tool_start_dtos
         assert custom_tool_start_dtos[-1].get("skill_names", []) == [
-            "gateway-context"
+            GATEWAY_CONTEXT_SKILL_NAME
         ]
         assert (
             get_trace_payload(custom_tool_start_dtos[-1]).get("invocation_tool_name")

@@ -1,5 +1,6 @@
 import { spawn, spawnSync } from "node:child_process";
 import { chmodSync, closeSync, mkdirSync, openSync } from "node:fs";
+import { performance } from "node:perf_hooks";
 import path from "node:path";
 import { rotateServiceLog } from "./service-log.mjs";
 
@@ -83,7 +84,7 @@ export async function terminateProcessWithEscalation(
     killImpl = process.kill,
     sleepImpl = (delayMs) =>
       new Promise((resolve) => setTimeout(resolve, delayMs)),
-    nowImpl = Date.now,
+    nowImpl = () => performance.now(),
   } = {},
 ) {
   if (!Number.isInteger(pid) || pid <= 0) {

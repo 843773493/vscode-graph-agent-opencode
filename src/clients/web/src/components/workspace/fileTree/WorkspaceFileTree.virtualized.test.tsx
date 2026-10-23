@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import React from "react";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import { VirtuosoMockContext } from "react-virtuoso";
+import { fileTreeNodeFixture } from "./workspaceFileTreeTestFixtures";
 
 
 const ROOT = "boxteam://workspace/backend_files/resources/files/root";
@@ -61,31 +62,14 @@ function apiResponse(data: unknown): Response {
   return Response.json({ code: 0, message: "ok", request_id: "req", data });
 }
 
-function fileNode(index: number): Record<string, unknown> {
-  return {
-    name: "file-" + index + ".ts",
-    path: ROOT + "/file-" + index + ".ts",
-    kind: "file",
-    has_children: false,
-    size: index,
-    modified_at: null,
-  };
-}
-
-function directoryNode(path: string): Record<string, unknown> {
-  return {
-    name: path.split("/").pop() ?? path,
-    path,
-    kind: "directory",
-    has_children: true,
-    size: null,
-    modified_at: null,
-  };
-}
-
 async function mount(port: number, activeFilePath: string | null, expanded: string[]): Promise<ReactTestRenderer> {
   installWindow(port);
-  const items = [directoryNode(`${ROOT}/big`), ...Array.from({ length: 320 }, (_, i) => fileNode(i))];
+  const items = [
+    fileTreeNodeFixture(`${ROOT}/big`, "directory"),
+    ...Array.from({ length: 320 }, (_, index) =>
+      fileTreeNodeFixture(`${ROOT}/file-${index}.ts`, "file", index)
+    ),
+  ];
   globalThis.fetch = Object.assign(async (input: RequestInfo | URL) => {
     const url = new URL(input instanceof Request ? input.url : String(input), "http://127.0.0.1");
     if (url.pathname === "/api/gateway/auth/local-credential") return apiResponse({ token: "t" });
@@ -95,7 +79,9 @@ async function mount(port: number, activeFilePath: string | null, expanded: stri
     return apiResponse({
       root_path: path,
       path,
-      items: path === ROOT ? items : [fileNode(999)],
+      items: path === ROOT
+        ? items
+        : [fileTreeNodeFixture(`${ROOT}/file-999.ts`, "file", 999)],
       truncated: false,
       next_cursor: null,
     });

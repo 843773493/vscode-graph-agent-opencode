@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
+from functools import lru_cache
 from os import environ
 from pathlib import Path
 from typing import Literal, cast
@@ -60,6 +61,18 @@ def _schema_path(config_path: Path, raw_config: Mapping[str, object]) -> Path:
     return (config_path.parent / raw_schema).resolve()
 
 
+@lru_cache(maxsize=32)
+def _schema_validator(
+    schema_path: Path,
+    schema_mtime_ns: int,
+    schema_size: int,
+) -> jsonschema.Draft202012Validator:
+    # mtime 和文件大小共同构成缓存键，schema 更新后会重新编译。
+    schema = read_jsonc_object(schema_path)
+    jsonschema.Draft202012Validator.check_schema(schema)
+    return jsonschema.Draft202012Validator(schema)
+
+
 def _validate_config(
     raw_config: dict[str, object],
     *,
@@ -70,10 +83,14 @@ def _validate_config(
         raise FileNotFoundError(
             f"模型 stream 测试配置 schema 不存在: config={config_path} schema={schema_path}"
         )
-    schema = read_jsonc_object(schema_path)
-    jsonschema.Draft202012Validator.check_schema(schema)
+    schema_stat = schema_path.stat()
+    validator = _schema_validator(
+        schema_path,
+        schema_stat.st_mtime_ns,
+        schema_stat.st_size,
+    )
     try:
-        jsonschema.validate(raw_config, schema)
+        validator.validate(raw_config)
     except jsonschema.ValidationError as error:
         location = ".".join(str(item) for item in error.absolute_path) or "<root>"
         raise ModelStreamConfigError(

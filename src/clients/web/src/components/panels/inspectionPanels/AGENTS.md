@@ -12,6 +12,17 @@
 - `components/shell/`：应用外壳；本目录不实现。
 - `state/display/`：事件队列与 Agent State 的展示投影权威（`eventQueueDisplay`、`agentStateDisplay`）；`state/requestLogDisplay/`：请求日志展示投影权威。本目录只渲染，不复制其投影与文案映射。
 
+```text
+inspectionPanels/
+├── EventQueuePanel.tsx       会话事件筛选、Trace 顺序展示与旧页分页入口
+├── RequestLogPanel.tsx       请求日志排序、摘要和窗口化分页
+├── RequestLogCard.tsx        单条请求摘要、上游交互和懒展开详情
+├── AgentStatePanel.tsx       Agent State 快照和冻结请求上下文入口
+└── *.test.tsx                面板输出合同
+```
+
+EventQueuePanel 将 `items + sessionId` 映射成会话 Trace、折叠展示项和关键链路摘要；该纯派生结果在 props 不变时复用。请求面板对 `logs` 引用复用时间排序和关键链路摘要，单条日志只在其 `log` 引用变化时重新解析摘要、replay 和上游尝试。向前扩展窗口时，已显示条目的对象及绝对序号保持稳定，卡片组件可跳过昂贵的详情格式化；分页凭证和滚动锚点归 `components/eventQueue/` 管理。
+
 # 可修改内容
 
 - 三个面板的列表渲染、分组标题、折叠展开与懒加载编排。

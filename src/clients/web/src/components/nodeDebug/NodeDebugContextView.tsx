@@ -1,8 +1,10 @@
+import { memo, useMemo } from "react";
 import type { Dispatch, SetStateAction } from "react";
 
 import type { NodeDebugState, NodeDebugVariable } from "../../types/backend";
 
 const GLOBAL_VARIABLE_PREVIEW_LIMIT = 80;
+const EMPTY_NODE_DEBUG_VARIABLES: NodeDebugVariable[] = [];
 
 function DebugVariableRows({ variables }: { variables: NodeDebugVariable[] }) {
   return (
@@ -17,6 +19,45 @@ function DebugVariableRows({ variables }: { variables: NodeDebugVariable[] }) {
     </div>
   );
 }
+
+const DebugVariableSection = memo(function DebugVariableSection({
+  variables,
+}: {
+  variables: NodeDebugVariable[];
+}) {
+  const { localVariables, globalVariables } = useMemo(() => {
+    const localVariables: NodeDebugVariable[] = [];
+    const globalVariables: NodeDebugVariable[] = [];
+    for (const variable of variables) {
+      (variable.scope === "global" ? globalVariables : localVariables).push(variable);
+    }
+    return { localVariables, globalVariables };
+  }, [variables]);
+  const globalVariablePreview = useMemo(
+    () => globalVariables.slice(0, GLOBAL_VARIABLE_PREVIEW_LIMIT),
+    [globalVariables],
+  );
+
+  return (
+    <section className="node-debug-section node-debug-variable-section">
+      <div className="debug-section-title-row"><h3>局部变量</h3><span>{localVariables.length}</span></div>
+      {localVariables.length > 0 ? (
+        <DebugVariableRows variables={localVariables} />
+      ) : (
+        <span className="debug-muted">当前栈帧没有可展示的局部变量</span>
+      )}
+      {globalVariables.length > 0 ? (
+        <details className="node-debug-variable-group">
+          <summary>全局变量 <span>{globalVariables.length}</span></summary>
+          <DebugVariableRows variables={globalVariablePreview} />
+          {globalVariables.length > GLOBAL_VARIABLE_PREVIEW_LIMIT ? (
+            <small>仅显示前 {GLOBAL_VARIABLE_PREVIEW_LIMIT} 项；可在上方 Watch 中按名称求值。</small>
+          ) : null}
+        </details>
+      ) : null}
+    </section>
+  );
+});
 
 export default function NodeDebugContextView({
   state,
@@ -36,12 +77,7 @@ export default function NodeDebugContextView({
   onOpenWorkspacePath: (path: string) => Promise<void>;
 }) {
   const activeFrame = state?.call_stack?.[0] ?? null;
-  const localVariables = (activeFrame?.variables ?? []).filter(
-    (variable) => variable.scope !== "global",
-  );
-  const globalVariables = (activeFrame?.variables ?? []).filter(
-    (variable) => variable.scope === "global",
-  );
+  const variables = activeFrame?.variables ?? EMPTY_NODE_DEBUG_VARIABLES;
 
   return (
     <div className="node-debug-view node-debug-context-view" role="tabpanel">
@@ -68,23 +104,7 @@ export default function NodeDebugContextView({
         </div>
         {state?.last_evaluation ? <pre>{state.last_evaluation.error ?? state.last_evaluation.value ?? state.last_evaluation.description ?? "undefined"}</pre> : null}
       </section>
-      <section className="node-debug-section node-debug-variable-section">
-        <div className="debug-section-title-row"><h3>局部变量</h3><span>{localVariables.length}</span></div>
-        {localVariables.length > 0 ? (
-          <DebugVariableRows variables={localVariables} />
-        ) : (
-          <span className="debug-muted">当前栈帧没有可展示的局部变量</span>
-        )}
-        {globalVariables.length > 0 ? (
-          <details className="node-debug-variable-group">
-            <summary>全局变量 <span>{globalVariables.length}</span></summary>
-            <DebugVariableRows variables={globalVariables.slice(0, GLOBAL_VARIABLE_PREVIEW_LIMIT)} />
-            {globalVariables.length > GLOBAL_VARIABLE_PREVIEW_LIMIT ? (
-              <small>仅显示前 {GLOBAL_VARIABLE_PREVIEW_LIMIT} 项；可在上方 Watch 中按名称求值。</small>
-            ) : null}
-          </details>
-        ) : null}
-      </section>
+      <DebugVariableSection variables={variables} />
     </div>
   );
 }

@@ -13,7 +13,7 @@ from configs.layout_migrations import (
 )
 
 
-def _legacy_user_config() -> dict[str, object]:
+def _legacy_user_config_payload() -> dict[str, object]:
     workspace = commentjson.loads(
         Path("configs/workspace_inline.jsonc").read_text(encoding="utf-8")
     )
@@ -33,14 +33,14 @@ def _legacy_user_config() -> dict[str, object]:
     return workspace
 
 
-def _schema_paths() -> tuple[Path, Path]:
+def _gateway_and_workspace_schema_paths() -> tuple[Path, Path]:
     return Path("configs/gateway_schema.jsonc"), Path("configs/workspace_schema.jsonc")
 
 
 def test_migrate_legacy_user_configuration_splits_domains(tmp_path: Path) -> None:
     legacy_path = tmp_path / "boxteam.jsonc"
-    legacy_path.write_text(json.dumps(_legacy_user_config()), encoding="utf-8")
-    gateway_schema, workspace_schema = _schema_paths()
+    legacy_path.write_text(json.dumps(_legacy_user_config_payload()), encoding="utf-8")
+    gateway_schema, workspace_schema = _gateway_and_workspace_schema_paths()
 
     assert migrate_legacy_user_configuration(
         config_root=tmp_path,
@@ -66,8 +66,8 @@ def test_user_layout_migration_recovers_after_one_target_commit(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     legacy_path = tmp_path / "boxteam.jsonc"
-    legacy_path.write_text(json.dumps(_legacy_user_config()), encoding="utf-8")
-    gateway_schema, workspace_schema = _schema_paths()
+    legacy_path.write_text(json.dumps(_legacy_user_config_payload()), encoding="utf-8")
+    gateway_schema, workspace_schema = _gateway_and_workspace_schema_paths()
     writes = 0
 
     def interrupt_third_write(path: Path, content: bytes, mode: int) -> None:
@@ -101,10 +101,10 @@ def test_user_layout_migration_recovers_after_one_target_commit(
 
 def test_user_layout_migration_rejects_conflicting_new_target(tmp_path: Path) -> None:
     (tmp_path / "boxteam.jsonc").write_text(
-        json.dumps(_legacy_user_config()), encoding="utf-8"
+        json.dumps(_legacy_user_config_payload()), encoding="utf-8"
     )
     (tmp_path / "gateway.jsonc").write_text('{"user": "owned"}\n')
-    gateway_schema, workspace_schema = _schema_paths()
+    gateway_schema, workspace_schema = _gateway_and_workspace_schema_paths()
 
     with pytest.raises(RuntimeError, match="新旧配置布局同时存在"):
         migrate_legacy_user_configuration(

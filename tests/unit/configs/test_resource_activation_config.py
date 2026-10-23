@@ -10,25 +10,44 @@ import pytest
 from configs.runtime import merge_json_objects, read_jsonc_object
 
 
-def test_inline_default_and_dev_template_share_activation_contract() -> None:
-    inline = read_jsonc_object(Path("configs/workspace_inline.jsonc"))
-    dev = read_jsonc_object(Path("configs/workspace_dev.jsonc"))
+@pytest.fixture(scope="module")
+def workspace_config_validator() -> jsonschema.Draft202012Validator:
     schema = read_jsonc_object(Path("configs/workspace_schema.jsonc"))
-    jsonschema.validate(inline, schema)
-    jsonschema.validate(dev, schema)
+    jsonschema.Draft202012Validator.check_schema(schema)
+    return jsonschema.Draft202012Validator(schema)
+
+
+@pytest.fixture(scope="module")
+def inline_workspace_config() -> dict[str, object]:
+    return read_jsonc_object(Path("configs/workspace_inline.jsonc"))
+
+
+@pytest.fixture(scope="module")
+def development_workspace_config() -> dict[str, object]:
+    return read_jsonc_object(Path("configs/workspace_dev.jsonc"))
+
+
+def test_inline_default_and_dev_template_share_activation_contract(
+    workspace_config_validator: jsonschema.Draft202012Validator,
+    inline_workspace_config: dict[str, object],
+    development_workspace_config: dict[str, object],
+) -> None:
+    workspace_config_validator.validate(inline_workspace_config)
+    workspace_config_validator.validate(development_workspace_config)
     expected = {
         "default_boundary": "turn",
         "overrides": {"mcp_tool_catalog": "turn"},
     }
-    assert inline["context"]["resource_activation"] == expected
-    assert dev["context"]["resource_activation"] == expected
+    assert inline_workspace_config["context"]["resource_activation"] == expected
+    assert development_workspace_config["context"]["resource_activation"] == expected
 
 
-def test_override_recursively_merges_and_schema_rejects_unknown_boundary() -> None:
-    inline = read_jsonc_object(Path("configs/workspace_inline.jsonc"))
-    schema = read_jsonc_object(Path("configs/workspace_schema.jsonc"))
+def test_override_recursively_merges_and_schema_rejects_unknown_boundary(
+    workspace_config_validator: jsonschema.Draft202012Validator,
+    inline_workspace_config: dict[str, object],
+) -> None:
     merged = merge_json_objects(
-        inline,
+        inline_workspace_config,
         {
             "context": {
                 "resource_activation": {
@@ -41,9 +60,9 @@ def test_override_recursively_merges_and_schema_rejects_unknown_boundary() -> No
         "default_boundary": "model_call",
         "overrides": {"mcp_tool_catalog": "turn"},
     }
-    jsonschema.validate(merged, schema)
+    workspace_config_validator.validate(merged)
     invalid = merge_json_objects(
-        inline,
+        inline_workspace_config,
         {
             "context": {
                 "resource_activation": {
@@ -53,4 +72,4 @@ def test_override_recursively_merges_and_schema_rejects_unknown_boundary() -> No
         },
     )
     with pytest.raises(jsonschema.ValidationError):
-        jsonschema.validate(invalid, schema)
+        workspace_config_validator.validate(invalid)

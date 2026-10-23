@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import type { LLMRequestLogRecord } from "../../types/backend";
+import { requestLogRecordFixture } from "./requestLogRecordFixture";
 import {
   buildUpstreamAttemptDisplay,
   buildRequestLogDisplay,
@@ -8,25 +8,11 @@ import {
   normalizeRequestLogJsonForDisplay,
 } from "./index";
 
-function requestLog(
-  overrides: Partial<LLMRequestLogRecord>,
-): LLMRequestLogRecord {
-  return {
-    session_id: "ses_request_log_fixture",
-    timestamp: 0,
-    file_name: "request-log.json",
-    request: {},
-    response: {},
-    upstream: {},
-    ...overrides,
-  };
-}
-
 test("请求日志解析完整 Skill 回执后才截断展示，不按文件读取或失败结果推断", () => {
   const name = "long-skill-" + "x".repeat(150);
   const receipt = JSON.stringify({ name, mode: "snapshot", status: "already_active",
     append_status: "already_active", error: null });
-  const summary = buildRequestLogKeyFlow([requestLog({ request: { messages: [
+  const summary = buildRequestLogKeyFlow([requestLogRecordFixture({ request: { messages: [
     { role: "assistant", tool_calls: [{ name: "read_file", args: { path: ".boxteam/skills/fake/SKILL.md" } },
       { name: "skill_load", args: { name: "only-requested" } }] },
     { role: "tool", name: "read_file", content: receipt },
@@ -37,7 +23,7 @@ test("请求日志解析完整 Skill 回执后才截断展示，不按文件读�
 });
 
 test("buildUpstreamAttemptDisplay exposes merged upstream payloads", () => {
-  const log = requestLog({
+  const log = requestLogRecordFixture({
     upstream: {
       attempts: [
         {
@@ -72,7 +58,7 @@ function assert(condition: unknown, message: string): asserts condition {
   }
 }
 
-const multiCustomToolLog = requestLog({
+const multiCustomToolLog = requestLogRecordFixture({
   timestamp: 1,
   session_id: "ses_multi_custom_tool",
   file_name: "request-log.json",
@@ -129,7 +115,7 @@ assert(
   "请求日志应按 tool_call_id 把 beta 结果归因给 beta_tool",
 );
 
-const splitResultLog = requestLog({
+const splitResultLog = requestLogRecordFixture({
   timestamp: 1,
   session_id: "ses_split_custom_tool",
   file_name: "result-log.json",
@@ -148,7 +134,7 @@ const splitResultLog = requestLog({
   },
   response: { result: [] },
 });
-const splitCallLog = requestLog({
+const splitCallLog = requestLogRecordFixture({
   timestamp: 2,
   session_id: "ses_split_custom_tool",
   file_name: "call-log.json",
@@ -179,7 +165,7 @@ assert(
   "请求日志应先收集全部 tool_call_id 映射，再归因跨请求文件的扩展工具结果",
 );
 
-const retryAfterInvalidInvocationLog = requestLog({
+const retryAfterInvalidInvocationLog = requestLogRecordFixture({
   timestamp: 3,
   session_id: "ses_retry_after_invalid_invocation",
   file_name: "retry-after-invalid-invocation.json",
@@ -242,7 +228,7 @@ assert(
   "已知的入口校验错误和成功结果都不应显示为 unknown_custom_tool",
 );
 
-const malformedArgumentLog = requestLog({
+const malformedArgumentLog = requestLogRecordFixture({
   timestamp: 2,
   session_id: "ses_malformed_argument",
   file_name: "malformed-request-log.json",
@@ -273,7 +259,7 @@ assert(
 
 // 条目概览的相位标签是请求日志面板的可见文案，三条分支都必须被覆盖。
 const toolCallPhase = buildRequestLogDisplay(
-  requestLog({
+  requestLogRecordFixture({
     request: { model_name: "gpt-5.6-luna", messages: [{ type: "human", content: "hi" }] },
     response: {
       result: [
@@ -303,7 +289,7 @@ assert(
 );
 
 const naturalLanguagePhase = buildRequestLogDisplay(
-  requestLog({
+  requestLogRecordFixture({
     request: { messages: [] },
     response: { result: [{ type: "ai", content: "最终回复" }] },
   }),
@@ -318,7 +304,7 @@ assert(
 );
 
 const intermediatePhase = buildRequestLogDisplay(
-  requestLog({ request: { messages: [] }, response: { result: [] } }),
+  requestLogRecordFixture({ request: { messages: [] }, response: { result: [] } }),
 );
 assert(
   intermediatePhase.phaseLabel === "中间请求",
@@ -329,7 +315,7 @@ assert(
   "缺少模型信息时概览应回退为 unknown_model",
 );
 
-const replayLog = requestLog({
+const replayLog = requestLogRecordFixture({
   timestamp: 4,
   session_id: "ses_request_replay",
   file_name: "request-replay.json",

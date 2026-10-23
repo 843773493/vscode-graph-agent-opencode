@@ -10,10 +10,10 @@ import httpx
 import pytest
 
 from app.core.mounted_workspaces import MountedWorkspace
-from tests.support.processes.gateway import reset_gateway_persistent_state
 from tests.support.model_stream_config import prepare_e2e_model_stream_config
 from tests.support.paths import output_root_for_test
 from tests.support.ports import e2e_port_block_for_file
+from tests.support.processes.gateway import reset_gateway_persistent_state
 from tests.support.processes.workspace import (
     close_backend_process,
     start_backend_process,
@@ -77,11 +77,7 @@ def e2e_workspace_root_path(request: pytest.FixtureRequest) -> str:
 @pytest.fixture(scope="module")
 def e2e_config_path() -> str:
     return str(
-        Path.cwd().resolve()
-        / "configs"
-        / "tests"
-        / "workspace"
-        / "default.jsonc"
+        Path.cwd().resolve() / "configs" / "tests" / "workspace" / "default.jsonc"
     )
 
 
@@ -163,7 +159,9 @@ def e2e_backend_process(
 ) -> Generator[subprocess.Popen[str], None, None]:
     if not Path(e2e_workspace_config_path).is_file():
         raise FileNotFoundError(f"E2E 工作区配置不存在: {e2e_workspace_config_path}")
-    debugpy_port = int(os.getenv("BOXTEAM_E2E_BACKEND_DEBUGPY_PORT")) if is_debug else None
+    debugpy_port = (
+        int(os.getenv("BOXTEAM_E2E_BACKEND_DEBUGPY_PORT")) if is_debug else None
+    )
     env_overrides = (
         {"BOXTEAM_TEST_MODEL_STREAM_CONFIG": e2e_model_stream_runtime_config_path}
         if e2e_model_stream_runtime_config_path is not None
@@ -208,7 +206,7 @@ async def client(
     e2e_backend_process: subprocess.Popen[str],
     e2e_workspace_root_path: str,
     client_base_url: str,
-    is_debug: bool
+    is_debug: bool,
 ) -> AsyncIterator[httpx.AsyncClient]:
     backend_workspace_id = workspace_backend_id_for_root(e2e_workspace_root_path)
     async with httpx.AsyncClient(
@@ -233,8 +231,12 @@ def pytest_collection_modifyitems(
             "--keep-docker-runtime 只能配合一个已收集的测试使用，避免遗留大量端口进程"
         )
 
+    group_name_by_test_key: dict[str, str] = {}
     for item in items:
-        path_key = item.path.as_posix() if hasattr(item, "path") else item.nodeid
-        group_suffix = sha1(path_key.encode("utf-8")).hexdigest()[:8]
-        group_name = f"e2e_file_{group_suffix}"
+        test_group_key = item.path.as_posix() if hasattr(item, "path") else item.nodeid
+        group_name = group_name_by_test_key.get(test_group_key)
+        if group_name is None:
+            file_hash = sha1(test_group_key.encode("utf-8")).hexdigest()[:8]
+            group_name = f"e2e_file_{file_hash}"
+            group_name_by_test_key[test_group_key] = group_name
         item.add_marker(pytest.mark.xdist_group(name=group_name))

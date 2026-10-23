@@ -25,7 +25,7 @@ from tests.harness.python.process_output import spawn_logged_process
 from tests.harness.python.run_context import TestRunContext
 from tests.harness.python.terminal_backend import start_terminal_backend
 from tests.support.processes.workspace import terminate_process, wait_for_http_ok
-from tests.support.workspaces import prepare_default_test_workspace
+from tests.support.workspaces import prepare_test_workspace
 
 
 @pytest.fixture
@@ -37,12 +37,12 @@ def terminal_mounts(
     with ExitStack() as lifetime:
         for index, name in enumerate(("a", "b")):
             root = context.workspace_root / name
-            prepare_default_test_workspace(
+            prepare_test_workspace(
                 workspace_root=root,
                 template_root=Path.cwd()
                 / "tests/fixtures/workspaces/default_test_workspace",
+                template_items=(),
             )
-            (root / ".boxteam/workspace-identity.json").unlink(missing_ok=True)
             workspace_id = load_or_create_workspace_id(root)
             backend_port, frontend_port = terminal_ports_with_offset(
                 e2e_backend_port, 40 + index * 2

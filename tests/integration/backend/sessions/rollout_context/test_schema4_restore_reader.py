@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import sqlite3
 import subprocess
 import sys
@@ -12,6 +13,7 @@ from contextlib import closing
 from dataclasses import dataclass, replace
 from pathlib import Path
 
+import psutil
 import pytest
 
 from app.core.identifier import create_uuid_hex
@@ -78,22 +80,36 @@ def restore_case(
     )
 
 
-def _files(case: RestoreCase) -> dict[str, object]:
+def _database_file_state(case: RestoreCase) -> dict[str, object]:
     paths = (case.index, Path(str(case.index) + "-wal"), Path(str(case.index) + "-shm"))
-    files = {
+    database_paths = {os.path.normcase(os.path.normpath(str(path))) for path in paths}
+    database_files = {
         path.name: {"inode": path.stat().st_ino, "size": path.stat().st_size}
         for path in paths
         if path.exists()
     }
-    descriptors: dict[str, object] = {}
-    for fd in Path("/proc/self/fd").iterdir():
-        try:
-            target = fd.readlink()
-        except FileNotFoundError:
+    open_files: list[dict[str, object]] = []
+    for opened_file in psutil.Process().open_files():
+        target = opened_file.path
+        target_path = Path(target)
+        if not target_path.exists() and target.endswith(" (deleted)"):
+            target = target.removesuffix(" (deleted)")
+        normalized_target = os.path.normcase(os.path.normpath(target))
+        if normalized_target not in database_paths:
             continue
-        if str(case.index) in str(target):
-            descriptors[fd.name] = {"target": str(target), "inode": fd.stat().st_ino}
-    return {"files": files, "fds": descriptors}
+        file_stat = (
+            os.fstat(opened_file.fd)
+            if opened_file.fd >= 0
+            else Path(opened_file.path).stat()
+        )
+        open_files.append(
+            {
+                "fd": opened_file.fd,
+                "target": opened_file.path,
+                "inode": file_stat.st_ino,
+            }
+        )
+    return {"database_files": database_files, "open_files": open_files}
 
 
 def _observe(connection: sqlite3.Connection) -> dict[str, object]:
@@ -129,7 +145,7 @@ def _restore_with_reader(case: RestoreCase, reader_mode: str) -> dict[str, objec
             )
             assert _observe(reader)["revision"] == 0
             assert not reader.in_transaction
-        evidence["before_write"] = _files(case)
+        evidence["before_write"] = _database_file_state(case)
         revised = case.saver.revise_context_plan(
             case.session,
             replace(case.plan, history_view_revision=7),
@@ -139,13 +155,13 @@ def _restore_with_reader(case: RestoreCase, reader_mode: str) -> dict[str, objec
         if reader is not None:
             assert _observe(reader)["revision"] == 1
             assert not reader.in_transaction
-        evidence["before_restore"] = _files(case)
+        evidence["before_restore"] = _database_file_state(case)
         with case.saver._storage.storage.restore_index_backup(
             case.thread, case.backup
         , session_id=case.session) as restored:
             evidence["restored_snapshot"] = _observe(restored.connection)
-            evidence["while_snapshot_open"] = _files(case)
-        evidence["after_restore"] = _files(case)
+            evidence["while_snapshot_open"] = _database_file_state(case)
+        evidence["after_restore"] = _database_file_state(case)
         if reader is not None:
             evidence["old_reader"] = _observe(reader)
             assert not reader.in_transaction
@@ -160,7 +176,7 @@ def _restore_with_reader(case: RestoreCase, reader_mode: str) -> dict[str, objec
             case.session, thread_id=case.thread, plan_id=case.plan.plan_id
         )
         evidence["new_saver_revision"] = registered.revision
-        evidence["after_new_saver"] = _files(case)
+        evidence["after_new_saver"] = _database_file_state(case)
         # 只有确实恢复到备份后才尝试合法写入；已经错读时不继续污染证据。
         if registered.revision == 0:
             written = restarted.revise_context_plan(
@@ -187,7 +203,7 @@ def _restore_with_reader(case: RestoreCase, reader_mode: str) -> dict[str, objec
         evidence["backup_unchanged"] = True
         return evidence
     finally:
-        evidence["final_files"] = _files(case)
+        evidence["final_files"] = _database_file_state(case)
         artifact.write_text(json.dumps(evidence, indent=2), encoding="utf-8")
         if reader is not None:
             reader.close()
@@ -215,11 +231,11 @@ def test_restore_really_restores_backup_with_idle_reader(restore_case, reader_mo
 @pytest.mark.parametrize("reader_mode", ["ro", "rw"])
 def test_restore_cannot_detach_live_database_reader(restore_case, reader_mode):
     evidence = _restore_with_reader(restore_case, reader_mode)
-    before_inode = evidence["before_restore"]["files"]["index.sqlite"]["inode"]
-    after_inode = evidence["after_restore"]["files"]["index.sqlite"]["inode"]
+    before_inode = evidence["before_restore"]["database_files"]["index.sqlite"]["inode"]
+    after_inode = evidence["after_restore"]["database_files"]["index.sqlite"]["inode"]
     detached = [
         record
-        for record in evidence["after_restore"]["fds"].values()
+        for record in evidence["after_restore"]["open_files"]
         if record["target"].endswith("index.sqlite (deleted)")
     ]
     assert not detached, f"restore 成功返回却遗留旧 database inode: {detached}"

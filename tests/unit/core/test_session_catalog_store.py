@@ -3328,18 +3328,22 @@ def test_verify_backup_missing_enters_maintenance(
         )
 
 
-def test_startup_detects_unregistered_date_directory(
-    store: SessionCatalogStore, sessions_root: Path, tmp_path: Path
+def test_startup_detects_and_orders_unregistered_date_directories(
+    store: SessionCatalogStore, sessions_root: Path
 ) -> None:
-    """未登记日期目录 → 维护模式，保留原数据且不补 active node。"""
+    """未登记日期桶按稳定顺序进入维护模式，保留原数据且不补 active node。"""
     node = create_session(store, display_name="已登记会话")
-    # 手工放一个 catalog 未登记的日期桶目录（绕过软件写入）。
-    rogue = sessions_root / "2026" / "07" / "15" / make_session_id()
-    rogue.mkdir(parents=True, exist_ok=True)
-    with pytest.raises(CatalogMaintenanceRequiredError, match="未登记日期目录"):
+    # 倒序放入两个未登记日期桶，输出仍必须稳定排序。
+    later_rogue_session = sessions_root / "2026" / "07" / "15" / make_session_id()
+    earlier_rogue_session = sessions_root / "2026" / "07" / "14" / make_session_id()
+    later_rogue_session.mkdir(parents=True, exist_ok=True)
+    earlier_rogue_session.mkdir(parents=True, exist_ok=True)
+    with pytest.raises(CatalogMaintenanceRequiredError, match="未登记日期目录") as error:
         store.verify_registered_date_directories()
+    message = str(error.value)
+    assert message.index("2026/07/14") < message.index("2026/07/15")
     # 原数据保留，未吸收为 active node。
-    assert rogue.is_dir()
+    assert later_rogue_session.is_dir() and earlier_rogue_session.is_dir()
     assert store.get_node(node.node_id).state == "active"
     assert store.get_node(node.node_id).display_name == "已登记会话"
 

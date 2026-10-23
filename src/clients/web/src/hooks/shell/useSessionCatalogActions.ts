@@ -1,17 +1,17 @@
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { catalogOutboxParentCreation } from "../../state/session/sessionCatalogOutbox";
 import {
   DEFAULT_SESSION_TITLE,
 } from "../../api";
 import { fetchSessionCatalogSnapshot } from "../../api/session/sessionCatalogOperations";
-import { getSessionForkSourcePoint } from "../../api/session/sessions";
 import { buildSessionCatalogSyncKeys } from "../sessionResourceExplorer/resourceTreeSync";
 import { errorMessage } from "../../utils/errorMessage";
 import { listGatewayWorkspaces } from "../../gatewayApi";
 import { HttpRequestError } from "../../api/http";
-import type { GatewayRuntimeGroupRequest, GatewayUserAccess, GatewayWorkspace, Session, SessionForkMode, SessionForkRequest, SessionForkResult, SessionForkSourcePoint } from "../../types/backend";
+import type { GatewayRuntimeGroupRequest, GatewayUserAccess, GatewayWorkspace, Session } from "../../types/backend";
 import type { SessionCatalogOutboxRuntime } from "../session/sessionCatalogOutboxRuntime";
 import { requireGatewayWorkspaceRequestTarget } from "../../api/workspaceIdentity";
+import { useSessionForkDialog, type SessionForkDialogInput } from "./useSessionForkDialog";
 
 export interface SessionNameDialogState {
   sessionId: string;
@@ -19,26 +19,10 @@ export interface SessionNameDialogState {
   initialTitle: string;
 }
 
-export interface SessionForkDialogState {
-  sourceWorkspaceId: string;
-  sourceSessionId: string;
-  sourceTitle: string | null;
-  sourceThreadId: string | undefined;
-  sourceAnchorItemId: string | null;
-  mode: SessionForkMode;
-  anchorMode: "inclusive" | "before";
-  targetContainerUri: string;
-  idempotencyKey: string;
-  point: SessionForkSourcePoint | null;
-  request: SessionForkRequest | null;
-  loading: boolean;
-  submitting: boolean;
-  error: string | null;
-}
-
-export type SessionForkDialogSelection = Pick<SessionForkDialogState, "mode" | "anchorMode" | "targetContainerUri">;
-
-interface SessionCatalogActionsInput {
+interface SessionCatalogActionsInput extends Pick<
+  SessionForkDialogInput,
+  "forkSessionContext" | "readSessionSelectionIntent" | "onForkCreated"
+> {
   apiPort: number;
   activeGatewayWorkspaceId: string | null;
   activeSessionId: string | null;
@@ -70,13 +54,6 @@ interface SessionCatalogActionsInput {
     title: string,
     workspaceId?: string | null,
   ) => Promise<void>;
-  forkSessionContext: (
-    workspaceId: string,
-    sourceSessionId: string,
-    request: SessionForkRequest,
-  ) => Promise<SessionForkResult>;
-  readSessionSelectionIntent: () => number;
-  onForkCreated?: (workspaceId: string, result: SessionForkResult, selectionIntent: number) => Promise<void>;
   setSessionParent: (
     workspaceId: string,
     sessionId: string,
@@ -112,8 +89,6 @@ export function useSessionCatalogActions({
   const [nameDialog, setNameDialog] = useState<SessionNameDialogState | null>(null);
   const [nameDialogSubmitting, setNameDialogSubmitting] = useState(false);
   const [nameDialogError, setNameDialogError] = useState<string | null>(null);
-  const [forkDialog, setForkDialog] = useState<SessionForkDialogState | null>(null);
-  const forkDialogRead = useRef(0);
   const [sessionCatalogRefreshVersions, setSessionCatalogRefreshVersions] =
     useState<ReadonlyMap<string, number>>(new Map());
 
@@ -128,6 +103,15 @@ export function useSessionCatalogActions({
       return next;
     });
   }, []);
+
+  const { forkSession, ...forkDialogActions } = useSessionForkDialog({
+    apiPort,
+    sessionsByWorkspace,
+    forkSessionContext,
+    readSessionSelectionIntent,
+    onForkCreated,
+    invalidateSessionCatalog,
+  });
 
   const createSessionInCatalog = async (workspaceId?: string | null) => {
     setNameDialog(null);
@@ -346,101 +330,6 @@ export function useSessionCatalogActions({
     await setSessionParent(workspaceId, sessionId, parentSessionId);
     invalidateSessionCatalog(workspaceId);
   };
-  const forkSession = async (
-    workspaceId: string, sourceSessionId: string,
-    selection: {
-      threadId?: string; turnId?: string; itemId?: string;
-      sourceViewId?: string; sourceViewRevision?: number;
-    } = {},
-  ) => {
-    const read = ++forkDialogRead.current;
-    setForkDialog({
-      sourceWorkspaceId: workspaceId, sourceSessionId,
-      sourceTitle: sessionsByWorkspace.get(workspaceId)?.find((session) => session.session_id === sourceSessionId)?.title ?? null,
-      sourceThreadId: selection.threadId, sourceAnchorItemId: selection.itemId ?? null,
-      mode: "view_prefix_fork", anchorMode: "inclusive", targetContainerUri: "",
-      idempotencyKey: crypto.randomUUID(), point: null,
-      request: null, loading: true, submitting: false, error: null,
-    });
-    try {
-      const point = await getSessionForkSourcePoint(apiPort, sourceSessionId, selection, workspaceId);
-      if (forkDialogRead.current !== read) return;
-      if (selection.sourceViewId !== undefined && (
-        point.source_view_id !== selection.sourceViewId
-        || point.source_view_revision !== selection.sourceViewRevision
-        || selection.itemId !== undefined && point.anchor_item_id !== selection.itemId
-      )) throw new Error("来源回执与实际展示快照不一致");
-      setForkDialog((prior) => prior ? {
-        ...prior, point, sourceAnchorItemId: point.anchor_item_id ?? null,
-        targetContainerUri: point.child_container_uri, loading: false,
-      } : null);
-    } catch (error) {
-      if (forkDialogRead.current !== read) return;
-      setForkDialog((prior) => prior ? { ...prior, loading: false, error: errorMessage(error) } : null);
-    }
-  };
-  const updateForkDialogSelection = async (change: Partial<SessionForkDialogSelection>) => {
-    if (!forkDialog?.point || forkDialog.submitting || forkDialog.request) return;
-    const sourcePoint = forkDialog.point;
-    const prior = forkDialog;
-    const next = { ...prior, ...change, loading: true, error: null };
-    const read = ++forkDialogRead.current;
-    setForkDialog(next);
-    try {
-      const point = await getSessionForkSourcePoint(apiPort, prior.sourceSessionId, {
-        threadId: prior.sourceThreadId,
-        itemId: next.mode === "view_prefix_fork" ? prior.sourceAnchorItemId ?? undefined : undefined,
-        sourceViewId: sourcePoint.source_view_id, sourceViewRevision: sourcePoint.source_view_revision,
-        mode: next.mode, anchorMode: next.anchorMode,
-      }, prior.sourceWorkspaceId);
-      if (forkDialogRead.current !== read) return;
-      if (point.source_uri !== sourcePoint.source_uri
-        || point.source_view_id !== sourcePoint.source_view_id
-        || point.source_view_revision !== sourcePoint.source_view_revision
-        || next.mode === "view_prefix_fork" && (point.anchor_item_id ?? null) !== prior.sourceAnchorItemId
-        || next.mode === "full_rollout_copy" && point.anchor_item_id != null
-        || point.resource_mode !== next.mode || point.resource_anchor_mode !== next.anchorMode) {
-        throw new Error("附件候选回执与冻结的来源或当前复制范围不一致");
-      }
-      setForkDialog({ ...next, point, loading: false });
-    } catch (error) {
-      if (forkDialogRead.current !== read) return;
-      setForkDialog({ ...next, loading: false, error: errorMessage(error) });
-    }
-  };
-  const closeForkDialog = () => {
-    if (forkDialog?.submitting) return;
-    forkDialogRead.current += 1;
-    setForkDialog(null);
-  };
-  const submitForkDialog = async (request: SessionForkRequest) => {
-    if (!forkDialog?.point || forkDialog.submitting || forkDialog.loading
-      || (!forkDialog.request && (forkDialog.error
-        || forkDialog.mode === "view_prefix_fork" && !forkDialog.point.anchor_item_id
-        || forkDialog.point.resource_mode !== forkDialog.mode
-        || forkDialog.point.resource_anchor_mode !== forkDialog.anchorMode))) return;
-    const dialog = forkDialog;
-    const frozen = dialog.request ?? request;
-    setForkDialog({ ...dialog, request: frozen, submitting: true, error: null });
-    try {
-      const operation = forkSessionContext(dialog.sourceWorkspaceId, dialog.sourceSessionId, frozen);
-      const selectionIntent = readSessionSelectionIntent();
-      const result = await operation;
-      invalidateSessionCatalog(dialog.sourceWorkspaceId);
-      await onForkCreated?.(dialog.sourceWorkspaceId, result, selectionIntent);
-      const failures = result.resources.filter((resource) => resource.owner_reference
-        && resource.action !== "omit" && resource.availability === "unavailable");
-      if (failures.length > 0) {
-        setForkDialog({ ...dialog, request: frozen, submitting: false,
-          error: `目标已创建（${result.thread_id}），运行资源关联失败或待核实：${failures.map((resource) =>
-            `${resource.owner_reference!.resource_id}：${resource.reason ?? "原 owner 尚未核实"}`).join("；")}` });
-      } else {
-        setForkDialog(null);
-      }
-    } catch (error) {
-      setForkDialog({ ...dialog, request: frozen, submitting: false, error: errorMessage(error) });
-    }
-  };
   const closeNameDialog = () => {
     if (nameDialogSubmitting) {
       return;
@@ -471,10 +360,7 @@ export function useSessionCatalogActions({
   };
 
   return {
-    forkDialog,
-    updateForkDialogSelection,
-    closeForkDialog,
-    submitForkDialog,
+    ...forkDialogActions,
     nameDialog,
     nameDialogSubmitting,
     nameDialogError,

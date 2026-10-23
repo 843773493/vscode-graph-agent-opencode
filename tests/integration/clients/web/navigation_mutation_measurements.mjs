@@ -11,21 +11,21 @@ const observationOnly = mode === "--observation-only";
 const minimalSamples = mode === "--minimal-samples";
 const focusConcurrent = process.env.BOXTEAM_NAVIGATION_FOCUS === "concurrent";
 const traceConcurrent = process.env.BOXTEAM_NAVIGATION_TRACE === "concurrent";
-const config = JSON.parse(await readFile(configPath, "utf8"));
-const { observationHeaders, ...browserConfig } = config;
+const measurementConfig = JSON.parse(await readFile(configPath, "utf8"));
+const { observationHeaders, ...browserConfig } = measurementConfig;
 const bundleDirectory = path.join(artifacts, "bundle");
-const root = process.cwd();
+const repositoryRootPath = process.cwd();
 const outputs = new Map();
 if (!observationOnly) {
   await mkdir(bundleDirectory, { recursive: true });
   const bundle = await Bun.build({
-    entrypoints: [path.join(root, "tests/integration/clients/web/navigation_mutation_measurements_harness.tsx")],
+    entrypoints: [path.join(repositoryRootPath, "tests/integration/clients/web/navigation_mutation_measurements_harness.tsx")],
     target: "browser", outdir: bundleDirectory, naming: "[name].[ext]",
     plugins: [{
       name: "frontend-react",
       setup(build) {
         build.onResolve({ filter: /^(react|react-dom)(\/.*)?$/ }, (args) => ({
-          path: Bun.resolveSync(args.path, path.join(root, "src/clients/web")),
+          path: Bun.resolveSync(args.path, path.join(repositoryRootPath, "src/clients/web")),
         }));
       },
     }],
@@ -263,7 +263,7 @@ async function captureActualMutationRequest(request, url) {
   if (!isActualMutationRequest(request.method, url.pathname)) return { body: null, fact: null, rawEntry: null };
   const contentType = request.headers["content-type"] ?? "";
   const fact = { method: request.method, url: url.href, path: url.pathname, query: url.search,
-    gateway_target_url: new URL(request.url ?? "/", config.gatewayUrl).href,
+    gateway_target_url: new URL(request.url ?? "/", measurementConfig.gatewayUrl).href,
     proxy_exchange_id: `proxy-exchange-${process.pid}-${++proxyExchangeSequence}`,
     browser_request_id: request.headers["x-test-navigation-browser-request-id"] ?? null,
     proxy_state: "request_receiving", proxy_response_status: null, proxy_error: null,
@@ -331,10 +331,10 @@ async function saveBackendConcurrentObservation() {
   backendConcurrentObservationAttempted = true;
   try {
     const response = await context.request.get(new URL(
-      "/api/v1/test/navigation-measurements/concurrent-trace", config.gatewayUrl,
+      "/api/v1/test/navigation-measurements/concurrent-trace", measurementConfig.gatewayUrl,
     ).href, { timeout: 30_000, headers: { ...observationHeaders,
-      "X-BoxTeam-Workspace-Id": config.workspaceId,
-      "X-BoxTeam-Backend-Workspace-Id": config.backendWorkspaceId } });
+      "X-BoxTeam-Workspace-Id": measurementConfig.workspaceId,
+      "X-BoxTeam-Backend-Workspace-Id": measurementConfig.backendWorkspaceId } });
     let responseBody;
     try {
       responseBody = await response.text();
@@ -382,9 +382,9 @@ const server = createServer(async (request, response) => {
       response.destroy();
       return;
     }
-    const upstream = proxyRequest(new URL(request.url, config.gatewayUrl), {
+    const upstream = proxyRequest(new URL(request.url, measurementConfig.gatewayUrl), {
       method: request.method, agent: false,
-      headers: { ...forwardedHeaders(request.headers), host: new URL(config.gatewayUrl).host, connection: "close" },
+      headers: { ...forwardedHeaders(request.headers), host: new URL(measurementConfig.gatewayUrl).host, connection: "close" },
     }, (incoming) => {
       if (fact) fact.proxy_node_phase_times.upstream_response_headers = nodePhaseTimestamp();
       proxyResponses.add(incoming);
@@ -469,8 +469,8 @@ if (!address || typeof address === "string") throw new Error("量化客户端未
 const baseUrl = `http://127.0.0.1:${address.port}`;
 const browser = await chromium.launch({ executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH || undefined, headless: true });
 const context = await browser.newContext({ viewport: { width: 1300, height: 10000 }, permissions: ["clipboard-read", "clipboard-write"] });
-await context.addCookies(config.cookies.map((cookie) => ({ ...cookie, url: baseUrl })));
-const requests = [];
+await context.addCookies(measurementConfig.cookies.map((cookie) => ({ ...cookie, url: baseUrl })));
+const browserApiRequestRecords = [];
 const mutationSamples = [];
 const clockAlignmentSamples = [];
 const clockAlignmentErrors = [];
@@ -489,7 +489,7 @@ const pageIds = new WeakMap();
 let pageNumber = 0;
 const sameDirectoryKey = (actual, expected) => actual?.workspace_id === expected.workspace_id
   && actual.scope === expected.scope && actual.root === expected.root && actual.path === expected.path;
-function attach(page) {
+function attachMeasurementPageObservers(page) {
   const pageId = ++pageNumber;
   const ownedRequests = [];
   pageRequests.set(page, ownedRequests);
@@ -530,7 +530,7 @@ function attach(page) {
     }
     tracked.set(request, record);
     ownedRequests.push(record);
-    requests.push(record);
+    browserApiRequestRecords.push(record);
   });
   page.on("response", (response) => {
     const record = tracked.get(response.request());
@@ -614,7 +614,7 @@ async function observeUiStatus(page) {
       (error) => ({ page: pageIds.get(page), observation_error: error.message }));
   uiStatusObservations.push(observation);
 }
-const pause = (page, ms) => page.waitForTimeout(ms);
+const waitForMeasurementPageDelay = (page, ms) => page.waitForTimeout(ms);
 function nodeClockSample() {
   const timeOriginMs = performance.timeOrigin;
   const nowMs = performance.now();
@@ -648,7 +648,7 @@ async function captureClockAlignment(page, label) {
   }
 }
 const fileTree = (page) => page.getByRole("tree", { name: "工作区文件树" });
-const fileTreeTitle = (treePath) => path.resolve(config.workspaceRoot, treePath);
+const fileTreeTitle = (treePath) => path.resolve(measurementConfig.workspaceRoot, treePath);
 const waitForTreePaint = (page) => page.evaluate(() => new Promise((resolve) =>
   requestAnimationFrame(() => requestAnimationFrame(resolve))));
 async function treeNavigationFacts(page) {
@@ -738,11 +738,11 @@ async function visibleTreePath(page, treePath) {
   while (performance.now() < deadline) {
     const row = await findVisibleTreeRow(page, treePath);
     if (row) return row;
-    await pause(page, 25);
+    await waitForMeasurementPageDelay(page, 25);
   }
   throw new Error(`文件树中未找到可见导航行 ${fileTreeTitle(treePath)}: ${JSON.stringify(await treeNavigationFacts(page))}`);
 }
-async function ready(page, expanded) {
+async function openReadyMeasurementPage(page, expanded) {
   await page.goto(`${baseUrl}/?expanded=${expanded}`, { waitUntil: "domcontentloaded" });
   await fileTree(page).waitFor();
   const layout = await fileTree(page).evaluate((element) => ({
@@ -758,11 +758,11 @@ async function ready(page, expanded) {
     record.path === "/api/v1/workspace/files" && new URLSearchParams(record.query).get("path") === directory
     && record.status === 200))) {
     if (performance.now() >= deadline) throw new Error(`未真实加载 ${expanded} 个展开目录`);
-    await pause(page, 50);
+    await waitForMeasurementPageDelay(page, 50);
   }
   await page.waitForFunction(() => Boolean(window.gatewayMutation?.nodes().length
     && window.navigationHarness?.ready && window.navigationHarness?.observerReady));
-  await pause(page, 650);
+  await waitForMeasurementPageDelay(page, 650);
 }
 async function contextMenu(page, treePath) {
   const row = await visibleTreePath(page, treePath);
@@ -790,7 +790,7 @@ async function waitForActualVisibleTreeRow(page, treePath, deadline) {
   const row = fileTree(page).getByTitle(fileTreeTitle(treePath), { exact: true });
   while (performance.now() < deadline) {
     if (await row.count() && await treeRowViewport(row) === true) return true;
-    await pause(page, 20);
+    await waitForMeasurementPageDelay(page, 20);
   }
   throw new Error(`发起页未实际呈现并显示目标路径: ${fileTreeTitle(treePath)}`);
 }
@@ -905,14 +905,14 @@ async function readCounters(page, runtime) {
   const probe = { probe_id: `fs-${process.pid}-${++probeSequence}-${runtime}`, runtime,
     path: `${prefix}/test/navigation-measurements/fs-reads`, phases: [] };
   // 内部计数观察直连已冻结的 Gateway 目标；浏览器 mutation 仍使用量化代理。
-  probe.target_url = new URL(probe.path, config.gatewayUrl).href;
+  probe.target_url = new URL(probe.path, measurementConfig.gatewayUrl).href;
   probeTraces.push(probe);
   const start = performance.now();
   traceProbe(probe, "client_start", { target_url: probe.target_url });
   try {
     const response = await page.request.get(probe.target_url, {
-      headers: { ...observationHeaders, "X-BoxTeam-Workspace-Id": config.workspaceId,
-        "X-BoxTeam-Backend-Workspace-Id": config.backendWorkspaceId,
+      headers: { ...observationHeaders, "X-BoxTeam-Workspace-Id": measurementConfig.workspaceId,
+        "X-BoxTeam-Backend-Workspace-Id": measurementConfig.backendWorkspaceId,
         "X-Test-Navigation-Probe-Id": probe.probe_id },
     });
     traceProbe(probe, "client_response", { status: response.status() });
@@ -942,7 +942,7 @@ function readsInWindow(before, after) {
 function actualRequestMatchesSample(fact, sample, expectedDirectoryKey) {
   const actualUrl = new URL(fact.url);
   const targetUrl = new URL(fact.gateway_target_url);
-  const expectedTarget = new URL(actualUrl.pathname + actualUrl.search, config.gatewayUrl);
+  const expectedTarget = new URL(actualUrl.pathname + actualUrl.search, measurementConfig.gatewayUrl);
   const endpointByKind = { file: "entries", directory: "entries", paste: "paste", copy: "copy", upload: "upload" };
   const payload = fact.payload;
   const intent = payload?.intent;
@@ -951,19 +951,19 @@ function actualRequestMatchesSample(fact, sample, expectedDirectoryKey) {
     || actualUrl.searchParams.get("path") !== sample.directory
     || actualUrl.searchParams.get("scope") !== "workspace"
     || targetUrl.href !== expectedTarget.href
-    || fact.workspace_id_header !== config.workspaceId || !fact.has_local_token
+    || fact.workspace_id_header !== measurementConfig.workspaceId || !fact.has_local_token
     || !sameDirectoryKey(intent?.directory_key, expectedDirectoryKey)) return false;
   if (sample.kind === "file" || sample.kind === "directory") {
     return payload.name === sample.name && payload.kind === (sample.kind === "directory" ? "directory" : "file");
   }
-  const sourcePath = path.join(config.workspaceRoot, "a_sources", sample.name);
+  const sourcePath = path.join(measurementConfig.workspaceRoot, "a_sources", sample.name);
   if (sample.kind === "copy") {
-    return path.resolve(config.workspaceRoot, payload.source_path) === sourcePath
+    return path.resolve(measurementConfig.workspaceRoot, payload.source_path) === sourcePath
       && payload.source_scope === "workspace";
   }
   if (sample.kind === "paste") {
     return payload.source_paths?.length === 1
-      && path.resolve(config.workspaceRoot, payload.source_paths[0]) === sourcePath;
+      && path.resolve(measurementConfig.workspaceRoot, payload.source_paths[0]) === sourcePath;
   }
   return sample.kind === "upload" && payload.fileNames?.length === 1
     && payload.fileNames[0] === sample.name && payload.relativePaths?.length === 1
@@ -973,8 +973,8 @@ function actualRequestMatchesSample(fact, sample, expectedDirectoryKey) {
 }
 
 async function freezeFileOperation(sample) {
-  const expectedDirectoryKey = { workspace_id: config.backendWorkspaceId, scope: "workspace",
-    root: config.workspaceRoot, path: sample.directory };
+  const expectedDirectoryKey = { workspace_id: measurementConfig.backendWorkspaceId, scope: "workspace",
+    root: measurementConfig.workspaceRoot, path: sample.directory };
   const deadline = performance.now() + 30000;
   while (performance.now() < deadline) {
     const matches = actualMutationRequests.slice(sample.actualRequestOffset)
@@ -1040,7 +1040,7 @@ function fileMutationAttemptPairs(operation, sample) {
           browser_request_id: fact.browser_request_id, proxy_exchange_id: fact.proxy_exchange_id }));
     }
     seenBrowserRequestIds.add(fact.browser_request_id);
-    const browserCandidates = requests.slice(sample.requestOffset)
+    const browserCandidates = browserApiRequestRecords.slice(sample.requestOffset)
       .filter((record) => record.browser_request_id === fact.browser_request_id
         || (record.request && browserRequestIdByRequest.get(record.request) === fact.browser_request_id));
     if (browserCandidates.length > 1) throw new Error("一个浏览器请求 ID 对应多个 Request 事件: "
@@ -1178,7 +1178,7 @@ async function waitForFileAcceptance(operation, sample) {
         return { actual: fact, browser, accepted: browser.receipt };
       }
     }
-    await pause(sample.page, 20);
+    await waitForMeasurementPageDelay(sample.page, 20);
   }
   throw new Error("等待任一已 attach 页面按冻结 operation/exchange 配对实际请求与 202 超时: "
     + JSON.stringify({ operation_id: operation.operation_id,
@@ -1330,7 +1330,7 @@ function fileUiCompletionSnapshot(state) {
 }
 
 function fileOperationObservations(operation, sample) {
-  return requests.slice(sample.requestOffset).flatMap((record) => {
+  return browserApiRequestRecords.slice(sample.requestOffset).flatMap((record) => {
     if (record.response_error && record.network_state === "response_completed") {
       const fact = actualMutationRequests.find((value) => value.browser_request_id === record.browser_request_id);
       if (!fact?.proxy_error) throw new Error(record.response_error);
@@ -1367,7 +1367,7 @@ async function waitForFileUiCompletion(operation, sample) {
       }
       return { snapshot, page: baseline.page, page_id: baseline.page_id, baseline };
     }
-    await pause(sample.page, 20);
+    await waitForMeasurementPageDelay(sample.page, 20);
   }
   const failure = new Error("从原动作30s期限内未消费到冻结operation的真实DOM双帧快照: " + operation.operation_id);
   let diagnosticTimer;
@@ -1397,7 +1397,7 @@ async function waitForFileUiCompletion(operation, sample) {
   } finally {
     clearTimeout(diagnosticTimer);
   }
-  diagnostic.playwright_node_phase_times = requests.slice(sample.requestOffset)
+  diagnostic.playwright_node_phase_times = browserApiRequestRecords.slice(sample.requestOffset)
     .filter((record) => record.request && actualMutationRequests.some((fact) =>
       fact.browser_request_id === record.browser_request_id
       && fact.payload?.intent?.client_operation_id === operation.operation_id))
@@ -1481,10 +1481,10 @@ async function finishFileMutation(page, operation, sample) {
   const responseUrl = browserRequestRecord.request.url();
   const requestUrl = new URL(responseUrl);
   const actualUrl = new URL(acceptedRequest.url);
-  const expectedGatewayUrl = new URL(actualUrl.pathname + actualUrl.search, config.gatewayUrl);
+  const expectedGatewayUrl = new URL(actualUrl.pathname + actualUrl.search, measurementConfig.gatewayUrl);
   const observedGatewayUrl = new URL(acceptedRequest.gateway_target_url);
-  const expectedDirectoryKey = { workspace_id: config.backendWorkspaceId, scope: "workspace",
-    root: config.workspaceRoot, path: sample.directory };
+  const expectedDirectoryKey = { workspace_id: measurementConfig.backendWorkspaceId, scope: "workspace",
+    root: measurementConfig.workspaceRoot, path: sample.directory };
   const requestPayload = acceptedRequest.payload;
   const requestIntent = requestPayload?.intent;
   const endpointByKind = { file: "entries", directory: "entries", paste: "paste", copy: "copy", upload: "upload" };
@@ -1492,7 +1492,7 @@ async function finishFileMutation(page, operation, sample) {
     || actualUrl.searchParams.get("path") !== sample.directory
     || actualUrl.searchParams.get("scope") !== expectedDirectoryKey.scope
     || observedGatewayUrl.href !== expectedGatewayUrl.href
-    || acceptedRequest.workspace_id_header !== config.workspaceId || !acceptedRequest.has_local_token
+    || acceptedRequest.workspace_id_header !== measurementConfig.workspaceId || !acceptedRequest.has_local_token
     || !sameDirectoryKey(requestIntent?.directory_key, operation.directory_key)
     || !sameDirectoryKey(requestIntent?.directory_key, expectedDirectoryKey)
     || requestIntent.client_operation_id !== operation.operation_id
@@ -1504,17 +1504,17 @@ async function finishFileMutation(page, operation, sample) {
         workspace_id_header: acceptedRequest.workspace_id_header, has_local_token: acceptedRequest.has_local_token,
         request_directory_key: requestIntent?.directory_key, expectedDirectoryKey }));
   }
-  const sourcePath = path.join(config.workspaceRoot, "a_sources", sample.name);
+  const sourcePath = path.join(measurementConfig.workspaceRoot, "a_sources", sample.name);
   if ((sample.kind === "file" || sample.kind === "directory")
     && (requestPayload.name !== sample.name || requestPayload.kind !== (sample.kind === "directory" ? "directory" : "file"))) {
     throw new Error("创建请求内容与目标样本不一致: " + JSON.stringify(requestPayload));
   }
-  if (sample.kind === "copy" && (path.resolve(config.workspaceRoot, requestPayload.source_path) !== sourcePath
+  if (sample.kind === "copy" && (path.resolve(measurementConfig.workspaceRoot, requestPayload.source_path) !== sourcePath
     || requestPayload.source_scope !== "workspace")) {
     throw new Error("复制请求来源与样本不一致: " + JSON.stringify(requestPayload));
   }
   if (sample.kind === "paste" && (requestPayload.source_paths?.length !== 1
-    || path.resolve(config.workspaceRoot, requestPayload.source_paths[0]) !== sourcePath)) {
+    || path.resolve(measurementConfig.workspaceRoot, requestPayload.source_paths[0]) !== sourcePath)) {
     throw new Error("粘贴请求来源与样本不一致: " + JSON.stringify(requestPayload));
   }
   if (sample.kind === "upload" && (requestPayload.fileNames?.length !== 1
@@ -1544,7 +1544,7 @@ async function finishFileMutation(page, operation, sample) {
     } else {
       if (performance.now() >= deadline) throw new Error("等待任一已 attach 页面确认原文件 operation 完成超时: "
         + operation.operation_id);
-      await pause(page, 20);
+      await waitForMeasurementPageDelay(page, 20);
     }
   }
   const relative = sample.directory + "/" + sample.name;
@@ -1553,7 +1553,7 @@ async function finishFileMutation(page, operation, sample) {
   const items = terminal.items.filter((value) => value.path === sample.name && value.kind === itemKind);
   const directories = terminal.directories.filter((value) => sameDirectoryKey(value.directory_key, expectedDirectoryKey));
   const snapshots = terminal.snapshots.filter((value) => sameDirectoryKey(value.directory_key, expectedDirectoryKey)
-    && value.root_path === config.workspaceRoot && value.path === sample.directory);
+    && value.root_path === measurementConfig.workspaceRoot && value.path === sample.directory);
   const snapshot = snapshots[0];
   const snapshotItems = snapshot?.items.filter((value) => value.path === relative && value.kind === itemKind) ?? [];
   const expectedCreatedPath = expectedOperationKind === "create" ? relative : null;
@@ -1565,7 +1565,7 @@ async function finishFileMutation(page, operation, sample) {
     throw new Error("committed 回执未证明原请求目标下的发布项与同目标快照: "
       + JSON.stringify({ terminal, expectedDirectoryKey, expectedCreatedPath }));
   }
-  const physicalPath = path.join(config.workspaceRoot, relative);
+  const physicalPath = path.join(measurementConfig.workspaceRoot, relative);
   const physical = await lstat(physicalPath);
   if (sample.kind === "directory" ? !physical.isDirectory() : !physical.isFile()) {
     throw new Error("文件 operation 物理发布类型不一致: " + physicalPath);
@@ -1635,7 +1635,7 @@ async function finishFileMutation(page, operation, sample) {
 async function createViaMenu(page, name, kind, directory = "d000", observationStart = null) {
   if (!observationStart?.prepared) await prepareFileMutationMenu(page, directory);
   page.once("dialog", (dialog) => dialog.accept(name));
-  const requestOffset = observationStart?.requestOffset ?? requests.length;
+  const requestOffset = observationStart?.requestOffset ?? browserApiRequestRecords.length;
   const pageRequestOffset = pageRequests.get(page).length;
   const actualRequestOffset = observationStart?.actualRequestOffset ?? actualMutationRequests.length;
   const readsBefore = await readCounters(page, "backend");
@@ -1651,16 +1651,16 @@ async function createViaMenu(page, name, kind, directory = "d000", observationSt
   beginFileUiCompletion(operation, sample);
   return await finishFileMutation(page, operation, sample);
 }
-const sum = (value) => Object.values(value ?? {}).reduce((total, count) => total + count, 0);
-const p95 = (values) => [...values].sort((a, b) => a - b)[Math.ceil(values.length * 0.95) - 1];
+const sumFileSystemReadCounts = (readCounts) => Object.values(readCounts ?? {}).reduce((total, count) => total + count, 0);
+const calculateP95 = (values) => [...values].sort((a, b) => a - b)[Math.ceil(values.length * 0.95) - 1];
 async function measureMutations() {
   for (const expanded of (focusConcurrent ? [] : minimalSamples ? [1] : [1, 20, 200])) {
     const page = await context.newPage();
-    const pageId = attach(page);
+    const pageId = attachMeasurementPageObservers(page);
     if (!clockAlignmentSamples.some((sample) => sample.label === "run_before")) {
       await captureClockAlignment(page, "run_before");
     }
-    await ready(page, expanded);
+    await openReadyMeasurementPage(page, expanded);
     const kinds = ["file", "directory", "paste", "copy", "upload"];
     const sampleOrder = minimalSamples ? kinds.map((kind) => ({ kind, index: 0 })) : [
       ...kinds.map((kind) => ({ kind, index: 0 })),
@@ -1677,10 +1677,10 @@ async function measureMutations() {
             await page.getByRole("menuitem", { name: /^复制\s+Ctrl\+C$/ }).click();
           } else if (kind === "paste") {
             await visibleTreePath(page, `a_sources/${name}`);
-            await page.evaluate((value) => navigator.clipboard.writeText(value), `${config.workspaceRoot}/a_sources/${name}`);
+            await page.evaluate((value) => navigator.clipboard.writeText(value), `${measurementConfig.workspaceRoot}/a_sources/${name}`);
           }
           await prepareFileMutationMenu(page, "d000");
-          const requestOffset = requests.length;
+          const requestOffset = browserApiRequestRecords.length;
           const pageRequestOffset = pageRequests.get(page).length;
           const actualRequestOffset = actualMutationRequests.length;
           const readsBefore = await readCounters(page, "backend");
@@ -1720,7 +1720,7 @@ async function measureMutations() {
           page_request_index_start: mutationSample.pageRequestOffset, page_request_index_end: pageRequests.get(page).length,
           http_requests: pageRelated.length,
           directory_reloads: pageRelated.filter((record) => record.method === "GET" && record.path === "/api/v1/workspace/files").length,
-          backend_fs_reads: windowReads, backend_fs_read_count: sum(windowReads),
+          backend_fs_reads: windowReads, backend_fs_read_count: sumFileSystemReadCounts(windowReads),
           backend_fs_window_before: mutationSample.readsBefore, backend_fs_window_after: readsAfter,
           fs_window: { endpoint_epoch_ms: fsWindow.endpoint_epoch_ms,
             deadline_epoch_ms: fsWindow.deadline_epoch_ms,
@@ -1732,7 +1732,7 @@ async function measureMutations() {
           request_id: firstAcceptedAttempt.request_id });
         if (kind === "upload" && index === 0) {
           process.stdout.write(`file mutation ${expanded}: five real actions ready\n`);
-          await ready(page, expanded);
+          await openReadyMeasurementPage(page, expanded);
         }
         if (index === 19) process.stdout.write(`file mutation ${expanded}/${kind}: 20 samples complete\n`);
     }
@@ -1747,8 +1747,8 @@ async function measureMutations() {
     const pages = await Promise.all([context.newPage(), context.newPage()]);
     if (focusConcurrent) await captureClockAlignment(pages[0], "run_before");
     for (const currentPage of pages) {
-      attach(currentPage);
-      await ready(currentPage, 1);
+      attachMeasurementPageObservers(currentPage);
+      await openReadyMeasurementPage(currentPage, 1);
       await ensureTreeDirectoryExpanded(currentPage, "concurrent");
     }
     for (let index = 0; index < 10; index += 1) {
@@ -1764,7 +1764,7 @@ async function measureMutations() {
       const failedOutcome = outcomes.find((outcome) => outcome.status === "rejected");
       if (failedOutcome) throw failedOutcome.reason;
     }
-    await Promise.all(pages.map((currentPage) => pause(currentPage, 1000)));
+    await Promise.all(pages.map((currentPage) => waitForMeasurementPageDelay(currentPage, 1000)));
     for (const [index, currentPage] of pages.entries()) {
       for (const name of names) {
         if (!(await findVisibleTreeRow(currentPage, `concurrent/${name}`))) missing.push({ page: index + 1, name });
@@ -1773,15 +1773,15 @@ async function measureMutations() {
     page = pages[0];
   } else {
     const pages = await Promise.all([context.newPage(), context.newPage()]);
-    const attachedPageIds = pages.map((currentPage) => attach(currentPage));
+    const attachedPageIds = pages.map((currentPage) => attachMeasurementPageObservers(currentPage));
     for (const currentPage of pages) {
-      await ready(currentPage, 1);
+      await openReadyMeasurementPage(currentPage, 1);
       await ensureTreeDirectoryExpanded(currentPage, "concurrent");
       await prepareFileMutationMenu(currentPage, "concurrent");
     }
     const pair = ["cross_page_a.txt", "cross_page_b.txt"];
     concurrentExpectedNames.push(...pair);
-    const observationStart = { prepared: true, requestOffset: requests.length,
+    const observationStart = { prepared: true, requestOffset: browserApiRequestRecords.length,
       actualRequestOffset: actualMutationRequests.length, completionBaselines: await captureFileUiBaselines(),
       confirmationPages: new Map(attachedPageIds.map((id, column) => [id, attachedPageIds[1 - column]])) };
     const queryHolds = [];
@@ -1800,13 +1800,13 @@ async function measureMutations() {
         if (!peerBaseline) throw new Error("跨页 DOM 快照缺少操作前基线: " + operationId);
         const baseline = { completed_before: peerBaseline.completed_before,
           event_offset: peerBaseline.event_offset, snapshot_offset: peerBaseline.snapshot_offset };
-        const targetPathTitle = path.resolve(config.workspaceRoot, "concurrent", pair[column]);
+        const targetPathTitle = path.resolve(measurementConfig.workspaceRoot, "concurrent", pair[column]);
         const deadline = performance.now() + 30000;
         let peerSnapshot = null;
         let acceptedQueueSeq = null;
         let terminalRevision = null;
         while (!peerSnapshot) {
-          const acceptedPairs = requests.slice(observationStart.requestOffset).filter((record) =>
+          const acceptedPairs = browserApiRequestRecords.slice(observationStart.requestOffset).filter((record) =>
             record.status === 202 && record.browser_state === "response_completed"
             && record.receipt?.operation_id === operationId
             && record.receipt.client_sequence === own.payload.intent.client_sequence
@@ -1817,7 +1817,7 @@ async function measureMutations() {
               && fact.payload?.intent?.client_operation_id === operationId));
           const acceptedQueues = new Set(acceptedPairs.map((record) => record.receipt.queue_seq));
           if (acceptedQueues.size > 1) throw new Error("跨页接受回执 queue_seq 漂移: " + operationId);
-          const terminalReceipts = requests.slice(observationStart.requestOffset).flatMap((record) => [
+          const terminalReceipts = browserApiRequestRecords.slice(observationStart.requestOffset).flatMap((record) => [
             ...(record.receipt ? [record.receipt] : []), ...(record.operation_status?.operations ?? []),
           ]).filter((receipt) => receipt.operation_id === operationId
             && ["committed", "rejected", "cancelled", "dependency_failed"].includes(receipt.state));
@@ -1844,7 +1844,7 @@ async function measureMutations() {
           }
           if (peerSnapshot) break;
           if (performance.now() >= deadline) throw new Error("真实跨页terminal handoff超时: " + operationId);
-          await pause(currentPage, 20);
+          await waitForMeasurementPageDelay(currentPage, 20);
         }
         queryHolds.push({ operation_id: operationId, held_page: attachedPageIds[column],
           completion_page: attachedPageIds[1 - column], release_condition: "peer-frozen-operation-dom-snapshot",
@@ -1911,13 +1911,13 @@ async function measureMutations() {
       await currentPage.close();
     }));
     page = await context.newPage();
-    attach(page);
-    await ready(page, 1);
+    attachMeasurementPageObservers(page);
+    await openReadyMeasurementPage(page, 1);
   }
   for (const kind of (focusConcurrent ? [] : ["create_folder", "move_workspace"])) {
     for (let index = 0; index < (minimalSamples ? 1 : 20); index += 1) {
       const name = `gateway_measure_${index}`;
-      const parent = config.gatewayFolderIds[index % config.gatewayFolderIds.length];
+      const parent = measurementConfig.gatewayFolderIds[index % measurementConfig.gatewayFolderIds.length];
       if (kind === "create_folder") await page.locator("#gateway-name").fill(name);
       else await page.locator("#gateway-parent").selectOption(parent);
       const requestOffset = pageRequests.get(page).length;
@@ -1928,7 +1928,7 @@ async function measureMutations() {
       await page.waitForFunction((value) => document.getElementById("gateway-status")?.textContent === value,
         kind === "create_folder" ? `已创建:${name}` : `已移动:${parent}`);
       const elapsed = performance.now() - start;
-      await pause(page, 100);
+      await waitForMeasurementPageDelay(page, 100);
       const readsAfter = await readCounters(page, "gateway");
       await settleResponseTasks();
       const related = pageRequests.get(page).slice(requestOffset);
@@ -1953,14 +1953,14 @@ async function measureMutations() {
         const expectedParent = kind === "create_folder" ? null : parent;
         returnedNode = write.navigation_nodes?.find((node) => kind === "create_folder"
           ? node.kind === "workspace_folder" && node.name === name
-          : node.kind === "workspace_ref" && node.node_id === config.workspaceNodeId);
+          : node.kind === "workspace_ref" && node.node_id === measurementConfig.workspaceNodeId);
         if (!requestFact.has_local_token
           || (kind === "create_folder" && (write.path !== "/api/gateway/workspace-navigation/folders"
             || payload.name !== name || payload.parent_node_id !== null))
           || (kind === "move_workspace" && (write.path !== "/api/gateway/workspace-navigation/placement"
-            || payload.node_id !== config.workspaceNodeId || payload.parent_node_id !== parent || payload.mode !== "last"))
+            || payload.node_id !== measurementConfig.workspaceNodeId || payload.parent_node_id !== parent || payload.mode !== "last"))
           || !returnedNode || returnedNode.parent_node_id !== (kind === "create_folder" ? null : parent)
-          || (kind === "move_workspace" && returnedNode.workspace_id !== config.workspaceId)) {
+          || (kind === "move_workspace" && returnedNode.workspace_id !== measurementConfig.workspaceId)) {
           throw new Error(`Gateway mutation 请求或返回节点目标不一致: ${JSON.stringify({ kind, write, payload, returnedNode })}`);
         }
         uiNode = await page.locator("#gateway-navigation li").evaluateAll((nodes, identity) =>
@@ -1971,13 +1971,13 @@ async function measureMutations() {
         if (uiNode.length !== 1 || uiNode[0].parent !== (expectedParent ?? "root")
           || uiNode[0].kind !== (kind === "create_folder" ? "workspace_folder" : "workspace_ref")
           || (kind === "create_folder" && uiNode[0].name !== name)
-          || (kind === "move_workspace" && uiNode[0].workspaceId !== config.workspaceId)) {
+          || (kind === "move_workspace" && uiNode[0].workspaceId !== measurementConfig.workspaceId)) {
           throw new Error(`Gateway UI 未显示原操作目标节点: ${JSON.stringify({ kind, uiNode, returnedNode })}`);
         }
       }
       const windowReads = readsInWindow(readsBefore, readsAfter);
       gatewaySamples.push({ kind, name, parent, elapsed_ms: elapsed, http_requests: related.length,
-        gateway_fs_reads: windowReads, gateway_fs_read_count: sum(windowReads),
+        gateway_fs_reads: windowReads, gateway_fs_read_count: sumFileSystemReadCounts(windowReads),
         gateway_fs_window_before: readsBefore, gateway_fs_window_after: readsAfter,
         mutation_request_fs_reads: write.gateway_reads, request_id: write.request_id,
         ...(minimalSamples ? { request_has_local_token: requestFact.has_local_token,
@@ -1989,7 +1989,7 @@ async function measureMutations() {
   for (const expanded of (focusConcurrent ? [] : minimalSamples ? [1] : [1, 20, 200])) for (const kind of ["file", "directory", "paste", "copy", "upload"]) {
     const samples = mutationSamples.filter((item) => item.expanded_directories === expanded && item.kind === kind);
     groups.push({ expanded_directories: expanded, kind, sample_count: samples.length,
-      ...(samples.length ? { p95_ms: p95(samples.map((item) => item.elapsed_ms)),
+      ...(samples.length ? { p95_ms: calculateP95(samples.map((item) => item.elapsed_ms)),
         reloads: samples.map((item) => item.directory_reloads), fs_reads: samples.map((item) => item.backend_fs_read_count) } : {}) });
   }
   const maxP95 = minimalSamples || focusConcurrent ? null : Math.max(...groups.map((group) => group.p95_ms));
@@ -2011,7 +2011,7 @@ async function measureMutations() {
     browser: await browser.version(), clock_alignment: { method: "performance.timeOrigin + performance.now() at run boundaries; browser/node brackets retained",
       samples: clockAlignmentSamples, errors: clockAlignmentErrors }, groups, mutation_samples: mutationSamples,
     gateway_samples: gatewaySamples, gateway_summary: ["create_folder", "move_workspace"].map((kind) => ({
-      kind, p95_ms: p95(gatewaySamples.filter((sample) => sample.kind === kind).map((sample) => sample.elapsed_ms)),
+      kind, p95_ms: calculateP95(gatewaySamples.filter((sample) => sample.kind === kind).map((sample) => sample.elapsed_ms)),
       request_counts: gatewaySamples.filter((sample) => sample.kind === kind).map((sample) => sample.http_requests),
       fs_read_counts: gatewaySamples.filter((sample) => sample.kind === kind).map((sample) => sample.gateway_fs_read_count),
     })),
@@ -2022,8 +2022,8 @@ async function measureMutations() {
       : focusConcurrent ? { decision: "not_evaluated", reason: "并发阶段诊断不参与 10.4b 性能门控" }
       : { max_p95_ms: maxP95, max_reloads: maxReloads, reload_growth: reloadGrowth,
         decision: maxP95 > 1000 || reloadGrowth || missing.length ? "10.4b-1" : maxP95 < 300 && maxReloads <= 2 ? "10.4b-2" : "10.4b-3" },
-    sse_connection_requests: requests.filter((request) => request.path.endsWith("/events")).length,
-    requests, actual_mutation_requests: actualMutationRequests.map(actualMutationRequestSummary),
+    sse_connection_requests: browserApiRequestRecords.filter((request) => request.path.endsWith("/events")).length,
+    requests: browserApiRequestRecords, actual_mutation_requests: actualMutationRequests.map(actualMutationRequestSummary),
     operation_exchange_index: operationExchangeIndex(),
     observation_requests: observationRequests, probe_traces: probeTraces, ui_status_observations: uiStatusObservations,
     file_ui_failure_diagnostics: fileUiFailureDiagnostics,
@@ -2100,7 +2100,7 @@ try {
   }));
   await cleanup("raw exchange flush", () => flushRawExchanges());
 }
-failures.push(...requests.filter((record) => record.response_error && record.network_state === "response_completed"
+failures.push(...browserApiRequestRecords.filter((record) => record.response_error && record.network_state === "response_completed"
   && !actualMutationRequests.some((fact) => fact.browser_request_id === record.browser_request_id && fact.proxy_error))
   .map((record) => `响应观察失败: ${record.path}: ${record.response_error}`));
 measurementError ??= failures.length ? new Error(`浏览器错误: ${failures.join("；")}`) : null;
@@ -2112,7 +2112,7 @@ if (measurementError) {
     error_name: measurementError.name, error_stack: measurementError.stack,
     clock_alignment: { method: "performance.timeOrigin + performance.now() at run boundaries; browser/node brackets retained",
       samples: clockAlignmentSamples, errors: clockAlignmentErrors }, mutationSamples, gatewaySamples,
-    requests, actual_mutation_requests: actualMutationRequests.map(actualMutationRequestSummary), observationRequests, probe_traces: probeTraces,
+    requests: browserApiRequestRecords, actual_mutation_requests: actualMutationRequests.map(actualMutationRequestSummary), observationRequests, probe_traces: probeTraces,
     operation_exchange_index: operationExchangeIndex(),
     concurrent: { expected_names: concurrentExpectedNames, missing_from_ui: concurrentMissingFromUi,
       actions: concurrentActions },

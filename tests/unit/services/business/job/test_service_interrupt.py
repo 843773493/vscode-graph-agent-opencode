@@ -572,9 +572,9 @@ async def test_job_control_cancel_queued_job_removes_it_from_queue(job_service_f
 
     assert result.status == JobStatus.cancelled
     assert service._jobs[queued.job_id].status == JobStatus.cancelled
-    assert service._pending_queue.ids(session_id) == ()
+    assert service._pending_queue.queued_job_ids(session_id) == ()
     successor = await accepted("successor", "msg_successor")
-    assert service._pending_queue.ids(session_id) == (successor.job_id,)
+    assert service._pending_queue.queued_job_ids(session_id) == (successor.job_id,)
     assert saver.accepted_user_message(session_id, thread_id=thread_id, job_id=queued.job_id, message_id="msg_queued").content == "queued"
     with sqlite3.connect(database) as connection:
         assert connection.execute("SELECT turn_id,turn_ordinal,root_input_item_id FROM turn_records WHERE turn_id=?", (turn_id,)).fetchone() == original
@@ -642,7 +642,7 @@ async def test_start_job_queues_same_session_until_previous_finishes(job_service
     assert third_dispatch.queued_job_count == 2
     assert third_dispatch.pending_job_count == 3
     assert service._thread_current_job[(session_id, job_fixture_thread_id(session_id))] == first_job_id
-    assert list(service._pending_queue.ids(session_id)) == [
+    assert list(service._pending_queue.queued_job_ids(session_id)) == [
         second_job_id,
         third_job_id,
     ]
@@ -655,7 +655,7 @@ async def test_start_job_queues_same_session_until_previous_finishes(job_service
 
     assert started_jobs == [first_job_id, second_job_id]
     assert service._thread_current_job[(session_id, job_fixture_thread_id(session_id))] == second_job_id
-    assert list(service._pending_queue.ids(session_id)) == [third_job_id]
+    assert list(service._pending_queue.queued_job_ids(session_id)) == [third_job_id]
     assert service._jobs[second_job_id].status == JobStatus.running
 
 
@@ -696,7 +696,7 @@ async def test_boundary_notification_keeps_fifo_head_and_records_waiting_reason(
     )
     assert request.status == "queued"
     assert request.waiting_reason is None
-    assert service._pending_queue.ids(session_id) == (queued.job_id,)
+    assert service._pending_queue.queued_job_ids(session_id) == (queued.job_id,)
 
 
 @pytest.mark.asyncio
@@ -749,7 +749,7 @@ async def test_interrupt_releases_after_turn_head_instead_of_stalling_fifo(job_s
     assert started == [active.job_id, queued.job_id]
     assert service._jobs[queued.job_id].status == JobStatus.running
     assert service._thread_current_job[(session_id, job_fixture_thread_id(session_id))] == queued.job_id
-    assert service._pending_queue.ids(session_id) == ()
+    assert service._pending_queue.queued_job_ids(session_id) == ()
 
 
 @pytest.mark.asyncio
@@ -805,4 +805,4 @@ async def test_direct_cancel_releases_after_turn_head_when_boundary_stays_idle(j
     assert started == [active.job_id, queued.job_id]
     assert service._jobs[queued.job_id].status == JobStatus.running
     assert service._thread_current_job[(session_id, job_fixture_thread_id(session_id))] == queued.job_id
-    assert service._pending_queue.ids(session_id) == ()
+    assert service._pending_queue.queued_job_ids(session_id) == ()

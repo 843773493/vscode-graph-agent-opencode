@@ -7,6 +7,29 @@ import type {
 
 export const FRONTEND_EVENT_QUEUE_LIMIT = 200;
 export const LIVE_TRACE_EVENT_LIMIT = 512;
+const PINNED_FRONTEND_EVENT_TYPES = new Set([
+  "session_load_completed",
+  "session_load_failed",
+  "session_selected",
+]);
+const PINNED_TRACE_EVENT_TYPES = new Set([
+  "message_created",
+  "job_created",
+  "job_started",
+]);
+const TERMINAL_TRACE_TYPES = new Set([
+  "agent_end",
+  "job_completed",
+  "job_failed",
+  "job_cancelled",
+  "session_interrupted",
+]);
+const JOB_TERMINAL_TRACE_TYPES = new Set([
+  "job_completed",
+  "job_failed",
+  "job_cancelled",
+  "session_interrupted",
+]);
 
 export function rawTracePayload(event: TraceEvent): Record<string, unknown> {
   return event.raw?.payload ?? event.payload ?? {};
@@ -24,22 +47,23 @@ export function tracePayloadString(event: TraceEvent, key: string): string {
 
 export function dedupeTraceEvents(events: TraceEvent[]): TraceEvent[] {
   const seenEventIds = new Set<string>();
-  return events
-    .filter((event) => {
-      const id = event.event_id;
-      if (!id) {
-        throw new Error(`Trace 事件缺少 event_id: type=${event.type}`);
-      }
-      if (seenEventIds.has(id)) {
-        return false;
-      }
-      seenEventIds.add(id);
-      return true;
-    })
-    .sort(
-      (a, b) =>
-        new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime(),
-    );
+  const orderedEvents: { event: TraceEvent; timestampMs: number }[] = [];
+  for (const event of events) {
+    const id = event.event_id;
+    if (!id) {
+      throw new Error(`Trace 事件缺少 event_id: type=${event.type}`);
+    }
+    if (seenEventIds.has(id)) {
+      continue;
+    }
+    seenEventIds.add(id);
+    orderedEvents.push({
+      event,
+      timestampMs: new Date(event.timestamp).getTime(),
+    });
+  }
+  orderedEvents.sort((left, right) => left.timestampMs - right.timestampMs);
+  return orderedEvents.map(({ event }) => event);
 }
 
 export function appendBoundedLiveTraceEvents(
@@ -122,15 +146,9 @@ export function appendReceivedEvents(
 
 function isPinnedEventQueueItem(item: FrontendReceivedEvent): boolean {
   if (item.kind === "frontend") {
-    return [
-      "session_load_completed",
-      "session_load_failed",
-      "session_selected",
-    ].includes(item.type);
+    return PINNED_FRONTEND_EVENT_TYPES.has(item.type);
   }
-  return ["message_created", "job_created", "job_started"].includes(
-    item.event.type,
-  );
+  return PINNED_TRACE_EVENT_TYPES.has(item.event.type);
 }
 
 export function trimReceivedEventQueue(
@@ -141,20 +159,18 @@ export function trimReceivedEventQueue(
     return items;
   }
 
-  const pinned = items.filter(isPinnedEventQueueItem);
-  const unpinned = items.filter((item) => !isPinnedEventQueueItem(item));
-  const pinnedIds = new Set(pinned.map((item) => item.id));
+  const pinned: FrontendReceivedEvent[] = [];
+  const unpinned: FrontendReceivedEvent[] = [];
+  for (const item of items) {
+    (isPinnedEventQueueItem(item) ? pinned : unpinned).push(item);
+  }
   const keepUnpinnedCount = Math.max(limit - pinned.length, 0);
   const kept = [
     ...pinned.slice(-limit),
     ...unpinned.slice(-keepUnpinnedCount),
   ];
-  return items.filter((item) => {
-    if (pinnedIds.has(item.id)) {
-      return kept.some((keptItem) => keptItem.id === item.id);
-    }
-    return kept.some((keptItem) => keptItem.id === item.id);
-  });
+  const keptIds = new Set(kept.map((item) => item.id));
+  return items.filter((item) => keptIds.has(item.id));
 }
 
 export function appendFrontendEvent(
@@ -186,22 +202,11 @@ export function appendFrontendEvent(
 }
 
 export function isTerminalTraceType(eventType: string): boolean {
-  return [
-    "agent_end",
-    "job_completed",
-    "job_failed",
-    "job_cancelled",
-    "session_interrupted",
-  ].includes(eventType);
+  return TERMINAL_TRACE_TYPES.has(eventType);
 }
 
 export function isJobTerminalTraceType(eventType: string): boolean {
-  return [
-    "job_completed",
-    "job_failed",
-    "job_cancelled",
-    "session_interrupted",
-  ].includes(eventType);
+  return JOB_TERMINAL_TRACE_TYPES.has(eventType);
 }
 
 export function terminalStatusForEvent(

@@ -2,6 +2,23 @@
 
 存放请求装载与并发编排的运行期 hook 与基础原语：LLM 请求日志装载、待处理请求动作、Agent 状态消息快照装载、在途请求登记原语，以及把长任务串行化/只保留最新结果的 serialTaskQueue。
 
+## 职责树
+
+```text
+runtime/
+├── 请求数据装载
+│   ├── useRequestLogLoader.ts          当前会话的 LLM 请求日志
+│   └── useAgentStateSnapshot.ts        Agent State 快照及按 message_id 取正文
+├── 请求状态动作
+│   └── usePendingRequestActions.ts     待处理请求接受、拒绝和清理
+├── 并发原语
+│   ├── inFlightRequests.ts             按请求身份登记与注销在途任务
+│   └── serialTaskQueue.ts              FIFO 串行队列与 latest-only 队列
+└── *.test.ts(x)                        原语与 hook 行为合同
+```
+
+需要更新 React 展示状态时使用对应 `use*` hook；跨子包登记请求或串行任务时使用无 React 依赖的基础原语，不把两类职责合并。
+
 serialTaskQueue 是跨子包复用的基础原语，用于把异步任务串行化并支持 latest-only 短路；`hooks/session/`、`hooks/workspace/`、`hooks/gatewayWorkspace/` 等子包直接引用它，修改其对外语义会影响这些调用方。
 
 inFlightRequests 是跨子包复用的在途请求登记原语：`hooks/session/`、`hooks/workspace/`、`hooks/nodeDebug/`、`hooks/sessionResourceExplorer/` 等子包用它在结算后按身份注销登记，避免被顶替的旧请求清掉新请求。

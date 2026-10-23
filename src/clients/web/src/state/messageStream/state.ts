@@ -115,11 +115,10 @@ export function cloneMessageStreamState(state: MessageStreamState): MessageStrea
       Object.entries(state.resourceRefs).map(([id, value]) => [id, { ...value }]),
     ),
     recovery: state.recovery ? { ...state.recovery } : null,
-    pendingEvents: state.pendingEvents.map((pending): MessageStreamEvent =>
-      pending.type === "stream.snapshot"
-        ? { ...pending, payload: { ...pending.payload } }
-        : { ...pending, payload: { ...pending.payload } },
-    ),
+    pendingEvents: state.pendingEvents.map((event) => ({
+      ...event,
+      payload: { ...event.payload },
+    } as MessageStreamEvent)),
   };
 }
 

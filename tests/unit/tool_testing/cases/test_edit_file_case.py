@@ -60,10 +60,10 @@ def test_prepare_copies_seed_and_selects_real_edit_file_tool(
         "new_string",
         "replace_all",
     }
-    assert case.file_name in prepared.prompt
+    assert case.workspace_relative_path in prepared.prompt
     assert "/.boxteam/tool_tests" not in prepared.prompt
     assert json.dumps(case.old_string, ensure_ascii=False) in prepared.prompt
-    assert (attempt_root / case.file_name).is_file()
+    assert (attempt_root / case.workspace_relative_path).is_file()
 
 
 @pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
@@ -75,10 +75,10 @@ async def test_real_edit_file_tool_and_evaluate(
     prepared, attempt_root = prepared_case
 
     arguments = {
-            "file_path": case.file_name,
+            "file_path": case.workspace_relative_path,
             "expected_version": "sha256:"
             + sha256(
-                (attempt_root / case.file_name).read_bytes()
+                (attempt_root / case.workspace_relative_path).read_bytes()
             ).hexdigest(),
             "old_string": case.old_string,
             "new_string": case.new_string,
@@ -99,7 +99,7 @@ def test_evaluate_rejects_incorrect_file_result(
     case: EditFileScenarioCase,
 ) -> None:
     _, attempt_root = prepared_case
-    (attempt_root / case.file_name).write_text(
+    (attempt_root / case.workspace_relative_path).write_text(
         "错误内容\n", encoding="utf-8"
     )
 

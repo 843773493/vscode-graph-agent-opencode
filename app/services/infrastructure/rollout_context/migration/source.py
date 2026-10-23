@@ -13,7 +13,7 @@ from app.domain.itemized.errors import FormatDispatchError
 from app.domain.itemized.hashing import sha256_jcs
 from app.services.infrastructure.rollout_context.migration.artifacts import (
     artifact_manifest,
-    read_regular,
+    open_regular_artifact,
 )
 from app.services.infrastructure.rollout_context.migration.legacy_adapter import (
     LegacyRolloutAdapter,
@@ -57,7 +57,13 @@ def read_source_report(
         if name in files and files[name]["size"]:
             raise FormatDispatchError(f"v1_source_requires_offline_snapshot: {name}")
     index = source_root / "index.sqlite"
-    raw_jsonl = read_regular(source_root / "rollout.jsonl")
+    rollout_jsonl_artifact = files["rollout.jsonl"]
+    raw_jsonl_size = strict_non_negative_int(
+        rollout_jsonl_artifact["size"], field="v1 rollout.jsonl size"
+    )
+    raw_jsonl_sha256 = strict_text(
+        rollout_jsonl_artifact["sha256"], field="v1 rollout.jsonl sha256"
+    )
     with closing(
         sqlite3.connect(index.as_uri() + "?mode=ro&immutable=1", uri=True)
     ) as connection:
@@ -89,7 +95,7 @@ def read_source_report(
         committed = strict_non_negative_int(
             meta_rows[0][2], field="v1 database_meta.committed_jsonl_offset"
         )
-        if committed > len(raw_jsonl):
+        if committed > raw_jsonl_size:
             raise FormatDispatchError(
                 "v1 rollout.jsonl 与 source committed offset 不一致"
             )
@@ -128,67 +134,92 @@ def read_source_report(
     records: list[dict[str, object]] = []
     next_offset = 0
     previous_sequence = 0
-    for (
-        sequence_value,
-        message_id_value,
-        turn_value,
-        offset_value,
-        length_value,
-    ) in rows:
-        sequence = strict_non_negative_int(
-            sequence_value, field="v1 messages.message_sequence"
-        )
-        message_id = strict_text(message_id_value, field="v1 messages.message_id")
-        turn_id = strict_optional_text(turn_value, field="v1 messages.turn_id")
-        offset = strict_non_negative_int(offset_value, field="v1 messages.jsonl_offset")
-        length = strict_non_negative_int(length_value, field="v1 messages.jsonl_length")
-        if sequence <= previous_sequence or offset != next_offset or length == 0:
-            raise FormatDispatchError(
-                f"v1 manifest sequence/offset/length 不连续或重叠: {message_id}"
+    rollout_jsonl_digest = hashlib.sha256()
+    # manifest offset 连续性在循环内校验，因此可按序读取而无需逐条 seek。
+    with open_regular_artifact(source_root / "rollout.jsonl") as raw_jsonl:
+        for (
+            sequence_value,
+            message_id_value,
+            turn_value,
+            offset_value,
+            length_value,
+        ) in rows:
+            sequence = strict_non_negative_int(
+                sequence_value, field="v1 messages.message_sequence"
             )
-        if offset + length > committed:
-            raise FormatDispatchError(
-                f"legacy message 超出 committed offset: {message_id}"
+            message_id = strict_text(message_id_value, field="v1 messages.message_id")
+            turn_id = strict_optional_text(turn_value, field="v1 messages.turn_id")
+            offset = strict_non_negative_int(
+                offset_value, field="v1 messages.jsonl_offset"
             )
-        raw_line = raw_jsonl[offset : offset + length]
-        if not raw_line.endswith(b"\n") or b"\n" in raw_line[:-1]:
-            raise FormatDispatchError(
-                f"v1 manifest 必须指向一条完整 JSONL 行: {message_id}"
+            length = strict_non_negative_int(
+                length_value, field="v1 messages.jsonl_length"
             )
-        envelope = json.loads(
-            raw_line.decode("utf-8"), object_pairs_hook=_unique_object
-        )
-        if not isinstance(envelope, Mapping):
-            raise FormatDispatchError(f"legacy envelope 不是 object: {message_id}")
-        validate_envelope(envelope, expected_format=1)
-        if "legacy_manifest_final" in envelope:
-            raise FormatDispatchError(
-                "v1 envelope 不得伪造 migration manifest final evidence"
+            if sequence <= previous_sequence or offset != next_offset or length == 0:
+                raise FormatDispatchError(
+                    f"v1 manifest sequence/offset/length 不连续或重叠: {message_id}"
+                )
+            if offset + length > committed:
+                raise FormatDispatchError(
+                    f"legacy message 超出 committed offset: {message_id}"
+                )
+            raw_line = raw_jsonl.read(length)
+            if (
+                len(raw_line) != length
+                or not raw_line.endswith(b"\n")
+                or b"\n" in raw_line[:-1]
+            ):
+                raise FormatDispatchError(
+                    f"v1 manifest 必须指向一条完整 JSONL 行: {message_id}"
+                )
+            rollout_jsonl_digest.update(raw_line)
+            envelope = json.loads(
+                raw_line.decode("utf-8"), object_pairs_hook=_unique_object
             )
-        validate_message_checks(envelope, checks.get(sequence, {}))
-        if (
-            envelope["message_sequence"],
-            envelope["message_id"],
-            envelope["turn_id"],
-        ) != (sequence, message_id, turn_id):
-            raise FormatDispatchError(
-                f"legacy message manifest 与 JSONL envelope 不一致: {message_id}"
+            if not isinstance(envelope, Mapping):
+                raise FormatDispatchError(f"legacy envelope 不是 object: {message_id}")
+            validate_envelope(envelope, expected_format=1)
+            if "legacy_manifest_final" in envelope:
+                raise FormatDispatchError(
+                    "v1 envelope 不得伪造 migration manifest final evidence"
+                )
+            validate_message_checks(envelope, checks.get(sequence, {}))
+            if (
+                envelope["message_sequence"],
+                envelope["message_id"],
+                envelope["turn_id"],
+            ) != (sequence, message_id, turn_id):
+                raise FormatDispatchError(
+                    f"legacy message manifest 与 JSONL envelope 不一致: {message_id}"
+                )
+            payload_hash = sha256_jcs(envelope["message"])
+            if "payload_hash" in envelope and envelope["payload_hash"] != payload_hash:
+                raise FormatDispatchError(
+                    f"source-mismatch: v1 payload_hash: {message_id}"
+                )
+            records.append(
+                {
+                    **envelope,
+                    "payload_hash": payload_hash,
+                    "jsonl_offset": offset,
+                    "jsonl_length": length,
+                    "raw_line_sha256": hashlib.sha256(raw_line).hexdigest(),
+                }
             )
-        payload_hash = sha256_jcs(envelope["message"])
-        if "payload_hash" in envelope and envelope["payload_hash"] != payload_hash:
-            raise FormatDispatchError(f"source-mismatch: v1 payload_hash: {message_id}")
-        records.append(
-            {
-                **envelope,
-                "payload_hash": payload_hash,
-                "jsonl_offset": offset,
-                "jsonl_length": length,
-                "raw_line_sha256": hashlib.sha256(raw_line).hexdigest(),
-            }
-        )
-        previous_sequence, next_offset = sequence, offset + length
-    if next_offset != committed:
-        raise FormatDispatchError("v1 manifest 未覆盖全部 committed JSONL 字节")
+            previous_sequence, next_offset = sequence, offset + length
+        if next_offset != committed:
+            raise FormatDispatchError("v1 manifest 未覆盖全部 committed JSONL 字节")
+        remaining_tail_bytes = raw_jsonl_size - committed
+        while remaining_tail_bytes:
+            chunk = raw_jsonl.read(min(1024 * 1024, remaining_tail_bytes))
+            if not chunk:
+                raise FormatDispatchError(
+                    "source-mismatch: v1 rollout.jsonl 在报告读取期间截断"
+                )
+            rollout_jsonl_digest.update(chunk)
+            remaining_tail_bytes -= len(chunk)
+    if rollout_jsonl_digest.hexdigest() != raw_jsonl_sha256:
+        raise FormatDispatchError("source-mismatch: v1 report 读取期间原件变化")
     apply_final_pointers(records, final_refs)
     if artifact_manifest(source_root) != files:
         raise FormatDispatchError("source-mismatch: v1 report 读取期间原件变化")
@@ -227,10 +258,10 @@ def read_source_report(
                     {
                         "reason": "uncommitted_tail_quarantined",
                         "offset": committed,
-                        "length": len(raw_jsonl) - committed,
+                        "length": raw_jsonl_size - committed,
                     }
                 ]
-                if committed < len(raw_jsonl)
+                if committed < raw_jsonl_size
                 else []
             ),
             *(

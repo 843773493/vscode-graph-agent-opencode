@@ -3,7 +3,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, test } from "bun:test";
 import type { ConversationView } from "../../types/frontend";
 import type { InternalExecutionHistory } from "../../types/backend";
-import ChatInternalExecutionDisplay from "./ChatInternalExecutionDisplay";
+import InternalExecutionTranscriptItem from "./InternalExecutionTranscriptItem";
 import { chatTranscriptItems } from "./transcriptItems";
 
 function turn(
@@ -175,7 +175,7 @@ describe("standalone internal execution display", () => {
 
   test("renders only registry-safe text and a kind label", () => {
     const html = renderToStaticMarkup(
-      <ChatInternalExecutionDisplay
+      <InternalExecutionTranscriptItem
         displayPart={internalExecution.display_parts[0]}
       />,
     );

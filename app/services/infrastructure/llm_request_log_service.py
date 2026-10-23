@@ -84,9 +84,9 @@ class LLMRequestLogService:
         return value
 
     def _log_sort_key(self, log_file: Path) -> tuple[int, str]:
-        return (self._file_created_at_ns(log_file), log_file.name)
+        return (self._timestamp_ns_from_filename(log_file), log_file.name)
 
-    def _file_created_at_ns(self, log_file: Path) -> int:
+    def _timestamp_ns_from_filename(self, log_file: Path) -> int:
         """文件名中的 epoch 纳秒只用于排序，不回填正文的毫秒时间。"""
         try:
             return int(log_file.stem)

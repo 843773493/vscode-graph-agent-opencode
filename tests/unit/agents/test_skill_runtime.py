@@ -53,7 +53,8 @@ from app.services.infrastructure.workspace_file_watch_service import (
 from tests.support.gateway_skill_sources import accepted_gateway_skill_sources
 
 
-def _custom_tool_context(tmp_path) -> CustomToolFactoryContext:
+@pytest.fixture
+def custom_tool_factory_context(tmp_path: Path) -> CustomToolFactoryContext:
     return CustomToolFactoryContext(
         session_id="ses_test",
         agent_id="default",
@@ -94,7 +95,7 @@ def _write_runtime_manifest(root: Path) -> Path:
 FAKE_GATEWAY_ID = "gateway_0123456789abcdef0123456789abcdef"
 
 
-def _build_catalog(
+def _build_test_skill_catalog(
     workspace: Path,
     *,
     registry: ResourceRegistry,
@@ -111,8 +112,10 @@ def _build_catalog(
     gateway_id = get_current_gateway_id()
     if gateway_sources is None and gateway_id is not None:
         gateway_sources = accepted_gateway_skill_sources(
-            skills_root=get_boxteam_home() / "skills", gateway_id=gateway_id,
-            workspace_id=load_or_create_workspace_id(workspace), observation_channel=source_owner.observation_channel,
+            skills_root=get_boxteam_home() / "skills",
+            gateway_id=gateway_id,
+            workspace_id=load_or_create_workspace_id(workspace),
+            observation_channel=source_owner.observation_channel,
         )
     return build_workspace_skill_catalog(
         workspace,
@@ -142,7 +145,7 @@ def test_build_workspace_skill_catalog_empty_layers_publishes_empty_revision(
     monkeypatch.delenv("BOXTEAM_DEFAULT_SKILL_GROUPS", raising=False)
 
     registry = ResourceRegistry()
-    catalog = _build_catalog(tmp_path, registry=registry)
+    catalog = _build_test_skill_catalog(tmp_path, registry=registry)
 
     assert catalog.entries == ()
     assert catalog.catalog_snapshot.available
@@ -163,7 +166,7 @@ def test_build_workspace_skill_catalog_resolves_gateway_layer(
     )
     monkeypatch.setenv("BOXTEAM_HOME", str(boxteam_home))
 
-    catalog = _build_catalog(tmp_path, registry=ResourceRegistry())
+    catalog = _build_test_skill_catalog(tmp_path, registry=ResourceRegistry())
 
     assert len(catalog.entries) == 1
     entry = catalog.entries[0]
@@ -206,7 +209,7 @@ def test_gateway_scope_uri_passes_binding_with_injected_identity(
     )
     monkeypatch.setenv("BOXTEAM_HOME", str(boxteam_home))
 
-    catalog = _build_catalog(tmp_path, registry=ResourceRegistry())
+    catalog = _build_test_skill_catalog(tmp_path, registry=ResourceRegistry())
     entry = catalog.entries[0]
     parsed = parse_resource_uri(entry.display_uri)
     assert parsed.scope == "gateway"
@@ -246,14 +249,19 @@ def test_build_workspace_skill_catalog_fails_closed_without_gateway_identity(
 
     assert get_current_gateway_id() is None
     channel = WorkspaceFileResourceRegistry(
-        workspace_root=tmp_path, watch_service=WorkspaceFileWatchService(workspace_root=tmp_path),
+        workspace_root=tmp_path,
+        watch_service=WorkspaceFileWatchService(workspace_root=tmp_path),
     ).observation_channel
     remote = accepted_gateway_skill_sources(
-        skills_root=boxteam_home / "skills", gateway_id=FAKE_GATEWAY_ID,
-        workspace_id=load_or_create_workspace_id(tmp_path), observation_channel=channel,
+        skills_root=boxteam_home / "skills",
+        gateway_id=FAKE_GATEWAY_ID,
+        workspace_id=load_or_create_workspace_id(tmp_path),
+        observation_channel=channel,
     )
     with pytest.raises(RuntimeError, match="缺少请求级 Gateway 身份绑定"):
-        _build_catalog(tmp_path, registry=ResourceRegistry(), gateway_sources=remote)
+        _build_test_skill_catalog(
+            tmp_path, registry=ResourceRegistry(), gateway_sources=remote
+        )
 
 
 def test_gateway_identity_flows_from_request_header_into_catalog(
@@ -276,11 +284,14 @@ def test_gateway_identity_flows_from_request_header_into_catalog(
     monkeypatch.setenv("BOXTEAM_HOME", str(boxteam_home))
 
     file_owner = WorkspaceFileResourceRegistry(
-        workspace_root=tmp_path, watch_service=WorkspaceFileWatchService(workspace_root=tmp_path),
+        workspace_root=tmp_path,
+        watch_service=WorkspaceFileWatchService(workspace_root=tmp_path),
     )
     remote = accepted_gateway_skill_sources(
-        skills_root=boxteam_home / "skills", gateway_id=FAKE_GATEWAY_ID,
-        workspace_id=load_or_create_workspace_id(tmp_path), observation_channel=file_owner.observation_channel,
+        skills_root=boxteam_home / "skills",
+        gateway_id=FAKE_GATEWAY_ID,
+        workspace_id=load_or_create_workspace_id(tmp_path),
+        observation_channel=file_owner.observation_channel,
     )
     app = FastAPI()
     app.add_middleware(TraceMiddleware)
@@ -289,7 +300,9 @@ def test_gateway_identity_flows_from_request_header_into_catalog(
     def _build() -> dict[str, object]:
         bound = get_current_gateway_id()
         try:
-            catalog = _build_catalog(tmp_path, registry=ResourceRegistry(), gateway_sources=remote)
+            catalog = _build_test_skill_catalog(
+                tmp_path, registry=ResourceRegistry(), gateway_sources=remote
+            )
         except RuntimeError as error:
             return {"bound": bound, "error": str(error)}
         parsed = parse_resource_uri(catalog.entries[0].display_uri)
@@ -330,7 +343,7 @@ def test_build_workspace_skill_catalog_prefers_workspace_over_gateway(
         )
     monkeypatch.setenv("BOXTEAM_HOME", str(boxteam_home))
 
-    catalog = _build_catalog(tmp_path, registry=ResourceRegistry())
+    catalog = _build_test_skill_catalog(tmp_path, registry=ResourceRegistry())
 
     assert len(catalog.entries) == 1
     entry = catalog.entries[0]
@@ -365,9 +378,7 @@ def test_gateway_layer_build_writes_nothing_into_workspace_storage(
         if not root.exists():
             return None
         return {
-            str(path.relative_to(root)): (
-                path.read_bytes() if path.is_file() else None
-            )
+            str(path.relative_to(root)): (path.read_bytes() if path.is_file() else None)
             for path in sorted(root.rglob("*"))
         }
 
@@ -385,7 +396,7 @@ def test_gateway_layer_build_writes_nothing_into_workspace_storage(
         }
 
     before_sqlite = session_storage_snapshot()
-    catalog = _build_catalog(tmp_path, registry=ResourceRegistry())
+    catalog = _build_test_skill_catalog(tmp_path, registry=ResourceRegistry())
     assert len(catalog.entries) == 1
     assert catalog.entries[0].layer == "gateway"
 
@@ -407,7 +418,7 @@ def test_build_workspace_skill_catalog_uses_inline_manifest(tmp_path, monkeypatc
     )
 
     assert resolve_bundled_skill_groups() == ("gateway-context",)
-    catalog = _build_catalog(
+    catalog = _build_test_skill_catalog(
         tmp_path,
         registry=ResourceRegistry(),
         project_root=Path.cwd(),
@@ -432,7 +443,7 @@ def test_build_workspace_skill_catalog_fails_closed_without_manifest(
     monkeypatch.delenv("BOXTEAM_RUNTIME_MANIFEST", raising=False)
 
     with pytest.raises(RuntimeError, match="BOXTEAM_RUNTIME_MANIFEST"):
-        _build_catalog(
+        _build_test_skill_catalog(
             tmp_path,
             registry=ResourceRegistry(),
             project_root=Path.cwd(),
@@ -449,14 +460,16 @@ def test_build_workspace_skill_catalog_rejects_symlink_entry(tmp_path, monkeypat
     monkeypatch.delenv("BOXTEAM_DEFAULT_SKILL_GROUPS", raising=False)
 
     with pytest.raises(RuntimeError, match="symlink") as caught:
-        _build_catalog(tmp_path, registry=ResourceRegistry())
+        _build_test_skill_catalog(tmp_path, registry=ResourceRegistry())
     assert str(tmp_path) not in str(caught.value)
     assert "evil" in str(caught.value)
 
 
 @pytest.mark.parametrize("failure", ["invalid_utf8", "skill_symlink", "directory_io"])
 def test_skill_catalog_failure_exposes_logical_source_without_native_locator(
-    tmp_path, monkeypatch, failure,
+    tmp_path,
+    monkeypatch,
+    failure,
 ):
     skill_dir = tmp_path / ".boxteam" / "skills" / "demo"
     skill_dir.mkdir(parents=True)
@@ -479,7 +492,7 @@ def test_skill_catalog_failure_exposes_logical_source_without_native_locator(
 
         monkeypatch.setattr(Path, "iterdir", fail_directory)
     with pytest.raises(RuntimeError) as caught:
-        _build_catalog(tmp_path, registry=ResourceRegistry())
+        _build_test_skill_catalog(tmp_path, registry=ResourceRegistry())
     message = str(caught.value)
     assert str(tmp_path) not in message
     if failure == "invalid_utf8":
@@ -505,7 +518,7 @@ def test_build_workspace_skill_catalog_rejects_name_dir_mismatch(
     monkeypatch.delenv("BOXTEAM_DEFAULT_SKILL_GROUPS", raising=False)
 
     with pytest.raises(RuntimeError, match="目录名一致"):
-        _build_catalog(tmp_path, registry=ResourceRegistry())
+        _build_test_skill_catalog(tmp_path, registry=ResourceRegistry())
 
 
 def test_build_workspace_skill_catalog_revision_is_immutable_hash(
@@ -526,11 +539,15 @@ def test_build_workspace_skill_catalog_revision_is_immutable_hash(
         workspace_root=tmp_path,
         watch_service=WorkspaceFileWatchService(workspace_root=tmp_path),
     )
-    first = _build_catalog(
-        tmp_path, registry=registry, file_registry=file_registry,
+    first = _build_test_skill_catalog(
+        tmp_path,
+        registry=registry,
+        file_registry=file_registry,
     )
-    unchanged = _build_catalog(
-        tmp_path, registry=registry, file_registry=file_registry,
+    unchanged = _build_test_skill_catalog(
+        tmp_path,
+        registry=registry,
+        file_registry=file_registry,
     )
     assert unchanged.catalog_revision == first.catalog_revision
     assert unchanged.entries[0].metadata_revision == first.entries[0].metadata_revision
@@ -543,10 +560,14 @@ def test_build_workspace_skill_catalog_revision_is_immutable_hash(
     )
     source_uri = first.entries[0].display_uri
     file_registry.refresh(source_uri)
-    ignored_only = _build_catalog(
-        tmp_path, registry=registry, file_registry=file_registry,
+    ignored_only = _build_test_skill_catalog(
+        tmp_path,
+        registry=registry,
+        file_registry=file_registry,
     )
-    assert ignored_only.entries[0].metadata_revision == first.entries[0].metadata_revision
+    assert (
+        ignored_only.entries[0].metadata_revision == first.entries[0].metadata_revision
+    )
     assert ignored_only.catalog_revision == first.catalog_revision
 
     (skill_dir / "SKILL.md").write_text(
@@ -554,8 +575,10 @@ def test_build_workspace_skill_catalog_revision_is_immutable_hash(
         encoding="utf-8",
     )
     file_registry.refresh(source_uri)
-    changed = _build_catalog(
-        tmp_path, registry=registry, file_registry=file_registry,
+    changed = _build_test_skill_catalog(
+        tmp_path,
+        registry=registry,
+        file_registry=file_registry,
     )
     assert changed.entries[0].metadata_revision != first.entries[0].metadata_revision
     assert changed.catalog_revision != first.catalog_revision
@@ -619,7 +642,7 @@ def test_workspace_skills_prompt_keeps_custom_tools_out_of_skill_list(
         "调用 `test_tool_2`。\n",
         encoding="utf-8",
     )
-    catalog = _build_catalog(tmp_path, registry=ResourceRegistry())
+    catalog = _build_test_skill_catalog(tmp_path, registry=ResourceRegistry())
     middleware = WorkspaceSkillsMiddleware(catalog=catalog)
 
     skill_list = middleware._format_skills_list(
@@ -631,12 +654,17 @@ def test_workspace_skills_prompt_keeps_custom_tools_out_of_skill_list(
     assert 'skill_load(name="...")' in skill_list
     assert "test_tool_2" not in skill_list
     # allowed_tools 已按 4.2 从 Skill context contract 移除。
-    assert all("allowed_tools" not in view for view in [entry.metadata_view() for entry in catalog.entries])
+    assert all(
+        "allowed_tools" not in view
+        for view in [entry.metadata_view() for entry in catalog.entries]
+    )
 
 
 @pytest.mark.asyncio
-async def test_custom_tool_invoker_dispatches_configured_tool_without_skill_activation(tmp_path):
-    custom_tool = create_test_tool_2(_custom_tool_context(tmp_path))
+async def test_custom_tool_invoker_dispatches_configured_tool_without_skill_activation(
+    custom_tool_factory_context: CustomToolFactoryContext,
+):
+    custom_tool = create_test_tool_2(custom_tool_factory_context)
     invoker = create_extension_tool_invoker_tool(
         [custom_tool],
         catalog_binding_resolver=seal_extension_catalog_binding_from_tools(
@@ -657,8 +685,10 @@ async def test_custom_tool_invoker_dispatches_configured_tool_without_skill_acti
 
 
 @pytest.mark.asyncio
-async def test_custom_tool_invoker_rechecks_effective_execution_policy(tmp_path):
-    custom_tool = create_test_tool_2(_custom_tool_context(tmp_path))
+async def test_custom_tool_invoker_rechecks_effective_execution_policy(
+    custom_tool_factory_context: CustomToolFactoryContext,
+):
+    custom_tool = create_test_tool_2(custom_tool_factory_context)
     invoker = create_extension_tool_invoker_tool(
         [custom_tool],
         catalog_binding_resolver=seal_extension_catalog_binding_from_tools(
@@ -677,9 +707,9 @@ async def test_custom_tool_invoker_rechecks_effective_execution_policy(tmp_path)
 
 @pytest.mark.asyncio
 async def test_custom_tool_invoker_rejects_unknown_envelope_and_target_arguments(
-    tmp_path,
+    custom_tool_factory_context: CustomToolFactoryContext,
 ):
-    custom_tool = create_test_tool_2(_custom_tool_context(tmp_path))
+    custom_tool = create_test_tool_2(custom_tool_factory_context)
     invoker = create_extension_tool_invoker_tool(
         [custom_tool],
         catalog_binding_resolver=seal_extension_catalog_binding_from_tools(
@@ -747,7 +777,9 @@ async def test_custom_tool_invoker_executes_mcp_style_target_and_validates_schem
     )
     invoker = create_extension_tool_invoker_tool(
         [mcp_status],
-        catalog_binding_resolver=seal_extension_catalog_binding_from_tools([mcp_status]),
+        catalog_binding_resolver=seal_extension_catalog_binding_from_tools(
+            [mcp_status]
+        ),
     )
 
     result = await invoker.ainvoke(
@@ -794,11 +826,11 @@ async def test_custom_tool_invoker_uses_ainvoke_for_mcp_style_base_tool():
 
 @pytest.mark.asyncio
 async def test_custom_tool_invoker_preserves_container_injected_invocation_context(
-    tmp_path,
+    custom_tool_factory_context: CustomToolFactoryContext,
 ) -> None:
     from langchain_core.tools import tool
 
-    context = _custom_tool_context(tmp_path)
+    context = custom_tool_factory_context
 
     @tool
     def context_aware() -> str:

@@ -26,7 +26,7 @@ from app.schemas.internal_v2.job import JobDispatchSnapshotDTO
 from app.services.infrastructure.background_work_store import BackgroundWorkStore
 from tests.support.background_work import build_background_registry
 
-pytestmark = pytest.mark.usefixtures("workspace_scope")
+pytestmark = pytest.mark.usefixtures("empty_workspace_scope")
 
 class _DummyConfigService:
     def get_llm_providers(self):

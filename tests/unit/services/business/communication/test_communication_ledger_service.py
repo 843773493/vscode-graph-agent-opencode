@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import AsyncIterator, Iterator
-from contextlib import asynccontextmanager
+from contextlib import ExitStack, asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -39,18 +39,23 @@ class SessionHarness:
     def __init__(self, tmp_path: Path, name: str) -> None:
         self.session_id = f"ses_{create_uuid_hex()}"
         self.main_thread_id = f"thr_{create_uuid_hex()}"
-        self.store = SessionControlStore(tmp_path / name / "session-control.sqlite")
-        self.store.initialize_main_thread(
-            self.main_thread_id, DEFAULT_CREATED_AT, TEST_THREAD_GRAPH_BINDING
-        )
-        self.store.initialize_fence("active", 1)
-        self.gate = SessionLifecycleGate(tmp_path)
-        self.facade = CommunicationLedgerService(
-            session_id=self.session_id,
-            store=self.store,
-            write_admission=self.gate.exclusive,
-            lease_settlement=self.lease_settlement,
-        )
+        with ExitStack() as resources:
+            store = SessionControlStore(tmp_path / name / "session-control.sqlite")
+            resources.callback(store.close)
+            store.initialize_main_thread(
+                self.main_thread_id, DEFAULT_CREATED_AT, TEST_THREAD_GRAPH_BINDING
+            )
+            store.initialize_fence("active", 1)
+            gate = SessionLifecycleGate(tmp_path)
+            self.store = store
+            self.gate = gate
+            self.facade = CommunicationLedgerService(
+                session_id=self.session_id,
+                store=store,
+                write_admission=gate.exclusive,
+                lease_settlement=self.lease_settlement,
+            )
+            resources.pop_all()
 
     @asynccontextmanager
     async def lease_settlement(
@@ -74,13 +79,14 @@ class SessionHarness:
 
 
 @pytest.fixture
-def workspace(tmp_path: Path) -> Iterator[tuple[SessionHarness, SessionHarness]]:
+def session_pair(tmp_path: Path) -> Iterator[tuple[SessionHarness, SessionHarness]]:
     """双 session 装具：A/B 各自独立 gate 与 control store。"""
-    harness_a = SessionHarness(tmp_path, "session-a")
-    harness_b = SessionHarness(tmp_path, "session-b")
-    yield harness_a, harness_b
-    harness_a.close()
-    harness_b.close()
+    with ExitStack() as resources:
+        harness_a = SessionHarness(tmp_path, "session-a")
+        resources.callback(harness_a.close)
+        harness_b = SessionHarness(tmp_path, "session-b")
+        resources.callback(harness_b.close)
+        yield harness_a, harness_b
 
 
 def make_send_request(
@@ -99,9 +105,9 @@ def make_send_request(
 
 
 async def test_admit_outgoing_send_creates_lease_and_outbox(
-    workspace: tuple[SessionHarness, SessionHarness],
+    session_pair: tuple[SessionHarness, SessionHarness],
 ) -> None:
-    harness_a, harness_b = workspace
+    harness_a, harness_b = session_pair
     request = make_send_request(harness_a.address(), harness_b.address())
     decision = await harness_a.facade.admit_outgoing_send(
         request=request, communication_id=f"comm_{uuid.uuid4().hex}"
@@ -123,9 +129,9 @@ async def test_admit_outgoing_send_creates_lease_and_outbox(
 
 
 async def test_admit_outgoing_send_duplicate_keeps_lease_token(
-    workspace: tuple[SessionHarness, SessionHarness],
+    session_pair: tuple[SessionHarness, SessionHarness],
 ) -> None:
-    harness_a, harness_b = workspace
+    harness_a, harness_b = session_pair
     request = make_send_request(harness_a.address(), harness_b.address())
     communication_id = f"comm_{uuid.uuid4().hex}"
     first = await harness_a.facade.admit_outgoing_send(
@@ -145,9 +151,9 @@ async def test_admit_outgoing_send_duplicate_keeps_lease_token(
 
 
 async def test_admit_outgoing_send_payload_drift_conflicts(
-    workspace: tuple[SessionHarness, SessionHarness],
+    session_pair: tuple[SessionHarness, SessionHarness],
 ) -> None:
-    harness_a, harness_b = workspace
+    harness_a, harness_b = session_pair
     request = make_send_request(harness_a.address(), harness_b.address())
     communication_id = f"comm_{uuid.uuid4().hex}"
     await harness_a.facade.admit_outgoing_send(
@@ -166,9 +172,9 @@ async def test_admit_outgoing_send_payload_drift_conflicts(
 
 
 async def test_accept_incoming_send_creates_target_lease_and_inbox(
-    workspace: tuple[SessionHarness, SessionHarness],
+    session_pair: tuple[SessionHarness, SessionHarness],
 ) -> None:
-    harness_a, harness_b = workspace
+    harness_a, harness_b = session_pair
     communication_id = f"comm_{uuid.uuid4().hex}"
     payload = CommunicationPayload(content="周报数据")
     inbox = await harness_b.facade.accept_incoming_send(
@@ -192,9 +198,9 @@ async def test_accept_incoming_send_creates_target_lease_and_inbox(
 
 
 async def test_accept_incoming_send_duplicate_is_idempotent(
-    workspace: tuple[SessionHarness, SessionHarness],
+    session_pair: tuple[SessionHarness, SessionHarness],
 ) -> None:
-    harness_a, harness_b = workspace
+    harness_a, harness_b = session_pair
     communication_id = f"comm_{uuid.uuid4().hex}"
     payload = CommunicationPayload(content="周报数据")
     first = await harness_b.facade.accept_incoming_send(
@@ -215,9 +221,9 @@ async def test_accept_incoming_send_duplicate_is_idempotent(
 
 
 async def test_accept_rejects_foreign_target_session(
-    workspace: tuple[SessionHarness, SessionHarness],
+    session_pair: tuple[SessionHarness, SessionHarness],
 ) -> None:
-    harness_a, harness_b = workspace
+    harness_a, harness_b = session_pair
     with pytest.raises(ValueError, match="facade 绑定的 Session"):
         await harness_a.facade.accept_incoming_send(
             communication_id=f"comm_{uuid.uuid4().hex}",
@@ -228,9 +234,9 @@ async def test_accept_rejects_foreign_target_session(
 
 
 async def test_deleting_gate_rejects_new_admission(
-    workspace: tuple[SessionHarness, SessionHarness],
+    session_pair: tuple[SessionHarness, SessionHarness],
 ) -> None:
-    harness_a, harness_b = workspace
+    harness_a, harness_b = session_pair
     assert harness_a.store.cas_fence_transition(1, "deleting") is True
     with pytest.raises(RuntimeError, match="fence 非 active"):
         await harness_a.facade.admit_outgoing_send(
@@ -240,9 +246,9 @@ async def test_deleting_gate_rejects_new_admission(
 
 
 async def test_reply_round_trip_and_forgery_rejected(
-    workspace: tuple[SessionHarness, SessionHarness],
+    session_pair: tuple[SessionHarness, SessionHarness],
 ) -> None:
-    harness_a, harness_b = workspace
+    harness_a, harness_b = session_pair
     question_id = f"comm_{uuid.uuid4().hex}"
     await harness_a.facade.admit_outgoing_send(
         request=make_send_request(harness_a.address(), harness_b.address()),

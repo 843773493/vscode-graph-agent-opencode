@@ -2,6 +2,18 @@
 
 存放 Launcher 用户配置初始化、发行运行时发现和 manifest 校验。
 
+```text
+configuration/
+├── config-bootstrap.mjs         选择用户配置根目录并启动配置初始化
+├── config-bootstrap.test.mjs    配置根目录、子进程参数与错误结果
+├── runtime-discovery.mjs        按平台选择 runtime 包并加载完整 runtime
+├── runtime-discovery.test.mjs   显式 manifest 优先级与平台包选择
+├── runtime-manifest.mjs         校验 manifest、解析资源路径并确认资源存在
+└── runtime-manifest.test.mjs    manifest 字段、路径解析和资源缺失错误
+```
+
+调用顺序是 `runtime-discovery` 选出 manifest → `runtime-manifest` 校验并解析其中资源 → `config-bootstrap` 使用已解析的 runtime 初始化用户配置。平台选择、资源事实和配置根目录各由一个模块持有；新增发行平台时同步更新选择表及对应测试，不在初始化流程里猜测资源路径。
+
 # 可修改内容
 
 - `config-bootstrap.mjs`：全局配置目录解析与初始化。

@@ -2,6 +2,17 @@
 
 `src/clients/web/src/utils/markdown/` 存放浏览器前端的 Markdown 渲染与解析纯工具：一类把通用 Markdown 文本渲染为 HTML（含代码块、表格等装饰）；另一类解析工作区文件里的 Markdown 链接与图片引用目标（区分工作区相对路径与外部 URL）。
 
+## 职责树
+
+```text
+markdown/
+├── markdown.ts                 通用 Markdown 文本 → HTML
+├── workspaceMarkdown.ts        工作区 Markdown 链接/图片目标解析
+└── workspaceMarkdown.test.ts   相对路径、外部 URL 与路径边界合同
+```
+
+按处理目标选择入口：需要展示 Markdown 正文时使用 `markdown.ts`；需要将工作区 Markdown 中的相对链接或图片引用解析到工作区资源时使用 `workspaceMarkdown.ts`。渲染与资源定位处于不同阶段，不相互承担对方职责。
+
 与相邻文件的边界：
 
 - `utils/media/`：媒体附件类型判定与 `SelectedAttachment` 构造，与 Markdown 文本无关。

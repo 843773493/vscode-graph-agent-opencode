@@ -22,30 +22,69 @@ function messageStreamActivityStats(
 ): NonNullable<ConversationView["activityStats"]> {
   // live 展示计时从 turnStartedAt 到已收到 block/tool execution 的最晚时间，
   // 单位为毫秒，负差为 0、任一端缺失/非法为 null；历史 DTO 使用后端投影的起止时间。
-  const timestamps = [
-    ...stream.blocks.flatMap((block) => [
-      block.started_at,
-      block.updated_at,
-      block.completed_at,
-    ]),
-    ...stream.toolExecutions.flatMap((execution) => [
-      execution.started_at,
-      execution.updated_at,
-      execution.completed_at,
-    ]),
-  ].filter((value): value is string => typeof value === "string");
+  let latestAt = Number.NEGATIVE_INFINITY;
+  const includeTimestamp = (value: string | undefined) => {
+    if (value === undefined) return;
+    const timestamp = Date.parse(value);
+    if (Number.isFinite(timestamp) && timestamp > latestAt) latestAt = timestamp;
+  };
+  for (const block of stream.blocks) {
+    includeTimestamp(block.started_at);
+    includeTimestamp(block.updated_at);
+    includeTimestamp(block.completed_at);
+  }
+  for (const execution of stream.toolExecutions) {
+    includeTimestamp(execution.started_at);
+    includeTimestamp(execution.updated_at);
+    includeTimestamp(execution.completed_at);
+  }
   const startedAt = turnStartedAt ? Date.parse(turnStartedAt) : Number.NaN;
-  const latestAt = Math.max(
-    ...timestamps
-      .map((value) => Date.parse(value))
-      .filter((value) => Number.isFinite(value)),
-  );
+  let itemCount = 0;
+  for (const part of parts) {
+    if (ACTIVITY_PART_KINDS.has(part.kind)) itemCount += 1;
+  }
   return {
     duration_ms: Number.isFinite(startedAt) && Number.isFinite(latestAt)
       ? Math.max(0, latestAt - startedAt)
       : null,
-    item_count: parts.filter((part) => ACTIVITY_PART_KINDS.has(part.kind)).length,
+    item_count: itemCount,
   };
+}
+
+function compareMessageStreamCandidates(
+  left: MessageStreamState,
+  right: MessageStreamState,
+): number {
+  return Number(isTerminalStatus(right.streamStatus))
+    - Number(isTerminalStatus(left.streamStatus))
+    || right.lastEventSeq - left.lastEventSeq
+    || Number(right.connectionStatus === "terminal")
+      - Number(left.connectionStatus === "terminal");
+}
+
+function preferredStreamsBySession(
+  streams: Map<string, MessageStreamState>,
+  sessionCacheKey: string,
+): Map<string, Map<string, Map<string, MessageStreamState>>> {
+  const bySession = new Map<string, Map<string, Map<string, MessageStreamState>>>();
+  for (const candidate of streams.values()) {
+    if (candidate.sessionCacheKey !== sessionCacheKey) continue;
+    let byThread = bySession.get(candidate.sessionId);
+    if (!byThread) {
+      byThread = new Map();
+      bySession.set(candidate.sessionId, byThread);
+    }
+    let byTurn = byThread.get(candidate.threadId);
+    if (!byTurn) {
+      byTurn = new Map();
+      byThread.set(candidate.threadId, byTurn);
+    }
+    const current = byTurn.get(candidate.turnId);
+    if (!current || compareMessageStreamCandidates(candidate, current) < 0) {
+      byTurn.set(candidate.turnId, candidate);
+    }
+  }
+  return bySession;
 }
 
 function terminalActivityStatsError(
@@ -70,20 +109,14 @@ export function applyMessageStreamProjection(
   streams: Map<string, MessageStreamState>,
   sessionCacheKey: string,
 ): ConversationView[] {
+  const streamsBySession = preferredStreamsBySession(streams, sessionCacheKey);
   return conversations.map((conversation) => {
-    const streamCandidates = [...streams.values()].filter((candidate) =>
-      candidate.sessionCacheKey === sessionCacheKey
-      && candidate.sessionId === conversation.sessionId
-      && candidate.threadId === conversation.threadId
-      && candidate.turnId === conversation.turnId,
-    );
-    const stream = streamCandidates.sort((left, right) =>
-      Number(isTerminalStatus(right.streamStatus))
-        - Number(isTerminalStatus(left.streamStatus))
-      || right.lastEventSeq - left.lastEventSeq
-      || Number(right.connectionStatus === "terminal")
-        - Number(left.connectionStatus === "terminal"),
-    )[0];
+    if (conversation.threadId === undefined || conversation.turnId === undefined) {
+      return conversation;
+    }
+    const stream = streamsBySession.get(conversation.sessionId)
+      ?.get(conversation.threadId)
+      ?.get(conversation.turnId);
     if (!stream) return conversation;
     const terminalTurn = conversation.turnStatus
       && TERMINAL_TURN_STATUSES.has(conversation.turnStatus);
@@ -178,14 +211,28 @@ export function messageStreamTurnIdForSession(
     return activeTurn?.turn_id ?? null;
   }
 
-  const candidate = [...(state.messageStreamsByTurnStream ?? new Map()).values()]
-    .filter((stream) =>
-      stream.sessionCacheKey === sessionCacheKey
-      && stream.sessionId === sessionId
-      && pending.some((conversation) => conversation.turnId === stream.turnId
-        && conversation.threadId === stream.threadId)
-      && !["completed", "interrupted", "failed"].includes(stream.streamStatus),
-    )
-    .sort((left, right) => right.lastEventSeq - left.lastEventSeq)[0];
+  const pendingTurnsByThread = new Map<string, Set<string>>();
+  for (const conversation of pending) {
+    if (conversation.threadId === undefined || conversation.turnId === undefined) continue;
+    let turnIds = pendingTurnsByThread.get(conversation.threadId);
+    if (!turnIds) {
+      turnIds = new Set();
+      pendingTurnsByThread.set(conversation.threadId, turnIds);
+    }
+    turnIds.add(conversation.turnId);
+  }
+
+  let candidate: MessageStreamState | undefined;
+  for (const stream of state.messageStreamsByTurnStream?.values() ?? []) {
+    if (
+      stream.sessionCacheKey !== sessionCacheKey
+      || stream.sessionId !== sessionId
+      || !pendingTurnsByThread.get(stream.threadId)?.has(stream.turnId)
+      || isTerminalStatus(stream.streamStatus)
+    ) {
+      continue;
+    }
+    if (!candidate || stream.lastEventSeq > candidate.lastEventSeq) candidate = stream;
+  }
   return candidate?.turnId ?? null;
 }

@@ -84,9 +84,7 @@ def test_selection_ref_identity_fails_closed_without_thread_id() -> None:
         selection_ref_identity(_ForgedRef())
 
 
-def test_selection_ref_identity_keys_tool_set_by_ref_id(
-    user_item: CanonicalItemRecord,
-) -> None:
+def test_selection_ref_identity_keys_tool_set_by_ref_id() -> None:
     # ToolSetRef 显式绑定 owner，但计划内 registry identity 仍由 ref_id 表达。
     tool_ref = ToolSetRef.from_tool_snapshot(
         snapshot_id="tool-set-sibling",

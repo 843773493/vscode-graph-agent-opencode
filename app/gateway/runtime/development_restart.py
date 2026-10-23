@@ -54,14 +54,14 @@ def start_development_restart(
 ) -> int:
     log_path.parent.mkdir(parents=True, exist_ok=True)
     with log_path.open("ab") as log_file:
-        platform_options: dict[str, object]
+        popen_platform_options: dict[str, object]
         if os.name == "nt":
-            platform_options = {
+            popen_platform_options = {
                 "creationflags": subprocess.CREATE_NEW_PROCESS_GROUP
                 | subprocess.DETACHED_PROCESS,
             }
         else:
-            platform_options = {"start_new_session": True}
+            popen_platform_options = {"start_new_session": True}
         process = subprocess.Popen(
             command.argv,
             cwd=command.cwd,
@@ -69,7 +69,7 @@ def start_development_restart(
             stdin=subprocess.DEVNULL,
             stdout=log_file,
             stderr=subprocess.STDOUT,
-            **platform_options,
+            **popen_platform_options,
         )
     if process.pid <= 0:
         raise RuntimeError("源码开发服务重启进程未返回有效 PID")

@@ -11,7 +11,7 @@ import WarmConfirmProvider from "../shell/WarmConfirmProvider";
 import type { AppState } from "../../types/frontend";
 import type { Agent } from "../../types/backend";
 import Composer from "./Composer";
-import { restoreGlobalDescriptor } from "../../tests/testGlobals";
+import { installComposerTestGlobals } from "./composerTestFixtures";
 
 const WORKSPACE_ID = "workspace";
 const SESSION_ID = "session";
@@ -134,83 +134,15 @@ function mountComposer(state: AppState, actions: Actions): ReactTestRenderer {
   return renderer;
 }
 
-const originalWindow = Object.getOwnPropertyDescriptor(globalThis, "window");
-const originalBroadcastChannel = Object.getOwnPropertyDescriptor(
-  globalThis,
-  "BroadcastChannel",
-);
-const originalDocument = Object.getOwnPropertyDescriptor(globalThis, "document");
-// 这三个构造器是测试自己注入的，原本不存在，afterEach 直接删除即可。
-const OVERLAY_CONSTRUCTOR_NAMES = ["Element", "Node", "HTMLElement"] as const;
+let restoreComposerGlobals = () => {};
 
-/** Composer 挂载需要 window 事件通道、localStorage 与 BroadcastChannel；
- * 测试环境没有 DOM，这里提供最小可用的替身，不参与业务断言。 */
 function installComposerEnvironment(): void {
-  installOverlayConstructors();
-  const listeners = new Map<string, Set<(event: unknown) => void>>();
-  const storage = new Map<string, string>();
-  Object.defineProperty(globalThis, "window", {
-    configurable: true,
-    value: {
-      localStorage: {
-        getItem: (key: string) => storage.get(key) ?? null,
-        setItem: (key: string, value: string) => {
-          storage.set(key, value);
-        },
-        removeItem: (key: string) => {
-          storage.delete(key);
-        },
-      },
-      // AnchoredOverlay 的定位依赖通过 `instanceof window.Element` 判定引用；
-      // 纯 Node 环境没有这些构造器，缺失会让真实浮层在 render 阶段直接抛错。
-      ...OVERLAY_CONSTRUCTORS,
-      location: { origin: "http://127.0.0.1:8011" },
-      addEventListener: (type: string, handler: (event: unknown) => void) => {
-        const set = listeners.get(type) ?? new Set();
-        set.add(handler);
-        listeners.set(type, set);
-      },
-      removeEventListener: (type: string, handler: (event: unknown) => void) => {
-        listeners.get(type)?.delete(handler);
-      },
-    },
-  });
-  Object.defineProperty(globalThis, "BroadcastChannel", {
-    configurable: true,
-    value: class {
-      addEventListener() {}
-      removeEventListener() {}
-      close() {}
-    },
-  });
-}
-
-/** @floating-ui 一旦看到 window 就对引用做 `instanceof window.Element` 判定，
- * 纯 Node 环境没有这些构造器。这里只补最小构造器，让真实 AnchoredOverlay 能走完
- * render；document 仍不存在，浮层按 SSR 分支把子节点内联渲染 —— 正是本用例要验证的
- * 「菜单打开时子节点可见」契约，因此不必替换整个模块。 */
-class OverlayElementStub {}
-class OverlayNodeStub {}
-const OVERLAY_CONSTRUCTORS = {
-  Element: OverlayElementStub,
-  Node: OverlayNodeStub,
-  HTMLElement: OverlayElementStub,
-};
-
-/** @floating-ui/utils/dom 直接引用裸全局 `Element`，不只走 window.xx。 */
-function installOverlayConstructors(): void {
-  for (const [name, value] of Object.entries(OVERLAY_CONSTRUCTORS)) {
-    Object.defineProperty(globalThis, name, { configurable: true, value });
-  }
+  restoreComposerGlobals = installComposerTestGlobals();
 }
 
 afterEach(() => {
-  restoreGlobalDescriptor("document", originalDocument);
-  for (const name of OVERLAY_CONSTRUCTOR_NAMES) {
-    Reflect.deleteProperty(globalThis, name);
-  }
-  restoreGlobalDescriptor("window", originalWindow);
-  restoreGlobalDescriptor("BroadcastChannel", originalBroadcastChannel);
+  restoreComposerGlobals();
+  restoreComposerGlobals = () => {};
 });
 
 describe("Composer 切换类动作失败必须可见", () => {

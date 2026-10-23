@@ -445,7 +445,7 @@ class ConfigSourceLayersMixin:
             if payload is None:
                 raise RuntimeError(f"present 配置文件解析为空: {path}")
             prepare_config_for_persistence(payload)
-            self._preflight_override(payload, source_path=self._workspace_state_store.path)
+            ConfigAgentToolsMixin._preflight_custom_tool_factories(payload)
             verify_stable_config_file(file_snapshot)
             source_record = self._workspace_state_store.sync_config_source(
                 config_key=config_key,
@@ -470,7 +470,7 @@ class ConfigSourceLayersMixin:
         if payload is None:
             raise RuntimeError(f"present 配置文件解析为空: {path}")
         prepare_config_for_persistence(payload)
-        self._preflight_override(payload, source_path=path)
+        ConfigAgentToolsMixin._preflight_custom_tool_factories(payload)
         verify_stable_config_file(file_snapshot)
         backup_path = path.with_name(f"{path.name}.migrated.bak")
         if not backup_path.exists():
@@ -590,13 +590,8 @@ class ConfigSourceLayersMixin:
         config = parse_stable_config_file(config_snapshot)
         if config is None:
             raise FileNotFoundError(f"配置文件不存在: {path}")
-        ConfigAgentToolsMixin._preflight_custom_tool_factories(config, source_path=path)
+        ConfigAgentToolsMixin._preflight_custom_tool_factories(config)
         return config
-
-    @staticmethod
-    def _preflight_override(payload: dict[str, Any], *, source_path: Path) -> None:
-        # SQLite 中的数据已经经过 JSON 解析；仍执行自定义工具工厂预检，保持来源边界一致。
-        ConfigAgentToolsMixin._preflight_custom_tool_factories(payload, source_path=source_path)
 
     def _apply_workspace_override(
         self,

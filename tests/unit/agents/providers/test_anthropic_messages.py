@@ -9,7 +9,8 @@ from app.agents.agent_factory import build_model_from_provider
 from app.agents.providers.litellm_chat import BoxteamLiteLLMChatModel
 
 
-def _provider() -> dict[str, Any]:
+@pytest.fixture
+def anthropic_provider() -> dict[str, Any]:
     return {
         "id": "anthropic-test",
         "endpoint": "https://example.com/anthropic",
@@ -32,8 +33,10 @@ def _provider() -> dict[str, Any]:
     }
 
 
-def test_anthropic_messages_mode_uses_litellm_chat_model() -> None:
-    model = build_model_from_provider(_provider(), {})
+def test_anthropic_messages_mode_uses_litellm_chat_model(
+    anthropic_provider: dict[str, Any],
+) -> None:
+    model = build_model_from_provider(anthropic_provider, {})
 
     assert isinstance(model, BoxteamLiteLLMChatModel)
     assert model.custom_llm_provider == "anthropic"
@@ -45,6 +48,7 @@ def test_anthropic_messages_mode_uses_litellm_chat_model() -> None:
 @pytest.mark.asyncio
 async def test_anthropic_messages_stream_uses_litellm_acompletion(
     monkeypatch: pytest.MonkeyPatch,
+    anthropic_provider: dict[str, Any],
 ) -> None:
     captured: dict[str, Any] = {}
 
@@ -97,7 +101,11 @@ async def test_anthropic_messages_stream_uses_litellm_acompletion(
         "acompletion_with_retry",
         fake_acompletion_with_retry,
     )
-    model = build_model_from_provider(_provider(), {}, invocation_purpose="tool_test")
+    model = build_model_from_provider(
+        anthropic_provider,
+        {},
+        invocation_purpose="tool_test",
+    )
 
     chunks = [
         chunk
@@ -108,9 +116,7 @@ async def test_anthropic_messages_stream_uses_litellm_acompletion(
                         {"type": "text", "text": "请看图"},
                         {
                             "type": "image_url",
-                            "image_url": {
-                                "url": "data:image/webp;base64,preview"
-                            },
+                            "image_url": {"url": "data:image/webp;base64,preview"},
                         },
                     ]
                 )

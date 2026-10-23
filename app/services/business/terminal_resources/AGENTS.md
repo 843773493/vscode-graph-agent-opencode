@@ -2,6 +2,16 @@
 
 工作区 Terminal 资源的唯一领域 owner，负责来源 Thread、保留范围、关联、版本、租约引用和恢复事实。
 
+## 文件职责树
+
+```text
+terminal_resources/
+├── owner.py       Terminal 领域状态与生命周期，委托共享资源 owner 处理通用保留和释放
+└── operations.py  单次受信 Terminal 调用，持有 operation lease 并核实外部回执
+```
+
+调用路径从 `app/agents/tools/terminal.py` 进入 `TerminalResourceOwner.operation()`，再由 `TerminalOperations` 执行单次调用；Browser 与 Terminal 共有的 lease 或记录规则归 `workspace_resources/`，PTY 事实和终端动作则留在本目录。
+
 ## 可修改内容
 
 - 修改 Terminal 创建、查询、管理、Thread 卸载、Session 删除与孤儿回收。

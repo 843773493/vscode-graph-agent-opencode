@@ -6,7 +6,7 @@ import { randomUUID } from "node:crypto";
 import test from "node:test";
 
 import { TerminalManager } from "./terminalManager.js";
-import { IsolatedPtyProcess } from "./isolatedPtyProcess.js";
+import { IsolatedPtyProcess } from "./processes/isolatedPtyProcess.js";
 
 test("外部绝对 cwd 经真实创建、落盘和恢复后仍传给同一 PTY 目录", async (t) => {
   const runRoot = path.join(process.cwd(), "out/tests/src/workspace-services/terminal/server/terminalCwdPersistence/workspace", randomUUID());

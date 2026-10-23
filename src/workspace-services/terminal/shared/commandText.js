@@ -26,8 +26,9 @@ export function lastNonEmptyInputLine(data) {
 }
 
 function stripAnsi(value) {
+  // OSC止于BEL或首个ESC反斜杠；不跨下一条转义吞正文或反复回溯未闭合前缀。
   return value
-    .replace(/\x1B\][^\x07]*(?:\x07|\x1B\\)/g, "")
+    .replace(/\x1B\][^\x07\x1B]*(?:\x07|\x1B\\)/g, "")
     .replace(/\x1B\[[0-?]*[ -/]*[@-~]/g, "");
 }
 

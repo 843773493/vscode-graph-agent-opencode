@@ -147,6 +147,7 @@ let currentActivePageId = null;
 let currentToolPageUrl = null;
 let waitingForFramePageId = null;
 let currentNavigationError = null;
+/** @type {{width: number, height: number}} 远端页面的 CSS 视口，不是 JPEG 或画布后备像素尺寸。 */
 let remoteViewport = { width: 1280, height: 800 };
 let remoteViewportInitialized = false;
 let viewportDraft = null;
@@ -155,7 +156,8 @@ let autoFitSuppressed = false;
 let viewportZoom = 1;
 let viewportDrag = null;
 let viewportResize = null;
-let viewportPosition = null;
+/** @type {{x: number, y: number}|null} 画面在本地 screenScroll 内容区内的显示偏移，单位为 CSS 像素。 */
+let viewportDisplayPosition = null;
 let currentDeviceSnapshot = null;
 let debugSnapshotData = null;
 
@@ -163,13 +165,12 @@ function viewportForLayout() {
   return viewportDraft || remoteViewport;
 }
 
-function clampViewportPosition(position) {
-  const margin = 12;
-  const width = screenContent.getBoundingClientRect().width;
-  const height = screenContent.getBoundingClientRect().height;
+function clampViewportDisplayPosition(displayPosition) {
+  const visibleMarginCssPx = 12;
+  const contentDisplayRect = screenContent.getBoundingClientRect();
   return {
-    x: Math.max(margin - width, Math.min(screenScroll.clientWidth - margin, position.x)),
-    y: Math.max(margin - height, Math.min(screenScroll.clientHeight - margin, position.y)),
+    x: Math.max(visibleMarginCssPx - contentDisplayRect.width, Math.min(screenScroll.clientWidth - visibleMarginCssPx, displayPosition.x)),
+    y: Math.max(visibleMarginCssPx - contentDisplayRect.height, Math.min(screenScroll.clientHeight - visibleMarginCssPx, displayPosition.y)),
   };
 }
 
@@ -197,14 +198,14 @@ function layoutScreen() {
   const contentHeight = Math.max(1, Math.floor(viewport.height * Math.max(0.05, scale)));
   screenContent.style.width = `${contentWidth}px`;
   screenContent.style.height = `${contentHeight}px`;
-  if (viewportDrag === null && viewportResize === null && viewportPosition === null) {
+  if (viewportDrag === null && viewportResize === null && viewportDisplayPosition === null) {
     const canCenter = contentWidth <= containerWidth - 32 && contentHeight <= containerHeight - 32;
     screenContent.style.left = canCenter ? "50%" : "16px";
     screenContent.style.top = canCenter ? "50%" : "16px";
     screenContent.style.transform = canCenter ? "translate(-50%, -50%)" : "none";
-  } else if (viewportPosition) {
-    screenContent.style.left = `${viewportPosition.x}px`;
-    screenContent.style.top = `${viewportPosition.y}px`;
+  } else if (viewportDisplayPosition) {
+    screenContent.style.left = `${viewportDisplayPosition.x}px`;
+    screenContent.style.top = `${viewportDisplayPosition.y}px`;
     screenContent.style.transform = "none";
   }
 }
@@ -1544,7 +1545,7 @@ deviceTouchInput.addEventListener("change", () => {
 
 deviceFitButton.addEventListener("click", () => {
   fitViewportToWindow = !fitViewportToWindow;
-  viewportPosition = null;
+  viewportDisplayPosition = null;
   deviceFitButton.setAttribute("aria-pressed", String(fitViewportToWindow));
   deviceFitButton.title = fitViewportToWindow ? "适应窗口" : "实际尺寸 (1:1)";
   layoutScreen();
@@ -1595,7 +1596,7 @@ screenScroll.addEventListener("wheel", (event) => {
   viewportZoom = Math.max(0.25, Math.min(4, viewportZoom * (direction > 0 ? 1.1 : 0.9)));
   fitViewportToWindow = false;
   autoFitSuppressed = true;
-  viewportPosition = null;
+  viewportDisplayPosition = null;
   deviceFitButton.setAttribute("aria-pressed", "false");
   deviceFitButton.title = `实际尺寸 · 缩放 ${Math.round(viewportZoom * 100)}%`;
   layoutScreen();
@@ -1607,7 +1608,7 @@ screenScroll.addEventListener("pointerdown", (event) => {
   }
   const workspaceRect = screenScroll.getBoundingClientRect();
   const contentRect = screenContent.getBoundingClientRect();
-  viewportPosition = {
+  viewportDisplayPosition = {
     x: contentRect.left - workspaceRect.left + screenScroll.scrollLeft,
     y: contentRect.top - workspaceRect.top + screenScroll.scrollTop,
   };
@@ -1615,8 +1616,8 @@ screenScroll.addEventListener("pointerdown", (event) => {
     pointerId: event.pointerId,
     startX: event.clientX,
     startY: event.clientY,
-    originX: viewportPosition.x,
-    originY: viewportPosition.y,
+    originX: viewportDisplayPosition.x,
+    originY: viewportDisplayPosition.y,
   };
   screenScroll.setPointerCapture(event.pointerId);
   screenContent.style.transform = "none";
@@ -1625,11 +1626,11 @@ screenScroll.addEventListener("pointerdown", (event) => {
 
 screenScroll.addEventListener("pointermove", (event) => {
   if (!viewportDrag || viewportDrag.pointerId !== event.pointerId) return;
-  viewportPosition = {
+  viewportDisplayPosition = {
     x: viewportDrag.originX + event.clientX - viewportDrag.startX,
     y: viewportDrag.originY + event.clientY - viewportDrag.startY,
   };
-  viewportPosition = clampViewportPosition(viewportPosition);
+  viewportDisplayPosition = clampViewportDisplayPosition(viewportDisplayPosition);
   layoutScreen();
 });
 

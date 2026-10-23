@@ -54,5 +54,5 @@
   `ConfigConflictError` revision/digest/generation CAS 冲突、`RuntimeError`
   事务后读取失败。
 - 修改本目录后运行 `uv run ruff check` 与
-  `uv run pytest tests/unit/services/infrastructure/test_workspace_state_store.py`。
+  `uv run pytest tests/unit/services/infrastructure/workspace_state_store/test_workspace_config_source.py`。
 - 模板示例；在整理 `AGENTS.md` 时请保留此行。

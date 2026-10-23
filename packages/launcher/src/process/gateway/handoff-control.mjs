@@ -3,16 +3,22 @@ import { chmodSync, mkdirSync, rmSync } from "node:fs";
 import net from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { StringDecoder } from "node:string_decoder";
 
 import { gatewayStartupContract } from "./startup-contract.mjs";
 import { closeServer, listenServer } from "./server-lifecycle.mjs";
+
+const MAX_HANDOFF_REQUEST_CODE_UNITS = 64 * 1024;
 
 export function resolveGatewaySupervisorSocketPath(boxteamHome) {
   if (typeof boxteamHome !== "string" || boxteamHome.trim() === "") {
     return null;
   }
   const resolvedHome = path.resolve(boxteamHome);
-  const homeDigest = createHash("sha256").update(resolvedHome).digest("hex").slice(0, 32);
+  const homeDigest = createHash("sha256")
+    .update(resolvedHome)
+    .digest("hex")
+    .slice(0, 32);
   if (process.platform === "win32") {
     return `\\\\.\\pipe\\boxteam-gateway-supervisor-${homeDigest}`;
   }
@@ -35,22 +41,29 @@ export function createGatewaySupervisorControl({ socketPath, onHandoff }) {
     throw new TypeError("Gateway supervisor control handler 无效");
   }
   const server = net.createServer((socket) => {
-    let buffer = "";
+    const decoder = new StringDecoder("utf8");
+    const requestParts = [];
+    let requestLength = 0;
     let handled = false;
     socket.on("error", () => {
       // 控制请求方断开时只结束当前请求，不得让 supervisor 进程崩溃。
     });
     socket.on("data", (chunk) => {
       if (handled) return;
-      buffer += chunk.toString("utf8");
-      if (buffer.length > 64 * 1024) {
+      const decodedChunk = decoder.write(chunk);
+      requestLength += decodedChunk.length;
+      if (requestLength > MAX_HANDOFF_REQUEST_CODE_UNITS) {
         socket.destroy(new Error("Gateway supervisor control 请求过大"));
         return;
       }
-      const newlineIndex = buffer.indexOf("\n");
-      if (newlineIndex === -1) return;
+      const newlineIndex = decodedChunk.indexOf("\n");
+      if (newlineIndex === -1) {
+        requestParts.push(decodedChunk);
+        return;
+      }
       handled = true;
-      const line = buffer.slice(0, newlineIndex).trim();
+      requestParts.push(decodedChunk.slice(0, newlineIndex));
+      const line = requestParts.join("").trim();
       let payload;
       try {
         payload = JSON.parse(line);
@@ -104,7 +117,8 @@ export function requestGatewayHandoff({
   }
   return new Promise((resolve, reject) => {
     const socket = net.createConnection(socketPath);
-    let buffer = "";
+    const decoder = new StringDecoder("utf8");
+    const responseParts = [];
     let settled = false;
     const timer = setTimeout(() => {
       socket.destroy();
@@ -130,12 +144,16 @@ export function requestGatewayHandoff({
       );
     });
     socket.on("data", (chunk) => {
-      buffer += chunk.toString("utf8");
-      const newlineIndex = buffer.indexOf("\n");
-      if (newlineIndex === -1) return;
+      const decodedChunk = decoder.write(chunk);
+      const newlineIndex = decodedChunk.indexOf("\n");
+      if (newlineIndex === -1) {
+        responseParts.push(decodedChunk);
+        return;
+      }
+      responseParts.push(decodedChunk.slice(0, newlineIndex));
       let response;
       try {
-        response = JSON.parse(buffer.slice(0, newlineIndex));
+        response = JSON.parse(responseParts.join(""));
       } catch (error) {
         finish(() => reject(error));
         return;

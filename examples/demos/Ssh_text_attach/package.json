@@ -9,6 +9,6 @@
     "server": "node src/server/server.js",
     "docker:up": "node scripts/docker-up.mjs",
     "test": "bun test",
-    "check": "node scripts/check.mjs"
+    "check": "bun run scripts/check.mjs"
   }
 }

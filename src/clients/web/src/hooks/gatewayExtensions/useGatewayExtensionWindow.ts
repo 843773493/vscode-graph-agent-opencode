@@ -125,12 +125,15 @@ export function useGatewayExtensionWindow({
   const extensionCanOpen = extensionPreviewEntry?.resource.status === "running"
     && extensionPreviewEntry.resource.reconciliation_status === "verified"
     && (extensionPreviewEntry.resource.retention_scope === "workspace" || extensionPreviewEntry.resource.thread_associations.length > 0);
-  const extensionPreviewTab: WorkspaceRuntimePreviewTab | null = extensionPreviewEntry && extensionCanOpen
+  const extensionPreviewResource = extensionPreviewEntry && extensionCanOpen
+    ? workspaceResourceDisplay(extensionPreviewEntry.resource)
+    : null;
+  const extensionPreviewTab: WorkspaceRuntimePreviewTab | null = extensionPreviewEntry && extensionPreviewResource
     ? extensionPreviewEntry.resource.kind === "browser"
       ? {
           previewType: "browser",
           path: `gateway-resource://${extensionPreviewEntry.key}`,
-          name: workspaceResourceDisplay(extensionPreviewEntry.resource).name,
+          name: extensionPreviewResource.name,
           scopeLabel: `${extensionPreviewEntry.gateway_name} · ${extensionPreviewEntry.workspace_name} · ${extensionPreviewEntry.session_title}`,
           browserId: extensionPreviewEntry.resource.resource_id,
           attachUrl: buildGatewayAttachUrl(
@@ -138,13 +141,13 @@ export function useGatewayExtensionWindow({
             extensionPreviewEntry.workspace_id,
             extensionPreviewEntry.resource.resource_id,
             true,
-            resourcePreviewThread(workspaceResourceDisplay(extensionPreviewEntry.resource), extensionPreviewEntry.session_id),
+            resourcePreviewThread(extensionPreviewResource, extensionPreviewEntry.session_id),
           ),
         }
       : {
           previewType: "terminal",
           path: `gateway-resource://${extensionPreviewEntry.key}`,
-          name: workspaceResourceDisplay(extensionPreviewEntry.resource).name,
+          name: extensionPreviewResource.name,
           scopeLabel: `${extensionPreviewEntry.gateway_name} · ${extensionPreviewEntry.workspace_name} · ${extensionPreviewEntry.session_title}`,
           terminalId: extensionPreviewEntry.resource.resource_id,
           attachUrl: buildGatewayAttachUrl(
@@ -152,7 +155,7 @@ export function useGatewayExtensionWindow({
             extensionPreviewEntry.workspace_id,
             extensionPreviewEntry.resource.resource_id,
             true,
-            resourcePreviewThread(workspaceResourceDisplay(extensionPreviewEntry.resource), extensionPreviewEntry.session_id),
+            resourcePreviewThread(extensionPreviewResource, extensionPreviewEntry.session_id),
           ),
         }
     : null;

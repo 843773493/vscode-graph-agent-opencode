@@ -94,7 +94,9 @@ function Composer() {
   } =
     useComposerState();
   const [attachments, setAttachments] = useState<SelectedAttachment[]>([]);
-  const [browserElements, setBrowserElements] = useState<BrowserElementSelection[]>([]);
+  const [selectedBrowserElements, setSelectedBrowserElements] = useState<
+    BrowserElementSelection[]
+  >([]);
   const [attachmentError, setAttachmentError] = useState("");
   const [composerNotice, setComposerNotice] = useState("");
   const [viewMenuOpen, setViewMenuOpen] = useState(false);
@@ -141,7 +143,9 @@ function Composer() {
     ? state.currentGoal
     : null;
 
-  const hasContent = input.trim().length > 0 || attachments.length > 0 || browserElements.length > 0;
+  const hasContent = input.trim().length > 0
+    || attachments.length > 0
+    || selectedBrowserElements.length > 0;
   const currentAgent =
     state.currentSession?.current_agent_id
     ?? state.agents.find((agent) => agent.workspace_default)?.agent_id
@@ -182,7 +186,7 @@ function Composer() {
     }
     previousSessionIdRef.current = currentSessionCacheKey;
     setAttachments([]);
-    setBrowserElements([]);
+    setSelectedBrowserElements([]);
     setAttachmentError("");
     setComposerNotice("");
     setAgentMenuOpen(false);
@@ -197,22 +201,26 @@ function Composer() {
 
   useEffect(() => {
     const acceptBrowserElementSelection = (value: unknown) => {
-      const bundle = parseBrowserElementSelectionBundle(value);
-      if (!bundle || bundle.workspaceId !== currentWorkspaceId) {
+      const selectionBundle = parseBrowserElementSelectionBundle(value);
+      if (!selectionBundle || selectionBundle.workspaceId !== currentWorkspaceId) {
         return;
       }
-      setBrowserElements((current) => {
-        const base = current.filter((item) => item.browserId !== bundle.browserId);
-        return bundle.elements.reduce((next, selection) => [
-          ...next.filter((item) =>
-            item.browserId !== selection.browserId || item.ref !== selection.ref
-          ),
-          selection,
-        ], base);
+      setSelectedBrowserElements((currentSelections) => {
+        const retainedSelections = currentSelections.filter(
+          (selection) => selection.browserId !== selectionBundle.browserId,
+        );
+        const latestSelectionByRef = new Map<string, BrowserElementSelection>();
+        // 解析器已将相同 browserId 绑定到 bundle 内全部元素，因此按 ref 合并即可。
+        for (const selection of selectionBundle.elements) {
+          // 删除再写入可保留重复 ref 的最后一个载荷及其最后出现顺序。
+          latestSelectionByRef.delete(selection.ref);
+          latestSelectionByRef.set(selection.ref, selection);
+        }
+        return [...retainedSelections, ...latestSelectionByRef.values()];
       });
-      const lastSelection = bundle.elements[bundle.elements.length - 1];
+      const lastSelection = selectionBundle.elements[selectionBundle.elements.length - 1];
       setComposerNotice(
-        bundle.mode === "rich"
+        selectionBundle.mode === "rich"
           ? `已选择页面元素 <${lastSelection.tag}>（完整元素上下文）`
           : `已选择页面元素 <${lastSelection.tag}>`,
       );
@@ -455,11 +463,11 @@ function Composer() {
     }
 
     const typedContent = input.trim();
-    if (!typedContent && attachments.length === 0 && browserElements.length === 0) {
+    if (!typedContent && attachments.length === 0 && selectedBrowserElements.length === 0) {
       return;
     }
 
-    const elementContext = formatBrowserElementSelections(browserElements);
+    const elementContext = formatBrowserElementSelections(selectedBrowserElements);
     const content = [typedContent || (attachments.length > 0 ? MEDIA_ONLY_PROMPT : ""), elementContext]
       .filter(Boolean)
       .join("\n\n");
@@ -481,10 +489,10 @@ function Composer() {
     };
     inFlightSubmissionRef.current = submission;
     const sentAttachments = attachments;
-    const sentBrowserElements = browserElements;
+    const sentBrowserElementSelections = selectedBrowserElements;
     setInput("");
     setAttachments([]);
-    setBrowserElements([]);
+    setSelectedBrowserElements([]);
     setAttachmentError("");
     setComposerNotice("");
     void sendMessage(
@@ -505,7 +513,9 @@ function Composer() {
         // 覆盖它。空输入时才把未发出的内容恢复回来，避免用户的草稿凭空消失。
         setInput((current) => (current ? current : typedContent));
         setAttachments((current) => (current.length > 0 ? current : sentAttachments));
-        setBrowserElements((current) => (current.length > 0 ? current : sentBrowserElements));
+        setSelectedBrowserElements((currentSelections) => (
+          currentSelections.length > 0 ? currentSelections : sentBrowserElementSelections
+        ));
         setAttachmentError(
           `发送失败：${errorMessage(error)}`,
         );
@@ -585,7 +595,7 @@ function Composer() {
   const handleClear = () => {
     setInput("");
     setAttachments([]);
-    setBrowserElements([]);
+    setSelectedBrowserElements([]);
     setAttachmentError("");
     setComposerNotice("");
   };
@@ -769,9 +779,9 @@ function Composer() {
                 notice={composerNotice}
                 onRemove={handleRemoveAttachment}
               />
-              {browserElements.length > 0 ? (
+              {selectedBrowserElements.length > 0 ? (
                 <div className="composer-browser-elements" aria-label="已选择的浏览器元素">
-                  {browserElements.map((element) => (
+                  {selectedBrowserElements.map((element) => (
                     <div className="composer-browser-element" key={`${element.browserId}:${element.ref}`}>
                       <span className="codicon codicon-symbol-interface" aria-hidden="true" />
                       <span className="composer-browser-element-name" title={`${element.selector}\n${element.url}`}>
@@ -781,9 +791,9 @@ function Composer() {
                         type="button"
                         className="composer-attachment-remove"
                         aria-label={`移除页面元素 ${element.text || element.ref}`}
-                        onClick={() => setBrowserElements((current) =>
-                          current.filter((item) =>
-                            item.browserId !== element.browserId || item.ref !== element.ref
+                        onClick={() => setSelectedBrowserElements((currentSelections) =>
+                          currentSelections.filter((selection) =>
+                            selection.browserId !== element.browserId || selection.ref !== element.ref
                           )
                         )}
                       >

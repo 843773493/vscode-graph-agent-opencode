@@ -3,16 +3,23 @@ import {
   installTerminalShortcuts,
 } from "./terminalShortcuts.js";
 
+const SEARCH_DECORATIONS = Object.freeze({
+  matchBackground: "#334155",
+  matchOverviewRuler: "#64748b",
+  activeMatchBackground: "#b45309",
+  activeMatchColorOverviewRuler: "#f59e0b",
+});
+const STANDARD_SEARCH_OPTIONS = Object.freeze({
+  incremental: false,
+  decorations: SEARCH_DECORATIONS,
+});
+const INCREMENTAL_SEARCH_OPTIONS = Object.freeze({
+  incremental: true,
+  decorations: SEARCH_DECORATIONS,
+});
+
 function searchOptions(incremental = false) {
-  return {
-    incremental,
-    decorations: {
-      matchBackground: "#334155",
-      matchOverviewRuler: "#64748b",
-      activeMatchBackground: "#b45309",
-      activeMatchColorOverviewRuler: "#f59e0b",
-    },
-  };
+  return incremental ? INCREMENTAL_SEARCH_OPTIONS : STANDARD_SEARCH_OPTIONS;
 }
 
 export function installTerminalUserActions({

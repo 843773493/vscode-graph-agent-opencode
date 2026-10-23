@@ -7,6 +7,6 @@
     "demo": "bun src/cli.js --reset",
     "start": "bun src/server.js",
     "test": "bun test",
-    "check": "bun build --target=bun --outfile runtime/check-storage.js src/storage.js && bun build --target=bun --outfile runtime/check-cli.js src/cli.js && bun build --target=bun --outfile runtime/check-server.js src/server.js && bun build --target=browser --outfile runtime/check-web.js src/web/main.js && bun test"
+    "check": "bun run scripts/check.mjs"
   }
 }

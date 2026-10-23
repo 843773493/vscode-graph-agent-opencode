@@ -33,16 +33,18 @@ export function changedCatalogWorkspaceIds(
   previousRefreshVersions: ReadonlyMap<string, number>,
   nextRefreshVersions: ReadonlyMap<string, number>,
 ): string[] {
-  const workspaceIds = new Set([
-    ...previousSyncKeys.keys(),
-    ...nextSyncKeys.keys(),
-    ...previousRefreshVersions.keys(),
-    ...nextRefreshVersions.keys(),
-  ]);
-  return [...workspaceIds].filter(
-    (workspaceId) =>
-      previousSyncKeys.get(workspaceId) !== nextSyncKeys.get(workspaceId)
+  const workspaceIds = new Set(previousSyncKeys.keys());
+  for (const workspaceId of nextSyncKeys.keys()) workspaceIds.add(workspaceId);
+  for (const workspaceId of previousRefreshVersions.keys()) workspaceIds.add(workspaceId);
+  for (const workspaceId of nextRefreshVersions.keys()) workspaceIds.add(workspaceId);
+
+  const changedWorkspaceIds: string[] = [];
+  for (const workspaceId of workspaceIds) {
+    if (previousSyncKeys.get(workspaceId) !== nextSyncKeys.get(workspaceId)
       || previousRefreshVersions.get(workspaceId)
-        !== nextRefreshVersions.get(workspaceId),
-  );
+        !== nextRefreshVersions.get(workspaceId)) {
+      changedWorkspaceIds.push(workspaceId);
+    }
+  }
+  return changedWorkspaceIds;
 }

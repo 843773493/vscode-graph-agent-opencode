@@ -56,59 +56,70 @@ from app.services.infrastructure.rollout_context.storage.transaction import (
 )
 
 
-def read_activation_refs_for_turns(
+def read_activation_refs_for_view(
     connection: sqlite3.Connection,
     *,
     session_id: str,
     thread_id: str,
-    turn_ids: tuple[str, ...],
+    view_id: str,
 ) -> tuple[dict[str, object], ...]:
-    """在同一事务内读取指定 Turn 的 sealed activation 引用摘要。
+    """在同一事务内读取 view 两条历史 lane 的 sealed activation 引用摘要。
 
     rewind/compaction 边界用它把「旧 assembly 的精确 activation identity」写进
-    control payload；按 Turn 原 owner 校验目标本地冻结 scope，不重属化复制的行，
-    不解析当前 URI、不访问 Registry。空 rows 表示无引用，schema 异常显式失败。
+    control payload；用户 Turn 与内部 execution 都从明确 membership 取得，
+    按原 owner 校验目标本地冻结 scope，不重属化复制的行，不解析当前资源。
     """
 
     require_resource_activation_schema(connection)
     storage_owner = (session_id, thread_id)
     if current_scope(connection) != storage_owner:
         raise ValueError("source-mismatch: activation ref 读取方与目标 rollout owner 不一致")
-    if not turn_ids:
-        return ()
-    placeholders = ",".join("?" for _ in turn_ids)
     turn_owners = {
         strict_text(row[0], field="activation_ref.turn_id"): (
             strict_text(row[1], field="turn_records.session_id"),
             strict_text(row[2], field="turn_records.thread_id"),
         )
         for row in connection.execute(
-            f"SELECT turn_id, session_id, thread_id FROM turn_records WHERE turn_id IN ({placeholders})",
-            turn_ids,
+            "SELECT membership.turn_id, record.session_id, record.thread_id "
+            "FROM context_view_turns membership LEFT JOIN turn_records record "
+            "ON record.turn_id=membership.turn_id WHERE membership.view_id=?",
+            (view_id,),
         )
     }
-    if set(turn_owners) != set(turn_ids):
-        raise ValueError("source-mismatch: activation ref 缺少 view Turn 的真实 owner")
     for owner in set(turn_owners.values()):
         require_historical_scope(connection, *owner, current_owner=storage_owner)
     rows = connection.execute(
         "SELECT b.assembly_id, a.turn_id, b.activation_snapshot_id, "
         "b.plan_hash, b.request_hash, b.bindings_hash, "
-        "b.activation_provenance_hash, a.session_id, a.thread_id, b.session_id, b.thread_id "
+        "b.activation_provenance_hash, a.session_id, a.thread_id, b.session_id, b.thread_id, "
+        "e.session_id, e.thread_id, e.turn_id "
         "FROM resource_activation_assembly_bindings b "
         "JOIN context_assemblies a ON a.assembly_id = b.assembly_id "
-        f"WHERE a.turn_id IN ({placeholders}) "
+        "LEFT JOIN executions e ON e.execution_id=a.execution_id "
+        "WHERE (a.turn_id IN (SELECT turn_id FROM context_view_turns WHERE view_id=?) "
+        "OR (a.turn_id IS NULL AND EXISTS ("
+        "SELECT 1 FROM context_view_items membership JOIN item_catalog item ON item.item_id=membership.item_id "
+        "WHERE membership.view_id=? AND membership.visible=1 AND item.turn_id IS NULL "
+        "AND item.execution_id=a.execution_id))) "
         "AND a.status IN ('sealed','terminal') "
         "ORDER BY a.turn_id, b.assembly_id",
-        turn_ids,
+        (view_id, view_id),
     ).fetchall()
     for row in rows:
-        if tuple(row[7:9]) != turn_owners[row[1]] or tuple(row[9:11]) != turn_owners[row[1]]:
-            raise ValueError("source-mismatch: activation ref 的 assembly/binding 与 Turn owner 不一致")
+        execution_owner = tuple(row[11:13])
+        if (
+            any(not isinstance(value, str) or not value for value in execution_owner)
+            or row[13] != row[1]
+            or (row[1] is not None and execution_owner != turn_owners[row[1]])
+            or tuple(row[7:9]) != execution_owner
+            or tuple(row[9:11]) != execution_owner
+        ):
+            raise ValueError("source-mismatch: activation ref 的 assembly/binding 与 execution owner 不一致")
+        require_historical_scope(connection, *execution_owner, current_owner=storage_owner)
     return tuple(
         {
             "assembly_id": strict_text(row[0], field="activation_ref.assembly_id"),
-            "turn_id": strict_text(row[1], field="activation_ref.turn_id"),
+            "turn_id": strict_optional_text(row[1], field="activation_ref.turn_id"),
             "activation_snapshot_id": strict_text(
                 row[2], field="activation_ref.activation_snapshot_id"
             ),
@@ -649,5 +660,5 @@ class ResourceActivationReadMixin:
 
 __all__ = [
     "ResourceActivationReadMixin",
-    "read_activation_refs_for_turns",
+    "read_activation_refs_for_view",
 ]

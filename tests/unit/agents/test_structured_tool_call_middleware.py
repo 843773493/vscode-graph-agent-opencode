@@ -21,12 +21,12 @@ class _ToolBindingFakeModel(FakeMessagesListChatModel):
 
 
 @pytest.fixture
-def middleware() -> StructuredToolCallMiddleware:
+def structured_tool_call_middleware() -> StructuredToolCallMiddleware:
     return StructuredToolCallMiddleware()
 
 
 @pytest.fixture
-def executions() -> list[str]:
+def tool_invocation_arguments() -> list[str]:
     return []
 
 
@@ -87,20 +87,20 @@ def _malformed_tool_message(
     ids=["legacy-marker", "json-code-block", "xml", "bare-json", "natural-text"],
 )
 def test_plain_text_that_looks_like_tool_json_is_not_executed_or_rewritten(
-    middleware: StructuredToolCallMiddleware,
+    structured_tool_call_middleware: StructuredToolCallMiddleware,
     content: str,
 ):
     message = AIMessage(content=content)
 
-    update = middleware.after_model({"messages": [message]}, None)
+    update = structured_tool_call_middleware.after_model({"messages": [message]}, None)
 
     assert update is None
 
 
 def test_malformed_structured_arguments_return_error_and_retry_model(
-    middleware: StructuredToolCallMiddleware,
+    structured_tool_call_middleware: StructuredToolCallMiddleware,
 ):
-    update = middleware.after_model(
+    update = structured_tool_call_middleware.after_model(
         {"messages": [_malformed_tool_message(include_parsed_call=True)]},
         None,
     )
@@ -135,7 +135,7 @@ def test_malformed_structured_arguments_return_error_and_retry_model(
     ],
 )
 def test_unusual_invalid_json_is_returned_to_model_for_correction(
-    middleware: StructuredToolCallMiddleware,
+    structured_tool_call_middleware: StructuredToolCallMiddleware,
     arguments: str,
 ):
     message = AIMessage(
@@ -143,7 +143,7 @@ def test_unusual_invalid_json_is_returned_to_model_for_correction(
         additional_kwargs={"tool_calls": [_raw_tool_call(arguments)]},
     )
 
-    update = middleware.after_model({"messages": [message]}, None)
+    update = structured_tool_call_middleware.after_model({"messages": [message]}, None)
 
     assert update is not None
     assert update["jump_to"] == "model"
@@ -159,7 +159,7 @@ def test_unusual_invalid_json_is_returned_to_model_for_correction(
     ids=["missing-arguments", "provider-returned-object"],
 )
 def test_non_string_raw_arguments_fail_as_provider_protocol_errors(
-    middleware: StructuredToolCallMiddleware,
+    structured_tool_call_middleware: StructuredToolCallMiddleware,
     arguments: object,
     expected_type: str,
 ):
@@ -169,7 +169,7 @@ def test_non_string_raw_arguments_fail_as_provider_protocol_errors(
     )
 
     with pytest.raises(RuntimeError, match=expected_type):
-        middleware.after_model({"messages": [message]}, None)
+        structured_tool_call_middleware.after_model({"messages": [message]}, None)
 
 
 @pytest.mark.parametrize(
@@ -191,7 +191,7 @@ def test_langchain_rejects_non_object_json_before_middleware(arguments: str):
     ids=["null", "empty-array", "false"],
 )
 def test_falsy_non_objects_are_rejected_after_langchain_normalizes_them(
-    middleware: StructuredToolCallMiddleware,
+    structured_tool_call_middleware: StructuredToolCallMiddleware,
     arguments: str,
     expected_type: str,
 ):
@@ -201,7 +201,7 @@ def test_falsy_non_objects_are_rejected_after_langchain_normalizes_them(
     )
     assert message.tool_calls[0]["args"] == {}
 
-    update = middleware.after_model({"messages": [message]}, None)
+    update = structured_tool_call_middleware.after_model({"messages": [message]}, None)
 
     assert update is not None
     assert expected_type in update["messages"][0].content
@@ -214,18 +214,29 @@ def test_falsy_non_objects_are_rejected_after_langchain_normalizes_them(
         (["broken"], r"tool_calls\[0\] 必须为 object"),
         ([{"id": "call-invalid", "type": "function"}], "缺少 function object"),
         (
-            [{"type": "function", "function": {"name": "read_file", "arguments": "{}"}}],
+            [
+                {
+                    "type": "function",
+                    "function": {"name": "read_file", "arguments": "{}"},
+                }
+            ],
             "缺少 tool_call_id",
         ),
         (
-            [{"id": "call-invalid", "type": "function", "function": {"arguments": "{}"}}],
+            [
+                {
+                    "id": "call-invalid",
+                    "type": "function",
+                    "function": {"arguments": "{}"},
+                }
+            ],
             "缺少工具名称",
         ),
     ],
     ids=["mapping-list", "non-object-call", "no-function", "no-id", "no-name"],
 )
 def test_broken_structured_envelope_fails_loudly(
-    middleware: StructuredToolCallMiddleware,
+    structured_tool_call_middleware: StructuredToolCallMiddleware,
     raw_tool_calls: object,
     error: str,
 ):
@@ -235,22 +246,25 @@ def test_broken_structured_envelope_fails_loudly(
     )
 
     with pytest.raises(RuntimeError, match=error):
-        middleware.after_model({"messages": [message]}, None)
+        structured_tool_call_middleware.after_model({"messages": [message]}, None)
 
 
 def test_tuple_tool_call_collection_is_accepted_when_call_is_valid(
-    middleware: StructuredToolCallMiddleware,
+    structured_tool_call_middleware: StructuredToolCallMiddleware,
 ):
     message = AIMessage(
         content="",
         additional_kwargs={"tool_calls": (_raw_tool_call('{"file_path":"a"}'),)},
     )
 
-    assert middleware.after_model({"messages": [message]}, None) is None
+    assert (
+        structured_tool_call_middleware.after_model({"messages": [message]}, None)
+        is None
+    )
 
 
 def test_unicode_quotes_newlines_and_backslashes_remain_exact(
-    middleware: StructuredToolCallMiddleware,
+    structured_tool_call_middleware: StructuredToolCallMiddleware,
 ):
     arguments = {
         "file_path": '目录/C:\\tmp\\雪人".txt',
@@ -259,18 +273,19 @@ def test_unicode_quotes_newlines_and_backslashes_remain_exact(
     message = AIMessage(
         content="",
         additional_kwargs={
-            "tool_calls": [
-                _raw_tool_call(json.dumps(arguments, ensure_ascii=False))
-            ]
+            "tool_calls": [_raw_tool_call(json.dumps(arguments, ensure_ascii=False))]
         },
     )
 
-    assert middleware.after_model({"messages": [message]}, None) is None
+    assert (
+        structured_tool_call_middleware.after_model({"messages": [message]}, None)
+        is None
+    )
     assert message.tool_calls[0]["args"] == arguments
 
 
 def test_multiple_invalid_calls_each_get_one_error_message(
-    middleware: StructuredToolCallMiddleware,
+    structured_tool_call_middleware: StructuredToolCallMiddleware,
 ):
     message = AIMessage(
         content="",
@@ -282,14 +297,14 @@ def test_multiple_invalid_calls_each_get_one_error_message(
         },
     )
 
-    update = middleware.after_model({"messages": [message]}, None)
+    update = structured_tool_call_middleware.after_model({"messages": [message]}, None)
 
     assert update is not None
     assert [item.tool_call_id for item in update["messages"]] == ["bad-1", "bad-2"]
 
 
 def test_duplicate_tool_call_id_fails_loudly(
-    middleware: StructuredToolCallMiddleware,
+    structured_tool_call_middleware: StructuredToolCallMiddleware,
 ):
     message = AIMessage(
         content="",
@@ -302,11 +317,11 @@ def test_duplicate_tool_call_id_fails_loudly(
     )
 
     with pytest.raises(RuntimeError, match="重复 tool_call_id"):
-        middleware.after_model({"messages": [message]}, None)
+        structured_tool_call_middleware.after_model({"messages": [message]}, None)
 
 
 def test_valid_parallel_call_remains_pending_while_invalid_call_gets_error(
-    middleware: StructuredToolCallMiddleware,
+    structured_tool_call_middleware: StructuredToolCallMiddleware,
 ):
     message = _malformed_tool_message()
     message.tool_calls.append(
@@ -318,7 +333,7 @@ def test_valid_parallel_call_remains_pending_while_invalid_call_gets_error(
         }
     )
 
-    update = middleware.after_model({"messages": [message]}, None)
+    update = structured_tool_call_middleware.after_model({"messages": [message]}, None)
 
     assert update is not None
     assert "jump_to" not in update
@@ -326,10 +341,10 @@ def test_valid_parallel_call_remains_pending_while_invalid_call_gets_error(
 
 
 def test_malformed_structured_arguments_fail_after_retry_limit(
-    middleware: StructuredToolCallMiddleware,
+    structured_tool_call_middleware: StructuredToolCallMiddleware,
 ):
     with pytest.raises(RuntimeError, match="已达到重试上限"):
-        middleware.after_model(
+        structured_tool_call_middleware.after_model(
             {
                 "messages": [_malformed_tool_message()],
                 "_invalid_tool_call_retry_count": MAX_INVALID_TOOL_CALL_RETRIES,
@@ -339,9 +354,9 @@ def test_malformed_structured_arguments_fail_after_retry_limit(
 
 
 def test_valid_response_resets_previous_invalid_retry_count(
-    middleware: StructuredToolCallMiddleware,
+    structured_tool_call_middleware: StructuredToolCallMiddleware,
 ):
-    update = middleware.after_model(
+    update = structured_tool_call_middleware.after_model(
         {
             "messages": [AIMessage(content="最终回答")],
             "_invalid_tool_call_retry_count": 3,
@@ -353,13 +368,13 @@ def test_valid_response_resets_previous_invalid_retry_count(
 
 
 def test_agent_returns_malformed_json_error_to_model_without_executing_tool(
-    executions: list[str],
+    tool_invocation_arguments: list[str],
 ):
 
     @tool
     def read_file(file_path: str) -> str:
         """读取指定文件。"""
-        executions.append(file_path)
+        tool_invocation_arguments.append(file_path)
         return file_path
 
     model = _ToolBindingFakeModel(
@@ -381,22 +396,21 @@ def test_agent_returns_malformed_json_error_to_model_without_executing_tool(
     )
     assert error_message.status == "error"
     assert error_message.tool_call_id == "call-invalid"
-    assert executions == []
+    assert tool_invocation_arguments == []
     assert result["messages"][-1].content == "已收到参数错误并停止错误调用。"
 
 
 def test_agent_treats_pseudo_tool_syntax_as_final_text(
-    executions: list[str],
+    tool_invocation_arguments: list[str],
 ):
     @tool
     def read_file(file_path: str) -> str:
         """读取指定文件。"""
-        executions.append(file_path)
+        tool_invocation_arguments.append(file_path)
         return file_path
 
     pseudo_call = (
-        '<TOOLCALL>[{"name":"read_file",'
-        '"arguments":{"file_path":"should-not-run"}}]'
+        '<TOOLCALL>[{"name":"read_file","arguments":{"file_path":"should-not-run"}}]'
     )
     agent = create_agent(
         _ToolBindingFakeModel(responses=[AIMessage(content=pseudo_call)]),
@@ -406,17 +420,17 @@ def test_agent_treats_pseudo_tool_syntax_as_final_text(
 
     result = agent.invoke({"messages": [HumanMessage(content="解释示例代码")]})
 
-    assert executions == []
+    assert tool_invocation_arguments == []
     assert result["messages"][-1].content == pseudo_call
 
 
 def test_agent_executes_corrected_call_after_malformed_first_attempt(
-    executions: list[str],
+    tool_invocation_arguments: list[str],
 ):
     @tool
     def read_file(file_path: str) -> str:
         """读取指定文件。"""
-        executions.append(file_path)
+        tool_invocation_arguments.append(file_path)
         return f"内容:{file_path}"
 
     model = _ToolBindingFakeModel(
@@ -451,17 +465,17 @@ def test_agent_executes_corrected_call_after_malformed_first_attempt(
         ("call-invalid", "error"),
         ("call-corrected", "success"),
     ]
-    assert executions == ["src/main.py"]
+    assert tool_invocation_arguments == ["src/main.py"]
     assert result["messages"][-1].content == "修正后读取成功。"
 
 
 def test_agent_executes_valid_parallel_call_while_rejecting_broken_peer(
-    executions: list[str],
+    tool_invocation_arguments: list[str],
 ):
     @tool
     def grep(pattern: str) -> str:
         """查找文本。"""
-        executions.append(pattern)
+        tool_invocation_arguments.append(pattern)
         return "found"
 
     mixed_message = AIMessage(
@@ -495,7 +509,7 @@ def test_agent_executes_valid_parallel_call_while_rejecting_broken_peer(
         ("call-bad", "error"),
         ("call-good", "success"),
     }
-    assert executions == ["needle"]
+    assert tool_invocation_arguments == ["needle"]
 
 
 def test_agent_returns_schema_error_to_model_before_retrying():

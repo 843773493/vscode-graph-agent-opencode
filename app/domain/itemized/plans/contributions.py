@@ -246,8 +246,6 @@ class ContextContribution:
 
         body = object.__getattribute__(self, "body")
         extensions = object.__getattribute__(self, "extensions")
-        if body is not None:
-            canonical_json_bytes(body)
         canonical_json_bytes(extensions)
         object.__setattr__(
             self,

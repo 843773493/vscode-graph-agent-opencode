@@ -122,31 +122,44 @@ function parseElement(
   if (!isRecord(rawElement)) {
     return null;
   }
-  if (!hasRequiredStringFields(rawElement) || !isBounds(rawElement.bounds)) {
+  if (!hasRequiredStringFields(rawElement)) {
     return null;
   }
-  if (rawElement.ancestors !== undefined && !isAncestors(rawElement.ancestors)) {
+  const bounds = rawElement.bounds;
+  if (!isBounds(bounds)) {
     return null;
   }
-  if (rawElement.attributes !== undefined && !isStringRecord(rawElement.attributes)) {
+
+  const ancestors = rawElement.ancestors;
+  if (ancestors !== undefined && !isAncestors(ancestors)) {
     return null;
   }
-  if (rawElement.computedStyles !== undefined && !isStringRecord(rawElement.computedStyles)) {
+  const attributes = rawElement.attributes;
+  if (attributes !== undefined && !isStringRecord(attributes)) {
     return null;
   }
-  if (rawElement.dimensions !== undefined && !isDimensions(rawElement.dimensions)) {
+  const computedStyles = rawElement.computedStyles;
+  if (computedStyles !== undefined && !isStringRecord(computedStyles)) {
     return null;
   }
-  if (rawElement.id !== undefined && typeof rawElement.id !== "string") {
+  const dimensions = rawElement.dimensions;
+  if (dimensions !== undefined && !isDimensions(dimensions)) {
     return null;
   }
-  if (rawElement.classes !== undefined && typeof rawElement.classes !== "string") {
+  const id = rawElement.id;
+  if (id !== undefined && typeof id !== "string") {
     return null;
   }
-  if (rawElement.document_revision !== undefined && typeof rawElement.document_revision !== "number") {
+  const classes = rawElement.classes;
+  if (classes !== undefined && typeof classes !== "string") {
     return null;
   }
-  if (rawElement.innerText !== undefined && typeof rawElement.innerText !== "string") {
+  const documentRevision = rawElement.document_revision;
+  if (documentRevision !== undefined && typeof documentRevision !== "number") {
+    return null;
+  }
+  const innerText = rawElement.innerText;
+  if (innerText !== undefined && typeof innerText !== "string") {
     return null;
   }
 
@@ -163,17 +176,15 @@ function parseElement(
     url: rawElement.url,
     outerHTML: rawElement.outerHTML,
     computedStyle: rawElement.computedStyle,
-    bounds: rawElement.bounds,
-    ...(isAncestors(rawElement.ancestors) ? { ancestors: rawElement.ancestors } : {}),
-    ...(isStringRecord(rawElement.attributes) ? { attributes: rawElement.attributes } : {}),
-    ...(isStringRecord(rawElement.computedStyles) ? { computedStyles: rawElement.computedStyles } : {}),
-    ...(isDimensions(rawElement.dimensions) ? { dimensions: rawElement.dimensions } : {}),
-    ...(typeof rawElement.innerText === "string" ? { innerText: rawElement.innerText } : {}),
-    ...(typeof rawElement.id === "string" ? { id: rawElement.id } : {}),
-    ...(typeof rawElement.classes === "string" ? { classes: rawElement.classes } : {}),
-    ...(typeof rawElement.document_revision === "number"
-      ? { document_revision: rawElement.document_revision }
-      : {}),
+    bounds,
+    ...(ancestors !== undefined ? { ancestors } : {}),
+    ...(attributes !== undefined ? { attributes } : {}),
+    ...(computedStyles !== undefined ? { computedStyles } : {}),
+    ...(dimensions !== undefined ? { dimensions } : {}),
+    ...(innerText !== undefined ? { innerText } : {}),
+    ...(id !== undefined ? { id } : {}),
+    ...(classes !== undefined ? { classes } : {}),
+    ...(documentRevision !== undefined ? { document_revision: documentRevision } : {}),
   };
 }
 

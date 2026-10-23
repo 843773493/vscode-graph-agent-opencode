@@ -1,6 +1,8 @@
+import { useMemo } from "react";
 import type { Dispatch, SetStateAction } from "react";
 
 import type { NodeDebugState } from "../../types/backend";
+import { formatLocalTime } from "../../utils/format";
 import { nodeDebugActionActor } from "./nodeDebugPresentation";
 
 export default function NodeDebugConsoleView({
@@ -20,9 +22,19 @@ export default function NodeDebugConsoleView({
   setExpression: Dispatch<SetStateAction<string>>;
   onEvaluate: () => void;
 }) {
-  const recentActions = [...(state?.actions ?? [])]
-    .reverse()
-    .slice(0, extensionWindow ? 40 : 12);
+  const actionLimit = extensionWindow ? 40 : 12;
+  const recentActions = useMemo(
+    () => (state?.actions ?? []).slice(-actionLimit).reverse(),
+    [actionLimit, state?.actions],
+  );
+  const recentEvaluations = useMemo(
+    () => (state?.evaluations ?? []).slice().reverse(),
+    [state?.evaluations],
+  );
+  const outputText = useMemo(
+    () => (state?.output ?? []).join("\n"),
+    [state?.output],
+  );
 
   return (
     <div className="node-debug-view node-debug-console-view" role="tabpanel">
@@ -40,7 +52,7 @@ export default function NodeDebugConsoleView({
         </div>
         <div className="node-debug-evaluation-list">
           {(state?.evaluations ?? []).length === 0 ? <span className="debug-muted">暂无表达式求值</span> : null}
-          {[...(state?.evaluations ?? [])].reverse().map((evaluation) => (
+          {recentEvaluations.map((evaluation) => (
             <div key={`${evaluation.evaluated_at}-${evaluation.expression}`}>
               <code>{evaluation.expression}</code>
               <strong>{evaluation.error ?? evaluation.value ?? evaluation.description ?? "undefined"}</strong>
@@ -50,7 +62,7 @@ export default function NodeDebugConsoleView({
       </section>
       <section className="node-debug-section">
         <div className="debug-section-title-row"><h3>调试控制台</h3><span>{state?.output?.length ?? 0} 行</span></div>
-        <pre className="node-debug-output">{(state?.output ?? []).join("\n") || "暂无程序输出"}</pre>
+        <pre className="node-debug-output">{outputText || "暂无程序输出"}</pre>
       </section>
       <section className="node-debug-section">
         <div className="debug-section-title-row"><h3>模型 / 用户动作</h3><span>{state?.actions?.length ?? 0}</span></div>
@@ -61,7 +73,7 @@ export default function NodeDebugConsoleView({
               <span className={action.actor === "ai" ? "agent" : "human"}>{nodeDebugActionActor(action)}</span>
               <strong>{action.tool_name ?? action.action}</strong>
               <small title={action.message}>{action.message}</small>
-              <time>{new Date(action.created_at).toLocaleTimeString()}</time>
+              <time>{formatLocalTime(action.created_at)}</time>
             </div>
           ))}
         </div>

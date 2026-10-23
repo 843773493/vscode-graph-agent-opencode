@@ -1,5 +1,11 @@
 import { spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
+import {
+  describeCommandCheckResult,
+  resolveDockerCommandPrefix,
+} from "./dockerAccess.js";
 
+const demoRoot = fileURLToPath(new URL("../", import.meta.url));
 const proxy = process.env.SSH_TEXT_DOCKER_PROXY
   || process.env.HTTP_PROXY
   || process.env.http_proxy;
@@ -29,31 +35,41 @@ function proxyEnvPairs() {
   ];
 }
 
-function commandOk(command, args) {
+function checkCommand(command, args) {
   const result = spawnSync(command, args, {
+    cwd: demoRoot,
     env: commandEnvironment,
-    stdio: "ignore",
+    encoding: "utf8",
+    maxBuffer: 64 * 1024,
+    stdio: ["ignore", "ignore", "pipe"],
   });
-  return result.status === 0;
+  return describeCommandCheckResult(result);
 }
 
 function dockerPrefix() {
-  if (commandOk("docker", ["version"])) {
-    return ["docker"];
-  }
-  if (commandOk("sudo", ["-n", "env", ...proxyEnvPairs(), "docker", "version"])) {
-    return ["sudo", "-n", "env", ...proxyEnvPairs(), "docker"];
-  }
-  throw new Error("无法访问 Docker daemon：当前用户没有权限，且 sudo -n docker 不可用");
+  return resolveDockerCommandPrefix({
+    platform: process.platform,
+    checkCommand,
+    sudoEnvironmentPairs: proxyEnvPairs(),
+  });
 }
 
 function run(prefix, args) {
   const result = spawnSync(prefix[0], [...prefix.slice(1), ...args], {
+    cwd: demoRoot,
     env: commandEnvironment,
     stdio: "inherit",
   });
+  const operation = args[0] || "unknown";
+  if (result.error) {
+    throw new Error(`Docker 操作 ${operation} 无法启动: ${result.error.message}`, {
+      cause: result.error,
+    });
+  }
   if (result.status !== 0) {
-    throw new Error(`命令失败: ${prefix.join(" ")} ${args.join(" ")}`);
+    throw new Error(
+      `Docker 操作 ${operation} 失败: code=${result.status ?? "null"} signal=${result.signal ?? "null"}`,
+    );
   }
 }
 
@@ -61,7 +77,7 @@ const prefix = dockerPrefix();
 
 console.log(
   proxy
-    ? `[docker] 使用代理 ${proxy} 拉取 ${upstreamImage}`
+    ? `[docker] 已配置代理，使用代理拉取 ${upstreamImage}`
     : `[docker] 未配置代理，直接拉取 ${upstreamImage}`,
 );
 run(prefix, ["pull", upstreamImage]);

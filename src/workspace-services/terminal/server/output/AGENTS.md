@@ -17,7 +17,7 @@ Session决定何时记录PTY正文并产生唯一输出sequence；本目录决�
 
 尾部只保留256KiB，不应编码已经确定会丢弃的整段输入。UTF-8每个UTF-16单元至少占1字节，因此只需编码最后256Ki个单元，再按字节边界对齐；扫描与编码范围由保留上限约束。未超限字符串保持原值，超限时沿用UTF-8编码对孤立代理项的替换语义。
 
-超出64KiB的单次输出按码点宽度累计UTF-8字节，确定边界后从原字符串切片；不逐字符调用编码函数或拼接块正文。码点决定字符宽度，UTF-16偏移决定切片位置，孤立代理项按3字节计费且保留原值，不能把这两种单位混作同一偏移。
+单次输出的UTF-16长度不超过64KiB时才调用`Buffer.byteLength`判断能否直发；长度已超限就直接按码点宽度累计UTF-8字节，避免先扫描全文再切块。超限输出确定边界后从原字符串切片，不逐字符调用编码函数或拼接块正文。码点决定字符宽度，UTF-16偏移决定切片位置，孤立代理项按3字节计费且保留原值，不能把这两种单位混作同一偏移。
 
 输出sequence只有Session逐一递增产生，重放环只从头部淘汰，因此Multiplexer可用序号差加逻辑头偏移定位增量起点，无需从头扫描或维护第二份位置索引。淘汰立即释放正文引用，空前缀达到数组一半后集中压缩，避免大量小输出逐项shift搬移。字节窗口、ACK、控制事件顺序及缺口resync仍由同一Multiplexer处理。
 
@@ -25,7 +25,7 @@ Session决定何时记录PTY正文并产生唯一输出sequence；本目录决�
 
 客户端未确认队列只记录sequence和字节数，ACK累计确认到指定序号；逻辑头游标推进后同样集中压缩。窗口计费只包含未确认后缀；resync替换整份待确认快照时必须同时归零头游标，防止旧游标跳过新快照的确认。该队列与模型读取的重放缓冲各管自己的消费状态。
 
-Multiplexer的`clientFlowStates`按attach连接保存`TerminalClientFlowState`，不表示终端业务状态。`attachedMessageSent`只确认attached已交给连接，`blockedOn`明确区分ACK窗口与socket拒收；`socketRetryTimer`只重试socket发送。已发送/已确认输出序号、模型读取游标和屏幕实际绘制是不同事实，不能互相替代。
+Multiplexer的`clientFlowStates`按attach连接保存`TerminalClientFlowState`，不表示终端业务状态。`attachedMessageSent`只确认attached已交给连接，`blockedOn`明确区分ACK窗口与socket拒收；`socketRetryTimer`只重试socket发送。已发送/已确认输出序号、模型读取游标和屏幕实际绘制是不同事实，不能互相替代。控制消息队列用`controlQueueStartIndex`推进已发送前缀并集中压缩，socket拒收时保留当前队首；队列字节数只计未发送消息，不含已释放前缀。
 
 多个连接接收同一输出事件时，Multiplexer只在本次同步广播内复用现有协议owner生成的封包；广播返回即释放这个局部映射，重放记录不额外保留编码正文。后续ACK续传、socket重试和重连仍按各自游标重新编码；没有连接时不编码输出，不另建持久传输缓存或第二套序列化合同。
 

@@ -41,7 +41,7 @@ def item_matrix() -> dict[str, object]:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-@pytest.fixture
+@pytest.fixture(scope="session")
 def golden_plan(hash_vectors: dict[str, object]) -> ContextRequestPlan:
     scenario = hash_vectors["scenario"]
     item = CanonicalItemRecord.from_dict(scenario["item"])

@@ -5,20 +5,20 @@ const json = process.argv.includes("--json");
 const store = new ItemizedDemoStore("demo");
 
 await store.initialize({ reset });
-const inspected = await store.inspect();
+const runtimeSnapshot = await store.readRuntimeSnapshot();
 store.close();
 
 if (json) {
-  console.log(JSON.stringify(inspected, null, 2));
+  console.log(JSON.stringify(runtimeSnapshot, null, 2));
 } else {
   console.log("Itemized Context Storage Demo");
-  console.log(`运行时根目录: ${inspected.runtimeRoot}`);
-  console.log(`canonical items: ${inspected.catalog.length}`);
-  console.log(`active view: ${inspected.view.filter((item) => item.included).length} included / ${inspected.view.length} traced`);
-  console.log(`model wire messages: ${inspected.plan.wire_request.messages.length}`);
-  console.log(`transcript entries: ${inspected.transcript.entries.length}`);
+  console.log(`运行时根目录: ${runtimeSnapshot.runtimeRoot}`);
+  console.log(`canonical items: ${runtimeSnapshot.catalog.length}`);
+  console.log(`active view: ${runtimeSnapshot.view.filter((item) => item.included).length} included / ${runtimeSnapshot.view.length} traced`);
+  console.log(`model wire messages: ${runtimeSnapshot.plan.wire_request.messages.length}`);
+  console.log(`transcript entries: ${runtimeSnapshot.transcript.entries.length}`);
   console.log("\n可以观察的文件:");
-  for (const file of inspected.files) {
+  for (const file of runtimeSnapshot.files) {
     console.log(`  ${file.path} (${file.bytes} bytes)`);
   }
   console.log("\n关键事实:");

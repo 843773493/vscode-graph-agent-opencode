@@ -1,6 +1,5 @@
 import type { Session } from "../../types/backend";
 import type { AppState } from "../../types/frontend";
-import { cloneMaps } from "../appStateMaps";
 import { sessionScopeKey } from "./sessionScope";
 
 /** 首页只能替换已返回的完整对象；缺席节点只有在完整列表中才表示已移除。 */
@@ -37,15 +36,36 @@ export function applySessionListConvergence(
   workspaceId: string,
   remainingSessions: Session[],
 ): AppState {
-  const next = cloneMaps(state);
   const previousSessions = state.sessionsByWorkspace.get(workspaceId)
     ?? (state.activeGatewayWorkspaceId === workspaceId ? state.sessions : []);
-  if (state.activeGatewayWorkspaceId === workspaceId) next.sessions = remainingSessions;
-  next.sessionsByWorkspace.set(workspaceId, remainingSessions);
   const remainingIds = new Set(remainingSessions.map((session) => session.session_id));
+  const removedCacheKeys = new Set<string>();
   for (const removed of previousSessions) {
     if (remainingIds.has(removed.session_id)) continue;
-    const cacheKey = sessionScopeKey(workspaceId, removed.session_id);
+    removedCacheKeys.add(sessionScopeKey(workspaceId, removed.session_id));
+  }
+  const next: AppState = {
+    ...state,
+    sessionsByWorkspace: new Map(state.sessionsByWorkspace),
+    ...(removedCacheKeys.size > 0
+      ? {
+          sessionAttachmentSummaries: new Map(state.sessionAttachmentSummaries),
+          eventQueuesBySession: new Map(state.eventQueuesBySession),
+          sessionTraceHistoryBySession: new Map(state.sessionTraceHistoryBySession),
+          pendingConversations: new Map(state.pendingConversations),
+          activeJobIdsBySession: new Map(state.activeJobIdsBySession),
+          unreadSessionKeys: new Set(state.unreadSessionKeys),
+          sessionGatewayWorkspaceById: new Map(state.sessionGatewayWorkspaceById),
+          turnTimelinesBySession: new Map(state.turnTimelinesBySession ?? []),
+          messageStreamsByTurnStream: new Map(state.messageStreamsByTurnStream ?? []),
+        }
+      : {}),
+  };
+  if (state.activeGatewayWorkspaceId === workspaceId) {
+    next.sessions = remainingSessions;
+  }
+  next.sessionsByWorkspace.set(workspaceId, remainingSessions);
+  for (const cacheKey of removedCacheKeys) {
     next.sessionAttachmentSummaries.delete(cacheKey);
     next.eventQueuesBySession.delete(cacheKey);
     next.sessionTraceHistoryBySession.delete(cacheKey);
@@ -53,9 +73,13 @@ export function applySessionListConvergence(
     next.activeJobIdsBySession.delete(cacheKey);
     next.unreadSessionKeys.delete(cacheKey);
     next.sessionGatewayWorkspaceById.delete(cacheKey);
-    next.turnTimelinesBySession.delete(cacheKey);
+    next.turnTimelinesBySession?.delete(cacheKey);
+  }
+  if (removedCacheKeys.size > 0) {
     for (const [streamKey, stream] of next.messageStreamsByTurnStream ?? []) {
-      if (stream.sessionCacheKey === cacheKey) next.messageStreamsByTurnStream?.delete(streamKey);
+      if (removedCacheKeys.has(stream.sessionCacheKey)) {
+        next.messageStreamsByTurnStream?.delete(streamKey);
+      }
     }
   }
   return next;
@@ -66,7 +90,11 @@ export function replaceSessionMetadata(
   updatedSession: Session,
   workspaceIdOverride?: string | null,
 ): AppState {
-  const next = cloneMaps(state);
+  const next: AppState = {
+    ...state,
+    sessionsByWorkspace: new Map(state.sessionsByWorkspace),
+    sessionGatewayWorkspaceById: new Map(state.sessionGatewayWorkspaceById),
+  };
   const workspaceId =
     workspaceIdOverride ?? state.activeGatewayWorkspaceId ?? updatedSession.workspace_id;
   if (workspaceId === state.activeGatewayWorkspaceId) {

@@ -13,7 +13,7 @@ export function childThreadStatusLabel(status: ChildThreadStatus): string {
   return STATUS_LABELS[status];
 }
 
-/** 状态徽标的配色类名；与 styles/childThreadPanel.css 中的状态变量对应。 */
+/** 状态徽标的配色类名；与 styles/session/childThreadPanel.css 中的状态变量对应。 */
 const STATUS_CLASSES: Record<ChildThreadStatus, string> = {
   idle: "child-thread-status-idle",
   pending: "child-thread-status-pending",

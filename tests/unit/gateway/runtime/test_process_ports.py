@@ -3,11 +3,35 @@ import socket
 
 import pytest
 
+from app.gateway.runtime import process_ports
 from app.gateway.runtime.process_ports import (
     allocate_local_port_in_range,
     is_local_port_available,
     ssh_tunnel_port_range_from_env,
 )
+
+
+def test_allocate_local_port_in_range_scans_from_random_offset(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    probed_ports: list[int] = []
+    random_bounds: list[int] = []
+
+    class FixedRandomStart:
+        def randrange(self, stop: int) -> int:
+            random_bounds.append(stop)
+            return 2
+
+    def is_available(port: int) -> bool:
+        probed_ports.append(port)
+        return port == 43000
+
+    monkeypatch.setattr(process_ports.random, "SystemRandom", FixedRandomStart)
+    monkeypatch.setattr(process_ports, "is_local_port_available", is_available)
+
+    assert allocate_local_port_in_range(43000, 43003) == 43000
+    assert random_bounds == [4]
+    assert probed_ports == [43002, 43003, 43000]
 
 
 def test_ssh_tunnel_port_range_reads_env(monkeypatch: pytest.MonkeyPatch):

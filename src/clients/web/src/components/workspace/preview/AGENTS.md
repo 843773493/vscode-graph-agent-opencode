@@ -2,6 +2,16 @@
 
 `components/workspace/preview/` 存放工作区预览区的专用内容渲染组件。
 
+```text
+preview/
+├── WorkspaceMarkdownPreview.tsx      Markdown/GFM 文档预览与渲染上限
+├── WorkspaceMarkdownImage.tsx         工作区图片请求、外链图片原生懒加载
+├── WorkspaceAttachmentPreview.tsx     会话附件预览与对象 URL 生命周期
+└── MermaidDiagram.tsx                 Mermaid 懒加载与图表渲染
+```
+
+工作区 Markdown 图片在进入视口附近后才读取文件 Blob；组件卸载时中止未完成请求并回收对象 URL。外链图片交给浏览器的 `loading="lazy"`，不经过工作区文件 API。
+
 # 可修改内容
 
 - Markdown、Mermaid、媒体等文件预览 renderer 及其局部展示状态。

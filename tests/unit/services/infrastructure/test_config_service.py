@@ -1079,8 +1079,10 @@ def test_config_loading_rejects_duplicate_normalized_custom_tool_names(
     config_path = _write_workspace_config(tmp_path, config)
     service = ConfigService(config_dir=Path.cwd() / "configs", config_path=config_path)
 
-    with pytest.raises(ValueError, match="重复扩展工具名: web_search"):
+    with pytest.raises(ValueError, match="配置源扩展工具声明无效") as failure:
         service.list_agents()
+    assert "重复扩展工具名: web_search" in str(failure.value.__cause__)
+    assert str(config_path) not in str(failure.value)
 
 
 def test_workspace_config_overrides_user_global_config(

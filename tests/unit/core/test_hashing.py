@@ -52,13 +52,16 @@ def test_bare_sha256_hexdigest_helper_has_single_neutral_definition() -> None:
     """裸 ``sha256(...).hexdigest()`` 助手只在 ``app/core/hashing.py`` 定义一次。
 
     该形态曾被复制到 rollout v2 持久化、Node Debug source capture 与 workspace
-    内容修订等 16 处；任一处重新长出一份本地副本（哪怕逐字等价）都会让本断言
-    失败，从而阻断摘要口径再次分叉。
+    内容修订等多处；任一处重新长出本地副本（哪怕逐字等价）都会让本断言失败，
+    从而阻断摘要口径再次分叉。先按源码标记筛候选文件，避免对整个 app 树构造 AST。
     """
     app_root = Path.cwd() / "app"
-    found: set[tuple[str, str]] = set()
+    bare_sha256_helpers: set[tuple[str, str]] = set()
     for path in sorted(app_root.rglob("*.py")):
-        tree = ast.parse(path.read_text(encoding="utf-8"))
+        source = path.read_text(encoding="utf-8")
+        if any(marker not in source for marker in ("hashlib", "sha256", "hexdigest")):
+            continue
+        tree = ast.parse(source)
         for node in ast.walk(tree):
             if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 continue
@@ -75,14 +78,16 @@ def test_bare_sha256_hexdigest_helper_has_single_neutral_definition() -> None:
                 continue
             if body[0].value is None:
                 continue
-            expression = ast.unparse(body[0].value)
+            return_expression = ast.unparse(body[0].value)
             if (
-                "hashlib.sha256" in expression
-                and expression.endswith(".hexdigest()")
-                and ":" not in expression
-                and "+" not in expression
+                "hashlib.sha256" in return_expression
+                and return_expression.endswith(".hexdigest()")
+                and ":" not in return_expression
+                and "+" not in return_expression
             ):
-                found.add((str(path.relative_to(Path.cwd())), node.name))
+                bare_sha256_helpers.add((str(path.relative_to(Path.cwd())), node.name))
 
-    assert ("app/core/hashing.py", "sha256_hex") in found
-    assert found - _ALLOWED_OTHER_BARE_SHA256 == {("app/core/hashing.py", "sha256_hex")}
+    assert ("app/core/hashing.py", "sha256_hex") in bare_sha256_helpers
+    assert bare_sha256_helpers - _ALLOWED_OTHER_BARE_SHA256 == {
+        ("app/core/hashing.py", "sha256_hex")
+    }

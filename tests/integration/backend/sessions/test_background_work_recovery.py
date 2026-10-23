@@ -38,7 +38,6 @@ from app.services.infrastructure.rollout_context.runtime.stream_accumulator impo
 from app.services.orchestration.execution_step.stream_bindings import CanonicalItemSink
 from app.services.orchestration.thread_residency import ThreadResidencyTracker
 from tests.harness.python.run_context import TestRunContext
-from tests.support.workspaces import prepare_default_test_workspace
 
 _PROCESS = r'''
 import asyncio, os, sys
@@ -113,9 +112,9 @@ class BackgroundCase:
 @pytest.fixture
 def process_case(request: pytest.FixtureRequest, session_bundle_factory):
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
-    workspace = prepare_default_test_workspace(workspace_root=context.workspace_root,
-        template_root=Path.cwd() / "tests/fixtures/workspaces/default_test_workspace")
-    shutil.rmtree(workspace / ".boxteam")
+    workspace = context.workspace_root
+    shutil.rmtree(workspace)
+    workspace.mkdir()
     sessions = workspace / ".boxteam" / "sessions"
     session_id = "ses_019c3df7f8527d568e834acf3c0f6612"
     session_bundle_factory(sessions, session_id)

@@ -126,7 +126,7 @@ async def skill_route_case(tmp_path: Path):
             services.append(FederationRpcService(
                 gateway_id=gateway_id, policy_store=FederationPolicyStore(),
                 control_store=FederationControlStore(database=federation_control_database(gateway_root=root)),
-                signing_key=object(), catalog=WorkspaceCatalogPort(),
+                signing_key=object(), catalog=WorkspaceCatalogPort(http_client=client),
                 session_main=WorkspaceSessionMainPort(http_client=client),
                 credential_store=FederationCredentialStore(storage_path=root / "credentials.json"),
                 spoke_directory=directory if gateway_id == HUB else None,

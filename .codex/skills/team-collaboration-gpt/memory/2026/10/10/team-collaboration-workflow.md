@@ -130,9 +130,9 @@ git read-tree HEAD
 # 按本批机器manifest逐项装入固定blob；删除项用update-index --force-remove。
 git update-index --add --cacheinfo <mode>,<固定blob>,<精确路径>
 git diff --cached --name-only
-bun scripts/assert_isolated_index_commit.mjs record --index "$TASK_INDEX" --task "$TASK_NAME"
+bun scripts/git/assert_isolated_index_commit.mjs record --index "$TASK_INDEX" --task "$TASK_NAME"
 git commit -F "$TASK_GIT_DIR/commit-message.txt"
-bun scripts/assert_isolated_index_commit.mjs verify --index "$TASK_INDEX" --task "$TASK_NAME" --commit <本笔提交hash>
+bun scripts/git/assert_isolated_index_commit.mjs verify --index "$TASK_INDEX" --task "$TASK_NAME" --commit <本笔提交hash>
 git show --name-status <本笔提交hash>
 git merge-base --is-ancestor <提交前HEAD> HEAD
 git merge-base --is-ancestor <本笔提交hash> HEAD

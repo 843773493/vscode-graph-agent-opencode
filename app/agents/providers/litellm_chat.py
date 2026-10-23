@@ -34,7 +34,6 @@ from langchain_core.outputs import (
     LLMResult,
 )
 from langchain_core.runnables.config import RunnableConfig, ensure_config
-from langchain_litellm import ChatLiteLLM
 from pydantic import PrivateAttr
 
 from app.agents.provider_api_mode import parse_provider_api_mode
@@ -95,7 +94,7 @@ from app.core.turn_execution_scope import (
     ScopeCancelledError,
     get_current_turn_execution_scope,
 )
-from app.runtime.model_stream import ensure_model_stream_installed
+from app.runtime.litellm_runtime import ChatLiteLLM, prepare_model_request
 from app.runtime.provider_errors import mark_provider_failure
 
 logger = logging.getLogger(__name__)
@@ -335,7 +334,7 @@ class BoxteamLiteLLMChatModel(LiteLLMHistoryProjectionMixin, ChatLiteLLM):
         **kwargs: Any,
     ) -> Any:
         self._validate_completion_dispatch(kwargs)
-        ensure_model_stream_installed()
+        prepare_model_request()
         client = self._provider_http_client(is_async=False)
         # 非流调用由父类 _generate/_agenerate 消费，不属于流式 attempt 采集。
         if kwargs.get("stream") is True:
@@ -366,7 +365,7 @@ class BoxteamLiteLLMChatModel(LiteLLMHistoryProjectionMixin, ChatLiteLLM):
         **kwargs: Any,
     ) -> Any:
         self._validate_completion_dispatch(kwargs)
-        ensure_model_stream_installed()
+        prepare_model_request()
         client = self._provider_http_client(is_async=True)
         if kwargs.get("stream") is True:
             binding = read_sealed_assembly_dispatch(invocation_purpose=self.invocation_purpose)

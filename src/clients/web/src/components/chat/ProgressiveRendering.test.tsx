@@ -9,7 +9,7 @@ import ThinkingSection from "./ThinkingSection";
 import ToolRow from "./ToolRow";
 import ProgressiveUserMessage, {
   LARGE_USER_MESSAGE_RENDER_LIMIT,
-} from "./ProgressiveUserMessage";
+} from "./turn/ProgressiveUserMessage";
 
 describe("渐进 Markdown 渲染", () => {
   test("大型 Markdown 首次提交只渲染轻量文本", () => {

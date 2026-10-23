@@ -2,6 +2,23 @@
 
 存放输入框（Composer）相关的 hook：草稿持久化、斜杠命令解析与执行、Composer 状态投影，以及 Composer React 上下文边界测试，负责把输入框草稿、命令与上下文状态整理成可复用的副作用单元。
 
+## 职责树
+
+```text
+composer/
+├── useComposerDraft.ts                    草稿作用域、持久化与超限内存态
+├── useComposerDraftOverflow.test.tsx      超限草稿仍可编辑且不写入 localStorage
+├── useComposerSlashCommands.ts            斜杠命令副作用与结果提示
+├── useComposerSlashCommands.test.tsx      命令识别、执行和结果处理
+├── useComposerStateProjection.ts          AppState 到 Composer 状态快照的投影
+├── useComposerStateProjection.test.tsx    快照身份、会话隔离和更新边界
+├── useSkillUntrackCommand.ts              停止跟踪 Skill 的后端命令
+├── useSkillUntrackCommand.test.tsx        命令回执与失败状态
+└── composerContext.test.tsx               Composer React 上下文和状态边界
+```
+
+按副作用链路选择实现：草稿值与作用域持久化走 `useComposerDraft`，纯草稿存储规则留在 `state/composerDrafts/`；斜杠命令的匹配规则留在 `state/slashCommands`，执行副作用走 `useComposerSlashCommands`；完整应用状态到输入框上下文的只读投影走 `useComposerStateProjection`。Skill 停止跟踪属于独立后端动作，走 `useSkillUntrackCommand`，不要塞进通用斜杠命令处理器。
+
 # 可修改内容
 
 - Composer 草稿的读写、作用域键与持久化。

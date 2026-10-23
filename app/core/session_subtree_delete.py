@@ -163,7 +163,7 @@ class SessionSubtreeDeleteService:
         if self._sessions_root != store.sessions_root:
             raise ValueError(
                 "sessions_root 与 catalog store 的 sessions_root 不一致: "
-                f"service={self._sessions_root}, store={store.sessions_root}"
+                f"workspace_id={workspace_id}"
             )
         self._workspace_id = workspace_id
         self._gate = (
@@ -440,7 +440,11 @@ class SessionSubtreeDeleteService:
                 await self._fork_retention_release_callback(session_id)
             source = self._date_bucket_dir(record.frozen_session_locators[session_id])
             if not (source / CONTROL_DATABASE_NAME).is_file():
-                raise RuntimeError(f"删除排空缺少原控制库: session_id={session_id}, path={source}")
+                raise RuntimeError(
+                    "删除排空缺少原控制库: "
+                    f"session_id={session_id}, artifact=session-control, "
+                    f"operation_id={idempotency_key}"
+                )
             control = SessionControlStore(source / CONTROL_DATABASE_NAME)
             try:
                 await settle_thread_creations_for_deletion(
@@ -484,38 +488,52 @@ class SessionSubtreeDeleteService:
 
         恢复窗口（上次运行 rename 已完成、进度未记）：隔离目标已存在且
         源日期桶目录已不在 → 校验目标一致性后幂等跳过 fence CAS 与
-        rename，仅由调用方补记进度（rename 严格后于 fence CAS，目标存在
-        即证明 fence 已关闭）。
+        rename，但仍须重做目录 durability barrier 后才允许补记进度。
+        目标存在只证明 fence 已关闭，不能证明上次 fsync 已经完成。
         """
         stage = "子树删除 drain"
         source = self._date_bucket_dir(storage_relative_locator)
         target = self._deleting_dir(idempotency_key) / session_id
-        if target.exists() or target.is_symlink():
+        already_isolated = target.exists() or target.is_symlink()
+        if already_isolated:
             self._verify_isolated_target(
                 source, target, session_id, stage=stage
             )
-            return
-        if not source.is_dir() or source.is_symlink():
-            raise RuntimeError(
-                f"{stage}: 源日期桶目录缺失且隔离目标不存在，无法证明"
-                f"（外部改动，fail closed）: session_id={session_id}, "
-                f"source={source}, target={target}"
-            )
-        self._cas_session_fence(source, session_id, stage=stage)
-        await observe_phase(idempotency_key, "deletion.fence_closed/" + session_id)
-        target.parent.mkdir(parents=True, exist_ok=True)
+        else:
+            if not source.is_dir() or source.is_symlink():
+                raise RuntimeError(
+                    f"{stage}: 源日期桶目录缺失且隔离目标不存在，无法证明"
+                    f"（外部改动，fail closed）: session_id={session_id}, "
+                    f"operation_id={idempotency_key}, artifact=session-directory"
+                )
+            self._cas_session_fence(source, session_id, stage=stage)
+            await observe_phase(idempotency_key, "deletion.fence_closed/" + session_id)
+        io_stage = "mkdir-isolation"
         try:
-            os.rename(source, target)
+            if not already_isolated:
+                target.parent.mkdir(parents=True, exist_ok=True)
+                try:
+                    os.rename(source, target)
+                except OSError as error:
+                    raise RuntimeError(
+                        f"{stage}: 日期桶目录隔离失败: session_id={session_id}, "
+                        f"operation_id={idempotency_key}, artifact=session-directory, "
+                        f"stage=rename, error={type(error).__name__}, errno={error.errno}"
+                    ) from error
+            # 进度只承诺已 durable 的事实，目录 barrier 必须先于进度记录。
+            io_stage = "fsync-isolation-bucket"
+            _fsync_directory(target.parent)
+            io_stage = "fsync-isolation-root"
+            _fsync_directory(target.parent.parent)
+            io_stage = "fsync-source-bucket"
+            _fsync_directory(source.parent)
         except OSError as error:
-            raise RuntimeError(
-                f"{stage}: 日期桶目录隔离失败: {source} -> {target}: {error}"
+            raise type(error)(
+                error.errno,
+                f"{stage}: session_id={session_id}, operation_id={idempotency_key}, "
+                f"artifact=session-directory, stage={io_stage}, "
+                f"error={type(error).__name__}, errno={error.errno}",
             ) from error
-        # durability barrier（目录 fsync）。barrier 先于进度记录：进度
-        # 只承诺已 durable 的事实，避免「进度已记、rename 未持久」的崩
-        # 溃窗口把目录留在源位置造成孤儿。
-        _fsync_directory(target.parent)
-        _fsync_directory(target.parent.parent)
-        _fsync_directory(source.parent)
         await observe_phase(idempotency_key, "deletion.renamed/" + session_id)
 
     def _cas_session_fence(
@@ -538,14 +556,15 @@ class SessionSubtreeDeleteService:
             raise RuntimeError(
                 f"{stage}: session 日期桶目录缺少 {CONTROL_DATABASE_NAME}"
                 f"（无法执行 fence CAS，fail closed）: "
-                f"session_id={session_id}, path={control_path}"
+                f"session_id={session_id}, artifact=session-control"
             )
         try:
             control = SessionControlStore(control_path)
         except sqlite3.Error as error:
             raise RuntimeError(
                 f"{stage}: session-control.sqlite 无法打开: "
-                f"{control_path}: {error}"
+                f"session_id={session_id}, artifact=session-control, "
+                f"error={type(error).__name__}, sqlite_code={getattr(error, 'sqlite_errorcode', None)}"
             ) from error
         try:
             advanced = control.cas_fence_transition(
@@ -564,7 +583,7 @@ class SessionSubtreeDeleteService:
             raise RuntimeError(
                 f"{stage}: session-control fence row 缺失（库被外部改动，"
                 f"fail closed）: session_id={session_id}, "
-                f"path={control_path}: {error}"
+                "artifact=session-control"
             ) from error
         finally:
             control.close()
@@ -588,27 +607,27 @@ class SessionSubtreeDeleteService:
         if source.exists() or source.is_symlink():
             raise RuntimeError(
                 f"{stage}: 源日期桶目录与隔离目标同时存在（外部改动，"
-                f"fail closed）: session_id={session_id}, source={source}, "
-                f"target={target}"
+                f"fail closed）: session_id={session_id}, artifact=session-directory"
             )
         if not target.is_dir() or target.is_symlink():
             raise RuntimeError(
                 f"{stage}: 隔离目标不是目录（外部改动，fail closed）: "
-                f"session_id={session_id}, target={target}"
+                f"session_id={session_id}, artifact=isolated-session-directory"
             )
         control_path = target / CONTROL_DATABASE_NAME
         if not control_path.is_file():
             raise RuntimeError(
                 f"{stage}: 隔离目标缺少 {CONTROL_DATABASE_NAME}"
                 f"（内容不一致，fail closed）: "
-                f"session_id={session_id}, target={target}"
+                f"session_id={session_id}, artifact=isolated-session-control"
             )
         try:
             control = SessionControlStore(control_path, read_only=True)
         except sqlite3.Error as error:
             raise RuntimeError(
                 f"{stage}: 隔离目标 session-control.sqlite 无法打开: "
-                f"{control_path}: {error}"
+                f"session_id={session_id}, artifact=isolated-session-control, "
+                f"error={type(error).__name__}, sqlite_code={getattr(error, 'sqlite_errorcode', None)}"
             ) from error
         try:
             state, _generation = control.get_fence()
@@ -616,7 +635,8 @@ class SessionSubtreeDeleteService:
             raise RuntimeError(
                 f"{stage}: 隔离目标控制库 fence 不可读（内容不一致，"
                 f"fail closed）: session_id={session_id}, "
-                f"path={control_path}: {error}"
+                "artifact=isolated-session-control, "
+                f"error={type(error).__name__}"
             ) from error
         finally:
             control.close()

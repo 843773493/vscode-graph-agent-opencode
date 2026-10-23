@@ -120,20 +120,31 @@ function localSessionDeletionClosure(
   sessions: readonly Session[],
   rootSessionId: string,
 ): Set<string> {
-  const doomed = new Set<string>([rootSessionId]);
-  let changed = true;
-  while (changed) {
-    changed = false;
-    for (const session of sessions) {
-      if (doomed.has(session.session_id)) continue;
-      const parentId = session.parent_session_id;
-      if (parentId && doomed.has(parentId)) {
-        doomed.add(session.session_id);
-        changed = true;
-      }
+  const childSessionIdsByParent = new Map<string, string[]>();
+  for (const session of sessions) {
+    const parentSessionId = session.parent_session_id;
+    if (!parentSessionId) continue;
+    const childSessionIds = childSessionIdsByParent.get(parentSessionId);
+    if (childSessionIds) {
+      childSessionIds.push(session.session_id);
+    } else {
+      childSessionIdsByParent.set(parentSessionId, [session.session_id]);
     }
   }
-  return doomed;
+
+  const deletedSessionIds = new Set<string>([rootSessionId]);
+  const pendingSessionIds = [rootSessionId];
+  for (let cursor = 0; cursor < pendingSessionIds.length; cursor += 1) {
+    const parentSessionId = pendingSessionIds[cursor]!;
+    const childSessionIds = childSessionIdsByParent.get(parentSessionId);
+    if (!childSessionIds) continue;
+    for (const childSessionId of childSessionIds) {
+      if (deletedSessionIds.has(childSessionId)) continue;
+      deletedSessionIds.add(childSessionId);
+      pendingSessionIds.push(childSessionId);
+    }
+  }
+  return deletedSessionIds;
 }
 
 /**

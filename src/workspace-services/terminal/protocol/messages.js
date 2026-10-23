@@ -12,12 +12,18 @@ function assertPlainObject(value, label) {
   }
 }
 
-function jsonSafe(value) {
+function normalizeJsonSerializableValue(value) {
   const serialized = JSON.stringify(value);
   if (serialized === undefined) {
     throw new Error("Terminal 协议消息无法转换为 JSON");
   }
   return JSON.parse(serialized);
+}
+
+function normalizeParsedJsonNumber(_fieldName, value) {
+  if (typeof value !== "number") return value;
+  if (!Number.isFinite(value)) return null;
+  return Object.is(value, -0) ? 0 : value;
 }
 
 function rawText(raw) {
@@ -26,7 +32,7 @@ function rawText(raw) {
   return String(raw);
 }
 
-function typedClientMessage(message) {
+function clientProtoFromJson(message) {
   if (message.type === "attach") {
     const value = { terminalId: message.terminalId };
     value.grantToken = message.grantToken;
@@ -68,47 +74,50 @@ function typedClientMessage(message) {
       payload: { case: "acknowledge", value: { sequence: message.sequence } },
     });
   }
+  const { type, ...payload } = message;
   return create(TerminalClientMessageSchema, {
     payload: {
       case: "json",
       value: {
-        type: message.type,
-        payload: Object.fromEntries(Object.entries(message).filter(([key]) => key !== "type")),
+        type,
+        payload,
       },
     },
   });
 }
 
-function typedClientJson(message) {
-  const json = toJson(TerminalClientMessageSchema, message);
-  const payloadCase = Object.keys(json)[0];
-  if (!payloadCase) {
+function clientMessageFromProto(message) {
+  const protobufJson = toJson(TerminalClientMessageSchema, message);
+  const messageOneofCase = Object.keys(protobufJson)[0];
+  if (!messageOneofCase) {
     throw new Error("Terminal WebSocket 消息缺少 payload");
   }
-  if (payloadCase === "json") {
-    return { type: json.json.type, ...json.json.payload };
+  if (messageOneofCase === "json") {
+    return { type: protobufJson.json.type, ...protobufJson.json.payload };
   }
-  const type = payloadCase === "acknowledge"
+  const type = messageOneofCase === "acknowledge"
     ? "ack"
-    : payloadCase === "agentInput"
+    : messageOneofCase === "agentInput"
       ? "agentInput"
-      : payloadCase;
-  return { type, ...json[payloadCase] };
+      : messageOneofCase;
+  return { type, ...protobufJson[messageOneofCase] };
 }
 
 export function parseTerminalClientMessage(raw) {
-  const message = JSON.parse(rawText(raw));
+  const message = JSON.parse(rawText(raw), normalizeParsedJsonNumber);
   assertPlainObject(message, "Terminal WebSocket 消息");
   if (typeof message.type !== "string" || !message.type) {
     throw new Error(`Terminal WebSocket 消息缺少 type: ${message.type}`);
   }
-  return typedClientJson(typedClientMessage(jsonSafe(message)));
+  return clientMessageFromProto(clientProtoFromJson(message));
 }
 
 export function encodeTerminalClientMessage(message) {
   assertPlainObject(message, "Terminal 客户端消息");
-  const safeMessage = jsonSafe(message);
-  return JSON.stringify(typedClientJson(typedClientMessage(safeMessage)));
+  const normalizedMessage = normalizeJsonSerializableValue(message);
+  return JSON.stringify(
+    clientMessageFromProto(clientProtoFromJson(normalizedMessage)),
+  );
 }
 
 export function encodeTerminalServerMessage(message) {
@@ -116,16 +125,20 @@ export function encodeTerminalServerMessage(message) {
   if (typeof message.type !== "string" || !message.type) {
     throw new Error(`Terminal 服务端消息缺少 type: ${message.type}`);
   }
-  const safeMessage = jsonSafe(message);
+  const normalizedMessage = normalizeJsonSerializableValue(message);
+  const { type, ...payload } = normalizedMessage;
   const proto = create(TerminalServerMessageSchema, {
     payload: {
       case: "json",
       value: {
-        type: safeMessage.type,
-        payload: Object.fromEntries(Object.entries(safeMessage).filter(([key]) => key !== "type")),
+        type,
+        payload,
       },
     },
   });
-  const json = toJson(TerminalServerMessageSchema, proto);
-  return JSON.stringify({ type: json.json.type, ...json.json.payload });
+  const protobufJson = toJson(TerminalServerMessageSchema, proto);
+  return JSON.stringify({
+    type: protobufJson.json.type,
+    ...protobufJson.json.payload,
+  });
 }

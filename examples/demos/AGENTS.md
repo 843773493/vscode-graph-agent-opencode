@@ -2,6 +2,16 @@
 
 `examples/demos/` 存放可运行的功能演示项目，用于验证后续可能迁入主应用的交互、协议或运行时能力。
 
+```text
+examples/demos/
+├── Interactive_terminal/       多浏览器共享 PTY、WebSocket 输入和终端输出
+├── Itemized_context_storage/   canonical JSONL、SQLite 索引视图、request plan 与 transcript 投影
+├── Playwright_remote_screen/   Playwright/CDP 页面控制、屏幕帧和远程查看器协议
+└── Ssh_text_attach/            本地或 SSH 隧道目标上的 txt 文件 attach 与保存
+```
+
+先按能力选择 demo，再查看其根目录 `AGENTS.md` 的实现树；源码、协议和测试分别从 `src/`、`tests/` 深入。
+
 # 可修改内容
 
 - demo 项目的源码、测试和配置

@@ -2,6 +2,16 @@
 
 存放 `app/services/infrastructure/events/` 的单元测试，覆盖通用 `EventChannelService` 的 channel 隔离、溢出策略与 cursor 重放合同，以及 `resource.state/*`、`config.lifecycle/*`、`context.source/*` typed 轻量事件的字段与值校验。
 
+## 测试目录树
+
+```text
+events/
+├── test_event_channel_service.py     # channel 生命周期、溢出与历史重放
+└── test_channel_events.py            # typed 事件值对象与 publisher adapter
+```
+
+`event_channel_service` fixture 由上级 `infrastructure/conftest.py` 提供。
+
 ## 可修改内容
 
 - channel 命名/解析、六类 channel kind、history 关闭与溢出错误、cursor 重放等合同测试。

@@ -2,12 +2,14 @@ import { createHash } from "node:crypto";
 import {
   cpSync,
   createReadStream,
+  createWriteStream,
   existsSync,
   readFileSync,
   rmSync,
 } from "node:fs";
-import { open } from "node:fs/promises";
 import path from "node:path";
+import { Readable } from "node:stream";
+import { pipeline } from "node:stream/promises";
 
 import * as tar from "tar";
 
@@ -46,24 +48,25 @@ function copyLocalAsset(sourcePath) {
 }
 
 async function downloadRemoteAsset(url) {
-  const response = await fetch(url, {
-    signal: AbortSignal.timeout(downloadTimeoutMs),
-  });
-  if (!response.ok) {
-    throw new Error(
-      `下载 BoxTeam runtime asset 失败: HTTP ${response.status} ${response.statusText} url=${url}`,
-    );
-  }
-  if (response.body === null) {
-    throw new Error(`下载 BoxTeam runtime asset 没有响应体: url=${url}`);
-  }
-  const file = await open(archivePath, "w");
+  const controller = new AbortController();
   try {
-    for await (const chunk of response.body) {
-      await file.write(chunk);
+    const response = await fetch(url, {
+      signal: AbortSignal.any([
+        controller.signal, AbortSignal.timeout(downloadTimeoutMs),
+      ]),
+    });
+    if (!response.ok) {
+      throw new Error(
+        `下载 BoxTeam runtime asset 失败: HTTP ${response.status} ${response.statusText} url=${url}`,
+      );
     }
+    if (response.body === null) {
+      throw new Error(`下载 BoxTeam runtime asset 没有响应体: url=${url}`);
+    }
+    await pipeline(Readable.fromWeb(response.body), createWriteStream(archivePath));
   } finally {
-    await file.close();
+    // 头部拒绝或文件打开失败也取消未消费的正文；文件和流由pipeline释放。
+    controller.abort();
   }
 }
 
@@ -85,7 +88,6 @@ async function installRuntime() {
     );
   }
 
-  // TODO: Linux/Windows 的本地文件与 HTTPS 下载必须共用同一份摘要校验和归档解压逻辑。
   if (localAssetPath) {
     await copyLocalAsset(path.resolve(localAssetPath));
   } else {
@@ -112,8 +114,18 @@ async function installRuntime() {
   }
 }
 
+const failures = [];
 try {
   await installRuntime();
-} finally {
+} catch (error) {
+  failures.push(error);
+}
+try {
   rmSync(archivePath, { force: true });
+} catch (error) {
+  failures.push(error);
+}
+if (failures.length === 1) throw failures[0];
+if (failures.length > 1) {
+  throw new AggregateError(failures, "BoxTeam runtime 安装及暂存归档清理均失败", { cause: failures[0] });
 }

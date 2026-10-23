@@ -34,6 +34,13 @@ const SPECIAL_KEY_CODES = new Map([
   ["F12", 123],
 ]);
 
+const POINTER_EVENT_TYPE_BY_ACTION = {
+  move: "mouseMoved",
+  down: "mousePressed",
+  up: "mouseReleased",
+  wheel: "mouseWheel",
+};
+
 function modifierBitmask(modifiers = {}) {
   return (modifiers.alt ? 1 : 0)
     | (modifiers.ctrl ? 2 : 0)
@@ -58,14 +65,8 @@ function windowsVirtualKeyCodeFor(key, code) {
 }
 
 export async function dispatchPointer(cdpSession, message) {
-  const typeByAction = {
-    move: "mouseMoved",
-    down: "mousePressed",
-    up: "mouseReleased",
-    wheel: "mouseWheel",
-  };
   const params = {
-    type: typeByAction[message.action],
+    type: POINTER_EVENT_TYPE_BY_ACTION[message.action],
     x: message.x,
     y: message.y,
     button: message.action === "wheel" ? "none" : message.button,
@@ -92,7 +93,6 @@ export class BrowserPointerController {
     this.dragData = null;
     this.dragEntered = false;
     this.interceptingDrags = false;
-    this.lastPoint = { x: 0, y: 0 };
     this.onDragIntercepted = (event) => {
       this.dragData = event.data;
     };
@@ -103,7 +103,6 @@ export class BrowserPointerController {
       await this.reset();
     }
     this.cdpSession = cdpSession;
-    this.lastPoint = { x: message.x, y: message.y };
 
     if (message.action === "down") {
       this.pressedButton = message.button;

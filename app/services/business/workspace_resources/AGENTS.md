@@ -1,6 +1,18 @@
 # 目录用途
 
-Terminal 与 Browser 两个领域 owner 共同的保留范围、Thread 关联、operation lease 和核实后释放规则。每个 owner 仍有独立记录与传输事实。
+Terminal 与 Browser 两个领域 owner 共用资源保留、Thread 关联、operation lease 和核实后释放规则。每个领域仍拥有独立记录与外部运行事实。
+
+## 文件职责树
+
+```text
+workspace_resources/
+├── owner.py       串联准入、资源状态转换、关联释放与授权核实
+├── records.py     Thread 引用、持久 owner 记录及文件存储
+├── facts.py       校验外部运行快照并派生领域投影
+└── operations.py  单次工具调用持有和释放自己的 operation lease
+```
+
+生命周期规则放在 `owner.py`，不按 Terminal/Browser 复制两套；外部进程和浏览器句柄仍由各自领域 owner 管理。需要持久字段时修改 `records.py`，需要解释外部快照时修改 `facts.py`，单次调用的占用边界由 `operations.py` 表达。
 
 # 可修改内容
 
@@ -17,3 +29,4 @@ Terminal 与 Browser 两个领域 owner 共同的保留范围、Thread 关联、
 - owner 各自只核实自己的外部事实，不跨领域对账。
 - 临时资源 unload 立即清理，manual detach 才使用原始 30 分钟期限。
 - 未知结果保留可发现状态；只有核实停止后才能报告成功。
+- 模板示例；在整理 `AGENTS.md` 时请保留此行。

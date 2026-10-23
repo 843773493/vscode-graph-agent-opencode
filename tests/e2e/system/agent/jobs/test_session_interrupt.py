@@ -34,11 +34,10 @@ async def _run_interrupt_then_second_message(
     target_event_type: str,
     second_message_content: str,
     timeout_seconds: float = 60.0,
-) -> tuple[str, list[dict]]:
-    """在第一个消息流中按事件打断，然后发送第二条消息。"""
-    events: list[dict] = []
+) -> tuple[str, set[object]]:
+    """在第一个消息流中按事件打断，随后发送第二条消息并只保留事件类型。"""
+    event_types: set[object] = set()
     interrupted = False
-    first_job_id: str | None = None
 
     async with client.stream(
         "GET", f"/api/v1/sessions/{session_id}/traces/stream", timeout=None
@@ -72,9 +71,10 @@ async def _run_interrupt_then_second_message(
                     event = json.loads(raw)
                 except json.JSONDecodeError:
                     continue
-                events.append(event)
+                event_type = event.get("type")
+                event_types.add(event_type)
 
-                if not interrupted and event.get("type") == target_event_type:
+                if not interrupted and event_type == target_event_type:
                     interrupted = True
                     interrupt_response = await client.post(
                         f"/api/v1/sessions/{session_id}/interrupt"
@@ -84,10 +84,8 @@ async def _run_interrupt_then_second_message(
                     assert interrupt_data["job_id"] == first_job_id
                     assert interrupt_data["phase"] in {"text", "tool"}
 
-                if event.get("type") == "job_cancelled":
+                if event_type == "job_cancelled":
                     break
-
-    assert first_job_id is not None
 
     first_job_data = await _wait_for_job_terminal(client, first_job_id)
     assert first_job_data["status"] in {"failed", "cancelled"}
@@ -105,7 +103,7 @@ async def _run_interrupt_then_second_message(
     second_job_data = await _wait_for_job_terminal(client, second_job_id)
     assert second_job_data["status"] in {"completed", "succeeded"}
 
-    return first_job_id, events
+    return first_job_id, event_types
 
 
 async def _load_agent_state_records(
@@ -128,7 +126,7 @@ async def test_interrupt_text_phase_then_send_second_message(client: httpx.Async
     assert create_session_response.status_code == 200
     session_id = create_session_response.json()["data"]["session_id"]
 
-    _first_job_id, events = await _run_interrupt_then_second_message(
+    _first_job_id, event_types = await _run_interrupt_then_second_message(
         client,
         session_id,
         first_message_content="请用中文详细介绍如何学习 Python 编程，从基础语法到实践项目，至少 800 字，不要调用任何工具。",
@@ -136,7 +134,6 @@ async def test_interrupt_text_phase_then_send_second_message(client: httpx.Async
         second_message_content="简单回复一句话：继续测试",
     )
 
-    event_types = [event.get("type") for event in events]
     assert "text_delta" in event_types, f"未收到 text_delta 事件: {event_types}"
     assert "session_interrupted" in event_types, f"未收到 session_interrupted 事件: {event_types}"
     assert "job_cancelled" in event_types, f"未收到 job_cancelled 事件: {event_types}"
@@ -201,7 +198,7 @@ async def test_interrupt_tool_phase_then_send_second_message(client: httpx.Async
     assert create_session_response.status_code == 200
     session_id = create_session_response.json()["data"]["session_id"]
 
-    _first_job_id, events = await _run_interrupt_then_second_message(
+    _first_job_id, event_types = await _run_interrupt_then_second_message(
         client,
         session_id,
         first_message_content=(
@@ -213,7 +210,6 @@ async def test_interrupt_tool_phase_then_send_second_message(client: httpx.Async
         second_message_content="忽略我之前的请求，不要调用任何工具，直接简单回复一句话：工具已取消。",
     )
 
-    event_types = [event.get("type") for event in events]
     assert "tool_call_start" in event_types, f"未收到 tool_call_start 事件: {event_types}"
     assert "session_interrupted" in event_types, f"未收到 session_interrupted 事件: {event_types}"
     assert "job_cancelled" in event_types, f"未收到 job_cancelled 事件: {event_types}"

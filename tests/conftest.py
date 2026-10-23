@@ -4,6 +4,7 @@ import json
 import os
 import shutil
 from collections.abc import Callable, Iterator
+from functools import lru_cache
 from pathlib import Path
 
 import pytest
@@ -113,6 +114,12 @@ def use_config(name: str) -> str:
     return os.path.join(CONFIGS_DIR, "tests", "workspace", f"{name}.jsonc")
 
 
+@lru_cache(maxsize=16)
+def _read_test_config_text(config_path: Path) -> str:
+    """复用只读测试配置模板正文；每个用例仍写入自己的工作区副本。"""
+    return config_path.read_text(encoding="utf-8")
+
+
 @pytest.fixture(autouse=True)
 def test_process_lifetime() -> Iterator[None]:
     with capture_test_processes():
@@ -159,7 +166,7 @@ def setup_test_config(
     if os.path.exists(test_config_path):
         (config_root / "workspace.jsonc").write_text(
             render_test_workspace_config(
-                Path(test_config_path).read_text(encoding="utf-8"),
+                _read_test_config_text(Path(test_config_path).resolve()),
             ),
             encoding="utf-8",
         )

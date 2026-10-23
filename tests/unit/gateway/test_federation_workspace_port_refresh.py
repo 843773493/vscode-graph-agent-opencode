@@ -45,7 +45,7 @@ def _service(tmp_path: Path, http_client: httpx.AsyncClient) -> FederationRpcSer
             database=federation_control_database(gateway_root=root)
         ),
         signing_key=load_or_create_signing_key(root),
-        catalog=WorkspaceCatalogPort(),
+        catalog=WorkspaceCatalogPort(http_client=http_client),
         session_main=WorkspaceSessionMainPort(http_client=http_client),
         credential_store=FederationCredentialStore(
             storage_path=root / "credentials/federation.json"
@@ -69,8 +69,10 @@ def _catalog_ids(service: FederationRpcService) -> dict[str, str]:
     port = service.catalog
     assert isinstance(port, WorkspaceCatalogPort)
     return {
-        workspace_id: backend_url
-        for workspace_id, (backend_url, _) in port._backend_endpoints.items()
+        gateway_workspace_id: endpoint.backend_url
+        for gateway_workspace_id, endpoint in (
+            port._backend_endpoint_by_gateway_workspace_id.items()
+        )
     }
 
 

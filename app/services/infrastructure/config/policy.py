@@ -30,18 +30,24 @@ class ConfigPolicyRule:
     identity_key: str | None = None
 
     def matches(self, path: str) -> bool:
-        pattern_parts = _pointer_parts(self.pattern)
-        path_parts = _pointer_parts(path)
-        if pattern_parts and pattern_parts[-1] == "*":
-            prefix = pattern_parts[:-1]
-            return len(path_parts) > len(prefix) and all(
-                pattern_part == "*" or pattern_part == path_part
-                for pattern_part, path_part in zip(prefix, path_parts, strict=False)
-            )
-        return len(pattern_parts) == len(path_parts) and all(
-            pattern_part == "*" or pattern_part == path_part
-            for pattern_part, path_part in zip(pattern_parts, path_parts, strict=True)
+        return _pointer_pattern_matches(
+            _pointer_parts(self.pattern), _pointer_parts(path)
         )
+
+
+def _pointer_pattern_matches(
+    pattern_parts: tuple[str, ...], path_parts: tuple[str, ...]
+) -> bool:
+    if pattern_parts and pattern_parts[-1] == "*":
+        prefix = pattern_parts[:-1]
+        return len(path_parts) > len(prefix) and all(
+            pattern_part == "*" or pattern_part == path_part
+            for pattern_part, path_part in zip(prefix, path_parts, strict=False)
+        )
+    return len(pattern_parts) == len(path_parts) and all(
+        pattern_part == "*" or pattern_part == path_part
+        for pattern_part, path_part in zip(pattern_parts, path_parts, strict=True)
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -106,20 +112,31 @@ class ConfigPolicyRegistry:
             for right in rules[index + 1 :]:
                 if _patterns_overlap(left.pattern, right.pattern):
                     raise ValueError(
-                        "同优先级配置策略重叠: "
-                        f"{left.pattern} 与 {right.pattern}"
+                        f"同优先级配置策略重叠: {left.pattern} 与 {right.pattern}"
                     )
         self.rules = rules
+        # 深路径优先等价于原来的最大深度选择；稳定排序保留等深规则的声明顺序。
+        self._compiled_rules_by_specificity = tuple(
+            sorted(
+                ((rule, _pointer_parts(rule.pattern)) for rule in rules),
+                key=lambda item: len(item[1]),
+                reverse=True,
+            )
+        )
 
     def classify(self, paths: tuple[str, ...]) -> tuple[ConfigPolicyDecision, ...]:
+        if not paths:
+            return ()
         decisions: list[ConfigPolicyDecision] = []
         for path in paths:
-            matches = [rule for rule in self.rules if rule.matches(path)]
-            rule = max(
-                matches,
-                key=lambda item: len(_pointer_parts(item.pattern)),
-                default=None,
+            path_parts = (
+                _pointer_parts(path) if self._compiled_rules_by_specificity else ()
             )
+            rule: ConfigPolicyRule | None = None
+            for candidate, pattern_parts in self._compiled_rules_by_specificity:
+                if _pointer_pattern_matches(pattern_parts, path_parts):
+                    rule = candidate
+                    break
             if rule is None:
                 decisions.append(
                     ConfigPolicyDecision(
@@ -214,8 +231,7 @@ def _pointer_parts(path: str) -> tuple[str, ...]:
     if not path.startswith("/"):
         raise ValueError(f"配置路径不是 JSON Pointer: {path}")
     return tuple(
-        item.replace("~1", "/").replace("~0", "~")
-        for item in path[1:].split("/")
+        item.replace("~1", "/").replace("~0", "~") for item in path[1:].split("/")
     )
 
 
@@ -237,7 +253,9 @@ def workspace_config_policy() -> ConfigPolicyRegistry:
         rules=(
             ConfigPolicyRule("/ui/*", "next_session", "next_session"),
             ConfigPolicyRule("/llm/providers", "next_job", "next_job"),
-            ConfigPolicyRule("/runtime/agent/run/timeout_seconds", "next_job", "next_job"),
+            ConfigPolicyRule(
+                "/runtime/agent/run/timeout_seconds", "next_job", "next_job"
+            ),
             ConfigPolicyRule("/runtime/agent/run/mode", "next_session", "next_session"),
             ConfigPolicyRule("/runtime/auxiliary_services/*", "next_job", "next_job"),
             ConfigPolicyRule("/runtime/gateway/connection/*", "next_job", "next_job"),
@@ -258,7 +276,9 @@ def gateway_config_policy() -> ConfigPolicyRegistry:
             ConfigPolicyRule("/permissions/federation/*", "immediate_read", "current"),
             ConfigPolicyRule("/features/session_catalog/*", "next_job", "next_job"),
             ConfigPolicyRule("/features/session_generators/*", "next_job", "next_job"),
-            ConfigPolicyRule("/runtime/gateway/process/*", "restart_gateway", "restart_gateway"),
+            ConfigPolicyRule(
+                "/runtime/gateway/process/*", "restart_gateway", "restart_gateway"
+            ),
             ConfigPolicyRule("/workspaces", "restart_gateway", "restart_gateway"),
             ConfigPolicyRule(
                 "/workspaces/*",

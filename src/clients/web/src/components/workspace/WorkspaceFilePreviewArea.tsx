@@ -84,6 +84,7 @@ interface WorkspaceFilePreviewAreaProps {
 // 会话 diff 可能包含数万行；一次渲染全部行会让主线程长时间阻塞。超过阈值时
 // 只渲染前 N 行，并显式提示剩余行数与展开入口，绝不静默截断。
 const MAX_RENDERED_DIFF_LINES = 2000;
+const EMPTY_DEBUG_BREAKPOINTS: NodeDebugBreakpoint[] = [];
 
 function lineRows(content: string): string[] {
   const normalized = content.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
@@ -133,24 +134,30 @@ export default function WorkspaceFilePreviewArea({
   debugMode = false,
   debugExecutionPath = null,
   debugExecutionLine = null,
-  debugBreakpoints = [],
+  debugBreakpoints = EMPTY_DEBUG_BREAKPOINTS,
   debugActionBusy = false,
   onChangeDebugBreakpoint,
 }: WorkspaceFilePreviewAreaProps) {
   const editorRef = useRef<HTMLTextAreaElement | null>(null);
   const editorLineNumbersRef = useRef<HTMLDivElement | null>(null);
   const debugExecutionLineRef = useRef<HTMLDivElement | null>(null);
-  const activeTab = tabs.find((tab) => tab.path === activePath) ?? tabs[0] ?? null;
+  const activeTab = useMemo(
+    () => tabs.find((tab) => tab.path === activePath) ?? tabs[0] ?? null,
+    [activePath, tabs],
+  );
   // 展开状态按标签路径记忆：切换标签或重开同一 diff 时重置为折叠，避免上次
   // 的展开状态在另一个大 diff 上意外生效。
   const [diffFullyExpanded, setDiffFullyExpanded] = useState(false);
   useEffect(() => {
     setDiffFullyExpanded(false);
   }, [activeTab?.path]);
-  const activeDiffLines =
-    activeTab?.previewType === "session-diff"
-      ? lineRows(activeTab.change.diff_text)
-      : [];
+  const activeDiffText = activeTab?.previewType === "session-diff"
+    ? activeTab.change.diff_text
+    : null;
+  const activeDiffLines = useMemo(
+    () => activeDiffText === null ? [] : lineRows(activeDiffText),
+    [activeDiffText],
+  );
   const diffTruncated = activeDiffLines.length > MAX_RENDERED_DIFF_LINES;
   const visibleDiffLines = useMemo(
     () => diffTruncated && !diffFullyExpanded
@@ -166,17 +173,28 @@ export default function WorkspaceFilePreviewArea({
   const activeEditorContent = activeTab?.previewType === "file"
     ? editingActiveFile ? draftContent : activeTab.content
     : "";
-  const activeEditorLines = lineRows(activeEditorContent);
   const markdownActiveFile = activeTab?.previewType === "file" &&
     activeTab.language === "markdown";
   const debugActiveFile = debugMode && activeTab?.previewType === "file";
+  const needsEditorLineRows = activeTab?.previewType === "file" && (
+    (debugActiveFile && !editingActiveFile)
+    || !markdownActiveFile
+    || markdownSourceVisible
+  );
+  const activeEditorLines = useMemo(
+    () => needsEditorLineRows ? lineRows(activeEditorContent) : [],
+    [activeEditorContent, needsEditorLineRows],
+  );
   const activeDebugLine = debugActiveFile && activeTab.path === debugExecutionPath
     ? debugExecutionLine
     : null;
-  const debugBreakpointByLine = new Map(
-    debugBreakpoints
-      .filter((breakpoint) => breakpoint.path === activeTab?.path)
-      .map((breakpoint) => [breakpoint.actual_line ?? breakpoint.line, breakpoint]),
+  const debugBreakpointByLine = useMemo(
+    () => new Map(
+      debugBreakpoints
+        .filter((breakpoint) => breakpoint.path === activeTab?.path)
+        .map((breakpoint) => [breakpoint.actual_line ?? breakpoint.line, breakpoint]),
+    ),
+    [activeTab?.path, debugBreakpoints],
   );
 
   useEffect(() => {

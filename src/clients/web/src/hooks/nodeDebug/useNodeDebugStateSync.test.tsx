@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, spyOn, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import React from "react";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import * as api from "../../api";
@@ -11,7 +11,7 @@ import {
   useNodeDebugStateSync,
   type NodeDebugStateSync,
 } from "./useNodeDebugStateSync";
-import { restoreGlobalDescriptor } from "../../tests/testGlobals";
+import { installNodeDebugBrowserGlobals } from "./nodeDebugTestFixtures";
 
 interface Deferred<T> {
   promise: Promise<T>;
@@ -52,27 +52,9 @@ const capabilities: NodeDebugCapabilities = {
   launch_profiles: [],
 };
 
-const originalWindowDescriptor = Object.getOwnPropertyDescriptor(globalThis, "window");
-const originalBroadcastChannelDescriptor = Object.getOwnPropertyDescriptor(
-  globalThis,
-  "BroadcastChannel",
-);
 let renderer: ReactTestRenderer | undefined;
 let restoreApi = () => {};
-
-function installBrowserGlobals(): void {
-  Object.defineProperty(globalThis, "window", {
-    configurable: true,
-    value: {
-      setInterval: globalThis.setInterval.bind(globalThis),
-      clearInterval: globalThis.clearInterval.bind(globalThis),
-    },
-  });
-  Object.defineProperty(globalThis, "BroadcastChannel", {
-    configurable: true,
-    value: undefined,
-  });
-}
+let restoreNodeDebugGlobals = () => {};
 
 function installApiSpies(pending: Deferred<NodeDebugState>[]): void {
   const stateSpy = spyOn(api, "getNodeDebugState").mockImplementation(
@@ -122,17 +104,20 @@ function props(
   };
 }
 
+beforeEach(() => {
+  restoreNodeDebugGlobals = installNodeDebugBrowserGlobals();
+});
+
 afterEach(() => {
   act(() => renderer?.unmount());
   renderer = undefined;
   restoreApi();
-  restoreGlobalDescriptor("window", originalWindowDescriptor);
-  restoreGlobalDescriptor("BroadcastChannel", originalBroadcastChannelDescriptor);
+  restoreNodeDebugGlobals();
+  restoreNodeDebugGlobals = () => {};
 });
 
 describe("useNodeDebugStateSync", () => {
   test("并发 refresh 与初始轮询共享同一个状态请求", async () => {
-    installBrowserGlobals();
     const pending: Deferred<NodeDebugState>[] = [];
     installApiSpies(pending);
     const gate = new NodeDebugMutationGate("owner-a");
@@ -164,7 +149,6 @@ describe("useNodeDebugStateSync", () => {
   });
 
   test("owner 切换后迟到的旧轮询响应不能覆盖新 owner", async () => {
-    installBrowserGlobals();
     const pending: Deferred<NodeDebugState>[] = [];
     installApiSpies(pending);
     const gate = new NodeDebugMutationGate("owner-a");
@@ -202,7 +186,6 @@ describe("useNodeDebugStateSync", () => {
   });
 
   test("mutation 失败后强制读取后端权威状态", async () => {
-    installBrowserGlobals();
     const pending: Deferred<NodeDebugState>[] = [];
     installApiSpies(pending);
     const gate = new NodeDebugMutationGate("owner-a");

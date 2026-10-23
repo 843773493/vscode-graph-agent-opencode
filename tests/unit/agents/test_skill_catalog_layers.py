@@ -428,7 +428,7 @@ def test_metadata_facet_payload_hides_locator_and_ignored_fields(
     assert metadata.source_lineage[0][0] == "skill-source:workspace:shared"
 
 
-def test_metadata_facet_ignores_uri_and_identity_carriers(layered_workspace, file_registry):
+def test_metadata_facet_ignores_uri_and_identity_carriers():
     from app.services.business.resource_derivations.skills import (
         SkillDerivationEntry,
         SkillFacetLoader,

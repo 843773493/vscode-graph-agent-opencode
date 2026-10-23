@@ -2,6 +2,18 @@
 
 存放工作区文件树与既有四个集合写入口的浏览器 Integration 测试，以及最小 HTTP 支撑。Chromium 消费生产 intent/Blob 存储、目录和操作 hook；HTTP 使用生产文件路由与真实 WorkspaceService/文件 owner。
 
+## 职责树
+
+```text
+workspace_files/
+├── chromium-temporary-directory.mjs   按 Linux/macOS/Windows 选择短路径并释放浏览器临时目录资源
+├── native_directory_browser.mjs       真实页面、Gateway 与文件 owner 的浏览/编辑/重开
+├── gateway_directory_selection.mjs    真实 Gateway 目录选择与工作区注册
+├── workspace_file_operations.mjs      真实文件 owner、生产 hook/IndexedDB 与 HTTP proxy
+├── workspace_file_operations_backend.py 两个隔离工作区及真实文件路由的测试后端
+└── test_native_directory_browser.py   pytest fixture、服务装配与用户行为断言
+```
+
 # 可修改内容
 
 - 未注册目录在完整 Web 页面的浏览、文本编辑、URI 快捷目录刷新及双 owner 重启重开；使用真实 Gateway/Backend，模型协议桩仅用于隔离外部服务。

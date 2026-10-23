@@ -7,12 +7,12 @@ from pathlib import Path
 import httpx
 import pytest
 
-from app.core.mounted_workspaces import mounted_workspace_manifest_digest
 from app.gateway.control.gateway_state import GatewayStateStore
 from app.gateway.federation import (
     RemoteGatewayConnection,
     build_projected_workspace_id,
 )
+from app.core.mounted_workspaces import mounted_workspace_manifest_digest
 from app.gateway.registry import (
     GatewayWorkspaceRegistry,
     WorkspaceTarget,

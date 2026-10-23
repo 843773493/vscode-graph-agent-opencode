@@ -182,7 +182,9 @@ def main() -> int:
     parser.add_argument("command", nargs=argparse.REMAINDER)
     args = parser.parse_args()
     profile_path = args.profile.resolve(strict=True)
-    profile = json.loads(profile_path.read_text())
+    profile_bytes = profile_path.read_bytes()
+    profile_sha256 = hashlib.sha256(profile_bytes).hexdigest()
+    profile = json.loads(profile_bytes)
     workdir = Path(profile["workdir"]).resolve(strict=True)
     project = Path(profile["project_root"]).resolve(strict=True)
     artifact_root = Path(profile["artifacts"]).resolve(strict=True)
@@ -225,9 +227,12 @@ def main() -> int:
             paths = sorted(set(paths) | {target.relative_to(workdir).as_posix()})
     baseline_path = None
     baseline = None
+    baseline_sha256 = None
     if "source_baseline" in profile:
         baseline_path = Path(profile["source_baseline"]).resolve(strict=True)
-        baseline = json.loads(baseline_path.read_text())
+        baseline_bytes = baseline_path.read_bytes()
+        baseline_sha256 = hashlib.sha256(baseline_bytes).hexdigest()
+        baseline = json.loads(baseline_bytes)
         paths = sorted(set(paths) | set(baseline["files"]))
     source_before_started = time.monotonic()
     fingerprints = source_fingerprints(workdir, paths)
@@ -244,7 +249,7 @@ def main() -> int:
                       if fingerprints[relative] != expected]
         write_json(result_dir / "source-baseline-check.json", {
             "baseline": str(baseline_path), "candidate_tree": baseline["candidate_tree"],
-            "baseline_sha256": hashlib.sha256(baseline_path.read_bytes()).hexdigest(),
+            "baseline_sha256": baseline_sha256,
             "source_count": len(baseline["files"]), "mismatched_paths": mismatches,
             "passed": not mismatches,
         })
@@ -272,7 +277,7 @@ def main() -> int:
             "ended_utc": utc_now(), "duration_seconds": time.monotonic() - started,
             "exit_code": 2, "child_started": False, "launch_blocked": True,
             "cwd": str(workdir), "profile": str(profile_path),
-            "profile_sha256": hashlib.sha256(profile_path.read_bytes()).hexdigest(),
+            "profile_sha256": profile_sha256,
             "runner_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
             "requested_command": command, "logs": logs,
             "source_before": fingerprints, "source_after": source_after,
@@ -294,7 +299,7 @@ def main() -> int:
         ])
     start = {"started_utc": utc_now(), "runner_pid": os.getpid(),
              "cwd": str(workdir), "profile": str(profile_path),
-             "profile_sha256": hashlib.sha256(profile_path.read_bytes()).hexdigest(),
+             "profile_sha256": profile_sha256,
              "runner_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
              "argv": argv, "options": overrides}
     interrupted_signal: int | None = None

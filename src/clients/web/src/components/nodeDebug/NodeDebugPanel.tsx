@@ -1,7 +1,7 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import type { NodeDebugController } from "../../hooks/nodeDebug/useNodeDebugController";
-import type { Session } from "../../types/backend";
+import type { NodeDebugBreakpoint, Session } from "../../types/backend";
 import NodeDebugConfigurationView from "./NodeDebugConfigurationView";
 import NodeDebugConsoleView from "./NodeDebugConsoleView";
 import NodeDebugContextView from "./NodeDebugContextView";
@@ -29,6 +29,7 @@ interface NodeDebugPanelProps {
 }
 
 type NodeDebugView = "source" | "context" | "console" | "configuration";
+const EMPTY_NODE_DEBUG_BREAKPOINTS: NodeDebugBreakpoint[] = [];
 
 const DEBUG_VIEWS: ReadonlyArray<{
   id: NodeDebugView;
@@ -96,7 +97,7 @@ export default function NodeDebugPanel({
 
   const status = state?.status ?? "idle";
   const activeFrame = state?.call_stack?.[0] ?? null;
-  const breakpoints = state?.breakpoints ?? [];
+  const breakpoints = state?.breakpoints ?? EMPTY_NODE_DEBUG_BREAKPOINTS;
   const sourceSelection = resolveNodeDebugSourceSelection({
     state,
     selectedPath: selectedSourceLocation?.path ?? null,
@@ -218,7 +219,7 @@ export default function NodeDebugPanel({
     });
   };
 
-  const changeBreakpoint = (
+  const changeBreakpoint = useCallback((
     path: string,
     line: number,
     breakpointId: string | null,
@@ -257,7 +258,7 @@ export default function NodeDebugPanel({
         log_message: definition.log_message,
       },
     });
-  };
+  }, [runAction]);
 
   const addBreakpointFromForm = () => {
     const line = Number(breakpointLine);

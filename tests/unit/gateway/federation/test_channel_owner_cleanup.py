@@ -125,7 +125,7 @@ async def federation_case(tmp_path: Path) -> AsyncIterator[_FederationCase]:
         policy_store=FederationPolicyStore(),
         control_store=control_store,
         signing_key=object(),
-        catalog=WorkspaceCatalogPort(),
+        catalog=WorkspaceCatalogPort(http_client=http_client),
         session_main=WorkspaceSessionMainPort(http_client=http_client),
         credential_store=credential_store,
     )

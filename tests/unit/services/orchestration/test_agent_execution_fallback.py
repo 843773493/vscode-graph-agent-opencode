@@ -229,7 +229,7 @@ class _ActivationBodyStore:
 
 
 @pytest.fixture
-def mock_dependencies(
+def agent_execution_dependencies(
     monkeypatch: pytest.MonkeyPatch,
     workspace_scope: tuple[str, Path],
 ):
@@ -490,13 +490,13 @@ def mock_dependencies(
 @pytest.mark.parametrize(
     "missing", [None, "register_model_call", "mark_execution_lost"]
 )
-async def test_step_requires_v2_owner_before_opening_stream(mock_dependencies, missing):
-    provider = mock_dependencies["dependency_provider"]
+async def test_step_requires_v2_owner_before_opening_stream(agent_execution_dependencies, missing):
+    provider = agent_execution_dependencies["dependency_provider"]
     if missing is None:
         provider.get_checkpointer.return_value = None
     else:
         setattr(provider.get_checkpointer.return_value, missing, None)
-    service = _make_service(mock_dependencies)
+    service = _build_agent_execution_service(agent_execution_dependencies)
     with pytest.raises((TypeError, RuntimeError), match="checkpointer|缺少可调用端口"):
         await service.run_step(
             session_id="ses_missing",
@@ -508,8 +508,8 @@ async def test_step_requires_v2_owner_before_opening_stream(mock_dependencies, m
             message_created_at="2026-07-20T00:00:00+00:00",
             thread_id="thr_test",
         )
-    mock_dependencies["message_stream_store"].open.assert_not_awaited()
-    mock_dependencies["job_event_bus"].publish.assert_not_awaited()
+    agent_execution_dependencies["message_stream_store"].open.assert_not_awaited()
+    agent_execution_dependencies["job_event_bus"].publish.assert_not_awaited()
 
 
 def create_chunk(
@@ -563,12 +563,12 @@ def _user_execution_binding(job_id: str) -> UserExecutionIdentity:
     )
 
 
-async def _run_accepted_step(service, mock_dependencies, **step_args):
+async def _run_accepted_step(service, agent_execution_dependencies, **step_args):
     """先登记真实 owner/job/message 输入，再从正式 Step 入口执行。"""
     execution_binding = step_args["execution_binding"]
     if not isinstance(execution_binding, UserExecutionIdentity):
         raise TypeError("测试 helper 只接受已登记的用户执行身份")
-    mock_dependencies["accepted_user_inputs"].accept(
+    agent_execution_dependencies["accepted_user_inputs"].accept(
         session_id=step_args["session_id"],
         thread_id=step_args["thread_id"],
         job_id=step_args["job_id"],
@@ -581,44 +581,44 @@ async def _run_accepted_step(service, mock_dependencies, **step_args):
     return await service.run_step(**step_args)
 
 
-def _make_service(deps):
+def _build_agent_execution_service(dependencies):
     """用当前测试夹具构造 AgentExecutionService。"""
     return AgentExecutionService(
-        graph_binding_store=deps["graph_binding_store"],
-        residency_tracker=deps["residency_tracker"],
-        resource_activation_factory=deps["resource_activation_factory"],
+        graph_binding_store=dependencies["graph_binding_store"],
+        residency_tracker=dependencies["residency_tracker"],
+        resource_activation_factory=dependencies["resource_activation_factory"],
         team_resource_subscriber=lambda _session, _thread, _registry, _scope: None,
-        config_service=deps["config_service"],
-        background_task_registry=deps["registry"],
-        background_message_bus=deps["msg_bus"],
-        job_event_bus=deps["job_event_bus"],
-        dependency_provider=deps["dependency_provider"],
-        session_changes_service=deps["session_changes_service"],
-        tool_selection_store=deps["tool_selection_store"],
-        message_stream_store=deps["message_stream_store"],
-        workspace_id=deps["workspace_id"],
-        workspace_root=deps["workspace_root"],
-        workspace_file_resource_registry=deps["workspace_file_resource_registry"],
+        config_service=dependencies["config_service"],
+        background_task_registry=dependencies["registry"],
+        background_message_bus=dependencies["msg_bus"],
+        job_event_bus=dependencies["job_event_bus"],
+        dependency_provider=dependencies["dependency_provider"],
+        session_changes_service=dependencies["session_changes_service"],
+        tool_selection_store=dependencies["tool_selection_store"],
+        message_stream_store=dependencies["message_stream_store"],
+        workspace_id=dependencies["workspace_id"],
+        workspace_root=dependencies["workspace_root"],
+        workspace_file_resource_registry=dependencies["workspace_file_resource_registry"],
         session_catalog=get_session_catalog_components(
-            deps["workspace_root"] / ".boxteam" / "sessions",
-            workspace_id=deps["workspace_id"],
+            dependencies["workspace_root"] / ".boxteam" / "sessions",
+            workspace_id=dependencies["workspace_id"],
         ),
         control_inbox_state_path=lambda _session_id, turn_stream_id: (
-            deps["workspace_root"] / "control" / f"{turn_stream_id}.json"
+            dependencies["workspace_root"] / "control" / f"{turn_stream_id}.json"
         ),
     )
 
 
 def test_tool_face_blueprint_cache_is_keyed_without_session(
-    mock_dependencies,
+    agent_execution_dependencies,
 ):
     """OpenSpec 8.4：复用的是不含 session/thread 的工具面 blueprint 投影。
 
     同一配置 revision 反复查询命中同一份定义；配置 revision 变化则重建。
     缓存键不含 session_id，真实 invocation 的 session/thread 依赖不在其中。
     """
-    service = _make_service(mock_dependencies)
-    mock_dependencies["config_service"].get_revision.side_effect = [
+    service = _build_agent_execution_service(agent_execution_dependencies)
+    agent_execution_dependencies["config_service"].get_revision.side_effect = [
         "revision-a",
         "revision-a",
         "revision-b",
@@ -645,7 +645,7 @@ def test_tool_face_blueprint_cache_is_keyed_without_session(
     assert build_runtime.call_count == 2  # 配置 revision 变化 → 重建
     assert all(
         call.kwargs["workspace_file_resource_registry"]
-        is mock_dependencies["workspace_file_resource_registry"]
+        is agent_execution_dependencies["workspace_file_resource_registry"]
         for call in build_runtime.call_args_list
     )
     assert second is not first
@@ -661,17 +661,17 @@ def test_tool_face_blueprint_cache_is_keyed_without_session(
 
 @pytest.mark.asyncio
 async def test_run_step_pins_snapshot_through_async_tool_stage(
-    mock_dependencies,
+    agent_execution_dependencies,
 ):
-    service = _make_service(mock_dependencies)
+    service = _build_agent_execution_service(agent_execution_dependencies)
     snapshot = build_config_snapshot({
         "test": "pinned",
-        "context": mock_dependencies["config_service"].get_snapshot.return_value.to_dict()["context"],
+        "context": agent_execution_dependencies["config_service"].get_snapshot.return_value.to_dict()["context"],
     }, source_paths=())
     active_snapshot: ContextVar[object | None] = ContextVar(
         "test_config_snapshot", default=None
     )
-    mock_dependencies["config_service"].get_snapshot.return_value = snapshot
+    agent_execution_dependencies["config_service"].get_snapshot.return_value = snapshot
 
     @contextmanager
     def use_snapshot(candidate):
@@ -681,14 +681,14 @@ async def test_run_step_pins_snapshot_through_async_tool_stage(
         finally:
             active_snapshot.reset(token)
 
-    mock_dependencies["config_service"].use_snapshot.side_effect = use_snapshot
+    agent_execution_dependencies["config_service"].use_snapshot.side_effect = use_snapshot
 
     built_agent = object()
 
     def fake_build_agent(**kwargs):
         assert active_snapshot.get() is snapshot
-        assert kwargs["config_service"] is mock_dependencies["config_service"]
-        assert kwargs["workspace_root"] == mock_dependencies["workspace_root"]
+        assert kwargs["config_service"] is agent_execution_dependencies["config_service"]
+        assert kwargs["workspace_root"] == agent_execution_dependencies["workspace_root"]
         return built_agent
 
     async def fake_process_events(**kwargs):
@@ -696,9 +696,9 @@ async def test_run_step_pins_snapshot_through_async_tool_stage(
         assert kwargs["agent"] is built_agent
         assert (
             kwargs["session_changes_service"]
-            is mock_dependencies["session_changes_service"]
+            is agent_execution_dependencies["session_changes_service"]
         )
-        assert kwargs["workspace_root"] == mock_dependencies["workspace_root"]
+        assert kwargs["workspace_root"] == agent_execution_dependencies["workspace_root"]
         await asyncio.sleep(0)
         # 模拟模型返回后进入异步工具阶段，snapshot 仍必须固定。
         assert active_snapshot.get() is snapshot
@@ -718,7 +718,7 @@ async def test_run_step_pins_snapshot_through_async_tool_stage(
             side_effect=fake_process_events,
         ) as process_events,
     ):
-        result = await _run_accepted_step(service, mock_dependencies,
+        result = await _run_accepted_step(service, agent_execution_dependencies,
             session_id="ses_test",
             message="test",
             agent_id="test_agent",
@@ -791,8 +791,8 @@ def test_session_question_reply_requires_matching_communication_id():
 
 
 @pytest.mark.asyncio
-async def test_delegated_report_is_not_enforced_by_default(mock_dependencies):
-    service = _make_service(mock_dependencies)
+async def test_delegated_report_is_not_enforced_by_default(agent_execution_dependencies):
+    service = _build_agent_execution_service(agent_execution_dependencies)
     stream_result = AgentEventStreamResult(
         final_text="普通文本结果",
         latest_model_content_blocks=(),
@@ -809,7 +809,7 @@ async def test_delegated_report_is_not_enforced_by_default(mock_dependencies):
             new=AsyncMock(return_value=stream_result),
         ) as process,
     ):
-        result = await _run_accepted_step(service, mock_dependencies,
+        result = await _run_accepted_step(service, agent_execution_dependencies,
             session_id="ses_child",
             message="委派任务",
             agent_id="test_agent",
@@ -830,12 +830,12 @@ async def test_delegated_report_is_not_enforced_by_default(mock_dependencies):
 
 @pytest.mark.asyncio
 async def test_delegated_first_turn_fails_after_two_missing_tool_reports(
-    mock_dependencies,
+    agent_execution_dependencies,
 ):
-    mock_dependencies["config_service"].get_agent_runtime_config.return_value[
+    agent_execution_dependencies["config_service"].get_agent_runtime_config.return_value[
         "require_delegated_report"
     ] = True
-    service = _make_service(mock_dependencies)
+    service = _build_agent_execution_service(agent_execution_dependencies)
     stream_results = [
         AgentEventStreamResult(
             final_text=f"普通文本 {index}",
@@ -856,7 +856,7 @@ async def test_delegated_first_turn_fails_after_two_missing_tool_reports(
         ) as process,
     ):
         with pytest.raises(RuntimeError, match="没有通过 send_message_to_session"):
-            await _run_accepted_step(service, mock_dependencies,
+            await _run_accepted_step(service, agent_execution_dependencies,
                 session_id="ses_child",
                 message="委派任务",
                 agent_id="test_agent",
@@ -877,12 +877,12 @@ async def test_delegated_first_turn_fails_after_two_missing_tool_reports(
 
 @pytest.mark.asyncio
 async def test_delegated_progress_only_cannot_replace_final_result(
-    mock_dependencies,
+    agent_execution_dependencies,
 ):
-    mock_dependencies["config_service"].get_agent_runtime_config.return_value[
+    agent_execution_dependencies["config_service"].get_agent_runtime_config.return_value[
         "require_delegated_report"
     ] = True
-    service = _make_service(mock_dependencies)
+    service = _build_agent_execution_service(agent_execution_dependencies)
     progress_call = SuccessfulToolCall(
         "send_message_to_session",
         {
@@ -911,7 +911,7 @@ async def test_delegated_progress_only_cannot_replace_final_result(
         ),
     ):
         with pytest.raises(RuntimeError, match="没有通过 send_message_to_session"):
-            await _run_accepted_step(service, mock_dependencies,
+            await _run_accepted_step(service, agent_execution_dependencies,
                 session_id="ses_child",
                 message="委派任务",
                 agent_id="test_agent",
@@ -929,9 +929,9 @@ async def test_delegated_progress_only_cannot_replace_final_result(
 
 @pytest.mark.asyncio
 async def test_cross_session_question_retries_until_correlated_tool_reply(
-    mock_dependencies,
+    agent_execution_dependencies,
 ):
-    service = _make_service(mock_dependencies)
+    service = _build_agent_execution_service(agent_execution_dependencies)
     input_messages: list[object] = []
     stream_results = [
         AgentEventStreamResult(
@@ -970,7 +970,7 @@ async def test_cross_session_question_retries_until_correlated_tool_reply(
             side_effect=process_side_effect,
         ),
     ):
-        result = await _run_accepted_step(service, mock_dependencies,
+        result = await _run_accepted_step(service, agent_execution_dependencies,
             session_id="ses_answerer",
             message="跨会话问题",
             agent_id="test_agent",
@@ -991,18 +991,18 @@ async def test_cross_session_question_retries_until_correlated_tool_reply(
     assert result == "已通过会话工具回复"
     assert len(input_messages) == 2
     assert input_messages[1] == []
-    retry = mock_dependencies["dependency_provider"].get_checkpointer.return_value.register_execution_retry_source.call_args.kwargs["message"]
+    retry = agent_execution_dependencies["dependency_provider"].get_checkpointer.return_value.register_execution_retry_source.call_args.kwargs["message"]
     assert retry.metadata["source"] == "session_question_reply_retry"
 
 
 @pytest.mark.asyncio
-async def test_primary_success_no_fallback(mock_dependencies):
+async def test_primary_success_no_fallback(agent_execution_dependencies):
     """测试：主模型成功时，不使用 fallback。"""
-    deps = mock_dependencies
+    deps = agent_execution_dependencies
     deps["tool_selection_store"].snapshot.side_effect = lambda agent_id: ToolSelectionSnapshot(
         agent_id, {"apply_patch": False, "test_tool_2": False}, {},
     )
-    service = _make_service(deps)
+    service = _build_agent_execution_service(deps)
 
     with patch(
         "app.services.orchestration.agent_execution_service.build_session_agent_runtime"
@@ -1026,7 +1026,7 @@ async def test_primary_success_no_fallback(mock_dependencies):
         mock_agent.astream_events = mock_events
         mock_build.return_value = mock_agent
 
-        result = await _run_accepted_step(service, mock_dependencies,
+        result = await _run_accepted_step(service, agent_execution_dependencies,
             session_id="test",
             message="test",
             agent_id="test_agent",
@@ -1046,9 +1046,9 @@ async def test_primary_success_no_fallback(mock_dependencies):
 
 
 @pytest.mark.asyncio
-async def test_reasoning_stream_not_mixed_into_final_text(mock_dependencies):
+async def test_reasoning_stream_not_mixed_into_final_text(agent_execution_dependencies):
     """reasoning 流只参与最终聚合，不应污染正式回复或旧实时事件。"""
-    deps = mock_dependencies
+    deps = agent_execution_dependencies
     deps["config_service"].get_agent_runtime_config.return_value = {
         "providers": [
             {
@@ -1063,7 +1063,7 @@ async def test_reasoning_stream_not_mixed_into_final_text(mock_dependencies):
         "max_output_tokens": 1024,
         "system_prompt": "test",
     }
-    service = _make_service(deps)
+    service = _build_agent_execution_service(deps)
 
     with patch(
         "app.services.orchestration.agent_execution_service.build_session_agent_runtime"
@@ -1109,7 +1109,7 @@ async def test_reasoning_stream_not_mixed_into_final_text(mock_dependencies):
         mock_agent.astream_events = mock_events
         mock_build.return_value = mock_agent
 
-        result = await _run_accepted_step(service, mock_dependencies,
+        result = await _run_accepted_step(service, agent_execution_dependencies,
             session_id="test",
             message="test",
             agent_id="test_agent",
@@ -1130,11 +1130,11 @@ async def test_reasoning_stream_not_mixed_into_final_text(mock_dependencies):
 
 @pytest.mark.asyncio
 async def test_model_event_stream_does_not_recreate_legacy_text_events(
-    mock_dependencies,
+    agent_execution_dependencies,
 ):
     """模型事件流不应重新创建消息流已经替代的旧文本事件。"""
-    deps = mock_dependencies
-    service = _make_service(deps)
+    deps = agent_execution_dependencies
+    service = _build_agent_execution_service(deps)
 
     with patch(
         "app.services.orchestration.agent_execution_service.build_session_agent_runtime"
@@ -1170,7 +1170,7 @@ async def test_model_event_stream_does_not_recreate_legacy_text_events(
         mock_agent.astream_events = mock_events
         mock_build.return_value = mock_agent
 
-        result = await _run_accepted_step(service, mock_dependencies,
+        result = await _run_accepted_step(service, agent_execution_dependencies,
             session_id="test",
             message="test",
             agent_id="test_agent",
@@ -1190,9 +1190,9 @@ async def test_model_event_stream_does_not_recreate_legacy_text_events(
 
 
 @pytest.mark.asyncio
-async def test_reasoning_only_response_retries_with_system_reminder(mock_dependencies):
+async def test_reasoning_only_response_retries_with_system_reminder(agent_execution_dependencies):
     """reasoning-only 空响应应继续请求模型产生工具调用或最终正文。"""
-    deps = mock_dependencies
+    deps = agent_execution_dependencies
     deps["config_service"].get_agent_runtime_config.return_value = {
         "providers": [
             {
@@ -1207,7 +1207,7 @@ async def test_reasoning_only_response_retries_with_system_reminder(mock_depende
         "max_output_tokens": 1024,
         "system_prompt": "test",
     }
-    service = _make_service(deps)
+    service = _build_agent_execution_service(deps)
 
     input_messages: list[object] = []
 
@@ -1261,7 +1261,7 @@ async def test_reasoning_only_response_retries_with_system_reminder(mock_depende
         mock_agent.astream_events = mock_events
         mock_build.return_value = mock_agent
 
-        result = await _run_accepted_step(service, mock_dependencies,
+        result = await _run_accepted_step(service, agent_execution_dependencies,
             session_id="test",
             message="test",
             agent_id="test_agent",
@@ -1275,16 +1275,16 @@ async def test_reasoning_only_response_retries_with_system_reminder(mock_depende
     assert result == "OK"
     assert len(input_messages) == 2
     assert input_messages[1] == []
-    retry = mock_dependencies["dependency_provider"].get_checkpointer.return_value.register_execution_retry_source.call_args.kwargs["message"]
+    retry = agent_execution_dependencies["dependency_provider"].get_checkpointer.return_value.register_execution_retry_source.call_args.kwargs["message"]
     assert retry.metadata["source"] == "empty_response_retry"
 
 
 @pytest.mark.asyncio
 async def test_requested_custom_tool_missing_result_retries_with_system_reminder(
-    mock_dependencies,
+    agent_execution_dependencies,
 ):
     """用户点名配置 custom tool 但模型只输出正文时，应继续要求真实工具调用。"""
-    deps = mock_dependencies
+    deps = agent_execution_dependencies
     deps["config_service"].get_agent_runtime_config.return_value = {
         "providers": [
             {
@@ -1308,7 +1308,7 @@ async def test_requested_custom_tool_missing_result_retries_with_system_reminder
             }
         ],
     }
-    service = _make_service(deps)
+    service = _build_agent_execution_service(deps)
 
     input_messages: list[object] = []
     stream_results = [
@@ -1356,7 +1356,7 @@ async def test_requested_custom_tool_missing_result_retries_with_system_reminder
 
         mock_process.side_effect = process_side_effect
 
-        result = await _run_accepted_step(service, mock_dependencies,
+        result = await _run_accepted_step(service, agent_execution_dependencies,
             session_id="test",
             message="请调用 test_tool_2",
             agent_id="test_agent",
@@ -1370,17 +1370,17 @@ async def test_requested_custom_tool_missing_result_retries_with_system_reminder
     assert result == "4568"
     assert len(input_messages) == 2
     assert input_messages[1] == []
-    retry = mock_dependencies["dependency_provider"].get_checkpointer.return_value.register_execution_retry_source.call_args.kwargs["message"]
+    retry = agent_execution_dependencies["dependency_provider"].get_checkpointer.return_value.register_execution_retry_source.call_args.kwargs["message"]
     assert retry.metadata["source"] == "missing_custom_tool_retry"
     assert "test_tool_2" in retry.metadata["missing_tools"]
 
 
 @pytest.mark.asyncio
 async def test_standard_content_blocks_stream_split_reasoning_and_text(
-    mock_dependencies,
+    agent_execution_dependencies,
 ):
     """标准 content blocks 流应拆分为 reasoning/text 两种事件。"""
-    deps = mock_dependencies
+    deps = agent_execution_dependencies
     deps["config_service"].get_agent_runtime_config.return_value = {
         "providers": [
             {
@@ -1395,7 +1395,7 @@ async def test_standard_content_blocks_stream_split_reasoning_and_text(
         "max_output_tokens": 1024,
         "system_prompt": "test",
     }
-    service = _make_service(deps)
+    service = _build_agent_execution_service(deps)
 
     content_blocks = [
         {
@@ -1423,7 +1423,7 @@ async def test_standard_content_blocks_stream_split_reasoning_and_text(
         mock_agent.astream_events = mock_events
         mock_build.return_value = mock_agent
 
-        result = await _run_accepted_step(service, mock_dependencies,
+        result = await _run_accepted_step(service, agent_execution_dependencies,
             session_id="test",
             message="test",
             agent_id="test_agent",
@@ -1444,10 +1444,10 @@ async def test_standard_content_blocks_stream_split_reasoning_and_text(
 
 @pytest.mark.asyncio
 async def test_tool_events_use_tool_start_input_and_tool_message_content(
-    mock_dependencies,
+    agent_execution_dependencies,
 ):
     """工具卡片应使用 on_tool_start 的完整参数和 ToolMessage.content。"""
-    deps = mock_dependencies
+    deps = agent_execution_dependencies
     deps["config_service"].get_agent_runtime_config.return_value = {
         "providers": [
             {
@@ -1462,7 +1462,7 @@ async def test_tool_events_use_tool_start_input_and_tool_message_content(
         "max_output_tokens": 1024,
         "system_prompt": "test",
     }
-    service = _make_service(deps)
+    service = _build_agent_execution_service(deps)
     tool_arguments = {"code": "print('LC_BLOCK_OK_2')"}
 
     with patch(
@@ -1575,7 +1575,7 @@ async def test_tool_events_use_tool_start_input_and_tool_message_content(
         mock_agent.get_graph = None
         mock_build.return_value = mock_agent
 
-        result = await _run_accepted_step(service, mock_dependencies,
+        result = await _run_accepted_step(service, agent_execution_dependencies,
             session_id="test",
             message="test",
             agent_id="test_agent",
@@ -1633,11 +1633,11 @@ async def test_tool_events_use_tool_start_input_and_tool_message_content(
 
 @pytest.mark.asyncio
 async def test_execution_builds_single_agent_runtime_without_model_override(
-    mock_dependencies,
+    agent_execution_dependencies,
 ):
     """成功 fake Agent 流验证单次 runtime 构建且不传模型覆盖参数。"""
-    deps = mock_dependencies
-    service = _make_service(deps)
+    deps = agent_execution_dependencies
+    service = _build_agent_execution_service(deps)
 
     with patch(  # noqa: SIM117 - 两个运行时入口必须共享同一个 mock。
         "app.services.orchestration.agent_execution_service.build_session_agent_runtime"
@@ -1667,7 +1667,7 @@ async def test_execution_builds_single_agent_runtime_without_model_override(
 
             mock_build.side_effect = create_mock_agent
 
-            result = await _run_accepted_step(service, mock_dependencies,
+            result = await _run_accepted_step(service, agent_execution_dependencies,
                 session_id="test",
                 message="test",
                 agent_id="test_agent",
@@ -1684,10 +1684,10 @@ async def test_execution_builds_single_agent_runtime_without_model_override(
 
 
 @pytest.mark.asyncio
-async def test_agent_runtime_build_exception_propagates(mock_dependencies):
+async def test_agent_runtime_build_exception_propagates(agent_execution_dependencies):
     """Agent runtime 构建阶段异常会传播给调用方。"""
-    deps = mock_dependencies
-    service = _make_service(deps)
+    deps = agent_execution_dependencies
+    service = _build_agent_execution_service(deps)
 
     with patch(
         "app.services.orchestration.agent_execution_service.build_session_agent_runtime"
@@ -1695,7 +1695,7 @@ async def test_agent_runtime_build_exception_propagates(mock_dependencies):
         mock_build.side_effect = Exception("Agent runtime 构建失败")
 
         with pytest.raises(Exception, match="Agent runtime 构建失败"):
-            await _run_accepted_step(service, mock_dependencies,
+            await _run_accepted_step(service, agent_execution_dependencies,
                 session_id="test",
                 message="test",
                 agent_id="test_agent",
@@ -1708,10 +1708,10 @@ async def test_agent_runtime_build_exception_propagates(mock_dependencies):
 
 
 @pytest.mark.asyncio
-async def test_successful_agent_stream_publishes_agent_start_once(mock_dependencies):
+async def test_successful_agent_stream_publishes_agent_start_once(agent_execution_dependencies):
     """成功 fake Agent 流只发布一次 agent_start。"""
-    deps = mock_dependencies
-    service = _make_service(deps)
+    deps = agent_execution_dependencies
+    service = _build_agent_execution_service(deps)
 
     with patch(  # noqa: SIM117 - 两个运行时入口必须共享同一个 mock。
         "app.services.orchestration.agent_execution_service.build_session_agent_runtime"
@@ -1741,7 +1741,7 @@ async def test_successful_agent_stream_publishes_agent_start_once(mock_dependenc
 
             mock_build.side_effect = create_mock_agent
 
-            await _run_accepted_step(service, mock_dependencies,
+            await _run_accepted_step(service, agent_execution_dependencies,
                 session_id="test",
                 message="test",
                 agent_id="test_agent",
@@ -1762,9 +1762,9 @@ async def test_successful_agent_stream_publishes_agent_start_once(mock_dependenc
 
 @pytest.mark.asyncio
 async def test_agent_loop_retry_keeps_model_attempt_boundaries(
-    mock_dependencies,
+    agent_execution_dependencies,
 ):
-    service = _make_service(mock_dependencies)
+    service = _build_agent_execution_service(agent_execution_dependencies)
     stream_results = [
         AgentEventStreamResult(
             final_text="",
@@ -1804,7 +1804,7 @@ async def test_agent_loop_retry_keeps_model_attempt_boundaries(
             side_effect=process_with_retry,
         ),
     ):
-        result = await _run_accepted_step(service, mock_dependencies,
+        result = await _run_accepted_step(service, agent_execution_dependencies,
             session_id="ses_retry",
             message="重试",
             agent_id="test_agent",
@@ -1818,19 +1818,19 @@ async def test_agent_loop_retry_keeps_model_attempt_boundaries(
     assert result == "最终答案"
     committed_types = [
         call.args[0]
-        for call in mock_dependencies[
+        for call in agent_execution_dependencies[
             "message_stream_store"
         ].open.return_value.commit.await_args_list
     ]
     assert committed_types.count("model.started") == 2
     assert committed_types.count("model.completed") == 2
     assert committed_types.count("model.retrying") == 1
-    mock_dependencies[
+    agent_execution_dependencies[
         "message_stream_store"
     ].open.return_value.close_completed.assert_awaited_once()
     completed_outcomes = [
         call.args[1]["outcome"]
-        for call in mock_dependencies[
+        for call in agent_execution_dependencies[
             "message_stream_store"
         ].open.return_value.commit.await_args_list
         if call.args[0] == "model.completed"
@@ -1840,12 +1840,12 @@ async def test_agent_loop_retry_keeps_model_attempt_boundaries(
 
 @pytest.mark.asyncio
 async def test_interrupt_wins_when_completion_races_with_persisted_request(
-    mock_dependencies,
+    agent_execution_dependencies,
 ):
-    service = _make_service(mock_dependencies)
-    writer = mock_dependencies["message_stream_store"].open.return_value
+    service = _build_agent_execution_service(agent_execution_dependencies)
+    writer = agent_execution_dependencies["message_stream_store"].open.return_value
     writer.close_completed.side_effect = MessageStreamTerminalError("已进入中断闸门")
-    mock_dependencies["message_stream_store"].get_state.return_value = {
+    agent_execution_dependencies["message_stream_store"].get_state.return_value = {
         "stream_status": "interrupting",
         "interrupt_state": {
             "request_id": "intr_race",
@@ -1872,7 +1872,7 @@ async def test_interrupt_wins_when_completion_races_with_persisted_request(
             side_effect=process_success,
         ),
     ):
-        result = await _run_accepted_step(service, mock_dependencies,
+        result = await _run_accepted_step(service, agent_execution_dependencies,
             session_id="ses_race",
             message="竞态",
             agent_id="test_agent",
@@ -1890,9 +1890,9 @@ async def test_interrupt_wins_when_completion_races_with_persisted_request(
 
 @pytest.mark.asyncio
 async def test_cancelled_without_user_interrupt_persists_checkpoint_and_closes_as_execution_lost(
-    mock_dependencies,
+    agent_execution_dependencies,
 ):
-    service = _make_service(mock_dependencies)
+    service = _build_agent_execution_service(agent_execution_dependencies)
 
     async def process_cancelled(**_kwargs):
         raise asyncio.CancelledError()
@@ -1911,7 +1911,7 @@ async def test_cancelled_without_user_interrupt_persists_checkpoint_and_closes_a
         ) as persist_checkpoint,
     ):
         with pytest.raises(asyncio.CancelledError):
-            await _run_accepted_step(service, mock_dependencies,
+            await _run_accepted_step(service, agent_execution_dependencies,
                 session_id="ses_cancelled",
                 message="取消",
                 agent_id="test_agent",
@@ -1924,7 +1924,7 @@ async def test_cancelled_without_user_interrupt_persists_checkpoint_and_closes_a
 
     persist_checkpoint.assert_called_once()
     assert persist_checkpoint.call_args.kwargs["checkpoint_source"] == "execution_lost"
-    writer = mock_dependencies["message_stream_store"].open.return_value
+    writer = agent_execution_dependencies["message_stream_store"].open.return_value
     writer.close_failed.assert_awaited_once_with(
         code="execution_lost",
         message="AgentLoop 因内部取消而结束，未收到用户中断请求",
@@ -1934,9 +1934,9 @@ async def test_cancelled_without_user_interrupt_persists_checkpoint_and_closes_a
 
 @pytest.mark.asyncio
 async def test_scope_job_timeout_cancelled_error_keeps_job_timeout_code(
-    mock_dependencies,
+    agent_execution_dependencies,
 ):
-    service = _make_service(mock_dependencies)
+    service = _build_agent_execution_service(agent_execution_dependencies)
 
     async def process_job_timeout(**_kwargs):
         raise asyncio.CancelledError("运行时 scope 已取消: reason=job_timeout")
@@ -1955,7 +1955,7 @@ async def test_scope_job_timeout_cancelled_error_keeps_job_timeout_code(
         ),
         pytest.raises(asyncio.CancelledError),
     ):
-        await _run_accepted_step(service, mock_dependencies,
+        await _run_accepted_step(service, agent_execution_dependencies,
             session_id="ses_scope_job_timeout",
             message="总超时",
             agent_id="test_agent",
@@ -1966,7 +1966,7 @@ async def test_scope_job_timeout_cancelled_error_keeps_job_timeout_code(
             thread_id="thr_test",
         )
 
-    writer = mock_dependencies["message_stream_store"].open.return_value
+    writer = agent_execution_dependencies["message_stream_store"].open.return_value
     writer.close_failed.assert_awaited_once_with(
         code="job_timeout",
         message="Job 执行超过总超时上限",
@@ -1976,9 +1976,9 @@ async def test_scope_job_timeout_cancelled_error_keeps_job_timeout_code(
 
 @pytest.mark.asyncio
 async def test_scope_deadline_failure_persists_checkpoint_without_user_interrupt(
-    mock_dependencies,
+    agent_execution_dependencies,
 ):
-    service = _make_service(mock_dependencies)
+    service = _build_agent_execution_service(agent_execution_dependencies)
 
     async def process_scope_deadline(**_kwargs):
         raise ScopeCancelledError("scope_deadline_exceeded")
@@ -1997,7 +1997,7 @@ async def test_scope_deadline_failure_persists_checkpoint_without_user_interrupt
         ) as persist_checkpoint,
         pytest.raises(ScopeCancelledError, match="scope_deadline_exceeded"),
     ):
-        await _run_accepted_step(service, mock_dependencies,
+        await _run_accepted_step(service, agent_execution_dependencies,
             session_id="ses_scope_deadline",
             message="在预算内完成",
             agent_id="test_agent",
@@ -2012,7 +2012,7 @@ async def test_scope_deadline_failure_persists_checkpoint_without_user_interrupt
     assert persist_checkpoint.call_args.kwargs["checkpoint_source"] == (
         "scope_deadline_exceeded"
     )
-    writer = mock_dependencies["message_stream_store"].open.return_value
+    writer = agent_execution_dependencies["message_stream_store"].open.return_value
     writer.close_failed.assert_awaited_once_with(
         code="scope_deadline_exceeded",
         message="运行时 scope 已取消: reason=scope_deadline_exceeded",
@@ -2023,9 +2023,9 @@ async def test_scope_deadline_failure_persists_checkpoint_without_user_interrupt
 
 @pytest.mark.asyncio
 async def test_cancelled_with_complete_tool_call_closes_as_dispatch_timeout(
-    mock_dependencies,
+    agent_execution_dependencies,
 ):
-    service = _make_service(mock_dependencies)
+    service = _build_agent_execution_service(agent_execution_dependencies)
     zero_argument_tool = create_test_tool()
     assert zero_argument_tool.args == {}
 
@@ -2059,7 +2059,7 @@ async def test_cancelled_with_complete_tool_call_closes_as_dispatch_timeout(
         ),
         pytest.raises(asyncio.CancelledError),
     ):
-        await _run_accepted_step(service, mock_dependencies,
+        await _run_accepted_step(service, agent_execution_dependencies,
             session_id="ses_dispatch_timeout_cancelled",
             message="分派超时",
             agent_id="test_agent",
@@ -2070,7 +2070,7 @@ async def test_cancelled_with_complete_tool_call_closes_as_dispatch_timeout(
             thread_id="thr_test",
         )
 
-    writer = mock_dependencies["message_stream_store"].open.return_value
+    writer = agent_execution_dependencies["message_stream_store"].open.return_value
     writer.close_failed.assert_awaited_once_with(
         code="tool_dispatch_timeout",
         message=(
@@ -2083,9 +2083,9 @@ async def test_cancelled_with_complete_tool_call_closes_as_dispatch_timeout(
 
 @pytest.mark.asyncio
 async def test_job_timeout_cancel_closes_stream_as_timed_out(
-    mock_dependencies,
+    agent_execution_dependencies,
 ):
-    service = _make_service(mock_dependencies)
+    service = _build_agent_execution_service(agent_execution_dependencies)
 
     async def process_timed_out(**_kwargs):
         raise asyncio.CancelledError("job_timeout")
@@ -2101,7 +2101,7 @@ async def test_job_timeout_cancel_closes_stream_as_timed_out(
         ),
         pytest.raises(asyncio.CancelledError),
     ):
-        await _run_accepted_step(service, mock_dependencies,
+        await _run_accepted_step(service, agent_execution_dependencies,
             session_id="ses_job_timeout_stream",
             message="总超时",
             agent_id="test_agent",
@@ -2112,7 +2112,7 @@ async def test_job_timeout_cancel_closes_stream_as_timed_out(
             thread_id="thr_test",
         )
 
-    writer = mock_dependencies["message_stream_store"].open.return_value
+    writer = agent_execution_dependencies["message_stream_store"].open.return_value
     writer.close_failed.assert_awaited_once_with(
         code="job_timeout",
         message="Job 执行超过总超时上限",
@@ -2122,9 +2122,9 @@ async def test_job_timeout_cancel_closes_stream_as_timed_out(
 
 @pytest.mark.asyncio
 async def test_cancelled_after_user_interrupt_closes_as_interrupted(
-    mock_dependencies,
+    agent_execution_dependencies,
 ):
-    service = _make_service(mock_dependencies)
+    service = _build_agent_execution_service(agent_execution_dependencies)
 
     async def process_user_cancelled(**_kwargs):
         SessionInterruptState.set(
@@ -2146,7 +2146,7 @@ async def test_cancelled_after_user_interrupt_closes_as_interrupted(
         ),
     ):
         with pytest.raises(asyncio.CancelledError):
-            await _run_accepted_step(service, mock_dependencies,
+            await _run_accepted_step(service, agent_execution_dependencies,
                 session_id="ses_user_cancelled",
                 message="用户打断",
                 agent_id="test_agent",
@@ -2157,16 +2157,16 @@ async def test_cancelled_after_user_interrupt_closes_as_interrupted(
                 thread_id="thr_test",
             )
 
-    writer = mock_dependencies["message_stream_store"].open.return_value
+    writer = agent_execution_dependencies["message_stream_store"].open.return_value
     writer.close_interrupted.assert_awaited_once_with("intr_user_cancelled")
     writer.close_failed.assert_not_awaited()
 
 
 @pytest.mark.asyncio
 async def test_agent_exception_persists_stream_failure_before_rethrow(
-    mock_dependencies, caplog,
+    agent_execution_dependencies, caplog,
 ):
-    service = _make_service(mock_dependencies)
+    service = _build_agent_execution_service(agent_execution_dependencies)
     original_error = RuntimeError("上游异常")
 
     async def process_failed(**_kwargs):
@@ -2183,7 +2183,7 @@ async def test_agent_exception_persists_stream_failure_before_rethrow(
         ),
     ):
         with pytest.raises(RuntimeError, match="上游异常") as raised:
-            await _run_accepted_step(service, mock_dependencies,
+            await _run_accepted_step(service, agent_execution_dependencies,
                 session_id="ses_execution_error",
                 message="异常",
                 agent_id="test_agent",
@@ -2212,7 +2212,7 @@ async def test_agent_exception_persists_stream_failure_before_rethrow(
         for frame in traceback.extract_tb(error_traceback)
     )
 
-    writer = mock_dependencies["message_stream_store"].open.return_value
+    writer = agent_execution_dependencies["message_stream_store"].open.return_value
     writer.close_failed.assert_awaited_once_with(
         code="execution_error",
         message="上游异常",
@@ -2222,10 +2222,10 @@ async def test_agent_exception_persists_stream_failure_before_rethrow(
 
 
 @pytest.mark.asyncio
-async def test_generation_reactor_release_is_isolated_per_thread(mock_dependencies):
+async def test_generation_reactor_release_is_isolated_per_thread(agent_execution_dependencies):
     """跨会话 runtime 持有各自订阅；一个 thread 卸载不影响其它 active lease。"""
-    service = _make_service(mock_dependencies)
-    tracker = mock_dependencies["residency_tracker"]
+    service = _build_agent_execution_service(agent_execution_dependencies)
+    tracker = agent_execution_dependencies["residency_tracker"]
     reactors: dict[str, AsyncMock] = {}
 
     def fake_build(*, session_id, reactor_lifetime_scope, **kwargs):
@@ -2283,16 +2283,16 @@ async def test_generation_reactor_release_is_isolated_per_thread(mock_dependenci
 
 
 @pytest.mark.asyncio
-async def test_mcp_catalog_change_updates_resident_registry_without_rebuilding_runtime(mock_dependencies):
+async def test_mcp_catalog_change_updates_resident_registry_without_rebuilding_runtime(agent_execution_dependencies):
     factory = FakeMcpSessionFactory(initial_tools={"mini": []})
     owner = McpCatalogOwner(
         raw_config={"servers": {"mini": {"enabled": True, "transport": "stdio", "command": "fake"}}},
-        workspace_root=mock_dependencies["workspace_root"],
+        workspace_root=agent_execution_dependencies["workspace_root"],
         event_service=EventChannelService(), session_factory=factory,
     )
     await owner.start()
-    mock_dependencies["dependency_provider"].get_mcp_catalog_owner.return_value = owner
-    service = _make_service(mock_dependencies)
+    agent_execution_dependencies["dependency_provider"].get_mcp_catalog_owner.return_value = owner
+    service = _build_agent_execution_service(agent_execution_dependencies)
     registries = []
 
     def build(*, resource_registry, reactor_lifetime_scope, **_kwargs):

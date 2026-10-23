@@ -56,7 +56,7 @@ class ToolPolicyResolver:
         execution_override: bool | None = None,
         model_visibility_override: bool | None = None,
     ) -> ToolCapabilityPolicy:
-        values = {
+        resolved_policy = {
             "execution_enabled": self._bool_value(
                 self._defaults, "execution_enabled", True
             ),
@@ -76,59 +76,12 @@ class ToolPolicyResolver:
             ),
         }
 
-        for rules in self._rule_layers():
-            for scope_name, metadata_name in _RULE_SCOPES:
-                scope_rules = self._mapping(rules.get(scope_name))
-                patch = self._mapping(scope_rules.get(getattr(metadata, metadata_name)))
-                self._apply_patch(values, patch)
+        for scope_name, metadata_name in _RULE_SCOPES:
+            scope_rules = self._mapping(self._rules.get(scope_name))
+            patch = self._mapping(scope_rules.get(getattr(metadata, metadata_name)))
+            self._apply_patch(resolved_policy, patch)
 
-        execution_locked = self._matches_restriction(
-            "execution_disabled", metadata
-        )
-        model_visibility_locked = self._matches_restriction(
-            "model_hidden", metadata
-        )
-        confirmation_restricted = self._matches_restriction(
-            "confirmation_required", metadata
-        )
-
-        if execution_locked:
-            values["execution_enabled"] = False
-        elif execution_override is not None:
-            values["execution_enabled"] = execution_override
-
-        if model_visibility_locked:
-            values["model_visible"] = False
-        elif model_visibility_override is not None:
-            values["model_visible"] = model_visibility_override
-
-        if confirmation_restricted:
-            values["confirmation_required"] = True
-        if not values["execution_enabled"]:
-            values["model_visible"] = False
-
-        return ToolCapabilityPolicy(
-            execution_enabled=bool(values["execution_enabled"]),
-            model_visible=bool(values["model_visible"]),
-            confirmation_required=bool(values["confirmation_required"]),
-            timeout_ms=int(values["timeout_ms"]),
-            max_result_bytes=int(values["max_result_bytes"]),
-            execution_locked=execution_locked,
-            model_visibility_locked=model_visibility_locked,
-        )
-
-    def _rule_layers(self) -> tuple[Mapping[str, object], ...]:
-        return (self._rules,)
-
-    def _matches_restriction(
-        self,
-        name: str,
-        metadata: ToolMetadata,
-    ) -> bool:
-        selectors = self._restrictions.get(name, [])
-        if not isinstance(selectors, list):
-            raise TypeError(f"工具策略 restrictions.{name} 必须是数组")
-        values = {
+        metadata_selectors = {
             metadata.tool_id,
             f"tool:{metadata.tool_id}",
             metadata.group_id,
@@ -138,28 +91,76 @@ class ToolPolicyResolver:
             metadata.origin,
             f"origin:{metadata.origin}",
         }
-        return any(isinstance(selector, str) and selector in values for selector in selectors)
+        execution_locked = self._matches_restriction(
+            "execution_disabled", metadata_selectors
+        )
+        model_visibility_locked = self._matches_restriction(
+            "model_hidden", metadata_selectors
+        )
+        confirmation_restricted = self._matches_restriction(
+            "confirmation_required", metadata_selectors
+        )
+
+        if execution_locked:
+            resolved_policy["execution_enabled"] = False
+        elif execution_override is not None:
+            resolved_policy["execution_enabled"] = execution_override
+
+        if model_visibility_locked:
+            resolved_policy["model_visible"] = False
+        elif model_visibility_override is not None:
+            resolved_policy["model_visible"] = model_visibility_override
+
+        if confirmation_restricted:
+            resolved_policy["confirmation_required"] = True
+        if not resolved_policy["execution_enabled"]:
+            resolved_policy["model_visible"] = False
+
+        return ToolCapabilityPolicy(
+            execution_enabled=bool(resolved_policy["execution_enabled"]),
+            model_visible=bool(resolved_policy["model_visible"]),
+            confirmation_required=bool(resolved_policy["confirmation_required"]),
+            timeout_ms=int(resolved_policy["timeout_ms"]),
+            max_result_bytes=int(resolved_policy["max_result_bytes"]),
+            execution_locked=execution_locked,
+            model_visibility_locked=model_visibility_locked,
+        )
+
+    def _matches_restriction(
+        self,
+        restriction_name: str,
+        metadata_selectors: set[str],
+    ) -> bool:
+        selectors = self._restrictions.get(restriction_name, [])
+        if not isinstance(selectors, list):
+            raise TypeError(f"工具策略 restrictions.{restriction_name} 必须是数组")
+        return any(
+            isinstance(selector, str) and selector in metadata_selectors
+            for selector in selectors
+        )
 
     @staticmethod
-    def _apply_patch(values: dict[str, object], patch: Mapping[str, object]) -> None:
+    def _apply_patch(
+        resolved_policy: dict[str, object], patch: Mapping[str, object]
+    ) -> None:
         for name in (
             "execution_enabled",
             "model_visible",
             "confirmation_required",
         ):
-            value = patch.get(name)
-            if value is not None:
-                if not isinstance(value, bool):
+            policy_value = patch.get(name)
+            if policy_value is not None:
+                if not isinstance(policy_value, bool):
                     raise TypeError(f"工具策略 {name} 必须是布尔值")
-                values[name] = value
+                resolved_policy[name] = policy_value
         limits = patch.get("limits")
         if limits is not None:
             for name in ("timeout_ms", "max_result_bytes"):
-                value = ToolPolicyResolver._mapping(limits).get(name)
-                if value is not None:
-                    if not isinstance(value, int) or isinstance(value, bool):
+                policy_value = ToolPolicyResolver._mapping(limits).get(name)
+                if policy_value is not None:
+                    if not isinstance(policy_value, int) or isinstance(policy_value, bool):
                         raise TypeError(f"工具策略 limits.{name} 必须是整数")
-                    values[name] = value
+                    resolved_policy[name] = policy_value
 
     @staticmethod
     def _mapping(value: object) -> Mapping[str, object]:

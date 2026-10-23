@@ -19,9 +19,9 @@ import type { TurnProjectionState } from "../../state/session/turnTimeline";
 import { isLiveConversationView } from "../../state/trace/traceAggregation";
 import ChatHistoryEmptyState from "../chat/ChatHistoryEmptyState";
 import ChatHistoryPageHeader from "../chat/ChatHistoryPageHeader";
-import ChatTurn from "../chat/ChatTurn";
-import ChatInternalExecutionDisplay from "../chat/ChatInternalExecutionDisplay";
-import ChatTurnErrorBoundary from "../chat/ChatTurnErrorBoundary";
+import ChatTurn from "../chat/turn/ChatTurn";
+import InternalExecutionTranscriptItem from "../chat/InternalExecutionTranscriptItem";
+import ChatTurnErrorBoundary from "../chat/turn/ChatTurnErrorBoundary";
 import { chatTranscriptItems, type ChatTranscriptItem } from "../chat/transcriptItems";
 import { useTurnVirtualScroller } from "../chat/useTurnVirtualScroller";
 import { errorMessage } from "../../utils/errorMessage";
@@ -123,7 +123,7 @@ const renderChatPanelItem: ItemContent<
       && source.source_thread_id && source.source_thread_id !== state.threadId && source.source_execution_id;
     return (
       <div className="chat-virtual-item">
-        <ChatInternalExecutionDisplay displayPart={item.displayPart} />
+        <InternalExecutionTranscriptItem displayPart={item.displayPart} />
         {canOpenReport ? <button type="button" onClick={() => state.onOpenChildReport?.(source)}>查看来源报告</button> : null}
       </div>
     );

@@ -41,25 +41,44 @@ export type AgentStateJsonlLine =
  * 但与 toolDisplay 不同，这里 **不静默丢弃** 非法行：原始 JSONL 快照是排查
  * checkpoint 与消息格式的唯一依据，失败行必须连同原文片段一起呈现给用户。
  */
-export function parseAgentStateJsonlLines(jsonl: string): AgentStateJsonlLine[] {
-  const lines: AgentStateJsonlLine[] = [];
-  jsonl.split(/\r?\n/).forEach((raw, index) => {
-    if (raw.trim().length === 0) return;
-    const lineNumber = index + 1;
-    try {
-      lines.push({ ok: true, lineNumber, value: JSON.parse(raw) });
-    } catch (error) {
-      lines.push({
-        ok: false,
-        lineNumber,
-        raw: raw.length > AGENT_STATE_INVALID_LINE_SNIPPET_LIMIT
-          ? `${raw.slice(0, AGENT_STATE_INVALID_LINE_SNIPPET_LIMIT)}...`
-          : raw,
-        message: errorMessage(error),
-      });
+function* iterateAgentStateJsonlLines(
+  jsonl: string,
+): Generator<AgentStateJsonlLine, void, unknown> {
+  let lineStart = 0;
+  let lineNumber = 1;
+  while (lineStart <= jsonl.length) {
+    const lineFeedIndex = jsonl.indexOf("\n", lineStart);
+    const hasLineFeed = lineFeedIndex !== -1;
+    const lineEnd = hasLineFeed ? lineFeedIndex : jsonl.length;
+    const rawEnd = hasLineFeed
+      && lineEnd > lineStart
+      && jsonl.charCodeAt(lineEnd - 1) === 13
+      ? lineEnd - 1
+      : lineEnd;
+    const raw = jsonl.slice(lineStart, rawEnd);
+    if (raw.trim().length > 0) {
+      try {
+        yield { ok: true, lineNumber, value: JSON.parse(raw) };
+      } catch (error) {
+        yield {
+          ok: false,
+          lineNumber,
+          raw: raw.length > AGENT_STATE_INVALID_LINE_SNIPPET_LIMIT
+            ? `${raw.slice(0, AGENT_STATE_INVALID_LINE_SNIPPET_LIMIT)}...`
+            : raw,
+          message: errorMessage(error),
+        };
+      }
     }
-  });
-  return lines;
+
+    if (!hasLineFeed) break;
+    lineStart = lineEnd + 1;
+    lineNumber += 1;
+  }
+}
+
+export function parseAgentStateJsonlLines(jsonl: string): AgentStateJsonlLine[] {
+  return [...iterateAgentStateJsonlLines(jsonl)];
 }
 
 /** 解析失败行的可见标注：保留原文片段，便于直接定位损坏的那一行。 */
@@ -80,16 +99,19 @@ export function formatAgentStateLinesForDisplay(lines: AgentStateJsonlLine[]): s
 
 /** 从已解析行中取出可用的记录：非法行被排除，但调用方仍可据 lines 给出诊断。 */
 export function agentStateRecordsFromLines(
-  lines: AgentStateJsonlLine[],
+  lines: Iterable<AgentStateJsonlLine>,
 ): Record<string, unknown>[] {
-  return lines
-    .filter((line): line is Extract<AgentStateJsonlLine, { ok: true }> => line.ok)
-    .map((line) => line.value)
-    .filter(isRecord);
+  const records: Record<string, unknown>[] = [];
+  for (const line of lines) {
+    if (line.ok && isRecord(line.value)) {
+      records.push(line.value);
+    }
+  }
+  return records;
 }
 
 export function parseAgentStateRecords(jsonl: string): Record<string, unknown>[] {
-  return agentStateRecordsFromLines(parseAgentStateJsonlLines(jsonl));
+  return agentStateRecordsFromLines(iterateAgentStateJsonlLines(jsonl));
 }
 
 function agentStateMessageId(record: Record<string, unknown>): string | null {
@@ -119,10 +141,16 @@ export function findAgentStateMessageRawContent(
   messageId: string,
 ): string | null {
   if (!messageId) return null;
-  const record = parseAgentStateRecords(jsonl).find(
-    (candidate) => agentStateMessageId(candidate) === messageId,
-  );
-  return record ? formatAgentStateMessageContent(record.content) : null;
+  for (const line of iterateAgentStateJsonlLines(jsonl)) {
+    if (
+      line.ok
+      && isRecord(line.value)
+      && agentStateMessageId(line.value) === messageId
+    ) {
+      return formatAgentStateMessageContent(line.value.content);
+    }
+  }
+  return null;
 }
 
 function textContent(value: unknown): string {

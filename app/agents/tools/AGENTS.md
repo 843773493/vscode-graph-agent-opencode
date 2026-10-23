@@ -2,6 +2,17 @@
 
 存放 Agent 可用工具的聚焦 factory 模块，按工具所属领域拆分，供 `app/agents/agent_tools.py` 统一注册。
 
+终端工具沿一条调用链分工：
+
+```text
+app/agents/tools/
+├── terminal.py          Agent 工具入口、PTY 生命周期和输出收集
+├── terminal_command.py  POSIX、cmd 和 PowerShell 的终端输入构造
+└── terminal_contract.py 终端参数、结果结构与输出整理
+```
+
+平台 shell 的输入格式留在 `terminal_command.py`；`terminal.py` 负责把构造结果写入当前 PTY 并解释返回状态。
+
 # 可修改内容
 
 - 新增或调整单一领域的 LangChain `BaseTool` factory。

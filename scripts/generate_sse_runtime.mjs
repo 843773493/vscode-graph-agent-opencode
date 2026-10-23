@@ -5,12 +5,12 @@ import { createRequire } from "node:module";
 import { spawn } from "node:child_process";
 import path from "node:path";
 
-const workspaceRoot = path.resolve(process.env.BOXTEAM_PROJECT_ROOT ?? process.cwd());
+const projectRoot = path.resolve(process.env.BOXTEAM_PROJECT_ROOT ?? process.cwd());
 const pythonExecutable = process.platform === "win32"
-  ? path.join(workspaceRoot, ".venv", "Scripts", "python.exe")
-  : path.join(workspaceRoot, ".venv", "bin", "python");
+  ? path.join(projectRoot, ".venv", "Scripts", "python.exe")
+  : path.join(projectRoot, ".venv", "bin", "python");
 const schemaPath = path.join(
-  workspaceRoot,
+  projectRoot,
   "src",
   "clients",
   "web",
@@ -23,8 +23,8 @@ const schemaPath = path.join(
 function run(command, args) {
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, {
-      cwd: workspaceRoot,
-      env: { ...process.env, PYTHONPATH: workspaceRoot },
+      cwd: projectRoot,
+      env: { ...process.env, PYTHONPATH: projectRoot },
       stdio: "inherit",
     });
     child.on("error", reject);
@@ -39,7 +39,7 @@ function run(command, args) {
 }
 
 async function generateValidators() {
-  const webRequire = createRequire(path.join(workspaceRoot, "src", "clients", "web", "package.json"));
+  const webRequire = createRequire(path.join(projectRoot, "src", "clients", "web", "package.json"));
   const Ajv = webRequire("ajv").default;
   const standaloneCode = webRequire("ajv/dist/standalone").default;
   const payload = JSON.parse(await readFile(schemaPath, "utf8"));
@@ -61,8 +61,8 @@ async function generateValidators() {
     ajv.addSchema(schema, schemaId);
     exportsByName[`validate${name}`] = schemaId;
   }
-  const outputPath = path.join(workspaceRoot, "src", "shared", "sseRuntimeValidators.js");
-  const declarationPath = path.join(workspaceRoot, "src", "shared", "sseRuntimeValidators.d.ts");
+  const outputPath = path.join(projectRoot, "src", "shared", "sseRuntimeValidators.js");
+  const declarationPath = path.join(projectRoot, "src", "shared", "sseRuntimeValidators.d.ts");
   const validatorSource = standaloneCode(ajv, exportsByName)
     .replace(
       /const (\w+) = require\("([^"]+)"\)\.default;/g,

@@ -21,6 +21,9 @@ from app.domain.itemized.mutation_intents import (
     MutationIntentOwner,
     RebuildContextEpochIntent,
 )
+from app.services.infrastructure.rollout_context.activation.reads import (
+    read_activation_refs_for_view,
+)
 from app.services.infrastructure.rollout_context.checkpoint.boundary.tool_protocol_boundary import (
     validate_tool_protocol_closure,
 )
@@ -551,7 +554,9 @@ class RolloutCheckpointPersistenceMixin:
                     checkpoint_id,
                     self._checkpoint_control_payload(
                         connection,
-                        checkpoint=checkpoint,
+                        session_id=owner.session_id,
+                        thread_id=owner.thread_id,
+                        view_id=view_id,
                         message_count=len(current_messages),
                         message_sequences=batch.visible_sequences,
                         compaction_event=compaction_event,
@@ -605,16 +610,23 @@ class RolloutCheckpointPersistenceMixin:
     def _checkpoint_control_payload(
         connection: sqlite3.Connection,
         *,
-        checkpoint: Checkpoint,
+        session_id: str,
+        thread_id: str,
+        view_id: str,
         message_count: int,
         message_sequences: list[int],
         compaction_event: Mapping[str, object] | None = None,
     ) -> dict[str, object]:
-        """保存 checkpoint 控制信息，并保留 compaction 的 message cutoff。"""
+        """同一提交保存 compaction cutoff 与两条历史 lane 的冻结资源引用。"""
         payload: dict[str, object] = {"message_count": message_count}
         event = compaction_event
         if not isinstance(event, Mapping):
             return payload
+        activation_refs = read_activation_refs_for_view(
+            connection, session_id=session_id, thread_id=thread_id, view_id=view_id,
+        )
+        if activation_refs:
+            payload["resource_activation_refs"] = list(activation_refs)
         cutoff_index = event.get("cutoff_index")
         if isinstance(cutoff_index, int) and cutoff_index >= 0:
             payload["cutoff_index"] = cutoff_index

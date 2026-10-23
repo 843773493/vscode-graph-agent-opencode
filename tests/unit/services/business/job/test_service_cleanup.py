@@ -84,4 +84,4 @@ async def test_delete_session_jobs_removes_running_and_queued_jobs(job_service_f
     assert queued_job.job_id not in service._jobs
     assert other_job.job_id in service._jobs
     assert all(key[0] != session_id for key in service._thread_current_job)
-    assert service._pending_queue.ids(session_id) == ()
+    assert service._pending_queue.queued_job_ids(session_id) == ()

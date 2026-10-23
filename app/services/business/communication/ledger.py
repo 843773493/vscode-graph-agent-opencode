@@ -29,21 +29,21 @@ from app.services.business.communication.admission import (
     CommunicationPayload,
     CommunicationSendRequest,
     communication_preimage_hash,
-    resolve_request_preimage,
+    resolve_request_preimage_hash,
 )
 
-__all__ = ["CommunicationLedgerService", "bare_sha256"]
+__all__ = ["CommunicationLedgerService", "strip_sha256_prefix"]
 
 SessionLeaseSettlement = Callable[
     [str, SessionControlStore, SessionOperationLease], AbstractAsyncContextManager[bool]
 ]
 
 
-def bare_sha256(preimage: str) -> str:
+def strip_sha256_prefix(prefixed_digest: str) -> str:
     """typed 合同的 sha256: 前缀形式转为数据库内的裸 hex 形态。"""
-    if not preimage.startswith("sha256:"):
-        raise ValueError(f"preimage 必须是 sha256 前缀形式: {preimage!r}")
-    return preimage.removeprefix("sha256:")
+    if not prefixed_digest.startswith("sha256:"):
+        raise ValueError(f"摘要必须是 sha256 前缀形式: {prefixed_digest!r}")
+    return prefixed_digest.removeprefix("sha256:")
 
 
 class CommunicationLedgerService:
@@ -74,7 +74,7 @@ class CommunicationLedgerService:
         create-or-get outbox；同 operation 不同 preimage 或同
         communication_id 不同 payload/target 在 store 层 fail closed。
         """
-        preimage = resolve_request_preimage(request)
+        request_preimage_hash = resolve_request_preimage_hash(request)
         prior_lease = self._store.find_lease_by_operation(f"communication-source|{request.send_operation_id}")
         scope = self._write_admission(self._session_id) if prior_lease is None else self.settlement(prior_lease)
         async with scope:
@@ -83,7 +83,7 @@ class CommunicationLedgerService:
                 operation_identity=(
                     f"communication-source|{request.send_operation_id}"
                 ),
-                preimage_hash=bare_sha256(preimage),
+                preimage_hash=strip_sha256_prefix(request_preimage_hash),
             )
             self._begin_settlement(lease)
             record, created = self._store.create_or_get_communication_outbox(
@@ -101,13 +101,13 @@ class CommunicationLedgerService:
                 reply_to_communication_id=(
                     request.payload.reply_to_communication_id
                 ),
-                payload_hash=bare_sha256(preimage),
+                payload_hash=strip_sha256_prefix(request_preimage_hash),
                 content=request.payload.content, delivery_policy=request.payload.delivery_policy,
                 request_id=request_id, target_ref=target_ref,
             )
         return CommunicationAdmissionDecision(
             communication_id=record.communication_id,
-            payload_hash=preimage,
+            payload_hash=request_preimage_hash,
             is_duplicate=not created,
         )
 
@@ -133,12 +133,12 @@ class CommunicationLedgerService:
                 "accept_incoming_send 的 target.session_id 必须等于 facade "
                 f"绑定的 Session: {target.session_id!r} != {self._session_id!r}"
             )
-        preimage = communication_preimage_hash(target=target, payload=payload)
+        payload_hash = communication_preimage_hash(target=target, payload=payload)
         async with self._write_admission(self._session_id):
             lease = self._store.create_or_get_lease(
                 operation_kind="communication_target",
                 operation_identity=f"communication-target|{communication_id}",
-                preimage_hash=bare_sha256(preimage),
+                preimage_hash=strip_sha256_prefix(payload_hash),
             )
             self._begin_settlement(lease)
             record, _created = self._store.create_or_get_communication_inbox(
@@ -153,7 +153,7 @@ class CommunicationLedgerService:
                 target_thread_id=target.thread_id,
                 kind=payload.kind,
                 reply_to_communication_id=payload.reply_to_communication_id,
-                payload_hash=bare_sha256(preimage),
+                payload_hash=strip_sha256_prefix(payload_hash),
                 content=payload.content, delivery_policy=payload.delivery_policy, request_id=request_id,
             )
         return record

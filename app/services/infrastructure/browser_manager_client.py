@@ -46,22 +46,30 @@ class BrowserManagerClient:
         viewport: dict[str, int] | None = None, device_profile: str | None = None,
         device_orientation: str | None = None,
     ) -> dict[str, object]:
-        return self._runtime(await self._request_data("POST", "/api/browsers", {
-            "workspace_id": self._workspace_id, "browser_id": browser_id,
-            "owner_revision": owner_revision, "title": title, "url": url,
-            "viewport": viewport, "device_profile": device_profile,
-            "device_orientation": device_orientation,
-        }))
+        browser_record = await self._request_data(
+            "POST",
+            "/api/browsers",
+            {
+                "workspace_id": self._workspace_id, "browser_id": browser_id,
+                "owner_revision": owner_revision, "title": title, "url": url,
+                "viewport": viewport, "device_profile": device_profile,
+                "device_orientation": device_orientation,
+            },
+        )
+        return self._normalize_browser_record(browser_record)
 
     async def get_resource(self, browser_id: str) -> dict[str, object]:
-        return self._runtime(await self._request_data("GET", f"/api/browsers/{browser_id}"))
+        browser_record = await self._request_data(
+            "GET", f"/api/browsers/{browser_id}"
+        )
+        return self._normalize_browser_record(browser_record)
 
     async def list_resources(self) -> list[dict[str, object]]:
         response = await self._json_request("GET", "/api/browsers")
         data = response.get("data")
         if not isinstance(data, list) or any(not isinstance(item, dict) for item in data):
             raise TypeError(f"Browser 运行列表格式错误: {response}")
-        return [self._runtime(item) for item in data]
+        return [self._normalize_browser_record(item) for item in data]
 
     async def perform(
         self, browser_id: str, action: BrowserAction, payload: dict[str, object], *, actor: str,
@@ -72,13 +80,21 @@ class BrowserManagerClient:
             _ACTION_METHODS[action], f"/api/browsers/{browser_id}/{action}",
             None if action == "read" else payload, actor=actor,
         )
-        return self._envelope(result)
+        return self._normalize_browser_record_envelope(result)
 
-    async def stop_resource(self, browser_id: str, *, reason: str | None = None) -> dict[str, object]:
-        return self._envelope(await self._request_data("POST", f"/api/browsers/{browser_id}/close"))
+    async def stop_resource(
+        self, browser_id: str, *, reason: str | None = None
+    ) -> dict[str, object]:
+        close_receipt = await self._request_data(
+            "POST", f"/api/browsers/{browser_id}/close"
+        )
+        return self._normalize_browser_record_envelope(close_receipt)
 
     async def delete_resource(self, browser_id: str) -> dict[str, object]:
-        return self._envelope(await self._request_data("DELETE", f"/api/browsers/{browser_id}"))
+        delete_receipt = await self._request_data(
+            "DELETE", f"/api/browsers/{browser_id}"
+        )
+        return self._normalize_browser_record_envelope(delete_receipt)
 
     async def sync_owner_revision(self, browser_id: str, owner_revision: int) -> None:
         await self._request_data("POST", f"/api/browsers/{browser_id}/owner-revision",
@@ -106,29 +122,31 @@ class BrowserManagerClient:
             if not isinstance(message, str) or not message.strip() or not isinstance(browser, dict):
                 raise
             # 正式拒绝也必须携带可核身份、状态与非旧版本；普通 409 没有这项证明。
-            runtime = self._runtime(browser)
-            revision = runtime["transport_owner_revision"]
+            browser_record = self._normalize_browser_record(browser)
+            revision = browser_record["transport_owner_revision"]
             if (
-                runtime.get("browser_id") != browser_id
-                or runtime.get("workspace_id") != self._workspace_id
-                or runtime.get("reconciliation_status") != "verified"
+                browser_record.get("browser_id") != browser_id
+                or browser_record.get("workspace_id") != self._workspace_id
+                or browser_record.get("reconciliation_status") != "verified"
                 or not isinstance(revision, int)
                 or isinstance(revision, bool)
                 or revision < owner_revision
-                or (runtime.get("status") == "running" and revision == owner_revision)
+                or (browser_record.get("status") == "running" and revision == owner_revision)
             ):
                 raise
-            raise ResourceTransportGrantRejected(message, snapshot=runtime) from error
+            raise ResourceTransportGrantRejected(message, snapshot=browser_record) from error
 
     @staticmethod
-    def _runtime(data: dict[str, object]) -> dict[str, object]:
+    def _normalize_browser_record(data: dict[str, object]) -> dict[str, object]:
         return browser_page_to_json(browser_page_to_proto(data))
 
-    def _envelope(self, data: dict[str, object]) -> dict[str, object]:
+    def _normalize_browser_record_envelope(
+        self, data: dict[str, object]
+    ) -> dict[str, object]:
         browser = data.get("browser")
         if not isinstance(browser, dict):
             raise TypeError("Browser 操作回执缺少 browser")
-        return {**data, "browser": self._runtime(browser)}
+        return {**data, "browser": self._normalize_browser_record(browser)}
 
     async def _request_data(
         self, method: str, path: str, payload: dict[str, object] | None = None,

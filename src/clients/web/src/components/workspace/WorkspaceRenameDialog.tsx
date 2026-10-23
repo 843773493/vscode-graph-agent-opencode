@@ -17,15 +17,17 @@ export default function WorkspaceRenameDialog({
   const [name, setName] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const workspaceId = workspace?.workspace_id ?? null;
+  const workspaceName = workspace?.name ?? null;
 
   useEffect(() => {
-    if (!workspace) {
+    if (workspaceId === null || workspaceName === null) {
       return;
     }
-    setName(workspace.name);
+    setName(workspaceName);
     setSubmitting(false);
     setError(null);
-  }, [workspace]);
+  }, [workspaceId, workspaceName]);
 
   if (!workspace) {
     return null;

@@ -164,26 +164,30 @@ class SessionGenerationService(SessionGenerationMessageDispatchSupport):
         self,
         payload: SessionGenerationExecuteRequest,
     ) -> SessionGenerationExecuteResultDTO:
-        lock_key = (payload.generator_id, payload.idempotency_key)
+        idempotency_lock_key = (payload.generator_id, payload.idempotency_key)
         async with self._idempotency_lock_guard:
-            lock = self._idempotency_locks.setdefault(
-                lock_key,
-                asyncio.Lock(),
-            )
-            self._idempotency_lock_users[lock_key] = (
-                self._idempotency_lock_users.get(lock_key, 0) + 1
+            lock = self._idempotency_locks.get(idempotency_lock_key)
+            if lock is None:
+                lock = asyncio.Lock()
+                self._idempotency_locks[idempotency_lock_key] = lock
+            self._idempotency_lock_users[idempotency_lock_key] = (
+                self._idempotency_lock_users.get(idempotency_lock_key, 0) + 1
             )
         try:
             async with lock:
                 return await self._execute_locked(payload)
         finally:
             async with self._idempotency_lock_guard:
-                remaining_users = self._idempotency_lock_users[lock_key] - 1
-                if remaining_users == 0:
-                    self._idempotency_lock_users.pop(lock_key)
-                    self._idempotency_locks.pop(lock_key)
+                remaining_lock_users = (
+                    self._idempotency_lock_users[idempotency_lock_key] - 1
+                )
+                if remaining_lock_users == 0:
+                    self._idempotency_lock_users.pop(idempotency_lock_key)
+                    self._idempotency_locks.pop(idempotency_lock_key)
                 else:
-                    self._idempotency_lock_users[lock_key] = remaining_users
+                    self._idempotency_lock_users[
+                        idempotency_lock_key
+                    ] = remaining_lock_users
 
     async def _execute_locked(
         self,

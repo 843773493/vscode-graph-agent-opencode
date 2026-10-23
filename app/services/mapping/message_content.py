@@ -12,12 +12,15 @@ from datetime import datetime
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
 
-from app.prompting.validation import internal_prompt_metadata, validate_internal_message
+from app.prompting.validation import internal_prompt_metadata
 from app.schemas.internal_v2.common import MessageRole
 from app.schemas.internal_v2.message import AttachmentRef, MessageDTO
 from app.services.business.message_display import project_message_for_display
 from app.services.mapping.agent_content_mapper import extract_reasoning_summary
-from app.services.mapping.user_message_content_projection import user_content_projection
+from app.services.mapping.user_message_content_projection import (
+    UserContentProjection,
+    user_content_projection,
+)
 
 
 class MessageContentProjectionMixin:
@@ -33,6 +36,7 @@ class MessageContentProjectionMixin:
         content = extracted["content"]
         response_metadata = message.response_metadata or {}
         structured_metadata = internal_prompt_metadata(response_metadata)
+        user_projection: UserContentProjection | None = None
         display_projection = None
         if isinstance(message.content, str):
             if structured_metadata is not None or role != MessageRole.user:
@@ -112,6 +116,7 @@ class MessageContentProjectionMixin:
             attachments=MessageContentProjectionMixin._attachments_for_message(
                 message,
                 response_metadata,
+                user_projection,
             ),
             metadata=metadata,
             created_at=created_at,
@@ -192,11 +197,15 @@ class MessageContentProjectionMixin:
     def _attachments_for_message(
         message: BaseMessage,
         response_metadata: Mapping[object, object],
+        user_projection: UserContentProjection | None,
     ) -> list[AttachmentRef]:
         attachments = MessageContentProjectionMixin._attachments_from_metadata(response_metadata)
         if attachments or not isinstance(message, HumanMessage):
             return attachments
-        projection = user_content_projection(message.content, response_metadata)
+        projection = user_projection or user_content_projection(
+            message.content,
+            response_metadata,
+        )
         return [
             AttachmentRef.model_validate(
                 {
@@ -209,21 +218,20 @@ class MessageContentProjectionMixin:
         ]
 
     @staticmethod
-    def _is_system_reminder_only_message(message: BaseMessage) -> bool:
+    def _is_structured_internal_message_candidate(message: BaseMessage) -> bool:
         content = getattr(message, "content", "")
         if not isinstance(content, str):
             return False
         metadata = message.response_metadata or {}
-        if internal_prompt_metadata(metadata) is None:
-            return False
-        validate_internal_message(content, metadata)
-        return True
+        return internal_prompt_metadata(metadata) is not None
 
     @staticmethod
     def _is_user_visible_message(message: BaseMessage) -> bool:
         metadata = message.response_metadata or {}
         message_metadata = metadata.get("message_metadata")
-        if MessageContentProjectionMixin._is_system_reminder_only_message(message):
+        if MessageContentProjectionMixin._is_structured_internal_message_candidate(
+            message
+        ):
             content = message.content
             if not isinstance(content, str):
                 raise TypeError("内部结构消息 content 必须是字符串")

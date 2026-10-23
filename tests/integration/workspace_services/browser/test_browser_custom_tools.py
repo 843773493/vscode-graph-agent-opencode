@@ -7,6 +7,7 @@ import time
 from collections.abc import AsyncIterator, Generator
 from contextlib import ExitStack
 from pathlib import Path
+from shutil import copytree
 from urllib.error import HTTPError
 from urllib.parse import quote
 from urllib.request import Request, urlopen
@@ -57,6 +58,7 @@ CUSTOM_TOOL_WORKSPACE_TEMPLATE_ITEMS = (
     "AGENTS.md",
     ".boxteam/skills",
 )
+BROWSER_CONTROL_SKILL_NAME = "browser-control"
 
 
 def _browser_ports(integration_backend_port: int) -> tuple[int, int]:
@@ -166,11 +168,15 @@ def integration_workspace_root_path(request: pytest.FixtureRequest) -> str:
         project_root / "out" / "tests" / "integration" / relative_test_path / "workspace"
     )
     template_root = project_root / "tests" / "fixtures" / "workspaces" / "custom_tool_test_workspace"
-    prepare_test_workspace(
+    workspace_root = prepare_test_workspace(
         workspace_root=workspace_root,
         template_root=template_root,
         template_items=CUSTOM_TOOL_WORKSPACE_TEMPLATE_ITEMS,
-        shared_skill_root=project_root / "resources" / "skills",
+    )
+    copytree(
+        project_root / "resources" / "skills" / BROWSER_CONTROL_SKILL_NAME,
+        workspace_root / ".boxteam" / "skills" / BROWSER_CONTROL_SKILL_NAME,
+        dirs_exist_ok=True,
     )
     return str(workspace_root)
 
@@ -375,6 +381,88 @@ async def test_checkpoint_failure_reports_stage_without_publishing_native_path(
     awake = await integration_client.post(f"/api/v1/resources/{browser_id}/browser-operation", json={**command, "action": "wake"})
     assert awake.status_code == 200, awake.text
     assert awake.json()["data"]["browser"]["metadata"]["resource_transition_error"] is None
+
+
+@pytest.mark.asyncio
+async def test_download_failure_publishes_stage_without_native_storage(
+    integration_client: httpx.AsyncClient, browser_context: CustomToolFactoryContext,
+    browser_manager_processes: tuple[int, int], browser_runtime: WorkspaceToolRuntime,
+) -> None:
+    container, _session, _invocation = browser_runtime
+    created = await integration_client.post("/api/v1/resources/browsers", json={
+        "session_id": browser_context.session_id,
+        "thread_id": browser_context.invocation_context.thread_binding.thread_id,
+        "url": "about:blank",
+    })
+    assert created.status_code == 200, created.text
+    browser_id = created.json()["data"]["resource_id"]
+    root = Path(container.workspace_root)
+    destination = root / ".boxteam/browser-manager/downloads" / browser_id
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    destination.write_bytes(b"existing-directory-conflict")
+    transport = BrowserManagerClient(
+        workspace_id=container.workspace_id,
+        backend_url=f"http://127.0.0.1:{browser_manager_processes[0]}",
+    )
+    code = """
+const started = page.waitForEvent('download');
+await page.evaluate(() => {
+  const anchor = document.createElement('a');
+  anchor.href = URL.createObjectURL(new Blob(['download-body'], {type: 'text/plain'}));
+  anchor.download = 'report.txt';
+  anchor.click();
+});
+await started;
+return 'download-started';
+"""
+    try:
+        await transport.perform(browser_id, "run", {"code": code}, actor="agent")
+        deadline = time.monotonic() + 10
+        while True:
+            raw = await transport._json_request("GET", f"/api/browsers/{browser_id}")
+            failure = raw["data"].get("download_error")
+            if failure:
+                break
+            assert time.monotonic() < deadline, "真实下载事件未发布失败状态"
+            await asyncio.sleep(0.05)
+        assert f"保存浏览器下载失败: browser_id={browser_id}, download_id=download_" in failure
+        assert "stage=目录创建" in failure
+        assert any(f"code={code}" in failure for code in ("EEXIST", "ENOTDIR", "EPERM"))
+        assert str(root) not in json.dumps(raw)
+        assert raw["data"].get("downloads", []) == []
+        assert destination.read_bytes() == b"existing-directory-conflict"
+        observed = await integration_client.get(f"/api/v1/resources/{browser_id}")
+        assert observed.status_code == 200, observed.text
+        assert observed.json()["data"]["metadata"]["download_error"] == failure
+        assert observed.headers["X-Request-ID"] == observed.json()["request_id"]
+        records = json.loads((root / ".boxteam/browser-manager/browsers.json").read_text())
+        record, = [item for item in records["browsers"] if item["browser_id"] == browser_id]
+        assert record["download_error"] == failure
+        assert str(root) not in json.dumps(record)
+        artifacts = TestRunContext.from_test_file(Path(__file__)).artifacts_dir
+        diagnostics = "\n".join(item.read_text() for item in artifacts.glob("browser-backend-*.stderr.log"))
+        assert "[browser-state-store] 保存浏览器下载失败" in diagnostics
+        assert str(destination) in diagnostics
+        (artifacts / f"download-failure-{time.time_ns()}.json").write_text(json.dumps({
+            "raw_node_response": raw, "resource_response": observed.json(), "node_record": record,
+        }, ensure_ascii=False, indent=2), encoding="utf-8")
+        destination.unlink()
+        await transport.perform(browser_id, "run", {"code": code}, actor="agent")
+        deadline = time.monotonic() + 10
+        while True:
+            recovered = (await transport._json_request("GET", f"/api/browsers/{browser_id}"))["data"]
+            if recovered.get("downloads"):
+                break
+            assert time.monotonic() < deadline, "目录修复后真实下载未完成"
+            await asyncio.sleep(0.05)
+        saved, = recovered["downloads"]
+        assert saved["status"] == "completed" and saved["filename"] == "report.txt"
+        assert (destination / f"{saved['download_id']}-{saved['filename']}").read_bytes() == b"download-body"
+    finally:
+        if destination.is_file():
+            destination.unlink()
+        deleted = await _detach_delete(integration_client, browser_id, browser_context)
+        assert deleted.status_code == 200, deleted.text
 
 
 @pytest.mark.asyncio
@@ -636,7 +724,13 @@ async def test_browser_custom_tools_are_invokable_and_exposed_as_resource(
         detached = await _recv_ws_type(websocket, "detached")
         assert detached["browserId"] == page_id
 
-    skill_path = Path(integration_workspace_root_path) / ".boxteam" / "skills" / "browser-control" / "SKILL.md"
+    skill_root = Path(integration_workspace_root_path) / ".boxteam" / "skills"
+    assert {entry.name for entry in skill_root.iterdir() if entry.is_dir()} == {
+        BROWSER_CONTROL_SKILL_NAME,
+        "large-test-output",
+        "test-tool-2",
+    }
+    skill_path = skill_root / BROWSER_CONTROL_SKILL_NAME / "SKILL.md"
     skill_text = skill_path.read_text(encoding="utf-8")
     for tool_name in [
         "listBrowserPage",
@@ -990,88 +1084,6 @@ async def test_real_node_agent_lock_rejection_preserves_owner_and_never_executes
     assert promoted["reconciliation_status"] == "verified"
     await owner.command(resource_id, action="stop", expected_revision=promoted["owner_revision"],
                         holder_id="request:stop-real", operation_id="stop-real")
-
-
-@pytest.mark.asyncio
-async def test_download_failure_publishes_stage_without_native_storage(
-    integration_client: httpx.AsyncClient, browser_context: CustomToolFactoryContext,
-    browser_manager_processes: tuple[int, int], browser_runtime: WorkspaceToolRuntime,
-) -> None:
-    container, _session, _invocation = browser_runtime
-    created = await integration_client.post("/api/v1/resources/browsers", json={
-        "session_id": browser_context.session_id,
-        "thread_id": browser_context.invocation_context.thread_binding.thread_id,
-        "url": "about:blank",
-    })
-    assert created.status_code == 200, created.text
-    browser_id = created.json()["data"]["resource_id"]
-    root = Path(container.workspace_root)
-    destination = root / ".boxteam/browser-manager/downloads" / browser_id
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    destination.write_bytes(b"existing-directory-conflict")
-    transport = BrowserManagerClient(
-        workspace_id=container.workspace_id,
-        backend_url=f"http://127.0.0.1:{browser_manager_processes[0]}",
-    )
-    code = """
-const started = page.waitForEvent('download');
-await page.evaluate(() => {
-  const anchor = document.createElement('a');
-  anchor.href = URL.createObjectURL(new Blob(['download-body'], {type: 'text/plain'}));
-  anchor.download = 'report.txt';
-  anchor.click();
-});
-await started;
-return 'download-started';
-"""
-    try:
-        await transport.perform(browser_id, "run", {"code": code}, actor="agent")
-        deadline = time.monotonic() + 10
-        while True:
-            raw = await transport._json_request("GET", f"/api/browsers/{browser_id}")
-            failure = raw["data"].get("download_error")
-            if failure:
-                break
-            assert time.monotonic() < deadline, "真实下载事件未发布失败状态"
-            await asyncio.sleep(0.05)
-        assert f"保存浏览器下载失败: browser_id={browser_id}, download_id=download_" in failure
-        assert "stage=目录创建" in failure
-        assert any(f"code={code}" in failure for code in ("EEXIST", "ENOTDIR", "EPERM"))
-        assert str(root) not in json.dumps(raw)
-        assert raw["data"].get("downloads", []) == []
-        assert destination.read_bytes() == b"existing-directory-conflict"
-        observed = await integration_client.get(f"/api/v1/resources/{browser_id}")
-        assert observed.status_code == 200, observed.text
-        assert observed.json()["data"]["metadata"]["download_error"] == failure
-        assert observed.headers["X-Request-ID"] == observed.json()["request_id"]
-        records = json.loads((root / ".boxteam/browser-manager/browsers.json").read_text())
-        record, = [item for item in records["browsers"] if item["browser_id"] == browser_id]
-        assert record["download_error"] == failure
-        assert str(root) not in json.dumps(record)
-        artifacts = TestRunContext.from_test_file(Path(__file__)).artifacts_dir
-        diagnostics = "\n".join(item.read_text() for item in artifacts.glob("browser-backend-*.stderr.log"))
-        assert "[browser-state-store] 保存浏览器下载失败" in diagnostics
-        assert str(destination) in diagnostics
-        (artifacts / f"download-failure-{time.time_ns()}.json").write_text(json.dumps({
-            "raw_node_response": raw, "resource_response": observed.json(), "node_record": record,
-        }, ensure_ascii=False, indent=2), encoding="utf-8")
-        destination.unlink()
-        await transport.perform(browser_id, "run", {"code": code}, actor="agent")
-        deadline = time.monotonic() + 10
-        while True:
-            recovered = (await transport._json_request("GET", f"/api/browsers/{browser_id}"))["data"]
-            if recovered.get("downloads"):
-                break
-            assert time.monotonic() < deadline, "目录修复后真实下载未完成"
-            await asyncio.sleep(0.05)
-        saved, = recovered["downloads"]
-        assert saved["status"] == "completed" and saved["filename"] == "report.txt"
-        assert (destination / f"{saved['download_id']}-{saved['filename']}").read_bytes() == b"download-body"
-    finally:
-        if destination.is_file():
-            destination.unlink()
-        deleted = await _detach_delete(integration_client, browser_id, browser_context)
-        assert deleted.status_code == 200, deleted.text
 
 
 @pytest.mark.asyncio

@@ -15,7 +15,6 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-import psutil
 from pydantic import ValidationError
 
 PROJECT_ROOT = Path.cwd().resolve()
@@ -74,39 +73,35 @@ from app.services.orchestration.resource_activation import ResourceActivationCoo
 SESSION_ID = "ses_019c27f816b17ee394a67f9312bb669e"
 
 
-def _inherit_running_provider_environment(environment_names: set[str]) -> None:
-    """从同项目后端进程继承 Provider 配置环境变量，不输出变量值。"""
-    missing_environment_names = {
+def _load_running_provider_keys(environment_names: set[str]) -> None:
+    """从当前工作区后端进程继承已加载的 provider key，不输出密钥。"""
+    missing_names = {
         name for name in environment_names if not os.environ.get(name)
     }
-    if not missing_environment_names:
+    if not missing_names:
         return
-
-    for process in psutil.process_iter(attrs=("cmdline",)):
+    for process_path in Path("/proc").glob("[0-9]*"):
+        environ_path = process_path / "environ"
+        command_path = process_path / "cmdline"
         try:
-            process_info = process.info
-            command = process_info.get("cmdline") or []
-            if not any("app.main" in argument for argument in command):
+            command = command_path.read_bytes().decode(errors="ignore")
+            if (
+                "vscode-graph-agent-opencode" not in command
+                or "app.main" not in command
+            ):
                 continue
-            process_root = Path(process.cwd()).resolve()
-        except psutil.Error:
+            entries = environ_path.read_bytes().split(b"\0")
+        except (FileNotFoundError, PermissionError):
             continue
-        if process_root != PROJECT_ROOT:
-            continue
-        try:
-            environment = process.environ()
-        except psutil.Error as error:
-            raise RuntimeError(
-                "无法读取当前项目后端的 Provider 环境变量: "
-                f"pid={process.pid}, "
-                f"missing={','.join(sorted(missing_environment_names))}"
-            ) from error
-        for name in tuple(missing_environment_names):
-            value = environment.get(name)
-            if value:
-                os.environ[name] = value
-                missing_environment_names.remove(name)
-        if not missing_environment_names:
+        for entry in entries:
+            name_bytes, separator, value_bytes = entry.partition(b"=")
+            if not separator:
+                continue
+            name = name_bytes.decode(errors="ignore")
+            if name in missing_names and value_bytes:
+                os.environ[name] = value_bytes.decode()
+                missing_names.remove(name)
+        if not missing_names:
             return
 
 
@@ -382,7 +377,7 @@ def generate(
     override_config_path = (
         workspace_root / ".boxteam" / "workspace_real_model_override.jsonc"
     )
-    _inherit_running_provider_environment(
+    _load_running_provider_keys(
         _configured_environment_names((inline_config_path, override_config_path))
     )
     registry = WorkspaceContainerRegistry(

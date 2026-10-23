@@ -1,7 +1,6 @@
 import { useEffect, useMemo } from "react";
 import { getJob } from "../../api";
 import { listMainThreadPendingRequests } from "../../pendingRequestsApi";
-import { cloneMaps } from "../../state/appStateMaps";
 import { writePendingSnapshot } from "../../state/conversations";
 import { parseSessionScopeKey } from "../../state/session/sessionScope";
 import { isSessionActivelyViewed } from "../../state/session/viewedSession";
@@ -70,7 +69,12 @@ export function useBackgroundSessionActivity({
             if (previous.activeJobIdsBySession.get(sessionCacheKey) !== jobId) {
               return previous;
             }
-            const next = cloneMaps(previous);
+            const next = {
+              ...previous,
+              pendingConversations: new Map(previous.pendingConversations),
+              activeJobIdsBySession: new Map(previous.activeJobIdsBySession),
+              unreadSessionKeys: new Set(previous.unreadSessionKeys),
+            };
             writePendingSnapshot(
               next.pendingConversations,
               next.activeJobIdsBySession,

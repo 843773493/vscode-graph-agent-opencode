@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import io
 import json
-from pathlib import Path
 from threading import Event
 from types import SimpleNamespace
 from unittest.mock import Mock
@@ -29,15 +28,11 @@ from app.services.infrastructure.workspace_files.store import (
     WorkspaceFileOperationConflictError,
 )
 from app.services.infrastructure.workspace_service import WorkspaceService
-from tests.harness.python.run_context import TestRunContext
-from tests.support.workspaces import prepare_default_test_workspace
 
 
 @pytest.fixture
-async def file_case(request):
-    context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
-    workspace = prepare_default_test_workspace(workspace_root=context.workspace_root,
-                                               template_root=Path.cwd() / "tests/fixtures/workspaces/model_tool_test_workspace")
+async def file_case(empty_workspace_scope):
+    _, workspace = empty_workspace_scope
     (workspace / "target").mkdir()
     (workspace / "other").mkdir()
     config = Mock(spec=ConfigService)
@@ -46,11 +41,10 @@ async def file_case(request):
     config.get_workspace_preview_binary_sample_bytes.return_value = 8192
     service = WorkspaceService(config_service=config, workspace_root=workspace)
     await service.start()
-    case = SimpleNamespace(service=service, owner=service.file_operations, workspace=workspace, context=context)
+    case = SimpleNamespace(service=service, owner=service.file_operations, workspace=workspace)
     yield case
     await service.stop()
     service.close()
-    context.close()
 
 
 async def intent(case, path="target", **overrides):

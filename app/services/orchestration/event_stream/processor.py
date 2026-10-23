@@ -137,8 +137,8 @@ async def process_agent_event_stream(
     )
 
     collected_text_parts: list[str] = []
-    latest_model_part_order: list[str] = []
-    latest_model_parts: dict[str, dict[str, object]] = {}
+    latest_model_part_ids_in_order: list[str] = []
+    latest_model_parts_by_id: dict[str, dict[str, object]] = {}
     latest_model_visible_text_seen = False
     latest_model_reasoning_seen = False
     tool_contexts_by_run_id: dict[str, ToolEventDisplayContext] = {}
@@ -186,8 +186,8 @@ async def process_agent_event_stream(
     def record_latest_model_part(part: AgentStreamContentPart) -> None:
         merge_model_content_part(
             part,
-            part_order=latest_model_part_order,
-            parts=latest_model_parts,
+            part_ids_in_order=latest_model_part_ids_in_order,
+            parts_by_id=latest_model_parts_by_id,
         )
 
     def record_model_content_parts(parts: list[AgentStreamContentPart]) -> None:
@@ -333,8 +333,8 @@ async def process_agent_event_stream(
                 continue
 
             if event_type == "on_chat_model_start" and is_tracked_chat_model_event(name):
-                latest_model_part_order.clear()
-                latest_model_parts.clear()
+                latest_model_part_ids_in_order.clear()
+                latest_model_parts_by_id.clear()
                 latest_model_visible_text_seen = False
                 latest_model_reasoning_seen = False
                 model_run_id = event_run_id(event)
@@ -824,8 +824,8 @@ async def process_agent_event_stream(
         final_text="".join(collected_text_parts).strip(),
         latest_model_content_blocks=tuple(
             part
-            for part_id in latest_model_part_order
-            if (part := latest_model_parts.get(part_id)) is not None
+            for part_id in latest_model_part_ids_in_order
+            if (part := latest_model_parts_by_id.get(part_id)) is not None
         ),
         last_tool_result_text=last_tool_result_text,
         successful_tool_calls=tuple(successful_tool_calls),

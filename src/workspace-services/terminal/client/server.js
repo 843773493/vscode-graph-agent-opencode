@@ -153,7 +153,7 @@ async function main() {
 
   const server = http.createServer(async (request, response) => {
     try {
-      const url = new URL(request.url || "/", `http://${host}:${port}`);
+      const url = new URL(request.url || "/", `http://${formatUrlHost(host)}:${port}`);
       if (url.pathname === "/health") {
         send(
           response,
@@ -217,7 +217,7 @@ async function main() {
   });
 
   server.listen(port, host, () => {
-    console.log(`[terminal-frontend] listening on http://${host}:${port}`);
+    console.log(`[terminal-frontend] listening on http://${formatUrlHost(host)}:${port}`);
     console.log(`[terminal-frontend] backend ${backendUrl}`);
   });
 }

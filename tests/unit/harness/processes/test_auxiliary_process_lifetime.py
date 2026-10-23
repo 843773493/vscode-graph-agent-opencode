@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import subprocess
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
@@ -186,6 +187,83 @@ def test_auxiliary_repeated_start_never_overwrites_logs(auxiliary_log_startup: A
         assert all(path.read_text(encoding="utf-8") == "保留原运行日志" for path in previous_paths)
         previous_paths.update(current_paths)
     assert len(previous_paths) == auxiliary_log_startup.process_count * 4
+
+
+@dataclass
+class AuxiliaryLogCloseFailure:
+    error: BaseException
+    streams: list[TextIO]
+
+
+@pytest.fixture(params=[
+    ("stdout", OSError), ("stderr", OSError),
+    ("stdout", KeyboardInterrupt), ("stderr", KeyboardInterrupt),
+])
+def auxiliary_log_close_failure(
+    request: pytest.FixtureRequest,
+    auxiliary_log_startup: AuxiliaryLogStartup,
+    monkeypatch: pytest.MonkeyPatch,
+) -> AuxiliaryLogCloseFailure:
+    channel, failure_type = request.param
+    error = failure_type("模拟父进程关闭日志失败")
+    streams: list[TextIO] = []
+    real_open = open
+
+    @contextmanager
+    def open_log(path: Path, mode: str, *, encoding: str) -> Iterator[TextIO]:
+        with real_open(path, mode, encoding=encoding) as stream:
+            streams.append(stream)
+            try:
+                yield stream
+            finally:
+                if path.name.endswith(f".{channel}.log"):
+                    stream.close()
+                    raise error
+
+    auxiliary_log_startup.spawn.return_value = next(auxiliary_log_startup.spawn.side_effect)
+    auxiliary_log_startup.spawn.side_effect = None
+    monkeypatch.setattr(process_output, "open", open_log, raising=False)
+    monkeypatch.setattr(
+        process_output, "terminate_process", auxiliary_log_startup.terminate, raising=False,
+    )
+    return AuxiliaryLogCloseFailure(error, streams)
+
+
+def test_log_close_failure_reclaims_process_before_handle_publication(
+    auxiliary_log_startup: AuxiliaryLogStartup,
+    auxiliary_log_close_failure: AuxiliaryLogCloseFailure,
+) -> None:
+    with pytest.raises(type(auxiliary_log_close_failure.error)) as failure:
+        auxiliary_log_startup.start()
+
+    assert failure.value is auxiliary_log_close_failure.error
+    auxiliary_log_startup.spawn.assert_called_once()
+    auxiliary_log_startup.terminate.assert_called_once_with(
+        auxiliary_log_startup.spawn.return_value,
+    )
+    auxiliary_log_startup.ready.assert_not_called()
+    assert len(auxiliary_log_close_failure.streams) == 2
+    assert all(stream.closed for stream in auxiliary_log_close_failure.streams)
+    assert any(".stdout.log" in note for note in failure.value.__notes__)
+    assert any(".stderr.log" in note for note in failure.value.__notes__)
+
+
+def test_log_close_and_process_cleanup_failures_keep_original_error_chain(
+    auxiliary_log_startup: AuxiliaryLogStartup,
+    auxiliary_log_close_failure: AuxiliaryLogCloseFailure,
+) -> None:
+    cleanup_error = RuntimeError("模拟未移交进程回收失败")
+    auxiliary_log_startup.terminate.side_effect = cleanup_error
+    with pytest.raises(BaseException) as failure:
+        auxiliary_log_startup.start()
+
+    assert failure.value is cleanup_error
+    assert failure.value.__context__ is auxiliary_log_close_failure.error
+    auxiliary_log_startup.terminate.assert_called_once_with(
+        auxiliary_log_startup.spawn.return_value,
+    )
+    auxiliary_log_startup.ready.assert_not_called()
+    assert all(stream.closed for stream in auxiliary_log_close_failure.streams)
 
 
 def test_browser_manager_close_reports_all_owned_cleanup_errors(

@@ -25,10 +25,12 @@ export function upsertTool(
 ): void {
   const executionId = stringValue(payload.tool_execution_id);
   if (!executionId) return;
-  const existing = state.toolExecutions.find((tool) => tool.tool_execution_id === executionId);
-  if (existing) {
-    Object.assign(existing, toolFromPayload(payload, status));
-    applyLifecycle(existing, event, status !== "running");
+  const existingExecution = state.toolExecutions.find(
+    (tool) => tool.tool_execution_id === executionId,
+  );
+  if (existingExecution) {
+    Object.assign(existingExecution, toolFromPayload(payload, status));
+    applyLifecycle(existingExecution, event, status !== "running");
     return;
   }
   const execution = toolFromPayload(payload, status);

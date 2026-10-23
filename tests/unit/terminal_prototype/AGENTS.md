@@ -6,6 +6,20 @@ applyTo: tests/unit/terminal_prototype/**
 
 放置终端原型相关的最小实验测试，验证持续化 shell 会话、node-pty 执行和后续 xterm.js 接入的接口形状。
 
+当前文件与执行链：
+
+```text
+terminal_prototype/
+├── AGENTS.md
+├── test_node_pty_smoke.py
+│   └── 启动 node_pty_smoke.mjs，并核对输出、退出状态和工作目录
+└── node_pty_smoke.mjs
+    ├── node-pty
+    └── 平台 shell
+        ├── Windows：COMSPEC 或 cmd.exe
+        └── Linux/macOS：SHELL 或 /bin/sh
+```
+
 # 可以修改
 
 - 该目录下所有测试文件

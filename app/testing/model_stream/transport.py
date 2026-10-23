@@ -24,11 +24,7 @@ from .replay import ReplayCoordinator
 
 
 class _ReplayByteStream(httpx.AsyncByteStream):
-    def __init__(
-        self,
-        frames: tuple[StreamFrame, ...],
-        codec: StreamProtocolCodec,
-    ) -> None:
+    def __init__(self, frames: tuple[StreamFrame, ...], codec: StreamProtocolCodec) -> None:
         self._frames = frames
         self._codec = codec
         self._closed = False

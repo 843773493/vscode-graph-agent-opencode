@@ -17,6 +17,7 @@ from app.domain.itemized.enums import (
 from app.domain.itemized.errors import ItemSchemaError
 from app.domain.itemized.hashing import (
     canonical_json_bytes,
+    canonical_json_bytes_and_hash,
     copy_json_value,
     payload_content_length,
     sha256_jcs,
@@ -397,17 +398,20 @@ class ContextRef:
         effective_payload_kind = (
             PayloadKind.STRUCTURED_CONTENT if payload_kind is None else payload_kind
         )
-        actual_length = (
-            payload_content_length(effective_payload_kind, content)
-            if content is not None
-            else None
-        )
+        if content is None:
+            actual_length = None
+        elif effective_payload_kind == PayloadKind.TEXT:
+            actual_length = payload_content_length(effective_payload_kind, content)
+        else:
+            encoded, actual_hash = canonical_json_bytes_and_hash(content)
+            actual_length = len(encoded)
         if content is not None:
             if content_length is not None and content_length != actual_length:
                 raise ItemSchemaError(
                     f"request-only ref content_length 与正文不一致: {ref_id}"
                 )
-            actual_hash = sha256_jcs(content)
+            if effective_payload_kind == PayloadKind.TEXT:
+                actual_hash = sha256_jcs(content)
             if content_hash_value is not None and content_hash_value != actual_hash:
                 raise ItemSchemaError(
                     f"request-only ref content_hash 与正文不一致: {ref_id}"

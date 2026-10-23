@@ -107,7 +107,9 @@ class NodeDebugConfigurationRegistry:
         if self._store is None:
             return
         owner = normalize_node_debug_owner(session_id, thread_id)
-        known = self._configurations.setdefault(owner, {})
+        known = self._configurations.get(owner)
+        if known is None:
+            known = self._configurations.setdefault(owner, {})
         for configuration in self._store.list_configurations(session_id, thread_id):
             if configuration.configuration_id in known:
                 continue
@@ -116,10 +118,15 @@ class NodeDebugConfigurationRegistry:
             known[validated.configuration_id] = validated
 
     def list(self, session_id: str, thread_id: str) -> list[NodeDebugConfigurationDTO]:
+        configurations = self._configurations.get(
+            normalize_node_debug_owner(session_id, thread_id)
+        )
+        if configurations is None:
+            return []
         return [
             configuration.model_copy(deep=True)
             for configuration in sorted(
-                self._configurations.get(normalize_node_debug_owner(session_id, thread_id), {}).values(),
+                configurations.values(),
                 key=lambda item: (item.name.casefold(), item.configuration_id),
             )
         ]
@@ -127,8 +134,13 @@ class NodeDebugConfigurationRegistry:
     def get(
         self, session_id: str, thread_id: str, configuration_id: str
     ) -> NodeDebugConfigurationDTO:
-        configuration = self._configurations.get(normalize_node_debug_owner(session_id, thread_id), {}).get(
-            configuration_id
+        configurations = self._configurations.get(
+            normalize_node_debug_owner(session_id, thread_id)
+        )
+        configuration = (
+            configurations.get(configuration_id)
+            if configurations is not None
+            else None
         )
         if configuration is None:
             raise FileNotFoundError(
@@ -139,9 +151,10 @@ class NodeDebugConfigurationRegistry:
         return configuration
 
     def contains(self, session_id: str, thread_id: str, configuration_id: str) -> bool:
-        return configuration_id in self._configurations.get(
-            normalize_node_debug_owner(session_id, thread_id), {}
+        configurations = self._configurations.get(
+            normalize_node_debug_owner(session_id, thread_id)
         )
+        return configurations is not None and configuration_id in configurations
 
     def put(
         self,
@@ -149,9 +162,11 @@ class NodeDebugConfigurationRegistry:
         configuration: NodeDebugConfigurationDTO,
         thread_id: str,
     ) -> None:
-        self._configurations.setdefault(normalize_node_debug_owner(session_id, thread_id), {})[
-            configuration.configuration_id
-        ] = configuration
+        owner = normalize_node_debug_owner(session_id, thread_id)
+        configurations = self._configurations.get(owner)
+        if configurations is None:
+            configurations = self._configurations.setdefault(owner, {})
+        configurations[configuration.configuration_id] = configuration
         if self._store is not None:
             self._store.write_configuration(session_id, configuration, thread_id)
 
@@ -413,9 +428,12 @@ class NodeDebugConfigurationRegistry:
         normalized = name.strip().casefold()
         if not normalized:
             raise ValueError("调试方案名称不能为空")
-        for configuration in self._configurations.get(
-            normalize_node_debug_owner(session_id, thread_id), {}
-        ).values():
+        configurations = self._configurations.get(
+            normalize_node_debug_owner(session_id, thread_id)
+        )
+        if configurations is None:
+            return
+        for configuration in configurations.values():
             if configuration.configuration_id == exclude_configuration_id:
                 continue
             if configuration.name.casefold() == normalized:

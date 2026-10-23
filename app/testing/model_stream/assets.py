@@ -263,7 +263,7 @@ def load_cassette(path: Path | str) -> ModelStreamCassette:
         metadata=copy.deepcopy(metadata),
         interactions=interactions,
         path=resolved_path,
-        raw=copy.deepcopy(raw),
+        raw=raw,
     )
 
 
@@ -337,7 +337,7 @@ def load_scenario(fixture_root: Path | str, scenario_id: str) -> StreamScenario:
         asset_path=asset_path,
         cassette=cassette,
         business_assertion=business_assertion,
-        raw=copy.deepcopy(raw),
+        raw=raw,
     )
 
 

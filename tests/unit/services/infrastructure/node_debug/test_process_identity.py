@@ -54,6 +54,54 @@ def test_linux_missing_proc_entry_is_authoritative(
     assert probe_process_identity(4242) is None
 
 
+def test_linux_process_identity_requires_boot_id(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(process_identity.sys, "platform", "linux")
+    monkeypatch.setattr(process_identity, "_PROC_ROOT", tmp_path)
+    monkeypatch.setattr(
+        Path,
+        "is_file",
+        lambda _path: pytest.fail("Linux 进程身份读取不应先探测文件是否存在"),
+    )
+    process_root = tmp_path / "4242"
+    process_root.mkdir()
+    stat_fields = ["S", *(["0"] * 18), "12345"]
+    (process_root / "stat").write_text(
+        f"4242 (python) {' '.join(stat_fields)}",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(FileNotFoundError, match="boot_id"):
+        probe_process_identity(4242)
+
+    boot_id_path = tmp_path / "sys" / "kernel" / "random" / "boot_id"
+    boot_id_path.parent.mkdir(parents=True)
+    boot_id_path.write_text("\n", encoding="utf-8")
+    with pytest.raises(RuntimeError, match="启动 ID 为空"):
+        probe_process_identity(4242)
+
+
+@pytest.mark.parametrize("state", ["Z", "X", "x"])
+def test_linux_terminal_proc_states_have_no_live_identity(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    state: str,
+) -> None:
+    monkeypatch.setattr(process_identity.sys, "platform", "linux")
+    monkeypatch.setattr(process_identity, "_PROC_ROOT", tmp_path)
+    process_root = tmp_path / "4242"
+    process_root.mkdir()
+    stat_fields = [state, *(["0"] * 18), "12345"]
+    (process_root / "stat").write_text(
+        f"4242 (python) {' '.join(stat_fields)}",
+        encoding="utf-8",
+    )
+
+    assert probe_process_identity(4242) is None
+
+
 def test_linux_proc_identity_reports_vanishing_entry_as_terminated(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

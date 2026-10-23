@@ -201,8 +201,11 @@ class LLMLoggingMiddleware(AgentMiddleware[StateT, Any, Any]):
             upstream={"attempts": _json_value(upstream_attempts)},
         )
 
-        file_created_at_ns = time.time_ns()
-        log_file = self._session_log_dir(session_id) / f"{file_created_at_ns}.json"
+        log_filename_timestamp_ns = time.time_ns()
+        log_file = (
+            self._session_log_dir(session_id)
+            / f"{log_filename_timestamp_ns}.json"
+        )
         payload = full_log.model_dump(mode="json")
         bounded_payload = {
             "timestamp": payload["timestamp"],
@@ -228,12 +231,14 @@ class LLMLoggingMiddleware(AgentMiddleware[StateT, Any, Any]):
     def _prune_session_logs(log_dir: Path) -> None:
         log_files = sorted(log_dir.glob("*.json"), key=lambda path: path.name)
         total_bytes = sum(path.stat().st_size for path in log_files)
-        retained_files = list(log_files)
-        while (
-            len(retained_files) > LLM_LOG_MAX_FILES
-            or total_bytes > LLM_LOG_MAX_TOTAL_BYTES
-        ) and retained_files:
-            stale_file = retained_files.pop(0)
+        remaining_file_count = len(log_files)
+        for stale_file in log_files:
+            if (
+                remaining_file_count <= LLM_LOG_MAX_FILES
+                and total_bytes <= LLM_LOG_MAX_TOTAL_BYTES
+            ):
+                break
+            remaining_file_count -= 1
             try:
                 stale_size = stale_file.stat().st_size
                 stale_file.unlink()

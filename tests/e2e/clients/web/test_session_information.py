@@ -10,13 +10,39 @@ from pathlib import Path
 import httpx
 import pytest
 
+from tests.support.paths import output_root_for_test
+from tests.support.ports import e2e_port_block_for_file
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
     acquire_gateway_guest,
     close_gateway_process,
+    reset_gateway_persistent_state,
     start_gateway_process,
 )
-from tests.support.ports import e2e_port_block_for_file
+from tests.support.workspaces import prepare_test_workspace
+
+
+@pytest.fixture(scope="module")
+def e2e_workspace_root_path(request: pytest.FixtureRequest) -> str:
+    """只复制稳定工作区身份，诊断面板不读取示例项目文件或 Skill。"""
+    project_root = Path.cwd().resolve()
+    output_root = output_root_for_test(
+        Path(request.node.fspath),
+        test_layer="e2e",
+        project_root=project_root,
+    )
+    workspace_root = output_root / "workspace"
+    reset_gateway_persistent_state(workspace_root=workspace_root)
+    workspace = prepare_test_workspace(
+        workspace_root=workspace_root,
+        template_root=project_root
+        / "tests"
+        / "fixtures"
+        / "workspaces"
+        / "default_test_workspace",
+        template_items=(".boxteam/workspace-identity.json",),
+    )
+    return str(workspace)
 
 
 @pytest.mark.asyncio
@@ -59,9 +85,7 @@ async def test_copy_session_information_uses_bounded_protocol_projection(
         default_backend_url=None,
         port=port,
         extra_env={
-            "BOXTEAM_WEB_ASSETS": str(
-                project_root / "src" / "clients" / "web" / "dist"
-            )
+            "BOXTEAM_WEB_ASSETS": str(project_root / "src" / "clients" / "web" / "dist")
         },
     )
     try:
@@ -87,7 +111,8 @@ async def test_copy_session_information_uses_bounded_protocol_projection(
             {
                 "BOXTEAM_E2E_BASE_URL": f"http://127.0.0.1:{port}",
                 "BOXTEAM_E2E_FIXTURE": json.dumps(
-                    {"sessionId": session_id, "workspacePath": str(workspace_root)}, ensure_ascii=False
+                    {"sessionId": session_id, "workspacePath": str(workspace_root)},
+                    ensure_ascii=False,
                 ),
                 "BOXTEAM_E2E_RESULT_PATH": str(result_path),
                 "BOXTEAM_E2E_SCREENSHOT_PATH": str(screenshot_path),
@@ -112,7 +137,9 @@ async def test_copy_session_information_uses_bounded_protocol_projection(
         assert browser_result["kind"] == "session_diagnostic_snapshot"
         assert browser_result["schemaVersion"] == 2
         assert browser_result["noPhysicalLocator"] is True
-        assert browser_result["apiWorkspaceId"] == browser_result["clipboardWorkspaceId"]
+        assert (
+            browser_result["apiWorkspaceId"] == browser_result["clipboardWorkspaceId"]
+        )
         assert browser_result["titleTruncated"] is True
         assert browser_result["titleLength"] == 512
         assert browser_result["activeResourceCount"] <= 32

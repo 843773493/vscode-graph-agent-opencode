@@ -215,7 +215,9 @@ class NodeDebugProcessLifecycle:
         if state != "same":
             return state in {"terminated", "reused"}
         try:
-            os.kill(pid, signal.SIGKILL)
+            # Windows 的 SIGTERM 由 TerminateProcess 实现，没有独立的 SIGKILL。
+            forced_termination_signal = getattr(signal, "SIGKILL", signal.SIGTERM)
+            os.kill(pid, forced_termination_signal)
         except ProcessLookupError:
             return True
         state = await self.wait_for_recorded_instance(

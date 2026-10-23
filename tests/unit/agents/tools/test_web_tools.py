@@ -2,14 +2,12 @@ from __future__ import annotations
 
 import json
 from collections.abc import Sequence
-from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import httpx
 import pytest
 
 from app.agents.tools import web as web_tools
-from app.runtime.embeddings import LiteLLMEmbeddingComputer
 
 
 @pytest.fixture(autouse=True)
@@ -249,36 +247,3 @@ async def test_fetch_webpage_query_requires_embedding_configuration() -> None:
                 "query": "semantic query",
             }
         )
-
-
-@pytest.mark.asyncio
-async def test_litellm_embedding_computer_preserves_response_index_order(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    captured: dict[str, object] = {}
-
-    async def fake_aembedding(**kwargs: object) -> SimpleNamespace:
-        captured.update(kwargs)
-        return SimpleNamespace(
-            data=[
-                {"index": 1, "embedding": [0, 1]},
-                {"index": 0, "embedding": [1, 0]},
-            ]
-        )
-
-    monkeypatch.setattr("litellm.aembedding", fake_aembedding)
-    computer = LiteLLMEmbeddingComputer.from_provider(
-        {
-            "id": "openrouter_embedding",
-            "endpoint": "https://openrouter.ai/api/v1",
-            "model": "openai/text-embedding-3-small",
-            "api_key": "test-key",
-            "custom_llm_provider": "openrouter",
-        }
-    )
-
-    embeddings = await computer.compute(["first", "second"])
-
-    assert embeddings == [[1.0, 0.0], [0.0, 1.0]]
-    assert captured["max_retries"] == 3
-    assert captured["model"] == "openai/text-embedding-3-small"

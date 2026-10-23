@@ -246,7 +246,11 @@ def _required_int(value: Mapping[str, Any], key: str) -> int:
 
 
 def _normalize_payload(event_type: str, payload: Mapping[str, Any]) -> dict[str, Any]:
-    normalized = copy.deepcopy(dict(payload))
+    normalized = (
+        copy.deepcopy(dict(payload))
+        if event_type == "stream.snapshot"
+        else dict(payload)
+    )
     enum_maps = _ENUM_MAPS
     if (
         event_type in {"stream.opened", "stream.completed", "stream.interrupted"}

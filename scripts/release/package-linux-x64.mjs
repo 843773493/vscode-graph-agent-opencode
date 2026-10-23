@@ -5,7 +5,7 @@ const projectRoot = path.resolve(
   process.env.BOXTEAM_PROJECT_ROOT ?? process.cwd(),
 );
 
-for (const script of ["build-linux-x64.mjs", "verify-linux-x64.mjs"]) {
+for (const script of ["build-linux-x64.mjs", "verification/verify-linux-x64.mjs"]) {
   const result = spawnSync(
     process.execPath,
     [path.join(projectRoot, "packaging", "runtime", script)],

@@ -1,29 +1,26 @@
 import { describe, expect, test } from "bun:test";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import type { LLMRequestLogRecord } from "../../../types/backend";
+import { requestLogRecordFixture } from "../../../state/requestLogDisplay/requestLogRecordFixture";
 import RequestLogPanel, {
   INITIAL_VISIBLE_REQUEST_LOG_COUNT,
 } from "./RequestLogPanel";
-
-function requestLog(index: number): LLMRequestLogRecord {
-  return {
-    session_id: "ses_requests",
-    job_id: `job_${index}`,
-    timestamp: index,
-    file_name: `${index}.json`,
-    request: { model_name: `model-${index}`, messages: [] },
-    response: {},
-    upstream: {},
-  };
-}
 
 describe("RequestLogPanel", () => {
   test("默认按时间正序渲染最新一批请求", () => {
     const logCount = INITIAL_VISIBLE_REQUEST_LOG_COUNT + 2;
     const html = renderToStaticMarkup(
       <RequestLogPanel
-        logs={Array.from({ length: logCount }, (_, index) => requestLog(index + 1))}
+        logs={Array.from({ length: logCount }, (_, index) => {
+          const timestamp = index + 1;
+          return requestLogRecordFixture({
+            session_id: "ses_requests",
+            job_id: `job_${timestamp}`,
+            timestamp,
+            file_name: `${timestamp}.json`,
+            request: { model_name: `model-${timestamp}`, messages: [] },
+          });
+        })}
         loading={false}
         error={null}
         loadedAt={null}

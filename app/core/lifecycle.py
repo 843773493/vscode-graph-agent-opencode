@@ -246,7 +246,7 @@ class LifetimeScope:
         errors: list[Exception] = []
         with self._state_lock:
             tasks = tuple(self._tasks.items())
-            children = tuple(reversed(tuple(self._children.values())))
+            children = tuple(reversed(self._children.values()))
         for task, _label in tasks:
             if not task.done():
                 task.cancel()

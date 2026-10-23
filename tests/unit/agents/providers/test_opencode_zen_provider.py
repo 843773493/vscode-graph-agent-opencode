@@ -160,18 +160,14 @@ def test_convert_messages_to_dicts_returns_empty_content_when_only_reasoning(
     assert content == ""
 
 
-def test_normalize_history_content_returns_original_when_not_list(
-    model: BoxteamLiteLLMChatModel,
-):
+def test_normalize_history_content_returns_original_when_not_list():
     """非 list 类型的 content 应原样返回。"""
     assert normalize_chat_history_content("plain string") == "plain string"
     assert normalize_chat_history_content(None) is None
     assert normalize_chat_history_content(42) == 42
 
 
-def test_normalize_history_content_returns_original_for_standard_text_blocks(
-    model: BoxteamLiteLLMChatModel,
-):
+def test_normalize_history_content_returns_original_for_standard_text_blocks():
     """标准 text 块不需要转换时应原样返回（保持原引用）。"""
     original = [
         {"type": "text", "text": "a"},
@@ -180,9 +176,7 @@ def test_normalize_history_content_returns_original_for_standard_text_blocks(
     assert result is original
 
 
-def test_normalize_history_content_normalizes_output_text_without_reasoning(
-    model: BoxteamLiteLLMChatModel,
-):
+def test_normalize_history_content_normalizes_output_text_without_reasoning():
     """output_text 不应透传给 Chat Completions 历史消息。"""
     original = [
         {"type": "text", "text": "a"},
@@ -195,9 +189,7 @@ def test_normalize_history_content_normalizes_output_text_without_reasoning(
     ]
 
 
-def test_normalize_history_content_drops_repeated_reasoning_block_type(
-    model: BoxteamLiteLLMChatModel,
-):
+def test_normalize_history_content_drops_repeated_reasoning_block_type():
     """流式合并产生重复 type 时，内部 reasoning 仍不得发送给上游。"""
     result = normalize_chat_history_content(
         [

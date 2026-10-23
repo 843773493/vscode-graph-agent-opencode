@@ -111,7 +111,7 @@ class CommunicationAdmissionDecision:
     is_duplicate: bool
 
 
-def resolve_request_preimage(request: CommunicationSendRequest) -> str:
+def resolve_request_preimage_hash(request: CommunicationSendRequest) -> str:
     """冻结 (target, payload) 的稳定 preimage hash；同 preimage 才允许幂等复用。"""
     return communication_preimage_hash(
         target=request.target_binding.target,
@@ -171,13 +171,13 @@ def decide_send_admission(
             "communication-id-conflict",
             "communication_id 必须是非空字符串",
         )
-    request_preimage = resolve_request_preimage(request)
+    request_preimage_hash = resolve_request_preimage_hash(request)
     if request.payload.kind == "reply":
         _validate_reply_correlation(request, reply_context)
     if existing is None:
         return CommunicationAdmissionDecision(
             communication_id=communication_id,
-            payload_hash=request_preimage,
+            payload_hash=request_preimage_hash,
             is_duplicate=False,
         )
     if existing.source != request.source:
@@ -187,7 +187,7 @@ def decide_send_admission(
         )
     existing_preimage = (existing.target, existing.payload_hash)
     request_target = request.target_binding.target
-    request_preimage_pair = (request_target, request_preimage)
+    request_preimage_pair = (request_target, request_preimage_hash)
     if existing.send_operation_id == request.send_operation_id:
         if existing_preimage != request_preimage_pair:
             raise CommunicationContractError(

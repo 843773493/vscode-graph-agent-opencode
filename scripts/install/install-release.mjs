@@ -86,6 +86,9 @@ async function buildResultMatches({
   }
   const installTarballs = result.install_tarballs;
   if (
+    result.platform !== targetPlatform ||
+    result.version !== version ||
+    result.source_fingerprint !== sourceFingerprint ||
     !installTarballs ||
     typeof installTarballs !== "object" ||
     installTarballs.launcher?.filename !== path.basename(paths.launcherTarball) ||
@@ -100,10 +103,6 @@ async function buildResultMatches({
   ]);
 
   return (
-    result !== null &&
-    result.platform === targetPlatform &&
-    result.version === version &&
-    result.source_fingerprint === sourceFingerprint &&
     installTarballs.launcher.sha256 === launcherDigest &&
     installTarballs.runtime.sha256 === runtimeDigest
   );
@@ -121,7 +120,9 @@ function runPackageBuild({
     stdio: "inherit",
   });
   if (result.error) {
-    throw new Error(`本地发行包构建失败: ${result.error.message}`);
+    throw new Error(`本地发行包构建失败: ${result.error.message}`, {
+      cause: result.error,
+    });
   }
   if (result.status !== 0) {
     throw new Error(
@@ -202,7 +203,9 @@ export function runReleaseInstall({
     stdio: "inherit",
   });
   if (result.error) {
-    throw new Error(`执行本地发行包安装失败: ${command}: ${result.error.message}`);
+    throw new Error(`执行本地发行包安装失败: ${command}: ${result.error.message}`, {
+      cause: result.error,
+    });
   }
   if (result.status !== 0) {
     throw new Error(
@@ -228,7 +231,9 @@ function verifyInstalledRelease({
     stdio: ["ignore", "pipe", "inherit"],
   });
   if (rootResult.error) {
-    throw new Error(`读取全局 npm 安装目录失败: ${rootResult.error.message}`);
+    throw new Error(`读取全局 npm 安装目录失败: ${rootResult.error.message}`, {
+      cause: rootResult.error,
+    });
   }
   if (rootResult.status !== 0 || !rootResult.stdout?.trim()) {
     throw new Error(

@@ -204,30 +204,27 @@ def _project_tool_history(
     旧失败 turn 的延迟结果就会阻断同一会话的后续消息。
     """
 
-    projected: list[BaseMessage] = []
-    history_boundary = max(
-        (
-            index
-            for index, message in enumerate(messages)
-            if _is_internal_history_message(message)
-        ),
-        default=-1,
-    )
-    pending: dict[str, int] = {}
+    projected_messages: list[BaseMessage] = []
+    last_internal_message_index = -1
+    for index in range(len(messages) - 1, -1, -1):
+        if _is_internal_history_message(messages[index]):
+            last_internal_message_index = index
+            break
+    pending_tool_call_ids: set[str] = set()
     discarded_previous_tool_call_ids: set[str] = set()
-    pending_segment_start: int | None = None
-    completed_ids: set[str] = set()
+    pending_tool_segment_start: int | None = None
+    completed_tool_call_ids: set[str] = set()
     repaired_segments = 0
     orphaned_tool_results: list[tuple[str, int]] = []
 
     def discard_pending_segment() -> None:
-        nonlocal pending_segment_start, repaired_segments
-        if pending_segment_start is None:
-            pending.clear()
+        nonlocal pending_tool_segment_start, repaired_segments
+        if pending_tool_segment_start is None:
+            pending_tool_call_ids.clear()
             return
-        del projected[pending_segment_start:]
-        pending.clear()
-        pending_segment_start = None
+        del projected_messages[pending_tool_segment_start:]
+        pending_tool_call_ids.clear()
+        pending_tool_segment_start = None
         repaired_segments += 1
 
     for index, message in enumerate(messages):
@@ -238,12 +235,12 @@ def _project_tool_history(
                 f"{DEFAULT_RESPONSES_PAYLOAD_BUILD_TIMEOUT_SECONDS:g}"
             )
         if _is_internal_history_message(message):
-            if pending:
+            if pending_tool_call_ids:
                 discard_pending_segment()
             continue
         if isinstance(message, AIMessage):
             normalized = _message_with_standard_tool_calls(message)
-            if index < history_boundary and normalized.tool_calls:
+            if index < last_internal_message_index and normalized.tool_calls:
                 discarded_previous_tool_call_ids.update(
                     call_id
                     for call in normalized.tool_calls
@@ -253,34 +250,35 @@ def _project_tool_history(
                 # 的 Responses call。当前 turn 不需要重放这些执行事务；完整
                 # 工具配对只在当前 turn 内保留，避免跨 job 污染新请求。
                 continue
-            if pending:
+            if pending_tool_call_ids:
                 discard_pending_segment()
-            calls = [call for call in normalized.tool_calls if isinstance(call, dict)]
-            call_ids: list[str] = []
-            for call in calls:
+            message_tool_call_ids: set[str] = set()
+            for call in normalized.tool_calls:
+                if not isinstance(call, dict):
+                    continue
                 call_id = _tool_call_id(call)
                 if call_id is None:
                     continue
-                if call_id in completed_ids:
+                if call_id in completed_tool_call_ids:
                     raise ResponsesToolHistoryError(
                         "Responses 历史包含重复的工具调用 ID；无法区分当前与旧 job: "
                         f"call_id={call_id}, index={index}。请重建当前会话上下文后重试。"
                     )
-                if call_id in call_ids:
+                if call_id in message_tool_call_ids:
                     raise ResponsesToolHistoryError(
                         "Responses 历史的同一 assistant 消息包含重复工具调用 ID: "
                         f"call_id={call_id}, index={index}"
                     )
-                call_ids.append(call_id)
-            projected.append(normalized)
-            if call_ids:
-                pending_segment_start = len(projected) - 1
-                pending.update({call_id: index for call_id in call_ids})
+                message_tool_call_ids.add(call_id)
+            projected_messages.append(normalized)
+            if message_tool_call_ids:
+                pending_tool_segment_start = len(projected_messages) - 1
+                pending_tool_call_ids.update(message_tool_call_ids)
             continue
 
         if isinstance(message, ToolMessage):
             if (
-                index < history_boundary
+                index < last_internal_message_index
                 and message.tool_call_id in discarded_previous_tool_call_ids
             ):
                 continue
@@ -288,23 +286,23 @@ def _project_tool_history(
             if not isinstance(call_id, str) or not call_id:
                 orphaned_tool_results.append(("<missing>", index))
                 continue
-            if call_id not in pending:
+            if call_id not in pending_tool_call_ids:
                 orphaned_tool_results.append((call_id, index))
                 continue
-            projected.append(_portable_tool_result_message(message))
-            pending.pop(call_id)
-            completed_ids.add(call_id)
-            if not pending:
-                pending_segment_start = None
+            projected_messages.append(_portable_tool_result_message(message))
+            pending_tool_call_ids.remove(call_id)
+            completed_tool_call_ids.add(call_id)
+            if not pending_tool_call_ids:
+                pending_tool_segment_start = None
             continue
 
-        if pending:
+        if pending_tool_call_ids:
             # 当前用户消息意味着旧工具段已经跨越 job 边界；不能把它和
             # 新请求混在一起发送给 Responses API。
             discard_pending_segment()
-        projected.append(message)
+        projected_messages.append(message)
 
-    if pending:
+    if pending_tool_call_ids:
         discard_pending_segment()
     if repaired_segments:
         logger.warning(
@@ -312,7 +310,7 @@ def _project_tool_history(
             "messages_after=%s",
             repaired_segments,
             len(messages),
-            len(projected),
+            len(projected_messages),
         )
     if orphaned_tool_results:
         orphaned_count = len(orphaned_tool_results)
@@ -324,7 +322,7 @@ def _project_tool_history(
             orphaned_preview,
             " (其余结果已省略)" if orphaned_count > len(orphaned_preview) else "",
         )
-    return projected
+    return projected_messages
 
 
 def _portable_tool_result_message(message: ToolMessage) -> ToolMessage:

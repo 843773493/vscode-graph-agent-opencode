@@ -1,17 +1,15 @@
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 
-import {
-  defaultBoxteamHome,
-  initializeUserConfiguration,
-} from "./configuration/config-bootstrap.mjs";
+import { initializeUserConfiguration } from "./config-bootstrap.mjs";
+import { defaultBoxteamHome } from "./config-bootstrap.mjs";
 import { buildDoctorReport, printDoctorReport } from "./doctor.mjs";
-import { issueFederationToken } from "./federation/federation-token.mjs";
-import { superviseGateway } from "./process/gateway/supervisor.mjs";
-import { acquireLauncherLock } from "./process/instance-lock.mjs";
+import { issueFederationToken } from "./federation-token.mjs";
+import { superviseGateway } from "./gateway/supervisor.mjs";
+import { acquireLauncherLock } from "./instance-lock.mjs";
 import { discoverRuntime } from "./configuration/runtime-discovery.mjs";
-import { openServiceLog } from "./process/service-log.mjs";
-import { stopLauncher } from "./process/stop.mjs";
+import { openServiceLog } from "./logging/service-log.mjs";
+import { stopLauncher } from "./stop.mjs";
 
 const launcherPackageMetadata = JSON.parse(
   readFileSync(new URL("../package.json", import.meta.url), "utf8"),

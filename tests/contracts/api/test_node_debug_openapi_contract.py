@@ -13,13 +13,6 @@ from tests.contracts.api.openapi_snapshots import (
 )
 
 
-@pytest.fixture(params=("live", *OPENAPI_SNAPSHOTS))
-def openapi_document(request: pytest.FixtureRequest):
-    if request.param == "live":
-        return app.openapi()
-    return load_openapi_snapshot(request.param)
-
-
 def test_node_debug_state_requires_explicit_thread_owner(openapi_document) -> None:
     schema = openapi_document["components"]["schemas"]["NodeDebugStateDTO"]
 

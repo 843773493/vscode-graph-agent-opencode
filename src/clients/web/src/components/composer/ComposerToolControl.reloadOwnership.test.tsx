@@ -1,13 +1,14 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
 
+import { invalidateGatewayToken } from "../../api/http";
 import {
   apiResponse,
   installGatewayFetch,
-  installTestWindow,
   restoreSessionHookGlobals,
   type GatewayFetchRequest,
 } from "../../hooks/session/sessionHookTestFixtures";
+import { installComposerTestGlobals } from "./composerTestFixtures";
 import ComposerToolControl from "./ComposerToolControl";
 
 /**
@@ -23,59 +24,46 @@ import ComposerToolControl from "./ComposerToolControl";
  * 文件抢占 CPU 的影响。
  */
 
-afterEach(restoreSessionHookGlobals);
-
-const OVERLAY_CONSTRUCTOR_NAMES = ["Element", "Node", "HTMLElement"] as const;
-
-let intervalCallbacks: Array<() => void> = [];
+let intervalCallbacks = new Map<number, () => void>();
 let nextIntervalId = 1;
-const clearedIntervalIds = new Set<number>();
+let restoreComposerEnvironment = () => {};
 
-function installOverlayGlobals(): void {
-  class OverlayElementStub {}
-  class OverlayNodeStub {}
-  for (const [name, value] of Object.entries({
-    Element: OverlayElementStub,
-    Node: OverlayNodeStub,
-    HTMLElement: OverlayElementStub,
-  })) {
-    Object.defineProperty(globalThis, name, { configurable: true, value });
-  }
-  installTestWindow(49_501);
-  intervalCallbacks = [];
+function installComposerTestEnvironment(): void {
+  invalidateGatewayToken(49_501);
+  intervalCallbacks.clear();
   nextIntervalId = 1;
-  clearedIntervalIds.clear();
-  // @floating-ui 会对引用做 `instanceof window.Element` 判定；窗口桩必须同时带上
-  // 这些构造器，否则 useFloating 的挂载副作用会在 render 阶段直接抛错。document
-  // 仍不存在，AnchoredOverlay 因而走「无 document 直接内联子节点」分支。
-  Object.assign(
-    (globalThis as unknown as { window: Record<string, unknown> }).window,
-    {
-      Element: OverlayElementStub,
-      Node: OverlayNodeStub,
-      HTMLElement: OverlayElementStub,
+  restoreComposerEnvironment = installComposerTestGlobals({
+    port: 49_501,
+    intervalController: {
       setInterval: (callback: () => void) => {
         const id = nextIntervalId;
         nextIntervalId += 1;
-        intervalCallbacks.push(callback);
+        intervalCallbacks.set(id, callback);
         return id;
       },
       clearInterval: (id: number) => {
-        clearedIntervalIds.add(id);
+        intervalCallbacks.delete(id);
       },
     },
-  );
+  });
 }
+
+afterEach(() => {
+  restoreComposerTestEnvironment();
+  restoreSessionHookGlobals();
+});
 
 /** 手工触发所有仍然存活的轮询回调，不等待真实 1s 间隔。 */
 function tickIntervals(): void {
-  for (const callback of intervalCallbacks) callback();
+  for (const [timerId, callback] of [...intervalCallbacks]) {
+    if (intervalCallbacks.get(timerId) === callback) callback();
+  }
 }
 
-function uninstallOverlayGlobals(): void {
-  for (const name of OVERLAY_CONSTRUCTOR_NAMES) {
-    Reflect.deleteProperty(globalThis, name);
-  }
+function restoreComposerTestEnvironment(): void {
+  restoreComposerEnvironment();
+  restoreComposerEnvironment = () => {};
+  intervalCallbacks.clear();
 }
 
 interface Deferred {
@@ -154,7 +142,7 @@ async function renderAndOpen(props: {
 
 describe("工具目录加载的 owner 归属", () => {
   test("切换 Agent 后旧请求晚到不得覆盖新 Agent 的工具目录", async () => {
-    installOverlayGlobals();
+    installComposerTestEnvironment();
     const catalogs: Record<string, Deferred> = {
       agent_a: {} as Deferred,
       agent_b: {} as Deferred,
@@ -190,7 +178,7 @@ describe("工具目录加载的 owner 归属", () => {
     expect(JSON.stringify(renderer.toJSON())).not.toContain("alpha_tool");
     expect(JSON.stringify(renderer.toJSON())).toContain("beta_tool");
     act(() => renderer.unmount());
-    uninstallOverlayGlobals();
+    restoreComposerTestEnvironment();
   });
 });
 
@@ -202,7 +190,7 @@ describe("工具目录加载的 owner 归属", () => {
  */
 describe("工具测试进度轮询的 owner 归属", () => {
   test("切换工作区后旧轮询结果不得写回，也不得继续轮询旧运行", async () => {
-    installOverlayGlobals();
+    installComposerTestEnvironment();
     const catalogs: Record<string, Deferred> = { agent_a: {} as Deferred };
     const runPoll: Deferred = { resolve: () => undefined };
     let runPollRequests = 0;
@@ -300,6 +288,6 @@ describe("工具测试进度轮询的 owner 归属", () => {
     expect(html).not.toContain("成功率 100% · 7/7 通过");
     expect(html).not.toContain("测试进度读取失败");
     act(() => renderer.unmount());
-    uninstallOverlayGlobals();
+    restoreComposerTestEnvironment();
   });
 });

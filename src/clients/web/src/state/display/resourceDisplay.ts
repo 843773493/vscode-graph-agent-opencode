@@ -177,14 +177,14 @@ export function isRecoverableBrowser(resource: SessionResource): boolean {
     && resource.metadata.checkpoint_available === true;
 }
 
-export function resourceAttentionGroup(
+function resourceAttentionGroupFromSignals(
   resource: SessionResource,
-  activePreviewPath: string | null,
+  isPreviewed: boolean,
+  clientCount: number,
 ): ResourceAttentionGroup {
   const resourceState = metadataString(resource, "resource_state");
   const commandStatus = metadataString(resource, "command_status");
-  const isPreviewed = isPreviewedResource(resource, activePreviewPath);
-  const hasClients = metadataNumber(resource, "client_count") > 0;
+  const hasClients = clientCount > 0;
   const needsUserAction = Boolean(
     resource.metadata.pending_dialog || resource.metadata.pending_file_chooser,
   );
@@ -218,6 +218,17 @@ export function resourceAttentionGroup(
   return "available";
 }
 
+export function resourceAttentionGroup(
+  resource: SessionResource,
+  activePreviewPath: string | null,
+): ResourceAttentionGroup {
+  return resourceAttentionGroupFromSignals(
+    resource,
+    isPreviewedResource(resource, activePreviewPath),
+    metadataNumber(resource, "client_count"),
+  );
+}
+
 function resourceRecency(resource: SessionResource): number {
   const candidates = [
     metadataString(resource, "last_input_at"),
@@ -239,26 +250,42 @@ export function groupSessionResources(
   resources: SessionResource[],
   activePreviewPath: string | null,
 ): ResourceTreeGroup[] {
-  const buckets = new Map<ResourceAttentionGroup, SessionResource[]>();
+  interface SortableResource {
+    resource: SessionResource;
+    isPreviewed: boolean;
+    clientCount: number;
+    recency?: number;
+  }
+
+  const buckets = new Map<ResourceAttentionGroup, SortableResource[]>();
   for (const definition of RESOURCE_GROUP_DEFINITIONS) {
     buckets.set(definition.key, []);
   }
   for (const resource of resources) {
-    buckets.get(resourceAttentionGroup(resource, activePreviewPath))?.push(resource);
+    const isPreviewed = isPreviewedResource(resource, activePreviewPath);
+    const clientCount = metadataNumber(resource, "client_count");
+    const group = resourceAttentionGroupFromSignals(
+      resource,
+      isPreviewed,
+      clientCount,
+    );
+    buckets.get(group)?.push({ resource, isPreviewed, clientCount });
   }
-  return RESOURCE_GROUP_DEFINITIONS.map((definition) => ({
-    ...definition,
-    resources: [...(buckets.get(definition.key) ?? [])].sort((left, right) => {
-      const previewDifference = Number(isPreviewedResource(right, activePreviewPath)) -
-        Number(isPreviewedResource(left, activePreviewPath));
-      if (previewDifference !== 0) {
-        return previewDifference;
-      }
-      const clientDifference = metadataNumber(right, "client_count") -
-        metadataNumber(left, "client_count");
-      return clientDifference || resourceRecency(right) - resourceRecency(left);
-    }),
-  })).filter((group) => group.resources.length > 0);
+  return RESOURCE_GROUP_DEFINITIONS.map((definition) => {
+    const entries = buckets.get(definition.key) ?? [];
+    if (entries.length > 1) {
+      for (const entry of entries) entry.recency = resourceRecency(entry.resource);
+      entries.sort((left, right) =>
+        Number(right.isPreviewed) - Number(left.isPreviewed)
+        || right.clientCount - left.clientCount
+        || (right.recency ?? 0) - (left.recency ?? 0),
+      );
+    }
+    return {
+      ...definition,
+      resources: entries.map((entry) => entry.resource),
+    };
+  }).filter((group) => group.resources.length > 0);
 }
 
 function resourceUrlSummary(resource: SessionResource): string {

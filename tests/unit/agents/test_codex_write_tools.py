@@ -23,8 +23,8 @@ from app.services.infrastructure.workspace_service import (
 
 
 @pytest.fixture
-def write_tools(workspace_scope, configure_filesystem_tools):
-    root = workspace_scope[1]
+def write_tools(empty_workspace_scope, configure_filesystem_tools):
+    root = empty_workspace_scope[1]
     middleware = FilesystemMiddleware(backend=build_workspace_backend(root), tool_token_limit_before_evict=None)
     configure_filesystem_tools(middleware, workspace_root=root)
     return root, {tool.name: tool for tool in middleware.tools}, SimpleNamespace(tool_call_id="call_text")
@@ -129,9 +129,9 @@ async def test_public_write_schema_requires_caller_version(write_tools, name, ar
 
 @pytest.mark.parametrize("tool_name", ["write_file", "edit_file", "apply_patch"])
 async def test_all_text_tools_reject_same_write_permission_before_any_publication(text_mutations_factory,
-    workspace_scope, configure_filesystem_tools, tool_name,
+    empty_workspace_scope, configure_filesystem_tools, tool_name,
 ):
-    root = workspace_scope[1]
+    root = empty_workspace_scope[1]
     rules = [FilesystemPermission(operations=["write"], paths=["/blocked.txt"], mode="deny")]
     middleware = FilesystemMiddleware(backend=build_workspace_backend(root), _permissions=rules)
     configure_filesystem_tools(middleware, workspace_root=root)

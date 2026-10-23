@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import path from "node:path";
 
 import { BOXTEAM_VERSION } from "../../packaging/runtime/versions.mjs";
 import {
@@ -7,12 +8,19 @@ import {
   runReleaseInstall,
 } from "./install-release.mjs";
 
+// 这里只组装路径与命令，不创建安装目录或执行npm；真实路径遵循运行主机的规则。
+const fixtureRoot = path.resolve(process.cwd(), "out/tests/scripts/install/install-release/workspace");
+const fixtureProjectRoot = path.join(fixtureRoot, "源码 工作区");
+const fixtureInstallPrefix = path.join(fixtureRoot, "隔离 安装");
+
 describe("发布版安装入口", () => {
   test("默认从当前源码的 Linux 本地 tarball 安装", () => {
+    const launcherTarball = path.join(fixtureProjectRoot, "out", "packaging", "linux-x64", "tarballs", `boxteam-${BOXTEAM_VERSION}.tgz`);
+    const runtimeTarball = path.join(fixtureProjectRoot, "out", "packaging", "linux-x64", "release-assets", `boxteam-runtime-linux-x64-${BOXTEAM_VERSION}.tgz`);
     const command = buildReleaseInstallCommand({
       platform: "linux",
       architecture: "x64",
-      projectRoot: "/workspace",
+      projectRoot: fixtureProjectRoot,
     });
 
     expect(command).toEqual({
@@ -24,18 +32,18 @@ describe("发布版安装入口", () => {
         "--no-fund",
         "--offline",
         "--omit=optional",
-        `/workspace/out/packaging/linux-x64/tarballs/boxteam-${BOXTEAM_VERSION}.tgz`,
-        `/workspace/out/packaging/linux-x64/release-assets/boxteam-runtime-linux-x64-${BOXTEAM_VERSION}.tgz`,
+        launcherTarball,
+        runtimeTarball,
       ],
       targetPlatform: "linux-x64",
       version: BOXTEAM_VERSION,
       prefix: null,
       packageTarballs: [
-        `/workspace/out/packaging/linux-x64/tarballs/boxteam-${BOXTEAM_VERSION}.tgz`,
-        `/workspace/out/packaging/linux-x64/release-assets/boxteam-runtime-linux-x64-${BOXTEAM_VERSION}.tgz`,
+        launcherTarball,
+        runtimeTarball,
       ],
-      buildScript: "/workspace/scripts/release/package-linux-x64.mjs",
-      buildResult: "/workspace/out/packaging/linux-x64/build-result.json",
+      buildScript: path.join(fixtureProjectRoot, "scripts", "release", "package-linux-x64.mjs"),
+      buildResult: path.join(fixtureProjectRoot, "out", "packaging", "linux-x64", "build-result.json"),
     });
   });
 
@@ -43,8 +51,8 @@ describe("发布版安装入口", () => {
     const command = buildReleaseInstallCommand({
       platform: "win32",
       architecture: "x64",
-      projectRoot: "/workspace",
-      prefix: "/tmp/boxteam-install",
+      projectRoot: fixtureProjectRoot,
+      prefix: fixtureInstallPrefix,
     });
 
     expect(command.command).toBe("npm.cmd");
@@ -56,9 +64,9 @@ describe("发布版安装入口", () => {
       "--offline",
       "--omit=optional",
       "--prefix",
-      "/tmp/boxteam-install",
-      `/workspace/out/packaging/windows-x64/tarballs/boxteam-${BOXTEAM_VERSION}.tgz`,
-      `/workspace/out/packaging/windows-x64/release-assets/boxteam-runtime-windows-x64-${BOXTEAM_VERSION}.tgz`,
+      fixtureInstallPrefix,
+      path.join(fixtureProjectRoot, "out", "packaging", "windows-x64", "tarballs", `boxteam-${BOXTEAM_VERSION}.tgz`),
+      path.join(fixtureProjectRoot, "out", "packaging", "windows-x64", "release-assets", `boxteam-runtime-windows-x64-${BOXTEAM_VERSION}.tgz`),
     ]);
   });
 

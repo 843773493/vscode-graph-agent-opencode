@@ -39,19 +39,26 @@ class ResourceOwnerSessionsFake:
     def __init__(self, root: Path) -> None:
         self.root = root
         # 每个Session的线程列表，首项是主线程；与磁盘导航树无关。
-        self.refs = {SESSION_A: [THREAD_A, CHILD_THREAD_A], SESSION_B: [THREAD_B]}
+        self.thread_ids_by_session = {
+            SESSION_A: [THREAD_A, CHILD_THREAD_A],
+            SESSION_B: [THREAD_B],
+        }
         self.closed: set[str] = set()
         self.admitted: list[str] = []
         self.unloading_generation = 1
 
     def accepts_release(self, session_id: str, thread_id: str, generation: int) -> bool:
-        return thread_id in self.refs[session_id] and generation == self.unloading_generation
+        return (
+            thread_id in self.thread_ids_by_session[session_id]
+            and generation == self.unloading_generation
+        )
 
     @asynccontextmanager
     async def session_write_admission(self, session_id: str) -> AsyncIterator[None]:
         if session_id in self.closed:
             raise ValueError("Session 准入已关闭")
-        await self.get(session_id)
+        if session_id not in self.thread_ids_by_session:
+            raise KeyError(session_id)
         self.admitted.append(session_id)
         yield
 
@@ -62,12 +69,12 @@ class ResourceOwnerSessionsFake:
                           title="测试会话", current_agent_id="default",
                           created_at=datetime(2026, 10, 5, tzinfo=UTC),
                           updated_at=datetime(2026, 10, 5, tzinfo=UTC),
-                          thread_id=self.refs[session_id][0])
+                          thread_id=self.thread_ids_by_session[session_id][0])
 
     def main_thread_id(self, session_id: str) -> str:
-        return self.refs[session_id][0]
+        return self.thread_ids_by_session[session_id][0]
 
     def resolve_thread_node(self, session_id: str, thread_id: str) -> Path:
-        if thread_id not in self.refs[session_id]:
+        if thread_id not in self.thread_ids_by_session[session_id]:
             raise KeyError("目标 Thread 不在本 Session catalog 中")
         return self.root / session_id / thread_id

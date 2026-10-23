@@ -1,12 +1,8 @@
-import { createHash } from "node:crypto";
 import {
   cpSync,
   existsSync,
   mkdirSync,
-  readFileSync,
-  readdirSync,
   rmSync,
-  statSync,
   writeFileSync,
 } from "node:fs";
 import path from "node:path";
@@ -21,9 +17,15 @@ import {
   sha256File,
   runtimeAssetUrl,
   stageRuntimeDownloaderPackage,
-  stampReleasePackageManifest,
+  stageRuntimeAndLauncherPackages,
+  writeRuntimeSizeReport,
 } from "./runtime-release-assets.mjs";
-import { computeBuildInputFingerprint } from "./build-input-fingerprint.mjs";
+import { downloadPinnedLinuxPython } from "./pinned-archive-download.mjs";
+import { copyApplicationSources } from "./application-sources.mjs";
+import {
+  beginRuntimeBuild,
+  publishRuntimeBuildResult,
+} from "./runtime-build-result.mjs";
 
 const projectRoot = path.resolve(
   process.env.BOXTEAM_PROJECT_ROOT ?? process.cwd(),
@@ -52,78 +54,6 @@ function run(command, args, options = {}) {
     );
   }
   return result.stdout?.trim() ?? "";
-}
-
-async function downloadPinnedPython() {
-  mkdirSync(downloadRoot, { recursive: true });
-  const archivePath = path.join(downloadRoot, PYTHON_RUNTIME.archive);
-  if (!existsSync(archivePath)) {
-    const response = await fetch(PYTHON_RUNTIME.url);
-    if (!response.ok) {
-      throw new Error(
-        `下载 Python 运行时失败: HTTP ${response.status} ${response.statusText}`,
-      );
-    }
-    writeFileSync(archivePath, Buffer.from(await response.arrayBuffer()));
-  }
-  const digest = createHash("sha256")
-    .update(readFileSync(archivePath))
-    .digest("hex");
-  if (digest !== PYTHON_RUNTIME.sha256) {
-    throw new Error(
-      `Python 运行时摘要不匹配: expected=${PYTHON_RUNTIME.sha256} actual=${digest}`,
-    );
-  }
-  return archivePath;
-}
-
-function copyApplicationSources(applicationRoot) {
-  const copyOptions = {
-    recursive: true,
-    filter(source) {
-      const relative = path.relative(projectRoot, source);
-      return (
-        !relative.split(path.sep).includes("__pycache__") &&
-        !relative.endsWith(".pyc")
-      );
-    },
-  };
-  cpSync(
-    path.join(projectRoot, "app"),
-    path.join(applicationRoot, "app"),
-    copyOptions,
-  );
-  cpSync(
-    path.join(projectRoot, "configs"),
-    path.join(applicationRoot, "configs"),
-    copyOptions,
-  );
-  cpSync(
-    path.join(projectRoot, "resources"),
-    path.join(applicationRoot, "resources"),
-    copyOptions,
-  );
-  for (const service of ["terminal", "browser"]) {
-    cpSync(
-      path.join(projectRoot, "src", "workspace-services", service, "server"),
-      path.join(applicationRoot, "src", "workspace-services", service, "server"),
-      copyOptions,
-    );
-    cpSync(
-      path.join(projectRoot, "src", "workspace-services", service, "protocol"),
-      path.join(applicationRoot, "src", "workspace-services", service, "protocol"),
-      copyOptions,
-    );
-  }
-  cpSync(
-    path.join(projectRoot, "src", "workspace-services", "protocol"),
-    path.join(applicationRoot, "src", "workspace-services", "protocol"),
-    copyOptions,
-  );
-  cpSync(
-    path.join(projectRoot, "pyproject.toml"),
-    path.join(applicationRoot, "pyproject.toml"),
-  );
 }
 
 function installPythonDependencies(pythonExecutable) {
@@ -259,21 +189,6 @@ function writeRuntimeMetadata({ chromiumExecutable }) {
   );
 }
 
-function stageNpmPackages() {
-  cpSync(
-    path.join(projectRoot, "packages", "runtime-linux-x64", "package.json"),
-    path.join(runtimePackageRoot, "package.json"),
-  );
-  cpSync(path.join(projectRoot, "packages", "launcher"), launcherPackageRoot, {
-    recursive: true,
-    filter(source) {
-      return !source.split(path.sep).includes("node_modules");
-    },
-  });
-  stampReleasePackageManifest(runtimePackageRoot);
-  stampReleasePackageManifest(launcherPackageRoot, { launcher: true });
-}
-
 function npmPack(packageRoot, destinationRoot) {
   const filename = run(
     "npm",
@@ -287,47 +202,17 @@ function npmPack(packageRoot, destinationRoot) {
   return path.join(destinationRoot, outputLines[0]);
 }
 
-function directoryBytes(root) {
-  let bytes = 0;
-  for (const entry of readdirSync(root, { withFileTypes: true })) {
-    const target = path.join(root, entry.name);
-    bytes += entry.isDirectory()
-      ? directoryBytes(target)
-      : statSync(target).size;
-  }
-  return bytes;
-}
-
-function writeSizeReport({ npmTarballs, releaseAssets }) {
-  const components = {};
-  for (const name of ["python", "application", "web", "chromium"]) {
-    components[name] = directoryBytes(path.join(runtimePackageRoot, name));
-  }
-  const report = {
-    components,
-    npm_tarballs: Object.fromEntries(
-      npmTarballs.map((tarball) => [
-        path.basename(tarball),
-        statSync(tarball).size,
-      ]),
-    ),
-    release_assets: Object.fromEntries(
-      releaseAssets.map((asset) => [asset.filename, statSync(asset.path).size]),
-    ),
-  };
-  writeFileSync(
-    path.join(outputRoot, "size-report.json"),
-    `${JSON.stringify(report, null, 2)}\n`,
-  );
-  process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
-}
-
 async function main() {
   if (process.platform !== "linux" || process.arch !== "x64") {
     throw new Error(
       `linux-x64 构建器不支持当前平台: ${process.platform}-${process.arch}`,
     );
   }
+  const startingSourceFingerprint = beginRuntimeBuild({
+    projectRoot,
+    targetPlatform: "linux-x64",
+    buildResultPath: path.join(outputRoot, "build-result.json"),
+  });
   rmSync(stageRoot, { recursive: true, force: true });
   rmSync(tarballRoot, { recursive: true, force: true });
   rmSync(releaseAssetRoot, { recursive: true, force: true });
@@ -335,7 +220,7 @@ async function main() {
   mkdirSync(tarballRoot, { recursive: true });
   mkdirSync(releaseAssetRoot, { recursive: true });
 
-  const pythonArchive = await downloadPinnedPython();
+  const pythonArchive = await downloadPinnedLinuxPython(downloadRoot);
   run("tar", ["-xzf", pythonArchive, "-C", runtimePackageRoot]);
   const pythonExecutable = path.join(
     runtimePackageRoot,
@@ -349,7 +234,7 @@ async function main() {
 
   const applicationRoot = path.join(runtimePackageRoot, "application");
   mkdirSync(applicationRoot, { recursive: true });
-  copyApplicationSources(applicationRoot);
+  copyApplicationSources(projectRoot, applicationRoot);
   installPythonDependencies(pythonExecutable);
   installNodeDependencies(applicationRoot);
 
@@ -366,7 +251,9 @@ async function main() {
     path.join(runtimePackageRoot, "chromium"),
   );
   writeRuntimeMetadata({ chromiumExecutable });
-  stageNpmPackages();
+  stageRuntimeAndLauncherPackages({
+    projectRoot, platform: "linux-x64", runtimePackageRoot, launcherPackageRoot,
+  });
 
   const fullRuntimeTarball = npmPack(runtimePackageRoot, releaseAssetRoot);
   const downloader = await stageRuntimeDownloaderPackage({
@@ -393,10 +280,9 @@ async function main() {
       sha256: downloader.releaseAsset.sha256,
     },
   ];
-  writeSizeReport({ npmTarballs, releaseAssets });
-  const sourceFingerprint = computeBuildInputFingerprint({
-    projectRoot,
-    targetPlatform: "linux-x64",
+  writeRuntimeSizeReport({
+    runtimePackageRoot, outputRoot, npmTarballs,
+    assetGroups: { release_assets: releaseAssets },
   });
   const launcherTarball = npmTarballs.find(
     (tarball) => path.basename(tarball) === `boxteam-${BOXTEAM_VERSION}.tgz`,
@@ -408,30 +294,28 @@ async function main() {
   if (!launcherTarball || !runtimeAsset) {
     throw new Error("本地安装 tarball 清单缺少 Launcher 或 Linux runtime");
   }
-  writeFileSync(
-    path.join(outputRoot, "build-result.json"),
-    `${JSON.stringify(
-      {
-        platform: "linux-x64",
-        version: BOXTEAM_VERSION,
-        source_fingerprint: sourceFingerprint,
-        install_tarballs: {
-          launcher: {
-            filename: path.basename(launcherTarball),
-            sha256: await sha256File(launcherTarball),
-          },
-          runtime: {
-            filename: runtimeAsset.filename,
-            sha256: runtimeAsset.sha256,
-          },
+  publishRuntimeBuildResult({
+    projectRoot,
+    targetPlatform: "linux-x64",
+    buildResultPath: path.join(outputRoot, "build-result.json"),
+    startingSourceFingerprint,
+    metadata: {
+      platform: "linux-x64",
+      version: BOXTEAM_VERSION,
+      install_tarballs: {
+        launcher: {
+          filename: path.basename(launcherTarball),
+          sha256: await sha256File(launcherTarball),
         },
-        npm_tarballs: npmTarballs,
-        release_assets: releaseAssets,
+        runtime: {
+          filename: runtimeAsset.filename,
+          sha256: runtimeAsset.sha256,
+        },
       },
-      null,
-      2,
-    )}\n`,
-  );
+      npm_tarballs: npmTarballs,
+      release_assets: releaseAssets,
+    },
+  });
   process.stdout.write(`构建完成: ${outputRoot}\n`);
 }
 

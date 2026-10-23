@@ -17,11 +17,13 @@ resources/
 
 `resourcePolicy.js` 在构造候选前统一筛选常驻状态：热页面、冻结页面和转换中页面参与容量及阻塞归因，冷回收、丢失、关闭等非常驻记录不参与，也不解析它们的活动时间。每个候选一次组装活动时刻、空闲时长和从同一快照派生的保护理由，不另建中间候选副本。逻辑资源仍由Manager保存，策略不删除记录或维护第二份活跃索引。`nowUnixMs`、`lastActivityUnixMs` 是绝对时刻，`idleMs` 与冻结稳定阈值是持续时长；策略只比较这些值，不改变快照中的原始ISO字段。
 
-`memoryPressure.js` 的 `memory.events` 是所属 cgroup 的累计计数，只对同一目录的连续有效观测求增量；换组、观测缺失或取消限额后，下一次有效观测仅建立基线，不补报历史 OOM。主机比例、当前 cgroup 比例仍参与当轮压力分类。`*UnixMs` 是同一注入时钟的绝对毫秒时刻，`*StableMs` 是降级所需稳定时长；对外 `sampled_at` 保持 ISO 观测时间。
+`memoryPressure.js` 的 `memory.events` 是所属 cgroup 的累计计数，只对同一目录的连续有效观测求增量；换组、观测缺失或取消限额后，下一次有效观测仅建立基线，不补报历史 OOM。主机比例、当前 cgroup 比例仍参与当轮压力分类。`now`只为公开`sampled_at`提供Unix观察时刻；稳定降级使用独立的`monotonicNow`，默认`performance.now()`，`exitCandidateSinceMonotonicMs/nowMonotonicMs`只在这个时钟内求差。`*StableMs`是降级所需持续时长，系统校时不提前或延后窗口；每次采样仍至多降一级，失去退出条件或重新升级时清空候选起点。
+
+cgroup单测的文件查询键与目录断言使用宿主`path.join`，匹配被测模块拼接的路径；`/proc/self/cgroup`的模拟正文仍采用Linux统一层级的斜杠格式。宿主文件路径与模拟内核文件的内容是两种边界，不能为了在Windows执行单测而把正文也转换为反斜杠；这些用例不读取宿主的真实cgroup。
 
 动作失败的退避期限由 `resourceGovernor.js` 持有，值为下次允许动作的Unix毫秒时刻，不是持续时间。每轮先按Manager当前治理列表及到期时间清理记录，再读取资源快照；退出治理或到期的记录不能等快照成功才释放。最近失败历史有自己的有界列表，不随退避清理而删除；策略只消费当前有效的退避保护，不另存第二份期限。
 
-调度器注入的`now`返回Unix毫秒，动作、执行批次与整轮分别记录`actionStartedAtUnixMs`、`batchStartedAtUnixMs`和`cycleStartedAtUnixMs`；错误观察时间为`occurredAtUnixMs`。公开`started_at/occurred_at`仍为ISO，`duration_ms`为时差；性能测试的`scanStartedAtPerformanceMs`则属于测试进程的performance时钟，不与治理时钟混算。`ResourceBatchLimits.maxDurationMs`是动作块之间检查的软预算，不取消或伪报在途动作；`backlogIntervalMs`只表示仍有积压时下一轮的等待，普通/压力轮询与整批失败退避各自使用对应间隔，不另设“动作后等待”别名。
+调度器的`now`返回Unix毫秒，用于策略、退避及ISO回执：动作/整轮起点为`actionStartedAtUnixMs/cycleStartedAtUnixMs`，错误观察时间为`occurredAtUnixMs`。耗时与批次软预算使用独立的`monotonicNow`，默认`performance.now()`；动作、执行批次与整轮各自的`*StartedAtMonotonicMs`只与同一时钟求差，不与Unix时刻相减。公开`started_at/occurred_at`仍为真实ISO观察时刻，`duration_ms`不受系统校时影响。`ResourceBatchLimits.maxDurationMs`是动作块之间检查的软预算，不取消或伪报在途动作；`backlogIntervalMs`只表示仍有积压时下一轮的等待，普通/压力轮询与整批失败退避各自使用对应间隔，不另设“动作后等待”别名。
 
 `browserCheckpoint.js` 在一次同步页面采集内按父节点索引兄弟元素的同类总数与顺序，避免匿名表单为每个控件重复扫描整组兄弟；索引不跨采集保留。定位符继续使用原ID转义与同类型序号规则，不能为了减少扫描改变恢复目标。
 

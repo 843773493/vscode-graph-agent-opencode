@@ -1,5 +1,4 @@
 import os
-import tempfile
 from pathlib import Path
 
 import pytest
@@ -64,10 +63,11 @@ def initialized_workspace(tmp_path: Path):
 class TestPathUtils:
     """测试路径工具类安全功能"""
 
-    def setup_method(self):
-        """每个测试前创建临时目录作为测试根目录"""
-        self.temp_dir = tempfile.mkdtemp()
-        self.base_path = Path(self.temp_dir).resolve()
+    base_path: Path
+
+    @pytest.fixture(autouse=True)
+    def _use_temporary_root(self, tmp_path: Path) -> None:
+        self.base_path = tmp_path.resolve()
 
     def test_safe_join_filesystem_root(self):
         root = Path(self.base_path.anchor)

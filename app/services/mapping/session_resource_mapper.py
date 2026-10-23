@@ -180,21 +180,21 @@ class SessionResourceMapper:
         )
 
 
-def parse_datetime(value: object, field_name: str, terminal_id: str) -> datetime:
+def parse_datetime(value: object, field_name: str, resource_id: str) -> datetime:
     if not isinstance(value, str):
-        raise RuntimeError(f"terminal {terminal_id} 缺少时间字段: {field_name}")
+        raise RuntimeError(f"resource {resource_id} 缺少时间字段: {field_name}")
     return normalize_datetime(datetime.fromisoformat(value.replace("Z", "+00:00")))
 
 
 def parse_optional_datetime(
     value: object,
     field_name: str,
-    terminal_id: str,
+    resource_id: str,
 ) -> datetime | None:
     if value is None:
         return None
     if not isinstance(value, str):
-        raise RuntimeError(f"terminal {terminal_id} 时间字段格式错误: {field_name}")
+        raise RuntimeError(f"resource {resource_id} 时间字段格式错误: {field_name}")
     return normalize_datetime(datetime.fromisoformat(value.replace("Z", "+00:00")))
 
 

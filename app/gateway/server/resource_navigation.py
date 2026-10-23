@@ -150,15 +150,22 @@ async def _navigate_target(
                 raise ResourceUriResolveError("scope_mismatch", "此导航 scope 需要显式 Workspace 路由")
             if resource.kind == "files":
                 # 资源固定属于本机 Gateway；按稳定身份选择同机执行进程，不读取激活态。
-                targets = sorted((target for target in _registry(request).targets()
-                                  if target.connection_kind == "local" and target.backend_url.strip()
-                                  and target.backend_workspace_id is not None),
-                                 key=lambda target: target.backend_workspace_id)
-                if not targets:
+                file_owner = min(
+                    (
+                        target
+                        for target in _registry(request).targets()
+                        if target.connection_kind == "local"
+                        and target.backend_url.strip()
+                        and target.backend_workspace_id is not None
+                    ),
+                    key=lambda target: target.backend_workspace_id,
+                    default=None,
+                )
+                if file_owner is None:
                     raise ResourceUriResolveError("unknown_resource", "原生目录没有可用的同机文件 owner")
                 return await _proxy_workspace_request(
                     "resources/navigation", request, auth=auth, user_access=user_access,
-                    include_credentials=True, target_workspace_id=targets[0].workspace_id,
+                    include_credentials=True, target_workspace_id=file_owner.workspace_id,
                     request_body=payload.model_dump_json(exclude_unset=True).encode("utf-8"),
                     navigation_deadline_at=navigation_deadline_at(deadline),
                 )

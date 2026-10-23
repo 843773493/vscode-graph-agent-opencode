@@ -325,7 +325,7 @@ describe("会话目录编排链路", () => {
 });
 
 describe("上下文分支候选与冻结重试", () => {
-  const point = (overrides: Partial<SessionForkSourcePoint> = {}): SessionForkSourcePoint => ({
+  const sourcePointFixture = (overrides: Partial<SessionForkSourcePoint> = {}): SessionForkSourcePoint => ({
     source_uri: "boxteam://workspace/ws-source/resources/session/ses-source/threads/tid-source",
     source_view_id: "view-source", source_view_revision: 9, anchor_item_id: "item-source",
     child_container_uri: "boxteam://workspace/ws-source/resources/session/ses-source",
@@ -344,7 +344,7 @@ describe("上下文分支候选与冻结重试", () => {
     const selection = { threadId: "tid-source", turnId: "turn-source", sourceViewId: "view-display", sourceViewRevision: 8 };
     await act(async () => { await mounted.hook().forkSession("ws-source", "ses-source", selection); });
     expect(read.mock.calls).toEqual([[8014, "ses-source", selection, "ws-source"]]);
-    expect(mounted.hook().forkDialog!.point).toBeNull();
+    expect(mounted.hook().forkDialog!.sourcePoint).toBeNull();
     expect(mounted.hook().forkDialog!.error).toContain("展示快照已失效");
     expect(mounted.hook().forkDialog!.sourceThreadId).toBe("tid-source");
   });
@@ -355,7 +355,7 @@ describe("上下文分支候选与冻结重试", () => {
     const oldRead = new Promise<SessionForkSourcePoint>((resolve) => { finishOld = resolve; });
     const currentRead = new Promise<SessionForkSourcePoint>((resolve) => { finishCurrent = resolve; });
     const read = spyOn(sessionApi, "getSessionForkSourcePoint")
-      .mockResolvedValueOnce(point())
+      .mockResolvedValueOnce(sourcePointFixture())
       .mockImplementationOnce(() => oldRead)
       .mockImplementationOnce(() => currentRead);
     spies.push(read);
@@ -374,20 +374,20 @@ describe("上下文分支候选与冻结重试", () => {
     await act(async () => { pendingCurrent = mounted.hook().updateForkDialogSelection({ targetContainerUri: "boxteam://gateway-c/workspace/ws-target/resources/session" }); });
     const request: SessionForkRequest = {
       idempotency_key: mounted.hook().forkDialog!.idempotencyKey,
-      source_uri: point().source_uri, source_view_id: "view-source", source_view_revision: 9,
+      source_uri: sourcePointFixture().source_uri, source_view_id: "view-source", source_view_revision: 9,
       anchor_item_id: null, mode: "full_rollout_copy", anchor_mode: "inclusive",
       target_container_uri: mounted.hook().forkDialog!.targetContainerUri,
       creation_kind: "new_session_main", relationship: "detached", resources: [],
     };
     await act(async () => { await mounted.hook().submitForkDialog(request); });
     expect(submissions).toEqual([]);
-    const current = point({ anchor_item_id: null, resource_mode: "full_rollout_copy", resources: [{
+    const current = sourcePointFixture({ anchor_item_id: null, resource_mode: "full_rollout_copy", resources: [{
       resource_uri: "boxteam://workspace/019d1b4a-1111-7000-8000-000000000001/resources/session/ses_526468c69b637b128bacbc68e83b284b/attachments/att_b7ce3abba40fd6a19282a0da38ea7c9d", name: "当前附件",
       content_type: "text/plain", availability: "available", required_for_context: false,
     }] });
     await act(async () => { finishCurrent(current); await pendingCurrent; });
-    await act(async () => { finishOld(point({ anchor_item_id: null, resource_mode: "full_rollout_copy" })); await pendingOld; });
-    expect(mounted.hook().forkDialog!.point).toBe(current);
+    await act(async () => { finishOld(sourcePointFixture({ anchor_item_id: null, resource_mode: "full_rollout_copy" })); await pendingOld; });
+    expect(mounted.hook().forkDialog!.sourcePoint).toBe(current);
     expect(mounted.hook().forkDialog!.targetContainerUri).toBe(request.target_container_uri);
     expect(read.mock.calls[2]![2]).toEqual({
       threadId: "tid-source", itemId: undefined, sourceViewId: "view-source", sourceViewRevision: 9,
@@ -402,10 +402,10 @@ describe("上下文分支候选与冻结重试", () => {
 
   test("完整历史无需截止消息，切回前缀仍使用首次点击点", async () => {
     const read = spyOn(sessionApi, "getSessionForkSourcePoint")
-      .mockResolvedValueOnce(point())
-      .mockResolvedValueOnce(point({ anchor_item_id: null, resource_mode: "full_rollout_copy" }))
-      .mockResolvedValueOnce(point({ anchor_item_id: "item-completed", resource_mode: "context_fork" }))
-      .mockResolvedValueOnce(point());
+      .mockResolvedValueOnce(sourcePointFixture())
+      .mockResolvedValueOnce(sourcePointFixture({ anchor_item_id: null, resource_mode: "full_rollout_copy" }))
+      .mockResolvedValueOnce(sourcePointFixture({ anchor_item_id: "item-completed", resource_mode: "context_fork" }))
+      .mockResolvedValueOnce(sourcePointFixture());
     spies.push(read);
     const mounted = mountHook();
     await mounted.mount();
@@ -413,9 +413,9 @@ describe("上下文分支候选与冻结重试", () => {
       itemId: "item-source", sourceViewId: "view-source", sourceViewRevision: 9,
     }); });
     await act(async () => { await mounted.hook().updateForkDialogSelection({ mode: "full_rollout_copy" }); });
-    expect(mounted.hook().forkDialog!.point!.anchor_item_id).toBeNull();
+    expect(mounted.hook().forkDialog!.sourcePoint!.anchor_item_id).toBeNull();
     await act(async () => { await mounted.hook().updateForkDialogSelection({ mode: "context_fork" }); });
-    expect(mounted.hook().forkDialog!.point!.anchor_item_id).toBe("item-completed");
+    expect(mounted.hook().forkDialog!.sourcePoint!.anchor_item_id).toBe("item-completed");
     await act(async () => { await mounted.hook().updateForkDialogSelection({ mode: "view_prefix_fork" }); });
     expect(mounted.hook().forkDialog!.error).toBeNull();
     expect(read.mock.calls[3]![2]).toEqual({
@@ -426,8 +426,8 @@ describe("上下文分支候选与冻结重试", () => {
 
   test("无默认锚点时显示冻结来源且拒绝前缀提交，允许显式完整历史", async () => {
     const read = spyOn(sessionApi, "getSessionForkSourcePoint")
-      .mockResolvedValueOnce(point({ anchor_item_id: null }))
-      .mockResolvedValueOnce(point({ anchor_item_id: null, resource_mode: "full_rollout_copy" }));
+      .mockResolvedValueOnce(sourcePointFixture({ anchor_item_id: null }))
+      .mockResolvedValueOnce(sourcePointFixture({ anchor_item_id: null, resource_mode: "full_rollout_copy" }));
     spies.push(read);
     const submitted: SessionForkRequest[] = [];
     const mounted = mountHook({ forkSessionContext: async (_workspace, _source, request) => {
@@ -437,9 +437,9 @@ describe("上下文分支候选与冻结重试", () => {
     await mounted.mount();
     await act(async () => { await mounted.hook().forkSession("ws-route", "ses-source"); });
     const request: SessionForkRequest = {
-      idempotency_key: mounted.hook().forkDialog!.idempotencyKey, source_uri: point().source_uri,
+      idempotency_key: mounted.hook().forkDialog!.idempotencyKey, source_uri: sourcePointFixture().source_uri,
       source_view_id: "view-source", source_view_revision: 9, anchor_item_id: null,
-      mode: "view_prefix_fork", anchor_mode: "inclusive", target_container_uri: point().child_container_uri,
+      mode: "view_prefix_fork", anchor_mode: "inclusive", target_container_uri: sourcePointFixture().child_container_uri,
       creation_kind: "new_child_thread", relationship: "detached", resources: [],
     };
     await act(async () => { await mounted.hook().submitForkDialog(request); });
@@ -463,16 +463,16 @@ describe("上下文分支候选与冻结重试", () => {
       source_thread: { session_id: "ses-source", thread_id: "tid-source" }, thread_associations: [{ session_id: "ses-source", thread_id: "tid-source" }],
       owner_revision: 7, status: "running", reconciliation_status: "verified", available_actions: ["attach"], metadata: {},
       created_at: "2026-10-15T00:00:00Z", updated_at: "2026-10-15T00:00:00Z" };
-    const read = spyOn(sessionApi, "getSessionForkSourcePoint").mockResolvedValue(point({ live_resources: [candidate] }));
+    const read = spyOn(sessionApi, "getSessionForkSourcePoint").mockResolvedValue(sourcePointFixture({ live_resources: [candidate] }));
     spies.push(read);
     const submitted: SessionForkRequest[] = [];
     const opened: SessionForkResult[] = [];
     const result: SessionForkResult = {
       session: { session_id: "ses-source", workspace_id: "ws-source", resource_identity: "session:ws-source:ses-source",
-        uri: point().child_container_uri, scope: "workspace", title: "来源", current_agent_id: "default", created_at: "2026-10-15T00:00:00Z", updated_at: "2026-10-15T00:00:00Z", title_source: "default", kind: "normal" },
+        uri: sourcePointFixture().child_container_uri, scope: "workspace", title: "来源", current_agent_id: "default", created_at: "2026-10-15T00:00:00Z", updated_at: "2026-10-15T00:00:00Z", title_source: "default", kind: "normal" },
       thread_id: "tid-published", thread_uri: "boxteam://workspace/ws-source/resources/session/ses-source/threads/tid-published",
       target_gateway_id: "gateway_test",
-      creation_kind: "new_child_thread", source_uri: point().source_uri, source_view_id: "view-source", source_view_revision: 9,
+      creation_kind: "new_child_thread", source_uri: sourcePointFixture().source_uri, source_view_id: "view-source", source_view_revision: 9,
       anchor_item_id: "item-source", mode: "view_prefix_fork", goal_id: null, resources: [{
         owner_reference: { kind: "terminal", resource_id: "term-live", workspace_id: "ws-source", expected_revision: 7 },
         owner_resource: candidate, action: "reuse_reference", availability: "unavailable", target_uri: null,
@@ -500,7 +500,7 @@ describe("上下文分支候选与冻结重试", () => {
         kind: "terminal", resource_id: "term-live", workspace_id: "ws-source", expected_revision: 7,
       } }]);
       expect(opened).toEqual([result]);
-      expect(mounted.hook().forkDialog!.request).toBe(selected);
+      expect(mounted.hook().forkDialog!.frozenRequest).toBe(selected);
       expect(mounted.renderer().root.findByProps({ role: "alert" }).children.join("")).toContain("目标已创建（tid-published），运行资源关联失败或待核实：term-live：关联回执待核实");
       await act(async () => { mounted.renderer().root.findByType("form").props.onSubmit({ preventDefault() {} }); });
       expect(submitted[2]).toBe(selected);

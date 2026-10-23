@@ -40,18 +40,18 @@ def _collect_host_aliases(config_path: Path, visited: set[Path]) -> list[str]:
     visited.add(resolved_path)
     aliases: list[str] = []
     for raw_line in resolved_path.read_text(encoding="utf-8").splitlines():
-        tokens = _split_config_line(raw_line)
-        if not tokens:
+        config_tokens = _split_config_line(raw_line)
+        if not config_tokens:
             continue
-        keyword = tokens[0].lower()
+        keyword = config_tokens[0].lower()
         if keyword == "include":
-            for pattern in tokens[1:]:
+            for pattern in config_tokens[1:]:
                 for included_path in _included_config_paths(pattern):
                     aliases.extend(_collect_host_aliases(included_path, visited))
             continue
         if keyword != "host":
             continue
-        for alias in tokens[1:]:
+        for alias in config_tokens[1:]:
             if alias.startswith("!") or any(character in alias for character in "*?"):
                 continue
             aliases.append(alias)
@@ -59,31 +59,35 @@ def _collect_host_aliases(config_path: Path, visited: set[Path]) -> list[str]:
 
 
 def _effective_ssh_options(alias: str) -> dict[str, list[str]]:
-    result = subprocess.run(
+    ssh_config_result = subprocess.run(
         ["ssh", "-G", alias],
         capture_output=True,
         text=True,
         timeout=10,
         check=False,
     )
-    if result.returncode != 0:
-        detail = result.stderr.strip() or result.stdout.strip() or "ssh -G 无输出"
+    if ssh_config_result.returncode != 0:
+        detail = (
+            ssh_config_result.stderr.strip()
+            or ssh_config_result.stdout.strip()
+            or "ssh -G 无输出"
+        )
         raise RuntimeError(f"解析 SSH Host {alias} 失败: {detail}")
-    options: dict[str, list[str]] = {}
-    for line in result.stdout.splitlines():
-        key, separator, value = line.partition(" ")
-        if separator and value:
-            options.setdefault(key.lower(), []).append(value.strip())
-    return options
+    options_by_name: dict[str, list[str]] = {}
+    for option_line in ssh_config_result.stdout.splitlines():
+        option_name, separator, option_value = option_line.partition(" ")
+        if separator and option_value:
+            options_by_name.setdefault(option_name.lower(), []).append(option_value.strip())
+    return options_by_name
 
 
 def _resolve_effective_host(alias: str) -> UserSshHost:
-    options = _effective_ssh_options(alias)
-    hostname = (options.get("hostname") or [alias])[0]
-    username_values = options.get("user")
+    ssh_options = _effective_ssh_options(alias)
+    hostname = (ssh_options.get("hostname") or [alias])[0]
+    username_values = ssh_options.get("user")
     if not username_values or not username_values[0]:
         raise ValueError(f"SSH Host {alias} 无法解析 User")
-    port_text = (options.get("port") or ["22"])[0]
+    port_text = (ssh_options.get("port") or ["22"])[0]
     try:
         port = int(port_text)
     except ValueError as error:

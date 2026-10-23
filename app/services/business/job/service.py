@@ -919,7 +919,7 @@ class JobService:
                 job_status=job.status.value, queued_jobs_ahead=0, queued_job_count=0,
                 pending_job_count=0, queue_snapshot_version=self._pending_queue.snapshot_version(job.session_id),
             )
-        queued_ids = self._pending_queue.ids(job.session_id, job.thread_id)
+        queued_ids = self._pending_queue.queued_job_ids(job.session_id, job.thread_id)
         try:
             queued_ahead = queued_ids.index(job.job_id)
         except ValueError:
@@ -1186,7 +1186,7 @@ class JobService:
         """失败后丢弃尚未执行的终端收尾提醒，避免创建孤立 continuation stream。"""
         stale_jobs: list[JobState] = []
         for job_id in tuple(
-            self._pending_queue.ids(session_id, thread_id)
+            self._pending_queue.queued_job_ids(session_id, thread_id)
         ):
             job = self._jobs.get(job_id)
             if job is None or not self._is_terminal_followup(job):
@@ -1648,7 +1648,7 @@ class JobService:
             async with self._dispatch_lock:
                 thread_ids = dict.fromkeys(
                     self._pending_queue.entry(job_id).thread_id
-                    for job_id in self._pending_queue.ids(session_id)
+                    for job_id in self._pending_queue.queued_job_ids(session_id)
                 )
                 for (owner_session_id, thread_id), job_id in self._thread_current_job.items():
                     if owner_session_id == session_id and self._pending_dispatch_unstarted(self._jobs[job_id]):

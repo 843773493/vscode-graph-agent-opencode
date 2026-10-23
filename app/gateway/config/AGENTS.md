@@ -3,14 +3,21 @@
 `app/gateway/config/` 是 Gateway 配置加载与热重载的同名子包（facade + 按垂直链路拆分的模块），
 由原单文件 `app/gateway/config.py` 物理下线后拆入，导入路径 `app.gateway.config` 保持不变。
 
-- `values.py`：配置值对象（`GatewayConfig`/`ConfiguredRemoteGateway`/`ConfiguredTheme`）与
-  取值、路径解析辅助（`resolve_gateway_path` 等）。
-- `connection_ids.py`：connection_id 规范化、迁移与回滚。
-- `sources.py`：配置来源层加载/迁移/日志与来源明细。
-- `loader.py`：`load_gateway_config` 与 consumer 健康摘要校验。
-- `reload_lifecycle.py`：`ReloadLifecycleMixin`（服务初始化、状态、事件游标、watcher、reload）。
-- `reload_pending_restart.py`：`ReloadPendingRestartMixin`（pending restart 与 health proof）。
-- `__init__.py`：facade，组装 `GatewayConfigReloadService` 并再导出全部原顶层符号。
+```text
+app/gateway/config/
+├── __init__.py                 facade：组装 ReloadService，并维护原公开导入出口
+├── values.py                   配置值对象与无副作用的值解析
+├── loader.py                   合并来源、校验配置、生成 GatewayConfig
+├── sources.py                  来源层读取、迁移和来源明细
+├── connection_ids.py           connection_id 规范化、迁移和回滚
+├── reload_lifecycle.py         ReloadLifecycleMixin：watcher、事件游标与 reload
+└── reload_pending_restart.py   ReloadPendingRestartMixin：pending restart 与 health proof
+```
+
+配置读取链：`sources.py` 提供持久来源，`connection_ids.py` 规范化旧配置，`loader.py`
+完成合并与校验，`values.py` 定义返回的配置值。热重载链：`__init__.py` 组装公开服务，
+`reload_lifecycle.py` 管理 watcher 和 reload 状态，`reload_pending_restart.py` 管理重启提交与健康证明。
+新增职责先归入对应的垂直模块；只有出现独立 owner 和调用边界时才继续下沉目录。
 
 # 可修改内容
 

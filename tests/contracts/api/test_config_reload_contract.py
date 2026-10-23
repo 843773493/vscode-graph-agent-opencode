@@ -304,7 +304,7 @@ async def test_real_config_diff_persists_and_serializes_json_pointers(pointer_ev
 
 @pytest.mark.parametrize("damage", ["value", "key", "dynamic"])
 async def test_workspace_reload_status_rejects_without_echoing_config(
-    pointer_event_owner, damage: str,
+    pointer_event_owner, monkeypatch: pytest.MonkeyPatch, damage: str,
 ) -> None:
     service, store, client, config_path, config, _workspace_root = pointer_event_owner
     snapshot = service.get_snapshot()
@@ -378,4 +378,90 @@ async def test_workspace_reload_status_never_echoes_unresolved_schema_reference(
     recovered = (await client.get("/api/v1/config/reload-status")).json()["data"]
     assert recovered["healthy"] is True
     assert recovered["last_error"] is None
+    assert store.get_active_config_snapshot("workspace") == active
+
+
+@pytest.mark.parametrize("damage", [
+    "factory_import", "factory_attribute", "factory_callable", "factory_runtime",
+    "factory_syntax", "factory_os", "factory_path", "name",
+    "unknown_field", "skill", "tool_id", "duplicate", "custom_type", "agents_type", "agent_key",
+])
+async def test_workspace_custom_tool_preflight_keeps_native_paths_out_of_status(
+    pointer_event_owner, monkeypatch: pytest.MonkeyPatch, damage: str,
+) -> None:
+    service, store, client, config_path, config, _workspace_root = pointer_event_owner
+    snapshot = service.get_snapshot()
+    active = store.get_active_config_snapshot("workspace")
+    events = service.list_config_events()
+    original = config_path.read_bytes()
+    marker = str(config_path.parent / "private-preflight-marker")
+    spec = {"name": "preflight_probe", "factory": "json:loads"}
+    custom = [spec]
+    if damage == "factory_import":
+        spec["factory"] = "missing_preflight_probe:factory"
+    elif damage == "factory_attribute":
+        spec["factory"] = "json:missing_preflight_probe"
+    elif damage == "factory_callable":
+        spec["factory"] = "json:__doc__"
+    elif damage in {"factory_runtime", "factory_syntax", "factory_os"}:
+        cause_type = {
+            "factory_runtime": "RuntimeError", "factory_syntax": "SyntaxError", "factory_os": "OSError",
+        }[damage]
+        module_path = _workspace_root / "preflight_failure.py"
+        module_path.write_text(f"raise {cause_type}({marker!r})\n", encoding="utf-8")
+        monkeypatch.syspath_prepend(str(_workspace_root))
+        spec["factory"] = "preflight_failure:create"
+    elif damage == "factory_path":
+        spec["factory"] = marker
+    elif damage == "name":
+        spec["name"] = marker
+    elif damage == "unknown_field":
+        spec[marker] = "unknown"
+    elif damage == "skill":
+        spec["skills"] = [marker]
+    elif damage == "tool_id":
+        custom = [{"tool_id": marker}]
+    elif damage == "duplicate":
+        custom.append(dict(spec))
+    config["agents"]["default"]["tools"] = {"custom": marker if damage == "custom_type" else custom}
+    if damage == "agents_type":
+        config["agents"] = marker
+    elif damage == "agent_key":
+        config["agents"] = {marker: {"tools": {"custom": [{
+            "name": "preflight_probe", "factory": "missing_preflight_probe:factory",
+        }]}}}
+    config_path.write_text(json.dumps(config), encoding="utf-8")
+    rejected = config_path.read_bytes()
+
+    with pytest.raises((TypeError, ValueError)) as failure:
+        await service.reload()
+    assert marker not in str(failure.value) and str(config_path.parent) not in str(failure.value)
+    if damage not in {"custom_type", "agents_type"}:
+        assert failure.value.__cause__ is not None
+    if damage in {"factory_runtime", "factory_syntax", "factory_os"}:
+        assert f"cause_type={cause_type}" in str(failure.value)
+        assert type(failure.value.__cause__).__name__ == cause_type
+        assert marker in str(failure.value.__cause__)
+    if damage == "duplicate":
+        assert "重复扩展工具名: preflight_probe" in str(failure.value.__cause__)
+    response = await client.get("/api/v1/config/reload-status", headers={"X-Request-ID": "preflight-error"})
+    assert response.status_code == 200, response.text
+    assert response.headers["X-Request-ID"] == response.json()["request_id"] == "preflight-error"
+    status = response.json()["data"]
+    assert status["healthy"] is False and status["reason"] == "invalid_config"
+    assert status["last_error"] == f"{type(failure.value).__name__}: {failure.value}"
+    public = await client.get("/api/v1/config")
+    assert public.status_code == 200, public.text
+    for body in (response.text, public.text):
+        assert marker not in body and str(config_path.parent) not in body
+    assert service.get_snapshot() is snapshot
+    assert store.get_active_config_snapshot("workspace") == active
+    assert store.get_pending_config_candidate(config_domain="workspace") is None
+    assert service.list_config_events() == events
+    assert config_path.read_bytes() == rejected
+
+    config_path.write_bytes(original)
+    await service.reload()
+    recovered = (await client.get("/api/v1/config/reload-status")).json()["data"]
+    assert recovered["healthy"] is True and recovered["last_error"] is None
     assert store.get_active_config_snapshot("workspace") == active

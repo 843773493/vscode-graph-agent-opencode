@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from itertools import islice
 
 from app.abstractions.job_event_bus import JobEventBusProtocol
 from app.core.job_event_bus import EventType
@@ -23,9 +24,11 @@ def build_session_title_from_first_message(user_message: str) -> str:
     if not normalized:
         raise RuntimeError("首条用户消息为空，无法自动命名会话")
 
-    tokens = list(TITLE_TOKEN_RE.finditer(normalized))
-    if len(tokens) > TITLE_MAX_WORDS:
-        normalized = normalized[: tokens[TITLE_MAX_WORDS - 1].end()].strip()
+    first_tokens = tuple(
+        islice(TITLE_TOKEN_RE.finditer(normalized), TITLE_MAX_WORDS + 1)
+    )
+    if len(first_tokens) > TITLE_MAX_WORDS:
+        normalized = normalized[: first_tokens[TITLE_MAX_WORDS - 1].end()].strip()
 
     return normalize_session_title(normalized)
 
@@ -68,14 +71,14 @@ class SessionTitleService:
             return AutoSessionTitleMutationResult("not_applicable", session)
 
         title = build_session_title_from_first_message(user_message)
-        result = await self._session_catalog_service.auto_title_session(
+        title_mutation = await self._session_catalog_service.auto_title_session(
             session_id,
             expected_title=session.title,
             title=title,
         )
-        if result.outcome != "applied":
-            return result
-        updated = result.session
+        if title_mutation.outcome != "applied":
+            return title_mutation
+        updated = title_mutation.session
         await self._bus.publish(
             job_id=job_id,
             event_type=EventType.STATUS_CHANGE,
@@ -87,4 +90,4 @@ class SessionTitleService:
             },
             agent_id="session_title_service",
         )
-        return result
+        return title_mutation

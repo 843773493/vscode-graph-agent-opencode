@@ -17,6 +17,8 @@ export const DEFAULT_CHECKPOINT_LIMITS = Object.freeze({
   workspaceCheckpointMaxBytes: 2 * 1024 * 1024 * 1024,
 });
 
+const CHECKPOINT_SCAN_BATCH_SIZE = 64;
+
 function checkpointQuotaError(code, message, details) {
   const error = new Error(`${message}: ${Object.entries(details)
     .map(([key, value]) => `${key}=${value}`)
@@ -33,6 +35,13 @@ function sameCheckpointSizes(left, right) {
   }
   return true;
 }
+
+/**
+ * Manager交付的一轮浏览器恢复记录，不是页面检查点或HTTP/WebSocket展示快照。
+ * @typedef {object} BrowserStateWriteSnapshot
+ * @property {string} updated_at Manager开始组装本轮快照的UTC ISO时刻，早于逐资源toRecord；不是资源更新时间或写盘完成时间。
+ * @property {ReturnType<import("./browserSession.js").BrowserSession["toRecord"]>[]} browsers 本轮保留的全部浏览器恢复记录，包括非运行记录。
+ */
 
 export class BrowserStateStore {
   constructor({ workspaceRoot, workspaceId, checkpointLimits = DEFAULT_CHECKPOINT_LIMITS }) {
@@ -239,18 +248,20 @@ export class BrowserStateStore {
     try {
       const entries = await readdir(this.checkpointDir, { withFileTypes: true });
       stage = "目录项检查或清理";
-      await Promise.all(entries.map(async (entry) => {
-        if (entry.isFile() && entry.name.endsWith(".tmp")) {
-          if (cleanupTemporaryFiles) {
-            await rm(path.join(this.checkpointDir, entry.name), { force: true });
+      for (let offset = 0; offset < entries.length; offset += CHECKPOINT_SCAN_BATCH_SIZE) {
+        await Promise.all(entries.slice(offset, offset + CHECKPOINT_SCAN_BATCH_SIZE).map(async (entry) => {
+          if (entry.isFile() && entry.name.endsWith(".tmp")) {
+            if (cleanupTemporaryFiles) {
+              await rm(path.join(this.checkpointDir, entry.name), { force: true });
+            }
+            return;
           }
-          return;
-        }
-        const match = entry.isFile() ? entry.name.match(/^(browser_[a-zA-Z0-9]+)\.json$/) : null;
-        if (!match) return;
-        const metadata = await stat(path.join(this.checkpointDir, entry.name));
-        sizes.set(match[1], metadata.size);
-      }));
+          const match = entry.isFile() ? entry.name.match(/^(browser_[a-zA-Z0-9]+)\.json$/) : null;
+          if (!match) return;
+          const metadata = await stat(path.join(this.checkpointDir, entry.name));
+          sizes.set(match[1], metadata.size);
+        }));
+      }
     } catch (error) {
       if (stage === "目录读取" && error?.code === "ENOENT") return sizes;
       console.error("[browser-state-store] 核验浏览器检查点目录失败", { directory: this.checkpointDir, stage }, error);
@@ -320,10 +331,11 @@ export class BrowserStateStore {
     }
   }
 
-  async write(payload) {
-    for (const record of payload.browsers) this.validateRecord(record);
-    payload = { ...payload, schema_version: 2, workspace_id: this.workspaceId };
-    const serialized = `${JSON.stringify(payload, null, 2)}\n`;
+  /** @param {BrowserStateWriteSnapshot} stateSnapshot */
+  async write(stateSnapshot) {
+    for (const record of stateSnapshot.browsers) this.validateRecord(record);
+    const stateFilePayload = { ...stateSnapshot, schema_version: 2, workspace_id: this.workspaceId };
+    const serialized = `${JSON.stringify(stateFilePayload, null, 2)}\n`;
     const temporaryFile = `${this.stateFile}.${process.pid}.${randomUUID()}.tmp`;
     let stage = "目录创建";
     try {

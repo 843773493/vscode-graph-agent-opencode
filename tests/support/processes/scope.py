@@ -7,26 +7,31 @@ from contextvars import ContextVar, Token
 
 class TestProcessScope:
     def __init__(self) -> None:
-        self._cleanups: list[tuple[object, Callable[[], None]]] = []
+        self._cleanup_by_handle_id: dict[int, tuple[object, Callable[[], None]]] = {}
         self._closed = False
 
     def register(self, handle: object, cleanup: Callable[[], None]) -> None:
         if self._closed:
             raise RuntimeError("测试进程生命周期 scope 已关闭")
-        if any(tracked_handle is handle for tracked_handle, _ in self._cleanups):
+        handle_id = id(handle)
+        if handle_id in self._cleanup_by_handle_id:
             raise ValueError("测试进程在 scope 中重复注册")
-        self._cleanups.append((handle, cleanup))
+        self._cleanup_by_handle_id[handle_id] = (handle, cleanup)
 
     def unregister(self, handle: object) -> None:
-        self._cleanups = [
-            item for item in self._cleanups if item[0] is not handle
-        ]
+        handle_id = id(handle)
+        registered = self._cleanup_by_handle_id.get(handle_id)
+        if registered is not None and registered[0] is handle:
+            del self._cleanup_by_handle_id[handle_id]
 
     def close(self) -> None:
         if self._closed:
             return
         self._closed = True
-        cleanups, self._cleanups = self._cleanups, []
+        cleanups, self._cleanup_by_handle_id = (
+            tuple(self._cleanup_by_handle_id.values()),
+            {},
+        )
         failures: list[BaseException] = []
         for _, cleanup in reversed(cleanups):
             try:

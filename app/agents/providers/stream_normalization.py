@@ -61,25 +61,31 @@ def _is_generated_part_id(value: Any) -> bool:
 def clean_stream_block(block: Mapping[str, Any]) -> dict[str, Any]:
     """去除流式临时 part/index/extras，保留 provider item identity。"""
     result = {str(key): copy.deepcopy(value) for key, value in block.items()}
-    extras = result.get("extras")
+    _normalize_stream_block_fields(result)
+    return result
+
+
+def _normalize_stream_block_fields(block: dict[str, Any]) -> None:
+    """原地清理已隔离的 block，保留 provider item identity。"""
+    extras = block.get("extras")
     provider_part_id = (
         extras.get("provider_part_id") if isinstance(extras, Mapping) else None
     )
-    generated_id = _is_generated_part_id(result.get("id"))
+    generated_id = _is_generated_part_id(block.get("id"))
     if generated_id:
-        result.pop("id", None)
+        block.pop("id", None)
     if generated_id or provider_part_id is not None:
-        result.pop("index", None)
-    if isinstance(provider_part_id, str) and result.get("type") == "reasoning":
-        result["id"] = provider_part_id
-    return result
+        block.pop("index", None)
+    if isinstance(provider_part_id, str) and block.get("type") == "reasoning":
+        block["id"] = provider_part_id
 
 
 def stream_content_blocks(content: Any) -> list[dict[str, Any]]:
     """把已接收的 provider block 重新线性化为 canonical stream carrier。"""
     blocks: list[dict[str, Any]] = []
-    for raw_block in content_blocks(content):
-        block = clean_stream_block(raw_block)
+    for block in content_blocks(content):
+        # content_blocks 已隔离 Provider 输入；直接整理该副本，避免再次递归复制。
+        _normalize_stream_block_fields(block)
         block_type = block.get("type")
         extras = block.get("extras")
         if block_type == "reasoning" and isinstance(extras, Mapping):

@@ -46,6 +46,11 @@ class FakeWaitClock:
         self.utc += timedelta(seconds=seconds)
 
 
+@pytest.fixture
+def fake_wait_clock() -> FakeWaitClock:
+    return FakeWaitClock()
+
+
 def make_target() -> GlobalThreadAddress:
     return GlobalThreadAddress(
         gateway_id="gw_local",
@@ -66,8 +71,8 @@ def test_selector_rejects_blank_id() -> None:
         WaitSelector(kind="job", selector_id="  ")
 
 
-def test_timeout_boundaries() -> None:
-    clock = FakeWaitClock()
+def test_timeout_boundaries(fake_wait_clock: FakeWaitClock) -> None:
+    clock = fake_wait_clock
     with pytest.raises(CommunicationContractError, match="wait-timeout-out-of-range"):
         freeze_wait_deadline(clock=clock, timeout_seconds=0)
     with pytest.raises(CommunicationContractError, match="wait-timeout-out-of-range"):
@@ -77,8 +82,10 @@ def test_timeout_boundaries() -> None:
         assert deadline.timeout_seconds == timeout
 
 
-def test_freeze_deadline_records_utc_and_monotonic_origin() -> None:
-    clock = FakeWaitClock()
+def test_freeze_deadline_records_utc_and_monotonic_origin(
+    fake_wait_clock: FakeWaitClock,
+) -> None:
+    clock = fake_wait_clock
     deadline = freeze_wait_deadline(clock=clock, timeout_seconds=60)
     assert deadline.monotonic_origin_id == "boot-1"
     assert deadline.monotonic_deadline_ns == clock.mono_ns + 60 * 1_000_000_000
@@ -87,8 +94,10 @@ def test_freeze_deadline_records_utc_and_monotonic_origin() -> None:
     ) == timedelta(seconds=60)
 
 
-def test_same_origin_restart_keeps_original_monotonic_budget() -> None:
-    clock = FakeWaitClock()
+def test_same_origin_restart_keeps_original_monotonic_budget(
+    fake_wait_clock: FakeWaitClock,
+) -> None:
+    clock = fake_wait_clock
     deadline = freeze_wait_deadline(clock=clock, timeout_seconds=60)
     clock.advance(seconds=30)
     assert remaining_wait_budget_seconds(deadline, clock) == pytest.approx(30.0)
@@ -96,8 +105,10 @@ def test_same_origin_restart_keeps_original_monotonic_budget() -> None:
     assert remaining_wait_budget_seconds(deadline, clock) == pytest.approx(-1.0)
 
 
-def test_origin_change_budget_capped_by_original_deadline() -> None:
-    clock = FakeWaitClock()
+def test_origin_change_budget_capped_by_original_deadline(
+    fake_wait_clock: FakeWaitClock,
+) -> None:
+    clock = fake_wait_clock
     deadline = freeze_wait_deadline(clock=clock, timeout_seconds=300)
     clock.advance(seconds=290)
     # origin 变化后只能按 UTC 计算剩余，且不超过原 timeout。
@@ -109,8 +120,10 @@ def test_origin_change_budget_capped_by_original_deadline() -> None:
     assert remaining_wait_budget_seconds(deadline, clock) is None
 
 
-def test_origin_change_clock_rollback_returns_none() -> None:
-    clock = FakeWaitClock()
+def test_origin_change_clock_rollback_returns_none(
+    fake_wait_clock: FakeWaitClock,
+) -> None:
+    clock = fake_wait_clock
     deadline = freeze_wait_deadline(clock=clock, timeout_seconds=60)
     clock.origin = "boot-2"
     clock.utc = clock.utc - timedelta(seconds=10)

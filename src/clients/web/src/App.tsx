@@ -9,7 +9,7 @@ import {
 import { controlWorkspaceResource, getWorkspaceResource } from "./api/workspaceResources";
 import { getSessionMainThread } from "./api/session/sessions";
 import WorkbenchStatusBar from "./components/WorkbenchStatusBar";
-import PendingQueueBar from "./components/chat/PendingQueueBar";
+import PendingQueueBar from "./components/chat/pending/PendingQueueBar";
 import Composer from "./components/composer/Composer";
 import AgentSessionsPanel from "./components/panels/sessionPanels/AgentSessionsPanel";
 import ResourcePanel from "./components/panels/resourceTree/ResourcePanel";

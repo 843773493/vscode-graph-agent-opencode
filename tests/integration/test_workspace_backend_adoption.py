@@ -41,8 +41,8 @@ async def adopted_backend(
     workspace_id = load_or_create_workspace_id(workspace_root)
     generation = "backend_generation_adoption"
     digest = mounted_workspace_manifest_digest((MountedWorkspace(workspace_id, workspace_root),))
-    # 独立 HTTP 替身提供真实健康身份与进程组；父进程的 stdin 管道关闭时，
-    # 服务也停止，进程外测试超时不会留下独立运行的替身。
+    # 独立 HTTP 替身提供真实健康身份；父进程关闭 stdin 时服务随之停止，
+    # 测试 runner 保留对子进程的归属，超时清理可覆盖完整进程树。
     server_source = """
 import json
 import os
@@ -84,7 +84,6 @@ server.server_close()
         digest,
         stdin=asyncio.subprocess.PIPE,
         stdout=asyncio.subprocess.PIPE,
-        start_new_session=True,
     )
     try:
         assert process.stdout is not None

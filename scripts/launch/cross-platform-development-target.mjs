@@ -87,8 +87,13 @@ async function synchronizeTarget(target, configuration, options) {
 }
 
 async function openTargetShell(target, options) {
-  const remoteCommand = options.passthrough.length > 0 ? options.passthrough.join(" ") : undefined;
-  const command = sshCommand(target, remoteCommand ?? "cd && exec \"$SHELL\" -l");
+  const remoteCommand =
+    options.passthrough.length > 0
+      ? options.passthrough.join(" ")
+      : target.platform === "linux"
+        ? 'cd && exec "$SHELL" -l'
+        : undefined;
+  const command = sshCommand(target, remoteCommand);
   command.splice(1, 0, "-t");
   runChecked(command, {
     stdout: "inherit",

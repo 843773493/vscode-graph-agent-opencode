@@ -2,29 +2,16 @@ import { createServer } from "node:http";
 import { fileURLToPath } from "node:url";
 import { loadTargetsConfig, resolveRuntimeConfig } from "./config.js";
 import { TextFileStore } from "./fileStore.js";
-import { HttpError, readJsonRequest, readRawRequest, requestUrl, requireMethod, writeJson } from "./http.js";
+import { HttpError, readJsonRequest, requestUrl, requireMethod, writeJson } from "./http.js";
 import { createStaticFileHandler } from "./staticFiles.js";
 import { TargetFileClient } from "./targetFileClient.js";
 import { SshTunnelManager } from "./tunnel.js";
+import { proxyBackendRequest } from "./upstreamProxy.js";
 
 const clientRoot = fileURLToPath(new URL("../client/", import.meta.url));
 const PROXY_PREFIX = "/api/proxy/";
-const HOP_BY_HOP_HEADERS = new Set([
-  "connection",
-  "content-length",
-  "expect",
-  "host",
-  "keep-alive",
-  "proxy-authenticate",
-  "proxy-authorization",
-  "proxy-connection",
-  "te",
-  "trailer",
-  "transfer-encoding",
-  "upgrade",
-]);
 
-function parseProxyPath(url) {
+function parseBackendProxyRoute(url) {
   if (!url.pathname.startsWith(PROXY_PREFIX)) {
     return null;
   }
@@ -47,53 +34,6 @@ function parseProxyPath(url) {
   };
 }
 
-function proxyRequestHeaders(request) {
-  const headers = {};
-  for (const [name, value] of Object.entries(request.headers)) {
-    const lowerName = name.toLowerCase();
-    if (HOP_BY_HOP_HEADERS.has(lowerName)) {
-      continue;
-    }
-    if (value === undefined) {
-      continue;
-    }
-    headers[name] = Array.isArray(value) ? value.join(", ") : value;
-  }
-  return headers;
-}
-
-function proxyResponseHeaders(upstreamResponse) {
-  const headers = {
-    "access-control-allow-origin": "*",
-    "access-control-allow-methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
-    "access-control-allow-headers": "content-type",
-    "cache-control": "no-store",
-  };
-  for (const [name, value] of upstreamResponse.headers) {
-    const lowerName = name.toLowerCase();
-    if (HOP_BY_HOP_HEADERS.has(lowerName)) {
-      continue;
-    }
-    headers[name] = value;
-  }
-  return headers;
-}
-
-async function proxyTargetRequest(targetClient, proxyInfo, request, response, originalUrl) {
-  const origin = await targetClient.backendOriginFor(proxyInfo.targetId);
-  const upstreamUrl = new URL(`${proxyInfo.backendPath}${originalUrl.search}`, origin);
-  const hasBody = request.method !== "GET" && request.method !== "HEAD";
-  const body = hasBody ? await readRawRequest(request) : undefined;
-  const upstreamResponse = await fetch(upstreamUrl, {
-    method: request.method,
-    headers: proxyRequestHeaders(request),
-    body,
-  });
-  const responseBody = Buffer.from(await upstreamResponse.arrayBuffer());
-  response.writeHead(upstreamResponse.status, proxyResponseHeaders(upstreamResponse));
-  response.end(responseBody);
-}
-
 async function handleGatewayRequest(targetClient, request, response) {
   try {
     if (request.method === "OPTIONS") {
@@ -102,9 +42,9 @@ async function handleGatewayRequest(targetClient, request, response) {
     }
 
     const url = requestUrl(request);
-    const proxyInfo = parseProxyPath(url);
-    if (proxyInfo) {
-      await proxyTargetRequest(targetClient, proxyInfo, request, response, url);
+    const backendProxyRoute = parseBackendProxyRoute(url);
+    if (backendProxyRoute) {
+      await proxyBackendRequest(targetClient, backendProxyRoute, request, response, url);
       return;
     }
 
@@ -125,6 +65,13 @@ async function handleGatewayRequest(targetClient, request, response) {
     const statusCode = error instanceof HttpError ? error.statusCode : 500;
     const message = error instanceof Error ? error.message : String(error);
     console.error(`[gateway] ${request.method} ${request.url} ${statusCode}: ${message}`);
+    if (response.destroyed) {
+      return;
+    }
+    if (response.headersSent) {
+      response.destroy();
+      return;
+    }
     writeJson(response, statusCode, { error: message });
   }
 }
@@ -164,6 +111,13 @@ async function handleBackendRequest(localStore, request, response) {
     const statusCode = error instanceof HttpError ? error.statusCode : 500;
     const message = error instanceof Error ? error.message : String(error);
     console.error(`[backend] ${request.method} ${request.url} ${statusCode}: ${message}`);
+    if (response.destroyed) {
+      return;
+    }
+    if (response.headersSent) {
+      response.destroy();
+      return;
+    }
     writeJson(response, statusCode, { error: message });
   }
 }
@@ -171,18 +125,33 @@ async function handleBackendRequest(localStore, request, response) {
 function listen(server, host, port, label) {
   return new Promise((resolve, reject) => {
     const onError = (error) => {
-      reject(error);
+      server.off("error", onError);
+      server.off("listening", onListening);
+      reject(new Error(
+        `[${label}] 无法监听 ${host}:${port}: ${error.message}`,
+        { cause: error },
+      ));
     };
-    server.once("error", onError);
-    server.listen(port, host, () => {
+    const onListening = () => {
       server.off("error", onError);
       console.log(`[${label}] http://${host}:${port}`);
       resolve();
-    });
+    };
+
+    server.once("error", onError);
+    server.once("listening", onListening);
+    try {
+      server.listen(port, host);
+    } catch (error) {
+      onError(error);
+    }
   });
 }
 
 function closeServer(server) {
+  if (!server.listening) {
+    return Promise.resolve();
+  }
   return new Promise((resolve, reject) => {
     server.close((error) => {
       if (error) {
@@ -194,6 +163,38 @@ function closeServer(server) {
   });
 }
 
+async function closeServers(serverEntries) {
+  const closeResults = await Promise.allSettled(
+    serverEntries.map(({ server }) => closeServer(server)),
+  );
+  const closeErrors = closeResults
+    .filter((result) => result.status === "rejected")
+    .map((result) => result.reason);
+  if (closeErrors.length > 0) {
+    throw new AggregateError(closeErrors, "一个或多个 HTTP 服务关闭失败");
+  }
+}
+
+async function startServers(serverEntries) {
+  const listenResults = await Promise.allSettled(serverEntries.map(({ server, host, port, label }) => (
+    listen(server, host, port, label)
+  )));
+  const listenErrors = listenResults
+    .filter((result) => result.status === "rejected")
+    .map((result) => result.reason);
+  if (listenErrors.length === 0) {
+    return;
+  }
+
+  const startupErrors = [...listenErrors];
+  try {
+    await closeServers(serverEntries);
+  } catch (error) {
+    startupErrors.push(error);
+  }
+  throw new AggregateError(startupErrors, "Ssh_text_attach 服务启动失败");
+}
+
 const runtimeConfig = resolveRuntimeConfig();
 const servers = [];
 const tunnelManager = new SshTunnelManager();
@@ -203,7 +204,7 @@ if (runtimeConfig.roles.includes("backend")) {
     filePath: runtimeConfig.dataFilePath,
     label: runtimeConfig.dataLabel,
   });
-  await localStore.ensureReady();
+  await localStore.ensureFileExists();
   const backendServer = createServer((request, response) => {
     void handleBackendRequest(localStore, request, response);
   });
@@ -217,7 +218,7 @@ if (runtimeConfig.roles.includes("backend")) {
 }
 
 if (runtimeConfig.roles.includes("gateway")) {
-  const targetsConfig = await loadTargetsConfig(runtimeConfig.targetsConfigPath, runtimeConfig.projectRoot);
+  const targetsConfig = await loadTargetsConfig(runtimeConfig.targetsConfigPath, runtimeConfig.demoRoot);
   const targetClient = new TargetFileClient({
     targetsConfig,
     tunnelManager,
@@ -235,7 +236,7 @@ if (runtimeConfig.roles.includes("gateway")) {
 }
 
 if (runtimeConfig.roles.includes("frontend")) {
-  const frontendServer = createServer(createStaticFileHandler(clientRoot));
+  const frontendServer = createServer(createStaticFileHandler(clientRoot, runtimeConfig.gatewayPort));
   servers.push({
     label: "frontend",
     server: frontendServer,
@@ -244,18 +245,69 @@ if (runtimeConfig.roles.includes("frontend")) {
   });
 }
 
-process.once("SIGINT", async () => {
-  console.log("[shutdown] 收到 SIGINT");
-  tunnelManager.closeAll();
-  await Promise.all(servers.map((entry) => closeServer(entry.server)));
-  process.exit(0);
-});
+let shutdownStarted = false;
+let startupPromise;
 
-process.once("SIGTERM", async () => {
-  console.log("[shutdown] 收到 SIGTERM");
-  tunnelManager.closeAll();
-  await Promise.all(servers.map((entry) => closeServer(entry.server)));
-  process.exit(0);
-});
+async function shutdown(signal) {
+  if (shutdownStarted) {
+    return;
+  }
+  shutdownStarted = true;
+  process.off("SIGINT", handleInterrupt);
+  process.off("SIGTERM", handleTermination);
+  console.log(`[shutdown] 收到 ${signal}`);
+  const shutdownErrors = [];
+  if (startupPromise) {
+    try {
+      await startupPromise;
+    } catch (error) {
+      shutdownErrors.push(error);
+    }
+  }
+  try {
+    await tunnelManager.shutdown();
+  } catch (error) {
+    shutdownErrors.push(error);
+  }
+  try {
+    await closeServers(servers);
+  } catch (error) {
+    shutdownErrors.push(error);
+  }
+  if (shutdownErrors.length > 0) {
+    throw new AggregateError(shutdownErrors, "服务关闭期间发生错误");
+  }
+  process.exitCode = 0;
+}
 
-await Promise.all(servers.map((entry) => listen(entry.server, entry.host, entry.port, entry.label)));
+function handleTermination() {
+  handleShutdownSignal("SIGTERM");
+}
+
+function handleInterrupt() {
+  handleShutdownSignal("SIGINT");
+}
+
+function handleShutdownSignal(signal) {
+  void shutdown(signal).catch((error) => {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error(`[shutdown] 关闭服务失败: ${message}`);
+    process.exitCode = 1;
+  });
+}
+
+process.once("SIGINT", handleInterrupt);
+process.once("SIGTERM", handleTermination);
+
+startupPromise = startServers(servers).catch(async (error) => {
+  try {
+    await tunnelManager.shutdown();
+  } catch (shutdownError) {
+    throw new AggregateError(
+      [error, shutdownError],
+      "Ssh_text_attach 服务启动失败且 SSH 隧道清理未完成",
+    );
+  }
+  throw error;
+});
+await startupPromise;

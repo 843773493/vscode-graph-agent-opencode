@@ -62,9 +62,11 @@ class ModelStreamTransportController:
                 raise ModelStreamError("model stream transport owner 已关闭")
             if self.client is not None:
                 return
-            import litellm
-            import litellm.llms.custom_httpx.llm_http_handler as litellm_http_handler
-            from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+            from app.runtime.litellm_runtime import (
+                AsyncHTTPHandler,
+                litellm,
+                litellm_http_handler,
+            )
 
             if litellm.aclient_session is not None:
                 raise ModelStreamError(
@@ -107,8 +109,7 @@ class ModelStreamTransportController:
             client = self.client
             if client is None:
                 return
-            import litellm
-            import litellm.llms.custom_httpx.llm_http_handler as litellm_http_handler
+            from app.runtime.litellm_runtime import litellm, litellm_http_handler
 
             litellm_http_handler.get_async_httpx_client = self._previous_async_client_factory
             if litellm.aclient_session is client:

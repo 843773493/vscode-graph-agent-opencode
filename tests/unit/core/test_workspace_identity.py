@@ -1,4 +1,5 @@
 import json
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -10,7 +11,6 @@ from app.core.workspace_identity import (
     load_or_create_workspace_id,
     workspace_identity_path,
 )
-from tests.support.workspaces import prepare_default_test_workspace
 
 
 def _run_workspace_identity_cli(*arguments: str) -> subprocess.CompletedProcess[str]:
@@ -36,11 +36,11 @@ def cli_workspace(request: pytest.FixtureRequest) -> Path:
         / "out/tests/unit/core/test_workspace_identity/workspace"
         / request.node.name
     )
-    template_root = Path.cwd() / "tests/fixtures/workspaces/default_test_workspace"
-    return prepare_default_test_workspace(
-        workspace_root=workspace_root,
-        template_root=template_root,
-    )
+    if workspace_root.exists():
+        shutil.rmtree(workspace_root)
+    workspace_root.mkdir(parents=True)
+    (workspace_root / ".boxteam").mkdir()
+    return workspace_root
 
 
 def test_workspace_identity_is_a_persistent_uuid4(tmp_path):

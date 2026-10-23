@@ -56,12 +56,12 @@ def test_metadata_api_serializes_identity_and_preserves_request_id(metadata_clie
 
 @pytest.mark.parametrize("endpoint,method", [("/api/v1/workspace", "get"), ("/api/v1/workspace/context", "get_context")])
 def test_metadata_api_preserves_paths_in_user_text_and_commands(metadata_client: TestClient, metadata_owner: SimpleNamespace, endpoint: str, method: str) -> None:
-    text = {"content": "/tmp/example", "command": ["/usr/bin/python", r"C:\Users\owner\input"],
+    expected_git_metadata = {"content": "/tmp/example", "command": ["/usr/bin/python", r"C:\Users\owner\input"],
         "changed_paths": ["/agent/provider"]}
-    getattr(metadata_owner, method).return_value.git.update(text)
+    getattr(metadata_owner, method).return_value.git.update(expected_git_metadata)
     response = metadata_client.get(endpoint)
     assert response.status_code == 200, response.text
-    assert response.json()["data"]["git"] == text
+    assert response.json()["data"]["git"] == expected_git_metadata
 
 
 @pytest.mark.parametrize("endpoint,method", [("/api/v1/workspace", "get"), ("/api/v1/workspace/context", "get_context")])

@@ -40,7 +40,7 @@ def integration_config_path(
 
 
 @pytest.mark.asyncio
-async def test_agent_uses_test_started_stateful_mini_mcp(
+async def test_agent_reuses_mini_mcp_state_across_tool_calls(
     integration_client: httpx.AsyncClient,
 ) -> None:
     servers_response = await integration_client.get("/api/v1/mcp/servers")
@@ -60,7 +60,7 @@ async def test_agent_uses_test_started_stateful_mini_mcp(
     assert create_response.status_code == 200
     session_id = create_response.json()["data"]["session_id"]
 
-    observed_results: list[str] = []
+    assistant_responses: list[str] = []
     for invocation_index in (1, 2):
         message_response = await integration_client.post(
             f"/api/v1/sessions/{session_id}/messages",
@@ -85,12 +85,12 @@ async def test_agent_uses_test_started_stateful_mini_mcp(
             f"/api/v1/sessions/{session_id}/messages"
         )
         assert messages_response.status_code == 200
-        observed_results.append(
+        assistant_responses.append(
             last_assistant_message(messages_response.json()["data"]["items"])
         )
 
-    assert "1" in observed_results[0]
-    assert "2" in observed_results[1]
+    assert "1" in assistant_responses[0]
+    assert "2" in assistant_responses[1]
 
     tools_response = await integration_client.get("/api/v1/tools")
     assert tools_response.status_code == 200

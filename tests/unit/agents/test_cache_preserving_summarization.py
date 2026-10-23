@@ -1147,14 +1147,20 @@ def test_untriggered_path_calls_handler_without_parent_argument_truncation() -> 
     )
     messages = [HumanMessage(content="写入"), tool_ai]
     observed: list[ModelRequest] = []
+    effective_message_reads: list[ModelRequest] = []
 
     class _UntriggeredStub:
         @staticmethod
-        def _prepare_cache_compaction(_: ModelRequest) -> None:
-            return None
+        def _prepare_cache_compaction(
+            _: ModelRequest,
+            *,
+            effective_messages: list | None = None,
+        ) -> None:
+            assert effective_messages is messages
 
         @staticmethod
-        def _get_effective_messages(_: ModelRequest) -> list:
+        def _get_effective_messages(request: ModelRequest) -> list:
+            effective_message_reads.append(request)
             return messages
 
     def handler(next_request: ModelRequest) -> ModelResponse:
@@ -1168,10 +1174,46 @@ def test_untriggered_path_calls_handler_without_parent_argument_truncation() -> 
     )
 
     assert isinstance(response, ModelResponse)
+    assert len(effective_message_reads) == 1
     assert observed[0].messages[1] is tool_ai
     assert observed[0].messages[1].tool_calls[0]["args"]["content"] == (
         "必须原样保留" * 500
     )
+
+
+@pytest.mark.asyncio
+async def test_async_untriggered_path_reuses_effective_messages() -> None:
+    messages = [HumanMessage(content="保留完整上下文")]
+    effective_message_reads: list[ModelRequest] = []
+    observed: list[ModelRequest] = []
+
+    class _UntriggeredStub:
+        @staticmethod
+        def _prepare_cache_compaction(
+            _: ModelRequest,
+            *,
+            effective_messages: list | None = None,
+        ) -> None:
+            assert effective_messages is messages
+
+        @staticmethod
+        def _get_effective_messages(request: ModelRequest) -> list:
+            effective_message_reads.append(request)
+            return messages
+
+    async def handler(request: ModelRequest) -> ModelResponse:
+        observed.append(request)
+        return ModelResponse(result=[AIMessage(content="完成")])
+
+    response = await CachePreservingSummarizationMiddleware.awrap_model_call(
+        _UntriggeredStub(),  # type: ignore[arg-type]
+        ModelRequest(model=None, messages=messages),
+        handler,
+    )
+
+    assert isinstance(response, ModelResponse)
+    assert len(effective_message_reads) == 1
+    assert observed[0].messages is messages
 
 
 def test_compaction_references_callable_history_tool_without_persisting_archive_location(preflight_runtime: SimpleNamespace) -> None:
@@ -1187,8 +1229,16 @@ def test_compaction_references_callable_history_tool_without_persisting_archive_
         _build_summary_message = staticmethod(CachePreservingSummarizationMiddleware._build_summary_message)
 
         @staticmethod
-        def _prepare_cache_compaction(_: ModelRequest):
+        def _prepare_cache_compaction(
+            _: ModelRequest,
+            *,
+            effective_messages: list | None = None,
+        ):
             return before, partition
+
+        @staticmethod
+        def _get_effective_messages(_: ModelRequest) -> list:
+            return before
 
         @staticmethod
         def _get_backend(*_):
@@ -1228,8 +1278,14 @@ def test_forced_compaction_without_safe_partition_clears_one_shot_flag() -> None
         @staticmethod
         def _prepare_cache_compaction(
             _: ModelRequest,
+            *,
+            effective_messages: list | None = None,
         ) -> tuple[list, None]:
             return messages, None
+
+        @staticmethod
+        def _get_effective_messages(_: ModelRequest) -> list:
+            return messages
 
         @staticmethod
         def _handle_unavailable_forced_compaction(
@@ -1270,8 +1326,16 @@ def test_forced_compaction_summary_failure_falls_back_to_original_context() -> N
 
     class _SummaryFailureStub:
         @staticmethod
-        def _prepare_cache_compaction(_: ModelRequest) -> tuple[list, CachePreservingPartition]:
+        def _prepare_cache_compaction(
+            _: ModelRequest,
+            *,
+            effective_messages: list | None = None,
+        ) -> tuple[list, CachePreservingPartition]:
             return messages, partition
+
+        @staticmethod
+        def _get_effective_messages(_: ModelRequest) -> list:
+            return messages
 
         @staticmethod
         def _get_backend(*_) -> object:
@@ -1328,8 +1392,16 @@ async def test_forced_compaction_async_summary_failure_falls_back_to_original_co
 
     class _AsyncSummaryFailureStub:
         @staticmethod
-        def _prepare_cache_compaction(_: ModelRequest) -> tuple[list, CachePreservingPartition]:
+        def _prepare_cache_compaction(
+            _: ModelRequest,
+            *,
+            effective_messages: list | None = None,
+        ) -> tuple[list, CachePreservingPartition]:
             return messages, partition
+
+        @staticmethod
+        def _get_effective_messages(_: ModelRequest) -> list:
+            return messages
 
         @staticmethod
         def _get_backend(*_) -> object:
@@ -1443,6 +1515,8 @@ async def test_async_compaction_uses_context_activity_handler(preflight_runtime:
         @staticmethod
         def _prepare_cache_compaction(
             _: ModelRequest,
+            *,
+            effective_messages: list | None = None,
         ) -> tuple[list, CachePreservingPartition]:
             return messages, partition
 

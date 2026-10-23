@@ -14,14 +14,33 @@ import httpx
 import pytest
 
 from tests.harness.python.run_context import TestRunContext
+from tests.support.ports import integration_port_block_for_file
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
     acquire_gateway_guest,
     close_gateway_process,
+    reset_gateway_persistent_state,
     start_gateway_process,
 )
-from tests.support.ports import integration_port_block_for_file
-from tests.support.processes.workspace import close_backend_process, start_backend_process
+from tests.support.processes.workspace import (
+    close_backend_process,
+    start_backend_process,
+)
+from tests.support.workspaces import prepare_default_test_workspace
+
+
+@pytest.fixture
+def integration_workspace_root_path(request: pytest.FixtureRequest) -> str:
+    """每个用例重置到完整模板，避免共享模块工作区累积导航与会话数据。"""
+    workspace = TestRunContext.from_test_file(Path(request.node.path)).workspace_root
+    reset_gateway_persistent_state(workspace_root=workspace)
+    project_root = Path.cwd().resolve()
+    prepare_default_test_workspace(
+        workspace_root=workspace,
+        template_root=project_root / "tests/fixtures/workspaces/default_test_workspace",
+        shared_skill_root=project_root / "resources/skills",
+    )
+    return str(workspace)
 
 
 @pytest.fixture
@@ -31,20 +50,77 @@ async def navigation_measurement_stack(
 ) -> AsyncIterator[tuple[TestRunContext, httpx.AsyncClient]]:
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
     workspace = Path(integration_workspace_root_path)
-    for index in range(200):
-        directory = workspace / f"d{index:03d}"
-        directory.mkdir()
-        for child in range(3):
-            (directory / f"seed_{child}.txt").write_text("正式量化目录内容\n", encoding="utf-8")
-    (workspace / "concurrent").mkdir()
-    sources = workspace / "a_sources"
-    sources.mkdir()
-    for kind in ("paste", "copy"):
-        for expanded in (1, 20, 200):
-            for index in range(20):
-                (sources / f"{kind}_{expanded}_{index:03d}.txt").write_text(
-                    "正式量化复制内容\n", encoding="utf-8"
+    default_workload_profile = (
+        "concurrent-only"
+        if os.environ.get("BOXTEAM_NAVIGATION_FOCUS") == "concurrent"
+        else "full-measurement"
+    )
+    workload_profile = getattr(request, "param", default_workload_profile)
+    if workload_profile not in {
+        "full-measurement",
+        "minimal-measurement",
+        "concurrent-only",
+        "observation-only",
+    }:
+        raise ValueError(f"未知导航量化 fixture profile: {workload_profile!r}")
+    if workload_profile != "observation-only":
+        if workload_profile == "full-measurement":
+            (
+                numbered_measurement_directory_count,
+                seed_files_per_numbered_directory,
+                source_expansion_levels,
+                source_samples_per_kind_per_expansion,
+            ) = (
+                200,
+                3,
+                (1, 20, 200),
+                20,
+            )
+        elif workload_profile == "minimal-measurement":
+            (
+                numbered_measurement_directory_count,
+                seed_files_per_numbered_directory,
+                source_expansion_levels,
+                source_samples_per_kind_per_expansion,
+            ) = (
+                1,
+                0,
+                (1,),
+                1,
+            )
+        else:
+            (
+                numbered_measurement_directory_count,
+                seed_files_per_numbered_directory,
+                source_expansion_levels,
+                source_samples_per_kind_per_expansion,
+            ) = (
+                1,
+                0,
+                (),
+                0,
+            )
+        for directory_index in range(numbered_measurement_directory_count):
+            directory = workspace / f"d{directory_index:03d}"
+            directory.mkdir()
+            for seed_file_index in range(seed_files_per_numbered_directory):
+                (directory / f"seed_{seed_file_index}.txt").write_text(
+                    "正式量化目录内容\n", encoding="utf-8"
                 )
+        (workspace / "concurrent").mkdir()
+        if source_samples_per_kind_per_expansion:
+            source_files_root = workspace / "a_sources"
+            source_files_root.mkdir()
+            for source_operation_kind in ("paste", "copy"):
+                for expanded_directory_count in source_expansion_levels:
+                    for source_sample_index in range(source_samples_per_kind_per_expansion):
+                        source_filename = (
+                            f"{source_operation_kind}_{expanded_directory_count}_"
+                            f"{source_sample_index:03d}.txt"
+                        )
+                        (source_files_root / source_filename).write_text(
+                            "正式量化复制内容\n", encoding="utf-8"
+                        )
     ports = integration_port_block_for_file(Path(request.node.path))
     backend = start_backend_process(
         workspace_root=str(workspace), port=ports.port(0), log_name="measurements",
@@ -148,8 +224,9 @@ async def test_navigation_mutation_measurement_gate(
             "workspaceNodeId": workspace_node["node_id"], "gatewayFolderIds": folders[:2],
             "cookies": [{"name": cookie.name, "value": cookie.value} for cookie in client.cookies.jar],
             "observationHeaders": dict(LOCAL_TOKEN_HEADERS),
-            "seed_counts": {"created_sessions": 1, "workspace_directories": 200,
-                            "workspace_source_files": 120, "gateway_folders": len(folders)},
+            "fixture_counts": {"created_sessions": 1, "numbered_measurement_directories": 1,
+                                "numbered_directory_seed_files": 0,
+                                "copy_paste_source_files": 0, "gateway_folders": len(folders)},
         }
         configuration_path = context.artifacts_dir / "concurrent-configuration.json"
         configuration_path.write_text(json.dumps(configuration, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
@@ -230,8 +307,9 @@ async def test_navigation_mutation_measurement_gate(
         "workspaceNodeId": workspace_node["node_id"], "gatewayFolderIds": folders[:2],
         "cookies": [{"name": cookie.name, "value": cookie.value} for cookie in client.cookies.jar],
         "observationHeaders": dict(LOCAL_TOKEN_HEADERS),
-        "seed_counts": {"created_sessions": 200, "workspace_directories": 200,
-                        "workspace_source_files": 120, "gateway_folders": len(folders)},
+        "fixture_counts": {"created_sessions": 200, "numbered_measurement_directories": 200,
+                            "numbered_directory_seed_files": 600,
+                            "copy_paste_source_files": 120, "gateway_folders": len(folders)},
     }
     configuration_path = context.artifacts_dir / "configuration.json"
     configuration_path.write_text(json.dumps(configuration, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
@@ -308,7 +386,11 @@ async def test_navigation_mutation_measurement_gate(
     context.write_result("passed", {"file_gate": measurements["file_gate"], "sample_count": 300})
 
 
-@pytest.mark.parametrize("navigation_measurement_stack", [pytest.param(True, id="minimal")], indirect=True)
+@pytest.mark.parametrize(
+    "navigation_measurement_stack",
+    [pytest.param("minimal-measurement", id="minimal")],
+    indirect=True,
+)
 @pytest.mark.asyncio
 async def test_navigation_mutation_measurement_minimal_samples(
     navigation_measurement_stack: tuple[TestRunContext, httpx.AsyncClient],
@@ -336,7 +418,9 @@ async def test_navigation_mutation_measurement_minimal_samples(
         "workspaceNodeId": workspace_node["node_id"], "gatewayFolderIds": folders,
         "cookies": [{"name": cookie.name, "value": cookie.value} for cookie in client.cookies.jar],
         "observationHeaders": dict(LOCAL_TOKEN_HEADERS),
-        "seed_counts": {"created_sessions": 1, "workspace_directories": 200, "gateway_folders": len(folders)},
+        "fixture_counts": {"created_sessions": 1, "numbered_measurement_directories": 1,
+                            "numbered_directory_seed_files": 0,
+                            "copy_paste_source_files": 2, "gateway_folders": len(folders)},
     }
     configuration_path = context.artifacts_dir / "minimal-configuration.json"
     configuration_path.write_text(json.dumps(configuration, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
@@ -542,6 +626,11 @@ async def test_navigation_mutation_measurement_minimal_samples(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "navigation_measurement_stack",
+    [pytest.param("observation-only", id="observation-only")],
+    indirect=True,
+)
 async def test_navigation_observation_requests_use_fixture_credentials(
     request: pytest.FixtureRequest,
     navigation_measurement_stack: tuple[TestRunContext, httpx.AsyncClient],

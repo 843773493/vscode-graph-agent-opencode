@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections import deque
 
 import pytest
 
@@ -36,9 +37,7 @@ def test_channel_name_helpers_cover_all_six_kinds() -> None:
         channel_name(CONFIG_LIFECYCLE_CHANNEL_KIND, "workspace")
         == "config.lifecycle/workspace"
     )
-    assert (
-        channel_name(CONTEXT_SOURCE_CHANNEL_KIND, "ws-1") == "context.source/ws-1"
-    )
+    assert channel_name(CONTEXT_SOURCE_CHANNEL_KIND, "ws-1") == "context.source/ws-1"
     assert mcp_catalog_channel_name() == "mcp.catalog/workspace"
     assert CHANNEL_KINDS == frozenset(
         {
@@ -75,17 +74,18 @@ def test_channel_name_rejects_invalid_kind_and_parameter() -> None:
         parse_channel_name("unknown.kind/param")
 
 
-def test_channels_are_isolated_fault_domains() -> None:
+def test_channels_are_isolated_fault_domains(
+    event_channel_service: EventChannelService,
+) -> None:
     """一条 channel 的订阅者溢出不得影响其它 channel 的订阅者与 sequence。"""
-    service = EventChannelService()
-    noisy = service.ensure_channel(
+    noisy = event_channel_service.ensure_channel(
         EventChannelSpec(
             name=channel_name(RESOURCE_OBSERVE_CHANNEL_KIND, "*"),
             overflow_policy="gap",
             max_queue_size=1,
         )
     )
-    quiet = service.ensure_channel(
+    quiet = event_channel_service.ensure_channel(
         EventChannelSpec(
             name=channel_name(RESOURCE_STATE_CHANNEL_KIND, "debug"),
             overflow_policy="gap",
@@ -112,10 +112,11 @@ def test_channels_are_isolated_fault_domains() -> None:
     assert noisy_sub.pending()[0].gap is True
 
 
-def test_gap_overflow_drops_oldest_marks_gap_and_recovers() -> None:
+def test_gap_overflow_drops_oldest_marks_gap_and_recovers(
+    event_channel_service: EventChannelService,
+) -> None:
     """gap 策略：丢最旧一条 + gap 标记 + 消费后恢复投递（与既有通道语义一致）。"""
-    service = EventChannelService()
-    channel = service.ensure_channel(
+    channel = event_channel_service.ensure_channel(
         EventChannelSpec(
             name=channel_name(RESOURCE_OBSERVE_CHANNEL_KIND, "*"),
             overflow_policy="gap",
@@ -137,9 +138,10 @@ def test_gap_overflow_drops_oldest_marks_gap_and_recovers() -> None:
     assert [d.event for d in subscription.pending()] == ["r3"]
 
 
-def test_gap_overflow_keeps_single_gap_marker_while_overflow_persists() -> None:
-    service = EventChannelService()
-    channel = service.ensure_channel(
+def test_gap_overflow_keeps_single_gap_marker_while_overflow_persists(
+    event_channel_service: EventChannelService,
+) -> None:
+    channel = event_channel_service.ensure_channel(
         EventChannelSpec(
             name=channel_name(RESOURCE_OBSERVE_CHANNEL_KIND, "*"),
             overflow_policy="gap",
@@ -160,10 +162,11 @@ def test_gap_overflow_keeps_single_gap_marker_while_overflow_persists() -> None:
     assert deliveries[0].gap is True
 
 
-async def test_fail_closed_overflow_removes_subscriber_and_raises_on_next() -> None:
+async def test_fail_closed_overflow_removes_subscriber_and_raises_on_next(
+    event_channel_service: EventChannelService,
+) -> None:
     """fail_closed 策略：队列满即记录溢出错误并从后续投递移除。"""
-    service = EventChannelService()
-    channel = service.ensure_channel(
+    channel = event_channel_service.ensure_channel(
         EventChannelSpec(
             name=channel_name(JOB_EVENTS_CHANNEL_KIND, "job_1"),
             overflow_policy="fail_closed",
@@ -197,9 +200,10 @@ async def test_fail_closed_overflow_removes_subscriber_and_raises_on_next() -> N
     ]
 
 
-async def test_pending_raises_after_fail_closed_overflow() -> None:
-    service = EventChannelService()
-    channel = service.ensure_channel(
+async def test_pending_raises_after_fail_closed_overflow(
+    event_channel_service: EventChannelService,
+) -> None:
+    channel = event_channel_service.ensure_channel(
         EventChannelSpec(
             name=channel_name(JOB_EVENTS_CHANNEL_KIND, "job_2"),
             overflow_policy="fail_closed",
@@ -213,10 +217,11 @@ async def test_pending_raises_after_fail_closed_overflow() -> None:
         subscription.pending()
 
 
-def test_sink_subscriber_is_removed_when_offer_returns_false() -> None:
+def test_sink_subscriber_is_removed_when_offer_returns_false(
+    event_channel_service: EventChannelService,
+) -> None:
     """外部 sink 订阅者：offer 返回 False 即被 fail_closed 移除。"""
-    service = EventChannelService()
-    channel = service.ensure_channel(
+    channel = event_channel_service.ensure_channel(
         EventChannelSpec(
             name=channel_name(JOB_EVENTS_CHANNEL_KIND, "job_3"),
             overflow_policy="fail_closed",
@@ -248,9 +253,10 @@ def test_sink_subscriber_is_removed_when_offer_returns_false() -> None:
     assert subscription_id not in channel.subscriber_ids
 
 
-def test_subscribe_with_sink_requires_fail_closed_channel_and_offer_method() -> None:
-    service = EventChannelService()
-    gap_channel = service.ensure_channel(
+def test_subscribe_with_sink_requires_fail_closed_channel_and_offer_method(
+    event_channel_service: EventChannelService,
+) -> None:
+    gap_channel = event_channel_service.ensure_channel(
         EventChannelSpec(
             name=channel_name(RESOURCE_OBSERVE_CHANNEL_KIND, "*"),
             overflow_policy="gap",
@@ -259,7 +265,7 @@ def test_subscribe_with_sink_requires_fail_closed_channel_and_offer_method() -> 
     with pytest.raises(ValueError, match="只支持 fail_closed"):
         gap_channel.subscribe_with_sink(object(), label="bad")
 
-    fail_closed = service.ensure_channel(
+    fail_closed = event_channel_service.ensure_channel(
         EventChannelSpec(
             name=channel_name(JOB_EVENTS_CHANNEL_KIND, "job_4"),
             overflow_policy="fail_closed",
@@ -269,10 +275,9 @@ def test_subscribe_with_sink_requires_fail_closed_channel_and_offer_method() -> 
         fail_closed.subscribe_with_sink(object(), label="bad")
 
 
-def test_history_and_cursor_replay() -> None:
+def test_history_and_cursor_replay(event_channel_service: EventChannelService) -> None:
     """短期历史 + cursor 重放：按 sequence 重放，环形缓冲覆盖后不可重放。"""
-    service = EventChannelService()
-    channel = service.ensure_channel(
+    channel = event_channel_service.ensure_channel(
         EventChannelSpec(
             name=channel_name(JOB_EVENTS_CHANNEL_KIND, "job_5"),
             overflow_policy="fail_closed",
@@ -302,9 +307,45 @@ def test_history_and_cursor_replay() -> None:
         channel.replay(after_sequence=-1)
 
 
-def test_replay_on_historyless_channel_raises() -> None:
-    service = EventChannelService()
-    channel = service.ensure_channel(
+def test_replay_reads_only_the_requested_tail_and_cursor_boundary(
+    event_channel_service: EventChannelService,
+) -> None:
+    channel = event_channel_service.ensure_channel(
+        EventChannelSpec(
+            name=channel_name(JOB_EVENTS_CHANNEL_KIND, "large-history"),
+            overflow_policy="fail_closed",
+            history_size=1000,
+        )
+    )
+    for index in range(1000):
+        channel.publish(index)
+
+    class CountingHistory(deque):
+        def __init__(self, values):
+            super().__init__(values)
+            self.visited = 0
+
+        def __reversed__(self):
+            for delivery in super().__reversed__():
+                self.visited += 1
+                yield delivery
+
+    history = CountingHistory(channel._history)
+    channel._history = history
+
+    assert [delivery.event for delivery in channel.replay(limit=3)] == [997, 998, 999]
+    assert history.visited == 3
+
+    history.visited = 0
+    replayed = channel.replay(after_sequence=999, limit=3)
+    assert [delivery.event for delivery in replayed] == [999]
+    assert history.visited == 2
+
+
+def test_replay_on_historyless_channel_raises(
+    event_channel_service: EventChannelService,
+) -> None:
+    channel = event_channel_service.ensure_channel(
         EventChannelSpec(
             name=channel_name(RESOURCE_OBSERVE_CHANNEL_KIND, "*"),
             overflow_policy="gap",
@@ -316,9 +357,10 @@ def test_replay_on_historyless_channel_raises() -> None:
         channel.replay()
 
 
-def test_unsubscribe_stops_delivery_but_keeps_pending() -> None:
-    service = EventChannelService()
-    channel = service.ensure_channel(
+def test_unsubscribe_stops_delivery_but_keeps_pending(
+    event_channel_service: EventChannelService,
+) -> None:
+    channel = event_channel_service.ensure_channel(
         EventChannelSpec(
             name=channel_name(RESOURCE_OBSERVE_CHANNEL_KIND, "*"),
             overflow_policy="gap",
@@ -336,9 +378,10 @@ def test_unsubscribe_stops_delivery_but_keeps_pending() -> None:
         channel.unsubscribe(123)  # type: ignore[arg-type]
 
 
-def test_delivery_sequence_is_monotonic_and_shared_per_publish() -> None:
-    service = EventChannelService()
-    channel = service.ensure_channel(
+def test_delivery_sequence_is_monotonic_and_shared_per_publish(
+    event_channel_service: EventChannelService,
+) -> None:
+    channel = event_channel_service.ensure_channel(
         EventChannelSpec(
             name=channel_name(RESOURCE_STATE_CHANNEL_KIND, "debug"),
             overflow_policy="gap",
@@ -356,23 +399,24 @@ def test_delivery_sequence_is_monotonic_and_shared_per_publish() -> None:
     assert channel.last_sequence == 2
 
 
-def test_service_channel_access_and_spec_conflict_fail_fast() -> None:
-    service = EventChannelService()
+def test_service_channel_access_and_spec_conflict_fail_fast(
+    event_channel_service: EventChannelService,
+) -> None:
     spec = EventChannelSpec(
         name=channel_name(RESOURCE_STATE_CHANNEL_KIND, "debug"),
         overflow_policy="gap",
         max_queue_size=4,
     )
-    channel = service.ensure_channel(spec)
-    assert service.channel("resource.state/debug") is channel
-    assert service.find_channel("resource.state/debug") is channel
-    assert service.find_channel("resource.state/other") is None
-    assert service.channel_names == ("resource.state/debug",)
-    assert service.channels == (channel,)
+    channel = event_channel_service.ensure_channel(spec)
+    assert event_channel_service.channel("resource.state/debug") is channel
+    assert event_channel_service.find_channel("resource.state/debug") is channel
+    assert event_channel_service.find_channel("resource.state/other") is None
+    assert event_channel_service.channel_names == ("resource.state/debug",)
+    assert event_channel_service.channels == (channel,)
     with pytest.raises(KeyError, match="channel 不存在"):
-        service.channel("resource.state/other")
+        event_channel_service.channel("resource.state/other")
     with pytest.raises(EventChannelSpecConflictError, match="spec 冲突"):
-        service.ensure_channel(
+        event_channel_service.ensure_channel(
             EventChannelSpec(
                 name=channel_name(RESOURCE_STATE_CHANNEL_KIND, "debug"),
                 overflow_policy="gap",
@@ -380,11 +424,12 @@ def test_service_channel_access_and_spec_conflict_fail_fast() -> None:
             )
         )
     # 完全相同的 spec 幂等返回同一 channel。
-    assert service.ensure_channel(spec) is channel
+    assert event_channel_service.ensure_channel(spec) is channel
 
 
-def test_service_and_spec_reject_invalid_arguments() -> None:
-    service = EventChannelService()
+def test_service_and_spec_reject_invalid_arguments(
+    event_channel_service: EventChannelService,
+) -> None:
     with pytest.raises(ValueError, match="'kind/参数' 形式"):
         EventChannelSpec(name="invalid", overflow_policy="gap")
     with pytest.raises(ValueError, match="未知 channel kind"):
@@ -405,8 +450,8 @@ def test_service_and_spec_reject_invalid_arguments() -> None:
             history_size=-1,
         )
     with pytest.raises(TypeError, match="EventChannelSpec"):
-        service.ensure_channel("resource.observe/*")  # type: ignore[arg-type]
-    channel = service.ensure_channel(
+        event_channel_service.ensure_channel("resource.observe/*")  # type: ignore[arg-type]
+    channel = event_channel_service.ensure_channel(
         EventChannelSpec(name=channel_name(RESOURCE_OBSERVE_CHANNEL_KIND, "*"))
     )
     with pytest.raises(ValueError, match="非空 label"):
@@ -420,10 +465,11 @@ def test_service_and_spec_reject_invalid_arguments() -> None:
         channel.publish(None)  # type: ignore[arg-type]
 
 
-async def test_next_and_pending_remain_usable_while_released() -> None:
+async def test_next_and_pending_remain_usable_while_released(
+    event_channel_service: EventChannelService,
+) -> None:
     """释放后已排队投递仍可读取；空队列的 next() 继续等待（既有语义）。"""
-    service = EventChannelService()
-    channel = service.ensure_channel(
+    channel = event_channel_service.ensure_channel(
         EventChannelSpec(
             name=channel_name(RESOURCE_OBSERVE_CHANNEL_KIND, "*"),
             overflow_policy="gap",

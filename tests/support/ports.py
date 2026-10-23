@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
+from types import MappingProxyType
 from typing import ClassVar
 
 TEST_FILE_PORT_BLOCK_SIZE = 100
@@ -19,9 +21,13 @@ E2E_PORT_END = E2E_PORT_START + TEST_FILE_PORT_BLOCK_SIZE * E2E_PORT_MAX_FILES -
 
 
 @lru_cache(maxsize=16)
-def _test_files_for_root(root: Path) -> tuple[Path, ...]:
-    """pytest 单次运行内测试树固定，复用按测试文件排序的目录扫描。"""
-    return tuple(sorted(path.resolve() for path in root.rglob("test_*.py")))
+def _test_file_indexes_for_root(root: Path) -> tuple[int, Mapping[Path, int]]:
+    """缓存测试文件数量与首次排序序号，供重复端口查询使用。"""
+    test_files = tuple(sorted(path.resolve() for path in root.rglob("test_*.py")))
+    first_index_by_path: dict[Path, int] = {}
+    for index, test_file in enumerate(test_files):
+        first_index_by_path.setdefault(test_file, index)
+    return len(test_files), MappingProxyType(first_index_by_path)
 
 
 @dataclass(frozen=True, slots=True)
@@ -58,15 +64,15 @@ def port_block_for_file(
 ) -> TestFilePortBlock:
     root = tests_root.resolve()
     resolved_file = test_file_path.resolve()
-    test_files = _test_files_for_root(root)
-    if resolved_file not in test_files:
+    test_file_count, first_index_by_path = _test_file_indexes_for_root(root)
+    index = first_index_by_path.get(resolved_file)
+    if index is None:
         raise ValueError(f"未能为 {test_layer} 测试文件分配端口块: {resolved_file}")
 
-    index = test_files.index(resolved_file)
     if index >= max_files:
         raise RuntimeError(
             f"{test_layer} 测试文件数量超过端口块容量: "
-            f"count={len(test_files)}, max={max_files}"
+            f"count={test_file_count}, max={max_files}"
         )
 
     start = port_start + index * TEST_FILE_PORT_BLOCK_SIZE

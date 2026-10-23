@@ -60,10 +60,12 @@ async def _next_event(
     return event
 
 
-async def test_start_discovers_namespaced_tools_and_calls_them(tmp_path: Path) -> None:
-    event_service = EventChannelService()
+async def test_start_discovers_namespaced_tools_and_calls_them(
+    tmp_path: Path,
+    event_channel_service: EventChannelService,
+) -> None:
     factory = _FakeSessionFactory(initial_tools={"mini": ["echo"]})
-    owner = _make_owner(tmp_path, factory, event_service)
+    owner = _make_owner(tmp_path, factory, event_channel_service)
 
     await owner.start()
     try:
@@ -84,12 +86,12 @@ async def test_start_discovers_namespaced_tools_and_calls_them(tmp_path: Path) -
 
 async def test_empty_catalog_publishes_fixed_envelope_and_relist_does_not_advance(
     tmp_path: Path,
+    event_channel_service: EventChannelService,
 ) -> None:
     """目录为空仍发布固定 envelope/revision；连续 relist payload 不变不推进。"""
-    event_service = EventChannelService()
     factory = _FakeSessionFactory(initial_tools={"mini": []})
-    owner = _make_owner(tmp_path, factory, event_service)
-    subscription = event_service.channel("mcp.catalog/workspace").subscribe(
+    owner = _make_owner(tmp_path, factory, event_channel_service)
+    subscription = event_channel_service.channel("mcp.catalog/workspace").subscribe(
         label="test"
     )
 
@@ -107,7 +109,7 @@ async def test_empty_catalog_publishes_fixed_envelope_and_relist_does_not_advanc
         other = _make_owner(
             tmp_path,
             _FakeSessionFactory(initial_tools={"mini": []}),
-            event_service,
+            event_channel_service,
         )
         await other.start()
         try:
@@ -134,11 +136,11 @@ async def test_empty_catalog_publishes_fixed_envelope_and_relist_does_not_advanc
 
 async def test_list_changed_publishes_new_revision_and_removal_tombstone(
     tmp_path: Path,
+    event_channel_service: EventChannelService,
 ) -> None:
-    event_service = EventChannelService()
     factory = _FakeSessionFactory(initial_tools={"mini": ["echo"]})
-    owner = _make_owner(tmp_path, factory, event_service)
-    subscription = event_service.channel("mcp.catalog/workspace").subscribe(
+    owner = _make_owner(tmp_path, factory, event_channel_service)
+    subscription = event_channel_service.channel("mcp.catalog/workspace").subscribe(
         label="test"
     )
 
@@ -172,17 +174,17 @@ async def test_list_changed_publishes_new_revision_and_removal_tombstone(
 
 async def test_stale_generation_callback_is_rejected_by_generation_lease(
     tmp_path: Path,
+    event_channel_service: EventChannelService,
 ) -> None:
-    event_service = EventChannelService()
     factory = _FakeSessionFactory(initial_tools={"mini": ["echo"]})
-    owner = _make_owner(tmp_path, factory, event_service)
+    owner = _make_owner(tmp_path, factory, event_channel_service)
 
     await owner.start()
     try:
         revision = owner.catalog_revision()
-        subscription = event_service.channel(
-            "mcp.catalog/workspace"
-        ).subscribe(label="test")
+        subscription = event_channel_service.channel("mcp.catalog/workspace").subscribe(
+            label="test"
+        )
 
         # 模拟旧连接回调：连接代际已推进，callback 仍持旧 generation。
         runtime = owner._runtimes["mini"]
@@ -208,10 +210,10 @@ async def test_stale_generation_callback_is_rejected_by_generation_lease(
 
 async def test_server_without_notifications_relists_at_activation_boundary(
     tmp_path: Path,
+    event_channel_service: EventChannelService,
 ) -> None:
-    event_service = EventChannelService()
     factory = _FakeSessionFactory(initial_tools={"mini": ["echo"]})
-    owner = _make_owner(tmp_path, factory, event_service)
+    owner = _make_owner(tmp_path, factory, event_channel_service)
 
     await owner.start()
     try:
@@ -234,14 +236,16 @@ async def test_server_without_notifications_relists_at_activation_boundary(
         await owner.shutdown()
 
 
-async def test_catalog_events_stay_out_of_job_events(tmp_path: Path) -> None:
-    event_service = EventChannelService()
-    job_channel = event_service.ensure_channel(
+async def test_catalog_events_stay_out_of_job_events(
+    tmp_path: Path,
+    event_channel_service: EventChannelService,
+) -> None:
+    job_channel = event_channel_service.ensure_channel(
         EventChannelSpec(name="job.events/job-1", overflow_policy="fail_closed")
     )
     job_subscription = job_channel.subscribe(label="job-test")
     factory = _FakeSessionFactory(initial_tools={"mini": ["echo"]})
-    owner = _make_owner(tmp_path, factory, event_service)
+    owner = _make_owner(tmp_path, factory, event_channel_service)
 
     await owner.start()
     try:
@@ -249,17 +253,22 @@ async def test_catalog_events_stay_out_of_job_events(tmp_path: Path) -> None:
         factory.notify_callbacks["mini"]()
         await _drain_pending_relists(owner)
         assert job_subscription.pending() == ()
-        assert "mcp.catalog/workspace" in event_service.channel_names
+        assert "mcp.catalog/workspace" in event_channel_service.channel_names
     finally:
         await owner.shutdown()
 
 
 async def test_explicit_refresh_keeps_entire_old_catalog_until_all_servers_validate(
     tmp_path: Path,
+    event_channel_service: EventChannelService,
 ) -> None:
     factory = _FakeSessionFactory(initial_tools={"alpha": ["old"], "beta": ["old"]})
-    events = EventChannelService()
-    owner = _make_owner(tmp_path, factory, events, _stdio_server("alpha") | _stdio_server("beta"))
+    owner = _make_owner(
+        tmp_path,
+        factory,
+        event_channel_service,
+        _stdio_server("alpha") | _stdio_server("beta"),
+    )
     await owner.start()
     try:
         for session in factory.sessions.values():
@@ -268,7 +277,9 @@ async def test_explicit_refresh_keeps_entire_old_catalog_until_all_servers_valid
         previous = owner.publication_snapshot()
         publications = []
         unsubscribe = owner.subscribe_publication(publications.append)
-        subscription = events.channel("mcp.catalog/workspace").subscribe(label="atomic-refresh")
+        subscription = event_channel_service.channel("mcp.catalog/workspace").subscribe(
+            label="atomic-refresh"
+        )
         factory.sessions["beta"].relist_error = RuntimeError("beta candidate invalid")
         with pytest.raises(McpCatalogRelistError, match="beta candidate invalid"):
             await owner.relist_servers_without_notifications()
@@ -283,8 +294,12 @@ async def test_explicit_refresh_keeps_entire_old_catalog_until_all_servers_valid
         available = [value for value in publications if value.status == "available"]
         assert len(available) == 1
         assert set(available[0].tools) == {"mcp__alpha__new", "mcp__beta__new"}
-        assert available[0].binding_ref.generation == previous.binding_ref.generation + 1
-        assert all(snapshot.last_relist_error is None for snapshot in owner.list_servers())
+        assert (
+            available[0].binding_ref.generation == previous.binding_ref.generation + 1
+        )
+        assert all(
+            snapshot.last_relist_error is None for snapshot in owner.list_servers()
+        )
         event = await _next_event(subscription)
         assert event.revision == available[0].binding_ref.catalog_revision
         assert event.server_id is None
@@ -295,10 +310,12 @@ async def test_explicit_refresh_keeps_entire_old_catalog_until_all_servers_valid
 
 
 async def test_overlapping_explicit_refreshes_each_publish_their_complete_result(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    event_channel_service: EventChannelService,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     factory = _FakeSessionFactory(initial_tools={"mini": ["old"]})
-    owner = _make_owner(tmp_path, factory, EventChannelService())
+    owner = _make_owner(tmp_path, factory, event_channel_service)
     await owner.start()
     release = asyncio.Event()
     task: asyncio.Task[None] | None = None
@@ -332,22 +349,29 @@ async def test_overlapping_explicit_refreshes_each_publish_their_complete_result
         assert not queued.done()
         release.set()
         await asyncio.wait_for(asyncio.gather(task, queued), timeout=2)
-        assert [set(value.tools) for value in publications if value.status == "available"] == [
-            {"mcp__mini__first"}, {"mcp__mini__second"},
+        assert [
+            set(value.tools) for value in publications if value.status == "available"
+        ] == [
+            {"mcp__mini__first"},
+            {"mcp__mini__second"},
         ]
         assert owner.get_tool_ids() == frozenset({"mcp__mini__second"})
         unsubscribe()
     finally:
         release.set()
-        await asyncio.gather(*(pending for pending in (task, queued) if pending), return_exceptions=True)
+        await asyncio.gather(
+            *(pending for pending in (task, queued) if pending), return_exceptions=True
+        )
         await owner.shutdown()
 
 
 async def test_explicit_refresh_reports_expired_connection_instead_of_success(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    event_channel_service: EventChannelService,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     factory = _FakeSessionFactory(initial_tools={"mini": ["old"]})
-    owner = _make_owner(tmp_path, factory, EventChannelService())
+    owner = _make_owner(tmp_path, factory, event_channel_service)
     await owner.start()
     release = asyncio.Event()
     task: asyncio.Task[None] | None = None

@@ -32,6 +32,15 @@ from app.services.infrastructure.session_message_idempotency_store import (
 )
 from app.services.orchestration.runtime_source_dispatcher import RuntimeSourceDispatcher
 
+_RESERVED_INTERNAL_METADATA_KEYS = frozenset(
+    {
+        "internal",
+        "structured_prompt_kind",
+        "structured_prompt_schema_version",
+        "internal_display_kind",
+    }
+)
+
 
 class SessionOrchestrator:
     def __init__(
@@ -85,7 +94,7 @@ class SessionOrchestrator:
         delivery_policy: DeliveryPolicy = "after_turn",
         idempotency_key: str | None = None,
     ) -> MessageRunAccepted:
-        self._reject_internal_message_on_user_path(content, metadata)
+        self._reject_internal_metadata_on_user_path(metadata)
         session = await self._session_service.get(session_id)
         message_request = MessageCreateRequest(
             role=MessageRole.user,
@@ -135,7 +144,7 @@ class SessionOrchestrator:
         metadata: dict[str, object] | None = None,
     ) -> MessageDTO:
         """生成稳定消息 DTO；调用方必须先写入业务账本再派发。"""
-        self._reject_internal_message_on_user_path(content, metadata)
+        self._reject_internal_metadata_on_user_path(metadata)
         self._session_service.path_resolver.resolve_thread_node(session_id, thread_id)
         return await self._job_service.run_session_preparation(
             session_id,
@@ -170,18 +179,12 @@ class SessionOrchestrator:
         )
 
     @staticmethod
-    def _reject_internal_message_on_user_path(
-        content: str,
+    def _reject_internal_metadata_on_user_path(
         metadata: dict[str, object] | None,
     ) -> None:
-        del content
-        reserved_metadata_keys = {
-            "internal",
-            "structured_prompt_kind",
-            "structured_prompt_schema_version",
-            "internal_display_kind",
-        }
-        if metadata is not None and reserved_metadata_keys & metadata.keys():
+        if metadata is not None and not _RESERVED_INTERNAL_METADATA_KEYS.isdisjoint(
+            metadata
+        ):
             raise ValueError(
                 "内部结构消息必须通过 create_and_run_internal 或 "
                 "prepare_internal_message 注入"
@@ -217,10 +220,7 @@ class SessionOrchestrator:
         logger.info("[session_orchestrator] create_message begin: session_id=%s", session_id)
         requested_agent_id = payload.run.agent_id if payload.run else None
         delivery_policy: DeliveryPolicy = payload.run.delivery_policy
-        self._reject_internal_message_on_user_path(
-            payload.message.content,
-            payload.message.metadata,
-        )
+        self._reject_internal_metadata_on_user_path(payload.message.metadata)
         return await self._create_and_dispatch(
             session_id,
             payload.message,

@@ -16,7 +16,8 @@ const SOCKET_RETRY_DELAY_MS = 50;
  * @property {boolean} attachedMessageSent attached消息是否已交给连接，不代表客户端已确认。
  * @property {"ack"|"socket"|null} blockedOn 当前停止发送的原因；等待ACK与等待socket可写分别恢复。
  * @property {ReturnType<typeof setTimeout>|null} socketRetryTimer socket拒收后的重试句柄，不是ACK超时。
- * @property {Array<{afterSequence: number, message: object, byteCount: number}>} controlQueue 按输出序号屏障排队的控制消息。
+ * @property {Array<{afterSequence: number, message: object, byteCount: number}|null>} controlQueue 按输出序号屏障排队的控制消息，已发送前缀置null。
+ * @property {number} controlQueueStartIndex 未发送控制消息在数组中的逻辑起点。
  * @property {number} controlQueueBytes 控制队列按JSON正文计费的UTF-8字节数。
  */
 
@@ -107,6 +108,7 @@ export class TerminalOutputMultiplexer {
       blockedOn: null,
       socketRetryTimer: null,
       controlQueue: [],
+      controlQueueStartIndex: 0,
       controlQueueBytes: 0,
     };
     this.clientFlowStates.set(client, clientFlow);
@@ -331,15 +333,27 @@ export class TerminalOutputMultiplexer {
 
   flushControlsThrough(client, clientFlow, sequence) {
     while (
-      clientFlow.controlQueue.length > 0
-      && clientFlow.controlQueue[0].afterSequence <= sequence
+      clientFlow.controlQueueStartIndex < clientFlow.controlQueue.length
+      && clientFlow.controlQueue[clientFlow.controlQueueStartIndex].afterSequence <= sequence
     ) {
-      if (!client.sendJson(clientFlow.controlQueue[0].message)) {
+      const controlMessage = clientFlow.controlQueue[clientFlow.controlQueueStartIndex];
+      if (!client.sendJson(controlMessage.message)) {
         this.scheduleSocketRetry(client, clientFlow);
         return false;
       }
-      const sent = clientFlow.controlQueue.shift();
-      clientFlow.controlQueueBytes = Math.max(clientFlow.controlQueueBytes - sent.byteCount, 0);
+      clientFlow.controlQueue[clientFlow.controlQueueStartIndex] = null;
+      clientFlow.controlQueueStartIndex += 1;
+      clientFlow.controlQueueBytes = Math.max(
+        clientFlow.controlQueueBytes - controlMessage.byteCount,
+        0,
+      );
+    }
+    if (
+      clientFlow.controlQueueStartIndex > 0
+      && clientFlow.controlQueueStartIndex * 2 >= clientFlow.controlQueue.length
+    ) {
+      clientFlow.controlQueue = clientFlow.controlQueue.slice(clientFlow.controlQueueStartIndex);
+      clientFlow.controlQueueStartIndex = 0;
     }
     return true;
   }

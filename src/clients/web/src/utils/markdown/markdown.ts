@@ -43,7 +43,7 @@ function isTableSeparator(line: string): boolean {
 }
 
 function isTableRow(line: string): boolean {
-  return parseTableRow(line).length > 1 && line.includes('|');
+  return line.includes('|') && parseTableRow(line).length > 1;
 }
 
 function renderTable(headers: string[], rows: string[][]): string {

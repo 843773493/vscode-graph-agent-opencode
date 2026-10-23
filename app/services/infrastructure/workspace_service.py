@@ -539,12 +539,17 @@ class WorkspaceService:
                 if Path(opener).name == "gio"
                 else [opener, str(target if target.is_dir() else target.parent)]
             )
+        process_group_options = (
+            {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}
+            if os.name == "nt"
+            else {"start_new_session": True}
+        )
         subprocess.Popen(
             command,
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
-            start_new_session=True,
+            **process_group_options,
         )
         return display_path
 

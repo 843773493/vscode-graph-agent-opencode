@@ -29,8 +29,8 @@ function section8ScenarioRegistry(surfaces, facts) {
     goal_owner: { default: true, run: () => runGoalOwner(surfaces.a) },
     session_page_selection: { default: true, run: () => runSessionPageSelection(surfaces.a) },
     child: { default: true, run: () => runChildFifoAndResidency(surfaces.a) },
-    background_mailbox: { default: true, run: () => runBackgroundMailboxRecovery(surfaces.a) },
     runtime_shared_resources: { default: true, run: () => runRuntimeSharedResources(surfaces.a) },
+    background_mailbox: { default: true, run: () => runBackgroundMailboxRecovery(surfaces.a) },
     team_turn: { default: true, run: async () => runTeamActivation(surfaces.a, "turn", await teamTarget()) },
     team_model_call: { default: true, run: async () => runTeamActivation(surfaces.c, "model_call", await teamTarget()) },
     mcp_turn: { default: true, run: () => runMcpActivation(surfaces.a, "turn") },
@@ -3681,6 +3681,14 @@ async function runLifecycleAdmissionDeletion(surfaces) {
         const controlAfter = await readDeletedControl(owner, deletion.operation, "SELECT (SELECT COUNT(*) FROM thread_catalog) AS threads,(SELECT COUNT(*) FROM thread_creation_records) AS creations,(SELECT COUNT(*) FROM communication_inbox) AS inbox,(SELECT COUNT(*) FROM thread_execution_intents) AS intents,(SELECT COUNT(*) FROM collaboration_fanouts) AS fanouts");
         assert.deepEqual(controlAfter, baseline, "独立控制失败不能旁生 thread/inbox/intent/fanout");
         const events = (await testControl({ action: "events" })).filter((event) => event.operation_id === admitted.operation_id);
+        assert.equal(admitted.phase, control.phase);
+        assert.equal(admitted.details.session_id, owner.sessionId);
+        assert.equal(admitted.details.thread_id, owner.threadId);
+        assert.equal(admitted.details.kind, kind);
+        await writeFile(`${requiredEnvironment("BOXTEAM_BROWSER_ARTIFACT_ROOT")}/lifecycle-control-${kind}-${operationFirst}.json`, JSON.stringify({
+          owner: { sessionId: owner.sessionId, threadId: owner.threadId }, barrier: control, admitted, events,
+          deletion: deletion.operation, before, after, leaseRows, terminal,
+        }, null, 2));
         let leaseAfter;
         if (operationFirst) {
           leaseAfter = await deletedLease(owner, deletion.operation, lease);
@@ -7729,6 +7737,9 @@ async function runRealCompaction(surface) {
       toolResponse(`compact-seed-${index}`, "read_file", { path: "README.md" }),
       finalResponse(`compact-seed-final-${index}`, `第 ${index} 轮已确认 README。${"这是待压缩的详细过程。".repeat(160)}`),
     ]));
+  const activationQuery = "SELECT a.assembly_id,a.turn_id,b.activation_snapshot_id,b.plan_hash,b.request_hash,b.bindings_hash,b.activation_provenance_hash,a.snapshot_json FROM context_assemblies a JOIN resource_activation_assembly_bindings b ON b.assembly_id=a.assembly_id WHERE a.status IN ('sealed','terminal') ORDER BY a.assembly_id";
+  const frozenBefore = await readRollout(owner, activationQuery);
+  assert.ok(frozenBefore.length >= prepared.length, "压缩前每个真实 Turn 必须已有封存资源绑定");
   const compactCall = { ...toolResponse("compact-real-tool", "compact_conversation", {}), usage: { input: 100000, output: 16 } };
   const actual = await completeOwnerTurn(owner, "压缩前文的详细过程，然后保留简短结果。", [
     compactCall, { label: "compact-summary-provider", text: "前面三轮均通过 read_file 核对 README，事实一致。" },
@@ -7768,8 +7779,37 @@ async function runRealCompaction(surface) {
   const sources = JSON.parse(await display.getAttribute("data-response-sources"));
   assert.deepEqual(sources.map(partCoordinate), summaries.map(partCoordinate));
   assert.ok((await display.innerText()).includes("README"));
-  return { sessionId: owner.sessionId, prepared, actual, summary: summaries[0], archiveRead,
-    compactedRequest: compactedRequest.identity, activity: turn.activity_stats };
+  const controls = await readRollout(owner,
+    "SELECT event.checkpoint_id,event.payload_json FROM control_events event JOIN checkpoints checkpoint ON checkpoint.checkpoint_id=event.checkpoint_id WHERE event.control_kind='checkpoint_created' AND checkpoint.checkpoint_kind='compaction' ORDER BY event.control_sequence");
+  assert.equal(controls.length, 1, "一次真实压缩必须提交唯一 compaction checkpoint control event");
+  const [control] = controls;
+  const refs = JSON.parse(control.payload_json).resource_activation_refs;
+  assert.ok(Array.isArray(refs) && refs.length >= frozenBefore.length);
+  assert.equal(new Set(refs.map((ref) => ref.assembly_id)).size, refs.length);
+  const frozenAtRestart = await readRollout(owner, activationQuery);
+  const frozenById = new Map(frozenAtRestart.map((row) => [row.assembly_id, row]));
+  for (const ref of refs) {
+    const { snapshot_json: _snapshot, ...binding } = frozenById.get(ref.assembly_id);
+    assert.deepEqual(ref, binding, "control 引用必须逐字段对应原封存 assembly");
+  }
+  for (const row of frozenBefore) {
+    assert.deepEqual(frozenById.get(row.assembly_id), row, "压缩不得改写旧 assembly bytes");
+    assert.ok(refs.some((ref) => ref.assembly_id === row.assembly_id), "被压缩的原资源引用不能丢失");
+  }
+  const reopen = await replaceNodePage(surface, [owner]);
+  const killed = await testControl({ action: "process", name: surface.name, operation: "kill" });
+  const restarted = await testControl({ action: "process", name: surface.name, operation: "start" });
+  assert.notEqual(killed.before_pid, restarted.after_pid);
+  await reopen();
+  await openOwner(owner);
+  const frozenAfter = await readRollout(owner, activationQuery);
+  assert.deepEqual(frozenAfter, frozenAtRestart, "硬重启只能恢复原封存 activation/assembly");
+  const restoredHistory = await loadThreadHistory(owner);
+  assert.deepEqual(restoredHistory.items, history.items, "压缩后的历史在实际 backend 重启后保持原身份/顺序/统计");
+  const evidence = await verifyOwnerTurns(owner);
+  return { sessionId: owner.sessionId, threadId: owner.threadId, prepared, actual, summary: summaries[0], archiveRead,
+    compactedRequest: compactedRequest.identity, activity: turn.activity_stats,
+    activationRecovery: { frozenBefore, frozenAtRestart, frozenAfter, control, refs, killed, restarted, evidence } };
 }
 
 async function runBackgroundMailboxRecovery(surface) {
@@ -9519,7 +9559,10 @@ async function runWeeklyReport(surfaces) {
   const history = await loadThreadHistory(weekly);
   const toolResults = history.items[0].response_parts.filter((part) => part.kind === "tool_result");
   assert.equal(toolResults.length, 6);
-  for (const text of ["Git：", "分析：", "实施："]) assert.ok(toolResults.some((part) => String(part.result).includes(text)), `真实 read tool result 缺少 ${text}`);
+  for (const text of ["Git：", "分析：", "实施："]) assert.ok(toolResults.some((part) => String(part.result).includes(text)),
+    `真实 read tool result 缺少 ${text}: ${JSON.stringify(toolResults.map((part) => ({
+      tool_name: part.tool_name, result: String(part.result).slice(0, 2000),
+    })))}`);
   const requests = await Promise.all(report.calls.map(modelRequest));
   const system = requests.map((entry) => entry.request.messages.filter((message) => message.role === "system"));
   for (const prefix of system) assert.deepEqual(prefix, system[0], "send/wait/read 不能漂移 stable prefix bytes");

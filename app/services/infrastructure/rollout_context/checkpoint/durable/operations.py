@@ -17,7 +17,7 @@ from app.domain.itemized.mutation_intents import (
     RebuildContextEpochIntent,
 )
 from app.services.infrastructure.rollout_context.activation.reads import (
-    read_activation_refs_for_turns,
+    read_activation_refs_for_view,
 )
 from app.services.infrastructure.rollout_context.checkpoint.boundary.tool_protocol_boundary import (
     validate_tool_protocol_closure,
@@ -159,21 +159,11 @@ class RolloutCheckpointOperationsMixin:
                 # activation snapshot/ref：这些引用写入同一 control event，后续
                 # restore 只读该引用，永不解析当前 URI 或 Registry。没有任何 sealed
                 # activation 绑定时不写该键，schema 缺失或陈旧则直接失败。
-                source_turn_ids = tuple(
-                    dict.fromkeys(
-                        strict_text(row[0], field="context_view_turns.turn_id")
-                        for row in connection.execute(
-                            "SELECT turn_id FROM context_view_turns "
-                            "WHERE view_id = ? ORDER BY logical_turn_ordinal",
-                            (source_view_id,),
-                        ).fetchall()
-                    )
-                )
-                activation_refs = read_activation_refs_for_turns(
+                activation_refs = read_activation_refs_for_view(
                     connection,
                     session_id=session_id,
                     thread_id=thread_id,
-                    turn_ids=source_turn_ids,
+                    view_id=source_view_id,
                 )
                 # 在创建目标 view/branch 前验证 tool protocol closure：
                 # 冲突时旧 active view 与全部状态保持零副作用。

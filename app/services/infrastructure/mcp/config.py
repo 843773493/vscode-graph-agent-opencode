@@ -44,18 +44,18 @@ def parse_mcp_server_configs(
     if not isinstance(raw_servers, dict):
         raise TypeError("mcp.servers 必须是对象")
 
-    parsed: list[McpServerConfig] = []
+    server_configs: list[McpServerConfig] = []
     for server_id, raw_server in raw_servers.items():
         if not isinstance(server_id, str) or not _SERVER_ID_PATTERN.fullmatch(server_id):
             raise ValueError(f"MCP Server ID 格式无效: {server_id!r}")
-        parsed.append(
+        server_configs.append(
             _parse_server(
                 server_id,
                 raw_server,
                 workspace_root=workspace_root,
             )
         )
-    return tuple(parsed)
+    return tuple(server_configs)
 
 
 def _parse_server(
@@ -178,16 +178,19 @@ def _parse_http_connection(
 
 
 def _expand_value(value: str, *, workspace_root: Path) -> str:
-    def replace(match: re.Match[str]) -> str:
-        variable_name = match.group(1)
-        if variable_name == "workspaceRoot":
-            return str(workspace_root)
-        resolved = os.environ.get(variable_name)
-        if resolved is None:
-            raise ValueError(f"MCP 配置引用了未定义的环境变量: {variable_name}")
-        return resolved
+    if "${" not in value:
+        return value
 
-    return _PLACEHOLDER_PATTERN.sub(replace, value)
+    def resolve_placeholder(placeholder_match: re.Match[str]) -> str:
+        placeholder_name = placeholder_match.group(1)
+        if placeholder_name == "workspaceRoot":
+            return str(workspace_root)
+        environment_value = os.environ.get(placeholder_name)
+        if environment_value is None:
+            raise ValueError(f"MCP 配置引用了未定义的环境变量: {placeholder_name}")
+        return environment_value
+
+    return _PLACEHOLDER_PATTERN.sub(resolve_placeholder, value)
 
 
 def _reject_unknown_fields(

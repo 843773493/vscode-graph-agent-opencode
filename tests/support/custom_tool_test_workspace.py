@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Iterator
-from contextlib import contextmanager
+from contextlib import ExitStack, closing, contextmanager
 from pathlib import Path
 from time import perf_counter_ns
 from uuid import uuid4
@@ -23,40 +23,27 @@ CANONICAL_SESSION_IDS = frozenset(
 )
 
 
-def custom_tool_workspace_template_items(template_root: Path) -> tuple[str, ...]:
-    """列出需要复制的模板输入；fixture/ 由 canonical 生成器完整重建。"""
-
-    return tuple(
-        sorted(
-            [
-                item.name
-                for item in template_root.iterdir()
-                if item.name not in {".boxteam", "fixture"}
-            ]
-            + [".boxteam/AGENTS.md", ".boxteam/skills"]
-        )
-    )
-
-
 class FixtureStageObserver:
     """仅供显式 profile 使用的标量 JSONL 计时记录器。"""
 
     def __init__(self, artifacts_root: Path) -> None:
         artifacts_root.mkdir(parents=True, exist_ok=True)
         self.path = artifacts_root / f"fixture-stage-timing-{uuid4().hex}.jsonl"
-        self._stream = self.path.open("x", encoding="utf-8")
-        self._sequence = 0
-        self._normal_prepare_calls = 0
-        self._completed_normal_turns = 0
-        self._completed_fork_turns = 0
-        self._closed = False
-        self.record(
-            "start",
-            "fixture.profile",
-            expected_total_turns=427,
-            expected_normal_turns=420,
-            expected_fork_turns=7,
-        )
+        with ExitStack() as startup_cleanup:
+            self._stream = startup_cleanup.enter_context(self.path.open("x", encoding="utf-8"))
+            self._sequence = 0
+            self._normal_prepare_calls = 0
+            self._completed_normal_turns = 0
+            self._completed_fork_turns = 0
+            self._closed = False
+            self.record(
+                "start",
+                "fixture.profile",
+                expected_total_turns=427,
+                expected_normal_turns=420,
+                expected_fork_turns=7,
+            )
+            startup_cleanup.pop_all()
 
     def record(self, event: str, stage: str, **fields: object) -> None:
         if any(not isinstance(value, (str, int, float, bool, type(None))) for value in fields.values()):
@@ -90,17 +77,16 @@ class FixtureStageObserver:
     def close(self) -> None:
         if self._closed:
             return
-        self.record(
-            "summary",
-            "fixture.profile",
-            total_turns=self._completed_normal_turns + self._completed_fork_turns,
-            normal_turns=self._completed_normal_turns,
-            normal_prepare_calls=self._normal_prepare_calls,
-            fork_turns=self._completed_fork_turns,
-        )
         self._closed = True
-        self._stream.flush()
-        self._stream.close()
+        with closing(self._stream):
+            self.record(
+                "summary",
+                "fixture.profile",
+                total_turns=self._completed_normal_turns + self._completed_fork_turns,
+                normal_turns=self._completed_normal_turns,
+                normal_prepare_calls=self._normal_prepare_calls,
+                fork_turns=self._completed_fork_turns,
+            )
 
 
 @contextmanager
@@ -151,7 +137,12 @@ def prepare_custom_tool_test_workspace(
 ) -> Path:
     """复制只读模板，并在测试副本重建完整 canonical rollout 历史。"""
 
-    template_items = custom_tool_workspace_template_items(template_root)
+    template_items = tuple(
+        sorted(
+            [item.name for item in template_root.iterdir() if item.name != ".boxteam"]
+            + [".boxteam/AGENTS.md", ".boxteam/skills"]
+        )
+    )
     with timed_fixture_stage(observer, "workspace.template_copy"):
         workspace_root = prepare_test_workspace(
             workspace_root=workspace_root,

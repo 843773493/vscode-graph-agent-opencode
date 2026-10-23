@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { memo, useEffect, useMemo, useState } from "react";
 import { errorMessage } from "../../utils/errorMessage";
 
 import { getWorkspaceFileContent } from "../../api";
@@ -26,7 +26,7 @@ interface NodeDebugSourcePreviewProps {
 
 const SOURCE_WINDOW_RADIUS = 7;
 
-export default function NodeDebugSourcePreview({
+const NodeDebugSourcePreview = memo(function NodeDebugSourcePreview({
   apiPort,
   workspaceId,
   path,
@@ -119,4 +119,6 @@ export default function NodeDebugSourcePreview({
       <small>源码会跟随模型或用户的当前暂停位置；左键切换普通断点，右键设置条件、命中次数或日志点。</small>
     </div>
   );
-}
+});
+
+export default NodeDebugSourcePreview;

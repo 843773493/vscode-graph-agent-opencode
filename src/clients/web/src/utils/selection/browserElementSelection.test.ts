@@ -18,6 +18,7 @@ const element = {
   classes: "primary",
   outerHTML: '<button id="submit" class="primary">提交</button>',
   computedStyle: "button { color: rgb(0, 0, 0); }",
+  computedStyles: { display: "block", color: "rgb(0, 0, 0)" },
   attributes: { id: "submit", class: "primary" },
   ancestors: [
     { tagName: "html", classNames: [] },
@@ -41,6 +42,9 @@ describe("浏览器元素选择消息", () => {
     expect(selection?.ref).toBe("e1");
     expect(selection?.outerHTML).toBe(element.outerHTML);
     expect(selection?.computedStyle).toBe(element.computedStyle);
+    expect(selection?.computedStyles).toEqual(element.computedStyles);
+    expect(selection?.attributes).toEqual(element.attributes);
+    expect(selection?.dimensions).toEqual(element.dimensions);
     expect(selection?.ancestors).toHaveLength(3);
   });
 

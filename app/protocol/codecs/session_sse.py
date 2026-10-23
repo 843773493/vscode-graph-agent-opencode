@@ -184,8 +184,10 @@ def _event_payload_to_json(event: session_interaction_pb2.SessionExecutionEvent)
         always_print_fields_with_no_presence=False,
     ))
     if payload_case == "message_updated":
-        payload.setdefault("attachments", [])
-        payload.setdefault("metadata", {})
+        if "attachments" not in payload:
+            payload["attachments"] = []
+        if "metadata" not in payload:
+            payload["metadata"] = {}
     elif payload_case == "job_step_updated":
         payload.setdefault("agent_id", None)
         payload.setdefault("message", None)

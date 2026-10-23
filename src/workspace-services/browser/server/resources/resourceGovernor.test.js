@@ -366,4 +366,59 @@ describe("浏览器资源调度器", () => {
       browser_id: session.id, action: "snapshot", message: "到期后快照读取失败",
     });
   });
+
+  test.each([-60_000, 0, 60_000])("系统校时不改变完整治理轮次的动作预算与耗时: wall_clock_jump_ms=%s", async (wallClockJumpMs) => {
+    const startedAtUnixMs = Date.parse("2026-01-01T01:00:00.000Z");
+    let elapsedMs = 0;
+    let wallOffsetMs = 0;
+    const frozen = [];
+    const sessions = Array.from({ length: 4 }, (_, index) => {
+      const id = `browser_clock_${index}`;
+      return {
+        id,
+        resourcePolicySnapshot: () => ({
+          browser_id: id, resource_state: "background", resource_policy: "automatic",
+          resource_protections: [], client_count: 0,
+          created_at: "2026-01-01T00:00:00.000Z",
+          last_user_interaction_at: "2026-01-01T00:00:00.000Z",
+        }),
+        freeze: async () => {
+          elapsedMs += 150;
+          wallOffsetMs = wallClockJumpMs;
+          frozen.push(id);
+          return { resource_state: "frozen" };
+        },
+      };
+    });
+    const governor = new BrowserResourceGovernor({
+      manager: {
+        runningSessions: () => sessions,
+        get: (id) => sessions.find((session) => session.id === id),
+      },
+      memoryMonitor: { sample: async () => { elapsedMs += 10; return { level: "warning" }; } },
+      now: () => startedAtUnixMs + elapsedMs + wallOffsetMs,
+      monotonicNow: () => elapsedMs,
+      batchPolicy: { warning: { maxActions: 4, maxDurationMs: 250, freezeConcurrency: 1, discardConcurrency: 4 } },
+    });
+    const delays = [];
+    governor.schedule = (delayMs) => { delays.push(delayMs); };
+
+    const state = await governor.runCycle();
+
+    // 软预算只在动作块之间检查；第二个动作允许完成，第三个留给下一轮。
+    expect(frozen).toEqual(["browser_clock_0", "browser_clock_1"]);
+    expect(state.last_cycle).toMatchObject({
+      started_at: new Date(startedAtUnixMs).toISOString(), duration_ms: 310,
+      snapshot_count: 4, planned_action_count: 4, completed_action_count: 2,
+      failed_action_count: 0, soft_action_budget_ms: 250,
+    });
+    expect(state.last_actions.map((action) => action.duration_ms)).toEqual([150, 150]);
+    expect(state.last_actions.map((action) => action.started_at)).toEqual([
+      new Date(startedAtUnixMs + 10).toISOString(),
+      new Date(startedAtUnixMs + 160 + wallClockJumpMs).toISOString(),
+    ]);
+    expect(state.capacity.actual_after_execution).toEqual({ hot: 2, frozen: 2, resident: 4 });
+    expect(delays).toEqual([100]);
+    expect(state.recent_action_errors).toEqual([]);
+  });
 });

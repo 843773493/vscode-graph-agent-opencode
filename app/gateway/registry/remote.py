@@ -28,21 +28,23 @@ class RegistryRemoteMixin:
             )
         self._remote_gateway_connections[connection.connection_id] = connection
         if runtime is not None:
-            previous = self._remote_gateway_runtimes.get(connection.connection_id)
-            if previous is not None:
+            previous_runtime = self._remote_gateway_runtimes.get(
+                connection.connection_id
+            )
+            if previous_runtime is not None:
                 if self._has_route_references_for_connection(connection.connection_id):
-                    self._retired_remote_gateway_runtimes.setdefault(
+                    self._register_retired_remote_gateway_runtime(
                         connection.connection_id,
-                        [],
-                    ).append(previous)
+                        previous_runtime,
+                    )
                 else:
                     try:
-                        previous.close()
+                        previous_runtime.close()
                     except Exception:  # noqa: BLE001 - 发布新隧道前保留失败的旧运行时，沿用 retired 重试语义。
-                        self._retired_remote_gateway_runtimes.setdefault(
+                        self._register_retired_remote_gateway_runtime(
                             connection.connection_id,
-                            [],
-                        ).append(previous)
+                            previous_runtime,
+                        )
             self._remote_gateway_runtimes[connection.connection_id] = runtime
             for target in self._targets.values():
                 if target.remote_gateway_connection_id == connection.connection_id:
@@ -85,14 +87,26 @@ class RegistryRemoteMixin:
             for target in self._targets.values()
         ):
             return
-        runtime = self._remote_gateway_runtimes.get(connection_id)
-        if runtime is not None:
-            runtime.close()
+        active_runtime = self._remote_gateway_runtimes.get(connection_id)
+        if active_runtime is not None:
+            active_runtime.close()
             self._remote_gateway_runtimes.pop(connection_id)
         self._remote_gateway_connections.pop(connection_id, None)
         FederationCredentialStore(
             storage_path=get_gateway_root() / "credentials" / "federation.json"
         ).remove(connection_id)
+
+    def _register_retired_remote_gateway_runtime(
+        self,
+        connection_id: str,
+        retired_runtime: WorkspaceRuntime,
+    ) -> None:
+        retired_runtimes = self._retired_remote_gateway_runtimes.get(connection_id)
+        if retired_runtimes is None:
+            self._retired_remote_gateway_runtimes[connection_id] = [retired_runtime]
+        else:
+            retired_runtimes.append(retired_runtime)
+
     def _has_route_references_for_connection(self, connection_id: str) -> bool:
         return any(
             connection_id in referenced_connection_ids
@@ -104,24 +118,47 @@ class RegistryRemoteMixin:
     def _close_retired_remote_gateway_runtimes(self, connection_id: str) -> None:
         if self._has_route_references_for_connection(connection_id):
             return
-        retired = tuple(self._retired_remote_gateway_runtimes.get(connection_id, []))
-        for runtime in retired:
-            runtime.close()
-            self._remove_retired_runtime_instances(((connection_id, runtime),))
+        retired_runtimes = tuple(
+            self._retired_remote_gateway_runtimes.get(connection_id, [])
+        )
+        successfully_closed_runtimes: list[WorkspaceRuntime] = []
+        try:
+            for retired_runtime in retired_runtimes:
+                retired_runtime.close()
+                successfully_closed_runtimes.append(retired_runtime)
+        finally:
+            if successfully_closed_runtimes:
+                self._remove_retired_runtime_instances(
+                    tuple(
+                        (connection_id, retired_runtime)
+                        for retired_runtime in successfully_closed_runtimes
+                    )
+                )
+
     def _remove_retired_runtime_instances(
         self,
-        runtimes: tuple[tuple[str, WorkspaceRuntime], ...],
+        retired_runtime_entries: tuple[tuple[str, WorkspaceRuntime], ...],
     ) -> None:
-        for connection_id, runtime in runtimes:
-            retained = [
-                item
-                for item in self._retired_remote_gateway_runtimes.get(
-                    connection_id,
-                    [],
-                )
-                if item is not runtime
+        runtime_ids_by_connection: dict[str, set[int]] = {}
+        for connection_id, runtime_to_remove in retired_runtime_entries:
+            runtime_ids = runtime_ids_by_connection.get(connection_id)
+            if runtime_ids is None:
+                runtime_ids = set()
+                runtime_ids_by_connection[connection_id] = runtime_ids
+            runtime_ids.add(id(runtime_to_remove))
+
+        for connection_id, runtime_ids in runtime_ids_by_connection.items():
+            retired_runtimes = self._retired_remote_gateway_runtimes.get(connection_id)
+            if retired_runtimes is None:
+                continue
+            retained_runtimes = [
+                retired_runtime
+                for retired_runtime in retired_runtimes
+                if id(retired_runtime) not in runtime_ids
             ]
-            if retained:
-                self._retired_remote_gateway_runtimes[connection_id] = retained
+            if retained_runtimes:
+                self._retired_remote_gateway_runtimes[
+                    connection_id
+                ] = retained_runtimes
             else:
                 self._retired_remote_gateway_runtimes.pop(connection_id, None)

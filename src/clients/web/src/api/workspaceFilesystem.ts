@@ -64,26 +64,28 @@ function fileTreeLocationQuery(path: string): {
   };
 }
 
-function encodeWorkspaceFileList(
-  result: WorkspaceFileList,
+function validateWorkspaceFileList(
+  workspaceFileList: WorkspaceFileList,
 ): WorkspaceFileList {
   // 后端 WorkspaceFileListDTO.items 是 default_factory=list，序列化必为数组；
   // 非数组即契约被破坏，不得静默收敛成空列表把损坏伪装成合法结果。
-  if (!Array.isArray(result.items)) {
+  if (!Array.isArray(workspaceFileList.items)) {
     throw new Error("工作区文件列表响应 items 必须是数组");
   }
-  const key = result.directory_key;
-  if (!key || typeof key.workspace_id !== "string" || !key.workspace_id
-    || typeof key.root !== "string" || !key.root
-    || typeof key.path !== "string" || key.path !== result.path
-    || !Number.isSafeInteger(result.directory_revision) || result.directory_revision < 1) {
+  const directoryKey = workspaceFileList.directory_key;
+  if (!directoryKey || typeof directoryKey.workspace_id !== "string" || !directoryKey.workspace_id
+    || typeof directoryKey.root !== "string" || !directoryKey.root
+    || typeof directoryKey.path !== "string" || directoryKey.path !== workspaceFileList.path
+    || !Number.isSafeInteger(workspaceFileList.directory_revision)
+    || workspaceFileList.directory_revision < 1) {
     throw new Error("工作区文件列表响应缺少配对的目录键和 revision");
   }
-  if (!result.path.startsWith("boxteam://") || !key.root.startsWith("boxteam://")
-    || result.items.some((node) => !node.path.startsWith("boxteam://"))) {
+  if (!workspaceFileList.path.startsWith("boxteam://")
+    || !directoryKey.root.startsWith("boxteam://")
+    || workspaceFileList.items.some((node) => !node.path.startsWith("boxteam://"))) {
     throw new Error("文件列表响应必须使用资源 URI");
   }
-  return result;
+  return workspaceFileList;
 }
 
 export async function getWorkspaceFiles(
@@ -99,7 +101,7 @@ export async function getWorkspaceFiles(
   query.set("scope", location.scope);
   if (cursor) query.set("cursor", cursor);
   const suffix = query.toString();
-  const result = unwrapApiData(await requestJson<APIResponse<WorkspaceFileList>>(
+  const workspaceFileList = unwrapApiData(await requestJson<APIResponse<WorkspaceFileList>>(
     port,
     `/api/v1/workspace/files${suffix ? `?${suffix}` : ""}`,
     {
@@ -108,7 +110,7 @@ export async function getWorkspaceFiles(
       timeoutMs: DEFAULT_API_REQUEST_TIMEOUT_MS,
     },
   ));
-  return encodeWorkspaceFileList(result);
+  return validateWorkspaceFileList(workspaceFileList);
 }
 
 export async function createWorkspaceFileEntry(
@@ -254,31 +256,33 @@ export async function revealWorkspaceFileEntry(
 }
 
 /**
- * 文件内容响应契约校验的唯一实现。
+ * 文件内容响应契约验证的唯一实现。
  *
  * 后端 WorkspaceFileContentDTO 的 content / path 均为必填字符串；非字符串即契约
  * 被破坏。此前只做信封校验（unwrapApiData），畸形 content（数字 / null / 缺失）
  * 会一路透传到预览组件，在 `content.replace` 处抛英文引擎错误并让整页被错误边界
  * 接管（真实浏览器审查实测白屏）；path 为数字时同理会落到 decodeFileTreePath 的
- * `path.startsWith` 抛 TypeError。这里与同文件 encodeWorkspaceFileList 的数组校验
+ * `path.startsWith` 抛 TypeError。这里与同文件 validateWorkspaceFileList 的数组校验
  * 保持同一标准：不符就带上下文响亮失败，由上层既有错误展示链路接管。
  */
-function decodeWorkspaceFileContent(
-  result: WorkspaceFileContent,
+function validateWorkspaceFileContent(
+  workspaceFileContent: WorkspaceFileContent,
 ): WorkspaceFileContent {
-  if (!result || typeof result !== "object" || Array.isArray(result)) {
+  if (!workspaceFileContent || typeof workspaceFileContent !== "object"
+    || Array.isArray(workspaceFileContent)) {
     throw new Error("工作区文件内容响应必须是对象");
   }
-  if (typeof result.content !== "string") {
+  if (typeof workspaceFileContent.content !== "string") {
     throw new Error("工作区文件内容响应 content 必须是字符串");
   }
-  if (typeof result.path !== "string") {
+  if (typeof workspaceFileContent.path !== "string") {
     throw new Error("工作区文件内容响应 path 必须是字符串");
   }
-  if (!result.path.startsWith("boxteam://") || !result.root_path.startsWith("boxteam://")) {
+  if (!workspaceFileContent.path.startsWith("boxteam://")
+    || !workspaceFileContent.root_path.startsWith("boxteam://")) {
     throw new Error("文件内容响应必须使用资源 URI");
   }
-  return result;
+  return workspaceFileContent;
 }
 
 export async function getWorkspaceFileContent(
@@ -287,12 +291,12 @@ export async function getWorkspaceFileContent(
   workspaceId?: string | null,
 ): Promise<WorkspaceFileContent> {
   const { query } = fileTreeLocationQuery(path);
-  const result = unwrapApiData(await requestJson<APIResponse<WorkspaceFileContent>>(
+  const workspaceFileContent = unwrapApiData(await requestJson<APIResponse<WorkspaceFileContent>>(
     port,
     `/api/v1/workspace/files/content?${query.toString()}`,
     workspaceId ? { headers: workspaceHeader(workspaceId) } : undefined,
   ));
-  return decodeWorkspaceFileContent(result);
+  return validateWorkspaceFileContent(workspaceFileContent);
 }
 
 export async function getWorkspaceRawFileBlob(
@@ -322,7 +326,7 @@ export async function updateWorkspaceFileContent(
   workspaceId?: string | null,
 ): Promise<WorkspaceFileContent> {
   const { query } = fileTreeLocationQuery(path);
-  const result = unwrapApiData(await requestJson<APIResponse<WorkspaceFileContent>>(
+  const workspaceFileContent = unwrapApiData(await requestJson<APIResponse<WorkspaceFileContent>>(
     port,
     `/api/v1/workspace/files/content?${query.toString()}`,
     {
@@ -331,7 +335,7 @@ export async function updateWorkspaceFileContent(
       body: JSON.stringify(payload),
     },
   ));
-  return decodeWorkspaceFileContent(result);
+  return validateWorkspaceFileContent(workspaceFileContent);
 }
 
 export async function getSessionFileTreeSettings(

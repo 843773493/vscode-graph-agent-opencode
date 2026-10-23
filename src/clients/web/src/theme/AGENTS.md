@@ -4,7 +4,7 @@
 
 本目录与相邻模块的分工边界：
 
-- `styles/theme.css`、`styles/themeSurfaces.css`：主题相关的静态样式表，本包只负责运行时应用，不定义样式规则。
+- `styles/foundation/theme.css`、`styles/foundation/themeSurfaces.css`：主题相关静态样式表；本包只负责运行时应用，不定义样式规则。
 - `state/uiSettings/`：界面偏好的业务状态与持久化，本包只消费已解析的主题配置，不拥有状态权威。
 - `api/`、`api/session/`：Gateway 主题接口的请求编排，本包只接收其结果。
 - `types/backend.ts`、`types/gatewayProtocol.ts`：后端协议类型的权威来源，本包的类型只描述运行时配置形态。

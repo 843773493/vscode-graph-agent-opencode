@@ -80,14 +80,19 @@ class ResourceDerivationGraph:
         self._registry = registry
         self._specs: dict[str, SemanticResourceDescriptor] = {}
         self._loaders: dict[str, SemanticLoader] = {}
+        self._topological_order_cache: tuple[str, ...] | None = None
         # 重建图仍延续同一 Registry 的发布代际，不能让来源刷新回退至零。
         self._generation = max(
-            (snapshot.generation for snapshot in registry.snapshots()), default=0,
+            (snapshot.generation for snapshot in registry.snapshots()),
+            default=0,
         )
 
     def register(
-        self, spec: SemanticResourceDescriptor, loader: SemanticLoader,
-        *, expected: SemanticResourceDescriptor | None = None,
+        self,
+        spec: SemanticResourceDescriptor,
+        loader: SemanticLoader,
+        *,
+        expected: SemanticResourceDescriptor | None = None,
     ) -> None:
         """代码内注册 derivation 规范与版本化 loader;重复注册同 id 冲突。"""
         if not isinstance(spec, SemanticResourceDescriptor):
@@ -98,12 +103,15 @@ class ResourceDerivationGraph:
             raise TypeError("ResourceDerivationGraph.register 需要可调用 loader")
         if spec.resource_id in self._specs:
             raise ValueError(f"语义资源重复注册: resource_id={spec.resource_id}")
+        previous_order = self._topological_order_cache
         self._specs[spec.resource_id] = spec
+        self._topological_order_cache = None
         try:
             self._topological_order()
             self._registry.register_descriptor(spec, expected=expected)
         except BaseException:
             del self._specs[spec.resource_id]
+            self._topological_order_cache = previous_order
             raise
         self._loaders[spec.resource_id] = loader
 
@@ -130,6 +138,13 @@ class ResourceDerivationGraph:
         if spec is None:
             raise KeyError(f"语义资源尚未注册: resource_id={resource_id}")
         self._topological_order()
+        return self._publish_registered_spec(spec)
+
+    def _publish_registered_spec(
+        self,
+        spec: SemanticResourceDescriptor,
+    ) -> ResourceSnapshot:
+        resource_id = spec.resource_id
         try:
             inputs = self._collect_inputs(spec)
         except _DerivationBlocked as blocked:
@@ -150,13 +165,15 @@ class ResourceDerivationGraph:
             raise ValueError(
                 f"语义 loader 的 payload 不是 JSON value: resource_id={resource_id}"
             ) from error
-        lineage = tuple(sorted(
-            (identity, item.revision) for identity, item in inputs.items()
-        ))
+        lineage = tuple(
+            sorted((identity, item.revision) for identity, item in inputs.items())
+        )
         current = self._current_snapshot(resource_id)
         if (
-            current is not None and current.available
-            and current.revision == revision and current.source_lineage == lineage
+            current is not None
+            and current.available
+            and current.revision == revision
+            and current.source_lineage == lineage
         ):
             return current
         self._generation += 1
@@ -176,17 +193,26 @@ class ResourceDerivationGraph:
         """对全部已注册语义资源做一次有界派生(不扫描、不递归文件系统)。"""
         with self._registry.publication():
             try:
+                order = self._topological_order()
                 return tuple(
-                    self.publish(resource_id) for resource_id in self._topological_order()
+                    self._publish_registered_spec(self._specs[resource_id])
+                    for resource_id in order
                 )
             except Exception as error:
                 # 部分 facet 已推进时也必须先阻断整批 required，再暴露程序缺陷。
                 for spec in self._specs.values():
-                    self._publish_unavailable(spec, _DerivationBlocked("loader-error", f"语义派生图求值失败: {type(error).__name__}"))
+                    self._publish_unavailable(
+                        spec,
+                        _DerivationBlocked(
+                            "loader-error",
+                            f"语义派生图求值失败: {type(error).__name__}",
+                        ),
+                    )
                 raise
 
     def _collect_inputs(
-        self, spec: SemanticResourceDescriptor,
+        self,
+        spec: SemanticResourceDescriptor,
     ) -> dict[str, SemanticInput]:
         inputs: dict[str, SemanticInput] = {}
         for source_id in spec.source_ids:
@@ -237,7 +263,9 @@ class ResourceDerivationGraph:
         return inputs
 
     def _ensure_dependency_fresh(
-        self, dependency_id: str, dependency: ResourceSnapshot,
+        self,
+        dependency_id: str,
+        dependency: ResourceSnapshot,
     ) -> None:
         """混合代际守卫:依赖快照的 lineage 必须等于上游来源当前 revision。"""
         dependency_spec = self._specs.get(dependency_id)
@@ -250,7 +278,8 @@ class ResourceDerivationGraph:
             except KeyError:
                 source = None
             if (
-                source is None or not source.available
+                source is None
+                or not source.available
                 or lineage.get(upstream_source) != source.revision
             ):
                 raise _DerivationBlocked(
@@ -260,15 +289,16 @@ class ResourceDerivationGraph:
                 )
         for upstream_id in dependency_spec.dependency_resource_ids:
             current = self._current_snapshot(upstream_id)
-            if current is None or not current.available or (
-                lineage.get(upstream_id) != current.revision
+            if (
+                current is None
+                or not current.available
+                or (lineage.get(upstream_id) != current.revision)
             ):
                 raise _DerivationBlocked(
                     "generation-mismatch",
                     f"依赖快照落后于上游发布: resource_id={dependency_id} dependency={upstream_id}",
                 )
             self._ensure_dependency_fresh(upstream_id, current)
-
 
     def _publish_unavailable(
         self, spec: SemanticResourceDescriptor, blocked: _DerivationBlocked
@@ -304,6 +334,12 @@ class ResourceDerivationGraph:
             return None
 
     def _topological_order(self) -> tuple[str, ...]:
+        """返回注册状态对应的拓扑序，注册成功前 DFS 无环校验一次。"""
+        if self._topological_order_cache is None:
+            self._topological_order_cache = self._compute_topological_order()
+        return self._topological_order_cache
+
+    def _compute_topological_order(self) -> tuple[str, ...]:
         """对全部已注册规范做 DFS 无环校验;依赖成环显式失败。"""
         state: dict[str, int] = {}
         ordered: list[str] = []
@@ -311,9 +347,7 @@ class ResourceDerivationGraph:
         def visit(resource_id: str, trail: tuple[str, ...]) -> None:
             marker = state.get(resource_id)
             if marker == 1:
-                raise ValueError(
-                    "语义依赖成环: " + " -> ".join((*trail, resource_id))
-                )
+                raise ValueError("语义依赖成环: " + " -> ".join((*trail, resource_id)))
             if marker == 2:
                 return
             spec = self._specs.get(resource_id)

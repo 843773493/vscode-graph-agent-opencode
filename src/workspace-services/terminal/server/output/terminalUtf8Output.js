@@ -22,7 +22,8 @@ export function splitTerminalOutputChunks(value) {
   if (value.length === 0) {
     return [];
   }
-  if (Buffer.byteLength(value, "utf8") <= MAX_TERMINAL_OUTPUT_EVENT_BYTES) {
+  if (value.length <= MAX_TERMINAL_OUTPUT_EVENT_BYTES
+    && Buffer.byteLength(value, "utf8") <= MAX_TERMINAL_OUTPUT_EVENT_BYTES) {
     return [value];
   }
   const chunks = [];

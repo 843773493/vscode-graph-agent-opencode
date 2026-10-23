@@ -35,7 +35,6 @@ from app.services.infrastructure.workspace_file_watch_service import (
     WorkspaceFileWatchService,
 )
 from app.services.infrastructure.workspace_service import WorkspaceService
-from tests.support.workspaces import prepare_default_test_workspace
 
 
 class _Source:
@@ -195,11 +194,8 @@ async def test_workspace_file_sse_closes_source_on_exhaustion(
 
 
 @pytest.fixture
-async def workspace_service(tmp_path: Path):
-    root = prepare_default_test_workspace(
-        workspace_root=tmp_path / "workspace",
-        template_root=Path.cwd() / "tests/fixtures/workspaces/default_test_workspace",
-    )
+async def workspace_service(empty_workspace_scope: tuple[str, Path]):
+    root = empty_workspace_scope[1]
     config = Mock(spec=ConfigService)
     config.get_workspace_file_default_limit.return_value = 500
     service = WorkspaceService(config_service=config, workspace_root=root)

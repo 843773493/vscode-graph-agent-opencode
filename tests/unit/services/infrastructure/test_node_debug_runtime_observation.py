@@ -81,42 +81,49 @@ def _observer(
     )
 
 
-def _runtime(process: _FakeProcess | None = None) -> NodeDebugRuntime:
+def _runtime(
+    workspace_root: Path,
+    process: _FakeProcess | None = None,
+) -> NodeDebugRuntime:
     return NodeDebugRuntime(
         session_id="ses_019bf141964978208ce9100774167f90",
         thread_id=TEST_THREAD_ID,
         configuration_id="dbgcfg_" + "1" * 32,
-        workspace_root=Path("/tmp"),
-        script_path=Path("/tmp/entry.mjs"),
+        workspace_root=workspace_root,
+        script_path=workspace_root / "entry.mjs",
         relative_script_path="entry.mjs",
         process=process,  # type: ignore[arg-type]
     )
 
 
 @pytest.mark.asyncio
-async def test_monitor_process_marks_failed_and_reports_exit_code() -> None:
+async def test_monitor_process_marks_failed_and_reports_exit_code(
+    tmp_path: Path,
+) -> None:
     """非零退出必须报 failed 且携带退出码；零退出才是 exited。"""
     recorder = _Recorder()
     observer = _observer(recorder)
 
-    failed = _runtime(_FakeProcess(3))
+    failed = _runtime(tmp_path, _FakeProcess(3))
     await observer.monitor_process(failed)
     assert failed.status == "failed"
     assert failed.error_message == "Node 调试进程退出，退出码: 3"
     assert recorder.claim_phases == [("settled", "进程已退出，退出码: 3")]
     assert recorder.cleared == 1
 
-    ok = _runtime(_FakeProcess(0))
+    ok = _runtime(tmp_path, _FakeProcess(0))
     await observer.monitor_process(ok)
     assert ok.status == "exited"
     assert ok.error_message is None
 
 
 @pytest.mark.asyncio
-async def test_monitor_process_prefers_logpoint_error_message() -> None:
+async def test_monitor_process_prefers_logpoint_error_message(
+    tmp_path: Path,
+) -> None:
     recorder = _Recorder()
     observer = _observer(recorder)
-    runtime = _runtime(_FakeProcess(1))
+    runtime = _runtime(tmp_path, _FakeProcess(1))
     runtime.logpoint_error_message = "日志点求值失败: boom"
     await observer.monitor_process(runtime)
     assert runtime.status == "failed"
@@ -124,11 +131,13 @@ async def test_monitor_process_prefers_logpoint_error_message() -> None:
 
 
 @pytest.mark.asyncio
-async def test_monitor_process_skips_state_write_while_closing() -> None:
+async def test_monitor_process_skips_state_write_while_closing(
+    tmp_path: Path,
+) -> None:
     """closing 期间只结清 claim，不再覆写终态（避免与停止路径互相覆盖）。"""
     recorder = _Recorder()
     observer = _observer(recorder)
-    runtime = _runtime(_FakeProcess(0))
+    runtime = _runtime(tmp_path, _FakeProcess(0))
     runtime.closing = True
     runtime.status = "stopping"
     await observer.monitor_process(runtime)
@@ -137,10 +146,13 @@ async def test_monitor_process_skips_state_write_while_closing() -> None:
 
 
 @pytest.mark.asyncio
-async def test_read_stream_detects_inspector_url_and_logpoint_lines() -> None:
+async def test_read_stream_detects_inspector_url_and_logpoint_lines(
+    tmp_path: Path,
+) -> None:
     recorder = _Recorder()
     observer = _observer(recorder)
     runtime = _runtime(
+        tmp_path,
         _FakeProcess(
             0,
             stdout=[
@@ -171,33 +183,41 @@ async def test_read_stream_detects_inspector_url_and_logpoint_lines() -> None:
 
 
 @pytest.mark.asyncio
-async def test_read_stream_ignores_stderr_logpoint_and_caps_output() -> None:
+async def test_read_stream_ignores_stderr_logpoint_and_caps_output(
+    tmp_path: Path,
+) -> None:
     recorder = _Recorder()
     observer = _observer(recorder, max_output_lines=2)
-    runtime = _runtime(_FakeProcess(0, stdout=["a", "b", "c"]))
+    runtime = _runtime(tmp_path, _FakeProcess(0, stdout=["a", "b", "c"]))
     await observer.read_stream(runtime, "stdout")
     assert runtime.output == ["b", "c"]
 
-    stderr_runtime = _runtime(_FakeProcess(0, stderr=["__BOXTEAM_NODE_LOGPOINT__x=1"]))
+    stderr_runtime = _runtime(
+        tmp_path,
+        _FakeProcess(0, stderr=["__BOXTEAM_NODE_LOGPOINT__x=1"]),
+    )
     await observer.read_stream(stderr_runtime, "stderr")
     assert stderr_runtime.output == []
     assert stderr_runtime.logpoint_error_message is None
 
 
 @pytest.mark.asyncio
-async def test_read_stream_returns_without_process() -> None:
+async def test_read_stream_returns_without_process(tmp_path: Path) -> None:
     observer = _observer(_Recorder())
-    runtime = _runtime(None)
+    runtime = _runtime(tmp_path)
     await observer.read_stream(runtime, "stdout")
     assert runtime.output == []
 
 
 @pytest.mark.asyncio
-async def test_read_stream_buffers_stderr_and_flags_inspector_failure() -> None:
+async def test_read_stream_buffers_stderr_and_flags_inspector_failure(
+    tmp_path: Path,
+) -> None:
     """stderr 诊断行不得丢弃：端口占用必须被识别并唤醒握手失败分支。"""
     recorder = _Recorder()
     observer = _observer(recorder)
     runtime = _runtime(
+        tmp_path,
         _FakeProcess(
             1,
             stderr=[
@@ -218,33 +238,33 @@ async def test_read_stream_buffers_stderr_and_flags_inspector_failure() -> None:
 
 
 @pytest.mark.asyncio
-async def test_read_stream_caps_stderr_lines() -> None:
+async def test_read_stream_caps_stderr_lines(tmp_path: Path) -> None:
     observer = _observer(_Recorder(), max_stderr_lines=2)
-    runtime = _runtime(_FakeProcess(0, stderr=["a", "b", "c"]))
+    runtime = _runtime(tmp_path, _FakeProcess(0, stderr=["a", "b", "c"]))
     await observer.read_stream(runtime, "stderr")
     assert runtime.stderr_lines == ["b", "c"]
 
 
-def test_terminal_error_message_never_empty_on_failure() -> None:
+def test_terminal_error_message_never_empty_on_failure(tmp_path: Path) -> None:
     """非零退出必须给出退出码与 stderr 尾行；零退出才是 None。"""
     observer = _observer(_Recorder())
-    runtime = _runtime()
+    runtime = _runtime(tmp_path)
     runtime.stderr_lines = ["line-1", "line-2", "line-3", "line-4"]
     assert observer.terminal_error_message(runtime, 0) is None
     failed = observer.terminal_error_message(runtime, 3)
     assert failed == "Node 调试进程退出，退出码: 3；stderr: line-2 / line-3 / line-4"
 
-    bare = _runtime()
+    bare = _runtime(tmp_path)
     assert observer.terminal_error_message(bare, 3) == "Node 调试进程退出，退出码: 3"
 
-    logpoint = _runtime()
+    logpoint = _runtime(tmp_path)
     logpoint.logpoint_error_message = "日志点求值失败: boom"
     assert observer.terminal_error_message(logpoint, 1) == "日志点求值失败: boom"
 
 
-def test_handshake_timeout_message_never_empty() -> None:
+def test_handshake_timeout_message_never_empty(tmp_path: Path) -> None:
     observer = _observer(_Recorder())
-    runtime = _runtime()
+    runtime = _runtime(tmp_path)
     assert observer.handshake_timeout_message(runtime, 3.0) == (
         "等待 Node Inspector 就绪超时（3 秒）"
     )
@@ -255,13 +275,15 @@ def test_handshake_timeout_message_never_empty() -> None:
 
 
 @pytest.mark.asyncio
-async def test_read_stream_survives_oversized_line_with_visible_notice() -> None:
+async def test_read_stream_survives_oversized_line_with_visible_notice(
+    tmp_path: Path,
+) -> None:
     """单行超限不得终止读取循环：必须显式标注截断并继续读取后续行。"""
     recorder = _Recorder()
     observer = _observer(recorder)
     process = _FakeProcess(0, stdout=["after-oversize"])
     process.stdout._limit_error = True
-    runtime = _runtime(process)
+    runtime = _runtime(tmp_path, process)
     await observer.read_stream(runtime, "stdout")
     assert runtime.output[0].startswith("[输出截断] ")
     assert "stdout" in runtime.output[0]
@@ -280,7 +302,7 @@ def _breakpoint(breakpoint_id: str, *, path: str = "entry.mjs", line: int = 1, c
     )
 
 
-def test_paused_at_breakpoint_matrix() -> None:
+def test_paused_at_breakpoint_matrix(tmp_path: Path) -> None:
     observer = _observer(_Recorder())
     frame = NodeDebugStackFrameDTO(
         call_frame_id="1", function_name="f", url="u", path="entry.mjs", line=1, column=1
@@ -290,7 +312,7 @@ def test_paused_at_breakpoint_matrix() -> None:
     logpoint = _breakpoint("node-bp-3", log_message="x={x}")
 
     def _rt(breakpoints, *, paused=(), inspector=None, call_stack=()) -> NodeDebugRuntime:
-        runtime = _runtime()
+        runtime = _runtime(tmp_path)
         runtime.breakpoints = {b.breakpoint_id: b for b in breakpoints}
         runtime.paused_breakpoint_ids = set(paused)
         runtime.inspector_breakpoint_ids = dict(inspector or {})

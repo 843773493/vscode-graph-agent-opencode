@@ -554,7 +554,7 @@ async def test_local_preflight_rejection_does_not_create_provider_attempt(
     elif preflight == "client":
         monkeypatch.setattr(BoxteamLiteLLMChatModel, "_provider_http_client", reject)
     else:
-        monkeypatch.setattr(f"{module}.ensure_model_stream_installed", reject)
+        monkeypatch.setattr(f"{module}.prepare_model_request", reject)
     token = begin_upstream_capture()
     try:
         with pytest.raises(ValueError) as raised:

@@ -92,11 +92,11 @@ FORBIDDEN_RUNTIME_FIELDS = frozenset(
 
 
 class _SessionCatalogResolverStub:
-    def __init__(self, root: Path) -> None:
-        self._root = root
+    def __init__(self, session_nodes_root: Path) -> None:
+        self._session_nodes_root = session_nodes_root
 
     def resolve_session_node(self, session_id: str) -> Path:
-        path = self._root / session_id
+        path = self._session_nodes_root / session_id
         path.mkdir(parents=True, exist_ok=True)
         return path
 
@@ -107,7 +107,7 @@ class _SessionCatalogResolverStub:
         return TEST_THREAD_ID
 
     def resolve_thread_node(self, session_id: str, thread_id: str) -> Path:
-        path = self._root / session_id / "threads" / thread_id
+        path = self._session_nodes_root / session_id / "threads" / thread_id
         path.mkdir(parents=True, exist_ok=True)
         return path
 
@@ -198,8 +198,7 @@ async def _wait_for_debug_state(
     )
 
 
-def _tool_map(
-    workspace_root: Path,
+def _debug_tools_by_name(
     service: NodeDebugService,
     *,
     session_id: str = "ses_e2e_debug",
@@ -316,7 +315,7 @@ async def test_node_inspector_tool_adapter_integration_session(
         session_admission=permissive_node_debug_session_admission(),
         external_resource_leases=ExternalResourceLeaseLedger(),
     )
-    tools = _tool_map(workspace_root, service)
+    tools = _debug_tools_by_name(service)
 
     try:
         breakpoint_result = _payload(
@@ -610,7 +609,7 @@ async def test_node_inspector_hit_count_and_logpoint_runtime_semantics(
         session_admission=permissive_node_debug_session_admission(),
         external_resource_leases=ExternalResourceLeaseLedger(),
     )
-    tools = _tool_map(workspace_root, service)
+    tools = _debug_tools_by_name(service)
 
     try:
         added = _payload(
@@ -694,7 +693,7 @@ async def test_node_logpoint_reports_invalid_interpolation_without_pausing(
         session_admission=permissive_node_debug_session_admission(),
         external_resource_leases=ExternalResourceLeaseLedger(),
     )
-    tools = _tool_map(workspace_root, service)
+    tools = _debug_tools_by_name(service)
 
     try:
         malformed = _payload(
@@ -840,7 +839,7 @@ async def test_node_inspector_agent_results_enforce_least_privilege_and_redactio
         session_admission=permissive_node_debug_session_admission(),
         external_resource_leases=ExternalResourceLeaseLedger(),
     )
-    tools = _tool_map(workspace_root, service)
+    tools = _debug_tools_by_name(service)
 
     try:
         await tools["add_breakpoint"].ainvoke(
@@ -912,7 +911,7 @@ async def test_human_and_agent_share_cross_file_debug_runtime(
         session_admission=permissive_node_debug_session_admission(),
         external_resource_leases=ExternalResourceLeaseLedger(),
     )
-    tools = _tool_map(workspace_root, service)
+    tools = _debug_tools_by_name(service)
 
     try:
         await tools["add_breakpoint"].ainvoke(
@@ -986,7 +985,7 @@ async def test_active_debug_session_invalidates_changed_source_without_blocking_
         session_admission=permissive_node_debug_session_admission(),
         external_resource_leases=ExternalResourceLeaseLedger(),
     )
-    tools = _tool_map(workspace_root, service)
+    tools = _debug_tools_by_name(service)
 
     try:
         configured = _payload(
@@ -1073,7 +1072,7 @@ async def test_start_and_finish_report_invalid_breakpoints_at_both_boundaries(
         session_admission=permissive_node_debug_session_admission(),
         external_resource_leases=ExternalResourceLeaseLedger(),
     )
-    tools = _tool_map(workspace_root, service)
+    tools = _debug_tools_by_name(service)
 
     try:
         configured = _payload(

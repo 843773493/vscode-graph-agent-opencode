@@ -13,18 +13,20 @@ import {
   spawnDetachedProcess,
   terminateDetachedProcess,
   terminateProcessWithEscalation,
-} from "../../packages/launcher/src/process/detached-process.mjs";
+} from "../../packages/launcher/src/detached-process.mjs";
 import {
   resolveServiceLogPath,
   SERVICE_LOG_CAPTURED_ENV,
-} from "../../packages/launcher/src/process/service-log.mjs";
-import { requestGatewayHandoff } from "../../packages/launcher/src/process/gateway/handoff-control.mjs";
+} from "../../packages/launcher/src/logging/service-log.mjs";
+import { requestGatewayHandoff } from "../../packages/launcher/src/gateway/supervisor.mjs";
 import { BOXTEAM_VERSION } from "../../packaging/runtime/versions.mjs";
 import {
   remainingOccupiedPorts,
   resolveDevelopmentLayout,
   resolveBackendWorkspaceId,
 } from "./dev-environment.mjs";
+
+import { waitForDetachedReady, waitForHttpOk } from "./dev-readiness.mjs";
 
 const developmentLayout = resolveDevelopmentLayout();
 const {
@@ -208,69 +210,6 @@ function writeDevelopmentManifest() {
   return manifestPath;
 }
 
-async function waitForHttpOk(
-  url,
-  label,
-  processHandle = null,
-  headers = undefined,
-) {
-  const timeoutMs = 90_000;
-  const deadline = Date.now() + timeoutMs;
-  let lastError = null;
-  while (Date.now() < deadline) {
-    if (
-      processHandle !== null &&
-      (processHandle.exitCode !== null || processHandle.signalCode !== null)
-    ) {
-      throw new Error(
-        `${label}就绪前进程退出: exit=${String(processHandle.exitCode)} ` +
-          `signal=${String(processHandle.signalCode)}`,
-      );
-    }
-    try {
-      const response = await fetch(url, { headers });
-      if (response.ok) {
-        process.stdout.write(`[dev] ${label} ready: ${url}\n`);
-        return;
-      }
-      lastError = new Error(`HTTP ${response.status} ${response.statusText}`);
-    } catch (error) {
-      lastError = error;
-    }
-    await Bun.sleep(250);
-  }
-  throw new Error(
-    `${label}在 ${timeoutMs}ms 内未就绪: ${url}: ${
-      lastError instanceof Error ? lastError.message : String(lastError)
-    }`,
-  );
-}
-
-async function waitForDetachedReady(child, readyFile, logPath) {
-  const timeoutMs = 120_000;
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    if (child.exitCode !== null || child.signalCode !== null) {
-      throw new Error(
-        `detached dev manager 就绪前退出: exit=${String(child.exitCode)} ` +
-          `signal=${String(child.signalCode)}，日志: ${logPath}`,
-      );
-    }
-    if (existsSync(readyFile)) {
-      try {
-        const payload = JSON.parse(readFileSync(readyFile, "utf8"));
-        if (payload.pid === child.pid) return;
-      } catch (error) {
-        if (!(error instanceof SyntaxError)) throw error;
-      }
-    }
-    await Bun.sleep(250);
-  }
-  throw new Error(
-    `detached dev manager 在 ${timeoutMs}ms 内未就绪，日志: ${logPath}`,
-  );
-}
-
 async function launchDetachedManager() {
   const runtimeRoot = path.join(projectRoot, "out", "development-runtime");
   mkdirSync(runtimeRoot, { recursive: true });
@@ -297,11 +236,19 @@ async function launchDetachedManager() {
   });
   try {
     await Promise.race([
-      waitForDetachedReady(child, readyFile, logPath),
+      waitForDetachedReady({ child, readyFile, logPath }),
       spawnError,
     ]);
   } catch (error) {
-    terminateDetachedProcess(child.pid);
+    try {
+      terminateDetachedProcess(child.pid);
+    } catch (cleanupError) {
+      throw new AggregateError(
+        [error, cleanupError],
+        "detached dev manager 启动失败，终止请求也失败",
+        { cause: error },
+      );
+    }
     throw error;
   }
   child.unref();
@@ -310,38 +257,77 @@ async function launchDetachedManager() {
   );
 }
 
-function listenerPidsUnix(targetPort) {
-  const lsof = Bun.spawnSync(["lsof", "-ti", `tcp:${targetPort}`], {
-    cwd: projectRoot,
-    stdout: "pipe",
-    stderr: "ignore",
-  });
-  if (lsof.exitCode !== 0) return [];
-  return new TextDecoder()
-    .decode(lsof.stdout)
-    .trim()
-    .split(/\r?\n/)
-    .filter((value) => /^\d+$/.test(value));
-}
-
-function listenerPidsWindows(targetPort) {
-  const netstat = Bun.spawnSync(["netstat", "-ano", "-p", "tcp"], {
+function readUnixListenerPidsByPort(targetPorts) {
+  // 只清理本地监听者；连接这些端口的客户端不属于开发服务。
+  const command = ["lsof", "-nP", "-a", `-iTCP:${targetPorts.join(",")}`, "-sTCP:LISTEN", "-Fpn"];
+  const lsof = Bun.spawnSync(command, {
     cwd: projectRoot,
     stdout: "pipe",
     stderr: "pipe",
   });
-  if (netstat.exitCode !== 0) {
-    throw new Error("无法检查 Windows 开发端口占用");
+  const stdout = new TextDecoder().decode(lsof.stdout).trim();
+  const stderr = new TextDecoder().decode(lsof.stderr).trim();
+  const signalCode = lsof.signalCode ?? null;
+  const pidsByPort = new Map(targetPorts.map((port) => [port, []]));
+  if (lsof.exitCode === 1 && signalCode === null && stdout === "" && stderr === "") return pidsByPort;
+  if (lsof.exitCode !== 0 || signalCode !== null) {
+    throw new Error(
+      `检查 Unix 开发端口失败: ${command.join(" ")} exit=${String(lsof.exitCode)} ` +
+      `signal=${signalCode ?? "none"}${stderr ? `\n${stderr}` : ""}`,
+    );
   }
-  const targetPortName = String(targetPort);
-  const pids = [];
-  for (const line of new TextDecoder().decode(netstat.stdout).split(/\r?\n/)) {
+  let currentPid;
+  let listenerCount = 0;
+  for (const field of stdout.split(/\r?\n/)) {
+    if (field.startsWith("p") && /^[1-9]\d*$/.test(field.slice(1))) {
+      currentPid = field.slice(1);
+    } else if (field.startsWith("n") && currentPid !== undefined) {
+      const port = Number(field.slice(field.lastIndexOf(":") + 1));
+      if (!pidsByPort.has(port)) {
+        throw new Error(`Unix 开发端口查询返回无效监听地址: ${command.join(" ")} field=${JSON.stringify(field)}`);
+      }
+      const pids = pidsByPort.get(port);
+      if (!pids.includes(currentPid)) pids.push(currentPid);
+      listenerCount++;
+    } else {
+      throw new Error(`Unix 开发端口查询返回无效监听记录: ${command.join(" ")} field=${JSON.stringify(field)}`);
+    }
+  }
+  if (listenerCount === 0) {
+    throw new Error(`Unix 开发端口查询返回无效监听记录: ${command.join(" ")} stdout=${JSON.stringify(stdout)}`);
+  }
+  return pidsByPort;
+}
+
+function readWindowsListenerPidsByPort(targetPorts) {
+  const command = ["netstat", "-ano", "-p", "tcp"];
+  const netstat = Bun.spawnSync(command, {
+    cwd: projectRoot,
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const stdout = new TextDecoder().decode(netstat.stdout);
+  const stderr = new TextDecoder().decode(netstat.stderr).trim();
+  const signalCode = netstat.signalCode ?? null;
+  if (netstat.exitCode !== 0 || signalCode !== null) {
+    throw new Error(
+      `检查 Windows 开发端口失败: ${command.join(" ")} exit=${String(netstat.exitCode)} ` +
+      `signal=${signalCode ?? "none"}${stderr ? `\n${stderr}` : ""}`,
+    );
+  }
+  const pidsByPort = new Map(targetPorts.map((port) => [port, []]));
+  for (const line of stdout.split(/\r?\n/)) {
     const columns = line.trim().split(/\s+/);
-    if (!/LISTENING/i.test(line)) continue;
-    if (columns[1]?.split(":").at(-1) !== targetPortName) continue;
-    if (/^\d+$/.test(columns.at(-1))) pids.push(columns.at(-1));
+    if (columns[0]?.toUpperCase() !== "TCP" || columns[3]?.toUpperCase() !== "LISTENING") continue;
+    const port = Number(columns[1]?.split(":").at(-1));
+    if (!pidsByPort.has(port)) continue;
+    const pid = columns.at(-1);
+    if (!/^[1-9]\d*$/.test(pid)) {
+      throw new Error(`Windows 开发端口查询返回无效 PID: port=${port} line=${JSON.stringify(line)}`);
+    }
+    pidsByPort.get(port).push(pid);
   }
-  return pids;
+  return pidsByPort;
 }
 
 function assertDevelopmentPortsFree(targetPorts, listenerPids) {
@@ -360,7 +346,9 @@ function assertDevelopmentPortsFree(targetPorts, listenerPids) {
 async function cleanDevelopmentPorts() {
   const targetPorts = selectedPorts();
   if (process.platform === "win32") {
-    const pids = new Set(targetPorts.flatMap((port) => listenerPidsWindows(port)));
+    // 一次查询覆盖全部目标端口；清理后的确认必须重新取得快照。
+    const listenersBeforeCleanup = readWindowsListenerPidsByPort(targetPorts);
+    const pids = new Set([...listenersBeforeCleanup.values()].flat());
     for (const pid of pids) {
       const result = Bun.spawnSync(["taskkill", "/T", "/F", "/PID", pid], {
         cwd: projectRoot,
@@ -371,29 +359,31 @@ async function cleanDevelopmentPorts() {
         throw new Error(`无法清理 Windows 开发进程: pid=${pid}`);
       }
     }
-    assertDevelopmentPortsFree(targetPorts, listenerPidsWindows);
+    const listenersAfterCleanup = readWindowsListenerPidsByPort(targetPorts);
+    assertDevelopmentPortsFree(targetPorts, (port) => listenersAfterCleanup.get(port));
     return;
   }
 
-  const pids = new Set(targetPorts.flatMap((port) => listenerPidsUnix(port)));
+  const signalListener = (pid, signal) => {
+    try {
+      process.kill(Number(pid), signal);
+    } catch (error) {
+      // 监听查询和发信号之间进程可能已退出；其它失败必须原样暴露。
+      if (error.code !== "ESRCH") throw error;
+    }
+  };
+  const listenersBeforeCleanup = readUnixListenerPidsByPort(targetPorts);
+  const pids = new Set([...listenersBeforeCleanup.values()].flat());
   for (const pid of pids) {
-    Bun.spawnSync(["kill", "-TERM", pid], {
-      cwd: projectRoot,
-      stdout: "ignore",
-      stderr: "ignore",
-    });
+    signalListener(pid, "SIGTERM");
   }
   if (pids.size > 0) await Bun.sleep(1_000);
-  for (const port of targetPorts) {
-    for (const pid of listenerPidsUnix(port)) {
-      Bun.spawnSync(["kill", "-KILL", pid], {
-        cwd: projectRoot,
-        stdout: "ignore",
-        stderr: "ignore",
-      });
-    }
+  const listenersAfterTerm = readUnixListenerPidsByPort(targetPorts);
+  for (const pid of new Set([...listenersAfterTerm.values()].flat())) {
+    signalListener(pid, "SIGKILL");
   }
-  assertDevelopmentPortsFree(targetPorts, listenerPidsUnix);
+  const listenersAfterCleanup = readUnixListenerPidsByPort(targetPorts);
+  assertDevelopmentPortsFree(targetPorts, (port) => listenersAfterCleanup.get(port));
 }
 
 function launcherLockPid() {
@@ -573,35 +563,34 @@ async function main() {
   let gatewayReady = serviceMode === "backend" || serviceMode === "web";
   try {
     if (serviceMode === "backend") {
-      await waitForHttpOk(
-        `http://${host}:${ports.backend}/api/v1/health`,
-        "backend",
-        null,
-        { "X-BoxTeam-Workspace-Id": backendWorkspaceId },
-      );
+      await waitForHttpOk({
+        url: `http://${host}:${ports.backend}/api/v1/health`,
+        label: "backend",
+        headers: { "X-BoxTeam-Workspace-Id": backendWorkspaceId },
+      });
     } else if (serviceMode === "web") {
-      await waitForHttpOk(`http://${host}:${ports.frontend}/health`, "frontend");
+      await waitForHttpOk({ url: `http://${host}:${ports.frontend}/health`, label: "frontend" });
     } else {
-      await waitForHttpOk(
-        `http://${host}:${ports.gateway}/api/gateway/health`,
-        "gateway",
-        gatewayProcess,
-      );
+      await waitForHttpOk({
+        url: `http://${host}:${ports.gateway}/api/gateway/health`,
+        label: "gateway",
+        processHandle: gatewayProcess,
+      });
       gatewayReady = true;
       if (serviceMode === "all") {
         await Promise.all([
-          waitForHttpOk(
-            `http://${host}:${ports.terminalFrontend}/health`,
-            "terminal frontend",
-          ),
-          waitForHttpOk(
-            `http://${host}:${ports.browserFrontend}/health`,
-            "browser frontend",
-          ),
+          waitForHttpOk({
+            url: `http://${host}:${ports.terminalFrontend}/health`,
+            label: "terminal frontend",
+          }),
+          waitForHttpOk({
+            url: `http://${host}:${ports.browserFrontend}/health`,
+            label: "browser frontend",
+          }),
         ]);
         const frontend = spawnProcess("bun", ["run", "dev"], webRoot, environment);
         processes.push(frontend);
-        await waitForHttpOk(`http://${host}:${ports.frontend}/health`, "frontend");
+        await waitForHttpOk({ url: `http://${host}:${ports.frontend}/health`, label: "frontend" });
       }
     }
     if (detachedReadyFile !== null) {
@@ -646,11 +635,11 @@ async function main() {
         );
         processes[processes.indexOf(gatewayProcess)] = fallbackGatewayProcess;
         gatewayProcess = fallbackGatewayProcess;
-        await waitForHttpOk(
-          `http://${host}:${ports.gateway}/api/gateway/health`,
-          "gateway active fallback",
-          fallbackGatewayProcess,
-        );
+        await waitForHttpOk({
+          url: `http://${host}:${ports.gateway}/api/gateway/health`,
+          label: "gateway active fallback",
+          processHandle: fallbackGatewayProcess,
+        });
         gatewayReady = true;
       } catch (fallbackError) {
         for (const child of processes) {

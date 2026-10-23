@@ -118,6 +118,7 @@ class WorkspaceResourceOwner:
                 statuses[record.resource_id] = lease_status(record)
             # 每个领域只对账自身 lease，不修改另一 owner 的运行事实。
             self._leases.reconcile(statuses, kind=self.lease_kind)
+            revisions_to_sync: list[OwnedResourceRecord] = []
             for record in self._store.records.values():
                 self._release_committed_fork_leases(record)
                 self._reconcile_stopped_record(record, observed.get(record.resource_id))
@@ -134,15 +135,17 @@ class WorkspaceResourceOwner:
                         )
                         + 1
                     )
-                    self._store.persist()
-                    try:
-                        await self._transport.sync_owner_revision(
-                            record.resource_id, record.owner_revision
-                        )
-                    except BaseException as error:
-                        self._unknown(record, error)
-                        raise
-            self._store.persist()
+                    revisions_to_sync.append(record)
+            if self._store.records:
+                self._store.persist()
+            for record in revisions_to_sync:
+                try:
+                    await self._transport.sync_owner_revision(
+                        record.resource_id, record.owner_revision
+                    )
+                except BaseException as error:
+                    self._unknown(record, error)
+                    raise
             self._recovered = True
 
     async def _create_record(

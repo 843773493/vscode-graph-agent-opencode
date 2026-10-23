@@ -2,6 +2,16 @@
 
 Browser 领域 owner，负责创建及真实工具调用；共用工作区资源的保留、关联、lease 和释放规则。
 
+## 文件职责树
+
+```text
+browser_resources/
+├── owner.py       Browser 领域状态与生命周期，委托共享资源 owner 处理通用保留和释放
+└── operations.py  单次受信 Browser 调用，持有 operation lease 并核实外部回执
+```
+
+调用路径从 `app/agents/tools/browser.py` 进入 `BrowserResourceOwner.operation()`，再由 `BrowserOperations` 执行单次调用；需要新增跨 Browser/Terminal 共用的 lease 规则时，归 `workspace_resources/`，只影响 Browser 的 Playwright 事实和动作时留在本目录。
+
 # 可修改内容
 
 Browser owner、operation 与对应行为验证。

@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import json
+import os
+import shutil
 import socket
 import subprocess
 import sys
@@ -9,6 +12,7 @@ from contextlib import ExitStack
 from io import StringIO
 from pathlib import Path
 from typing import Literal, TextIO
+from urllib.request import urlopen
 
 import pytest
 
@@ -21,6 +25,7 @@ from tests.harness.python.browser_manager import (
     start_browser_frontend_process,
     start_browser_manager_processes,
 )
+from tests.harness.python.process_output import spawn_logged_process
 from tests.harness.python.terminal_frontend import (
     TerminalFrontendProcess,
     close_terminal_frontend_process,
@@ -32,18 +37,19 @@ from tests.integration.gateway import (
 from tests.integration.workspace_services.browser import (
     test_browser_resource_performance as performance_case,
 )
+from tests.support.ports import integration_port_block_for_file
 from tests.support.processes.gateway import (
     GatewayProcess,
     close_gateway_process,
     start_gateway_process,
 )
-from tests.support.ports import integration_port_block_for_file
 from tests.support.processes.scope import capture_test_processes, register_test_process
 from tests.support.processes.workspace import (
     BackendProcess,
     close_backend_process,
     start_backend_process,
     terminate_process,
+    wait_for_http_ok,
 )
 
 
@@ -157,6 +163,63 @@ def process_lifetime() -> Iterator[ExitStack]:
     """测试自建子进程独立归属此 fixture，不受被测嵌套 scope 的释放影响。"""
     with ExitStack() as lifetime:
         yield lifetime
+
+
+@pytest.fixture(params=["127.0.0.1", "::1"])
+def frontend_loopback_address(request: pytest.FixtureRequest) -> tuple[str, int]:
+    host = str(request.param)
+    family = socket.AF_INET6 if host == "::1" else socket.AF_INET
+    with socket.socket(family, socket.SOCK_STREAM) as probe:
+        try:
+            probe.bind((host, 0))
+        except OSError as error:
+            if host == "::1":
+                pytest.skip(f"当前宿主无法绑定IPv6回环地址: {error}")
+            raise
+        return host, int(probe.getsockname()[1])
+
+
+@pytest.mark.parametrize("resource", ["browser", "terminal"])
+def test_auxiliary_frontend_serves_explicit_loopback_host(
+    resource: str,
+    frontend_loopback_address: tuple[str, int],
+    process_lifetime: ExitStack,
+    integration_workspace_root_path: str,
+) -> None:
+    node = shutil.which("node")
+    assert node is not None, "未找到辅助服务使用的Node运行时"
+    root = Path.cwd()
+    workspace = Path(integration_workspace_root_path)
+    workspace_id = json.loads(
+        (workspace / ".boxteam/workspace-identity.json").read_text(encoding="utf-8"),
+    )["workspace_id"]
+    host, port = frontend_loopback_address
+    # 使用真实静态入口与完整fixture工作区；不启动Browser/Terminal业务后端。
+    process, _logs = spawn_logged_process(
+        [node, str(root / "src/workspace-services" / resource / "client/server.js"),
+         "--host", host, "--port", str(port), "--backend-url", "auto",
+         "--workspace-root", str(workspace), "--workspace-id", workspace_id,
+         "--asset-root", str(root)],
+        cwd=root, env=os.environ.copy(),
+        artifacts_dir=workspace.parent / "artifacts",
+        log_name=f"{resource}-frontend-loopback",
+    )
+    process_lifetime.callback(terminate_process, process)
+    url_host = f"[{host}]" if host == "::1" else host
+    base_url = f"http://{url_host}:{port}"
+    wait_for_http_ok(f"{base_url}/health", process, timeout_seconds=3)
+    with urlopen(f"{base_url}/health", timeout=1) as response:
+        health = json.load(response)
+    assert health == {"ok": True, "backend_url": "auto", "workspace_id": workspace_id}
+    with urlopen(f"{base_url}/config.js", timeout=1) as response:
+        config = response.read().decode("utf-8")
+    backend_port = 8015 if resource == "browser" else 8012
+    assert f'"http://{url_host}:{backend_port}"' in config
+    assert json.dumps(workspace_id) in config
+    with urlopen(f"{base_url}/", timeout=1) as response:
+        assert response.status == 200
+        assert b"<html" in response.read()
+    assert process.poll() is None
 
 
 def _free_port() -> int:

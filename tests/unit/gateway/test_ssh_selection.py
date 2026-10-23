@@ -21,7 +21,7 @@ from app.schemas.gateway.ssh import AddRemoteGatewayRequest
 
 
 @pytest.fixture
-def ssh_config_files(tmp_path: Path) -> Path:
+def ssh_config_with_includes(tmp_path: Path) -> Path:
     included_path = tmp_path / "included.conf"
     included_path.write_text(
         "Host jump\n  HostName jump.example.com\n  User ops\n",
@@ -45,7 +45,7 @@ def ssh_config_files(tmp_path: Path) -> Path:
 
 
 @pytest.fixture
-def mock_ssh_g(monkeypatch: pytest.MonkeyPatch):
+def stub_ssh_config_resolution(monkeypatch: pytest.MonkeyPatch) -> None:
     options = {
         "dev": "hostname dev.example.com\nuser developer\nport 2222\n",
         "jump": "hostname jump.example.com\nuser ops\nport 22\n",
@@ -59,18 +59,21 @@ def mock_ssh_g(monkeypatch: pytest.MonkeyPatch):
 
 
 def test_user_ssh_config_lists_concrete_hosts_and_includes(
-    ssh_config_files: Path,
-    mock_ssh_g: None,
+    ssh_config_with_includes: Path,
+    stub_ssh_config_resolution: None,
 ):
-    hosts = list_user_ssh_hosts(ssh_config_files)
+    hosts = list_user_ssh_hosts(ssh_config_with_includes)
 
     assert [(host.alias, host.hostname, host.port, host.username) for host in hosts] == [
         ("dev", "dev.example.com", 2222, "developer"),
         ("jump", "jump.example.com", 22, "ops"),
     ]
-    assert resolve_user_ssh_host("dev", ssh_config_files).hostname == "dev.example.com"
+    assert (
+        resolve_user_ssh_host("dev", ssh_config_with_includes).hostname
+        == "dev.example.com"
+    )
     with pytest.raises(ValueError, match="不存在 Host"):
-        resolve_user_ssh_host("missing", ssh_config_files)
+        resolve_user_ssh_host("missing", ssh_config_with_includes)
 
 
 def test_windows_ssh_include_keeps_backslashes_and_removes_quotes(

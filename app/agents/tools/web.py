@@ -6,7 +6,7 @@ import math
 import re
 from collections.abc import Mapping, Sequence
 from html.parser import HTMLParser
-from typing import Literal
+from typing import ClassVar, Literal
 from urllib.parse import urlparse
 
 import httpx
@@ -105,8 +105,13 @@ class _SemanticChunkRanker:
             self._get_query_embedding(),
             self._compute_chunk_embeddings(chunks),
         )
+        query_norm = math.sqrt(sum(value * value for value in query_embedding))
         return [
-            _cosine_similarity(query_embedding, chunk_embedding)
+            _cosine_similarity(
+                query_embedding,
+                chunk_embedding,
+                left_norm=query_norm,
+            )
             for chunk_embedding in chunk_embeddings
         ]
 
@@ -142,30 +147,34 @@ class _SemanticChunkRanker:
 
 
 class _VisibleTextParser(HTMLParser):
-    _SKIPPED_TAGS = {"script", "style", "noscript", "svg", "template"}
-    _BLOCK_TAGS = {
-        "article",
-        "aside",
-        "blockquote",
-        "br",
-        "div",
-        "footer",
-        "h1",
-        "h2",
-        "h3",
-        "h4",
-        "h5",
-        "h6",
-        "header",
-        "li",
-        "main",
-        "nav",
-        "p",
-        "pre",
-        "section",
-        "table",
-        "tr",
-    }
+    _SKIPPED_TAGS: ClassVar[frozenset[str]] = frozenset(
+        {"script", "style", "noscript", "svg", "template"}
+    )
+    _BLOCK_TAGS: ClassVar[frozenset[str]] = frozenset(
+        {
+            "article",
+            "aside",
+            "blockquote",
+            "br",
+            "div",
+            "footer",
+            "h1",
+            "h2",
+            "h3",
+            "h4",
+            "h5",
+            "h6",
+            "header",
+            "li",
+            "main",
+            "nav",
+            "p",
+            "pre",
+            "section",
+            "table",
+            "tr",
+        }
+    )
 
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)
@@ -268,13 +277,19 @@ def _split_chunks(text: str) -> list[str]:
     return chunks
 
 
-def _cosine_similarity(left: Sequence[float], right: Sequence[float]) -> float:
+def _cosine_similarity(
+    left: Sequence[float],
+    right: Sequence[float],
+    *,
+    left_norm: float | None = None,
+) -> float:
     if len(left) != len(right):
         raise ValueError(
             f"Embedding 向量维度不一致: left={len(left)}, right={len(right)}"
         )
     dot_product = sum(a * b for a, b in zip(left, right, strict=True))
-    left_norm = math.sqrt(sum(value * value for value in left))
+    if left_norm is None:
+        left_norm = math.sqrt(sum(value * value for value in left))
     right_norm = math.sqrt(sum(value * value for value in right))
     if left_norm == 0 or right_norm == 0:
         raise ValueError("Embedding API 返回了零向量，无法计算余弦相似度")
@@ -339,15 +354,15 @@ async def _fetch_page(
                     download_truncated = True
                     break
             encoding = response.charset_encoding or "utf-8"
-            raw_text = bytes(body).decode(encoding, errors="replace")
+            response_text = body.decode(encoding, errors="replace")
             title: str | None = None
             if "html" in content_type.lower():
                 parser = _VisibleTextParser()
-                parser.feed(raw_text)
+                parser.feed(response_text)
                 title = parser.title
                 page_text = parser.text
             else:
-                page_text = _normalize_document_text(raw_text)
+                page_text = _normalize_document_text(response_text)
             selected_text, output_truncated = await _select_page_text(
                 page_text,
                 max_chars,

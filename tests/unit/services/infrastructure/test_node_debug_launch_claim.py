@@ -21,6 +21,7 @@ import sys
 import time
 from datetime import UTC, datetime
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 import websockets
@@ -1321,12 +1322,12 @@ async def test_cross_source_identity_cannot_report_termination(
 
 
 @pytest.mark.asyncio
-async def test_reconcile_terminate_rechecks_identity_before_sigkilling(
+async def test_reconcile_terminate_rechecks_identity_before_forced_termination(
     tmp_path: Path,
     session_tree: tuple[object, Path, Path],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """等待窗口内 PID 被回收复用：只接受复用/消失作为证据，绝不升级 SIGKILL。"""
+    """等待窗口内 PID 被回收复用：只接受复用/消失作为强制终止依据。"""
     resolver, _parent_dir, _child_dir = session_tree
     service, _store, _workspace_root = _make_service(tmp_path, resolver)
     monkeypatch.setattr(
@@ -1367,7 +1368,7 @@ async def test_reconcile_terminate_rechecks_identity_before_sigkilling(
             return self._entries[-1]
 
     monkeypatch.setattr(process_lifecycle, "os", _KillRecorder())
-    # 第一次核实＝同一实例 → 允许 SIGTERM；SIGTERM 后该 PID 被回收复用 → 不得再打 SIGKILL。
+    # 第一次核实＝同一实例 → 允许 SIGTERM；等待后 PID 被回收复用则不得强制终止。
     monkeypatch.setattr(
         process_lifecycle,
         "probe_process_identity",
@@ -1381,12 +1382,13 @@ async def test_reconcile_terminate_rechecks_identity_before_sigkilling(
     assert terminated is True
     assert sent_signals == [signal.SIGTERM]
 
-    # 反向对照：整个等待窗口内都核实为同一实例，才允许升级到 SIGKILL；
-    # 这里模拟"只有收到 SIGKILL 进程才消失"，核实结果一直是同一实例。
+    # 反向对照：整个等待窗口内都核实为同一实例，才允许升级到强制终止。
     sent_signals.clear()
+    forced_signal = getattr(signal, "SIGKILL", signal.SIGTERM)
+    required_signal_count = 2 if forced_signal == signal.SIGTERM else 1
 
     def kill_aware_probe(_pid: int) -> NodeDebugProcessIdentity | None:
-        if signal.SIGKILL in sent_signals:
+        if sent_signals.count(forced_signal) >= required_signal_count:
             return None
         return same_instance
 
@@ -1397,7 +1399,29 @@ async def test_reconcile_terminate_rechecks_identity_before_sigkilling(
         recorded_start_marker=recorded_marker,
     )
     assert terminated is True
-    assert sent_signals == [signal.SIGTERM, signal.SIGKILL]
+    assert sent_signals == [signal.SIGTERM, forced_signal]
+
+    # 模拟 Windows：SIGKILL 不存在时，重复 SIGTERM 走 TerminateProcess 强制结束。
+    sent_signals.clear()
+    monkeypatch.setattr(
+        process_lifecycle,
+        "signal",
+        SimpleNamespace(SIGTERM=signal.SIGTERM),
+    )
+
+    def windows_kill_aware_probe(_pid: int) -> NodeDebugProcessIdentity | None:
+        if sent_signals.count(signal.SIGTERM) >= 2:
+            return None
+        return same_instance
+
+    monkeypatch.setattr(process_lifecycle, "probe_process_identity", windows_kill_aware_probe)
+    terminated = await service._lifecycle.terminate_verified_instance(
+        pid=4321,
+        recorded_source=IDENTITY_SOURCE_LINUX_PROC,
+        recorded_start_marker=recorded_marker,
+    )
+    assert terminated is True
+    assert sent_signals == [signal.SIGTERM, signal.SIGTERM]
 
     # 事实不足（跨来源）同样不允许升级强制终止，也不能判为已终结。
     sent_signals.clear()

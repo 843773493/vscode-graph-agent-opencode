@@ -27,6 +27,7 @@ from app.services.infrastructure.config.state import (
 from app.services.infrastructure.workspace_activity.workspace_activity import (
     WorkspaceActivityCursorGoneError,
     WorkspaceActivityMixin,
+    WorkspaceActivityPage,
     WorkspaceActivityRecord,
     WorkspaceActivityService,
 )
@@ -51,6 +52,7 @@ from app.services.infrastructure.workspace_state_store_snapshot import (
 
 __all__ = [
     "WorkspaceActivityCursorGoneError",
+    "WorkspaceActivityPage",
     "WorkspaceActivityRecord",
     "WorkspaceActivityService",
     "WorkspaceStateStore",

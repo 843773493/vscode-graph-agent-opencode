@@ -1,5 +1,5 @@
 import { EventEmitter } from "node:events";
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import { BrowserSession } from "./browserSession.js";
 import { BrowserPageDiagnostics } from "./diagnostics/pageDiagnostics.js";
 import { BrowserRuntimePool } from "./resources/browserRuntimePool.js";
@@ -1015,5 +1015,104 @@ describe("浏览器统一操作队列", () => {
         operationDrainTimeoutMs: 5,
       }),
     ).rejects.toMatchObject({ code: "browser_shutdown_operation_drain_timeout" });
+  });
+
+  test.each([-60_000, 60_000])("管理器关闭排空不因系统校时提前失败: wall_clock_jump_ms=%s", async (wallClockJumpMs) => {
+    const browser = session();
+    const transitions = [];
+    let elapsedMs = 0;
+    let wallOffsetMs = 0;
+    browser.inFlightOperations = 1;
+    browser.record.resource_state = "frozen";
+    browser.discard = async () => {
+      transitions.push("discard");
+      browser.record.resource_state = "discarded";
+    };
+    browser.operationQueue.serialOperationTail = Promise.resolve().then(() => {
+      wallOffsetMs = wallClockJumpMs;
+    });
+    // 只替换时间边界；队列等待、在途检查和关闭入口仍执行真实Session方法。
+    const elapsedClock = spyOn(performance, "now").mockImplementation(() => elapsedMs);
+    const wallClock = spyOn(Date, "now").mockImplementation(() => 1_800_000_000_000 + elapsedMs + wallOffsetMs);
+    const drainTimer = {};
+    const clearedTimers = [];
+    const timers = spyOn(globalThis, "setTimeout").mockImplementation((callback, delay, ...args) => {
+      if (delay === 100) return drainTimer;
+      expect(delay).toBe(25);
+      queueMicrotask(() => {
+        elapsedMs += delay;
+        if (elapsedMs >= 50) browser.inFlightOperations = 0;
+        callback(...args);
+      });
+      return {};
+    });
+    const clearTimers = spyOn(globalThis, "clearTimeout").mockImplementation((timer) => {
+      clearedTimers.push(timer);
+    });
+    try {
+      const result = await browser.checkpointForManagerShutdown("clock_test", { operationDrainTimeoutMs: 100 });
+      expect(result.resource_state).toBe("discarded");
+      expect(elapsedMs).toBe(50);
+      expect(transitions).toEqual(["discard"]);
+      expect(clearedTimers).toEqual([drainTimer]);
+    } finally {
+      clearTimers.mockRestore();
+      timers.mockRestore();
+      wallClock.mockRestore();
+      elapsedClock.mockRestore();
+    }
+  });
+
+  test.each([
+    [-60_000, 0], [60_000, 0], [-60_000, 40], [60_000, 40],
+  ])("管理器关闭串行队列与在途操作共享单调预算: wall_clock_jump_ms=%s, queued_ms=%s", async (wallClockJumpMs, queuedMs) => {
+    const browser = session();
+    const attachedClient = {};
+    browser.clients.add(attachedClient);
+    browser.record.agent_access_locked = true;
+    browser.inFlightOperations = 1;
+    let elapsedMs = 0;
+    let wallOffsetMs = 0;
+    const sideEffects = [];
+    browser.freeze = async () => { sideEffects.push("freeze"); };
+    browser.discard = async () => { sideEffects.push("discard"); };
+    browser.manager.persist = async () => { sideEffects.push("persist"); };
+    browser.operationQueue.serialOperationTail = Promise.resolve().then(() => {
+      elapsedMs = queuedMs;
+      wallOffsetMs = wallClockJumpMs;
+    });
+    const elapsedClock = spyOn(performance, "now").mockImplementation(() => elapsedMs);
+    const wallClock = spyOn(Date, "now").mockImplementation(() => 1_800_000_000_000 + elapsedMs + wallOffsetMs);
+    const drainTimer = {};
+    const clearedTimers = [];
+    const timers = spyOn(globalThis, "setTimeout").mockImplementation((callback, delay, ...args) => {
+      if (delay === 50) return drainTimer;
+      expect(delay).toBe(25);
+      queueMicrotask(() => {
+        elapsedMs += delay;
+        // 错误实现回拨后仍有有限终点，不能让回归测试本身无限循环。
+        if (elapsedMs >= 100) browser.inFlightOperations = 0;
+        callback(...args);
+      });
+      return {};
+    });
+    const clearTimers = spyOn(globalThis, "clearTimeout").mockImplementation((timer) => {
+      clearedTimers.push(timer);
+    });
+    try {
+      await expect(browser.checkpointForManagerShutdown("clock_test", { operationDrainTimeoutMs: 50 }))
+        .rejects.toMatchObject({ code: "browser_shutdown_operation_drain_timeout" });
+      expect(elapsedMs).toBe(queuedMs === 0 ? 50 : 65);
+      expect(browser.inFlightOperations).toBe(1);
+      expect(sideEffects).toEqual([]);
+      expect(browser.clients.has(attachedClient)).toBe(true);
+      expect(browser.record.agent_access_locked).toBe(true);
+      expect(clearedTimers).toEqual([drainTimer]);
+    } finally {
+      clearTimers.mockRestore();
+      timers.mockRestore();
+      wallClock.mockRestore();
+      elapsedClock.mockRestore();
+    }
   });
 });

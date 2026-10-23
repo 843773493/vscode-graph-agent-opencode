@@ -23,6 +23,7 @@ from configs.boxteam import (
     install_user_configuration,
 )
 from configs.cli import main as config_cli_main
+from configs.installer import validate_config_resource_pair
 
 
 def _load(path: Path) -> dict[str, object]:
@@ -49,15 +50,43 @@ def _default_custom_tool_names(config: dict[str, object]) -> set[str]:
 
 @pytest.mark.parametrize("domain", ["gateway", "workspace"])
 @pytest.mark.parametrize("suffix", ["_inline", "_dev"])
-def test_static_configuration_matches_domain_schema(domain: str, suffix: str) -> None:
-    schema = _load(Path(f"configs/{domain}_schema.jsonc"))
+def test_static_configuration_matches_domain_schema(
+    domain: str,
+    suffix: str,
+    static_schema_validators: dict[str, jsonschema.Draft202012Validator],
+) -> None:
     config = _load(Path(f"configs/{domain}{suffix}.jsonc"))
-
-    jsonschema.Draft202012Validator.check_schema(schema)
-    jsonschema.validate(config, schema)
+    static_schema_validators[domain].validate(config)
 
 
-def test_development_templates_enable_development_capabilities_and_docker_gateway() -> None:
+def test_config_resource_pair_rejects_invalid_configuration(tmp_path: Path) -> None:
+    schema_source = tmp_path / "config-schema.json"
+    config_source = tmp_path / "config.json"
+    schema_source.write_text(
+        '{"$schema":"https://json-schema.org/draft/2020-12/schema",'
+        '"type":"object","required":["enabled"],'
+        '"properties":{"enabled":{"type":"boolean"}}}',
+        encoding="utf-8",
+    )
+    config_source.write_text('{"enabled":"true"}', encoding="utf-8")
+
+    with pytest.raises(jsonschema.ValidationError):
+        validate_config_resource_pair(config_source, schema_source)
+
+
+@pytest.fixture(scope="module")
+def static_schema_validators() -> dict[str, jsonschema.Draft202012Validator]:
+    validators: dict[str, jsonschema.Draft202012Validator] = {}
+    for domain in ("gateway", "workspace"):
+        schema = _load(Path(f"configs/{domain}_schema.jsonc"))
+        jsonschema.Draft202012Validator.check_schema(schema)
+        validators[domain] = jsonschema.Draft202012Validator(schema)
+    return validators
+
+
+def test_development_templates_enable_development_capabilities_and_docker_gateway() -> (
+    None
+):
     gateway = _load(Path("configs/gateway_inline.jsonc"))
     gateway_dev = _load(Path("configs/gateway_dev.jsonc"))
     workspace = _load(Path("configs/workspace_inline.jsonc"))
@@ -137,28 +166,32 @@ def test_force_rebuild_replaces_both_user_configs(tmp_path: Path) -> None:
     assert "stale" not in _load(config_root / "workspace.jsonc")
 
 
-def test_install_source_development_configuration_replaces_all_runtime_files(
+def test_source_development_install_uses_dev_profiles_and_source_env(
     tmp_path: Path,
 ) -> None:
-    project_root = tmp_path / "project"
-    configs_root = project_root / "configs"
-    configs_root.mkdir(parents=True)
-    (project_root / ".env").write_text("BOXTEAM_TEST=source\n", encoding="utf-8")
-    for name in (
-        "gateway_inline.jsonc",
+    source_project_root = tmp_path / "source-project"
+    source_configs_root = source_project_root / "configs"
+    source_configs_root.mkdir(parents=True)
+    (source_project_root / ".env").write_text(
+        "BOXTEAM_TEST=source\n",
+        encoding="utf-8",
+    )
+    for config_resource_name in (
         "gateway_dev.jsonc",
         "gateway_schema.jsonc",
-        "workspace_inline.jsonc",
         "workspace_dev.jsonc",
         "workspace_schema.jsonc",
     ):
-        shutil.copy2(Path.cwd() / "configs" / name, configs_root / name)
+        shutil.copyfile(
+            Path.cwd() / "configs" / config_resource_name,
+            source_configs_root / config_resource_name,
+        )
     config_root = tmp_path / "boxteam-home" / "config"
     config_root.mkdir(parents=True)
     (config_root / "gateway.jsonc").write_text('{"stale": true}\n')
 
     result = install_source_development_configuration(
-        project_root=project_root,
+        project_root=source_project_root,
         config_root=config_root,
     )
 
@@ -251,8 +284,8 @@ def test_cli_diagnose_is_read_only_and_reports_source_and_sqlite_state(
     config_root.mkdir(parents=True)
     gateway_config = config_root / "gateway.jsonc"
     workspace_config = config_root / "workspace.jsonc"
-    shutil.copy2(Path("configs/gateway_inline.jsonc"), gateway_config)
-    shutil.copy2(Path("configs/workspace_inline.jsonc"), workspace_config)
+    shutil.copyfile(Path("configs/gateway_inline.jsonc"), gateway_config)
+    shutil.copyfile(Path("configs/workspace_inline.jsonc"), workspace_config)
 
     gateway_root = boxteam_home / "state" / "gateway"
     state = GatewayStateStore(path=gateway_root / "gateway.sqlite")

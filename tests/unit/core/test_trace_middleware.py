@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Iterator
 
 import pytest
 from fastapi import Depends, FastAPI, HTTPException
@@ -50,8 +51,22 @@ def _build_client(*, raise_server_exceptions: bool = True) -> TestClient:
     return TestClient(app, raise_server_exceptions=raise_server_exceptions)
 
 
-def test_generated_request_id_is_identical_in_header_and_body() -> None:
-    response = _build_client().get("/request-id")
+@pytest.fixture
+def trace_client() -> Iterator[TestClient]:
+    with _build_client() as client:
+        yield client
+
+
+@pytest.fixture
+def trace_error_client() -> Iterator[TestClient]:
+    with _build_client(raise_server_exceptions=False) as client:
+        yield client
+
+
+def test_generated_request_id_is_identical_in_header_and_body(
+    trace_client: TestClient,
+) -> None:
+    response = trace_client.get("/request-id")
 
     assert response.status_code == 200
     request_id = response.headers["X-Request-ID"]
@@ -60,8 +75,10 @@ def test_generated_request_id_is_identical_in_header_and_body() -> None:
     assert response.json()["data"]["request_id"] == request_id
 
 
-def test_incoming_request_id_is_used_as_the_single_authority() -> None:
-    response = _build_client().get(
+def test_incoming_request_id_is_used_as_the_single_authority(
+    trace_client: TestClient,
+) -> None:
+    response = trace_client.get(
         "/request-id",
         headers={"X-Request-ID": "req_from_client"},
     )
@@ -71,8 +88,10 @@ def test_incoming_request_id_is_used_as_the_single_authority() -> None:
     assert response.json()["request_id"] == "req_from_client"
 
 
-def test_http_exception_keeps_its_status_and_request_id() -> None:
-    response = _build_client().get(
+def test_http_exception_keeps_its_status_and_request_id(
+    trace_client: TestClient,
+) -> None:
+    response = trace_client.get(
         "/http-exception",
         headers={"X-Request-ID": "req_http_exception"},
     )
@@ -82,9 +101,11 @@ def test_http_exception_keeps_its_status_and_request_id() -> None:
     assert response.json() == {"detail": "业务冲突"}
 
 
-def test_request_id_is_bound_to_request_scope_contextvar() -> None:
+def test_request_id_is_bound_to_request_scope_contextvar(
+    trace_client: TestClient,
+) -> None:
     """job 创建点从请求级 ContextVar 读取权威 request_id，不补造第二个。"""
-    response = _build_client().get(
+    response = trace_client.get(
         "/current-request-id",
         headers={"X-Request-ID": "req_carried_into_job"},
     )
@@ -93,9 +114,11 @@ def test_request_id_is_bound_to_request_scope_contextvar() -> None:
     assert response.json()["data"]["observed"] == "req_carried_into_job"
 
 
-def test_request_scope_contextvar_is_reset_after_dispatch() -> None:
+def test_request_scope_contextvar_is_reset_after_dispatch(
+    trace_client: TestClient,
+) -> None:
     """请求结束后执行根不再残留 request_id，独立执行根必须显式携带。"""
-    _build_client().get("/current-request-id", headers={"X-Request-ID": "req_reset"})
+    trace_client.get("/current-request-id", headers={"X-Request-ID": "req_reset"})
 
     assert get_current_request_id() is None
 
@@ -138,10 +161,11 @@ def test_require_current_request_id_rejects_blank_binding() -> None:
 
 def test_successful_request_trace_is_emitted_at_debug_level(
     caplog: pytest.LogCaptureFixture,
+    trace_client: TestClient,
 ) -> None:
     caplog.set_level(logging.DEBUG, logger="app.core.trace_middleware")
 
-    response = _build_client().get(
+    response = trace_client.get(
         "/request-id",
         headers={"X-Request-ID": "req_trace_log"},
     )
@@ -153,14 +177,14 @@ def test_successful_request_trace_is_emitted_at_debug_level(
 
 def test_failed_request_trace_is_emitted_with_exception(
     caplog: pytest.LogCaptureFixture,
+    trace_error_client: TestClient,
 ) -> None:
     caplog.set_level(logging.ERROR, logger="app.core.trace_middleware")
 
-    with _build_client(raise_server_exceptions=False) as client:
-        response = client.get(
-            "/failure",
-            headers={"X-Request-ID": "req_trace_failure"},
-        )
+    response = trace_error_client.get(
+        "/failure",
+        headers={"X-Request-ID": "req_trace_failure"},
+    )
 
     assert response.status_code == 500
     assert response.headers["X-Request-ID"] == "req_trace_failure"
@@ -192,48 +216,59 @@ def _build_gateway_client() -> TestClient:
     return TestClient(app, raise_server_exceptions=False)
 
 
-def test_gateway_id_header_is_read_into_request_scope() -> None:
-    """请求级注入通道：带头即绑定，缺头即保持未绑定。"""
-    client = _build_gateway_client()
+@pytest.fixture
+def gateway_trace_client() -> Iterator[TestClient]:
+    with _build_gateway_client() as client:
+        yield client
 
-    with_header = client.get(
-        "/gateway-id", headers={GATEWAY_ID_HEADER: "gateway_0123456789abcdef0123456789abcdef"}
+
+def test_gateway_id_header_is_read_into_request_scope(
+    gateway_trace_client: TestClient,
+) -> None:
+    """请求级注入通道：带头即绑定，缺头即保持未绑定。"""
+    with_header = gateway_trace_client.get(
+        "/gateway-id",
+        headers={GATEWAY_ID_HEADER: "gateway_0123456789abcdef0123456789abcdef"},
     )
     assert with_header.status_code == 200
     assert with_header.json()["data"]["gateway_id"] == "gateway_0123456789abcdef0123456789abcdef"
     assert with_header.headers["X-Request-ID"]
 
-    without_header = client.get("/gateway-id")
+    without_header = gateway_trace_client.get("/gateway-id")
     assert without_header.status_code == 200
     assert without_header.json()["data"]["gateway_id"] is None
 
-    blank_header = client.get("/gateway-id", headers={GATEWAY_ID_HEADER: "   "})
+    blank_header = gateway_trace_client.get(
+        "/gateway-id", headers={GATEWAY_ID_HEADER: "   "}
+    )
     assert blank_header.json()["data"]["gateway_id"] is None
 
 
-def test_require_gateway_id_fails_closed_without_header() -> None:
+def test_require_gateway_id_fails_closed_without_header(
+    gateway_trace_client: TestClient,
+) -> None:
     """缺头时消费方 fail-closed，MUST NOT 回退任何虚假默认值。"""
-    client = _build_gateway_client()
+    assert gateway_trace_client.get("/require-gateway-id").status_code == 500
 
-    assert client.get("/require-gateway-id").status_code == 500
-
-    ok = client.get(
-        "/require-gateway-id", headers={GATEWAY_ID_HEADER: "gateway_0123456789abcdef0123456789abcdef"}
+    ok = gateway_trace_client.get(
+        "/require-gateway-id",
+        headers={GATEWAY_ID_HEADER: "gateway_0123456789abcdef0123456789abcdef"},
     )
     assert ok.status_code == 200
     assert ok.json() == {"gateway_id": "gateway_0123456789abcdef0123456789abcdef"}
 
 
-def test_gateway_id_does_not_leak_across_requests() -> None:
+def test_gateway_id_does_not_leak_across_requests(
+    gateway_trace_client: TestClient,
+) -> None:
     """按请求注入而非进程级单例：后一个请求不得继承前一个请求的绑定。"""
-    client = _build_gateway_client()
-
-    first = client.get(
-        "/gateway-id", headers={GATEWAY_ID_HEADER: "gateway_11111111111111111111111111111111"}
+    first = gateway_trace_client.get(
+        "/gateway-id",
+        headers={GATEWAY_ID_HEADER: "gateway_11111111111111111111111111111111"},
     )
     assert first.json()["data"]["gateway_id"] == "gateway_11111111111111111111111111111111"
 
-    second = client.get("/gateway-id")
+    second = gateway_trace_client.get("/gateway-id")
     assert second.json()["data"]["gateway_id"] is None
 
 
@@ -242,10 +277,18 @@ def test_gateway_id_does_not_leak_across_requests() -> None:
     "gateway_" + "a" * 31, "gateway_" + "g" * 32, "gateway_" + "A" * 32,
     "channel_epoch_1",
 ])
-def test_gateway_identity_consumers_reject_invalid_header(gateway_id: str) -> None:
-    client = _build_gateway_client()
+def test_gateway_identity_consumers_reject_invalid_header(
+    gateway_trace_client: TestClient,
+    gateway_id: str,
+) -> None:
     for path in ("/gateway-id", "/require-gateway-id"):
-        response = client.get(path, headers={GATEWAY_ID_HEADER: gateway_id, "X-Request-ID": "invalid-gateway"})
+        response = gateway_trace_client.get(
+            path,
+            headers={
+                GATEWAY_ID_HEADER: gateway_id,
+                "X-Request-ID": "invalid-gateway",
+            },
+        )
         assert response.status_code == 500
         assert "非法 gateway_id" in response.json()["message"]
         assert response.headers["X-Request-ID"] == response.json()["request_id"] == "invalid-gateway"

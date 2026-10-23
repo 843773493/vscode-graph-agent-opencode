@@ -49,6 +49,10 @@ def test_build_session_agent_runtime_injects_job_service() -> None:
     assert create_runtime.call_args.kwargs["resource_activation"] is resource_activation
     assert create_runtime.call_args.kwargs["resource_navigation"] is dependency_provider.get_resource_navigation.return_value
     assert create_runtime.call_args.kwargs["text_mutations"] is dependency_provider.get_text_mutations.return_value
+    assert (
+        create_runtime.call_args.kwargs["node_debug_service"]
+        is dependency_provider.get_node_debug_service.return_value
+    )
     assert create_runtime.call_args.kwargs["skill_catalog"] is skill_catalog
     dependency_provider.get_mcp_tools.assert_not_called()
     assert (

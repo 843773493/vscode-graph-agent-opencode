@@ -41,14 +41,16 @@ def _response_has_visible_output(
     response: ModelResponse[Any] | AIMessage | ExtendedModelResponse[Any],
 ) -> bool:
     if isinstance(response, AIMessage):
-        messages = [response]
+        if response.tool_calls or response.invalid_tool_calls:
+            return True
+        return bool(response.text.strip())
     elif isinstance(response, ModelResponse):
-        messages = list(response.result)
+        messages = response.result
     elif isinstance(response, ExtendedModelResponse):
         model_response = response.model_response
         if not isinstance(model_response, ModelResponse):
             return False
-        messages = list(model_response.result)
+        messages = model_response.result
     else:
         return False
 
@@ -144,7 +146,11 @@ class CapabilityRoutingMiddleware(AgentMiddleware[Any, Any, Any]):
                 continue
 
             # 摘要响应由摘要 owner 决定无工具/最小系统重试，避免路由先吞掉空正文。
-            if current_summary_candidate() is not None or index == len(candidates) - 1 or _response_has_visible_output(response):
+            if (
+                current_summary_candidate() is not None
+                or index == len(candidates) - 1
+                or _response_has_visible_output(response)
+            ):
                 return response
             error = _visible_output_error(candidate)
             last_error = error
@@ -191,7 +197,11 @@ class CapabilityRoutingMiddleware(AgentMiddleware[Any, Any, Any]):
                 continue
 
             # 摘要响应由摘要 owner 决定无工具/最小系统重试，避免路由先吞掉空正文。
-            if current_summary_candidate() is not None or index == len(candidates) - 1 or _response_has_visible_output(response):
+            if (
+                current_summary_candidate() is not None
+                or index == len(candidates) - 1
+                or _response_has_visible_output(response)
+            ):
                 return response
             error = _visible_output_error(candidate)
             last_error = error

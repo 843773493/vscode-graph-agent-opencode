@@ -1,7 +1,9 @@
+import subprocess
 from pathlib import Path
 
 import pytest
 
+from app.gateway.runtime import development_restart
 from app.gateway.runtime.development_restart import (
     RESTART_DELAY_MS,
     resolve_development_restart_command,
@@ -23,9 +25,12 @@ def test_restart_command_is_unavailable_without_development_environment(
 
 
 def test_restart_command_requires_complete_development_environment(
+    tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("BOXTEAM_DEVELOPMENT_RESTART_RUNNER", "/tmp/bun")
+    monkeypatch.setenv(
+        "BOXTEAM_DEVELOPMENT_RESTART_RUNNER", str(tmp_path / "bun")
+    )
     monkeypatch.delenv("BOXTEAM_DEVELOPMENT_RESTART_SCRIPT", raising=False)
     monkeypatch.delenv("BOXTEAM_DEVELOPMENT_RESTART_CWD", raising=False)
 
@@ -33,9 +38,11 @@ def test_restart_command_requires_complete_development_environment(
         resolve_development_restart_command()
 
 
-def test_restart_process_uses_validated_command_and_log(
+@pytest.mark.parametrize("platform_name", ["posix", "nt"], ids=["posix", "windows"])
+def test_restart_process_uses_validated_command_and_platform_options(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    platform_name: str,
 ) -> None:
     runner = tmp_path / "bun"
     script = tmp_path / "dev.mjs"
@@ -57,13 +64,28 @@ def test_restart_process_uses_validated_command_and_log(
         captured["options"] = options
         return Process()
 
-    monkeypatch.setattr(
-        "app.gateway.runtime.development_restart.subprocess.Popen",
-        fake_popen,
-    )
     log_path = tmp_path / "logs" / "development-restart.log"
 
-    assert start_development_restart(command, log_path=log_path) == 24680
+    with monkeypatch.context() as platform_patch:
+        platform_patch.setattr(development_restart.os, "name", platform_name)
+        if platform_name == "nt":
+            process_group_flag = getattr(
+                subprocess, "CREATE_NEW_PROCESS_GROUP", 0x200
+            )
+            detached_flag = getattr(subprocess, "DETACHED_PROCESS", 0x8)
+            platform_patch.setattr(
+                subprocess,
+                "CREATE_NEW_PROCESS_GROUP",
+                process_group_flag,
+                raising=False,
+            )
+            platform_patch.setattr(
+                subprocess, "DETACHED_PROCESS", detached_flag, raising=False
+            )
+        platform_patch.setattr(subprocess, "Popen", fake_popen)
+
+        assert start_development_restart(command, log_path=log_path) == 24680
+
     assert captured["argv"] == [
         str(runner),
         str(script),
@@ -71,3 +93,17 @@ def test_restart_process_uses_validated_command_and_log(
         f"--restart-delay-ms={RESTART_DELAY_MS}",
     ]
     assert log_path.is_file()
+    options = captured["options"]
+    assert isinstance(options, dict)
+    assert options["cwd"] == command.cwd
+    assert options["stdin"] == subprocess.DEVNULL
+    assert options["stderr"] == subprocess.STDOUT
+    if platform_name == "nt":
+        expected_flags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0x200) | getattr(
+            subprocess, "DETACHED_PROCESS", 0x8
+        )
+        assert options["creationflags"] == expected_flags
+        assert "start_new_session" not in options
+    else:
+        assert options["start_new_session"] is True
+        assert "creationflags" not in options

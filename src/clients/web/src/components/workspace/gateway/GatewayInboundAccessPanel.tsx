@@ -8,6 +8,7 @@ import type {
   GatewayDeviceConnection,
   GatewayInboundAccessList,
 } from "../../../types/backend";
+import { formatLocalDateTime } from "../../../utils/format";
 import { useWarmConfirm } from "../../shell/WarmConfirmProvider";
 import { errorMessage } from "../../../utils/errorMessage";
 
@@ -15,10 +16,6 @@ interface GatewayInboundAccessPanelProps {
   apiPort: number;
   revision?: number;
   onAddDevice: () => void;
-}
-
-function formatExpiry(value: string): string {
-  return new Date(value).toLocaleString();
 }
 
 export default function GatewayInboundAccessPanel({
@@ -112,7 +109,7 @@ export default function GatewayInboundAccessPanel({
               <span className="gateway-device-icon"><span className="codicon codicon-device-mobile" aria-hidden="true" /></span>
               <div className="gateway-device-copy">
                 <div><strong>{device.device_name}</strong><span className={`gateway-authorization-status ${device.status}`}>{device.status === "authorized" ? "已授权" : "已过期"}</span></div>
-                <small>凭据有效至 {formatExpiry(device.credential_expires_at)}</small>
+                <small>凭据有效至 {formatLocalDateTime(device.credential_expires_at)}</small>
                 <code title={device.connection_id}>{device.connection_id}</code>
               </div>
               <button type="button" className="danger" disabled={revokingId === device.connection_id} onClick={() => void revoke(device)}>
@@ -135,7 +132,7 @@ export default function GatewayInboundAccessPanel({
           {gatewayPeers.map((peer) => (
             <article key={peer.connection_id}>
               <span className="codicon codicon-remote" aria-hidden="true" />
-              <div><strong>{peer.peer_gateway_id}</strong><small>授权有效至 {formatExpiry(peer.credential_expires_at)}</small></div>
+              <div><strong>{peer.peer_gateway_id}</strong><small>授权有效至 {formatLocalDateTime(peer.credential_expires_at)}</small></div>
               <span className="gateway-authorization-status authorized">已授权</span>
             </article>
           ))}

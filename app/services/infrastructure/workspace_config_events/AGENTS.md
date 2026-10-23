@@ -49,5 +49,5 @@ claim / delivered / failed 投递状态。
   `KeyError` 目标事件缺失、`ConfigConflictError` claim/幂等冲突、`RuntimeError`
   事务后读取失败、`ConfigEventCursorGoneError` 游标已被裁剪。
 - 修改本目录后运行 `uv run ruff check` 与
-  `uv run pytest tests/unit/services/infrastructure/test_workspace_state_store.py`。
+  `uv run pytest tests/unit/services/infrastructure/workspace_state_store/test_workspace_config_events.py`。
 - 模板示例；在整理 `AGENTS.md` 时请保留此行。

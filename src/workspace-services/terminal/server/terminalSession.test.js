@@ -5,7 +5,7 @@ import { cpSync, rmSync, writeFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 
 import { TerminalSession, validateTerminalRecord } from "./terminalSession.js";
-import { IsolatedPtyProcess } from "./isolatedPtyProcess.js";
+import { IsolatedPtyProcess } from "./processes/isolatedPtyProcess.js";
 
 const workspaceRunRoot = path.join(process.cwd(), "out/tests/src/workspace-services/terminal/server/terminalSession/workspace", randomUUID());
 // 文件级清理兜住准备失败；用例结束优先释放本次创建的独占工作区。
@@ -105,7 +105,7 @@ test("退出清理失败只广播阶段，原始异常只留在诊断", async (t
 
 test("只有返回给模型的后台 execution 可以 claim steering", (t) => {
   const session = completedSession(t);
-  const identity = { completionEventId: session.completionEventId, commandStartSequence: session.commandStartSequence };
+  const identity = { completionEventId: session.completionEventId, commandStartSequence: session.commandOutputBaselineSequence };
 
   assert.equal(session.claimSteering(identity), false);
   session.markModelBackgrounded();
@@ -119,7 +119,7 @@ test("只有返回给模型的后台 execution 可以 claim steering", (t) => {
 
 test("迟到 claim 和 finish 不得修改另一命令 generation", (t) => {
   const session = completedSession(t, { steering_dispatching: true });
-  const current = { completionEventId: session.completionEventId, commandStartSequence: session.commandStartSequence };
+  const current = { completionEventId: session.completionEventId, commandStartSequence: session.commandOutputBaselineSequence };
   const before = session.toRecord();
 
   for (const stale of [
@@ -134,7 +134,7 @@ test("迟到 claim 和 finish 不得修改另一命令 generation", (t) => {
 
 test("恢复持久 claim 保留原 completion event 和 generation", (t) => {
   const session = completedSession(t, { steering_dispatching: true });
-  const identity = { completionEventId: session.completionEventId, commandStartSequence: session.commandStartSequence };
+  const identity = { completionEventId: session.completionEventId, commandStartSequence: session.commandOutputBaselineSequence };
   assert.equal(session.claimSteering(identity), true);
   session.finishSteering({ ...identity, dispatched: true });
   assert.equal(session.snapshot().steering_dispatched, true);
@@ -147,7 +147,7 @@ test("模型读取完成输出后抑制 terminal completion steering", async (t)
   await session.readModelOutput();
 
   assert.equal(session.snapshot().completion_observed_by_model, true);
-  assert.equal(session.claimSteering({ completionEventId: session.completionEventId, commandStartSequence: session.commandStartSequence }), false);
+  assert.equal(session.claimSteering({ completionEventId: session.completionEventId, commandStartSequence: session.commandOutputBaselineSequence }), false);
 });
 
 test("持久记录只承载工作区内相对路径，绝不落盘任何真实绝对路径", (t) => {
@@ -363,7 +363,7 @@ test("没有运行中的模型命令时，PTY输出保留正文与序号但不�
       for (const receive of session.ptyProcess.ptyOutputHandlers) receive(output);
       assert.equal(session.buffer, output);
       assert.equal(session.outputMultiplexer.readAfter(0).output, output);
-      assert.equal(session.sequence, 1);
+      assert.equal(session.outputSequence, 1);
       assert.equal(session.lastCommandStatus, commandStatus);
       assert.equal(session.status, "running");
       assert.equal(scans, 0);
@@ -389,7 +389,7 @@ test("模型命令仍解析跨块和ANSI标记，完成后停止扫描且只释�
   });
   try {
     session.write("__BOXTEAM_CMD_START_cafe__\n__BOXTEAM_CMD_DONE_cafe__", { source: "agent", command: "exit 7" });
-    const outputs = ["旧标记 __BOXTEAM_CMD_DONE_deadbeef__:9\n", "\x1b[31m__BOXTEAM_CMD_DONE_ca", "fe__\x1b[0m:7\r\n", "尾部正文 __BOXTEAM_CMD_DONE_cafe__:8\n"];
+    const outputs = ["旧标记 __BOXTEAM_CMD_DONE_deadbeef__:9\n\x1b]0;旧标题\x1b\\", "\x1b[31m__BOXTEAM_CMD_DONE_ca", "fe__\x1b[0m:7\r\n\x1b]0;新标题\x1b\\", "尾部正文 __BOXTEAM_CMD_DONE_cafe__:8\n"];
     for (const [index, output] of outputs.entries()) {
       for (const receive of session.ptyProcess.ptyOutputHandlers) receive(output);
       if (index < 2) assert.equal(session.lastCommandStatus, "running");
@@ -397,8 +397,8 @@ test("模型命令仍解析跨块和ANSI标记，完成后停止扫描且只释�
     assert.equal(scans, 3);
     assert.equal(session.lastCommandStatus, "completed");
     assert.equal(session.lastCommandExitCode, 7);
-    assert.equal(session.sequence, 4);
-    assert.equal(session.commandStartSequence, 0);
+    assert.equal(session.outputSequence, 4);
+    assert.equal(session.commandOutputBaselineSequence, 0);
     assert.equal(session.completionEventId, `terminal_completed:${session.id}:3`);
     assert.deepEqual(released, [{ status: "completed", commandStatus: "completed", reason: "command_completed" }]);
     assert.equal(session.outputMultiplexer.readAfter(0).output, outputs.join(""));

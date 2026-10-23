@@ -2,12 +2,13 @@
 
 `app/runtime/` 是工作区后端的运行时组装层，负责把服务层与基础设施实例装配成 Agent 运行上下文，并提供在导入期会拉起重依赖的懒加载能力。它位于 `app/services/`（业务行为）与 `app/agents/`（Agent 构建）之间，不实现业务规则。
 
-四个模块的职责：
+主要模块的职责：
 
 - `agent_runtime.py`：声明 `AgentRuntimeDependencyProvider` 依赖提供协议，并提供 `build_session_agent_runtime` 与工具定义装配函数，把外部依赖收敛后交给 `app/agents/agent_factory`。
 - `session_orchestrator.py`：`SessionOrchestrator`，把用户消息的创建与调度编排放到一条 `create_and_run` 链路上。
 - `embeddings.py`：`LiteLLMEmbeddingComputer`，按 provider 配置构造远程 Embedding 调用。
 - `chatgpt_auth.py`：ChatGPT OAuth provider 的凭据目录解析与从 Codex 原生凭据迁移。
+- `litellm_runtime.py`：唯一模型 SDK 懒加载入口，以及公共模型目录的本地缓存、有界等待和后台刷新。
 
 # 可修改内容
 

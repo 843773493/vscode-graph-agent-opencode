@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
 
 from cryptography.hazmat.primitives import serialization
@@ -67,6 +68,7 @@ def public_key_pem(private_key: Ed25519PrivateKey) -> str:
     ).decode("utf-8")
 
 
+@lru_cache(maxsize=128)
 def load_public_key(pem: str) -> Ed25519PublicKey:
     try:
         public_key = serialization.load_pem_public_key(pem.encode("utf-8"))

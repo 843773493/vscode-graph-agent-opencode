@@ -4,6 +4,7 @@ import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { SessionChangesSummary } from "../../types/backend";
 import type { ConversationContentView } from "../../types/frontend";
+import AgentStatePanel from "../panels/inspectionPanels/AgentStatePanel";
 import EventQueuePanel from "../panels/inspectionPanels/EventQueuePanel";
 import RequestLogPanel from "../panels/inspectionPanels/RequestLogPanel";
 import ContentViewSlots from "./ContentViewSlots";
@@ -92,7 +93,7 @@ describe("ContentViewSlots 内容视图编排契约", () => {
     expect(html).not.toContain("content-view-slot");
   });
 
-  test("默认视图下只有会话记录槽可见，三个检视槽保留挂载但隐藏", () => {
+  test("默认视图下只有会话记录槽可见，未访问的检视槽保留空隐藏外壳", () => {
     const html = slot({ contentView: "default" });
 
     expect(html).toContain("<div class=\"content-view-slot preserve-mounted-hidden\" hidden=\"\">");
@@ -121,7 +122,7 @@ describe("ContentViewSlots 内容视图编排契约", () => {
     expect(slotMarkup(html, 1)).not.toContain("hidden=");
     expect(slotMarkup(html, 2)).toContain("hidden=\"\"");
     expect(slotMarkup(html, 3)).toContain("hidden=\"\"");
-    expect(html).toContain("上限 200");
+    expect(slotMarkup(html, 1)).toContain("正在加载面板...");
   });
 
   test("请求视图下只有请求槽可见", () => {
@@ -133,13 +134,59 @@ describe("ContentViewSlots 内容视图编排契约", () => {
     expect(slotMarkup(html, 3)).toContain("hidden=\"\"");
   });
 
-  test("诊断面板按工作区会话缓存键隔离，同时保留会话业务 ID", () => {
+  test("检视面板首次访问时才挂载，访问后保留实例并按工作区会话键隔离", async () => {
     let renderer: ReactTestRenderer;
-    act(() => {
+    await act(async () => {
       renderer = create(
         <ContentViewSlots
           {...slotProps({
+            contentView: "default",
+            workspaceId: "workspace-b",
+            sessionId: "session-shared",
+            activeSessionCacheKey: "workspace-b:session-shared",
+          })}
+        />,
+      );
+    });
+
+    expect(renderer!.root.findAllByType(AgentStatePanel)).toHaveLength(0);
+    expect(renderer!.root.findAllByType(EventQueuePanel)).toHaveLength(0);
+    expect(renderer!.root.findAllByType(RequestLogPanel)).toHaveLength(0);
+
+    await act(async () => {
+      renderer!.update(
+        <ContentViewSlots
+          {...slotProps({
             contentView: "events",
+            workspaceId: "workspace-b",
+            sessionId: "session-shared",
+            activeSessionCacheKey: "workspace-b:session-shared",
+            activeTraceHistory: {
+              scopeKey: "workspace-b:session-shared",
+              generation: 1,
+              items: [],
+              nextCursor: null,
+              hasMore: true,
+              loading: false,
+              loadingOlder: true,
+              error: null,
+            },
+          })}
+        />,
+      );
+    });
+
+    expect(renderer!.root.findAllByType(EventQueuePanel)).toHaveLength(1);
+    expect(renderer!.root.findAllByType(RequestLogPanel)).toHaveLength(0);
+    expect(renderer!.root.findByType(EventQueuePanel).props.active).toBe(true);
+    expect(renderer!.root.findByType(EventQueuePanel).props.historyHasMore).toBe(true);
+    expect(renderer!.root.findByType(EventQueuePanel).props.historyLoadingOlder).toBe(true);
+
+    await act(async () => {
+      renderer!.update(
+        <ContentViewSlots
+          {...slotProps({
+            contentView: "requests",
             workspaceId: "workspace-b",
             sessionId: "session-shared",
             activeSessionCacheKey: "workspace-b:session-shared",
@@ -150,12 +197,32 @@ describe("ContentViewSlots 内容视图编排契约", () => {
 
     const eventProps = renderer!.root.findByType(EventQueuePanel).props;
     const requestProps = renderer!.root.findByType(RequestLogPanel).props;
+    expect(renderer!.root.findAllByType(AgentStatePanel)).toHaveLength(0);
+    expect(renderer!.root.findAllByType(EventQueuePanel)).toHaveLength(1);
+    expect(renderer!.root.findAllByType(RequestLogPanel)).toHaveLength(1);
+    expect(eventProps.active).toBe(false);
+    expect(requestProps.active).toBe(true);
     expect(eventProps.scopeKey).toBe("workspace-b:session-shared");
     expect(eventProps.sessionId).toBe("session-shared");
     expect(requestProps.scopeKey).toBe("workspace-b:session-shared");
     expect(requestProps.sessionId).toBe("session-shared");
 
-    act(() => renderer!.unmount());
+    await act(async () => {
+      renderer!.update(
+        <ContentViewSlots
+          {...slotProps({
+            contentView: "default",
+            workspaceId: "workspace-b",
+            sessionId: "session-shared",
+            activeSessionCacheKey: "workspace-b:session-shared",
+          })}
+        />,
+      );
+    });
+
+    expect(renderer!.root.findAllByType(EventQueuePanel)).toHaveLength(1);
+    expect(renderer!.root.findAllByType(RequestLogPanel)).toHaveLength(1);
+    await act(async () => renderer!.unmount());
   });
 
   test("三个检视视图隐藏会话记录槽，变更视图仍保留会话记录槽", () => {

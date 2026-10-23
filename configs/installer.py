@@ -68,7 +68,8 @@ def _read_jsonc_object(path: Path) -> dict[str, object]:
 def validate_config_resource_pair(config_source: Path, schema_source: Path) -> None:
     schema = _read_jsonc_object(schema_source)
     jsonschema.Draft202012Validator.check_schema(schema)
-    jsonschema.validate(_read_jsonc_object(config_source), schema)
+    schema_validator = jsonschema.Draft202012Validator(schema)
+    schema_validator.validate(_read_jsonc_object(config_source))
 
 
 def _profile_config_resource(domain: str, profile: ConfigProfile) -> str:

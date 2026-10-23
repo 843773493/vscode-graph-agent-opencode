@@ -532,8 +532,10 @@ def _create_session(
             return
         config = build_checkpoint_config(thread_id)
         messages: list[BaseMessage] = []
-        start = 1
+        checkpoint_segment_start_turn = 1
         cutoff_index = 0
+        segment_has_internal_message = False
+        segment_has_large_tool_payload = False
         checkpoint_ends = set(
             range(1, turn_count + 1)
             if checkpoint_each_turn
@@ -543,6 +545,10 @@ def _create_session(
             raise ValueError(f"fixture checkpoint 边界非法: {sorted(checkpoint_ends)}")
         compaction_boundaries = set(compaction_points) | {turn_count}
         for turn_index in range(1, turn_count + 1):
+            segment_has_internal_message |= turn_index % 17 == 0
+            segment_has_large_tool_payload |= (
+                large_tool_payloads and turn_index % 11 == 0
+            )
             with timed_fixture_stage(
                 observer,
                 "generator.normal_turn",
@@ -596,18 +602,22 @@ def _create_session(
                     )
                 boundary = turn_index in checkpoint_ends
                 event = None
-                if boundary and start > 1 and turn_index in compaction_boundaries:
+                if (
+                    boundary
+                    and checkpoint_segment_start_turn > 1
+                    and turn_index in compaction_boundaries
+                ):
                     event = {
-                        "event_id": f"compaction-{start:04d}",
+                        "event_id": f"compaction-{checkpoint_segment_start_turn:04d}",
                         "strategy": "cache_preserving",
                         "cutoff_index": cutoff_index,
                         "cache_prefix_messages": [],
                         "summary_message": HumanMessage(
-                            id=f"summary-{start:04d}",
-                            content=f"第 {start} 轮前完成上下文压缩，保留主题和工具结论。",
+                            id=f"summary-{checkpoint_segment_start_turn:04d}",
+                            content=f"第 {checkpoint_segment_start_turn} 轮前完成上下文压缩，保留主题和工具结论。",
                             additional_kwargs={"lc_source": "summarization"},
                         ),
-                        "file_path": f".boxteam/context-history/compaction-{start:04d}.json",
+                        "file_path": f".boxteam/context-history/compaction-{checkpoint_segment_start_turn:04d}.json",
                     }
                 checkpoint_id = (
                     f"{checkpoint_prefix}-{turn_index:04d}" if boundary
@@ -674,19 +684,17 @@ def _create_session(
                                 "source": "custom-tool-rollout-fixture",
                                 "checkpoint_end_turn": turn_index,
                                 "semantic_boundary": "compaction" if event else "initial",
-                                "contains_internal_messages": any(
-                                    index % 17 == 0 for index in range(start, turn_index + 1)
-                                ),
-                                "contains_large_tool_payload": large_tool_payloads and any(
-                                    index % 11 == 0 for index in range(start, turn_index + 1)
-                                ),
+                                "contains_internal_messages": segment_has_internal_message,
+                                "contains_large_tool_payload": segment_has_large_tool_payload,
                                 **({"provider_id": provider_id} if real_provider_fixture else {}),
                             },
                             {"messages": str(turn_index)},
                         )
                 if turn_index in checkpoint_ends:
-                    start = turn_index + 1
+                    checkpoint_segment_start_turn = turn_index + 1
                     cutoff_index = len(messages)
+                    segment_has_internal_message = False
+                    segment_has_large_tool_payload = False
 
 
 def _write_fixture(

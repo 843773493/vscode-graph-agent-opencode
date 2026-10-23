@@ -8,10 +8,10 @@ import pytest
 from app.services.infrastructure.llm_request_log_service import LLMRequestLogService
 
 
-def write_log(session_dir: Path, file_created_at_ns: int, payload: dict) -> Path:
+def write_log(session_dir: Path, filename_timestamp_ns: int, payload: dict) -> Path:
     log_dir = session_dir / "logs" / "llm_requests"
     log_dir.mkdir(parents=True, exist_ok=True)
-    log_file = log_dir / f"{file_created_at_ns}.json"
+    log_file = log_dir / f"{filename_timestamp_ns}.json"
     log_file.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
     return log_file
 

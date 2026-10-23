@@ -13,24 +13,24 @@ def write_mcp_config(
     allowed_mcp_tools: list[str],
 ) -> str:
     project_root = Path.cwd().resolve()
-    source_config = (
+    default_config_path = (
         project_root
         / "configs"
         / "tests"
         / "workspace"
         / "default.jsonc"
     )
-    with source_config.open("r", encoding="utf-8") as stream:
-        config = commentjson.load(stream)
-    config["mcp"] = {"servers": servers}
-    config["agents"]["default"]["tools"]["denylist"] = ["all"]
-    config["agents"]["default"]["tools"]["allowlist"] = list(allowed_mcp_tools)
+    with default_config_path.open("r", encoding="utf-8") as stream:
+        workspace_config = commentjson.load(stream)
+    workspace_config["mcp"] = {"servers": servers}
+    workspace_config["agents"]["default"]["tools"]["denylist"] = ["all"]
+    workspace_config["agents"]["default"]["tools"]["allowlist"] = list(allowed_mcp_tools)
 
     artifacts_dir = workspace_root.parent / "artifacts"
     artifacts_dir.mkdir(parents=True, exist_ok=True)
-    config_path = artifacts_dir / "workspace.jsonc"
-    config_path.write_text(
-        json.dumps(config, ensure_ascii=False, indent=2),
+    output_config_path = artifacts_dir / "workspace.jsonc"
+    output_config_path.write_text(
+        json.dumps(workspace_config, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
-    return str(config_path)
+    return str(output_config_path)

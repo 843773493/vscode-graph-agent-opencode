@@ -16,7 +16,8 @@ import pytest
 from app.core.workspace_identity import load_or_create_workspace_id
 from tests.e2e.system.workspace_services.terminal.terminal_process_helpers import (
     create_long_running_terminal,
-    lifecycle_workspace,
+    create_terminal_scenario_workspace,
+    prepare_empty_terminal_e2e_workspace,
     process_exists,
     terminal_ports_with_offset,
     terminal_state_record,
@@ -33,6 +34,12 @@ class ProcessSnapshot(NamedTuple):
     group_id: int
     session_id: int | str
     start_time: int | str
+
+
+@pytest.fixture(scope="module")
+def e2e_workspace_root_path() -> str:
+    """生命周期测试只需空工作区，避免复制未使用的默认项目模板。"""
+    return prepare_empty_terminal_e2e_workspace(Path(__file__))
 
 
 def _registered_process_snapshot(record: dict[str, object]) -> ProcessSnapshot | None:
@@ -141,7 +148,9 @@ def test_terminal_manager_sigterm_preserves_registered_owner_for_reconciliation(
     e2e_workspace_root_path: str, e2e_backend_port: int
 ):
     backend_port, _frontend_port = terminal_ports_with_offset(e2e_backend_port, 70)
-    root = lifecycle_workspace(e2e_workspace_root_path, "sigterm")
+    root = create_terminal_scenario_workspace(
+        e2e_workspace_root_path, "sigterm"
+    )
     workspace_id = load_or_create_workspace_id(Path(root))
     process = start_terminal_backend(backend_port=backend_port, workspace_root=root, artifacts_dir=TestRunContext.from_test_file(Path(__file__)).artifacts_dir)
     original = None
@@ -168,7 +177,9 @@ def test_terminal_manager_restart_preserves_identity_without_claiming_pty_recove
     e2e_workspace_root_path: str, e2e_backend_port: int
 ):
     backend_port, _frontend_port = terminal_ports_with_offset(e2e_backend_port, 72)
-    root = lifecycle_workspace(e2e_workspace_root_path, "startup")
+    root = create_terminal_scenario_workspace(
+        e2e_workspace_root_path, "startup"
+    )
     workspace_id = load_or_create_workspace_id(Path(root))
     process = start_terminal_backend(backend_port=backend_port, workspace_root=root, artifacts_dir=TestRunContext.from_test_file(Path(__file__)).artifacts_dir)
     original = None

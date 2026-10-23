@@ -77,16 +77,21 @@ export function useSessionMessageStream({
     const updateState = (update: (current: MessageStreamState) => MessageStreamState) => {
       setState((previous) => {
         if (controller.signal.aborted || !hasSessionOwner(previous, targetSessionId, targetWorkspaceId)) return previous;
-        const next = cloneMaps(previous);
-        const messageStreams = next.messageStreamsByTurnStream ?? new Map();
-        next.messageStreamsByTurnStream = messageStreams;
+        // 此更新只改消息流镜像；其余状态映射保持共享，避免每个 SSE 帧都复制整份 AppState。
+        const next = { ...previous };
+        const messageStreams = previous.messageStreamsByTurnStream ?? new Map();
         const currentKey = turnStreamId ? streamCacheKey(turnStreamId) : pendingStreamKey;
-        const existingEntry = [...messageStreams.entries()].find(([key, value]) =>
-          value.sessionCacheKey === sessionCacheKey
-          && value.threadId === targetThreadId
-          && (key === currentKey || value.turnId === targetTurnId),
-        );
-        const existing = existingEntry?.[1];
+        let existing: MessageStreamState | undefined;
+        for (const [key, value] of messageStreams) {
+          if (
+            value.sessionCacheKey === sessionCacheKey
+            && value.threadId === targetThreadId
+            && (key === currentKey || value.turnId === targetTurnId)
+          ) {
+            existing = value;
+            break;
+          }
+        }
         const current = existing && existing.turnId === targetTurnId
           ? existing
           : createMessageStreamState(targetSessionId, targetTurnId, "", sessionCacheKey, targetThreadId);

@@ -1,18 +1,27 @@
 import { createServer } from "node:http";
-import { readFile } from "node:fs/promises";
-import path from "node:path";
 import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
-import { WebSocket, WebSocketServer } from "ws";
+import { WebSocketServer } from "ws";
 import { BrowserSession } from "./browserSession.js";
-import { FIXED_BROWSER_ID, encodeServerMessage, parseClientMessage } from "./protocol.js";
-import { executeBrowserCommand, parseTerminalCommand, TERMINAL_COMMAND_HELP } from "./terminalCommands.js";
+import { FIXED_BROWSER_ID } from "./protocol.js";
+import {
+  BROWSER_CONTROL_COMMAND_HELP,
+  executeBrowserCommand,
+  parseBrowserControlCommand,
+} from "./browserControlCommands.js";
 import { normalizeHttpUrl } from "./url.js";
+import { createHttpRequestHandler } from "./httpRoutes.js";
+import {
+  createViewerSocketHandler,
+  proxyCdpWebSocket,
+  webSocketUpgradePath,
+} from "./webSocketRoutes.js";
 
-const clientRoot = fileURLToPath(new URL("../client/", import.meta.url));
-const projectRoot = fileURLToPath(new URL("../../", import.meta.url));
+const demoRoot = fileURLToPath(new URL("../../", import.meta.url));
+const HTTP_SHUTDOWN_GRACE_MS = 1000;
+const WEB_SOCKET_SHUTDOWN_GRACE_MS = 1000;
 
-function readArg(name) {
+function readOptionValue(name) {
   const index = process.argv.indexOf(name);
   if (index === -1) {
     return null;
@@ -25,7 +34,7 @@ function readArg(name) {
 }
 
 function resolvePort() {
-  const rawPort = process.env.REMOTE_SCREEN_PORT || readArg("--port") || "8121";
+  const rawPort = process.env.REMOTE_SCREEN_PORT || readOptionValue("--port") || "8121";
   const port = Number(rawPort);
   if (!Number.isInteger(port) || port <= 0 || port > 65535) {
     throw new Error(`非法端口: ${rawPort}`);
@@ -34,7 +43,7 @@ function resolvePort() {
 }
 
 function resolveHeadless() {
-  const raw = process.env.REMOTE_SCREEN_HEADLESS || readArg("--headless");
+  const raw = process.env.REMOTE_SCREEN_HEADLESS || readOptionValue("--headless");
   if (process.argv.includes("--headed")) {
     return false;
   }
@@ -51,7 +60,7 @@ function resolveHeadless() {
 }
 
 function resolveViewport() {
-  const rawViewport = process.env.REMOTE_SCREEN_VIEWPORT || readArg("--viewport") || "1920x800";
+  const rawViewport = process.env.REMOTE_SCREEN_VIEWPORT || readOptionValue("--viewport") || "1920x800";
   const match = rawViewport.match(/^(\d+)x(\d+)$/i);
   if (!match) {
     throw new Error(`viewport 格式必须是 <width>x<height>: ${rawViewport}`);
@@ -65,7 +74,7 @@ function resolveViewport() {
 }
 
 function resolveCdpPort() {
-  const rawPort = process.env.REMOTE_SCREEN_CDP_PORT || readArg("--cdp-port") || "9333";
+  const rawPort = process.env.REMOTE_SCREEN_CDP_PORT || readOptionValue("--cdp-port") || "9333";
   const port = Number(rawPort);
   if (!Number.isInteger(port) || port <= 0 || port > 65535) {
     throw new Error(`非法 CDP 端口: ${rawPort}`);
@@ -73,352 +82,15 @@ function resolveCdpPort() {
   return port;
 }
 
-function mimeType(filePath) {
-  const ext = path.extname(filePath);
-  if (ext === ".html") return "text/html; charset=utf-8";
-  if (ext === ".js") return "text/javascript; charset=utf-8";
-  if (ext === ".css") return "text/css; charset=utf-8";
-  if (ext === ".json") return "application/json; charset=utf-8";
-  if (ext === ".svg") return "image/svg+xml";
-  return "application/octet-stream";
-}
-
-function resolveStaticPath(requestUrl) {
-  const url = new URL(requestUrl || "/", "http://127.0.0.1");
-  if (url.pathname === "/health" || url.pathname === "/api/command") {
-    return null;
-  }
-
-  const relativePath = url.pathname === "/" ? "index.html" : decodeURIComponent(url.pathname.slice(1));
-  if (relativePath.includes("\0")) {
-    throw new Error("静态资源路径包含非法空字符");
-  }
-  const filePath = path.resolve(clientRoot, relativePath);
-  if (!filePath.startsWith(clientRoot)) {
-    throw new Error(`静态资源路径越界: ${url.pathname}`);
-  }
-  return filePath;
-}
-
-async function readRequestJson(request) {
-  const chunks = [];
-  let size = 0;
-  for await (const chunk of request) {
-    size += chunk.length;
-    if (size > 65536) {
-      throw new Error("请求体过大");
-    }
-    chunks.push(chunk);
-  }
-  const text = Buffer.concat(chunks).toString("utf8");
-  if (!text.trim()) {
-    throw new Error("请求体不能为空");
-  }
-  return JSON.parse(text);
-}
-
-function writeJson(response, statusCode, payload) {
-  response.writeHead(statusCode, { "content-type": "application/json; charset=utf-8" });
-  response.end(JSON.stringify(payload));
-}
-
-async function handleCommandRequest(session, request, response) {
-  if (request.method !== "POST") {
-    writeJson(response, 405, { error: "只支持 POST /api/command" });
-    return;
-  }
-  const body = await readRequestJson(request);
-  if (!body || typeof body.line !== "string") {
-    throw new Error("请求体必须包含字符串字段 line");
-  }
-  const command = parseTerminalCommand(body.line);
-  if (command.name === "exit") {
-    throw new Error("exit 命令只允许在服务进程 stdin 中使用");
-  }
-  const output = await executeBrowserCommand(session, command);
-  const state = await session.currentState();
-  writeJson(response, 200, { ok: true, output, state });
-}
-
-function forwardedHeaders(headers) {
-  const forwarded = {};
-  for (const [key, value] of headers) {
-    if (key === "connection" || key === "content-encoding" || key === "content-length" || key === "transfer-encoding") {
-      continue;
-    }
-    forwarded[key] = value;
-  }
-  return forwarded;
-}
-
-async function proxyCdpHttp(session, request, response) {
-  if (request.method !== "GET") {
-    writeJson(response, 405, { error: "CDP HTTP 代理只支持 GET" });
-    return;
-  }
-  const requestUrl = new URL(request.url || "/", "http://127.0.0.1");
-  const upstreamUrl = new URL(`${requestUrl.pathname}${requestUrl.search}`, session.cdpHttpOrigin());
-  const upstreamResponse = await fetch(upstreamUrl, {
-    headers: {
-      "accept-encoding": "identity",
-    },
-  });
-  const body = Buffer.from(await upstreamResponse.arrayBuffer());
-  response.writeHead(upstreamResponse.status, forwardedHeaders(upstreamResponse.headers));
-  response.end(body);
-}
-
-async function redirectToDevTools(session, request, response) {
-  const target = await session.currentDebugTarget();
-  const publicHost = request.headers.host;
-  if (!publicHost) {
-    throw new Error("请求缺少 Host header，无法生成 DevTools WebSocket 地址");
-  }
-  const wsTarget = `${publicHost}/cdp/page/${encodeURIComponent(target.id)}`;
-  const devtoolsUrl = `/devtools/inspector.html?ws=${encodeURIComponent(wsTarget)}`;
-  response.writeHead(302, {
-    location: devtoolsUrl,
-    "cache-control": "no-store",
-  });
-  response.end();
-}
-
-async function handleHttpRequest(session, request, response) {
-  try {
-    const url = new URL(request.url || "/", "http://127.0.0.1");
-    if (url.pathname === "/health") {
-      const state = await session.currentState();
-      writeJson(response, 200, { ok: true, browserId: FIXED_BROWSER_ID, state });
-      return;
-    }
-
-    if (url.pathname === "/api/command") {
-      await handleCommandRequest(session, request, response);
-      return;
-    }
-
-    if (url.pathname === "/devtools" || url.pathname === "/devtools/page") {
-      await redirectToDevTools(session, request, response);
-      return;
-    }
-
-    if (url.pathname.startsWith("/devtools/") || url.pathname.startsWith("/json/")) {
-      await proxyCdpHttp(session, request, response);
-      return;
-    }
-
-    const filePath = resolveStaticPath(request.url);
-    const content = await readFile(filePath);
-    response.writeHead(200, { "content-type": mimeType(filePath) });
-    response.end(content);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    const statusCode = error?.code === "ENOENT" ? 404 : 500;
-    console.error(`[http] ${request.url} ${statusCode}: ${message}`);
-    if (request.url?.startsWith("/api/")) {
-      writeJson(response, statusCode, { error: message });
-      return;
-    }
-    response.writeHead(statusCode, { "content-type": "text/plain; charset=utf-8" });
-    response.end(message);
-  }
-}
-
-function proxyCdpWebSocket(session, targetId, clientSocket) {
-  const upstreamSocket = new WebSocket(`${session.cdpWebSocketOrigin()}/devtools/page/${targetId}`);
-  const pendingMessages = [];
-  let upstreamOpen = false;
-
-  function closeSocket(socket, code, reason) {
-    if (socket.readyState !== WebSocket.OPEN) {
-      return;
-    }
-    const safeCode = Number.isInteger(code) && code >= 1000 && code <= 4999 && code !== 1005 && code !== 1006 && code !== 1015
-      ? code
-      : 1000;
-    socket.close(safeCode, reason);
-  }
-
-  upstreamSocket.on("open", () => {
-    upstreamOpen = true;
-    for (const message of pendingMessages) {
-      upstreamSocket.send(message.payload, { binary: message.isBinary });
-    }
-    pendingMessages.length = 0;
-  });
-
-  clientSocket.on("message", (raw, isBinary) => {
-    const payload = isBinary ? raw : raw.toString("utf8");
-    if (upstreamOpen) {
-      upstreamSocket.send(payload, { binary: isBinary });
-      return;
-    }
-    pendingMessages.push({ payload, isBinary });
-  });
-
-  upstreamSocket.on("message", (raw, isBinary) => {
-    if (clientSocket.readyState === WebSocket.OPEN) {
-      const payload = isBinary ? raw : raw.toString("utf8");
-      clientSocket.send(payload, { binary: isBinary });
-    }
-  });
-
-  upstreamSocket.on("close", (code, reason) => {
-    closeSocket(clientSocket, code, reason);
-  });
-
-  clientSocket.on("close", () => {
-    if (upstreamSocket.readyState === WebSocket.OPEN) {
-      closeSocket(upstreamSocket, 1000, "client closed");
-      return;
-    }
-    if (upstreamSocket.readyState === WebSocket.CONNECTING) {
-      upstreamSocket.terminate();
-    }
-  });
-
-  upstreamSocket.on("error", (error) => {
-    console.error(`[cdp-ws] 上游连接错误: ${error instanceof Error ? error.message : String(error)}`);
-    if (clientSocket.readyState === WebSocket.OPEN) {
-      clientSocket.close(1011, "cdp upstream error");
-    }
-  });
-
-  clientSocket.on("error", (error) => {
-    console.error(`[cdp-ws] DevTools 客户端连接错误: ${error instanceof Error ? error.message : String(error)}`);
-  });
-}
-
-function sendJson(socket, message) {
-  if (socket.readyState !== WebSocket.OPEN) {
-    console.warn(`[ws] socket 未打开，跳过发送 ${message.type}`);
-    return;
-  }
-  socket.send(encodeServerMessage(message));
-}
-
-function sendSocketError(socket, error) {
-  const message = error instanceof Error ? error.message : String(error);
-  sendJson(socket, { type: "error", message });
-}
-
-function assertAttached(attached) {
-  if (!attached) {
-    throw new Error("请先 attach 到 uuid:12");
-  }
-}
-
-function commandFromClientMessage(message) {
-  if (message.name === "goto") {
-    return { name: "goto", url: message.url };
-  }
-  return { name: message.name };
-}
-
-function createSocketHandler(session) {
-  let nextClientNumber = 0;
-
-  return (socket) => {
-    const clientId = `viewer:${++nextClientNumber}`;
-    let attached = false;
-    let queue = Promise.resolve();
-
-    const onFrame = (frame) => {
-      if (attached) {
-        sendJson(socket, { type: "frame", ...frame });
-      }
-    };
-    const onState = (state) => {
-      if (attached) {
-        sendJson(socket, { type: "state", browserId: session.browserId, state });
-      }
-    };
-
-    async function detach(sendDetached) {
-      if (!attached) {
-        return;
-      }
-      attached = false;
-      session.off("frame", onFrame);
-      session.off("state", onState);
-      const state = await session.detachClient(clientId);
-      if (sendDetached) {
-        sendJson(socket, { type: "detached", browserId: session.browserId, state });
-      }
-    }
-
-    async function handleMessage(raw) {
-      const message = parseClientMessage(raw);
-      if (message.type === "attach") {
-        if (attached) {
-          throw new Error(`${clientId} 已经 attach`);
-        }
-        attached = true;
-        session.on("frame", onFrame);
-        session.on("state", onState);
-        const state = await session.attachClient(clientId);
-        sendJson(socket, { type: "attached", browserId: message.browserId, state });
-        return;
-      }
-
-      if (message.type === "detach") {
-        await detach(true);
-        return;
-      }
-
-      assertAttached(attached);
-      if (message.type === "pointer") {
-        await session.dispatchPointer(message);
-        return;
-      }
-      if (message.type === "key") {
-        await session.dispatchKey(message);
-        return;
-      }
-      if (message.type === "paste") {
-        await session.insertText(message.text);
-        return;
-      }
-      if (message.type === "viewport") {
-        await session.setViewport(message.width, message.height);
-        return;
-      }
-      if (message.type === "command") {
-        const output = await executeBrowserCommand(session, commandFromClientMessage(message));
-        const state = await session.currentState();
-        sendJson(socket, { type: "commandResult", browserId: message.browserId, output, state });
-        return;
-      }
-      throw new Error(`未处理消息类型: ${message.type}`);
-    }
-
-    socket.on("message", (raw) => {
-      queue = queue
-        .then(() => handleMessage(raw))
-        .catch((error) => {
-          sendSocketError(socket, error);
-        });
-    });
-
-    socket.on("close", () => {
-      void detach(false);
-    });
-
-    socket.on("error", (error) => {
-      console.error(`[ws] ${clientId} 连接错误: ${error instanceof Error ? error.message : String(error)}`);
-    });
-  };
-}
-
-function startTerminalCommandLoop(session, shutdown) {
+function startBrowserControlConsole(session, shutdown) {
   if (!process.stdin.isTTY) {
-    console.log("[remote-screen] stdin 不是 TTY，跳过终端命令循环");
+    console.log("[remote-screen] stdin 不是 TTY，跳过浏览器控制台");
     return;
   }
 
-  console.log("[remote-screen] 终端命令可用:");
-  for (const command of TERMINAL_COMMAND_HELP) {
-    console.log(`  ${command}`);
+  console.log("[remote-screen] 浏览器控制命令可用:");
+  for (const browserControlCommand of BROWSER_CONTROL_COMMAND_HELP) {
+    console.log(`  ${browserControlCommand}`);
   }
 
   const readline = createInterface({
@@ -428,25 +100,25 @@ function startTerminalCommandLoop(session, shutdown) {
     prompt: "browser> ",
   });
   let closed = false;
-  let queue = Promise.resolve();
+  let browserControlCommandChain = Promise.resolve();
 
   readline.on("line", (line) => {
-    queue = queue
+    browserControlCommandChain = browserControlCommandChain
       .then(async () => {
-        const command = parseTerminalCommand(line);
-        if (command.name === "exit") {
+        const browserControlCommand = parseBrowserControlCommand(line);
+        if (browserControlCommand.name === "exit") {
           closed = true;
           readline.close();
           await shutdown();
           return;
         }
-        const output = await executeBrowserCommand(session, command);
-        if (output) {
-          console.log(output);
+        const commandResult = await executeBrowserCommand(session, browserControlCommand);
+        if (commandResult.output) {
+          console.log(commandResult.output);
         }
       })
       .catch((error) => {
-        console.error(`[terminal] ${error instanceof Error ? error.message : String(error)}`);
+          console.error(`[browser-console] ${error instanceof Error ? error.message : String(error)}`);
       })
       .finally(() => {
         if (!closed) {
@@ -461,11 +133,11 @@ function startTerminalCommandLoop(session, shutdown) {
   readline.prompt();
 }
 
-async function closeServer(server) {
+async function closeServer(server, httpSockets) {
   if (!server.listening) {
     return;
   }
-  await new Promise((resolve, reject) => {
+  const closeOperation = new Promise((resolve, reject) => {
     server.close((error) => {
       if (error) {
         reject(error);
@@ -474,12 +146,77 @@ async function closeServer(server) {
       resolve();
     });
   });
+  const forceCloseTimer = setTimeout(
+    () => {
+      for (const socket of httpSockets) {
+        socket.destroy();
+      }
+    },
+    HTTP_SHUTDOWN_GRACE_MS,
+  );
+  try {
+    await closeOperation;
+  } finally {
+    clearTimeout(forceCloseTimer);
+  }
+}
+
+function closeWebSocketServer(webSocketServer) {
+  return new Promise((resolve, reject) => {
+    const forceCloseTimer = setTimeout(() => {
+      for (const socket of webSocketServer.clients) {
+        socket.terminate();
+      }
+    }, WEB_SOCKET_SHUTDOWN_GRACE_MS);
+
+    try {
+      webSocketServer.close((error) => {
+        clearTimeout(forceCloseTimer);
+        if (error) {
+          reject(error);
+          return;
+        }
+        resolve();
+      });
+    } catch (error) {
+      clearTimeout(forceCloseTimer);
+      reject(error);
+      return;
+    }
+
+    for (const socket of webSocketServer.clients) {
+      socket.close(1001, "remote screen server shutting down");
+    }
+  });
+}
+
+function listen(server, host, port) {
+  return new Promise((resolve, reject) => {
+    const onError = (error) => {
+      server.off("error", onError);
+      server.off("listening", onListening);
+      reject(error);
+    };
+    const onListening = () => {
+      server.off("error", onError);
+      server.off("listening", onListening);
+      resolve();
+    };
+
+    server.once("error", onError);
+    server.once("listening", onListening);
+    try {
+      server.listen(port, host);
+    } catch (error) {
+      onError(error);
+    }
+  });
 }
 
 async function main() {
-  const host = process.env.REMOTE_SCREEN_HOST || readArg("--host") || "0.0.0.0";
+  const host = process.env.REMOTE_SCREEN_HOST || readOptionValue("--host") || "0.0.0.0";
   const port = resolvePort();
-  const initialUrl = normalizeHttpUrl(process.env.REMOTE_SCREEN_INITIAL_URL || readArg("--url") || "https://www.bilibili.com/");
+  const initialUrl = normalizeHttpUrl(process.env.REMOTE_SCREEN_INITIAL_URL || readOptionValue("--url") || "https://www.bilibili.com/");
   const session = new BrowserSession({
     browserId: FIXED_BROWSER_ID,
     initialUrl,
@@ -490,17 +227,21 @@ async function main() {
   });
   await session.start();
 
-  const server = createServer((request, response) => {
-    void handleHttpRequest(session, request, response);
+  const httpSockets = new Set();
+  const server = createServer(createHttpRequestHandler(session));
+  server.on("connection", (socket) => {
+    httpSockets.add(socket);
+    socket.once("close", () => httpSockets.delete(socket));
   });
   const webSocketServer = new WebSocketServer({ noServer: true });
-  webSocketServer.on("connection", createSocketHandler(session));
+  webSocketServer.on("connection", createViewerSocketHandler(session));
 
   server.on("upgrade", (request, socket, head) => {
-    const url = new URL(request.url || "/", `http://${host}`);
-    if (url.pathname !== "/remote-screen") {
-      if (url.pathname.startsWith("/cdp/page/")) {
-        const targetId = decodeURIComponent(url.pathname.slice("/cdp/page/".length));
+    httpSockets.delete(socket);
+    const upgradePath = webSocketUpgradePath(request.url);
+    if (upgradePath !== "/remote-screen") {
+      if (upgradePath.startsWith("/cdp/page/")) {
+        const targetId = decodeURIComponent(upgradePath.slice("/cdp/page/".length));
         webSocketServer.handleUpgrade(request, socket, head, (ws) => {
           proxyCdpWebSocket(session, targetId, ws);
         });
@@ -522,9 +263,28 @@ async function main() {
     }
     shuttingDown = true;
     console.log("[remote-screen] 正在关闭...");
-    webSocketServer.close();
-    await closeServer(server);
-    await session.close();
+
+    const shutdownErrors = [];
+    const [httpCloseResult, webSocketCloseResult] = await Promise.allSettled([
+      closeServer(server, httpSockets),
+      closeWebSocketServer(webSocketServer),
+    ]);
+    if (httpCloseResult.status === "rejected") {
+      shutdownErrors.push(httpCloseResult.reason);
+    }
+    if (webSocketCloseResult.status === "rejected") {
+      shutdownErrors.push(webSocketCloseResult.reason);
+    }
+    try {
+      await session.close();
+    } catch (error) {
+      shutdownErrors.push(error);
+    }
+
+    if (shutdownErrors.length > 0) {
+      console.error(new AggregateError(shutdownErrors, "远程屏幕服务关闭失败"));
+      process.exit(1);
+    }
     console.log("[remote-screen] 已关闭");
     process.exit(0);
   }
@@ -536,13 +296,25 @@ async function main() {
     void shutdown();
   });
 
-  server.listen(port, host, () => {
-    console.log(`[remote-screen] http://${host}:${port}`);
-    console.log(`[remote-screen] browserId=${FIXED_BROWSER_ID}`);
-    console.log(`[remote-screen] projectRoot=${projectRoot}`);
-    console.log(`[remote-screen] initialUrl=${initialUrl}`);
-  });
-  startTerminalCommandLoop(session, shutdown);
+  try {
+    await listen(server, host, port);
+  } catch (error) {
+    try {
+      await session.close();
+    } catch (closeError) {
+      throw new AggregateError(
+        [error, closeError],
+        "远程屏幕 HTTP 服务启动失败，且无法关闭浏览器会话",
+      );
+    }
+    throw error;
+  }
+
+  console.log(`[remote-screen] http://${host}:${port}`);
+  console.log(`[remote-screen] browserId=${FIXED_BROWSER_ID}`);
+  console.log(`[remote-screen] demoRoot=${demoRoot}`);
+  console.log(`[remote-screen] initialUrl=${initialUrl}`);
+  startBrowserControlConsole(session, shutdown);
 }
 
 main().catch((error) => {

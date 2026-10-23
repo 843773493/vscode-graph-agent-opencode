@@ -57,13 +57,16 @@ def test_resource_state_event_contract_accepts_lightweight_event() -> None:
     assert event.kind == "state"
 
 
-def test_resource_state_publisher_uses_isolated_typed_channel() -> None:
-    service = EventChannelService()
+def test_resource_state_publisher_uses_isolated_typed_channel(
+    event_channel_service: EventChannelService,
+) -> None:
     publisher = ResourceStateEventPublisher(
-        event_service=service,
+        event_service=event_channel_service,
         owner_domain="node_debug",
     )
-    subscription = service.channel(publisher.channel_name).subscribe(label="test")
+    subscription = event_channel_service.channel(publisher.channel_name).subscribe(
+        label="test"
+    )
 
     publisher.publish(resource_id="process_123", state="released")
 
@@ -74,7 +77,10 @@ def test_resource_state_publisher_uses_isolated_typed_channel() -> None:
         resource_id="process_123",
         state="released",
     )
-    assert all(not name.startswith("job.events/") for name in service.channel_names)
+    assert all(
+        not name.startswith("job.events/")
+        for name in event_channel_service.channel_names
+    )
 
 
 def test_resource_state_event_rejects_extra_fields_and_bad_values() -> None:
@@ -120,7 +126,9 @@ def test_resource_state_event_rejects_extra_fields_and_bad_values() -> None:
     with pytest.raises(ValueError):
         ResourceStateEvent(owner_domain="d", resource_id="r", state="exploded")
     with pytest.raises(ValueError):
-        ResourceStateEvent(owner_domain="d", resource_id="r", state="released", kind="boom")
+        ResourceStateEvent(
+            owner_domain="d", resource_id="r", state="released", kind="boom"
+        )
 
 
 def test_config_lifecycle_event_contract() -> None:
@@ -167,7 +175,9 @@ def test_context_source_event_contract() -> None:
 
     with pytest.raises(RuntimeError, match="diff"):
         assert_context_source_event_is_lightweight(
-            SmuggledContextSourceEvent(source_id="src_1", source_kind="skill", kind="committed")
+            SmuggledContextSourceEvent(
+                source_id="src_1", source_kind="skill", kind="committed"
+            )
         )
     # 轻量红线：把正文/diff 塞进 revision 字段必须显式报错。
     with pytest.raises(RuntimeError, match="sha256"):
@@ -178,31 +188,39 @@ def test_context_source_event_contract() -> None:
             revision="--- a/file.md\n+++ b/file.md\n+full document body",
         )
     with pytest.raises(RuntimeError, match="宿主机路径"):
-        ContextSourceEvent(source_id="/host/path/SKILL.md", source_kind="skill", kind="committed")
+        ContextSourceEvent(
+            source_id="/host/path/SKILL.md", source_kind="skill", kind="committed"
+        )
     with pytest.raises(ValueError, match="kind"):
         ContextSourceEvent(source_id="src_1", source_kind="skill", kind="attached")
     with pytest.raises(ValueError):
         ContextSourceEvent(source_id="src_1", source_kind="", kind="committed")
 
 
-def test_all_three_channels_can_be_ensured_in_one_service() -> None:
+def test_all_three_channels_can_be_ensured_in_one_service(
+    event_channel_service: EventChannelService,
+) -> None:
     """三类 channel 在同一服务内按名字独立创建，互不影响。"""
-    service = EventChannelService()
     names = {
         resource_state_channel_name("node_debug"),
         config_lifecycle_channel_name("workspace"),
         context_source_channel_name("ws-1"),
     }
     for name in names:
-        service.ensure_channel(EventChannelSpec(name=name, overflow_policy="gap"))
-    assert set(service.channel_names) == names
+        event_channel_service.ensure_channel(
+            EventChannelSpec(name=name, overflow_policy="gap")
+        )
+    assert set(event_channel_service.channel_names) == names
 
 
-def test_context_source_publisher_publishes_to_named_channel() -> None:
-    service = EventChannelService()
-    publisher = ContextSourceEventPublisher(event_service=service, scope_id="ws-1")
+def test_context_source_publisher_publishes_to_named_channel(
+    event_channel_service: EventChannelService,
+) -> None:
+    publisher = ContextSourceEventPublisher(
+        event_service=event_channel_service, scope_id="ws-1"
+    )
     assert publisher.channel_name == "context.source/ws-1"
-    channel = service.channel("context.source/ws-1")
+    channel = event_channel_service.channel("context.source/ws-1")
     assert channel.overflow_policy == "gap"
     subscription = channel.subscribe(label="consumer")
 
@@ -233,7 +251,7 @@ def test_context_source_publisher_publishes_to_named_channel() -> None:
             )
         )
     with pytest.raises(ValueError, match="空白"):
-        ContextSourceEventPublisher(event_service=service, scope_id="  ")
+        ContextSourceEventPublisher(event_service=event_channel_service, scope_id="  ")
     with pytest.raises(TypeError, match="EventChannelService"):
         ContextSourceEventPublisher(event_service=object(), scope_id="ws-1")  # type: ignore[arg-type]
 
@@ -331,7 +349,10 @@ def test_contracts_reject_smuggled_payloads_in_identity_and_revision() -> None:
             kind="committed",
         )
 
-def test_mcp_catalog_revision_message_differs_between_construction_and_lightweight() -> None:
+
+def test_mcp_catalog_revision_message_differs_between_construction_and_lightweight() -> (
+    None
+):
     """零回归钉子：``McpCatalogEvent`` 两条链路的必填 revision 错误消息历史性地不同。
 
     HEAD 原文里构造路径（``__post_init__`` -> ``_REVISION_DIGEST_WITH_TYPE``）在消息末尾
@@ -379,15 +400,17 @@ def test_typed_events_revision_message_matches_across_both_paths() -> None:
                 state="released",
                 revision=invalid_revision,
             ),
-            lambda: assert_resource_state_event_is_lightweight(_tamper_revision(
-                ResourceStateEvent(
-                    owner_domain="node_debug",
-                    resource_id="node_debug_process:proc_1",
-                    state="released",
-                    revision=_digest("resource_state"),
-                ),
-                invalid_revision,
-            )),
+            lambda: assert_resource_state_event_is_lightweight(
+                _tamper_revision(
+                    ResourceStateEvent(
+                        owner_domain="node_debug",
+                        resource_id="node_debug_process:proc_1",
+                        state="released",
+                        revision=_digest("resource_state"),
+                    ),
+                    invalid_revision,
+                )
+            ),
         ),
         (
             "ConfigLifecycleEvent",
@@ -396,14 +419,16 @@ def test_typed_events_revision_message_matches_across_both_paths() -> None:
                 kind="published",
                 revision=invalid_revision,
             ),
-            lambda: assert_config_lifecycle_event_is_lightweight(_tamper_revision(
-                ConfigLifecycleEvent(
-                    domain="workspace",
-                    kind="published",
-                    revision=_digest("config_lifecycle"),
-                ),
-                invalid_revision,
-            )),
+            lambda: assert_config_lifecycle_event_is_lightweight(
+                _tamper_revision(
+                    ConfigLifecycleEvent(
+                        domain="workspace",
+                        kind="published",
+                        revision=_digest("config_lifecycle"),
+                    ),
+                    invalid_revision,
+                )
+            ),
         ),
         (
             "ContextSourceEvent",
@@ -413,15 +438,17 @@ def test_typed_events_revision_message_matches_across_both_paths() -> None:
                 kind="committed",
                 revision=invalid_revision,
             ),
-            lambda: assert_context_source_event_is_lightweight(_tamper_revision(
-                ContextSourceEvent(
-                    source_id="src_1",
-                    source_kind="skill",
-                    kind="committed",
-                    revision=_digest("context_source"),
-                ),
-                invalid_revision,
-            )),
+            lambda: assert_context_source_event_is_lightweight(
+                _tamper_revision(
+                    ContextSourceEvent(
+                        source_id="src_1",
+                        source_kind="skill",
+                        kind="committed",
+                        revision=_digest("context_source"),
+                    ),
+                    invalid_revision,
+                )
+            ),
         ),
     ]
 

@@ -15,6 +15,7 @@ const FORWARDED_ENVIRONMENT_NAMES = Object.freeze([
   "BOXTEAM_INSTALL_DEVELOPMENT_ASSETS",
   "BOXTEAM_DEV_LISTEN_HOST",
 ]);
+const STATUS_GATEWAY_OBSERVATION_TIMEOUT_MS = 2_000;
 
 function normalizeLocalOnly(environment) {
   const value = environment.BOXTEAM_DEV_LOCAL_ONLY?.trim() || "1";
@@ -91,40 +92,52 @@ function runCommand(command, args, { allowFailure = false } = {}) {
   });
   const stdout = result.stdout.toString().trim();
   const stderr = result.stderr.toString().trim();
-  if (!allowFailure && result.exitCode !== 0) {
+  const signalCode = result.signalCode ?? null;
+  if (!allowFailure && (result.exitCode !== 0 || signalCode !== null)) {
     throw new Error(
-      `${command} ${args.join(" ")} 失败: exit=${String(result.exitCode)}${
-        stderr ? `\n${stderr}` : ""
-      }`,
+      `${command} ${args.join(" ")} 失败: exit=${String(result.exitCode)} signal=${
+        signalCode === null ? "none" : String(signalCode)
+      }${stderr ? `\n${stderr}` : ""}`,
     );
   }
-  return { exitCode: result.exitCode, stdout, stderr };
+  return { exitCode: result.exitCode, signalCode, stdout, stderr };
 }
 
 function readUnitState(serviceName) {
-  const result = runCommand(
-    "systemctl",
-    [
-      "--user",
-      "show",
-      serviceName,
-      "--property=LoadState",
-      "--property=ActiveState",
-      "--property=SubState",
-      "--property=MainPID",
-      "--no-pager",
-    ],
-    { allowFailure: true },
-  );
-  if (result.exitCode !== 0) {
-    return { loadState: "not-found", activeState: "inactive", subState: "dead" };
-  }
+  const args = [
+    "--user",
+    "show",
+    serviceName,
+    "--property=LoadState",
+    "--property=ActiveState",
+    "--property=SubState",
+    "--property=MainPID",
+    "--no-pager",
+  ];
+  const result = runCommand("systemctl", args, { allowFailure: true });
   const values = Object.fromEntries(
     result.stdout
       .split("\n")
       .map((line) => line.split("=", 2))
       .filter(([name, value]) => name && value !== undefined),
   );
+  if (result.exitCode !== 0 || result.signalCode !== null) {
+    if (
+      Number.isInteger(result.exitCode) &&
+      result.exitCode !== 0 &&
+      result.signalCode === null &&
+      values.LoadState === "not-found"
+    ) {
+      return { loadState: "not-found", activeState: "inactive", subState: "dead" };
+    }
+    throw new Error(
+      `systemctl ${args.join(" ")} 读取状态失败: unit=${serviceName} exit=${String(
+        result.exitCode,
+      )} signal=${result.signalCode === null ? "none" : String(result.signalCode)}${
+        result.stderr ? `\n${result.stderr}` : ""
+      }`,
+    );
+  }
   return {
     loadState: values.LoadState ?? "unknown",
     activeState: values.ActiveState ?? "unknown",
@@ -146,9 +159,9 @@ function isManagerReady(unit, state) {
 }
 
 export async function waitForGateway(unit, timeoutMs = 120_000) {
-  const deadline = Date.now() + timeoutMs;
+  const deadline = performance.now() + timeoutMs;
   let lastError = null;
-  while (Date.now() < deadline) {
+  while (performance.now() < deadline) {
     const state = readUnitState(unit.serviceName);
     if (state.loadState === "not-found" || ["failed", "inactive", "deactivating"].includes(state.activeState)) {
       throw new Error(
@@ -156,29 +169,55 @@ export async function waitForGateway(unit, timeoutMs = 120_000) {
       );
     }
     if (!isManagerReady(unit, state)) {
-      lastError = new Error(`manager 尚未就绪: load=${state.loadState} active=${state.activeState} sub=${state.subState}`);
-      await Bun.sleep(250);
+      lastError ??= new Error(`manager 尚未就绪: load=${state.loadState} active=${state.activeState} sub=${state.subState}`);
+      await Bun.sleep(Math.max(0, Math.min(250, Math.ceil(deadline - performance.now()))));
       continue;
     }
+    const remainingMs = deadline - performance.now();
+    if (remainingMs <= 0) break;
+    const requestController = new AbortController();
+    const requestTimer = setTimeout(
+      () => requestController.abort(new Error("健康请求超过就绪期限")),
+      Math.ceil(remainingMs),
+    );
+    let ready = false;
     try {
-      const response = await fetch(unit.gatewayHealthUrl);
-      if (response.ok) {
+      const response = await fetch(unit.gatewayHealthUrl, {
+        signal: requestController.signal,
+      });
+      await response.body?.cancel();
+      if (performance.now() >= deadline) {
+        lastError = new Error("健康响应超过就绪期限");
+      } else if (response.ok) {
         const current = readUnitState(unit.serviceName);
         if (current.activeState !== "active" || current.mainPid !== state.mainPid || !isManagerReady(unit, current)) {
           throw new Error("健康请求结束时 development manager 已退出或更换");
         }
-        return;
+        if (performance.now() >= deadline) {
+          lastError = new Error("健康响应超过就绪期限");
+        } else {
+          ready = true;
+        }
+      } else {
+        lastError = new Error(`HTTP ${response.status} ${response.statusText}`);
       }
-      lastError = new Error(`HTTP ${response.status} ${response.statusText}`);
     } catch (error) {
-      lastError = error;
+      lastError = requestController.signal.aborted
+        ? requestController.signal.reason
+        : error;
+    } finally {
+      clearTimeout(requestTimer);
+      // 即使响应正文已取消，也显式终止本次请求并释放底层传输。
+      requestController.abort();
     }
-    await Bun.sleep(250);
+    if (ready) return;
+    await Bun.sleep(Math.max(0, Math.min(250, Math.ceil(deadline - performance.now()))));
   }
   throw new Error(
     `${unit.serviceName} 在 ${timeoutMs}ms 内未就绪: ${
       lastError instanceof Error ? lastError.message : String(lastError)
     }；查看日志: journalctl --user-unit=${unit.serviceName} -n 200 --no-pager`,
+    { cause: lastError },
   );
 }
 
@@ -225,10 +264,23 @@ async function status(unit) {
   const managerReady = isManagerReady(unit, state);
   let gatewayReady = false;
   if (managerReady && state.activeState === "active") {
+    const deadline = performance.now() + STATUS_GATEWAY_OBSERVATION_TIMEOUT_MS;
+    const requestController = new AbortController();
+    const requestTimer = setTimeout(
+      () => requestController.abort(),
+      STATUS_GATEWAY_OBSERVATION_TIMEOUT_MS,
+    );
     try {
-      gatewayReady = (await fetch(unit.gatewayHealthUrl)).ok;
+      const response = await fetch(unit.gatewayHealthUrl, {
+        signal: requestController.signal,
+      });
+      await response.body?.cancel();
+      gatewayReady = response.ok && performance.now() < deadline;
     } catch {
       gatewayReady = false;
+    } finally {
+      clearTimeout(requestTimer);
+      requestController.abort();
     }
   }
   process.stdout.write(

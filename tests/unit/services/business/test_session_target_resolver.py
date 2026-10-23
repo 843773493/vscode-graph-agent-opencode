@@ -109,7 +109,7 @@ class _FakeGatewayContextClient:
 
 
 @pytest.mark.asyncio
-async def test_resolver_prefers_local_session_without_gateway_lookup(monkeypatch):
+async def test_resolver_prefers_local_session_without_gateway_lookup():
     gateway = _FakeGatewayContextClient(backend_sessions=[], workspaces=[])
     resolver = SessionTargetResolver(
         session_service=_FakeSessionService({"ses_local": "backend-local"}),

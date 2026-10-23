@@ -95,11 +95,12 @@ def test_invalid_environment_config_fails_with_schema_context(tmp_path: Path) ->
 def test_missing_environment_config_path_fails_explicitly(tmp_path: Path) -> None:
     missing_path = tmp_path / "missing-model-stream.jsonc"
 
-    with pytest.raises(FileNotFoundError, match="missing-model-stream.jsonc"):
+    with pytest.raises(FileNotFoundError, match="配置文件不存在") as raised:
         load_model_stream_config_from_environment(
             environment={"BOXTEAM_TEST_MODEL_STREAM_CONFIG": str(missing_path)},
             project_root=Path.cwd(),
         )
+    assert str(missing_path) not in str(raised.value)
 
 
 def test_invalid_transport_mode_fails_schema_validation(tmp_path: Path) -> None:

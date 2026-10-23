@@ -77,14 +77,6 @@ async def test_debugging_source_targets_share_workspace_resolution(tmp_path: Pat
         assert (command.session_id, command.thread_id, command.params.path) == (session_id, _MAIN_THREAD_ID, "source.mjs")
 
 
-def _build_tools(tmp_path: Path):
-    return create_debugging_tools(
-        session_id="ses_debug_schema",
-        node_debug_service=MagicMock(),
-        invocation_context=ToolInvocationContext(),
-    )
-
-
 def _debug_configuration(
     *,
     configuration_id: str = "dbgcfg_" + "a" * 32,
@@ -137,7 +129,7 @@ def _service_for_launch(
     return service
 
 
-def _tool_map(tmp_path: Path, service: MagicMock) -> dict[str, object]:
+def _debugging_tool_map(service: MagicMock) -> dict[str, object]:
     return {
         tool.name: tool
         for tool in create_debugging_tools(
@@ -150,10 +142,12 @@ def _tool_map(tmp_path: Path, service: MagicMock) -> dict[str, object]:
     }
 
 
-def test_debug_tool_names_and_model_schemas_match_debug_mcp_shape(
-    tmp_path: Path,
-) -> None:
-    tools = _build_tools(tmp_path)
+def test_debug_tool_names_and_model_schemas_match_debug_mcp_shape() -> None:
+    tools = create_debugging_tools(
+        session_id="ses_debug_schema",
+        node_debug_service=MagicMock(),
+        invocation_context=ToolInvocationContext(),
+    )
     by_name = {tool.name: tool for tool in tools}
 
     assert list(by_name) == [
@@ -625,7 +619,7 @@ async def test_start_debugging_reports_missing_explicit_configuration_first(
         status="idle",
     )
     service = _service_for_launch(service=debug_service_factory(tmp_path), state=state, configurations=[])
-    tools = _tool_map(tmp_path, service)
+    tools = _debugging_tool_map(service)
 
     payload = json.loads(
         await tools["start_debugging"].ainvoke(
@@ -655,7 +649,7 @@ async def test_start_debugging_reports_missing_id_before_invalid_paths(
         status="idle",
     )
     service = _service_for_launch(service=debug_service_factory(tmp_path), state=state, configurations=[])
-    tools = _tool_map(tmp_path, service)
+    tools = _debugging_tool_map(service)
 
     payload = json.loads(
         await tools["start_debugging"].ainvoke(
@@ -692,7 +686,7 @@ async def test_start_debugging_rejects_launch_parameter_conflict_with_fields(
         configurations=[_configuration_summary(configuration)],
     )
     service = _service_for_launch(service=debug_service_factory(tmp_path), state=state, configurations=[configuration])
-    tools = _tool_map(tmp_path, service)
+    tools = _debugging_tool_map(service)
 
     payload = json.loads(
         await tools["start_debugging"].ainvoke(
@@ -740,7 +734,7 @@ async def test_start_debugging_accepts_normalized_paths_matching_active_configur
         configurations=[_configuration_summary(configuration)],
     )
     service = _service_for_launch(service=debug_service_factory(tmp_path), state=state, configurations=[configuration])
-    tools = _tool_map(tmp_path, service)
+    tools = _debugging_tool_map(service)
 
     payload = json.loads(
         await tools["start_debugging"].ainvoke(
@@ -787,7 +781,7 @@ async def test_start_debugging_prefers_explicit_id_then_active_configuration(
         ],
     )
     service = _service_for_launch(service=debug_service_factory(tmp_path), state=state, configurations=[active, explicit])
-    tools = _tool_map(tmp_path, service)
+    tools = _debugging_tool_map(service)
 
     explicit_payload = json.loads(
         await tools["start_debugging"].ainvoke(
@@ -825,7 +819,7 @@ async def test_start_debugging_without_configuration_uses_safe_creation_path(
         status="idle",
     )
     service = _service_for_launch(service=debug_service_factory(tmp_path), state=state, configurations=[])
-    tools = _tool_map(tmp_path, service)
+    tools = _debugging_tool_map(service)
 
     payload = json.loads(
         await tools["start_debugging"].ainvoke(

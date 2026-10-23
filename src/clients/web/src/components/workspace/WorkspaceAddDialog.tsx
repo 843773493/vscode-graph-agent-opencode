@@ -42,9 +42,34 @@ export interface GatewayChoice {
 }
 
 export function gatewayChoices(workspaces: GatewayWorkspace[]): GatewayChoice[] {
-  const localWorkspaces = workspaces.filter(
-    (workspace) => workspace.connection_kind === "local",
-  );
+  let localWorkspaceCount = 0;
+  const remoteGroups = new Map<string, {
+    remote: GatewayWorkspace["remote"];
+    workspaceCount: number;
+    hasReadyWorkspace: boolean;
+    connectionError: string | null;
+  }>();
+  for (const workspace of workspaces) {
+    if (workspace.connection_kind === "local") localWorkspaceCount += 1;
+    const connectionId = workspace.remote?.gateway_connection_id;
+    if (workspace.connection_kind !== "remote_gateway" || !connectionId) continue;
+    let group = remoteGroups.get(connectionId);
+    if (!group) {
+      group = {
+        remote: workspace.remote,
+        workspaceCount: 0,
+        hasReadyWorkspace: false,
+        connectionError: null,
+      };
+      remoteGroups.set(connectionId, group);
+    }
+    group.workspaceCount += 1;
+    if (!workspace.connection_error) group.hasReadyWorkspace = true;
+    if (group.connectionError === null && workspace.connection_error) {
+      group.connectionError = workspace.connection_error;
+    }
+  }
+
   const choices: GatewayChoice[] = [
     {
       key: "local",
@@ -52,22 +77,14 @@ export function gatewayChoices(workspaces: GatewayWorkspace[]): GatewayChoice[] 
       kind: "local",
       name: "当前电脑",
       detail: "当前电脑",
-      workspaceCount: localWorkspaces.length,
+      workspaceCount: localWorkspaceCount,
       status: "ready",
       statusLabel: "可用",
       error: null,
     },
   ];
-  const remoteGroups = new Map<string, GatewayWorkspace[]>();
-  for (const workspace of workspaces) {
-    const connectionId = workspace.remote?.gateway_connection_id;
-    if (workspace.connection_kind !== "remote_gateway" || !connectionId) continue;
-    const group = remoteGroups.get(connectionId) ?? [];
-    group.push(workspace);
-    remoteGroups.set(connectionId, group);
-  }
   for (const [connectionId, group] of remoteGroups) {
-    const remote = group[0]?.remote;
+    const remote = group.remote;
     if (!remote) {
       throw new Error(`远程 Gateway ${connectionId} 缺少连接摘要`);
     }
@@ -78,19 +95,16 @@ export function gatewayChoices(workspaces: GatewayWorkspace[]): GatewayChoice[] 
       (customName && customName !== remote.host ? customName : "") ||
       `${remote.username}@${remote.host}`;
     const address = `${remote.username}@${remote.host}:${remote.port}`;
-    const ready = group.some((workspace) => !workspace.connection_error);
-    const connectionError =
-      group.find((workspace) => workspace.connection_error)?.connection_error ?? null;
     choices.push({
       key: connectionId,
       connectionId,
       kind: "remote",
       name: displayName,
       detail: address,
-      workspaceCount: group.length,
-      status: ready ? "ready" : "offline",
-      statusLabel: ready ? "SSH 已连接" : "SSH 连接异常",
-      error: connectionError,
+      workspaceCount: group.workspaceCount,
+      status: group.hasReadyWorkspace ? "ready" : "offline",
+      statusLabel: group.hasReadyWorkspace ? "SSH 已连接" : "SSH 连接异常",
+      error: group.connectionError,
     });
   }
   return choices;
@@ -153,10 +167,21 @@ export default function WorkspaceAddDialog({
         setCurrentPath(nextListing.path);
         setPathInput(nextQuery || nextListing.path);
         setDirectoryQuery(nextQuery);
-        const matches = nextListing.entries.filter((entry) =>
-          workspaceDirectoryMatchesQuery(entry.name, nextQuery),
-        );
-        setSelectedPath(nextQuery ? (matches.length === 1 ? matches[0].path : "") : nextListing.path);
+        if (!nextQuery) {
+          setSelectedPath(nextListing.path);
+        } else {
+          let uniqueMatchPath: string | null = null;
+          let hasMultipleMatches = false;
+          for (const entry of nextListing.entries) {
+            if (!workspaceDirectoryMatchesQuery(entry.name, nextQuery)) continue;
+            if (uniqueMatchPath !== null) {
+              hasMultipleMatches = true;
+              break;
+            }
+            uniqueMatchPath = entry.path;
+          }
+          setSelectedPath(hasMultipleMatches ? "" : uniqueMatchPath ?? "");
+        }
       } catch (loadError) {
         if (directoryRequestRef.current !== requestNumber) return;
         setListing(null);

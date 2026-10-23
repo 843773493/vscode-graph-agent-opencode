@@ -19,7 +19,7 @@ from app.schemas.gateway.directory import GatewayDirectoryListDTO
 
 
 @pytest.fixture
-def directory_request(tmp_path: Path):
+def gateway_directory_request(tmp_path: Path):
     app = FastAPI()
     app.state.gateway_id = "gateway_00000000000070008000000000000001"
     app.state.gateway_state = GatewayStateStore(path=tmp_path / "gateway.sqlite")
@@ -43,41 +43,48 @@ def test_scan_local_directories_only_returns_sorted_directories(directory_root: 
     assert truncated is False
 
 
-def test_scan_local_directories_reports_truncation(directory_root: Path) -> None:
-    entries, truncated = _scan_local_directories(directory_root, limit=1)
-    assert len(entries) == 1
+def test_scan_local_directories_preserves_sorted_prefix_after_truncation(
+    directory_root: Path,
+) -> None:
+    for name in ("Beta", "charlie", "delta"):
+        (directory_root / name).mkdir()
+    for index in range(1024):
+        (directory_root / f"entry-{index:04d}").mkdir()
+
+    entries, truncated = _scan_local_directories(directory_root, limit=2)
+    assert [entry.name for entry in entries] == ["alpha", "Beta"]
     assert truncated is True
 
 
 @pytest.mark.asyncio
 async def test_directory_uri_native_and_relative_input_share_target_owner(
-    directory_request: Request, directory_root: Path,
+    gateway_directory_request: Request, directory_root: Path,
 ) -> None:
-    listing = await _directory_listing(directory_request, str(directory_root), limit=120)
+    listing = await _directory_listing(gateway_directory_request, str(directory_root), limit=120)
     assert listing.name == directory_root.name
     assert str(directory_root.parent) not in listing.model_dump_json()
     for uri in [listing.path, listing.home_path, listing.parent_path, *(entry.path for entry in listing.entries)]:
         parsed = parse_resource_uri(uri)
-        assert parsed.kind == "files" and parsed.scope_id == directory_request.app.state.gateway_id
-    reopened = await _directory_listing(directory_request, listing.path, limit=120)
-    relative = await _directory_listing(directory_request, "alpha", base_path=listing.path, limit=120)
-    absolute = await _directory_listing(directory_request, str(directory_root / "alpha"), limit=120)
+        assert parsed.kind == "files" and parsed.scope_id == gateway_directory_request.app.state.gateway_id
+    reopened = await _directory_listing(gateway_directory_request, listing.path, limit=120)
+    relative = await _directory_listing(gateway_directory_request, "alpha", base_path=listing.path, limit=120)
+    absolute = await _directory_listing(gateway_directory_request, str(directory_root / "alpha"), limit=120)
     assert reopened == listing
     assert relative == absolute
-    assert resolve_management_directory(directory_request, relative.path) == directory_root / "alpha"
-    parent = await _directory_listing(directory_request, listing.parent_path, limit=120)
+    assert resolve_management_directory(gateway_directory_request, relative.path) == directory_root / "alpha"
+    parent = await _directory_listing(gateway_directory_request, listing.parent_path, limit=120)
     assert next(entry.path for entry in parent.entries if entry.name == listing.name) == listing.path
     assert not (directory_root / ".boxteam").exists()
-    state = directory_request.app.state.gateway_state
+    state = gateway_directory_request.app.state.gateway_state
     state_path = state.path
     state.close()
-    directory_request.app.state.gateway_state = GatewayStateStore(path=state_path)
-    assert resolve_management_directory(directory_request, listing.path) == directory_root
+    gateway_directory_request.app.state.gateway_state = GatewayStateStore(path=state_path)
+    assert resolve_management_directory(gateway_directory_request, listing.path) == directory_root
 
 
 @pytest.mark.asyncio
 async def test_absolute_input_is_never_reinterpreted_as_workspace_relative(
-    directory_request: Request, directory_root: Path,
+    gateway_directory_request: Request, directory_root: Path,
 ) -> None:
     external = directory_root.parent / "outside"
     external.mkdir()
@@ -85,33 +92,33 @@ async def test_absolute_input_is_never_reinterpreted_as_workspace_relative(
     decoy = directory_root / str(external).lstrip("/")
     decoy.mkdir(parents=True)
     (decoy / "wrong-target").mkdir()
-    base = await _directory_listing(directory_request, str(directory_root), limit=120)
-    result = await _directory_listing(directory_request, str(external), base_path=base.path, limit=120)
+    base = await _directory_listing(gateway_directory_request, str(directory_root), limit=120)
+    result = await _directory_listing(gateway_directory_request, str(external), base_path=base.path, limit=120)
     assert [entry.name for entry in result.entries] == ["real-target"]
-    assert resolve_management_directory(directory_request, result.path) == external
+    assert resolve_management_directory(gateway_directory_request, result.path) == external
 
 
 @pytest.mark.asyncio
 async def test_directory_selection_rejects_foreign_owner_and_implicit_relative_base(
-    directory_request: Request, directory_root: Path,
+    gateway_directory_request: Request, directory_root: Path,
 ) -> None:
-    listing = await _directory_listing(directory_request, str(directory_root), limit=120)
-    foreign = listing.path.replace(directory_request.app.state.gateway_id, "gateway_00000000000070008000000000000002")
+    listing = await _directory_listing(gateway_directory_request, str(directory_root), limit=120)
+    foreign = listing.path.replace(gateway_directory_request.app.state.gateway_id, "gateway_00000000000070008000000000000002")
     with pytest.raises(ValueError, match="不属于"):
-        resolve_management_directory(directory_request, foreign)
+        resolve_management_directory(gateway_directory_request, foreign)
     with pytest.raises(ValueError, match="相对路径"):
-        resolve_management_directory(directory_request, "alpha")
+        resolve_management_directory(gateway_directory_request, "alpha")
     if os.name != "nt":
         with pytest.raises(ValueError):
-            resolve_management_directory(directory_request, r"C:\projects\alpha", base_path=listing.path)
+            resolve_management_directory(gateway_directory_request, r"C:\projects\alpha", base_path=listing.path)
     with pytest.raises(HTTPException) as error:
-        await _directory_listing(directory_request, str(directory_root / "missing"), limit=120)
+        await _directory_listing(gateway_directory_request, str(directory_root / "missing"), limit=120)
     assert str(directory_root) not in str(error.value.detail)
 
 
 @pytest.mark.asyncio
 async def test_remote_gateway_directory_browser_delegates_to_federation_api(
-    monkeypatch: pytest.MonkeyPatch, directory_request: Request,
+    monkeypatch: pytest.MonkeyPatch, gateway_directory_request: Request,
 ) -> None:
     class FakeRegistry:
         def remote_gateway_url(self, connection_id: str) -> str:
@@ -128,7 +135,7 @@ async def test_remote_gateway_directory_browser_delegates_to_federation_api(
     monkeypatch.setattr("app.gateway.routes.workspaces_lifecycle._remote_gateway_credential",
                         lambda connection_id: f"token-for-{connection_id}")
     response = await list_local_directories(
-        request=directory_request, path=r"C:\projects", base_path=uri, limit=25,
+        request=gateway_directory_request, path=r"C:\projects", base_path=uri, limit=25,
         gateway_connection_id="rgw_remote", _="local-token", request_id="req_remote_directory",
         registry=FakeRegistry(),  # type: ignore[arg-type]
     )
@@ -147,7 +154,7 @@ def test_directory_receipt_rejects_native_response_paths() -> None:
 
 @pytest.mark.asyncio
 async def test_registration_http_consumes_selected_directory_uri(
-    directory_request: Request, directory_root: Path, monkeypatch: pytest.MonkeyPatch,
+    gateway_directory_request: Request, directory_root: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     import httpx
 
@@ -156,8 +163,8 @@ async def test_registration_http_consumes_selected_directory_uri(
     from app.gateway.routes._shared import get_registry
     from app.gateway.routes.workspaces_lifecycle import router
 
-    listing = await _directory_listing(directory_request, str(directory_root), limit=120)
-    app = directory_request.app
+    listing = await _directory_listing(gateway_directory_request, str(directory_root), limit=120)
+    app = gateway_directory_request.app
     registry = AsyncMock()
     registry.active_workspace_id = None
     registry.list_dtos.return_value = []
@@ -178,7 +185,7 @@ async def test_registration_http_consumes_selected_directory_uri(
         assert create.await_count == 1
         gone = directory_root / "gone"
         gone.mkdir()
-        selected = await _directory_listing(directory_request, str(gone), limit=120)
+        selected = await _directory_listing(gateway_directory_request, str(gone), limit=120)
         gone.rmdir()
         failed = await client.post("/api/gateway/workspaces/local", json={"root_path": selected.path})
         assert failed.status_code == 400 and str(directory_root) not in failed.text
@@ -188,7 +195,7 @@ async def test_registration_http_consumes_selected_directory_uri(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("federated", [False, True])
 async def test_managed_registration_http_uses_target_directory_binding(
-    directory_request: Request, directory_root: Path, monkeypatch: pytest.MonkeyPatch, federated: bool,
+    gateway_directory_request: Request, directory_root: Path, monkeypatch: pytest.MonkeyPatch, federated: bool,
 ) -> None:
     import httpx
 
@@ -199,9 +206,9 @@ async def test_managed_registration_http_uses_target_directory_binding(
     from app.gateway.server.port_forwarding import get_port_forward_manager
     from app.schemas.gateway.workspaces import GatewayManagedWorkspaceListDTO
 
-    listing = await _directory_listing(directory_request, str(directory_root), limit=120)
+    listing = await _directory_listing(gateway_directory_request, str(directory_root), limit=120)
     module = federation if federated else workspaces_managed
-    app = directory_request.app
+    app = gateway_directory_request.app
     app.include_router(module.router)
     app.dependency_overrides[verify_gateway_token] = lambda: "local-token"
     app.dependency_overrides[verify_federation_token] = lambda: "federation-token"
@@ -226,7 +233,7 @@ async def test_managed_registration_http_uses_target_directory_binding(
         monkeypatch.setattr(module, "create_direct_managed_workspace", create_direct_managed_workspace)
         gone = directory_root / "gone"
         gone.mkdir()
-        selected = await _directory_listing(directory_request, str(gone), limit=120)
+        selected = await _directory_listing(gateway_directory_request, str(gone), limit=120)
         gone.rmdir()
         for value in (str(gone), selected.path):
             failed = await client.post(path, json={"root_path": value, "create_directory": False})

@@ -31,7 +31,8 @@ function createTerminalTestWorkspace() {
 test("终端的持久相对路径覆盖相对子目录、越界绝对路径、工作区移动与符号链接四类场景", () => {
   const root = createTerminalTestWorkspace();
   mkdirSync(path.join(root, "sub", "deep"), { recursive: true });
-  symlinkSync(path.join(root, "sub"), path.join(root, "link"));
+  // Windows用目录junction避免依赖符号链接特权；两者都验证保留链接段而非realpath。
+  symlinkSync(path.join(root, "sub"), path.join(root, "link"), process.platform === "win32" ? "junction" : "dir");
 
   // 用户传入相对子目录：落盘相对路径，restore 还原到同一绝对目录。
   const relativeCwd = resolveTerminalCwd(root, "sub/deep");
@@ -39,9 +40,11 @@ test("终端的持久相对路径覆盖相对子目录、越界绝对路径、�
   assert.equal(resolveTerminalCwd(root, path.relative(root, relativeCwd)), relativeCwd);
 
   // 用户传入越界绝对路径：保留原语义（不施加 workspace 边界），且落盘为相对表达。
-  const outside = resolveTerminalCwd(root, "/etc");
-  assert.equal(outside, "/etc");
-  assert.equal(resolveTerminalCwd(root, path.relative(root, outside)), "/etc");
+  const externalCwd = path.join(workspaceRunRoot, randomUUID(), "external-cwd");
+  mkdirSync(externalCwd, { recursive: true });
+  const outside = resolveTerminalCwd(root, externalCwd);
+  assert.equal(outside, externalCwd);
+  assert.equal(resolveTerminalCwd(root, path.relative(root, outside)), externalCwd);
 
   // 工作区被移动：相对路径按新根重新推导，不依赖旧绝对路径。
   const movedRoot = createTerminalTestWorkspace();

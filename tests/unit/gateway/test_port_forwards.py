@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 from pathlib import Path
@@ -90,6 +91,35 @@ def _manager(
 
     manager._wait_until_listening = ready  # type: ignore[method-assign]
     return manager
+
+
+def _write_saved_forwards(
+    storage_path: Path,
+    forwards: list[tuple[str, str, int, int]],
+) -> None:
+    storage_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "items": [
+                    {
+                        "forward_id": forward_id,
+                        "workspace_id": workspace_id,
+                        "connection_id": "rgw_server",
+                        "remote_host": "127.0.0.1",
+                        "remote_port": remote_port,
+                        "local_host": "127.0.0.1",
+                        "local_port": local_port,
+                        "protocol": "http",
+                        "label": None,
+                        "desired_running": True,
+                    }
+                    for forward_id, workspace_id, remote_port, local_port in forwards
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
 
 
 @pytest.mark.asyncio
@@ -297,6 +327,176 @@ async def test_restore_failure_remains_visible_on_workspace_list(
     assert "绑定的远程 Gateway 已变化" in (restored[0].error or "")
     with pytest.raises(RuntimeError, match="SSH 端口转发健康检查失败"):
         manager.assert_healthy()
+
+
+@pytest.mark.asyncio
+async def test_restore_starts_saved_forwards_concurrently(tmp_path: Path) -> None:
+    registry = _registry(tmp_path)
+    storage_path = tmp_path / "port-forwards.json"
+    _write_saved_forwards(
+        storage_path,
+        [
+            ("pf_1", "workspace_a", 5173, 41250),
+            ("pf_2", "workspace_b", 3000, 41251),
+        ],
+    )
+    calls: list[dict[str, object]] = []
+    processes: list[_FakeManagedProcess] = []
+    manager = _manager(tmp_path, registry, calls, processes)
+    entered_ports: list[int] = []
+    both_forwards_started = asyncio.Event()
+    release_readiness = asyncio.Event()
+
+    async def wait_for_listening(
+        _process: _FakeManagedProcess,
+        local_port: int,
+    ) -> None:
+        entered_ports.append(local_port)
+        if len(entered_ports) == 2:
+            both_forwards_started.set()
+        await release_readiness.wait()
+
+    manager._wait_until_listening = wait_for_listening  # type: ignore[method-assign]
+    restore = asyncio.create_task(manager.restore())
+    try:
+        await asyncio.wait_for(both_forwards_started.wait(), timeout=0.5)
+    except TimeoutError:
+        release_readiness.set()
+        await restore
+        raise
+    release_readiness.set()
+    await restore
+
+    assert sorted(entered_ports) == [41250, 41251]
+    assert len(calls) == 2
+    assert [item.status for item in await manager.list("workspace_a")] == ["active"]
+    assert [item.status for item in await manager.list("workspace_b")] == ["active"]
+
+
+@pytest.mark.asyncio
+async def test_restore_cancellation_closes_started_forward(tmp_path: Path) -> None:
+    registry = _registry(tmp_path)
+    storage_path = tmp_path / "port-forwards.json"
+    _write_saved_forwards(storage_path, [("pf_waiting", "workspace_a", 5173, 41252)])
+    processes: list[_FakeManagedProcess] = []
+    manager = _manager(tmp_path, registry, [], processes)
+    readiness_started = asyncio.Event()
+
+    async def wait_for_listening(
+        _process: _FakeManagedProcess,
+        _local_port: int,
+    ) -> None:
+        readiness_started.set()
+        await asyncio.Future()
+
+    manager._wait_until_listening = wait_for_listening  # type: ignore[method-assign]
+    restore = asyncio.create_task(manager.restore())
+    await asyncio.wait_for(readiness_started.wait(), timeout=0.5)
+
+    restore.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await restore
+
+    assert len(processes) == 1
+    assert processes[0].closed is True
+    restored = await manager.list("workspace_a")
+    assert restored[0].status == "error"
+    assert restored[0].error == "SSH 端口转发启动被取消"
+
+
+@pytest.mark.asyncio
+async def test_restore_limits_parallel_process_starts(tmp_path: Path) -> None:
+    registry = _registry(tmp_path)
+    storage_path = tmp_path / "port-forwards.json"
+    forwards = [
+        (
+            f"pf_{index}",
+            "workspace_a" if index % 2 == 0 else "workspace_b",
+            1000 + index,
+            41300 + index,
+        )
+        for index in range(port_forwarding._RESTORE_CONCURRENCY + 2)
+    ]
+    _write_saved_forwards(storage_path, forwards)
+    calls: list[dict[str, object]] = []
+    processes: list[_FakeManagedProcess] = []
+    manager = _manager(tmp_path, registry, calls, processes)
+    entered_count = 0
+    peak_active = 0
+    active = 0
+    concurrency_reached = asyncio.Event()
+    release_readiness = asyncio.Event()
+
+    async def wait_for_listening(
+        _process: _FakeManagedProcess,
+        _local_port: int,
+    ) -> None:
+        nonlocal active, entered_count, peak_active
+        active += 1
+        entered_count += 1
+        peak_active = max(peak_active, active)
+        if entered_count == port_forwarding._RESTORE_CONCURRENCY:
+            concurrency_reached.set()
+        await release_readiness.wait()
+        active -= 1
+
+    manager._wait_until_listening = wait_for_listening  # type: ignore[method-assign]
+    restore = asyncio.create_task(manager.restore())
+    await asyncio.wait_for(concurrency_reached.wait(), timeout=0.5)
+    await asyncio.sleep(0)
+
+    assert entered_count == port_forwarding._RESTORE_CONCURRENCY
+    assert peak_active == port_forwarding._RESTORE_CONCURRENCY
+
+    release_readiness.set()
+    await restore
+
+    assert entered_count == len(forwards)
+    assert peak_active == port_forwarding._RESTORE_CONCURRENCY
+    assert len(calls) == len(forwards)
+
+
+@pytest.mark.asyncio
+async def test_failed_start_retains_process_when_close_fails(tmp_path: Path) -> None:
+    processes: list[_FakeManagedProcess] = []
+    manager = _manager(tmp_path, _registry(tmp_path), [], processes)
+    close_attempts = 0
+
+    def start_process(**_: object) -> tuple[_FakeManagedProcess, Path]:
+        process = _FakeManagedProcess()
+        processes.append(process)
+
+        def close(*, timeout_seconds: float = 8) -> None:
+            nonlocal close_attempts
+            del timeout_seconds
+            close_attempts += 1
+            if close_attempts == 1:
+                raise RuntimeError("close failed")
+            process.closed = True
+
+        process.close = close
+        return process, tmp_path / "logs" / "failed-start.log"
+
+    manager._process_starter = start_process
+
+    async def readiness_failure(*_: object) -> None:
+        raise TimeoutError("readiness failed")
+
+    manager._wait_until_listening = readiness_failure  # type: ignore[method-assign]
+    created = await manager.create(
+        "workspace_a",
+        CreatePortForwardRequest(remote_port=5173, local_port=41253),
+    )
+
+    assert created.status == "error"
+    assert "close failed" in (created.error or "")
+    assert processes[0].closed is False
+    assert manager._runtimes[created.forward_id].process is processes[0]
+
+    await manager.delete("workspace_a", created.forward_id)
+
+    assert close_attempts == 2
+    assert processes[0].closed is True
 
 
 def test_log_tail_reads_bounded_utf8_suffix(

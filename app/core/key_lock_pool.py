@@ -33,8 +33,8 @@ class KeyLockPool:
         """返回该 key 恒定命中的锁；锁池数量不随出现过的 key 数增长。"""
         if not isinstance(key, str) or not key:
             raise ValueError(f"key 必须是非空字符串: {key!r}")
-        shard = zlib.crc32(key.encode("utf-8")) % len(self._shards)
-        return self._shards[shard]
+        shard_index = zlib.crc32(key.encode("utf-8")) % len(self._shards)
+        return self._shards[shard_index]
 
     def __len__(self) -> int:
         return len(self._shards)

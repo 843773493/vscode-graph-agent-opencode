@@ -208,6 +208,36 @@ async def test_restart_projection_uses_sqlite_readiness_and_never_json_activatio
 
 
 @pytest.mark.asyncio
+async def test_list_teams_reads_member_ledger_once_and_filters_other_teams(
+    team_case,
+    monkeypatch,
+):
+    first_board, first_member = await create_reviewer(team_case)
+    await create_reviewer(team_case)
+    list_members = team_case.factory.list_collaboration_members
+    list_member_calls = 0
+
+    def count_member_reads(*, coordinator_session_id):
+        nonlocal list_member_calls
+        list_member_calls += 1
+        return list_members(coordinator_session_id=coordinator_session_id)
+
+    monkeypatch.setattr(team_case.factory, "list_collaboration_members", count_member_reads)
+
+    listed = await team_case.service.list_teams(
+        requester_session_id="ses_owner",
+        requester_thread_id=first_member.member.thread_id,
+    )
+
+    assert [board.team_id for board in listed.items] == [first_board.team_id]
+    assert [member.thread_id for member in listed.items[0].members] == [
+        "thr_main",
+        first_member.member.thread_id,
+    ]
+    assert list_member_calls == 1
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("user_update", [False, True])
 async def test_original_dispatch_recovery_clears_only_its_failure_after_long_event_history(team_case, monkeypatch, user_update):
     case = team_case

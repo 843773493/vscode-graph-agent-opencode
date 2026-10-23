@@ -47,8 +47,8 @@ function requiredPartKind(
 /** 按 part_id 原地合并增量，并保持各 part 第一次出现时的顺序。 */
 export function aggregateConversationEvents(
   events: TraceEvent[],
-  convId: string,
-  isRunning: boolean,
+  conversationId: string,
+  isConversationRunning: boolean,
 ): TimelineItem[] {
   const items: TimelineItem[] = [];
   const seenEventIds = new Set<string>();
@@ -120,14 +120,6 @@ export function aggregateConversationEvents(
     return item;
   }
 
-  function replaceTextPart(partId: string, item: TextPart) {
-    const index = textPartIndexes.get(partId);
-    if (index === undefined) {
-      throw new Error(`无法更新不存在的文本 part_id=${partId}`);
-    }
-    items[index] = item;
-  }
-
   function failPendingTools(payload: Record<string, unknown>, eventType: string) {
     for (const pending of pendingToolCalls.values()) {
       items[pending.itemIndex] = buildFailedToolItem(pending, payload, eventType);
@@ -135,6 +127,7 @@ export function aggregateConversationEvents(
     pendingToolCalls.clear();
   }
 
+  // 聚合项在返回前不外泄；增量原地追加，避免每次复制全部历史 rawEvents 和文本项。
   for (const event of events) {
     const { eventType, payload, timestamp, eventId, partId } = extractEventInfo(event);
     if (eventId && seenEventIds.has(eventId)) {
@@ -165,19 +158,16 @@ export function aggregateConversationEvents(
           throw new Error(`part_id=${id} 的 kind 从 ${current.partKind} 变成了 ${kind}`);
         }
         textPartSegmentStarts.set(id, current.text.length);
-        replaceTextPart(id, {
-          ...current,
-          active: isRunning,
-          eventCount: current.eventCount + 1,
-          rawEvents: [...current.rawEvents, { type: eventType, payload }],
-        });
+        current.active = isConversationRunning;
+        current.eventCount += 1;
+        current.rawEvents.push({ type: eventType, payload });
         continue;
       }
       appendTextPart({
         partId: id,
         text: "",
         kind,
-        active: isRunning,
+        active: isConversationRunning,
         timestamp,
         eventType,
         payload,
@@ -194,7 +184,7 @@ export function aggregateConversationEvents(
           partId: id,
           text: deltaText,
           kind,
-          active: isRunning,
+          active: isConversationRunning,
           timestamp,
           eventType,
           payload,
@@ -208,15 +198,11 @@ export function aggregateConversationEvents(
       if (current.partKind !== kind) {
         throw new Error(`part_id=${id} 的 kind 从 ${current.partKind} 变成了 ${kind}`);
       }
-      const next = {
-        ...current,
-        text: current.text + deltaText,
-        active: isRunning,
-        eventCount: current.eventCount + 1,
-        rawEvents: [...current.rawEvents, { type: eventType, payload }],
-      };
-      replaceTextPart(id, next);
-      if (next.text.trim()) {
+      current.text += deltaText;
+      current.active = isConversationRunning;
+      current.eventCount += 1;
+      current.rawEvents.push({ type: eventType, payload });
+      if (deltaText.trim()) {
         hasOutputContent = true;
       }
       continue;
@@ -255,18 +241,14 @@ export function aggregateConversationEvents(
         : segmentStart > 0
           ? current.text.slice(0, segmentStart) + finalText
           : finalText;
-      const next = {
-        ...current,
-        text: resolvedText,
-        active: false,
-        eventCount: current.eventCount + 1,
-        rawEvents: [...current.rawEvents, { type: eventType, payload }],
-      };
-      replaceTextPart(id, next);
+      current.text = resolvedText;
+      current.active = false;
+      current.eventCount += 1;
+      current.rawEvents.push({ type: eventType, payload });
       if (kind === "markdown") {
-        recordFinalText(skillFlow, next.text);
+        recordFinalText(skillFlow, current.text);
       }
-      if (next.text.trim()) {
+      if (current.text.trim()) {
         hasOutputContent = true;
       }
       continue;
@@ -366,13 +348,12 @@ export function aggregateConversationEvents(
     addTraceItem(eventType, payload, timestamp, eventId);
   }
 
-  if (!isRunning) {
-    for (const [partId, index] of textPartIndexes) {
+  if (!isConversationRunning) {
+    for (const index of textPartIndexes.values()) {
       const item = items[index];
       if (item.kind === "aggregated_text" && item.active) {
-        items[index] = { ...item, active: false };
+        item.active = false;
       }
-      textPartIndexes.set(partId, index);
     }
     if (pendingToolCalls.size > 0) {
       failPendingTools(
@@ -384,14 +365,14 @@ export function aggregateConversationEvents(
 
   if (
     sawSuccessfulTerminalEvent &&
-    !isRunning &&
+    !isConversationRunning &&
     !hasOutputContent &&
     items.length === 0
   ) {
     const modelInfo = llmModel ? `模型: ${llmModel}` : "";
     items.push({
       kind: "trace",
-      id: `fallback-agent-end-${convId}-${agentEndTs || items.length}`,
+      id: `fallback-agent-end-${conversationId}-${agentEndTs || items.length}`,
       eventType: "llm_empty_response",
       payload: { message: modelInfo || "LLM 返回了空响应", model: llmModel },
       timestamp: agentEndTs,
@@ -402,7 +383,7 @@ export function aggregateConversationEvents(
   if (skillSnapshot.keyFlowToolResults.length > 0 && skillSnapshot.finalText) {
     const summaryItem: TimelineItem = {
       kind: "skill_summary",
-      id: `skill-summary-${convId}`,
+      id: `skill-summary-${conversationId}`,
       acceptedSkillLoads: skillSnapshot.acceptedSkillLoads,
       toolResults: skillSnapshot.keyFlowToolResults.map((item) => ({
         toolName: item.toolName,

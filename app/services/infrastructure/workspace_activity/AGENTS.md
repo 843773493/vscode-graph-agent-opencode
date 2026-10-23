@@ -8,7 +8,8 @@
 # 可修改内容
 
 - 可以维护 `workspace_activity.py` 中 `WorkspaceActivityMixin` 的方法族
-  （`append_activity`、`list_activity`、`activity_bounds`、`prune_activity`）。
+  （`append_activity`、`read_activity_page`、`prune_activity`）；分页记录与游标窗口边界
+  必须由同一次 SQLite 读取返回。
 - 可以维护本模块自有的 `WorkspaceActivityRecord` 投影、`_activity_record_from_row`
   行工厂、`WorkspaceActivityCursorGoneError` 与 `WorkspaceActivityService`。
 - 可以维护对应的单元测试；测试放在 `tests/unit/services/infrastructure/`。
@@ -37,6 +38,6 @@
   改动或订阅者消费速度不足。
 - 分页读取与去重回读必须走本地 SQLite，不得静默吞掉错误或返回伪造默认值。
 - 修改本目录后运行 `uv run ruff check` 与
-  `uv run pytest tests/unit/services/infrastructure/test_workspace_activity_service.py
-  tests/unit/services/infrastructure/test_workspace_state_store.py`。
+  `uv run pytest tests/unit/services/infrastructure/workspace_activity/test_workspace_activity_service.py
+  tests/unit/services/infrastructure/workspace_state_store/test_workspace_state_store.py`。
 - 模板示例；在整理 `AGENTS.md` 时请保留此行。

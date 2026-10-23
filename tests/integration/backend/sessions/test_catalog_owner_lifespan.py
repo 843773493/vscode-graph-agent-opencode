@@ -21,7 +21,7 @@ from app.core.path_utils import (
 )
 from app.core.session_catalog_store import SessionCatalogStore
 from tests.harness.python.run_context import TestRunContext
-from tests.support.workspaces import prepare_default_test_workspace
+from tests.support.workspaces import prepare_test_workspace
 
 
 @pytest.fixture
@@ -30,11 +30,11 @@ def catalog_registry(request: pytest.FixtureRequest):
     mounts = []
     for number in range(34):
         root = context.workspace_root / f"workspace-{number}"
-        prepare_default_test_workspace(
+        prepare_test_workspace(
             workspace_root=root,
             template_root=Path.cwd() / "tests/fixtures/workspaces/default_test_workspace",
+            template_items=(),
         )
-        (root / ".boxteam/workspace-identity.json").unlink(missing_ok=True)
         mounts.append(MountedWorkspace(str(uuid4()), root))
     registry = WorkspaceContainerRegistry(
         mounted_workspaces=MountedWorkspaceRegistry(mounts),

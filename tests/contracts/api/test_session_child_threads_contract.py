@@ -18,13 +18,6 @@ from tests.contracts.api.openapi_snapshots import (
 PUBLIC_PROTO = Path.cwd() / "proto/boxteam/workspace/v2/public.proto"
 
 
-@pytest.fixture(params=("live", *OPENAPI_SNAPSHOTS))
-def openapi_document(request: pytest.FixtureRequest) -> dict[str, object]:
-    if request.param == "live":
-        return app.openapi()
-    return load_openapi_snapshot(request.param)
-
-
 def test_child_thread_status_has_one_authoritative_openapi_field(
     openapi_document: dict[str, object],
 ) -> None:

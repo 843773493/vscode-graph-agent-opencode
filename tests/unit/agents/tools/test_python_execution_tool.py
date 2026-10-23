@@ -11,7 +11,12 @@ def test_python_executable_prefers_uv_project_environment(
     tmp_path: Path,
 ):
     uv_env = tmp_path / "uv-env"
-    uv_python = uv_env / "bin" / "python"
+    venv_python_path = (
+        Path("Scripts") / "python.exe"
+        if sys.platform == "win32"
+        else Path("bin") / "python"
+    )
+    uv_python = uv_env / venv_python_path
     uv_python.parent.mkdir(parents=True)
     uv_python.write_text("", encoding="utf-8")
 

@@ -196,7 +196,7 @@ async def lifespan(app: FastAPI):
             policy_store=federation_policy,
             control_store=federation_control,
             signing_key=load_or_create_signing_key(_gateway_root()),
-            catalog=WorkspaceCatalogPort(),
+            catalog=WorkspaceCatalogPort(http_client=app.state.http_client),
             session_main=WorkspaceSessionMainPort(
                 http_client=app.state.http_client, inventory_provider=federation_inventory,
                 skill_source_owner=skill_source_owner,

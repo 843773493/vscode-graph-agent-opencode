@@ -13,7 +13,7 @@ import { sessionScopeKey } from "../../state/session/sessionScope";
 import { cloneMaps } from "../../state/appStateMaps";
 import { errorMessage } from "../../utils/errorMessage";
 import type { SetAppState } from "../contentViewLoaderTypes";
-import { canAcceptUserViewStateMutation } from "../workspace/useWorkspaceBootstrap";
+import { canAcceptUserViewStateMutation } from "../workspace/workspaceBootstrapPolicy";
 import { trackInFlightRequest } from "../runtime/inFlightRequests";
 
 const SESSION_VIEW_STATE_CACHE_LIMIT = 64;

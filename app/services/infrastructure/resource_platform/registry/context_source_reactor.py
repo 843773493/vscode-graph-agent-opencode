@@ -151,8 +151,15 @@ class ContextSourceReactor:
             marked += self._handle_event(observation)
         return marked
 
-    def drain(self) -> Iterator[PublishedSourceObservationRef]:
+    def drain(
+        self,
+        *,
+        descriptors: tuple[ContextSourceDescriptor, ...] | None = None,
+    ) -> Iterator[PublishedSourceObservationRef]:
         """把已排队的轻量通知转换为待观察来源，不读取任何来源内容。
+
+        第一条 pending 到达时构造一次 descriptor 索引；调用方可复用请求边界快照，
+        避免每条 pending 都重新扫描注册表。
 
         已释放的 reactor 返回空迭代器：订阅已经解除，事件不再到达 CSM；
         仍在执行的旧 agent 只保留它已有的上下文，不因为订阅释放而失败。
@@ -160,11 +167,26 @@ class ContextSourceReactor:
         if self._released:
             return
         self.ingest_notifications()
+        descriptors_by_source_id: dict[str, ContextSourceDescriptor] | None = None
         while True:
             pending = self._context_sources.next_pending_observation()
             if pending is None:
                 return
-            descriptor = self._descriptor_by_source_id(pending.source_id)
+            if descriptors_by_source_id is None:
+                descriptors_by_source_id = {
+                    descriptor.source_id: descriptor
+                    for descriptor in (
+                        self._context_sources.descriptors()
+                        if descriptors is None
+                        else descriptors
+                    )
+                }
+            descriptor = descriptors_by_source_id.get(pending.source_id)
+            if descriptor is None:
+                raise KeyError(
+                    "待观察来源尚未由 owner 重新注册 descriptor: "
+                    f"source_id={pending.source_id}"
+                )
             resource_uri = descriptor.resource_uri
             if resource_uri is None:
                 raise RuntimeError(
@@ -320,15 +342,6 @@ class ContextSourceReactor:
         self._require_active()
         return self._context_sources.mark_all_pending_observations(
             tuple(set(self._source_ids_by_uri.values()))
-        )
-
-    def _descriptor_by_source_id(self, source_id: str) -> ContextSourceDescriptor:
-        for descriptor in self._context_sources.descriptors():
-            if descriptor.source_id == source_id:
-                return descriptor
-        raise KeyError(
-            "待观察来源尚未由 owner 重新注册 descriptor: "
-            f"source_id={source_id}"
         )
 
     async def _release_resources(self) -> None:

@@ -122,7 +122,9 @@ class _FakeNodeProcess:
     真实子进程提供可信的 OS 起始身份（PID + starttime），身份核对走生产代码。
     """
 
-    def __init__(self, child: subprocess.Popen[bytes], inspector_url: str | None) -> None:
+    def __init__(
+        self, child: subprocess.Popen[bytes], inspector_url: str | None
+    ) -> None:
         self._child = child
         self.returncode: int | None = None
         self.stderr = asyncio.StreamReader()
@@ -241,6 +243,7 @@ def _make_service(
 async def test_release_failure_publishes_release_failed_state_event(
     tmp_path: Path,
     session_tree: object,
+    event_channel_service: EventChannelService,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """owner 停止失败进入 reconcile_required 时发布 release_failed 事件。"""
@@ -253,17 +256,16 @@ async def test_release_failure_publishes_release_failed_state_event(
         0.05,
     )
     manager = ExternalResourceLeaseLedger(state_path=tmp_path / "resources.json")
-    event_service = EventChannelService()
     service, store, workspace_root = _make_service(
         tmp_path,
         session_tree,
         manager,
         state_events=ResourceStateEventPublisher(
-            event_service=event_service,
+            event_service=event_channel_service,
             owner_domain="node_debug",
         ),
     )
-    subscription = event_service.channel("resource.state/node_debug").subscribe(
+    subscription = event_channel_service.channel("resource.state/node_debug").subscribe(
         label="test"
     )
     created = await service.create_configuration(
@@ -317,9 +319,7 @@ async def test_release_failure_publishes_release_failed_state_event(
         assert blocked.status == "reconcile_required"
         # 通知只携带轻量身份字段，不夹带 reason 正文或进程细节。
         deliveries = subscription.pending()
-        assert [delivery.event.state for delivery in deliveries] == [
-            "release_failed"
-        ]
+        assert [delivery.event.state for delivery in deliveries] == ["release_failed"]
         assert [delivery.event.resource_id for delivery in deliveries] == [
             identity.resource_id
         ]
@@ -584,7 +584,9 @@ async def test_reconcile_required_keeps_lease_active_until_termination_verified(
             ),
         )
         assert released.status == "exited"
-        persisted_after = store.read_launch_claim(_PARENT_SESSION_ID, _PARENT_MAIN_THREAD_ID)
+        persisted_after = store.read_launch_claim(
+            _PARENT_SESSION_ID, _PARENT_MAIN_THREAD_ID
+        )
         assert persisted_after is not None
         assert persisted_after.phase == "settled"
         assert manager.get_lease(identity.lease_id).status == "settled"
@@ -614,11 +616,15 @@ async def test_restart_recovery_keeps_active_lease_without_duplicate_acquire(
         )
         store.write_launch_claim(claim)
 
-        manager_before = ExternalResourceLeaseLedger(state_path=tmp_path / "resources.json")
+        manager_before = ExternalResourceLeaseLedger(
+            state_path=tmp_path / "resources.json"
+        )
         identity = _seed_active_lease(manager_before, claim.process_instance_id)
 
         # 模拟 backend 重启：新的 ExternalResourceLeaseLedger 从同一 durable state path 恢复账本。
-        manager_after = ExternalResourceLeaseLedger(state_path=tmp_path / "resources.json")
+        manager_after = ExternalResourceLeaseLedger(
+            state_path=tmp_path / "resources.json"
+        )
         service, _store, _workspace_root = _make_service(
             tmp_path,
             session_tree,
@@ -683,9 +689,9 @@ async def test_restart_recovery_settles_lease_only_after_instance_verified_gone(
     assert settled is not None
     assert settled.status == "settled"
     # 恢复过程只结清既有占用，不重复 acquire 出第二行。
-    assert [lease.lease_id for lease in manager_after.leases_for_turn(identity.holder_id)] == [
-        identity.lease_id
-    ]
+    assert [
+        lease.lease_id for lease in manager_after.leases_for_turn(identity.holder_id)
+    ] == [identity.lease_id]
 
 
 @pytest.mark.asyncio
@@ -786,9 +792,7 @@ async def test_ledger_conflict_fails_start_closed_without_fake_registration(
         manager,
         inspector_port=0,
     )
-    conflicting_id = (
-        f"node_debug_process:{_PARENT_SESSION_ID}:{_PARENT_MAIN_THREAD_ID}"
-    )
+    conflicting_id = f"node_debug_process:{_PARENT_SESSION_ID}:{_PARENT_MAIN_THREAD_ID}"
     manager.register(
         resource_id=conflicting_id,
         kind="terminal",

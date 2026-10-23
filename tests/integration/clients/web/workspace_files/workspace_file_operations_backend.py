@@ -27,7 +27,7 @@ from app.services.infrastructure.workspace_file_watch_service import (
     WorkspaceFileWatchService,
 )
 from app.services.infrastructure.workspace_service import WorkspaceService
-from tests.support.workspaces import prepare_default_test_workspace
+from tests.support.workspaces import prepare_test_workspace
 
 
 def make_app(output_root: Path) -> FastAPI:
@@ -37,9 +37,11 @@ def make_app(output_root: Path) -> FastAPI:
     requests = []
     for name in ("a", "b"):
         route = "gw-files-" + name
-        root = prepare_default_test_workspace(
+        root = prepare_test_workspace(
             workspace_root=output_root / "workspace" / name,
-            template_root=Path.cwd() / "tests/fixtures/workspaces/default_test_workspace",
+            template_root=Path.cwd()
+            / "tests/fixtures/workspaces/default_test_workspace",
+            template_items=(),
         )
         for directory in ("target", "other", "cold"):
             (root / directory).mkdir()

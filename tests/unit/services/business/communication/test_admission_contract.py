@@ -15,7 +15,7 @@ from app.services.business.communication.admission import (
     ExistingOutboxView,
     ReceivedCommunicationView,
     decide_send_admission,
-    resolve_request_preimage,
+    resolve_request_preimage_hash,
 )
 from app.services.business.communication.errors import CommunicationContractError
 
@@ -60,7 +60,7 @@ def make_existing(
         send_operation_id=request.send_operation_id,
         communication_id=communication_id,
         target=request.target_binding.target,
-        payload_hash=resolve_request_preimage(request),
+        payload_hash=resolve_request_preimage_hash(request),
     )
 
 
@@ -115,7 +115,7 @@ def test_payload_rejects_empty_content_and_reply_field_misuse() -> None:
 
 def test_preimage_hash_is_deterministic() -> None:
     request = make_request()
-    assert resolve_request_preimage(request) == resolve_request_preimage(request)
+    assert resolve_request_preimage_hash(request) == resolve_request_preimage_hash(request)
 
 
 def test_same_operation_same_preimage_returns_original_receipt() -> None:

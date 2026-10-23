@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from app.domain.itemized.execution_queue import ExecutionQueueInput
 import json
 import sqlite3
 from contextlib import closing
@@ -25,7 +26,6 @@ from app.domain.itemized.execution_admission import (
     InternalExecutionIntent,
     UserExecutionIdentity,
 )
-from app.domain.itemized.execution_queue import ExecutionQueueInput
 from app.domain.itemized.hashing import content_hash, sha256_jcs
 from app.domain.itemized.identity.item_projection import (
     ItemProjectionIdentity,

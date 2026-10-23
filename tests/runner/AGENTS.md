@@ -20,3 +20,4 @@
 - `integration-browser-element-references` 使用真实Chromium验证辅助Browser服务的DOM引用与动作，固定60秒/4GiB；不代表Gateway或主Web产品链路验收。
 - `integration-browser-checkpoint-form-state` 使用真实Chromium与HTTP表单验证检查点捕获、DOM变更后的定位、释放后恢复及大型匿名表单的扫描成本，固定60秒/4GiB；Manager落盘边界为空操作，不代表持久化或主Web验收。
 - 每个已启用 suite 都带数据段内存上限与硬超时；被上限或超时中止的套件必须以 TIMEOUT 或非零退出码报出，不得记成通过。
+- POSIX套件根进程退出后仍回收其独立进程组，覆盖正常、失败、超时和中断路径。首次SIGINT/SIGTERM先转发TERM，沿用30秒退出宽限；再次中断立即强杀，原套件强杀期限不重置。等待根进程退出后才返回，中断仍为130，超时仍为3及原TIMEOUT回执。Windows的现有PID分支只覆盖根进程，不能把POSIX组清理证据称作Windows进程树保证。

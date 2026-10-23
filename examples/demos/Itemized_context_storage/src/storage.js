@@ -1,229 +1,54 @@
-import { createHash } from "node:crypto";
-import { mkdir, readFile, readdir, rm, stat, writeFile, appendFile } from "node:fs/promises";
-import { fileURLToPath } from "node:url";
+import { appendFile, mkdir, readFile, readdir, stat, truncate, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { Database } from "bun:sqlite";
+import {
+  assertCanonicalJsonlTail,
+  readCanonicalItemsByCatalogOffsets,
+} from "./canonicalJsonl.js";
+import {
+  canonicalJson,
+  createItemProjectionPreview,
+  sampleItems,
+} from "./canonicalItems.js";
+import { createRequestPlan, createTranscriptProjection } from "./contextProjections.js";
+import { resetDemoRuntime, resolveRuntimePath, RUNTIME_ROOT } from "./runtimePaths.js";
 
-const DEMO_ROOT = path.resolve(fileURLToPath(new URL("..", import.meta.url)));
-const RUNTIME_ROOT = path.join(DEMO_ROOT, "runtime");
+export { canonicalJson, contentHash, sampleItems, sha256 } from "./canonicalItems.js";
+
 const SESSION_ID = "session-itemized-teaching";
-
-function assertRuntimeName(runtimeName) {
-  if (!/^[A-Za-z0-9._-]+$/.test(runtimeName)) {
-    throw new Error(`runtime 名称非法: ${runtimeName}`);
-  }
-}
-
-function sortJson(value) {
-  if (Array.isArray(value)) {
-    return value.map(sortJson);
-  }
-  if (value && typeof value === "object") {
-    return Object.fromEntries(
-      Object.entries(value)
-        .sort(([left], [right]) => left.localeCompare(right))
-        .map(([key, child]) => [key, sortJson(child)]),
-    );
-  }
-  return value;
-}
-
-export function canonicalJson(value) {
-  return JSON.stringify(sortJson(value));
-}
-
-export function sha256(value) {
-  return createHash("sha256").update(value).digest("hex");
-}
-
-export function contentHash(payload) {
-  return `sha256:jcs:v1:${sha256(canonicalJson(payload))}`;
-}
 
 function jsonFile(value) {
   return `${JSON.stringify(value, null, 2)}\n`;
 }
 
-function textPreview(record) {
-  if (record.payload_kind === "text") {
-    return record.payload;
-  }
-  if (record.semantic_kind === "tool_call") {
-    const call = record.payload.tool_calls[0];
-    return `${call.name}(${canonicalJson(call.args)})`;
-  }
-  if (record.semantic_kind === "tool_result") {
-    return record.payload.content;
-  }
-  if (record.payload_kind === "opaque") {
-    return "[reasoning body is canonical, but hidden from this projection]";
-  }
-  return canonicalJson(record.payload);
-}
-
-function projectionContent(record) {
-  const content = textPreview(record);
-  return {
-    content: content.slice(0, 120),
-    contentLength: content.length,
-    contentTruncated: content.length > 120 ? 1 : 0,
-  };
-}
-
-function createItem({
-  itemSequence,
-  itemId,
-  semanticKind,
-  payloadKind,
-  payload,
-  producerRef,
-  status = "completed",
-  turnId = null,
-  turnScope = null,
-  wireRole = null,
-  metadata = {},
-  createdAt = "2026-09-20T00:00:00.000Z",
-}) {
-  return {
-    format_version: 2,
-    record_type: "item",
-    item_sequence: itemSequence,
-    item_id: itemId,
-    semantic_kind: semanticKind,
-    payload_kind: payloadKind,
-    status,
-    producer_ref: producerRef,
-    payload,
-    content_hash: contentHash(payload),
-    created_at: createdAt,
-    metadata,
-    ...(turnId ? { turn_id: turnId } : {}),
-    ...(turnScope ? { turn_scope: turnScope } : {}),
-    ...(wireRole ? { wire_role: wireRole } : {}),
-  };
-}
-
-export function sampleItems() {
-  const turnId = "turn-001";
-  return [
-    createItem({
-      itemSequence: 1,
-      itemId: "item-user-001",
-      semanticKind: "user_input",
-      payloadKind: "text",
-      payload: "请读取 README 的标题",
-      producerRef: { producer_kind: "user", producer_id: "user-input" },
-      turnId,
-      turnScope: "turn_root",
-      wireRole: "user",
-    }),
-    createItem({
-      itemSequence: 2,
-      itemId: "item-reasoning-001",
-      semanticKind: "reasoning",
-      payloadKind: "opaque",
-      payload: {
-        protection: { class: "internal", redaction: "projection-hidden" },
-        text: "先读取文件，再提取第一行标题。",
-      },
-      producerRef: {
-        producer_kind: "model",
-        producer_id: "demo-model",
-        invocation_id: "invocation-001",
-      },
-      turnId,
-      turnScope: "turn_member",
-      metadata: { visibility: "internal" },
-    }),
-    createItem({
-      itemSequence: 3,
-      itemId: "item-tool-call-001",
-      semanticKind: "tool_call",
-      payloadKind: "structured_content",
-      payload: {
-        tool_calls: [
-          { id: "call-001", name: "read_file", args: { path: "README.md" } },
-        ],
-      },
-      producerRef: {
-        producer_kind: "model",
-        producer_id: "demo-model",
-        invocation_id: "invocation-001",
-      },
-      turnId,
-      turnScope: "turn_member",
-      wireRole: "assistant",
-    }),
-    createItem({
-      itemSequence: 4,
-      itemId: "item-tool-result-001",
-      semanticKind: "tool_result",
-      payloadKind: "structured_content",
-      payload: {
-        tool_call_id: "call-001",
-        result_id: "result-001",
-        tool_outcome: "success",
-        content: "# Itemized Context Demo\n\n这是 README 的标题。",
-      },
-      producerRef: {
-        producer_kind: "tool",
-        producer_id: "read_file",
-        invocation_id: "call-001",
-      },
-      turnId,
-      turnScope: "turn_member",
-      wireRole: "tool",
-      metadata: { execution_confirmed: true },
-    }),
-    createItem({
-      itemSequence: 5,
-      itemId: "item-assistant-001",
-      semanticKind: "assistant_output",
-      payloadKind: "text",
-      payload: "README 的标题是 `Itemized Context Demo`。",
-      producerRef: {
-        producer_kind: "model",
-        producer_id: "demo-model",
-        invocation_id: "invocation-001",
-      },
-      turnId,
-      turnScope: "turn_member",
-      wireRole: "assistant",
-    }),
-    createItem({
-      itemSequence: 6,
-      itemId: "item-runtime-notice-001",
-      semanticKind: "runtime_notice",
-      payloadKind: "text",
-      payload: "工具调用耗时 12ms",
-      producerRef: { producer_kind: "runtime", producer_id: "clock" },
-      turnScope: "ambient",
-      metadata: { visibility: "internal" },
-    }),
-  ];
-}
-
 export class ItemizedDemoStore {
-  constructor(runtimeName = "demo") {
-    assertRuntimeName(runtimeName);
-    this.runtimeName = runtimeName;
-    this.runtimeRoot = path.join(RUNTIME_ROOT, runtimeName);
+  constructor(runtimeRelativePath = "demo", { runtimeBasePath = RUNTIME_ROOT } = {}) {
+    this.runtimeRelativePath = runtimeRelativePath;
+    this.runtimeBasePath = path.resolve(runtimeBasePath);
+    this.runtimeRoot = resolveRuntimePath(runtimeRelativePath, this.runtimeBasePath);
     this.rolloutRoot = path.join(this.runtimeRoot, "sessions", SESSION_ID, "rollout");
     this.jsonlPath = path.join(this.rolloutRoot, "rollout.jsonl");
     this.indexPath = path.join(this.rolloutRoot, "index.sqlite");
     this.planPath = path.join(this.runtimeRoot, "request-plan.json");
     this.transcriptPath = path.join(this.runtimeRoot, "transcript.json");
     this.db = null;
+    this.sampleAppendOperation = null;
+    this.initializationOperation = null;
+    this.initialized = false;
   }
 
   async open() {
+    if (this.db) {
+      return this;
+    }
     await mkdir(this.rolloutRoot, { recursive: true });
     const jsonlFile = Bun.file(this.jsonlPath);
     if (!(await jsonlFile.exists())) {
       await writeFile(this.jsonlPath, "", "utf8");
     }
-    this.db = new Database(this.indexPath);
-    this.db.exec(`
+    const database = new Database(this.indexPath);
+    try {
+      database.exec(`
       PRAGMA foreign_keys = ON;
       CREATE TABLE IF NOT EXISTS item_catalog (
         item_sequence INTEGER PRIMARY KEY,
@@ -271,12 +96,16 @@ export class ItemizedDemoStore {
         key TEXT PRIMARY KEY,
         value TEXT NOT NULL
       );
-    `);
-    this.run(
-      "INSERT OR REPLACE INTO metadata (key, value) VALUES (?, ?)",
-      "storage_contract",
-      "canonical JSONL is payload source; SQLite is catalog/projection/view state",
-    );
+      `);
+      database.query("INSERT OR REPLACE INTO metadata (key, value) VALUES (?, ?)").run(
+        "storage_contract",
+        "canonical JSONL is payload source; SQLite is catalog/projection/view state",
+      );
+    } catch (error) {
+      database.close(false);
+      throw error;
+    }
+    this.db = database;
     return this;
   }
 
@@ -285,6 +114,7 @@ export class ItemizedDemoStore {
       this.db.close(false);
       this.db = null;
     }
+    this.initialized = false;
   }
 
   requireDb() {
@@ -294,75 +124,112 @@ export class ItemizedDemoStore {
     return this.db;
   }
 
-  run(sql, ...params) {
+  executeStatement(sql, ...params) {
     return this.requireDb().query(sql).run(...params);
   }
 
-  get(sql, ...params) {
+  queryOne(sql, ...params) {
     return this.requireDb().query(sql).get(...params);
   }
 
-  all(sql, ...params) {
+  queryMany(sql, ...params) {
     return this.requireDb().query(sql).all(...params);
   }
 
-  async appendItem(item) {
-    if (this.get("SELECT item_id FROM item_catalog WHERE item_id = ?", item.item_id)) {
-      throw new Error(`item_id 已存在，拒绝重复追加: ${item.item_id}`);
+  appendSampleItems() {
+    if (this.sampleAppendOperation) {
+      return this.sampleAppendOperation;
     }
-    const rawLine = `${canonicalJson(item)}\n`;
-    const currentSize = (await stat(this.jsonlPath)).size;
-    await appendFile(this.jsonlPath, rawLine, "utf8");
-    const payloadText = canonicalJson(item.payload);
-    const projection = projectionContent(item);
-    this.run(
+    const appendOperation = this.#appendSampleItems();
+    const trackedOperation = appendOperation.finally(() => {
+      if (this.sampleAppendOperation === trackedOperation) {
+        this.sampleAppendOperation = null;
+      }
+    });
+    this.sampleAppendOperation = trackedOperation;
+    return trackedOperation;
+  }
+
+  async #appendSampleItems() {
+    if (this.queryOne("SELECT item_id FROM item_catalog LIMIT 1")) {
+      throw new Error("当前 demo runtime 已有数据，请使用 --reset 建立新的教学快照");
+    }
+
+    const sampleEntries = sampleItems().map((item) => {
+      const jsonlLine = Buffer.from(`${canonicalJson(item)}\n`, "utf8");
+      const payloadText = canonicalJson(item.payload);
+      return {
+        item,
+        jsonlLine,
+        payloadLength: Buffer.byteLength(payloadText),
+        projection: createItemProjectionPreview(item),
+      };
+    });
+    const db = this.requireDb();
+    const insertCatalog = db.query(
       `INSERT INTO item_catalog (
         item_sequence, item_id, semantic_kind, payload_kind, status, turn_id,
         turn_scope, wire_role, producer_ref_json, payload_length, source_revision,
         content_hash, jsonl_offset, jsonl_length, created_at, metadata_json
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      item.item_sequence,
-      item.item_id,
-      item.semantic_kind,
-      item.payload_kind,
-      item.status,
-      item.turn_id ?? null,
-      item.turn_scope ?? null,
-      item.wire_role ?? null,
-      canonicalJson(item.producer_ref),
-      Buffer.byteLength(payloadText),
-      item.producer_ref.source_version ?? "demo-revision-1",
-      item.content_hash,
-      currentSize,
-      Buffer.byteLength(rawLine),
-      item.created_at,
-      canonicalJson(item.metadata),
     );
-    this.run(
+    const insertProjection = db.query(
       `INSERT INTO item_projections (
         item_sequence, item_id, content, content_length, content_truncated, projection_version
       ) VALUES (?, ?, ?, ?, ?, ?)`,
-      item.item_sequence,
-      item.item_id,
-      projection.content,
-      projection.contentLength,
-      projection.contentTruncated,
-      1,
     );
-    return item;
-  }
-
-  async appendSampleItems() {
-    if (this.get("SELECT item_id FROM item_catalog LIMIT 1")) {
-      throw new Error("当前 demo runtime 已有数据，请使用 --reset 建立新的教学快照");
-    }
-    for (const item of sampleItems()) {
-      await this.appendItem(item);
+    const appendCatalogBatch = db.transaction(() => {
+      let nextJsonlOffset = initialJsonlOffset;
+      for (const entry of sampleEntries) {
+        const { item, jsonlLine, payloadLength, projection } = entry;
+        insertCatalog.run(
+          item.item_sequence,
+          item.item_id,
+          item.semantic_kind,
+          item.payload_kind,
+          item.status,
+          item.turn_id ?? null,
+          item.turn_scope ?? null,
+          item.wire_role ?? null,
+          canonicalJson(item.producer_ref),
+          payloadLength,
+          item.producer_ref.source_version ?? "demo-revision-1",
+          item.content_hash,
+          nextJsonlOffset,
+          jsonlLine.byteLength,
+          item.created_at,
+          canonicalJson(item.metadata),
+        );
+        insertProjection.run(
+          item.item_sequence,
+          item.item_id,
+          projection.content,
+          projection.previewByteLength,
+          projection.previewTruncated,
+          1,
+        );
+        nextJsonlOffset += jsonlLine.byteLength;
+      }
+    });
+    const initialJsonlOffset = (await stat(this.jsonlPath)).size;
+    try {
+      await appendFile(this.jsonlPath, Buffer.concat(sampleEntries.map((entry) => entry.jsonlLine)));
+      appendCatalogBatch();
+    } catch (error) {
+      try {
+        await truncate(this.jsonlPath, initialJsonlOffset);
+      } catch (rollbackError) {
+        throw new AggregateError(
+          [error, rollbackError],
+          `canonical JSONL 追加失败且无法回滚到 offset=${initialJsonlOffset}`,
+        );
+      }
+      throw error;
     }
   }
 
   readCatalog() {
-    return this.all(`
+    return this.queryMany(`
       SELECT item_sequence, item_id, semantic_kind, payload_kind, status,
         turn_id, turn_scope, wire_role, payload_length, source_revision,
         content_hash, jsonl_offset, jsonl_length, created_at
@@ -371,7 +238,7 @@ export class ItemizedDemoStore {
   }
 
   readViewItems(viewId = "view-main") {
-    return this.all(`
+    return this.queryMany(`
       SELECT v.view_ordinal, v.item_id, v.included, v.omission_reason,
         v.selection_kind, c.item_sequence, c.semantic_kind, c.payload_kind,
         c.content_hash, c.jsonl_offset, c.jsonl_length
@@ -382,181 +249,149 @@ export class ItemizedDemoStore {
   }
 
   async readItem(itemId) {
-    const catalog = this.get(
-      "SELECT jsonl_offset, jsonl_length FROM item_catalog WHERE item_id = ?",
+    const catalogEntry = this.queryOne(
+      "SELECT item_id, item_sequence, jsonl_offset, jsonl_length FROM item_catalog WHERE item_id = ?",
       itemId,
     );
-    if (!catalog) {
+    if (!catalogEntry) {
       throw new Error(`找不到 item_catalog: ${itemId}`);
     }
-    const bytes = await readFile(this.jsonlPath);
-    const line = bytes.subarray(catalog.jsonl_offset, catalog.jsonl_offset + catalog.jsonl_length);
-    return JSON.parse(line.toString("utf8"));
+    return (await readCanonicalItemsByCatalogOffsets(this.jsonlPath, [catalogEntry]))[0];
   }
 
   async createActiveView() {
     const viewId = "view-main";
-    this.run("DELETE FROM context_view_items WHERE view_id = ?", viewId);
-    this.run("DELETE FROM context_views WHERE view_id = ?", viewId);
-    this.run(
+    const db = this.requireDb();
+    const deleteViewItems = db.query("DELETE FROM context_view_items WHERE view_id = ?");
+    const deleteView = db.query("DELETE FROM context_views WHERE view_id = ?");
+    const insertView = db.query(
       "INSERT INTO context_views (view_id, view_kind, source_revision, active, created_at) VALUES (?, ?, ?, ?, ?)",
-      viewId,
-      "active_view",
-      "demo-revision-1",
-      1,
-      "2026-09-20T00:00:00.000Z",
     );
-    for (const item of this.readCatalog()) {
-      const included = item.semantic_kind !== "runtime_notice" && item.semantic_kind !== "reasoning";
-      const omissionReason = item.semantic_kind === "reasoning"
-        ? "demo provider projection hides internal reasoning"
-        : item.semantic_kind === "runtime_notice"
-          ? "ambient runtime notice is not canonical model history"
-          : null;
-      this.run(
-        `INSERT INTO context_view_items (
-          view_id, item_id, view_ordinal, included, omission_reason, selection_kind
-        ) VALUES (?, ?, ?, ?, ?, ?)`,
+    const insertViewItems = db.query(`
+      INSERT INTO context_view_items (
+        view_id, item_id, view_ordinal, included, omission_reason, selection_kind
+      )
+      SELECT ?, item_id, item_sequence - 1,
+        CASE
+          WHEN semantic_kind IN ('runtime_notice', 'reasoning') THEN 0
+          ELSE 1
+        END,
+        CASE semantic_kind
+          WHEN 'reasoning' THEN 'demo provider projection hides internal reasoning'
+          WHEN 'runtime_notice' THEN 'ambient runtime notice is not canonical model history'
+          ELSE NULL
+        END,
+        'canonical_history'
+      FROM item_catalog
+    `);
+    db.transaction(() => {
+      deleteViewItems.run(viewId);
+      deleteView.run(viewId);
+      insertView.run(
         viewId,
-        item.item_id,
-        item.item_sequence - 1,
-        included ? 1 : 0,
-        omissionReason,
-        "canonical_history",
+        "active_view",
+        "demo-revision-1",
+        1,
+        "2026-09-20T00:00:00.000Z",
       );
-    }
+      insertViewItems.run(viewId);
+    })();
     return viewId;
   }
 
   async buildRequestPlan() {
     const view = this.readViewItems();
-    const requestOnly = [
-      {
-        contribution_id: "system:demo-policy",
-        source_kind: "system",
-        source_revision: "system-revision-1",
-        body: "你是一个只读文件助手。回答时引用工具返回的事实。",
-        request_only: true,
-      },
-      {
-        contribution_id: "tools:demo-read-file",
-        source_kind: "tool_set",
-        source_revision: "tools-revision-1",
-        body: { name: "read_file", description: "读取一个 UTF-8 文本文件" },
-        request_only: true,
-      },
-    ].map((entry) => ({
-      ...entry,
-      content_hash: contentHash(entry.body),
-      content_length: Buffer.byteLength(canonicalJson(entry.body)),
-    }));
-    const selection = [
-      ...view.map((entry) => ({
-        plan_ordinal: entry.view_ordinal,
-        selection_kind: entry.selection_kind,
-        ref: { ref_type: "canonical_item", ref_id: entry.item_id },
-        item_sequence: entry.item_sequence,
-        content_hash: entry.content_hash,
-        included: Boolean(entry.included),
-        omission_reason: entry.omission_reason,
-      })),
-      ...requestOnly.map((entry, index) => ({
-        plan_ordinal: view.length + index,
-        selection_kind: "request_only",
-        ref: { ref_type: entry.source_kind, ref_id: entry.contribution_id },
-        content_hash: entry.content_hash,
-        included: true,
-        omission_reason: null,
-      })),
-    ];
-    const wireMessages = [
-      { role: "system", content: requestOnly[0].body, source: "request_only" },
-    ];
-    for (const entry of view.filter((candidate) => candidate.included)) {
-      const item = await this.readItem(entry.item_id);
-      if (item.semantic_kind === "tool_call") {
-        wireMessages.push({
-          role: "assistant",
-          tool_calls: item.payload.tool_calls,
-          source_item_id: item.item_id,
-        });
-      } else if (item.semantic_kind === "tool_result") {
-        wireMessages.push({
-          role: "tool",
-          tool_call_id: item.payload.tool_call_id,
-          content: item.payload.content,
-          source_item_id: item.item_id,
-        });
-      } else {
-        wireMessages.push({
-          role: item.wire_role ?? item.semantic_kind,
-          content: item.payload,
-          source_item_id: item.item_id,
-        });
-      }
-    }
-    const plan = {
-      schema: "context-request-plan:v1",
-      plan_id: "plan-demo-001",
-      session_id: SESSION_ID,
-      view_id: "view-main",
-      selection_policy: "active_view",
-      source_revision: "demo-revision-1",
-      history_high_watermark: Math.max(...this.readCatalog().map((item) => item.item_sequence)),
-      request_only: requestOnly,
-      selection,
-      wire_request: {
-        provider: "demo-provider",
-        target_format: "message-array",
-        messages: wireMessages,
-      },
-    };
-    plan.plan_hash = `sha256:jcs:v1:${sha256(canonicalJson(plan))}`;
+    const includedItems = await readCanonicalItemsByCatalogOffsets(
+      this.jsonlPath,
+      view.filter((candidate) => candidate.included),
+    );
+    const historyHighWatermark = this.queryOne(
+      "SELECT COALESCE(MAX(item_sequence), 0) AS high_watermark FROM item_catalog",
+    ).high_watermark;
+    const plan = createRequestPlan({
+      view,
+      includedItems,
+      historyHighWatermark,
+      sessionId: SESSION_ID,
+    });
     await writeFile(this.planPath, jsonFile(plan), "utf8");
     return plan;
   }
 
   async buildTranscript() {
-    const entries = [];
-    for (const item of this.readCatalog()) {
-      if (!["user_input", "assistant_output"].includes(item.semantic_kind)) {
-        continue;
-      }
-      const record = await this.readItem(item.item_id);
-      entries.push({
-        item_id: item.item_id,
-        role: item.semantic_kind === "user_input" ? "user" : "assistant",
-        text: record.payload,
-      });
-    }
-    const transcript = {
-      schema: "transcript-projection:v1",
-      session_id: SESSION_ID,
-      note: "这是面向用户的粗粒度投影，不是模型上下文的 canonical source。",
-      entries,
-    };
+    const transcriptCatalogEntries = this.queryMany(`
+      SELECT item_sequence, item_id, jsonl_offset, jsonl_length
+      FROM item_catalog
+      WHERE semantic_kind IN (?, ?)
+      ORDER BY item_sequence
+    `, "user_input", "assistant_output");
+    const transcriptItems = await readCanonicalItemsByCatalogOffsets(
+      this.jsonlPath,
+      transcriptCatalogEntries,
+    );
+    const transcript = createTranscriptProjection({ items: transcriptItems, sessionId: SESSION_ID });
     await writeFile(this.transcriptPath, jsonFile(transcript), "utf8");
     return transcript;
   }
 
+  async #assertJsonlTailMatchesCatalog() {
+    const lastCatalogEntry = this.queryOne(
+      "SELECT jsonl_offset, jsonl_length FROM item_catalog ORDER BY item_sequence DESC LIMIT 1",
+    );
+    const indexedEnd = lastCatalogEntry
+      ? lastCatalogEntry.jsonl_offset + lastCatalogEntry.jsonl_length
+      : 0;
+    await assertCanonicalJsonlTail(this.jsonlPath, indexedEnd);
+  }
+
   async initialize({ reset = false } = {}) {
+    if (this.initializationOperation) {
+      if (reset) {
+        throw new Error("不能在初始化进行期间重置 runtime");
+      }
+      return this.initializationOperation;
+    }
+
+    const initializationOperation = this.#initialize({ reset });
+    const trackedOperation = initializationOperation.finally(() => {
+      if (this.initializationOperation === trackedOperation) {
+        this.initializationOperation = null;
+      }
+    });
+    this.initializationOperation = trackedOperation;
+    return trackedOperation;
+  }
+
+  async #initialize({ reset }) {
     if (reset) {
-      await resetDemoRuntime(this.runtimeName);
+      this.close();
+      await resetDemoRuntime(this.runtimeRelativePath, this.runtimeBasePath);
     }
     await this.open();
-    if (!this.get("SELECT item_id FROM item_catalog LIMIT 1")) {
-      await this.appendSampleItems();
-      await this.createActiveView();
-      await this.buildRequestPlan();
-      await this.buildTranscript();
+    await this.#assertJsonlTailMatchesCatalog();
+    if (this.initialized) {
+      return this;
     }
+    if (!this.queryOne("SELECT item_id FROM item_catalog LIMIT 1")) {
+      await this.appendSampleItems();
+    }
+    await this.createActiveView();
+    await this.buildRequestPlan();
+    await this.buildTranscript();
+    this.initialized = true;
     return this;
   }
 
-  async inspect() {
+  async readRuntimeSnapshot() {
     const readJson = async (filePath) => {
-      const file = Bun.file(filePath);
-      return (await file.exists()) ? JSON.parse(await file.text()) : null;
+      try {
+        return JSON.parse(await readFile(filePath, "utf8"));
+      } catch (error) {
+        if (error?.code === "ENOENT") {
+          return null;
+        }
+        throw error;
+      }
     };
     const files = [];
     const walk = async (directory) => {
@@ -585,14 +420,3 @@ export class ItemizedDemoStore {
     };
   }
 }
-
-export async function resetDemoRuntime(runtimeName = "demo") {
-  assertRuntimeName(runtimeName);
-  const runtimePath = path.join(RUNTIME_ROOT, runtimeName);
-  if (!runtimePath.startsWith(`${RUNTIME_ROOT}${path.sep}`)) {
-    throw new Error(`拒绝清理 demo 目录之外的路径: ${runtimePath}`);
-  }
-  await rm(runtimePath, { recursive: true, force: true });
-}
-
-export { DEMO_ROOT, RUNTIME_ROOT, SESSION_ID };

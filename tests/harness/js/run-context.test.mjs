@@ -129,3 +129,21 @@ describe("TestRunContext", () => {
     }
   });
 });
+
+describe("显式项目根下的相对测试路径", () => {
+  test.each([
+    ["tests/unit/test-relative.mjs", "unit/test-relative"],
+    ["./tests/unit/../unit/nested/test-relative.mjs", "unit/nested/test-relative"],
+  ])("以指定项目根解析 %s，与当前cwd分开", (relativeFile, testId) => {
+    const projectRoot = path.join(process.cwd(), "out/tests/harness/js/run-context.test/workspace/project with 中文");
+    const context = TestRunContext.fromTestFile(relativeFile, projectRoot);
+    const expectedOutput = path.join(projectRoot, "out/tests", testId);
+
+    expect(context.projectRoot).toBe(projectRoot);
+    expect(context.testFile).toBe(path.resolve(projectRoot, relativeFile));
+    expect(context.testId).toBe(testId);
+    expect(context.outputRoot).toBe(expectedOutput);
+    expect(context.workspaceRoot).toBe(path.join(expectedOutput, "workspace"));
+    expect(context.artifactsDir).toBe(path.join(expectedOutput, "artifacts"));
+  });
+});

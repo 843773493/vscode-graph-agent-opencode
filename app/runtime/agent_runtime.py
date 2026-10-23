@@ -171,12 +171,7 @@ def build_session_agent_runtime(
         mcp_catalog_owner=mcp_catalog_owner,
         resource_registry=resource_registry,
         resource_activation=resource_activation,
-        node_debug_service=(
-            # TODO: 所有外部 runtime provider 补齐该依赖后移除兼容分支。
-            dependency_provider.get_node_debug_service()
-            if hasattr(dependency_provider, "get_node_debug_service")
-            else None
-        ),
+        node_debug_service=dependency_provider.get_node_debug_service(),
         checkpointer=checkpointer,
         resource_navigation=dependency_provider.get_resource_navigation(),
         text_mutations=dependency_provider.get_text_mutations(),

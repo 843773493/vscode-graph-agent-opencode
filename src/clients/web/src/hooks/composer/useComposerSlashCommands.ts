@@ -147,12 +147,12 @@ export function useComposerSlashCommands({
         case "compact":
           if (currentSession && !compactLoading) {
             void compactSession()
-              .then((result) => {
-                setComposerNotice(result.status === "scheduled"
+              .then((compactResult) => {
+                setComposerNotice(compactResult.status === "scheduled"
                   ? "已安排上下文压缩，将在下一条消息发送前执行"
-                  : result.status === "compacted"
-                    ? `已压缩上下文：${result.summarized_message_count} 条消息`
-                    : `上下文未压缩：${result.message}`);
+                  : compactResult.status === "compacted"
+                    ? `已压缩上下文：${compactResult.summarized_message_count} 条消息`
+                    : `上下文未压缩：${compactResult.message}`);
               })
               .catch((error: unknown) => {
                 setAttachmentError(

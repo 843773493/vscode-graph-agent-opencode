@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
@@ -24,6 +23,7 @@ from app.agents.middleware_prompts import (
     TODO_TOOL_DESCRIPTION,
 )
 from app.agents.skill_runtime import (
+    PublishedSkillCatalog,
     WorkspaceSkillsMiddleware,
     build_workspace_skill_catalog,
 )
@@ -49,8 +49,9 @@ from app.services.infrastructure.workspace_file_watch_service import (
 )
 
 
-def _build_skill_catalog(tmp_path: Path) -> Any:
-    """在临时工作区构建最小 SkillCatalog,供装配断言使用。"""
+@pytest.fixture
+def demo_skill_catalog(tmp_path: Path) -> PublishedSkillCatalog:
+    """在隔离工作区构建装配测试所需的最小 SkillCatalog。"""
     skill_dir = tmp_path / ".boxteam" / "skills" / "demo-skill"
     skill_dir.mkdir(parents=True, exist_ok=True)
     (skill_dir / "SKILL.md").write_text(
@@ -73,7 +74,7 @@ def _build_middleware(
     tmp_path: Path,
     *,
     denylist: set[str] | None = None,
-    skill_catalog: Any | None = None,
+    resolved_skill_catalog: PublishedSkillCatalog | None = None,
     context_source_manager: ContextSourceManager | None = None,
 ) -> list[AgentMiddleware]:
     invocation_context = ToolInvocationContext()
@@ -85,7 +86,7 @@ def _build_middleware(
         artifact_reader=MagicMock(),
         text_mutations=MagicMock(),
         permissions=None,
-        resolved_skills=skill_catalog,
+        resolved_skills=resolved_skill_catalog,
         context_source_manager=context_source_manager or ContextSourceManager(),
         compaction_preflight=NoDurableOwnerCompactionPreflight(),
         resolved_tool_denylist=set(denylist or set()),
@@ -138,9 +139,11 @@ def test_middleware_uses_project_prompts_without_upstream_demo_agents(tmp_path):
     assert compact.system_prompt is None
 
 
-def test_workspace_skills_uses_compact_project_template(tmp_path):
+def test_workspace_skills_uses_compact_project_template(
+    demo_skill_catalog: PublishedSkillCatalog,
+) -> None:
     middleware = WorkspaceSkillsMiddleware(
-        catalog=_build_skill_catalog(tmp_path),
+        catalog=demo_skill_catalog,
     )
 
     assert middleware.system_prompt_template == SKILLS_SYSTEM_PROMPT
@@ -148,7 +151,11 @@ def test_workspace_skills_uses_compact_project_template(tmp_path):
 
 
 @pytest.mark.parametrize("deny_history", [False, True])
-def test_denylist_removes_tool_specific_middleware_and_prompts(tmp_path, deny_history):
+def test_denylist_removes_tool_specific_middleware_and_prompts(
+    tmp_path: Path,
+    deny_history: bool,
+    demo_skill_catalog: PublishedSkillCatalog,
+) -> None:
     manager = ContextSourceManager()
     denied = {"write_todos", "task", "compact_conversation", "read_file"}
     if deny_history:
@@ -156,7 +163,7 @@ def test_denylist_removes_tool_specific_middleware_and_prompts(tmp_path, deny_hi
     middleware = _build_middleware(
         tmp_path,
         denylist=denied,
-        skill_catalog=_build_skill_catalog(tmp_path),
+        resolved_skill_catalog=demo_skill_catalog,
         context_source_manager=manager,
     )
 

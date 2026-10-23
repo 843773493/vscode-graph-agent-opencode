@@ -19,7 +19,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
-from langchain_core.messages import HumanMessage
+from langchain_core.messages import AIMessage, HumanMessage
 from langgraph.checkpoint.base import empty_checkpoint
 from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 
@@ -89,7 +89,7 @@ def _activation_snapshot(
     saver: RolloutCheckpointSaver,
     *,
     binding: ThreadRuntimeBinding,
-    turn_id: str,
+    turn_id: str | None,
     execution_id: str,
 ) -> ResourceActivationSnapshotRef:
     """写入逐资源正文 detail 并返回引用它的 turn snapshot。"""
@@ -152,39 +152,44 @@ def _activation_snapshot(
     )
 
 
-def _write_accepted_checkpoint(
-    saver: RolloutCheckpointSaver,
-) -> tuple[ThreadRuntimeBinding, str, str]:
-    """通过正式 acceptance 与 LangGraph owner 写入一条真实 Turn root。"""
+def _write_admitted_checkpoint(
+    saver: RolloutCheckpointSaver, *, internal: bool = False,
+) -> tuple[ThreadRuntimeBinding, str | None, str]:
+    """通过正式 admission 与 LangGraph owner 写入用户 root 或内部回复。"""
     binding = ThreadRuntimeBinding(
         session_id=SESSION_ID,
         thread_id=saver._storage.storage.main_thread_id(SESSION_ID),
     )
-    accepted_ingress_id = create_prefixed_id("evt")
-    acceptance_key = f"activation-test:{create_uuid_hex()}:accept"
     execution_id = f"execution-{create_uuid_hex()}"
     job_id = create_prefixed_id("job")
     user_message_id = f"user-{create_uuid_hex()}"
-    accepted = saver.accept_turn(
-        binding.session_id,
-        thread_id=binding.thread_id,
-        accepted_ingress_id=accepted_ingress_id,
-        acceptance_idempotency_key=acceptance_key,
-        job_id=job_id,
-        admission_idempotency_key=f"activation-test:{create_uuid_hex()}:admission",
-        payload="问题",
-        turn_id=None,
-        root_item_id=f"item-{user_message_id}",
-        initial_execution_id=execution_id,
-    )
-    turn_id = accepted["turn_id"]
-    accepted_execution_id = accepted["execution_id"]
-    if not isinstance(turn_id, str) or not isinstance(accepted_execution_id, str):
-        raise TypeError("accept_turn 未返回完整 Turn/execution identity")
+    if internal:
+        saver._storage.executions.admit_internal_execution(
+            binding.session_id, thread_id=binding.thread_id,
+            execution_id=execution_id, job_id=job_id,
+            admission_idempotency_key=f"activation-test:{create_uuid_hex()}:internal",
+            runtime_notice_item=None,
+            request_input={"kind": "seed_reference", "reference": {"seed_id": "activation-test"}},
+        )
+        messages = [AIMessage(content="内部回复", id=user_message_id)]
+    else:
+        saver.accept_turn(
+            binding.session_id,
+            thread_id=binding.thread_id,
+            accepted_ingress_id=create_prefixed_id("evt"),
+            acceptance_idempotency_key=f"activation-test:{create_uuid_hex()}:accept",
+            job_id=job_id,
+            admission_idempotency_key=f"activation-test:{create_uuid_hex()}:admission",
+            payload="问题",
+            turn_id=None,
+            root_item_id=f"item-{user_message_id}",
+            initial_execution_id=execution_id,
+        )
+        messages = [HumanMessage(content="问题", id=user_message_id)]
     admission = saver.execution_admission(
         binding.session_id,
         thread_id=binding.thread_id,
-        execution_id=accepted_execution_id,
+        execution_id=execution_id,
     )
     owner = MutationIntentOwner(
         session_id=binding.session_id,
@@ -198,18 +203,18 @@ def _write_accepted_checkpoint(
             build_checkpoint_config(binding.thread_id),
             _checkpoint(
                 "cp-1",
-                [HumanMessage(content="问题", id=user_message_id)],
+                messages,
             ),
             {"source": "resource-activation-test"},
             {"messages": "1"},
         )
-    return binding, turn_id, accepted_execution_id
+    return binding, admission.turn_id, admission.execution_id
 
 
-def _sealed_with_activation(sessions_dir: Path):
+def _sealed_with_activation(sessions_dir: Path, *, internal: bool = False):
     """建立一个带 sealed activation binding 的真实会话。"""
     saver = _saver(sessions_dir)
-    binding, turn_id, execution_id = _write_accepted_checkpoint(saver)
+    binding, turn_id, execution_id = _write_admitted_checkpoint(saver, internal=internal)
     saver._storage.storage.initialize(
         binding.session_id,
         thread_id=binding.thread_id,
@@ -343,7 +348,7 @@ def test_restore_rejects_missing_activation_fact(tmp_path: Path, session_bundle_
     sessions_dir = tmp_path / "sessions"
     session_bundle_factory(sessions_dir, SESSION_ID)
     saver = _saver(sessions_dir)
-    binding, turn_id, execution_id = _write_accepted_checkpoint(saver)
+    binding, turn_id, execution_id = _write_admitted_checkpoint(saver)
     plan = saver.compose_committed_context_plan(
         binding.session_id, binding.thread_id, plan_id="plan-1",
         tool_set=ToolSetSnapshot(selection_revision=sha256_jcs({}), tools=()),
@@ -370,50 +375,115 @@ def test_restore_rejects_missing_activation_fact(tmp_path: Path, session_bundle_
         )
 
 
-def test_rewind_control_payload_keeps_activation_ref(tmp_path: Path, session_bundle_factory) -> None:
+def _apply_checkpoint_boundary(saver: RolloutCheckpointSaver, execution_id: str, boundary: str) -> None:
+    """走真实 Saver 边界；compaction 必须由新 summarization channel version 触发。"""
+    thread_id = _main_thread_id(saver)
+    owner = MutationIntentOwner(SESSION_ID, thread_id)
+    admission = saver.execution_admission(SESSION_ID, thread_id=thread_id, execution_id=execution_id)
+    with (
+        session_thread_owner_scope(owner, langgraph_thread_id=thread_id),
+        execution_admission_scope(admission, langgraph_thread_id=thread_id),
+    ):
+        config = build_checkpoint_config(thread_id)
+        source = saver.get_tuple(config)
+        assert source is not None
+        if boundary == "rewind":
+            saver.rewind(source.config, checkpoint_id="cp-1")
+        else:
+            messages = source.checkpoint["channel_values"]["messages"]
+            checkpoint = _checkpoint("cp-compacted", messages)
+            checkpoint["channel_values"]["_summarization_event"] = {
+                "cutoff_index": len(messages), "cutoff_message_id": messages[-1].id,
+                "summary_message": HumanMessage(content="压缩摘要", id="activation-summary"),
+            }
+            checkpoint["channel_versions"] = {name: "2" for name in checkpoint["channel_values"]}
+            checkpoint["updated_channels"] = list(checkpoint["channel_values"])
+            saver.put(source.config, checkpoint, {"source": "compaction"}, checkpoint["channel_versions"])
+
+
+@pytest.mark.parametrize("internal", (False, True), ids=("user-turn", "internal-null-turn"))
+@pytest.mark.parametrize("boundary", ("rewind", "compaction"))
+def test_checkpoint_boundary_keeps_activation_ref_after_cold_restore(
+    tmp_path: Path, session_bundle_factory, internal: bool, boundary: str,
+) -> None:
     sessions_dir = tmp_path / "sessions"
     session_bundle_factory(sessions_dir, SESSION_ID)
-    saver, snapshot, _sealed = _sealed_with_activation(sessions_dir)
+    saver, snapshot, sealed = _sealed_with_activation(sessions_dir, internal=internal)
     thread_id = _main_thread_id(saver)
+    original_assembly = saver.get_context_assembly(SESSION_ID, thread_id, assembly_id=sealed.assembly_id)
+    jsonl = saver._storage.storage.jsonl_path(SESSION_ID, "", thread_id=thread_id)
+    original_bytes = jsonl.read_bytes()
 
-    owner = MutationIntentOwner(SESSION_ID, thread_id)
-    with session_thread_owner_scope(owner, langgraph_thread_id=thread_id):
-        saver._storage.checkpoints.rewind_to_checkpoint(
-            thread_id=thread_id, checkpoint_id="cp-1", anchor_mode="inclusive"
-        )
+    _apply_checkpoint_boundary(saver, snapshot.execution_id, boundary)
+    cold = _saver(sessions_dir)
     with closing(
-        sqlite3.connect(saver._storage.storage.index_path(SESSION_ID, "", thread_id=thread_id))
+        sqlite3.connect(cold._storage.storage.index_path(SESSION_ID, "", thread_id=thread_id))
     ) as connection:
         payload = json.loads(
             connection.execute(
-                "SELECT payload_json FROM control_events WHERE control_kind = 'rewind'"
+                "SELECT payload_json FROM control_events WHERE control_kind = ? "
+                "ORDER BY control_sequence DESC LIMIT 1",
+                ("rewind" if boundary == "rewind" else "checkpoint_created",),
             ).fetchone()[0]
         )
     refs = payload["resource_activation_refs"]
     assert refs == [
         {
-            "assembly_id": _sealed.assembly_id,
+            "assembly_id": sealed.assembly_id,
             "turn_id": snapshot.turn_id,
             "activation_snapshot_id": snapshot.activation_snapshot_id,
-            "plan_hash": _sealed.plan_hash,
-            "request_hash": _sealed.request_hash,
+            "plan_hash": sealed.plan_hash,
+            "request_hash": sealed.request_hash,
             "bindings_hash": snapshot.bindings_hash,
             "activation_provenance_hash": snapshot.activation_provenance_hash,
         }
     ]
+    restored = cold.load_sealed_resource_activation(
+        SESSION_ID, thread_id=thread_id, assembly_id=refs[0]["assembly_id"],
+        plan_hash=refs[0]["plan_hash"], request_hash=refs[0]["request_hash"],
+    )
+    assert restored.to_dict() == snapshot.to_dict()
+    assert ResourceActivationBodyStore(cold._storage, cold._detail_store).read_payload(
+        snapshot=restored, binding=restored.bindings[0], storage_owner=(SESSION_ID, thread_id),
+    ) == {"payload": "resource-body"}
+    assert cold.get_context_assembly(SESSION_ID, thread_id, assembly_id=sealed.assembly_id) == original_assembly
+    assert jsonl.read_bytes().startswith(original_bytes)
+    assert (snapshot.turn_id is None) == internal
 
 
-def test_rewind_payload_omits_key_without_activation(tmp_path: Path, session_bundle_factory) -> None:
+@pytest.mark.parametrize("internal", (False, True), ids=("user-turn", "internal-null-turn"))
+@pytest.mark.parametrize("boundary", ("rewind", "compaction"))
+def test_checkpoint_boundary_rejects_activation_owner_mismatch_without_writes(
+    tmp_path: Path, session_bundle_factory, internal: bool, boundary: str,
+) -> None:
+    sessions_dir = tmp_path / "sessions"
+    session_bundle_factory(sessions_dir, SESSION_ID)
+    saver, snapshot, _sealed = _sealed_with_activation(sessions_dir, internal=internal)
+    thread_id = _main_thread_id(saver)
+    index = saver._storage.storage.index_path(SESSION_ID, "", thread_id=thread_id)
+    jsonl = saver._storage.storage.jsonl_path(SESSION_ID, "", thread_id=thread_id)
+    with closing(sqlite3.connect(index)) as connection:
+        connection.execute("UPDATE resource_activation_assembly_bindings SET thread_id='invalid-owner'")
+        connection.commit()
+        before = tuple(connection.iterdump())
+    original_bytes = jsonl.read_bytes()
+
+    with pytest.raises(ValueError, match="source-mismatch"):
+        _apply_checkpoint_boundary(saver, snapshot.execution_id, boundary)
+
+    with closing(sqlite3.connect(index)) as connection:
+        assert tuple(connection.iterdump()) == before
+    assert jsonl.read_bytes() == original_bytes
+
+
+@pytest.mark.parametrize("boundary", ("rewind", "compaction"))
+def test_boundary_payload_omits_key_without_activation(tmp_path: Path, session_bundle_factory, boundary: str) -> None:
     """无 activation 事实时 control payload 保持原字节，不新造空键。"""
     sessions_dir = tmp_path / "sessions"
     session_bundle_factory(sessions_dir, SESSION_ID)
     saver = _saver(sessions_dir)
-    binding, _turn_id, _execution_id = _write_accepted_checkpoint(saver)
-    owner = MutationIntentOwner(binding.session_id, binding.thread_id)
-    with session_thread_owner_scope(owner, langgraph_thread_id=binding.thread_id):
-        saver._storage.checkpoints.rewind_to_checkpoint(
-            thread_id=binding.thread_id, checkpoint_id="cp-1", anchor_mode="inclusive"
-        )
+    binding, _turn_id, execution_id = _write_admitted_checkpoint(saver)
+    _apply_checkpoint_boundary(saver, execution_id, boundary)
     with closing(
         sqlite3.connect(
             saver._storage.storage.index_path(
@@ -423,7 +493,9 @@ def test_rewind_payload_omits_key_without_activation(tmp_path: Path, session_bun
     ) as connection:
         payload = json.loads(
             connection.execute(
-                "SELECT payload_json FROM control_events WHERE control_kind = 'rewind'"
+                "SELECT payload_json FROM control_events WHERE control_kind = ? "
+                "ORDER BY control_sequence DESC LIMIT 1",
+                ("rewind" if boundary == "rewind" else "checkpoint_created",),
             ).fetchone()[0]
         )
     assert "resource_activation_refs" not in payload

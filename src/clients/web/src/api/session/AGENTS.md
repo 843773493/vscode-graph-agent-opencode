@@ -8,6 +8,26 @@
 - `api/sessionMessageStream.ts`、`api/sessionTraceStream.ts`、`api/messageStreamSnapshot.ts`、`api/workspaceFileEvents.ts`（上级目录，属 stream 组）：SSE 实时流与快照校验，与本包的会话快照/分页语义不同，不得互相内联复制。
 - `types/`：后端协议类型的权威来源，本包只消费不定义。
 
+## 文件职责树
+
+```text
+api/session/
+├── sessions.ts                    会话、主线程与 fork 来源查询
+├── sessionCatalog.ts               会话目录快照读取
+├── sessionCatalogOperations.ts     目录变更请求、回执与回压状态
+├── sessionActivity.ts              会话活动事件请求
+├── sessionMessages.ts              消息发送
+├── sessionTurnHistory.ts            Turn 历史读取与分页
+├── sessionContext.ts                会话上下文投影读取
+├── sessionGoals.ts                  会话目标读写
+├── sessionResources.ts              会话资源读取
+├── sessionSkillTracking.ts          会话技能跟踪操作
+├── sessionApiFetchMock.ts            API 单测共用 fetch 桩与 Gateway 屏障响应
+└── *.test.ts                        各 API 模块的就近契约测试
+```
+
+API 测试共享 fetch 桩按会话 API 域命名，不按某一个具体端点命名；只由测试导入，生产客户端不得依赖它。
+
 # 可修改内容
 
 - 会话域各 API 客户端的请求构造、响应解包与专用错误类型。

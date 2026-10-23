@@ -142,13 +142,17 @@ export async function readBrowserSummary(page, refSelectors, documentRevision = 
       );
     }
 
-    function textOf(element) {
-      const aria = element.getAttribute("aria-label");
-      const alt = element.getAttribute("alt");
-      const title = element.getAttribute("title");
-      const value = element.value;
-      const text = element.innerText || element.textContent || "";
-      return String(aria || alt || title || value || text || "")
+    function summaryLabelOf(element) {
+      // 优先级按原始值判定；已有标签或表单值时不读取无关的完整正文。
+      return String(
+        element.getAttribute("aria-label")
+        || element.getAttribute("alt")
+        || element.getAttribute("title")
+        || element.value
+        || element.innerText
+        || element.textContent
+        || "",
+      )
         .replace(/\s+/g, " ")
         .trim()
         .slice(0, 160);
@@ -185,7 +189,7 @@ export async function readBrowserSummary(page, refSelectors, documentRevision = 
         tag: element.tagName.toLowerCase(),
         role: element.getAttribute("role") || "",
         type: element.getAttribute("type") || "",
-        text: textOf(element),
+        text: summaryLabelOf(element),
         selector: `[${refAttribute}="${CSS.escape(ref)}"]`,
       });
     }

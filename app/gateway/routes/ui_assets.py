@@ -209,10 +209,7 @@ async def get_gateway_themes(
         )
         catalog = theme_catalog(
             user_settings,
-            config=load_validated_theme_config(
-                gateway_root=theme_asset_root,
-                config=theme_config,
-            ),
+            config=theme_config,
             gateway_root=theme_asset_root,
         )
     except (OSError, TypeError, ValueError) as error:

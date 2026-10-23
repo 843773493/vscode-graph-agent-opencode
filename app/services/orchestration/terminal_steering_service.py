@@ -63,12 +63,12 @@ class TerminalSteeringService:
             await self._terminal_client.sweep_orphans()
         except ExceptionGroup as error:
             errors.append(error)
-        terminals = await self._terminal_client.list_resources()
-        for terminal in terminals:
-            if not self._is_candidate(terminal):
+        terminal_resources = await self._terminal_client.list_resources()
+        for terminal_resource in terminal_resources:
+            if not self._is_candidate(terminal_resource):
                 continue
             try:
-                await self._dispatch_terminal(terminal)
+                await self._dispatch_terminal(terminal_resource)
             except (SessionDeletionPendingError, NotFoundError) as error:
                 logger.info("Terminal 来源 Session 已关闭准入，跳过完成通知: %s", error)
             except (ConnectionError, TimeoutError, URLError, ResourceConflict) as error:
@@ -76,14 +76,18 @@ class TerminalSteeringService:
         if errors:
             raise ExceptionGroup("Terminal owner 扫描存在未收敛操作", errors)
 
-    async def _dispatch_terminal(self, terminal: dict[str, object]) -> None:
-        terminal_id = self._required_string(terminal, "terminal_id")
-        owner_session_id = self._required_string(terminal, "session_id")
-        thread_id = self._required_string(terminal, "source_thread_id")
-        completion_event_id = self._required_string(terminal, "completion_event_id")
-        command_start_sequence = terminal.get("command_start_sequence")
+    async def _dispatch_terminal(self, terminal_resource: dict[str, object]) -> None:
+        terminal_id = self._required_string(terminal_resource, "terminal_id")
+        owner_session_id = self._required_string(terminal_resource, "session_id")
+        thread_id = self._required_string(terminal_resource, "source_thread_id")
+        completion_event_id = self._required_string(
+            terminal_resource, "completion_event_id"
+        )
+        command_start_sequence = terminal_resource.get("command_start_sequence")
         if type(command_start_sequence) is not int or command_start_sequence < 0:
-            raise TypeError(f"终端 completion 记录缺少真实命令 generation: {terminal}")
+            raise TypeError(
+                f"终端 completion 记录缺少真实命令 generation: {terminal_resource}"
+            )
         async with self._terminal_client.operation(
             session_id=owner_session_id,
             thread_id=thread_id,
@@ -91,7 +95,8 @@ class TerminalSteeringService:
             operation_id=completion_event_id,
         ) as operation:
             claim = await operation.claim_terminal_steering(
-                terminal_id, completion_event_id=completion_event_id,
+                terminal_id,
+                completion_event_id=completion_event_id,
                 command_start_sequence=command_start_sequence,
             )
             if claim.get("claimed") is not True:
@@ -102,12 +107,16 @@ class TerminalSteeringService:
 
         async def finish() -> None:
             async with self._terminal_client.operation(
-                session_id=owner_session_id, thread_id=thread_id,
-                holder_id=f"terminal-monitor:{terminal_id}", operation_id=completion_event_id,
+                session_id=owner_session_id,
+                thread_id=thread_id,
+                holder_id=f"terminal-monitor:{terminal_id}",
+                operation_id=completion_event_id,
             ) as completion:
                 await completion.finish_terminal_steering(
-                    terminal_id, completion_event_id=completion_event_id,
-                    command_start_sequence=command_start_sequence, dispatched=dispatched,
+                    terminal_id,
+                    completion_event_id=completion_event_id,
+                    command_start_sequence=command_start_sequence,
+                    dispatched=dispatched,
                 )
 
         try:
@@ -141,7 +150,13 @@ class TerminalSteeringService:
                 await self.scan_once()
             except asyncio.CancelledError:
                 raise
-            except (ConnectionError, TimeoutError, URLError, ResourceConflict, ExceptionGroup) as error:
+            except (
+                ConnectionError,
+                TimeoutError,
+                URLError,
+                ResourceConflict,
+                ExceptionGroup,
+            ) as error:
                 logger.warning(
                     "终端 owner 监控存在未收敛操作，将重试: %s",
                     error,
@@ -149,23 +164,28 @@ class TerminalSteeringService:
             await asyncio.sleep(self._poll_interval_seconds)
 
     @staticmethod
-    def _is_candidate(terminal: dict[str, object]) -> bool:
+    def _is_candidate(terminal_resource: dict[str, object]) -> bool:
         return (
-            terminal.get("status") in {"running", "completed"}
-            and terminal.get("reconciliation_status") == "verified"
-            and terminal.get("source_thread") in terminal.get("thread_associations", [])
-            and terminal.get("model_backgrounded") is True
-            and terminal.get("last_command_status") == "completed"
-            and (terminal.get("steering_dispatching") is True
-                 or terminal.get("completion_observed_by_model") is not True)
-            and terminal.get("steering_dispatched") is not True
+            terminal_resource.get("status") in {"running", "completed"}
+            and terminal_resource.get("reconciliation_status") == "verified"
+            and terminal_resource.get("source_thread")
+            in terminal_resource.get("thread_associations", [])
+            and terminal_resource.get("model_backgrounded") is True
+            and terminal_resource.get("last_command_status") == "completed"
+            and (
+                terminal_resource.get("steering_dispatching") is True
+                or terminal_resource.get("completion_observed_by_model") is not True
+            )
+            and terminal_resource.get("steering_dispatched") is not True
         )
 
     @staticmethod
-    def _required_string(terminal: dict[str, object], field: str) -> str:
-        value = terminal.get(field)
+    def _required_string(terminal_resource: dict[str, object], field_name: str) -> str:
+        value = terminal_resource.get(field_name)
         if not isinstance(value, str) or not value:
-            raise TypeError(f"终端 completion 记录缺少 {field}: {terminal}")
+            raise TypeError(
+                f"终端 completion 记录缺少 {field_name}: {terminal_resource}"
+            )
         return value
 
     @staticmethod

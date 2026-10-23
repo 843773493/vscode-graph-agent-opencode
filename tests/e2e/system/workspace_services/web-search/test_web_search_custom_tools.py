@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 from pathlib import Path
 from typing import Any
 
@@ -13,7 +14,8 @@ from tests.support.messages import last_assistant_message
 from tests.support.trace import get_trace_payload
 from tests.support.workspaces import prepare_test_workspace
 
-CUSTOM_TOOL_WORKSPACE_TEMPLATE_ITEMS = (
+WEB_SEARCH_SKILL_NAME = "web-search-fetch"
+WEB_SEARCH_WORKSPACE_TEMPLATE_ITEMS = (
     "AGENTS.md",
     ".boxteam/skills",
 )
@@ -34,8 +36,11 @@ def e2e_workspace_root_path(
     prepare_test_workspace(
         workspace_root=workspace_root,
         template_root=template_root,
-        template_items=CUSTOM_TOOL_WORKSPACE_TEMPLATE_ITEMS,
-        shared_skill_root=project_root / "resources" / "skills",
+        template_items=WEB_SEARCH_WORKSPACE_TEMPLATE_ITEMS,
+    )
+    shutil.copytree(
+        project_root / "resources" / "skills" / WEB_SEARCH_SKILL_NAME,
+        workspace_root / ".boxteam" / "skills" / WEB_SEARCH_SKILL_NAME,
     )
     return str(workspace_root)
 
@@ -113,7 +118,7 @@ async def test_model_searches_web_then_fetches_selected_result(
         and get_trace_payload(trace).get("tool_name") == "read_file"
     ]
     assert any(
-        path.endswith(".boxteam/skills/web-search-fetch/SKILL.md")
+        path.endswith(f".boxteam/skills/{WEB_SEARCH_SKILL_NAME}/SKILL.md")
         for path in read_file_paths
     )
     for tool_name in ("web_search", "fetch_webpage"):
@@ -124,7 +129,7 @@ async def test_model_searches_web_then_fetches_selected_result(
             and get_trace_payload(trace).get("tool_name") == tool_name
         ]
         assert tool_starts
-        assert tool_starts[-1].get("skill_names", []) == ["web-search-fetch"]
+        assert tool_starts[-1].get("skill_names", []) == [WEB_SEARCH_SKILL_NAME]
         assert (
             get_trace_payload(tool_starts[-1]).get("invocation_tool_name")
             == EXTENSION_TOOL_INVOKER_NAME

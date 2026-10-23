@@ -29,7 +29,9 @@ from app.services.infrastructure.resource_platform.sources.observed_source impor
 PROJECT_ROOT = Path.cwd()
 
 
-def _file_handle(path: Path, root: Path, source_id: str = "src-1") -> ObservedSourceHandle:
+def _file_handle(
+    path: Path, root: Path, source_id: str = "src-1"
+) -> ObservedSourceHandle:
     return ObservedSourceHandle(
         descriptor=ObservedSourceDescriptor(
             source_id=source_id,
@@ -105,9 +107,13 @@ def test_reader_reports_missing_file(tmp_path: Path) -> None:
     assert info.value.reason_code == "missing"
 
 
-@pytest.mark.parametrize("failure", ["missing", "invalid_utf8", "symlink_rejected", "not_regular_file", "oversize"])
+@pytest.mark.parametrize(
+    "failure",
+    ["missing", "invalid_utf8", "symlink_rejected", "not_regular_file", "oversize"],
+)
 def test_failed_observation_references_uri_and_retains_previous_revision(
-    tmp_path: Path, failure: str,
+    tmp_path: Path,
+    failure: str,
 ) -> None:
     source = tmp_path / "SKILL.md"
     source.write_text("accepted\n", encoding="utf-8")
@@ -137,7 +143,9 @@ def test_failed_observation_references_uri_and_retains_previous_revision(
 
 @pytest.mark.parametrize("stage", ["open", "pread"])
 def test_source_io_failure_preserves_reason_without_publishing_locator(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, stage: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    stage: str,
 ) -> None:
     source = tmp_path / "SKILL.md"
     source.write_text("accepted\n", encoding="utf-8")
@@ -161,7 +169,8 @@ def test_source_io_failure_preserves_reason_without_publishing_locator(
 
 
 def test_open_symlink_race_keeps_symlink_reason(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     source = tmp_path / "SKILL.md"
     source.write_text("accepted\n", encoding="utf-8")
@@ -202,7 +211,9 @@ def test_unstable_read_exhausts_attempts_and_reconciler_retains_previous(
     unavailable = reconciler.reconcile("src-1")
     assert unavailable.available is False
     assert unavailable.error_code == "unstable_read"
-    assert "boxteam://workspace/test/resources/skills/demo/SKILL.md" in unavailable.error
+    assert (
+        "boxteam://workspace/test/resources/skills/demo/SKILL.md" in unavailable.error
+    )
     assert str(tmp_path) not in unavailable.error
     # 失败保旧:revision/content 保持上一份 valid 事实,并显式保留引用。
     assert unavailable.revision == first.revision
@@ -288,7 +299,10 @@ def test_reader_and_reconciler_are_not_imported_outside_sources() -> None:
         rel = path.relative_to(PROJECT_ROOT).as_posix()
         if rel in allowed:
             continue
-        tree = ast.parse(path.read_text(encoding="utf-8"), filename=rel)
+        source = path.read_text(encoding="utf-8")
+        if not any(name in source for name in forbidden_names):
+            continue
+        tree = ast.parse(source, filename=rel)
         for node in ast.walk(tree):
             if isinstance(node, ast.Name) and node.id in forbidden_names:
                 violations.append(f"{rel}:{node.lineno}:{node.id}")

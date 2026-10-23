@@ -2,12 +2,12 @@ import { afterEach, describe, expect, test } from "bun:test";
 import React from "react";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import { useGatewayExtensionResources } from "./useGatewayExtensionResources";
-import { restoreGlobalDescriptor } from "../../tests/testGlobals";
+import { installWindowWithTimers } from "../../tests/testGlobals";
 import type { GatewayResourceItem } from "../../types/backend";
 
 const originalFetch = globalThis.fetch;
-const originalWindowDescriptor = Object.getOwnPropertyDescriptor(globalThis, "window");
 const renderers: ReactTestRenderer[] = [];
+let restoreWindow = () => {};
 
 function ownerItem(revision: number, scope = "thread"): GatewayResourceItem {
   const thread = { session_id: "ses_deleted_source", thread_id: "thr_exact" };
@@ -46,14 +46,7 @@ function installOwnerFetch(handler: (path: string, init?: RequestInit) => Promis
 }
 
 function installWindow(): void {
-  Object.defineProperty(globalThis, "window", {
-    configurable: true,
-    value: {
-      location: { port: "49507" },
-      setInterval: globalThis.setInterval.bind(globalThis),
-      clearInterval: globalThis.clearInterval.bind(globalThis),
-    },
-  });
+  restoreWindow = installWindowWithTimers({ port: "49507" });
 }
 
 function apiResponse(data: unknown): Response {
@@ -71,7 +64,8 @@ function apiResponse(data: unknown): Response {
 afterEach(() => {
   for (const renderer of renderers.splice(0)) act(() => renderer.unmount());
   globalThis.fetch = originalFetch;
-  restoreGlobalDescriptor("window", originalWindowDescriptor);
+  restoreWindow();
+  restoreWindow = () => {};
 });
 
 describe("useGatewayExtensionResources 请求协调", () => {

@@ -428,7 +428,9 @@ class EventChannel(Generic[EventT]):
                         )
                     )
             elif self._spec.overflow_policy == "gap":
-                receipts.append(self._offer_gap(subscriber, sequence, occurred_at, event))
+                receipts.append(
+                    self._offer_gap(subscriber, sequence, occurred_at, event)
+                )
             else:
                 receipt, overflowed = self._offer_fail_closed(
                     subscriber, sequence, occurred_at, event
@@ -461,12 +463,15 @@ class EventChannel(Generic[EventT]):
             not isinstance(after_sequence, int) or after_sequence < 0
         ):
             raise ValueError("EventChannel.replay after_sequence 必须是非负整数或 None")
-        deliveries = tuple(self._history)
-        if after_sequence is not None:
-            deliveries = tuple(
-                delivery for delivery in deliveries if delivery.sequence > after_sequence
-            )
-        return tuple(deliveries[-limit:])
+        recent: list[ChannelDelivery[EventT]] = []
+        for delivery in reversed(self._history):
+            if after_sequence is not None and delivery.sequence <= after_sequence:
+                break
+            recent.append(delivery)
+            if len(recent) == limit:
+                break
+        recent.reverse()
+        return tuple(recent)
 
     def _offer_gap(
         self,

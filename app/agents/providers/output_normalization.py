@@ -93,14 +93,12 @@ def build_ai_message_content(
 
     if isinstance(reasoning_items, list) and "reasoning_items" not in direct_types:
         items = [
-            block
-            for value in reasoning_items
-            if (block := as_block(value)) is not None
+            block for value in reasoning_items if (block := as_block(value)) is not None
         ]
         if items:
             blocks.append(reasoning_items_block(items))
 
-    blocks.extend(copy.deepcopy(block) for block in direct_blocks)
+    blocks.extend(direct_blocks)
     if not blocks:
         return ""
     return validate_content_blocks(blocks)

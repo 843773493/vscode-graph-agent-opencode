@@ -11,6 +11,7 @@ from contextlib import closing
 from pathlib import Path
 from uuid import uuid4
 
+from app.core.atomic_fs import fsync_directory
 from app.core.sqlite_state import utc_now_text
 from app.services.infrastructure.rollout_context.migration.artifacts import (
     artifact_manifest,
@@ -19,7 +20,6 @@ from app.services.infrastructure.rollout_context.migration.artifacts import (
     install_directory,
     read_regular,
     require_safe_path,
-    sync_directory,
     write_audit,
     write_private,
 )
@@ -123,7 +123,7 @@ class LegacyRolloutImporter:
             migration_id = uuid4().hex
             audit = audit_root / migration_id
             audit.mkdir(mode=0o700)
-            sync_directory(audit_root)
+            fsync_directory(audit_root)
             staging = audit / "staging"
             record: dict[str, object] = {
                 "migration_id": migration_id,
@@ -298,7 +298,7 @@ class LegacyRolloutImporter:
                 pending = list(audit.iterdir())
                 if not pending:
                     audit.rmdir()
-                    sync_directory(audit_root)
+                    fsync_directory(audit_root)
                     continue
                 if len(pending) != 1 or not re.fullmatch(
                     r"report-[0-9a-f]{32}\.next\.json", pending[0].name
@@ -313,9 +313,9 @@ class LegacyRolloutImporter:
                 except (json.JSONDecodeError, UnicodeDecodeError):
                     # 首份临时报告尚未发布、也未开始复制；只清理本次写入中断的数据。
                     pending_report.unlink()
-                    sync_directory(audit)
+                    fsync_directory(audit)
                     audit.rmdir()
-                    sync_directory(audit_root)
+                    fsync_directory(audit_root)
                     continue
                 if (
                     not isinstance(record, dict)
@@ -357,7 +357,7 @@ class LegacyRolloutImporter:
                 raise RuntimeError(f"migration recovery audit identity 不一致: {audit}")
             if pending_report is not None:
                 os.replace(pending_report, report)
-                sync_directory(audit)
+                fsync_directory(audit)
             if record.get("status") not in {
                 "running",
                 "ready",

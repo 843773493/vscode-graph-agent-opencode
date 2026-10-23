@@ -7,25 +7,32 @@ import os
 from pathlib import Path
 
 from tests.harness.python.run_context import TestRunContext
-from tests.support.workspaces import prepare_default_test_workspace
+from tests.support.workspaces import prepare_test_workspace
 
 
 def prepare_session_test_workspace(
     *,
     test_file: Path,
     node_id: str,
+    template_items: tuple[str, ...] | None = None,
 ) -> tuple[TestRunContext, Path, Path]:
-    """在正式测试输出树内复制完整 fixture，并按测试节点隔离。"""
+    """在正式测试输出树内创建节点隔离工作区，可只复制需要的模板项。"""
     context = TestRunContext.from_test_file(test_file).prepare()
     node_key = hashlib.sha1(node_id.encode("utf-8")).hexdigest()[:12]
-    workspace_base = context.workspace_root / f"run-{os.getpid()}-node-{node_key}"
-    workspace_root = workspace_base / "workspace"
+    workspace_fixture_root = context.workspace_root / f"run-{os.getpid()}-node-{node_key}"
+    workspace_root = workspace_fixture_root / "workspace"
     template_root = context.project_root / "tests" / "fixtures" / "workspaces" / "default_test_workspace"
-    prepare_default_test_workspace(
+    selected_template_items = (
+        tuple(item.name for item in template_root.iterdir())
+        if template_items is None
+        else template_items
+    )
+    prepare_test_workspace(
         workspace_root=workspace_root,
         template_root=template_root,
+        template_items=selected_template_items,
     )
-    return context, workspace_base, workspace_root
+    return context, workspace_fixture_root, workspace_root
 
 
 class SessionServiceConfigStub:

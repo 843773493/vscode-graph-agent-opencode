@@ -39,7 +39,7 @@ def _valid_manifest(root: Path, **overrides: object) -> Path:
     return _write_manifest(root, payload)
 
 
-@pytest.fixture
+@pytest.fixture(scope="module")
 def manifest_distributions() -> tuple[str, ...]:
     schema = json.loads(
         (Path.cwd() / "packages/launcher/runtime-manifest.schema.json").read_text(

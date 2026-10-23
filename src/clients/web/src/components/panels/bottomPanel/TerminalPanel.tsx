@@ -3,6 +3,7 @@ import type { WorkspaceTerminalController } from "../../../hooks/workspace/useWo
 import type { ResourceAction, ResourceThreadRef } from "../../../api/workspaceResources";
 import { buildGatewayAttachUrl } from "../../../utils/attachUrls";
 import { errorMessage } from "../../../utils/errorMessage";
+import { formatLocalTime } from "../../../utils/format";
 import { statusLabel, stripTerminalNamePrefix } from "../../../state/display/resourceDisplay";
 
 /** 终端 iframe 等待就绪的上限；超过即视为无响应，必须给用户明确的兜底说明与重试入口。 */
@@ -41,8 +42,8 @@ export default function TerminalPanel({
 }: TerminalPanelProps) {
   const { items: entries, loading } = controller;
   const onRefresh = () => void controller.refresh();
-  const [scope, setScope] = useState<"thread" | "workspace">("thread");
-  const acting = controller.mutating;
+  const [retentionScope, setRetentionScope] = useState<"thread" | "workspace">("thread");
+  const isMutating = controller.mutating;
   const [terminalListWidth, setTerminalListWidth] = useState<number | null>(null);
   const [frameStatus, setFrameStatus] = useState<TerminalFrameStatus>("loading");
   const [frameReloadToken, setFrameReloadToken] = useState(0);
@@ -53,10 +54,10 @@ export default function TerminalPanel({
     ) ?? entries[0] ?? null,
     [entries, selectedTerminalId],
   );
-  const isCurrentAssociated = selectedEntry?.thread_associations.some((ref) => ref.session_id === currentThread?.session_id && ref.thread_id === currentThread?.thread_id);
-  const canAttachCurrent = currentThread && !isCurrentAssociated && (selectedEntry?.retention_scope === "workspace"
+  const isCurrentThreadAssociated = selectedEntry?.thread_associations.some((ref) => ref.session_id === currentThread?.session_id && ref.thread_id === currentThread?.thread_id);
+  const canAttachToCurrentThread = currentThread && !isCurrentThreadAssociated && (selectedEntry?.retention_scope === "workspace"
     || (selectedEntry?.source_thread?.session_id === currentThread.session_id && selectedEntry?.source_thread?.thread_id === currentThread.thread_id));
-  const canControl = (action: ResourceAction) => !acting && !threadTargetUnavailable && selectedEntry?.available_actions.includes(action);
+  const canControlSelectedTerminal = (action: ResourceAction) => !isMutating && !threadTargetUnavailable && selectedEntry?.available_actions.includes(action);
   // 终端服务未就绪时 iframe 只会长时间空白，不会触发 onError；因此必须自行计时，
   // 把「一直转圈」变成明确的「超时 + 重试」。URL 构造失败同样不得在 render 阶段抛出。
   const attach = useMemo((): { url: string } | { error: string } | null => {
@@ -102,14 +103,14 @@ export default function TerminalPanel({
     return () => window.clearTimeout(timerId);
   }, [attach, frameReloadToken]);
 
-  const control = async (action: ResourceAction, thread?: ResourceThreadRef) => {
+  const controlSelectedTerminal = async (action: ResourceAction, thread?: ResourceThreadRef) => {
     if (!selectedEntry || threadTargetUnavailable) return;
     try { await controller.control(selectedEntry, action, thread); }
     catch { /* controller 已显示 owner 原始错误并重取完整资源。 */ }
   };
-  const create = async () => {
+  const createTerminal = async () => {
     if (!currentThread || threadTargetUnavailable) return;
-    try { onSelectTerminal((await controller.create(currentThread, scope)).resource_id); }
+    try { onSelectTerminal((await controller.create(currentThread, retentionScope)).resource_id); }
     catch { /* controller 已显示创建错误并重新读取工作区清单。 */ }
   };
 
@@ -206,21 +207,21 @@ export default function TerminalPanel({
       </header>
 
       <div className="terminal-panel-resource-actions">
-        <select aria-label="终端保留范围" value={scope} onChange={(event) => setScope(event.target.value as "thread" | "workspace")}>
+        <select aria-label="终端保留范围" value={retentionScope} onChange={(event) => setRetentionScope(event.target.value as "thread" | "workspace")}>
           <option value="thread">临时终端</option><option value="workspace">工作区保留</option>
         </select>
-        <button type="button" disabled={acting || !currentThread || threadTargetUnavailable} onClick={() => void create()}>新建终端</button>
+        <button type="button" disabled={isMutating || !currentThread || threadTargetUnavailable} onClick={() => void createTerminal()}>新建终端</button>
         {selectedEntry ? <>
           <span>{selectedEntry.retention_scope === "workspace" ? "工作区保留" : "随来源线程释放"} · {statusLabel(selectedEntry.status)}</span>
-          {selectedEntry.retention_scope === "thread" ? <button type="button" disabled={!canControl("promote")} onClick={() => void control("promote")}>保留到工作区</button> : null}
-          <button type="button" disabled={!canControl("attach") || !canAttachCurrent} onClick={() => currentThread && void control("attach", currentThread)}>{isCurrentAssociated ? "已关联当前会话" : "关联当前会话"}</button>
-          <button type="button" disabled={!canControl("stop") || selectedEntry.status !== "running"} onClick={() => void control("stop")}>停止</button>
-          <button type="button" disabled={!canControl("delete") || selectedEntry.thread_associations.length > 0} title={selectedEntry.thread_associations.length > 0 ? "请先解除所有线程关联" : "删除终端与进程"} onClick={() => void control("delete")}>删除</button>
+          {selectedEntry.retention_scope === "thread" ? <button type="button" disabled={!canControlSelectedTerminal("promote")} onClick={() => void controlSelectedTerminal("promote")}>保留到工作区</button> : null}
+          <button type="button" disabled={!canControlSelectedTerminal("attach") || !canAttachToCurrentThread} onClick={() => currentThread && void controlSelectedTerminal("attach", currentThread)}>{isCurrentThreadAssociated ? "已关联当前会话" : "关联当前会话"}</button>
+          <button type="button" disabled={!canControlSelectedTerminal("stop") || selectedEntry.status !== "running"} onClick={() => void controlSelectedTerminal("stop")}>停止</button>
+          <button type="button" disabled={!canControlSelectedTerminal("delete") || selectedEntry.thread_associations.length > 0} title={selectedEntry.thread_associations.length > 0 ? "请先解除所有线程关联" : "删除终端与进程"} onClick={() => void controlSelectedTerminal("delete")}>删除</button>
           {selectedEntry.thread_associations.map((ref) => <span className="terminal-panel-association" key={`${ref.session_id}/${ref.thread_id}`} title={`${ref.session_id} / ${ref.thread_id}`}>
             <span>{ref.session_id === currentThread?.session_id ? "当前会话" : `会话 ${ref.session_id.slice(-8)}`} · 线程 {ref.thread_id.slice(-8)}</span>
-            <button type="button" disabled={!canControl("detach")} onClick={() => void control("detach", ref)}>解除关联</button>
+            <button type="button" disabled={!canControlSelectedTerminal("detach")} onClick={() => void controlSelectedTerminal("detach", ref)}>解除关联</button>
           </span>)}
-          {selectedEntry.reclaim_at ? <span>无关联，将于 {new Date(selectedEntry.reclaim_at).toLocaleTimeString()} 回收</span> : null}
+          {selectedEntry.reclaim_at ? <span>无关联，将于 {formatLocalTime(selectedEntry.reclaim_at)} 回收</span> : null}
           {selectedEntry.error ? <span role="alert">{selectedEntry.error}</span> : null}
         </> : null}
       </div>

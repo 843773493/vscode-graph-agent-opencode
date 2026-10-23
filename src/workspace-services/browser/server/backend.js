@@ -938,6 +938,9 @@ async function main() {
   process.once("SIGINT", () => void shutdown("browser_manager_sigint", 130));
   process.once("SIGTERM", () => void shutdown("browser_manager_sigterm", 143));
   process.once("SIGHUP", () => void shutdown("browser_manager_sighup", 129));
+  if (process.platform === "win32") {
+    process.once("SIGBREAK", () => void shutdown("browser_manager_sigbreak", 143));
+  }
   process.once("uncaughtException", (error) => {
     void shutdown("browser_manager_uncaught_exception", 1, error);
   });

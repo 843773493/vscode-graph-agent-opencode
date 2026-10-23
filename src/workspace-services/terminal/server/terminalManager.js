@@ -1,7 +1,7 @@
 import path from "node:path";
 import { randomBytes } from "node:crypto";
 import { validateWorkspaceId, verifyWorkspaceIdentity } from "./workspaceIdentity.js";
-import { readProcessStat } from "./terminalProcessUtils.js";
+import { readProcessStat } from "./processes/terminalProcessLifecycle.js";
 import {
   nowIso,
   resolveShell,

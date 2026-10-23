@@ -130,12 +130,13 @@ export default function WorkspacePortForwardPanel({
   const [isTableMenuOpen, setIsTableMenuOpen] = useState(false);
   const filterInputRef = useRef<HTMLInputElement>(null);
   const requestRevisionRef = useRef(0);
-  const currentWorkspaceIdRef = useRef(workspace?.workspace_id ?? null);
-  currentWorkspaceIdRef.current = workspace?.workspace_id ?? null;
+  const workspaceId = workspace?.workspace_id ?? null;
+  const isRemoteWorkspace = workspace?.connection_kind === "remote_gateway";
+  const currentWorkspaceIdRef = useRef(workspaceId);
+  currentWorkspaceIdRef.current = workspaceId;
 
   const refresh = useCallback(async () => {
-    if (!workspace || workspace.connection_kind !== "remote_gateway" || !active) return;
-    const workspaceId = workspace.workspace_id;
+    if (workspaceId === null || !isRemoteWorkspace || !active) return;
     const revision = ++requestRevisionRef.current;
     setLoading(true);
     setError(null);
@@ -152,7 +153,7 @@ export default function WorkspacePortForwardPanel({
     } finally {
       if (requestRevisionRef.current === revision) setLoading(false);
     }
-  }, [active, api, apiPort, workspace]);
+  }, [active, api, apiPort, isRemoteWorkspace, workspaceId]);
 
   useEffect(() => {
     requestRevisionRef.current += 1;
@@ -179,8 +180,23 @@ export default function WorkspacePortForwardPanel({
     setFilterText("");
     setIsFilterOpen(false);
     setIsTableMenuOpen(false);
-    if (active && workspace?.connection_kind === "remote_gateway") void refresh();
-  }, [active, refresh, workspace?.connection_kind, workspace?.workspace_id]);
+    if (active && isRemoteWorkspace) void refresh();
+  }, [
+    active,
+    isRemoteWorkspace,
+    refresh,
+    workspace?.connection_error,
+    workspace?.remote?.gateway_connection_id,
+    workspace?.remote?.gateway_id,
+    workspace?.remote?.host,
+    workspace?.remote?.port,
+    workspace?.remote?.remote_gateway_port,
+    workspace?.remote?.remote_workspace_id,
+    workspace?.remote?.ssh_config_host,
+    workspace?.remote?.username,
+    workspace?.status,
+    workspaceId,
+  ]);
 
   const recoverAfterFailure = async (workspaceId: string, message: string) => {
     setError(message);

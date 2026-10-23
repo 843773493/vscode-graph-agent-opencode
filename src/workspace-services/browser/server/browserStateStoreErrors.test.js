@@ -123,3 +123,77 @@ test("状态发布和清理都失败时保留两份原异常，后续显式保�
   // 清理失败的文件保留给诊断；后续保存不扫描或代删其他尝试的文件。
   assert.deepEqual((await readdir(store.stateDir)).sort(), failedFiles);
 });
+
+test("损坏检查点保留JSON解析异常，显式删除后读取可继续", async (t) => {
+  const store = await createStore(t);
+  await mkdir(store.checkpointDir, { recursive: true });
+  await writeFile(store.checkpointPath("browser_broken"), "{invalid JSON");
+  await assert.rejects(store.readCheckpoint("browser_broken"), (error) => {
+    assert.equal(error.code, "browser_checkpoint_read_failed");
+    assert(error.cause instanceof SyntaxError);
+    assert.equal(error.message, "读取浏览器检查点失败: browser_id=browser_broken, stage=正文解析, code=browser_checkpoint_read_failed");
+    return true;
+  });
+  await store.deleteCheckpoint("browser_broken");
+  assert.equal(await store.readCheckpoint("browser_broken"), null);
+});
+
+test("真实目录读取失败保留文件系统错误码和原始cause", async (t) => {
+  const store = await createStore(t);
+  await mkdir(store.checkpointPath("browser_directory"), { recursive: true });
+  await assert.rejects(store.readCheckpoint("browser_directory"), (error) => {
+    assert.equal(error.code, "EISDIR");
+    assert.equal(error.cause.code, "EISDIR");
+    assert(error.cause instanceof Error);
+    return true;
+  });
+});
+
+test("发布失败保留原始异常、旧正文和配额，清理临时文件后可显式重试", async (t) => {
+  const store = await createStore(t);
+  const browserId = "browser_publish";
+  const original = { data: "旧正文" };
+  await store.writeCheckpoint(browserId, original);
+  const originalBytes = await readFile(store.checkpointPath(browserId));
+  const writeError = Object.assign(new Error("模拟rename失败"), { code: "EXDEV" });
+  t.mock.method(fs, "rename", async () => { throw writeError; });
+  syncBuiltinESMExports();
+  await assert.rejects(store.writeCheckpoint(browserId, { data: "待发布正文" }), (error) => {
+    assert.equal(error.code, writeError.code);
+    assert.equal(error.cause, writeError);
+    return true;
+  });
+  assert.deepEqual(await readFile(store.checkpointPath(browserId)), originalBytes);
+  assert.equal((await store.checkpointBudgetSnapshot()).used_bytes, originalBytes.length);
+  assert.equal((await readdir(store.checkpointDir)).filter((name) => name.endsWith(".tmp")).length, 0);
+  t.mock.restoreAll();
+  syncBuiltinESMExports();
+  await store.writeCheckpoint(browserId, { data: "重试正文" });
+  assert.deepEqual(await store.readCheckpoint(browserId), { data: "重试正文" });
+});
+
+test("发布与临时文件清理均失败时保留两份原异常和写入错误归属", async (t) => {
+  const store = await createStore(t);
+  const browserId = "browser_cleanup";
+  const original = { data: "仍有效的旧正文" };
+  await store.writeCheckpoint(browserId, original);
+  const originalBytes = await readFile(store.checkpointPath(browserId));
+  const writeError = Object.assign(new Error("模拟rename失败"), { code: "EXDEV" });
+  const cleanupError = Object.assign(new Error("模拟临时文件删除失败"), { code: "EACCES" });
+  t.mock.method(fs, "rename", async () => { throw writeError; });
+  t.mock.method(fs, "rm", async () => { throw cleanupError; });
+  syncBuiltinESMExports();
+  await assert.rejects(store.writeCheckpoint(browserId, { data: "未发布正文" }), (error) => {
+    assert.equal(error.code, writeError.code);
+    assert(error.cause instanceof AggregateError);
+    assert.deepEqual(error.cause.errors, [writeError, cleanupError]);
+    return true;
+  });
+  assert.deepEqual(await readFile(store.checkpointPath(browserId)), originalBytes);
+  assert.equal((await store.checkpointBudgetSnapshot()).used_bytes, originalBytes.length);
+  assert.equal((await readdir(store.checkpointDir)).filter((name) => name.endsWith(".tmp")).length, 1);
+  t.mock.restoreAll();
+  syncBuiltinESMExports();
+  await store.writeCheckpoint(browserId, { data: "显式重试成功" });
+  assert.deepEqual(await store.readCheckpoint(browserId), { data: "显式重试成功" });
+});

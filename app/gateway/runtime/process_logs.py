@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from typing import TextIO
 
 PROCESS_LOG_MAX_BYTES = 64 * 1024 * 1024
@@ -14,7 +14,11 @@ class ProcessLogStore:
     root: Path
 
     def path_for(self, file_name: str) -> Path:
-        if not file_name or Path(file_name).name != file_name:
+        if (
+            not file_name
+            or Path(file_name).name != file_name
+            or PureWindowsPath(file_name).name != file_name
+        ):
             raise ValueError(f"进程日志文件名非法: {file_name!r}")
         if not file_name.endswith(".log"):
             raise ValueError(f"进程日志必须使用 .log 后缀: {file_name}")

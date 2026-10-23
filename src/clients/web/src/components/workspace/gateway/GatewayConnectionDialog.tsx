@@ -13,6 +13,7 @@ import type {
 } from "../../../types/backend";
 import { copyTextToClipboard } from "../../../utils/clipboard";
 import { errorMessage } from "../../../utils/errorMessage";
+import { formatLocalDateTime } from "../../../utils/format";
 import { parsePortLiteral } from "../portLiteral";
 
 type ConnectionPage = "ssh-select" | "ssh-manual" | "external-device" | "device-info";
@@ -457,7 +458,7 @@ export default function GatewayConnectionDialog({
 
           {page === "device-info" && createdDevice ? (
             <div className="gateway-device-info">
-              <div className="gateway-device-created"><span className="codicon codicon-pass-filled" aria-hidden="true" /><p><strong>{createdDevice.connection.device_name} 已授权</strong><small>凭据有效至 {new Date(createdDevice.connection.credential_expires_at).toLocaleString()}</small></p></div>
+              <div className="gateway-device-created"><span className="codicon codicon-pass-filled" aria-hidden="true" /><p><strong>{createdDevice.connection.device_name} 已授权</strong><small>凭据有效至 {formatLocalDateTime(createdDevice.connection.credential_expires_at)}</small></p></div>
               <pre>{connectionInfoText(createdDevice)}</pre>
               <button type="button" className="primary" onClick={() => void copyConnectionInfo()}><span className={`codicon codicon-${copied ? "pass" : "copy"}`} aria-hidden="true" />{copied ? "已复制" : "复制连接信息"}</button>
             </div>

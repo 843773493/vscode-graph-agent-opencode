@@ -96,6 +96,7 @@ def _streamed_response_payload(
     reasoning_parts: list[str] = []
     text_parts: list[str] = []
     tool_calls: dict[int, dict[str, str]] = {}
+    tool_argument_parts: dict[int, list[str]] = {}
     for message in chunks:
         content = getattr(message, "content", "")
         blocks = content if isinstance(content, list) else [content]
@@ -120,16 +121,19 @@ def _streamed_response_payload(
         ):
             if not isinstance(raw_tool_call, Mapping):
                 continue
-            raw_index = raw_tool_call.get("index")
-            index = raw_index if isinstance(raw_index, int) else fallback_index
-            current = tool_calls.setdefault(index, {})
+            provider_index = raw_tool_call.get("index")
+            tool_call_index = (
+                provider_index if isinstance(provider_index, int) else fallback_index
+            )
+            call_metadata = tool_calls.setdefault(tool_call_index, {})
+            argument_parts = tool_argument_parts.setdefault(tool_call_index, [])
             for key in ("id", "name"):
                 value = raw_tool_call.get(key)
                 if isinstance(value, str) and value:
-                    current[key] = value
+                    call_metadata[key] = value
             arguments = raw_tool_call.get("args")
             if isinstance(arguments, str):
-                current["arguments"] = current.get("arguments", "") + arguments
+                argument_parts.append(arguments)
 
     message_payload: dict[str, object] = {
         "role": "assistant",
@@ -145,10 +149,10 @@ def _streamed_response_payload(
                 "type": "function",
                 "function": {
                     "name": call.get("name"),
-                    "arguments": call.get("arguments", ""),
+                    "arguments": "".join(tool_argument_parts[call_index]),
                 },
             }
-            for _index, call in sorted(tool_calls.items())
+            for call_index, call in sorted(tool_calls.items())
         ]
     return {
         "choices": [

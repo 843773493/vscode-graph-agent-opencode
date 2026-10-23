@@ -10,12 +10,13 @@ logger = logging.getLogger(__name__)
 
 
 def read_json_object(path: Path, *, default: dict[str, object]) -> dict[str, object]:
-    if not path.exists():
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
         return dict(default)
-    value = json.loads(path.read_text(encoding="utf-8"))
-    if not isinstance(value, dict):
+    if not isinstance(payload, dict):
         raise RuntimeError(f"Gateway 控制面文件必须是 JSON 对象: {path}")
-    return value
+    return payload
 
 
 def atomic_write_json(path: Path, payload: dict[str, object]) -> None:

@@ -8,7 +8,7 @@ schema 选择或外部请求编码。provider 响应的归一化仍归
 from __future__ import annotations
 
 import copy
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
 from typing import Any
 
@@ -29,31 +29,38 @@ class ReasoningContentRow:
     signature_present: bool = False
 
 
-def direct_content_blocks(content: Any) -> list[dict[str, Any]]:
-    """将已接受的消息 content 展开为独立副本，保持原有顺序。"""
+def _iter_direct_content_blocks(content: Any) -> Iterator[dict[str, Any]]:
+    """展开 content block；只规范化外层键，不复制嵌套载荷。"""
     if isinstance(content, Mapping) and "attachments" in content and "content" in content:
         content = content["content"]
     if content is None:
-        return []
+        return
     if isinstance(content, str):
-        return [{"type": "text", "text": content}] if content else []
+        if content:
+            yield {"type": "text", "text": content}
+        return
     if not isinstance(content, list):
-        return [{"type": "text", "text": str(content)}]
+        yield {"type": "text", "text": str(content)}
+        return
 
-    blocks: list[dict[str, Any]] = []
     for value in content:
         if isinstance(value, str):
             if value:
-                blocks.append({"type": "text", "text": value})
+                yield {"type": "text", "text": value}
             continue
         if isinstance(value, Mapping):
-            blocks.append(
-                {str(key): copy.deepcopy(item) for key, item in value.items()}
-            )
+            yield {str(key): item for key, item in value.items()}
             continue
         if value is not None:
-            blocks.append({"type": "text", "text": str(value)})
-    return blocks
+            yield {"type": "text", "text": str(value)}
+
+
+def direct_content_blocks(content: Any) -> list[dict[str, Any]]:
+    """将已接受的消息 content 展开为独立副本，保持原有顺序。"""
+    return [
+        {key: copy.deepcopy(value) for key, value in block.items()}
+        for block in _iter_direct_content_blocks(content)
+    ]
 
 
 def _reasoning_content_text(block: Mapping[str, object]) -> str:
@@ -97,7 +104,7 @@ def reasoning_content_rows(content: object) -> list[ReasoningContentRow]:
             encrypted=encrypted if isinstance(encrypted, str) else None,
         ))
 
-    for block_index, block in enumerate(direct_content_blocks(content)):
+    for block_index, block in enumerate(_iter_direct_content_blocks(content)):
         block_type = block.get("type")
         if block_type == "reasoning_items":
             items = block.get("reasoning_items")

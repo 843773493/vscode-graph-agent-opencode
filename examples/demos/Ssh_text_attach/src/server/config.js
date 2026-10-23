@@ -1,12 +1,14 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
+const demoRoot = fileURLToPath(new URL("../../", import.meta.url));
 const DEFAULT_GATEWAY_PORT = 7910;
 const DEFAULT_FRONTEND_PORT = 7911;
 const DEFAULT_BACKEND_PORT = 7912;
 const SHORT_UUID_PATTERN = /^[a-f0-9]{12}$/;
 
-export function readArg(name, argv = process.argv) {
+export function readOptionValue(name, argv = process.argv) {
   const index = argv.indexOf(name);
   if (index === -1) {
     return null;
@@ -26,11 +28,21 @@ export function parsePort(rawValue, label) {
   return port;
 }
 
-function resolveProjectPath(projectRoot, rawPath) {
+function resolveProjectPath(pathBaseDirectory, rawPath) {
   if (path.isAbsolute(rawPath)) {
     return path.normalize(rawPath);
   }
-  return path.resolve(projectRoot, rawPath);
+  const resolvedBaseDirectory = path.resolve(pathBaseDirectory);
+  const resolvedPath = path.resolve(resolvedBaseDirectory, rawPath);
+  const relativePath = path.relative(resolvedBaseDirectory, resolvedPath);
+  if (
+    relativePath === ".."
+    || relativePath.startsWith(`..${path.sep}`)
+    || path.isAbsolute(relativePath)
+  ) {
+    throw new Error(`相对路径不得离开基准目录: ${rawPath}`);
+  }
+  return resolvedPath;
 }
 
 function assertObject(value, label) {
@@ -62,7 +74,7 @@ function normalizeLocalTarget(target) {
   };
 }
 
-function normalizeSshTarget(target, projectRoot) {
+function normalizeSshTarget(target, pathBaseDirectory) {
   assertObject(target.ssh, `目标 ${target.id} 的 ssh`);
   assertString(target.ssh.host, `目标 ${target.id} 的 ssh.host`);
   assertString(target.ssh.user, `目标 ${target.id} 的 ssh.user`);
@@ -77,14 +89,14 @@ function normalizeSshTarget(target, projectRoot) {
       host: target.ssh.host,
       port: parsePort(target.ssh.port, `目标 ${target.id} 的 ssh.port`),
       user: target.ssh.user,
-      privateKeyPath: resolveProjectPath(projectRoot, target.ssh.privateKeyPath),
+      privateKeyPath: resolveProjectPath(pathBaseDirectory, target.ssh.privateKeyPath),
       remoteBackendHost: target.ssh.remoteBackendHost,
       remoteBackendPort: parsePort(target.ssh.remoteBackendPort, `目标 ${target.id} 的 ssh.remoteBackendPort`),
     },
   };
 }
 
-function normalizeTarget(target, projectRoot) {
+function normalizeTarget(target, pathBaseDirectory) {
   assertObject(target, "targets[]");
   assertShortUuid(target.id, "targets[].id");
   assertString(target.name, `目标 ${target.id} 的 name`);
@@ -94,12 +106,12 @@ function normalizeTarget(target, projectRoot) {
     return normalizeLocalTarget(target);
   }
   if (target.kind === "ssh") {
-    return normalizeSshTarget(target, projectRoot);
+    return normalizeSshTarget(target, pathBaseDirectory);
   }
   throw new Error(`不支持的目标类型: ${target.kind}`);
 }
 
-export function parseTargetsConfigText(text, projectRoot) {
+export function parseTargetsConfigText(text, pathBaseDirectory) {
   const rawConfig = JSON.parse(text);
   assertObject(rawConfig, "targets 配置");
   assertShortUuid(rawConfig.defaultTargetId, "defaultTargetId");
@@ -107,7 +119,7 @@ export function parseTargetsConfigText(text, projectRoot) {
     throw new Error("targets 必须是非空数组");
   }
 
-  const targets = rawConfig.targets.map((target) => normalizeTarget(target, projectRoot));
+  const targets = rawConfig.targets.map((target) => normalizeTarget(target, pathBaseDirectory));
   const ids = new Set();
   for (const target of targets) {
     if (ids.has(target.id)) {
@@ -125,9 +137,9 @@ export function parseTargetsConfigText(text, projectRoot) {
   };
 }
 
-export async function loadTargetsConfig(configPath, projectRoot) {
+export async function loadTargetsConfig(configPath, pathBaseDirectory) {
   const text = await readFile(configPath, "utf8");
-  return parseTargetsConfigText(text, projectRoot);
+  return parseTargetsConfigText(text, pathBaseDirectory);
 }
 
 export function publicTarget(target) {
@@ -154,9 +166,8 @@ export function publicTarget(target) {
   };
 }
 
-export function resolveRuntimeConfig() {
-  const projectRoot = path.resolve(process.cwd());
-  const rawRoles = process.env.SSH_TEXT_ROLES || readArg("--roles") || "frontend,gateway,backend";
+export function resolveRuntimeConfig({ environment = process.env, argv = process.argv } = {}) {
+  const rawRoles = environment.SSH_TEXT_ROLES || readOptionValue("--roles", argv) || "frontend,gateway,backend";
   const roles = rawRoles.split(",").map((role) => role.trim()).filter(Boolean);
   if (roles.length === 0) {
     throw new Error("SSH_TEXT_ROLES 至少要包含一个角色");
@@ -168,24 +179,24 @@ export function resolveRuntimeConfig() {
     }
   }
 
-  const gatewayHost = process.env.SSH_TEXT_GATEWAY_HOST || readArg("--gateway-host") || readArg("--host") || "127.0.0.1";
-  const frontendHost = process.env.SSH_TEXT_FRONTEND_HOST || readArg("--frontend-host") || readArg("--host") || "127.0.0.1";
-  const backendHost = process.env.SSH_TEXT_BACKEND_HOST || readArg("--backend-host") || readArg("--host") || "127.0.0.1";
-  const gatewayPort = parsePort(process.env.SSH_TEXT_GATEWAY_PORT || readArg("--gateway-port") || DEFAULT_GATEWAY_PORT, "gateway 端口");
-  const backendPort = parsePort(process.env.SSH_TEXT_BACKEND_PORT || readArg("--backend-port") || DEFAULT_BACKEND_PORT, "后端端口");
-  const frontendPort = parsePort(process.env.SSH_TEXT_FRONTEND_PORT || readArg("--frontend-port") || DEFAULT_FRONTEND_PORT, "前端端口");
+  const gatewayHost = environment.SSH_TEXT_GATEWAY_HOST || readOptionValue("--gateway-host", argv) || readOptionValue("--host", argv) || "127.0.0.1";
+  const frontendHost = environment.SSH_TEXT_FRONTEND_HOST || readOptionValue("--frontend-host", argv) || readOptionValue("--host", argv) || "127.0.0.1";
+  const backendHost = environment.SSH_TEXT_BACKEND_HOST || readOptionValue("--backend-host", argv) || readOptionValue("--host", argv) || "127.0.0.1";
+  const gatewayPort = parsePort(environment.SSH_TEXT_GATEWAY_PORT || readOptionValue("--gateway-port", argv) || DEFAULT_GATEWAY_PORT, "gateway 端口");
+  const backendPort = parsePort(environment.SSH_TEXT_BACKEND_PORT || readOptionValue("--backend-port", argv) || DEFAULT_BACKEND_PORT, "后端端口");
+  const frontendPort = parsePort(environment.SSH_TEXT_FRONTEND_PORT || readOptionValue("--frontend-port", argv) || DEFAULT_FRONTEND_PORT, "前端端口");
   const dataFilePath = resolveProjectPath(
-    projectRoot,
-    process.env.SSH_TEXT_DATA_FILE || readArg("--data-file") || ".boxteam/managed-note.txt",
+    demoRoot,
+    environment.SSH_TEXT_DATA_FILE || readOptionValue("--data-file", argv) || ".boxteam/managed-note.txt",
   );
-  const dataLabel = process.env.SSH_TEXT_DATA_LABEL || readArg("--data-label") || "本地后端";
+  const dataLabel = environment.SSH_TEXT_DATA_LABEL || readOptionValue("--data-label", argv) || "本地后端";
   const targetsConfigPath = resolveProjectPath(
-    projectRoot,
-    process.env.SSH_TEXT_TARGETS_CONFIG || readArg("--targets-config") || "config/targets.json",
+    demoRoot,
+    environment.SSH_TEXT_TARGETS_CONFIG || readOptionValue("--targets-config", argv) || "config/targets.json",
   );
 
   return {
-    projectRoot,
+    demoRoot,
     roles,
     gatewayHost,
     gatewayPort,

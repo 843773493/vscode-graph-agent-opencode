@@ -37,20 +37,48 @@ class _ToolBindingFakeModel(FakeMessagesListChatModel):
 
 
 def _request(
-    tool_call_id: str, *, args: dict[str, object] | None = None,
+    tool_call_id: str,
+    *,
+    args: dict[str, object] | None = None,
     model_call_id: str | None = None,
 ) -> ToolCallRequest:
-    call = {
-        "id": tool_call_id, "name": "test_tool", "args": args or {}, "type": "tool_call",
+    tool_call = {
+        "id": tool_call_id,
+        "name": "test_tool",
+        "args": args or {},
+        "type": "tool_call",
     }
-    messages = [] if model_call_id is None else [
-        AIMessage(content="", id=f"lc_run--{model_call_id}", tool_calls=[call]),
-    ]
-    return ToolCallRequest(tool_call=call, tool=None, state={"messages": messages}, runtime=None)
+    request_messages = (
+        []
+        if model_call_id is None
+        else [
+            AIMessage(
+                content="", id=f"lc_run--{model_call_id}", tool_calls=[tool_call]
+            ),
+        ]
+    )
+    return ToolCallRequest(
+        tool_call=tool_call,
+        tool=None,
+        state={"messages": request_messages},
+        runtime=None,
+    )
 
 
 @pytest.fixture
-def invocation_failure_case():
+def tool_invocation_context() -> ToolInvocationContext:
+    return ToolInvocationContext()
+
+
+@pytest.fixture
+def tool_invocation_middleware(
+    tool_invocation_context: ToolInvocationContext,
+) -> ToolInvocationContextMiddleware:
+    return ToolInvocationContextMiddleware(tool_invocation_context)
+
+
+@pytest.fixture
+def tool_invocation_failure_case():
     commit_started = asyncio.Event()
     release_commit = asyncio.Event()
 
@@ -58,125 +86,171 @@ def invocation_failure_case():
         commit_started.set()
         await release_commit.wait()
 
-    sink = SimpleNamespace(
-        prepare_tool_execution=AsyncMock(), fail_tool_invocation=AsyncMock(side_effect=fail),
+    model_delta_sink = SimpleNamespace(
+        prepare_tool_execution=AsyncMock(),
+        fail_tool_invocation=AsyncMock(side_effect=fail),
     )
-    return SimpleNamespace(sink=sink, commit_started=commit_started, release_commit=release_commit)
+    return SimpleNamespace(
+        model_delta_sink=model_delta_sink,
+        commit_started=commit_started,
+        release_commit=release_commit,
+    )
 
 
 @pytest.mark.asyncio
-async def test_tool_error_waits_for_original_result_commit_before_scheduler_failure(invocation_failure_case):
-    case = invocation_failure_case
-    context = ToolInvocationContext()
-    middleware = ToolInvocationContextMiddleware(context)
+async def test_tool_error_waits_for_original_result_commit_before_scheduler_failure(
+    tool_invocation_failure_case,
+    tool_invocation_context: ToolInvocationContext,
+    tool_invocation_middleware: ToolInvocationContextMiddleware,
+):
+    failure_case = tool_invocation_failure_case
     failure = RuntimeError("target-deleted")
 
     async def handler(_request_value):
         raise failure
 
-    token = set_current_model_delta_sink(case.sink)
+    token = set_current_model_delta_sink(failure_case.model_delta_sink)
     try:
-        task = asyncio.create_task(middleware.awrap_tool_call(
-            _request("original-call", model_call_id="original-model"), handler,
-        ))
-        await asyncio.wait_for(case.commit_started.wait(), 1)
+        task = asyncio.create_task(
+            tool_invocation_middleware.awrap_tool_call(
+                _request("original-call", model_call_id="original-model"),
+                handler,
+            )
+        )
+        await asyncio.wait_for(failure_case.commit_started.wait(), 1)
         assert not task.done()
-        case.release_commit.set()
+        failure_case.release_commit.set()
         with pytest.raises(RuntimeError, match="target-deleted") as raised:
             await task
         assert raised.value is failure
-        case.sink.fail_tool_invocation.assert_awaited_once_with(
-            "original-model", "original-call", error="target-deleted",
+        failure_case.model_delta_sink.fail_tool_invocation.assert_awaited_once_with(
+            "original-model",
+            "original-call",
+            error="target-deleted",
         )
         with pytest.raises(RuntimeError, match="缺少 tool_call_id"):
-            context.require_tool_call_id()
+            tool_invocation_context.require_tool_call_id()
     finally:
-        case.release_commit.set()
+        failure_case.release_commit.set()
         reset_current_model_delta_sink(token)
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("local_timeout", [False, True])
-async def test_file_cancellation_commits_unknown_result_before_scheduler_continues(invocation_failure_case, local_timeout):
-    case = invocation_failure_case
-    context = ToolInvocationContext(tool_timeout_seconds=0.03 if local_timeout else None)
-    middleware = ToolInvocationContextMiddleware(context)
+async def test_file_cancellation_commits_unknown_result_before_scheduler_continues(
+    tool_invocation_failure_case,
+    local_timeout,
+):
+    failure_case = tool_invocation_failure_case
+    invocation_context = ToolInvocationContext(
+        tool_timeout_seconds=0.03 if local_timeout else None
+    )
+    invocation_middleware = ToolInvocationContextMiddleware(invocation_context)
     entered = asyncio.Event()
-    receipt = {"status": "error", "effect": "unknown", "code": "cancellation_requested", "retryable": False}
+    receipt = {
+        "status": "error",
+        "effect": "unknown",
+        "code": "cancellation_requested",
+        "retryable": False,
+    }
 
     async def handler(_request_value):
         entered.set()
         try:
             await asyncio.Future()
         except asyncio.CancelledError:
-            raise asyncio.CancelledError(TextMutationReceiptDTO.model_validate(receipt)) from None
+            raise asyncio.CancelledError(
+                TextMutationReceiptDTO.model_validate(receipt)
+            ) from None
 
-    token = set_current_model_delta_sink(case.sink)
+    token = set_current_model_delta_sink(failure_case.model_delta_sink)
     try:
-        task = asyncio.create_task(middleware.awrap_tool_call(
-            _request("file-call", model_call_id="file-model"), handler,
-        ))
+        task = asyncio.create_task(
+            invocation_middleware.awrap_tool_call(
+                _request("file-call", model_call_id="file-model"),
+                handler,
+            )
+        )
         await asyncio.wait_for(entered.wait(), 1)
         if not local_timeout:
             task.cancel()
-        await asyncio.wait_for(case.commit_started.wait(), 1)
+        await asyncio.wait_for(failure_case.commit_started.wait(), 1)
         assert not task.done()
         if not local_timeout:
             task.cancel()
             await asyncio.sleep(0)
             assert not task.done()
-        case.release_commit.set()
+        failure_case.release_commit.set()
         if local_timeout:
             result = await task
             assert isinstance(result, ToolMessage) and result.status == "error"
-            assert json.loads(result.content) == TextMutationReceiptDTO.model_validate(receipt).model_dump(mode="json", exclude_none=True)
+            assert json.loads(result.content) == TextMutationReceiptDTO.model_validate(
+                receipt
+            ).model_dump(mode="json", exclude_none=True)
         else:
             with pytest.raises(asyncio.CancelledError):
                 await task
-        case.sink.fail_tool_invocation.assert_awaited_once()
-        call = case.sink.fail_tool_invocation.await_args
-        assert call.args == ("file-model", "file-call")
+        failure_case.model_delta_sink.fail_tool_invocation.assert_awaited_once()
+        failure_result_call = (
+            failure_case.model_delta_sink.fail_tool_invocation.await_args
+        )
+        assert failure_result_call.args == ("file-model", "file-call")
         if local_timeout:
-            assert result.content == call.kwargs["error"]
-        assert json.loads(call.kwargs["error"]) == TextMutationReceiptDTO.model_validate(receipt).model_dump(mode="json", exclude_none=True)
+            assert result.content == failure_result_call.kwargs["error"]
+        assert json.loads(
+            failure_result_call.kwargs["error"]
+        ) == TextMutationReceiptDTO.model_validate(receipt).model_dump(
+            mode="json", exclude_none=True
+        )
     finally:
-        case.release_commit.set()
+        failure_case.release_commit.set()
         reset_current_model_delta_sink(token)
 
 
 @pytest.mark.asyncio
-async def test_model_preparation_failure_never_claims_a_tool_result(invocation_failure_case):
-    case = invocation_failure_case
-    case.sink.prepare_tool_execution.side_effect = RuntimeError("原 ModelCall 登记失败")
+async def test_model_preparation_failure_never_claims_a_tool_result(
+    tool_invocation_failure_case,
+    tool_invocation_middleware: ToolInvocationContextMiddleware,
+):
+    failure_case = tool_invocation_failure_case
+    failure_case.model_delta_sink.prepare_tool_execution.side_effect = RuntimeError(
+        "原 ModelCall 登记失败"
+    )
     handler = AsyncMock()
-    token = set_current_model_delta_sink(case.sink)
+    token = set_current_model_delta_sink(failure_case.model_delta_sink)
     try:
         with pytest.raises(RuntimeError, match="原 ModelCall 登记失败"):
-            await ToolInvocationContextMiddleware(ToolInvocationContext()).awrap_tool_call(
-                _request("original-call", model_call_id="original-model"), handler,
+            await tool_invocation_middleware.awrap_tool_call(
+                _request("original-call", model_call_id="original-model"),
+                handler,
             )
         handler.assert_not_awaited()
-        case.sink.fail_tool_invocation.assert_not_awaited()
+        failure_case.model_delta_sink.fail_tool_invocation.assert_not_awaited()
     finally:
         reset_current_model_delta_sink(token)
 
 
 @pytest.mark.asyncio
-async def test_tool_invocation_context_is_isolated_for_parallel_calls():
-    context = ToolInvocationContext()
-    middleware = ToolInvocationContextMiddleware(context)
+async def test_tool_invocation_context_is_isolated_for_parallel_calls(
+    tool_invocation_context: ToolInvocationContext,
+    tool_invocation_middleware: ToolInvocationContextMiddleware,
+):
 
     async def invoke(tool_call_id: str, model_call_id: str) -> str:
         async def handler(_request_value):
-            before = context.require_tool_call_id()
-            before_model = context.require_model_call_id()
+            before = tool_invocation_context.require_tool_call_id()
+            before_model = tool_invocation_context.require_model_call_id()
             await asyncio.sleep(0)
-            after = context.require_tool_call_id()
+            after = tool_invocation_context.require_tool_call_id()
             assert before == after == tool_call_id
-            assert before_model == context.require_model_call_id() == model_call_id
+            assert (
+                before_model
+                == tool_invocation_context.require_model_call_id()
+                == model_call_id
+            )
             return ToolMessage(content="ok", tool_call_id=tool_call_id)
 
-        result = await middleware.awrap_tool_call(
+        result = await tool_invocation_middleware.awrap_tool_call(
             _request(tool_call_id, model_call_id=model_call_id),
             handler,
         )
@@ -191,15 +265,15 @@ async def test_tool_invocation_context_is_isolated_for_parallel_calls():
         "call_b",
     ]
     with pytest.raises(RuntimeError, match="缺少 tool_call_id"):
-        context.require_tool_call_id()
+        tool_invocation_context.require_tool_call_id()
     with pytest.raises(RuntimeError, match="model_call_id"):
-        context.require_model_call_id()
+        tool_invocation_context.require_model_call_id()
 
 
 @pytest.mark.asyncio
-async def test_tool_child_scope_abort_does_not_leave_running_handler():
-    context = ToolInvocationContext()
-    middleware = ToolInvocationContextMiddleware(context)
+async def test_tool_child_scope_abort_does_not_leave_running_handler(
+    tool_invocation_middleware: ToolInvocationContextMiddleware,
+):
     scope = TurnExecutionScope("stream_1")
     started = asyncio.Event()
 
@@ -209,7 +283,9 @@ async def test_tool_child_scope_abort_does_not_leave_running_handler():
 
     async def invoke():
         with pytest.raises(ScopeCancelledError, match="user_requested"):
-            await middleware.awrap_tool_call(_request("call_1"), handler)
+            await tool_invocation_middleware.awrap_tool_call(
+                _request("call_1"), handler
+            )
 
     from app.core.turn_execution_scope import (
         reset_current_turn_execution_scope,
@@ -256,9 +332,9 @@ async def test_tool_local_timeout_returns_error_without_cancelling_turn():
 
 
 @pytest.mark.asyncio
-async def test_transport_timeout_returns_recoverable_tool_result_without_aborting_turn():
-    context = ToolInvocationContext()
-    middleware = ToolInvocationContextMiddleware(context)
+async def test_transport_timeout_returns_recoverable_tool_result_without_aborting_turn(
+    tool_invocation_middleware: ToolInvocationContextMiddleware,
+):
     scope = TurnExecutionScope("stream_transport_timeout")
 
     async def handler(_request_value):
@@ -271,7 +347,7 @@ async def test_transport_timeout_returns_recoverable_tool_result_without_abortin
 
     token = set_current_turn_execution_scope(scope)
     try:
-        result = await middleware.awrap_tool_call(
+        result = await tool_invocation_middleware.awrap_tool_call(
             _request("call_transport_timeout"),
             handler,
         )
@@ -297,15 +373,17 @@ async def test_transport_timeout_returns_recoverable_tool_result_without_abortin
 
 
 @pytest.mark.asyncio
-async def test_parallel_transport_timeouts_still_emit_one_result_per_tool_call():
-    context = ToolInvocationContext()
-    middleware = ToolInvocationContextMiddleware(context)
+async def test_parallel_transport_timeouts_still_emit_one_result_per_tool_call(
+    tool_invocation_middleware: ToolInvocationContextMiddleware,
+):
 
     async def invoke(tool_call_id: str):
         async def handler(_request_value):
             raise TimeoutError("terminal manager timed out")
 
-        return await middleware.awrap_tool_call(_request(tool_call_id), handler)
+        return await tool_invocation_middleware.awrap_tool_call(
+            _request(tool_call_id), handler
+        )
 
     results = await asyncio.gather(
         invoke("call_timeout_a"),
@@ -328,12 +406,12 @@ async def test_parallel_transport_timeouts_still_emit_one_result_per_tool_call()
 @pytest.mark.asyncio
 async def test_tool_invocation_does_not_infer_resource_lease_from_public_arguments(
     tmp_path: Path,
+    tool_invocation_middleware: ToolInvocationContextMiddleware,
 ) -> None:
     ledger = ExternalResourceLeaseLedger(state_path=tmp_path / "resources.json")
     # ToolInvocationContext 不再持有资源账本：通用调用链没有可注入的
     # lease 入口，公开参数（如 terminal_id）无法在通用层制造占用。
     assert not hasattr(ToolInvocationContext(), "resource_manager")
-    middleware = ToolInvocationContextMiddleware(ToolInvocationContext())
     scope = TurnExecutionScope("stream_1")
 
     async def handler(_request_value):
@@ -346,7 +424,7 @@ async def test_tool_invocation_does_not_infer_resource_lease_from_public_argumen
 
     token = set_current_turn_execution_scope(scope)
     try:
-        result = await middleware.awrap_tool_call(
+        result = await tool_invocation_middleware.awrap_tool_call(
             _request("call_1", args={"terminal_id": "terminal_1"}),
             handler,
         )
@@ -359,13 +437,13 @@ async def test_tool_invocation_does_not_infer_resource_lease_from_public_argumen
     assert ledger.leases_for_turn("stream_1") == []
 
 
-def test_tool_invocation_context_rejects_missing_call_id():
-    context = ToolInvocationContext()
-    middleware = ToolInvocationContextMiddleware(context)
+def test_tool_invocation_context_rejects_missing_call_id(
+    tool_invocation_middleware: ToolInvocationContextMiddleware,
+):
     request = _request("")
 
     with pytest.raises(RuntimeError, match="工具调用缺少 tool_call_id"):
-        middleware.wrap_tool_call(
+        tool_invocation_middleware.wrap_tool_call(
             request,
             lambda _request_value: ToolMessage(
                 content="不应执行",
@@ -381,7 +459,8 @@ def test_thread_runtime_binding_carries_exact_trusted_identity():
         ThreadRuntimeBinding(session_id="ses_binding", thread_id="")
 
     binding = ThreadRuntimeBinding(
-        session_id="ses_binding", thread_id="thr_00000000400070008000000000000002",
+        session_id="ses_binding",
+        thread_id="thr_00000000400070008000000000000002",
     )
     context = ToolInvocationContext(thread_binding=binding)
 
@@ -390,14 +469,16 @@ def test_thread_runtime_binding_carries_exact_trusted_identity():
     assert ToolInvocationContext().thread_binding is None
 
 
-def test_agent_injects_call_id_without_exposing_runtime_parameter():
-    context = ToolInvocationContext()
+def test_agent_injects_call_id_without_exposing_runtime_parameter(
+    tool_invocation_context: ToolInvocationContext,
+    tool_invocation_middleware: ToolInvocationContextMiddleware,
+):
     observed_call_ids: list[str] = []
 
     @tool
     def context_aware_tool(value: str) -> str:
         """记录当前工具调用身份。"""
-        observed_call_ids.append(context.require_tool_call_id())
+        observed_call_ids.append(tool_invocation_context.require_tool_call_id())
         return value
 
     model = _ToolBindingFakeModel(
@@ -418,13 +499,11 @@ def test_agent_injects_call_id_without_exposing_runtime_parameter():
     agent = create_agent(
         model,
         tools=[context_aware_tool],
-        middleware=[ToolInvocationContextMiddleware(context)],
+        middleware=[tool_invocation_middleware],
     )
 
     result = agent.invoke({"messages": [HumanMessage(content="执行工具")]})
 
     assert observed_call_ids == ["call_context"]
     assert result["messages"][-1].content == "完成"
-    assert context_aware_tool.args == {
-        "value": {"title": "Value", "type": "string"}
-    }
+    assert context_aware_tool.args == {"value": {"title": "Value", "type": "string"}}

@@ -2,6 +2,18 @@
 
 `app/services/` 存放应用服务层代码，并按 `business`、`orchestration`、`infrastructure`、`mapping` 等子目录划分职责。
 
+## 职责树
+
+```text
+services/
+├── business/        业务规则与用户可见的业务能力
+├── orchestration/   跨服务流程、执行顺序与生命周期编排
+├── infrastructure/ 持久化、系统状态和外部能力
+└── mapping/         DTO、事件与内部模型之间的纯转换
+```
+
+按问题定位目录：要改变“业务结果是什么”进入 `business/`；要改变“多个步骤怎样衔接”进入 `orchestration/`；要改变“状态如何读写或依赖什么系统能力”进入 `infrastructure/`；只改变“数据如何表达”进入 `mapping/`。一个功能跨越多层时，沿各层已有边界拆分职责，不把整条流程塞进单个目录。
+
 # 可修改内容
 
 - 可以在既有职责子目录下新增或调整服务实现。

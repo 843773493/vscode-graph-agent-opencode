@@ -119,7 +119,7 @@ const ERROR_BODY_SNIPPET_LIMIT = 200;
  * 下用户才能看到真实原因。
  */
 async function readHttpErrorDetail(response: Response): Promise<unknown> {
-  const raw = await response.clone().text().catch(() => null);
+  const raw = await response.text().catch(() => null);
   if (raw === null) return "响应体不可读取";
   const trimmed = raw.trim();
   if (!trimmed) return "响应体为空";
@@ -146,28 +146,32 @@ function normalizeHeaders(headers: HeadersInit | undefined): Record<string, stri
   return headers;
 }
 
-async function shouldRefreshGatewayToken(response: Response): Promise<boolean> {
-  if (response.status !== 401) return false;
-  const body = await response.clone().json().catch(() => null) as {
-    detail?: unknown;
-    message?: unknown;
-  } | null;
-  const detail = body?.detail ?? body?.message;
-  return typeof detail === "string" && detail.includes("invalid local token");
+interface GatewayUnauthorizedResponse {
+  invalidLocalToken: boolean;
+  userSessionRequired: boolean;
 }
 
-async function isGatewayUserSessionRequired(response: Response): Promise<boolean> {
-  if (response.status !== 401) return false;
+async function inspectGatewayUnauthorizedResponse(
+  response: Response,
+): Promise<GatewayUnauthorizedResponse> {
+  if (response.status !== 401) {
+    return { invalidLocalToken: false, userSessionRequired: false };
+  }
   const body = await response.clone().json().catch(() => null) as {
     detail?: unknown;
     message?: unknown;
   } | null;
   const detail = body?.detail ?? body?.message;
-  if (typeof detail === "string") return detail.includes("user_session_required");
-  return detail !== null
-    && typeof detail === "object"
-    && "code" in detail
-    && detail.code === "user_session_required";
+  return {
+    invalidLocalToken: typeof detail === "string"
+      && detail.includes("invalid local token"),
+    userSessionRequired: typeof detail === "string"
+      ? detail.includes("user_session_required")
+      : detail !== null
+        && typeof detail === "object"
+        && "code" in detail
+        && detail.code === "user_session_required",
+  };
 }
 
 interface RequestAbortState {
@@ -448,22 +452,23 @@ async function runGatewayRequest<T>(
         abortState.signal,
       );
       if (response.status === 401) {
-        if (
-          !skipGatewayUserSession
-          && !userSessionRecovered
-          && await isGatewayUserSessionRequired(response)
-        ) {
-          userSessionRecovered = true;
-          await recoverGatewayUserSession(port);
-          continue;
-        }
-        if (!tokenRefreshed && await shouldRefreshGatewayToken(response)) {
-          tokenRefreshed = true;
-          if (gatewayTokenByPort.get(port) === tokenPromise) {
-            gatewayTokenByPort.delete(port);
+        const canRecoverUserSession = !skipGatewayUserSession && !userSessionRecovered;
+        const canRefreshToken = !tokenRefreshed;
+        if (canRecoverUserSession || canRefreshToken) {
+          const unauthorizedResponse = await inspectGatewayUnauthorizedResponse(response);
+          if (canRecoverUserSession && unauthorizedResponse.userSessionRequired) {
+            userSessionRecovered = true;
+            await recoverGatewayUserSession(port);
+            continue;
           }
-          tokenPromise = getGatewayToken(port);
-          continue;
+          if (canRefreshToken && unauthorizedResponse.invalidLocalToken) {
+            tokenRefreshed = true;
+            if (gatewayTokenByPort.get(port) === tokenPromise) {
+              gatewayTokenByPort.delete(port);
+            }
+            tokenPromise = getGatewayToken(port);
+            continue;
+          }
         }
       }
       break;

@@ -116,34 +116,37 @@ class StructuredPromptRegistry:
                     f"标签 {tag.name} 不得注册结构保留属性: "
                     f"{sorted(reserved_attributes)}"
                 )
-        for kind in self._internal_message_kinds.values():
-            if _TAG_NAME_PATTERN.fullmatch(kind.kind) is None:
-                raise ValueError(f"内部消息 kind 名无效: {kind.kind}")
-            if not kind.required_sections <= kind.allowed_sections:
+        for message_kind_spec in self._internal_message_kinds.values():
+            if _TAG_NAME_PATTERN.fullmatch(message_kind_spec.kind) is None:
+                raise ValueError(f"内部消息 kind 名无效: {message_kind_spec.kind}")
+            if (
+                not message_kind_spec.required_sections
+                <= message_kind_spec.allowed_sections
+            ):
                 raise ValueError(
-                    f"内部消息 kind={kind.kind} 的 required_sections "
+                    f"内部消息 kind={message_kind_spec.kind} 的 required_sections "
                     "必须属于 allowed_sections"
                 )
-            for section_name in kind.allowed_sections:
+            for section_name in message_kind_spec.allowed_sections:
                 section = self.tag(section_name)
                 if section.allowed_parent != "system_reminder":
                     raise ValueError(
-                        f"内部消息 kind={kind.kind} 引用了非 reminder section: "
+                        f"内部消息 kind={message_kind_spec.kind} 引用了非 reminder section: "
                         f"{section_name}"
                     )
-            if kind.display_policy == InternalDisplayPolicy.explicit:
-                if not kind.display_kind:
+            if message_kind_spec.display_policy == InternalDisplayPolicy.explicit:
+                if not message_kind_spec.display_kind:
                     raise ValueError(
-                        f"内部消息 kind={kind.kind} 的显式展示策略缺少 display_kind"
+                        f"内部消息 kind={message_kind_spec.kind} 的显式展示策略缺少 display_kind"
                     )
-                if _TAG_NAME_PATTERN.fullmatch(kind.display_kind) is None:
+                if _TAG_NAME_PATTERN.fullmatch(message_kind_spec.display_kind) is None:
                     raise ValueError(
-                        f"内部消息 kind={kind.kind} 的 display_kind 名无效: "
-                        f"{kind.display_kind}"
+                        f"内部消息 kind={message_kind_spec.kind} 的 display_kind 名无效: "
+                        f"{message_kind_spec.display_kind}"
                     )
-            elif kind.display_kind is not None:
+            elif message_kind_spec.display_kind is not None:
                 raise ValueError(
-                    f"内部消息 kind={kind.kind} 的隐藏展示策略不得声明 display_kind"
+                    f"内部消息 kind={message_kind_spec.kind} 的隐藏展示策略不得声明 display_kind"
                 )
 
     def tag(self, name: str) -> PromptTagSpec:

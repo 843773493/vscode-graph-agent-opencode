@@ -19,7 +19,7 @@ from app.domain.itemized.resource_activation import (
 
 # 固定的观测应然集合（独立于源码，供变异自检使用，非闭集的第二权威）。
 # 一旦有人把闭集缩回旧版 11 个码或漏掉任一枚举，下面的用例会立刻变红。
-_EXPECTED_DOMAIN_CODES = frozenset(
+_EXPECTED_RESOURCE_ACTIVATION_ERROR_CODES = frozenset(
     {
         "resource-activation-schema-invalid",
         "resource-activation-boundary-singularity-rejected",
@@ -35,35 +35,37 @@ _EXPECTED_DOMAIN_CODES = frozenset(
     }
 )
 
-_PACKAGE_DIR = Path("app/domain/itemized/resource_activation")
+_RESOURCE_ACTIVATION_PACKAGE_DIR = Path("app/domain/itemized/resource_activation")
 # 只匹配完整的 code 字面量；schema token 形如 "resource-activation-provenance:v1"
 # 引号不紧跟词尾，因此不会被本正则捕获。
 _CODE_LITERAL = re.compile(r'"(resource-activation-[a-z0-9-]+)"')
 
 
-def _declared_codes_from_source() -> set[str]:
-    """从 domain 包全部源码现场派生被 raise/校验的 code 字面量。"""
+def _declared_resource_activation_error_codes_from_source() -> set[str]:
+    """从 resource_activation 包源码派生被 raise/校验的错误码字面量。"""
 
-    found: set[str] = set()
-    for path in sorted(_PACKAGE_DIR.glob("*.py")):
-        found.update(_CODE_LITERAL.findall(path.read_text(encoding="utf-8")))
-    return found
+    declared_error_codes: set[str] = set()
+    for path in sorted(_RESOURCE_ACTIVATION_PACKAGE_DIR.glob("*.py")):
+        declared_error_codes.update(
+            _CODE_LITERAL.findall(path.read_text(encoding="utf-8"))
+        )
+    return declared_error_codes
 
 
-def test_closure_matches_declared_literals() -> None:
+def test_resource_activation_error_allowlist_matches_declared_literals() -> None:
     """闭集必须与源码现存的 code 字面量严格相等（不许多、不许少）。"""
 
-    declared = _declared_codes_from_source()
-    assert declared == set(RESOURCE_ACTIVATION_ERROR_CODES)
+    declared_error_codes = _declared_resource_activation_error_codes_from_source()
+    assert declared_error_codes == set(RESOURCE_ACTIVATION_ERROR_CODES)
 
 
-def test_closure_trips_mutation_shrink() -> None:
+def test_resource_activation_error_allowlist_cannot_shrink() -> None:
     """变异自检：闭集缩回旧 11 个码或漏枚举时立即失败。"""
 
-    assert RESOURCE_ACTIVATION_ERROR_CODES == _EXPECTED_DOMAIN_CODES
+    assert RESOURCE_ACTIVATION_ERROR_CODES == _EXPECTED_RESOURCE_ACTIVATION_ERROR_CODES
 
 
-def test_closure_is_the_sole_authority_for_raise() -> None:
+def test_contract_error_rejects_codes_outside_resource_activation_allowlist() -> None:
     """闭集是 raise 的唯一闸门：域外 code 必须被显式拒绝。"""
 
     with pytest.raises(ValueError):

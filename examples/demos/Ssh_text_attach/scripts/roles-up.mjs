@@ -1,6 +1,11 @@
 import { spawn } from "node:child_process";
+import { fileURLToPath } from "node:url";
+import { terminateChildProcessTree } from "./processTree.js";
+import { pipePrefixedOutput } from "./processOutput.js";
 
-function readArg(name) {
+const demoRoot = fileURLToPath(new URL("../", import.meta.url));
+
+function readOptionValue(name) {
   const index = process.argv.indexOf(name);
   if (index === -1) {
     return null;
@@ -78,68 +83,88 @@ function profileProcesses(profile) {
   throw new Error(`未知 profile: ${profile}`);
 }
 
-function pipeWithPrefix(stream, prefix, target) {
-  let pending = "";
-  stream.setEncoding("utf8");
-  stream.on("data", (chunk) => {
-    pending += chunk;
-    const lines = pending.split("\n");
-    pending = lines.pop() ?? "";
-    for (const line of lines) {
-      target.write(`[${prefix}] ${line}\n`);
-    }
-  });
-  stream.on("end", () => {
-    if (pending) {
-      target.write(`[${prefix}] ${pending}\n`);
-    }
+const profile = readOptionValue("--profile") || process.env.SSH_TEXT_PROFILE || "host";
+const children = [];
+let shutdownStarted = false;
+
+function requestChildProcessTreeTermination(entry) {
+  void terminateChildProcessTree(entry).catch((error) => {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error(`[roles] ${message}`);
+    process.exitCode = 1;
   });
 }
 
-const profile = readArg("--profile") || process.env.SSH_TEXT_PROFILE || "host";
-const children = [];
-let stopping = false;
+function stopAfterChildFailure(name, details, exitCode) {
+  if (shutdownStarted) {
+    return;
+  }
+  shutdownStarted = true;
+  removeSignalHandlers();
+  console.error(`[roles] ${name} ${details}`);
+  for (const entry of children) {
+    requestChildProcessTreeTermination(entry);
+  }
+  process.exitCode = exitCode;
+}
 
 for (const processConfig of profileProcesses(profile)) {
   const child = spawn(process.execPath, ["src/server/server.js"], {
+    cwd: demoRoot,
     env: {
       ...process.env,
       ...processConfig.env,
     },
+    detached: process.platform !== "win32",
     stdio: ["ignore", "pipe", "pipe"],
   });
 
   children.push({ name: processConfig.name, child });
-  pipeWithPrefix(child.stdout, processConfig.name, process.stdout);
-  pipeWithPrefix(child.stderr, processConfig.name, process.stderr);
+  pipePrefixedOutput(child.stdout, processConfig.name, process.stdout);
+  pipePrefixedOutput(child.stderr, processConfig.name, process.stderr);
 
+  child.once("error", (error) => {
+    stopAfterChildFailure(
+      processConfig.name,
+      `启动失败: ${error.message}`,
+      1,
+    );
+  });
   child.on("exit", (code, signal) => {
-    if (stopping) {
-      return;
-    }
-    stopping = true;
-    console.error(`[roles] ${processConfig.name} 退出 code=${code ?? "null"} signal=${signal ?? "null"}`);
-    for (const other of children) {
-      if (other.child.pid !== child.pid) {
-        other.child.kill("SIGTERM");
-      }
-    }
-    process.exit(code ?? 1);
+    stopAfterChildFailure(
+      processConfig.name,
+      `退出 code=${code ?? "null"} signal=${signal ?? "null"}`,
+      code ?? 1,
+    );
   });
 }
 
 console.log(`[roles] profile=${profile} started: ${children.map((entry) => entry.name).join(", ")}`);
 
 function shutdown(signal) {
-  if (stopping) {
+  if (shutdownStarted) {
     return;
   }
-  stopping = true;
+  shutdownStarted = true;
+  removeSignalHandlers();
   console.log(`[roles] 收到 ${signal}`);
   for (const entry of children) {
-    entry.child.kill("SIGTERM");
+    requestChildProcessTreeTermination(entry);
   }
 }
 
-process.once("SIGINT", () => shutdown("SIGINT"));
-process.once("SIGTERM", () => shutdown("SIGTERM"));
+function removeSignalHandlers() {
+  process.off("SIGINT", handleInterrupt);
+  process.off("SIGTERM", handleTermination);
+}
+
+function handleInterrupt() {
+  shutdown("SIGINT");
+}
+
+function handleTermination() {
+  shutdown("SIGTERM");
+}
+
+process.once("SIGINT", handleInterrupt);
+process.once("SIGTERM", handleTermination);

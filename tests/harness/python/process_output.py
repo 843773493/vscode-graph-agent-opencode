@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import subprocess
+from contextlib import ExitStack
 from pathlib import Path
 from uuid import uuid4
+
+from tests.support.processes.workspace import terminate_process
 
 
 def spawn_logged_process(
@@ -20,10 +23,14 @@ def spawn_logged_process(
     prefix = f"{log_name}-{uuid4().hex}"
     logs = (artifacts_dir / f"{prefix}.stdout.log", artifacts_dir / f"{prefix}.stderr.log")
     try:
-        with open(logs[0], "x", encoding="utf-8") as stdout, open(logs[1], "x", encoding="utf-8") as stderr:
-            process = subprocess.Popen(
-                command, cwd=cwd, env=env, stdout=stdout, stderr=stderr, text=True,
-            )
+        with ExitStack() as startup_cleanup:
+            with open(logs[0], "x", encoding="utf-8") as stdout, open(logs[1], "x", encoding="utf-8") as stderr:
+                process = subprocess.Popen(
+                    command, cwd=cwd, env=env, stdout=stdout, stderr=stderr, text=True,
+                )
+                # 日志副本关闭前尚未移交进程；关闭失败仍由创建入口回收。
+                startup_cleanup.callback(terminate_process, process)
+            startup_cleanup.pop_all()
     except BaseException as error:
         for path in logs:
             error.add_note(f"辅助服务测试进程日志：{path}")

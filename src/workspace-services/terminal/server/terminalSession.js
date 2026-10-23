@@ -1,10 +1,10 @@
 import {
   readProcessStat,
   terminateTerminalProcessTree,
-} from "./terminalProcessUtils.js";
+} from "./processes/terminalProcessLifecycle.js";
 import { statSync } from "node:fs";
 import path from "node:path";
-import { IsolatedPtyProcess } from "./isolatedPtyProcess.js";
+import { IsolatedPtyProcess } from "./processes/isolatedPtyProcess.js";
 import { TerminalOutputMultiplexer } from "./output/terminalOutputMultiplexer.js";
 import { splitTerminalOutputChunks, trimTerminalBuffer } from "./output/terminalUtf8Output.js";
 import {
@@ -92,6 +92,13 @@ export function shellArgs() {
   return ["-i"];
 }
 
+/**
+ * 完成事件的对照字段；输出基线与事件ID联合核对，不单独充当命令代际。
+ * @typedef {object} TerminalCompletionComparison
+ * @property {string} completionEventId Session记录的完成事件标识，不是终端资源ID。
+ * @property {number} commandStartSequence 接纳命令前最后已有的输出序号，不是命令首条输出序号或独立generation。
+ */
+
 export class TerminalSession {
   constructor({ record, manager }) {
     validateTerminalRecord(record, manager.workspaceId);
@@ -129,9 +136,12 @@ export class TerminalSession {
     /** @type {number|string|null} 同 TerminalProcessStat：Linux 时钟滴答数或 POSIX lstart 原文，只作进程身份比较。 */
     this.processStartTime = record.process_start_time ?? null;
     this.releaseReason = record.release_reason ?? null;
-    this.sequence = record.sequence || 0;
-    this.modelOutputSequence = record.model_output_sequence || 0;
-    this.commandStartSequence = record.command_start_sequence ?? null;
+    /** @type {number} 已产生的最后一条PTY输出事件序号；不等于worker的IPC包号。 */
+    this.outputSequence = record.sequence || 0;
+    /** @type {number} 模型已读到的输出序号（包含该条），与UI的逐连接ACK分开。 */
+    this.modelReadThroughOutputSequence = record.model_output_sequence || 0;
+    /** @type {number|null} 当前命令写入前最后已有的输出序号；null表示尚无命令基线。 */
+    this.commandOutputBaselineSequence = record.command_start_sequence ?? null;
     this.modelBackgrounded = record.model_backgrounded || false;
     this.completionObservedByModel = record.completion_observed_by_model || false;
     this.steeringDispatching = record.steering_dispatching || false;
@@ -153,7 +163,7 @@ export class TerminalSession {
     this.releasePromise = null;
     this.outputMultiplexer = new TerminalOutputMultiplexer({
       terminalId: this.id,
-      getSequence: () => this.sequence,
+      getSequence: () => this.outputSequence,
       getSnapshot: () => this.snapshot(),
     });
     if (this.lastCommand && this.lastCommandStatus === null) {
@@ -176,11 +186,11 @@ export class TerminalSession {
       this.buffer = trimTerminalBuffer(this.buffer + data);
       const outputReceivedAt = nowIso();
       for (const chunk of splitTerminalOutputChunks(data)) {
-        this.sequence += 1;
+        this.outputSequence += 1;
         this.outputMultiplexer.recordAndBroadcast({
           type: "output",
           terminalId: this.id,
-          sequence: this.sequence,
+          sequence: this.outputSequence,
           data: chunk,
           timestamp: outputReceivedAt,
         });
@@ -193,7 +203,7 @@ export class TerminalSession {
         this.lastCommandExitCode = exitCode;
         this.lastCommandCompletedAt = nowIso();
         this.completionEventId =
-          this.completionEventId || `terminal_completed:${this.id}:${this.sequence}`;
+          this.completionEventId || `terminal_completed:${this.id}:${this.outputSequence}`;
         void this.terminateForRelease({
           status: "completed",
           commandStatus: "completed",
@@ -375,8 +385,8 @@ export class TerminalSession {
 
   async readModelOutput() {
     this.touchUsage();
-    const read = this.outputMultiplexer.readAfter(this.modelOutputSequence);
-    this.modelOutputSequence = read.sequence;
+    const read = this.outputMultiplexer.readAfter(this.modelReadThroughOutputSequence);
+    this.modelReadThroughOutputSequence = read.sequence;
     if (this.lastCommandStatus === "completed") {
       this.completionObservedByModel = true;
     }
@@ -398,7 +408,7 @@ export class TerminalSession {
     }
     if (command) {
       const markers = commandMarkersFromInput(data);
-      this.commandStartSequence = this.sequence;
+      this.commandOutputBaselineSequence = this.outputSequence;
       this.lastCommand = command;
       this.lastCommandStatus = "running";
       this.lastCommandExitCode = null;
@@ -655,20 +665,22 @@ export class TerminalSession {
     this.touchUsage();
   }
 
+  /** @param {TerminalCompletionComparison} identity */
   assertSteeringIdentity({ completionEventId, commandStartSequence }) {
     if (typeof completionEventId !== "string" || !completionEventId
         || !Number.isInteger(commandStartSequence) || commandStartSequence < 0) {
       throw new TypeError("Terminal completion 必须提供真实 event 和命令 generation");
     }
     if (this.completionEventId !== completionEventId
-        || this.commandStartSequence !== commandStartSequence) {
+        || this.commandOutputBaselineSequence !== commandStartSequence) {
       throw new Error(`Terminal completion event/generation 不匹配: ${this.id}`);
     }
   }
 
+  /** @param {TerminalCompletionComparison} identity */
   claimSteering(identity) {
     this.assertSteeringIdentity(identity);
-    // 未结清的持久 claim 只恢复同一个 event/generation。
+    // 未结清的持久claim只恢复同一个完成事件与输出基线。
     if (this.steeringDispatching) {
       return true;
     }
@@ -685,6 +697,7 @@ export class TerminalSession {
     return true;
   }
 
+  /** @param {TerminalCompletionComparison & { dispatched: boolean }} result */
   finishSteering({ completionEventId, commandStartSequence, dispatched }) {
     this.assertSteeringIdentity({ completionEventId, commandStartSequence });
     if (typeof dispatched !== "boolean") {
@@ -734,9 +747,9 @@ export class TerminalSession {
       process_start_time: this.processStartTime,
       release_reason: this.releaseReason,
       os_pid: this.osPid,
-      sequence: this.sequence,
-      model_output_sequence: this.modelOutputSequence,
-      command_start_sequence: this.commandStartSequence,
+      sequence: this.outputSequence,
+      model_output_sequence: this.modelReadThroughOutputSequence,
+      command_start_sequence: this.commandOutputBaselineSequence,
       model_backgrounded: this.modelBackgrounded,
       completion_observed_by_model: this.completionObservedByModel,
       steering_dispatching: this.steeringDispatching,

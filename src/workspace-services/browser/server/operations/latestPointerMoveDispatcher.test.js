@@ -6,9 +6,9 @@ describe("浏览器指针移动最新值调度", () => {
     const dispatched = [];
     let releaseFirst;
     const firstBarrier = new Promise((resolve) => { releaseFirst = resolve; });
-    const dispatcher = new LatestPointerMoveDispatcher(async (message) => {
-      dispatched.push(message.x);
-      if (message.x === 1) await firstBarrier;
+    const dispatcher = new LatestPointerMoveDispatcher(async (pointerMoveMessage) => {
+      dispatched.push(pointerMoveMessage.x);
+      if (pointerMoveMessage.x === 1) await firstBarrier;
     });
 
     dispatcher.offer({ x: 1 });

@@ -153,14 +153,21 @@ export async function consumeSseResponse(response, options) {
       }
       buffer += decoded.replace(/\r\n|\r/g, '\n');
 
+      let frameStart = 0;
       let boundaryIndex = buffer.indexOf('\n\n');
       while (boundaryIndex !== -1) {
-        dispatchBlock(buffer.slice(0, boundaryIndex));
-        buffer = buffer.slice(boundaryIndex + 2);
-        boundaryIndex = buffer.indexOf('\n\n');
+        dispatchBlock(buffer.slice(frameStart, boundaryIndex));
+        frameStart = boundaryIndex + 2;
+        boundaryIndex = buffer.indexOf('\n\n', frameStart);
         if (boundaryIndex !== -1 && options.yieldBetweenEvents) {
+          buffer = buffer.slice(frameStart);
+          boundaryIndex -= frameStart;
+          frameStart = 0;
           await yieldBetweenEvents();
         }
+      }
+      if (frameStart > 0) {
+        buffer = buffer.slice(frameStart);
       }
       if (done) {
         reachedEnd = true;

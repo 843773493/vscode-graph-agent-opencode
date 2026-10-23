@@ -44,7 +44,7 @@ from app.domain.itemized.serde.epoch import (
 )
 
 
-@pytest.fixture
+@pytest.fixture(scope="module")
 def tool_set() -> ToolSetSnapshot:
     return ToolSetSnapshot(
         selection_revision=sha256_jcs({"read_file": True}),
@@ -63,7 +63,7 @@ def tool_set() -> ToolSetSnapshot:
     )
 
 
-@pytest.fixture
+@pytest.fixture(scope="module")
 def binding(tool_set: ToolSetSnapshot) -> ContextSealBinding:
     ref = tool_set.bind(session_id="session", thread_id="thread", plan_id="plan")
     state = initial_epoch_state(
@@ -305,7 +305,7 @@ def test_snapshot_tool_snapshot_is_isolated_from_input_getter_and_serialization(
         snapshot.validate_hashes()
 
 
-@pytest.fixture
+@pytest.fixture(scope="module")
 def tampered_binding(binding):
     """保持 ToolSet identity，却共同改写 root/prefix 并重算帧摘要。"""
     changed_key = sha256_jcs({"forged_toolset": "same id and revision"})

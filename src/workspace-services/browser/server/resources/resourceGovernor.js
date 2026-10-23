@@ -56,6 +56,7 @@ export class BrowserResourceGovernor {
     failedBatchBackoffMs = 1_000,
     allowDiscard = true,
     now = () => Date.now(),
+    monotonicNow = () => performance.now(),
   }) {
     this.manager = manager;
     this.memoryMonitor = memoryMonitor;
@@ -66,8 +67,10 @@ export class BrowserResourceGovernor {
     this.backlogIntervalMs = backlogIntervalMs;
     this.failedBatchBackoffMs = failedBatchBackoffMs;
     this.allowDiscard = allowDiscard;
-    /** @type {() => number} 注入时钟返回Unix毫秒绝对时刻，ISO回执与时差预算共用它。 */
+    /** @type {() => number} Unix毫秒绝对时刻，用于ISO回执、资源策略和退避期限。 */
     this.now = now;
+    /** @type {() => number} 进程内单调毫秒时钟，只用于耗时和动作批次软预算。 */
+    this.monotonicNow = monotonicNow;
     this.timer = null;
     this.running = false;
     /** @type {Map<string, number>} 资源下次允许动作的Unix毫秒期限，不是退避时长。 */
@@ -179,6 +182,7 @@ export class BrowserResourceGovernor {
   async executeDecision(decision, pressureLevel) {
     const session = this.manager.get(decision.browserId);
     const actionStartedAtUnixMs = this.now();
+    const actionStartedAtMonotonicMs = this.monotonicNow();
     const allowSoftProtection = ["critical", "emergency"].includes(pressureLevel);
     let finalSnapshot;
     if (decision.action === "freeze") {
@@ -190,7 +194,7 @@ export class BrowserResourceGovernor {
       ...decision,
       pressure_level: pressureLevel,
       started_at: new Date(actionStartedAtUnixMs).toISOString(),
-      duration_ms: this.now() - actionStartedAtUnixMs,
+      duration_ms: this.monotonicNow() - actionStartedAtMonotonicMs,
       final_resource_state: finalSnapshot?.resource_state
         || (decision.action === "freeze" ? "frozen" : "discarded"),
     };
@@ -198,12 +202,12 @@ export class BrowserResourceGovernor {
 
   /** @param {ResourceBatchLimits} limits */
   async executePlan(actions, pressureLevel, limits) {
-    const batchStartedAtUnixMs = this.now();
+    const batchStartedAtMonotonicMs = this.monotonicNow();
     const completed = [];
     const errors = [];
     let cursor = 0;
     while (cursor < actions.length) {
-      if (completed.length + errors.length > 0 && this.now() - batchStartedAtUnixMs >= limits.maxDurationMs) {
+      if (completed.length + errors.length > 0 && this.monotonicNow() - batchStartedAtMonotonicMs >= limits.maxDurationMs) {
         break;
       }
       const actionName = actions[cursor].action;
@@ -233,12 +237,13 @@ export class BrowserResourceGovernor {
       completed,
       errors,
       unexecuted: actions.slice(cursor),
-      duration_ms: this.now() - batchStartedAtUnixMs,
+      duration_ms: this.monotonicNow() - batchStartedAtMonotonicMs,
     };
   }
 
   async runCycle() {
     const cycleStartedAtUnixMs = this.now();
+    const cycleStartedAtMonotonicMs = this.monotonicNow();
     const sample = await this.memoryMonitor.sample();
     this.state.last_sample = sample;
     this.state.error = null;
@@ -295,7 +300,7 @@ export class BrowserResourceGovernor {
           : (sample.level === "normal" ? this.normalIntervalMs : this.pressureIntervalMs));
     this.state.last_cycle = {
       started_at: new Date(cycleStartedAtUnixMs).toISOString(),
-      duration_ms: this.now() - cycleStartedAtUnixMs,
+      duration_ms: this.monotonicNow() - cycleStartedAtMonotonicMs,
       snapshot_count: collection.snapshots.length,
       planned_action_count: plan.actions.length,
       completed_action_count: execution.completed.length,

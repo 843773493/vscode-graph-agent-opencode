@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import shutil
 from collections.abc import Callable, Iterator
 from dataclasses import replace
 from pathlib import Path
@@ -29,6 +28,7 @@ from app.services.infrastructure.rollout_context.checkpoint.saver import (
 )
 from tests.harness.python.run_context import TestRunContext
 from tests.support.fork_deadline import ForkDeadlineRegistry
+from tests.support.workspaces import prepare_test_workspace
 
 
 async def copy_rollout_snapshot(
@@ -92,27 +92,28 @@ async def copy_rollout_snapshot(
 
 
 @pytest.fixture(scope="module")
-def projection_workspace(request: pytest.FixtureRequest) -> Path:
-    context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
-    shutil.copytree(
-        Path.cwd() / "tests/fixtures/workspaces/model_tool_test_workspace",
-        context.workspace_root,
-        dirs_exist_ok=True,
+def projection_workspace_root(request: pytest.FixtureRequest) -> Path:
+    """为仅需会话存储的投影测试创建空工作区。"""
+    context = TestRunContext.from_test_file(Path(request.node.path))
+    workspace_root = prepare_test_workspace(
+        workspace_root=context.workspace_root,
+        template_root=context.project_root / "tests/fixtures/workspaces",
+        template_items=(),
     )
-    return context.workspace_root
+    context.prepare()
+    return workspace_root
 
 
 @pytest.fixture
 def projection_saver(
-    request: pytest.FixtureRequest,
-    projection_workspace: Path,
+    projection_workspace_root: Path,
     session_bundle_factory: Callable[[Path, str], Path],
 ) -> Iterator[tuple[RolloutCheckpointSaver, str, Path]]:
-    sessions = projection_workspace / ".boxteam/sessions"
+    sessions_root = projection_workspace_root / ".boxteam/sessions"
     session_id = f"ses_{create_uuid_hex()}"
-    session_bundle_factory(sessions, session_id)
+    session_bundle_factory(sessions_root, session_id)
     with RolloutCheckpointSaver(
-        sessions,
+        sessions_root,
     ) as saver:
         thread = saver._storage.storage.main_thread_id(session_id)
         owner_root = saver._storage.storage._path_resolver.resolve_thread_node(session_id, thread)

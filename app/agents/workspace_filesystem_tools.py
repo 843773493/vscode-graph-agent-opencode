@@ -24,7 +24,11 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from app.abstractions.resource_file_content import ResourceFileReader
 from app.agents.middleware_prompts import FILESYSTEM_TOOL_DESCRIPTIONS
-from app.core.resource_uri import ResourceUriGrammarError, parse_resource_uri
+from app.core.resource_uri import (
+    ParsedResourceUri,
+    ResourceUriGrammarError,
+    parse_resource_uri,
+)
 from app.core.trace_middleware import require_current_gateway_id
 from app.gateway.federation.errors import FederationError
 from app.schemas.internal_v2.resource_navigation import (
@@ -344,7 +348,7 @@ def configure_workspace_filesystem_tools(
         try:
             gateway_id = require_current_gateway_id("read_file")
             uri = resource_navigation.input_uri(path)
-            require_read_permission(uri)
+            require_read_permission(uri, parse_resource_uri(uri))
             result = resource_navigation.navigate_sync(ResourceNavigationRequest(
                 uri=uri, operation="read", read_format="auto", line_offset=line_offset,
                 max_lines=max_lines or DEFAULT_MAX_LINES, max_bytes=max_bytes,
@@ -362,12 +366,19 @@ def configure_workspace_filesystem_tools(
             return _path_error("read_file", runtime, error)
 
 
-    def require_read_permission(uri: str) -> None:
-        parsed = parse_resource_uri(uri)
-        if parsed.session_artifact_kind is not None:
+    def require_read_permission(
+        uri: str,
+        parsed_resource_uri: ParsedResourceUri,
+    ) -> None:
+        if parsed_resource_uri.session_artifact_kind is not None:
             # 会话产物沿原 owner 的精确 capability，不套用普通工作区路径规则。
             return
-        permission_path = "/" + "/".join(parsed.tail_segments[1:]) if parsed.scope == "workspace" and parsed.kind == "files" else uri
+        permission_path = (
+            "/" + "/".join(parsed_resource_uri.tail_segments[1:])
+            if parsed_resource_uri.scope == "workspace"
+            and parsed_resource_uri.kind == "files"
+            else uri
+        )
         if _check_fs_permission(middleware._permissions, "read", permission_path) == "deny":
             raise ResourceUriResolveError("capability_denied", "文件目标被当前工具读取规则拒绝")
 
@@ -383,7 +394,7 @@ def configure_workspace_filesystem_tools(
             gateway_id = require_current_gateway_id("read_file")
             async with asyncio.timeout(max(0, deadline - time.monotonic())):
                 uri = await asyncio.to_thread(resource_navigation.input_uri, path)
-                require_read_permission(uri)
+                require_read_permission(uri, parse_resource_uri(uri))
                 result = await resource_navigation.navigate(ResourceNavigationRequest(
                     uri=uri, operation="read", read_format="auto", line_offset=line_offset,
                     max_lines=max_lines or DEFAULT_MAX_LINES, max_bytes=max_bytes,
@@ -450,18 +461,36 @@ def configure_workspace_filesystem_tools(
     ) -> ResourceNavigationRequest:
         if tool_name == "glob":
             _validate_glob_pattern(pattern)
-        uri = resource_navigation.input_uri("." if path is None else path)
-        target = parse_resource_uri(uri)
-        if tool_name == "grep" and target.kind == "files" and (
-            ".boxteam" in target.tail_segments[1:] or
-            (target.scope == "workspace" and len(target.tail_segments) == 1 and (glob is None or "**" in glob))
+        resource_uri = resource_navigation.input_uri("." if path is None else path)
+        parsed_resource_uri = parse_resource_uri(resource_uri)
+        if (
+            tool_name == "grep"
+            and parsed_resource_uri.kind == "files"
+            and (
+                ".boxteam" in parsed_resource_uri.tail_segments[1:]
+                or (
+                    parsed_resource_uri.scope == "workspace"
+                    and len(parsed_resource_uri.tail_segments) == 1
+                    and (glob is None or "**" in glob)
+                )
+            )
         ):
-            raise _grep_scope_error(uri, glob)
-        require_read_permission(uri)
-        return ResourceNavigationRequest(uri=uri, operation="search", query=pattern,
-            search_mode="glob" if tool_name == "glob" else "content", file_glob=glob,
-            limit=limit, cursor=cursor, timeout_ms=timeout_ms, scan_limit=scan_limit,
-            max_response_bytes=max_response_bytes, max_bytes=max_bytes, max_snippet_bytes=max_snippet_bytes)
+            raise _grep_scope_error(resource_uri, glob)
+        require_read_permission(resource_uri, parsed_resource_uri)
+        return ResourceNavigationRequest(
+            uri=resource_uri,
+            operation="search",
+            query=pattern,
+            search_mode="glob" if tool_name == "glob" else "content",
+            file_glob=glob,
+            limit=limit,
+            cursor=cursor,
+            timeout_ms=timeout_ms,
+            scan_limit=scan_limit,
+            max_response_bytes=max_response_bytes,
+            max_bytes=max_bytes,
+            max_snippet_bytes=max_snippet_bytes,
+        )
 
     def search_message(
         tool_name: str, result: ResourceNavigationResultDTO, output_mode: GrepOutputMode,

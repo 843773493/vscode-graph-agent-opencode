@@ -37,7 +37,7 @@ from tests.integration.backend.sessions.itemized_projection_helpers import (
     projection_draft,
     projection_plan,
     projection_saver,
-    projection_workspace,
+    projection_workspace_root,
     register_projection_draft,
 )
 
@@ -45,7 +45,7 @@ __all__ = [
     "projection_draft",
     "projection_plan",
     "projection_saver",
-    "projection_workspace",
+    "projection_workspace_root",
 ]
 
 

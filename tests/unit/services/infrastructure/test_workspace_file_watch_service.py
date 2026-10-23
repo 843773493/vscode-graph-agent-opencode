@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import AsyncIterator, Awaitable, Callable
 from pathlib import Path
 
 import pytest
@@ -14,6 +15,11 @@ from app.services.infrastructure.workspace_file_watch_service import (
     WorkspaceFileChangeBatch,
     WorkspaceFileWatchService,
 )
+
+_WorkspaceWatchStarter = Callable[
+    [],
+    Awaitable[asyncio.Task[WorkspaceFileChangeBatch]],
+]
 
 
 def test_watch_roots_deduplicate_nested_shortcuts(tmp_path: Path) -> None:
@@ -39,6 +45,41 @@ def test_watch_roots_reject_filesystem_root(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="必须是绝对目录"):
         service.resolve_watch_roots(["relative/path"])
+
+
+@pytest.fixture
+async def live_workspace_watch(
+    tmp_path: Path,
+) -> AsyncIterator[
+    tuple[Path, _WorkspaceWatchStarter]
+]:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    service = WorkspaceFileWatchService(workspace_root=workspace)
+    streams: list[AsyncIterator[WorkspaceFileChangeBatch]] = []
+    pending_batches: list[asyncio.Task[WorkspaceFileChangeBatch]] = []
+
+    async def start_watching() -> asyncio.Task[WorkspaceFileChangeBatch]:
+        stream = service.subscribe([])
+        streams.append(stream)
+        next_batch = asyncio.create_task(anext(stream))
+        pending_batches.append(next_batch)
+        await asyncio.wait_for(
+            service.wait_until_ready(service.resolve_watch_roots([])),
+            timeout=10,
+        )
+        return next_batch
+
+    try:
+        yield workspace, start_watching
+    finally:
+        for next_batch in pending_batches:
+            if not next_batch.done():
+                next_batch.cancel()
+        await asyncio.gather(*pending_batches, return_exceptions=True)
+        for stream in streams:
+            await stream.aclose()
+        await service.shutdown()
 
 
 def test_watcher_filters_boxteam_runtime_before_watch_batches(tmp_path: Path) -> None:
@@ -76,111 +117,113 @@ def test_queue_overflow_is_reported_instead_of_silently_dropping() -> None:
     assert queue.get_nowait().error == "watch stopped"
 
 
+def test_internal_path_filter_is_shared_across_subscribers(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    internal_root = tmp_path / ".boxteam"
+    internal_change = WorkspaceFileChange(
+        kind="edit",
+        path=str(internal_root / "state.json"),
+    )
+    workspace_change = WorkspaceFileChange(
+        kind="edit",
+        path=str(tmp_path / "main.py"),
+    )
+    batch = WorkspaceFileChangeBatch(changes=(internal_change, workspace_change))
+    public_queue_a = _watch_queue()
+    public_queue_b = _watch_queue()
+    internal_queue = _watch_queue()
+    subscribers = {
+        public_queue_a: False,
+        public_queue_b: False,
+        internal_queue: True,
+    }
+    path_checks: list[str] = []
+    is_path_under = watch_module._is_path_under
+
+    def count_path_check(path: str, root: Path) -> bool:
+        path_checks.append(path)
+        return is_path_under(path, root)
+
+    monkeypatch.setattr(watch_module, "_is_path_under", count_path_check)
+
+    WorkspaceFileWatchService._publish(
+        subscribers,
+        batch,
+        internal_root=internal_root,
+    )
+
+    public_batch_a = public_queue_a.get_nowait()
+    public_batch_b = public_queue_b.get_nowait()
+    assert path_checks == [internal_change.path, workspace_change.path]
+    assert public_batch_a is public_batch_b
+    assert public_batch_a.changes == (workspace_change,)
+    assert internal_queue.get_nowait() is batch
+
+
 @pytest.mark.asyncio
-async def test_live_watcher_delivers_external_file_change(tmp_path: Path) -> None:
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-    service = WorkspaceFileWatchService(workspace_root=workspace)
-    stream = service.subscribe([])
-    try:
-        next_batch = asyncio.create_task(anext(stream))
-        while not service._watchers or not all(
-            watcher.ready.is_set() for watcher in service._watchers.values()
-        ):
-            await asyncio.sleep(0)
+async def test_live_watcher_delivers_external_file_change(
+    live_workspace_watch: tuple[Path, _WorkspaceWatchStarter],
+) -> None:
+    workspace, start_watching = live_workspace_watch
+    next_batch = await start_watching()
+    changed_file = workspace / "external.txt"
+    changed_file.write_text("changed", encoding="utf-8")
+    batch = await asyncio.wait_for(next_batch, timeout=2)
 
-        changed_file = workspace / "external.txt"
-        changed_file.write_text("changed", encoding="utf-8")
-        batch = await asyncio.wait_for(next_batch, timeout=2)
-
-        assert any(
-            change.kind == "create" and change.path == str(changed_file.resolve())
-            for change in batch.changes
-        )
-    finally:
-        await stream.aclose()
-        await service.shutdown()
+    assert any(
+        change.kind == "create" and change.path == str(changed_file.resolve())
+        for change in batch.changes
+    )
 
 
 @pytest.mark.asyncio
 async def test_live_watcher_preserves_lexical_path_when_file_becomes_symlink(
-    tmp_path: Path,
+    live_workspace_watch: tuple[Path, _WorkspaceWatchStarter],
 ) -> None:
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
+    workspace, start_watching = live_workspace_watch
     source = workspace / "same-name.txt"
     source.write_text("original", encoding="utf-8")
-    target = tmp_path / "external-target.txt"
+    target = workspace.parent / "external-target.txt"
     target.write_text("external", encoding="utf-8")
-    service = WorkspaceFileWatchService(workspace_root=workspace)
-    stream = service.subscribe([])
-    try:
-        next_batch = asyncio.create_task(anext(stream))
-        while not service._watchers or not all(
-            watcher.ready.is_set() for watcher in service._watchers.values()
-        ):
-            await asyncio.sleep(0)
+    next_batch = await start_watching()
+    source.unlink()
+    source.symlink_to(target)
+    batch = await asyncio.wait_for(next_batch, timeout=2)
 
-        source.unlink()
-        source.symlink_to(target)
-        batch = await asyncio.wait_for(next_batch, timeout=2)
-
-        assert any(change.path == str(source) for change in batch.changes)
-        assert all(change.path != str(target) for change in batch.changes)
-    finally:
-        await stream.aclose()
-        await service.shutdown()
+    assert any(change.path == str(source) for change in batch.changes)
+    assert all(change.path != str(target) for change in batch.changes)
 
 
 @pytest.mark.asyncio
 async def test_live_watcher_hides_internal_symlink_to_external_target(
-    tmp_path: Path,
+    live_workspace_watch: tuple[Path, _WorkspaceWatchStarter],
 ) -> None:
-    workspace = tmp_path / "workspace"
+    workspace, start_watching = live_workspace_watch
     internal = workspace / ".boxteam"
     internal.mkdir(parents=True)
-    target = tmp_path / "external-target.txt"
+    target = workspace.parent / "external-target.txt"
     target.write_text("external", encoding="utf-8")
-    service = WorkspaceFileWatchService(workspace_root=workspace)
-    stream = service.subscribe([])
-    try:
-        next_batch = asyncio.create_task(anext(stream))
-        while not service._watchers or not all(
-            watcher.ready.is_set() for watcher in service._watchers.values()
-        ):
-            await asyncio.sleep(0)
-
-        (internal / "external-link.txt").symlink_to(target)
-        with pytest.raises(asyncio.TimeoutError):
-            await asyncio.wait_for(next_batch, timeout=0.5)
-    finally:
-        await stream.aclose()
-        await service.shutdown()
+    next_batch = await start_watching()
+    (internal / "external-link.txt").symlink_to(target)
+    with pytest.raises(asyncio.TimeoutError):
+        await asyncio.wait_for(next_batch, timeout=0.5)
 
 
 @pytest.mark.asyncio
 async def test_live_watcher_ignores_workspace_internal_state(
-    tmp_path: Path,
+    live_workspace_watch: tuple[Path, _WorkspaceWatchStarter],
 ) -> None:
-    workspace = tmp_path / "workspace"
+    workspace, start_watching = live_workspace_watch
     internal = workspace / ".boxteam"
     internal.mkdir(parents=True)
-    service = WorkspaceFileWatchService(workspace_root=workspace)
-    stream = service.subscribe([])
-    try:
-        first_batch = asyncio.create_task(anext(stream))
-        while not service._watchers or not all(
-            watcher.ready.is_set() for watcher in service._watchers.values()
-        ):
-            await asyncio.sleep(0)
-        internal_file = internal / "rollout" / "index.sqlite-shm"
-        internal_file.parent.mkdir()
-        internal_file.write_bytes(b"internal")
-        with pytest.raises(asyncio.TimeoutError):
-            await asyncio.wait_for(first_batch, timeout=0.5)
-    finally:
-        await stream.aclose()
-        await service.shutdown()
+    first_batch = await start_watching()
+    internal_file = internal / "rollout" / "index.sqlite-shm"
+    internal_file.parent.mkdir()
+    internal_file.write_bytes(b"internal")
+    with pytest.raises(asyncio.TimeoutError):
+        await asyncio.wait_for(first_batch, timeout=0.5)
 
 
 def _watch_queue() -> asyncio.Queue[WorkspaceFileChangeBatch]:

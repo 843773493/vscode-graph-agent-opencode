@@ -19,11 +19,18 @@ from app.schemas.internal_v2.common import APIResponse
 router = APIRouter(dependencies=[Depends(verify_gateway_token)])
 
 
-def _require_native_owner(request: Request, registry: GatewayWorkspaceRegistry, workspace_id: str) -> None:
+def _require_native_owner(
+    request: Request,
+    registry: GatewayWorkspaceRegistry,
+    backend_workspace_id: str,
+) -> None:
     if request.client is None or request.client.host not in {"127.0.0.1", "::1"}:
         raise HTTPException(403, "原生根绑定只提供给同机文件 owner")
-    if not any(target.connection_kind == "local" and target.backend_workspace_id == workspace_id
-               for target in registry.targets()):
+    if not any(
+        target.connection_kind == "local"
+        and target.backend_workspace_id == backend_workspace_id
+        for target in registry.targets()
+    ):
         raise HTTPException(403, "文件 owner 不属于本 Gateway 的本机工作区")
 
 
@@ -33,7 +40,7 @@ def bind_native_directory(
     registry: Annotated[GatewayWorkspaceRegistry, Depends(get_registry)],
     request_id: Annotated[str, Depends(get_request_id)],
 ) -> APIResponse[NativeDirectoryBindingDTO]:
-    _require_native_owner(request, registry, workspace_id)
+    _require_native_owner(request, registry, backend_workspace_id=workspace_id)
     gateway_id = request.app.state.gateway_id
     directory_id = request.app.state.gateway_state.bind_native_directory(gateway_id=gateway_id, native_root=body.native_root)
     uri = resource_display_uri(scope="gateway", scope_id=gateway_id, kind="files", tail_segments=(directory_id,))
@@ -46,7 +53,7 @@ def resolve_native_directory(
     registry: Annotated[GatewayWorkspaceRegistry, Depends(get_registry)],
     request_id: Annotated[str, Depends(get_request_id)],
 ) -> APIResponse[NativeDirectoryResolveDTO]:
-    _require_native_owner(request, registry, workspace_id)
+    _require_native_owner(request, registry, backend_workspace_id=workspace_id)
     if gateway_id != request.app.state.gateway_id:
         raise HTTPException(409, "原生目录 Gateway owner 不符")
     try:

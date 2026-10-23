@@ -26,9 +26,13 @@ def runtime_context() -> tuple[MessageStreamStore, object, str, Path]:
         Path.cwd()
         / "out/tests/integration/backend/agents/test_turn_message_stream_runtime"
     )
-    if output_root.exists():
-        shutil.rmtree(output_root)
-    sessions_root = output_root / "workspace" / ".boxteam" / "sessions"
+    workspace_root = output_root / "workspace"
+    if workspace_root.exists():
+        shutil.rmtree(workspace_root)
+    resource_state_path = output_root / "runtime" / "resources.json"
+    resource_state_path.unlink(missing_ok=True)
+    resource_state_path.with_suffix(".tmp").unlink(missing_ok=True)
+    sessions_root = workspace_root / ".boxteam" / "sessions"
     resolver = get_session_path_resolver(sessions_root)
     resolver.initialize()
     # canonical session_id 必须是 UUIDv4 位 profile（第 13 位为 4、第 17 位属 8/9/a/b）
@@ -38,7 +42,7 @@ def runtime_context() -> tuple[MessageStreamStore, object, str, Path]:
         MessageStreamStore(path_resolver=resolver),
         resolver,
         session_id,
-        output_root,
+        resource_state_path,
     )
 
 
@@ -143,8 +147,8 @@ async def test_model_call_local_deadline_does_not_cancel_turn(
 async def test_resource_cancel_stop_and_crash_reconcile_are_independent(
     runtime_context: tuple[MessageStreamStore, object, str, Path],
 ) -> None:
-    _, _, _, output_root = runtime_context
-    manager = ExternalResourceLeaseLedger(state_path=output_root / "resources.json")
+    _, _, _, resource_state_path = runtime_context
+    manager = ExternalResourceLeaseLedger(state_path=resource_state_path)
     manager.register_external(
         resource_id="browser_1",
         kind="browser_context",
@@ -170,7 +174,7 @@ async def test_resource_cancel_stop_and_crash_reconcile_are_independent(
         turn_stream_id="stream_crashed",
         operation_id="call_1",
     )
-    restarted = ExternalResourceLeaseLedger(state_path=output_root / "resources.json")
+    restarted = ExternalResourceLeaseLedger(state_path=resource_state_path)
     records = restarted.reconcile({"browser_1": "stopped", "mcp_1": "running"})
     statuses = {record.resource_id: record.status for record in records}
     assert statuses["mcp_1"] == "recovered"

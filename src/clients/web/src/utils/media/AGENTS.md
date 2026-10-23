@@ -2,11 +2,23 @@
 
 `src/clients/web/src/utils/media/` 存放浏览器前端的“媒体附件”纯工具：一类把上传/粘贴进来的 `File` 判定为图片/视频/通用文件并构造 composer 可用的 `SelectedAttachment`（含 data URL 归一与兜底文件名/类型）；另一类把后端 `AttachmentRef` 归一为消息渲染用的媒体项与媒体类型（image/audio/video/file）。
 
+## 职责树
+
+```text
+media/
+├── mediaAttachments.ts          上传或粘贴的 File → Composer SelectedAttachment
+├── mediaAttachments.test.ts     文件名、类型、data URL 和剪贴板输入合同
+├── messageMedia.ts              后端 AttachmentRef → 消息展示用 MessageMediaItem
+└── messageMedia.test.ts         媒体分类与重复附件标识合同
+```
+
+按数据生命周期选择实现：进入 Composer 前的本地 `File` 处理走 `mediaAttachments`；消息已经持久化后的 `AttachmentRef` 展示归一走 `messageMedia`。两者输入来源和输出用途不同，不互相调用，也不合并成第二套附件 DTO。
+
 与相邻文件的边界：
 
 - `utils/fileTransferHost.ts`：工作区文件下载执行器（`FileTransferHost.downloadWorkspaceFile` 以 anchor 触发浏览器原生导航），服务于 `api/workspaceFilesystem.ts` 的下载链路，不含任何媒体类型判定，**不属于本包**。
 - `utils/selection/`：浏览器元素选择与工作区目录选择工具，与媒体附件无关。
-- `utils/markdown.ts`、`utils/workspaceMarkdown.ts`、`utils/skillMarkdown.ts`：Markdown 渲染与解析族，与媒体附件无关。
+- `utils/markdown/markdown.ts`、`utils/markdown/workspaceMarkdown.ts`、`utils/skillMarkdown.ts`：Markdown 渲染与解析族，与媒体附件无关。
 - `types/`：后端协议类型（如 `AttachmentRef`）的权威来源，本包只消费不定义。
 
 # 可修改内容

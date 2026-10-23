@@ -1,3 +1,7 @@
+import { createRemoteFrameRenderer } from "./remoteFrameRenderer.js";
+import { createLatestPointerMoveScheduler } from "./latestPointerMoveScheduler.js";
+import { createCanvasRectCache } from "./canvasRectCache.js";
+
 const BROWSER_ID = "uuid:12";
 const MIN_VIEWPORT = { width: 360, height: 240 };
 const DEFAULT_REMOTE_VIEWPORT_WIDTH = 1920;
@@ -28,7 +32,6 @@ let attached = false;
 let pendingDetach = false;
 let lastViewport = null;
 let viewportTimer = null;
-let frameSerial = 0;
 
 canvas.width = 1280;
 canvas.height = 800;
@@ -38,10 +41,19 @@ function clamp(value, min, max) {
   return Math.max(min, Math.min(max, value));
 }
 
-function setStatus(nextStatus, message) {
+function setStatus(nextStatus, statusMessage) {
   statusDot.className = `status-dot ${nextStatus}`;
-  statusText.textContent = message;
+  statusText.textContent = statusMessage;
 }
+
+const renderRemoteFrame = createRemoteFrameRenderer({
+  canvas,
+  context,
+  onFrameError: (error) => {
+    console.error(`[viewer] 远程屏幕帧处理失败: ${error.message}`);
+    setStatus("error", "远程屏幕帧处理失败");
+  },
+});
 
 function setAttachedState(nextAttached) {
   attached = nextAttached;
@@ -66,19 +78,33 @@ function socketUrl() {
   return `${protocol}//${window.location.host}/remote-screen`;
 }
 
-function send(message) {
+function sendViewerMessage(outboundMessage) {
   if (!socket || socket.readyState !== WebSocket.OPEN) {
     throw new Error("WebSocket 未连接，无法发送远程屏幕消息");
   }
-  socket.send(JSON.stringify(message));
+  socket.send(JSON.stringify(outboundMessage));
 }
 
-function sendIfAttached(message) {
-  if (!attached) {
+function sendIfAttached(outboundMessage) {
+  if (outboundMessage.type !== "pointer" || outboundMessage.action !== "move") {
+    pointerMoveScheduler.flush();
+  }
+  if (!attached || pendingDetach) {
     return;
   }
-  send({ browserId: BROWSER_ID, ...message });
+  sendViewerMessage({ browserId: BROWSER_ID, ...outboundMessage });
 }
+
+const pointerMoveScheduler = createLatestPointerMoveScheduler({
+  requestFrame: (callback) => window.requestAnimationFrame(callback),
+  cancelFrame: (frameId) => window.cancelAnimationFrame(frameId),
+  send: (pointerMove) => sendIfAttached({
+    type: "pointer",
+    action: "move",
+    button: "none",
+    ...pointerMove,
+  }),
+});
 
 function modifiersFromEvent(event) {
   return {
@@ -96,8 +122,14 @@ function pointerButtonName(button) {
   return "none";
 }
 
-function remotePointFromEvent(event) {
-  const rect = canvas.getBoundingClientRect();
+const canvasRectCache = createCanvasRectCache({
+  readRect: () => canvas.getBoundingClientRect(),
+  requestFrame: (callback) => window.requestAnimationFrame(callback),
+  cancelFrame: (frameId) => window.cancelAnimationFrame(frameId),
+});
+
+function remotePointFromEvent(event, refreshRect = false) {
+  const rect = refreshRect ? canvasRectCache.refresh() : canvasRectCache.getRect();
   if (rect.width <= 0 || rect.height <= 0) {
     throw new Error("canvas 尺寸无效，无法映射指针坐标");
   }
@@ -107,38 +139,22 @@ function remotePointFromEvent(event) {
   };
 }
 
-function command(name, extra = {}) {
+function sendBrowserCommand(commandName, commandOptions = {}) {
   sendIfAttached({
     type: "command",
-    name,
-    ...extra,
+    name: commandName,
+    ...commandOptions,
   });
 }
 
-function applyState(state) {
-  browserIdLabel.textContent = state.browserId;
+function applyBrowserState(browserState) {
+  browserIdLabel.textContent = browserState.browserId;
   if (document.activeElement !== addressInput) {
-    addressInput.value = state.url;
+    addressInput.value = browserState.url;
   }
-  pageTitle.textContent = state.title || "";
-  const streamingText = state.streaming ? "streaming" : "idle";
-  setStatus(attached ? "attached" : "detached", `${state.browserId} ${streamingText} ${state.viewport.width}x${state.viewport.height}`);
-}
-
-function drawFrame(message) {
-  const serial = ++frameSerial;
-  const image = new Image();
-  image.onload = () => {
-    if (serial !== frameSerial) {
-      return;
-    }
-    if (canvas.width !== message.width || canvas.height !== message.height) {
-      canvas.width = message.width;
-      canvas.height = message.height;
-    }
-    context.drawImage(image, 0, 0, canvas.width, canvas.height);
-  };
-  image.src = message.dataUrl;
+  pageTitle.textContent = browserState.title || "";
+  const streamingText = browserState.streaming ? "streaming" : "idle";
+  setStatus(attached ? "attached" : "detached", `${browserState.browserId} ${streamingText} ${browserState.viewport.width}x${browserState.viewport.height}`);
 }
 
 function computeViewport() {
@@ -154,15 +170,16 @@ function sameViewport(left, right) {
 }
 
 function sendViewportNow() {
-  if (!attached) {
+  if (!attached || pendingDetach) {
     return;
   }
+  pointerMoveScheduler.flush();
   const viewport = computeViewport();
   if (sameViewport(viewport, lastViewport)) {
     return;
   }
   lastViewport = viewport;
-  send({
+  sendViewerMessage({
     type: "viewport",
     browserId: BROWSER_ID,
     width: viewport.width,
@@ -170,64 +187,93 @@ function sendViewportNow() {
   });
 }
 
-function scheduleViewport() {
+function cancelViewportUpdate() {
   window.clearTimeout(viewportTimer);
-  viewportTimer = window.setTimeout(sendViewportNow, 80);
+  viewportTimer = null;
+}
+
+function scheduleViewport() {
+  if (!attached || pendingDetach) {
+    return;
+  }
+  cancelViewportUpdate();
+  viewportTimer = window.setTimeout(() => {
+    viewportTimer = null;
+    sendViewportNow();
+  }, 80);
 }
 
 function attach() {
   if (browserIdInput.value.trim() !== BROWSER_ID) {
     throw new Error(`只能 attach 到 ${BROWSER_ID}`);
   }
-  if (socket && socket.readyState === WebSocket.OPEN) {
-    throw new Error("WebSocket 已连接，不能重复 attach");
+  if (socket && socket.readyState !== WebSocket.CLOSED) {
+    setStatus("connecting", "远程屏幕连接正在处理中...");
+    return;
   }
 
   pendingDetach = false;
-  socket = new WebSocket(socketUrl());
+  const connectionSocket = new WebSocket(socketUrl());
+  socket = connectionSocket;
   setStatus("connecting", "正在连接...");
 
-  socket.addEventListener("open", () => {
-    send({ type: "attach", browserId: BROWSER_ID });
+  connectionSocket.addEventListener("open", () => {
+    if (socket !== connectionSocket) {
+      return;
+    }
+    sendViewerMessage({ type: "attach", browserId: BROWSER_ID });
   });
 
-  socket.addEventListener("message", (event) => {
-    const message = JSON.parse(event.data);
-    if (message.type === "attached") {
+  connectionSocket.addEventListener("message", (event) => {
+    if (socket !== connectionSocket) {
+      return;
+    }
+    const serverMessage = JSON.parse(event.data);
+    if (serverMessage.type === "attached") {
       setAttachedState(true);
-      applyState(message.state);
+      applyBrowserState(serverMessage.state);
       scheduleViewport();
       canvas.focus();
       return;
     }
-    if (message.type === "detached") {
+    if (serverMessage.type === "detached") {
+      cancelViewportUpdate();
+      pointerMoveScheduler.clear();
       setAttachedState(false);
-      applyState(message.state);
+      applyBrowserState(serverMessage.state);
       pendingDetach = true;
-      socket.close(1000, "detached");
+      connectionSocket.close(1000, "detached");
       return;
     }
-    if (message.type === "frame") {
-      drawFrame(message);
+    if (serverMessage.type === "frame") {
+      renderRemoteFrame(serverMessage);
       return;
     }
-    if (message.type === "state") {
-      applyState(message.state);
+    if (serverMessage.type === "state") {
+      applyBrowserState(serverMessage.state);
       return;
     }
-    if (message.type === "commandResult") {
-      applyState(message.state);
-      setStatus("attached", message.output || "命令已完成");
+    if (serverMessage.type === "commandResult") {
+      applyBrowserState(serverMessage.state);
+      setStatus("attached", serverMessage.output || "命令已完成");
       return;
     }
-    if (message.type === "error") {
-      setStatus("error", message.message);
+    if (serverMessage.type === "error") {
+      setStatus("error", serverMessage.message);
+      if (pendingDetach) {
+        connectionSocket.close(1000, "detach failed");
+      }
       return;
     }
-    throw new Error(`未知服务端消息类型: ${message.type}`);
+    throw new Error(`未知服务端消息类型: ${serverMessage.type}`);
   });
 
-  socket.addEventListener("close", () => {
+  connectionSocket.addEventListener("close", () => {
+    if (socket !== connectionSocket) {
+      return;
+    }
+    cancelViewportUpdate();
+    pointerMoveScheduler.clear();
     setAttachedState(false);
     socket = null;
     lastViewport = null;
@@ -237,14 +283,23 @@ function attach() {
     pendingDetach = false;
   });
 
-  socket.addEventListener("error", () => {
+  connectionSocket.addEventListener("error", () => {
+    if (socket !== connectionSocket) {
+      return;
+    }
+    cancelViewportUpdate();
     setStatus("error", "WebSocket 连接错误");
   });
 }
 
 function detach() {
+  if (pendingDetach) {
+    return;
+  }
+  cancelViewportUpdate();
+  pointerMoveScheduler.flush();
   pendingDetach = true;
-  send({ type: "detach", browserId: BROWSER_ID });
+  sendViewerMessage({ type: "detach", browserId: BROWSER_ID });
 }
 
 attachToggle.addEventListener("click", () => {
@@ -257,25 +312,25 @@ attachToggle.addEventListener("click", () => {
 
 urlForm.addEventListener("submit", (event) => {
   event.preventDefault();
-  command("goto", { url: addressInput.value.trim() });
+  sendBrowserCommand("goto", { url: addressInput.value.trim() });
 });
 
-backButton.addEventListener("click", () => command("back"));
-forwardButton.addEventListener("click", () => command("forward"));
-reloadButton.addEventListener("click", () => command("reload"));
-stopButton.addEventListener("click", () => command("stop"));
+backButton.addEventListener("click", () => sendBrowserCommand("back"));
+forwardButton.addEventListener("click", () => sendBrowserCommand("forward"));
+reloadButton.addEventListener("click", () => sendBrowserCommand("reload"));
+stopButton.addEventListener("click", () => sendBrowserCommand("stop"));
 devtoolsButton.addEventListener("click", () => {
   window.open(`${window.location.origin}/devtools/page`, "_blank", "noopener,noreferrer");
 });
 
 canvas.addEventListener("pointerdown", (event) => {
-  if (!attached) {
+  if (!attached || pendingDetach) {
     return;
   }
   event.preventDefault();
   canvas.focus();
   canvas.setPointerCapture(event.pointerId);
-  const point = remotePointFromEvent(event);
+  const point = remotePointFromEvent(event, true);
   sendIfAttached({
     type: "pointer",
     action: "down",
@@ -287,15 +342,12 @@ canvas.addEventListener("pointerdown", (event) => {
 });
 
 canvas.addEventListener("pointermove", (event) => {
-  if (!attached) {
+  if (!attached || pendingDetach) {
     return;
   }
   event.preventDefault();
   const point = remotePointFromEvent(event);
-  sendIfAttached({
-    type: "pointer",
-    action: "move",
-    button: "none",
+  pointerMoveScheduler.schedule({
     x: point.x,
     y: point.y,
     modifiers: modifiersFromEvent(event),
@@ -303,14 +355,14 @@ canvas.addEventListener("pointermove", (event) => {
 });
 
 canvas.addEventListener("pointerup", (event) => {
-  if (!attached) {
+  if (!attached || pendingDetach) {
     return;
   }
   event.preventDefault();
   if (canvas.hasPointerCapture(event.pointerId)) {
     canvas.releasePointerCapture(event.pointerId);
   }
-  const point = remotePointFromEvent(event);
+  const point = remotePointFromEvent(event, true);
   sendIfAttached({
     type: "pointer",
     action: "up",
@@ -322,11 +374,11 @@ canvas.addEventListener("pointerup", (event) => {
 });
 
 canvas.addEventListener("wheel", (event) => {
-  if (!attached) {
+  if (!attached || pendingDetach) {
     return;
   }
   event.preventDefault();
-  const point = remotePointFromEvent(event);
+  const point = remotePointFromEvent(event, true);
   sendIfAttached({
     type: "pointer",
     action: "wheel",
@@ -340,7 +392,7 @@ canvas.addEventListener("wheel", (event) => {
 }, { passive: false });
 
 canvas.addEventListener("keydown", (event) => {
-  if (!attached) {
+  if (!attached || pendingDetach) {
     return;
   }
   event.preventDefault();
@@ -357,7 +409,7 @@ canvas.addEventListener("keydown", (event) => {
 });
 
 canvas.addEventListener("keyup", (event) => {
-  if (!attached) {
+  if (!attached || pendingDetach) {
     return;
   }
   event.preventDefault();
@@ -373,7 +425,7 @@ canvas.addEventListener("keyup", (event) => {
 });
 
 canvas.addEventListener("paste", (event) => {
-  if (!attached) {
+  if (!attached || pendingDetach) {
     return;
   }
   event.preventDefault();
@@ -388,10 +440,22 @@ canvas.addEventListener("contextmenu", (event) => {
   event.preventDefault();
 });
 
-new ResizeObserver(scheduleViewport).observe(screenScroll);
+const screenGeometryObserver = new ResizeObserver(() => {
+  canvasRectCache.scheduleRefresh();
+  scheduleViewport();
+});
+screenGeometryObserver.observe(screenScroll);
+screenGeometryObserver.observe(canvas);
+screenScroll.addEventListener("scroll", canvasRectCache.scheduleRefresh, { passive: true });
+window.addEventListener("scroll", canvasRectCache.scheduleRefresh, { capture: true, passive: true });
+window.addEventListener("resize", canvasRectCache.scheduleRefresh);
+canvasRectCache.refresh();
 window.addEventListener("beforeunload", () => {
+  cancelViewportUpdate();
+  canvasRectCache.dispose();
+  pointerMoveScheduler.flush();
   if (attached && socket?.readyState === WebSocket.OPEN) {
-    socket.send(JSON.stringify({ type: "detach", browserId: BROWSER_ID }));
+    sendViewerMessage({ type: "detach", browserId: BROWSER_ID });
   }
 });
 

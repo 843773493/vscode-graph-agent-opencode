@@ -1,13 +1,35 @@
-import type { PointerEvent as ReactPointerEvent } from "react";
-import GatewayLogPanel from "../panels/bottomPanel/GatewayLogPanel";
-import AutomationPanel from "../panels/bottomPanel/AutomationPanel";
-import PortForwardPanel from "../panels/bottomPanel/PortForwardPanel";
-import TerminalPanel from "../panels/bottomPanel/TerminalPanel";
+import { lazy, Suspense, type PointerEvent as ReactPointerEvent } from "react";
 import type { SessionGeneratorResourcesController } from "../../hooks/sessionResourceExplorer/useSessionGeneratorResources";
 import type { WorkspaceTerminalController } from "../../hooks/workspace/useWorkspaceTerminalResources";
 import type { ResourceThreadRef } from "../../api/workspaceResources";
 import type { WorkspaceBottomPanelState } from "../../state/workspaceBottomPanel";
 import type { GatewayWorkspace } from "../../types/backend";
+
+const GatewayLogPanel = lazy(() => import("../panels/bottomPanel/GatewayLogPanel"));
+const AutomationPanel = lazy(() => import("../panels/bottomPanel/AutomationPanel"));
+const PortForwardPanel = lazy(() => import("../panels/bottomPanel/PortForwardPanel"));
+const TerminalPanel = lazy(() => import("../panels/bottomPanel/TerminalPanel"));
+
+function BottomPanelLoading({ height }: { height: number }) {
+  return (
+    <div
+      role="status"
+      aria-live="polite"
+      style={{
+        flexBasis: `${height}px`,
+        minHeight: 190,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        borderTop: "1px solid var(--bt-panel-border)",
+        background: "var(--bt-bottom-panel-background)",
+        color: "var(--bt-text-muted)",
+      }}
+    >
+      正在加载底部面板…
+    </div>
+  );
+}
 
 interface WorkbenchBottomPanelProps {
   visible: boolean;
@@ -75,63 +97,65 @@ export default function WorkbenchBottomPanel({
         onPointerDown={onStartResize}
         onDoubleClick={onResetHeight}
       />
-      {state.tab === "terminal" ? (
-        <TerminalPanel
-          controller={terminalController}
-          currentThread={terminalThread}
-          threadTargetUnavailable={terminalThreadTargetUnavailable}
-          workspaceId={workspaceId}
-          workspaceName={workspaceName}
-          selectedTerminalId={state.terminalId}
-          height={state.height}
-          onSelectTerminal={(terminalId) => onUpdateState({
-            tab: "terminal",
-            terminalId,
-          })}
-          onSwitchToOutput={() => switchTab("output")}
-          onSwitchToPorts={() => switchTab("ports")}
-          onSwitchToAutomation={() => switchTab("automation")}
-          onClose={close}
-        />
-      ) : state.tab === "ports" ? (
-        <PortForwardPanel
-          apiPort={apiPort}
-          workspace={workspace}
-          height={state.height}
-          onSwitchToTerminal={() => switchTab("terminal")}
-          onSwitchToOutput={() => switchTab("output")}
-          onSwitchToAutomation={() => switchTab("automation")}
-          onClose={close}
-        />
-      ) : state.tab === "automation" ? (
-        <AutomationPanel
-          apiPort={apiPort}
-          generatorResources={generatorResources}
-          workspaces={workspaces}
-          activeWorkspaceId={workspaceId}
-          currentSessionId={currentSessionId}
-          workspaceName={workspace?.name ?? workspaceName}
-          height={state.height}
-          onStatusChange={onStatusChange}
-          onOpenConnectionManager={onOpenConnectionManager}
-          onReconnectWorkspace={onReconnectWorkspace}
-          onStartWorkspace={onStartWorkspace}
-          onSwitchToTerminal={() => switchTab("terminal")}
-          onSwitchToOutput={() => switchTab("output")}
-          onSwitchToPorts={() => switchTab("ports")}
-          onClose={close}
-        />
-      ) : (
-        <GatewayLogPanel
-          apiPort={apiPort}
-          workspaceId={workspaceId}
-          height={state.height}
-          onOpenTerminal={() => switchTab("terminal")}
-          onOpenPorts={() => switchTab("ports")}
-          onOpenAutomation={() => switchTab("automation")}
-          onClose={close}
-        />
-      )}
+      <Suspense fallback={<BottomPanelLoading height={state.height} />}>
+        {state.tab === "terminal" ? (
+          <TerminalPanel
+            controller={terminalController}
+            currentThread={terminalThread}
+            threadTargetUnavailable={terminalThreadTargetUnavailable}
+            workspaceId={workspaceId}
+            workspaceName={workspaceName}
+            selectedTerminalId={state.terminalId}
+            height={state.height}
+            onSelectTerminal={(terminalId) => onUpdateState({
+              tab: "terminal",
+              terminalId,
+            })}
+            onSwitchToOutput={() => switchTab("output")}
+            onSwitchToPorts={() => switchTab("ports")}
+            onSwitchToAutomation={() => switchTab("automation")}
+            onClose={close}
+          />
+        ) : state.tab === "ports" ? (
+          <PortForwardPanel
+            apiPort={apiPort}
+            workspace={workspace}
+            height={state.height}
+            onSwitchToTerminal={() => switchTab("terminal")}
+            onSwitchToOutput={() => switchTab("output")}
+            onSwitchToAutomation={() => switchTab("automation")}
+            onClose={close}
+          />
+        ) : state.tab === "automation" ? (
+          <AutomationPanel
+            apiPort={apiPort}
+            generatorResources={generatorResources}
+            workspaces={workspaces}
+            activeWorkspaceId={workspaceId}
+            currentSessionId={currentSessionId}
+            workspaceName={workspace?.name ?? workspaceName}
+            height={state.height}
+            onStatusChange={onStatusChange}
+            onOpenConnectionManager={onOpenConnectionManager}
+            onReconnectWorkspace={onReconnectWorkspace}
+            onStartWorkspace={onStartWorkspace}
+            onSwitchToTerminal={() => switchTab("terminal")}
+            onSwitchToOutput={() => switchTab("output")}
+            onSwitchToPorts={() => switchTab("ports")}
+            onClose={close}
+          />
+        ) : (
+          <GatewayLogPanel
+            apiPort={apiPort}
+            workspaceId={workspaceId}
+            height={state.height}
+            onOpenTerminal={() => switchTab("terminal")}
+            onOpenPorts={() => switchTab("ports")}
+            onOpenAutomation={() => switchTab("automation")}
+            onClose={close}
+          />
+        )}
+      </Suspense>
     </>
   );
 }

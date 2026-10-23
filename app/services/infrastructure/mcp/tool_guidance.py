@@ -20,6 +20,7 @@ from app.services.infrastructure.mcp.extension_catalog import payload_digest
 MAX_GUIDANCE_DESCRIPTION_LENGTH = 200
 MAX_GUIDANCE_ARGS_FIELDS = 8
 MAX_GUIDANCE_ARGS_SUMMARY_LENGTH = 120
+_CONTROL_CHARACTER_TRANSLATION = str.maketrans(dict.fromkeys((*range(0x20), 0x7F), " "))
 
 
 class McpToolGuidanceError(RuntimeError):
@@ -28,9 +29,7 @@ class McpToolGuidanceError(RuntimeError):
 
 def _sanitize_untrusted_text(value: str, *, max_length: int) -> str:
     """不可信外部文本：控制字符清洗 + 确定性长度截断。"""
-    cleaned = "".join(
-        " " if (ord(char) < 0x20 or ord(char) == 0x7F) else char for char in value
-    )
+    cleaned = value.translate(_CONTROL_CHARACTER_TRANSLATION)
     return cleaned.strip()[:max_length]
 
 
@@ -134,12 +133,14 @@ class McpToolGuidanceProducer:
             else {}
         )
         current = {entry.tool_id: entry for entry in entries}
-        added = tuple(sorted(set(current) - set(previous_entries)))
-        removed = tuple(sorted(set(previous_entries) - set(current)))
+        current_tool_ids = current.keys()
+        previous_tool_ids = previous_entries.keys()
+        added = tuple(sorted(current_tool_ids - previous_tool_ids))
+        removed = tuple(sorted(previous_tool_ids - current_tool_ids))
         modified = tuple(
             sorted(
                 tool_id
-                for tool_id in set(current) & set(previous_entries)
+                for tool_id in current_tool_ids & previous_tool_ids
                 if current[tool_id] != previous_entries[tool_id]
             )
         )

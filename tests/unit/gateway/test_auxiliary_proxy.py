@@ -198,7 +198,6 @@ async def test_auxiliary_stream_releases_upstream_under_anyio_cancellation() -> 
 @pytest.mark.asyncio
 async def test_auxiliary_http_releases_reference_when_registry_raises_runtime(
     registry: GatewayWorkspaceRegistry,
-    tmp_path,
 ) -> None:
     """registry 权威拒绝（RuntimeError）必须归还引用并显式失败，不得泄漏。"""
 

@@ -10,14 +10,14 @@ export class LatestPointerMoveDispatcher {
     this.supersededMoveCount = 0;
   }
 
-  offer(message) {
+  offer(pointerMoveMessage) {
     if (this.closed) {
       return;
     }
     if (this.pendingPointerMove !== null) {
       this.supersededMoveCount += 1;
     }
-    this.pendingPointerMove = message;
+    this.pendingPointerMove = pointerMoveMessage;
     this.start();
   }
 
@@ -47,9 +47,9 @@ export class LatestPointerMoveDispatcher {
 
   async drain() {
     while (this.pendingPointerMove !== null && !this.closed) {
-      const pointerMove = this.pendingPointerMove;
+      const pointerMoveMessage = this.pendingPointerMove;
       this.pendingPointerMove = null;
-      await this.dispatchPointerMove(pointerMove);
+      await this.dispatchPointerMove(pointerMoveMessage);
     }
   }
 }

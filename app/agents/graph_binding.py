@@ -211,14 +211,6 @@ class GraphFactoryRegistry:
 
     def resolve(self, binding: GraphBinding) -> GraphFactoryBuilder:
         """按四元组逐字段解析 factory；任何不匹配都显式失败，不回退。"""
-        registered_graph_ids = self.registered_graph_ids()
-        if binding.graph_id not in registered_graph_ids:
-            raise GraphBindingUnavailableError(
-                "graph_binding_unavailable: registry 中不存在该 graph_id 的 "
-                f"factory: 期望 graph_id={binding.graph_id!r}, "
-                f"实际已注册 graph_id={list(registered_graph_ids)}；"
-                f"binding: {_binding_summary(binding)}"
-            )
         entry = self._entries.get((binding.graph_id, binding.graph_revision))
         if entry is None:
             available_revisions = sorted(
@@ -226,6 +218,14 @@ class GraphFactoryRegistry:
                 for graph_id, revision in self._entries
                 if graph_id == binding.graph_id
             )
+            if not available_revisions:
+                registered_graph_ids = self.registered_graph_ids()
+                raise GraphBindingUnavailableError(
+                    "graph_binding_unavailable: registry 中不存在该 graph_id 的 "
+                    f"factory: 期望 graph_id={binding.graph_id!r}, "
+                    f"实际已注册 graph_id={list(registered_graph_ids)}；"
+                    f"binding: {_binding_summary(binding)}"
+                )
             raise GraphBindingUnavailableError(
                 "graph_binding_unavailable: graph revision 不匹配，不回退到其它 "
                 f"revision: 期望 graph_revision={binding.graph_revision}, "

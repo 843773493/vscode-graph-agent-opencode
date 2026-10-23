@@ -12,7 +12,8 @@ from __future__ import annotations
 from typing import Any
 
 import httpx
-from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+
+from app.runtime.litellm_runtime import AsyncHTTPHandler, HTTPHandler
 
 
 def _no_proxy_httpx_sync() -> httpx.Client:

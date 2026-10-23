@@ -26,7 +26,6 @@ from tests.support.catalog_session_bundle import (
     CatalogSessionBundleSpec,
     seed_catalog_session,
 )
-from tests.support.workspaces import prepare_default_test_workspace
 
 _UUID7_TEST_OUTPUT_ROOT = Path("out/tests/unit/core/test_identifier_uuidv7_monotonic")
 
@@ -36,11 +35,11 @@ def isolated_uuid7_workspace(request: pytest.FixtureRequest) -> Path:
     workspace_root = (
         Path.cwd() / _UUID7_TEST_OUTPUT_ROOT / "workspace" / request.node.name
     )
-    template_root = Path.cwd() / "tests/fixtures/workspaces/default_test_workspace"
-    return prepare_default_test_workspace(
-        workspace_root=workspace_root,
-        template_root=template_root,
-    )
+    if workspace_root.exists():
+        shutil.rmtree(workspace_root)
+    workspace_root.mkdir(parents=True)
+    (workspace_root / ".boxteam").mkdir()
+    return workspace_root
 
 
 def _ms_groups(hex_ids: list[str]) -> dict[str, list[str]]:

@@ -1,12 +1,11 @@
 import { describe, expect, test } from "bun:test";
-import React from "react";
-import { act, create, type ReactTestRenderer } from "react-test-renderer";
+import { act } from "react-test-renderer";
+import {
+  attachFakeScrollList,
+  mountHookProbe,
+  type FakeScrollList,
+} from "./eventQueueHookTestFixture";
 import { useEventQueuePagination } from "./useEventQueuePagination";
-
-interface FakeList {
-  scrollHeight: number;
-  scrollTop: number;
-}
 
 interface PaginationOptions {
   active: boolean;
@@ -28,8 +27,6 @@ function deferredNumber(): DeferredNumber {
 
 function mountPagination(initialScopeKey: string) {
   let options: PaginationOptions = { active: true, scopeKey: initialScopeKey };
-  let latest: ReturnType<typeof useEventQueuePagination> | undefined;
-  let renderer: ReactTestRenderer | undefined;
   const requests: DeferredNumber[] = [];
   const onLoadOlderHistory = () => {
     const request = deferredNumber();
@@ -37,35 +34,26 @@ function mountPagination(initialScopeKey: string) {
     return request.promise;
   };
 
-  function Probe(): React.ReactNode {
-    latest = useEventQueuePagination({
-      ...options,
-      displayItemCount: 1,
-      historyLoading: false,
-      historyLoadingOlder: false,
-      historyHasMore: true,
-      onLoadOlderHistory,
-    });
-    return null;
-  }
-
-  act(() => {
-    renderer = create(<Probe />);
-  });
+  const probe = mountHookProbe(() => useEventQueuePagination({
+    ...options,
+    displayItemCount: 1,
+    historyLoading: false,
+    historyLoadingOlder: false,
+    historyHasMore: true,
+    onLoadOlderHistory,
+  }));
 
   return {
-    hook: () => latest!,
+    hook: () => probe.current,
     requests,
-    attachList(list: FakeList) {
-      (latest!.listRef as unknown as { current: FakeList | null }).current = list;
+    attachList(list: FakeScrollList) {
+      attachFakeScrollList(probe.current.listRef, list);
     },
     updateScope(scopeKey: string) {
       options = { ...options, scopeKey };
-      act(() => renderer!.update(<Probe />));
+      probe.rerender();
     },
-    unmount() {
-      act(() => renderer!.unmount());
-    },
+    unmount: probe.unmount,
   };
 }
 

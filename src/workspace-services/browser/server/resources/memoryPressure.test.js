@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import path from "node:path";
 import {
   BrowserMemoryPressureMonitor,
   classifyMemoryPressure,
@@ -9,15 +10,15 @@ function createLinuxMemoryMonitor(reading) {
     platform: "linux",
     now: () => 1_000,
     pathExists: (filePath) => filePath === "/sys/fs/cgroup/cgroup.controllers"
-      || filePath === `/sys/fs/cgroup/${reading.directoryName}/memory.max`,
+      || filePath === path.join("/sys/fs/cgroup", reading.directoryName, "memory.max"),
     readText: async (filePath) => {
-      const directory = `/sys/fs/cgroup/${reading.directoryName}`;
+      const directory = path.join("/sys/fs/cgroup", reading.directoryName);
       const files = {
         "/proc/meminfo": "MemTotal: 1000000 kB\nMemAvailable: 600000 kB\n",
         "/proc/self/cgroup": `0::/${reading.directoryName}\n`,
-        [`${directory}/memory.max`]: reading.memoryMax,
-        [`${directory}/memory.current`]: "400",
-        [`${directory}/memory.events`]: `high 0\noom 0\noom_kill ${reading.oomKillCount}\n`,
+        [path.join(directory, "memory.max")]: reading.memoryMax,
+        [path.join(directory, "memory.current")]: "400",
+        [path.join(directory, "memory.events")]: `high 0\noom 0\noom_kill ${reading.oomKillCount}\n`,
       };
       if (!(filePath in files)) throw new Error(`测试未提供内存观测文件: ${filePath}`);
       return files[filePath];
@@ -48,7 +49,7 @@ describe("浏览器内存压力", () => {
     const result = classifyMemoryPressure({
       usedRatio: 0.4,
       eventDelta: { oom_kill: 1 },
-      nowUnixMs: 1_000,
+      nowMonotonicMs: 1_000,
     });
     expect(result.level).toBe("emergency");
   });
@@ -57,37 +58,37 @@ describe("浏览器内存压力", () => {
     const first = classifyMemoryPressure({
       usedRatio: 0.5,
       previousLevel: "emergency",
-      nowUnixMs: 1_000,
+      nowMonotonicMs: 1_000,
     });
     const second = classifyMemoryPressure({
       usedRatio: 0.5,
       previousLevel: first.level,
-      exitCandidateSinceUnixMs: first.exitCandidateSinceUnixMs,
-      nowUnixMs: 11_001,
+      exitCandidateSinceMonotonicMs: first.exitCandidateSinceMonotonicMs,
+      nowMonotonicMs: 11_001,
     });
     const third = classifyMemoryPressure({
       usedRatio: 0.5,
       previousLevel: second.level,
-      exitCandidateSinceUnixMs: second.exitCandidateSinceUnixMs,
-      nowUnixMs: 11_002,
+      exitCandidateSinceMonotonicMs: second.exitCandidateSinceMonotonicMs,
+      nowMonotonicMs: 11_002,
     });
     const fourth = classifyMemoryPressure({
       usedRatio: 0.5,
       previousLevel: third.level,
-      exitCandidateSinceUnixMs: third.exitCandidateSinceUnixMs,
-      nowUnixMs: 31_003,
+      exitCandidateSinceMonotonicMs: third.exitCandidateSinceMonotonicMs,
+      nowMonotonicMs: 31_003,
     });
     const fifth = classifyMemoryPressure({
       usedRatio: 0.5,
       previousLevel: fourth.level,
-      exitCandidateSinceUnixMs: fourth.exitCandidateSinceUnixMs,
-      nowUnixMs: 31_004,
+      exitCandidateSinceMonotonicMs: fourth.exitCandidateSinceMonotonicMs,
+      nowMonotonicMs: 31_004,
     });
     const sixth = classifyMemoryPressure({
       usedRatio: 0.5,
       previousLevel: fifth.level,
-      exitCandidateSinceUnixMs: fifth.exitCandidateSinceUnixMs,
-      nowUnixMs: 61_005,
+      exitCandidateSinceMonotonicMs: fifth.exitCandidateSinceMonotonicMs,
+      nowMonotonicMs: 61_005,
     });
     expect(first.level).toBe("emergency");
     expect(second.level).toBe("critical");
@@ -107,7 +108,7 @@ describe("浏览器内存压力", () => {
     reading.directoryName = "second";
     reading.oomKillCount = 20;
     const switched = await monitor.sample();
-    expect(switched.cgroup.directory).toBe("/sys/fs/cgroup/second");
+    expect(switched.cgroup.directory).toBe(path.join("/sys/fs/cgroup", "second"));
     expect(switched.event_delta).toEqual({});
     expect(switched.level).toBe("normal");
 
@@ -144,3 +145,54 @@ describe("浏览器内存压力", () => {
     expect(newEvent.level).toBe("emergency");
   });
 });
+
+for (const platform of ["linux", "win32", "darwin"]) {
+  const pressureExits = [
+    ["emergency", 0.95, 10_000, "critical"],
+    ["critical", 0.90, 20_000, "warning"],
+    ["warning", 0.80, 30_000, "normal"],
+  ].flatMap((entry) => [-60_000, 0, 60_000].map((jump) => [...entry, jump]));
+
+  test.each(pressureExits)(
+    `${platform}：%s（初始用量 %d）稳定 %d ms 后降为 %s，系统校时 %d ms`,
+    async (initialLevel, initialUsedRatio, stableMs, nextLevel, wallClockJumpMs) => {
+      let sampledAtUnixMs = Date.parse("2026-10-20T00:00:00.000Z");
+      let sampledAtMonotonicMs = 1_000;
+      let usedRatio = initialUsedRatio;
+      const monitor = new BrowserMemoryPressureMonitor({
+        platform,
+        now: () => sampledAtUnixMs,
+        monotonicNow: () => sampledAtMonotonicMs,
+        totalMemory: () => 1_000_000,
+        freeMemory: () => 1_000_000 * (1 - usedRatio),
+        pathExists: () => false,
+        readText: async (filePath) => {
+          expect(filePath).toBe("/proc/meminfo");
+          return `MemTotal: 1000000 kB\nMemAvailable: ${Math.round(1_000_000 * (1 - usedRatio))} kB\n`;
+        },
+      });
+      expect((await monitor.sample()).level).toBe(initialLevel);
+
+      usedRatio = 0.5;
+      sampledAtUnixMs += 1_000;
+      sampledAtMonotonicMs += 1_000;
+      const firstLowSample = await monitor.sample();
+      expect(firstLowSample.level).toBe(initialLevel);
+      expect(firstLowSample.raw_level).toBe("normal");
+      expect(firstLowSample.sampled_at).toBe(new Date(sampledAtUnixMs).toISOString());
+
+      sampledAtUnixMs += stableMs - 1 + wallClockJumpMs;
+      sampledAtMonotonicMs += stableMs - 1;
+      const beforeStable = await monitor.sample();
+      expect(beforeStable.level).toBe(initialLevel);
+      expect(beforeStable.sampled_at).toBe(new Date(sampledAtUnixMs).toISOString());
+
+      sampledAtUnixMs += 1;
+      sampledAtMonotonicMs += 1;
+      const stable = await monitor.sample();
+      expect(stable.level).toBe(nextLevel);
+      expect(stable.raw_level).toBe("normal");
+      expect(stable.sampled_at).toBe(new Date(sampledAtUnixMs).toISOString());
+    },
+  );
+}

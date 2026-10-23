@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import { once } from "node:events";
+import { performance } from "node:perf_hooks";
 import net from "node:net";
 
 import {
@@ -61,9 +62,9 @@ export async function waitForGateway({
   if (typeof url !== "string" || url.length === 0) {
     throw new TypeError("Gateway 健康检查 URL 必须是非空字符串");
   }
-  const deadline = Date.now() + timeoutMs;
+  const deadline = performance.now() + timeoutMs;
   let lastError = null;
-  while (Date.now() < deadline) {
+  while (performance.now() < deadline) {
     try {
       const response = await fetchImpl(url);
       if (response.ok) return;

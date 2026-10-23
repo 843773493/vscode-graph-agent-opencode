@@ -273,7 +273,11 @@ async def test_real_double_mount_requests_compilation_and_reverse_cleanup(
                 assert (await container.session_service.get(pair[0])).workspace_id == container.workspace_id
                 with pytest.raises(KeyError):
                     other.session_service.path_resolver.get_node(pair[0])
-                activity = container.workspace_activity_service.store.list_activity()
+                activity = (
+                    container.workspace_activity_service.store
+                    .read_activity_page()
+                    .records
+                )
                 assert [(record.session_id, record.status) for record in activity] == [(pair[0], "completed")]
     assert_closed(case)
 

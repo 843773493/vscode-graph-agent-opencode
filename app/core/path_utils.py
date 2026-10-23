@@ -402,14 +402,20 @@ def resolve_native_file_path(
         raise ValueError("文件路径不能包含 NUL 字符")
     if os.name != "nt" and PureWindowsPath(value).drive:
         raise ValueError("Windows 盘符或 UNC 路径必须交给 Windows 目标解释")
-    base = base_path.resolve()
-    native = Path(value).expanduser()
-    if native.drive and not native.is_absolute():
+    resolved_base = base_path.resolve()
+    requested_path = Path(value).expanduser()
+    if requested_path.drive and not requested_path.is_absolute():
         raise ValueError("Windows 盘符路径必须提供绝对根，不能依赖目标进程的盘符当前目录")
-    target = (native if native.is_absolute() else base / native).resolve()
-    if not target.is_relative_to(base) and not (native.is_absolute() and allow_absolute_outside):
+    resolved_path = (
+        requested_path
+        if requested_path.is_absolute()
+        else resolved_base / requested_path
+    ).resolve()
+    if not resolved_path.is_relative_to(resolved_base) and not (
+        requested_path.is_absolute() and allow_absolute_outside
+    ):
         raise ForbiddenError("文件路径超出当前目标目录的访问能力")
-    return target
+    return resolved_path
 
 
 def safe_join(base_path: Path, *paths: str) -> Path:

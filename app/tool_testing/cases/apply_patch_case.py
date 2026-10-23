@@ -31,19 +31,36 @@ class ApplyPatchScenarioCase:
     ) -> PreparedToolTest:
         del asset_root
         file_paths = ToolTestFilePaths(workspace_root=workspace_root, attempt_root=attempt_root)
-        for relative_path, content in self.initial_files.items():
-            target = attempt_root / relative_path
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_text(content, encoding="utf-8")
+        for relative_path, initial_content in self.initial_files.items():
+            attempt_file_path = attempt_root / relative_path
+            attempt_file_path.parent.mkdir(parents=True, exist_ok=True)
+            attempt_file_path.write_text(initial_content, encoding="utf-8")
 
-        versions = {
-            name: "sha256:" + sha256((attempt_root / name).read_bytes()).hexdigest()
-            if (attempt_root / name).is_file() else "absent"
-            for name in sorted(self.initial_files.keys() | self.expected_files.keys())
-        }
+        expected_versions = {}
+        for relative_path in sorted(
+            self.initial_files.keys() | self.expected_files.keys()
+        ):
+            attempt_file_path = attempt_root / relative_path
+            try:
+                file_contents = attempt_file_path.read_bytes()
+            except FileNotFoundError:
+                expected_versions[relative_path] = "absent"
+            else:
+                expected_versions[relative_path] = (
+                    "sha256:" + sha256(file_contents).hexdigest()
+                )
+        apply_patch_tool = create_apply_patch_tool(
+            text_mutations=WorkspaceTextMutationOwner(
+                paths=file_paths,
+            ),
+        )
         return PreparedToolTest(
-            prompt=self.prompt_template + "\nexpected_versions = " + json.dumps(versions, ensure_ascii=False),
-            tool=create_apply_patch_tool(text_mutations=WorkspaceTextMutationOwner(paths=file_paths)),
+            prompt=(
+                self.prompt_template
+                + "\nexpected_versions = "
+                + json.dumps(expected_versions, ensure_ascii=False)
+            ),
+            tool=apply_patch_tool,
         )
 
     def evaluate(
@@ -54,20 +71,20 @@ class ApplyPatchScenarioCase:
     ) -> ToolTestEvaluation:
         del tool_result
         for relative_path, expected_content in self.expected_files.items():
-            target = attempt_root / relative_path
+            attempt_file_path = attempt_root / relative_path
             if expected_content is None:
-                if target.exists():
+                if attempt_file_path.exists():
                     return ToolTestEvaluation(
                         passed=False,
                         detail=f"预期文件已删除，但仍然存在: {relative_path}",
                     )
                 continue
-            if not target.is_file():
+            if not attempt_file_path.is_file():
                 return ToolTestEvaluation(
                     passed=False,
                     detail=f"预期文件不存在: {relative_path}",
                 )
-            actual_content = target.read_text(encoding="utf-8")
+            actual_content = attempt_file_path.read_text(encoding="utf-8")
             if _without_optional_final_newline(actual_content) != (
                 _without_optional_final_newline(expected_content)
             ):

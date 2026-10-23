@@ -7,12 +7,22 @@ import jsonschema
 import pytest
 
 
-def _provider_schema() -> dict[str, object]:
+@pytest.fixture(scope="module")
+def provider_validator() -> jsonschema.Draft202012Validator:
     schema = commentjson.loads(
         Path("configs/workspace_schema.jsonc").read_text(encoding="utf-8")
     )
     jsonschema.Draft202012Validator.check_schema(schema)
-    return schema["$defs"]["provider"]
+    return jsonschema.Draft202012Validator(schema["$defs"]["provider"])
+
+
+def _validate_provider(
+    provider_validator: jsonschema.Draft202012Validator,
+    provider: dict[str, object],
+) -> None:
+    error = jsonschema.exceptions.best_match(provider_validator.iter_errors(provider))
+    if error is not None:
+        raise error
 
 
 def _provider(api_mode: dict[str, object]) -> dict[str, object]:
@@ -26,8 +36,10 @@ def _provider(api_mode: dict[str, object]) -> dict[str, object]:
     }
 
 
-def test_schema_accepts_chat_completions_model_info_and_reasoning_content():
-    jsonschema.validate(
+def test_schema_accepts_chat_completions_model_info_and_reasoning_content(
+    provider_validator: jsonschema.Draft202012Validator,
+) -> None:
+    provider_validator.validate(
         _provider(
             {
                 "protocol": "chat_completions",
@@ -38,26 +50,28 @@ def test_schema_accepts_chat_completions_model_info_and_reasoning_content():
                 },
                 "supports_reasoning": {"reasoning_content": True},
             }
-        ),
-        _provider_schema(),
+        )
     )
 
 
-def test_schema_accepts_chat_completions_thinking_blocks():
-    jsonschema.validate(
+def test_schema_accepts_chat_completions_thinking_blocks(
+    provider_validator: jsonschema.Draft202012Validator,
+) -> None:
+    provider_validator.validate(
         _provider(
             {
                 "protocol": "chat_completions",
                 "model_info": {"supports_reasoning": True},
                 "supports_reasoning": {"thinking_blocks": True},
             }
-        ),
-        _provider_schema(),
+        )
     )
 
 
-def test_schema_accepts_responses_reasoning_items_and_replay_policy():
-    jsonschema.validate(
+def test_schema_accepts_responses_reasoning_items_and_replay_policy(
+    provider_validator: jsonschema.Draft202012Validator,
+) -> None:
+    provider_validator.validate(
         _provider(
             {
                 "protocol": "responses",
@@ -70,12 +84,13 @@ def test_schema_accepts_responses_reasoning_items_and_replay_policy():
                 },
                 "replay_policy": {"encrypted_content": "same_source"},
             }
-        ),
-        _provider_schema(),
+        )
     )
 
 
-def test_schema_accepts_anthropic_thinking_block_shape():
+def test_schema_accepts_anthropic_thinking_block_shape(
+    provider_validator: jsonschema.Draft202012Validator,
+) -> None:
     provider = _provider(
         {
             "protocol": "anthropic_messages",
@@ -89,15 +104,14 @@ def test_schema_accepts_anthropic_thinking_block_shape():
         }
     )
     provider["custom_llm_provider"] = "anthropic"
-    jsonschema.validate(
-        provider,
-        _provider_schema(),
-    )
+    provider_validator.validate(provider)
 
 
-def test_schema_rejects_legacy_string_api_mode_and_flat_capabilities():
+def test_schema_rejects_legacy_string_api_mode_and_flat_capabilities(
+    provider_validator: jsonschema.Draft202012Validator,
+) -> None:
     with pytest.raises(jsonschema.ValidationError):
-        jsonschema.validate(
+        provider_validator.validate(
             {
                 **_provider(
                     {
@@ -107,8 +121,7 @@ def test_schema_rejects_legacy_string_api_mode_and_flat_capabilities():
                     }
                 ),
                 "api_mode": "responses",
-            },
-            _provider_schema(),
+            }
         )
 
     legacy = _provider(
@@ -120,12 +133,15 @@ def test_schema_rejects_legacy_string_api_mode_and_flat_capabilities():
     )
     legacy["capabilities"] = ["image_input"]
     with pytest.raises(jsonschema.ValidationError, match="capabilities"):
-        jsonschema.validate(legacy, _provider_schema())
+        _validate_provider(provider_validator, legacy)
 
 
-def test_schema_rejects_unknown_model_info_and_replay_policy_fields():
+def test_schema_rejects_unknown_model_info_and_replay_policy_fields(
+    provider_validator: jsonschema.Draft202012Validator,
+) -> None:
     with pytest.raises(jsonschema.ValidationError, match="unknown"):
-        jsonschema.validate(
+        _validate_provider(
+            provider_validator,
             _provider(
                 {
                     "protocol": "chat_completions",
@@ -133,11 +149,12 @@ def test_schema_rejects_unknown_model_info_and_replay_policy_fields():
                     "supports_reasoning": {"reasoning_content": False},
                 }
             ),
-            _provider_schema(),
         )
 
 
-def test_schema_requires_anthropic_custom_provider_for_anthropic_protocol():
+def test_schema_requires_anthropic_custom_provider_for_anthropic_protocol(
+    provider_validator: jsonschema.Draft202012Validator,
+) -> None:
     provider = _provider(
         {
             "protocol": "anthropic_messages",
@@ -146,12 +163,14 @@ def test_schema_requires_anthropic_custom_provider_for_anthropic_protocol():
         }
     )
     with pytest.raises(jsonschema.ValidationError, match="anthropic"):
-        jsonschema.validate(provider, _provider_schema())
+        _validate_provider(provider_validator, provider)
 
 
-def test_schema_rejects_protocol_specific_reasoning_shape_mismatch():
+def test_schema_rejects_protocol_specific_reasoning_shape_mismatch(
+    provider_validator: jsonschema.Draft202012Validator,
+) -> None:
     with pytest.raises(jsonschema.ValidationError):
-        jsonschema.validate(
+        provider_validator.validate(
             _provider(
                 {
                     "protocol": "chat_completions",
@@ -163,21 +182,23 @@ def test_schema_rejects_protocol_specific_reasoning_shape_mismatch():
                         }
                     },
                 }
-            ),
-            _provider_schema(),
+            )
         )
 
     with pytest.raises(jsonschema.ValidationError, match="different_source"):
-        jsonschema.validate(
+        _validate_provider(
+            provider_validator,
             _provider(
                 {
                     "protocol": "responses",
                     "model_info": {"supports_reasoning": False},
                     "supports_reasoning": {
-                        "reasoning_items": {"summary": False, "encrypted_content": False}
+                        "reasoning_items": {
+                            "summary": False,
+                            "encrypted_content": False,
+                        }
                     },
                     "replay_policy": {"encrypted_content": "different_source"},
                 }
             ),
-            _provider_schema(),
         )

@@ -3,8 +3,8 @@ const DEFAULT_BUFFER_RETRY_MS = 8;
 const DEFAULT_MAX_BUFFERED_BYTES = 128 * 1024;
 
 /**
- * 单连接画面发送与确认。now 是同一时钟的毫秒读数，默认 Date.now；
- * 只计算发送至 ACK 的差值，不与 CDP 的帧时间戳比较。
+ * 单连接画面发送与确认。now 是同一单调时钟的毫秒读数，默认 performance.now；
+ * 只计算发送至 ACK 的差值，不是 Unix 时间，不与 CDP 的帧时间戳比较。
  */
 export class BrowserFrameFlow {
   constructor({
@@ -14,7 +14,7 @@ export class BrowserFrameFlow {
     ackTimeoutMs = DEFAULT_ACK_TIMEOUT_MS,
     bufferRetryMs = DEFAULT_BUFFER_RETRY_MS,
     maxBufferedBytes = DEFAULT_MAX_BUFFERED_BYTES,
-    now = () => Date.now(),
+    now = () => performance.now(),
     schedule = (callback, delay) => setTimeout(callback, delay),
     cancel = (timer) => clearTimeout(timer),
   }) {

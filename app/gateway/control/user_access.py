@@ -108,6 +108,16 @@ class UserAccessService:
     def _connection(self) -> sqlite3.Connection:
         return self._state.connection()
 
+    def _invalidation_event(self, access_session_id: str) -> asyncio.Event:
+        """复用会话失效事件；只有首次登记时才创建新 Event。"""
+        event = self._invalidations.get(access_session_id)
+        if event is None:
+            event = self._invalidations.setdefault(
+                access_session_id,
+                asyncio.Event(),
+            )
+        return event
+
     @staticmethod
     def _lease_from_row(row: sqlite3.Row | None, *, now: datetime) -> LeaseSummary:
         if row is None:
@@ -370,7 +380,7 @@ class UserAccessService:
                 )
             finally:
                 connection.close()
-            event = self._invalidations.setdefault(session_id, asyncio.Event())
+            event = self._invalidation_event(session_id)
             return UserAccessContext("guest", None, cookie_value, 1, event)
         connection = self._connection()
         try:
@@ -389,7 +399,7 @@ class UserAccessService:
                 if event is not None:
                     event.set()
                 return None
-            event = self._invalidations.setdefault(cookie_value, asyncio.Event())
+            event = self._invalidation_event(cookie_value)
             return UserAccessContext(
                 "user", str(row[0]), cookie_value, int(row[1]), event
             )
@@ -485,13 +495,19 @@ class UserAccessService:
         finally:
             connection.close()
         for row in expired_leases:
-            session_id = str(row[0])
-            self._invalidations.setdefault(session_id, asyncio.Event()).set()
-            self._invalidations.pop(session_id, None)
+            access_session_id = str(row[0])
+            event = self._invalidations.pop(access_session_id, None)
+            if event is not None:
+                event.set()
         for row in expired_guests:
             tracking = json.loads(str(row[1]))
-            session_id = tracking.get("access_session_id") if isinstance(tracking, dict) else None
-            if isinstance(session_id, str):
-                self._invalidations.setdefault(session_id, asyncio.Event()).set()
-                self._invalidations.pop(session_id, None)
+            access_session_id = (
+                tracking.get("access_session_id")
+                if isinstance(tracking, dict)
+                else None
+            )
+            if isinstance(access_session_id, str):
+                event = self._invalidations.pop(access_session_id, None)
+                if event is not None:
+                    event.set()
         return len(expired_leases), len(expired_guests)

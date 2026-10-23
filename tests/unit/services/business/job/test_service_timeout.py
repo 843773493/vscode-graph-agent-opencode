@@ -858,7 +858,7 @@ async def test_failed_job_discards_queued_terminal_followup_without_new_stream(j
     await service._schedule_next_job_if_needed(parent)
 
     assert followup.status == JobStatus.failed
-    assert service._pending_queue.ids(session_id) == ()
+    assert service._pending_queue.queued_job_ids(session_id) == ()
     assert started == [user_job.job_id]
     assert service._thread_current_job[(session_id, job_fixture_thread_id(session_id))] == user_job.job_id
     stale_event = next(
@@ -923,4 +923,4 @@ async def test_pending_dispatch_race_cannot_start_terminal_followup_after_failur
     assert await service._start_next_pending(session_id, thread_id=job_fixture_thread_id(session_id), boundary="idle") is False
     assert followup.status == JobStatus.failed
     assert started == []
-    assert service._pending_queue.ids(session_id) == ()
+    assert service._pending_queue.queued_job_ids(session_id) == ()

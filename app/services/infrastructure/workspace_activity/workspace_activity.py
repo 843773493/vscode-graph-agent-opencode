@@ -3,8 +3,8 @@
 本模块承载 ``workspace_activity`` 这一条垂直链路的全部实现：
 
 - ``workspace_activity`` 行投影（``WorkspaceActivityRecord``）、追加去重语义
-  （``ON CONFLICT(event_id) DO NOTHING`` 后回读既有行）、分页读取、保留窗口
-  边界计算与按 occurred_at 裁剪；
+  （``ON CONFLICT(event_id) DO NOTHING`` 后回读既有行）、记录页与保留窗口边界的
+  单次快照读取，以及按 occurred_at 裁剪；
 - 游标失效判定与 ``WorkspaceActivityCursorGoneError``；
 - 活动事件的实时订阅与重放服务 ``WorkspaceActivityService``。
 
@@ -31,6 +31,7 @@ from app.core.sqlite_state import SQLiteDiagnostics, utc_now_text
 __all__ = [
     "WorkspaceActivityCursorGoneError",
     "WorkspaceActivityMixin",
+    "WorkspaceActivityPage",
     "WorkspaceActivityRecord",
     "WorkspaceActivityService",
 ]
@@ -46,6 +47,13 @@ class WorkspaceActivityRecord:
     status: str
     summary: str
     occurred_at: str
+
+
+@dataclass(frozen=True, slots=True)
+class WorkspaceActivityPage:
+    records: tuple[WorkspaceActivityRecord, ...]
+    first_retained_seq: int | None
+    last_allocated_seq: int
 
 
 class WorkspaceActivityCursorGoneError(RuntimeError):
@@ -102,46 +110,69 @@ class WorkspaceActivityMixin:
         finally:
             connection.close()
 
-    def list_activity(
+    def read_activity_page(
         self,
         *,
         after: int = 0,
         limit: int = 100,
-    ) -> tuple[WorkspaceActivityRecord, ...]:
+    ) -> WorkspaceActivityPage:
         if after < 0 or limit < 1 or limit > 2000:
             raise ValueError("Workspace 活动事件分页参数无效")
         connection = self._database.connection()
         try:
             rows = connection.execute(
                 """
-                SELECT event_seq, event_id, session_id, status, summary, occurred_at
-                FROM workspace_activity
-                WHERE event_seq > ?
-                ORDER BY event_seq ASC
-                LIMIT ?
+                WITH bounds AS (
+                    SELECT
+                        MIN(event_seq) AS first_retained_seq,
+                        COALESCE(
+                            (
+                                SELECT seq FROM sqlite_sequence
+                                WHERE name = 'workspace_activity'
+                            ),
+                            0
+                        ) AS last_allocated_seq
+                    FROM workspace_activity
+                ),
+                page AS (
+                    SELECT event_seq, event_id, session_id, status, summary, occurred_at
+                    FROM workspace_activity
+                    WHERE event_seq > ?
+                    ORDER BY event_seq ASC
+                    LIMIT ?
+                )
+                SELECT
+                    page.event_seq,
+                    page.event_id,
+                    page.session_id,
+                    page.status,
+                    page.summary,
+                    page.occurred_at,
+                    bounds.first_retained_seq,
+                    bounds.last_allocated_seq
+                FROM bounds
+                LEFT JOIN page ON 1 = 1
+                ORDER BY page.event_seq ASC
                 """,
                 (after, limit),
             ).fetchall()
         finally:
             connection.close()
-        return tuple(_activity_record_from_row(row) for row in rows)
-
-    def activity_bounds(self) -> tuple[int | None, int]:
-        """返回当前保留事件的最小序号和 SQLite 已分配的最高序号。"""
-
-        connection = self._database.connection()
-        try:
-            row = connection.execute(
-                "SELECT MIN(event_seq), MAX(event_seq) FROM workspace_activity"
-            ).fetchone()
-            sequence_row = connection.execute(
-                "SELECT seq FROM sqlite_sequence WHERE name = 'workspace_activity'"
-            ).fetchone()
-            first = int(row[0]) if row[0] is not None else None
-            latest = int(sequence_row[0]) if sequence_row is not None else 0
-            return first, latest
-        finally:
-            connection.close()
+        first_retained_seq = rows[0]["first_retained_seq"]
+        last_allocated_seq = int(rows[0]["last_allocated_seq"])
+        return WorkspaceActivityPage(
+            records=tuple(
+                _activity_record_from_row(row)
+                for row in rows
+                if row["event_seq"] is not None
+            ),
+            first_retained_seq=(
+                int(first_retained_seq)
+                if first_retained_seq is not None
+                else None
+            ),
+            last_allocated_seq=last_allocated_seq,
+        )
 
     def prune_activity(self, *, retention_days: int = 30) -> int:
         if retention_days < 1:
@@ -209,21 +240,26 @@ class WorkspaceActivityService:
         return record
 
     def list(self, *, after: int = 0, limit: int = 100) -> tuple[WorkspaceActivityRecord, ...]:
-        first_seq, latest_seq = self.store.activity_bounds()
+        page = self.store.read_activity_page(after=after, limit=limit)
         if (
             after > 0
-            and latest_seq > after
-            and (first_seq is None or first_seq > after + 1)
+            and page.last_allocated_seq > after
+            and (
+                page.first_retained_seq is None
+                or page.first_retained_seq > after + 1
+            )
         ):
             raise WorkspaceActivityCursorGoneError(
-                f"Workspace 活动事件游标已失效: after={after}, first={first_seq}"
+                "Workspace 活动事件游标已失效: "
+                f"after={after}, first={page.first_retained_seq}"
             )
-        records = self.store.list_activity(after=after, limit=limit)
+        records = page.records
         if after > 0 and records:
-            first_seq = records[0].event_seq
-            if first_seq > after + 1:
+            first_page_seq = records[0].event_seq
+            if first_page_seq > after + 1:
                 raise WorkspaceActivityCursorGoneError(
-                    f"Workspace 活动事件游标已失效: after={after}, first={first_seq}"
+                    "Workspace 活动事件游标已失效: "
+                    f"after={after}, first={first_page_seq}"
                 )
         return records
 

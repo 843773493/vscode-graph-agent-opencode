@@ -11,9 +11,25 @@ export interface MessageMediaItem {
   name: string;
 }
 
+function dataUrlContentType(dataUrl: string | null | undefined): string | undefined {
+  if (dataUrl == null) {
+    return undefined;
+  }
+
+  let contentTypeEnd = 5;
+  while (contentTypeEnd < dataUrl.length) {
+    const character = dataUrl[contentTypeEnd];
+    if (character === ";" || character === ",") {
+      break;
+    }
+    contentTypeEnd += 1;
+  }
+  return dataUrl.slice(5, contentTypeEnd);
+}
+
 export function messageMediaKind(attachment: MessageAttachment): MessageMediaKind {
   const contentType = attachment.content_type
-    ?? attachment.data_url?.slice(5).split(/[;,]/, 1)[0]
+    ?? dataUrlContentType(attachment.data_url)
     ?? "";
   if (contentType.startsWith("image/")) {
     return "image";

@@ -5,6 +5,8 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+from heapq import nsmallest
+from itertools import chain, islice
 from pathlib import Path
 
 from fastapi import (
@@ -33,6 +35,7 @@ from app.schemas.gateway.directory import (
 from app.schemas.gateway.workspaces import GatewayManagedWorkspaceListDTO
 
 logger = logging.getLogger(__name__)
+_DIRECTORY_FULL_SORT_THRESHOLD = 1024
 
 
 def _gateway_root() -> Path:
@@ -63,31 +66,42 @@ async def _wait_for_managed_runtime_restore_tasks(restore_tasks: object) -> None
 
 
 def resolve_management_directory(
-    request: Request, value: str, *, base_path: str | None = None,
+    request: Request, directory_reference: str, *, base_path: str | None = None,
 ) -> Path:
     """目录选择与注册共用目标 Gateway 的根绑定；相对输入必须有显式基准。"""
-    if "://" in value:
-        parsed = parse_resource_uri(value, local_gateway_id=request.app.state.gateway_id)
+    if "://" in directory_reference:
+        parsed = parse_resource_uri(
+            directory_reference,
+            local_gateway_id=request.app.state.gateway_id,
+        )
         if (parsed.scope != "gateway" or parsed.kind != "files"
                 or parsed.scope_id != request.app.state.gateway_id
                 or parsed.gateway_authority is not None):
             raise ValueError("目录 URI 不属于选定的 Gateway 原生目录")
         try:
-            root = request.app.state.gateway_state.resolve_native_directory(
+            native_root = request.app.state.gateway_state.resolve_native_directory(
                 gateway_id=parsed.scope_id, directory_id=parsed.tail_segments[0],
             )
         except KeyError as error:
             raise HTTPException(404, "所选目录绑定不存在") from error
         try:
-            return safe_join(Path(root), *parsed.tail_segments[1:])
+            return safe_join(Path(native_root), *parsed.tail_segments[1:])
         except ForbiddenError as error:
             raise HTTPException(403, "目录 URI 超出选定根的访问能力") from error
-    native = Path(value).expanduser()
-    if not native.is_absolute() and base_path is None:
+    native_directory_path = Path(directory_reference).expanduser()
+    if not native_directory_path.is_absolute() and base_path is None:
         raise ValueError("原生目录必须是绝对路径；相对路径需要选定目录 URI")
-    base = resolve_management_directory(request, base_path) if base_path else Path.home()
+    base_directory = (
+        resolve_management_directory(request, base_path)
+        if base_path
+        else Path.home()
+    )
     try:
-        return resolve_native_file_path(base, value, allow_absolute_outside=True)
+        return resolve_native_file_path(
+            base_directory,
+            directory_reference,
+            allow_absolute_outside=True,
+        )
     except ForbiddenError as error:
         raise HTTPException(403, "相对路径超出选定目录的访问能力") from error
 
@@ -107,12 +121,30 @@ def _scan_local_directories(
     limit: int,
 ) -> tuple[list[Path], bool]:
     with os.scandir(root_path) as directory_iterator:
-        directories = [
-            entry for entry in directory_iterator if entry.is_dir(follow_symlinks=False)
-        ]
-    directories.sort(key=lambda entry: (entry.name.lower(), entry.name))
+        candidate_directories = (
+            entry
+            for entry in directory_iterator
+            if entry.is_dir(follow_symlinks=False)
+        )
+        initial_directories = list(
+            islice(candidate_directories, _DIRECTORY_FULL_SORT_THRESHOLD + 1)
+        )
+        if len(initial_directories) <= _DIRECTORY_FULL_SORT_THRESHOLD:
+            directories = initial_directories
+            directories.sort(key=_directory_entry_sort_key)
+        else:
+            # 小目录用内置排序；大目录只保留排序最前的 limit + 1 项。
+            directories = nsmallest(
+                limit + 1,
+                chain(initial_directories, candidate_directories),
+                key=_directory_entry_sort_key,
+            )
     entries = [Path(entry.path).resolve() for entry in directories[:limit]]
     return entries, len(directories) > limit
+
+
+def _directory_entry_sort_key(entry: os.DirEntry[str]) -> tuple[str, str]:
+    return entry.name.lower(), entry.name
 
 
 async def _directory_listing(

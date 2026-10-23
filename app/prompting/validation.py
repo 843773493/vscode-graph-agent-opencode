@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-from collections import Counter
 from collections.abc import Mapping
 from xml.etree import ElementTree
 
@@ -17,6 +16,8 @@ from app.prompting.registry import (
     StructuredPromptRegistry,
     structured_prompt_registry,
 )
+
+_STRUCTURAL_PROMPT_ATTRIBUTES = frozenset({"encoding", "trust"})
 
 
 def internal_prompt_metadata(
@@ -69,54 +70,68 @@ def validate_internal_message(
         raise ValueError(f"内部结构消息 kind={kind} 的隐藏展示策略包含展示 metadata")
 
     try:
-        root = ElementTree.fromstring(content)
+        system_reminder_element = ElementTree.fromstring(content)
     except ElementTree.ParseError as exc:
         raise ValueError(f"内部结构消息不是合法标记结构: {exc}") from exc
-    if root.tag != "system_reminder":
-        raise ValueError(f"内部结构消息根标签必须是 system_reminder: {root.tag}")
-    if root.attrib:
+    if system_reminder_element.tag != "system_reminder":
+        raise ValueError(
+            "内部结构消息根标签必须是 system_reminder: "
+            f"{system_reminder_element.tag}"
+        )
+    if system_reminder_element.attrib:
         raise ValueError("system_reminder 根标签不允许属性")
-    root_spec = registry.tag(root.tag)
-    if root_spec.placement != PromptPlacement.internal_human:
+    system_reminder_spec = registry.tag(system_reminder_element.tag)
+    if system_reminder_spec.placement != PromptPlacement.internal_human:
         raise ValueError("system_reminder 注册 placement 错误")
 
-    section_names: list[str] = []
-    for child in root:
-        spec = registry.tag(child.tag)
-        if spec.allowed_parent != root.tag:
-            raise ValueError(f"标签 {child.tag} 不允许位于 {root.tag}")
-        structural_attributes = {"encoding", "trust"}
+    section_names: set[str] = set()
+    duplicate_section_names: set[str] = set()
+    for section_element in system_reminder_element:
+        section_spec = registry.tag(section_element.tag)
+        if section_spec.allowed_parent != system_reminder_element.tag:
+            raise ValueError(
+                f"标签 {section_element.tag} 不允许位于 "
+                f"{system_reminder_element.tag}"
+            )
         unsupported_attributes = (
-            set(child.attrib) - structural_attributes - spec.allowed_attributes
+            set(section_element.attrib)
+            - _STRUCTURAL_PROMPT_ATTRIBUTES
+            - section_spec.allowed_attributes
         )
         if unsupported_attributes:
             raise ValueError(
-                f"标签 {child.tag} 包含未注册属性: {sorted(unsupported_attributes)}"
+                f"标签 {section_element.tag} 包含未注册属性: "
+                f"{sorted(unsupported_attributes)}"
             )
-        if child.attrib.get("encoding") != spec.codec.value:
-            raise ValueError(f"标签 {child.tag} 的 encoding 与注册 codec 不一致")
-        if child.attrib.get("trust") != spec.trust_level.value:
-            raise ValueError(f"标签 {child.tag} 的 trust 与注册级别不一致")
-        if list(child):
-            raise ValueError(f"数据标签 {child.tag} 不允许嵌套子标签")
-        if spec.codec == PromptContentCodec.json:
+        if section_element.attrib.get("encoding") != section_spec.codec.value:
+            raise ValueError(
+                f"标签 {section_element.tag} 的 encoding 与注册 codec 不一致"
+            )
+        if section_element.attrib.get("trust") != section_spec.trust_level.value:
+            raise ValueError(
+                f"标签 {section_element.tag} 的 trust 与注册级别不一致"
+            )
+        if len(section_element):
+            raise ValueError(f"数据标签 {section_element.tag} 不允许嵌套子标签")
+        if section_spec.codec == PromptContentCodec.json:
             try:
-                json.loads(child.text or "")
+                json.loads(section_element.text or "")
             except json.JSONDecodeError as exc:
-                raise ValueError(f"标签 {child.tag} 包含无效 JSON") from exc
-        section_names.append(child.tag)
+                raise ValueError(f"标签 {section_element.tag} 包含无效 JSON") from exc
+        if section_element.tag in section_names:
+            duplicate_section_names.add(section_element.tag)
+        else:
+            section_names.add(section_element.tag)
 
-    duplicates = sorted(
-        name for name, count in Counter(section_names).items() if count > 1
-    )
+    duplicates = sorted(duplicate_section_names)
     if duplicates:
         raise ValueError(f"内部结构消息包含重复 section: {duplicates}")
-    unknown_sections = set(section_names) - kind_spec.allowed_sections
+    unknown_sections = section_names - kind_spec.allowed_sections
     if unknown_sections:
         raise ValueError(
             f"内部结构消息 kind={kind} 包含非法 section: {sorted(unknown_sections)}"
         )
-    missing_sections = kind_spec.required_sections - set(section_names)
+    missing_sections = kind_spec.required_sections - section_names
     if missing_sections:
         raise ValueError(
             f"内部结构消息 kind={kind} 缺少 section: {sorted(missing_sections)}"

@@ -60,9 +60,10 @@ def ssh_tunnel_port_range_from_env() -> tuple[int, int]:
 def allocate_local_port_in_range(start: int, end: int) -> int:
     if start < 1 or end > 65535 or start > end:
         raise ValueError(f"端口范围无效: {start}-{end}")
-    ports = list(range(start, end + 1))
-    random.SystemRandom().shuffle(ports)
-    for port in ports:
+    port_count = end - start + 1
+    first_offset = random.SystemRandom().randrange(port_count)
+    for offset in range(port_count):
+        port = start + (first_offset + offset) % port_count
         if is_local_port_available(port):
             return port
     raise RuntimeError(f"端口范围内没有可用本地端口: {start}-{end}")

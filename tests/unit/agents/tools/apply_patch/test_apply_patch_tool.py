@@ -18,10 +18,10 @@ from app.core.model_delta_context import (
 from app.core.path_utils import get_workspace_root
 from app.core.resource_uri import parse_resource_uri
 from app.core.workspace_identity import load_or_create_workspace_id
+from app.schemas.internal_v2.text_mutation import PatchText
 from app.services.infrastructure.workspace_files import text_mutation, text_publication
 from app.services.infrastructure.workspace_files.paths import WorkspaceFilePaths
 from app.services.infrastructure.workspace_files.text_owner import (
-    PatchText,
     WorkspaceTextMutationOwner,
 )
 from app.services.infrastructure.workspace_files.text_patch.models import (

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 from collections.abc import Callable
+from functools import lru_cache
 from pathlib import Path
 from typing import Protocol
 
@@ -33,8 +34,17 @@ def file_uri_root(uri: str) -> str:
                                 tail_segments=parsed.tail_segments[:1], gateway_authority=parsed.gateway_authority)
 
 
+@lru_cache(maxsize=256)
+def _parse_parent_resource_uri(uri: str) -> ParsedResourceUri:
+    return parse_resource_uri(uri)
+
+
 def file_uri_child(uri: str, *parts: str) -> str:
-    parsed = parse_resource_uri(uri)
+    parsed = (
+        _parse_parent_resource_uri(uri)
+        if isinstance(uri, str)
+        else parse_resource_uri(uri)
+    )
     if parsed.kind != "files":
         raise ValueError("文件 child 必须属于 files 资源")
     return resource_display_uri(scope=parsed.scope, scope_id=parsed.scope_id, kind="files",

@@ -57,9 +57,7 @@ class ContentBlockSchema(BaseModel):
             if not isinstance(items, list) or not all(
                 isinstance(item, dict) for item in items
             ):
-                raise TypeError(
-                    "reasoning_items carrier 的值必须是对象数组"
-                )
+                raise TypeError("reasoning_items carrier 的值必须是对象数组")
         elif present:
             raise ValueError(
                 "reasoning_content/reasoning_items 只能出现在同名 carrier block 中"
@@ -68,18 +66,17 @@ class ContentBlockSchema(BaseModel):
 
 
 def validate_content_blocks(content: Any) -> Any:
-    """校验并深复制 canonical content，不改变原始字段和字段顺序。
+    """校验 canonical content；列表 block 深复制并保留字段顺序。
 
-    字符串 content 仍是 LangChain 允许的空文本/纯文本表示；一旦 content
-    使用列表，每个元素都必须是可校验的对象。函数返回输入的深复制，而不是
-    ``model_dump()``，避免 Pydantic 默认值或字段重排污染 provider 原文。
+    字符串 content 是不可变值，直接返回；一旦 content 使用列表，每个元素都
+    必须是可校验对象。返回深复制的原始 block，而不是 ``model_dump()``，避免
+    Pydantic 默认值或字段重排污染 provider 原文。
     """
 
     if isinstance(content, str):
-        return copy.deepcopy(content)
+        return content
     if not isinstance(content, list):
         raise TypeError("AIMessage.content 必须是字符串或 block 数组")
     for block in content:
         ContentBlockSchema.model_validate(block)
     return copy.deepcopy(content)
-

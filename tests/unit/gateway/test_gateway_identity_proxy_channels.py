@@ -23,7 +23,6 @@ from app.core.trace_middleware import reset_current_request_id, set_current_requ
 from app.gateway.auth import get_gateway_local_token
 from app.gateway.auxiliary_proxy import _proxy_auxiliary_websocket
 from app.gateway.credentials import load_or_create_gateway_id
-from app.gateway.federation import workspace_port as workspace_port_module
 from app.gateway.federation.workspace_port import WorkspaceCatalogPort
 from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceTarget
 from app.gateway.runtime.controller import GatewayWorkspaceRuntimeController
@@ -83,13 +82,11 @@ def catalog_request_id():
 @pytest.mark.asyncio
 async def test_workspace_catalog_port_injects_authoritative_gateway_id(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
     catalog_request_id: str,
 ) -> None:
     """联邦冷 catalog 端口对工作区后端的请求带真实 gateway_id。"""
 
     captured: list[dict[str, str]] = []
-    real_client = httpx.AsyncClient
 
     async def handler(request: httpx.Request) -> httpx.Response:
         captured.append(dict(request.headers))
@@ -97,25 +94,24 @@ async def test_workspace_catalog_port_injects_authoritative_gateway_id(
             200,
             json={
                 "request_id": request.headers["X-Request-ID"],
-                "data": {"catalog_revision": "rev_34c", "sessions": []},
+                "data": {
+                    "items": [{"session_id": "session_catalog_identity"}],
+                    "catalog_revision": "rev_34c",
+                },
             },
             headers={"X-Request-ID": request.headers["X-Request-ID"]},
         )
 
-    def handler_client(*, timeout: float, trust_env: bool) -> httpx.AsyncClient:
-        assert trust_env is False
-        return real_client(transport=httpx.MockTransport(handler), timeout=timeout, trust_env=trust_env)
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(handler), trust_env=False
+    ) as client:
+        port = WorkspaceCatalogPort(http_client=client)
+        port.project_workspaces(
+            (("gw_catalog", "http://127.0.0.1:41100", "00000000-0000-4000-8000-000000000001"),)
+        )
+        workspaces = await port.local_session_workspaces("session_catalog_identity")
 
-    monkeypatch.setattr(workspace_port_module.httpx, "AsyncClient", handler_client)
-
-    port = WorkspaceCatalogPort()
-    port.project_workspaces(
-        (("gw_catalog", "http://127.0.0.1:41100", "00000000-0000-4000-8000-000000000001"),)
-    )
-
-    data = await port._export(workspace_id="gw_catalog")
-
-    assert data["catalog_revision"] == "rev_34c"
+    assert workspaces == ("00000000-0000-4000-8000-000000000001",)
     assert len(captured) == 1
     # httpx 头部名统一小写；断言线上可见的真实权威值。
     assert captured[0]["x-boxteam-gateway-id"] == _gateway_id(tmp_path)

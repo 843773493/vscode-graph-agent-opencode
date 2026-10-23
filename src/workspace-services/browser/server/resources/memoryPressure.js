@@ -77,14 +77,14 @@ function moreSevere(left, right) {
   return LEVEL_RANK[left] >= LEVEL_RANK[right] ? left : right;
 }
 
-// 降级候选起点与当前时刻均为同一注入时钟的Unix毫秒值；StableMs阈值才是持续时长。
+// 降级候选起点与当前时刻均来自同一单调毫秒时钟；不与ISO观测时间或Unix时刻相减。
 export function classifyMemoryPressure({
   usedRatio,
   psiSomeAvg10 = 0,
   eventDelta = {},
   previousLevel = "normal",
-  exitCandidateSinceUnixMs = null,
-  nowUnixMs,
+  exitCandidateSinceMonotonicMs = null,
+  nowMonotonicMs,
   thresholds = DEFAULT_MEMORY_PRESSURE_THRESHOLDS,
 }) {
   let rawLevel = pressureLevelForRatio(usedRatio, thresholds);
@@ -95,7 +95,7 @@ export function classifyMemoryPressure({
   }
 
   if (LEVEL_RANK[rawLevel] >= LEVEL_RANK[previousLevel]) {
-    return { level: rawLevel, exitCandidateSinceUnixMs: null, rawLevel };
+    return { level: rawLevel, exitCandidateSinceMonotonicMs: null, rawLevel };
   }
 
   let nextLevel;
@@ -116,16 +116,16 @@ export function classifyMemoryPressure({
       && psiSomeAvg10 < thresholds.warningExitPsiSomeAvg10;
     exitStableMs = thresholds.warningExitStableMs;
   } else {
-    return { level: rawLevel, exitCandidateSinceUnixMs: null, rawLevel };
+    return { level: rawLevel, exitCandidateSinceMonotonicMs: null, rawLevel };
   }
   if (!exitEligible) {
-    return { level: previousLevel, exitCandidateSinceUnixMs: null, rawLevel };
+    return { level: previousLevel, exitCandidateSinceMonotonicMs: null, rawLevel };
   }
-  const candidateSinceUnixMs = exitCandidateSinceUnixMs ?? nowUnixMs;
-  const level = nowUnixMs - candidateSinceUnixMs >= exitStableMs ? nextLevel : previousLevel;
+  const candidateSinceMonotonicMs = exitCandidateSinceMonotonicMs ?? nowMonotonicMs;
+  const level = nowMonotonicMs - candidateSinceMonotonicMs >= exitStableMs ? nextLevel : previousLevel;
   return {
     level,
-    exitCandidateSinceUnixMs: level === previousLevel ? candidateSinceUnixMs : null,
+    exitCandidateSinceMonotonicMs: level === previousLevel ? candidateSinceMonotonicMs : null,
     rawLevel,
   };
 }
@@ -148,6 +148,7 @@ export class BrowserMemoryPressureMonitor {
     freeMemory = () => os.freemem(),
     pathExists = existsSync,
     now = () => Date.now(),
+    monotonicNow = () => performance.now(),
     thresholds = DEFAULT_MEMORY_PRESSURE_THRESHOLDS,
   } = {}) {
     this.readText = readText;
@@ -155,10 +156,13 @@ export class BrowserMemoryPressureMonitor {
     this.totalMemory = totalMemory;
     this.freeMemory = freeMemory;
     this.pathExists = pathExists;
+    /** @type {() => number} Unix毫秒观察时刻，仅用于公开sampled_at。 */
     this.now = now;
+    /** @type {() => number} 进程内单调毫秒时钟，用于压力降级的连续稳定窗口。 */
+    this.monotonicNow = monotonicNow;
     this.thresholds = { ...DEFAULT_MEMORY_PRESSURE_THRESHOLDS, ...thresholds };
     this.level = "normal";
-    this.exitCandidateSinceUnixMs = null;
+    this.exitCandidateSinceMonotonicMs = null;
     /** @type {{ directory: string, counters: Record<string, number> } | null} 同一cgroup的上次累计事件观测。 */
     this.previousCgroupEventSample = null;
   }
@@ -208,6 +212,7 @@ export class BrowserMemoryPressureMonitor {
 
   async sample() {
     const sampledAtUnixMs = this.now();
+    const sampledAtMonotonicMs = this.monotonicNow();
     const host = await this.hostMemory();
     const hostUsedRatio = Math.min(1, Math.max(0, 1 - host.availableBytes / host.totalBytes));
     const cgroup = await this.cgroupMemory();
@@ -227,12 +232,12 @@ export class BrowserMemoryPressureMonitor {
       psiSomeAvg10: cgroup?.someAvg10 ?? 0,
       eventDelta,
       previousLevel: this.level,
-      exitCandidateSinceUnixMs: this.exitCandidateSinceUnixMs,
-      nowUnixMs: sampledAtUnixMs,
+      exitCandidateSinceMonotonicMs: this.exitCandidateSinceMonotonicMs,
+      nowMonotonicMs: sampledAtMonotonicMs,
       thresholds: this.thresholds,
     });
     this.level = classified.level;
-    this.exitCandidateSinceUnixMs = classified.exitCandidateSinceUnixMs;
+    this.exitCandidateSinceMonotonicMs = classified.exitCandidateSinceMonotonicMs;
     return {
       sampled_at: new Date(sampledAtUnixMs).toISOString(),
       level: classified.level,

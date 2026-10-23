@@ -9,6 +9,19 @@
 - `state/trace/`：Trace 事件的配对、失败补全与聚合 helper，本包通过 `trace/traceAggregation` 消费其聚合结果。
 - 本包 `responseParts` 是"响应片段展示投影"：它把已经是权威协议的 `TurnResponsePart`（无论来自实时流还是持久化历史）单向投影成 `TimelineItem`。它不产生也不修改协议 parts，与 `messageStream/responseProjection` 的分工是"消费协议 vs 生成协议"，两者不得互相合并或互设别名。
 
+```text
+timeline/
+├── timelineTypes.ts       TimelineItem 共享展示合同
+├── timelineMessages.ts    用户消息及附件的展示归一
+├── chatTimeline.ts        Trace 事件到会话时间线的编排入口
+├── responseParts.ts       权威 Turn response parts 到时间线项的投影
+├── chatResponseGroups.ts  历史边界状态、最终正文补齐与连续工作项分组
+├── responseParts.test.ts
+└── skillDisplayFlow.test.ts
+```
+
+数据沿单向路径流动：权威消息、Trace 或 response parts → 归一/聚合 → `TimelineItem` → `components/chat/`。目录中的模块共享展示类型，但不互相回写上游协议状态。
+
 ## 可修改内容
 
 - `TimelineItem` 联合类型及其时间线项结构定义。

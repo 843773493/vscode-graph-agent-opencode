@@ -2,57 +2,135 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
 
-from app.core.path_utils import get_session_catalog_components
+from app.core.path_utils import (
+    SessionCatalogComponents,
+    get_session_catalog_components,
+)
 from app.core.session_subtree_delete import SessionSubtreeDeleteService
 from app.services.infrastructure.log_service import LogService, LogSnapshotRecord
 
 SESSION_ID = "ses_019c257bff2c7c6989d1c38a6ae7fbf2"
 
 
+@dataclass(frozen=True, slots=True)
+class LogSnapshotFixture:
+    log_service: LogService
+    catalog_components: SessionCatalogComponents
+    subtree_deletion: SessionSubtreeDeleteService
+    session_directory: Path
+    workspace_root: Path
+
+
 @pytest.fixture
-def snapshot_storage(tmp_path: Path, session_bundle_factory):
+def snapshot_storage(tmp_path: Path, session_bundle_factory) -> LogSnapshotFixture:
     sessions_root = tmp_path / ".boxteam" / "sessions"
-    session_root = session_bundle_factory(sessions_root, SESSION_ID)
-    components = get_session_catalog_components(sessions_root)
-    service = LogService(workspace_root=tmp_path, path_resolver=components.resolver)
-    deletion = SessionSubtreeDeleteService(
-        store=components.resolver.catalog_store, sessions_root=sessions_root, workspace_id=components.resolver.workspace_id,
+    session_directory = session_bundle_factory(sessions_root, SESSION_ID)
+    catalog_components = get_session_catalog_components(sessions_root)
+    log_service = LogService(
+        workspace_root=tmp_path,
+        path_resolver=catalog_components.resolver,
     )
-    return service, components, deletion, session_root, tmp_path
+    subtree_deletion = SessionSubtreeDeleteService(
+        store=catalog_components.resolver.catalog_store,
+        sessions_root=sessions_root,
+        workspace_id=catalog_components.resolver.workspace_id,
+    )
+    return LogSnapshotFixture(
+        log_service=log_service,
+        catalog_components=catalog_components,
+        subtree_deletion=subtree_deletion,
+        session_directory=session_directory,
+        workspace_root=tmp_path,
+    )
 
 
 @pytest.mark.asyncio
-async def test_catalog_rename_keeps_snapshot_reference_and_delete_isolates_whole_node(snapshot_storage) -> None:
-    service, components, deletion, session_root, _ = snapshot_storage
-    result = await service.write_html_snapshot(LogSnapshotRecord(session_id=SESSION_ID, html="<p>历史</p>"))
-    store = components.resolver.catalog_store
+async def test_catalog_rename_keeps_snapshot_reference_and_delete_isolates_whole_node(
+    snapshot_storage,
+) -> None:
+    service = snapshot_storage.log_service
+    catalog_components = snapshot_storage.catalog_components
+    result = await service.write_html_snapshot(
+        LogSnapshotRecord(session_id=SESSION_ID, html="<p>历史</p>")
+    )
+    store = catalog_components.resolver.catalog_store
     store.rename_node(SESSION_ID, "重命名后")
     folder_id = "ses_019c257bff2c7c6989d1c38a6ae7fbf3"
-    store.create_folder(folder_id, components.resolver.workspace_id, None, "快照分组")
+    store.create_folder(
+        folder_id,
+        catalog_components.resolver.workspace_id,
+        None,
+        "快照分组",
+    )
     store.move_node(SESSION_ID, folder_id)
-    assert await service.read_html_snapshot(result.snapshot_id, session_id=SESSION_ID, metadata=False) == "<p>历史</p>"
-    deleted = await deletion.delete(idempotency_key="snapshot-delete", root_node_id=SESSION_ID)
-    assert deleted.record_state == "completed" and not session_root.exists()
-    isolated = components.resolver.sessions_root / ".deleting" / "snapshot-delete" / SESSION_ID
-    assert (isolated / "logs" / "webview" / f"{result.snapshot_id}.html").read_text() == "<p>历史</p>"
+    assert (
+        await service.read_html_snapshot(
+            result.snapshot_id,
+            session_id=SESSION_ID,
+            metadata=False,
+        )
+        == "<p>历史</p>"
+    )
+    deleted = await snapshot_storage.subtree_deletion.delete(
+        idempotency_key="snapshot-delete",
+        root_node_id=SESSION_ID,
+    )
+    assert deleted.record_state == "completed"
+    assert not snapshot_storage.session_directory.exists()
+    isolated = (
+        catalog_components.resolver.sessions_root
+        / ".deleting"
+        / "snapshot-delete"
+        / SESSION_ID
+    )
+    assert (
+        isolated / "logs" / "webview" / f"{result.snapshot_id}.html"
+    ).read_text() == "<p>历史</p>"
     with pytest.raises(KeyError):
-        await service.read_html_snapshot(result.snapshot_id, session_id=SESSION_ID, metadata=False)
+        await service.read_html_snapshot(
+            result.snapshot_id,
+            session_id=SESSION_ID,
+            metadata=False,
+        )
     with pytest.raises(KeyError):
-        await service.write_html_snapshot(LogSnapshotRecord(session_id=SESSION_ID, html="<p>禁止复活</p>"))
-    assert not session_root.exists()
+        await service.write_html_snapshot(
+            LogSnapshotRecord(session_id=SESSION_ID, html="<p>禁止复活</p>")
+        )
+    assert not snapshot_storage.session_directory.exists()
 
 
 @pytest.mark.asyncio
-async def test_snapshot_reopen_uses_catalog_and_metadata_identity(snapshot_storage) -> None:
-    service, components, _, session_root, workspace_root = snapshot_storage
-    result = await service.write_html_snapshot(LogSnapshotRecord(session_id=SESSION_ID, html="<p>重启读取</p>"))
-    reopened = LogService(workspace_root=workspace_root, path_resolver=components.resolver)
-    assert await reopened.read_html_snapshot(result.snapshot_id, session_id=SESSION_ID, metadata=False) == "<p>重启读取</p>"
-    metadata = session_root / "logs" / "webview" / f"{result.snapshot_id}.json"
+async def test_snapshot_reopen_uses_catalog_and_metadata_identity(
+    snapshot_storage,
+) -> None:
+    result = await snapshot_storage.log_service.write_html_snapshot(
+        LogSnapshotRecord(session_id=SESSION_ID, html="<p>重启读取</p>")
+    )
+    reopened = LogService(
+        workspace_root=snapshot_storage.workspace_root,
+        path_resolver=snapshot_storage.catalog_components.resolver,
+    )
+    assert (
+        await reopened.read_html_snapshot(
+            result.snapshot_id,
+            session_id=SESSION_ID,
+            metadata=False,
+        )
+        == "<p>重启读取</p>"
+    )
+    metadata = (
+        snapshot_storage.session_directory
+        / "logs"
+        / "webview"
+        / f"{result.snapshot_id}.json"
+    )
     metadata.write_text('{"snapshot_id":"other"}')
     with pytest.raises(RuntimeError, match="身份不一致"):
-        await reopened.read_html_snapshot(result.snapshot_id, session_id=SESSION_ID, metadata=True)
+        await reopened.read_html_snapshot(
+            result.snapshot_id, session_id=SESSION_ID, metadata=True
+        )

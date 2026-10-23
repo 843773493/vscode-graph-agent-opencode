@@ -143,15 +143,21 @@ def _unsafe_cutoff_indices(
         if result_sequence is not None:
             carrier_sequences.add(result_sequence)
     carriers = _tool_carriers(connection, sorted(carrier_sequences))
-    actual_calls: dict[int, list[int]] = {}
+    unique_assistant_sequence_by_result: dict[int, int | None] = {}
     visible_results: set[int] = set()
     for call_id, assistant_sequence, result_sequence in rows:
+        if result_sequence is None:
+            continue
         call = carriers.get(assistant_sequence)
-        result = carriers.get(result_sequence) if result_sequence is not None else None
+        result = carriers.get(result_sequence)
         if call is None or result is None or not _same_tool_pair(call, result, call_id):
             continue
         if call.checkpoint == result.checkpoint:
-            actual_calls.setdefault(result_sequence, []).append(assistant_sequence)
+            # None 表示同一 result 已对应多条 assistant call。
+            if result_sequence in unique_assistant_sequence_by_result:
+                unique_assistant_sequence_by_result[result_sequence] = None
+            else:
+                unique_assistant_sequence_by_result[result_sequence] = assistant_sequence
         if assistant_sequence in position:
             visible_results.add(result_sequence)
 
@@ -160,12 +166,15 @@ def _unsafe_cutoff_indices(
         result = carriers.get(result_sequence) if result_sequence is not None else None
         paired = call is not None and result is not None and _same_tool_pair(call, result, call_id)
         if assistant_sequence not in position:
-            actual = actual_calls.get(result_sequence, [])
+            unique_assistant_sequence = unique_assistant_sequence_by_result.get(
+                result_sequence
+            )
             if (
                 paired and call is not None and result is not None
                 and call.checkpoint != result.checkpoint
                 and result.identity is not None and result.identity.model_call_id is not None
-                and len(actual) == 1 and actual[0] in position
+                and unique_assistant_sequence is not None
+                and unique_assistant_sequence in position
             ):
                 # 首个 terminal 可闭合两个待完成 sink；只按已选中的真实
                 # carrier 配对检查，不能让隐藏镜像制造第二个未闭合工具组。

@@ -1,6 +1,20 @@
 # 目录用途
 
-`src/clients/web/src/state/requestLogDisplay/` 放浏览器前端「请求日志展示族」的纯派生逻辑：把后端权威的 LLM 请求日志记录（`LLMRequestLogRecord`）投影成请求日志面板可直接渲染的展示模型、文案与归一结果，供 `components/panels/inspectionPanels/RequestLogPanel.tsx` 消费。本子包的对外契约由 `index.ts` 统一收口，是该族唯一的导入入口。
+`src/clients/web/src/state/requestLogDisplay/` 放浏览器前端「请求日志展示族」的纯派生逻辑：把后端权威的 LLM 请求日志记录（`LLMRequestLogRecord`）投影成请求日志面板可直接渲染的展示模型、文案与归一结果，供 `components/panels/inspectionPanels/RequestLogPanel.tsx` 消费。生产代码的对外契约由 `index.ts` 统一收口；`requestLogRecordFixture.ts` 只供测试共享记录样板，不从生产入口导出。
+
+## 职责树
+
+```text
+requestLogDisplay/
+├── index.ts                       生产侧唯一导入入口
+├── types.ts                       展示模型
+├── overview.ts / messages.ts      单条日志摘要和消息展示
+├── tools.ts / keyFlow.ts          工具名称和多日志关键流转
+├── replay.ts                      请求重放展示
+├── jsonNormalize.ts               请求日志JSON展示归一
+├── requestLogRecordFixture.ts     测试专用的权威记录样板工厂
+└── requestLogDisplay.test.ts      请求日志投影和文案合同
+```
 
 与相邻子包的边界：
 

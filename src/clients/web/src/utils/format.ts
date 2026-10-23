@@ -1,3 +1,27 @@
+const TIME_FORMATTER = new Intl.DateTimeFormat('zh-CN', {
+  hour: '2-digit',
+  minute: '2-digit',
+  second: '2-digit',
+});
+
+const DATE_TIME_FORMATTER = new Intl.DateTimeFormat('zh-CN', {
+  year: 'numeric',
+  month: '2-digit',
+  day: '2-digit',
+  hour: '2-digit',
+  minute: '2-digit',
+  second: '2-digit',
+  timeZoneName: 'short',
+});
+
+// 保留浏览器默认语言与时区，等价于无选项的 Date 本地时间格式化。
+const LOCAL_DATE_TIME_FORMATTER = new Intl.DateTimeFormat();
+const LOCAL_TIME_FORMATTER = new Intl.DateTimeFormat(undefined, {
+  hour: 'numeric',
+  minute: 'numeric',
+  second: 'numeric',
+});
+
 export function escapeHtml(value: unknown): string {
   return String(value ?? '')
     .replace(/&/g, '&amp;')
@@ -17,11 +41,7 @@ export function formatTime(value: unknown): string {
     return String(value);
   }
 
-  return new Intl.DateTimeFormat('zh-CN', {
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-  }).format(date);
+  return TIME_FORMATTER.format(date);
 }
 
 export function formatDateTime(value: unknown): string {
@@ -34,15 +54,21 @@ export function formatDateTime(value: unknown): string {
     return String(value);
   }
 
-  return new Intl.DateTimeFormat('zh-CN', {
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-    timeZoneName: 'short',
-  }).format(date);
+  return DATE_TIME_FORMATTER.format(date);
+}
+
+export function formatLocalDateTime(value: string): string {
+  const date = new Date(value);
+  return Number.isNaN(date.getTime())
+    ? date.toLocaleString()
+    : LOCAL_DATE_TIME_FORMATTER.format(date);
+}
+
+export function formatLocalTime(value: string): string {
+  const date = new Date(value);
+  return Number.isNaN(date.getTime())
+    ? date.toLocaleTimeString()
+    : LOCAL_TIME_FORMATTER.format(date);
 }
 
 /**

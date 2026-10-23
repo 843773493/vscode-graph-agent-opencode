@@ -1,6 +1,6 @@
 import { useContextInspection, type InspectionOwner } from "../../hooks/contextInspection/useContextInspection";
 import { objectField, textField, type ContextItem } from "../../state/contextInspection/pagination";
-import "../../styles/contextInspection.css";
+import "../../styles/inspection/contextInspection.css";
 
 function ProjectionItem({ item }: { item: ContextItem }) {
   if (item.kind === "selection") {

@@ -12,8 +12,14 @@ from langgraph.checkpoint.base import empty_checkpoint
 
 async def create_session(client: httpx.AsyncClient, title: str) -> str:
     response = await client.post("/api/v1/sessions", json={"title": title})
-    assert response.status_code == 200, response.text
-    return str(response.json()["data"]["session_id"])
+    if response.status_code != 200:
+        raise AssertionError(
+            f"创建会话失败: status={response.status_code}, body={response.text}"
+        )
+    session_id = response.json()["data"]["session_id"]
+    if not isinstance(session_id, str) or not session_id:
+        raise AssertionError(f"创建会话成功响应缺少有效 session_id: {response.text}")
+    return session_id
 
 
 def checkpoint_fixture(

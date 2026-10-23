@@ -1,4 +1,4 @@
-const apiOrigin = `${window.location.protocol}//${window.location.hostname}:7910`;
+let apiOrigin;
 
 const elements = {
   apiOrigin: document.querySelector("#api-origin"),
@@ -21,9 +21,15 @@ const state = {
   attachedTargetId: null,
   file: null,
   dirty: false,
+  draftRevision: 0,
+  activeFileOperation: null,
 };
 
-elements.apiOrigin.textContent = apiOrigin;
+const fileOperationStatus = {
+  attach: "正在 attach",
+  refresh: "正在刷新",
+  save: "正在保存",
+};
 
 function requireElement(element, name) {
   if (!element) {
@@ -51,12 +57,11 @@ async function requestJson(path, options = {}) {
   const response = await fetch(`${apiOrigin}${path}`, {
     ...options,
     headers: {
-      "content-type": "application/json",
+      ...(options.body === undefined ? {} : { "content-type": "application/json" }),
       ...(options.headers || {}),
     },
   });
-  const text = await response.text();
-  const payload = text.trim() ? JSON.parse(text) : {};
+  const payload = await response.json();
   if (!response.ok) {
     throw new Error(payload.error || `HTTP ${response.status}`);
   }
@@ -78,6 +83,7 @@ function renderTargets() {
     button.type = "button";
     button.className = target.id === state.selectedTargetId ? "target-item active" : "target-item";
     button.dataset.targetId = target.id;
+    button.disabled = state.activeFileOperation !== null;
 
     const title = document.createElement("strong");
     title.textContent = target.name;
@@ -92,33 +98,38 @@ function renderTargets() {
         state.file = null;
         state.dirty = false;
       }
-      render();
+      render({ updateTargets: true });
     });
     elements.targetList.append(button);
   }
 }
 
-function renderFile(file) {
+function applyFileSnapshot(file, draftRevisionAtRequest) {
   state.file = file;
-  state.dirty = false;
-  elements.editor.value = file.content;
+  if (state.draftRevision === draftRevisionAtRequest) {
+    elements.editor.value = file.content;
+  }
+  state.dirty = elements.editor.value !== file.content;
   elements.filePath.textContent = file.path;
   elements.updatedAt.textContent = new Date(file.updatedAt).toLocaleString();
 }
 
-function render() {
-  renderTargets();
+function render({ updateTargets = false } = {}) {
+  if (updateTargets) {
+    renderTargets();
+  }
   const target = selectedTarget();
   const attached = state.attachedTargetId === state.selectedTargetId && state.file;
 
   elements.activeTitle.textContent = target ? target.name : "选择目标";
   elements.activeKind.textContent = target ? (target.kind === "ssh" ? "SSH attach" : "Local attach") : "未 attach";
-  elements.attachButton.disabled = !target;
+  elements.attachButton.disabled = !target || state.activeFileOperation !== null;
   elements.attachButton.textContent = attached ? "重新 Attach" : "Attach";
-  elements.refreshButton.disabled = !attached;
-  elements.saveButton.disabled = !attached || !state.dirty;
-  elements.editor.disabled = !attached;
-  elements.statusText.textContent = attached ? (state.dirty ? "已修改" : "已 attach") : "未连接";
+  elements.refreshButton.disabled = !attached || state.activeFileOperation !== null;
+  elements.saveButton.disabled = !attached || !state.dirty || state.activeFileOperation !== null;
+  elements.editor.disabled = !attached || state.activeFileOperation === "attach";
+  elements.statusText.textContent = fileOperationStatus[state.activeFileOperation]
+    || (attached ? (state.dirty ? "已修改" : "已 attach") : "未连接");
 
   if (!attached) {
     elements.editor.value = "";
@@ -133,12 +144,18 @@ async function attachSelectedTarget() {
     throw new Error("未选择 attach 目标");
   }
   clearToast();
-  elements.statusText.textContent = "正在 attach";
-  const payload = await requestJson(managedFileProxyPath(target.id));
-  state.attachedTargetId = target.id;
-  renderFile(payload.file);
-  render();
-  showToast(`已 attach 到 ${target.name}`, "success");
+  const draftRevisionAtRequest = state.draftRevision;
+  state.activeFileOperation = "attach";
+  render({ updateTargets: true });
+  try {
+    const payload = await requestJson(managedFileProxyPath(target.id));
+    state.attachedTargetId = target.id;
+    applyFileSnapshot(payload.file, draftRevisionAtRequest);
+    showToast(`已 attach 到 ${target.name}`, "success");
+  } finally {
+    state.activeFileOperation = null;
+    render({ updateTargets: true });
+  }
 }
 
 async function refreshFile() {
@@ -146,10 +163,18 @@ async function refreshFile() {
     throw new Error("尚未 attach");
   }
   clearToast();
-  const payload = await requestJson(managedFileProxyPath(state.attachedTargetId));
-  renderFile(payload.file);
-  render();
-  showToast("已刷新", "success");
+  const targetId = state.attachedTargetId;
+  const draftRevisionAtRequest = state.draftRevision;
+  state.activeFileOperation = "refresh";
+  render({ updateTargets: true });
+  try {
+    const payload = await requestJson(managedFileProxyPath(targetId));
+    applyFileSnapshot(payload.file, draftRevisionAtRequest);
+    showToast("已刷新", "success");
+  } finally {
+    state.activeFileOperation = null;
+    render({ updateTargets: true });
+  }
 }
 
 async function saveFile() {
@@ -157,14 +182,22 @@ async function saveFile() {
     throw new Error("尚未 attach");
   }
   clearToast();
-  elements.statusText.textContent = "正在保存";
-  const payload = await requestJson(managedFileProxyPath(state.attachedTargetId), {
-    method: "PUT",
-    body: JSON.stringify({ content: elements.editor.value }),
-  });
-  renderFile(payload.file);
-  render();
-  showToast("已保存", "success");
+  const targetId = state.attachedTargetId;
+  const content = elements.editor.value;
+  const draftRevisionAtRequest = state.draftRevision;
+  state.activeFileOperation = "save";
+  render({ updateTargets: true });
+  try {
+    const payload = await requestJson(managedFileProxyPath(targetId), {
+      method: "PUT",
+      body: JSON.stringify({ content }),
+    });
+    applyFileSnapshot(payload.file, draftRevisionAtRequest);
+    showToast("已保存", "success");
+  } finally {
+    state.activeFileOperation = null;
+    render({ updateTargets: true });
+  }
 }
 
 async function withUiError(action) {
@@ -194,11 +227,29 @@ elements.editor.addEventListener("input", () => {
   if (!state.file) {
     return;
   }
+  state.draftRevision += 1;
   state.dirty = elements.editor.value !== state.file.content;
   render();
 });
 
-const initialTargets = await requestJson("/api/targets");
-state.targets = initialTargets.targets;
-state.selectedTargetId = initialTargets.defaultTargetId;
 render();
+
+async function initializePage() {
+  const response = await fetch("/runtime-config");
+  if (!response.ok) {
+    throw new Error(`读取前端运行配置失败: HTTP ${response.status}`);
+  }
+  const runtimeConfig = await response.json();
+  if (!Number.isInteger(runtimeConfig.gatewayPort) || runtimeConfig.gatewayPort <= 0 || runtimeConfig.gatewayPort > 65535) {
+    throw new Error(`前端运行配置中的 gatewayPort 非法: ${runtimeConfig.gatewayPort}`);
+  }
+
+  apiOrigin = `${window.location.protocol}//${window.location.hostname}:${runtimeConfig.gatewayPort}`;
+  elements.apiOrigin.textContent = apiOrigin;
+  const initialTargets = await requestJson("/api/targets");
+  state.targets = initialTargets.targets;
+  state.selectedTargetId = initialTargets.defaultTargetId;
+  render({ updateTargets: true });
+}
+
+void withUiError(initializePage);

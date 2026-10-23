@@ -72,8 +72,8 @@ def _owner(
 
 
 @pytest.fixture()
-def registry() -> GraphFactoryRegistry:
-    """每个测试独立的 registry，不污染进程级单例。"""
+def graph_factory_registry() -> GraphFactoryRegistry:
+    """每个测试独立的 GraphFactoryRegistry，不污染进程级单例。"""
     return GraphFactoryRegistry()
 
 
@@ -262,37 +262,37 @@ def test_hash_helpers_reject_invalid_inputs() -> None:
 
 
 def test_registry_register_and_resolve_roundtrip(
-    registry: GraphFactoryRegistry,
+    graph_factory_registry: GraphFactoryRegistry,
 ) -> None:
     binding = _binding()
     builder = _make_builder("blueprint")
-    registry.register(binding, builder)
-    assert registry.resolve(binding) is builder
+    graph_factory_registry.register(binding, builder)
+    assert graph_factory_registry.resolve(binding) is builder
 
 
 def test_registry_register_is_idempotent_for_identical_entry(
-    registry: GraphFactoryRegistry,
+    graph_factory_registry: GraphFactoryRegistry,
 ) -> None:
     binding = _binding()
     builder = _make_builder("blueprint")
-    registry.register(binding, builder)
-    registry.register(binding, builder)
-    assert registry.resolve(binding) is builder
+    graph_factory_registry.register(binding, builder)
+    graph_factory_registry.register(binding, builder)
+    assert graph_factory_registry.resolve(binding) is builder
 
 
 def test_registry_rejects_non_callable_builder(
-    registry: GraphFactoryRegistry,
+    graph_factory_registry: GraphFactoryRegistry,
 ) -> None:
     with pytest.raises(TypeError, match="可调用对象"):
-        registry.register(_binding(), "not-callable")  # type: ignore[arg-type]
+        graph_factory_registry.register(_binding(), "not-callable")  # type: ignore[arg-type]
 
 
 def test_registry_conflict_on_different_schema_hash(
-    registry: GraphFactoryRegistry,
+    graph_factory_registry: GraphFactoryRegistry,
 ) -> None:
-    registry.register(_binding(), _make_builder("first"))
+    graph_factory_registry.register(_binding(), _make_builder("first"))
     with pytest.raises(GraphFactoryRegistrationConflictError) as excinfo:
-        registry.register(
+        graph_factory_registry.register(
             _binding(graph_schema_hash=_DIGEST_C),
             _make_builder("second"),
         )
@@ -303,11 +303,11 @@ def test_registry_conflict_on_different_schema_hash(
 
 
 def test_registry_conflict_on_different_capability_hash(
-    registry: GraphFactoryRegistry,
+    graph_factory_registry: GraphFactoryRegistry,
 ) -> None:
-    registry.register(_binding(), _make_builder("first"))
+    graph_factory_registry.register(_binding(), _make_builder("first"))
     with pytest.raises(GraphFactoryRegistrationConflictError) as excinfo:
-        registry.register(
+        graph_factory_registry.register(
             _binding(capability_profile_hash=_DIGEST_C),
             _make_builder("second"),
         )
@@ -318,11 +318,11 @@ def test_registry_conflict_on_different_capability_hash(
 
 
 def test_registry_conflict_on_same_binding_different_builder(
-    registry: GraphFactoryRegistry,
+    graph_factory_registry: GraphFactoryRegistry,
 ) -> None:
-    registry.register(_binding(), _make_builder("first"))
+    graph_factory_registry.register(_binding(), _make_builder("first"))
     with pytest.raises(GraphFactoryRegistrationConflictError):
-        registry.register(_binding(), _make_builder("second"))
+        graph_factory_registry.register(_binding(), _make_builder("second"))
 
 
 # ---------------------------------------------------------------------------
@@ -331,12 +331,14 @@ def test_registry_conflict_on_same_binding_different_builder(
 
 
 def test_resolve_fails_when_graph_id_not_registered(
-    registry: GraphFactoryRegistry,
+    graph_factory_registry: GraphFactoryRegistry,
 ) -> None:
-    registry.register(_binding(graph_id="known-graph"), _make_builder("b"))
+    graph_factory_registry.register(
+        _binding(graph_id="known-graph"), _make_builder("b")
+    )
     binding = _binding(graph_id="unknown-graph")
     with pytest.raises(GraphBindingUnavailableError) as excinfo:
-        registry.resolve(binding)
+        graph_factory_registry.resolve(binding)
     message = str(excinfo.value)
     assert "graph_binding_unavailable" in message
     assert "unknown-graph" in message
@@ -347,12 +349,12 @@ def test_resolve_fails_when_graph_id_not_registered(
 
 
 def test_resolve_does_not_fallback_to_other_revision(
-    registry: GraphFactoryRegistry,
+    graph_factory_registry: GraphFactoryRegistry,
 ) -> None:
-    registry.register(_binding(graph_revision=2), _make_builder("v2"))
+    graph_factory_registry.register(_binding(graph_revision=2), _make_builder("v2"))
     stale_binding = _binding(graph_revision=1)
     with pytest.raises(GraphBindingUnavailableError) as excinfo:
-        registry.resolve(stale_binding)
+        graph_factory_registry.resolve(stale_binding)
     message = str(excinfo.value)
     assert "graph_binding_unavailable" in message
     assert "不回退" in message
@@ -361,12 +363,12 @@ def test_resolve_does_not_fallback_to_other_revision(
 
 
 def test_resolve_fails_on_schema_hash_drift(
-    registry: GraphFactoryRegistry,
+    graph_factory_registry: GraphFactoryRegistry,
 ) -> None:
-    registry.register(_binding(), _make_builder("b"))
+    graph_factory_registry.register(_binding(), _make_builder("b"))
     drifted = _binding(graph_schema_hash=_DIGEST_C)
     with pytest.raises(GraphBindingUnavailableError) as excinfo:
-        registry.resolve(drifted)
+        graph_factory_registry.resolve(drifted)
     message = str(excinfo.value)
     assert "graph_binding_unavailable" in message
     assert f"期望(注册)={_DIGEST_A!r}" in message
@@ -374,12 +376,12 @@ def test_resolve_fails_on_schema_hash_drift(
 
 
 def test_resolve_fails_on_capability_hash_drift(
-    registry: GraphFactoryRegistry,
+    graph_factory_registry: GraphFactoryRegistry,
 ) -> None:
-    registry.register(_binding(), _make_builder("b"))
+    graph_factory_registry.register(_binding(), _make_builder("b"))
     drifted = _binding(capability_profile_hash=_DIGEST_C)
     with pytest.raises(GraphBindingUnavailableError) as excinfo:
-        registry.resolve(drifted)
+        graph_factory_registry.resolve(drifted)
     message = str(excinfo.value)
     assert "graph_binding_unavailable" in message
     assert f"期望(注册)={_DIGEST_B!r}" in message
@@ -396,8 +398,14 @@ def test_deep_agent_graph_binding_is_descriptor_stable() -> None:
     assert binding.graph_id == DEEP_AGENT_GRAPH_ID == "deep-agent"
     assert binding.graph_revision == 15
     assert "PatchToolCallsMiddleware" not in DEEP_AGENT_MIDDLEWARE_STACK
-    assert binding.graph_schema_hash == "sha256:6c06c21fcefb1ef4c3fb6abf15ee5c745f99086d9b889829a73cd2e9b5652377"
-    assert binding.capability_profile_hash == "sha256:c5c064f94d290eed5e016d92c45dd5e1acd6a43753e9fd48296f031412f0b870"
+    assert (
+        binding.graph_schema_hash
+        == "sha256:6c06c21fcefb1ef4c3fb6abf15ee5c745f99086d9b889829a73cd2e9b5652377"
+    )
+    assert (
+        binding.capability_profile_hash
+        == "sha256:c5c064f94d290eed5e016d92c45dd5e1acd6a43753e9fd48296f031412f0b870"
+    )
     assert binding.graph_schema_hash == compute_graph_schema_hash(
         graph_id=DEEP_AGENT_GRAPH_ID,
         middleware_stack=DEEP_AGENT_MIDDLEWARE_STACK,
@@ -495,8 +503,8 @@ def test_resolve_graph_binding_returns_exact_registered_selector() -> None:
     from app.agents.graph_binding import GraphBindingStorePort
 
     binding = _binding()
-    registry = GraphFactoryRegistry()
-    registry.register(binding, _make_builder("exact"))
+    graph_factory_registry = GraphFactoryRegistry()
+    graph_factory_registry.register(binding, _make_builder("exact"))
     store = MagicMock(spec=GraphBindingStorePort)
     store.load_graph_binding.return_value = binding
 
@@ -504,7 +512,7 @@ def test_resolve_graph_binding_returns_exact_registered_selector() -> None:
         resolve_graph_binding(
             store=store,
             owner=_owner(),
-            registry=registry,
+            registry=graph_factory_registry,
         )
         is binding
     )
@@ -516,8 +524,8 @@ def test_resolve_graph_binding_rejects_revision_drift_without_fallback() -> None
     from app.agents.graph_binding import GraphBindingStorePort
 
     registered = _binding()
-    registry = GraphFactoryRegistry()
-    registry.register(registered, _make_builder("exact"))
+    graph_factory_registry = GraphFactoryRegistry()
+    graph_factory_registry.register(registered, _make_builder("exact"))
     store = MagicMock(spec=GraphBindingStorePort)
     store.load_graph_binding.return_value = _binding(graph_revision=2)
 
@@ -525,7 +533,7 @@ def test_resolve_graph_binding_rejects_revision_drift_without_fallback() -> None
         resolve_graph_binding(
             store=store,
             owner=_owner(),
-            registry=registry,
+            registry=graph_factory_registry,
         )
 
 
@@ -536,7 +544,8 @@ def test_resolve_graph_binding_rejects_revision_drift_without_fallback() -> None
 
 def test_binding_for_combines_graph_and_thread_bindings() -> None:
     thread_binding = ThreadRuntimeBinding(
-        session_id="ses_graph", thread_id=thread_id_at(datetime(2026, 6, 1, tzinfo=UTC)),
+        session_id="ses_graph",
+        thread_id=thread_id_at(datetime(2026, 6, 1, tzinfo=UTC)),
     )
     combined = binding_for(DEEP_AGENT_GRAPH_BINDING, thread_binding)
     assert isinstance(combined, InvocationGraphBinding)

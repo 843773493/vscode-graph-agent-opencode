@@ -10,6 +10,8 @@ shared/
 
 命令协议语义独占一份实现；server决定何时推导状态，client决定何时展示，shared不负责两者的调用时机。UTF-8字节边界仍归server/output/terminalUtf8Output.js，传输字段转换仍归protocol/messages.js。
 
+退出码解析只在派生文本中移除完整ANSI序列。OSC标题/超链接按BEL或首个ESC反斜杠结束，不能跨下一条转义把普通正文或命令完成标记吞掉；OSC元数据中的伪标记仍须忽略。未闭合OSC前缀不跨后续ESC重扫整段尾部，原始输出、完成事件身份、sequence及展示过滤不因此改变。
+
 ## 可修改内容
 
 - 接收字符串并返回派生值的命令文本算法及其单元测试。

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from itertools import islice
 from typing import Any
 
 from pydantic import RootModel
@@ -71,6 +72,6 @@ def _compact_value(
                 remaining=remaining,
                 key=str(child_key),
             )
-            for child_key, child in list(value.items())[:64]
+            for child_key, child in islice(value.items(), 64)
         }
     return value

@@ -20,7 +20,8 @@ class AgentStreamContentPart:
     ]
     text: str
     extras: dict[str, Any] | None = None
-    payload: dict[str, Any] | None = None
+    reasoning_items: object | None = None
+    redacted_thinking_data: object | None = None
 
 
 def extract_reasoning_summary(summary: Any) -> str:
@@ -196,7 +197,16 @@ def extract_agent_stream_content_parts(content: Any) -> list[AgentStreamContentP
                     if isinstance(block.get("extras"), dict)
                     else None
                 ),
-                payload=dict(block),
+                reasoning_items=(
+                    block.get("reasoning_items")
+                    if block_type == "reasoning_items"
+                    else None
+                ),
+                redacted_thinking_data=(
+                    block.get("data")
+                    if block_type == "redacted_thinking"
+                    else None
+                ),
             )
         )
     return result

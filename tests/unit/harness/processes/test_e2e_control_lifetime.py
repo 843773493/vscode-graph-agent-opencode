@@ -7,7 +7,7 @@ from unittest.mock import Mock
 
 import pytest
 
-from tests.support import e2e_test_control
+from tests.support.e2e_control import harness as e2e_test_control
 
 
 @dataclass

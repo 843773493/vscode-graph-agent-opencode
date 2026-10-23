@@ -208,7 +208,16 @@ class StrictRequestMatcher:
         cassette: ModelStreamCassette,
         request: httpx.Request,
     ) -> tuple[Interaction, ...]:
-        summary = request_summary(request)
+        return self._matching_interactions_for_summary(
+            cassette,
+            request_summary(request),
+        )
+
+    def _matching_interactions_for_summary(
+        self,
+        cassette: ModelStreamCassette,
+        summary: RequestSummary,
+    ) -> tuple[Interaction, ...]:
         matched = tuple(
             interaction
             for interaction in cassette.interactions
@@ -224,7 +233,7 @@ class StrictRequestMatcher:
         scenario_id: str,
     ) -> Interaction:
         summary = request_summary(request)
-        matched = self.matching_interactions(cassette, request)
+        matched = self._matching_interactions_for_summary(cassette, summary)
         if len(matched) == 1:
             return matched[0]
         if not matched:

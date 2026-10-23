@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import type { GatewayRuntimeGroupRequest, GatewayWorkspace } from "../../../types/backend";
 import { errorMessage } from "../../../utils/errorMessage";
 
@@ -12,73 +12,122 @@ export interface GatewayBackendRuntimeActions {
 export default function GatewayBackendRuntimePanel({
   workspaces, onStart, onStop, onSafeRestart, onForceRestart,
 }: GatewayBackendRuntimeActions & { workspaces: GatewayWorkspace[] }) {
-  const [selection, setSelection] = useState<{ generation: string; workspaceId: string; ids: string[] } | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const managed = workspaces.filter((workspace) => workspace.managed);
-  const groups = new Map<string, GatewayWorkspace[]>();
-  for (const workspace of managed) {
-    const key = `${workspace.remote?.gateway_connection_id ?? "local"}:${workspace.backend_generation ?? workspace.workspace_id}`;
-    const group = groups.get(key) ?? [];
-    group.push(workspace);
-    groups.set(key, group);
-  }
-  const run = async (action: () => Promise<void>) => {
-    setBusy(true);
-    setError(null);
-    try { await action(); setSelection(null); }
-    catch (failure) { setError(errorMessage(failure)); }
-    finally { setBusy(false); }
+  const [memberSelection, setMemberSelection] = useState<{
+    backendGeneration: string;
+    targetWorkspaceId: string;
+    desiredWorkspaceIds: string[];
+  } | null>(null);
+  const [actionBusy, setActionBusy] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const workspaceById = useMemo(() => {
+    const index = new Map<string, GatewayWorkspace>();
+    for (const workspace of workspaces) {
+      if (!index.has(workspace.workspace_id)) index.set(workspace.workspace_id, workspace);
+    }
+    return index;
+  }, [workspaces]);
+  const managedWorkspaces = useMemo(
+    () => workspaces.filter((workspace) => workspace.managed),
+    [workspaces],
+  );
+  const runtimeGroups = useMemo(() => {
+    const groups = new Map<string, GatewayWorkspace[]>();
+    for (const workspace of managedWorkspaces) {
+      const groupKey = `${workspace.remote?.gateway_connection_id ?? "local"}:${workspace.backend_generation ?? workspace.workspace_id}`;
+      const groupMembers = groups.get(groupKey) ?? [];
+      groupMembers.push(workspace);
+      groups.set(groupKey, groupMembers);
+    }
+    return [...groups.entries()].map(([groupKey, groupMembers]) => {
+      const groupTarget = groupMembers.find((workspace) => workspace.system_default) ?? groupMembers[0];
+      const memberWorkspaceIds = groupTarget.backend_generation
+        ? groupTarget.affected_workspace_ids
+        : [groupTarget.workspace_id];
+      const memberWorkspaceIdSet = new Set(memberWorkspaceIds);
+      const memberWorkspaces = memberWorkspaceIds.map((workspaceId) => workspaceById.get(workspaceId));
+      const candidateWorkspaces = managedWorkspaces.filter((workspace) =>
+        memberWorkspaceIdSet.has(workspace.workspace_id)
+        || (workspace.status === "offline" && workspace.affected_workspace_ids.length <= 1
+          && workspace.remote?.gateway_connection_id === groupTarget.remote?.gateway_connection_id),
+      );
+      return {
+        groupKey,
+        groupTarget,
+        memberWorkspaceIds,
+        memberWorkspaces,
+        allMembersReady: groupMembers.every((workspace) => workspace.status === "ready"),
+        hasProtectedMember: memberWorkspaces.some(
+          (workspace) => workspace?.system_default || workspace?.removable === false,
+        ),
+        candidateWorkspaces,
+      };
+    });
+  }, [managedWorkspaces, workspaceById]);
+  const runRuntimeAction = async (runtimeAction: () => Promise<void>) => {
+    setActionBusy(true);
+    setActionError(null);
+    try { await runtimeAction(); setMemberSelection(null); }
+    catch (failure) { setActionError(errorMessage(failure)); }
+    finally { setActionBusy(false); }
   };
   return <section aria-label="Backend 运行时">
-    {error ? <div className="gateway-console-alert" role="alert">{error}</div> : null}
-    {[...groups.entries()].map(([key, group]) => {
-      const target = group.find((item) => item.system_default) ?? group[0];
-      const memberIds = target.backend_generation ? target.affected_workspace_ids : [target.workspace_id];
-      const members = memberIds.map((id) => workspaces.find((item) => item.workspace_id === id));
-      const selected = selection?.generation === target.backend_generation && selection?.workspaceId === target.workspace_id;
-      const desired = selected && selection ? selection.ids : memberIds;
-      const ready = group.every((item) => item.status === "ready");
-      const protectedGroup = members.some((item) => item?.system_default || item?.removable === false);
-      const candidates = managed.filter((item) =>
-        memberIds.includes(item.workspace_id)
-        || (item.status === "offline" && item.affected_workspace_ids.length <= 1
-          && item.remote?.gateway_connection_id === target.remote?.gateway_connection_id),
-      );
-      const request = target.backend_generation ? {
-        expected_backend_generation: target.backend_generation,
-        expected_workspace_ids: memberIds,
-        desired_workspace_ids: desired,
+    {actionError ? <div className="gateway-console-alert" role="alert">{actionError}</div> : null}
+    {runtimeGroups.map((runtimeGroup) => {
+      const {
+        groupKey,
+        groupTarget,
+        memberWorkspaceIds,
+        memberWorkspaces,
+        allMembersReady,
+        hasProtectedMember,
+        candidateWorkspaces,
+      } = runtimeGroup;
+      const isMemberSelectionOpen = memberSelection?.backendGeneration === groupTarget.backend_generation
+        && memberSelection?.targetWorkspaceId === groupTarget.workspace_id;
+      const desiredWorkspaceIds = isMemberSelectionOpen && memberSelection
+        ? memberSelection.desiredWorkspaceIds
+        : memberWorkspaceIds;
+      const groupRestartRequest = groupTarget.backend_generation ? {
+        expected_backend_generation: groupTarget.backend_generation,
+        expected_workspace_ids: memberWorkspaceIds,
+        desired_workspace_ids: desiredWorkspaceIds,
       } : undefined;
-      return <article className="gateway-connection-section" key={key}>
-        <h2>{members.map((item, index) => item?.name ?? memberIds[index]).join("、")}</h2>
-        <p>{ready ? "运行中" : "离线或异常"} · {memberIds.length} 个工作区共用一个 Backend</p>
+      return <article className="gateway-connection-section" key={groupKey}>
+        <h2>{memberWorkspaces.map((workspace, index) => workspace?.name ?? memberWorkspaceIds[index]).join("、")}</h2>
+        <p>{allMembersReady ? "运行中" : "离线或异常"} · {memberWorkspaceIds.length} 个工作区共用一个 Backend</p>
         <div className="gateway-control-actions">
-          <button type="button" disabled={busy || ready} onClick={() => void run(() => onStart(target.workspace_id))}>启动完整组</button>
-          <button type="button" disabled={busy || !ready || protectedGroup} onClick={() => void run(() => onStop(target.workspace_id))}>关闭完整组</button>
-          <button type="button" disabled={busy || !target.backend_generation} onClick={() => void run(() => onSafeRestart(target.workspace_id))}>安全重启</button>
-          <button type="button" className="danger-soft" disabled={busy || !target.backend_generation} onClick={() => void run(() => onForceRestart(target.workspace_id))}>强制重启</button>
-          <button type="button" disabled={busy || !target.backend_generation} onClick={() => setSelection(
-            selected ? null : { generation: target.backend_generation!, workspaceId: target.workspace_id, ids: memberIds },
+          <button type="button" disabled={actionBusy || allMembersReady} onClick={() => void runRuntimeAction(() => onStart(groupTarget.workspace_id))}>启动完整组</button>
+          <button type="button" disabled={actionBusy || !allMembersReady || hasProtectedMember} onClick={() => void runRuntimeAction(() => onStop(groupTarget.workspace_id))}>关闭完整组</button>
+          <button type="button" disabled={actionBusy || !groupTarget.backend_generation} onClick={() => void runRuntimeAction(() => onSafeRestart(groupTarget.workspace_id))}>安全重启</button>
+          <button type="button" className="danger-soft" disabled={actionBusy || !groupTarget.backend_generation} onClick={() => void runRuntimeAction(() => onForceRestart(groupTarget.workspace_id))}>强制重启</button>
+          <button type="button" disabled={actionBusy || !groupTarget.backend_generation} onClick={() => setMemberSelection(
+            isMemberSelectionOpen ? null : {
+              backendGeneration: groupTarget.backend_generation!,
+              targetWorkspaceId: groupTarget.workspace_id,
+              desiredWorkspaceIds: memberWorkspaceIds,
+            },
           )}>调整成员</button>
         </div>
-        {selected ? <fieldset disabled={busy}>
+        {isMemberSelectionOpen ? <fieldset disabled={actionBusy}>
           <legend>重启后的完整成员</legend>
-          {candidates.map((item) => <label key={item.workspace_id} style={{ display: "block" }}>
-            <input type="checkbox" checked={desired.includes(item.workspace_id)}
-              disabled={item.system_default || !item.removable}
-              onChange={(event) => setSelection({
-                generation: target.backend_generation!, workspaceId: target.workspace_id,
-                ids: event.target.checked ? [...desired, item.workspace_id] : desired.filter((id) => id !== item.workspace_id),
-              })} /> {item.name}{item.system_default ? "（默认工作区）" : ""}
+          {candidateWorkspaces.map((workspace) => <label key={workspace.workspace_id} style={{ display: "block" }}>
+            <input type="checkbox" checked={desiredWorkspaceIds.includes(workspace.workspace_id)}
+              disabled={workspace.system_default || !workspace.removable}
+              onChange={(event) => setMemberSelection({
+                backendGeneration: groupTarget.backend_generation!,
+                targetWorkspaceId: groupTarget.workspace_id,
+                desiredWorkspaceIds: event.target.checked
+                  ? [...desiredWorkspaceIds, workspace.workspace_id]
+                  : desiredWorkspaceIds.filter((workspaceId) => workspaceId !== workspace.workspace_id),
+              })} /> {workspace.name}{workspace.system_default ? "（默认工作区）" : ""}
           </label>)}
           <p>加入前请先关闭另一个 singleton；移出全部成员将关闭 Backend，其余变更会一起受控重启。</p>
-          <button type="button" onClick={() => void run(() => onSafeRestart(target.workspace_id, request))}>{desired.length ? "确认成员并安全重启" : "排空并退出全部成员"}</button>
-          <button type="button" className="danger-soft" onClick={() => void run(() => onForceRestart(target.workspace_id, request))}>{desired.length ? "确认成员并强制重启" : "中断任务并退出全部成员"}</button>
+          <button type="button" onClick={() => void runRuntimeAction(() => onSafeRestart(groupTarget.workspace_id, groupRestartRequest))}>{desiredWorkspaceIds.length ? "确认成员并安全重启" : "排空并退出全部成员"}</button>
+          <button type="button" className="danger-soft" onClick={() => void runRuntimeAction(() => onForceRestart(groupTarget.workspace_id, groupRestartRequest))}>{desiredWorkspaceIds.length ? "确认成员并强制重启" : "中断任务并退出全部成员"}</button>
         </fieldset> : null}
       </article>;
     })}
-    {managed.length === 0 ? <p>当前 Gateway 没有托管工作区。</p> : null}
-    {busy ? <p role="status">正在操作完整组，请等待所有工作区就绪…</p> : null}
+    {managedWorkspaces.length === 0 ? <p>当前 Gateway 没有托管工作区。</p> : null}
+    {actionBusy ? <p role="status">正在操作完整组，请等待所有工作区就绪…</p> : null}
   </section>;
 }

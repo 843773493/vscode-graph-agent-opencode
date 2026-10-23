@@ -70,12 +70,12 @@ class TestSessionService:
         request: pytest.FixtureRequest,
         session_config_service: SessionServiceConfigStub,
     ):
-        """从完整只读模板准备正式测试工作区，并注入离线配置替身。"""
+        """准备隔离的会话数据目录，并注入离线配置替身。"""
         context, _, workspace_root = prepare_session_test_workspace(
             test_file=Path(request.node.path),
             node_id=request.node.nodeid,
+            template_items=(),
         )
-        self.temp_dir = workspace_root
         self.workspace_id = load_or_create_workspace_id(workspace_root)
         initialize_directories(self.workspace_id, workspace_root)
         self.config_service = session_config_service
@@ -813,13 +813,14 @@ class TestSessionListReadAmplification:
     workspace_id = "00000000-0000-4000-8000-000000000001"
 
     @pytest.fixture()
-    def workspace_base(self, request: pytest.FixtureRequest) -> Iterator[Path]:
-        context, workspace_base, _ = prepare_session_test_workspace(
+    def workspace_fixture_root(self, request: pytest.FixtureRequest) -> Iterator[Path]:
+        context, workspace_fixture_root, _ = prepare_session_test_workspace(
             test_file=Path(request.node.path),
             node_id=request.node.nodeid,
+            template_items=(),
         )
         try:
-            yield workspace_base
+            yield workspace_fixture_root
         finally:
             context.close()
 
@@ -827,7 +828,7 @@ class TestSessionListReadAmplification:
     @pytest.mark.parametrize("population", [30, 200])
     async def test_list_projects_only_current_page_without_manifests(
         self,
-        workspace_base: Path,
+        workspace_fixture_root: Path,
         session_config_service: SessionServiceConfigStub,
         monkeypatch: pytest.MonkeyPatch,
         request: pytest.FixtureRequest,
@@ -836,7 +837,7 @@ class TestSessionListReadAmplification:
         from tests.unit.core.catalog_workspace_helper import build_catalog_workspace
 
         workspace = build_catalog_workspace(
-            workspace_base,
+            workspace_fixture_root,
             workspace_id=self.workspace_id,
         )
         try:

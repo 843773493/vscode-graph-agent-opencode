@@ -17,29 +17,28 @@ from app.services.infrastructure.external_resource_leases import (
 )
 
 
-def _ledger_with_events(tmp_path: Path) -> tuple[
-    ExternalResourceLeaseLedger,
-    EventChannelService,
-]:
+def _ledger_with_state_events(
+    tmp_path: Path,
+    event_service: EventChannelService,
+) -> ExternalResourceLeaseLedger:
     """带 resource.state 通知出口的账本与同一事件服务（供订阅断言）。"""
-    service = EventChannelService()
-    ledger = ExternalResourceLeaseLedger(
+    return ExternalResourceLeaseLedger(
         state_path=tmp_path / "resources.json",
         state_events=ResourceStateEventPublisher(
-            event_service=service,
+            event_service=event_service,
             owner_domain="external_resource_leases",
         ),
     )
-    return ledger, service
 
 
 @pytest.mark.asyncio
 async def test_holder_settle_publishes_released_but_turn_release_does_not(
     tmp_path: Path,
+    event_channel_service: EventChannelService,
 ) -> None:
     """Turn 收尾释放不发事件；owner 核实终态的 settle 才发布 released。"""
-    ledger, service = _ledger_with_events(tmp_path)
-    subscription = service.channel(
+    ledger = _ledger_with_state_events(tmp_path, event_channel_service)
+    subscription = event_channel_service.channel(
         "resource.state/external_resource_leases"
     ).subscribe(label="test")
     ledger.register(
@@ -74,10 +73,11 @@ async def test_holder_settle_publishes_released_but_turn_release_does_not(
 @pytest.mark.asyncio
 async def test_reconcile_required_publishes_unavailable_never_released(
     tmp_path: Path,
+    event_channel_service: EventChannelService,
 ) -> None:
     """崩溃对账缺失证据：占用进入 reconcile_required，事件绝不虚报 released。"""
-    ledger, service = _ledger_with_events(tmp_path)
-    subscription = service.channel(
+    ledger = _ledger_with_state_events(tmp_path, event_channel_service)
+    subscription = event_channel_service.channel(
         "resource.state/external_resource_leases"
     ).subscribe(label="test")
     ledger.register(
@@ -102,20 +102,21 @@ async def test_reconcile_required_publishes_unavailable_never_released(
 @pytest.mark.asyncio
 async def test_event_unavailable_keeps_durable_truth_and_records_error(
     tmp_path: Path,
+    event_channel_service: EventChannelService,
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     """事件通道不可用：durable 事实不变，错误显式记录且可从账本读取。"""
-    service = EventChannelService()
+
     def fail_publish(_event) -> None:
         raise RuntimeError("event unavailable")
 
     # publisher 构造即 ensure channel；先建 publisher 再 patch 同一 channel。
     publisher = ResourceStateEventPublisher(
-        event_service=service,
+        event_service=event_channel_service,
         owner_domain="external_resource_leases",
     )
-    channel = service.channel("resource.state/external_resource_leases")
+    channel = event_channel_service.channel("resource.state/external_resource_leases")
     monkeypatch.setattr(channel, "publish", fail_publish)
     ledger = ExternalResourceLeaseLedger(
         state_path=tmp_path / "resources.json",
@@ -132,18 +133,24 @@ async def test_event_unavailable_keeps_durable_truth_and_records_error(
         lease_id="lease_1",
         operation_id="op_1",
     )
-    with caplog.at_level(logging.ERROR, logger="app.services.infrastructure.external_resource_leases"):
+    with caplog.at_level(
+        logging.ERROR, logger="app.services.infrastructure.external_resource_leases"
+    ):
         settled = ledger.settle("lease_1")
     # durable 事实已经落盘，通知失败绝不回滚。
     assert settled.status == "settled"
     assert ledger.get_lease("lease_1").status == "settled"
     assert ledger.notification_errors
     assert "event unavailable" in ledger.notification_errors[-1]
-    assert any("resource.state 事件发布失败" in record.message for record in caplog.records)
+    assert any(
+        "resource.state 事件发布失败" in record.message for record in caplog.records
+    )
 
 
 @pytest.mark.asyncio
-async def test_turn_cancel_releases_durable_leases_without_stopping_resources(tmp_path: Path) -> None:
+async def test_turn_cancel_releases_durable_leases_without_stopping_resources(
+    tmp_path: Path,
+) -> None:
     manager = ExternalResourceLeaseLedger(state_path=tmp_path / "resources.json")
     manager.register(
         resource_id="browser_1",
@@ -184,7 +191,9 @@ async def test_turn_cancel_releases_durable_leases_without_stopping_resources(tm
 
 
 @pytest.mark.asyncio
-async def test_reconcile_never_assumes_missing_external_resource_is_safe(tmp_path: Path) -> None:
+async def test_reconcile_never_assumes_missing_external_resource_is_safe(
+    tmp_path: Path,
+) -> None:
     manager = ExternalResourceLeaseLedger(state_path=tmp_path / "resources.json")
     manager.register(
         resource_id="mcp_1",
@@ -203,7 +212,9 @@ async def test_reconcile_never_assumes_missing_external_resource_is_safe(tmp_pat
     assert manager.leases_for_turn("stream_1")[0].status == "reconcile_required"
 
 
-def test_external_resource_registration_requires_explicit_supported_kind(tmp_path: Path) -> None:
+def test_external_resource_registration_requires_explicit_supported_kind(
+    tmp_path: Path,
+) -> None:
     manager = ExternalResourceLeaseLedger(state_path=tmp_path / "resources.json")
     manager.register_external(
         resource_id="browser_1",

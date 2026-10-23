@@ -1,4 +1,4 @@
-import { useRef, useState, type DragEvent } from "react";
+import { useMemo, useRef, useState, type DragEvent } from "react";
 import type { WorkspaceNavigationNode } from "../../types/backend";
 import type { SessionResourceExplorerController } from "../../hooks/session/useSessionResourceExplorer";
 import {
@@ -49,14 +49,22 @@ export function useSessionResourceTreeNavigation({
   // 因此必须用 ref 阻断重复提交，保证一次拖放只发一次移动请求。
   const dropInFlightRef = useRef(false);
 
-  const navigationChildren = new Map<string | null, WorkspaceNavigationNode[]>();
-  for (const node of navigationNodes) {
-    const parentId = node.parent_node_id ?? null;
-    navigationChildren.set(parentId, [...(navigationChildren.get(parentId) ?? []), node]);
-  }
-  for (const children of navigationChildren.values()) {
-    children.sort((left, right) => left.position - right.position || left.name.localeCompare(right.name));
-  }
+  const navigationChildren = useMemo(() => {
+    const childrenByParent = new Map<string | null, WorkspaceNavigationNode[]>();
+    for (const node of navigationNodes) {
+      const parentId = node.parent_node_id ?? null;
+      const siblings = childrenByParent.get(parentId);
+      if (siblings) {
+        siblings.push(node);
+      } else {
+        childrenByParent.set(parentId, [node]);
+      }
+    }
+    for (const siblings of childrenByParent.values()) {
+      siblings.sort((left, right) => left.position - right.position || left.name.localeCompare(right.name));
+    }
+    return childrenByParent;
+  }, [navigationNodes]);
 
   const dropTargetClass = (targetKey: string): string => (
     dropTargetKey === targetKey && dropTargetZone

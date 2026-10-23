@@ -17,3 +17,25 @@ export function restoreGlobalDescriptor(
     Reflect.deleteProperty(globalThis, name);
   }
 }
+
+/** 安装只提供计时器的 window 桩，并返回与本次安装配对的还原函数。 */
+export function installWindowWithTimers(options: {
+  port?: string;
+  origin?: string;
+} = {}): () => void {
+  const originalWindow = Object.getOwnPropertyDescriptor(globalThis, "window");
+  const location = options.port === undefined && options.origin === undefined
+    ? undefined
+    : { ...options };
+
+  Object.defineProperty(globalThis, "window", {
+    configurable: true,
+    value: {
+      ...(location ? { location } : {}),
+      setInterval: globalThis.setInterval.bind(globalThis),
+      clearInterval: globalThis.clearInterval.bind(globalThis),
+    },
+  });
+
+  return () => restoreGlobalDescriptor("window", originalWindow);
+}

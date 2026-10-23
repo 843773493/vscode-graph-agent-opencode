@@ -7,7 +7,18 @@ export const DEFAULT_BROWSER_NETWORK_PROFILE = "none";
 const ORIENTATIONS = new Set(["portrait", "landscape"]);
 const DESKTOP_CHROME = devices["Desktop Chrome"];
 
-const NETWORK_PROFILE_DEFINITIONS = new Map([
+/**
+ * 网络仿真预设；参数原值交给CDP Network.emulateNetworkConditions。
+ * @typedef {object} BrowserNetworkThrottleProfile
+ * @property {string} id 本地预设名称，不是连接或网络请求身份。
+ * @property {string} label attach页面中的展示名称。
+ * @property {boolean} offline 是否模拟离线，与吞吐限速分别设置。
+ * @property {number} latency 请求发出到收到响应头的最小延迟，单位毫秒；不是整次下载耗时。
+ * @property {number} downloadThroughput 最大聚合下载吞吐，单位字节/秒；-1表示关闭下载限速。
+ * @property {number} uploadThroughput 最大聚合上传吞吐，单位字节/秒；-1表示关闭上传限速。
+ */
+/** @type {Map<string, BrowserNetworkThrottleProfile>} */
+const NETWORK_THROTTLE_PROFILES = new Map([
   ["none", {
     id: "none",
     label: "无限制",
@@ -120,6 +131,7 @@ export function resolveBrowserDeviceState(
   const profile = getBrowserDeviceProfile(profileId);
   const orientation = resolvedOrientation(profile, requestedOrientation);
   const descriptor = profile.descriptor;
+  // base值已应用方向、尚未应用自定义覆盖；尺寸单位为CSS像素，不是截图物理像素。
   const baseViewport = rotateSize(descriptor.viewport, orientation);
   const baseScreen = rotateSize(descriptor.screen || descriptor.viewport, orientation);
   const hasViewportOverride = overrides.viewport !== undefined && overrides.viewport !== null;
@@ -230,14 +242,16 @@ export function listBrowserDeviceProfiles() {
   });
 }
 
-export function getBrowserNetworkProfile(profileId = DEFAULT_BROWSER_NETWORK_PROFILE) {
-  const profile = NETWORK_PROFILE_DEFINITIONS.get(profileId || DEFAULT_BROWSER_NETWORK_PROFILE);
-  if (!profile) {
-    throw new Error(`未知网络限制配置: ${profileId}`);
+/** @returns {BrowserNetworkThrottleProfile} */
+export function getBrowserNetworkProfile(networkProfileId = DEFAULT_BROWSER_NETWORK_PROFILE) {
+  const networkProfile = NETWORK_THROTTLE_PROFILES.get(networkProfileId || DEFAULT_BROWSER_NETWORK_PROFILE);
+  if (!networkProfile) {
+    throw new Error(`未知网络限制配置: ${networkProfileId}`);
   }
-  return { ...profile };
+  return { ...networkProfile };
 }
 
+/** @returns {BrowserNetworkThrottleProfile[]} */
 export function listBrowserNetworkProfiles() {
-  return [...NETWORK_PROFILE_DEFINITIONS.values()].map((profile) => ({ ...profile }));
+  return [...NETWORK_THROTTLE_PROFILES.values()].map((networkProfile) => ({ ...networkProfile }));
 }

@@ -115,7 +115,7 @@
 
 ### 2. 集成提交与防线
 
-`scripts/assert_isolated_index_commit.mjs` 已落地，当前执行方法统一见 [技能的集成与索引流程](../../.codex/skills/team-collaboration-gpt/memory/2026/10/10/team-collaboration-workflow.md#集成与索引)。
+`scripts/git/assert_isolated_index_commit.mjs` 已落地，当前执行方法统一见 [技能的集成与索引流程](../../.codex/skills/team-collaboration-gpt/memory/2026/10/10/team-collaboration-workflow.md#集成与索引)。
 
 - 独立索引只能隔离暂存内容，不能隔离工作树文件，也不能防止旧 HEAD 快照覆盖并发提交；默认由主代理串行集成。
 - `git commit -- <路径>` 会绕过隔离索引（事故 `d4e864fc`），禁止使用；禁止 `--amend` 与裸共享索引提交。
@@ -184,7 +184,7 @@ bun run --cwd src/clients/web build                             EXIT=0
 
 ## 九、本轮关键报告与产物路径
 
-- 隔离索引防线脚本：`scripts/assert_isolated_index_commit.mjs`
+- 隔离索引防线脚本：`scripts/git/assert_isolated_index_commit.mjs`
 - 架构与冗余审查：`out/tests/temp/arch_owner_dedup/artifacts/ARCH_REVIEW_round.md`
 - 并发/提交独立核验：`out/tests/temp/review_p1_concurrency/artifacts/REVIEW_round2.md`、`out/tests/temp/review_round5/artifacts/REVIEW.md`
 - 各面缺陷报告：`out/tests/temp/{infra_bug_hunt,orch_bug_hunt,biz_bug_hunt2,core_keylock,event_stream_hunt,gateway_core_hunt,api_contract_hunt,tests_integration_audit,domain_itemized,core_abstractions}/artifacts/report.md`

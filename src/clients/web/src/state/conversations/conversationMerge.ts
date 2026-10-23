@@ -10,7 +10,7 @@ export const TERMINAL_TURN_STATUSES = new Set([
   "timed_out",
 ]);
 
-function conversationStartTime(conversation: ConversationView): number {
+function conversationStartTimeMs(conversation: ConversationView): number {
   const messageTime = conversation.userMessage?.created_at;
   if (messageTime) {
     return new Date(messageTime).getTime();
@@ -22,6 +22,16 @@ function conversationStartTime(conversation: ConversationView): number {
 export function sortConversationViews(
   conversations: ConversationView[],
 ): ConversationView[] {
+  const startTimeMsByConversation = new WeakMap<ConversationView, number>();
+  const startTimeMsForSort = (conversation: ConversationView): number => {
+    const cached = startTimeMsByConversation.get(conversation);
+    if (cached !== undefined) {
+      return cached;
+    }
+    const startTimeMs = conversationStartTimeMs(conversation);
+    startTimeMsByConversation.set(conversation, startTimeMs);
+    return startTimeMs;
+  };
   return [...conversations].sort((left, right) => {
     if (left.pending !== right.pending) {
       return left.pending ? 1 : -1;
@@ -32,7 +42,7 @@ export function sortConversationViews(
         - (right.enqueueSequence ?? right.pendingPosition ?? Number.MAX_SAFE_INTEGER)
       );
     }
-    return conversationStartTime(left) - conversationStartTime(right);
+    return startTimeMsForSort(left) - startTimeMsForSort(right);
   });
 }
 
@@ -119,13 +129,17 @@ export function mergeConversation(
         ? pending.turnStatus : persisted.turnStatus,
     };
   }
-  const assistantMessages = [
-    ...(persisted.assistantMessages ?? []),
-    ...(pending.assistantMessages ?? []),
-  ].filter(
-    (message, index, all) =>
-      all.findIndex((candidate) => candidate.message_id === message.message_id) === index,
-  );
+  const assistantMessages: NonNullable<ConversationView["assistantMessages"]> = [];
+  const seenAssistantMessageIds = new Set<string>();
+  for (const messages of [persisted.assistantMessages, pending.assistantMessages]) {
+    for (const message of messages ?? []) {
+      if (seenAssistantMessageIds.has(message.message_id)) {
+        continue;
+      }
+      seenAssistantMessageIds.add(message.message_id);
+      assistantMessages.push(message);
+    }
+  }
   return {
     ...persisted,
     ...pending,

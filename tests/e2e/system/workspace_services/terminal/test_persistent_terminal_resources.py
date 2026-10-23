@@ -19,6 +19,7 @@ from tests.e2e.system.workspace_services.terminal.terminal_history_fixture impor
     seed_historical_terminal_checkpoint,
 )
 from tests.e2e.system.workspace_services.terminal.terminal_process_helpers import (
+    prepare_empty_terminal_e2e_workspace,
     terminal_ports,
 )
 from tests.harness.python.process_output import spawn_logged_process
@@ -44,6 +45,11 @@ async def _recv_ws_type(websocket, expected_type: str) -> dict[str, object]:
         if message.get("type") == expected_type:
             return message
     raise TimeoutError(f"未收到 WebSocket 消息: {expected_type}")
+
+
+@pytest.fixture(scope="module")
+def e2e_workspace_root_path() -> str:
+    return prepare_empty_terminal_e2e_workspace(Path(__file__))
 
 
 @pytest.fixture(scope="module", autouse=True)

@@ -15,7 +15,7 @@ from app.gateway.runtime.managed_backend import (
     ManagedBackendOwner,
 )
 from app.gateway.runtime.workspace import WorkspaceRuntime
-from app.gateway.runtime.workspace_process import resolve_backend_workspace_id
+from app.gateway.runtime.workspace_process import resolve_backend_workspace_ids
 
 if TYPE_CHECKING:
     from . import GatewayWorkspaceRegistry
@@ -66,15 +66,32 @@ class RegistryRuntimeMixin:
             raise RuntimeError(f"Backend 完整成员集合与 registry 不匹配: missing={sorted(managed_ids-member_ids)}, extra={sorted(member_ids-managed_ids)}")
         for owner in self.backend_owners():
             self.resolve_backend_mounts(owner.contract)
+        local_root_bindings: list[tuple[str, str, Path]] = []
         for target in registry.targets():
             if target.connection_kind != "local":
                 continue
             if target.backend_workspace_id is None:
                 raise RuntimeError(f"本地 root binding 缺少 Backend UUID: {target.workspace_id}")
             root = self.local_workspace_root(target.workspace_id, target.backend_workspace_id)
-            actual_id = resolve_backend_workspace_id(project_root, root, initialize=False)
-            if actual_id != target.backend_workspace_id:
-                raise RuntimeError(f"Gateway registry 工作区 backend UUID 与本地身份文件不一致: workspace_id={target.workspace_id}, expected={target.backend_workspace_id}, actual={actual_id}")
+            local_root_bindings.append(
+                (target.workspace_id, target.backend_workspace_id, root)
+            )
+
+        actual_ids = resolve_backend_workspace_ids(
+            project_root,
+            tuple(root for _, _, root in local_root_bindings),
+            initialize=False,
+        )
+        for (workspace_id, expected_id, _), actual_id in zip(
+            local_root_bindings,
+            actual_ids,
+            strict=True,
+        ):
+            if actual_id != expected_id:
+                raise RuntimeError(
+                    "Gateway registry 工作区 backend UUID 与本地身份文件不一致: "
+                    f"workspace_id={workspace_id}, expected={expected_id}, actual={actual_id}"
+                )
 
     def register_backend_owner(self, owner: ManagedBackendOwner) -> None:
         """在启动任何进程前登记显式完整合同，失败句柄仍有唯一回收入口。"""

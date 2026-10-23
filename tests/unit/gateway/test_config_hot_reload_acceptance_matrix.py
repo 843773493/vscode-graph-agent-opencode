@@ -50,7 +50,7 @@ ACCEPTANCE_MATRIX = (
     ),
     AcceptanceCase(
         "duplicate-watcher",
-        "tests/unit/services/infrastructure/test_workspace_state_store.py",
+        "tests/unit/services/infrastructure/workspace_state_store/test_workspace_config_events.py",
         ("test_workspace_config_events_are_durable_replayable_and_idempotent",),
     ),
     AcceptanceCase(
@@ -150,7 +150,7 @@ ACCEPTANCE_MATRIX = (
     ),
     AcceptanceCase(
         "secret-compatibility-rotation",
-        "tests/unit/services/infrastructure/test_workspace_state_store.py",
+        "tests/unit/services/infrastructure/workspace_state_store/test_workspace_config_source.py",
         (
             "test_legacy_workspace_secret_migration_blocks_literal_and_normalizes_env",
             "test_secret_binding_resolver_reports_failure_and_detects_rotation",

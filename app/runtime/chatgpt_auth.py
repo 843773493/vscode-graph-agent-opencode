@@ -31,26 +31,26 @@ def is_chatgpt_oauth_provider(provider: Mapping[str, object]) -> bool:
 
 def configure_litellm_chatgpt_auth_directory() -> Path:
     """配置凭据目录，并在首次使用时从 Codex 原生凭据迁移。"""
-    configured = os.environ.get(CHATGPT_TOKEN_DIR_ENV)
-    if configured:
-        token_dir = Path(configured).expanduser().resolve()
+    configured_token_directory = os.environ.get(CHATGPT_TOKEN_DIR_ENV)
+    if configured_token_directory:
+        token_directory = Path(configured_token_directory).expanduser().resolve()
     else:
-        token_dir = get_boxteam_home() / "auth" / "chatgpt"
-        os.environ[CHATGPT_TOKEN_DIR_ENV] = str(token_dir)
+        token_directory = get_boxteam_home() / "auth" / "chatgpt"
+        os.environ[CHATGPT_TOKEN_DIR_ENV] = str(token_directory)
 
-    auth_file = _resolve_litellm_auth_file(token_dir)
+    auth_file = _resolve_litellm_auth_file(token_directory)
     if auth_file.is_file():
-        return token_dir
+        return token_directory
 
     codex_auth_file = Path("~/.codex/auth.json").expanduser().resolve()
     if codex_auth_file.is_file():
         _migrate_codex_auth(codex_auth_file, auth_file)
-    return token_dir
+    return token_directory
 
 
-def ensure_chatgpt_oauth_ready(token_dir: Path) -> None:
+def ensure_chatgpt_oauth_ready(token_directory: Path) -> None:
     """确保服务请求只使用现成凭据，绝不进入交互式 device-code 登录。"""
-    auth_file = _resolve_litellm_auth_file(token_dir)
+    auth_file = _resolve_litellm_auth_file(token_directory)
     if not auth_file.is_file():
         raise RuntimeError(
             "ChatGPT OAuth 凭据不存在。请先执行 codex login，再重试请求。"
@@ -87,17 +87,16 @@ def ensure_litellm_chatgpt_model_capabilities(model: str) -> bool:
     if not normalized_model.startswith("gpt-5.6-"):
         return False
 
-    from litellm import register_model
-    from litellm.utils import supports_native_streaming
+    from app.runtime.litellm_runtime import litellm
 
-    if supports_native_streaming(
+    if litellm.utils.supports_native_streaming(
         model=normalized_model,
         custom_llm_provider="chatgpt",
     ):
         return False
 
     # TODO: LiteLLM 原生模型目录识别 GPT-5.6 ChatGPT streaming 后删除此兼容注册。
-    register_model(
+    litellm.register_model(
         {
             f"chatgpt/{normalized_model}": {
                 "litellm_provider": "chatgpt",
@@ -115,12 +114,12 @@ def ensure_litellm_chatgpt_model_capabilities(model: str) -> bool:
     return True
 
 
-def _resolve_litellm_auth_file(token_dir: Path) -> Path:
-    configured_name = os.environ.get(
+def _resolve_litellm_auth_file(token_directory: Path) -> Path:
+    configured_auth_filename = os.environ.get(
         CHATGPT_AUTH_FILE_ENV,
         DEFAULT_CHATGPT_AUTH_FILE,
     )
-    return (token_dir / configured_name).expanduser().resolve()
+    return (token_directory / configured_auth_filename).expanduser().resolve()
 
 
 def _migrate_codex_auth(source: Path, target: Path) -> None:

@@ -303,7 +303,7 @@ async def test_blank_reserved_internal_job_id_fails_before_preparation(job_servi
     assert preparations == []
     assert starts == []
     assert service._jobs == {}
-    assert service._pending_queue.ids(session_id) == ()
+    assert service._pending_queue.queued_job_ids(session_id) == ()
 
 
 @pytest.mark.asyncio

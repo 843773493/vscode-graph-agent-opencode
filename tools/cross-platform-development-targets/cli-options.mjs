@@ -22,7 +22,9 @@ const VALUE_OPTIONS = new Set([
 const FLAG_OPTIONS = new Set(["--activate", "--no-env", "--rebuild", "--submodules"]);
 
 export function parseTargetCliArgs(args) {
-  if (args.length === 0 || args.includes("--help") || args.includes("-h")) {
+  const passthroughIndex = args.indexOf("--");
+  const cliArgs = passthroughIndex === -1 ? args : args.slice(0, passthroughIndex);
+  if (args.length === 0 || cliArgs.includes("--help") || cliArgs.includes("-h")) {
     return { help: true };
   }
   const [command, targetId, ...rest] = args;

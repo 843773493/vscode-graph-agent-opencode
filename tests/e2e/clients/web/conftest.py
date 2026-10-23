@@ -46,34 +46,36 @@ def _read_section8_selection_contract(project_root: Path) -> Section8SelectionCo
         detail = result.stderr.strip() or result.stdout.strip() or "没有诊断信息"
         raise _section8_contract_error(detail)
 
-    output_lines = result.stdout.splitlines()
-    if len(output_lines) != 1:
+    contract_output_lines = result.stdout.splitlines()
+    if len(contract_output_lines) != 1:
         raise _section8_contract_error("selector contract CLI 未返回单行 JSON")
     try:
-        payload_value: object = json.loads(output_lines[0])
+        contract_value: object = json.loads(contract_output_lines[0])
     except json.JSONDecodeError as error:
         raise _section8_contract_error(f"selector contract CLI 返回无效 JSON：{error}") from error
-    if not isinstance(payload_value, dict):
+    if not isinstance(contract_value, dict):
         raise _section8_contract_error("selector contract 必须是 JSON 对象")
 
-    payload = cast(dict[str, object], payload_value)
-    mode = payload.get("mode")
+    contract_payload = cast(dict[str, object], contract_value)
+    mode = contract_payload.get("mode")
     if mode not in {"default", "focus"}:
         raise _section8_contract_error("selector contract 的 mode 无效")
 
-    string_lists: dict[str, list[str]] = {}
+    scenario_lists: dict[str, list[str]] = {}
     for key in ("requested", "selected", "validScenarios", "defaultScenarios"):
-        value = payload.get(key)
-        if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+        scenario_values = contract_payload.get(key)
+        if not isinstance(scenario_values, list) or not all(
+            isinstance(item, str) for item in scenario_values
+        ):
             raise _section8_contract_error(f"selector contract 的 {key} 必须是字符串数组")
-        string_lists[key] = cast(list[str], value)
+        scenario_lists[key] = cast(list[str], scenario_values)
 
     return {
         "mode": cast(Literal["default", "focus"], mode),
-        "requested": string_lists["requested"],
-        "selected": string_lists["selected"],
-        "validScenarios": string_lists["validScenarios"],
-        "defaultScenarios": string_lists["defaultScenarios"],
+        "requested": scenario_lists["requested"],
+        "selected": scenario_lists["selected"],
+        "validScenarios": scenario_lists["validScenarios"],
+        "defaultScenarios": scenario_lists["defaultScenarios"],
     }
 
 
@@ -86,8 +88,9 @@ def pytest_collection_finish(session: pytest.Session) -> None:
     project_root = Path.cwd().resolve()
     target_file = project_root / _SECTION8_TARGET_FILE
     target_selected = any(
-        Path(item.path).resolve() == target_file
-        and item.nodeid.rsplit("::", maxsplit=1)[-1].split("[", maxsplit=1)[0] == _SECTION8_TARGET_NAME
+        item.nodeid.rsplit("::", maxsplit=1)[-1].split("[", maxsplit=1)[0]
+        == _SECTION8_TARGET_NAME
+        and Path(item.path).resolve() == target_file
         for item in session.items
     )
     if not target_selected:

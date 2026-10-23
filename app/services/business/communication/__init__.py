@@ -15,7 +15,7 @@ from app.services.business.communication.admission import (
     ReceivedCommunicationView,
     communication_preimage_hash,
     decide_send_admission,
-    resolve_request_preimage,
+    resolve_request_preimage_hash,
 )
 from app.services.business.communication.errors import (
     COMMUNICATION_CONTRACT_ERROR_CODES,
@@ -66,6 +66,6 @@ __all__ = [
     "decide_send_admission",
     "freeze_wait_deadline",
     "remaining_wait_budget_seconds",
-    "resolve_request_preimage",
+    "resolve_request_preimage_hash",
     "resolve_wait_outcome",
 ]

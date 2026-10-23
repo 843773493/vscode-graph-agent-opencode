@@ -4,6 +4,7 @@ import json
 import shutil
 from functools import lru_cache
 from pathlib import Path
+from stat import S_ISDIR
 
 import commentjson
 
@@ -32,13 +33,15 @@ def prepare_test_workspace(
         shutil.rmtree(native_io_path(workspace_root))
     workspace_root.mkdir(parents=True, exist_ok=True)
 
-    for relative_item in template_items:
-        source = template_root / relative_item
-        if not source.exists():
-            raise FileNotFoundError(f"测试模板缺少必要文件: {source}")
-        target = workspace_root / relative_item
+    for relative_template_path in template_items:
+        source = template_root / relative_template_path
+        try:
+            source_mode = source.stat().st_mode
+        except FileNotFoundError as error:
+            raise FileNotFoundError(f"测试模板缺少必要文件: {source}") from error
+        target = workspace_root / relative_template_path
         target.parent.mkdir(parents=True, exist_ok=True)
-        if source.is_dir():
+        if S_ISDIR(source_mode):
             shutil.copytree(source, target)
         else:
             shutil.copy2(source, target)
@@ -65,14 +68,15 @@ def prepare_default_test_workspace(
 ) -> Path:
     """完整复制只读模板，创建文件级隔离工作区。"""
 
-    template_items = tuple(item.name for item in template_root.iterdir())
-    prepared_root = prepare_test_workspace(
+    template_entry_names = tuple(
+        sorted(entry.name for entry in template_root.iterdir())
+    )
+    return prepare_test_workspace(
         workspace_root=workspace_root,
         template_root=template_root,
-        template_items=template_items,
+        template_items=template_entry_names,
         shared_skill_root=shared_skill_root,
     )
-    return prepared_root
 
 
 def install_test_workspace_config(

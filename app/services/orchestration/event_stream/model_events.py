@@ -71,11 +71,11 @@ def last_model_token_usage(
 def merge_model_content_part(
     part: AgentStreamContentPart,
     *,
-    part_order: list[str],
-    parts: dict[str, dict[str, object]],
+    part_ids_in_order: list[str],
+    parts_by_id: dict[str, dict[str, object]],
 ) -> None:
     """把规范化 model block/delta 合并到本次请求的有序内存视图。"""
-    existing = parts.get(part.part_id)
+    existing = parts_by_id.get(part.part_id)
     text_key = (
         "reasoning_content"
         if part.block_type == "reasoning_content"
@@ -88,26 +88,26 @@ def merge_model_content_part(
         else "text"
     )
     if existing is None:
-        part_order.append(part.part_id)
+        part_ids_in_order.append(part.part_id)
         initial: dict[str, object] = {
             "type": part.block_type,
             "id": part.part_id,
             "index": part.index,
         }
         if part.block_type == "reasoning_items":
-            items = part.payload.get("reasoning_items") if part.payload else None
+            items = part.reasoning_items
             initial["reasoning_items"] = (
                 copy.deepcopy(items) if isinstance(items, list) else []
             )
         elif part.block_type == "redacted_thinking":
-            data = part.payload.get("data") if part.payload else None
+            data = part.redacted_thinking_data
             if isinstance(data, str):
                 initial["data"] = data
         else:
             initial[text_key] = part.text
-        parts[part.part_id] = initial
+        parts_by_id[part.part_id] = initial
         if part.extras:
-            parts[part.part_id]["extras"] = dict(part.extras)
+            parts_by_id[part.part_id]["extras"] = dict(part.extras)
         return
     if existing.get("type") != part.block_type or existing.get("index") != part.index:
         raise RuntimeError(
@@ -116,7 +116,7 @@ def merge_model_content_part(
         )
     if part.block_type == "reasoning_items":
         current_items = existing.get("reasoning_items")
-        incoming_items = part.payload.get("reasoning_items") if part.payload else None
+        incoming_items = part.reasoning_items
         if not isinstance(current_items, list) or not isinstance(incoming_items, list):
             raise TypeError(f"模型流 part 缺少 reasoning_items: part_id={part.part_id}")
         for incoming in incoming_items:
@@ -133,7 +133,7 @@ def merge_model_content_part(
             if incoming not in current_items:
                 current_items.append(copy.deepcopy(incoming))
     elif part.block_type == "redacted_thinking":
-        data = part.payload.get("data") if part.payload else None
+        data = part.redacted_thinking_data
         if isinstance(data, str):
             existing["data"] = data
     else:

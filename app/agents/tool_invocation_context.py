@@ -99,7 +99,9 @@ class ToolInvocationContext:
     ) -> contextvars.Token[_ToolInvocationBinding | None]:
         if not tool_call_id:
             raise ValueError("tool_call_id 不能为空")
-        return self._invocation.set(_ToolInvocationBinding(tool_call_id, projection_identity))
+        return self._invocation.set(
+            _ToolInvocationBinding(tool_call_id, projection_identity)
+        )
 
     def reset_tool_call_id(
         self,
@@ -119,7 +121,9 @@ class ToolInvocationContext:
         invocation = self._invocation.get()
         identity = invocation.projection_identity if invocation is not None else None
         if identity is None or identity.model_call_id is None:
-            raise RuntimeError("当前工具执行上下文缺少 emitting assistant 的 model_call_id")
+            raise RuntimeError(
+                "当前工具执行上下文缺少 emitting assistant 的 model_call_id"
+            )
         return identity.model_call_id
 
     def require_operation_created_at(self) -> datetime:
@@ -135,9 +139,16 @@ class ToolInvocationContext:
         model_call_id = self.require_model_call_id()
         if invocation is None or self.thread_binding is None:
             raise RuntimeError("通信工具缺少精确 thread invocation binding")
-        call_id = provider_tool_call_id(invocation.projection_identity, invocation.tool_call_id)
-        return software_tool_operation_id(operation, self.thread_binding.session_id,
-                                          self.thread_binding.thread_id, model_call_id, call_id)
+        call_id = provider_tool_call_id(
+            invocation.projection_identity, invocation.tool_call_id
+        )
+        return software_tool_operation_id(
+            operation,
+            self.thread_binding.session_id,
+            self.thread_binding.thread_id,
+            model_call_id,
+            call_id,
+        )
 
     def set_extension_catalog_binding(
         self,
@@ -197,26 +208,36 @@ class ToolInvocationContextMiddleware(AgentMiddleware):
             if tool_scope is not None
             else None
         )
+
         async def invoke_tool() -> ToolMessage | Command[object]:
             delta_sink = get_current_model_delta_sink()
             if delta_sink is not None:
-                await delta_sink.prepare_tool_execution(self._context.require_model_call_id())
+                await delta_sink.prepare_tool_execution(
+                    self._context.require_model_call_id()
+                )
             try:
                 if delta_sink is None:
                     return await handler(request)
                 with model_tool_invocation_scope(
-                    self._context.require_model_call_id(), self._context.require_tool_call_id(),
+                    self._context.require_model_call_id(),
+                    self._context.require_tool_call_id(),
                 ):
                     return await handler(request)
             except asyncio.CancelledError as error:
-                if delta_sink is not None and len(error.args) == 1 and isinstance(error.args[0], TextMutationReceiptDTO):
+                if (
+                    delta_sink is not None
+                    and len(error.args) == 1
+                    and isinstance(error.args[0], TextMutationReceiptDTO)
+                ):
                     receipt = error.args[0]
 
                     async def commit_file_cancellation() -> None:
                         await delta_sink.fail_tool_invocation(
                             self._context.require_model_call_id(),
-                            self._context.require_tool_call_id(), error=receipt.model_dump_json(exclude_none=True),
+                            self._context.require_tool_call_id(),
+                            error=receipt.model_dump_json(exclude_none=True),
                         )
+
                     await run_cleanup_shielded(commit_file_cancellation)
                 raise
             except (TimeoutError, ScopeCancelledError):
@@ -283,27 +304,44 @@ class ToolInvocationContextMiddleware(AgentMiddleware):
             )
         # ToolNode 的本次 request 来自 state 最后一个 AI carrier；只核该
         # carrier 的实际调用，不搜索历史消息或最新的 durable model-call。
-        state = request.state
-        messages = state.get("messages", ()) if isinstance(state, Mapping) else ()
-        assistant = next(
-            (message for message in reversed(messages) if isinstance(message, AIMessage)),
+        execution_state = request.state
+        execution_messages = (
+            execution_state.get("messages", ())
+            if isinstance(execution_state, Mapping)
+            else ()
+        )
+        assistant_carrier = next(
+            (
+                message
+                for message in reversed(execution_messages)
+                if isinstance(message, AIMessage)
+            ),
             None,
         )
-        identity = None
-        if assistant is not None:
-            model_call_id = LangChainMessageCodec().model_call_id(assistant)
+        projection_identity = None
+        if assistant_carrier is not None:
+            model_call_id = LangChainMessageCodec().model_call_id(assistant_carrier)
             if model_call_id is not None:
-                candidate = ItemProjectionIdentity(
-                    projection_message_id=assistant.id, model_call_id=model_call_id,
+                candidate_projection_identity = ItemProjectionIdentity(
+                    projection_message_id=assistant_carrier.id,
+                    model_call_id=model_call_id,
                 )
+                tool_call_name = request.tool_call.get("name")
                 if any(
-                    call.get("name") == request.tool_call.get("name")
-                    and isinstance(call.get("id"), str)
-                    and matches_tool_call_id(candidate, call["id"], tool_call_id)
-                    for call in assistant.tool_calls
+                    assistant_tool_call.get("name") == tool_call_name
+                    and isinstance(assistant_tool_call.get("id"), str)
+                    and matches_tool_call_id(
+                        candidate_projection_identity,
+                        assistant_tool_call["id"],
+                        tool_call_id,
+                    )
+                    for assistant_tool_call in assistant_carrier.tool_calls
                 ):
-                    identity = candidate
-        return self._context.set_tool_call_id(tool_call_id, projection_identity=identity)
+                    projection_identity = candidate_projection_identity
+        return self._context.set_tool_call_id(
+            tool_call_id,
+            projection_identity=projection_identity,
+        )
 
 
 async def _cancel_task(task: asyncio.Task[object]) -> None:
@@ -324,9 +362,17 @@ def _timeout_tool_message(
         raise RuntimeError("工具超时缺少 tool_call_id") from error
     tool_name = request.tool_call.get("name") or "unknown_tool"
     cause = error.__cause__
-    if isinstance(cause, asyncio.CancelledError) and len(cause.args) == 1 and isinstance(cause.args[0], TextMutationReceiptDTO):
+    if (
+        isinstance(cause, asyncio.CancelledError)
+        and len(cause.args) == 1
+        and isinstance(cause.args[0], TextMutationReceiptDTO)
+    ):
         # 复用取消时已提交的原回执，不能把未知写入投影成可重试的通用超时。
-        return ToolMessage(content=cause.args[0].model_dump_json(exclude_none=True), tool_call_id=tool_call_id, status="error")
+        return ToolMessage(
+            content=cause.args[0].model_dump_json(exclude_none=True),
+            tool_call_id=tool_call_id,
+            status="error",
+        )
     timeout_label = "工具执行超过局部超时" if timeout_ms is not None else "工具执行超时"
     payload: dict[str, object] = {
         "status": "error",

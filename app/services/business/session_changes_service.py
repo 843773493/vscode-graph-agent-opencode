@@ -23,7 +23,7 @@ from app.services.business.session_changes_logic import (
     changeset_records,
     count_diff_lines,
     detect_change_kind,
-    preview,
+    preview_session_file_content,
     sorted_turn_ids,
 )
 from app.services.business.session_service import SessionService
@@ -208,8 +208,8 @@ class SessionChangesService:
                     execution_ids=list(change.execution_ids),
                     turn_ids=list(change.turn_ids),
                     diff_text=diff_text,
-                    before_preview=preview(change.before_content),
-                    after_preview=preview(change.after_content),
+                    before_preview=preview_session_file_content(change.before_content),
+                    after_preview=preview_session_file_content(change.after_content),
                 )
             )
 

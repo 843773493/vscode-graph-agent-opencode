@@ -17,4 +17,5 @@
 ## 规范
 
 - 应通过 FastAPI 依赖覆盖或直接调用公开处理函数隔离依赖。
-- 文件系统状态必须使用 pytest 临时目录。
+- 非工作区文件状态使用 pytest 临时目录；工作区数据使用 `TestRunContext` 对应的 `out/tests/` 工作区。
+- 仅需 identity 与上下文时使用 `empty_workspace_scope`；需要模板文件时使用 `workspace_scope`。

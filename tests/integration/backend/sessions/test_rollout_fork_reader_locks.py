@@ -1,4 +1,4 @@
-"""保留 source SQLite reader 时 fork 不释放其 POSIX 锁；独立 writer 可继续提交。"""
+"""source SQLite reader 在 rollout fork 前后保持快照；独立 writer 可继续提交。"""
 
 from __future__ import annotations
 
@@ -39,6 +39,19 @@ def _locks(index: Path) -> list[str]:
     ]
 
 
+def _wal_checkpoint(index: Path) -> tuple[int, int, int]:
+    """读取 WAL 截断是否被既有读快照阻塞的跨平台证据。"""
+    connection = sqlite3.connect(index, timeout=0)
+    try:
+        checkpoint = connection.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
+        if checkpoint is None:
+            raise RuntimeError(f"SQLite WAL checkpoint 未返回状态: {index}")
+        busy, log_frames, checkpointed_frames = (int(value) for value in checkpoint)
+        return busy, log_frames, checkpointed_frames
+    finally:
+        connection.close()
+
+
 @pytest.fixture
 def source_reader(protected_source, request):
     saver = protected_source[0]
@@ -55,8 +68,10 @@ def source_reader(protected_source, request):
 @pytest.fixture
 def lock_artifacts(request):
     context = TestRunContext.from_test_file(Path(request.node.path))
-    context.artifacts_dir.mkdir(parents=True, exist_ok=True)
-    return context.artifacts_dir
+    run_directory = context.runtime_root_for_node(request.node.nodeid).parent
+    artifacts = context.artifacts_dir / run_directory.name
+    artifacts.mkdir(parents=True, exist_ok=True)
+    return artifacts
 
 
 @pytest.fixture
@@ -96,13 +111,21 @@ with fixture_catalog_scope(), RolloutCheckpointSaver(Path(sys.argv[1])) as saver
 """
 
 
-@pytest.mark.skipif(sys.platform != "linux", reason="Linux /proc POSIX 锁证据")
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "source_reader",
-    [False, True],
+    [
+        pytest.param(
+            False,
+            id="idle-reader",
+            marks=pytest.mark.skipif(
+                sys.platform != "linux",
+                reason="空闲连接的内核锁证据仅在 Linux /proc 可直接观测",
+            ),
+        ),
+        pytest.param(True, id="transaction-reader"),
+    ],
     indirect=True,
-    ids=["idle-reader", "transaction-reader"],
 )
 @pytest.mark.parametrize("operation", ["preflight", "full-copy"])
 async def test_fork_preserves_live_reader_and_independent_writer(
@@ -115,9 +138,12 @@ async def test_fork_preserves_live_reader_and_independent_writer(
 ):
     saver = protected_source[0]
     index = saver._storage.storage.index_path(SOURCE_SESSION_ID)
-    before = _locks(index)
-    assert before, "合法 source reader 必须持有 SQLite database SHARED lock"
     transaction_reader = source_reader.in_transaction
+    before = _locks(index) if sys.platform == "linux" else []
+    if sys.platform == "linux":
+        assert before, "合法 source reader 必须持有 SQLite database SHARED lock"
+    else:
+        assert transaction_reader, "非 Linux 平台只运行可由 SQLite checkpoint 验证的显式读事务"
     initial_count = source_reader.execute(
         "SELECT count(*) FROM context_plans"
     ).fetchone()[0]
@@ -125,8 +151,9 @@ async def test_fork_preserves_live_reader_and_independent_writer(
         await saver.forks.source.preflight_fork(source_session_id=SOURCE_SESSION_ID, mode="full_rollout_copy")
     else:
         await copy_rollout_snapshot(saver, SOURCE_SESSION_ID, TARGET_SESSION_ID, fork_deadlines=fork_deadlines)
-    after = _locks(index)
-    assert after, "fork 不得因父进程 open/close 原始 DB 而释放其它 SQLite reader 的锁"
+    after = _locks(index) if sys.platform == "linux" else []
+    if sys.platform == "linux":
+        assert after, "fork 不得因父进程 open/close 原始 DB 而释放其它 SQLite reader 的锁"
     assert source_reader.in_transaction == transaction_reader
     result = await asyncio.to_thread(
         subprocess.run,
@@ -136,18 +163,25 @@ async def test_fork_preserves_live_reader_and_independent_writer(
         text=True,
         timeout=30,
     )
+    checkpoint = _wal_checkpoint(index) if transaction_reader else None
     evidence = {
         "parent_pid": os.getpid(),
         "operation": operation,
         "transaction_reader": transaction_reader,
         "locks_before": before,
         "locks_after_fork": after,
+        "wal_checkpoint_after_writer": checkpoint,
         "writer_exit_code": result.returncode,
         "writer_stderr": result.stderr,
     }
     artifact = lock_artifacts / f"{operation}-{transaction_reader}.json"
     artifact.write_text(json.dumps(evidence, indent=2), encoding="utf-8")
     assert result.returncode == 0, f"独立 writer 失败，证据: {artifact}"
+    if checkpoint is not None:
+        assert checkpoint[0] == 1, (
+            "活动 SQLite reader 必须阻止 WAL 截断 checkpoint；"
+            f"observed={checkpoint}, evidence={artifact}"
+        )
     if transaction_reader:
         assert (
             source_reader.execute("SELECT count(*) FROM context_plans").fetchone()[0]

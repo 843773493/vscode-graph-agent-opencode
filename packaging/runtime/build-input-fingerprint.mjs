@@ -1,7 +1,9 @@
 import { createHash } from "node:crypto";
 import {
+  closeSync,
   lstatSync,
-  readFileSync,
+  openSync,
+  readSync,
   readdirSync,
   readlinkSync,
 } from "node:fs";
@@ -15,6 +17,7 @@ const FIXED_BUILD_INPUTS = Object.freeze([
   "app",
   "configs",
   "resources",
+  "src/shared",
   "src/clients/web",
   "src/workspace-services",
   "packages/launcher",
@@ -31,9 +34,16 @@ const GENERATED_DIRECTORY_NAMES = new Set([
   "__pycache__",
 ]);
 
-function collectBuildInputPaths(projectRoot, inputPath) {
+// 只忽略构建工具及Launcher中不进入发行包的普通说明和测试文件。
+function isUnshippedInstructionOrTest(inputPath) {
+  if (!inputPath.startsWith("packaging/runtime/") && !inputPath.startsWith("packages/launcher/")) return false;
+  const fileName = path.posix.basename(inputPath);
+  return fileName === "AGENTS.md" || fileName.endsWith(".test.mjs");
+}
+
+function collectBuildInputPaths(projectRoot, inputPath, entry) {
+  // 构建相对路径始终使用/；只有实际磁盘定位遵循宿主路径规则。
   const absolutePath = path.join(projectRoot, inputPath);
-  const entry = lstatSync(absolutePath);
   if (entry.isSymbolicLink()) {
     return [{ path: inputPath, linkTarget: readlinkSync(absolutePath) }];
   }
@@ -44,7 +54,10 @@ function collectBuildInputPaths(projectRoot, inputPath) {
 
   return readdirSync(absolutePath, { withFileTypes: true })
     .filter(
-      (child) => !GENERATED_DIRECTORY_NAMES.has(child.name),
+      (child) =>
+        !GENERATED_DIRECTORY_NAMES.has(child.name) &&
+        !(child.isFile() &&
+          isUnshippedInstructionOrTest(path.posix.join(inputPath, child.name))),
     )
     .sort((left, right) =>
       left.name < right.name ? -1 : left.name > right.name ? 1 : 0,
@@ -52,7 +65,8 @@ function collectBuildInputPaths(projectRoot, inputPath) {
     .flatMap((child) =>
       collectBuildInputPaths(
         projectRoot,
-        path.join(inputPath, child.name),
+        path.posix.join(inputPath, child.name),
+        child,
       ),
     );
 }
@@ -71,21 +85,33 @@ export function computeBuildInputFingerprint({
     `packages/runtime-${targetPlatform}/package.json`,
     `scripts/release/package-${targetPlatform}.mjs`,
   ]
-    .flatMap((inputPath) => collectBuildInputPaths(root, inputPath))
+    // 顶层输入需要查类型；后代复用readdir返回的Dirent，不再逐项lstat。
+    .flatMap((inputPath) =>
+      collectBuildInputPaths(root, inputPath, lstatSync(path.join(root, inputPath))),
+    )
     .sort((left, right) =>
       left.path < right.path ? -1 : left.path > right.path ? 1 : 0,
     );
   const fingerprint = createHash("sha256");
+  const fileBuffer = Buffer.allocUnsafe(64 * 1024);
 
   for (const input of inputPaths) {
-    const relativePath = input.path.split(path.sep).join("/");
-    fingerprint.update(relativePath);
+    fingerprint.update(input.path);
     fingerprint.update("\0");
     if (input.linkTarget !== undefined) {
       fingerprint.update("symlink\0");
       fingerprint.update(input.linkTarget);
     } else {
-      fingerprint.update(readFileSync(path.join(root, input.path)));
+      const descriptor = openSync(path.join(root, input.path), "r");
+      try {
+        while (true) {
+          const bytesRead = readSync(descriptor, fileBuffer, 0, fileBuffer.length, null);
+          if (bytesRead === 0) break;
+          fingerprint.update(fileBuffer.subarray(0, bytesRead));
+        }
+      } finally {
+        closeSync(descriptor);
+      }
     }
     fingerprint.update("\0");
   }

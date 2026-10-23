@@ -16,13 +16,13 @@ from app.agents.tool_invocation_context import (
     ToolInvocationContext,
 )
 from app.agents.tools.terminal import (
-    _command_for_shell,
     _resolve_terminal_workdir,
     create_exec_command_tool,
     create_kill_terminal_tool,
     create_list_terminal_sessions_tool,
     create_write_stdin_tool,
 )
+from app.agents.tools.terminal_command import _build_terminal_input
 from app.agents.tools.terminal_contract import tool_output
 from app.core.execution_admission_context import execution_admission_scope
 from app.core.session_thread_context import session_thread_owner_scope
@@ -59,40 +59,40 @@ def test_windows_cmd_wrapper_uses_cmd_syntax(
     monkeypatch.setattr(os, "name", "nt")
     monkeypatch.setenv("COMSPEC", r"C:\Windows\System32\cmd.exe")
 
-    wrapped = _command_for_shell(
-        cmd="echo BOXTEAM_CMD_OK",
-        workdir=r"C:\workspace\demo",
-        shell=None,
+    terminal_input = _build_terminal_input(
+        command_text="echo BOXTEAM_CMD_OK",
+        working_directory=r"C:\workspace\demo",
+        shell_executable=None,
         login=True,
         start_marker="__BOXTEAM_CMD_START_test__",
         done_marker="__BOXTEAM_CMD_DONE_test__",
     )
 
-    assert "${SHELL" not in wrapped
-    assert "printf" not in wrapped
-    assert 'cd /d "C:\\workspace\\demo"' in wrapped
-    assert "echo __BOXTEAM_CMD_START_test__" in wrapped
-    assert 'set "__BOXTEAM_RC=%ERRORLEVEL%"' in wrapped
-    assert "echo __BOXTEAM_CMD_DONE_test__:%__BOXTEAM_RC%" in wrapped
+    assert "${SHELL" not in terminal_input
+    assert "printf" not in terminal_input
+    assert 'cd /d "C:\\workspace\\demo"' in terminal_input
+    assert "echo __BOXTEAM_CMD_START_test__" in terminal_input
+    assert 'set "__BOXTEAM_RC=%ERRORLEVEL%"' in terminal_input
+    assert "echo __BOXTEAM_CMD_DONE_test__:%__BOXTEAM_RC%" in terminal_input
 
 
 def test_windows_powershell_wrapper_preserves_command_and_markers(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(os, "name", "nt")
-    wrapped = _command_for_shell(
-        cmd='Write-Output "中文"',
-        workdir=r"C:\workspace\demo",
-        shell=r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
+    terminal_input = _build_terminal_input(
+        command_text='Write-Output "中文"',
+        working_directory=r"C:\workspace\demo",
+        shell_executable=r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
         login=True,
         start_marker="__BOXTEAM_CMD_START_test__",
         done_marker="__BOXTEAM_CMD_DONE_test__",
     )
 
-    encoded_script = wrapped.rstrip("\r").split()[-1]
+    encoded_script = terminal_input.rstrip("\r").split()[-1]
     script = base64.b64decode(encoded_script).decode("utf-16le")
-    assert "${SHELL" not in wrapped
-    assert "-EncodedCommand" in wrapped
+    assert "${SHELL" not in terminal_input
+    assert "-EncodedCommand" in terminal_input
     assert "Set-Location -LiteralPath 'C:\\workspace\\demo'" in script
     assert "Write-Output '__BOXTEAM_CMD_START_test__'" in script
     encoded_command = base64.b64encode('Write-Output "中文"'.encode()).decode()

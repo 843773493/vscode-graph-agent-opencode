@@ -73,7 +73,7 @@ class JobPendingRequestController:
 
     def _job_by_message_id(self, session_id: str, message_id: str) -> PendingJob:
         jobs = self._get_jobs()
-        for job_id in self._queue.ids(session_id):
+        for job_id in self._queue.queued_job_ids(session_id):
             job = jobs.get(job_id)
             if job is not None and job.message_id == message_id:
                 return job
@@ -152,7 +152,7 @@ class JobPendingRequestController:
     ) -> PendingRequestSummaryListDTO:
         async with self._lock:
             jobs = self._get_jobs()
-            job_ids = self._queue.ids(session_id, thread_id)
+            job_ids = self._queue.queued_job_ids(session_id, thread_id)
             summaries = []
             for job_id in job_ids[:limit]:
                 job = jobs.get(job_id)
@@ -187,7 +187,9 @@ class JobPendingRequestController:
     ) -> PendingRequestListDTO:
         jobs = self._get_jobs()
         requests = []
-        for position, job_id in enumerate(self._queue.ids(session_id, thread_id)):
+        for position, job_id in enumerate(
+            self._queue.queued_job_ids(session_id, thread_id)
+        ):
             job = jobs.get(job_id)
             if job is None:
                 raise RuntimeError(
@@ -241,7 +243,7 @@ class JobPendingRequestController:
         async with self._lock:
             jobs = self._get_jobs()
             now = datetime.now()  # noqa: DTZ005
-            for job_id in self._queue.ids(session_id):
+            for job_id in self._queue.queued_job_ids(session_id):
                 job = jobs[job_id]
                 await self._persist_terminal_status(job, "cancelled")
                 self._queue.remove(session_id, job_id)

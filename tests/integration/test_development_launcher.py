@@ -11,14 +11,15 @@ from pathlib import Path
 
 import pytest
 
-from tests.support.workspaces import prepare_default_test_workspace
+from tests.support.workspaces import prepare_test_workspace
 
 
 @pytest.fixture
 def launcher_workspace(request: pytest.FixtureRequest) -> Path:
-    return prepare_default_test_workspace(
+    return prepare_test_workspace(
         workspace_root=Path.cwd() / "out/tests/integration/test_development_launcher/workspace" / request.node.name,
         template_root=Path.cwd() / "tests/fixtures/workspaces/default_test_workspace",
+        template_items=(".boxteam/workspace-identity.json",),
     )
 
 

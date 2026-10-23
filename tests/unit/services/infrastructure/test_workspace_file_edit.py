@@ -6,6 +6,7 @@ import ctypes
 import errno
 import io
 import os
+import shutil
 import threading
 import zipfile
 from pathlib import Path
@@ -23,9 +24,7 @@ from app.schemas.internal_v2.workspace_file_operations import (
 )
 from app.services.infrastructure import workspace_service as workspace_service_module
 from app.services.infrastructure.config_service import ConfigService
-from app.services.infrastructure.workspace_files import (
-    runtime as workspace_file_runtime,
-)
+from app.services.infrastructure.workspace_files import runtime as workspace_file_runtime
 from app.services.infrastructure.workspace_files import text_publication
 from app.services.infrastructure.workspace_service import (
     WorkspaceFileConflictError,
@@ -40,56 +39,6 @@ def _workspace_config_service_mock() -> Mock:
     config_service.get_workspace_preview_max_bytes.return_value = 1024 * 1024
     config_service.get_workspace_preview_binary_sample_bytes.return_value = 8192
     return config_service
-
-
-@pytest.fixture
-def darwin_exclusive_rename(monkeypatch: pytest.MonkeyPatch) -> Mock:
-    native_rename = Mock(return_value=0)
-    monkeypatch.setattr(
-        ctypes, "CDLL", Mock(return_value=Mock(renamex_np=native_rename))
-    )
-    monkeypatch.setattr(
-        workspace_file_runtime, "sys", SimpleNamespace(platform="darwin")
-    )
-    return native_rename
-
-
-def test_rename_entry_exclusive_uses_darwin_no_replace_flag(
-    darwin_exclusive_rename: Mock,
-    tmp_path: Path,
-) -> None:
-    source = tmp_path / "staged"
-    target = tmp_path / "target"
-
-    workspace_file_runtime.rename_entry_exclusive(source, target)
-
-    darwin_exclusive_rename.assert_called_once_with(
-        os.fsencode(source), os.fsencode(target), 4
-    )
-    assert darwin_exclusive_rename.argtypes == [
-        ctypes.c_char_p,
-        ctypes.c_char_p,
-        ctypes.c_uint,
-    ]
-    assert darwin_exclusive_rename.restype is ctypes.c_int
-
-
-def test_rename_entry_exclusive_reports_darwin_existing_target(
-    darwin_exclusive_rename: Mock,
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    darwin_exclusive_rename.return_value = -1
-    monkeypatch.setattr(ctypes, "get_errno", Mock(return_value=errno.EEXIST))
-    source = tmp_path / "staged"
-    target = tmp_path / "target"
-
-    with pytest.raises(FileExistsError):
-        workspace_file_runtime.rename_entry_exclusive(source, target)
-
-    darwin_exclusive_rename.assert_called_once_with(
-        os.fsencode(source), os.fsencode(target), 4
-    )
 
 
 @pytest.fixture
@@ -326,9 +275,14 @@ def test_resolve_raw_file_rejects_path_outside_workspace(
 @pytest.mark.asyncio
 async def test_filesystem_scope_lists_and_reads_absolute_path(
     native_bindings,
-    tmp_path: Path,
 ) -> None:
-    filesystem_scope_root = tmp_path / "filesystem_scope"
+    output_root = (
+        Path.cwd()
+        / "out/tests/unit/services/infrastructure/test_workspace_file_edit"
+    )
+    filesystem_scope_root = output_root / "workspace" / "filesystem_scope"
+    if filesystem_scope_root.exists():
+        shutil.rmtree(filesystem_scope_root)
     workspace_root = filesystem_scope_root / "project"
     workspace_root.mkdir(parents=True)
     workspace_service = WorkspaceService(
@@ -398,14 +352,18 @@ async def test_directory_listing_rejects_invalid_cursor(
 
 @pytest.fixture
 async def file_manager_service(
-    tmp_path: Path,
     native_bindings,
 ):
-    project_root = prepare_default_test_workspace(
-        workspace_root=tmp_path / "project",
-        template_root=Path.cwd() / "tests/fixtures/workspaces/default_test_workspace",
+    output_root = (
+        Path.cwd()
+        / "out/tests/unit/services/infrastructure/test_workspace_file_edit"
+        / "workspace"
     )
-    source_root = tmp_path / "clipboard"
+    if output_root.exists():
+        shutil.rmtree(output_root)
+    project_root = prepare_default_test_workspace(workspace_root=output_root / "project",
+                                                  template_root=Path.cwd() / "tests/fixtures/workspaces/default_test_workspace")
+    source_root = output_root / "clipboard"
     source_root.mkdir()
     service = WorkspaceService(config_service=_workspace_config_service_mock(), workspace_root=project_root, native_directories=native_bindings)
     await service.start()
@@ -589,3 +547,49 @@ def test_file_manager_reveals_path_with_host_file_manager(
 
     assert service.file_paths.native(revealed) == target.resolve()
     assert popen.call_args.args[0] == ["/usr/bin/xdg-open", str(project_root.resolve())]
+
+
+def test_darwin_exclusive_rename_uses_native_no_replace_flag(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[bytes, bytes, int]] = []
+
+    def renamex_np(source: bytes, target: bytes, flags: int) -> int:
+        calls.append((source, target, flags))
+        return 0
+
+    monkeypatch.setattr(workspace_file_runtime.sys, "platform", "darwin")
+    monkeypatch.setattr(
+        ctypes,
+        "CDLL",
+        lambda *_args, **_kwargs: SimpleNamespace(renamex_np=renamex_np),
+    )
+    source = tmp_path / "staged-item"
+    target = tmp_path / "published-item"
+
+    workspace_file_runtime.rename_entry_exclusive(source, target)
+
+    assert calls == [(os.fsencode(source), os.fsencode(target), 0x00000004)]
+
+
+def test_darwin_exclusive_rename_preserves_destination_exists_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def renamex_np(_source: bytes, _target: bytes, _flags: int) -> int:
+        return -1
+
+    monkeypatch.setattr(workspace_file_runtime.sys, "platform", "darwin")
+    monkeypatch.setattr(
+        ctypes,
+        "CDLL",
+        lambda *_args, **_kwargs: SimpleNamespace(renamex_np=renamex_np),
+    )
+    monkeypatch.setattr(ctypes, "get_errno", lambda: errno.EEXIST)
+    target = tmp_path / "already-exists"
+
+    with pytest.raises(FileExistsError) as raised:
+        workspace_file_runtime.rename_entry_exclusive(tmp_path / "staged", target)
+
+    assert raised.value.filename == str(target)

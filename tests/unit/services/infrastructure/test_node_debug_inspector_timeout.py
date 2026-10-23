@@ -27,13 +27,13 @@ class _SilentSocket:
         return None
 
 
-def _runtime() -> NodeDebugRuntime:
+def _runtime(workspace_root: Path) -> NodeDebugRuntime:
     runtime = NodeDebugRuntime(
         session_id="ses_019bf141964978208ce9100774167f90",
         thread_id=TEST_THREAD_ID,
         configuration_id="dbgcfg_" + "1" * 32,
-        workspace_root=Path("/tmp"),
-        script_path=Path("/tmp/entry.mjs"),
+        workspace_root=workspace_root,
+        script_path=workspace_root / "entry.mjs",
         relative_script_path="entry.mjs",
         command_timeout_seconds=0.05,
     )
@@ -41,34 +41,27 @@ def _runtime() -> NodeDebugRuntime:
     return runtime
 
 
-def _runtime_at(tmp_path: Path) -> NodeDebugRuntime:
-    runtime = NodeDebugRuntime(
-        session_id="ses_019bf141964978208ce9100774167f90",
-        thread_id=TEST_THREAD_ID,
-        configuration_id="dbgcfg_" + "1" * 32,
-        workspace_root=tmp_path,
-        script_path=tmp_path / "entry.mjs",
-        relative_script_path="entry.mjs",
-        command_timeout_seconds=0.05,
-    )
-    return runtime
-
-
-def _inspector() -> NodeDebugInspector:
+def _inspector(workspace_root: Path) -> NodeDebugInspector:
     return NodeDebugInspector(
-        workspace_root=Path("/tmp"),
-        file_paths=WorkspaceFilePaths(workspace=Path("/tmp"), workspace_id="00000000-0000-4000-8000-000000000001", bindings=None),
+        workspace_root=workspace_root,
+        file_paths=WorkspaceFilePaths(
+            workspace=workspace_root,
+            workspace_id="00000000-0000-4000-8000-000000000001",
+            bindings=None,
+        ),
         append_action=lambda *args, **kwargs: None,
         clear_stop_snapshot=lambda runtime: None,
     )
 
 
 @pytest.mark.asyncio
-async def test_command_timeout_raises_diagnosable_runtime_error() -> None:
+async def test_command_timeout_raises_diagnosable_runtime_error(
+    tmp_path: Path,
+) -> None:
     """命令超时必须带方法名与超时值，绝不外泄空消息的 OSError。"""
-    runtime = _runtime()
+    runtime = _runtime(tmp_path)
     with pytest.raises(RuntimeError) as caught:
-        await _inspector().command(runtime, "Debugger.evaluateOnCallFrame")
+        await _inspector(tmp_path).command(runtime, "Debugger.evaluateOnCallFrame")
     message = str(caught.value)
     assert "Debugger.evaluateOnCallFrame" in message
     assert "超时" in message
@@ -80,7 +73,7 @@ async def test_command_timeout_raises_diagnosable_runtime_error() -> None:
 async def test_send_failure_clears_pending_command_and_preserves_exception(
     tmp_path: Path,
 ) -> None:
-    runtime = _runtime_at(tmp_path)
+    runtime = _runtime(tmp_path)
     original = OSError("synthetic send failure")
 
     class FailingSocket:
@@ -91,7 +84,7 @@ async def test_send_failure_clears_pending_command_and_preserves_exception(
     runtime.inspector.socket = FailingSocket()  # type: ignore[assignment]
 
     with pytest.raises(OSError) as caught:
-        await _inspector().command(runtime, "Runtime.enable")
+        await _inspector(tmp_path).command(runtime, "Runtime.enable")
 
     assert caught.value is original
     assert runtime.inspector.pending_commands == {}
@@ -99,7 +92,7 @@ async def test_send_failure_clears_pending_command_and_preserves_exception(
 
 @pytest.mark.asyncio
 async def test_cancelled_send_clears_pending_command(tmp_path: Path) -> None:
-    runtime = _runtime_at(tmp_path)
+    runtime = _runtime(tmp_path)
     entered_send = asyncio.Event()
 
     class BlockedSocket:
@@ -110,7 +103,7 @@ async def test_cancelled_send_clears_pending_command(tmp_path: Path) -> None:
 
     runtime.inspector.socket = BlockedSocket()  # type: ignore[assignment]
     command = asyncio.create_task(
-        _inspector().command(runtime, "Runtime.enable")
+        _inspector(tmp_path).command(runtime, "Runtime.enable")
     )
     await asyncio.wait_for(entered_send.wait(), timeout=1)
     command.cancel()
@@ -122,9 +115,11 @@ async def test_cancelled_send_clears_pending_command(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_frame_variable_timeout_raises_diagnosable_runtime_error() -> None:
+async def test_frame_variable_timeout_raises_diagnosable_runtime_error(
+    tmp_path: Path,
+) -> None:
     """局部变量读取超时同样必须可诊断。"""
-    runtime = _runtime()
+    runtime = _runtime(tmp_path)
 
     async def _never_finishes() -> None:
         await asyncio.Event().wait()
@@ -132,7 +127,7 @@ async def test_frame_variable_timeout_raises_diagnosable_runtime_error() -> None
     runtime.inspector.variable_hydration_task = asyncio.create_task(_never_finishes())
     try:
         with pytest.raises(RuntimeError) as caught:
-            await _inspector().wait_for_frame_variables(runtime)
+            await _inspector(tmp_path).wait_for_frame_variables(runtime)
         assert "读取局部变量超时" in str(caught.value)
     finally:
         runtime.inspector.variable_hydration_task.cancel()

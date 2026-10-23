@@ -14,7 +14,7 @@ import {
   type ResourceAttentionGroup,
   statusLabel,
 } from "../../../state/display/resourceDisplay";
-import { CREATABLE_SESSION_CONNECTIONS } from "../../../state/sessionConnections";
+import { CREATABLE_SESSION_CONNECTION_OPTIONS } from "../../../state/creatableSessionConnectionOptions";
 import type { CreatableSessionConnectionKind } from "../../../types/frontend";
 import AnchoredOverlay from "../../overlays/AnchoredOverlay";
 import ResourceTreeRow from "./ResourceTreeRow";
@@ -308,7 +308,7 @@ function ResourcePanelForOwner({
     setNoticeTechnicalDetails("");
     void onCreateConnection(kind, createThread)
       .then(() => {
-        const option = CREATABLE_SESSION_CONNECTIONS.find(
+        const option = CREATABLE_SESSION_CONNECTION_OPTIONS.find(
           (candidate) => candidate.kind === kind,
         );
         presentNotice(
@@ -392,7 +392,7 @@ function ResourcePanelForOwner({
             onClose={() => setCreateMenuOpen(false)}
           >
             <div className="resource-create-menu" role="menu">
-              {CREATABLE_SESSION_CONNECTIONS.map((option) => (
+              {CREATABLE_SESSION_CONNECTION_OPTIONS.map((option) => (
                 <button
                   key={option.kind}
                   type="button"

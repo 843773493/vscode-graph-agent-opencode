@@ -112,7 +112,7 @@ def _idle_state() -> NodeDebugStateDTO:
     )
 
 
-def _debug_tools(tmp_path: Path) -> list:
+def _debugging_tools() -> list:
     service = MagicMock()
     service.get_state = AsyncMock(return_value=_idle_state())
     service.record_tool_action = AsyncMock()
@@ -132,8 +132,8 @@ def test_debugging_group_matches_production_catalog() -> None:
 
 
 @pytest.mark.asyncio
-async def test_envelope_only_accepts_tool_name_and_arguments(tmp_path: Path) -> None:
-    debug_tools = _debug_tools(tmp_path)
+async def test_envelope_only_accepts_tool_name_and_arguments() -> None:
+    debug_tools = _debugging_tools()
     envelope = create_extension_tool_invoker_tool(
         debug_tools,
         catalog_binding_resolver=seal_extension_catalog_binding_from_tools(debug_tools),
@@ -166,9 +166,7 @@ async def test_envelope_only_accepts_tool_name_and_arguments(tmp_path: Path) -> 
 
 
 @pytest.mark.asyncio
-async def test_envelope_rejects_unknown_and_runtime_arguments_before_target(
-    tmp_path: Path,
-) -> None:
+async def test_envelope_rejects_unknown_and_runtime_arguments_before_target() -> None:
     service = MagicMock()
     service.get_state = AsyncMock(return_value=_idle_state())
     service.record_tool_action = AsyncMock()
@@ -212,10 +210,8 @@ async def test_envelope_rejects_unknown_and_runtime_arguments_before_target(
     assert json.loads(ok_result)["ok"] is True
 
 
-def test_envelope_description_and_schema_do_not_expose_target_names(
-    tmp_path: Path,
-) -> None:
-    debug_tools = _debug_tools(tmp_path)
+def test_envelope_description_and_schema_do_not_expose_target_names() -> None:
+    debug_tools = _debugging_tools()
     envelope = create_extension_tool_invoker_tool(
         debug_tools,
         catalog_binding_resolver=seal_extension_catalog_binding_from_tools(debug_tools),
@@ -231,10 +227,8 @@ def test_envelope_description_and_schema_do_not_expose_target_names(
     assert "thread" not in envelope.description
 
 
-def test_provider_tool_list_contains_only_fixed_envelope_for_debugging(
-    tmp_path: Path,
-) -> None:
-    debug_tools = _debug_tools(tmp_path)
+def test_provider_tool_list_contains_only_fixed_envelope_for_debugging() -> None:
+    debug_tools = _debugging_tools()
     envelope = create_extension_tool_invoker_tool(
         debug_tools,
         catalog_binding_resolver=seal_extension_catalog_binding_from_tools(debug_tools),
@@ -250,10 +244,8 @@ def test_provider_tool_list_contains_only_fixed_envelope_for_debugging(
     assert provider_tool_names.isdisjoint(DEBUGGING_TOOL_NAMES)
 
 
-def test_envelope_schema_is_stable_when_debugging_targets_change(
-    tmp_path: Path,
-) -> None:
-    tools = _debug_tools(tmp_path)
+def test_envelope_schema_is_stable_when_debugging_targets_change() -> None:
+    tools = _debugging_tools()
     empty_envelope = create_extension_tool_invoker_tool(
         [],
         catalog_binding_resolver=seal_extension_catalog_binding_from_tools([]),
@@ -383,9 +375,7 @@ def test_configured_debugging_specs_resolve_into_envelope_targets(
 
 
 @pytest.mark.asyncio
-async def test_envelope_preserves_original_tool_call_id_pairing(
-    tmp_path: Path,
-) -> None:
+async def test_envelope_preserves_original_tool_call_id_pairing() -> None:
     service = MagicMock()
     service.get_state = AsyncMock(return_value=_idle_state())
     service.record_tool_action = AsyncMock()

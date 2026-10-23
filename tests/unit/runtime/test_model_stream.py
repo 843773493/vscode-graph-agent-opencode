@@ -1,4 +1,5 @@
 """模型 transport 配置和未使用的关闭路径不得导入 SDK。"""
+
 from __future__ import annotations
 
 import builtins
@@ -20,7 +21,7 @@ from app.testing.model_stream.config import (
 from app.testing.model_stream.errors import ModelStreamError
 
 
-@pytest.fixture
+@pytest.fixture(scope="module")
 def model_stream_config() -> ModelStreamConfig:
     return load_model_stream_config(
         Path.cwd() / "configs/tests/model_stream/model_stream_chat_basic.jsonc",

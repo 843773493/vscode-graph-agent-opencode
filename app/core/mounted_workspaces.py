@@ -92,6 +92,7 @@ class MountedWorkspaceRegistry:
 
         self._by_id = by_id
         self._mounts = tuple(normalized)
+        self._manifest_digest = mounted_workspace_manifest_digest(self._mounts)
 
     @classmethod
     def from_environment(cls) -> MountedWorkspaceRegistry:
@@ -147,7 +148,7 @@ class MountedWorkspaceRegistry:
 
     @property
     def manifest_digest(self) -> str:
-        return mounted_workspace_manifest_digest(self._mounts)
+        return self._manifest_digest
 
     @property
     def workspace_ids(self) -> tuple[str, ...]:

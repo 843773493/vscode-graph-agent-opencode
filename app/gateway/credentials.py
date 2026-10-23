@@ -61,16 +61,21 @@ class FederationCredentialStore:
         return credential
 
     def verify(self, token: str) -> FederationCredential:
+        now = datetime.now(UTC)
         for credential in self._load().values():
-            if not credential.expired and secrets.compare_digest(credential.token, token):
+            if (
+                now < credential.expires_at
+                and secrets.compare_digest(credential.token, token)
+            ):
                 return credential
         raise PermissionError("无效或已过期的 Gateway 联邦凭据")
 
     def list_valid(self) -> tuple[FederationCredential, ...]:
+        now = datetime.now(UTC)
         return tuple(
             credential
             for credential in self._load().values()
-            if not credential.expired
+            if now < credential.expires_at
         )
 
     def list_all(self) -> tuple[FederationCredential, ...]:
@@ -83,14 +88,17 @@ class FederationCredentialStore:
             self._save(credentials)
 
     def _load(self) -> dict[str, FederationCredential]:
-        if not self._storage_path.exists():
+        try:
+            with self._storage_path.open("r", encoding="utf-8") as file:
+                # 校验与解析使用同一文件句柄，避免重复路径查询和替换竞态。
+                # TODO: Windows 使用 ACL 而不是 POSIX mode bits；临时文件 ACL 由系统继承控制。
+                if os.name != "nt" and os.fstat(file.fileno()).st_mode & 0o077:
+                    raise PermissionError(
+                        f"联邦凭据文件权限必须为 0600: {self._storage_path}"
+                    )
+                payload = json.load(file)
+        except FileNotFoundError:
             return {}
-        # TODO: Windows 使用 ACL 而不是 POSIX mode bits；临时文件 ACL 由系统继承控制。
-        if os.name != "nt" and self._storage_path.stat().st_mode & 0o077:
-            raise PermissionError(
-                f"联邦凭据文件权限必须为 0600: {self._storage_path}"
-            )
-        payload = json.loads(self._storage_path.read_text(encoding="utf-8"))
         if not isinstance(payload, dict) or payload.get("schema_version") != 1:
             raise ValueError(f"联邦凭据文件版本非法: {self._storage_path}")
         result: dict[str, FederationCredential] = {}

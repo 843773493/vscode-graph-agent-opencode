@@ -76,14 +76,10 @@ async def http_context(monkeypatch: pytest.MonkeyPatch):
             return httpx.Response(context.status, content=context.raw, headers=headers)
         return httpx.Response(context.status, json=context.data, headers=headers)
 
-    original = httpx.AsyncClient
     transport = httpx.MockTransport(response)
-    client = original(transport=transport, trust_env=False)
-    monkeypatch.setattr(
-        "app.gateway.federation.workspace_port.httpx.AsyncClient",
-        lambda **kwargs: original(transport=transport, **kwargs),
-    )
-    port, catalog = WorkspaceSessionMainPort(http_client=client), WorkspaceCatalogPort()
+    client = httpx.AsyncClient(transport=transport, trust_env=False)
+    port = WorkspaceSessionMainPort(http_client=client)
+    catalog = WorkspaceCatalogPort(http_client=client)
     for owner in (port, catalog):
         owner.project_workspaces(
             (("gateway-route", "http://workspace.test", WORKSPACE_ID),)

@@ -7,7 +7,6 @@ import time
 from collections.abc import AsyncIterator, Iterator, Mapping, Sequence
 from typing import Any, ClassVar
 
-import litellm
 from langchain_core.callbacks import (
     AsyncCallbackManagerForLLMRun,
     CallbackManagerForLLMRun,
@@ -66,7 +65,7 @@ from app.core.turn_execution_scope import (
     ScopeCancelledError,
     get_current_turn_execution_scope,
 )
-from app.runtime.model_stream import ensure_model_stream_installed
+from app.runtime.litellm_runtime import litellm, prepare_model_request
 from app.runtime.provider_errors import mark_provider_failure
 from app.services.mapping.agent_content_mapper import extract_reasoning_summary
 from app.services.mapping.itemized.provider_request import (
@@ -563,7 +562,7 @@ class BoxteamOpenAIResponsesModel(BoxteamLiteLLMChatModel):
             profile=responses_wire_profile(self),
             wire_request=wire_request_params(self, payload),
         )
-        ensure_model_stream_installed()
+        prepare_model_request()
         record_upstream_request(
             request=payload,
             model=self.model,
@@ -702,7 +701,7 @@ class BoxteamOpenAIResponsesModel(BoxteamLiteLLMChatModel):
             profile=responses_wire_profile(self),
             wire_request=wire_request_params(self, raw_payload),
         )
-        ensure_model_stream_installed()
+        prepare_model_request()
         open_timeout = asyncio.timeout(DEFAULT_RESPONSES_STREAM_OPEN_TIMEOUT_SECONDS)
         record_upstream_request(
             request=raw_payload,

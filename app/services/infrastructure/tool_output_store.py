@@ -83,13 +83,21 @@ class ToolOutputStore:
             session_id=session_id,
             tool_call_id=tool_call_id,
         )
-        _write_exact_output(output_path, encoded)
-        relative_path = session_artifact_uri(read_workspace_id(self._workspace_root), session_id, "tool-results", output_path.name,
-                                            gateway_authority=get_current_gateway_id())
+        resource_uri = session_artifact_uri(
+            read_workspace_id(self._workspace_root), session_id, "tool-results", output_path.name,
+            gateway_authority=get_current_gateway_id(),
+        )
+        try:
+            _write_exact_output(output_path, encoded, resource_uri)
+        except OSError as error:
+            raise type(error)(
+                error.errno,
+                f"工具结果 write 失败: uri={resource_uri}, error={type(error).__name__}, errno={error.errno}",
+            ) from error
         reference = ToolOutputReference(
             type="tool_output",
-            path=relative_path,
-            read_path=relative_path,
+            path=resource_uri,
+            read_path=resource_uri,
             tool_name=tool_name,
             tool_call_id=tool_call_id,
             byte_count=len(encoded),
@@ -98,7 +106,7 @@ class ToolOutputStore:
             truncated=True,
         )
         marker = (
-            f"... 工具输出过大，完整内容已保存到 {relative_path} ...\n"
+            f"... 工具输出过大，完整内容已保存到 {resource_uri} ...\n"
             "请先用 grep 搜索该路径，再用 read_file 按行分段读取。"
         )
         preview = _bounded_structured_preview(
@@ -156,8 +164,14 @@ class ToolOutputStore:
         path = directory / parsed.tail_segments[2]
         if directory.is_symlink() or path.is_symlink():
             raise PermissionError("工具结果及其目录不能是符号链接")
-        with path.open("rb") as stream:
-            data = stream.read(max_bytes + 1)
+        try:
+            with path.open("rb") as stream:
+                data = stream.read(max_bytes + 1)
+        except OSError as error:
+            raise type(error)(
+                error.errno,
+                f"工具结果 read 失败: uri={uri}, error={type(error).__name__}, errno={error.errno}",
+            ) from error
         return ResourceFileContent(data=data, content_type="text/plain")
 
 
@@ -196,12 +210,12 @@ def _line_count(text: str) -> int:
     return text.count("\n") + 1
 
 
-def _write_exact_output(path: Path, content: bytes) -> None:
+def _write_exact_output(path: Path, content: bytes, resource_uri: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     if path.exists():
         existing = path.read_bytes()
         if existing != content:
-            raise RuntimeError(f"同一 tool_call_id 对应的工具输出发生变化: {path}")
+            raise RuntimeError(f"同一 tool_call_id 对应的工具输出发生变化: {resource_uri}")
         return
 
     temporary_path = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
@@ -214,7 +228,7 @@ def _write_exact_output(path: Path, content: bytes) -> None:
     except FileExistsError:
         existing = path.read_bytes()
         if existing != content:
-            raise RuntimeError(f"同一 tool_call_id 对应的工具输出发生变化: {path}")
+            raise RuntimeError(f"同一 tool_call_id 对应的工具输出发生变化: {resource_uri}")
     finally:
         temporary_path.unlink(missing_ok=True)
 

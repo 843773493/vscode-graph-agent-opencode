@@ -5,10 +5,10 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 
+from app.core.atomic_fs import fsync_directory
 from app.domain.itemized.hashing import canonical_json_bytes
 from app.services.infrastructure.rollout_context.migration.artifacts import (
     require_safe_path,
-    sync_directory,
     write_private,
 )
 
@@ -34,7 +34,7 @@ def write_quarantine(
     }
     destination = audit_root / "quarantine.json"
     write_private(destination, canonical_json_bytes(result) + b"\n")
-    sync_directory(audit_root)
+    fsync_directory(audit_root)
     return {
         "schema": result["schema"],
         "candidate_count": len(entries),

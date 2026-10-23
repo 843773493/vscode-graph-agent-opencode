@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import subprocess
 from collections.abc import Iterator
+from contextlib import ExitStack
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from threading import Thread
 from unittest.mock import Mock
@@ -27,16 +28,19 @@ def health_endpoint(
             self.send_response(status if token == "local-dev-token" else 401)
             self.end_headers()
 
-    server = HTTPServer(("127.0.0.1", 0), Handler)
-    thread = Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01})
-    thread.start()
-    try:
+    with ExitStack() as lifetime:
+        server = HTTPServer(("127.0.0.1", 0), Handler)
+        lifetime.callback(server.server_close)
+        thread = Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01})
+        thread.start()
+
+        def join_server_thread() -> None:
+            thread.join(timeout=5)
+            assert not thread.is_alive(), "测试 HTTP 服务线程未停止"
+
+        lifetime.callback(join_server_thread)
+        lifetime.callback(server.shutdown)
         yield server.server_port, observed
-    finally:
-        server.shutdown()
-        thread.join(timeout=5)
-        server.server_close()
-        assert not thread.is_alive(), "测试 HTTP 服务线程未停止"
 
 
 @pytest.fixture

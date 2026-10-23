@@ -1,9 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-import base64
 import os
-import shlex
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -13,6 +11,7 @@ from typing import Any, Literal
 from langchain_core.tools import BaseTool, tool
 
 from app.agents.tool_invocation_context import ToolInvocationContext
+from app.agents.tools.terminal_command import _build_terminal_input
 from app.agents.tools.terminal_contract import (
     DEFAULT_EXEC_YIELD_TIME_MS,
     DEFAULT_MAX_OUTPUT_TOKENS,
@@ -30,150 +29,6 @@ from app.core.identifier import create_uuid_hex
 from app.core.turn_execution_scope import get_current_turn_execution_scope
 from app.services.business.terminal_resources.operations import TerminalOperations
 from app.services.business.terminal_resources.owner import TerminalResourceOwner
-
-
-def _command_for_posix_shell(
-    *,
-    cmd: str,
-    workdir: str | None,
-    shell: str | None,
-    login: bool,
-) -> str:
-    shell_command = shlex.quote(shell) if shell else '"${SHELL:-/bin/bash}"'
-    shell_flag = "-lc" if login else "-c"
-    invocation = f"{shell_command} {shell_flag} {shlex.quote(cmd)}"
-    if workdir is None:
-        return invocation
-    return f"cd -- {shlex.quote(workdir)} && {invocation}"
-
-
-def _windows_shell_name(shell: str | None) -> str:
-    configured = shell or os.environ.get("COMSPEC") or "cmd.exe"
-    return configured.replace("\\", "/").rsplit("/", maxsplit=1)[-1].lower()
-
-
-def _windows_cmd_quote(value: str) -> str:
-    if '"' in value:
-        raise ValueError("Windows 命令路径不能包含双引号")
-    return f'"{value}"'
-
-
-def _windows_powershell_quote(value: str) -> str:
-    return "'" + value.replace("'", "''") + "'"
-
-
-def _windows_powershell_command(
-    *,
-    cmd: str,
-    workdir: str | None,
-    shell: str,
-    start_marker: str,
-    done_marker: str,
-) -> str:
-    command_payload = base64.b64encode(cmd.encode("utf-8")).decode("ascii")
-    script_lines = [
-        f"Write-Output {_windows_powershell_quote(start_marker)}",
-        "$boxteamExitCode = 0",
-        "try {",
-    ]
-    if workdir is not None:
-        script_lines.append(
-            "  Set-Location -LiteralPath "
-            f"{_windows_powershell_quote(workdir)}"
-        )
-    script_lines.extend(
-        [
-            "  $global:LASTEXITCODE = 0",
-            (
-                "  $boxteamCommand = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String("
-                f"{_windows_powershell_quote(command_payload)}))"
-            ),
-            "  Invoke-Expression -Command $boxteamCommand",
-            "  $boxteamSucceeded = $?",
-            "  $boxteamExitCode = [int]$LASTEXITCODE",
-            "  if (-not $boxteamSucceeded -and $boxteamExitCode -eq 0) {",
-            "    $boxteamExitCode = 1",
-            "  }",
-            "} catch {",
-            "  Write-Error $_",
-            "  $boxteamExitCode = 1",
-            "}",
-            (
-                "Write-Output ("
-                f"{_windows_powershell_quote(done_marker + ':')}"
-                " + $boxteamExitCode)"
-            ),
-        ]
-    )
-    encoded_script = base64.b64encode(
-        "\n".join(script_lines).encode("utf-16le")
-    ).decode("ascii")
-    return (
-        f"{_windows_cmd_quote(shell)} -NoLogo -NoProfile -NonInteractive "
-        f"-ExecutionPolicy Bypass -EncodedCommand {encoded_script}\r"
-    )
-
-
-def _command_for_windows_shell(
-    *,
-    cmd: str,
-    workdir: str | None,
-    shell: str | None,
-    start_marker: str,
-    done_marker: str,
-) -> str:
-    shell_name = _windows_shell_name(shell)
-    shell_path = shell or os.environ.get("COMSPEC") or "cmd.exe"
-    if shell_name in {"powershell", "powershell.exe", "pwsh", "pwsh.exe"}:
-        return _windows_powershell_command(
-            cmd=cmd,
-            workdir=workdir,
-            shell=shell_path,
-            start_marker=start_marker,
-            done_marker=done_marker,
-        )
-    if shell_name not in {"cmd", "cmd.exe"}:
-        raise ValueError(
-            "Windows 终端暂不支持该 shell；请使用 cmd.exe、powershell.exe 或 pwsh.exe: "
-            f"{shell_path}"
-        )
-
-    lines = [f"echo {start_marker}"]
-    if workdir is not None:
-        lines.append(f"cd /d {_windows_cmd_quote(workdir)}")
-    lines.extend(
-        [
-            cmd,
-            'set "__BOXTEAM_RC=%ERRORLEVEL%"',
-            f"echo {done_marker}:%__BOXTEAM_RC%",
-        ]
-    )
-    return "\r\n".join(lines) + "\r"
-
-
-def _command_for_shell(
-    *,
-    cmd: str,
-    workdir: str | None,
-    shell: str | None,
-    login: bool,
-    start_marker: str,
-    done_marker: str,
-) -> str:
-    if os.name == "nt":
-        return _command_for_windows_shell(
-            cmd=cmd,
-            workdir=workdir,
-            shell=shell,
-            start_marker=start_marker,
-            done_marker=done_marker,
-        )
-    return _command_for_posix_shell(
-        cmd=cmd,
-        workdir=workdir,
-        shell=shell,
-        login=login,
-    )
 
 
 def _resolve_terminal_workdir(
@@ -304,29 +159,29 @@ def create_exec_command_tool(
             run_id = create_uuid_hex()
             start_marker = f"__BOXTEAM_CMD_START_{run_id}__"
             done_marker = f"__BOXTEAM_CMD_DONE_{run_id}__"
-            shell_command = _command_for_shell(
-                cmd=cmd,
+            terminal_input = _build_terminal_input(
+                command_text=cmd,
                 # cwd 已由 PTY 创建请求设置；这里不能再次 cd，否则相对 workdir
                 # 会从已进入的目录重复拼接（例如 workspace/parry_arena/parry_arena）。
-                workdir=None,
-                shell=shell,
+                working_directory=None,
+                shell_executable=shell,
                 login=login,
                 start_marker=start_marker,
                 done_marker=done_marker,
             )
             # TODO: 兼容 Codex 参数；BoxTeam 为保证 session_id 可 attach，底层始终分配 PTY。
             _ = tty
-            wrapped_command = shell_command
+            command_input = terminal_input
             if os.name != "nt":
-                wrapped_command = (
+                command_input = (
                     f"printf '\\n{start_marker}\\n'; "
-                    f"{shell_command}; "
+                    f"{terminal_input}; "
                     f"__boxteam_rc=$?; "
                     f"printf '\\n{done_marker}:%s\\n' \"$__boxteam_rc\"\r"
                 )
             await terminal_client.write_terminal(
                 terminal_id=terminal_id,
-                data=wrapped_command,
+                data=command_input,
                 source="agent",
                 command=cmd,
             )

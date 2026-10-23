@@ -230,6 +230,8 @@ class MessageStreamStore:
         self._snapshot_tasks: dict[str, asyncio.Task[None]] = {}
         self._snapshot_file_lock = threading.Lock()
         self._states: dict[str, dict[str, Any]] = {}
+        # 缓存状态按对象整体替换；记录对象身份后，终态大小只需在状态替换时序列化一次。
+        self._terminal_state_sizes: dict[str, tuple[dict[str, Any], int]] = {}
         self._subscriptions: dict[str, set[MessageStreamSubscription]] = {}
         self._event_ids: dict[str, dict[str, dict[str, Any]]] = {}
         self._event_ids_loaded: set[str] = set()
@@ -246,6 +248,7 @@ class MessageStreamStore:
 
     def _evict_stream_cache(self, turn_stream_id: str) -> None:
         self._states.pop(turn_stream_id, None)
+        self._terminal_state_sizes.pop(turn_stream_id, None)
         self._event_ids.pop(turn_stream_id, None)
         self._event_ids_loaded.discard(turn_stream_id)
         # 被淘汰的流不再需要串行锁；锁字典必须随缓存一起收敛，否则每处理一个
@@ -266,15 +269,30 @@ class MessageStreamStore:
         # 这里的终态状态只用于加速最近访问，不能随着历史会话无限增长。
         self._states.pop(turn_stream_id, None)
         self._states[turn_stream_id] = state
+        if str(state.get("stream_status")) in TERMINAL_STREAM_STATUSES:
+            cached_size = self._terminal_state_sizes.get(turn_stream_id)
+            if cached_size is None or cached_size[0] is not state:
+                self._terminal_state_sizes[turn_stream_id] = (
+                    state,
+                    self._cached_state_size_bytes(state),
+                )
+        else:
+            self._terminal_state_sizes.pop(turn_stream_id, None)
         self._prune_terminal_cache(protected_stream_id=turn_stream_id)
 
     def _prune_terminal_cache(self, *, protected_stream_id: str | None) -> None:
-        terminal_entries = [
-            (stream_id, state, self._cached_state_size_bytes(state))
-            for stream_id, state in self._states.items()
-            if str(state.get("stream_status")) in TERMINAL_STREAM_STATUSES
-        ]
-        total_bytes = sum(size for _, _, size in terminal_entries)
+        terminal_entries: list[tuple[str, int]] = []
+        for stream_id, state in self._states.items():
+            if str(state.get("stream_status")) not in TERMINAL_STREAM_STATUSES:
+                continue
+            cached_size = self._terminal_state_sizes.get(stream_id)
+            if cached_size is None or cached_size[0] is not state:
+                raise RuntimeError(
+                    "消息流终态缓存大小与状态对象不一致: "
+                    f"turn_stream_id={stream_id}"
+                )
+            terminal_entries.append((stream_id, cached_size[1]))
+        total_bytes = sum(size for _, size in terminal_entries)
         while (
             len(terminal_entries) > MESSAGE_STREAM_TERMINAL_CACHE_MAX_ENTRIES
             or total_bytes > MESSAGE_STREAM_TERMINAL_CACHE_MAX_BYTES
@@ -282,7 +300,7 @@ class MessageStreamStore:
             candidate_index = next(
                 (
                     index
-                    for index, (stream_id, _, _) in enumerate(terminal_entries)
+                    for index, (stream_id, _) in enumerate(terminal_entries)
                     if stream_id != protected_stream_id
                     and not self._subscriptions.get(stream_id)
                 ),
@@ -291,7 +309,7 @@ class MessageStreamStore:
             if candidate_index is None:
                 # 当前请求使用中的单个超大终态允许暂留；下一条流进入时会把它淘汰。
                 break
-            stream_id, _, size = terminal_entries.pop(candidate_index)
+            stream_id, size = terminal_entries.pop(candidate_index)
             total_bytes -= size
             self._evict_stream_cache(stream_id)
 
@@ -1325,6 +1343,7 @@ class MessageStreamStore:
             # 半条记录。重新扫描并截断未完成尾部，避免进程内继续沿用旧
             # checkpoint，下一次提交复用已经写过的 event_seq。
             self._states.pop(turn_stream_id, None)
+            self._terminal_state_sizes.pop(turn_stream_id, None)
             self._event_ids.pop(turn_stream_id, None)
             self._event_ids_loaded.discard(turn_stream_id)
             self._load_state_from_disk(session_id, turn_stream_id)

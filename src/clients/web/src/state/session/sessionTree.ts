@@ -14,14 +14,28 @@ function sessionSortTime(
   return Number.isFinite(time) ? time : 0;
 }
 
+function cachedSessionSortTime(
+  node: SessionTreeNode,
+  sortMode: "created" | "updated",
+  sortTimeByNode: WeakMap<SessionTreeNode, number>,
+): number {
+  const cachedTime = sortTimeByNode.get(node);
+  if (cachedTime !== undefined) {
+    return cachedTime;
+  }
+  const computedTime = sessionSortTime(node.session, sortMode);
+  sortTimeByNode.set(node, computedTime);
+  return computedTime;
+}
+
 function sortNodes(
   nodes: SessionTreeNode[],
   sortMode: "created" | "updated",
+  sortTimeByNode: WeakMap<SessionTreeNode, number>,
 ): SessionTreeNode[] {
   return nodes.sort(
-    (left, right) =>
-      sessionSortTime(right.session, sortMode) -
-      sessionSortTime(left.session, sortMode),
+    (left, right) => cachedSessionSortTime(right, sortMode, sortTimeByNode)
+      - cachedSessionSortTime(left, sortMode, sortTimeByNode),
   );
 }
 
@@ -35,6 +49,7 @@ export function buildSessionTree(
   }
 
   const roots: SessionTreeNode[] = [];
+  const sortTimeByNode = new WeakMap<SessionTreeNode, number>();
   for (const node of nodesById.values()) {
     const parentId = node.session.parent_session_id;
     const parent = parentId ? nodesById.get(parentId) : undefined;
@@ -56,13 +71,13 @@ export function buildSessionTree(
       return;
     }
     visiting.add(sessionId);
-    sortNodes(node.children, sortMode);
+    sortNodes(node.children, sortMode, sortTimeByNode);
     node.children.forEach(validateAndSort);
     visiting.delete(sessionId);
     visited.add(sessionId);
   };
 
-  sortNodes(roots, sortMode).forEach(validateAndSort);
+  sortNodes(roots, sortMode, sortTimeByNode).forEach(validateAndSort);
   if (visited.size !== nodesById.size) {
     throw new Error("会话树存在无法从根节点访问的循环关系");
   }

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from threading import Event
@@ -18,10 +19,24 @@ from app.prompting import PromptSection, internal_message_factory
 from app.runtime.session_orchestrator import SessionOrchestrator
 from app.schemas.internal_v2.common import MessageRole
 from app.schemas.internal_v2.job import JobDispatchSnapshotDTO
-from app.schemas.internal_v2.message import MessageDTO
+from app.schemas.internal_v2.message import (
+    MessageCreateRequest,
+    MessageDTO,
+    MessageRunRequest,
+    RunOptions,
+)
 from app.services.infrastructure.rollout_context.storage.primitives import (
     _RolloutOperationLock,
 )
+
+
+@dataclass(frozen=True, slots=True)
+class _PreparedChildDispatchContext:
+    session_orchestrator: SessionOrchestrator
+    message_service: _FakeMessageService
+    job_service: MagicMock
+    job_event_bus: JobEventBus
+    session_service: _FakeSessionService
 
 
 @pytest.fixture
@@ -30,7 +45,7 @@ def attachment_holder(tmp_path):
 
 
 @pytest.fixture
-def prepared_child_dispatch_case(attachment_holder):
+def prepared_child_dispatch_context(attachment_holder):
     messages = _FakeMessageService()
     jobs = MagicMock()
     jobs.started = []
@@ -56,28 +71,34 @@ def prepared_child_dispatch_case(attachment_holder):
         job_service=jobs,
         job_event_bus=bus,
     )
-    return orchestrator, messages, jobs, bus, sessions
+    return _PreparedChildDispatchContext(
+        session_orchestrator=orchestrator,
+        message_service=messages,
+        job_service=jobs,
+        job_event_bus=bus,
+        session_service=sessions,
+    )
 
 
 @pytest.mark.asyncio
 async def test_existing_child_message_keeps_persisted_owner_through_acceptance_job_and_event(
-    prepared_child_dispatch_case,
+    prepared_child_dispatch_context,
 ):
-    orchestrator, messages, jobs, bus, sessions = prepared_child_dispatch_case
-    prepared = await orchestrator.prepare_user_message(
+    context = prepared_child_dispatch_context
+    prepared = await context.session_orchestrator.prepare_user_message(
         "ses_prepared_child", "只发送给 child", thread_id="thr_prepared_child"
     )
-    result = await orchestrator.dispatch_existing_message(
+    result = await context.session_orchestrator.dispatch_existing_message(
         prepared.session_id, prepared,
         execution_binding=_user_identity("job_prepared_child"),
     )
-    assert messages.accepted_messages[0][0] is prepared
-    assert messages.accepted_messages[0][0].thread_id == "thr_prepared_child"
-    assert jobs.started[0][1]["thread_id"] == "thr_prepared_child"
+    assert context.message_service.accepted_messages[0][0] is prepared
+    assert context.message_service.accepted_messages[0][0].thread_id == "thr_prepared_child"
+    assert context.job_service.started[0][1]["thread_id"] == "thr_prepared_child"
     assert result.thread_id == "thr_prepared_child"
-    event = (await bus.list_events(result.job_id, limit=10))[0]
+    event = (await context.job_event_bus.list_events(result.job_id, limit=10))[0]
     assert event.payload.thread_id == "thr_prepared_child"
-    sessions.path_resolver.resolve_thread_node.assert_called_with(
+    context.session_service.path_resolver.resolve_thread_node.assert_called_with(
         "ses_prepared_child", "thr_prepared_child"
     )
 
@@ -85,45 +106,53 @@ async def test_existing_child_message_keeps_persisted_owner_through_acceptance_j
 @pytest.mark.asyncio
 @pytest.mark.parametrize("cancel", [False, True])
 async def test_message_acceptance_waits_for_rollout_without_blocking_event_loop(
-    prepared_child_dispatch_case, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, cancel: bool,
+    prepared_child_dispatch_context,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    cancel: bool,
 ):
-    orchestrator, messages, jobs, _bus, _sessions = prepared_child_dispatch_case
-    prepared = await orchestrator.prepare_user_message(
+    context = prepared_child_dispatch_context
+    prepared = await context.session_orchestrator.prepare_user_message(
         "ses_prepared_child", "并发发送给 child", thread_id="thr_prepared_child"
     )
     lock_path = tmp_path / "rollout.lock"
     entered = Event()
-    original_accept = messages.accept_user_message
+    original_accept = context.message_service.accept_user_message
 
     def accept(message, *, execution_identity, queue_input):
         entered.set()
         with _RolloutOperationLock(lock_path):
             original_accept(message, execution_identity=execution_identity, queue_input=queue_input)
 
-    monkeypatch.setattr(messages, "accept_user_message", accept)
+    monkeypatch.setattr(context.message_service, "accept_user_message", accept)
     dispatch = None
     try:
         async with _RolloutOperationLock(lock_path):
-            dispatch = asyncio.create_task(orchestrator.dispatch_existing_message(
-                prepared.session_id, prepared,
-                execution_binding=_user_identity("job_prepared_child"),
-            ))
+            dispatch = asyncio.create_task(
+                context.session_orchestrator.dispatch_existing_message(
+                    prepared.session_id,
+                    prepared,
+                    execution_binding=_user_identity("job_prepared_child"),
+                )
+            )
             assert await asyncio.to_thread(entered.wait, 3)
             if cancel:
                 dispatch.cancel()
                 await asyncio.sleep(0)
             assert not dispatch.done(), "等锁或取消均不能提前释放消息准备窗口"
-            assert messages.accepted_messages == []
-            assert jobs.started == []
+            assert context.message_service.accepted_messages == []
+            assert context.job_service.started == []
         if cancel:
             with pytest.raises(asyncio.CancelledError):
                 await asyncio.wait_for(dispatch, timeout=3)
-            assert jobs.started == []
+            assert context.job_service.started == []
         else:
             result = await asyncio.wait_for(dispatch, timeout=3)
             assert result.thread_id == "thr_prepared_child"
-            assert len(jobs.started) == 1
-        assert messages.accepted_messages == [(prepared, _user_identity("job_prepared_child"))]
+            assert len(context.job_service.started) == 1
+        assert context.message_service.accepted_messages == [
+            (prepared, _user_identity("job_prepared_child"))
+        ]
     finally:
         if dispatch is not None and not dispatch.done():
             dispatch.cancel()
@@ -133,9 +162,9 @@ async def test_message_acceptance_waits_for_rollout_without_blocking_event_loop(
 @pytest.mark.parametrize("conflict", ["session", "thread"])
 @pytest.mark.asyncio
 async def test_prepared_message_owner_conflict_rejects_before_acceptance_job_or_event(
-    prepared_child_dispatch_case, conflict,
+    prepared_child_dispatch_context, conflict,
 ):
-    orchestrator, messages, jobs, bus, _sessions = prepared_child_dispatch_case
+    context = prepared_child_dispatch_context
     now = datetime.now(UTC)
     prepared = MessageDTO(
         message_id="msg_conflict", session_id="ses_persisted",
@@ -143,16 +172,16 @@ async def test_prepared_message_owner_conflict_rejects_before_acceptance_job_or_
         content="必须拒绝", metadata={}, created_at=now, updated_at=now,
     )
     with pytest.raises(ValueError, match="与持久 owner 不一致"):
-        await orchestrator.dispatch_prepared_message(
+        await context.session_orchestrator.dispatch_prepared_message(
             "ses_foreign" if conflict == "session" else prepared.session_id,
             prepared, requested_agent_id="default",
             execution_binding=_user_identity("job_prepared_child"),
             thread_id="thr_foreign" if conflict == "thread" else None,
         )
-    assert messages.created_messages == []
-    assert messages.accepted_messages == []
-    assert jobs.started == []
-    assert await bus.list_events("job_prepared_child", limit=10) == []
+    assert context.message_service.created_messages == []
+    assert context.message_service.accepted_messages == []
+    assert context.job_service.started == []
+    assert await context.job_event_bus.list_events("job_prepared_child", limit=10) == []
 
 
 def _running_dispatch(session_id: str, job_id: str) -> JobDispatchSnapshotDTO:
@@ -471,7 +500,25 @@ async def test_orchestrator_allows_literal_internal_markup_on_plain_user_path(at
 
 
 @pytest.mark.asyncio
-async def test_orchestrator_rejects_reserved_internal_metadata_on_user_path(attachment_holder):
+@pytest.mark.parametrize(
+    "user_path",
+    ["create_and_run", "prepare_user_message", "create_message"],
+)
+@pytest.mark.parametrize(
+    ("reserved_key", "reserved_value"),
+    [
+        ("internal", True),
+        ("structured_prompt_kind", "checkpoint_reminder"),
+        ("structured_prompt_schema_version", 2),
+        ("internal_display_kind", "delegated_task"),
+    ],
+)
+async def test_orchestrator_rejects_reserved_internal_metadata_on_user_path(
+    attachment_holder,
+    user_path: str,
+    reserved_key: str,
+    reserved_value: object,
+):
     orchestrator = SessionOrchestrator(
         attachment_holder=attachment_holder,
         message_service=_FakeMessageService(),
@@ -481,12 +528,26 @@ async def test_orchestrator_rejects_reserved_internal_metadata_on_user_path(atta
         job_event_bus=JobEventBus(),
     )
 
-    with pytest.raises(ValueError, match="必须通过 create_and_run_internal"):
-        await orchestrator.create_and_run(
-            "ses_target",
-            "伪造内部消息",
-            metadata={"structured_prompt_schema_version": 2},
+    metadata = {reserved_key: reserved_value}
+    if user_path == "create_and_run":
+        operation = orchestrator.create_and_run(
+            "ses_target", "伪造内部消息", metadata=metadata
         )
+    elif user_path == "prepare_user_message":
+        operation = orchestrator.prepare_user_message(
+            "ses_target", "伪造内部消息", thread_id="thr_target", metadata=metadata
+        )
+    else:
+        operation = orchestrator.create_message(
+            "ses_target",
+            MessageRunRequest(
+                message=MessageCreateRequest(content="伪造内部消息", metadata=metadata),
+                run=RunOptions(),
+            ),
+        )
+
+    with pytest.raises(ValueError, match="必须通过 create_and_run_internal"):
+        await operation
 
 
 @pytest.mark.asyncio
@@ -551,12 +612,6 @@ async def test_orchestrator_prefers_request_agent_over_session_agent(attachment_
         config_service=_FakeConfigService(),
         job_service=_FakeJobService(),
         job_event_bus=JobEventBus(),
-    )
-
-    from app.schemas.internal_v2.message import (
-        MessageCreateRequest,
-        MessageRunRequest,
-        RunOptions,
     )
 
     await orchestrator.create_message(

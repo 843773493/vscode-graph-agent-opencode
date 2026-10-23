@@ -161,9 +161,10 @@ export default function GatewayLogPanel({
     [apiPort, workspaceId],
   );
 
+  const selectedLogTail = selectedLog?.tail;
   const filteredLogTail = useMemo(
-    () => (selectedLog?.tail ? filterLogTail(selectedLog.tail, filterText) : ""),
-    [filterText, selectedLog],
+    () => (selectedLogTail ? filterLogTail(selectedLogTail, filterText) : ""),
+    [filterText, selectedLogTail],
   );
 
   useEffect(() => {

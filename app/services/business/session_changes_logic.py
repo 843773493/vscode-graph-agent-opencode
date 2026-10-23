@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import difflib
 import hashlib
+import re
 import time
 from collections.abc import Callable
 from typing import Literal
@@ -12,7 +13,22 @@ from app.schemas.internal_v2.session_changes import (
     SessionFileChangeKind,
 )
 
-TEXT_PREVIEW_LIMIT = 8000
+SESSION_FILE_CHANGE_PREVIEW_LIMIT = 8000
+_DIFF_LINE_BREAK = re.compile(
+    r"\r\n|[\n\r\v\f\x1c-\x1e\x85\u2028\u2029]"
+)
+_DIFF_LINE_BREAKS = (
+    "\n",
+    "\r",
+    "\v",
+    "\f",
+    "\x1c",
+    "\x1d",
+    "\x1e",
+    "\x85",
+    "\u2028",
+    "\u2029",
+)
 
 
 def build_edit_id(
@@ -44,16 +60,21 @@ def build_unified_diff(
 
 
 def count_diff_lines(diff_text: str) -> tuple[int, int]:
-    additions = 0
-    deletions = 0
     # unified_diff 只在最前面固定输出 "---" / "+++" 两行文件头，hunk 之后
     # 的所有 +/- 行都是真实变更。不能按前缀识别文件头：正文本身以 ++ 或
     # -- 开头时会被误删，导致该类文件的 additions/deletions 恒为 0。
-    for line in diff_text.splitlines()[2:]:
-        if line.startswith("+"):
-            additions += 1
-        elif line.startswith("-"):
-            deletions += 1
+    body_start = 0
+    for _ in range(2):
+        line_break = _DIFF_LINE_BREAK.search(diff_text, body_start)
+        if line_break is None:
+            return 0, 0
+        body_start = line_break.end()
+
+    additions = int(diff_text.startswith("+", body_start))
+    deletions = int(diff_text.startswith("-", body_start))
+    for line_break in _DIFF_LINE_BREAKS:
+        additions += diff_text.count(f"{line_break}+", body_start)
+        deletions += diff_text.count(f"{line_break}-", body_start)
     return additions, deletions
 
 
@@ -152,10 +173,10 @@ def changeset_records(
     return [record for record in records if record.turn_id == turn_id]
 
 
-def preview(content: str | None) -> str | None:
-    if content is None or len(content) <= TEXT_PREVIEW_LIMIT:
-        return content
+def preview_session_file_content(file_content: str | None) -> str | None:
+    if file_content is None or len(file_content) <= SESSION_FILE_CHANGE_PREVIEW_LIMIT:
+        return file_content
     return (
-        f"{content[:TEXT_PREVIEW_LIMIT]}\n\n"
+        f"{file_content[:SESSION_FILE_CHANGE_PREVIEW_LIMIT]}\n\n"
         "[内容过长，已截断预览；完整内容请打开 changes 目录中的可读文件。]"
     )

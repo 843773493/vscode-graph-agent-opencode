@@ -106,10 +106,16 @@ export function upsertActivity(
 ): void {
   const activity = activityFromPayload(payload);
   if (!activity) return;
-  const existing = state.activities.find((item) => item.activity_id === activity.activity_id);
-  if (existing) {
-    Object.assign(existing, activity);
-    applyLifecycle(existing, event, event.type === "activity.completed" || event.type === "activity.failed");
+  const existingActivity = state.activities.find(
+    (item) => item.activity_id === activity.activity_id,
+  );
+  if (existingActivity) {
+    Object.assign(existingActivity, activity);
+    applyLifecycle(
+      existingActivity,
+      event,
+      event.type === "activity.completed" || event.type === "activity.failed",
+    );
   } else {
     applyLifecycle(activity, event, event.type === "activity.completed" || event.type === "activity.failed");
     state.activities.push(activity);

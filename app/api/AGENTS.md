@@ -10,6 +10,41 @@
 - 其余 `*.py`：按业务域（`sessions`、`messages`、`workspace`、`jobs`、`tools`、`mcp`、`node_debug`、`runtime` 等）拆分的路由实现。同层不再有前端 TS 文件；浏览器前端的 gateway API 客户端位于 `src/clients/web/src/gatewayApi.ts`，pending request 客户端位于 `src/clients/web/src/pendingRequestsApi.ts`，二者不属于本目录。
 - `messages.py` 与 `session_turns.py` 分别适配 `sessions/{session_id}/threads/{thread_id}/messages` 和同 thread 的 `/history`，复用消息准入和唯一历史 reader；Session-only 入口仍由业务 owner 解析 main thread。
 
+## 按职责查找
+
+下面是逻辑索引；所有文件仍直接位于 `app/api/`，分组表示请求入口的职责边界。
+
+```text
+app/api/
+├── HTTP 公共边界
+│   ├── deps.py                 服务依赖与请求身份
+│   ├── errors.py               统一错误响应
+│   └── sse_heartbeat.py        SSE 空闲心跳
+├── 会话与执行
+│   ├── sessions.py             会话创建、查询与生命周期
+│   ├── session_navigation.py   会话目录导航
+│   ├── session_activity.py     会话 catalog 事件流
+│   ├── messages.py             Thread 消息
+│   ├── message_stream.py       消息执行流
+│   ├── session_turns.py        Thread 执行历史
+│   ├── jobs.py                 后台执行任务
+│   ├── agents.py               Agent 目录与选择
+│   ├── context.py              上下文资源
+│   └── artifacts.py            执行产物
+├── 工作区能力
+│   ├── workspace.py            工作区信息与设置
+│   ├── workspace_observation.py 工作区观察事件
+│   ├── resources.py            可发布资源
+│   ├── tools.py                工具目录与选择
+│   └── mcp.py                  MCP 配置与状态
+└── 控制与配置
+    ├── config.py               应用配置
+    ├── runtime.py              运行时能力
+    └── node_debug.py           Node 调试会话
+```
+
+路由按请求域拆分，跨域状态转换仍交给服务层；同属 `/sessions` 的 `messages.py`、`message_stream.py` 与 `session_turns.py` 分别负责读取、执行流和历史查询，不因共享 URL 前缀而合并为第二个会话 owner。
+
 # 可修改内容
 
 - 可以新增、调整或删除路由域的 `APIRouter` 与处理函数，并在 `app/main.py` 对应位置挂载。

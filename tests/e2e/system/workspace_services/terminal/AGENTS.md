@@ -29,3 +29,4 @@ terminal/
 - 启动前只检查端口占用；退出时只清理本用例创建的进程句柄，不按端口杀死未知所有者。
 - 多进程 fixture 在创建后立即向 `ExitStack` 登记释放；部分启动失败或某个清理动作抛出普通异常/中断时，仍尝试释放其余已持有进程。原始错误沿异常链保留，不以首个清理失败为由跳过剩余资源。
 - Terminal 后端与本目录直接创建的 attach 前端把输出直接写入当前测试的 `TestRunContext.artifacts_dir`，使用独立不可覆盖日志；嵌套工作区不改变这个归属。清理只终止所持进程，不再通过 `communicate()` 收集或重写整份输出。
+- 只核验 mount 身份、空列表和传输隔离的场景使用 `prepare_test_workspace(..., template_items=())`；只有断言依赖工作区文件时才复制对应 fixture 项。

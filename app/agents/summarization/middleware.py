@@ -139,8 +139,14 @@ class CachePreservingSummarizationMiddleware(_DeepAgentsSummarizationMiddleware)
     def _prepare_cache_compaction(
         self,
         request: ModelRequest,
+        *,
+        effective_messages: list[AnyMessage] | None = None,
     ) -> tuple[list[AnyMessage], CachePreservingPartition | None] | None:
-        effective = self._get_effective_messages(request)
+        effective = (
+            effective_messages
+            if effective_messages is not None
+            else self._get_effective_messages(request)
+        )
         total_tokens = self._count_request_tokens(request, effective)
         force_compaction = request.state.get("_force_cache_compaction") is True
         if not force_compaction and not self._should_summarize(effective, total_tokens):
@@ -537,11 +543,13 @@ class CachePreservingSummarizationMiddleware(_DeepAgentsSummarizationMiddleware)
         request: ModelRequest,
         handler: Callable[[ModelRequest], ModelResponse],
     ) -> ModelResponse | ExtendedModelResponse:
-        prepared = self._prepare_cache_compaction(request)
+        effective_messages = self._get_effective_messages(request)
+        prepared = self._prepare_cache_compaction(
+            request,
+            effective_messages=effective_messages,
+        )
         if prepared is None:
-            return handler(
-                request.override(messages=self._get_effective_messages(request))
-            )
+            return handler(request.override(messages=effective_messages))
         before, partition = prepared
         if partition is None:
             if request.state.get("_force_cache_compaction") is True:
@@ -610,17 +618,20 @@ class CachePreservingSummarizationMiddleware(_DeepAgentsSummarizationMiddleware)
         request: ModelRequest,
         handler: Callable[[ModelRequest], Awaitable[ModelResponse]],
     ) -> ModelResponse | ExtendedModelResponse:
-        prepared = self._prepare_cache_compaction(request)
+        effective_messages = self._get_effective_messages(request)
+        prepared = self._prepare_cache_compaction(
+            request,
+            effective_messages=effective_messages,
+        )
         if prepared is None:
-            return await handler(
-                request.override(messages=self._get_effective_messages(request))
-            )
+            return await handler(request.override(messages=effective_messages))
         activity_runtime = current_activity_runtime()
         if activity_runtime is None:
             return await CachePreservingSummarizationMiddleware._awrap_model_call_impl(
                 self,
                 request,
                 handler,
+                prepared,
             )
         activity_id = CachePreservingSummarizationMiddleware._compaction_activity_id(
             activity_runtime
@@ -640,10 +651,13 @@ class CachePreservingSummarizationMiddleware(_DeepAgentsSummarizationMiddleware)
             },
         )
         try:
-            result = await CachePreservingSummarizationMiddleware._awrap_model_call_impl(
-                self,
-                request,
-                handler,
+            result = (
+                await CachePreservingSummarizationMiddleware._awrap_model_call_impl(
+                    self,
+                    request,
+                    handler,
+                    prepared,
+                )
             )
         except Exception as error:
             await activity_runtime.failed(
@@ -671,12 +685,19 @@ class CachePreservingSummarizationMiddleware(_DeepAgentsSummarizationMiddleware)
         self,
         request: ModelRequest,
         handler: Callable[[ModelRequest], Awaitable[ModelResponse]],
+        prepared: tuple[list[AnyMessage], CachePreservingPartition | None]
+        | None = None,
     ) -> ModelResponse | ExtendedModelResponse:
-        prepared = self._prepare_cache_compaction(request)
         if prepared is None:
-            return await handler(
-                request.override(messages=self._get_effective_messages(request))
+            effective_messages = self._get_effective_messages(request)
+            prepared = self._prepare_cache_compaction(
+                request,
+                effective_messages=effective_messages,
             )
+        else:
+            effective_messages = prepared[0]
+        if prepared is None:
+            return await handler(request.override(messages=effective_messages))
         before, partition = prepared
         if partition is None:
             if request.state.get("_force_cache_compaction") is True:

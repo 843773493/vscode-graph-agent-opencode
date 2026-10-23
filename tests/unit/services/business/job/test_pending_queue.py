@@ -10,12 +10,12 @@ def test_queue_is_strict_fifo_and_tail_policy_update_preserves_order() -> None:
 
     assert first.enqueue_sequence == 10
     assert second.enqueue_sequence == 14
-    assert queue.ids("session") == ("job_1", "job_2")
+    assert queue.queued_job_ids("session") == ("job_1", "job_2")
 
     updated = queue.update_policy("session", "job_2", "after_interrupt")
 
     assert updated.delivery_policy == "after_interrupt"
-    assert queue.ids("session") == ("job_1", "job_2")
+    assert queue.queued_job_ids("session") == ("job_1", "job_2")
     assert queue.peek_head("session", "thread") is first
 
 
@@ -27,7 +27,7 @@ def test_remove_head_makes_successor_the_new_head() -> None:
     queue.remove("session", first.job_id)
 
     assert queue.peek_head("session", "thread") is second
-    assert queue.ids("session") == ("job_2",)
+    assert queue.queued_job_ids("session") == ("job_2",)
 
 
 def test_boundary_eligibility_never_allows_later_item_to_bypass_head() -> None:
@@ -40,7 +40,7 @@ def test_boundary_eligibility_never_allows_later_item_to_bypass_head() -> None:
     assert queue.peek_head("session", "thread") is head
 
     assert queue.take_head("session", "after_interrupt", thread_id="thread") is head
-    assert queue.ids("session") == ("job_tail",)
+    assert queue.queued_job_ids("session") == ("job_tail",)
 
 
 def test_tool_result_policy_falls_back_only_when_no_tool_result_exists() -> None:
@@ -65,7 +65,7 @@ def test_take_head_removes_message_before_execution() -> None:
     taken = queue.take_head("session", "idle", thread_id="thread")
 
     assert taken is entry
-    assert queue.ids("session") == ()
+    assert queue.queued_job_ids("session") == ()
     with pytest.raises(ValueError, match="不存在"):
         queue.entry("job")
 
@@ -103,7 +103,7 @@ def test_restore_only_restores_still_queued_messages() -> None:
     queue = JobPendingQueue()
     queue.restore("session", [QueueEntry("job", "thread", 1, "after_turn")])
 
-    assert queue.ids("session") == ("job",)
+    assert queue.queued_job_ids("session") == ("job",)
 
 
 def test_interrupt_boundary_also_releases_after_turn_head() -> None:
@@ -113,7 +113,7 @@ def test_interrupt_boundary_also_releases_after_turn_head() -> None:
 
     assert queue.take_head("session", "after_tool_result", thread_id="thread") is None
     assert queue.take_head("session", "after_interrupt", thread_id="thread") is entry
-    assert queue.ids("session") == ()
+    assert queue.queued_job_ids("session") == ()
 
 
 def test_promoted_head_clears_stale_waiting_reason() -> None:
@@ -145,7 +145,7 @@ def test_promoted_head_after_remove_records_no_waiting_reason() -> None:
 
     assert queue.peek_head("session", "thread") is second
     assert second.waiting_reason is None
-    assert queue.ids("session") == ("job_2",)
+    assert queue.queued_job_ids("session") == ("job_2",)
 
 
 def test_head_keeps_boundary_waiting_reason_when_bumped() -> None:
@@ -218,5 +218,5 @@ def test_distinct_threads_may_have_the_same_admission_cursor() -> None:
 
     assert queue.peek_head("session", "main") is main
     assert queue.peek_head("session", "child") is child
-    assert queue.ids("session", "main") == ("job_main",)
-    assert queue.ids("session", "child") == ("job_child",)
+    assert queue.queued_job_ids("session", "main") == ("job_main",)
+    assert queue.queued_job_ids("session", "child") == ("job_child",)

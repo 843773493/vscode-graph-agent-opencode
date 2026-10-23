@@ -132,23 +132,39 @@ async function runSuite(suite) {
     detached: true,
   });
   let timedOut = false;
-  // detached 的子进程组收不到终端的 Ctrl-C，必须自己转发；否则中断 runner 会留下游离的测试进程。
+  let interrupted = false;
+  let interruptKillTimer = null;
+  // 首次中断给退出宽限，再次中断立即强杀；不能先退出runner而撤掉回收责任。
   const onInterrupt = () => {
+    if (interrupted) {
+      killProcessGroup(child.pid, "SIGKILL");
+      return;
+    }
+    interrupted = true;
+    clearTimeout(termTimer);
     killProcessGroup(child.pid, "SIGTERM");
-    process.exit(130);
+    interruptKillTimer = setTimeout(() => killProcessGroup(child.pid, "SIGKILL"), timeoutGraceMs);
   };
-  process.once("SIGINT", onInterrupt);
-  process.once("SIGTERM", onInterrupt);
   const termTimer = setTimeout(() => {
     timedOut = true;
     killProcessGroup(child.pid, "SIGTERM");
   }, timeoutMs);
   const killTimer = setTimeout(() => killProcessGroup(child.pid, "SIGKILL"), timeoutMs + timeoutGraceMs);
-  const exitCode = await child.exited;
-  clearTimeout(termTimer);
-  clearTimeout(killTimer);
-  process.off("SIGINT", onInterrupt);
-  process.off("SIGTERM", onInterrupt);
+  process.on("SIGINT", onInterrupt);
+  process.on("SIGTERM", onInterrupt);
+  let exitCode;
+  try {
+    exitCode = await child.exited;
+  } finally {
+    clearTimeout(termTimer);
+    clearTimeout(killTimer);
+    clearTimeout(interruptKillTimer);
+    process.off("SIGINT", onInterrupt);
+    process.off("SIGTERM", onInterrupt);
+    // POSIX根进程退出不等于进程组为空，残留后代不能随定时器一起被遗忘。
+    if (isPosix) killProcessGroup(child.pid, "SIGKILL");
+  }
+  if (interrupted) return 130;
   if (timedOut) {
     process.stdout.write(
       `${JSON.stringify({ suite: suite.id, status: "TIMEOUT", timeoutMs, signal: child.signalCode })}\n`,

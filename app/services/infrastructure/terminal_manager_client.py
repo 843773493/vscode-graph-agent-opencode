@@ -64,11 +64,11 @@ class TerminalManagerClient:
             "rows": rows,
         }
         response = await self._json_request("POST", "/api/terminals", payload)
-        return self._require_data(response)
+        return self._require_normalized_terminal_record(response)
 
     async def get_resource(self, terminal_id: str) -> dict[str, object]:
         response = await self._json_request("GET", f"/api/terminals/{terminal_id}")
-        return self._require_data(response)
+        return self._require_normalized_terminal_record(response)
 
     async def list_resources(self) -> list[dict[str, object]]:
         path = "/api/terminals"
@@ -80,7 +80,7 @@ class TerminalManagerClient:
         for item in data:
             if not isinstance(item, dict):
                 raise TypeError(f"终端管理器列表包含非对象记录: {response}")
-            result.append(self._normalize_terminal(item))
+            result.append(self._normalize_terminal_record(item))
         return result
 
     async def read_terminal(self, terminal_id: str) -> dict[str, object]:
@@ -90,15 +90,15 @@ class TerminalManagerClient:
         data = response.get("data")
         if not isinstance(data, dict) or not isinstance(data.get("terminal"), dict):
             raise TypeError(f"终端管理器读取输出返回格式错误: {response}")
-        normalized = dict(data)
-        normalized["terminal"] = self._normalize_terminal(data["terminal"])
-        return normalized
+        terminal_envelope = dict(data)
+        terminal_envelope["terminal"] = self._normalize_terminal_record(data["terminal"])
+        return terminal_envelope
 
     async def mark_terminal_backgrounded(self, terminal_id: str) -> dict[str, object]:
         response = await self._json_request(
             "POST", f"/api/terminals/{terminal_id}/background"
         )
-        return self._require_data(response)
+        return self._require_normalized_terminal_record(response)
 
     async def claim_terminal_steering(
         self, terminal_id: str, *, completion_event_id: str, command_start_sequence: int,
@@ -142,7 +142,7 @@ class TerminalManagerClient:
                 "command": command,
             },
         )
-        return self._require_data(response)
+        return self._require_normalized_terminal_record(response)
 
     async def stop_resource(
         self,
@@ -179,11 +179,13 @@ class TerminalManagerClient:
             raise TypeError("Terminal 传输授权缺少完整结果")
         return data
 
-    def _require_data(self, response: dict[str, object]) -> dict[str, object]:
+    def _require_normalized_terminal_record(
+        self, response: dict[str, object]
+    ) -> dict[str, object]:
         data = response.get("data")
         if not isinstance(data, dict):
             raise TypeError(f"终端管理器返回格式错误: {response}")
-        return self._normalize_terminal(data)
+        return self._normalize_terminal_record(data)
 
     def _require_terminal_envelope(self, response: dict[str, object]) -> dict[str, object]:
         data = response.get("data")
@@ -192,12 +194,12 @@ class TerminalManagerClient:
         terminal = data.get("terminal")
         if not isinstance(terminal, dict):
             raise TypeError(f"终端管理器返回缺少 terminal: {response}")
-        normalized = dict(data)
-        normalized["terminal"] = self._normalize_terminal(terminal)
-        return normalized
+        terminal_envelope = dict(data)
+        terminal_envelope["terminal"] = self._normalize_terminal_record(terminal)
+        return terminal_envelope
 
     @staticmethod
-    def _normalize_terminal(data: dict[str, object]) -> dict[str, object]:
+    def _normalize_terminal_record(data: dict[str, object]) -> dict[str, object]:
         normalized = terminal_session_to_json(terminal_session_to_proto(data))
         normalized.pop("attach_url", None)
         return normalized

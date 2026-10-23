@@ -24,13 +24,6 @@ VIEWS = [
     "assembly",
     "assemblies",
 ]
-@pytest.fixture(params=("live", *OPENAPI_SNAPSHOTS))
-def openapi_document(request: pytest.FixtureRequest):
-    if request.param == "live":
-        return app.openapi()
-    return load_openapi_snapshot(request.param)
-
-
 @pytest.mark.parametrize(
     "model", ("SessionContextReadRequest", "SessionContextReadResultDTO")
 )

@@ -1,18 +1,16 @@
 // Integration：生产页面与真实 Gateway/Backend；仅模型 Provider 使用协议桩。
 import assert from "node:assert/strict";
 import { dirname } from "node:path";
-import { mkdir, open, writeFile } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import { chromium } from "playwright";
+
+import { configureChromiumTemporaryDirectory } from "./chromium-temporary-directory.mjs";
 
 const fixture = JSON.parse(process.env.BOXTEAM_BROWSER_FIXTURE);
 const output = process.env.BOXTEAM_BROWSER_RESULT_PATH;
 assert.ok(output && process.env.BOXTEAM_BROWSER_BASE_URL && process.env.BOXTEAM_BROWSER_RUNTIME_PATH);
 await mkdir(dirname(output), { recursive: true });
-await mkdir(process.env.BOXTEAM_BROWSER_RUNTIME_PATH, { recursive: true });
-const runtimeHandle = process.platform === "linux" ? await open(process.env.BOXTEAM_BROWSER_RUNTIME_PATH, "r") : null;
-for (const key of ["TMPDIR", "TMP", "TEMP"]) {
-  process.env[key] = runtimeHandle ? `/proc/${process.pid}/fd/${runtimeHandle.fd}` : process.env.BOXTEAM_BROWSER_RUNTIME_PATH;
-}
+const releaseChromiumTemporaryDirectory = await configureChromiumTemporaryDirectory(process.env.BOXTEAM_BROWSER_RUNTIME_PATH);
 const errors = [], exchanges = [], pending = [];
 let browser, context, page;
 try {
@@ -109,5 +107,5 @@ try {
   throw error;
 } finally {
   try { if (context) await context.close(); }
-  finally { try { if (browser) await browser.close(); } finally { if (runtimeHandle) await runtimeHandle.close(); } }
+  finally { try { if (browser) await browser.close(); } finally { await releaseChromiumTemporaryDirectory(); } }
 }

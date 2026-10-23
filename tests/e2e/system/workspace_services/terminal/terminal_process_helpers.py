@@ -11,7 +11,9 @@ import psutil
 
 from app.core.identifier import create_uuid_hex
 from app.core.workspace_identity import load_or_create_workspace_id
+from tests.harness.python.run_context import TestRunContext
 from tests.support.ports import TEST_FILE_PORT_BLOCK_SIZE
+from tests.support.workspaces import prepare_test_workspace
 
 
 def _terminal_port_pair(e2e_backend_port: int, offset: int) -> tuple[int, int]:
@@ -30,11 +32,35 @@ def terminal_ports_with_offset(e2e_backend_port: int, offset: int) -> tuple[int,
     return _terminal_port_pair(e2e_backend_port, offset)
 
 
-def lifecycle_workspace(base_workspace_root: str, name: str) -> str:
-    workspace_root = Path(base_workspace_root).resolve() / f"terminal_lifecycle_{name}"
+def create_terminal_scenario_workspace(
+    base_workspace_root: str,
+    scenario_name: str,
+) -> str:
+    workspace_root = (
+        Path(base_workspace_root).resolve()
+        / f"terminal_lifecycle_{scenario_name}"
+    )
     if workspace_root.exists():
         shutil.rmtree(workspace_root)
     workspace_root.mkdir(parents=True)
+    return str(workspace_root)
+
+
+def prepare_empty_terminal_e2e_workspace(test_file: Path) -> str:
+    """只创建终端 E2E 需要的空工作区和日志目录。"""
+    context = TestRunContext.from_test_file(test_file)
+    context.artifacts_dir.mkdir(parents=True, exist_ok=True)
+    workspace_root = prepare_test_workspace(
+        workspace_root=context.workspace_root,
+        template_root=(
+            context.project_root
+            / "tests"
+            / "fixtures"
+            / "workspaces"
+            / "default_test_workspace"
+        ),
+        template_items=(),
+    )
     return str(workspace_root)
 
 

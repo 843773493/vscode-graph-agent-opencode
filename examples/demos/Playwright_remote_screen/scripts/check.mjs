@@ -1,21 +1,31 @@
-import { spawnSync } from "node:child_process";
+import { readFile, readdir } from "node:fs/promises";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 
-const files = [
-  "src/server/server.js",
-  "src/server/browserSession.js",
-  "src/server/protocol.js",
-  "src/server/terminalCommands.js",
-  "src/server/url.js",
-  "src/server/commandClient.js",
-  "src/client/main.js",
-  "scripts/check.mjs",
-];
+const packageRoot = path.resolve(fileURLToPath(new URL("..", import.meta.url)));
 
+async function collectJavaScriptFiles(directory) {
+  const entries = await readdir(directory, { withFileTypes: true });
+  const nestedFiles = await Promise.all(entries.map((entry) => {
+    const entryPath = path.join(directory, entry.name);
+    if (entry.isDirectory()) {
+      return collectJavaScriptFiles(entryPath);
+    }
+    return entry.isFile() && /\.(?:m?js)$/.test(entry.name) ? [entryPath] : [];
+  }));
+  return nestedFiles.flat();
+}
+
+const files = (await Promise.all(["src", "scripts", "tests"].map((directory) => (
+  collectJavaScriptFiles(path.join(packageRoot, directory))
+)))).flat().sort();
+
+const transpiler = new Bun.Transpiler({ loader: "js", target: "node" });
 for (const file of files) {
-  const result = spawnSync(process.execPath, ["--check", file], {
-    stdio: "inherit",
-  });
-  if (result.status !== 0) {
-    process.exit(result.status ?? 1);
+  try {
+    transpiler.transformSync(await readFile(file, "utf8"));
+  } catch (error) {
+    const details = error instanceof Error ? error.message : String(error);
+    throw new Error(`JavaScript 语法校验失败 ${file}: ${details}`, { cause: error });
   }
 }

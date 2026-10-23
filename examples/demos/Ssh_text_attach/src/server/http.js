@@ -1,3 +1,6 @@
+const DEFAULT_JSON_REQUEST_MAX_BYTES = 1024 * 1024;
+const DEFAULT_PROXY_REQUEST_MAX_BYTES = 20 * 1024 * 1024;
+
 export class HttpError extends Error {
   constructor(statusCode, message) {
     super(message);
@@ -22,7 +25,7 @@ export function writeJson(response, statusCode, payload, extraHeaders = {}) {
   response.end(JSON.stringify(payload));
 }
 
-export async function readJsonRequest(request, maxBytes = 1024 * 1024) {
+export async function readJsonRequest(request, maxBytes = DEFAULT_JSON_REQUEST_MAX_BYTES) {
   const body = await readRawRequest(request, maxBytes);
   const text = body.toString("utf8");
   if (text.trim() === "") {
@@ -37,14 +40,20 @@ export async function readJsonRequest(request, maxBytes = 1024 * 1024) {
   }
 }
 
-export async function readRawRequest(request, maxBytes = 20 * 1024 * 1024) {
-  const chunks = [];
+export async function* streamLimitedRequestBody(request, maxBytes = DEFAULT_PROXY_REQUEST_MAX_BYTES) {
   let size = 0;
   for await (const chunk of request) {
     size += chunk.length;
     if (size > maxBytes) {
       throw new HttpError(413, `请求体过大，最大允许 ${maxBytes} bytes`);
     }
+    yield chunk;
+  }
+}
+
+export async function readRawRequest(request, maxBytes) {
+  const chunks = [];
+  for await (const chunk of streamLimitedRequestBody(request, maxBytes)) {
     chunks.push(chunk);
   }
 

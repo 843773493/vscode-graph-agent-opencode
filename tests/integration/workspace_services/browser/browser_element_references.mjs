@@ -96,6 +96,61 @@ const scenarios = [
     assert(checks <= 100, `只需前80个可见元素，却检查了${checks}个候选元素`);
     return { candidateElements: 5_004, returnedElements: summary.refs.length, visibilityChecks: checks };
   }],
+  ["摘要标签保持来源优先级，已有标签和值时不读取无关正文", async (page, refs) => {
+    const expected = [
+      "首选 标签", "替代 标签", "标题 标签", "输入 值", "多行 值", "", "0",
+      "普通 正文", "隐藏备用正文", "a".repeat(159) + "\ud83d",
+    ];
+    await page.evaluate(() => {
+      document.body.replaceChildren();
+      const rows = [
+        { tag: "button", attributes: { "aria-label": " \t首选\n标签 ", alt: "备用alt", title: "备用title", value: "备用value" } },
+        { tag: "button", attributes: { "aria-label": "", alt: "替代  标签", title: "备用title", value: "备用value" } },
+        { tag: "button", attributes: { title: "标题\t标签", value: "备用value" } },
+        { tag: "input", value: "输入  值" },
+        { tag: "textarea", value: "多行\n值" },
+        { tag: "button", attributes: { "aria-label": " \t\n ", title: "不能回退到标题" } },
+        { tag: "input", value: "0" },
+        { tag: "button", text: "普通 \n 正文" },
+        { tag: "button", hiddenText: "隐藏备用正文" },
+        { tag: "button", attributes: { "aria-label": "a".repeat(159) + "😀尾部" } },
+      ];
+      const innerText = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "innerText");
+      const textContent = Object.getOwnPropertyDescriptor(Node.prototype, "textContent");
+      window.summaryLabelReads = [];
+      for (const [index, row] of rows.entries()) {
+        const element = document.createElement(row.tag);
+        element.id = `label_${index}`;
+        element.style.cssText = "display:inline-block;width:120px;height:32px;overflow:hidden";
+        for (const [name, value] of Object.entries(row.attributes || {})) element.setAttribute(name, value);
+        if (row.value !== undefined) element.value = row.value;
+        if (row.hiddenText) {
+          const span = document.createElement("span");
+          span.hidden = true;
+          span.textContent = row.hiddenText;
+          element.append(span);
+        } else element.textContent = row.text ?? "无关正文".repeat(2000);
+        const counts = { innerText: 0, textContent: 0 };
+        window.summaryLabelReads.push(counts);
+        Object.defineProperty(element, "innerText", {
+          get() { counts.innerText++; return innerText.get.call(this); },
+        });
+        Object.defineProperty(element, "textContent", {
+          get() { counts.textContent++; return textContent.get.call(this); },
+        });
+        document.body.append(element);
+      }
+    });
+    const summary = await readBrowserSummary(page, refs);
+    assert.deepEqual(summary.refs.map(item => item.text), expected);
+    assert.equal(new Set(summary.refs.map(item => item.ref)).size, expected.length);
+    const reads = await page.evaluate(() => window.summaryLabelReads);
+    assert.deepEqual(reads, expected.map((_, index) => ({
+      innerText: index === 7 || index === 8 ? 1 : 0,
+      textContent: index === 8 ? 1 : 0,
+    })), `摘要标签不应预读更低优先级正文: ${JSON.stringify(reads)}`);
+    return { elements: expected.length, reads };
+  }],
   ["元素检查只整理一次CSSOM，下一次检查仍读取规则更新", async (page, refs) => {
     const depth = 24;
     const unrelatedRuleCount = 200;

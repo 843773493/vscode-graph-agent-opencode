@@ -130,37 +130,40 @@ class FakeJobService:
         return self.count
 
 
-def _resource_mapper() -> SessionResourceMapper:
+@pytest.fixture
+def resource_mapper() -> SessionResourceMapper:
     return SessionResourceMapper()
 
 
 def _provider_registry(
     *,
     task_registry: BackgroundTaskRegistry,
-    terminal_manager: FakeTerminalResourceOwner,
+    terminal_owner: FakeTerminalResourceOwner,
     browser_owner: FakeBrowserResourceOwner,
     message_service: FakeMessageService | MessageService,
+    resource_mapper: SessionResourceMapper,
 ) -> SessionResourceProviderRegistry:
-    mapper = _resource_mapper()
     return SessionResourceProviderRegistry(
         [
             BackgroundTaskResourceProvider(
                 task_registry=task_registry,
-                resource_mapper=mapper,
+                resource_mapper=resource_mapper,
             ),
             TerminalResourceProvider(
-                terminal_owner=terminal_manager,
-                resource_mapper=mapper,
+                terminal_owner=terminal_owner,
+                resource_mapper=resource_mapper,
             ),
             BrowserResourceProvider(
                 browser_owner=browser_owner,
-                resource_mapper=mapper,
+                resource_mapper=resource_mapper,
             ),
         ]
     )
 
 
-def test_deleted_terminal_resource_explains_historical_status():
+def test_deleted_terminal_resource_explains_historical_status(
+    resource_mapper: SessionResourceMapper,
+):
     terminal = {
         "terminal_id": "term_123",
         "session_id": "ses_123",
@@ -169,7 +172,7 @@ def test_deleted_terminal_resource_explains_historical_status():
         "updated_at": "2026-07-05T01:02:04+00:00",
         "ended_at": "2026-07-05T01:02:05+00:00",
     }
-    resource = _resource_mapper().terminal_to_resource(
+    resource = resource_mapper.terminal_to_resource(
         _owner_snapshot(terminal),
         available_actions=[],
     )
@@ -179,7 +182,9 @@ def test_deleted_terminal_resource_explains_historical_status():
     assert "终端已删除" in str(resource.metadata["status_note"])
 
 
-def test_running_browser_resource_maps_identity_and_actions():
+def test_running_browser_resource_maps_identity_and_actions(
+    resource_mapper: SessionResourceMapper,
+):
     browser = {
         "browser_id": "browser_123",
         "session_id": "ses_123",
@@ -190,7 +195,7 @@ def test_running_browser_resource_maps_identity_and_actions():
         "title": "Example",
         "url": "https://example.com",
     }
-    resource = _resource_mapper().browser_to_resource(
+    resource = resource_mapper.browser_to_resource(
         _owner_snapshot(browser),
         available_actions=["cancel"],
     )
@@ -202,7 +207,9 @@ def test_running_browser_resource_maps_identity_and_actions():
     assert resource.available_actions == ["cancel"]
 
 
-def test_terminal_resource_projection_excludes_real_path():
+def test_terminal_resource_projection_excludes_real_path(
+    resource_mapper: SessionResourceMapper,
+):
     """负向断言（6.3）：API 投影 MUST NOT 携带真实文件系统路径。"""
     terminal = {
         "terminal_id": "term_real_path",
@@ -213,7 +220,7 @@ def test_terminal_resource_projection_excludes_real_path():
         "cwd": "/home/user/secret-workspace/app",
         "cwd_relative": "app",
     }
-    resource = _resource_mapper().terminal_to_resource(
+    resource = resource_mapper.terminal_to_resource(
         _owner_snapshot(terminal),
         available_actions=[],
     )
@@ -223,7 +230,9 @@ def test_terminal_resource_projection_excludes_real_path():
     assert "/home/user/secret-workspace" not in resource.model_dump_json()
 
 
-def test_browser_resource_projection_excludes_checkpoint_real_path():
+def test_browser_resource_projection_excludes_checkpoint_real_path(
+    resource_mapper: SessionResourceMapper,
+):
     """负向断言（6.3）：检查点真实路径不得上浮到 API 响应体。"""
     browser = {
         "browser_id": "browser_checkpoint_path",
@@ -237,7 +246,7 @@ def test_browser_resource_projection_excludes_checkpoint_real_path():
             "path": "/home/user/secret-workspace/.boxteam/browser-manager/checkpoints/browser_checkpoint_path.json",
         },
     }
-    resource = _resource_mapper().browser_to_resource(
+    resource = resource_mapper.browser_to_resource(
         _owner_snapshot(browser),
         available_actions=[],
     )
@@ -248,7 +257,9 @@ def test_browser_resource_projection_excludes_checkpoint_real_path():
 
 
 @pytest.mark.asyncio
-async def test_lost_browser_has_no_action_even_with_checkpoint():
+async def test_lost_browser_has_no_action_even_with_checkpoint(
+    resource_mapper: SessionResourceMapper,
+):
     browser = {
         "browser_id": "browser_cold",
         "session_id": "ses_019b94653e71714b8d406f83ab3d2b3b",
@@ -260,7 +271,7 @@ async def test_lost_browser_has_no_action_even_with_checkpoint():
     }
     provider = BrowserResourceProvider(
         browser_owner=FakeBrowserResourceOwner(browsers=[browser]),
-        resource_mapper=_resource_mapper(),
+        resource_mapper=resource_mapper,
     )
 
     resources = await provider.list_resources("ses_019b94653e71714b8d406f83ab3d2b3b")
@@ -271,7 +282,9 @@ async def test_lost_browser_has_no_action_even_with_checkpoint():
 
 
 @pytest.mark.asyncio
-async def test_terminal_fast_listing_skips_slow_agent_history() -> None:
+async def test_terminal_fast_listing_skips_slow_agent_history(
+    resource_mapper: SessionResourceMapper,
+) -> None:
     terminal = {
         "terminal_id": "term_live",
         "session_id": "ses_019b94653e71714b8d406f83ab3d2b3b",
@@ -288,7 +301,7 @@ async def test_terminal_fast_listing_skips_slow_agent_history() -> None:
         terminal_owner=FakeTerminalResourceOwner(
             terminals=[terminal, terminated_terminal]
         ),
-        resource_mapper=_resource_mapper(),
+        resource_mapper=resource_mapper,
     )
 
     resources = await provider.list_resources("ses_019b94653e71714b8d406f83ab3d2b3b", include_history=False)
@@ -301,8 +314,10 @@ async def test_terminal_fast_listing_skips_slow_agent_history() -> None:
 
 
 @pytest.mark.asyncio
-async def test_terminal_control_rejects_resource_outside_session_owner_list() -> None:
-    terminal_manager = FakeTerminalResourceOwner(
+async def test_terminal_control_rejects_resource_outside_session_owner_list(
+    resource_mapper: SessionResourceMapper,
+) -> None:
+    terminal_owner = FakeTerminalResourceOwner(
         terminals=[
             {
                 "terminal_id": "term_other_session",
@@ -312,8 +327,8 @@ async def test_terminal_control_rejects_resource_outside_session_owner_list() ->
         ]
     )
     provider = TerminalResourceProvider(
-        terminal_owner=terminal_manager,
-        resource_mapper=_resource_mapper(),
+        terminal_owner=terminal_owner,
+        resource_mapper=resource_mapper,
     )
 
     for action in ("cancel", "delete"):
@@ -325,13 +340,15 @@ async def test_terminal_control_rejects_resource_outside_session_owner_list() ->
                 operation_id="request-resource-test",
             )
 
-    assert terminal_manager.listed_session_ids == []
-    assert terminal_manager.killed_terminal_ids == []
-    assert terminal_manager.deleted_terminal_ids == []
+    assert terminal_owner.listed_session_ids == []
+    assert terminal_owner.killed_terminal_ids == []
+    assert terminal_owner.deleted_terminal_ids == []
 
 
 @pytest.mark.asyncio
-async def test_browser_fast_listing_excludes_closed_state_records() -> None:
+async def test_browser_fast_listing_excludes_closed_state_records(
+    resource_mapper: SessionResourceMapper,
+) -> None:
     browser = {
         "browser_id": "browser_live",
         "session_id": "ses_019b94653e71714b8d406f83ab3d2b3b",
@@ -350,7 +367,7 @@ async def test_browser_fast_listing_excludes_closed_state_records() -> None:
         browser_owner=FakeBrowserResourceOwner(
             browsers=[browser, closed_browser]
         ),
-        resource_mapper=_resource_mapper(),
+        resource_mapper=resource_mapper,
     )
 
     resources = await provider.list_resources("ses_019b94653e71714b8d406f83ab3d2b3b", include_history=False)
@@ -359,7 +376,9 @@ async def test_browser_fast_listing_excludes_closed_state_records() -> None:
 
 
 @pytest.mark.asyncio
-async def test_browser_provider_resumes_cold_recycled_browser():
+async def test_browser_provider_resumes_cold_recycled_browser(
+    resource_mapper: SessionResourceMapper,
+):
     browser = {
         "browser_id": "browser_cold",
         "session_id": "ses_019b94653e71714b8d406f83ab3d2b3b",
@@ -372,7 +391,7 @@ async def test_browser_provider_resumes_cold_recycled_browser():
     browser_owner = FakeBrowserResourceOwner(browsers=[browser])
     provider = BrowserResourceProvider(
         browser_owner=browser_owner,
-        resource_mapper=_resource_mapper(),
+        resource_mapper=resource_mapper,
     )
 
     result = await provider.control(
@@ -392,6 +411,7 @@ async def test_browser_provider_resumes_cold_recycled_browser():
 async def test_browser_provider_excludes_deleted_records(
     tmp_path,
     session_bundle_factory,
+    resource_mapper: SessionResourceMapper,
 ):
     session_id = "ses_019bb7ec49017d8cac52d5b674fa1b7e"
     sessions_dir = tmp_path / ".boxteam" / "sessions"
@@ -413,9 +433,10 @@ async def test_browser_provider_excludes_deleted_records(
         job_service=FakeJobService(count=0),
         provider_registry=_provider_registry(
             task_registry=registry,
-            terminal_manager=FakeTerminalResourceOwner(),
+            terminal_owner=FakeTerminalResourceOwner(),
             browser_owner=browser_owner,
             message_service=FakeMessageService(),
+            resource_mapper=resource_mapper,
         ),
     )
 
@@ -428,6 +449,7 @@ async def test_browser_provider_excludes_deleted_records(
 async def test_list_includes_closed_background_task_history(
     tmp_path,
     session_bundle_factory,
+    resource_mapper: SessionResourceMapper,
 ):
     session_id = "ses_019c7618ac207a1e89d845aa0622881f"
     sessions_dir = tmp_path / ".boxteam" / "sessions"
@@ -441,9 +463,10 @@ async def test_list_includes_closed_background_task_history(
         job_service=FakeJobService(count=0),
         provider_registry=_provider_registry(
             task_registry=registry,
-            terminal_manager=FakeTerminalResourceOwner(),
+            terminal_owner=FakeTerminalResourceOwner(),
             browser_owner=FakeBrowserResourceOwner(),
             message_service=FakeMessageService(),
+            resource_mapper=resource_mapper,
         ),
     )
 
@@ -459,6 +482,7 @@ async def test_list_includes_closed_background_task_history(
 async def test_list_excludes_deleted_background_task_history(
     tmp_path,
     session_bundle_factory,
+    resource_mapper: SessionResourceMapper,
 ):
     session_id = "ses_019beb2ad93f78668af7471f0ac9538c"
     sessions_dir = tmp_path / ".boxteam" / "sessions"
@@ -472,9 +496,10 @@ async def test_list_excludes_deleted_background_task_history(
         job_service=FakeJobService(count=0),
         provider_registry=_provider_registry(
             task_registry=registry,
-            terminal_manager=FakeTerminalResourceOwner(),
+            terminal_owner=FakeTerminalResourceOwner(),
             browser_owner=FakeBrowserResourceOwner(),
             message_service=FakeMessageService(),
+            resource_mapper=resource_mapper,
         ),
     )
 
@@ -487,6 +512,7 @@ async def test_list_excludes_deleted_background_task_history(
 async def test_cleanup_session_cleans_jobs_background_tasks_and_terminals(
     tmp_path,
     session_bundle_factory,
+    resource_mapper: SessionResourceMapper,
 ):
     session_id = "ses_019b7fe1fe727dcf8650ad9c92cb293e"
     sessions_dir = tmp_path / ".boxteam" / "sessions"
@@ -494,7 +520,7 @@ async def test_cleanup_session_cleans_jobs_background_tasks_and_terminals(
     registry = build_background_registry(sessions_dir)
 
     handle = await spawn_waiting_task(registry, sessions_dir, session_id)
-    terminal_client = FakeTerminalResourceOwner(
+    terminal_owner = FakeTerminalResourceOwner(
         terminals=[
             {
                 "terminal_id": "term_cleanup",
@@ -502,7 +528,7 @@ async def test_cleanup_session_cleans_jobs_background_tasks_and_terminals(
             }
         ],
     )
-    browser_client = FakeBrowserResourceOwner(
+    browser_owner = FakeBrowserResourceOwner(
         browsers=[
             {
                 "browser_id": "browser_cleanup",
@@ -519,18 +545,19 @@ async def test_cleanup_session_cleans_jobs_background_tasks_and_terminals(
         job_service=job_service,
         provider_registry=_provider_registry(
             task_registry=registry,
-            terminal_manager=terminal_client,
-            browser_owner=browser_client,
+            terminal_owner=terminal_owner,
+            browser_owner=browser_owner,
             message_service=FakeMessageService(),
+            resource_mapper=resource_mapper,
         ),
     )
 
     assert await service.cleanup_session(session_id) is None
     assert job_service.deleted_session_id == session_id
     assert registry.list_handles(session_id) == []
-    assert terminal_client.deleted_terminal_ids == ["term_cleanup"]
-    assert terminal_client.cleaned_session_ids == [session_id]
-    assert browser_client.deleted_browser_ids == ["browser_cleanup"]
+    assert terminal_owner.deleted_terminal_ids == ["term_cleanup"]
+    assert terminal_owner.cleaned_session_ids == [session_id]
+    assert browser_owner.deleted_browser_ids == ["browser_cleanup"]
     assert handle.status == "deleted"
 
 
@@ -538,6 +565,7 @@ async def test_cleanup_session_cleans_jobs_background_tasks_and_terminals(
 async def test_cancel_background_task_does_not_inject_monitor_reminder(
     tmp_path,
     session_bundle_factory,
+    resource_mapper: SessionResourceMapper,
 ):
     session_id = "ses_019c74e9583b7f338610345dcba9c87a"
     sessions_dir = tmp_path / ".boxteam" / "sessions"
@@ -561,9 +589,10 @@ async def test_cancel_background_task_does_not_inject_monitor_reminder(
         job_service=FakeJobService(count=0),
         provider_registry=_provider_registry(
             task_registry=registry,
-            terminal_manager=FakeTerminalResourceOwner(),
+            terminal_owner=FakeTerminalResourceOwner(),
             browser_owner=FakeBrowserResourceOwner(),
             message_service=message_service,
+            resource_mapper=resource_mapper,
         ),
     )
 

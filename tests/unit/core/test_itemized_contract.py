@@ -1054,7 +1054,7 @@ def test_runtime_notice_rejects_non_text_payload_for_both_provider_formats(
         project_native_request(plan, _canonical_registry(plan, (item,)), request_only_content={})
 
 
-@pytest.fixture
+@pytest.fixture(scope="module")
 def cross_language_vectors() -> dict[str, object]:
     return json.loads(
         (Path.cwd() / "tests/fixtures/itemized/hash_vectors.json").read_text(

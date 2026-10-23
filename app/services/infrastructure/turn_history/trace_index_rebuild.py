@@ -30,7 +30,7 @@ def _find_trace_event(
     trace_stream: BinaryIO,
     *,
     expected: Event,
-) -> tuple[Event, int, int]:
+) -> tuple[Event, int, int, dict[str, object]]:
     while found := _read_complete_event(trace_stream, source="events.jsonl"):
         event, trace_start, trace_end = found
         if event.event_id != expected.event_id:
@@ -40,12 +40,13 @@ def _find_trace_event(
                 "events/messages 语义事件类型不一致: "
                 f"event_id={event.event_id}, trace={event.type}, message={expected.type}"
             )
-        if event.model_dump(mode="json") != expected.model_dump(mode="json"):
+        full_event_payload = event.model_dump(mode="json")
+        if full_event_payload != expected.model_dump(mode="json"):
             raise RuntimeError(
                 "events/messages 语义事件内容不一致: "
                 f"event_id={event.event_id}, type={event.type}"
             )
-        return event, trace_start, trace_end
+        return event, trace_start, trace_end, full_event_payload
     raise RuntimeError(
         "messages.jsonl 事件在权威 Trace 中不存在: "
         f"event_id={expected.event_id}, type={expected.type}"
@@ -56,13 +57,13 @@ def _write_entry(
     stream: BinaryIO,
     *,
     event: Event,
+    full_event_payload: dict[str, object],
     trace_start: int,
     trace_end: int,
     message_start: int,
     message_end: int,
 ) -> tuple[TraceTurnIndexEntry, int, int]:
     index_start = stream.tell()
-    full_payload = event.model_dump(mode="json")
     compact_payload = compact_event(event)
     entry = TraceTurnIndexEntry(
         event_id=event.event_id,
@@ -73,7 +74,7 @@ def _write_entry(
         trace_end=trace_end,
         message_start=message_start,
         message_end=message_end,
-        source_compacted=compact_payload != full_payload,
+        source_compacted=compact_payload != full_event_payload,
         compact_event=compact_payload,
     )
     line = entry.model_dump_json().encode("utf-8") + b"\n"
@@ -130,13 +131,14 @@ def _build_temp_index(
                     "messages.jsonl 含不支持的语义事件: "
                     f"event_id={message_event.event_id}, type={message_event.type}"
                 )
-            event, trace_start, trace_end = _find_trace_event(
+            event, trace_start, trace_end, full_event_payload = _find_trace_event(
                 trace_stream,
                 expected=message_event,
             )
             entry, index_start, index_end = _write_entry(
                 index_stream,
                 event=event,
+                full_event_payload=full_event_payload,
                 trace_start=trace_start,
                 trace_end=trace_end,
                 message_start=message_start,

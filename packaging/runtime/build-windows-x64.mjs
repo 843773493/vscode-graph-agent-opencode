@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import {
   cpSync,
   existsSync,
@@ -6,10 +5,8 @@ import {
   readFileSync,
   readdirSync,
   rmSync,
-  statSync,
   writeFileSync,
 } from "node:fs";
-import { open } from "node:fs/promises";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 
@@ -23,9 +20,19 @@ import {
   sha256File,
   runtimeAssetUrl,
   stageRuntimeDownloaderPackage,
-  stampReleasePackageManifest,
+  stageRuntimeAndLauncherPackages,
+  writeRuntimeSizeReport,
 } from "./runtime-release-assets.mjs";
-import { computeBuildInputFingerprint } from "./build-input-fingerprint.mjs";
+import { installWindowsPythonDependencies } from "./windows-python-dependencies.mjs";
+import {
+  downloadPinnedWindowsPython,
+  downloadPinnedWindowsNode,
+} from "./pinned-archive-download.mjs";
+import { copyApplicationSources } from "./application-sources.mjs";
+import {
+  beginRuntimeBuild,
+  publishRuntimeBuildResult,
+} from "./runtime-build-result.mjs";
 
 const projectRoot = path.resolve(
   process.env.BOXTEAM_PROJECT_ROOT ?? process.cwd(),
@@ -53,13 +60,6 @@ const standaloneStageRoot = path.join(stageRoot, "standalone");
 const standaloneDirectoryName = `boxteam-windows-x64-${BOXTEAM_VERSION}`;
 const npmCommand = process.platform === "win32" ? "npm.cmd" : "npm";
 const crossBuild = process.argv.includes("--cross");
-// TODO: 依赖锁文件变化后重新确认这些包仍是纯 Python 且没有 Windows wheel。
-const CROSS_BUILD_SOURCE_PACKAGES = Object.freeze([
-  "commentjson",
-  "lark-parser",
-  "litellm",
-]);
-
 function run(command, args, options = {}) {
   const result = spawnSync(command, args, {
     cwd: options.cwd ?? projectRoot,
@@ -76,324 +76,6 @@ function run(command, args, options = {}) {
     );
   }
   return result.stdout?.trim() ?? "";
-}
-
-async function downloadPinnedPython() {
-  mkdirSync(pythonDownloadRoot, { recursive: true });
-  const archivePath = path.join(
-    pythonDownloadRoot,
-    PYTHON_RUNTIME_WINDOWS_X64.archive,
-  );
-  let offset = 0;
-  if (existsSync(archivePath)) {
-    const existingDigest = createHash("sha256")
-      .update(readFileSync(archivePath))
-      .digest("hex");
-    if (existingDigest === PYTHON_RUNTIME_WINDOWS_X64.sha256) {
-      return archivePath;
-    }
-    offset = statSync(archivePath).size;
-  }
-  let completed = false;
-  for (let attempt = 1; attempt <= 5 && !completed; attempt += 1) {
-    let response;
-    try {
-      response = await fetch(PYTHON_RUNTIME_WINDOWS_X64.url, {
-        headers: offset > 0 ? { Range: `bytes=${offset}-` } : {},
-        signal: AbortSignal.timeout(120_000),
-      });
-    } catch (error) {
-      if (attempt === 5) throw error;
-      await new Promise((resolve) => setTimeout(resolve, 1_000));
-      continue;
-    }
-    if (response.status === 416 && offset > 0) {
-      completed = true;
-      continue;
-    }
-    if (!response.ok) {
-      throw new Error(
-        `下载 Windows Python 运行时失败: HTTP ${response.status} ${response.statusText}`,
-      );
-    }
-    const append = offset > 0 && response.status === 206;
-    if (!append) {
-      offset = 0;
-    }
-    const file = await open(archivePath, append ? "a" : "w");
-    try {
-      if (response.body === null) {
-        throw new Error("下载 Windows Python 运行时响应没有 body");
-      }
-      for await (const chunk of response.body) {
-        await file.write(chunk);
-        offset += chunk.byteLength;
-      }
-      completed = true;
-    } catch (error) {
-      if (attempt === 5) throw error;
-      await new Promise((resolve) => setTimeout(resolve, 1_000));
-    } finally {
-      await file.close();
-    }
-  }
-  if (!completed) {
-    throw new Error("下载 Windows Python 运行时在重试后仍未完成");
-  }
-  const digest = createHash("sha256")
-    .update(readFileSync(archivePath))
-    .digest("hex");
-  if (digest !== PYTHON_RUNTIME_WINDOWS_X64.sha256) {
-    throw new Error(
-      `Windows Python 运行时摘要不匹配: expected=${PYTHON_RUNTIME_WINDOWS_X64.sha256} actual=${digest}`,
-    );
-  }
-  return archivePath;
-}
-
-async function downloadPinnedNode() {
-  mkdirSync(nodeDownloadRoot, { recursive: true });
-  const archivePath = path.join(nodeDownloadRoot, NODE_RUNTIME_WINDOWS_X64.archive);
-  if (existsSync(archivePath)) {
-    const existingDigest = createHash("sha256")
-      .update(readFileSync(archivePath))
-      .digest("hex");
-    if (existingDigest === NODE_RUNTIME_WINDOWS_X64.sha256) {
-      return archivePath;
-    }
-  }
-  const response = await fetch(NODE_RUNTIME_WINDOWS_X64.url, {
-    signal: AbortSignal.timeout(120_000),
-  });
-  if (!response.ok) {
-    throw new Error(
-      `下载 Windows Node 运行时失败: HTTP ${response.status} ${response.statusText}`,
-    );
-  }
-  writeFileSync(archivePath, Buffer.from(await response.arrayBuffer()));
-  const digest = createHash("sha256")
-    .update(readFileSync(archivePath))
-    .digest("hex");
-  if (digest !== NODE_RUNTIME_WINDOWS_X64.sha256) {
-    throw new Error(
-      `Windows Node 运行时摘要不匹配: expected=${NODE_RUNTIME_WINDOWS_X64.sha256} actual=${digest}`,
-    );
-  }
-  return archivePath;
-}
-
-function copyApplicationSources(applicationRoot) {
-  const copyOptions = {
-    recursive: true,
-    filter(source) {
-      const relative = path.relative(projectRoot, source);
-      return (
-        !relative.split(path.sep).includes("__pycache__") &&
-        !relative.endsWith(".pyc")
-      );
-    },
-  };
-  cpSync(
-    path.join(projectRoot, "app"),
-    path.join(applicationRoot, "app"),
-    copyOptions,
-  );
-  cpSync(
-    path.join(projectRoot, "configs"),
-    path.join(applicationRoot, "configs"),
-    copyOptions,
-  );
-  cpSync(
-    path.join(projectRoot, "resources"),
-    path.join(applicationRoot, "resources"),
-    copyOptions,
-  );
-  for (const service of ["terminal", "browser"]) {
-    cpSync(
-      path.join(projectRoot, "src", "workspace-services", service, "server"),
-      path.join(applicationRoot, "src", "workspace-services", service, "server"),
-      copyOptions,
-    );
-    cpSync(
-      path.join(projectRoot, "src", "workspace-services", service, "protocol"),
-      path.join(applicationRoot, "src", "workspace-services", service, "protocol"),
-      copyOptions,
-    );
-  }
-  cpSync(
-    path.join(projectRoot, "src", "workspace-services", "protocol"),
-    path.join(applicationRoot, "src", "workspace-services", "protocol"),
-    copyOptions,
-  );
-  cpSync(
-    path.join(projectRoot, "pyproject.toml"),
-    path.join(applicationRoot, "pyproject.toml"),
-  );
-}
-
-function parseLockedRequirements(requirementsPath) {
-  const blocks = [];
-  let header = [];
-  let current = null;
-  for (const line of readFileSync(requirementsPath, "utf8").split(/\r?\n/)) {
-    const match = line.match(
-      /^([A-Za-z0-9][A-Za-z0-9_.-]*)==([^\s\\;]+)/,
-    );
-    if (match) {
-      if (current !== null) blocks.push(current);
-      current = {
-        name: match[1].toLowerCase().replaceAll("_", "-"),
-        specifier: `${match[1]}==${match[2]}`,
-        lines: [line],
-      };
-      continue;
-    }
-    if (current === null) {
-      header.push(line);
-    } else {
-      current.lines.push(line);
-    }
-  }
-  if (current !== null) blocks.push(current);
-  return { blocks, header };
-}
-
-function writeCrossRequirements(requirementsPath) {
-  const { blocks, header } = parseLockedRequirements(requirementsPath);
-  const sourcePackageNames = new Set(CROSS_BUILD_SOURCE_PACKAGES);
-  const sourcePackages = blocks.filter((block) =>
-    sourcePackageNames.has(block.name),
-  );
-  const targetBlocks = blocks.filter(
-    (block) => !sourcePackageNames.has(block.name),
-  );
-  const crossRequirementsPath = path.join(
-    outputRoot,
-    "requirements.cross.locked.txt",
-  );
-  writeFileSync(
-    crossRequirementsPath,
-    `${[...header, ...targetBlocks.flatMap((block) => block.lines)].join("\n")}\n`,
-  );
-  return {
-    crossRequirementsPath,
-    sourceSpecifiers: sourcePackages.map((block) => block.specifier),
-  };
-}
-
-function removePackageArtifacts(sitePackagesRoot, packageNames) {
-  const prefixes = packageNames.flatMap((name) => {
-    const normalized = name.replaceAll("-", "_");
-    return [name, normalized];
-  });
-  for (const entry of readdirSync(sitePackagesRoot)) {
-    if (
-      prefixes.some(
-        (prefix) =>
-          entry === prefix ||
-          entry.startsWith(`${prefix}-`) ||
-          entry.startsWith(`${prefix}_`),
-      )
-    ) {
-      rmSync(path.join(sitePackagesRoot, entry), {
-        recursive: true,
-        force: true,
-      });
-    }
-  }
-}
-
-function collectFiles(root, result = []) {
-  for (const entry of readdirSync(root, { withFileTypes: true })) {
-    const target = path.join(root, entry.name);
-    if (entry.isDirectory()) {
-      collectFiles(target, result);
-    } else {
-      result.push(target);
-    }
-  }
-  return result;
-}
-
-function assertNoLinuxPythonNativeArtifacts(sitePackagesRoot) {
-  const linuxNativeArtifacts = collectFiles(sitePackagesRoot).filter((file) =>
-    file.endsWith(".so"),
-  );
-  if (linuxNativeArtifacts.length > 0) {
-    throw new Error(
-      `Windows 目标 Python 包含 Linux 原生扩展: ${linuxNativeArtifacts.join(", ")}`,
-    );
-  }
-}
-
-function removeSourcePackageLinuxNativeArtifacts(sitePackagesRoot) {
-  const packageRoots = ["commentjson", "lark", "litellm"].map((name) =>
-    path.join(sitePackagesRoot, name),
-  );
-  for (const file of collectFiles(sitePackagesRoot).filter((entry) =>
-    entry.endsWith(".so"),
-  )) {
-    if (packageRoots.some((root) => file.startsWith(`${root}${path.sep}`))) {
-      rmSync(file, { force: true });
-    }
-  }
-}
-
-function installPythonDependencies(pythonExecutable) {
-  const requirementsPath = path.join(outputRoot, "requirements.locked.txt");
-  run("uv", [
-    "export",
-    "--locked",
-    "--no-dev",
-    "--format",
-    "requirements-txt",
-    "--output-file",
-    requirementsPath,
-  ]);
-  if (crossBuild) {
-    const sitePackagesRoot = path.join(
-      runtimePackageRoot,
-      "python",
-      "Lib",
-      "site-packages",
-    );
-    const { crossRequirementsPath, sourceSpecifiers } =
-      writeCrossRequirements(requirementsPath);
-    run("uv", [
-      "pip",
-      "install",
-      "--target",
-      sitePackagesRoot,
-      "--python-version",
-      PYTHON_RUNTIME_WINDOWS_X64.version,
-      "--python-platform",
-      "x86_64-pc-windows-msvc",
-      "--no-build",
-      "--requirements",
-      crossRequirementsPath,
-    ]);
-    removePackageArtifacts(sitePackagesRoot, CROSS_BUILD_SOURCE_PACKAGES);
-    run("uv", [
-      "pip",
-      "install",
-      "--target",
-      sitePackagesRoot,
-      "--no-deps",
-      ...sourceSpecifiers,
-    ]);
-    removeSourcePackageLinuxNativeArtifacts(sitePackagesRoot);
-    assertNoLinuxPythonNativeArtifacts(sitePackagesRoot);
-    return;
-  }
-  const installArguments = [
-      "pip",
-      "install",
-      "--python",
-      pythonExecutable,
-      "--requirements",
-      requirementsPath,
-  ];
-  run("uv", installArguments);
 }
 
 function precompilePythonBytecode(pythonExecutable, applicationRoot) {
@@ -575,21 +257,6 @@ function writeRuntimeMetadata({
   );
 }
 
-function stageNpmPackages() {
-  cpSync(
-    path.join(projectRoot, "packages", "runtime-windows-x64", "package.json"),
-    path.join(runtimePackageRoot, "package.json"),
-  );
-  cpSync(path.join(projectRoot, "packages", "launcher"), launcherPackageRoot, {
-    recursive: true,
-    filter(source) {
-      return !source.split(path.sep).includes("node_modules");
-    },
-  });
-  stampReleasePackageManifest(runtimePackageRoot);
-  stampReleasePackageManifest(launcherPackageRoot, { launcher: true });
-}
-
 function npmPack(packageRoot, destinationRoot) {
   const filename = run(
     npmCommand,
@@ -765,52 +432,6 @@ function buildWindowsInstaller(packageRoot) {
   return installerArchive;
 }
 
-function directoryBytes(root) {
-  let bytes = 0;
-  for (const entry of readdirSync(root, { withFileTypes: true })) {
-    const target = path.join(root, entry.name);
-    bytes += entry.isDirectory()
-      ? directoryBytes(target)
-      : statSync(target).size;
-  }
-  return bytes;
-}
-
-function writeSizeReport({
-  npmTarballs,
-  releaseAssets,
-  standaloneAssets,
-  installerAssets,
-}) {
-  const components = {};
-  for (const name of ["python", "application", "web", "chromium"]) {
-    components[name] = directoryBytes(path.join(runtimePackageRoot, name));
-  }
-  const report = {
-    components,
-    npm_tarballs: Object.fromEntries(
-      npmTarballs.map((tarball) => [
-        path.basename(tarball),
-        statSync(tarball).size,
-      ]),
-    ),
-    release_assets: Object.fromEntries(
-      releaseAssets.map((asset) => [asset.filename, statSync(asset.path).size]),
-    ),
-    standalone_assets: Object.fromEntries(
-      standaloneAssets.map((asset) => [asset.filename, statSync(asset.path).size]),
-    ),
-    installer_assets: Object.fromEntries(
-      installerAssets.map((asset) => [asset.filename, statSync(asset.path).size]),
-    ),
-  };
-  writeFileSync(
-    path.join(outputRoot, "size-report.json"),
-    `${JSON.stringify(report, null, 2)}\n`,
-  );
-  process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
-}
-
 async function main() {
   const nativeWindowsBuild =
     process.platform === "win32" && process.arch === "x64" && !crossBuild;
@@ -821,6 +442,11 @@ async function main() {
       `windows-x64 构建器不支持当前模式: host=${process.platform}-${process.arch} cross=${String(crossBuild)}`,
     );
   }
+  const startingSourceFingerprint = beginRuntimeBuild({
+    projectRoot,
+    targetPlatform: "windows-x64",
+    buildResultPath: path.join(outputRoot, "build-result.json"),
+  });
   rmSync(stageRoot, { recursive: true, force: true });
   rmSync(tarballRoot, { recursive: true, force: true });
   rmSync(releaseAssetRoot, { recursive: true, force: true });
@@ -832,8 +458,8 @@ async function main() {
   mkdirSync(standaloneRoot, { recursive: true });
   mkdirSync(installerRoot, { recursive: true });
 
-  const pythonArchive = await downloadPinnedPython();
-  const nodeArchive = await downloadPinnedNode();
+  const pythonArchive = await downloadPinnedWindowsPython(pythonDownloadRoot);
+  const nodeArchive = await downloadPinnedWindowsNode(nodeDownloadRoot);
   // TODO: Windows 目标依赖系统提供的 tar.exe；若未来支持没有 tar.exe 的旧版 Windows，需改为内置解压实现。
   run("tar", ["-xzf", pythonArchive, "-C", runtimePackageRoot]);
   const pythonExecutable = path.join(
@@ -847,8 +473,10 @@ async function main() {
 
   const applicationRoot = path.join(runtimePackageRoot, "application");
   mkdirSync(applicationRoot, { recursive: true });
-  copyApplicationSources(applicationRoot);
-  installPythonDependencies(pythonExecutable);
+  copyApplicationSources(projectRoot, applicationRoot);
+  installWindowsPythonDependencies({
+    pythonExecutable, outputRoot, runtimePackageRoot, crossBuild, run,
+  });
   // 预编译 Python 字节码缓存（__pycache__/.pyc）：
   // - 打包产物首次运行时，Python 需要现场编译 site-packages 与 app 源码的全部字节码，
   //   在普通 Windows 机器上冷启动可能超过 120 秒，导致 Gateway 等待后端就绪超时退出。
@@ -869,7 +497,9 @@ async function main() {
     path.join(runtimePackageRoot, "chromium"),
   );
   writeRuntimeMetadata({ chromiumExecutable });
-  stageNpmPackages();
+  stageRuntimeAndLauncherPackages({
+    projectRoot, platform: "windows-x64", runtimePackageRoot, launcherPackageRoot,
+  });
 
   const fullRuntimeTarball = npmPack(runtimePackageRoot, releaseAssetRoot);
   const downloader = await stageRuntimeDownloaderPackage({
@@ -912,15 +542,13 @@ async function main() {
       path: installerArchive,
     },
   ];
-  writeSizeReport({
-    npmTarballs,
-    releaseAssets,
-    standaloneAssets,
-    installerAssets,
-  });
-  const sourceFingerprint = computeBuildInputFingerprint({
-    projectRoot,
-    targetPlatform: "windows-x64",
+  writeRuntimeSizeReport({
+    runtimePackageRoot, outputRoot, npmTarballs,
+    assetGroups: {
+      release_assets: releaseAssets,
+      standalone_assets: standaloneAssets,
+      installer_assets: installerAssets,
+    },
   });
   const launcherTarball = npmTarballs.find(
     (tarball) => path.basename(tarball) === `boxteam-${BOXTEAM_VERSION}.tgz`,
@@ -932,32 +560,30 @@ async function main() {
   if (!launcherTarball || !runtimeAsset) {
     throw new Error("本地安装 tarball 清单缺少 Launcher 或 Windows runtime");
   }
-  writeFileSync(
-    path.join(outputRoot, "build-result.json"),
-    `${JSON.stringify(
-      {
-        platform: "windows-x64",
-        version: BOXTEAM_VERSION,
-        source_fingerprint: sourceFingerprint,
-        install_tarballs: {
-          launcher: {
-            filename: path.basename(launcherTarball),
-            sha256: await sha256File(launcherTarball),
-          },
-          runtime: {
-            filename: runtimeAsset.filename,
-            sha256: runtimeAsset.sha256,
-          },
+  publishRuntimeBuildResult({
+    projectRoot,
+    targetPlatform: "windows-x64",
+    buildResultPath: path.join(outputRoot, "build-result.json"),
+    startingSourceFingerprint,
+    metadata: {
+      platform: "windows-x64",
+      version: BOXTEAM_VERSION,
+      install_tarballs: {
+        launcher: {
+          filename: path.basename(launcherTarball),
+          sha256: await sha256File(launcherTarball),
         },
-        npm_tarballs: npmTarballs,
-        release_assets: releaseAssets,
-        standalone_assets: standaloneAssets,
-        installer_assets: installerAssets,
+        runtime: {
+          filename: runtimeAsset.filename,
+          sha256: runtimeAsset.sha256,
+        },
       },
-      null,
-      2,
-    )}\n`,
-  );
+      npm_tarballs: npmTarballs,
+      release_assets: releaseAssets,
+      standalone_assets: standaloneAssets,
+      installer_assets: installerAssets,
+    },
+  });
   process.stdout.write(`Windows x64 构建完成: ${outputRoot}\n`);
 }
 

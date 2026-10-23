@@ -2,6 +2,11 @@
 
 `examples/llm/` 存放与 LLM、DeepAgents 或模型调用相关的实验示例脚本，用于手动验证和参考。
 
+```text
+llm/
+└── deepagent_trace_demo.py  可导入的跟踪中间件与显式模型调用入口
+```
+
 ## 可修改内容
 
 - 示例脚本和实验性配置。

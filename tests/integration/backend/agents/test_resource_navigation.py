@@ -12,8 +12,14 @@ from uuid import uuid4
 
 import httpx
 import pytest
+from langchain_core.messages import ToolMessage
 
 from app.core.resource_uri import parse_resource_uri, resource_display_uri
+from app.core.session_control_primitives import CONTROL_DATABASE_NAME
+from app.services.infrastructure.tool_output_store import (
+    ToolOutputStore,
+    extract_tool_output_reference,
+)
 from tests.support.ports import integration_port_block_for_file
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
@@ -21,6 +27,7 @@ from tests.support.processes.gateway import (
     close_gateway_process,
     start_gateway_process,
 )
+from tests.support.session_navigation_http import wait_for_navigation_operation
 from tests.support.workspaces import prepare_default_test_workspace
 
 
@@ -308,6 +315,99 @@ async def test_real_workspace_gateway_navigation_is_fixed_lightweight_and_contai
             after = _tracking_counts(workspace / ".boxteam")
             assert after == before
             assert (await client.get(raw_path)).json()["data"] == publication
+            # 真实 Session 与产物 owner 的回执由相同 Gateway 导航读取；缺失保持 404。
+            created = await client.post(f"/api/v1/workspaces/{workspace_id}/sessions", json={"title": "工具结果 URI"})
+            assert created.status_code == 200, created.text
+            session_id = created.json()["data"]["session_id"]
+            store = ToolOutputStore(workspace_root=workspace, max_lines=8, max_bytes=1024)
+            output = "精确工具正文 Ω\r\n" * 1000
+            bounded = store.bound(
+                session_id=session_id, tool_name="large", tool_call_id="navigation-large-output",
+                message=ToolMessage(content=output, tool_call_id="navigation-large-output"),
+            )
+            reference = extract_tool_output_reference(bounded)
+            assert reference is not None
+            uri = str(reference["path"])
+            assert (await navigate(uri, "read", max_bytes=65536))["content"] == output
+            output_path = store._path_resolver.resolve_session_node(session_id) / "tool-results" / uri.rsplit("/", 1)[1]
+            original = output_path.read_bytes()
+            output_path.unlink()
+            missing = await client.post(path, json={"uri": uri, "operation": "read"})
+            assert missing.status_code == 404, missing.text
+            assert missing.json()["detail"]["code"] == "unknown_resource"
+            assert missing.headers["X-Request-ID"] == missing.json()["request_id"]
+            assert str(workspace) not in missing.text and not output_path.exists()
+            output_path.write_bytes(original)
+            assert (await navigate(uri, "read", max_bytes=65536))["content"] == output
+            # 隔离目标冲突须留下安全修复回执，保留两侧原件且不覆盖未知目录。
+            registered = await client.get("/api/gateway/workspaces")
+            original_workspace = next(
+                item for item in registered.json()["data"]["items"]
+                if item["backend_workspace_id"] == workspace_id
+            )
+            activated = await client.post(f"/api/gateway/workspaces/{original_workspace['workspace_id']}/activate")
+            assert activated.status_code == 200, activated.text
+            snapshot = await client.get("/api/v1/session-catalog/snapshot")
+            assert snapshot.status_code == 200, snapshot.text
+            operation_id = "op_" + uuid4().hex
+            session_node = store._path_resolver.resolve_session_node(session_id)
+            control_path = session_node / CONTROL_DATABASE_NAME
+            original_inode = control_path.stat().st_ino
+            isolated = workspace / ".boxteam/sessions/.deleting" / operation_id / session_id
+            isolated.mkdir(parents=True)
+            decoy = isolated / "preserved.txt"
+            decoy_bytes = b"unrelated isolation target\r\n"
+            decoy.write_bytes(decoy_bytes)
+            try:
+                enqueue = await client.post("/api/v1/session-catalog/operations:enqueue", json={"intents": [{
+                    "client_operation_id": operation_id, "client_sequence": 1,
+                    "kind": "delete_session", "target_node_id": session_id,
+                    "base_catalog_revision": snapshot.json()["data"]["catalog_revision"],
+                }]})
+                assert enqueue.status_code == 202, enqueue.text
+                assert enqueue.headers["X-Request-ID"] == enqueue.json()["request_id"]
+                receipt = await wait_for_navigation_operation(client, operation_id, wait_for_settlement=True)
+                status = await client.get("/api/v1/session-catalog/operations", params={"operation_id": operation_id})
+                assert status.status_code == 200, status.text
+                assert status.headers["X-Request-ID"] == status.json()["request_id"]
+                assert status.json()["data"]["items"] == [receipt]
+                assert receipt["state"] == "committed" and receipt["settlement"] == "repair_required"
+                assert receipt["error_code"] == "delete_settlement_repair_required"
+                assert session_id in receipt["error_detail"]
+                assert "artifact=session-directory" in receipt["error_detail"]
+                serialized = json.dumps(receipt, ensure_ascii=False)
+                assert str(workspace) not in serialized and str(control_path) not in serialized
+                assert control_path.stat().st_ino == original_inode
+                assert decoy.read_bytes() == decoy_bytes
+                assert output_path.read_bytes() == original
+                with closing(sqlite3.connect(workspace / ".boxteam/navigation/session-catalog.sqlite")) as connection:
+                    row = connection.execute(
+                        "SELECT error_detail FROM navigation_mutation_records WHERE operation_id = ?", (operation_id,),
+                    ).fetchone()
+                assert row is not None and row[0] == receipt["error_detail"]
+                receipts.append({"delete_operation": receipt})
+            finally:
+                decoy.unlink()
+                isolated.rmdir()
+            # 真实 owner 重启沿原 operation 恢复，不创建新的删除意图。
+            close_gateway_process(gateway)
+            gateway = start_gateway_process(
+                workspace_root=workspace, default_backend_url=None, port=port,
+                boxteam_home=home, artifacts_dir=artifacts / "gateway-recovery",
+            )
+            async with httpx.AsyncClient(
+                base_url=f"http://127.0.0.1:{port}", headers=LOCAL_TOKEN_HEADERS,
+                timeout=60, trust_env=False,
+            ) as recovered_client:
+                await acquire_gateway_guest(recovered_client)
+                settled = await wait_for_navigation_operation(recovered_client, operation_id, wait_for_settlement=True)
+                assert settled["state"] == "committed" and settled["settlement"] == "settled"
+                assert settled["receipt_revision"] > receipt["receipt_revision"]
+                assert settled["error_code"] is None and settled["error_detail"] is None
+                assert not session_node.exists()
+                assert (isolated / CONTROL_DATABASE_NAME).stat().st_ino == original_inode
+                assert (isolated / "tool-results" / output_path.name).read_bytes() == original
+                receipts.append({"delete_operation_after_restart": settled})
             (artifacts / "navigation-receipts.json").write_text(json.dumps(receipts, ensure_ascii=False, indent=2) + "\n")
     finally:
         close_gateway_process(gateway)

@@ -20,7 +20,13 @@ from app.agents.tools.terminal import create_exec_command_tool
 from app.core.identifier import create_uuid_hex
 from app.core.mounted_workspaces import MountedWorkspace
 from app.core.workspace_identity import load_or_create_workspace_id
-from tests.support.processes.workspace import ensure_local_port_available, terminate_process
+from tests.e2e.system.workspace_services.terminal.terminal_process_helpers import (
+    prepare_empty_terminal_e2e_workspace,
+)
+from tests.support.processes.workspace import (
+    ensure_local_port_available,
+    terminate_process,
+)
 from tests.support.workspace_tool_runtime import workspace_tool_runtime
 
 
@@ -32,6 +38,11 @@ class WindowsTerminalBackend:
     workspace_root: str
     powershell: str
     workspace_id: str
+
+
+@pytest.fixture(scope="module")
+def e2e_workspace_root_path() -> str:
+    return prepare_empty_terminal_e2e_workspace(Path(__file__))
 
 
 def _wait_for_health(

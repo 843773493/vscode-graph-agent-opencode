@@ -7,17 +7,17 @@ import pytest
 
 from app.services.infrastructure.config_service import ConfigService
 from app.services.infrastructure.terminal_manager_client import TerminalManagerClient
+from tests.support.resource_owners.sessions import WORKSPACE_ID
 
-WORKSPACE_ID = "00000000-0000-4000-8000-000000000001"
 TERMINAL_ID = "term_00000000400070008000000000000001"
 
 
 @pytest.fixture
-def client() -> TerminalManagerClient:
+def terminal_manager_client() -> TerminalManagerClient:
     return TerminalManagerClient(backend_url="http://terminal.test", workspace_id=WORKSPACE_ID)
 
 
-def _runtime(status: str = "running") -> dict[str, object]:
+def _terminal_record(status: str = "running") -> dict[str, object]:
     return {
         "terminal_id": TERMINAL_ID, "workspace_id": WORKSPACE_ID,
         "status": status, "transport_owner_revision": 3, "cwd_relative": "app",
@@ -26,17 +26,17 @@ def _runtime(status: str = "running") -> dict[str, object]:
 
 @pytest.mark.asyncio
 async def test_create_sends_only_owner_allocated_pty_identity_and_transport_revision(
-    client: TerminalManagerClient, monkeypatch: pytest.MonkeyPatch,
+    terminal_manager_client: TerminalManagerClient, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     captured: dict[str, object] = {}
 
     async def request(method: str, path: str, payload: dict[str, object]) -> dict[str, object]:
         assert (method, path) == ("POST", "/api/terminals")
         captured.update(payload)
-        return {"data": _runtime()}
+        return {"data": _terminal_record()}
 
-    monkeypatch.setattr(client, "_json_request", request)
-    result = await client.create_terminal(
+    monkeypatch.setattr(terminal_manager_client, "_json_request", request)
+    result = await terminal_manager_client.create_terminal(
         terminal_id=TERMINAL_ID, owner_revision=3, title="用户终端", cwd="/workspace/app",
     )
     assert captured["workspace_id"] == WORKSPACE_ID
@@ -50,34 +50,34 @@ async def test_create_sends_only_owner_allocated_pty_identity_and_transport_revi
 
 @pytest.mark.asyncio
 async def test_delete_preserves_complete_nested_transport_receipt(
-    client: TerminalManagerClient, monkeypatch: pytest.MonkeyPatch,
+    terminal_manager_client: TerminalManagerClient, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     async def request(method: str, path: str, payload: object = None) -> dict[str, object]:
         assert (method, path, payload) == ("DELETE", f"/api/terminals/{TERMINAL_ID}", None)
-        return {"data": {"deleted": True, "terminal_id": TERMINAL_ID, "terminal": _runtime("deleted")}}
+        return {"data": {"deleted": True, "terminal_id": TERMINAL_ID, "terminal": _terminal_record("deleted")}}
 
-    monkeypatch.setattr(client, "_json_request", request)
-    result = await client.delete_resource(TERMINAL_ID)
+    monkeypatch.setattr(terminal_manager_client, "_json_request", request)
+    result = await terminal_manager_client.delete_resource(TERMINAL_ID)
     assert result["deleted"] is True
-    assert result["terminal"] == _runtime("deleted")
+    assert result["terminal"] == _terminal_record("deleted")
 
 
 @pytest.mark.asyncio
 async def test_list_is_workspace_transport_only_and_hides_direct_attach_url(
-    client: TerminalManagerClient, monkeypatch: pytest.MonkeyPatch,
+    terminal_manager_client: TerminalManagerClient, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     async def request(method: str, path: str, payload: object = None) -> dict[str, object]:
         assert (method, path, payload) == ("GET", "/api/terminals", None)
-        return {"data": [{**_runtime(), "attach_url": "http://terminal.test/direct"}]}
+        return {"data": [{**_terminal_record(), "attach_url": "http://terminal.test/direct"}]}
 
-    monkeypatch.setattr(client, "_json_request", request)
-    result = await client.list_resources()
-    assert result == [_runtime()]
+    monkeypatch.setattr(terminal_manager_client, "_json_request", request)
+    result = await terminal_manager_client.list_resources()
+    assert result == [_terminal_record()]
 
 
 @pytest.mark.asyncio
 async def test_revision_and_one_use_grant_consume_internal_owner_transport(
-    client: TerminalManagerClient, monkeypatch: pytest.MonkeyPatch,
+    terminal_manager_client: TerminalManagerClient, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     calls: list[tuple[str, str, object]] = []
 
@@ -85,9 +85,9 @@ async def test_revision_and_one_use_grant_consume_internal_owner_transport(
         calls.append((method, path, payload))
         return {"data": {"grant_token": "single-use", "owner_revision": 4}}
 
-    monkeypatch.setattr(client, "_json_request", request)
-    await client.sync_owner_revision(TERMINAL_ID, 4)
-    result = await client.issue_transport_grant(TERMINAL_ID, owner_revision=4, association="session/thread")
+    monkeypatch.setattr(terminal_manager_client, "_json_request", request)
+    await terminal_manager_client.sync_owner_revision(TERMINAL_ID, 4)
+    result = await terminal_manager_client.issue_transport_grant(TERMINAL_ID, owner_revision=4, association="session/thread")
     assert result["grant_token"] == "single-use"
     assert calls == [
         ("POST", f"/api/terminals/{TERMINAL_ID}/owner-revision", {"owner_revision": 4}),
@@ -95,7 +95,7 @@ async def test_revision_and_one_use_grant_consume_internal_owner_transport(
     ]
 
 
-class _Response:
+class _JsonResponse:
     def __enter__(self) -> Self:
         return self
 
@@ -107,18 +107,20 @@ class _Response:
 
 
 def test_current_config_backend_and_explicit_workspace_owner_headers() -> None:
-    config = Mock(spec=ConfigService)
-    urls = ["http://terminal-a", "http://terminal-b"]
-    config.get_terminal_backend_url.side_effect = urls
-    client = TerminalManagerClient(config_service=config, workspace_id=WORKSPACE_ID)
-    config.get_terminal_backend_url.assert_not_called()
-    with patch("app.services.infrastructure.terminal_manager_client.urlopen", return_value=_Response()) as send:
-        client._json_request_sync("GET", "/api/terminals", None)
-        client._json_request_sync("GET", "/api/terminals", None)
-    assert [call.args[0].full_url for call in send.call_args_list] == [
+    config_service = Mock(spec=ConfigService)
+    backend_urls = ["http://terminal-a", "http://terminal-b"]
+    config_service.get_terminal_backend_url.side_effect = backend_urls
+    terminal_manager_client = TerminalManagerClient(
+        config_service=config_service, workspace_id=WORKSPACE_ID
+    )
+    config_service.get_terminal_backend_url.assert_not_called()
+    with patch("app.services.infrastructure.terminal_manager_client.urlopen", return_value=_JsonResponse()) as urlopen_mock:
+        terminal_manager_client._json_request_sync("GET", "/api/terminals", None)
+        terminal_manager_client._json_request_sync("GET", "/api/terminals", None)
+    assert [call.args[0].full_url for call in urlopen_mock.call_args_list] == [
         "http://terminal-a/api/terminals", "http://terminal-b/api/terminals",
     ]
-    for call in send.call_args_list:
+    for call in urlopen_mock.call_args_list:
         headers = {name.lower(): value for name, value in call.args[0].header_items()}
         assert headers["x-boxteam-workspace-id"] == WORKSPACE_ID
         assert headers["x-boxteam-resource-owner"] == "workspace-terminal"

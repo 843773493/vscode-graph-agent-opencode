@@ -49,14 +49,22 @@ class TeamBoardManager:
             board, event_type="team.created", actor_thread_id=coordinator_thread_id,
             payload={"name": board.name},
         ))
-        return self.with_recent_events(board)
+        return self.with_members_and_recent_events(board)
 
     def list_for_member(self, session_id: str, thread_id: str) -> TeamListDTO:
-        boards = [self.with_recent_events(board) for board in self._store.list(session_id)]
+        stored_boards = self._store.list(session_id)
+        members_by_team = self._member_views_by_team(session_id, stored_boards)
+        boards = [
+            self._board_with_members_and_events(
+                board,
+                members_by_team[board.team_id],
+            )
+            for board in stored_boards
+        ]
         return TeamListDTO(items=[board for board in boards if find_member(board, thread_id, required=False) is not None])
 
     def get_for_member(self, *, session_id: str, team_id: str, thread_id: str) -> TeamBoardDTO:
-        board = self.with_recent_events(self._store.get(session_id, team_id))
+        board = self.with_members_and_recent_events(self._store.get(session_id, team_id))
         require_active_member(board, thread_id)
         return board
 
@@ -207,7 +215,7 @@ class TeamBoardManager:
             latest = self._store.latest_task_event(session_id, team_id, task_id)
             recovering_failure = latest is not None and latest.type == "task.dispatch_failed"
             if existing.assigned_job_id == job_id and not recovering_failure:
-                return self.with_recent_events(board), existing
+                return self.with_members_and_recent_events(board), existing
             if existing.assigned_job_id is not None and existing.assigned_job_id != job_id:
                 raise RuntimeError("团队任务已绑定其它 Job，拒绝恢复换绑")
             # 只撤销原调度失败写入；后续 task.updated 的用户结论由原事件因果保留。
@@ -265,24 +273,49 @@ class TeamBoardManager:
                 ),
             )
 
-    def with_recent_events(self, board: TeamBoardDTO) -> TeamBoardDTO:
-        control = self._factory.for_owner_session(board.session_id).control_store
-        members = [TeamMemberDTO(
-            thread_id=board.coordinator_thread_id, role="coordinator", source="coordinator",
-            work_mode="write", instructions="负责拆分工作、修改代码并协调团队成员。",
-            status="active", joined_at=board.created_at, updated_at=board.created_at,
-        )]
+    def with_members_and_recent_events(self, board: TeamBoardDTO) -> TeamBoardDTO:
+        members_by_team = self._member_views_by_team(board.session_id, [board])
+        return self._board_with_members_and_events(
+            board,
+            members_by_team[board.team_id],
+        )
+
+    def _member_views_by_team(
+        self,
+        session_id: str,
+        boards: list[TeamBoardDTO],
+    ) -> dict[str, list[TeamMemberDTO]]:
+        coordinators_by_team = {}
+        members_by_team = {}
+        for board in boards:
+            if board.session_id != session_id:
+                raise RuntimeError(
+                    "团队列表包含其它 Session 的 board: "
+                    f"requested={session_id}, board={board.session_id}"
+                )
+            coordinators_by_team[board.team_id] = board.coordinator_thread_id
+            members_by_team[board.team_id] = [TeamMemberDTO(
+                thread_id=board.coordinator_thread_id, role="coordinator", source="coordinator",
+                work_mode="write", instructions="负责拆分工作、修改代码并协调团队成员。",
+                status="active", joined_at=board.created_at, updated_at=board.created_at,
+            )]
+        if not boards:
+            return members_by_team
+
+        control = self._factory.for_owner_session(session_id).control_store
         with control.read_transaction():
             for row in control.list_collaboration_members(
-                coordinator_session_id=board.session_id
+                coordinator_session_id=session_id
             ):
                 if row.state == "registering":
                     continue
                 seed = json.loads(row.task_seed)
                 context = seed["trusted_context"]
-                if context.get("team_id") != board.team_id:
+                team_id = context.get("team_id")
+                if not isinstance(team_id, str) or team_id not in coordinators_by_team:
                     continue
-                if row.coordinator_thread_id != board.coordinator_thread_id or context["coordinator_thread_id"] != board.coordinator_thread_id:
+                coordinator_thread_id = coordinators_by_team[team_id]
+                if row.coordinator_thread_id != coordinator_thread_id or context["coordinator_thread_id"] != coordinator_thread_id:
                     raise RuntimeError(f"团队成员的冻结协调线程不一致: {row.delegation_id}")
                 if row.child_thread_id is None:
                     if row.state == "published":
@@ -310,20 +343,28 @@ class TeamBoardManager:
                         "团队成员状态非法（fail closed）: "
                         f"delegation_id={row.delegation_id}, state={row.state!r}"
                     )
-                members.append(TeamMemberDTO(
+                members_by_team[team_id].append(TeamMemberDTO(
                     thread_id=row.child_thread_id, delegation_id=row.delegation_id,
                     role=row.role, source="delegated", work_mode=context["work_mode"],
                     instructions=seed.get("untrusted_instructions", ""), status=status,
                     joined_at=row.registered_at, updated_at=updated_at,
                 ))
+        return members_by_team
+
+    def _board_with_members_and_events(
+        self,
+        board: TeamBoardDTO,
+        members: list[TeamMemberDTO],
+    ) -> TeamBoardDTO:
         return board.model_copy(update={
-            "members": members, "recent_events": self._store.recent_events(board.session_id, board.team_id),
+            "members": members,
+            "recent_events": self._store.recent_events(board.session_id, board.team_id),
         })
 
     async def _persist(self, board: TeamBoardDTO, event: TeamEventDTO,
                        *, wakeup: dict[str, object] | None = None) -> tuple[TeamBoardDTO, int]:
         revision = await self._store.commit(board, event, wakeup=wakeup)
-        return self.with_recent_events(board), revision
+        return self.with_members_and_recent_events(board), revision
 
     @staticmethod
     def _wakeup(message: PreparedInternalMessage, *, target_thread_id: str, source_id: str, idempotency_key: str) -> dict[str, object]:

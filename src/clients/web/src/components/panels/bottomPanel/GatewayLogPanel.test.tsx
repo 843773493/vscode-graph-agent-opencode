@@ -55,23 +55,19 @@ function diagnosticsPayload(workspaceId: string) {
   };
 }
 
-async function flush(): Promise<void> {
-  await act(async () => {
-    await Promise.resolve();
-    await Promise.resolve();
-  });
+interface PendingDiagnosticsRequest {
+  workspaceId: string;
+  resolve: () => void;
 }
 
-test("切换工作区后到达的旧输出不得覆盖新工作区", async () => {
-  // 底部输出面板跟随当前工作区；工作区切换会重发诊断请求。慢的旧请求若在快的
-  // 新请求之后返回，必须被丢弃，否则用户切到新工作区后仍看到上一个工作区的日志。
-  const pending: Array<{ workspaceId: string; resolve: () => void }> = [];
-  installGatewayFetch(({ url, path }) => {
-    if (path !== "/api/gateway/diagnostics") return undefined;
+function installPendingDiagnosticsFetch(token: string): PendingDiagnosticsRequest[] {
+  const pendingRequests: PendingDiagnosticsRequest[] = [];
+  installGatewayFetch(({ url, path, method }) => {
+    if (path !== "/api/gateway/diagnostics" || (method && method !== "GET")) return undefined;
     const workspaceId = new URL(url, "http://localhost").searchParams.get("workspace_id");
     if (!workspaceId) return undefined;
     return new Promise<Response>((resolve) => {
-      pending.push({
+      pendingRequests.push({
         workspaceId,
         resolve: () =>
           resolve(
@@ -82,7 +78,21 @@ test("切换工作区后到达的旧输出不得覆盖新工作区", async () =>
           ),
       });
     });
-  }, { token: "log-race-token" });
+  }, { token });
+  return pendingRequests;
+}
+
+async function flush(): Promise<void> {
+  await act(async () => {
+    await Promise.resolve();
+    await Promise.resolve();
+  });
+}
+
+test("切换工作区后到达的旧输出不得覆盖新工作区", async () => {
+  // 底部输出面板跟随当前工作区；工作区切换会重发诊断请求。慢的旧请求若在快的
+  // 新请求之后返回，必须被丢弃，否则用户切到新工作区后仍看到上一个工作区的日志。
+  const pendingRequests = installPendingDiagnosticsFetch("log-race-token");
   installPollingWindow(8025);
 
   let renderer!: ReactTestRenderer;
@@ -100,15 +110,15 @@ test("切换工作区后到达的旧输出不得覆盖新工作区", async () =>
     );
   });
   await flush();
-  expect(pending.map((item) => item.workspaceId)).toEqual(["ws_a", "ws_b"]);
+  expect(pendingRequests.map((request) => request.workspaceId)).toEqual(["ws_a", "ws_b"]);
 
   // 新工作区先返回，旧工作区后返回。
   await act(async () => {
-    pending[1].resolve();
+    pendingRequests[1].resolve();
     await Promise.resolve();
   });
   await act(async () => {
-    pending[0].resolve();
+    pendingRequests[0].resolve();
     await Promise.resolve();
   });
 
@@ -121,25 +131,7 @@ test("切换工作区到新工作区期间不得继续渲染旧工作区日志",
   // 切换窗口保护：A 已显示后切到 B，B 的响应仍在途时，面板必须立刻作废 A 的快照，
   // 不得因为 getWorkspaceLogs 回退到旧 diagnostics.selected_workspace_id 而继续渲染 A 的 tail，
   // 也不得把这段空窗期渲染成读取失败结论。
-  const pending: Array<{ workspaceId: string; resolve: () => void }> = [];
-  installGatewayFetch(({ url, path, method }) => {
-    if (path !== "/api/gateway/diagnostics") return undefined;
-    if (method && method !== "GET") return undefined;
-    const workspaceId = new URL(url, "http://localhost").searchParams.get("workspace_id");
-    if (!workspaceId) return undefined;
-    return new Promise<Response>((resolve) => {
-      pending.push({
-        workspaceId,
-        resolve: () =>
-          resolve(
-            Response.json({
-              data: diagnosticsPayload(workspaceId),
-              request_id: `req_${workspaceId}`,
-            }),
-          ),
-      });
-    });
-  }, { token: "log-switch-window-token" });
+  const pendingRequests = installPendingDiagnosticsFetch("log-switch-window-token");
   installPollingWindow(8028);
 
   let renderer!: ReactTestRenderer;
@@ -150,7 +142,7 @@ test("切换工作区到新工作区期间不得继续渲染旧工作区日志",
   });
   await flush();
   await act(async () => {
-    pending[0].resolve();
+    pendingRequests[0].resolve();
     await Promise.resolve();
   });
   await flush();
@@ -169,9 +161,9 @@ test("切换工作区到新工作区期间不得继续渲染旧工作区日志",
   expect(during).not.toContain("请刷新后重试");
 
   // ws_b 到达后正常渲染，证明上面是切换空窗而不是把面板彻底卡死。
-  expect(pending.map((item) => item.workspaceId)).toEqual(["ws_a", "ws_b"]);
+  expect(pendingRequests.map((request) => request.workspaceId)).toEqual(["ws_a", "ws_b"]);
   await act(async () => {
-    pending[1].resolve();
+    pendingRequests[1].resolve();
     await Promise.resolve();
   });
   await flush();

@@ -1,8 +1,15 @@
 import path from "node:path";
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 
 export const STATE_FILE_NAME = "terminals.json";
 export const STATE_SCHEMA_VERSION = 3;
+
+/**
+ * Manager交付的一轮终端恢复记录，不是HTTP/WebSocket展示快照。
+ * @typedef {object} TerminalStateWriteSnapshot
+ * @property {string} updated_at Manager开始组装本轮快照的UTC ISO时刻，早于逐资源toRecord；不是资源更新时间或写盘完成时间。
+ * @property {ReturnType<import("./terminalSession.js").TerminalSession["toRecord"]>[]} terminals 本轮保留的全部终端恢复记录，包括非运行记录。
+ */
 
 export class TerminalStateStore {
   constructor({ workspaceRoot, workspaceId }) {
@@ -40,19 +47,33 @@ export class TerminalStateStore {
     return parsed.terminals;
   }
 
-  async write(data) {
-    if (!Array.isArray(data.terminals)) {
+  /** @param {TerminalStateWriteSnapshot} stateSnapshot */
+  async write(stateSnapshot) {
+    if (!Array.isArray(stateSnapshot.terminals)) {
       throw new TypeError("终端状态写入必须包含 terminals 数组");
     }
     await mkdir(this.stateDir, { recursive: true });
     const temporaryFile = `${this.stateFile}.${process.pid}.tmp`;
-    const payload = {
+    const stateFilePayload = {
       schema_version: STATE_SCHEMA_VERSION,
       workspace_id: this.workspaceId,
-      updated_at: data.updated_at,
-      terminals: data.terminals,
+      updated_at: stateSnapshot.updated_at,
+      terminals: stateSnapshot.terminals,
     };
-    await writeFile(temporaryFile, `${JSON.stringify(payload, null, 2)}\n`, "utf8");
-    await rename(temporaryFile, this.stateFile);
+    try {
+      await writeFile(temporaryFile, `${JSON.stringify(stateFilePayload, null, 2)}\n`, "utf8");
+      await rename(temporaryFile, this.stateFile);
+    } catch (writeError) {
+      try {
+        await rm(temporaryFile, { force: true });
+      } catch (cleanupError) {
+        throw new AggregateError(
+          [writeError, cleanupError],
+          "终端状态写入失败，临时文件也未能清理",
+          { cause: writeError },
+        );
+      }
+      throw writeError;
+    }
   }
 }

@@ -50,41 +50,77 @@ def test_addressing_error_domains_are_disjoint_and_reject_each_others_codes() ->
 
 
 def test_federation_resolution_codes_match_the_normative_owner_table() -> None:
-    spec = (Path.cwd() / "openspec/changes/add-unified-virtual-resource-addressing/specs/virtual-resource-addressing/spec.md").read_text()
-    table = spec.split("- **联邦解析期拒绝码（第三套，独立闭集）**：", 1)[1].split("\n\n", 1)[0]
+    spec = (
+        Path.cwd()
+        / "openspec/changes/add-unified-virtual-resource-addressing/specs/virtual-resource-addressing/spec.md"
+    ).read_text()
+    table = spec.split("- **联邦解析期拒绝码（第三套，独立闭集）**：", 1)[1].split(
+        "\n\n", 1
+    )[0]
     assert set(re.findall(r"`((?:federation-[a-z-]+)|target_[a-z_]+)`", table)) == {
-        errors.FEDERATION_UNKNOWN_PEER, errors.FEDERATION_CHANNEL_CLOSED,
-        errors.FEDERATION_TARGET_NOT_RESOLVABLE, errors.FEDERATION_TARGET_AMBIGUOUS,
-        errors.FEDERATION_DEADLINE_EXCEEDED, errors.FEDERATION_TRANSIT_LIMIT_EXCEEDED,
+        errors.FEDERATION_UNKNOWN_PEER,
+        errors.FEDERATION_CHANNEL_CLOSED,
+        errors.FEDERATION_TARGET_NOT_RESOLVABLE,
+        errors.FEDERATION_TARGET_AMBIGUOUS,
+        errors.FEDERATION_DEADLINE_EXCEEDED,
+        errors.FEDERATION_TRANSIT_LIMIT_EXCEEDED,
     }
 
 
 def test_production_error_constructors_use_registered_owner_codes() -> None:
     """遍历实际调用点；新增同义码或跨域字面量必须在构造前被审计发现。"""
-    domains = {
+    error_codes_by_constructor = {
         "ResourceUriGrammarError": _GRAMMAR_REASON_CODES,
         "ResourceUriResolveError": RESOURCE_URI_RESOLVE_REASON_CODES,
         "FederationError": errors.FEDERATION_ERROR_CODES,
     }
+    constructor_names = tuple(error_codes_by_constructor)
+    root = Path.cwd()
     dynamic_sites = {
         ("app/gateway/federation/channel.py", "FederationError", "code"),
         ("app/gateway/federation/rpc.py", "FederationError", "code"),
-        ("app/services/infrastructure/resource_platform/sources/gateway_skill_sources.py",
-         "ResourceUriResolveError", "detail['code']"),
+        (
+            "app/services/infrastructure/resource_platform/sources/gateway_skill_sources.py",
+            "ResourceUriResolveError",
+            "detail['code']",
+        ),
     }
     observed_dynamic_sites = set()
-    for path in sorted((Path.cwd() / "app").rglob("*.py")):
-        relative = path.relative_to(Path.cwd()).as_posix()
-        tree = ast.parse(path.read_text())
+    for path in sorted((root / "app").rglob("*.py")):
+        source = path.read_text(encoding="utf-8")
+        if not any(name in source for name in constructor_names):
+            continue
+        relative = path.relative_to(root).as_posix()
+        tree = ast.parse(source, filename=relative)
         for node in ast.walk(tree):
-            if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Name) or node.func.id not in domains:
+            if (
+                not isinstance(node, ast.Call)
+                or not isinstance(node.func, ast.Name)
+                or node.func.id not in error_codes_by_constructor
+            ):
                 continue
-            code = node.args[0] if node.args else next(arg.value for arg in node.keywords if arg.arg in {"code", "reason_code"})
-            choices = (code.body, code.orelse) if isinstance(code, ast.IfExp) else (code,)
+            code = (
+                node.args[0]
+                if node.args
+                else next(
+                    arg.value
+                    for arg in node.keywords
+                    if arg.arg in {"code", "reason_code"}
+                )
+            )
+            choices = (
+                (code.body, code.orelse) if isinstance(code, ast.IfExp) else (code,)
+            )
             for choice in choices:
                 if isinstance(choice, ast.Constant):
-                    assert choice.value in domains[node.func.id], (relative, node.lineno, choice.value)
-                elif isinstance(choice, ast.Name) and choice.id.startswith("FEDERATION_"):
+                    assert choice.value in error_codes_by_constructor[node.func.id], (
+                        relative,
+                        node.lineno,
+                        choice.value,
+                    )
+                elif isinstance(choice, ast.Name) and choice.id.startswith(
+                    "FEDERATION_"
+                ):
                     assert node.func.id == "FederationError"
                     assert getattr(errors, choice.id) in errors.FEDERATION_ERROR_CODES
                 else:
@@ -170,15 +206,17 @@ def test_existing_close_code_groups_remain_stable() -> None:
     assert close_code_for(FederationError(FEDERATION_GRANT_EXPIRED, "expired")) == (
         CLOSE_CODE_POLICY_VIOLATION
     )
-    assert close_code_for(FederationError(FEDERATION_TARGET_NOT_RESOLVABLE, "missing")) == (
-        CLOSE_CODE_INTERNAL_ERROR
-    )
+    assert close_code_for(
+        FederationError(FEDERATION_TARGET_NOT_RESOLVABLE, "missing")
+    ) == (CLOSE_CODE_INTERNAL_ERROR)
 
 
 @pytest.mark.asyncio
 async def test_registered_remote_wire_error_keeps_its_contract() -> None:
     session = _session()
-    future: asyncio.Future[dict[str, object]] = asyncio.get_running_loop().create_future()
+    future: asyncio.Future[dict[str, object]] = (
+        asyncio.get_running_loop().create_future()
+    )
     session._pending["cor_registered"] = future
 
     session._dispatch_response(
@@ -208,7 +246,9 @@ async def test_registered_remote_wire_error_keeps_its_contract() -> None:
 @pytest.mark.asyncio
 async def test_unknown_remote_wire_error_becomes_protocol_error_with_cause() -> None:
     session = _session()
-    future: asyncio.Future[dict[str, object]] = asyncio.get_running_loop().create_future()
+    future: asyncio.Future[dict[str, object]] = (
+        asyncio.get_running_loop().create_future()
+    )
     session._pending["cor_unknown"] = future
 
     with pytest.raises(FederationError) as error:

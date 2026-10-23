@@ -42,12 +42,12 @@ export function resolveWorkspaceMarkdownTarget(
     return { kind: "workspace", path: decodedPath, fragment };
   }
   const marker = "/resources/files/";
-  const files = markdownPath.indexOf(marker);
-  if (files < 0) throw new Error("Markdown 文件缺少资源 URI");
-  const rootEnd = markdownPath.indexOf("/", files + marker.length);
-  if (rootEnd < 0) throw new Error("Markdown 地址没有指向文件");
-  const root = markdownPath.slice(0, rootEnd);
-  const baseSegments = markdownPath.slice(rootEnd + 1).split("/").slice(0, -1).map(decodeURIComponent);
+  const resourceMarkerIndex = markdownPath.indexOf(marker);
+  if (resourceMarkerIndex < 0) throw new Error("Markdown 文件缺少资源 URI");
+  const resourceRootEndIndex = markdownPath.indexOf("/", resourceMarkerIndex + marker.length);
+  if (resourceRootEndIndex < 0) throw new Error("Markdown 地址没有指向文件");
+  const resourceRootUri = markdownPath.slice(0, resourceRootEndIndex);
+  const baseSegments = markdownPath.slice(resourceRootEndIndex + 1).split("/").slice(0, -1).map(decodeURIComponent);
   for (const segment of decodedPath.replace(/\\/g, "/").split("/")) {
     if (!segment || segment === ".") {
       continue;
@@ -66,7 +66,7 @@ export function resolveWorkspaceMarkdownTarget(
   }
   return {
     kind: "workspace",
-    path: root + "/" + baseSegments.map(encodeURIComponent).join("/"),
+    path: resourceRootUri + "/" + baseSegments.map(encodeURIComponent).join("/"),
     fragment,
   };
 }

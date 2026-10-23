@@ -117,7 +117,7 @@ function Invoke-TargetAction([string[]]$Arguments) {
             if (-not ([System.IO.Path]::GetFileName($UploadPath).StartsWith(".env.uploading-"))) {
                 Fail-Target "拒绝删除非 .env 上传临时文件: $UploadPath"
             }
-            Remove-Item -LiteralPath $UploadPath -Force -ErrorAction SilentlyContinue
+            [System.IO.File]::Delete($UploadPath)
         }
         "install-env" {
             $UploadPath, $Destination = $Values
@@ -182,7 +182,7 @@ function Invoke-TargetAction([string[]]$Arguments) {
                     BOXTEAM_HOME = $BoxTeamHome
                     BOXTEAM_DEFAULT_USER_WORKSPACE_ROOT = $Workspace
                     BOXTEAM_PYTHON_BIN = $Python
-                    # 管理入口共用固定端口，不能继承宿主 .env 的偏移。
+                    # 管理入口的 start/status/stop 共用固定端口，不能继承宿主 .env 的偏移。
                     BOXTEAM_DEV_PORT_OFFSET = "0"
                     # TODO: 在真实 Windows VMware 目标验证统一服务日志的 detached 文件句柄生命周期。
                     BOXTEAM_SERVICE_LOG_PATH = $Log

@@ -508,7 +508,7 @@ class CanonicalItemRecord:
         wire_role: str | None = None,
     ) -> CanonicalItemRecord:
         semantic_value = _non_empty_string(semantic_kind, "semantic_kind")
-        payload_value = _non_empty_string(payload_kind, "payload_kind")
+        payload_kind_value = _non_empty_string(payload_kind, "payload_kind")
         status_value = _non_empty_string(status, "status")
         if created_at is None:
             created_at_value = datetime.now(UTC).isoformat()
@@ -525,7 +525,7 @@ class CanonicalItemRecord:
             item_sequence=item_sequence,
             item_id=item_id,
             semantic_kind=semantic_value,
-            payload_kind=payload_value,
+            payload_kind=payload_kind_value,
             status=status_value,
             producer_ref=(
                 producer_ref.to_dict()
@@ -533,7 +533,7 @@ class CanonicalItemRecord:
                 else producer_ref
             ),
             payload=payload,
-            content_hash=content_hash(payload_value, payload),
+            content_hash=content_hash(payload_kind_value, payload),
             created_at=created_at_value,
             extensions=extensions if extensions is not None else {},
             projection_group=projection_group,

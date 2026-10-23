@@ -61,7 +61,7 @@ from app.services.orchestration.resource_activation.contracts import (
 )
 from tests.harness.python.run_context import TestRunContext
 from tests.support.catalog_session_bundle import seed_catalog_session_bundle
-from tests.support.workspaces import prepare_default_test_workspace
+from tests.support.workspaces import prepare_test_workspace
 
 SESSION_ID = "ses_019c0fd1773c7b198a60f53aeeee17eb"
 SNAPSHOT_ID = "turn:body-owner-test"
@@ -72,10 +72,11 @@ PROTECTED_KEY = bytes(range(32))
 @pytest.fixture(scope="module")
 def body_workspace(request: pytest.FixtureRequest) -> Path:
     run_context = TestRunContext.from_test_file(Path(request.node.path))
-    return prepare_default_test_workspace(
+    return prepare_test_workspace(
         workspace_root=run_context.workspace_root,
         template_root=run_context.project_root
         / "tests/fixtures/workspaces/custom_tool_test_workspace",
+        template_items=(),
     )
 
 

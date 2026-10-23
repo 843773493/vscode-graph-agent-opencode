@@ -8,6 +8,39 @@ import pytest
 from app.gateway.control import storage
 
 
+def test_read_json_object_skips_existence_probe_for_existing_file(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    target = tmp_path / "gateway.json"
+    target.write_text('{"name": "工作区"}', encoding="utf-8")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(
+            Path,
+            "exists",
+            lambda _path: pytest.fail("JSON 读取不应先执行 exists 查询"),
+        )
+        payload = storage.read_json_object(target, default={})
+
+    assert payload == {"name": "工作区"}
+
+
+def test_read_json_object_returns_a_copy_of_default_for_missing_file(
+    tmp_path: Path,
+) -> None:
+    default = {"schema_version": 1}
+    target = tmp_path / "missing.json"
+
+    first = storage.read_json_object(target, default=default)
+    second = storage.read_json_object(target, default=default)
+
+    assert first == second == default
+    assert first is not default
+    assert second is not default
+    assert first is not second
+
+
 def test_write_error_remains_primary_when_temporary_cleanup_fails(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

@@ -32,7 +32,8 @@ def _chunk(
     )
 
 
-def _make_test_provider() -> BoxteamLiteLLMChatModel:
+@pytest.fixture
+def litellm_chat_provider() -> BoxteamLiteLLMChatModel:
     return BoxteamLiteLLMChatModel(
         model="openai/big-pickle",
         api_key="test-key",
@@ -157,8 +158,9 @@ def test_check_chunks_runs_all_checks():
         assert item.passed, f"{item.name}: {item.detail}"
 
 
-def test_history_roundtrip_with_reasoning_blocks_passes():
-    provider = _make_test_provider()
+def test_history_roundtrip_with_reasoning_blocks_passes(
+    litellm_chat_provider: BoxteamLiteLLMChatModel,
+):
     messages = [
         AIMessage(
             content=[
@@ -173,7 +175,7 @@ def test_history_roundtrip_with_reasoning_blocks_passes():
         )
     ]
 
-    item = check_history_messages_accepted(provider, messages)
+    item = check_history_messages_accepted(litellm_chat_provider, messages)
 
     assert item.passed, item.detail
 
@@ -206,18 +208,20 @@ def test_history_roundtrip_rejects_unconverted_content_blocks():
     assert "reasoning" in item.detail
 
 
-def test_litellm_self_check_passes():
-    provider = _make_test_provider()
-    result = provider.self_check()
+def test_litellm_self_check_passes(
+    litellm_chat_provider: BoxteamLiteLLMChatModel,
+):
+    result = litellm_chat_provider.self_check()
 
     assert result.all_passed, result.report()
 
 
 @pytest.mark.asyncio
-async def test_litellm_fixture_stream_uses_standard_blocks():
-    provider = _make_test_provider()
+async def test_litellm_fixture_stream_uses_standard_blocks(
+    litellm_chat_provider: BoxteamLiteLLMChatModel,
+):
     chunks = []
-    async for chunk in provider.build_stream("mixed_reasoning_text"):
+    async for chunk in litellm_chat_provider.build_stream("mixed_reasoning_text"):
         chunks.append(chunk)
 
     assert chunks[0].message.additional_kwargs == {}

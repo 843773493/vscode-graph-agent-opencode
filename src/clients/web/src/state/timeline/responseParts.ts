@@ -67,23 +67,18 @@ export function responsePartsToTimelineItems(
   const items: TimelineItem[] = [];
   const toolIndexes = new Map<string, number>();
   const toolIndexesByCallId = new Map<string, number>();
-  const resultKeys = new Set(
-    parts
-      .filter((part) => part.kind === "tool_result")
-      .map((part) => toolPartKey(part)),
-  );
-  const resultCallIds = new Set(
-    parts
-      .filter((part) => part.kind === "tool_result")
-      .filter((part) => {
-        const assistantSequence = "assistant_message_sequence" in part.source
-          ? part.source.assistant_message_sequence
-          : undefined;
-        return assistantSequence === undefined || assistantSequence === null;
-      })
-      .map((part) => part.tool_call_id)
-      .filter((value): value is string => Boolean(value)),
-  );
+  const toolResultKeys = new Set<string>();
+  const toolResultCallIdsWithoutAssistantSequence = new Set<string>();
+  for (const part of parts) {
+    if (part.kind !== "tool_result") continue;
+    toolResultKeys.add(toolPartKey(part));
+    const assistantSequence = "assistant_message_sequence" in part.source
+      ? part.source.assistant_message_sequence
+      : undefined;
+    if ((assistantSequence === undefined || assistantSequence === null) && part.tool_call_id) {
+      toolResultCallIdsWithoutAssistantSequence.add(part.tool_call_id);
+    }
+  }
 
   for (const [partIndex, part] of parts.entries()) {
     const text = part.text ?? "";
@@ -132,14 +127,14 @@ export function responsePartsToTimelineItems(
       const rawEnd = recordField(part, "raw_end");
       const unresolvedTerminalTool = options.terminalFailure === true
         && part.status !== "failed"
-        && !resultKeys.has(toolPartKey(part))
-        && !resultCallIds.has(part.tool_call_id ?? "");
+        && !toolResultKeys.has(toolPartKey(part))
+        && !toolResultCallIdsWithoutAssistantSequence.has(part.tool_call_id ?? "");
       const incomplete = part.partial === true
         || part.status === "cancelled"
         || (options.terminalCancellation === true
           && part.outcome_unknown === true
-          && !resultKeys.has(toolPartKey(part))
-          && !resultCallIds.has(part.tool_call_id ?? ""));
+          && !toolResultKeys.has(toolPartKey(part))
+          && !toolResultCallIdsWithoutAssistantSequence.has(part.tool_call_id ?? ""));
       const item: TimelineItem = {
         kind: "aggregated_tool",
         id: part.part_id,
@@ -154,8 +149,8 @@ export function responsePartsToTimelineItems(
         // response parts 已有 tool_result，就必须按已完成工具展示。
         active: !unresolvedTerminalTool && (
           part.status === "pending" || part.status === "running"
-        ) && !resultKeys.has(toolPartKey(part))
-          && !resultCallIds.has(part.tool_call_id ?? ""),
+        ) && !toolResultKeys.has(toolPartKey(part))
+          && !toolResultCallIdsWithoutAssistantSequence.has(part.tool_call_id ?? ""),
         detailsLoaded: part.projection === "detail",
         failed: !incomplete && (part.status === "failed" || unresolvedTerminalTool),
         incomplete,

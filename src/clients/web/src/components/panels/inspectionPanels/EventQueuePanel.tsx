@@ -51,7 +51,13 @@ function MessageCreatedSummary({
   );
 }
 
-function EventQueueCard({ item, index }: { item: FrontendReceivedEvent; index: number }) {
+const EventQueueCard = React.memo(function EventQueueCard({
+  item,
+  index,
+}: {
+  item: FrontendReceivedEvent;
+  index: number;
+}) {
   const payload = eventPayload(item);
   const type = eventType(item);
   const eventTime = formatDateTime(eventTimestamp(item));
@@ -121,9 +127,9 @@ function EventQueueCard({ item, index }: { item: FrontendReceivedEvent; index: n
       </div>
     </details>
   );
-}
+});
 
-function TextDeltaGroupCard({
+const TextDeltaGroupCard = React.memo(function TextDeltaGroupCard({
   items,
   index,
 }: {
@@ -206,9 +212,9 @@ function TextDeltaGroupCard({
       </div>
     </details>
   );
-}
+});
 
-function KeyTraceSummary({
+const KeyTraceSummary = React.memo(function KeyTraceSummary({
   acceptedSkillLoads,
   keyFlowToolCalls,
   keyFlowToolResults,
@@ -249,7 +255,7 @@ function KeyTraceSummary({
       </div>
     </div>
   );
-}
+});
 
 export default function EventQueuePanel({
   items,
@@ -276,10 +282,17 @@ export default function EventQueuePanel({
   onLoadOlderHistory: () => Promise<number>;
   onRetryHistory: () => void;
 }) {
-  const visibleItems = items.filter((item) => item.sessionId === sessionId);
-  const traceItems = orderedTraceItems(visibleItems);
-  const hiddenEventCount = Math.max(visibleItems.length - traceItems.length, 0);
-  const displayItems = buildDisplayItems(traceItems);
+  const eventView = React.useMemo(() => {
+    const sessionItems = items.filter((item) => item.sessionId === sessionId);
+    const traceItems = orderedTraceItems(sessionItems);
+    return {
+      traceItems,
+      hiddenEventCount: Math.max(sessionItems.length - traceItems.length, 0),
+      displayItems: buildDisplayItems(traceItems),
+      keyTraceSummary: buildKeyTraceSummary(traceItems),
+    };
+  }, [items, sessionId]);
+  const { traceItems, hiddenEventCount, displayItems, keyTraceSummary } = eventView;
   const {
     firstVisibleIndex,
     handleListScroll,
@@ -295,7 +308,6 @@ export default function EventQueuePanel({
     onLoadOlderHistory,
   });
   const renderedItems = displayItems.slice(firstVisibleIndex);
-  const keyTraceSummary = buildKeyTraceSummary(traceItems);
   const hasOlderEvents = firstVisibleIndex > 0 || historyHasMore;
 
   return (

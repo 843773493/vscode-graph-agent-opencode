@@ -33,7 +33,7 @@ class JobPendingQueue:
         self._entries: dict[str, QueueEntry] = {}
         self._snapshot_versions: dict[str, int] = {}
 
-    def ids(
+    def queued_job_ids(
         self,
         session_id: str,
         thread_id: str | None = None,
@@ -77,7 +77,7 @@ class JobPendingQueue:
             raise ValueError(f"Job 已在 FIFO 队列中: job_id={job_id}")
         if not isinstance(enqueue_sequence, int) or isinstance(enqueue_sequence, bool) or enqueue_sequence < 1:
             raise ValueError("入队顺序必须来自原 admission commit cursor")
-        previous = [self._entries[value].enqueue_sequence for value in self.ids(session_id, thread_id)]
+        previous = [self._entries[value].enqueue_sequence for value in self.queued_job_ids(session_id, thread_id)]
         if previous and enqueue_sequence <= previous[-1]:
             raise RuntimeError("FIFO 镜像不能改变同 Thread 的准入顺序")
         entry = QueueEntry(

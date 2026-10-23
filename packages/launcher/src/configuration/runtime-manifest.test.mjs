@@ -7,11 +7,17 @@ import {
   validateRuntimeManifest,
 } from "./runtime-manifest.mjs";
 
+const runtimeManifestPath = path.resolve(
+  "runtime-manifest-fixture",
+  "runtime-manifest.json",
+);
+const runtimeDirectory = path.dirname(runtimeManifestPath);
+
 const baseManifest = {
   schema_version: 1,
   distribution: "source-development",
   version: "test-version",
-  python_executable: "../../.venv/bin/python",
+  python_executable: "../../runtime/python",
   application_root: "../..",
   config_resources: {
     gateway_inline: "../../configs/gateway_inline.jsonc",
@@ -37,15 +43,14 @@ describe("runtime manifest", () => {
   });
 
   test("相对资源以 manifest 目录解析", () => {
-    const manifestPath = "/tmp/boxteam/runtime/runtime-manifest.json";
-    const manifest = resolveRuntimeManifest(manifestPath, baseManifest);
+    const manifest = resolveRuntimeManifest(runtimeManifestPath, baseManifest);
 
     expect(manifest.pythonExecutable).toBe(
-      path.resolve("/tmp/boxteam/runtime", "../../.venv/bin/python"),
+      path.resolve(runtimeDirectory, "../../runtime/python"),
     );
-    expect(manifest.applicationRoot).toBe("/tmp");
+    expect(manifest.applicationRoot).toBe(path.resolve(runtimeDirectory, "../.."));
     expect(manifest.skillResources).toBe(
-      path.resolve("/tmp/boxteam/runtime", "../../resources/skills"),
+      path.resolve(runtimeDirectory, "../../resources/skills"),
     );
   });
 
@@ -68,7 +73,7 @@ describe("runtime manifest", () => {
   });
 
   test("npm launcher Node 使用当前 Node", () => {
-    const manifest = resolveRuntimeManifest("/tmp/runtime.json", {
+    const manifest = resolveRuntimeManifest(runtimeManifestPath, {
       ...baseManifest,
       distribution: "npm",
     });
@@ -77,15 +82,17 @@ describe("runtime manifest", () => {
   });
 
   test("standalone 使用 manifest 声明的 bundled Node", () => {
-    const manifest = resolveRuntimeManifest("/tmp/runtime.json", {
+    const manifest = resolveRuntimeManifest(runtimeManifestPath, {
       ...baseManifest,
       distribution: "standalone",
       node: {
         source: "bundled",
-        executable: "node/bin/node",
+        executable: "node-runtime",
       },
     });
 
-    expect(resolveNodeExecutable(manifest)).toBe("/tmp/node/bin/node");
+    expect(resolveNodeExecutable(manifest)).toBe(
+      path.resolve(runtimeDirectory, "node-runtime"),
+    );
   });
 });

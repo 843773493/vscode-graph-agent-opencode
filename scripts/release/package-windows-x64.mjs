@@ -13,7 +13,7 @@ const packagingOutputRoot = path.join(
   "windows-x64",
 );
 
-const scripts = ["build-windows-x64.mjs", "verify-windows-x64.mjs"];
+const scripts = ["build-windows-x64.mjs", "verification/verify-windows-x64.mjs"];
 for (const [index, script] of scripts.entries()) {
   if (index === 1) {
     // 打包验证只需要最终 tarball、Release asset 和 ZIP；清理中间目录以便低磁盘空间的 Windows 用户机也能完成验证。

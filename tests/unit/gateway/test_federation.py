@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from datetime import timedelta
 from pathlib import Path
 from types import SimpleNamespace
@@ -47,26 +47,38 @@ def _response(data: dict[str, object]) -> httpx.Response:
     )
 
 
-class _FederationClient:
+@dataclass(slots=True)
+class _FederationClientState:
     manifest: dict[str, object]
     workspaces: dict[str, object]
-    requests: ClassVar[list[tuple[str, dict[str, str]]]] = []
+    requests: list[tuple[str, dict[str, str]]]
 
-    def __init__(self, *, timeout: float) -> None:
-        assert timeout == 10
 
-    async def __aenter__(self) -> _FederationClient:
-        return self
+@pytest.fixture
+def federation_client_state(
+    monkeypatch: pytest.MonkeyPatch,
+) -> _FederationClientState:
+    state = _FederationClientState(manifest={}, workspaces={}, requests=[])
 
-    async def __aexit__(self, *_: object) -> None:
-        return None
+    class FederationClient:
+        def __init__(self, *, timeout: float) -> None:
+            assert timeout == 10
 
-    async def get(self, url: str, *, headers: dict[str, str]) -> httpx.Response:
-        self.requests.append((url, dict(headers)))
-        assert headers["X-BoxTeam-Federation-Token"] == "federation-secret"
-        if url.endswith("/manifest"):
-            return _response(self.manifest)
-        return _response(self.workspaces)
+        async def __aenter__(self) -> Self:
+            return self
+
+        async def __aexit__(self, *_: object) -> None:
+            return None
+
+        async def get(self, url: str, *, headers: dict[str, str]) -> httpx.Response:
+            state.requests.append((url, dict(headers)))
+            assert headers["X-BoxTeam-Federation-Token"] == "federation-secret"
+            if url.endswith("/manifest"):
+                return _response(state.manifest)
+            return _response(state.workspaces)
+
+    monkeypatch.setattr("app.gateway.federation.httpx.AsyncClient", FederationClient)
+    return state
 
 
 def test_federation_credentials_are_separate_and_owner_only(tmp_path: Path) -> None:
@@ -906,7 +918,7 @@ async def test_configured_remote_reconcile_keeps_old_projection_when_peer_is_off
     closed = False
 
     class StagedRuntime:
-        service_urls = {"workspace_api": "http://new"}
+        service_urls: ClassVar[dict[str, str]] = {"workspace_api": "http://new"}
 
         def close(self) -> None:
             nonlocal closed
@@ -1175,7 +1187,7 @@ async def test_workspace_dto_exposes_safe_remote_connection_summary(
         def __init__(self, *, timeout: int) -> None:
             assert timeout == 2
 
-        async def __aenter__(self) -> _Client:
+        async def __aenter__(self) -> Self:
             return self
 
         async def __aexit__(self, *_: object) -> None:
@@ -1222,8 +1234,8 @@ async def test_workspace_dto_exposes_safe_remote_connection_summary(
 
 @pytest.mark.asyncio
 async def test_discovery_filters_nested_workspaces_and_checks_protocol(
-    monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
+    federation_client_state: _FederationClientState,
 ) -> None:
     store = FederationCredentialStore(storage_path=tmp_path / "federation.json")
     credential = store.issue(
@@ -1236,12 +1248,11 @@ async def test_discovery_filters_nested_workspaces_and_checks_protocol(
         token="federation-secret",
         expires_at=credential.expires_at,
     )
-    _FederationClient.requests = []
-    _FederationClient.manifest = {
+    federation_client_state.manifest = {
         "protocol_version": FEDERATION_PROTOCOL_VERSION,
         "gateway_id": "gateway_remote",
     }
-    _FederationClient.workspaces = {
+    federation_client_state.workspaces = {
         "items": [
             {
                 "workspace_id": "direct",
@@ -1259,8 +1270,6 @@ async def test_discovery_filters_nested_workspaces_and_checks_protocol(
             },
         ]
     }
-    monkeypatch.setattr("app.gateway.federation.httpx.AsyncClient", _FederationClient)
-
     manifest, workspaces = await discover_remote_gateway(
         gateway_url="http://127.0.0.1:41000",
         credential=credential,
@@ -1269,7 +1278,7 @@ async def test_discovery_filters_nested_workspaces_and_checks_protocol(
     assert manifest["gateway_id"] == "gateway_remote"
     assert [item["workspace_id"] for item in workspaces] == ["direct"]
 
-    _FederationClient.manifest["protocol_version"] = 2
+    federation_client_state.manifest["protocol_version"] = 2
     with pytest.raises(RuntimeError, match="local=1, remote=2"):
         await discover_remote_gateway(
             gateway_url="http://127.0.0.1:41000",
@@ -1278,13 +1287,13 @@ async def test_discovery_filters_nested_workspaces_and_checks_protocol(
 
     request_ids = [
         headers.get("X-Request-ID", "")
-        for _url, headers in _FederationClient.requests
+        for _url, headers in federation_client_state.requests
     ]
     assert len(request_ids) == 4
     assert all(request_ids)
     assert len(set(request_ids)) == 4
 
-    _FederationClient.manifest = {
+    federation_client_state.manifest = {
         "protocol_version": FEDERATION_PROTOCOL_VERSION,
         "gateway_id": "gateway_local",
     }
@@ -1612,7 +1621,9 @@ def test_pairing_ssh_has_bounded_timeout_and_stable_error_code(
     "backend_id", [None, "workspace-alias", "00000000-0000-4000-8000-00000000000A"]
 )
 async def test_discovery_rejects_missing_or_noncanonical_backend_uuid(
-    tmp_path, monkeypatch, backend_id
+    tmp_path: Path,
+    federation_client_state: _FederationClientState,
+    backend_id: str | None,
 ):
     credential = FederationCredentialStore(
         storage_path=tmp_path / "credentials.json"
@@ -1626,11 +1637,11 @@ async def test_discovery_rejects_missing_or_noncanonical_backend_uuid(
         token="federation-secret",
         expires_at=credential.expires_at,
     )
-    _FederationClient.manifest = {
+    federation_client_state.manifest = {
         "protocol_version": FEDERATION_PROTOCOL_VERSION,
         "gateway_id": "gateway-remote",
     }
-    _FederationClient.workspaces = {
+    federation_client_state.workspaces = {
         "items": [
             {
                 "workspace_id": "remote-alias",
@@ -1642,8 +1653,7 @@ async def test_discovery_rejects_missing_or_noncanonical_backend_uuid(
         ]
     }
     if backend_id is None:
-        del _FederationClient.workspaces["items"][0]["backend_workspace_id"]
-    monkeypatch.setattr("app.gateway.federation.httpx.AsyncClient", _FederationClient)
+        del federation_client_state.workspaces["items"][0]["backend_workspace_id"]
     with pytest.raises(ValueError, match="backend_workspace_id"):
         await discover_remote_gateway(
             gateway_url="http://remote.test", credential=credential

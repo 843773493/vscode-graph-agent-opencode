@@ -4,7 +4,7 @@ import { constants } from "node:fs";
 import { spawn } from "node:child_process";
 import path from "node:path";
 
-const workspaceRoot = path.resolve(process.env.BOXTEAM_PROJECT_ROOT ?? process.cwd());
+const projectRoot = path.resolve(process.env.BOXTEAM_PROJECT_ROOT ?? process.cwd());
 const scriptArguments = process.argv.slice(2);
 const checkOnly = scriptArguments.includes("--check");
 const breakingAgainstIndex = scriptArguments.indexOf("--breaking-against");
@@ -17,48 +17,45 @@ if (breakingAgainstIndex >= 0 && (!breakingAgainst || breakingAgainst.startsWith
 }
 const stagingRootIndex = scriptArguments.indexOf("--staging-root");
 const stagingRoot = path.resolve(
-  workspaceRoot,
+  projectRoot,
   stagingRootIndex >= 0
     ? scriptArguments[stagingRootIndex + 1]
     : path.join("out", "protocol-generation"),
 );
 const bufExecutable = path.join(
-  workspaceRoot,
+  projectRoot,
   "node_modules",
   ".bin",
   process.platform === "win32" ? "buf.exe" : "buf",
 );
-const pythonOutputRoot = path.join(workspaceRoot, "app", "protocol", "generated");
+const pythonOutputRoot = path.join(projectRoot, "app", "protocol", "generated");
 const generatedRoots = [
   {
     directory: pythonOutputRoot,
     extensions: [".py"],
   },
   {
-    directory: path.join(workspaceRoot, "src", "workspace-services", "protocol", "generated"),
+    directory: path.join(projectRoot, "src", "workspace-services", "protocol", "generated"),
     extensions: [".js", ".d.ts"],
   },
   {
-    directory: path.join(workspaceRoot, "src", "clients", "web", "src", "types", "protocol_buf_generated"),
+    directory: path.join(projectRoot, "src", "clients", "web", "src", "types", "protocol_buf_generated"),
     extensions: [".js", ".d.ts"],
   },
   {
-    directory: path.join(workspaceRoot, "src", "clients", "web", "src", "types", "protocol_generated"),
+    directory: path.join(projectRoot, "src", "clients", "web", "src", "types", "protocol_generated"),
     extensions: [".ts"],
   },
 ];
 
-async function ensureFile(filePath, label) {
+async function requirePathExists(filePath) {
   await access(filePath, constants.F_OK);
-  if (!filePath.startsWith(workspaceRoot)) {
-    throw new Error(`${label} 不在项目根目录下: ${filePath}`);
-  }
 }
 
 function run(command, args) {
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, {
-      cwd: workspaceRoot,
+      cwd: projectRoot,
       env: { ...process.env },
       stdio: "inherit",
     });
@@ -108,10 +105,10 @@ async function addPythonPackageMarkers(directory) {
 }
 
 async function main() {
-  await ensureFile(path.join(workspaceRoot, "buf.yaml"), "Buf 配置");
-  await ensureFile(path.join(workspaceRoot, "buf.gen.yaml"), "Buf 生成配置");
-  await ensureFile(path.join(workspaceRoot, "proto"), "协议源目录");
-  await ensureFile(bufExecutable, "Buf 可执行文件");
+  await requirePathExists(path.join(projectRoot, "buf.yaml"));
+  await requirePathExists(path.join(projectRoot, "buf.gen.yaml"));
+  await requirePathExists(path.join(projectRoot, "proto"));
+  await requirePathExists(bufExecutable);
 
   await run(bufExecutable, ["lint"]);
   await run(bufExecutable, ["build"]);
@@ -129,12 +126,12 @@ async function main() {
     // 原 Buf 模板和插件版本不变；远端生成全部成功前，不移除现有绑定。
     await run(bufExecutable, ["generate", "--output", stagingDirectory]);
     await addPythonPackageMarkers(
-      path.join(stagingDirectory, path.relative(workspaceRoot, pythonOutputRoot)),
+      path.join(stagingDirectory, path.relative(projectRoot, pythonOutputRoot)),
     );
-    await run(process.execPath, [path.join(workspaceRoot, "scripts", "generate_sse_runtime.mjs")]);
+    await run(process.execPath, [path.join(projectRoot, "scripts", "generate_sse_runtime.mjs")]);
     const stagedRoots = generatedRoots.map((generatedRoot) => ({
       ...generatedRoot,
-      generated: path.join(stagingDirectory, path.relative(workspaceRoot, generatedRoot.directory)),
+      generated: path.join(stagingDirectory, path.relative(projectRoot, generatedRoot.directory)),
     }));
     for (const { generated } of stagedRoots) {
       await access(generated, constants.R_OK);

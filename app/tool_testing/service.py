@@ -191,8 +191,11 @@ class ToolTestService:
         repetitions: int,
     ) -> None:
         provider_id = str(provider["id"])
-        lock = self._provider_locks.setdefault(provider_id, asyncio.Lock())
-        async with lock:
+        provider_lock = self._provider_locks.get(provider_id)
+        if provider_lock is None:
+            provider_lock = asyncio.Lock()
+            self._provider_locks[provider_id] = provider_lock
+        async with provider_lock:
             await self._mutate_run(
                 run_id,
                 lambda run: self._set_provider_status(run, provider_id, "running"),

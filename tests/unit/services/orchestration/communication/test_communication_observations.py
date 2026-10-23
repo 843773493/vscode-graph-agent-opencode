@@ -38,7 +38,11 @@ from app.services.business.session_context_resource import (
     session_resource_identity,
     session_resource_uri,
 )
-from app.services.orchestration.communication import observation_service
+from app.services.orchestration.communication import (
+    observation_cursor,
+    observation_persistence,
+    observation_service,
+)
 from app.services.orchestration.communication.service import SessionCommunicationService
 from tests.support.communication import (
     SOURCE_SESSION,
@@ -651,10 +655,15 @@ async def test_state_change_wait_reuses_original_baseline(harness: _Harness) -> 
 
 @pytest.mark.parametrize("field", ["t", "r", "u", "p", "b", "k", "n", "c", "e"])
 async def test_authenticated_cursor_binds_all_frozen_fields(harness: _Harness, read_request: SessionContextReadRequest, field: str) -> None:
-    owner = harness.service.observations
     first = await harness.read("cop_binding_0", read_request)
     with closing(harness.store(SOURCE_SESSION)) as store:
-        binding = owner._decode_token(store, SOURCE, first.next_cursor, prefix="rc1.")
+        binding = observation_cursor._decode_observation_cursor(
+            store,
+            SOURCE,
+            first.next_cursor,
+            prefix="rc1.",
+            now=harness.clock.utc_now(),
+        )
         assert set(binding) == {"o", "t", "r", "u", "p", "b", "k", "n", "c", "e", "f"}
         if field == "t":
             binding[field] = {**binding[field], "thread_id": SOURCE_THREAD}
@@ -668,7 +677,12 @@ async def test_authenticated_cursor_binds_all_frozen_fields(harness: _Harness, r
             binding[field] = (harness.clock.now + timedelta(days=3)).isoformat()
         else:
             binding[field] = "changed-frozen-value"
-        cursor = owner._encode_token(store, SOURCE, binding, prefix="rc1.")
+        cursor = observation_cursor._encode_observation_cursor(
+            store,
+            SOURCE,
+            binding,
+            prefix="rc1.",
+        )
     with pytest.raises(ValueError, match="read-snapshot-mismatch"):
         await harness.read("cop_binding_1", read_request.model_copy(update={"cursor": cursor}))
     assert len(harness.transport.requests) == 1
@@ -768,7 +782,7 @@ async def test_cold_expired_wait_resumes_original_deadline_and_cancels_stopped_s
                 assert store.list_remote_observations() == ()
     with closing(harness.store(TARGET_SESSION)) as store:
         with pytest.raises(RemoteObservationError, match="^operation-retry-expired$"):
-            observation_service._assert_current(store, old)
+            observation_persistence._require_current_observation_lease(store, old)
         assert store.list_remote_observations() == ()
         assert store.connection.execute("SELECT count(*) FROM session_operation_leases WHERE operation_kind='remote_observation'").fetchone()[0] == 0
     with pytest.raises(RemoteObservationError, match="^operation-retry-expired$"):
@@ -782,18 +796,18 @@ async def test_commit_interruption_replays_result_before_settling(
     monkeypatch: pytest.MonkeyPatch, boundary: str,
 ) -> None:
     """真实提交结果后中断，原 identity 重放只补 lease 终结，不重取快照。"""
-    original = observation_service._settle
+    original = observation_service._settle_observation_lease
 
     def interrupt(store, lease, *, outcome="completed"):
         if lease.operation_identity.startswith(boundary):
             raise asyncio.CancelledError
         return original(store, lease, outcome=outcome)
 
-    monkeypatch.setattr(observation_service, "_settle", interrupt)
+    monkeypatch.setattr(observation_service, "_settle_observation_lease", interrupt)
     with pytest.raises(asyncio.CancelledError):
         await harness.read("cop_commit_interrupt", read_request)
     request = harness.transport.requests[-1]
-    monkeypatch.setattr(observation_service, "_settle", original)
+    monkeypatch.setattr(observation_service, "_settle_observation_lease", original)
     harness.query.texts = ["重启后不得重读"]
     harness.restore()
     result = await harness.read("cop_commit_interrupt", read_request)
@@ -842,21 +856,21 @@ async def test_expired_cold_source_keeps_committed_result_before_settling(
     harness: _Harness, read_request: SessionContextReadRequest,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    original = observation_service._settle
+    original = observation_service._settle_observation_lease
 
     def interrupt(store, lease, *, outcome="completed"):
         if lease.operation_identity.startswith("source-page|"):
             raise asyncio.CancelledError
         return original(store, lease, outcome=outcome)
 
-    monkeypatch.setattr(observation_service, "_settle", interrupt)
+    monkeypatch.setattr(observation_service, "_settle_observation_lease", interrupt)
     with pytest.raises(asyncio.CancelledError):
         await harness.read("cop_committed_expiry", read_request)
     request = harness.transport.requests[-1]
     with closing(harness.store(SOURCE_SESSION)) as store:
         before = store.get_remote_page(request.observation_id, side="source", page_identity=request.page_identity)
         old = store.find_lease_by_operation("source-page|" + request.page_identity)
-    monkeypatch.setattr(observation_service, "_settle", original)
+    monkeypatch.setattr(observation_service, "_settle_observation_lease", original)
     harness.clock.now += timedelta(days=2)
     harness.restore()
     await harness.service.observations._recover_observation(SOURCE_SESSION, "source", request.observation_id)
@@ -867,5 +881,5 @@ async def test_expired_cold_source_keeps_committed_result_before_settling(
         assert store.list_non_terminal_leases() == ()
         harness.service.observations._collect_observations(store)
         with pytest.raises(RemoteObservationError, match="^operation-retry-expired$"):
-            observation_service._assert_current(store, old)
+            observation_persistence._require_current_observation_lease(store, old)
     assert len(harness.transport.requests) == 1

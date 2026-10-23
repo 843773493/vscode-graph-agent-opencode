@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, spyOn, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import React from "react";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import * as api from "../../api";
@@ -11,7 +11,7 @@ import {
   useNodeDebugWorkbench,
   type NodeDebugWorkbenchBinding,
 } from "./useNodeDebugWorkbench";
-import { restoreGlobalDescriptor } from "../../tests/testGlobals";
+import { installNodeDebugBrowserGlobals } from "./nodeDebugTestFixtures";
 
 function state(threadId: string): NodeDebugState {
   return {
@@ -47,39 +47,24 @@ const capabilities: NodeDebugCapabilities = {
 const mainThreadId = "thr_00000000700070008000000000000001";
 const childThreadId = "thr_00000000700070008000000000000002";
 
-const originalWindowDescriptor = Object.getOwnPropertyDescriptor(globalThis, "window");
-const originalBroadcastChannelDescriptor = Object.getOwnPropertyDescriptor(
-  globalThis,
-  "BroadcastChannel",
-);
 let renderer: ReactTestRenderer | undefined;
 let restoreApi = () => {};
+let restoreNodeDebugGlobals = () => {};
 
-function installBrowserGlobals(): void {
-  Object.defineProperty(globalThis, "window", {
-    configurable: true,
-    value: {
-      setInterval: globalThis.setInterval.bind(globalThis),
-      clearInterval: globalThis.clearInterval.bind(globalThis),
-    },
-  });
-  Object.defineProperty(globalThis, "BroadcastChannel", {
-    configurable: true,
-    value: undefined,
-  });
-}
+beforeEach(() => {
+  restoreNodeDebugGlobals = installNodeDebugBrowserGlobals();
+});
 
 afterEach(() => {
   act(() => renderer?.unmount());
   renderer = undefined;
   restoreApi();
-  restoreGlobalDescriptor("window", originalWindowDescriptor);
-  restoreGlobalDescriptor("BroadcastChannel", originalBroadcastChannelDescriptor);
+  restoreNodeDebugGlobals();
+  restoreNodeDebugGlobals = () => {};
 });
 
 describe("useNodeDebugWorkbench", () => {
   test("集中 owner 选择、active frame 和断点动作映射", async () => {
-    installBrowserGlobals();
     const getStateSpy = spyOn(api, "getNodeDebugState").mockImplementation(
       async (_port, _sessionId, threadId) => state(threadId),
     );
@@ -171,7 +156,6 @@ describe("useNodeDebugWorkbench", () => {
   });
 
   test("catalog main thread 解析前阻止调试 mutation", async () => {
-    installBrowserGlobals();
     const mainThreadSpy = spyOn(api, "getSessionMainThread").mockReturnValue(
       new Promise(() => {}),
     );

@@ -3,7 +3,9 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import signal
 import subprocess
+import sys
 import threading
 import time
 from collections.abc import Generator
@@ -13,6 +15,7 @@ from pathlib import Path
 from uuid import uuid4
 
 import httpx
+import psutil
 import pytest
 import websockets
 
@@ -24,7 +27,7 @@ from tests.support.processes.workspace import (
     wait_for_http_ok,
 )
 
-MAX_SHARED_RUNTIME_PSS_KIB = 400 * 1024
+MAX_SHARED_RUNTIME_PROCESS_MEMORY_KIB = 400 * 1024
 MAX_FROZEN_CPU_PERCENT = 5.0
 MAX_FROZEN_CPU_RATIO = 0.05
 MAX_FREEZE_MS = 300
@@ -67,6 +70,12 @@ def _browser_backend_process(
 ) -> subprocess.Popen[str]:
     ensure_local_port_available(backend_port, service_name="Browser 性能测试后端")
     project_root = Path.cwd().resolve()
+    if os.name == "posix":
+        process_group_options: dict[str, int | bool] = {"start_new_session": True}
+    elif os.name == "nt":
+        process_group_options = {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}
+    else:
+        raise RuntimeError(f"Browser 性能测试不支持当前操作系统: {os.name}")
     with log_path.open("a", encoding="utf-8") as log_file:
         process = subprocess.Popen(
             [
@@ -91,13 +100,13 @@ def _browser_backend_process(
             stdout=log_file,
             stderr=subprocess.STDOUT,
             text=True,
-            start_new_session=True,
+            **process_group_options,
         )
     try:
         wait_for_http_ok(f"http://127.0.0.1:{backend_port}/health", process)
     except BaseException as startup_error:
         try:
-            terminate_process(process)
+            _terminate_browser_backend(process, graceful=False)
         except BaseException as cleanup_error:  # noqa: BLE001 - 启动和清理错误一并保留
             raise BaseExceptionGroup(
                 "Browser 性能测试后端就绪检查失败且进程清理失败",
@@ -105,6 +114,35 @@ def _browser_backend_process(
             ) from None
         raise
     return process
+
+
+def _terminate_browser_backend(
+    process: subprocess.Popen[str], *, graceful: bool = True,
+) -> None:
+    if not graceful or os.name != "nt":
+        terminate_process(process)
+        return
+    if process.poll() is not None:
+        return
+
+    try:
+        process.send_signal(signal.CTRL_BREAK_EVENT)
+    except OSError as signal_error:
+        try:
+            terminate_process(process)
+        except BaseException as cleanup_error:  # noqa: BLE001 - 同时保留优雅关闭和强制清理错误
+            raise BaseExceptionGroup(
+                "Browser 后端无法接收关闭信号且进程清理失败",
+                [signal_error, cleanup_error],
+            ) from None
+        raise RuntimeError(
+            "Browser 后端未收到 Windows CTRL_BREAK_EVENT，已强制清理"
+        ) from signal_error
+
+    try:
+        process.wait(timeout=10)
+    except subprocess.TimeoutExpired:
+        terminate_process(process)
 
 
 def _owner_headers(workspace_id: str) -> dict[str, str]:
@@ -115,58 +153,67 @@ def _create_options(workspace_id: str, url: str) -> dict[str, object]:
     return {"workspace_id": workspace_id, "browser_id": f"browser_{uuid4().hex}", "owner_revision": 1, "url": url}
 
 
-def _descendant_pids(root_pid: int) -> set[int]:
-    parents: dict[int, int] = {}
-    for stat_path in Path("/proc").glob("[0-9]*/stat"):
-        try:
-            raw = stat_path.read_text(encoding="utf-8")
-            fields = raw[raw.rfind(")") + 2 :].split()
-            parents[int(stat_path.parent.name)] = int(fields[1])
-        except (FileNotFoundError, ProcessLookupError, ValueError, IndexError):
-            continue
-    descendants: set[int] = set()
-    frontier = {root_pid}
-    while frontier:
-        children = {pid for pid, parent in parents.items() if parent in frontier}
-        children -= descendants
-        descendants.update(children)
-        frontier = children
-    return descendants
+def _descendant_processes(root_pid: int) -> list[psutil.Process]:
+    try:
+        return psutil.Process(root_pid).children(recursive=True)
+    except psutil.Error as error:
+        raise RuntimeError(
+            f"无法枚举 Browser 后端子进程: pid={root_pid}: {error}"
+        ) from error
 
 
-def _process_tree_pss_kib(root_pid: int) -> int:
+def _process_tree_memory_kib(root_pid: int) -> tuple[int, str]:
+    metric = "pss" if sys.platform == "linux" else "uss"
     total = 0
-    for pid in _descendant_pids(root_pid):
+    sampled_processes = 0
+    for process in _descendant_processes(root_pid):
         try:
-            lines = Path(f"/proc/{pid}/smaps_rollup").read_text(encoding="utf-8").splitlines()
-        except (FileNotFoundError, ProcessLookupError, PermissionError):
+            memory = process.memory_full_info()
+        except psutil.NoSuchProcess:
             continue
-        pss_line = next((line for line in lines if line.startswith("Pss:")), None)
-        if pss_line is not None:
-            total += int(pss_line.split()[1])
-    return total
+        except psutil.Error as error:
+            raise RuntimeError(
+                f"无法读取 Browser 子进程内存: pid={process.pid}: {error}"
+            ) from error
+        measured_bytes = getattr(memory, metric, None)
+        if measured_bytes is None:
+            raise RuntimeError(
+                f"当前平台的进程内存信息缺少 {metric.upper()} 指标: "
+                f"platform={sys.platform}, pid={process.pid}"
+            )
+        total += measured_bytes
+        sampled_processes += 1
+    if sampled_processes == 0:
+        raise RuntimeError(f"Browser 后端没有可采样的子进程: pid={root_pid}")
+    return total // 1024, metric
 
 
-def _process_tree_cpu_ticks(root_pid: int) -> int:
-    ticks = 0
-    for pid in _descendant_pids(root_pid):
+def _process_tree_cpu_seconds(root_pid: int) -> float:
+    seconds = 0.0
+    sampled_processes = 0
+    for process in _descendant_processes(root_pid):
         try:
-            raw = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8")
-            fields = raw[raw.rfind(")") + 2 :].split()
-            ticks += int(fields[11]) + int(fields[12])
-        except (FileNotFoundError, ProcessLookupError, ValueError, IndexError):
+            cpu_times = process.cpu_times()
+        except psutil.NoSuchProcess:
             continue
-    return ticks
+        except psutil.Error as error:
+            raise RuntimeError(
+                f"无法读取 Browser 子进程 CPU 时间: pid={process.pid}: {error}"
+            ) from error
+        seconds += cpu_times.user + cpu_times.system
+        sampled_processes += 1
+    if sampled_processes == 0:
+        raise RuntimeError(f"Browser 后端没有可采样的子进程: pid={root_pid}")
+    return seconds
 
 
 def _cpu_percent(root_pid: int, duration_seconds: float = 1.0) -> float:
-    start = _process_tree_cpu_ticks(root_pid)
+    start = _process_tree_cpu_seconds(root_pid)
     started_at = time.monotonic()
     time.sleep(duration_seconds)
     elapsed = time.monotonic() - started_at
-    end = _process_tree_cpu_ticks(root_pid)
-    ticks_per_second = os.sysconf("SC_CLK_TCK")
-    return max(0.0, (end - start) / ticks_per_second / elapsed * 100)
+    end = _process_tree_cpu_seconds(root_pid)
+    return max(0.0, (end - start) / elapsed * 100)
 
 
 def _data(response: httpx.Response) -> dict[str, object]:
@@ -376,7 +423,6 @@ def dynamic_page_server(request: pytest.FixtureRequest) -> Generator[str, None, 
         yield f"http://127.0.0.1:{port}/"
 
 
-@pytest.mark.skipif(os.name != "posix" or not Path("/proc").is_dir(), reason="需要 Linux /proc")
 def test_browser_resource_governance_meets_first_ci_budget(
     request: pytest.FixtureRequest,
     integration_workspace_root_path: str,
@@ -398,7 +444,7 @@ def test_browser_resource_governance_meets_first_ci_budget(
             backend_port=port,
             log_path=log_path,
         )
-        lifetime.callback(terminate_process, process)
+        lifetime.callback(_terminate_browser_backend, process)
         client = httpx.Client(base_url=f"http://127.0.0.1:{port}", headers=_owner_headers(workspace_id), timeout=30)
         lifetime.callback(client.close)
         first = _data(client.post(
@@ -448,10 +494,12 @@ def test_browser_resource_governance_meets_first_ci_budget(
                     json={"type": "new_tab", "url": "about:blank"},
                 ))
         time.sleep(0.5)
-        shared_runtime_pss_kib = _process_tree_pss_kib(process.pid)
+        shared_runtime_memory_kib, shared_runtime_memory_metric = (
+            _process_tree_memory_kib(process.pid)
+        )
         health = client.get("/health").json()
         assert health["browser_runtime"]["context_count"] == 5
-        assert shared_runtime_pss_kib <= MAX_SHARED_RUNTIME_PSS_KIB
+        assert shared_runtime_memory_kib <= MAX_SHARED_RUNTIME_PROCESS_MEMORY_KIB
 
         _data(client.post(
             f"/api/browsers/{first_id}/navigate",
@@ -475,13 +523,13 @@ def test_browser_resource_governance_meets_first_ci_budget(
             json={"code": "await page.locator('#q').fill('shutdown-checkpoint'); return true;"},
         ))
 
-        terminate_process(process)
+        _terminate_browser_backend(process)
         process = _browser_backend_process(
             workspace_root=workspace_root,
             backend_port=port,
             log_path=log_path,
         )
-        lifetime.callback(terminate_process, process)
+        lifetime.callback(_terminate_browser_backend, process)
         client.close()
         client = httpx.Client(base_url=f"http://127.0.0.1:{port}", headers=_owner_headers(workspace_id), timeout=30)
         lifetime.callback(client.close)
@@ -555,7 +603,8 @@ def test_browser_resource_governance_meets_first_ci_budget(
             "freeze_ms": freeze_ms,
             "frozen_wake_ms": frozen_wake_ms,
             "cold_wake_ms": cold_wake_ms,
-            "shared_runtime_pss_kib": shared_runtime_pss_kib,
+            "shared_runtime_memory_kib": shared_runtime_memory_kib,
+            "shared_runtime_memory_metric": shared_runtime_memory_metric,
             "browser_count": 5,
             "page_count": 14,
             "interactive_stream": {
@@ -568,7 +617,7 @@ def test_browser_resource_governance_meets_first_ci_budget(
                 key: round(value, 2) for key, value in latest_frame.items()
             },
             "budgets": {
-                "max_shared_runtime_pss_kib": MAX_SHARED_RUNTIME_PSS_KIB,
+                "max_shared_runtime_process_memory_kib": MAX_SHARED_RUNTIME_PROCESS_MEMORY_KIB,
                 "max_frozen_cpu_percent": MAX_FROZEN_CPU_PERCENT,
                 "max_frozen_cpu_ratio": MAX_FROZEN_CPU_RATIO,
                 "max_freeze_ms": MAX_FREEZE_MS,

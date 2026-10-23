@@ -32,6 +32,7 @@ _LOCAL_HOST = "127.0.0.1"
 _REMOTE_HOST = "127.0.0.1"
 _READY_TIMEOUT_SECONDS = 10.0
 _LOG_TAIL_LIMIT = 4000
+_RESTORE_CONCURRENCY = 8
 
 logger = logging.getLogger(__name__)
 
@@ -86,25 +87,44 @@ class SshPortForwardManager:
 
     async def restore(self) -> None:
         async with self._lock:
-            for definition in self._definitions.values():
-                if not definition.desired_running:
-                    continue
-                try:
-                    connection = self._connection_for_definition(definition)
-                    await self._start_definition(definition, connection)
-                except Exception as error:
-                    self._runtimes[definition.forward_id] = _PortForwardRuntime(
-                        status="error",
-                        error=(
-                            "Gateway 启动时恢复 SSH 端口转发失败: "
-                            f"{type(error).__name__}: {error}"
-                        ),
-                    )
-                    logger.exception(
-                        "恢复 SSH 端口转发失败: forward_id=%s workspace_id=%s",
-                        definition.forward_id,
-                        definition.workspace_id,
-                    )
+            worker_count = min(
+                _RESTORE_CONCURRENCY,
+                sum(
+                    1
+                    for definition in self._definitions.values()
+                    if definition.desired_running
+                ),
+            )
+            definitions = (
+                definition
+                for definition in self._definitions.values()
+                if definition.desired_running
+            )
+
+            async def restore_next() -> None:
+                for definition in definitions:
+                    await self._restore_definition(definition)
+
+            await asyncio.gather(*(restore_next() for _ in range(worker_count)))
+
+    async def _restore_definition(
+        self,
+        definition: _PortForwardDefinition,
+    ) -> None:
+        try:
+            connection = self._connection_for_definition(definition)
+            await self._start_definition(definition, connection)
+        except Exception as error:
+            self._record_runtime_error(
+                definition.forward_id,
+                error,
+                prefix="Gateway 启动时恢复 SSH 端口转发失败: ",
+            )
+            logger.exception(
+                "恢复 SSH 端口转发失败: forward_id=%s workspace_id=%s",
+                definition.forward_id,
+                definition.workspace_id,
+            )
 
     def assert_healthy(self) -> None:
         """确认所有声明为 desired_running 的 SSH 转发都已监听。"""
@@ -232,10 +252,7 @@ class SshPortForwardManager:
             try:
                 await self._start_definition(definition, connection)
             except Exception as error:
-                self._runtimes[forward_id] = _PortForwardRuntime(
-                    status="error",
-                    error=f"{type(error).__name__}: {error}",
-                )
+                self._record_runtime_error(forward_id, error)
                 logger.exception(
                     "创建 SSH 端口转发失败: forward_id=%s workspace_id=%s",
                     forward_id,
@@ -260,10 +277,7 @@ class SshPortForwardManager:
             try:
                 await self._start_definition(definition, connection)
             except Exception as error:
-                self._runtimes[forward_id] = _PortForwardRuntime(
-                    status="error",
-                    error=f"{type(error).__name__}: {error}",
-                )
+                self._record_runtime_error(forward_id, error)
                 logger.exception(
                     "重连 SSH 端口转发失败: forward_id=%s workspace_id=%s",
                     forward_id,
@@ -308,10 +322,7 @@ class SshPortForwardManager:
                 if updated_definition.desired_running:
                     await self._start_definition(updated_definition, connection)
             except Exception as error:
-                self._runtimes[forward_id] = _PortForwardRuntime(
-                    status="error",
-                    error=f"{type(error).__name__}: {error}",
-                )
+                self._record_runtime_error(forward_id, error)
                 logger.exception(
                     "更改 SSH 端口转发本地端口失败: forward_id=%s workspace_id=%s",
                     forward_id,
@@ -402,6 +413,20 @@ class SshPortForwardManager:
                 f"current={connection.connection_id}"
             )
         return connection
+
+    def _record_runtime_error(
+        self,
+        forward_id: str,
+        error: Exception,
+        *,
+        prefix: str = "",
+    ) -> None:
+        runtime = self._runtimes.get(forward_id)
+        if runtime is None:
+            runtime = _PortForwardRuntime()
+            self._runtimes[forward_id] = runtime
+        runtime.status = "error"
+        runtime.error = f"{prefix}{type(error).__name__}: {error}"
 
     def _owned_definition(
         self,
@@ -500,8 +525,15 @@ class SshPortForwardManager:
         runtime.log_path = log_path
         try:
             await self._wait_until_listening(process, definition.local_port)
+        except asyncio.CancelledError:
+            runtime.status = "error"
+            runtime.error = "SSH 端口转发启动被取消"
+            await asyncio.shield(asyncio.to_thread(process.close))
+            runtime.process = None
+            raise
         except Exception as error:
             await asyncio.to_thread(process.close)
+            runtime.process = None
             log_detail = self._read_log_tail(log_path)
             raise RuntimeError(
                 f"{error}" + (f"；SSH 日志: {log_detail}" if log_detail else "")

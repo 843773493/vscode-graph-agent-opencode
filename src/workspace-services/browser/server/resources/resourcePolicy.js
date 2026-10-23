@@ -55,38 +55,33 @@ export function latestActivityUnixMs(snapshot) {
   );
 }
 
-function isSoftReason(reason) {
+function isSoftProtectionReason(reason) {
   return SOFT_REASON_PREFIXES.some((prefix) => String(reason).startsWith(prefix));
 }
 
-function hardProtectionReasons(snapshot) {
+function hasHardProtection(snapshot) {
   if (Array.isArray(snapshot.resource_protections)) {
-    return snapshot.resource_protections
-      .filter((protection) => protection?.class === "hard")
-      .map((protection) => protection.code);
+    return snapshot.resource_protections.some((protection) => protection?.class === "hard");
   }
   if (Array.isArray(snapshot.resource_hard_protection_reasons)) {
-    return snapshot.resource_hard_protection_reasons;
+    return snapshot.resource_hard_protection_reasons.length > 0;
   }
   return Array.isArray(snapshot.resource_protection_reasons)
-    ? snapshot.resource_protection_reasons.filter((reason) => !isSoftReason(reason))
-    : [];
+    && snapshot.resource_protection_reasons.some((reason) => !isSoftProtectionReason(reason));
 }
 
-function softProtectionReasons(snapshot) {
-  const reasons = Array.isArray(snapshot.resource_protections)
-    ? snapshot.resource_protections
-        .filter((protection) => protection?.class === "soft")
-        .map((protection) => protection.code)
-    : Array.isArray(snapshot.resource_soft_protection_reasons)
-    ? [...snapshot.resource_soft_protection_reasons]
-    : (Array.isArray(snapshot.resource_protection_reasons)
-        ? snapshot.resource_protection_reasons.filter(isSoftReason)
-        : []);
-  if (snapshot.resource_policy === "keep_alive" && !reasons.includes("keep_alive")) {
-    reasons.push("keep_alive");
+function hasSoftProtection(snapshot) {
+  if (Array.isArray(snapshot.resource_protections)) {
+    return snapshot.resource_protections.some((protection) => protection?.class === "soft")
+      || snapshot.resource_policy === "keep_alive";
   }
-  return reasons;
+  if (Array.isArray(snapshot.resource_soft_protection_reasons)) {
+    return snapshot.resource_soft_protection_reasons.length > 0
+      || snapshot.resource_policy === "keep_alive";
+  }
+  return snapshot.resource_policy === "keep_alive"
+    || (Array.isArray(snapshot.resource_protection_reasons)
+      && snapshot.resource_protection_reasons.some(isSoftProtectionReason));
 }
 
 function compareCandidates(left, right) {
@@ -118,14 +113,8 @@ function hasOverflow(overflow) {
   return overflow.hot > 0 || overflow.frozen > 0 || overflow.resident > 0;
 }
 
-function candidateProtection(snapshot, allowSoftProtection) {
-  const hard = hardProtectionReasons(snapshot);
-  const soft = softProtectionReasons(snapshot);
-  return {
-    hard,
-    soft,
-    protected: hard.length > 0 || (!allowSoftProtection && soft.length > 0),
-  };
+function candidateIsProtected(snapshot, allowSoftProtection) {
+  return hasHardProtection(snapshot) || (!allowSoftProtection && hasSoftProtection(snapshot));
 }
 
 export function chooseResourcePlan(snapshots, {
@@ -150,12 +139,16 @@ export function chooseResourcePlan(snapshots, {
     .filter((snapshot) => RESIDENT_STATES.has(snapshot.resource_state))
     .map((snapshot) => {
       const activityUnixMs = latestActivityUnixMs(snapshot);
+      const isProtected = candidateIsProtected(snapshot, allowSoftProtection);
       return {
         snapshot,
         browserId: snapshot.browser_id,
         lastActivityUnixMs: activityUnixMs,
         idleMs: Math.max(0, nowUnixMs - activityUnixMs),
-        protection: candidateProtection(snapshot, allowSoftProtection),
+        isProtected,
+        frozenDurationMs: snapshot.resource_state === "frozen" && !isProtected
+          ? nowUnixMs - parseTimestampUnixMs(snapshot.frozen_at)
+          : null,
       };
     });
   const initialCounts = capacityCounts(candidates);
@@ -172,10 +165,10 @@ export function chooseResourcePlan(snapshots, {
     : effective.minimumFrozenBeforeDiscardMs;
 
   const discardCandidates = candidates
-    .filter(({ snapshot, protection }) => snapshot.resource_state === "frozen"
+    .filter(({ snapshot, isProtected, frozenDurationMs }) => snapshot.resource_state === "frozen"
       && snapshot.client_count === 0
-      && !protection.protected
-      && nowUnixMs - parseTimestampUnixMs(snapshot.frozen_at) >= frozenBeforeDiscardMs)
+      && !isProtected
+      && frozenDurationMs >= frozenBeforeDiscardMs)
     .sort(compareCandidates);
   let planTruncated = false;
   if (allowDiscard) {
@@ -199,9 +192,9 @@ export function chooseResourcePlan(snapshots, {
   }
 
   const freezeCandidates = candidates
-    .filter(({ snapshot, protection }) => HOT_STATES.has(snapshot.resource_state)
+    .filter(({ snapshot, isProtected }) => HOT_STATES.has(snapshot.resource_state)
       && snapshot.client_count === 0
-      && !protection.protected)
+      && !isProtected)
     .sort(compareCandidates);
   for (const candidate of freezeCandidates) {
     const overflow = capacityOverflow(simulatedCounts, effective);
@@ -229,20 +222,21 @@ export function chooseResourcePlan(snapshots, {
 
   const initialOverflow = capacityOverflow(initialCounts, effective);
   const remainingOverflow = capacityOverflow(simulatedCounts, effective);
-  const protectedResidents = candidates.filter(({ snapshot, protection }) => (
-    RESIDENT_STATES.has(snapshot.resource_state) && protection.protected
+  const protectedResidents = candidates.filter(({ snapshot, isProtected }) => (
+    RESIDENT_STATES.has(snapshot.resource_state) && isProtected
   )).length;
   const transitioningResidents = candidates.filter(({ snapshot }) => (
     ["freezing", "restoring", "discarding"].includes(snapshot.resource_state)
   )).length;
-  const notYetEligible = candidates.filter(({ snapshot, idleMs, protection }) => {
-    if (protection.protected) return false;
+  const notYetEligible = candidates.filter((candidate) => {
+    const { snapshot, idleMs, isProtected, frozenDurationMs } = candidate;
+    if (isProtected) return false;
     if (HOT_STATES.has(snapshot.resource_state)) {
       return idleMs < Math.min(freezeIdleMs, effective.capacityFreezeIdleMs);
     }
     if (snapshot.resource_state === "frozen") {
       return idleMs < discardIdleMs
-        || nowUnixMs - parseTimestampUnixMs(snapshot.frozen_at) < frozenBeforeDiscardMs;
+        || frozenDurationMs < frozenBeforeDiscardMs;
     }
     return false;
   }).length;

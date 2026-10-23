@@ -132,7 +132,7 @@ def process_boundary(monkeypatch: pytest.MonkeyPatch) -> ProcessBoundary:
 
 
 @pytest.fixture
-def singleton(tmp_path: Path, managed_backend_factory, process_boundary: ProcessBoundary) -> ManagedBackendGraph:
+def single_workspace_graph(tmp_path: Path, managed_backend_factory, process_boundary: ProcessBoundary) -> ManagedBackendGraph:
     target = WorkspaceTarget(
         workspace_id="member-a", name="A", root_path=str(tmp_path),
         backend_url="http://127.0.0.1:41000", connection_kind="local",
@@ -142,7 +142,9 @@ def singleton(tmp_path: Path, managed_backend_factory, process_boundary: Process
         (target,), backend_url=target.backend_url, process=ProcessProbe("old"),
         auxiliary_processes={"member-a": {"terminal_manager": ProcessProbe("terminal"), "browser_manager": ProcessProbe("browser")}},
     )
-    registry = GatewayWorkspaceRegistry(storage_path=tmp_path / "singleton-registry.json")
+    registry = GatewayWorkspaceRegistry(
+        storage_path=tmp_path / "single-workspace-registry.json"
+    )
     registry.upsert(target)
     graph.publish(registry)
     process_boundary.register(graph, registry)
@@ -150,10 +152,10 @@ def singleton(tmp_path: Path, managed_backend_factory, process_boundary: Process
 
 
 @pytest.fixture
-def singleton_registry(tmp_path: Path, singleton: ManagedBackendGraph):
+def single_workspace_registry(tmp_path: Path, single_workspace_graph: ManagedBackendGraph):
     registry = GatewayWorkspaceRegistry(storage_path=tmp_path / "runtime-registry.json")
-    registry.upsert(singleton.targets[0])
-    singleton.publish(registry)
+    registry.upsert(single_workspace_graph.targets[0])
+    single_workspace_graph.publish(registry)
     return registry
 
 
@@ -243,17 +245,17 @@ async def test_workspace_health_rejects_uuid_mismatch_without_retry(local_http) 
 
 
 @pytest.mark.asyncio
-async def test_reconnect_managed_local_workspace_keeps_stable_id(tmp_path: Path, singleton, process_boundary, monkeypatch) -> None:
+async def test_reconnect_managed_local_workspace_keeps_stable_id(tmp_path: Path, single_workspace_graph, process_boundary, monkeypatch) -> None:
     registry = GatewayWorkspaceRegistry(storage_path=tmp_path / "gateway.json")
-    member = singleton.owner.contract.members[0]
+    member = single_workspace_graph.owner.contract.members[0]
     target = WorkspaceTarget(
         workspace_id=member.workspace_id, name="Managed", root_path=str(tmp_path),
-        backend_url=singleton.owner.contract.backend_url, backend_workspace_id=UUID_A,
+        backend_url=single_workspace_graph.owner.contract.backend_url, backend_workspace_id=UUID_A,
         connection_kind="local", managed=True, connection_error="旧连接失败",
     )
     registry.upsert(target)
-    singleton.publish(registry)
-    singleton.owner.close()
+    single_workspace_graph.publish(registry)
+    single_workspace_graph.owner.close()
     async def listed():
         return []
     monkeypatch.setattr(registry, "list_dtos", listed)
@@ -261,8 +263,8 @@ async def test_reconnect_managed_local_workspace_keeps_stable_id(tmp_path: Path,
         registry=registry, workspace_id=target.workspace_id, project_root=tmp_path, log_dir=tmp_path / "logs",
     )
     assert registry.resolve(target.workspace_id).connection_error is None
-    assert registry.backend_owner(target.workspace_id) is singleton.owner
-    assert registry.managed_runtime(target.workspace_id).backend_owner is singleton.owner
+    assert registry.backend_owner(target.workspace_id) is single_workspace_graph.owner
+    assert registry.managed_runtime(target.workspace_id).backend_owner is single_workspace_graph.owner
     assert len(process_boundary.starts) == 1
     registry.close()
 
@@ -573,7 +575,7 @@ async def test_runtime_controller_serializes_managed_restarts(controller_case, p
     monkeypatch.setattr("app.gateway.runtime.group_actions.rebuild_managed_backend_runtime", observe)
     async def restart(member_id):
         await controller.safe_restart_managed_backend(member_id, request_id=member_id, group_request=graph.group_request)
-    # 后一个完整合同在锁前已经取到；单成员兼容调用只适用于 singleton。
+    # 后一个完整合同在锁前已经取到；单成员兼容调用只适用于单工作区图。
     first = asyncio.create_task(restart("member-a"))
     await asyncio.sleep(0.002)
     second = asyncio.create_task(restart("member-b"))
@@ -632,9 +634,9 @@ async def test_runtime_controller_resolves_pending_after_candidate_restart(tmp_p
 
 @pytest.mark.asyncio
 async def test_managed_runtime_rejects_terminal_wrong_uuid_before_backend_and_closes_owned_handles(
-    singleton, process_boundary, monkeypatch, tmp_path, singleton_registry) -> None:
-    singleton.owner.close()
-    runtime = singleton.runtimes["member-a"]
+    single_workspace_graph, process_boundary, monkeypatch, tmp_path, single_workspace_registry) -> None:
+    single_workspace_graph.owner.close()
+    runtime = single_workspace_graph.runtimes["member-a"]
     adopted = runtime.processes["terminal_manager"]
     runtime.processes.clear()
     async def adopt(**_):
@@ -644,14 +646,14 @@ async def test_managed_runtime_rejects_terminal_wrong_uuid_before_backend_and_cl
     monkeypatch.setattr(local_workspace, "_adopt_local_node_service", adopt)
     monkeypatch.setattr(local_workspace, "wait_for_workspace_health", wrong_uuid)
     with pytest.raises(RuntimeError, match="backend UUID 不匹配"):
-        await start_managed_backend_runtime(owner=singleton.owner, registry=singleton_registry, project_root=tmp_path, log_dir=tmp_path / "logs")
+        await start_managed_backend_runtime(owner=single_workspace_graph.owner, registry=single_workspace_registry, project_root=tmp_path, log_dir=tmp_path / "logs")
     assert not process_boundary.starts and not process_boundary.nodes
     assert adopted.closed
 
 
 @pytest.mark.asyncio
-async def test_candidate_runtime_start_failure_detaches_adopted_and_closes_new_processes(singleton, process_boundary, monkeypatch, tmp_path, singleton_registry) -> None:
-    singleton.owner.close()
+async def test_candidate_runtime_start_failure_detaches_adopted_and_closes_new_processes(single_workspace_graph, process_boundary, monkeypatch, tmp_path, single_workspace_registry) -> None:
+    single_workspace_graph.owner.close()
     adopted = ProcessProbe("adopted-terminal")
     async def adopt(*, service_name, **_):
         return adopted if service_name == "terminal_manager" else None
@@ -660,14 +662,14 @@ async def test_candidate_runtime_start_failure_detaches_adopted_and_closes_new_p
     process_boundary.backend_outcomes[:] = [error]
     with pytest.raises(RuntimeError) as raised:
         await start_managed_backend_runtime(
-            owner=singleton.owner, registry=singleton_registry, project_root=tmp_path, log_dir=tmp_path / "logs",
+            owner=single_workspace_graph.owner, registry=single_workspace_registry, project_root=tmp_path, log_dir=tmp_path / "logs",
             preserve_adopted_processes_on_failure=True,
         )
     assert raised.value is error
     assert adopted.detached and not adopted.closed
     assert process_boundary.handles[0].closed
     assert process_boundary.nodes[0][1].closed
-    assert singleton.owner.process is None
+    assert single_workspace_graph.owner.process is None
 
 
 def test_workspace_config_proof_expectation_redacts_fencing_token() -> None:
@@ -681,13 +683,13 @@ def test_workspace_config_proof_expectation_redacts_fencing_token() -> None:
 
 
 @pytest.mark.asyncio
-async def test_backend_restart_preserves_terminal_and_browser(singleton, process_boundary, tmp_path, singleton_registry) -> None:
-    owner = singleton.owner
+async def test_backend_restart_preserves_terminal_and_browser(single_workspace_graph, process_boundary, tmp_path, single_workspace_registry) -> None:
+    owner = single_workspace_graph.owner
     old_handle = owner.process
-    runtime = singleton.runtimes["member-a"]
+    runtime = single_workspace_graph.runtimes["member-a"]
     auxiliary_handles = dict(runtime.processes)
     contract, runtimes = await rebuild_managed_backend_runtime(
-        owner=owner, registry=singleton_registry, desired_members=owner.contract.members, runtimes=singleton.runtimes,
+        owner=owner, registry=single_workspace_registry, desired_members=owner.contract.members, runtimes=single_workspace_graph.runtimes,
         project_root=tmp_path, log_dir=tmp_path / "logs",
     )
     assert old_handle.closed and owner.process is process_boundary.handles[0]
@@ -699,9 +701,9 @@ async def test_backend_restart_preserves_terminal_and_browser(singleton, process
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("failure", ["health", "config-proof"])
-async def test_backend_restart_failure_keeps_old_generation(singleton, process_boundary, tmp_path, failure, singleton_registry) -> None:
-    old_contract = singleton.owner.contract
-    old_handle = singleton.owner.process
+async def test_backend_restart_failure_keeps_old_generation(single_workspace_graph, process_boundary, tmp_path, failure, single_workspace_registry) -> None:
+    old_contract = single_workspace_graph.owner.contract
+    old_handle = single_workspace_graph.owner.process
     startup = {
         "candidate_ref": "candidate-ref", "candidate_id": "candidate", "pending_revision": 2,
         "candidate_digest": "candidate-digest", "effective_digest": "effective-digest",
@@ -713,21 +715,21 @@ async def test_backend_restart_failure_keeps_old_generation(singleton, process_b
         process_boundary.config_proofs[UUID_A] = {"loaded_source": "active"}
     with pytest.raises(RuntimeError, match="candidate backend unhealthy|config proof 不匹配"):
         await rebuild_managed_backend_runtime(
-            owner=singleton.owner, registry=singleton_registry, desired_members=old_contract.members, runtimes=singleton.runtimes,
+            owner=single_workspace_graph.owner, registry=single_workspace_registry, desired_members=old_contract.members, runtimes=single_workspace_graph.runtimes,
             project_root=tmp_path, log_dir=tmp_path / "logs",
             startup_contracts={"member-a": startup} if failure == "config-proof" else None,
         )
     assert old_handle.closed and process_boundary.handles[0].closed
-    assert singleton.owner.process is None
+    assert single_workspace_graph.owner.process is None
     restored_contract, _ = await start_managed_backend_runtime(
-        owner=singleton.owner, registry=singleton_registry, mount_contract=old_contract, reusable_runtimes=singleton.runtimes,
+        owner=single_workspace_graph.owner, registry=single_workspace_registry, mount_contract=old_contract, reusable_runtimes=single_workspace_graph.runtimes,
         project_root=tmp_path, log_dir=tmp_path / "logs",
         preferred_backend_port=41000, preserve_generation=True,
     )
     assert restored_contract == old_contract
-    assert singleton.owner.process is process_boundary.handles[1]
-    assert singleton.owner.contract == old_contract
-    assert singleton.runtimes["member-a"].service_urls["workspace_api"] == old_contract.backend_url
+    assert single_workspace_graph.owner.process is process_boundary.handles[1]
+    assert single_workspace_graph.owner.contract == old_contract
+    assert single_workspace_graph.runtimes["member-a"].service_urls["workspace_api"] == old_contract.backend_url
 
 
 @pytest.mark.asyncio
@@ -787,9 +789,9 @@ async def test_gateway_adopts_matching_workspace_backend(controller_case, local_
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("adopt_backend", [False, True])
-async def test_managed_runtime_adopts_or_reclaims_persisted_backend_once(singleton, process_boundary, monkeypatch, tmp_path, adopt_backend, singleton_registry) -> None:
-    singleton.owner.close()
-    previous = singleton.owner.contract
+async def test_managed_runtime_adopts_or_reclaims_persisted_backend_once(single_workspace_graph, process_boundary, monkeypatch, tmp_path, adopt_backend, single_workspace_registry) -> None:
+    single_workspace_graph.owner.close()
+    previous = single_workspace_graph.owner.contract
     backend = ProcessProbe("persisted-backend")
     auxiliaries = {service: ProcessProbe(service) for service in ("terminal_manager", "browser_manager")}
     async def adopt_backend_handle(**_):
@@ -799,46 +801,48 @@ async def test_managed_runtime_adopts_or_reclaims_persisted_backend_once(singlet
     monkeypatch.setattr(local_workspace, "_adopt_workspace_backend", adopt_backend_handle)
     monkeypatch.setattr(local_workspace, "_adopt_local_node_service", adopt_node)
     contract, runtimes = await start_managed_backend_runtime(
-        owner=singleton.owner, registry=singleton_registry, project_root=tmp_path, log_dir=tmp_path / "logs", adopt_existing_backend=adopt_backend,
+        owner=single_workspace_graph.owner, registry=single_workspace_registry, project_root=tmp_path, log_dir=tmp_path / "logs", adopt_existing_backend=adopt_backend,
     )
     assert contract.workspace_ids == ("member-a",)
     assert runtimes["member-a"].processes == auxiliaries
     assert not process_boundary.nodes
     assert len(process_boundary.starts) == (0 if adopt_backend else 1)
     assert backend.closed is not adopt_backend
-    assert singleton.owner.adopted is adopt_backend
+    assert single_workspace_graph.owner.adopted is adopt_backend
     if adopt_backend:
-        assert singleton.owner.contract == previous
+        assert single_workspace_graph.owner.contract == previous
 
 
 @pytest.mark.asyncio
-async def test_managed_runtime_replaces_default_backend_when_adoption_is_disabled(singleton, process_boundary, monkeypatch, tmp_path, singleton_registry) -> None:
-    singleton.owner.close()
+async def test_managed_runtime_replaces_default_backend_when_adoption_is_disabled(single_workspace_graph, process_boundary, monkeypatch, tmp_path, single_workspace_registry) -> None:
+    single_workspace_graph.owner.close()
     stale = ProcessProbe("stale")
     async def adopt(**_):
         return stale
     monkeypatch.setattr(local_workspace, "_adopt_workspace_backend", adopt)
-    await start_managed_backend_runtime(owner=singleton.owner, registry=singleton_registry, project_root=tmp_path, log_dir=tmp_path / "logs",
+    await start_managed_backend_runtime(owner=single_workspace_graph.owner, registry=single_workspace_registry, project_root=tmp_path, log_dir=tmp_path / "logs",
                                         preferred_backend_port=8010, adopt_existing_backend=False)
     assert stale.closed and process_boundary.starts[0]["port"] == 8010
     assert [service for service, _ in process_boundary.nodes] == ["terminal", "browser"]
 
 
 @pytest.mark.asyncio
-async def test_managed_runtime_reuses_browser_without_starting_replacement(singleton, process_boundary, monkeypatch, tmp_path, singleton_registry) -> None:
-    singleton.owner.close()
+async def test_managed_runtime_reuses_browser_without_starting_replacement(single_workspace_graph, process_boundary, monkeypatch, tmp_path, single_workspace_registry) -> None:
+    single_workspace_graph.owner.close()
     adopted = ProcessProbe("browser")
     async def adopt(*, service_name, **_):
         return adopted if service_name == "browser_manager" else None
     monkeypatch.setattr(local_workspace, "_adopt_local_node_service", adopt)
-    _, runtimes = await start_managed_backend_runtime(owner=singleton.owner, registry=singleton_registry, project_root=tmp_path, log_dir=tmp_path / "logs")
+    _, runtimes = await start_managed_backend_runtime(owner=single_workspace_graph.owner, registry=single_workspace_registry, project_root=tmp_path, log_dir=tmp_path / "logs")
     assert [service for service, _ in process_boundary.nodes] == ["terminal"]
     assert process_boundary.starts[0]["mounts"][0].browser_backend_url == runtimes["member-a"].service_urls["browser_manager"]
     assert runtimes["member-a"].processes["browser_manager"] is adopted
 
 
 @pytest.mark.asyncio
-async def test_full_health_proof_requires_all_mounts_same_process(controller_case, process_boundary) -> None:
+async def test_full_health_proof_requires_all_mounts_same_process(
+    controller_case,
+) -> None:
     registry, graph, _, _, _, _ = controller_case
     assert await verify_managed_backend_group(graph.owner.contract, mounts=registry.resolve_backend_mounts(graph.owner.contract)) == 7000
 

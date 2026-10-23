@@ -49,19 +49,19 @@ def _posix_process_stat(pid: int) -> tuple[str, int, int, float] | None:
     return state, group, session, starttime
 
 
-def _posix_process_group_members(pid: int) -> list[tuple[int, str]]:
+def _posix_process_group_members(pgid: int) -> list[tuple[int, str]]:
     import psutil
 
     members: list[tuple[int, str]] = []
     for member_pid in psutil.pids():
         try:
-            if os.getpgid(member_pid) != pid:
+            if os.getpgid(member_pid) != pgid:
                 continue
         except ProcessLookupError:
             continue
         except OSError as error:
             raise RuntimeError(
-                f"读取 POSIX 进程组成员身份失败: pgid={pid}, pid={member_pid}: {error}"
+                f"读取 POSIX 进程组成员身份失败: pgid={pgid}, pid={member_pid}: {error}"
             ) from error
 
         try:
@@ -72,7 +72,7 @@ def _posix_process_group_members(pid: int) -> list[tuple[int, str]]:
             continue
         except psutil.Error as error:
             raise RuntimeError(
-                f"读取 POSIX 进程组成员状态失败: pgid={pid}, pid={member_pid}: {error}"
+                f"读取 POSIX 进程组成员状态失败: pgid={pgid}, pid={member_pid}: {error}"
             ) from error
         else:
             state = (

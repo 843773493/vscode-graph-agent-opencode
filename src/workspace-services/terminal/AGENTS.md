@@ -7,7 +7,8 @@
 ```text
 terminal/
 ├── server/      PTY、终端状态与持久化
-│   └── output/  输出字节边界、增量重放和逐连接流控
+│   ├── processes/  操作系统进程、隔离PTY宿主与退出确认
+│   └── output/     输出字节边界、增量重放和逐连接流控
 ├── client/      attach网页及静态HTTP服务
 ├── protocol/    HTTP/WebSocket消息的线格式适配
 └── shared/      Node与浏览器共用的无状态命令文本处理
@@ -15,6 +16,8 @@ terminal/
 ```
 
 先按资源生命周期和运行面分层；只有已有跨运行面消费者的纯逻辑才进入shared。命令标记过滤在后端快照和浏览器增量输出中共用实现，不能各保留一份算法。真实PTY缓冲与输出sequence仍只由server持有，派生展示文本不成为新的状态来源。
+
+按问题定位：[终端生命周期](server/AGENTS.md)、[进程与PTY宿主](server/processes/AGENTS.md)、[输出与流控](server/output/AGENTS.md)、[attach页面](client/AGENTS.md)、[线格式](protocol/AGENTS.md)、[命令文本](shared/AGENTS.md)。
 
 ## 可修改内容
 

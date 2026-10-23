@@ -6,9 +6,9 @@
   "scripts": {
     "start": "node src/server/server.js",
     "dev": "node src/server/server.js",
-    "command": "node src/server/commandClient.js",
+    "command": "node src/server/browserControlCommandClient.js",
     "test": "bun test",
-    "check": "node scripts/check.mjs"
+    "check": "bun run scripts/check.mjs"
   },
   "dependencies": {
     "playwright": "^1.61.1",

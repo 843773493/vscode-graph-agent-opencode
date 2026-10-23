@@ -18,13 +18,18 @@ def _find_node() -> str:
 
 
 @pytest.mark.unit
-def test_node_pty_smoke_runs_a_real_shell_command(tmp_path: Path) -> None:
+def test_node_pty_smoke_runs_platform_shell_in_requested_directory(
+    tmp_path: Path,
+) -> None:
     node = _find_node()
-    script = Path(__file__).with_name("node_pty_smoke.cjs")
+    project_root = Path.cwd()
+    script = (
+        project_root / "tests" / "unit" / "terminal_prototype" / "node_pty_smoke.mjs"
+    )
 
     completed = subprocess.run(
         [node, str(script), str(tmp_path)],
-        cwd=str(Path(__file__).resolve().parents[3]),
+        cwd=str(project_root),
         capture_output=True,
         text=True,
         encoding="utf-8",
@@ -33,7 +38,9 @@ def test_node_pty_smoke_runs_a_real_shell_command(tmp_path: Path) -> None:
         check=False,
     )
 
-    if completed.returncode == 2 and "node-pty not installed" in (completed.stderr or completed.stdout):
+    if completed.returncode == 2 and "node-pty not installed" in (
+        completed.stderr or completed.stdout
+    ):
         pytest.skip("node-pty not installed")
 
     assert completed.returncode == 0, completed.stderr or completed.stdout
@@ -41,10 +48,14 @@ def test_node_pty_smoke_runs_a_real_shell_command(tmp_path: Path) -> None:
     payload = json.loads(completed.stdout.strip().splitlines()[-1])
     assert payload["ok"] is True
     assert payload["cwd"] == str(tmp_path.resolve())
-    cleaned_output = re.sub(r"\x1b\[[0-9;?]*[ -/]*[@-~]", "", payload["output"]).replace("\r", "")
+    cleaned_output = re.sub(
+        r"\x1b\[[0-9;?]*[ -/]*[@-~]", "", payload["output"]
+    ).replace("\r", "")
     assert "node-pty-ok" in cleaned_output
 
     if subprocess.os.name == "nt":
-        assert payload["shell"].lower().endswith("cmd.exe") or payload["shell"].lower().endswith("powershell.exe")
+        assert payload["shell"].lower().endswith("cmd.exe") or payload[
+            "shell"
+        ].lower().endswith("powershell.exe")
     else:
         assert payload["shell"].endswith("sh")

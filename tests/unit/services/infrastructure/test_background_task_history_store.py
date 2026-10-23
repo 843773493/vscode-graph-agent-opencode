@@ -21,16 +21,15 @@ from app.services.infrastructure.background_work_store import BackgroundWorkStor
 from app.services.orchestration.thread_residency import ThreadResidencyTracker
 from tests.harness.python.run_context import TestRunContext
 from tests.support.background_work import ControlledBackgroundHandler
-from tests.support.workspaces import prepare_default_test_workspace
 
 
 @pytest.fixture
 async def background_case(request, session_bundle_factory):
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
-    workspace = prepare_default_test_workspace(workspace_root=context.workspace_root,
-        template_root=Path.cwd() / "tests/fixtures/workspaces/default_test_workspace")
-    shutil.rmtree(workspace / ".boxteam")
-    sessions = workspace / ".boxteam" / "sessions"
+    workspace_root = context.workspace_root
+    shutil.rmtree(workspace_root)
+    workspace_root.mkdir()
+    sessions = workspace_root / ".boxteam" / "sessions"
     session_id = "ses_019c3df7f8527d568e834acf3c0f6612"
     session_bundle_factory(sessions, session_id)
     thread_id = get_session_path_resolver(sessions).main_thread_id(session_id)

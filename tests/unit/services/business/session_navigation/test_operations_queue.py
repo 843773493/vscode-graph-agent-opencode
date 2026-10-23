@@ -48,7 +48,7 @@ from tests.support.session_navigation_queue import (
     create_catalog_intent,
     submit_catalog_intent,
 )
-from tests.support.workspaces import prepare_default_test_workspace
+from tests.support.workspaces import prepare_test_workspace
 from tests.unit.services.business.session_service_test_support import (
     SessionServiceConfigStub,
 )
@@ -231,15 +231,16 @@ def _independent_service(stack: _Stack):
 
 @pytest.fixture
 def navigation_workspace(request: pytest.FixtureRequest) -> Path:
-    """为该测试节点复制独立完整 fixture，避免跨测试复用 SQLite 连接。"""
+    """为该测试节点创建隔离工作区，只复制路径解析所需的固定 identity。"""
     context = TestRunContext.from_test_file(Path(request.node.path))
-    template = Path.cwd() / "tests" / "fixtures" / "workspaces" / "default_test_workspace"
-    return prepare_default_test_workspace(
+    template_root = Path.cwd() / "tests" / "fixtures" / "workspaces" / "default_test_workspace"
+    return prepare_test_workspace(
         workspace_root=(
             context.workspace_root
             / f"node-{hashlib.sha256(request.node.nodeid.encode()).hexdigest()[:12]}"
         ),
-        template_root=template,
+        template_root=template_root,
+        template_items=(".boxteam/workspace-identity.json",),
     )
 
 

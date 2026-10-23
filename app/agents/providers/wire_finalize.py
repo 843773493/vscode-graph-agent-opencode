@@ -362,16 +362,17 @@ def normalize_chat_history_content(content: Any) -> Any:
     if not isinstance(content, list):
         return content
 
-    normalized: list[dict[str, Any] | Any] = []
-    changed = False
-    for block in content:
+    normalized: list[Any] | None = None
+    for index, block in enumerate(content):
         if isinstance(block, str):
+            if normalized is None:
+                normalized = _normalized_chat_history_prefix(content, index)
             normalized.append({"type": "text", "text": block})
-            changed = True
             continue
         if not isinstance(block, dict):
+            if normalized is None:
+                normalized = _normalized_chat_history_prefix(content, index)
             normalized.append({"type": "text", "text": str(block)})
-            changed = True
             continue
 
         block_type = block.get("type")
@@ -381,35 +382,53 @@ def normalize_chat_history_content(content: Any) -> Any:
         if isinstance(block_type, str) and block_type.startswith(
             ("reasoning", "thinking", "redacted_thinking")
         ):
-            changed = True
+            if normalized is None:
+                normalized = _normalized_chat_history_prefix(content, index)
             continue
         if block_type == "output_text":
+            if normalized is None:
+                normalized = _normalized_chat_history_prefix(content, index)
             text = block.get("text")
             if isinstance(text, str):
                 normalized.append({"type": "text", "text": text})
-            changed = True
             continue
         if block_type == "text":
             text = block.get("text")
             if isinstance(text, str):
-                normalized.append({"type": "text", "text": text})
-                if set(block) != {"type", "text"}:
-                    changed = True
+                if len(block) != 2 and normalized is None:
+                    normalized = _normalized_chat_history_prefix(content, index)
+                if normalized is not None:
+                    normalized.append({"type": "text", "text": text})
             else:
-                changed = True
+                if normalized is None:
+                    normalized = _normalized_chat_history_prefix(content, index)
             continue
 
         fallback_text = block.get("text")
         if isinstance(fallback_text, str):
+            if normalized is None:
+                normalized = _normalized_chat_history_prefix(content, index)
             normalized.append({"type": "text", "text": fallback_text})
-            changed = True
             continue
-        normalized.append(block)
+        if normalized is not None:
+            normalized.append(block)
 
+    if normalized is None:
+        return content
     if not normalized:
         return ""
-    if not changed:
-        return content
+    return normalized
+
+
+def _normalized_chat_history_prefix(content: list[Any], end: int) -> list[Any]:
+    """仅在后续确有转换时，复制此前未变更块的规范化结果。"""
+    normalized: list[Any] = []
+    for index in range(end):
+        block = content[index]
+        if isinstance(block, dict) and block.get("type") == "text":
+            normalized.append({"type": "text", "text": block["text"]})
+        else:
+            normalized.append(block)
     return normalized
 
 

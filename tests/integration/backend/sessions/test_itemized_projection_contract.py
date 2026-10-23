@@ -47,7 +47,7 @@ from tests.integration.backend.sessions.itemized_projection_helpers import (
     projection_draft,
     projection_plan,
     projection_saver,
-    projection_workspace,
+    projection_workspace_root,
     register_projection_draft,
 )
 
@@ -57,7 +57,7 @@ __all__ = [
     "projection_draft",
     "projection_plan",
     "projection_saver",
-    "projection_workspace",
+    "projection_workspace_root",
 ]
 
 
@@ -664,13 +664,14 @@ def test_detail_read_rejects_each_symlink_component(
 def test_detail_realpath_containment_rejects_resolved_escape(
     projection_saver,
     projection_plan,
-    projection_workspace: Path,
+    projection_workspace_root: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     saver, _, session = projection_saver
     detail = projection_plan.selection[2].detail_ref
     target = session / detail_relative_path(detail)
-    outside = projection_workspace / "containment-outside.json"
+    assert {entry.name for entry in projection_workspace_root.iterdir()} == {".boxteam"}
+    outside = projection_workspace_root / "containment-outside.json"
     outside.write_bytes(b"outside-owner-body")
     original_resolve = Path.resolve
 

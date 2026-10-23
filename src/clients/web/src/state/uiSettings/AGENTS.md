@@ -2,6 +2,17 @@
 
 集中定义 Web UI 持久化偏好的默认值、归一化与作用域转换。
 
+## 职责树
+
+```text
+uiSettings/
+├── preferences.ts                默认设置、载荷校验、游客补丁合并、稳定 ID 集合
+├── uiSettingsPreferences.test.ts 归一化、错误边界与 ID 集合行为
+└── uiSettingsGuest.test.ts       游客更新只替换本次返回的设置项
+```
+
+按设置数据流选择入口：服务端载荷先由 `normalizeWebUiSettings` 校验和补齐默认值；游客未持久化的更新由 `mergeGuestWebUiSettings` 依据本次 patch 合并；会话侧栏 ID 集合统一经稳定去重排序函数处理。新增设置时先明确 Gateway 持久化的权威字段，再把默认值、归一化与游客合并放在本目录对应链路中。
+
 # 可修改内容
 
 - Gateway UI 设置的纯数据解析与稳定集合转换。

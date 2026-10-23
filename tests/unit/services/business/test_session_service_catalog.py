@@ -66,11 +66,12 @@ def catalog_service(
     session_config_service: SessionServiceConfigStub,
 ) -> tuple[SessionService, object]:
     """直构新链 + SessionService 注入（不经环境变量开关）。"""
-    context, workspace_base, _ = prepare_session_test_workspace(
+    context, workspace_fixture_root, _ = prepare_session_test_workspace(
         test_file=Path(request.node.path),
         node_id=request.node.nodeid,
+        template_items=(),
     )
-    workspace = build_catalog_workspace(workspace_base, workspace_id=WORKSPACE_ID)
+    workspace = build_catalog_workspace(workspace_fixture_root, workspace_id=WORKSPACE_ID)
     sessions_dir = workspace.sessions_root
     service = SessionService(
         config_service=session_config_service,
@@ -96,6 +97,7 @@ def factory_resolver(
     context, _, workspace_root = prepare_session_test_workspace(
         test_file=Path(request.node.path),
         node_id=request.node.nodeid,
+        template_items=(),
     )
     sessions_root = workspace_root / ".boxteam" / "sessions"
     resolver = get_session_path_resolver(sessions_root)

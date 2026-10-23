@@ -24,13 +24,14 @@ TARGET_SESSION_ID = "ses_019c49da91667f7b842224c1bfc58b01"
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("internal", (False, True), ids=("user-turn", "internal-null-turn"))
 async def test_full_copy_preserves_original_activation_identity_and_local_bodies(
-    tmp_path, session_bundle_factory, fork_deadlines,
+    tmp_path, session_bundle_factory, fork_deadlines, internal,
 ):
     sessions = tmp_path / "sessions"
     for session in (SESSION_ID, TARGET_SESSION_ID):
         session_bundle_factory(sessions, session)
-    saver, original, sealed = _sealed_with_activation(sessions)
+    saver, original, sealed = _sealed_with_activation(sessions, internal=internal)
     source_thread = saver._storage.storage.main_thread_id(SESSION_ID)
     target_thread = saver._storage.storage.main_thread_id(TARGET_SESSION_ID)
     with saver._storage.storage.read_connection(SESSION_ID, source_thread, "") as connection:
@@ -55,8 +56,10 @@ async def test_full_copy_preserves_original_activation_identity_and_local_bodies
         for left, right in zip(original.bindings, restored.bindings, strict=True):
             assert right.members == left.members and right.detail_ref == left.detail_ref
             assert restarted.read_resource_activation_payload(restored, right, storage_owner=(TARGET_SESSION_ID, target_thread)) == {"payload": "resource-body"}
-        with pytest.raises(ValueError, match="turn_not_resumable"):
-            restarted.dispatch_replay(TARGET_SESSION_ID, thread_id=target_thread, turn_id=restored.turn_id)
+        if not internal:
+            with pytest.raises(ValueError, match="turn_not_resumable"):
+                restarted.dispatch_replay(TARGET_SESSION_ID, thread_id=target_thread, turn_id=restored.turn_id)
+        assert (restored.turn_id is None) == internal
 
 
 @pytest.mark.asyncio

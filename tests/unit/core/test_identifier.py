@@ -65,30 +65,38 @@ def _literal_prefixes_used_by_callers() -> set[str]:
     """扫描 ``app/`` 下所有把字面量传给 ``create_prefixed_id`` 的调用点。
 
     只认从 ``app.core.identifier`` 导入的该函数，避免把同名助手算进来；
-    非字面量实参直接报错（本仓既无此类调用，也不允许它悄悄绕过口径）。
+    先按导入模块标记筛选 AST 候选，避免解析整个 app 树；非字面量实参直接报错
+    （本仓既无此类调用，也不允许它悄悄绕过口径）。
     """
-    prefix_use: dict[str, list[str]] = {}
+    used_prefixes: set[str] = set()
     app_root = Path.cwd() / "app"
     if not app_root.is_dir():
         raise RuntimeError(
-            "本断言要求从仓库根目录运行 pytest（需扫描 app/ 调用面）: "
-            f"cwd={Path.cwd()}"
+            f"本断言要求从仓库根目录运行 pytest（需扫描 app/ 调用面）: cwd={Path.cwd()}"
         )
     for path in sorted(app_root.rglob("*.py")):
-        tree = ast.parse(path.read_text(encoding="utf-8"))
-        local_names: set[str] = set()
+        source = path.read_text(encoding="utf-8")
+        if "app.core.identifier" not in source:
+            continue
+        tree = ast.parse(source)
+        create_prefixed_id_aliases: set[str] = set()
         for node in ast.walk(tree):
-            if isinstance(node, ast.ImportFrom) and node.module == "app.core.identifier":
+            if (
+                isinstance(node, ast.ImportFrom)
+                and node.module == "app.core.identifier"
+            ):
                 for alias in node.names:
                     if alias.name == "create_prefixed_id":
-                        local_names.add(alias.asname or alias.name)
-        if not local_names:
+                        create_prefixed_id_aliases.add(alias.asname or alias.name)
+        if not create_prefixed_id_aliases:
             continue
         for node in ast.walk(tree):
             if not isinstance(node, ast.Call):
                 continue
             func = node.func
-            if not (isinstance(func, ast.Name) and func.id in local_names):
+            if not (
+                isinstance(func, ast.Name) and func.id in create_prefixed_id_aliases
+            ):
                 continue
             if not node.args or not (
                 isinstance(node.args[0], ast.Constant)
@@ -98,8 +106,8 @@ def _literal_prefixes_used_by_callers() -> set[str]:
                     f"create_prefixed_id 只接受字面量前缀: {path}:{node.lineno}"
                 )
             prefix = node.args[0].value
-            prefix_use.setdefault(prefix, []).append(f"{path}:{node.lineno}")
-    return set(prefix_use)
+            used_prefixes.add(prefix)
+    return used_prefixes
 
 
 def test_identifier_prefix_literal_matches_callers():

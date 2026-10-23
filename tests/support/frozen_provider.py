@@ -135,7 +135,7 @@ def create_frozen_provider_activation(
 
     admission 的归属和状态仍由 execution owner 管理。
     """
-    calls: dict[tuple[str, str, str, str], str] = {}
+    model_call_ids_by_execution: dict[tuple[str, str, str, str], str] = {}
 
     def create(
         saver: RolloutCheckpointSaver,
@@ -179,11 +179,16 @@ def create_frozen_provider_activation(
                         request_hash=sealed.request_hash, checkpoint_ns=checkpoint_ns,
                     )
                 return {"model_call_id": sealed.model_call_id, "activation_snapshot": frozen}
-            key = (
+            execution_plan_key = (
                 admission.session_id, admission.thread_id, admission.execution_id,
                 plan_creation_idempotency_key,
             )
-            call_id = model_call_id if model_call_id is not None else calls.setdefault(key, str(UUID(create_uuid_hex())))
+            call_id = model_call_id
+            if call_id is None:
+                call_id = model_call_ids_by_execution.get(execution_plan_key)
+                if call_id is None:
+                    call_id = str(UUID(create_uuid_hex()))
+                    model_call_ids_by_execution[execution_plan_key] = call_id
             UUID(call_id)
 
             async def freeze():

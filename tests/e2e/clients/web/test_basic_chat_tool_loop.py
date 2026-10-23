@@ -17,6 +17,7 @@ import httpx
 import pytest
 
 from app.core.path_utils import get_session_path_resolver
+from app.domain.itemized.hashing import sha256_jcs
 from app.gateway.runtime.process_lifecycle import ManagedProcess
 from app.services.business.session_context_resource import session_resource_uri
 from tests.harness.python.run_context import TestRunContext
@@ -552,6 +553,92 @@ async def test_basic_chat_tool_loop_through_real_web_surface(
             assert rebuilt["details"]["generation"] > generation
             own, sibling = graph["initiallyResident"]["compiled"][0], graph["siblingGraph"]["compiled"][0]
             assert own["pid"] == sibling["pid"] and own["details"]["compiled_graph_object_id"] != sibling["details"]["compiled_graph_object_id"]
+        if "compaction" in selected:
+            compaction = result["section8"]["compaction"]
+            recovery = compaction["activationRecovery"]
+            refs = json.loads(recovery["control"]["payload_json"])["resource_activation_refs"]
+            assert refs == recovery["refs"] and refs
+            assert len({ref["assembly_id"] for ref in refs}) == len(refs)
+            frozen = {row["assembly_id"]: row for row in recovery["frozenAtRestart"]}
+            for ref in refs:
+                assert ref == {key: value for key, value in frozen[ref["assembly_id"]].items() if key != "snapshot_json"}
+            assert len(recovery["frozenBefore"]) >= len(compaction["prepared"]) == 3
+            for row in recovery["frozenBefore"]:
+                assert frozen[row["assembly_id"]] == row
+                assert row["assembly_id"] in {ref["assembly_id"] for ref in refs}
+            assert recovery["frozenAfter"] == recovery["frozenAtRestart"]
+            assert recovery["killed"]["before_pid"] != recovery["restarted"]["after_pid"]
+            assert len(recovery["evidence"]["turns"]) == 4
+            assert compaction["summary"]["kind"] == "compaction_summary"
+            assert "read_compaction_history(line_offset=1, limit=200)" in compaction["summary"]["text"]
+        if "initial_admission_recovery" in selected:
+            recovery = result["section8"]["initial_admission_recovery"]
+            intent, bound, admission = recovery["intent"], recovery["bound"], recovery["admission"]
+            assert intent["state"] == "pending" and bound["state"] == "bound"
+            frozen_fields = ("admission_idempotency_key", "session_id", "thread_id", "creation_idempotency_key",
+                             "initial_state", "execution_binding_id", "job_id", "binding_preimage_hash")
+            assert {key: intent[key] for key in frozen_fields} == {key: bound[key] for key in frozen_fields}
+            assert recovery["admissionKey"] == admission["admission_idempotency_key"] == intent["admission_idempotency_key"]
+            assert intent["binding_preimage_hash"] == sha256_jcs(recovery["bindingPreimage"]).rsplit(":", 1)[1]
+            assert admission["admission_payload_hash"] == sha256_jcs(recovery["requestPreimage"])
+            assert admission["commit_status"] == "committed" and admission["execution_origin"] == "internal"
+            assert admission["execution_id"] == intent["execution_binding_id"] and admission["job_id"] == intent["job_id"]
+            assert admission["turn_id"] is None and admission["accepted_ingress_id"] is None
+            assert recovery["recovered"] == [{
+                "execution_id": intent["execution_binding_id"], "job_id": intent["job_id"], "turn_id": None,
+                "accepted_ingress_id": None, "admission_idempotency_key": recovery["admissionKey"],
+                "admission_payload_hash": admission["admission_payload_hash"], "outcome": "completed",
+            }], "恢复只能完成原 admission，不能创建第二个 execution 或用户 Turn"
+            assert recovery["commits"] == [{"metadata_json": admission["metadata_json"]}]
+            assert recovery["killed"]["before_pid"] != recovery["restarted"]["after_pid"]
+            assert recovery["displayed"]["turns"] == []
+            (internal,) = recovery["displayed"]["internal"]
+            for key in ("session_id", "thread_id", "execution_id", "job_id"):
+                assert internal[key] == admission[key]
+            assert internal["status"] == "completed"
+            assert [part["text"] for part in internal["response_parts"] if part["kind"] in {"text", "final_text"}] == ["初始化报告的私有正文。"]
+            (parent,) = recovery["parentTurn"]
+            assert parent["thread_id"] != intent["thread_id"] and parent["session_id"] == intent["session_id"]
+            terminal = recovery["parentTerminal"]
+            assert terminal["execution_id"] == parent["execution_id"] and terminal["turn_id"] == parent["turn_id"]
+            assert terminal["turn_status"] == "unknown" and terminal["outcome"] == "execution_lost"
+        if "generated_internal_history" in selected:
+            generated = result["section8"]["generated_internal_history"]
+            admission, notice = generated["admission"], generated["canonicalNotice"]
+            assert admission["session_id"] == generated["target"] and admission["execution_origin"] == "internal"
+            assert admission["turn_id"] is None and admission["accepted_ingress_id"] is None
+            assert admission["commit_status"] == "committed" and admission["commit_mode"] == "item_bearing"
+            assert admission["jsonl_record_count"] == 1 and generated["roots"] == [{"turns": 1, "roots": 1}]
+            assert admission["admission_payload_hash"] == sha256_jcs(generated["admissionPreimage"])
+            assert json.loads(admission["metadata_json"]) == generated["admissionMetadata"]
+            assert generated["admissionMetadata"]["request_input"] == {"kind": "runtime_notice", "payload": notice["payload"]}
+            assert notice["content_hash"] == sha256_jcs({"payload_kind": notice["payload_kind"], "payload": notice["payload"]})
+            assert len(generated["notices"]) == 1 and generated["notices"][0]["item_id"] == notice["item_id"]
+            assert notice.get("turn_id") is None and notice["turn_scope"] == "pending_next_turn"
+            internal = generated["internal"]
+            assert internal["execution_id"] == admission["execution_id"] and internal["job_id"] == admission["job_id"]
+            assert internal["session_id"] == admission["session_id"] and internal["thread_id"] == admission["thread_id"]
+            (display,) = internal["display_parts"]
+            assert display["item_id"] == notice["item_id"] and display["text"] == notice["payload"]["display_part"]["text"]
+            assert display["kind"] == "generated_session_result" and display["provenance"]["source_session_id"] == generated["generated"]
+            assert len(generated["membership"]) > 256 and len(generated["pages"]) > 1
+            paged_parts = []
+            for page in generated["pages"]:
+                assert page["items"] == []
+                (entry,) = page["internal_executions"]
+                assert entry["execution_id"] == admission["execution_id"] and entry["status"] == "completed"
+                records = {part["item_id"] for part in entry["display_parts"]}
+                records.update(part["source"]["item_id"] for part in entry["response_parts"])
+                assert len(records) <= 256
+                paged_parts.extend(entry["response_parts"])
+            assert len({part["part_id"] for part in paged_parts}) == len(paged_parts)
+            assert sorted(paged_parts, key=lambda part: part["part_id"]) == sorted(internal["response_parts"], key=lambda part: part["part_id"])
+            assert generated["snapshot"]["stale"]["status"] == 409
+            assert generated["snapshot"]["stale"]["body"]["detail"]["code"] == "stale_turn_cursor"
+            assert generated["crossOwner"]["status"] == 400
+            assert generated["head"]["zero"]["items"] == []
+            assert len(generated["head"]["zero"]["internal_executions"]) == 1
+            assert generated["head"]["history"]["internal_executions"] == generated["head"]["zero"]["internal_executions"]
         if "background_mailbox" in selected:
             mailbox = result["section8"]["background_mailbox"]
             assert mailbox["mainThreadId"] != mailbox["threadId"]

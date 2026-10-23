@@ -1,5 +1,4 @@
 import os
-import shutil
 import subprocess
 from pathlib import Path
 
@@ -188,10 +187,9 @@ def test_communication_wire_uses_one_destination_for_existing_resource_and_fork_
 @pytest.fixture
 def failed_protocol_workspace(tmp_path: Path) -> tuple[Path, tuple[Path, ...]]:
     """模拟外部 Buf 生成失败，保留四个现有产物根的实际文件字节。"""
-    project = Path.cwd()
     for name in ("buf.yaml", "buf.gen.yaml"):
-        shutil.copyfile(project / name, tmp_path / name)
-    shutil.copytree(project / "proto", tmp_path / "proto")
+        (tmp_path / name).touch()
+    (tmp_path / "proto").mkdir()
     executable = tmp_path / "node_modules" / ".bin" / "buf"
     executable.parent.mkdir(parents=True)
     executable.write_text(

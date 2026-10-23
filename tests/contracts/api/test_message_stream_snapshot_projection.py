@@ -33,9 +33,10 @@ def message_stream_api() -> tuple[FastAPI, MessageStreamStore, str, str]:
     output_root = (
         Path.cwd() / "out/tests/contracts/api/test_message_stream_snapshot_projection"
     )
-    if output_root.exists():
-        shutil.rmtree(output_root)
-    sessions_root = output_root / "workspace" / ".boxteam" / "sessions"
+    workspace_root = output_root / "workspace"
+    if workspace_root.exists():
+        shutil.rmtree(workspace_root)
+    sessions_root = workspace_root / ".boxteam" / "sessions"
     resolver = get_session_path_resolver(sessions_root)
     resolver.initialize()
     session_id = "ses_019bef80066f7038ae8e88ccb2e5e2ea"

@@ -1,7 +1,7 @@
 /**
  * 当前页面帧在 Node 侧的观察样本，每帧只记一次，不按客户端数量放大。
  * @typedef {object} BrowserFrameObservation
- * @property {number} observedAtUnixMs Node 记录样本时的 Unix 毫秒，不是 CDP 帧时间。
+ * @property {number} observedAtMonotonicMs 本进程performance.now向下取整的单调毫秒；只计算窗口与间隔，不持久化。
  * @property {number} jpegPayloadBytes JPEG 正文字节数，不含协议、WebSocket 或网络开销。
  */
 
@@ -41,7 +41,7 @@ export function summarizeBrowserStreamMetrics({ observations, deliveryClients, p
   }
   const observationSpanSeconds = Math.max(
     0.001,
-    (observations.at(-1).observedAtUnixMs - observations[0].observedAtUnixMs) / 1_000,
+    (observations.at(-1).observedAtMonotonicMs - observations[0].observedAtMonotonicMs) / 1_000,
   );
   const totalJpegPayloadBytes = observations.reduce((total, sample) => total + sample.jpegPayloadBytes, 0);
   return {

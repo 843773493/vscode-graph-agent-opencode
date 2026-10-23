@@ -11,6 +11,7 @@ root、子树含 deleting、mark CAS 漂移）、abort、空 folder root、
 from __future__ import annotations
 
 import asyncio
+import errno
 import os
 import shutil
 import sqlite3
@@ -20,6 +21,7 @@ from pathlib import Path
 
 import pytest
 
+import app.core.session_subtree_delete as deletion
 from app.core.session_catalog_store import (
     SessionCatalogNode,
     SessionCatalogStore,
@@ -302,6 +304,7 @@ async def test_descendant_pin_blocks_folder_delete_before_any_session_drain(
             control.close()
     assert not (sessions_root / _DELETING_DIR_NAME / "folder-pin").exists()
 
+
 async def test_released_descendant_pin_allows_complete_folder_delete(
     service: SessionSubtreeDeleteService,
     store: SessionCatalogStore,
@@ -323,6 +326,7 @@ async def test_released_descendant_pin_allows_complete_folder_delete(
             store.get_node(node_id)
     assert store.get_node(tree.outsider.node_id) == tree.outsider
     assert store.get_fork_retention_claim("released-descendant-pin") == released
+
 
 @pytest.mark.parametrize("source_index", [0, 1, 2])
 async def test_folder_catalog_delete_rejects_descendant_pin_with_active_local_fences(
@@ -829,11 +833,105 @@ async def test_failed_drain_keeps_whole_subtree_deleting(
         date_bucket_dir(sessions_root, record.frozen_session_locators[first_session])
         / "session-control.sqlite"
     ).unlink()
-    with pytest.raises(RuntimeError, match="缺少"):
+    with pytest.raises(RuntimeError, match="缺少") as caught:
         await service.delete(idempotency_key="del-key-1", root_node_id=tree.root)
+    assert first_session in str(caught.value)
+    assert "artifact=session-control" in str(caught.value)
+    assert str(sessions_root) not in str(caught.value)
     for node_id in tree.subtree_node_ids:
         assert store.get_node(node_id).state == "deleting"
     assert store.get_subtree_delete_record("del-key-1").state == "deleting"
+
+
+@pytest.mark.parametrize("failure_stage", ["mkdir", "rename", "fsync-target", "fsync-parent", "fsync-source"])
+async def test_isolation_io_failure_keeps_safe_diagnostic_and_original_recovery(
+    service: SessionSubtreeDeleteService,
+    store: SessionCatalogStore,
+    sessions_root: Path,
+    tree: DeleteTree,
+    monkeypatch: pytest.MonkeyPatch,
+    failure_stage: str,
+) -> None:
+    record = store.create_or_get_subtree_delete_record(
+        idempotency_key="del-key-1", workspace_id=WORKSPACE_ID, root_node_id=tree.root,
+    )
+    session_id = min(record.frozen_session_locators)
+    source = date_bucket_dir(sessions_root, record.frozen_session_locators[session_id])
+    target = sessions_root / _DELETING_DIR_NAME / "del-key-1" / session_id
+    original = (source / "session.json").read_bytes()
+    injected = PermissionError(errno.EACCES, f"private: {source} -> {target}", str(source))
+    native_mkdir = Path.mkdir
+    native_rename = os.rename
+    native_fsync = deletion._fsync_directory
+
+    def denied_mkdir(path: Path, *args, **kwargs) -> None:
+        if path == target.parent:
+            raise injected
+        native_mkdir(path, *args, **kwargs)
+
+    def denied_rename(old, new, *args, **kwargs) -> None:
+        if old == source:
+            raise injected
+        native_rename(old, new, *args, **kwargs)
+
+    fsync_target = {
+        "fsync-target": target.parent,
+        "fsync-parent": target.parent.parent,
+        "fsync-source": source.parent,
+    }.get(failure_stage)
+
+    def denied_fsync(path: Path) -> None:
+        if path == fsync_target:
+            raise injected
+        native_fsync(path)
+
+    recovery_barriers: list[Path] = []
+
+    def observed_fsync(path: Path) -> None:
+        recovery_barriers.append(path)
+        native_fsync(path)
+
+    with monkeypatch.context() as patch:
+        if failure_stage == "mkdir":
+            patch.setattr(Path, "mkdir", denied_mkdir)
+        elif failure_stage == "rename":
+            patch.setattr(os, "rename", denied_rename)
+        else:
+            patch.setattr(deletion, "_fsync_directory", denied_fsync)
+        expected_type = RuntimeError if failure_stage == "rename" else PermissionError
+        with pytest.raises(expected_type) as caught:
+            await service.delete(idempotency_key="del-key-1", root_node_id=tree.root)
+        if failure_stage.startswith("fsync"):
+            # 持续失败时恢复不得因目标已存在而绕过 barrier、补记进度。
+            with pytest.raises(PermissionError):
+                await service.delete(idempotency_key="del-key-1", root_node_id=tree.root)
+            assert store.get_subtree_delete_record("del-key-1").drained_session_ids == ()
+    message = str(caught.value)
+    assert session_id in message and "operation_id=del-key-1" in message
+    assert "artifact=session-directory" in message
+    assert "errno=13" in message and "private:" not in message
+    assert str(sessions_root) not in message
+    assert caught.value.__cause__ is injected
+    if isinstance(caught.value, OSError):
+        assert caught.value.errno == errno.EACCES
+    moved = failure_stage.startswith("fsync")
+    assert source.exists() is not moved
+    assert target.exists() is moved
+    assert ((target if moved else source) / "session.json").read_bytes() == original
+    failed = store.get_subtree_delete_record("del-key-1")
+    assert failed.state == "deleting" and failed.drained_session_ids == ()
+    assert all(store.get_node(node_id).state == "deleting" for node_id in tree.subtree_node_ids)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(deletion, "_fsync_directory", observed_fsync)
+        result = await service.delete(idempotency_key="del-key-1", root_node_id=tree.root)
+    assert recovery_barriers[:3] == [target.parent, target.parent.parent, source.parent]
+    assert result.record_state == "completed"
+    assert (target / "session.json").read_bytes() == original
+    for node_id in tree.subtree_node_ids:
+        with pytest.raises(KeyError):
+            store.get_node(node_id)
+    assert store.get_node(tree.outsider.node_id).state == "active"
 
 
 # ----------------------------------------------------------------------

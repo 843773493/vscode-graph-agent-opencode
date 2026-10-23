@@ -33,14 +33,7 @@ def is_transient_provider_error(error: Exception) -> bool:
     if not provider_errors:
         return False
 
-    from litellm.exceptions import (
-        APIConnectionError,
-        BadGatewayError,
-        InternalServerError,
-        RateLimitError,
-        ServiceUnavailableError,
-        Timeout,
-    )
+    from app.runtime.litellm_runtime import litellm
 
     for provider_error in provider_errors:
         if isinstance(
@@ -50,12 +43,12 @@ def is_transient_provider_error(error: Exception) -> bool:
                 TimeoutError,
                 httpx.TransportError,
                 httpx.TimeoutException,
-                APIConnectionError,
-                BadGatewayError,
-                InternalServerError,
-                RateLimitError,
-                ServiceUnavailableError,
-                Timeout,
+                litellm.APIConnectionError,
+                litellm.BadGatewayError,
+                litellm.InternalServerError,
+                litellm.RateLimitError,
+                litellm.ServiceUnavailableError,
+                litellm.Timeout,
             ),
         ):
             return True

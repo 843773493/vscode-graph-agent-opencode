@@ -56,12 +56,14 @@ export function prettyJson(value: unknown): string {
  */
 export function jsonCandidates(text: string): string[] {
   const candidates = [text];
+  const seen = new Set(candidates);
   const fencePattern = /```(?:json)?\s*([\s\S]*?)```/gi;
   for (const match of text.matchAll(fencePattern)) {
     const fencedJson = match[1]?.trim();
-    if (fencedJson) {
+    if (fencedJson && !seen.has(fencedJson)) {
+      seen.add(fencedJson);
       candidates.push(fencedJson);
     }
   }
-  return [...new Set(candidates)];
+  return candidates;
 }

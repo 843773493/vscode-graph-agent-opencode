@@ -7,9 +7,12 @@ import { FIXED_TERMINAL_ID, TerminalManager } from "./terminalManager.js";
 import { encodeServerMessage, parseClientMessage } from "./protocol.js";
 
 const clientRoot = fileURLToPath(new URL("../client/", import.meta.url));
-const packageRoot = process.cwd();
+const packageRoot = fileURLToPath(new URL("../../", import.meta.url));
+const MAX_TERMINAL_SOCKET_BUFFERED_BYTES = 8 * 1024 * 1024;
+const TERMINAL_SOCKET_SHUTDOWN_GRACE_MS = 1000;
+const encodedOutputEvents = new WeakMap();
 
-function readArg(name) {
+function readOptionValue(name) {
   const index = process.argv.indexOf(name);
   if (index === -1) {
     return null;
@@ -22,7 +25,7 @@ function readArg(name) {
 }
 
 function resolvePort() {
-  const rawPort = process.env.INTERACTIVE_TERMINAL_PORT || readArg("--port") || "8120";
+  const rawPort = process.env.INTERACTIVE_TERMINAL_PORT || readOptionValue("--port") || "8120";
   const port = Number(rawPort);
   if (!Number.isInteger(port) || port <= 0 || port > 65535) {
     throw new Error(`非法端口: ${rawPort}`);
@@ -31,7 +34,7 @@ function resolvePort() {
 }
 
 function resolveTerminalCwd() {
-  const rawCwd = process.env.INTERACTIVE_TERMINAL_CWD || readArg("--terminal-cwd") || packageRoot;
+  const rawCwd = process.env.INTERACTIVE_TERMINAL_CWD || readOptionValue("--terminal-cwd") || packageRoot;
   return path.resolve(packageRoot, rawCwd);
 }
 
@@ -44,11 +47,11 @@ function mimeType(filePath) {
   return "application/octet-stream";
 }
 
-function resolveStaticPath(requestUrl) {
-  const url = new URL(requestUrl || "/", "http://127.0.0.1");
-  if (url.pathname === "/health") {
-    return null;
-  }
+function parseRequestTarget(requestTarget) {
+  return new URL(requestTarget || "/", "http://127.0.0.1");
+}
+
+function resolveStaticPath(url) {
   if (url.pathname === "/vendor/xterm/xterm.js") {
     return path.resolve(packageRoot, "node_modules", "@xterm", "xterm", "lib", "xterm.js");
   }
@@ -64,22 +67,28 @@ function resolveStaticPath(requestUrl) {
     throw new Error("静态资源路径包含非法空字符");
   }
   const filePath = path.resolve(clientRoot, relativePath);
-  if (!filePath.startsWith(clientRoot)) {
+  const relativeToClientRoot = path.relative(clientRoot, filePath);
+  if (
+    relativeToClientRoot === ".."
+    || relativeToClientRoot.startsWith(`..${path.sep}`)
+    || path.isAbsolute(relativeToClientRoot)
+  ) {
     throw new Error(`静态资源路径越界: ${url.pathname}`);
   }
   return filePath;
 }
 
 async function handleHttpRequest(request, response) {
-  if (request.url?.startsWith("/health")) {
-    response.writeHead(200, { "content-type": "application/json; charset=utf-8" });
-    response.end(JSON.stringify({ ok: true, terminalId: FIXED_TERMINAL_ID }));
-    return;
-  }
-
   let filePath;
   try {
-    filePath = resolveStaticPath(request.url);
+    const url = parseRequestTarget(request.url);
+    if (url.pathname === "/health") {
+      response.writeHead(200, { "content-type": "application/json; charset=utf-8" });
+      response.end(JSON.stringify({ ok: true, terminalId: FIXED_TERMINAL_ID }));
+      return;
+    }
+
+    filePath = resolveStaticPath(url);
     const content = await readFile(filePath);
     response.writeHead(200, { "content-type": mimeType(filePath) });
     response.end(content);
@@ -87,22 +96,60 @@ async function handleHttpRequest(request, response) {
     const message = error instanceof Error ? error.message : String(error);
     const statusCode = error?.code === "ENOENT" ? 404 : 500;
     console.error(`[http] ${request.url} ${statusCode}: ${message}`);
+    if (response.destroyed) {
+      return;
+    }
+    if (response.headersSent) {
+      response.destroy();
+      return;
+    }
     response.writeHead(statusCode, { "content-type": "text/plain; charset=utf-8" });
     response.end(message);
   }
 }
 
-function sendJson(socket, message) {
+function sendJson(socket, message, clientId) {
   if (socket.readyState !== WebSocket.OPEN) {
-    console.warn(`[ws] socket 未打开，跳过发送 ${message.type}`);
-    return;
+    return false;
   }
-  socket.send(encodeServerMessage(message));
+  const encodedMessage = encodeServerMessage(message);
+  return sendEncodedJson(socket, encodedMessage, Buffer.byteLength(encodedMessage), clientId);
 }
 
-function sendSocketError(socket, error) {
+function sendTerminalOutput(socket, outputEvent, clientId) {
+  if (socket.readyState !== WebSocket.OPEN) {
+    return false;
+  }
+  let encodedOutput = encodedOutputEvents.get(outputEvent);
+  if (!encodedOutput) {
+    const message = encodeServerMessage({ type: "output", ...outputEvent });
+    encodedOutput = {
+      message,
+      byteLength: Buffer.byteLength(message),
+    };
+    encodedOutputEvents.set(outputEvent, encodedOutput);
+  }
+  return sendEncodedJson(socket, encodedOutput.message, encodedOutput.byteLength, clientId);
+}
+
+function sendEncodedJson(socket, encodedMessage, encodedByteLength, clientId) {
+  if (socket.readyState !== WebSocket.OPEN) {
+    return false;
+  }
+  if (
+    socket.bufferedAmount + encodedByteLength > MAX_TERMINAL_SOCKET_BUFFERED_BYTES
+  ) {
+    console.warn(`[ws] ${clientId} 输出接收过慢，关闭连接以限制缓冲增长`);
+    socket.close(1013, "terminal output buffer full");
+    return false;
+  }
+  socket.send(encodedMessage);
+  return true;
+}
+
+function sendSocketError(socket, error, clientId) {
   const message = error instanceof Error ? error.message : String(error);
-  sendJson(socket, { type: "error", message });
+  sendJson(socket, { type: "error", message }, clientId);
 }
 
 function createSocketHandler(terminalManager) {
@@ -121,30 +168,36 @@ function createSocketHandler(terminalManager) {
             clientId,
             cols: message.cols,
             rows: message.rows,
-            onOutput: (data) => sendJson(socket, { type: "output", terminalId: message.terminalId, data }),
+            onOutput: (outputEvent) => sendTerminalOutput(
+              socket,
+              outputEvent,
+              clientId,
+            ),
             onExit: ({ exitCode, signal }) => {
-              sendJson(socket, { type: "exit", terminalId: message.terminalId, exitCode, signal });
+              sendJson(
+                socket,
+                { type: "exit", terminalId: message.terminalId, exitCode, signal },
+                clientId,
+              );
+              if (socket.readyState === WebSocket.OPEN) {
+                socket.close(1000, "terminal exited");
+              }
             },
           });
           attachedTerminalId = message.terminalId;
-          sendJson(socket, { type: "attached", ...attached });
+          sendJson(socket, { type: "attached", ...attached }, clientId);
           return;
         }
 
         if (message.type === "detach") {
           terminalManager.detach(message.terminalId, clientId);
           attachedTerminalId = null;
-          sendJson(socket, { type: "detached", terminalId: message.terminalId });
+          sendJson(socket, { type: "detached", terminalId: message.terminalId }, clientId);
           return;
         }
 
-        if (message.type === "input") {
+        if (message.type === "input" || message.type === "agentInput") {
           terminalManager.write(message.terminalId, message.data);
-          return;
-        }
-
-        if (message.type === "agentInput") {
-          terminalManager.agentWrite(message.terminalId, message.data);
           return;
         }
 
@@ -153,8 +206,10 @@ function createSocketHandler(terminalManager) {
           return;
         }
       } catch (error) {
-        sendSocketError(socket, error);
-        socket.close(1002, "invalid terminal message");
+        sendSocketError(socket, error, clientId);
+        if (socket.readyState === WebSocket.OPEN) {
+          socket.close(1002, "invalid terminal message");
+        }
       }
     });
 
@@ -171,18 +226,59 @@ function createSocketHandler(terminalManager) {
   };
 }
 
-const host = process.env.INTERACTIVE_TERMINAL_HOST || readArg("--host") || "127.0.0.1";
+const host = process.env.INTERACTIVE_TERMINAL_HOST || readOptionValue("--host") || "127.0.0.1";
 const port = resolvePort();
 const terminalCwd = resolveTerminalCwd();
 const terminalManager = new TerminalManager({ cwd: terminalCwd });
+const httpSockets = new Set();
 const server = createServer((request, response) => {
   void handleHttpRequest(request, response);
 });
+server.on("connection", (socket) => {
+  httpSockets.add(socket);
+  socket.once("close", () => httpSockets.delete(socket));
+});
 const webSocketServer = new WebSocketServer({ noServer: true });
+let shutdownStarted = false;
+
+function shutdown(signal) {
+  if (shutdownStarted) {
+    return;
+  }
+  shutdownStarted = true;
+  console.log(`[interactive-terminal] 收到 ${signal}，正在关闭终端服务`);
+  const forceCloseWebSocketTimer = setTimeout(() => {
+    for (const socket of webSocketServer.clients) {
+      socket.terminate();
+    }
+  }, TERMINAL_SOCKET_SHUTDOWN_GRACE_MS);
+  forceCloseWebSocketTimer.unref();
+  webSocketServer.once("close", () => clearTimeout(forceCloseWebSocketTimer));
+  const forceCloseHttpTimer = setTimeout(() => {
+    for (const socket of httpSockets) {
+      socket.destroy();
+    }
+  }, TERMINAL_SOCKET_SHUTDOWN_GRACE_MS);
+  forceCloseHttpTimer.unref();
+  server.once("close", () => clearTimeout(forceCloseHttpTimer));
+  webSocketServer.close();
+  if (server.listening) {
+    server.close();
+  } else {
+    server.once("listening", () => server.close());
+  }
+  terminalManager.killAll();
+  for (const socket of webSocketServer.clients) {
+    if (socket.readyState === WebSocket.OPEN) {
+      socket.close(1001, "terminal server shutting down");
+    }
+  }
+}
 
 webSocketServer.on("connection", createSocketHandler(terminalManager));
 
 server.on("upgrade", (request, socket, head) => {
+  httpSockets.delete(socket);
   const url = new URL(request.url || "/", `http://${host}`);
   if (url.pathname !== "/terminal") {
     socket.write("HTTP/1.1 404 Not Found\r\n\r\n");
@@ -199,3 +295,6 @@ server.listen(port, host, () => {
   console.log(`[interactive-terminal] terminalId=${FIXED_TERMINAL_ID}`);
   console.log(`[interactive-terminal] terminal cwd=${terminalCwd}`);
 });
+
+process.once("SIGINT", () => shutdown("SIGINT"));
+process.once("SIGTERM", () => shutdown("SIGTERM"));

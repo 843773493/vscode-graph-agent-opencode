@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from app.domain.itemized.execution_queue import ExecutionQueueInput
 import asyncio
 import json
 import sqlite3
@@ -39,7 +40,6 @@ from app.domain.itemized.execution_admission import (
     InternalExecutionIntent,
     UserExecutionIdentity,
 )
-from app.domain.itemized.execution_queue import ExecutionQueueInput
 from app.domain.itemized.hashing import sha256_jcs
 from app.domain.itemized.mutation_intents import MutationIntentOwner
 from app.prompting.factory import PromptSection, internal_message_factory

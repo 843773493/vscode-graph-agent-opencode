@@ -29,6 +29,8 @@ import base64
 import hashlib
 import mimetypes
 import os
+import threading
+from collections import OrderedDict
 from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
 from io import BytesIO
@@ -88,6 +90,7 @@ __all__ = [
 
 DERIVED_DIRECTORY_NAME = ".derived"
 MAX_ATTACHMENT_BYTES = 30 * 1024 * 1024
+_VERIFIED_BLOB_SIGNATURE_CACHE_SIZE = 256
 
 
 def _sha256_hex(text: str) -> str:
@@ -112,7 +115,10 @@ class AttachmentBlobStore(ForkAttachmentStoreMixin, AttachmentIngestRecoveryMixi
         path_resolver: SessionCatalogPathResolver | None = None,
     ) -> None:
         self._workspace_root = workspace_root.expanduser().resolve()
-        self._verified_blob_signatures: dict[tuple[str, str, str, int], tuple[int, int, int, int, int]] = {}
+        self._verified_blob_signatures: OrderedDict[
+            tuple[str, str, str, int], tuple[int, int, int, int, int]
+        ] = OrderedDict()
+        self._verified_blob_signatures_lock = threading.Lock()
         self._sessions_root = self._workspace_root / ".boxteam" / "sessions"
         self._fork_imports = OperationHolderGate(self._sessions_root, namespace="attachment_fork_import")
         self._blob_commits = OperationHolderGate(self._sessions_root, namespace="attachment_blob_commit")
@@ -454,13 +460,19 @@ class AttachmentBlobStore(ForkAttachmentStoreMixin, AttachmentIngestRecoveryMixi
         metadata = path.stat()
         signature = (metadata.st_dev, metadata.st_ino, metadata.st_size, metadata.st_mtime_ns, metadata.st_ctime_ns)
         key = (str(path), blob_id, digest, length)
-        if self._verified_blob_signatures.get(key) == signature:
-            return
+        with self._verified_blob_signatures_lock:
+            if self._verified_blob_signatures.get(key) == signature:
+                self._verified_blob_signatures.move_to_end(key)
+                return
         _verify_content(path, digest, length, blob_id)
         checked = path.stat()
         if (checked.st_dev, checked.st_ino, checked.st_size, checked.st_mtime_ns, checked.st_ctime_ns) != signature:
             raise RuntimeError(f"附件正文在完整性校验期间发生变化: blob_id={blob_id}, path={path}")
-        self._verified_blob_signatures[key] = signature
+        with self._verified_blob_signatures_lock:
+            self._verified_blob_signatures[key] = signature
+            self._verified_blob_signatures.move_to_end(key)
+            if len(self._verified_blob_signatures) > _VERIFIED_BLOB_SIGNATURE_CACHE_SIZE:
+                self._verified_blob_signatures.popitem(last=False)
 
     async def collect_garbage(self, *, retention: timedelta) -> tuple[str, ...]:
         """定点回收无操作依赖的正文；不等待正在提交的 digest 分片。"""

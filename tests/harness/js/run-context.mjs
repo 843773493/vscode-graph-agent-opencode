@@ -31,7 +31,7 @@ export class TestRunContext {
 
   constructor({ projectRoot, testFile }) {
     this.projectRoot = path.resolve(projectRoot);
-    this.testFile = path.resolve(testFile);
+    this.testFile = path.resolve(this.projectRoot, testFile);
     const testsRoot = path.join(this.projectRoot, "tests");
     const relativeTestFile = assertInside(testsRoot, this.testFile, "测试文件");
     this.testId = withoutFinalExtension(relativeTestFile).split(path.sep).join("/");

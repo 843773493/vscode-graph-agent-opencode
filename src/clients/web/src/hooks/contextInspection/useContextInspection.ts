@@ -42,20 +42,20 @@ export function useContextInspection({ port, gatewayWorkspaceId, session: curren
     catalogRequest.current?.abort();
     const controller = new AbortController();
     catalogRequest.current = controller;
-    const previous = reset ? emptyInspectionPage() : catalogRef.current;
-    if (reset) { catalogRef.current = previous; setCatalog(previous); }
+    const previousPage = reset ? emptyInspectionPage() : catalogRef.current;
+    if (reset) { catalogRef.current = previousPage; setCatalog(previousPage); }
     setCatalogLoading(true);
     setCatalogError(null);
     try {
       if (!session) throw new Error("上下文检查缺少当前 Session API 响应");
       const page = await readSessionContext(port, gatewayWorkspaceId, session, "assemblies", {
-        signal: controller.signal, cursor: previous.nextCursor, revision: previous.revision,
+        signal: controller.signal, cursor: previousPage.nextCursor, revision: previousPage.revision,
       });
       if (controller.signal.aborted) return;
       if (page.items.some((item) => item.kind !== "assembly" || !item.assembly_ref)) {
         throw new Error("封存 assembly 列表项缺少 assembly_ref");
       }
-      const next = appendInspectionPage(previous, page, session);
+      const next = appendInspectionPage(previousPage, page, session);
       catalogRef.current = next;
       setCatalog(next);
     } catch (error) {
@@ -69,17 +69,17 @@ export function useContextInspection({ port, gatewayWorkspaceId, session: curren
     projectionRequest.current?.abort();
     const controller = new AbortController();
     projectionRequest.current = controller;
-    const previous = reset ? emptyInspectionPage() : projectionRef.current;
-    const id = item ? textField(item.data, "assembly_id") : "";
-    const ref = item?.assembly_ref ?? "";
+    const previousPage = reset ? emptyInspectionPage() : projectionRef.current;
+    const selectedAssemblyId = item ? textField(item.data, "assembly_id") : "";
+    const selectedAssemblyRef = item?.assembly_ref ?? "";
     setSelectedAssembly(item);
-    setAssemblyId(id);
-    setAssemblyRef(ref);
+    setAssemblyId(selectedAssemblyId);
+    setAssemblyRef(selectedAssemblyRef);
     selectedRef.current = item;
-    if (reset) { projectionRef.current = previous; setProjection(previous); }
+    if (reset) { projectionRef.current = previousPage; setProjection(previousPage); }
     setProjectionError(null);
     if (!item) { setProjectionLoading(false); return; }
-    if (item.kind !== "assembly" || !id || !ref) {
+    if (item.kind !== "assembly" || !selectedAssemblyId || !selectedAssemblyRef) {
       setProjectionError("封存 assembly 响应缺少 assembly_id 或 assembly_ref");
       setProjectionLoading(false);
       return;
@@ -89,11 +89,11 @@ export function useContextInspection({ port, gatewayWorkspaceId, session: curren
       if (!session) throw new Error("上下文检查缺少当前 Session API 响应");
       if (controller.signal.aborted) return;
       const page = await readSessionContext(port, gatewayWorkspaceId, session, "assembly", {
-        signal: controller.signal, cursor: previous.nextCursor, revision: previous.revision,
-        assemblyRef: ref,
+        signal: controller.signal, cursor: previousPage.nextCursor, revision: previousPage.revision,
+        assemblyRef: selectedAssemblyRef,
       });
       if (controller.signal.aborted) return;
-      const next = appendInspectionPage(previous, page, session);
+      const next = appendInspectionPage(previousPage, page, session);
       projectionRef.current = next;
       setProjection(next);
     } catch (error) {

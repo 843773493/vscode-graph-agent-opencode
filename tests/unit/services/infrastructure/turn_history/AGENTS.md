@@ -4,6 +4,12 @@
 
 存放 `app/services/infrastructure/turn_history/` 日志、索引、恢复和压缩基础设施的单元测试。
 
+```text
+turn_history/
+├── AGENTS.md
+└── test_trace_index_compaction.py  # mapping 遍历上限与 payload 压缩边界
+```
+
 ## 可修改内容
 
 - TurnHistoryStore、索引、时间线和故障恢复测试。

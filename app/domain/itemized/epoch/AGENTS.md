@@ -6,6 +6,22 @@ byte length/hash 校验、Provider-profile item frame、精确 ToolSetRef/policy
 compatibility key，以及新 epoch 的 root 编译投影。它只提供纯值对象与合同
 校验，不读取 rollout、Provider、CSM 或任何运行时状态。
 
+## 职责树
+
+下面按领域流程组织文件职责；叶子路径就是当前物理结构：
+
+```text
+epoch/
+├── 状态机与稳定前缀
+│   └── prefix_epoch.py       epoch 转移、frame 和稳定前缀校验
+├── 输入快照与绑定
+│   ├── tool_set.py           工具快照、ToolSetRef 绑定与兼容键
+│   └── seal_binding.py       已应用来源修订与 assembly seal 绑定
+├── root 投影
+│   └── root_compilation.py   root 候选、来源 provenance 与 wire role
+└── __init__.py               epoch 领域族说明
+```
+
 # 可修改内容
 
 - 可以维护 `prefix_epoch.py` 的 epoch/reason 闭集、parent assembly 前缀校验、

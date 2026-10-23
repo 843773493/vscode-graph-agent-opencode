@@ -220,9 +220,15 @@ class GoalRuntimeService:
 
     async def _ensure_after_job_completed(self, job_id: str) -> None:
         job = await self._job_service.get(job_id)
-        if job.thread_id != await self._session_orchestrator.resolve_main_thread(job.session_id):
+        main_thread_id = await self._session_orchestrator.resolve_main_thread(
+            job.session_id
+        )
+        if job.thread_id != main_thread_id:
             return
-        await self.ensure_active_goal_running(job.session_id)
+        await self._dispatch_active_goal_if_idle(
+            job.session_id,
+            resolved_main_thread_id=main_thread_id,
+        )
 
     async def _stop_after_terminal_error(self, job_id: str, event_type: str) -> None:
         await self._wait_for_goal_capture(job_id)
@@ -249,6 +255,14 @@ class GoalRuntimeService:
             await self.ensure_active_goal_running(goal.session_id)
 
     async def ensure_active_goal_running(self, session_id: str) -> None:
+        await self._dispatch_active_goal_if_idle(session_id)
+
+    async def _dispatch_active_goal_if_idle(
+        self,
+        session_id: str,
+        *,
+        resolved_main_thread_id: str | None = None,
+    ) -> None:
         async with self._continuation_admission() as admitted:
             if not admitted:
                 return
@@ -256,7 +270,11 @@ class GoalRuntimeService:
             if goal is None or goal.status != GoalStatus.active:
                 return
             jobs = await self._job_service.list(session_id=session_id)
-            main_thread_id = await self._session_orchestrator.resolve_main_thread(session_id)
+            main_thread_id = resolved_main_thread_id
+            if main_thread_id is None:
+                main_thread_id = await self._session_orchestrator.resolve_main_thread(
+                    session_id
+                )
             if any(item.thread_id == main_thread_id
                    and item.status.value in {"queued", "running", "accepted"} for item in jobs):
                 return

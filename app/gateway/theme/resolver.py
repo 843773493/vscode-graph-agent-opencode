@@ -30,8 +30,8 @@ def theme_definitions(config: GatewayConfig) -> dict[str, ThemeDefinition]:
     for custom in config.custom_themes:
         if custom.id in definitions:
             raise ValueError(f"自定义主题 ID 与内置主题重复: {custom.id}")
-        for name, value in custom.tokens.items():
-            validate_token(name, value)
+        for token_name, token_value in custom.tokens.items():
+            validate_token(token_name, token_value)
         definitions[custom.id] = _from_config(custom)
     if config.default_theme_id not in definitions:
         raise ValueError(f"Gateway 默认主题不存在: {config.default_theme_id}")
@@ -51,50 +51,55 @@ def _from_config(theme: ConfiguredTheme) -> ThemeDefinition:
 
 
 def _background(
-    raw: dict[str, object] | GatewayThemeBackgroundDTO | None,
+    background_config: dict[str, object] | GatewayThemeBackgroundDTO | None,
     *,
     gateway_root: Path,
 ) -> tuple[str | None, dict[str, str], str]:
-    if raw is None:
+    if background_config is None:
         return None, {}, "theme"
-    data = raw.model_dump() if isinstance(raw, GatewayThemeBackgroundDTO) else raw
-    kind = str(data["type"])
+    background_data = (
+        background_config.model_dump()
+        if isinstance(background_config, GatewayThemeBackgroundDTO)
+        else background_config
+    )
+    kind = str(background_data["type"])
     if kind == "remote":
-        url = str(data["url"])
+        url = str(background_data["url"])
         if urlparse(url).scheme not in {"http", "https"}:
             raise ValueError(f"网络背景只支持 http/https URL: {url}")
     elif kind == "local_file":
-        asset = import_ui_asset_file(Path(str(data["path"])), gateway_root=gateway_root)
+        asset = import_ui_asset_file(
+            Path(str(background_data["path"])), gateway_root=gateway_root
+        )
         url = asset.url
     elif kind == "gateway_asset":
-        asset_id = str(data["asset_id"])
+        asset_id = str(background_data["asset_id"])
         resolve_ui_asset(asset_id, gateway_root=gateway_root)
         url = f"/api/gateway/ui-assets/{asset_id}"
     else:
         raise ValueError(f"不支持的主题背景类型: {kind}")
     display_tokens = {
-        "--bt-background-position": str(data.get("position", "center")),
-        "--bt-background-size": str(data.get("size", "cover")),
-        "--bt-background-repeat": str(data.get("repeat", "no-repeat")),
+        "--bt-background-position": str(background_data.get("position", "center")),
+        "--bt-background-size": str(background_data.get("size", "cover")),
+        "--bt-background-repeat": str(background_data.get("repeat", "no-repeat")),
         "--bt-background-overlay": str(
-            data.get("overlay", DEFAULT_THEME_BACKGROUND_OVERLAY)
+            background_data.get("overlay", DEFAULT_THEME_BACKGROUND_OVERLAY)
         ),
     }
     validate_background_display_tokens(display_tokens)
-    appearance = str(data.get("appearance", "immersive"))
+    appearance = str(background_data.get("appearance", "immersive"))
     if appearance not in {"immersive", "theme"}:
         raise ValueError(f"不支持的背景外观: {appearance}")
     return url, display_tokens, appearance
 
 
-def resolve_theme(
+def _resolve_theme_from_definitions(
     theme_id: str,
     *,
-    config: GatewayConfig,
+    definitions: dict[str, ThemeDefinition],
     gateway_root: Path,
     background_override: GatewayThemeBackgroundDTO | None = None,
 ) -> ResolvedGatewayThemeDTO:
-    definitions = theme_definitions(config)
     definition = definitions.get(theme_id)
     if definition is None:
         raise ValueError(f"Gateway 主题不存在: {theme_id}")
@@ -121,16 +126,32 @@ def resolve_theme(
     )
 
 
-def resolve_settings_theme(
-    settings: WebUISettingsDTO,
+def resolve_theme(
+    theme_id: str,
     *,
     config: GatewayConfig,
     gateway_root: Path,
+    background_override: GatewayThemeBackgroundDTO | None = None,
+) -> ResolvedGatewayThemeDTO:
+    return _resolve_theme_from_definitions(
+        theme_id,
+        definitions=theme_definitions(config),
+        gateway_root=gateway_root,
+        background_override=background_override,
+    )
+
+
+def _resolve_settings_theme_from_definitions(
+    settings: WebUISettingsDTO,
+    *,
+    config: GatewayConfig,
+    definitions: dict[str, ThemeDefinition],
+    gateway_root: Path,
 ) -> WebUISettingsDTO:
     selected_id = settings.theme.theme_id or config.default_theme_id
-    resolved = resolve_theme(
+    resolved = _resolve_theme_from_definitions(
         selected_id,
-        config=config,
+        definitions=definitions,
         gateway_root=gateway_root,
         background_override=settings.theme.background,
     )
@@ -143,25 +164,50 @@ def resolve_settings_theme(
     )
 
 
+def resolve_settings_theme(
+    settings: WebUISettingsDTO,
+    *,
+    config: GatewayConfig,
+    gateway_root: Path,
+) -> WebUISettingsDTO:
+    return _resolve_settings_theme_from_definitions(
+        settings,
+        config=config,
+        definitions=theme_definitions(config),
+        gateway_root=gateway_root,
+    )
+
+
 def theme_catalog(
     settings: WebUISettingsDTO, *, config: GatewayConfig, gateway_root: Path
 ) -> GatewayThemeCatalogDTO:
-    resolved_settings = resolve_settings_theme(
-        settings, config=config, gateway_root=gateway_root
-    )
-    current = resolved_settings.theme.resolved_theme
-    if current is None:
-        raise RuntimeError("主题解析器未返回当前主题")
     definitions = theme_definitions(config)
-    items = []
-    for definition in definitions.values():
-        resolved_option = resolve_theme(
-            definition.id,
-            config=config,
+    resolved_options = {
+        theme_id: _resolve_theme_from_definitions(
+            theme_id,
+            definitions=definitions,
             gateway_root=gateway_root,
         )
+        for theme_id in definitions
+    }
+    selected_theme_id = settings.theme.theme_id or config.default_theme_id
+    if selected_theme_id not in definitions:
+        raise ValueError(f"Gateway 主题不存在: {selected_theme_id}")
+    current_theme = (
+        resolved_options[selected_theme_id]
+        if settings.theme.background is None
+        else _resolve_theme_from_definitions(
+            selected_theme_id,
+            definitions=definitions,
+            gateway_root=gateway_root,
+            background_override=settings.theme.background,
+        )
+    )
+    theme_options = []
+    for definition in definitions.values():
+        resolved_option = resolved_options[definition.id]
         tokens = resolved_option.tokens
-        items.append(
+        theme_options.append(
             GatewayThemeOptionDTO(
                 id=definition.id,
                 label=definition.label,
@@ -179,5 +225,7 @@ def theme_catalog(
             )
         )
     return GatewayThemeCatalogDTO(
-        current_theme_id=current.id, items=items, current_theme=current
+        current_theme_id=current_theme.id,
+        items=theme_options,
+        current_theme=current_theme,
     )

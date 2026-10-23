@@ -27,8 +27,14 @@ class ReplayCoordinator:
         else:
             identity = current_model_call_identity()
             cassette = load_cassette(self.cassette.path) if self.cassette.path is not None else self.cassette
-            matches = tuple(entry for entry in self.matcher.matching_interactions(cassette, request)
-                            if entry.identity == identity)
+            matches = tuple(
+                entry
+                for entry in self.matcher.matching_interactions(
+                    cassette,
+                    request,
+                )
+                if entry.identity == identity
+            )
             if len(matches) != 1:
                 raise ModelStreamMatchError(
                     "模型 stream call_identity 未唯一匹配: "

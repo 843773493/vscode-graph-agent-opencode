@@ -12,18 +12,24 @@ from app.services.orchestration.session_title_service import SessionTitleService
 
 
 def test_internal_goal_title_uses_objective_instead_of_system_reminder():
-    assert session_title_message(
-        "<system_reminder>内部提示</system_reminder>",
-        {
-            "internal": True,
-            "goal_continuation": True,
-            "goal_objective": "验证 Goal 控制",
-        },
-    ) == "验证 Goal 控制"
-    assert session_title_message(
-        "内部维护消息",
-        {"internal": True},
-    ) is None
+    assert (
+        session_title_message(
+            "<system_reminder>内部提示</system_reminder>",
+            {
+                "internal": True,
+                "goal_continuation": True,
+                "goal_objective": "验证 Goal 控制",
+            },
+        )
+        == "验证 Goal 控制"
+    )
+    assert (
+        session_title_message(
+            "内部维护消息",
+            {"internal": True},
+        )
+        is None
+    )
 
 
 class _FakeSession:
@@ -39,6 +45,7 @@ class _FakeSession:
 class _FakeSessionService:
     def __init__(self, title: str, title_source: str = "default") -> None:
         self.session = _FakeSession(title, title_source)
+
     async def get(self, session_id: str):
         assert session_id == self.session.session_id
         return self.session
@@ -91,28 +98,56 @@ class _FakeBus:
         )
 
 
-@pytest.mark.asyncio
-async def test_auto_title_updates_default_session_title_from_first_message():
-    session_service = _FakeSessionService("新会话")
-    catalog_service = _FakeSessionCatalogService(session_service.session)
-    bus = _FakeBus()
-    service = SessionTitleService(
-        session_service=session_service,
-        session_catalog_service=catalog_service,
-        job_event_bus=bus,
+@pytest.fixture
+def fake_session_service() -> _FakeSessionService:
+    return _FakeSessionService("新会话")
+
+
+@pytest.fixture
+def fake_session_catalog_service(
+    fake_session_service: _FakeSessionService,
+) -> _FakeSessionCatalogService:
+    return _FakeSessionCatalogService(fake_session_service.session)
+
+
+@pytest.fixture
+def fake_job_event_bus() -> _FakeBus:
+    return _FakeBus()
+
+
+@pytest.fixture
+def session_title_service(
+    fake_session_service: _FakeSessionService,
+    fake_session_catalog_service: _FakeSessionCatalogService,
+    fake_job_event_bus: _FakeBus,
+) -> SessionTitleService:
+    return SessionTitleService(
+        session_service=fake_session_service,  # type: ignore[arg-type]
+        session_catalog_service=fake_session_catalog_service,  # type: ignore[arg-type]
+        job_event_bus=fake_job_event_bus,
     )
 
-    result = await service.maybe_auto_title_before_first_message(
+
+@pytest.mark.asyncio
+async def test_auto_title_updates_default_session_title_from_first_message(
+    fake_session_service: _FakeSessionService,
+    fake_session_catalog_service: _FakeSessionCatalogService,
+    fake_job_event_bus: _FakeBus,
+    session_title_service: SessionTitleService,
+) -> None:
+    title_mutation = await session_title_service.maybe_auto_title_before_first_message(
         session_id="ses_title_test",
         job_id="job_title_test",
         user_message="one two three four five six seven eight nine ten",
     )
 
-    assert result.outcome == "applied"
-    assert result.session.title == "one two three four five six seven eight"
-    assert session_service.session.title == "one two three four five six seven eight"
-    assert session_service.session.title_source == "auto"
-    assert catalog_service.commands == [
+    assert title_mutation.outcome == "applied"
+    assert title_mutation.session.title == "one two three four five six seven eight"
+    assert (
+        fake_session_service.session.title == "one two three four five six seven eight"
+    )
+    assert fake_session_service.session.title_source == "auto"
+    assert fake_session_catalog_service.commands == [
         {
             "expected_title": "新会话",
             "title": "one two three four five six seven eight",
@@ -121,68 +156,64 @@ async def test_auto_title_updates_default_session_title_from_first_message():
     assert any(
         event["event_type"] == "status_change"
         and event["payload"].get("reason") == "session_auto_title_updated"
-        for event in bus.events
+        for event in fake_job_event_bus.events
     )
-    assert not any(event["event_type"] == "llm_request" for event in bus.events)
+    assert not any(
+        event["event_type"] == "llm_request" for event in fake_job_event_bus.events
+    )
 
 
 @pytest.mark.asyncio
-async def test_auto_title_supports_chinese_first_message():
-    session_service = _FakeSessionService("未命名")
-    catalog_service = _FakeSessionCatalogService(session_service.session)
-    service = SessionTitleService(
-        session_service=session_service,
-        session_catalog_service=catalog_service,
-        job_event_bus=_FakeBus(),
-    )
+async def test_auto_title_supports_chinese_first_message(
+    fake_session_service: _FakeSessionService,
+    session_title_service: SessionTitleService,
+) -> None:
+    fake_session_service.session.title = "未命名"
 
-    result = await service.maybe_auto_title_before_first_message(
+    title_mutation = await session_title_service.maybe_auto_title_before_first_message(
         session_id="ses_title_test",
         job_id="job_title_test",
         user_message="请只回复：自动命名测试完成",
     )
 
-    assert result.session.title == "请只回复：自动命名"
-    assert session_service.session.title == "请只回复：自动命名"
+    assert title_mutation.session.title == "请只回复：自动命名"
+    assert fake_session_service.session.title == "请只回复：自动命名"
 
 
 @pytest.mark.asyncio
-async def test_auto_title_does_not_overwrite_custom_session_title():
-    session_service = _FakeSessionService("用户手动标题", "user")
-    catalog_service = _FakeSessionCatalogService(session_service.session)
-    service = SessionTitleService(
-        session_service=session_service,
-        session_catalog_service=catalog_service,
-        job_event_bus=_FakeBus(),
-    )
+async def test_auto_title_does_not_overwrite_custom_session_title(
+    fake_session_service: _FakeSessionService,
+    fake_session_catalog_service: _FakeSessionCatalogService,
+    session_title_service: SessionTitleService,
+) -> None:
+    fake_session_service.session.title = "用户手动标题"
+    fake_session_service.session.title_source = "user"
 
-    result = await service.maybe_auto_title_before_first_message(
+    title_mutation = await session_title_service.maybe_auto_title_before_first_message(
         session_id="ses_title_test",
         job_id="job_title_test",
         user_message="hello",
     )
 
-    assert result.outcome == "not_applicable"
-    assert catalog_service.commands == []
-    assert session_service.session.title == "用户手动标题"
+    assert title_mutation.outcome == "not_applicable"
+    assert fake_session_catalog_service.commands == []
+    assert fake_session_service.session.title == "用户手动标题"
 
 
 @pytest.mark.asyncio
-async def test_auto_title_does_not_overwrite_user_title_that_matches_default_text():
-    session_service = _FakeSessionService("新会话", "user")
-    catalog_service = _FakeSessionCatalogService(session_service.session)
-    service = SessionTitleService(
-        session_service=session_service,
-        session_catalog_service=catalog_service,
-        job_event_bus=_FakeBus(),
-    )
+async def test_auto_title_does_not_overwrite_user_title_that_matches_default_text(
+    fake_session_service: _FakeSessionService,
+    fake_session_catalog_service: _FakeSessionCatalogService,
+    session_title_service: SessionTitleService,
+) -> None:
+    fake_session_service.session.title_source = "user"
 
-    result = await service.maybe_auto_title_before_first_message(
+    title_mutation = await session_title_service.maybe_auto_title_before_first_message(
         session_id="ses_title_test",
         job_id="job_title_test",
         user_message="hello",
     )
 
-    assert result.outcome == "not_applicable"
-    assert session_service.session.title == "新会话"
-    assert catalog_service.commands == []
+    assert title_mutation.outcome == "not_applicable"
+    assert fake_session_service.session.title == "新会话"
+    assert fake_session_catalog_service.commands == []

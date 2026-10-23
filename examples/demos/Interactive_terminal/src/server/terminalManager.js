@@ -12,8 +12,8 @@ function normalizeEnv(env) {
   return normalized;
 }
 
-export function resolveDefaultShell(env = process.env) {
-  if (process.platform === "win32") {
+export function resolveDefaultShell(env = process.env, platform = process.platform) {
+  if (platform === "win32") {
     return env.COMSPEC || "cmd.exe";
   }
   return env.SHELL || "/bin/sh";
@@ -60,7 +60,6 @@ class TerminalSession {
     this.rows = rows;
     this.clients = new Map();
     this.closed = false;
-    this.exitEvent = null;
     this.pty = ptySpawn(shell, [], {
       name: "xterm-256color",
       cols,
@@ -73,15 +72,8 @@ class TerminalSession {
   }
 
   attach(clientId, handlers) {
-    assertNonEmptyString(clientId, "clientId");
     if (this.closed) {
       throw new Error(`终端 ${this.terminalId} 已退出，不能继续 attach`);
-    }
-    if (typeof handlers?.onOutput !== "function") {
-      throw new Error("onOutput 必须是函数");
-    }
-    if (typeof handlers?.onExit !== "function") {
-      throw new Error("onExit 必须是函数");
     }
     this.clients.set(clientId, handlers);
   }
@@ -108,9 +100,12 @@ class TerminalSession {
     if (this.closed) {
       throw new Error(`终端 ${this.terminalId} 已退出，不能 resize`);
     }
+    if (this.cols === cols && this.rows === rows) {
+      return;
+    }
+    this.pty.resize(cols, rows);
     this.cols = cols;
     this.rows = rows;
-    this.pty.resize(cols, rows);
   }
 
   kill() {
@@ -121,14 +116,21 @@ class TerminalSession {
   }
 
   broadcastOutput(data) {
+    if (this.clients.size === 0) {
+      return;
+    }
+    const outputEvent = Object.freeze({ terminalId: this.terminalId, data });
     for (const { onOutput } of this.clients.values()) {
-      onOutput(data);
+      onOutput(outputEvent);
     }
   }
 
   broadcastExit(event) {
     this.closed = true;
-    this.exitEvent = event;
+    this.dataSubscription.dispose();
+    this.exitSubscription.dispose();
+    this.dataSubscription = null;
+    this.exitSubscription = null;
     for (const { onExit } of this.clients.values()) {
       onExit(event);
     }
@@ -157,15 +159,28 @@ export class TerminalManager {
     this.defaultCols = defaultCols;
     this.defaultRows = defaultRows;
     this.sessions = new Map();
+    this.clientSessions = new Map();
   }
 
   attach({ terminalId, clientId, onOutput, onExit, cols = this.defaultCols, rows = this.defaultRows }) {
     assertTerminalId(terminalId, this.supportedTerminalId);
+    assertNonEmptyString(clientId, "clientId");
+    if (typeof onOutput !== "function") {
+      throw new Error("onOutput 必须是函数");
+    }
+    if (typeof onExit !== "function") {
+      throw new Error("onExit 必须是函数");
+    }
     assertPositiveInteger(cols, "cols");
     assertPositiveInteger(rows, "rows");
     const session = this.getOrCreateSession(terminalId, cols, rows);
-    session.attach(clientId, { onOutput, onExit });
+    const previousSession = this.clientSessions.get(clientId);
     session.resize(cols, rows);
+    if (previousSession && previousSession !== session) {
+      previousSession.detach(clientId);
+    }
+    session.attach(clientId, { onOutput, onExit });
+    this.clientSessions.set(clientId, session);
     return {
       terminalId,
       clientId,
@@ -177,16 +192,16 @@ export class TerminalManager {
   }
 
   detach(terminalId, clientId) {
-    const session = this.getExistingSession(terminalId);
+    assertTerminalId(terminalId, this.supportedTerminalId);
+    const session = this.clientSessions.get(clientId) ?? this.getExistingSession(terminalId);
+    if (session.terminalId !== terminalId) {
+      throw new Error(`客户端 ${clientId} 未 attach 到终端 ${terminalId}`);
+    }
     session.detach(clientId);
+    this.clientSessions.delete(clientId);
   }
 
   write(terminalId, data) {
-    const session = this.getExistingSession(terminalId);
-    session.write(data);
-  }
-
-  agentWrite(terminalId, data) {
     const session = this.getExistingSession(terminalId);
     session.write(data);
   }
@@ -200,6 +215,12 @@ export class TerminalManager {
     const session = this.getExistingSession(terminalId);
     session.kill();
     this.sessions.delete(terminalId);
+  }
+
+  killAll() {
+    for (const terminalId of this.sessions.keys()) {
+      this.kill(terminalId);
+    }
   }
 
   getOrCreateSession(terminalId, cols, rows) {

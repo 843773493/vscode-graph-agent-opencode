@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from app.domain.itemized.execution_queue import ExecutionQueueInput
 import asyncio
 import copy
 import json
@@ -23,7 +24,6 @@ from app.container import AppContainer, build_app_container
 from app.core.identifier import create_prefixed_id
 from app.core.job_event_bus import JobEventBus
 from app.core.workspace_identity import load_or_create_workspace_id
-from app.domain.itemized.execution_queue import ExecutionQueueInput
 from app.schemas.event import JobCreatedEvent, JobStartedEvent
 from app.schemas.internal_v2.common import MessageRole
 from app.schemas.internal_v2.message import MessageDTO
@@ -39,7 +39,6 @@ from app.services.orchestration.owner_thread_creation_factory import (
     OwnerThreadCreationFactory,
 )
 from tests.harness.python.run_context import TestRunContext
-from tests.support.workspaces import prepare_default_test_workspace
 from tests.unit.core.catalog_workspace_helper import (
     CatalogWorkspaceContext,
     build_catalog_workspace,
@@ -76,11 +75,10 @@ class RecoveryCase:
 async def recovery_case(request: pytest.FixtureRequest) -> AsyncIterator[RecoveryCase]:
     context = TestRunContext.from_test_file(Path(request.node.path))
     runtime_root = context.runtime_root_for_node(request.node.nodeid)
-    workspace = prepare_default_test_workspace(
-        workspace_root=runtime_root / "workspace",
-        template_root=Path.cwd() / "tests/fixtures/workspaces/default_test_workspace",
-    )
-    shutil.rmtree(workspace / ".boxteam")
+    workspace = runtime_root / "workspace"
+    if workspace.exists():
+        shutil.rmtree(workspace)
+    workspace.mkdir(parents=True)
     artifacts = context.artifacts_dir / (
         f"{request.node.name}-{datetime.now(UTC).strftime('%Y%m%dT%H%M%S%f')}"
     )

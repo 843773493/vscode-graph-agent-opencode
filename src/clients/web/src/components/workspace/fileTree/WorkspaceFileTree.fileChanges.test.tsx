@@ -3,6 +3,7 @@ import React from "react";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
 
 import WorkspaceFileTree from "./WorkspaceFileTree";
+import { fileTreeNodeFixture as fileNode } from "./workspaceFileTreeTestFixtures";
 import {
   WORKSPACE_FILE_CHANGES_EVENT,
   type WorkspaceFileChangesEventDetail,
@@ -64,17 +65,6 @@ function apiResponse(data: unknown): Response {
     request_id: "request-workspace-file-tree-changes-test",
     data,
   });
-}
-
-function fileNode(path: string, kind: "file" | "directory"): Record<string, unknown> {
-  return {
-    name: path.split("/").pop() ?? path,
-    path,
-    kind,
-    has_children: kind === "directory",
-    size: kind === "file" ? 1 : null,
-    modified_at: null,
-  };
 }
 
 interface Harness {

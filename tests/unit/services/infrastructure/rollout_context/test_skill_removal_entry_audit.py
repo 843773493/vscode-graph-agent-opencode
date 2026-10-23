@@ -32,6 +32,8 @@ LOAD_SKILL_CALLER_WHITELIST = {
 # tracking 状态的唯一域 owner。
 TRACKING_OWNER_FILES = {
     "app/services/infrastructure/rollout_context/runtime/context_sources/context_source_manager.py",
+    # CSM 组合的 Skill catalog owner 在同一持久事务里冻结旧 tracking 并登记新来源。
+    "app/services/infrastructure/rollout_context/runtime/context_sources/skill_catalog.py",
 }
 # 生产代码中合法的 skill_load 工具名(LangChain @tool 首参)。
 ALLOWED_SKILL_TOOL_NAMES = {"skill_load"}

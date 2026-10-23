@@ -449,7 +449,7 @@ async def test_restore_and_new_send_keep_one_session_fifo_order(
         service._thread_current_job[("ses_019b8605a35b7fd6829e9dfec660d38c", pending_input_owner._resolve_main_thread_id("ses_019b8605a35b7fd6829e9dfec660d38c"))]
         == "job_restored_first"
     )
-    assert service._pending_queue.ids("ses_019b8605a35b7fd6829e9dfec660d38c") == (
+    assert service._pending_queue.queued_job_ids("ses_019b8605a35b7fd6829e9dfec660d38c") == (
         new_dispatch.job_id,
     )
 

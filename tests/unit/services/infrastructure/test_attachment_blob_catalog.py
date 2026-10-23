@@ -57,6 +57,9 @@ from app.schemas.internal_v2.session import SessionForkRequest
 from app.schemas.internal_v2.turn import TurnHistoryLoadRequest
 from app.services.business.session_context_fork_service import SessionContextForkService
 from app.services.business.user_content_builder import UserContentBuilder
+from app.services.infrastructure.attachment_blob_catalog import (
+    store as attachment_blob_store_module,
+)
 from app.services.infrastructure.attachment_blob_catalog.blob_identity import (
     compute_blob_identity,
     date_bucket_relative_locator,
@@ -836,6 +839,63 @@ async def test_repeated_upload_does_not_publish_missing_or_corrupt_winner(
         store.close()
 
 
+def test_verified_blob_signature_cache_is_bounded_lru(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = AttachmentBlobStore(tmp_path)
+    payload = b"verified attachment"
+    identity = compute_blob_identity(payload)
+    cache_limit = attachment_blob_store_module._VERIFIED_BLOB_SIGNATURE_CACHE_SIZE
+    paths = [tmp_path / f"blob-{index}" for index in range(cache_limit + 1)]
+    for path in paths:
+        path.write_bytes(payload)
+
+    verification_count = 0
+    verify_content = attachment_blob_store_module._verify_content
+
+    def count_verification(
+        data: bytes | Path,
+        expected_digest: str,
+        expected_length: int,
+        blob_id: str,
+    ) -> None:
+        nonlocal verification_count
+        verification_count += 1
+        verify_content(data, expected_digest, expected_length, blob_id)
+
+    monkeypatch.setattr(
+        attachment_blob_store_module,
+        "_verify_content",
+        count_verification,
+    )
+    try:
+        for path in paths[:-1]:
+            store._verify_blob_content(
+                path,
+                identity.digest,
+                identity.length,
+                identity.blob_id,
+            )
+        store._verify_blob_content(
+            paths[0], identity.digest, identity.length, identity.blob_id
+        )
+        store._verify_blob_content(
+            paths[-1], identity.digest, identity.length, identity.blob_id
+        )
+        store._verify_blob_content(
+            paths[0], identity.digest, identity.length, identity.blob_id
+        )
+        store._verify_blob_content(
+            paths[1], identity.digest, identity.length, identity.blob_id
+        )
+
+        assert verification_count == cache_limit + 2
+        assert len(store._verified_blob_signatures) == cache_limit
+    finally:
+        store.close()
+
+
 @pytest.mark.asyncio
 async def test_same_digest_across_sessions_reuses_single_physical_blob(
     tmp_path, session_bundle_factory
@@ -957,6 +1017,41 @@ async def test_read_thumbnail_reports_corrupt_image_as_value_error(
         store.read_thumbnail(SESSION_A, stored.file_id)
     assert store.read(SESSION_A, stored.file_id).data == truncated
     store.close()
+
+
+@pytest.mark.asyncio
+async def test_preview_cache_io_error_keeps_uri_and_errno_in_generated_diagnostics(
+    tmp_path, session_bundle_factory, monkeypatch,
+) -> None:
+    import errno
+
+    from app.services.infrastructure.attachment_blob_catalog import (
+        store as store_module,
+    )
+
+    store = _store(tmp_path, session_bundle_factory, SESSION_A)
+    buffer = BytesIO()
+    Image.new("RGB", (64, 64)).save(buffer, format="PNG")
+    attachment = (await store.persist_inline(
+        SESSION_A, [_attach("preview.png", "image/png", buffer.getvalue())],
+        thread_id=store._path_resolver.main_thread_id(SESSION_A),
+     message_id="msg_" + create_uuid_hex(namespace="message")))[0]
+
+    def denied_write(target, data):
+        raise PermissionError(errno.EACCES, "Permission denied", str(target))
+
+    monkeypatch.setattr(store_module, "_write_once", denied_write)
+    try:
+        built = UserContentBuilder(attachment_service=AttachmentContentService(
+            workspace_root=tmp_path, attachment_store=store,
+        )).build("读取附件", [attachment])
+        assert built.diagnostics[0]["file_id"] == attachment.file_id
+        assert "Errno 13" in built.diagnostics[0]["detail"]
+        assert attachment.file_id in built.diagnostics[0]["detail"]
+        assert str(tmp_path) not in str(built)
+        assert built.content[1]["metadata"]["preview_status"] == "failed"
+    finally:
+        store.close()
 
 
 @pytest.mark.asyncio
@@ -1444,41 +1539,6 @@ async def test_model_attachment_capability_normalizes_only_current_gateway(attac
                 case.saver.read_tool_call_attachment(SESSION_A, file_id=foreign, **read)
     finally:
         reset_current_gateway_id(token)
-
-
-@pytest.mark.asyncio
-async def test_preview_cache_io_error_keeps_uri_and_errno_in_generated_diagnostics(
-    tmp_path, session_bundle_factory, monkeypatch,
-) -> None:
-    import errno
-
-    from app.services.infrastructure.attachment_blob_catalog import (
-        store as store_module,
-    )
-
-    store = _store(tmp_path, session_bundle_factory, SESSION_A)
-    buffer = BytesIO()
-    Image.new("RGB", (64, 64)).save(buffer, format="PNG")
-    attachment = (await store.persist_inline(
-        SESSION_A, [_attach("preview.png", "image/png", buffer.getvalue())],
-        thread_id=store._path_resolver.main_thread_id(SESSION_A),
-     message_id="msg_" + create_uuid_hex(namespace="message")))[0]
-
-    def denied_write(target, data):
-        raise PermissionError(errno.EACCES, "Permission denied", str(target))
-
-    monkeypatch.setattr(store_module, "_write_once", denied_write)
-    try:
-        built = UserContentBuilder(attachment_service=AttachmentContentService(
-            workspace_root=tmp_path, attachment_store=store,
-        )).build("读取附件", [attachment])
-        assert built.diagnostics[0]["file_id"] == attachment.file_id
-        assert "Errno 13" in built.diagnostics[0]["detail"]
-        assert attachment.file_id in built.diagnostics[0]["detail"]
-        assert str(tmp_path) not in str(built)
-        assert built.content[1]["metadata"]["preview_status"] == "failed"
-    finally:
-        store.close()
 
 
 @pytest.fixture

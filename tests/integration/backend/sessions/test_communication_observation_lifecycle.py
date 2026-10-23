@@ -58,7 +58,9 @@ from app.services.orchestration.communication.inbox_admission_worker import (
     InboxAdmissionTarget,
     InboxExecutionBinding,
 )
-from app.services.orchestration.communication.observation_service import _page_identity
+from app.services.orchestration.communication.observation_persistence import (
+    _observation_page_identity,
+)
 from app.services.orchestration.communication.service import SessionCommunicationService
 from tests.harness.python.run_context import TestRunContext
 from tests.integration.backend.sessions.test_session_communication_pipeline import (
@@ -557,7 +559,7 @@ async def test_real_http_cursor_errors_gateway_source_and_deleted_page(
     source = GlobalThreadAddress(case.gateway_id, case.backend.workspace_id, source_id, source_thread)
     target = GlobalThreadAddress(case.gateway_id, case.backend.workspace_id, target_id, target_thread)
     read = SessionContextReadRequest(resource_identity=session_resource_identity(target.workspace_id, target.session_id), uri=session_resource_uri(target.workspace_id, target.session_id), scope="workspace", view="messages", limit=1)
-    request = CommunicationObservationRequest(observation_id="obs_http_lifecycle", source_call_id="cop_http_first", page_identity=_page_identity(source, "cop_http_first"), page_ordinal=0, expires_at=now + timedelta(days=1), source=source, target=target, operation="read", query={"read": read.model_dump(mode="json")})
+    request = CommunicationObservationRequest(observation_id="obs_http_lifecycle", source_call_id="cop_http_first", page_identity=_observation_page_identity(source, "cop_http_first"), page_ordinal=0, expires_at=now + timedelta(days=1), source=source, target=target, operation="read", query={"read": read.model_dump(mode="json")})
     relay = {"operation": "read", "target": request.model_dump(mode="json")["target"], "body": request.model_dump(mode="json")}
     first_response = await case.client.post("/api/gateway/federation/relay", json=relay)
     assert first_response.status_code == 200, first_response.text
@@ -567,7 +569,7 @@ async def test_real_http_cursor_errors_gateway_source_and_deleted_page(
     raw[-1] ^= 1
     tampered = "rt1." + base64.urlsafe_b64encode(raw).decode()
     bad = request.model_copy(update={
-        "source_call_id": "cop_http_bad", "page_identity": _page_identity(source, "cop_http_bad"),
+        "source_call_id": "cop_http_bad", "page_identity": _observation_page_identity(source, "cop_http_bad"),
         "page_ordinal": 1, "query": {"read": read.model_copy(update={"cursor": tampered}).model_dump(mode="json")},
     })
     async with httpx.AsyncClient(base_url=f"http://127.0.0.1:{case.backend.port}", headers={**LOCAL_TOKEN_HEADERS, "X-BoxTeam-Gateway-Id": case.gateway_id, "X-BoxTeam-Workspace-Id": case.backend.workspace_id, "X-BoxTeam-Communication-Origin": case.gateway_id}) as backend:
@@ -596,7 +598,7 @@ async def test_real_http_cursor_errors_gateway_source_and_deleted_page(
     missing_selector = CommunicationObservationRequest(
         observation_id="obs_http_missing_selector",
         source_call_id=missing_call_id,
-        page_identity=_page_identity(source, missing_call_id),
+        page_identity=_observation_page_identity(source, missing_call_id),
         page_ordinal=0,
         expires_at=now + timedelta(days=1),
         source=source,
@@ -617,7 +619,7 @@ async def test_real_http_cursor_errors_gateway_source_and_deleted_page(
     missing_direct_request = missing_selector.model_copy(update={
         "observation_id": "obs_http_missing_selector_direct",
         "source_call_id": direct_call_id,
-        "page_identity": _page_identity(source, direct_call_id),
+        "page_identity": _observation_page_identity(source, direct_call_id),
     })
     async with httpx.AsyncClient(base_url=f"http://127.0.0.1:{case.backend.port}", headers={**LOCAL_TOKEN_HEADERS, "X-BoxTeam-Gateway-Id": case.gateway_id, "X-BoxTeam-Workspace-Id": case.backend.workspace_id, "X-BoxTeam-Communication-Origin": case.gateway_id}) as backend:
         missing_direct = await backend.post(
@@ -686,7 +688,7 @@ async def test_real_http_cursor_errors_gateway_source_and_deleted_page(
     assert deletion["state"] == "committed", deletion
     restored = await case.client.post("/api/gateway/federation/relay", json=relay)
     assert restored.status_code == 200 and restored.json()["data"] == first, restored.text
-    new_page = bad.model_copy(update={"source_call_id": "cop_http_new_after_delete", "page_identity": _page_identity(source, "cop_http_new_after_delete"), "query": {"read": read.model_copy(update={"cursor": first["result"]["next_cursor"]}).model_dump(mode="json")}})
+    new_page = bad.model_copy(update={"source_call_id": "cop_http_new_after_delete", "page_identity": _observation_page_identity(source, "cop_http_new_after_delete"), "query": {"read": read.model_copy(update={"cursor": first["result"]["next_cursor"]}).model_dump(mode="json")}})
     rejected = await case.client.post("/api/gateway/federation/relay", json={**relay, "body": new_page.model_dump(mode="json")})
     assert rejected.status_code == 409
     assert rejected.json()["detail"]["code"] == FEDERATION_TARGET_OWNER_REJECTED

@@ -10,11 +10,11 @@ from app.tool_testing.definitions import ToolTestCase
 class ToolTestRegistry:
     def __init__(self, cases: list[ToolTestCase] | None = None) -> None:
         self._cases: dict[str, list[ToolTestCase]] = defaultdict(list)
-        default_cases: list[ToolTestCase] = [
+        registered_cases = cases or [
             *create_apply_patch_cases(),
             *create_edit_file_cases(),
         ]
-        for case in cases or default_cases:
+        for case in registered_cases:
             self.register(case)
 
     def register(self, case: ToolTestCase) -> None:

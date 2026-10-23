@@ -52,7 +52,8 @@ class UserProfileStore:
         initial_custom_themes: tuple[ConfiguredTheme, ...] = (),
     ) -> Path:
         profile_root = self.user_path(user_id)
-        first_user_profile = not any(
+        profile_path = profile_root / "profile.jsonc"
+        first_user_profile = not profile_path.exists() and not any(
             path.is_dir() for path in self._users_root.glob("*")
         )
         profile_root.mkdir(parents=True, exist_ok=True)
@@ -60,7 +61,6 @@ class UserProfileStore:
         gitignore_path = profile_root / ".gitignore"
         if not gitignore_path.exists():
             _atomic_write_text(gitignore_path, _PROFILE_GITIGNORE)
-        profile_path = profile_root / "profile.jsonc"
         if profile_path.exists():
             self._read_profile(profile_path)
         else:

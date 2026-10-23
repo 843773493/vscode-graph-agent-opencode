@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import sys
 from pathlib import Path
 from uuid import UUID, uuid4
 
@@ -126,6 +127,17 @@ def _absolute_workspace_root(value: str) -> Path:
     return workspace_root
 
 
+def _workspace_roots_from_stdin() -> tuple[Path, ...]:
+    values = json.load(sys.stdin)
+    if (
+        not isinstance(values, list)
+        or not values
+        or not all(isinstance(value, str) for value in values)
+    ):
+        raise TypeError("Workspace 根目录标准输入必须是非空字符串数组")
+    return tuple(_absolute_workspace_root(value) for value in values)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description="读取或初始化显式 Workspace 的后端 UUID。"
@@ -135,14 +147,28 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="只读取既有身份；缺失时直接失败，不初始化目录或 UUID",
     )
-    parser.add_argument(
+    root_options = parser.add_mutually_exclusive_group(required=True)
+    root_options.add_argument(
         "--workspace-root",
-        required=True,
+        action="append",
         type=_absolute_workspace_root,
-        help="Workspace 根目录绝对路径",
+        help="Workspace 根目录绝对路径；可重复传入以按序读取多个工作区",
+    )
+    root_options.add_argument(
+        "--workspace-roots-stdin",
+        action="store_true",
+        help="从标准输入读取 Workspace 根目录 JSON 数组",
     )
     args = parser.parse_args(argv)
-    print(read_workspace_id(args.workspace_root) if args.read_only else load_or_create_workspace_id(args.workspace_root))
+    workspace_roots = (
+        tuple(args.workspace_root)
+        if args.workspace_root is not None
+        else _workspace_roots_from_stdin()
+    )
+    identity_reader = (
+        read_workspace_id if args.read_only else load_or_create_workspace_id
+    )
+    print("\n".join(identity_reader(root) for root in workspace_roots))
     return 0
 
 

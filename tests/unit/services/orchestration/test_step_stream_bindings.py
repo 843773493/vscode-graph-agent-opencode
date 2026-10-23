@@ -9,19 +9,28 @@ import pytest
 from app.domain.itemized.records import CanonicalItemRecord
 from app.services.orchestration.execution_step.stream_bindings import CanonicalItemSink
 
+SESSION_ID = "session_1"
+THREAD_ID = "thr_00000000400070008000000000000002"
+CHECKPOINT_NAMESPACE = "agent"
+
 
 @pytest.fixture
-def saver() -> MagicMock:
+def canonical_item_saver() -> MagicMock:
     return MagicMock(spec=["append_items", "commit_tool_result"])
 
 
 @pytest.fixture
-def sink(saver: MagicMock) -> CanonicalItemSink:
-    return CanonicalItemSink(saver, session_id="session_1", thread_id="thr_00000000400070008000000000000002", checkpoint_ns="agent")
+def canonical_item_sink(canonical_item_saver: MagicMock) -> CanonicalItemSink:
+    return CanonicalItemSink(
+        canonical_item_saver,
+        session_id=SESSION_ID,
+        thread_id=THREAD_ID,
+        checkpoint_ns=CHECKPOINT_NAMESPACE,
+    )
 
 
 @pytest.fixture
-def item() -> CanonicalItemRecord:
+def reasoning_item() -> CanonicalItemRecord:
     return CanonicalItemRecord.create(
         item_sequence=1,
         item_id="item_1",
@@ -35,42 +44,59 @@ def item() -> CanonicalItemRecord:
     )
 
 
-def test_sink_requires_persistence_port() -> None:
+def test_canonical_item_sink_requires_append_items_port() -> None:
     with pytest.raises(TypeError, match="必须绑定 Saver append_items"):
-        CanonicalItemSink(object(), session_id="session_1", thread_id="thr_00000000400070008000000000000002", checkpoint_ns="")
+        CanonicalItemSink(
+            object(),
+            session_id=SESSION_ID,
+            thread_id=THREAD_ID,
+            checkpoint_ns="",
+        )
 
 
-def test_sink_requires_tool_result_commit_port() -> None:
-    checkpointer = MagicMock(spec=["append_items"])
+def test_canonical_item_sink_requires_tool_result_commit_port() -> None:
+    append_only_saver = MagicMock(spec=["append_items"])
     with pytest.raises(TypeError, match="必须绑定 Saver commit_tool_result"):
         CanonicalItemSink(
-            checkpointer,
-            session_id="session_1",
-            thread_id="thr_00000000400070008000000000000002",
+            append_only_saver,
+            session_id=SESSION_ID,
+            thread_id=THREAD_ID,
             checkpoint_ns="",
         )
 
 
 @pytest.mark.asyncio
-async def test_sink_rejects_invalid_items_before_writing(sink: CanonicalItemSink, saver: MagicMock) -> None:
+async def test_canonical_item_sink_rejects_invalid_items_before_writing(
+    canonical_item_sink: CanonicalItemSink,
+    canonical_item_saver: MagicMock,
+) -> None:
     with pytest.raises(TypeError, match="非法 item"):
-        await sink.append([object()])
-    saver.append_items.assert_not_called()
+        await canonical_item_sink.append([object()])
+    canonical_item_saver.append_items.assert_not_called()
 
 
 @pytest.mark.asyncio
-async def test_sink_routes_original_items_without_retaining_a_copy(
-    sink: CanonicalItemSink, saver: MagicMock, item: CanonicalItemRecord
+async def test_canonical_item_sink_forwards_original_items_without_retaining_a_copy(
+    canonical_item_sink: CanonicalItemSink,
+    canonical_item_saver: MagicMock,
+    reasoning_item: CanonicalItemRecord,
 ) -> None:
-    await sink.append([item])
-    saver.append_items.assert_called_once_with("session_1", (item,), thread_id="thr_00000000400070008000000000000002", checkpoint_ns="agent")
-    assert not hasattr(sink, "items")
+    await canonical_item_sink.append([reasoning_item])
+    canonical_item_saver.append_items.assert_called_once_with(
+        SESSION_ID,
+        (reasoning_item,),
+        thread_id=THREAD_ID,
+        checkpoint_ns=CHECKPOINT_NAMESPACE,
+    )
+    assert not hasattr(canonical_item_sink, "items")
 
 
 @pytest.mark.asyncio
-async def test_sink_propagates_commit_failure(
-    sink: CanonicalItemSink, saver: MagicMock, item: CanonicalItemRecord
+async def test_canonical_item_sink_propagates_append_failure(
+    canonical_item_sink: CanonicalItemSink,
+    canonical_item_saver: MagicMock,
+    reasoning_item: CanonicalItemRecord,
 ) -> None:
-    saver.append_items.side_effect = OSError("提交失败")
-    with pytest.raises(OSError, match="提交失败"):
-        await sink.append([item])
+    canonical_item_saver.append_items.side_effect = OSError("追加失败")
+    with pytest.raises(OSError, match="追加失败"):
+        await canonical_item_sink.append([reasoning_item])

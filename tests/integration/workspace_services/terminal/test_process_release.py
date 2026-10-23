@@ -79,7 +79,7 @@ def unreaped_process() -> Iterator[Callable[[str], int]]:
 def release_process() -> Callable[..., dict[str, object]]:
     node = shutil.which("node")
     assert node is not None, "未找到 Terminal 使用的 Node 运行时"
-    module = (Path.cwd() / "src/workspace-services/terminal/server/terminalProcessUtils.js").as_uri()
+    module = (Path.cwd() / "src/workspace-services/terminal/server/processes/terminalProcessLifecycle.js").as_uri()
     script = f"""
 import {{ readProcessStat, terminateTerminalProcessTree }} from {json.dumps(module)};
 const pid = Number(process.argv[1]);

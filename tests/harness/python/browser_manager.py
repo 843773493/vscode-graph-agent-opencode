@@ -38,8 +38,12 @@ def start_browser_manager_processes(
     frontend_port: int,
     backend_host: str,
 ) -> BrowserManagerProcesses:
-    ensure_local_port_available(backend_port, service_name="浏览器管理器后端")
+    ensure_local_port_available(backend_port, service_name="浏览器管理器后端", host=backend_host)
     ensure_local_port_available(frontend_port, service_name="浏览器管理器前端")
+    # 通配地址用于监听，本机访问用同地址族回环；IPv6仅在URL authority中加方括号。
+    backend_connect_host = {"0.0.0.0": "127.0.0.1", "::": "::1"}.get(backend_host, backend_host)
+    backend_url_host = f"[{backend_connect_host}]" if ":" in backend_connect_host else backend_connect_host
+    backend_url = f"http://{backend_url_host}:{backend_port}"
     project_root = Path.cwd().resolve()
     node_bin = shutil.which("node")
     if node_bin is None:
@@ -78,7 +82,7 @@ def start_browser_manager_processes(
                 "--port",
                 str(frontend_port),
                 "--backend-url",
-                f"http://127.0.0.1:{backend_port}",
+                backend_url,
                 "--workspace-root",
                 str(workspace_root),
                 "--asset-root",
@@ -107,7 +111,7 @@ def start_browser_manager_processes(
         frontend_port=frontend_port,
     )
     try:
-        wait_for_http_ok(f"http://127.0.0.1:{backend_port}/health", backend_process)
+        wait_for_http_ok(f"{backend_url}/health", backend_process)
         wait_for_http_ok(f"http://127.0.0.1:{frontend_port}/health", frontend_process)
     except BaseException as startup_error:
         for path in (*backend_logs, *frontend_logs):

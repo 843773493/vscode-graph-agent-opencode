@@ -8,6 +8,24 @@
 - `hooks/app/`：AppContext / ComposerContext 契约与 AppProvider 装配；本目录只服务 AppShell 的编排。
 - `components/shell/`：外壳组件；本目录只提供状态与动作，不渲染 JSX 组件。
 
+## 按职责查找
+
+```text
+AppShell 外壳行为
+├── 会话目录操作与对话框状态
+│   └── useSessionCatalogActions.ts          创建、移动、删除、重命名与目录刷新
+├── Fork 对话框状态流
+│   └── useSessionForkDialog.ts              来源校验、复制范围刷新与提交回执
+├── 会话变更预览的输入与提示
+│   └── useSessionChangesPreview.ts          取得当前会话变更并派生默认视图提示
+├── 工作区预览页签的区域投影
+│   └── previewTabProjection.ts              将已有页签分为文件、差异和运行时区域
+└── 工作台布局偏好
+    └── useWorkbenchLayoutPreferences.ts      本地展示镜像与后端布局设置同步
+```
+
+判断新逻辑放置位置时，先看它管理哪一段状态生命周期：目录刷新与目录动作放进目录 hook，Fork 对话框从来源读取到提交回执的状态放进 Fork hook，变更提示放进变更预览 hook，布局持久化放进布局 hook。如果只从显式输入计算区域切片，则放进纯投影函数。纯投影不保存状态、不发请求，测试验证输入到输出的映射；副作用和状态转换由所属 hook 测试。
+
 # 可修改内容
 
 - 外壳级会话目录动作、重命名对话框状态与目录刷新信号的编排。

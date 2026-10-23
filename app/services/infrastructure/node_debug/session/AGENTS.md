@@ -2,6 +2,31 @@
 
 `app/services/infrastructure/node_debug/session/` 承载 Node Debug 会话的基础设施实现：会话存储读写、会话调试状态、会话准入判定、调试动作分发与工具动作记录、启动/重启与关停/排空入口链路、只读状态读取、动作快照、线程所有权解析以及方案 fork 预发布边界。
 
+## 职责树与数据流
+
+目录在物理上保持扁平；按职责查找时使用下面的逻辑树：
+
+```text
+session/
+├── owner 与写入准入
+│   ├── thread_owner.py          规范化 Session/Thread 身份并解析 catalog owner
+│   └── session_admission.py     会话级变更准入
+├── 会话持久状态
+│   ├── session_store.py         manifest、launch claim 与方案配置文件读写
+│   ├── session_state.py         待安装断点、动作历史和运行态 manifest 更新
+│   └── snapshot.py              有界动作记录与 Node Debug 状态快照
+├── 服务入口 mixin
+│   ├── action_dispatch.py       apply_action 调试动作分发
+│   ├── tool_actions.py          record_tool_action 工具动作记录
+│   ├── launch_entry.py          start/restart 启动入口
+│   ├── state_reads.py           get_state/get_variables 只读入口
+│   └── lifecycle_entry.py       close/drain_session 关停入口
+└── Fork 预发布
+    └── fork.py                  source 快照捕获与 target 方案校验
+```
+
+常规 mutation 从 `NodeDebugService` 入口取得 owner 准入，再更新会话状态或 store；只读入口从 owner 读取状态并组装快照。Fork 流程独立冻结 source 方案 bytes，再在 target 发布前验证路径与 launch profile，不在此目录发布 Session。
+
 # 可修改内容
 
 - 可以维护会话 manifest/方案/claim 持久化、调试快照组装、线程归属解析和 fork 源捕获与目标校验。

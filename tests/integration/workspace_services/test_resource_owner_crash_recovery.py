@@ -73,6 +73,15 @@ def _wait_ready(process: subprocess.Popen[str], url: str) -> None:
     raise TimeoutError(f"资源服务未就绪: {url}")
 
 
+def _assert_force_terminated(process: subprocess.Popen[str]) -> None:
+    exit_code = process.wait(timeout=10)
+    if os.name == "nt":
+        # Windows 的 Popen.kill() 使用 TerminateProcess，退出码不编码 POSIX signal。
+        assert exit_code != 0
+    else:
+        assert exit_code == -signal.SIGKILL
+
+
 @pytest.fixture
 def resource_processes(
     request: pytest.FixtureRequest, integration_workspace_root_path: str,
@@ -332,9 +341,12 @@ async def _recover_orphan_worker(workspace: Path, barrier: Path, output: Path, k
 @pytest.mark.parametrize("kind", ["terminal", "browser"])
 @pytest.mark.parametrize("happened", [True, False])
 @pytest.mark.parametrize("retention_scope", ["thread", "workspace"])
-def test_sigkill_unknown_stop_new_process_preserves_owner_and_does_not_replay(
-    request: pytest.FixtureRequest, resource_processes: tuple[Path, Path],
-    kind: ResourceKind, happened: bool, retention_scope: RetentionScope,
+def test_force_termination_unknown_stop_new_process_preserves_owner_and_does_not_replay(
+    request: pytest.FixtureRequest,
+    resource_processes: tuple[Path, Path],
+    kind: ResourceKind,
+    happened: bool,
+    retention_scope: RetentionScope,
 ) -> None:
     workspace, runtime = resource_processes
     barrier = runtime / "stop-receipt-paused.json"
@@ -361,7 +373,7 @@ def test_sigkill_unknown_stop_new_process_preserves_owner_and_does_not_replay(
         ledger = json.loads((workspace / ".boxteam" / "resources.json").read_text())
         assert next(item for item in ledger["leases"] if item["lease_id"] == identity["lease_id"])["status"] == "active"
         child.kill()
-        assert child.wait(timeout=10) == -signal.SIGKILL
+        _assert_force_terminated(child)
         # 恢复进程尚未启动：活实例已经有持久权威记录，不能靠重扫外部实例补造。
         killed_record = next(item for item in json.loads((workspace / ".boxteam" / f"{kind}-resources.json").read_text())["records"] if item["resource_id"] == identity["rid"])
         assert killed_record == record
@@ -394,9 +406,11 @@ def test_sigkill_unknown_stop_new_process_preserves_owner_and_does_not_replay(
 
 @pytest.mark.parametrize("kind", ["terminal", "browser"])
 @pytest.mark.parametrize("reattach", [True, False])
-def test_sigkill_restart_keeps_original_orphan_deadline_and_exact_reclaim_boundary(
-    request: pytest.FixtureRequest, resource_processes: tuple[Path, Path],
-    kind: ResourceKind, reattach: bool,
+def test_force_termination_restart_keeps_original_orphan_deadline_and_exact_reclaim_boundary(
+    request: pytest.FixtureRequest,
+    resource_processes: tuple[Path, Path],
+    kind: ResourceKind,
+    reattach: bool,
 ) -> None:
     workspace, runtime = resource_processes
     barrier = runtime / "detached-orphan.json"
@@ -415,7 +429,7 @@ def test_sigkill_restart_keeps_original_orphan_deadline_and_exact_reclaim_bounda
         identity = json.loads(barrier.read_text())
         assert identity["pid"] == child.pid
         child.kill()
-        assert child.wait(timeout=10) == -signal.SIGKILL
+        _assert_force_terminated(child)
         recovered = _spawn(
             stack, [sys.executable, test_file, "recover-orphan", str(workspace), str(barrier), kind, str(output)],
             cwd=Path.cwd(), logs=runtime / "orphan-recovery-worker",

@@ -25,15 +25,20 @@ from app.services.infrastructure.rollout_context.runtime.context_sources.context
     ContextSourceManager,
 )
 
-_OWNER = ContextSourceOwnerKey(
+_CONTEXT_SOURCE_OWNER = ContextSourceOwnerKey(
     session_id="ses_00000000000070008000000000000001",
     thread_id="thr_018f1234567870008000000000000001",
 )
-_REVISION = "sha256:jcs:v1:" + "a" * 64
-_REVISION_NEXT = "sha256:jcs:v1:" + "b" * 64
+_SOURCE_REVISION = "sha256:jcs:v1:" + "a" * 64
+_NEXT_SOURCE_REVISION = "sha256:jcs:v1:" + "b" * 64
 
 
-def _spec(**overrides: object) -> InstructionProducerSpec:
+@pytest.fixture
+def instruction_context_source_manager() -> ContextSourceManager:
+    return ContextSourceManager()
+
+
+def _instruction_producer_spec(**overrides: object) -> InstructionProducerSpec:
     payload: dict[str, object] = {
         "producer_id": "R01",
         "source_id": "instruction:agent-instructions",
@@ -41,25 +46,25 @@ def _spec(**overrides: object) -> InstructionProducerSpec:
         "name": "agent-instructions",
         "root_placement": "root_eligible",
         "content": "你是本地工作区中的编码助手。",
-        "revision": _REVISION,
+        "revision": _SOURCE_REVISION,
     }
     payload.update(overrides)
     return InstructionProducerSpec(**payload)  # type: ignore[arg-type]
 
 
 def test_root_placement_is_declared_by_owner_only() -> None:
-    spec = _spec()
+    spec = _instruction_producer_spec()
     assert spec.root_placement == "root_eligible"
     assert spec.is_conditional is False
     assert spec.content_hash.startswith("sha256:jcs:v1:")
     with pytest.raises(ValueError):
-        _spec(root_placement="root")  # type: ignore[arg-type]
+        _instruction_producer_spec(root_placement="root")  # type: ignore[arg-type]
     with pytest.raises(InstructionProducerError):
-        _spec(producer_id="R99")  # type: ignore[arg-type]
+        _instruction_producer_spec(producer_id="R99")  # type: ignore[arg-type]
 
 
 def test_conditional_producer_requires_exact_toolset_policy() -> None:
-    spec = _spec(
+    spec = _instruction_producer_spec(
         producer_id="R03",
         source_id="instruction:team-coordination-policy",
         source_kind="team_coordination_policy",
@@ -76,7 +81,7 @@ def test_conditional_producer_requires_exact_toolset_policy() -> None:
         assert_toolset_policy_binding(spec, ("nope",))  # type: ignore[arg-type]
     assert unknown.value.code == "instruction-producer-policy-unknown"
     with pytest.raises(InstructionProducerError):
-        _spec(
+        _instruction_producer_spec(
             producer_id="R03",
             source_id="instruction:team-coordination-policy",
             source_kind="team_coordination_policy",
@@ -86,8 +91,10 @@ def test_conditional_producer_requires_exact_toolset_policy() -> None:
         )
 
 
-def test_unwired_producer_cannot_pose_as_enabled() -> None:
-    unwired = _spec(
+def test_unwired_producer_cannot_pose_as_enabled(
+    instruction_context_source_manager: ContextSourceManager,
+) -> None:
+    unwired = _instruction_producer_spec(
         producer_id="R07",
         source_id="instruction:compact-tool-usage",
         source_kind="compact_tool_usage",
@@ -100,40 +107,47 @@ def test_unwired_producer_cannot_pose_as_enabled() -> None:
         assert_producer_registrable(unwired)
     assert excinfo.value.code == "instruction-producer-not-wired"
     with pytest.raises(InstructionProducerError) as register_error:
-        register_instruction_producer(ContextSourceManager(), unwired)
+        register_instruction_producer(instruction_context_source_manager, unwired)
     assert register_error.value.code == "instruction-producer-not-wired"
 
 
 def test_observation_reuses_single_csm_typed_mapping() -> None:
-    spec = _spec()
-    base = InstructionProducerObservation(owner=_OWNER, spec=spec, revision=_REVISION)
+    spec = _instruction_producer_spec()
+    base = InstructionProducerObservation(
+        owner=_CONTEXT_SOURCE_OWNER, spec=spec, revision=_SOURCE_REVISION
+    )
     assert base.decision_kind == "base"
     decision = base.lifecycle_decision()
     assert decision.decision_kind == "base"
     assert decision.from_revision is None
     assert decision.source_id == spec.source_id
-    assert decision.owner.session_id == _OWNER.session_id
+    assert decision.owner.session_id == _CONTEXT_SOURCE_OWNER.session_id
     observation = base.source_observation()
     assert observation.extensions == {}
     assert observation.content == spec.content
-    assert observation.observation_id.endswith(f"{spec.source_id}:{_REVISION}")
+    assert observation.observation_id.endswith(f"{spec.source_id}:{_SOURCE_REVISION}")
     delta = InstructionProducerObservation(
-        owner=_OWNER,
+        owner=_CONTEXT_SOURCE_OWNER,
         spec=spec,
-        revision=_REVISION_NEXT,
-        from_revision=_REVISION,
+        revision=_NEXT_SOURCE_REVISION,
+        from_revision=_SOURCE_REVISION,
     )
     assert delta.decision_kind == "delta"
     assert delta.lifecycle_decision(pending_only=True).pending_only is True
     with pytest.raises(ValueError):
         InstructionProducerObservation(
-            owner=_OWNER, spec=spec, revision=_REVISION, from_revision=_REVISION
+            owner=_CONTEXT_SOURCE_OWNER,
+            spec=spec,
+            revision=_SOURCE_REVISION,
+            from_revision=_SOURCE_REVISION,
         )
 
 
-def test_registration_uses_unique_csm_and_rejects_control_metadata() -> None:
-    manager = ContextSourceManager()
-    spec = _spec()
+def test_registration_uses_unique_csm_and_rejects_control_metadata(
+    instruction_context_source_manager: ContextSourceManager,
+) -> None:
+    manager = instruction_context_source_manager
+    spec = _instruction_producer_spec()
     register_instruction_producer(manager, spec)
     assert [item["name"] for item in manager.metadata()] == [spec.name]
     descriptors = manager.descriptors()
@@ -141,7 +155,9 @@ def test_registration_uses_unique_csm_and_rejects_control_metadata() -> None:
     assert "boxteam" not in descriptors[0].internal_locator
     assert_toolset_policy_binding(spec, ())
     with pytest.raises(InstructionProducerError) as excinfo:
-        register_instruction_producer(manager, spec, metadata_payload={"wire_role": "system"})
+        register_instruction_producer(
+            manager, spec, metadata_payload={"wire_role": "system"}
+        )
     assert excinfo.value.code == "instruction-producer-metadata-forbidden"
     descriptor = instruction_producer_descriptor(spec)
     assert descriptor.resource_uri is None
@@ -162,8 +178,8 @@ def test_toolset_policy_keys_are_deterministic_and_content_free() -> None:
 
 
 def test_producer_revision_token_covers_policy_binding() -> None:
-    plain = _spec()
-    todo = _spec(
+    plain = _instruction_producer_spec()
+    todo = _instruction_producer_spec(
         producer_id="R04",
         source_id="instruction:todo-list",
         source_kind="todo_list",
@@ -172,14 +188,17 @@ def test_producer_revision_token_covers_policy_binding() -> None:
         policy_key="todo_list",
     )
     assert plain.revision_token() != todo.revision_token()
-    assert todo.revision_token() == _spec(
-        producer_id="R04",
-        source_id="instruction:todo-list",
-        source_kind="todo_list",
-        name="todo-list",
-        content=plain.content,
-        policy_key="todo_list",
-    ).revision_token()
+    assert (
+        todo.revision_token()
+        == _instruction_producer_spec(
+            producer_id="R04",
+            source_id="instruction:todo-list",
+            source_kind="todo_list",
+            name="todo-list",
+            content=plain.content,
+            policy_key="todo_list",
+        ).revision_token()
+    )
 
 
 @pytest.mark.parametrize(
@@ -194,16 +213,16 @@ def test_producer_revision_token_covers_policy_binding() -> None:
 def test_all_declared_instruction_producers_are_registerable(
     producer_id: str,
     source_id: str,
+    instruction_context_source_manager: ContextSourceManager,
 ) -> None:
-    manager = ContextSourceManager()
-    spec = _spec(
+    spec = _instruction_producer_spec(
         producer_id=producer_id,
         source_id=source_id,
         source_kind=source_id.split(":", 1)[1].replace("-", "_"),
         name=source_id.split(":", 1)[1],
     )
-    register_instruction_producer(manager, spec)
-    assert manager.descriptors()[0].source_id == source_id
+    register_instruction_producer(instruction_context_source_manager, spec)
+    assert instruction_context_source_manager.descriptors()[0].source_id == source_id
 
 
 def test_root_placement_is_single_domain_definition() -> None:
@@ -220,9 +239,11 @@ def test_root_placement_is_single_domain_definition() -> None:
 
 
 def test_instruction_observation_preserves_non_hash_owner_revision():
-    spec = _spec(revision="agent-config-revision:7")
+    spec = _instruction_producer_spec(revision="agent-config-revision:7")
     observation = InstructionProducerObservation(
-        owner=_OWNER, spec=spec, revision=spec.revision,
+        owner=_CONTEXT_SOURCE_OWNER,
+        spec=spec,
+        revision=spec.revision,
         from_revision="agent-config-revision:6",
     )
     decision = observation.lifecycle_decision()

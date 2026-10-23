@@ -520,9 +520,11 @@ export default function WorkspaceFileTree({
     toggleDirectory(node.path, referenceForPath(node.path));
   };
 
-  // 扁平行构建和递归 DOM 渲染共用匹配缓存，避免分别深搜相同的已加载目录。
+  // 搜索时扁平行构建和递归 DOM 渲染共用匹配缓存，避免分别深搜相同的已加载目录。
   const nodeMatchesSearch = useMemo(
-    () => createFileTreeSearchMatcher(directories, searchQuery),
+    () => searchQuery.trim()
+      ? createFileTreeSearchMatcher(directories, searchQuery)
+      : undefined,
     [directories, searchQuery],
   );
 
@@ -548,7 +550,9 @@ export default function WorkspaceFileTree({
       );
     }
 
-    const visibleItems = directory.items.filter(nodeMatchesSearch);
+    const visibleItems = nodeMatchesSearch
+      ? directory.items.filter(nodeMatchesSearch)
+      : directory.items;
 
     if (directory.items.length === 0) {
       return (
@@ -639,8 +643,9 @@ export default function WorkspaceFileTree({
   };
 
   const shortcuts = settings?.effective_shortcuts ?? [];
-  const defaultShortcutPaths = new Set(
-    (settings?.default_shortcuts ?? []).map((shortcut) => shortcut.path),
+  const defaultShortcutPaths = useMemo(
+    () => new Set((settings?.default_shortcuts ?? []).map((shortcut) => shortcut.path)),
+    [settings],
   );
   const rootExpanded = Boolean(roots && expandedPaths.has(ROOT_PATH));
   const filesystemRootExpanded = Boolean(roots && expandedPaths.has(FILESYSTEM_ROOT_PATH));
@@ -700,7 +705,10 @@ export default function WorkspaceFileTree({
       : `未找到“${query}”`;
   }, [directories, searchQuery]);
 
-  const directoryLoading = Object.values(directories).some((directory) => directory.loading);
+  const directoryLoading = useMemo(
+    () => Object.values(directories).some((directory) => directory.loading),
+    [directories],
+  );
   const fileTreeLoading = Boolean(
     active && sessionId && (
       (settings === null && settingsError === null) || directoryLoading

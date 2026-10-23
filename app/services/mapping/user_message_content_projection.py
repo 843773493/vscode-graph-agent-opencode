@@ -145,7 +145,7 @@ def user_content_projection(
 
     attachments = metadata_attachments or block_attachments
     return UserContentProjection(
-        blocks=tuple(copy.deepcopy(block) for block in blocks),
+        blocks=tuple(blocks),
         visible_text="".join(text_parts),
         attachments=tuple(attachments),
         rich_blocks=tuple(rich_blocks),

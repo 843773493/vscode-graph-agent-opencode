@@ -185,34 +185,45 @@ export async function synchronizeEnvironmentFile({ target, projectRoot }) {
   const contents = readFileSync(sourcePath);
   const localHash = createHash("sha256").update(contents).digest("hex");
   const temporaryPath = `${target.paths.repository}/.env.uploading-${process.pid}-${Date.now()}`;
-  runChecked(scpCommand(target, sourcePath, temporaryPath), {
-    cwd: projectRoot,
-    label: `向目标 ${target.id} 上传 .env 临时文件`,
-  });
-  const remoteHash = (
-    await runTargetAction({
-      target,
-      projectRoot,
-      action: "hash-file",
-      args: [temporaryPath],
-    })
-  ).stdout.trim();
   try {
+    runChecked(scpCommand(target, sourcePath, temporaryPath), {
+      cwd: projectRoot,
+      label: `向目标 ${target.id} 上传 .env 临时文件`,
+    });
+    const remoteHash = (
+      await runTargetAction({
+        target,
+        projectRoot,
+        action: "hash-file",
+        args: [temporaryPath],
+      })
+    ).stdout.trim();
     assertMatchingSha256(localHash, remoteHash, target.id);
-  } catch (error) {
     await runTargetAction({
       target,
       projectRoot,
-      action: "remove-upload",
-      args: [temporaryPath],
+      action: "install-env",
+      args: [temporaryPath, `${target.paths.repository}/.env`],
     });
+  } catch (error) {
+    try {
+      await runTargetAction({
+        target,
+        projectRoot,
+        action: "remove-upload",
+        args: [temporaryPath],
+      });
+    } catch (cleanupError) {
+      const primaryMessage = error instanceof Error ? error.message : String(error);
+      const cleanupMessage =
+        cleanupError instanceof Error ? cleanupError.message : String(cleanupError);
+      throw new AggregateError(
+        [error, cleanupError],
+        `目标 ${target.id} 的 .env 临时文件清理失败：原操作错误=${primaryMessage}；清理错误=${cleanupMessage}`,
+        { cause: error },
+      );
+    }
     throw error;
   }
-  await runTargetAction({
-    target,
-    projectRoot,
-    action: "install-env",
-    args: [temporaryPath, `${target.paths.repository}/.env`],
-  });
   return { bytes: contents.byteLength, sha256: localHash };
 }

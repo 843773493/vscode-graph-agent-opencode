@@ -1,8 +1,12 @@
-import type { ComponentProps, ReactNode } from "react";
+import {
+  lazy,
+  Suspense,
+  useEffect,
+  useState,
+  type ComponentProps,
+  type ReactNode,
+} from "react";
 import BootstrapState from "./BootstrapState";
-import AgentStatePanel from "../panels/inspectionPanels/AgentStatePanel";
-import EventQueuePanel from "../panels/inspectionPanels/EventQueuePanel";
-import RequestLogPanel from "../panels/inspectionPanels/RequestLogPanel";
 import ChatPanel from "../panels/ChatPanel";
 import { FRONTEND_EVENT_QUEUE_LIMIT } from "../../state/traceEvents";
 import type { SessionTurnTimeline } from "../../state/session/turnTimeline";
@@ -20,11 +24,15 @@ import type {
   SessionTraceHistoryState,
 } from "../../types/frontend";
 
+const AgentStatePanel = lazy(() => import("../panels/inspectionPanels/AgentStatePanel"));
+const EventQueuePanel = lazy(() => import("../panels/inspectionPanels/EventQueuePanel"));
+const RequestLogPanel = lazy(() => import("../panels/inspectionPanels/RequestLogPanel"));
+
 /**
  * 主窗口会话区的四个内容视图槽：上下文状态、事件、请求与会话记录。
  *
- * 四个槽共用同一套「保留挂载 + 隐藏」外壳，因此收敛到 ContentViewSlot；
- * 启动失败与启动骨架属于外壳级视图编排，与本组件一起留在应用外壳层。
+ * 四个槽共用「保留外壳 + 隐藏」编排；检视面板首次打开时才挂载，之后隐藏保留，
+ * 避免首屏初始化未访问的面板。启动失败与启动骨架也由本组件在应用外壳层处理。
  */
 
 type ChatPanelProps = ComponentProps<typeof ChatPanel>;
@@ -83,17 +91,39 @@ interface ContentViewSlotsProps extends Pick<
 
 function ContentViewSlot({
   visible,
+  mountAfterFirstVisit = false,
   children,
 }: {
   visible: boolean;
+  mountAfterFirstVisit?: boolean;
   children: ReactNode;
 }) {
+  const [hasBeenVisible, setHasBeenVisible] = useState(visible);
+  const shouldRenderChildren = !mountAfterFirstVisit || hasBeenVisible || visible;
+  const slotChildren = mountAfterFirstVisit ? (
+    <Suspense
+      fallback={
+        <div className="empty-state" role="status">
+          正在加载面板...
+        </div>
+      }
+    >
+      {children}
+    </Suspense>
+  ) : children;
+
+  useEffect(() => {
+    if (mountAfterFirstVisit && visible && !hasBeenVisible) {
+      setHasBeenVisible(true);
+    }
+  }, [hasBeenVisible, mountAfterFirstVisit, visible]);
+
   return (
     <div
       className={`content-view-slot${visible ? "" : " preserve-mounted-hidden"}`}
       hidden={!visible}
     >
-      {children}
+      {shouldRenderChildren ? slotChildren : null}
     </div>
   );
 }
@@ -181,7 +211,7 @@ export default function ContentViewSlots({
 
   return (
     <>
-      <ContentViewSlot visible={contentView === "agent"}>
+      <ContentViewSlot visible={contentView === "agent"} mountAfterFirstVisit>
         <AgentStatePanel
           port={apiPort}
           workspaceId={workspaceId ?? ""}
@@ -194,7 +224,7 @@ export default function ContentViewSlots({
           error={agentStateError}
         />
       </ContentViewSlot>
-      <ContentViewSlot visible={contentView === "events"}>
+      <ContentViewSlot visible={contentView === "events"} mountAfterFirstVisit>
         <EventQueuePanel
           items={receivedEvents}
           limit={FRONTEND_EVENT_QUEUE_LIMIT}
@@ -209,7 +239,7 @@ export default function ContentViewSlots({
           onRetryHistory={() => void onRetryTraceHistory()}
         />
       </ContentViewSlot>
-      <ContentViewSlot visible={contentView === "requests"}>
+      <ContentViewSlot visible={contentView === "requests"} mountAfterFirstVisit>
         <RequestLogPanel
           logs={requestLogs}
           loading={requestLogsLoading}

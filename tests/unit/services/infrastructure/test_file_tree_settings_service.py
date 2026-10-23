@@ -8,6 +8,7 @@ from typing import NamedTuple
 import pytest
 
 from app.core.path_utils import get_session_path_resolver
+from app.core.session_catalog_resolver import SessionCatalogPathResolver
 from app.core.workspace_identity import load_or_create_workspace_id
 from app.services.infrastructure.file_tree_settings_service import (
     FileTreeSettingsService,
@@ -22,7 +23,7 @@ class FileTreeFixture(NamedTuple):
     first_session_id: str
     second_session_id: str
     workspace_root: Path
-    resolver: object
+    session_path_resolver: SessionCatalogPathResolver
 
 
 @pytest.fixture
@@ -31,13 +32,13 @@ def file_tree_settings() -> FileTreeFixture:
         Path.cwd()
         / "out/tests/unit/services/infrastructure/test_file_tree_settings_service"
     )
-    if output_root.exists():
-        shutil.rmtree(output_root)
     workspace_root = output_root / "workspace"
+    if workspace_root.exists():
+        shutil.rmtree(workspace_root)
     sessions_root = workspace_root / ".boxteam" / "sessions"
 
-    resolver = get_session_path_resolver(sessions_root)
-    resolver.initialize()
+    session_path_resolver = get_session_path_resolver(sessions_root)
+    session_path_resolver.initialize()
     session_ids = (
         "ses_00000000400070008000000000000011",
         "ses_00000000400070008000000000000012",
@@ -46,7 +47,7 @@ def file_tree_settings() -> FileTreeFixture:
         seed_catalog_session_bundle(sessions_root, session_id, title=session_id)
     service = FileTreeSettingsService(
         workspace_root=workspace_root,
-        path_resolver=resolver,
+        path_resolver=session_path_resolver,
         file_paths=WorkspaceFilePaths(workspace=workspace_root, workspace_id=load_or_create_workspace_id(workspace_root), bindings=None),
     )
     shortcut_path = workspace_root / "torch_home"
@@ -57,7 +58,7 @@ def file_tree_settings() -> FileTreeFixture:
         session_ids[0],
         session_ids[1],
         workspace_root,
-        resolver,
+        session_path_resolver,
     )
 
 
@@ -78,7 +79,7 @@ def test_session_shortcut_is_stored_inside_session_node(
         ("Torch Home", "session")
     ]
     session_settings_path = (
-        file_tree_settings.resolver.resolve_session_node(first_session_id)
+        file_tree_settings.session_path_resolver.resolve_session_node(first_session_id)
         / "ui"
         / "file-tree-shortcuts.json"
     )
@@ -89,7 +90,7 @@ def test_upgrade_snapshots_current_defaults_for_existing_sessions(
     file_tree_settings: FileTreeFixture,
 ) -> None:
     settings_path = (
-        file_tree_settings.resolver.resolve_session_node(
+        file_tree_settings.session_path_resolver.resolve_session_node(
             file_tree_settings.first_session_id
         )
         / "ui"
@@ -120,7 +121,7 @@ def test_upgrade_snapshots_current_defaults_for_existing_sessions(
 
     migrated_service = FileTreeSettingsService(
         workspace_root=file_tree_settings.workspace_root,
-        path_resolver=file_tree_settings.resolver,
+        path_resolver=file_tree_settings.session_path_resolver,
         file_paths=file_tree_settings.service._file_paths,
     )
 

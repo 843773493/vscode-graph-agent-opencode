@@ -5,7 +5,7 @@ import { resolve } from 'node:path';
 
 // 独立于 Python：数字和字符串仅使用 ECMAScript JSON.stringify；
 // 逐个输出已按 UTF-16 排序的 key，避免 JS 再次按整数属性重排。
-export function canonicalize(value) {
+export function canonicalizeJcsJson(value) {
   if (typeof value === 'string') {
     if (!value.isWellFormed()) throw new TypeError('invalid Unicode');
     return JSON.stringify(value);
@@ -20,15 +20,22 @@ export function canonicalize(value) {
     throw new TypeError('not a JSON value');
   }
   return '{' + Object.keys(value).sort().map(
-    key => canonicalize(key) + ':' + canonicalize(value[key]),
+    key => canonicalizeJcsJson(key) + ':' + canonicalizeJcsJson(value[key]),
   ).join(',') + '}';
 }
 
-export function digest(value) {
-  return 'sha256:jcs:v1:' + createHash('sha256').update(canonicalize(value), 'utf8').digest('hex');
+export function digestJcsJson(value) {
+  return digestCanonicalJcsJson(canonicalizeJcsJson(value));
 }
 
-function valueFor(vector) {
+function digestCanonicalJcsJson(canonicalJson) {
+  const sha256Hex = createHash('sha256')
+    .update(canonicalJson, 'utf8')
+    .digest('hex');
+  return `sha256:jcs:v1:${sha256Hex}`;
+}
+
+function decodeVectorInput(vector) {
   if (vector.input_kind === 'binary64') {
     return Buffer.from(vector.input, 'hex').readDoubleBE(0);
   }
@@ -45,38 +52,49 @@ function valueFor(vector) {
   return JSON.parse(vector.input);
 }
 
-export function verifyVectors(vectors) {
+export function verifyHashVectorFixture(fixture) {
   let accepted = 0;
   let rejected = 0;
-  for (const vector of vectors.serialization) {
+  for (const vector of fixture.serialization) {
     if (vector.error) {
-      assert.throws(() => canonicalize(valueFor(vector)), undefined, vector.id);
+      assert.throws(
+        () => canonicalizeJcsJson(decodeVectorInput(vector)),
+        undefined,
+        vector.id,
+      );
       rejected++;
       continue;
     }
-    const value = valueFor(vector);
-    assert.equal(canonicalize(value), vector.canonical, vector.id);
-    assert.equal(digest(value), vector.hash, vector.id);
-    assert.equal(canonicalize(JSON.parse(vector.canonical)), vector.canonical, vector.id);
+    const value = decodeVectorInput(vector);
+    const canonicalJson = canonicalizeJcsJson(value);
+    assert.equal(canonicalJson, vector.canonical, vector.id);
+    assert.equal(digestCanonicalJcsJson(canonicalJson), vector.hash, vector.id);
+    assert.equal(
+      canonicalizeJcsJson(JSON.parse(canonicalJson)),
+      canonicalJson,
+      vector.id,
+    );
     accepted++;
   }
-  for (const vector of vectors.preimages) {
-    assert.equal(canonicalize(vector.preimage), vector.canonical, vector.id);
-    assert.equal(digest(vector.preimage), vector.hash, vector.id);
+  for (const vector of fixture.preimages) {
+    const canonicalJson = canonicalizeJcsJson(vector.preimage);
+    assert.equal(canonicalJson, vector.canonical, vector.id);
+    assert.equal(digestCanonicalJcsJson(canonicalJson), vector.hash, vector.id);
   }
-  return { accepted, rejected, preimages: vectors.preimages.length };
+  return { accepted, rejected, preimages: fixture.preimages.length };
 }
 
 if (import.meta.main) {
-  const paths = process.argv.slice(2);
-  if (paths.length === 0) paths.push(
+  const fixturePaths = process.argv.slice(2);
+  if (fixturePaths.length === 0) fixturePaths.push(
     'tests/fixtures/itemized/hash_vectors.json',
     'tests/fixtures/itemized/resource_activation_vectors.json',
   );
   const totals = { accepted: 0, rejected: 0, preimages: 0 };
-  for (const path of paths) {
-    const vectors = JSON.parse(readFileSync(resolve(process.cwd(), path), 'utf8'));
-    const result = verifyVectors(vectors);
+  for (const fixturePath of fixturePaths) {
+    const resolvedFixturePath = resolve(process.cwd(), fixturePath);
+    const fixture = JSON.parse(readFileSync(resolvedFixturePath, 'utf8'));
+    const result = verifyHashVectorFixture(fixture);
     for (const key of Object.keys(totals)) totals[key] += result[key];
   }
   console.log(JSON.stringify(totals));

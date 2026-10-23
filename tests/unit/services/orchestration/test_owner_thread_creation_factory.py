@@ -6,6 +6,7 @@ import gc
 import os
 from pathlib import Path
 
+import psutil
 import pytest
 
 from app.core.path_utils import get_session_path_resolver
@@ -99,22 +100,23 @@ async def test_service_cache_and_open_control_stores_stay_bounded(
         path_resolver=get_session_path_resolver(sessions_root),
     )
 
-    def open_fds() -> int:
-        return len(os.listdir(f"/proc/{os.getpid()}/fd"))
+    def process_resource_count() -> int:
+        process = psutil.Process(os.getpid())
+        return process.num_handles() if os.name == "nt" else process.num_fds()
 
-    baseline_fds = open_fds()
+    baseline_resources = process_resource_count()
     for session_id in session_ids:
         factory.for_owner_session(session_id)
     # 被淘汰的服务在仍有在飞引用时由 CPython 引用计数/GC 回收其 sqlite 连接。
     # 生产路径中工厂缓存是唯一长活引用，淘汰后连接即被回收；显式 gc 只是把
     # 时序确定性钉死，避免测量窗口依赖 GC 触发点。
     gc.collect()
-    settled_fds = open_fds()
+    settled_resources = process_resource_count()
 
     assert len(factory._services) <= _BOUND
-    # 每个 control store 是一条打开的 sqlite 连接（数个 fd）；若淘汰不回收旧
-    # 连接，fd 会随历史会话数线性增长。给一个宽松但恒定的上界。
-    assert settled_fds - baseline_fds <= _BOUND * 4
+    # 每个 control store 是一条打开的 sqlite 连接（句柄或 fd）；若淘汰不回收旧
+    # 连接，进程资源数会随历史会话数线性增长。给一个宽松但恒定的上界。
+    assert settled_resources - baseline_resources <= _BOUND * 4
 
 
 async def test_same_owner_session_reuses_same_service(tmp_path: Path) -> None:

@@ -71,9 +71,12 @@ class NodeDebugSessionState:
     def pending_breakpoints(
         self, owner: NodeDebugOwner
     ) -> list[NodeDebugBreakpointDTO]:
+        pending_breakpoints = self._pending_breakpoints.get(owner)
+        if pending_breakpoints is None:
+            return []
         return [
             breakpoint.model_copy(deep=True)
-            for breakpoint in self._pending_breakpoints.get(owner, [])
+            for breakpoint in pending_breakpoints
         ]
 
     def set_pending_breakpoints(
@@ -88,17 +91,21 @@ class NodeDebugSessionState:
     def append_pending_breakpoint(
         self, owner: NodeDebugOwner, breakpoint: NodeDebugBreakpointDTO
     ) -> None:
-        self._pending_breakpoints.setdefault(owner, []).append(
-            breakpoint.model_copy(deep=True)
-        )
+        pending_breakpoints = self._pending_breakpoints.get(owner)
+        if pending_breakpoints is None:
+            pending_breakpoints = self._pending_breakpoints.setdefault(owner, [])
+        pending_breakpoints.append(breakpoint.model_copy(deep=True))
 
     def find_pending_breakpoint(
         self, owner: NodeDebugOwner, breakpoint_id: str
     ) -> NodeDebugBreakpointDTO | None:
+        pending_breakpoints = self._pending_breakpoints.get(owner)
+        if pending_breakpoints is None:
+            return None
         return next(
             (
                 breakpoint.model_copy(deep=True)
-                for breakpoint in self._pending_breakpoints.get(owner, [])
+                for breakpoint in pending_breakpoints
                 if breakpoint.breakpoint_id == breakpoint_id
             ),
             None,
@@ -122,17 +129,19 @@ class NodeDebugSessionState:
     def remove_pending_breakpoint(
         self, owner: NodeDebugOwner, breakpoint_id: str
     ) -> NodeDebugBreakpointDTO:
-        breakpoints = self._pending_breakpoints.get(owner, [])
-        for index, breakpoint in enumerate(breakpoints):
-            if breakpoint.breakpoint_id == breakpoint_id:
-                removed = breakpoints.pop(index)
-                if not breakpoints:
-                    self._pending_breakpoints.pop(owner, None)
-                return removed.model_copy(deep=True)
+        pending_breakpoints = self._pending_breakpoints.get(owner)
+        if pending_breakpoints is not None:
+            for index, breakpoint in enumerate(pending_breakpoints):
+                if breakpoint.breakpoint_id == breakpoint_id:
+                    removed = pending_breakpoints.pop(index)
+                    if not pending_breakpoints:
+                        self._pending_breakpoints.pop(owner, None)
+                    return removed.model_copy(deep=True)
         raise ValueError(f"源码断点不存在: {breakpoint_id}")
 
     def clear_pending_breakpoints(self, owner: NodeDebugOwner) -> int:
-        return len(self._pending_breakpoints.pop(owner, []))
+        pending_breakpoints = self._pending_breakpoints.pop(owner, None)
+        return len(pending_breakpoints) if pending_breakpoints is not None else 0
 
     def consume_pending_breakpoints(
         self, owner: NodeDebugOwner
@@ -142,9 +151,12 @@ class NodeDebugSessionState:
         return breakpoints
 
     def pending_actions(self, owner: NodeDebugOwner) -> list[NodeDebugActionRecordDTO]:
+        pending_actions = self._pending_actions.get(owner)
+        if pending_actions is None:
+            return []
         return [
             action.model_copy(deep=True)
-            for action in self._pending_actions.get(owner, [])
+            for action in pending_actions
         ]
 
     def set_pending_actions(
@@ -161,7 +173,9 @@ class NodeDebugSessionState:
         index: int,
         replacement: NodeDebugActionRecordDTO,
     ) -> None:
-        actions = self._pending_actions.setdefault(owner, [])
+        actions = self._pending_actions.get(owner)
+        if actions is None:
+            actions = self._pending_actions.setdefault(owner, [])
         actions[index] = replacement.model_copy(deep=True)
 
     def append_pending_action(
@@ -178,8 +192,11 @@ class NodeDebugSessionState:
         result: Literal["success", "error"] = "success",
     ) -> None:
         owner = normalize_node_debug_owner(session_id, thread_id)
+        actions = self._pending_actions.get(owner)
+        if actions is None:
+            actions = self._pending_actions.setdefault(owner, [])
         append_pending_debug_action(
-            self._pending_actions.setdefault(owner, []),
+            actions,
             session_id=session_id,
             thread_id=thread_id,
             action=action,

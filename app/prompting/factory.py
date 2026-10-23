@@ -42,20 +42,22 @@ class InternalMessageFactory:
         display_provenance: InternalDisplayProvenance | None = None,
     ) -> PreparedInternalMessage:
         kind_spec = self._registry.internal_message_kind(kind)
-        section_names = [section.tag for section in sections]
-        duplicate_names = {
-            name for name in section_names if section_names.count(name) > 1
-        }
+        section_names: set[str] = set()
+        duplicate_names: set[str] = set()
+        for section in sections:
+            if section.tag in section_names:
+                duplicate_names.add(section.tag)
+            section_names.add(section.tag)
         if duplicate_names:
             raise ValueError(
                 f"内部结构消息不允许重复 section: {sorted(duplicate_names)}"
             )
-        unknown_sections = set(section_names) - kind_spec.allowed_sections
+        unknown_sections = section_names - kind_spec.allowed_sections
         if unknown_sections:
             raise ValueError(
                 f"内部结构消息 kind={kind} 不允许 section: {sorted(unknown_sections)}"
             )
-        missing_sections = kind_spec.required_sections - set(section_names)
+        missing_sections = kind_spec.required_sections - section_names
         if missing_sections:
             raise ValueError(
                 f"内部结构消息 kind={kind} 缺少 section: {sorted(missing_sections)}"

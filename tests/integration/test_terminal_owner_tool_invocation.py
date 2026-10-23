@@ -209,7 +209,6 @@ async def test_real_tool_acceptance_owner_lease_pty_and_final_receipt(
 async def test_actual_python_crash_stopped_pty_settles_persisted_lease_and_allows_cleanup(
     request: pytest.FixtureRequest,
     terminal_workspace_root_path: str,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from app.container import WorkspaceContainerRegistry
     from app.core.mounted_workspaces import MountedWorkspace, MountedWorkspaceRegistry

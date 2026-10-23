@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -95,10 +95,10 @@ class TerminalOwnerFixture:
     root: Path
     sessions: ResourceOwnerSessionsFake
     transport: TerminalTransportFake
-    leases: ExternalResourceLeaseLedger
-    owner: TerminalResourceOwner
     # 可由用例推进的owner时钟，不表示资源创建时间。
     now: datetime
+    leases: ExternalResourceLeaseLedger = field(init=False)
+    owner: TerminalResourceOwner = field(init=False)
 
     def restart(self) -> TerminalResourceOwner:
         self.leases = ExternalResourceLeaseLedger(state_path=self.root / ".boxteam" / "resources.json")
@@ -126,7 +126,11 @@ class TerminalOwnerFixture:
 def build_terminal_owner_fixture(tmp_path: Path) -> TerminalOwnerFixture:
     root = tmp_path / "workspace"
     root.mkdir()
-    result = TerminalOwnerFixture(root, ResourceOwnerSessionsFake(root), TerminalTransportFake(root), ExternalResourceLeaseLedger(), None,
-                    datetime(2026, 10, 5, tzinfo=UTC))
+    result = TerminalOwnerFixture(
+        root=root,
+        sessions=ResourceOwnerSessionsFake(root),
+        transport=TerminalTransportFake(root),
+        now=datetime(2026, 10, 5, tzinfo=UTC),
+    )
     result.restart()
     return result

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import {
   getGatewayHealth,
   restartDevelopmentRuntime,
@@ -11,13 +11,15 @@ import type {
   WebUiSettingsUpdate,
 } from "../../../types/backend";
 import { useWarmConfirm } from "../../shell/WarmConfirmProvider";
-import GatewayBackendRuntimePanel, { type GatewayBackendRuntimeActions } from "./GatewayBackendRuntimePanel";
-import GatewayConnectionDialog from "./GatewayConnectionDialog";
+import type { GatewayBackendRuntimeActions } from "./GatewayBackendRuntimePanel";
 import GatewayInboundAccessPanel from "./GatewayInboundAccessPanel";
 import { groupGatewayWorkspaces } from "./gatewayWorkspacePresentation";
-import GatewayDiagnosticsPanel from "./GatewayDiagnosticsPanel";
-import GatewayThemeSettings from "./GatewayThemeSettings";
 import { errorMessage } from "../../../utils/errorMessage";
+
+const GatewayBackendRuntimePanel = lazy(() => import("./GatewayBackendRuntimePanel"));
+const GatewayConnectionDialog = lazy(() => import("./GatewayConnectionDialog"));
+const GatewayDiagnosticsPanel = lazy(() => import("./GatewayDiagnosticsPanel"));
+const GatewayThemeSettings = lazy(() => import("./GatewayThemeSettings"));
 
 export { groupGatewayWorkspaces } from "./gatewayWorkspacePresentation";
 
@@ -217,13 +219,14 @@ export default function GatewayControlCenter({
             </div> : null}
           </header>
 
-          {activePage === "theme" ? (
-            <GatewayThemeSettings apiPort={apiPort} settings={uiSettings} onUpdateSettings={onUpdateUiSettings} />
-          ) : activePage === "runtime" ? (
-            <GatewayBackendRuntimePanel workspaces={workspaces} onStart={onStart} onStop={onStop} onSafeRestart={onSafeRestart} onForceRestart={onForceRestart} />
-          ) : activePage === "diagnostics" ? (
-            <GatewayDiagnosticsPanel apiPort={apiPort} workspaces={workspaces} />
-          ) : <>
+          <Suspense fallback={<div role="status" aria-live="polite">正在加载控制面页面…</div>}>
+            {activePage === "theme" ? (
+              <GatewayThemeSettings apiPort={apiPort} settings={uiSettings} onUpdateSettings={onUpdateUiSettings} />
+            ) : activePage === "runtime" ? (
+              <GatewayBackendRuntimePanel workspaces={workspaces} onStart={onStart} onStop={onStop} onSafeRestart={onSafeRestart} onForceRestart={onForceRestart} />
+            ) : activePage === "diagnostics" ? (
+              <GatewayDiagnosticsPanel apiPort={apiPort} workspaces={workspaces} />
+            ) : <>
 
           {gatewayError || healthError || operationError ? (
             <div className="gateway-console-alert" role="alert"><span className="codicon codicon-error" aria-hidden="true" /><div><strong>连接操作失败</strong><span>{gatewayError ?? healthError ?? operationError}</span></div></div>
@@ -274,18 +277,30 @@ export default function GatewayControlCenter({
             revision={deviceRevision}
             onAddDevice={() => setConnectionDialogMode("external-device")}
           />
-          </>}
+            </>}
+          </Suspense>
         </div>
       </section>
 
-      <GatewayConnectionDialog
-        open={connectionDialogMode !== null}
-        mode={connectionDialogMode ?? "ssh"}
-        apiPort={apiPort}
-        onClose={() => setConnectionDialogMode(null)}
-        onAddSsh={onAddSsh}
-        onDeviceConnectionsChanged={() => setDeviceRevision((value) => value + 1)}
-      />
+      {connectionDialogMode ? (
+        <Suspense fallback={(
+          <div className="gateway-connection-overlay" role="presentation">
+            <div className="gateway-connection-backdrop" aria-hidden="true" />
+            <div className="gateway-connection-dialog" role="status" aria-live="polite">
+              正在加载连接对话框…
+            </div>
+          </div>
+        )}>
+          <GatewayConnectionDialog
+            open
+            mode={connectionDialogMode}
+            apiPort={apiPort}
+            onClose={() => setConnectionDialogMode(null)}
+            onAddSsh={onAddSsh}
+            onDeviceConnectionsChanged={() => setDeviceRevision((value) => value + 1)}
+          />
+        </Suspense>
+      ) : null}
     </main>
   );
 }

@@ -2,6 +2,25 @@
 
 `app/tool_testing/` 是模型工具能力测试的独立功能模块，负责测试用例协议、注册、异步运行和可读结果持久化。
 
+## 职责树
+
+```text
+app/tool_testing/
+├── definitions.py       用例协议、模型调用输入和评估结果
+├── registry.py          按工具名登记和查询用例
+├── service.py           provider/用例调度、运行状态和并发控制
+├── model_invocation.py  单次工具调用探测、交换记录和短暂错误重试
+├── store.py             run 与 case JSON 产物的读写
+└── cases/
+    ├── apply_patch_case.py  apply_patch 场景准备与结果评估
+    └── edit_file_case.py    edit_file 场景准备与结果评估
+```
+
+主链路由 `service.py` 取得 `registry.py` 中的用例，调用用例准备独立 attempt，交给
+`model_invocation.py` 驱动模型发起真实工具调用，再由用例评估并通过 `store.py` 保存结果。
+新增工具场景放在 `cases/` 并实现 `definitions.py` 中的协议；模型调度与持久化仍由各自 owner
+负责，避免每个场景复制一套 provider 或结果写入逻辑。
+
 # 可修改内容
 
 - 可以新增工具测试用例、注册规则、运行编排和结果存储实现。

@@ -116,10 +116,19 @@ export default function GatewayDiagnosticsPanel({
 
   const availableLogCount = diagnostics?.logs.filter((log) => log.status === "available").length ?? 0;
   const offlineWorkspaceCount = diagnostics?.workspaces.filter((item) => item.status === "offline").length ?? 0;
+  const diagnosticWorkspacesById = useMemo(() => {
+    const workspacesById = new Map<string, GatewayDiagnostics["workspaces"][number]>();
+    for (const item of diagnostics?.workspaces ?? []) {
+      if (!workspacesById.has(item.workspace_id)) {
+        workspacesById.set(item.workspace_id, item);
+      }
+    }
+    return workspacesById;
+  }, [diagnostics?.workspaces]);
 
   const diagnosticWorkspaceFor = (workspace: GatewayWorkspace) => {
     const diagnosticWorkspaceId = workspace.remote?.remote_workspace_id ?? workspace.workspace_id;
-    return diagnostics?.workspaces.find((item) => item.workspace_id === diagnosticWorkspaceId);
+    return diagnosticWorkspacesById.get(diagnosticWorkspaceId);
   };
 
   const selectGateway = (value: string) => {

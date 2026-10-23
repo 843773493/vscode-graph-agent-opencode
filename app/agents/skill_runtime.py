@@ -124,8 +124,19 @@ class WorkspaceSkillsMiddleware(AgentMiddleware[Any, Any, Any]):
             skill_descriptors = ()
         if ordinary and reactor is None:
             raise RuntimeError("tracked-source-unavailable: 未绑定 published Registry owner")
+        descriptor_by_source_id = {
+            descriptor.source_id: descriptor for descriptor in descriptors
+        }
         frozen = [
-            PublishedContextSourceRevision(source.source_id, source.revision, self._source_body(source.source_id, source.content))
+            PublishedContextSourceRevision(
+                source.source_id,
+                source.revision,
+                self._source_body(
+                    source.source_id,
+                    source.content,
+                    descriptor_by_source_id=descriptor_by_source_id,
+                ),
+            )
             for source in (reactor.freeze_published_sources(ordinary) if ordinary else ())
         ]
         if skill_descriptors:
@@ -273,29 +284,47 @@ class WorkspaceSkillsMiddleware(AgentMiddleware[Any, Any, Any]):
             ),
         )
 
-    def _sync_source_bindings(self) -> None:
+    def _sync_source_bindings(self) -> tuple[ContextSourceDescriptor, ...]:
         """在请求边界做零 I/O 的订阅对账（新注册来源、tracking 状态变化）。"""
-        if self._context_source_reactor is not None:
-            descriptors = None
-            if self._execution_owned_catalog:
-                descriptors = tuple(
-                    source for source in self._context_source_manager.descriptors()
-                    if source.source_kind != "skill"
-                )
-            self._context_source_reactor.sync_sources(descriptors=descriptors)
+        manager = self._context_source_manager
+        reactor = self._context_source_reactor
+        if manager is None or reactor is None:
+            return ()
+        descriptors = manager.descriptors()
+        selected_descriptors = descriptors
+        if self._execution_owned_catalog:
+            selected_descriptors = tuple(
+                descriptor
+                for descriptor in descriptors
+                if descriptor.source_kind != "skill"
+            )
+        reactor.sync_sources(descriptors=selected_descriptors)
+        return descriptors
 
-    def _observe_pending_sources(self) -> None:
-        """只消费已排队的 observation；不遍历 descriptor、不读磁盘。"""
+    def _observe_pending_sources(
+        self,
+        descriptors: tuple[ContextSourceDescriptor, ...],
+    ) -> None:
+        """只消费已排队的 observation；仅有待观察项时构建一次 descriptor 索引。"""
         reactor = self._context_source_reactor
         manager = self._context_source_manager
         if reactor is None or manager is None:
             return
-        for observation in reactor.drain():
+        descriptor_by_source_id: dict[str, ContextSourceDescriptor] | None = None
+        for observation in reactor.drain(descriptors=descriptors):
+            if descriptor_by_source_id is None:
+                descriptor_by_source_id = {
+                    descriptor.source_id: descriptor for descriptor in descriptors
+                }
             typed_observation: PublishedSourceObservationRef = observation
             raw_content = reactor.content_for(typed_observation)
             manager.observe(
                 typed_observation.source_id,
-                self._source_body(typed_observation.source_id, raw_content),
+                self._source_body(
+                    typed_observation.source_id,
+                    raw_content,
+                    descriptor_by_source_id=descriptor_by_source_id,
+                ),
                 revision=typed_observation.revision,
             )
 
@@ -304,9 +333,19 @@ class WorkspaceSkillsMiddleware(AgentMiddleware[Any, Any, Any]):
         parsed = parse_skill_frontmatter(raw_content)
         return raw_content[parsed.body_offset :]
 
-    def _source_body(self, source_id: str, raw_content: str) -> str:
+    def _source_body(
+        self,
+        source_id: str,
+        raw_content: str,
+        *,
+        descriptor_by_source_id: Mapping[str, ContextSourceDescriptor] | None = None,
+    ) -> str:
         """按来源语义提取注入正文；Skill 取 frontmatter 后正文，其余取原文。"""
-        descriptor = self._descriptor_for(source_id)
+        descriptor = (
+            self._descriptor_for(source_id)
+            if descriptor_by_source_id is None
+            else descriptor_by_source_id.get(source_id)
+        )
         if descriptor is None:
             raise RuntimeError(f"观察来源缺少 descriptor: source_id={source_id}")
         if descriptor.source_kind == "skill":
@@ -323,9 +362,9 @@ class WorkspaceSkillsMiddleware(AgentMiddleware[Any, Any, Any]):
         del state, runtime
         if self._context_source_manager is None:
             return None
-        self._sync_source_bindings()
+        descriptors = self._sync_source_bindings()
         if self._context_source_reactor is not None:
-            self._observe_pending_sources()
+            self._observe_pending_sources(descriptors)
         # rebuild 由唯一 Saver preparation 在受控事务内恢复；此处只观察 desired。
         return None
 

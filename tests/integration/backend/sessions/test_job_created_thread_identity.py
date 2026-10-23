@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from app.domain.itemized.execution_queue import ExecutionQueueInput
 import asyncio
 import json
 import shutil
@@ -28,7 +29,6 @@ from app.core.identifier import create_prefixed_id
 from app.core.job_event_bus import EventType, JobEventBus
 from app.core.trace_middleware import TraceMiddleware
 from app.core.workspace_identity import load_or_create_workspace_id
-from app.domain.itemized.execution_queue import ExecutionQueueInput
 from app.schemas.internal_v2.common import MessageRole
 from app.schemas.internal_v2.message import MessageDTO
 from app.services.business.job.service import JobService

@@ -16,6 +16,7 @@ from app.domain.itemized.hashing import sha256_jcs
 from app.domain.itemized.identity.refs import ContextRef, selection_ref_identity
 from app.domain.itemized.records import CanonicalItemRecord
 from app.schemas.internal_v2.session_context import SessionContextReadResultDTO
+from app.schemas.internal_v2.turn import TurnHistoryLoadRequest
 from app.services.business.session_context_resource import (
     context_assembly_identity,
     session_resource_uri,
@@ -230,9 +231,23 @@ async def test_frozen_selection_http_and_active_history_survive_backend_restart(
     session_id = session["session_id"]
     state, endpoint = native_http_server
     prepared = []
+    binding_activity = []
+    history_query = TurnHistoryLoadRequest(turn_ids=[turn_id], include=[
+        "user", "assistant_text", "reasoning_detail", "tool_call", "tool_result", "metadata",
+    ])
+    thread_id = saver._storage.storage.main_thread_id(session_id)
     prepare = saver.prepare_context_for_provider
     def observe_prepare(*args, **kwargs):
+        (before,) = saver.load_history(session_id, thread_id, history_query).items
+        canonical = saver.read_canonical_items(session_id, saver._storage.storage.main_thread_id(session_id))
         result = prepare(*args, **kwargs)
+        (after,) = saver.load_history(session_id, thread_id, history_query).items
+        assert result["resource_refs"], "必须真正封存 request-only resource binding"
+        assert after.activity_stats == before.activity_stats, "封存资源不能改变 Turn 统计或计时"
+        assert after.response_parts == before.response_parts, "封存资源不能新增可展开内容或改变 identity/order/elapsed"
+        assert saver.read_canonical_items(session_id, saver._storage.storage.main_thread_id(session_id)) == canonical, "request-only binding 不能产生 canonical Item"
+        binding_activity.append({"before": before.model_dump(mode="json"), "after": after.model_dump(mode="json"),
+            "resource_refs": [ref.model_dump(mode="json") for ref in result["resource_refs"]]})
         prepared.append(result)
         return result
     with monkeypatch.context() as patch:
@@ -279,6 +294,11 @@ async def test_frozen_selection_http_and_active_history_survive_backend_restart(
     assert projected.assembly == snapshot
     assert len(projected.resource_activation.bindings) == 2
     expected_resources = project_sealed_resource_refs(projected.resource_activation)
+    assert len(binding_activity) == 1
+    assert binding_activity[0]["before"]["activity_stats"]["item_count"] == 0
+    (state.artifacts / "request-only-turn-stats.json").write_text(
+        json.dumps(binding_activity, ensure_ascii=False, indent=2), encoding="utf-8",
+    )
     assert len(prepared) == 1 and prepared[0]["resource_refs"] == expected_resources
     expected_wire_refs = [ref.model_dump(mode="json") for ref in expected_resources]
     assert attempts and all(attempt["resource_refs"] == expected_wire_refs for attempt in attempts)

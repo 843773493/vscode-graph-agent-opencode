@@ -209,6 +209,17 @@ Session Trace 的历史与 SSE 入口 SHALL 默认保留 Session 诊断聚合范
 - **WHEN** 产品入口在 main 与 child 生成执行历史，然后分别读取聚合、main 和 child 的分页或 SSE
 - **THEN** 每个精确范围只返回聚合历史中归属相同 Thread 的事件，身份与顺序不变且不重复；稀疏页仍推进游标，跨 Thread、聚合范围或游标用途复用均明确失败，cold child 保持未物化
 
+### Requirement: 用户中断必须绑定明确的 SessionThread
+
+`POST /api/v1/sessions/{session_id}/interrupt` SHALL 在省略 `thread_id` 时解析 catalog 权威 main；显式 `thread_id` SHALL 经统一 resolver 校验。服务 MUST 只选择目标 SessionThread 的可暂停 Job，选定后冻结该 Job，并核对其 execution admission、可选 Turn 和 internal execution 身份；绑定已消失时明确失败，不得重新选择后继 Job 或其它 Thread。main 没有活动 Job 而 child 正在执行时，默认入口 SHALL 返回无活动任务，不中断 child。
+
+可打断 phase、文本、并发工具、取消原因及 reminder 标志 MUST 按 `(workspace_id, session_id, thread_id)` 隔离，执行、重试、事件消费、drain blocker 和清理必须显式传入 Thread。公开响应 MUST 包含真实 Thread，Web 主聊天必须传入其权威 main 身份并验证响应归属；缺身份时明确失败，不发送含糊请求。响应 status SHALL 使用实际 Job 控制结果，不伪造固定 cancelling 状态。Session pending 聚合查询及 mutation 的既有范围不受此项改变。
+
+#### Scenario: main 与 child 同时执行时分别中断
+
+- **WHEN** 产品消息入口让同一 Session 的 main 与 child 同时进入工具执行，用户先默认中断再显式中断 child
+- **THEN** 第一次仅终结 main 的执行、消息流与临时状态，child 的工具与取消状态保持原值；第二次响应绑定 child 的原 Job，两个流分别终结且无跨 Thread 的 reminder 或清理
+
 ### Requirement: 基础 Web tool-loop E2E 必须验收完整 Session 协作场景
 
 仓库 SHALL 在已有 `tests/e2e/clients/web/test_basic_chat_tool_loop.py` 内保留基础两轮聊天/工具循环验收，并在同一 pytest 模块内增加多 Session main thread、Session内durable child、resident runtime回收、跨workspace/server send/read/wait、Session内team状态及右侧侧边栏child对话的分离用例。该模块是这一组跨change业务场景的唯一Web E2E owner；可拆成多个test function并调用共享Python/Node helper，但pytest collection、场景fixture和PASS/FAIL gate必须位于该模块，不得把唯一断言放进未被pytest收集的脚本，也不得在其它E2E中另造一套不同语义的验收流程。进程内`LifetimeScope`的释放合同、共享watch及外部资源lease由`add-context-injection-lifecycle`唯一拥有；本change只验证thread residency owner调用该合同后的可观察结果，不建立第二套dispose/ResourceManager。

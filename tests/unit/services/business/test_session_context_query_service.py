@@ -3,8 +3,9 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+from collections.abc import Callable
 from contextlib import nullcontext
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from unittest.mock import MagicMock, create_autospec
 
@@ -50,6 +51,12 @@ from app.services.business.session_context_resource import (
 )
 
 BACKEND_WORKSPACE_ID = "00000000-0000-4000-8000-000000000001"
+
+
+@dataclass(frozen=True, slots=True)
+class AssemblySelectionQueryFixture:
+    query_service: SessionContextQueryService
+    assembly_snapshot: MagicMock
 
 
 def _resign_cursor_offset(cursor: str, offset: int) -> str:
@@ -233,7 +240,9 @@ class _FakeInformationSource:
 
 
 @pytest.fixture
-def _service():
+def session_context_service_factory() -> Callable[
+    [_FakeMessageSource], SessionContextQueryService
+]:
     assembly_source = create_autospec(
         SessionContextAssemblySourceProtocol, spec_set=True
     )
@@ -244,7 +253,7 @@ def _service():
         AssertionError("active view 不得裁剪为 assembly selection")
     )
 
-    def create_service(
+    def build_session_context_query_service(
         message_source: _FakeMessageSource,
     ) -> SessionContextQueryService:
         service = SessionContextQueryService(
@@ -256,15 +265,17 @@ def _service():
         service.bind_information_source(_FakeInformationSource())
         return service
 
-    return create_service
+    return build_session_context_query_service
 
 
 @pytest.mark.asyncio
 async def test_overview_defaults_to_initial_goal_recent_three_rounds_and_safe_content(
-    _service,
+    session_context_service_factory,
 ):
     message_source = _FakeMessageSource()
-    result = await _service(message_source).read_context(_session_request())
+    result = await session_context_service_factory(message_source).read_context(
+        _session_request()
+    )
 
     serialized = result.model_dump_json()
     assert result.revision.startswith("content:")
@@ -359,7 +370,7 @@ async def test_assembly_history_projection_uses_session_thread_pair():
 
 
 @pytest.fixture
-def _assembly_selection_query():
+def assembly_selection_query() -> AssemblySelectionQueryFixture:
     selection = []
     for protection in ("public", "protected"):
         body = f"overlay 正文 {protection}"
@@ -422,12 +433,18 @@ def _assembly_selection_query():
         message_source=_FakeMessageSource(), session_lookup=_FakeSessionLookup(),
         assembly_source=assembly_source, workspace_id=BACKEND_WORKSPACE_ID,
     )
-    return service, snapshot
+    return AssemblySelectionQueryFixture(
+        query_service=service,
+        assembly_snapshot=snapshot,
+    )
 
 
 @pytest.mark.asyncio
-async def test_default_assembly_projection_hides_sensitive_hashes_and_tool_body(_assembly_selection_query):
-    service, snapshot = _assembly_selection_query
+async def test_default_assembly_projection_hides_sensitive_hashes_and_tool_body(
+    assembly_selection_query: AssemblySelectionQueryFixture,
+):
+    service = assembly_selection_query.query_service
+    snapshot = assembly_selection_query.assembly_snapshot
     internal = tuple(entry.to_dict() for entry in snapshot.selection)
     assembly_ref = context_assembly_identity(
         session_resource_identity(BACKEND_WORKSPACE_ID, "ses_target"), "asm_target",
@@ -475,9 +492,10 @@ async def test_default_assembly_projection_hides_sensitive_hashes_and_tool_body(
 
 @pytest.mark.asyncio
 async def test_default_assembly_revision_and_cursor_use_structure_without_body_hashes(
-    _assembly_selection_query,
+    assembly_selection_query: AssemblySelectionQueryFixture,
 ):
-    service, snapshot = _assembly_selection_query
+    service = assembly_selection_query.query_service
+    snapshot = assembly_selection_query.assembly_snapshot
     assembly_ref = context_assembly_identity(
         session_resource_identity(BACKEND_WORKSPACE_ID, "ses_target"), "asm_target",
     )
@@ -545,14 +563,16 @@ async def test_default_assembly_revision_and_cursor_use_structure_without_body_h
 
 
 @pytest.mark.asyncio
-async def test_overview_handles_fewer_user_rounds_than_default_window(_service):
+async def test_overview_handles_fewer_user_rounds_than_default_window(
+    session_context_service_factory,
+):
     message_source = _FakeMessageSource()
     message_source.records = [
         {"role": "user", "content": "唯一问题"},
         {"role": "assistant", "content": "唯一回答"},
     ]
 
-    result = await _service(message_source).read_context(
+    result = await session_context_service_factory(message_source).read_context(
         _session_request()
     )
 
@@ -562,8 +582,10 @@ async def test_overview_handles_fewer_user_rounds_than_default_window(_service):
 
 
 @pytest.mark.asyncio
-async def test_records_can_explicitly_include_detailed_fields(_service):
-    result = await _service(_FakeMessageSource()).read_context(
+async def test_records_can_explicitly_include_detailed_fields(
+    session_context_service_factory,
+):
+    result = await session_context_service_factory(_FakeMessageSource()).read_context(
         _session_request(
             view="records",
             include=[
@@ -587,9 +609,11 @@ async def test_records_can_explicitly_include_detailed_fields(_service):
 
 
 @pytest.mark.asyncio
-async def test_read_cursor_is_opaque_and_fails_when_revision_changes(_service):
+async def test_read_cursor_is_opaque_and_fails_when_revision_changes(
+    session_context_service_factory,
+):
     source = _FakeMessageSource()
-    service = _service(source)
+    service = session_context_service_factory(source)
     first = await service.read_context(
         _session_request(
             view="messages",
@@ -626,9 +650,9 @@ async def test_read_cursor_is_opaque_and_fails_when_revision_changes(_service):
 
 @pytest.mark.asyncio
 async def test_search_literal_by_default_regex_explicit_and_structured_match_can_be_read(
-    _service,
+    session_context_service_factory,
 ):
-    service = _service(_FakeMessageSource())
+    service = session_context_service_factory(_FakeMessageSource())
     literal = await service.search_context(
         _session_search_request(
             query="问题 BETA",
@@ -663,8 +687,10 @@ async def test_search_literal_by_default_regex_explicit_and_structured_match_can
 
 
 @pytest.mark.asyncio
-async def test_inventory_information_and_output_budget(_service):
-    service = _service(_FakeMessageSource())
+async def test_inventory_information_and_output_budget(
+    session_context_service_factory,
+):
+    service = session_context_service_factory(_FakeMessageSource())
     inventory = await service.read_context(
         _workspace_inventory_request(
             view="inventory",
@@ -706,8 +732,10 @@ async def test_inventory_information_and_output_budget(_service):
 
 
 @pytest.mark.asyncio
-async def test_overview_complete_dto_respects_budget_and_cursor_advances(_service):
-    service = _service(_FakeMessageSource())
+async def test_overview_complete_dto_respects_budget_and_cursor_advances(
+    session_context_service_factory,
+):
+    service = session_context_service_factory(_FakeMessageSource())
     cursor = None
     seen_cursors: set[str] = set()
     pages = 0
@@ -737,13 +765,15 @@ async def test_overview_complete_dto_respects_budget_and_cursor_advances(_servic
 
 
 @pytest.mark.asyncio
-async def test_oversized_single_record_can_be_reassembled_through_cursor(_service):
+async def test_oversized_single_record_can_be_reassembled_through_cursor(
+    session_context_service_factory,
+):
     message_source = _FakeMessageSource()
     oversized_text = "分段内容" * 20_000 + "-END"
     message_source.records = [
         {"role": "assistant", "type": "ai", "content": oversized_text}
     ]
-    service = _service(message_source)
+    service = session_context_service_factory(message_source)
     cursor = None
     chunks: list[str] = []
 
@@ -775,14 +805,16 @@ async def test_oversized_single_record_can_be_reassembled_through_cursor(_servic
 
 
 @pytest.mark.asyncio
-async def test_read_cursor_offset_beyond_items_is_rejected(_service) -> None:
+async def test_read_cursor_offset_beyond_items_is_rejected(
+    session_context_service_factory,
+) -> None:
     """游标 offset 越过真实 item 数时必须 fail-closed，不能静默返回空页。
 
     回归：cursor offset 是客户端可伪造的分页输入，越界时 ``items[offset:...]``
     只返回空列表且 ``has_more=False``。调用方按契约继续翻页会永远拿到空页，
     与同族已修的「limit<=0 返回永不前进空页」是同一类静默失败。
     """
-    service = _service(_FakeMessageSource())
+    service = session_context_service_factory(_FakeMessageSource())
     request = _session_request(
         view="messages",
     )
@@ -831,9 +863,11 @@ async def test_read_cursor_offset_beyond_items_is_rejected(_service) -> None:
 
 
 @pytest.mark.asyncio
-async def test_search_cursor_offset_beyond_matches_is_rejected(_service) -> None:
+async def test_search_cursor_offset_beyond_matches_is_rejected(
+    session_context_service_factory,
+) -> None:
     """search 的 cursor offset 越过总匹配数时同样必须 fail-closed。"""
-    service = _service(_FakeMessageSource())
+    service = session_context_service_factory(_FakeMessageSource())
     request = _session_search_request(
         query="回答",
         sources=["effective_context"],

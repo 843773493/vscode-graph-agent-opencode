@@ -2,6 +2,19 @@
 
 `app/prompting/` 维护项目内部结构化提示语言的注册表、编码、生成和验证规则。
 
+## 职责树
+
+```text
+app/prompting/
+├── registry.py       标签、codec、信任级别、消息 kind 与允许关系
+├── serialization.py  提示内容中的 JSON 编码
+├── factory.py        按注册规则校验 section 并生成 PreparedInternalMessage
+├── validation.py     校验已生成或恢复的内容、metadata 与注册结构
+└── __init__.py       暴露业务层使用的构造器和验证入口
+```
+
+调用方向是“业务构造 → 注册表/编码 → 最终验证”：`factory.py` 读取 `registry.py` 并委派 JSON 编码；`validation.py` 用同一注册表复核消息，schema 常量来自 `factory.py`；`__init__.py` 只汇总公开入口，不承载规则。新增结构标签时改注册表和对应调用点，不在业务层复制标签语法。
+
 # 可修改内容
 
 - 可以增加语义标签、内部消息 kind、渲染器和结构验证规则。

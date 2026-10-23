@@ -17,46 +17,48 @@ class AgentService:
 
         if agents_config:
             workspace_default_agent_id = config_service.get_workspace_default_agent_id()
-            agents: list[AgentDTO] = []
-            for agent_id, info in agents_config.items():
+            agent_dtos: list[AgentDTO] = []
+            for agent_id, agent_info in agents_config.items():
                 policy = config_service.resolve_agent_tool_policy(agent_id)
-                runtime = config_service.get_agent_runtime_config(agent_id)
+                agent_runtime_config = config_service.get_agent_runtime_config(agent_id)
                 workspace_default_provider_id = (
                     config_service.get_workspace_default_provider_id(agent_id)
                 )
-                providers: list[AgentProviderDTO] = []
-                for provider in runtime["providers"]:
+                provider_dtos: list[AgentProviderDTO] = []
+                for provider_config in agent_runtime_config["providers"]:
                     configuration_error = provider_configuration_error(
-                        provider,
-                        runtime,
+                        provider_config,
+                        agent_runtime_config,
                     )
-                    providers.append(
+                    provider_dtos.append(
                         AgentProviderDTO(
-                            provider_id=str(provider["id"]),
-                            model=str(provider["model"]),
+                            provider_id=str(provider_config["id"]),
+                            model=str(provider_config["model"]),
                             custom_llm_provider=str(
-                                provider["custom_llm_provider"]
+                                provider_config["custom_llm_provider"]
                             ),
                             workspace_default=(
-                                provider["id"] == workspace_default_provider_id
+                                provider_config["id"] == workspace_default_provider_id
                             ),
                             available=configuration_error is None,
                             configuration_error=configuration_error,
                         )
                     )
-                agents.append(
+                agent_dtos.append(
                     AgentDTO(
                         agent_id=agent_id,
-                        name=info.get("name", agent_id),
-                        description=info.get("description", ""),
-                        model=info.get("model", {}).get("primary_provider", "unknown"),
+                        name=agent_info.get("name", agent_id),
+                        description=agent_info.get("description", ""),
+                        model=agent_info.get("model", {}).get(
+                            "primary_provider", "unknown"
+                        ),
                         tools=sorted(policy.enabled_names),
-                        capabilities=list(info.get("tags", [])),
-                        providers=providers,
+                        capabilities=list(agent_info.get("tags", [])),
+                        providers=provider_dtos,
                         workspace_default=(agent_id == workspace_default_agent_id),
                     )
                 )
-            return agents
+            return agent_dtos
 
         raise RuntimeError(
             "Agent配置加载失败，没有找到有效的agent定义。\n"
@@ -77,7 +79,7 @@ class AgentService:
         return await self.list()
 
     async def get(self, agent_id: str) -> AgentDTO:
-        agents = {a.agent_id: a for a in await self.list()}
-        if agent_id not in agents:
+        agent_dtos_by_id = {agent.agent_id: agent for agent in await self.list()}
+        if agent_id not in agent_dtos_by_id:
             raise ValueError(f"Agent {agent_id} not found")
-        return agents[agent_id]
+        return agent_dtos_by_id[agent_id]

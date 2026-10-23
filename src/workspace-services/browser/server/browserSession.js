@@ -159,8 +159,8 @@ export class BrowserSession extends EventEmitter {
     /** @type {import("./diagnostics/streamMetrics.js").BrowserFrameObservation[]} */
     this.frameObservations = [];
     this.frameSequence = 0;
-    // 最近一次 attach 开始到下一次帧观察的计时起点，不表示客户端已收到或绘制。
-    this.attachRequestedAtUnixMs = null;
+    /** @type {number|null} 最近attach开始的进程内单调整毫秒；止于下一次帧观察，不持久化。 */
+    this.attachRequestedAtMonotonicMs = null;
     this.closingRequested = false;
     this.recoveringTimedOutPageIds = new Set();
     this.timeoutRecovery = Promise.resolve();
@@ -788,7 +788,7 @@ export class BrowserSession extends EventEmitter {
     { operationDrainTimeoutMs = SHUTDOWN_OPERATION_DRAIN_MS } = {},
   ) {
     this.closingRequested = true;
-    const deadline = Date.now() + operationDrainTimeoutMs;
+    const operationDrainDeadline = performance.now() + operationDrainTimeoutMs;
     let drainTimer = null;
     const queuedOperationsDrained = await Promise.race([
       this.operationQueue.serialOperationTail.then(() => true),
@@ -806,7 +806,7 @@ export class BrowserSession extends EventEmitter {
       error.code = "browser_shutdown_operation_drain_timeout";
       throw error;
     }
-    while (this.inFlightOperations > 0 && Date.now() < deadline) {
+    while (this.inFlightOperations > 0 && performance.now() < operationDrainDeadline) {
       await new Promise((resolve) => setTimeout(resolve, 25));
     }
     if (this.inFlightOperations > 0) {
@@ -1702,7 +1702,7 @@ export class BrowserSession extends EventEmitter {
       error.code = "browser_closing";
       throw error;
     }
-    this.attachRequestedAtUnixMs = Date.now();
+    this.attachRequestedAtMonotonicMs = Math.floor(performance.now());
     this.pendingAttachRequests += 1;
     try {
       this.assertTransport(client);
@@ -1827,13 +1827,13 @@ export class BrowserSession extends EventEmitter {
    * 首帧耗时止于 Node 观察，不等待连接流控、客户端解码或绘制 ACK。
    */
   recordFrameObservation(jpegPayloadBytes) {
-    const observedAtUnixMs = Date.now();
-    this.frameObservations.push({ observedAtUnixMs, jpegPayloadBytes });
-    const observationCutoffUnixMs = observedAtUnixMs - 5_000;
-    while (this.frameObservations[0]?.observedAtUnixMs < observationCutoffUnixMs) this.frameObservations.shift();
-    if (this.attachRequestedAtUnixMs !== null) {
-      this.record.last_attach_first_frame_ms = observedAtUnixMs - this.attachRequestedAtUnixMs;
-      this.attachRequestedAtUnixMs = null;
+    const observedAtMonotonicMs = Math.floor(performance.now());
+    this.frameObservations.push({ observedAtMonotonicMs, jpegPayloadBytes });
+    const observationCutoffMonotonicMs = observedAtMonotonicMs - 5_000;
+    while (this.frameObservations[0]?.observedAtMonotonicMs < observationCutoffMonotonicMs) this.frameObservations.shift();
+    if (this.attachRequestedAtMonotonicMs !== null) {
+      this.record.last_attach_first_frame_ms = observedAtMonotonicMs - this.attachRequestedAtMonotonicMs;
+      this.attachRequestedAtMonotonicMs = null;
     }
   }
 

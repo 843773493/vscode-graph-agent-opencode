@@ -47,12 +47,13 @@ def _stdio_server(server_id: str = "mini") -> dict[str, object]:
 def _make_owner(
     tmp_path: Path,
     factory: _FakeSessionFactory,
+    event_service: EventChannelService,
     servers: dict[str, object] | None = None,
 ) -> McpCatalogOwner:
     return McpCatalogOwner(
         raw_config={"servers": servers if servers is not None else _stdio_server()},
         workspace_root=tmp_path,
-        event_service=EventChannelService(),
+        event_service=event_service,
         session_factory=factory,
     )
 
@@ -60,9 +61,10 @@ def _make_owner(
 async def _started_owner(
     tmp_path: Path,
     factory: _FakeSessionFactory,
+    event_service: EventChannelService,
     servers: dict[str, object] | None = None,
 ):
-    owner = _make_owner(tmp_path, factory, servers)
+    owner = _make_owner(tmp_path, factory, event_service, servers)
     await owner.start()
     return owner
 
@@ -89,9 +91,12 @@ def _expected_binding_hash(ref: ExtensionCatalogBindingRef) -> str:
     return sha256_jcs(payload)
 
 
-async def test_binding_snapshot_frozen_and_verifiable(tmp_path: Path) -> None:
+async def test_binding_snapshot_frozen_and_verifiable(
+    tmp_path: Path,
+    event_channel_service: EventChannelService,
+) -> None:
     factory = _FakeSessionFactory(initial_tools={"mini": ["echo"]})
-    owner = await _started_owner(tmp_path, factory)
+    owner = await _started_owner(tmp_path, factory, event_channel_service)
     try:
         ref = owner.binding_snapshot()
         assert ref.catalog_revision == owner.catalog_revision()
@@ -106,9 +111,7 @@ async def test_binding_snapshot_frozen_and_verifiable(tmp_path: Path) -> None:
         assert target.schema_hash == (
             "sha256:"
             + hashlib.sha256(
-                extension_args_fingerprint(
-                    owner.get_tools()[0].args
-                ).encode()
+                extension_args_fingerprint(owner.get_tools()[0].args).encode()
             ).hexdigest()
         )
         # binding_hash 可按文档化 payload 独立重算核对。
@@ -124,9 +127,10 @@ async def test_binding_snapshot_frozen_and_verifiable(tmp_path: Path) -> None:
 
 async def test_binding_snapshot_does_not_drift_after_catalog_update(
     tmp_path: Path,
+    event_channel_service: EventChannelService,
 ) -> None:
     factory = _FakeSessionFactory(initial_tools={"mini": ["echo"]})
-    owner = await _started_owner(tmp_path, factory)
+    owner = await _started_owner(tmp_path, factory, event_channel_service)
     try:
         sealed = owner.binding_snapshot()
         sealed_revision = sealed.catalog_revision
@@ -150,9 +154,12 @@ async def test_binding_snapshot_does_not_drift_after_catalog_update(
         await owner.shutdown()
 
 
-async def test_generation_advances_only_on_revision_change(tmp_path: Path) -> None:
+async def test_generation_advances_only_on_revision_change(
+    tmp_path: Path,
+    event_channel_service: EventChannelService,
+) -> None:
     factory = _FakeSessionFactory(initial_tools={"mini": ["echo"]})
-    owner = await _started_owner(tmp_path, factory)
+    owner = await _started_owner(tmp_path, factory, event_channel_service)
     try:
         generation_before = owner.catalog_generation()
         # unchanged relist：generation 不推进。
@@ -171,9 +178,10 @@ async def test_generation_advances_only_on_revision_change(tmp_path: Path) -> No
 
 async def test_old_call_resolves_by_sealed_ref_after_tombstone(
     tmp_path: Path,
+    event_channel_service: EventChannelService,
 ) -> None:
     factory = _FakeSessionFactory(initial_tools={"mini": ["echo"]})
-    owner = await _started_owner(tmp_path, factory)
+    owner = await _started_owner(tmp_path, factory, event_channel_service)
     try:
         sealed = owner.binding_snapshot()
         # 目录删除 target（tombstone）：旧调用仍按 sealed ref 解析原 target。
@@ -192,10 +200,18 @@ async def test_old_call_resolves_by_sealed_ref_after_tombstone(
         await owner.shutdown()
 
 
-async def test_empty_catalog_binding_envelope_deterministic(tmp_path: Path) -> None:
-    owner_a = await _started_owner(tmp_path, _FakeSessionFactory(), servers={})
+async def test_empty_catalog_binding_envelope_deterministic(
+    tmp_path: Path,
+    event_channel_service: EventChannelService,
+) -> None:
+    owner_a = await _started_owner(
+        tmp_path, _FakeSessionFactory(), event_channel_service, servers={}
+    )
     owner_b = await _started_owner(
-        tmp_path / "b", _FakeSessionFactory(), servers={}
+        tmp_path / "b",
+        _FakeSessionFactory(),
+        event_channel_service,
+        servers={},
     )
     try:
         ref_a = owner_a.binding_snapshot()
@@ -212,16 +228,15 @@ async def test_empty_catalog_binding_envelope_deterministic(tmp_path: Path) -> N
 
 async def test_cross_server_same_remote_name_uses_declared_namespace(
     tmp_path: Path,
+    event_channel_service: EventChannelService,
 ) -> None:
     """跨 server 同名远端工具按规范命名空间区分，不冲突也不静默覆盖。"""
     servers: dict[str, object] = {
         "alpha": {"enabled": True, "transport": "stdio", "command": "fake-a"},
         "beta": {"enabled": True, "transport": "stdio", "command": "fake-b"},
     }
-    factory = _FakeSessionFactory(
-        initial_tools={"alpha": ["echo"], "beta": ["echo"]}
-    )
-    owner = await _started_owner(tmp_path, factory, servers)
+    factory = _FakeSessionFactory(initial_tools={"alpha": ["echo"], "beta": ["echo"]})
+    owner = await _started_owner(tmp_path, factory, event_channel_service, servers)
     try:
         ref = owner.binding_snapshot()
         assert set(ref.targets) == {"mcp__alpha__echo", "mcp__beta__echo"}

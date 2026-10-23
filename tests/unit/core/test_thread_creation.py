@@ -1778,7 +1778,6 @@ async def test_create_fails_with_control_store_misbinding(
     store: SessionCatalogStore,
     owner: OwnerSession,
     sessions_root: Path,
-    tmp_path: Path,
 ) -> None:
     """control_store 误绑其它 session 控制库 → fail fast。"""
     other_dir = sessions_root / "2026" / "06" / "01" / make_session_id()

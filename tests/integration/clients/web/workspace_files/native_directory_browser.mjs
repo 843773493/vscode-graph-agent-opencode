@@ -1,8 +1,10 @@
 // Integration：完整生产页面、Gateway 与文件 owner；文件引用场景由本地 Provider 桩回显 Markdown。
 import assert from "node:assert/strict";
 import { dirname } from "node:path";
-import { mkdir, open, writeFile } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import { chromium } from "playwright";
+
+import { configureChromiumTemporaryDirectory } from "./chromium-temporary-directory.mjs";
 
 const fixture = JSON.parse(process.env.BOXTEAM_BROWSER_FIXTURE);
 const output = process.env.BOXTEAM_BROWSER_RESULT_PATH;
@@ -11,11 +13,7 @@ const artifacts = dirname(output);
 await mkdir(artifacts, { recursive: true });
 const runtime = process.env.BOXTEAM_BROWSER_RUNTIME_PATH;
 assert.ok(runtime);
-await mkdir(runtime, { recursive: true });
-// Linux Unix socket 长度有限；目录 fd 的短路径仍指向本测试的正式 runtime。
-const runtimeHandle = process.platform === "linux" ? await open(runtime, "r") : null;
-const temporary = runtimeHandle ? `/proc/${process.pid}/fd/${runtimeHandle.fd}` : runtime;
-for (const key of ["TMPDIR", "TMP", "TEMP"]) process.env[key] = temporary;
+const releaseChromiumTemporaryDirectory = await configureChromiumTemporaryDirectory(runtime);
 const pageErrors = [], exchanges = [], pending = [];
 let browser, context, page;
 try {
@@ -206,6 +204,6 @@ try {
   try { if (context) await context.close(); }
   finally {
     try { if (browser) await browser.close(); }
-    finally { if (runtimeHandle) await runtimeHandle.close(); }
+    finally { await releaseChromiumTemporaryDirectory(); }
   }
 }

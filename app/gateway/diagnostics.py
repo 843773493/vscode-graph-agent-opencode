@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import heapq
+import stat
+from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -43,6 +46,16 @@ def _launcher_log_path() -> Path:
     return get_gateway_root().parent / "launcher" / "logs" / "services.log"
 
 
+def _launcher_log_candidate() -> _LogCandidate:
+    return _LogCandidate(
+        log_id="gateway:launcher",
+        source="gateway",
+        service="launcher",
+        label="Launcher 汇总日志",
+        path=_launcher_log_path(),
+    )
+
+
 def _port_from_url(url: str | None) -> int | None:
     if not url:
         return None
@@ -64,35 +77,38 @@ def _process_log_path(service: str, port: int | None) -> Path | None:
 
 
 def _candidate_gateway_logs(known_workspace_files: set[str]) -> list[_LogCandidate]:
-    candidates = [
-        _LogCandidate(
-            log_id="gateway:launcher",
-            source="gateway",
-            service="launcher",
-            label="Launcher 汇总日志",
-            path=_launcher_log_path(),
-        )
-    ]
+    candidates = [_launcher_log_candidate()]
     log_dir = _gateway_log_dir()
     if not log_dir.exists():
         return candidates
-    paths = [
-        item
-        for item in log_dir.iterdir()
-        if item.is_file()
-        and not item.is_symlink()
-        and item.name.endswith(".log")
-        and item.name not in known_workspace_files
-    ]
-    paths.sort(key=lambda item: (item.stat().st_mtime, item.name), reverse=True)
-    for path in paths[:_MAX_GATEWAY_LOG_ENTRIES]:
+
+    def gateway_log_entries() -> Iterator[tuple[float, str, Path]]:
+        for log_path in log_dir.iterdir():
+            if (
+                not log_path.name.endswith(".log")
+                or log_path.name in known_workspace_files
+            ):
+                continue
+            try:
+                metadata = log_path.stat(follow_symlinks=False)
+            except FileNotFoundError:
+                continue
+            if stat.S_ISREG(metadata.st_mode):
+                yield metadata.st_mtime, log_path.name, log_path
+
+    newest_log_entries = heapq.nlargest(
+        _MAX_GATEWAY_LOG_ENTRIES,
+        gateway_log_entries(),
+        key=lambda log_entry: log_entry[:2],
+    )
+    for _, _, log_path in newest_log_entries:
         candidates.append(
             _LogCandidate(
-                log_id=f"gateway:file:{path.name}",
+                log_id=f"gateway:file:{log_path.name}",
                 source="gateway",
                 service="gateway_runtime",
-                label=f"Gateway 运行日志 · {path.name}",
-                path=path,
+                label=f"Gateway 运行日志 · {log_path.name}",
+                path=log_path,
             )
         )
     return candidates
@@ -102,15 +118,15 @@ def _workspace_candidates(
     target: WorkspaceTarget,
     registry: GatewayWorkspaceRegistry,
 ) -> list[_LogCandidate]:
-    runtime_urls = registry.runtime_service_urls(target.workspace_id)
+    workspace_runtime_urls = registry.runtime_service_urls(target.workspace_id)
     if target.managed:
-        runtime_urls.setdefault("workspace_api", target.backend_url)
+        workspace_runtime_urls.setdefault("workspace_api", target.backend_url)
     candidates: list[_LogCandidate] = []
     for service in ("workspace_api", "terminal_manager", "browser_manager"):
-        service_url = runtime_urls.get(service)
-        path = _process_log_path(service, _port_from_url(service_url))
-        if service == "workspace_api" and path is None and target.managed:
-            path = _process_log_path(service, _port_from_url(target.backend_url))
+        service_url = workspace_runtime_urls.get(service)
+        log_path = _process_log_path(service, _port_from_url(service_url))
+        if service == "workspace_api" and log_path is None and target.managed:
+            log_path = _process_log_path(service, _port_from_url(target.backend_url))
         candidates.append(
             _LogCandidate(
                 log_id=f"workspace:{target.workspace_id}:{service}",
@@ -119,13 +135,18 @@ def _workspace_candidates(
                 workspace_name=target.name,
                 service=service,
                 label=f"{target.name} · {_SERVICE_LABELS[service]}",
-                path=path,
+                path=log_path,
             )
         )
     return candidates
 
 
-def _read_log(candidate: _LogCandidate, tail_lines: int) -> GatewayDiagnosticLogDTO:
+def _read_log(
+    candidate: _LogCandidate,
+    tail_lines: int,
+    *,
+    include_tail: bool,
+) -> GatewayDiagnosticLogDTO:
     if candidate.path is None:
         return GatewayDiagnosticLogDTO(
             log_id=candidate.log_id,
@@ -137,10 +158,10 @@ def _read_log(candidate: _LogCandidate, tail_lines: int) -> GatewayDiagnosticLog
             status="unavailable",
             error="该工作区不是当前 Gateway 托管进程，日志不在 Gateway 控制面中。",
         )
-    path = candidate.path
-    if path.is_symlink():
-        raise RuntimeError(f"拒绝读取符号链接日志: {path}")
-    if not path.exists():
+    log_path = candidate.path
+    try:
+        file_stat = log_path.stat(follow_symlinks=False)
+    except FileNotFoundError:
         return GatewayDiagnosticLogDTO(
             log_id=candidate.log_id,
             source=candidate.source,
@@ -149,11 +170,12 @@ def _read_log(candidate: _LogCandidate, tail_lines: int) -> GatewayDiagnosticLog
             service=candidate.service,
             label=candidate.label,
             status="unavailable",
-            error=f"日志文件不存在: {path.name}",
+            error=f"日志文件不存在: {log_path.name}",
         )
-    if not path.is_file():
-        raise RuntimeError(f"诊断日志路径不是普通文件: {path}")
-    file_stat = path.stat()
+    if stat.S_ISLNK(file_stat.st_mode):
+        raise RuntimeError(f"拒绝读取符号链接日志: {log_path}")
+    if not stat.S_ISREG(file_stat.st_mode):
+        raise RuntimeError(f"诊断日志路径不是普通文件: {log_path}")
     updated_at = datetime.fromtimestamp(
         file_stat.st_mtime,
         UTC,
@@ -170,16 +192,18 @@ def _read_log(candidate: _LogCandidate, tail_lines: int) -> GatewayDiagnosticLog
             size_bytes=0,
             updated_at=updated_at,
         )
-
-    with path.open("rb") as file:
-        file.seek(max(0, file_stat.st_size - _MAX_READ_BYTES))
-        raw = file.read(_MAX_READ_BYTES)
-    text = raw.decode("utf-8", errors="replace")
-    lines = text.splitlines()
-    truncated = len(raw) < file_stat.st_size
-    if len(lines) > tail_lines:
-        lines = lines[-tail_lines:]
-        truncated = True
+    if include_tail:
+        with log_path.open("rb") as file:
+            file.seek(max(0, file_stat.st_size - _MAX_READ_BYTES))
+            raw = file.read(_MAX_READ_BYTES)
+        lines = raw.decode("utf-8", errors="replace").splitlines()
+        truncated = len(raw) < file_stat.st_size
+        if len(lines) > tail_lines:
+            lines = lines[-tail_lines:]
+            truncated = True
+    else:
+        lines = []
+        truncated = False
     return GatewayDiagnosticLogDTO(
         log_id=candidate.log_id,
         source=candidate.source,
@@ -196,8 +220,13 @@ def _read_log(candidate: _LogCandidate, tail_lines: int) -> GatewayDiagnosticLog
     )
 
 
-def _status(workspaces: list[GatewayDiagnosticWorkspaceDTO]) -> GatewayDiagnosticStatus:
-    if any(item.status == "offline" or item.connection_error for item in workspaces):
+def _status(
+    workspace_dtos: list[GatewayDiagnosticWorkspaceDTO],
+) -> GatewayDiagnosticStatus:
+    if any(
+        workspace_dto.status == "offline" or workspace_dto.connection_error
+        for workspace_dto in workspace_dtos
+    ):
         return "degraded"
     return "ready"
 
@@ -241,49 +270,53 @@ async def collect_gateway_diagnostics(
     local_gateway_id = gateway_id or load_or_create_gateway_id(
         get_gateway_root() / "identity.json"
     )
-    all_workspace_dtos = [
-        item
-        for item in await registry.list_dtos()
-        if item.connection_kind == "local"
+    workspace_dtos = [
+        workspace_dto
+        for workspace_dto in await registry.list_dtos()
+        if workspace_dto.connection_kind == "local"
+        and (
+            selected_workspace_id is None
+            or workspace_dto.workspace_id == selected_workspace_id
+        )
     ]
-    if selected_workspace_id is not None and not any(
-        item.workspace_id == selected_workspace_id for item in all_workspace_dtos
-    ):
+    if selected_workspace_id is not None and not workspace_dtos:
         raise LookupError(f"Gateway 工作区不存在: {selected_workspace_id}")
 
-    workspace_dtos = [
-        item
-        for item in all_workspace_dtos
-        if selected_workspace_id is None or item.workspace_id == selected_workspace_id
-    ]
     workspace_items = [
         GatewayDiagnosticWorkspaceDTO(
-            workspace_id=item.workspace_id,
-            name=item.name,
-            connection_kind=item.connection_kind,
-            status=item.status,
-            managed=item.managed,
-            system_default=item.system_default,
-            connection_error=item.connection_error,
+            workspace_id=workspace_dto.workspace_id,
+            name=workspace_dto.name,
+            connection_kind=workspace_dto.connection_kind,
+            status=workspace_dto.status,
+            managed=workspace_dto.managed,
+            system_default=workspace_dto.system_default,
+            connection_error=workspace_dto.connection_error,
         )
-        for item in workspace_dtos
+        for workspace_dto in workspace_dtos
     ]
-    targets = [
+    local_workspace_targets = [
         target
         for target in registry.targets()
         if target.connection_kind == "local"
+        and (
+            selected_workspace_id is None
+            or target.workspace_id == selected_workspace_id
+        )
     ]
     workspace_candidates = [
         candidate
-        for target in targets
+        for target in local_workspace_targets
         for candidate in _workspace_candidates(target, registry)
     ]
-    known_workspace_files = {
-        candidate.path.name
-        for candidate in workspace_candidates
-        if candidate.path is not None
-    }
-    gateway_candidates = _candidate_gateway_logs(known_workspace_files)
+    if selected_workspace_id is None:
+        known_workspace_files = {
+            candidate.path.name
+            for candidate in workspace_candidates
+            if candidate.path is not None
+        }
+        gateway_candidates = _candidate_gateway_logs(known_workspace_files)
+    else:
+        gateway_candidates = [_launcher_log_candidate()]
     candidates = _scope_log_candidates(
         gateway_candidates,
         workspace_candidates,
@@ -294,7 +327,7 @@ async def collect_gateway_diagnostics(
     ):
         raise LookupError(f"诊断日志不存在: {selected_log_id}")
     if selected_log_id is None:
-        preferred = (
+        preferred_log_candidates = (
             [
                 candidate
                 for candidate in candidates
@@ -310,22 +343,20 @@ async def collect_gateway_diagnostics(
         selected_log_id = next(
             (
                 candidate.log_id
-                for candidate in preferred
+                for candidate in preferred_log_candidates
                 if candidate.path is not None and candidate.path.exists()
             ),
-            preferred[0].log_id if preferred else None,
+            preferred_log_candidates[0].log_id if preferred_log_candidates else None,
         )
-    logs = []
+    log_results = []
     for candidate in candidates:
-        log = _read_log(
+        is_selected = candidate.log_id == selected_log_id
+        log_dto = _read_log(
             candidate,
-            tail_lines if candidate.log_id == selected_log_id else 20,
+            tail_lines,
+            include_tail=is_selected,
         )
-        if candidate.log_id != selected_log_id:
-            log.tail = ""
-            log.truncated = False
-            log.line_count = 0
-        logs.append(log)
+        log_results.append(log_dto)
     return GatewayDiagnosticsDTO(
         gateway_id=local_gateway_id,
         gateway_name=gateway_name,
@@ -336,5 +367,5 @@ async def collect_gateway_diagnostics(
         selected_workspace_id=selected_workspace_id,
         selected_log_id=selected_log_id,
         workspaces=workspace_items,
-        logs=logs,
+        logs=log_results,
     )

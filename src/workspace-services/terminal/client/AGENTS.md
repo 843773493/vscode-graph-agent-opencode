@@ -4,6 +4,8 @@
 
 `server.js`是Node静态资源入口；工作区UUID与权威身份文件核对只依赖`../server/workspaceIdentity.js`，不为校验加载TerminalManager、Session或PTY管理链。网页main.js不导入这个Node模块。
 
+监听地址是传给Node的主机值，URL中的主机则须按authority语法表示：显式IPv6地址在请求解析基址和启动日志中都通过既有`formatUrlHost()`加方括号；`auto`后端地址继续从HTTP Host解析。HTTP入口验证位于`tests/integration/harness/test_process_ownership.py`，只证明静态服务，不替代页面交互或PTY业务验收。
+
 `main.js`从`./shared/commandText.js`读取唯一的命令文本过滤器；静态服务只公开该明确模块，不开放shared目录的任意文件。页面在输入边界沿用空值到空串的转换，原始输出、sequence及ACK合同不因展示过滤改变；后端提供display_buffer时直接消费该字段。
 
 ## 可修改内容

@@ -21,8 +21,13 @@ def commit_fixture_output(
     调用方须处于真实 admission scope，随后由原 checkpoint 写入验证同一消息组；
     不能把已经独立落盘的 assistant item 再补成成功终态。
     """
-    final = messages[-1]
-    if not isinstance(final, AIMessage) or final.tool_calls:
+    if not messages:
+        raise ValueError("静态完成 fixture 至少需要一条最终 AIMessage")
+    final_assistant_message = messages[-1]
+    if (
+        not isinstance(final_assistant_message, AIMessage)
+        or final_assistant_message.tool_calls
+    ):
         raise ValueError("静态完成 fixture 必须以无 tool-call 的 AIMessage 结束")
     admission = require_current_execution_admission()
     saver.ensure_request_items(
@@ -33,4 +38,4 @@ def commit_fixture_output(
     StepModelCallAdapter(
         checkpointer=saver, session_id=admission.session_id,
         thread_id=admission.thread_id, job_id=admission.job_id, checkpoint_ns="",
-    ).converge_final_message(final)
+    ).converge_final_message(final_assistant_message)

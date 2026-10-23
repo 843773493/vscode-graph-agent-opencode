@@ -30,23 +30,50 @@ def team_facet_payload(payload_json: str, thread_id: str, facet: str) -> dict[st
     """唯一投影同时供 loader 与 Saver 校验原持久 observation 使用。"""
     if facet not in TEAM_FACETS:
         raise ValueError(f"未知团队 facet: {facet}")
-    value = json.loads(payload_json)
-    selected = []
-    for board in value["boards"]:
-        team_members = [member for member in value["members"]
-                        if member["state"] != "registering" and member["child_thread_id"] is not None
-                        and json.loads(member["task_seed"]).get("trusted_context", {}).get("team_id") == board["team_id"]]
+    return _team_facet_payload_from_ledger(
+        json.loads(payload_json), thread_id=thread_id, facet=facet
+    )
+
+
+def _team_facet_payload_from_ledger(
+    ledger: dict[str, object], *, thread_id: str, facet: str
+) -> dict[str, str]:
+    """复用已解码的冻结账本，并只解析一次成员 task_seed。"""
+    members_by_team_id: dict[str, list[dict[str, object]]] = {}
+    if ledger["boards"]:
+        for member in ledger["members"]:
+            if member["state"] == "registering" or member["child_thread_id"] is None:
+                continue
+            team_id = (
+                json.loads(member["task_seed"])
+                .get("trusted_context", {})
+                .get("team_id")
+            )
+            if isinstance(team_id, str):
+                members_by_team_id.setdefault(team_id, []).append(member)
+    selected_boards = []
+    for board in ledger["boards"]:
+        team_members = members_by_team_id.get(board["team_id"], [])
         if thread_id != board["coordinator_thread_id"] and not any(
             member["child_thread_id"] == thread_id and member["state"] == "published" for member in team_members
         ):
             continue
-        selected.append(board if facet == "tasks" else {
+        selected_boards.append(board if facet == "tasks" else {
             "team_id": board["team_id"], "coordinator_thread_id": board["coordinator_thread_id"],
             "members": [{key: member[key] for key in ("delegation_id", "child_thread_id", "role", "state", "admission_state")}
                         for member in team_members],
         })
-    return {"content": canonical_json_bytes({"session_id": value["session_id"], "thread_id": thread_id,
-                                             facet: selected}).decode() if selected else ""}
+    return {
+        "content": canonical_json_bytes(
+            {
+                "session_id": ledger["session_id"],
+                "thread_id": thread_id,
+                facet: selected_boards,
+            }
+        ).decode()
+        if selected_boards
+        else ""
+    }
 
 
 @dataclass(frozen=True, slots=True)
@@ -80,4 +107,8 @@ class TeamFacetLoader:
             or event.content != event.revision
         ):
             return SemanticPayload(available=False, error="Team 已接受来源 owner/revision/event 向量不一致")
-        return SemanticPayload(payload=team_facet_payload(ledger.content, self.thread_id, self.facet))
+        return SemanticPayload(
+            payload=_team_facet_payload_from_ledger(
+                value, thread_id=self.thread_id, facet=self.facet
+            )
+        )

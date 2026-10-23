@@ -325,25 +325,27 @@ class WorkspaceFileWatchService:
             subscriber_items = tuple((queue, True) for queue in subscribers)
         else:
             subscriber_items = tuple(subscribers.items())
+        public_batch = batch
+        if (
+            internal_root is not None
+            and batch.error is None
+            and not batch.overflow
+            and any(not include_internal_paths for _, include_internal_paths in subscriber_items)
+        ):
+            public_changes = tuple(
+                change
+                for change in batch.changes
+                if not _is_path_under(change.path, internal_root)
+            )
+            public_batch = (
+                WorkspaceFileChangeBatch(changes=public_changes)
+                if public_changes
+                else None
+            )
         for queue, include_internal_paths in subscriber_items:
-            if (
-                internal_root is not None
-                and not include_internal_paths
-                and batch.error is None
-                and not batch.overflow
-            ):
-                changes = tuple(
-                    change
-                    for change in batch.changes
-                    if not _is_path_under(change.path, internal_root)
-                )
-                if not changes:
-                    continue
-                batch_for_subscriber = WorkspaceFileChangeBatch(
-                    changes=changes,
-                )
-            else:
-                batch_for_subscriber = batch
+            batch_for_subscriber = batch if include_internal_paths else public_batch
+            if batch_for_subscriber is None:
+                continue
             if queue.full():
                 while not queue.empty():
                     queue.get_nowait()

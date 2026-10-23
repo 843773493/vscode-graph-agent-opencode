@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from app.domain.itemized.execution_queue import ExecutionQueueInput
 import asyncio
 import json
 import shutil
@@ -16,12 +17,8 @@ import pytest
 from app.core.background_message_bus import BackgroundMessageBus
 from app.core.exceptions import NotFoundError
 from app.core.job_event_bus import JobEventBus
-from app.core.session_lifecycle_gate import (
-    NavigationTopologyGate,
-    SessionDeletionPendingError,
-)
+from app.core.session_lifecycle_gate import NavigationTopologyGate, SessionDeletionPendingError
 from app.core.session_subtree_delete import SessionSubtreeDeleteService
-from app.domain.itemized.execution_queue import ExecutionQueueInput
 from app.schemas.internal_v2.common import JobStatus, MessageRole
 from app.schemas.internal_v2.message import MessageDTO
 from app.services.business.job.service import JobService, JobState
@@ -215,7 +212,6 @@ async def test_large_subtree_delete_commits_one_visibility_transition(
     (context.artifacts_dir / "large-subtree-metrics.json").write_text(
         json.dumps(metrics, ensure_ascii=False, indent=2) + "\n", encoding="utf-8",
     )
-
 
 
 @pytest.fixture
@@ -430,7 +426,7 @@ async def test_catalog_delete_settles_active_and_queued_jobs_before_isolation(
         assert result.record_state == "completed"
         assert terminal_rows == {active.job_id: "cancelled", queued.job_id: "cancelled", unstarted.job_id: "cancelled"}
         assert admission_harness.executor.session_ids == [session_id], "queued 输入不能在删除收尾中启动"
-        assert service._pending_queue.ids(session_id) == ()
+        assert service._pending_queue.queued_job_ids(session_id) == ()
         assert all(job.session_id != session_id for job in service._jobs.values())
         with pytest.raises(KeyError):
             workspace.store.get_node(session_id)
@@ -543,7 +539,7 @@ async def test_catalog_delete_drain_failure_rejects_late_admission(
         job.session_id == target_session_id
         for job in job_service._jobs.values()
     )
-    assert job_service._pending_queue.ids(target_session_id) == ()
+    assert job_service._pending_queue.queued_job_ids(target_session_id) == ()
     with message_bus._store.control(target_session_id, read_only=True) as control:
         assert control.list_background_messages(target_thread_id, "default") == [target_message]
     assert workspace.store.get_subtree_delete_record(delete_key) == deletion_record

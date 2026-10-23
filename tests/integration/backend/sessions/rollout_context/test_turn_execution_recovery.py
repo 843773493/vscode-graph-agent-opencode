@@ -62,7 +62,7 @@ from app.services.orchestration.execution_step.stream_bindings import CanonicalI
 from app.services.orchestration.message_stream_runtime import MessageStreamRuntime
 from tests.harness.python.run_context import TestRunContext
 from tests.support.rollout_view_mutations import mutate_view_members
-from tests.support.workspaces import prepare_default_test_workspace
+from tests.support.workspaces import prepare_test_workspace
 
 SESSION_ID = "ses_019c205391bb7a4b81b6728df70f63e6"
 EMPTY_TOOL_SET = ToolSetSnapshot(selection_revision=sha256_jcs({}), tools=())
@@ -2561,9 +2561,10 @@ async def test_post_commit_tool_observer_failure_keeps_result_and_converges_exec
         pass
 
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
-    workspace_root = prepare_default_test_workspace(
+    workspace_root = prepare_test_workspace(
         workspace_root=context.workspace_root,
         template_root=Path.cwd() / "tests/fixtures/workspaces/default_test_workspace",
+        template_items=(),
     )
     sessions_dir = workspace_root / ".boxteam" / "sessions"
     session_bundle_factory(sessions_dir, SESSION_ID)

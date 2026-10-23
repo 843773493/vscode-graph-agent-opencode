@@ -1,7 +1,7 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import { BrowserFrameFlow } from "./browserFrameFlow.js";
 
-function harness() {
+function harness(overrides = {}) {
   const sent = [];
   const timers = new Map();
   let timerId = 0;
@@ -21,6 +21,7 @@ function harness() {
       return timerId;
     },
     cancel: (id) => timers.delete(id),
+    ...overrides,
   });
   return {
     flow,
@@ -36,6 +37,39 @@ function harness() {
 }
 
 describe("浏览器最新帧流控", () => {
+  test.each([-60_000, 60_000])("系统校时 %i ms 不改变默认时钟的 ACK 耗时", (clockShiftMs) => {
+    let elapsedClockMs = 1_000;
+    const wallClock = spyOn(Date, "now").mockReturnValue(1_800_000_000_000);
+    const elapsedClock = spyOn(performance, "now").mockImplementation(() => elapsedClockMs);
+    const state = harness({ now: undefined });
+    try {
+      state.flow.offer({ frameId: 50 });
+      state.flow.offer({ frameId: 51 });
+      wallClock.mockReturnValue(1_800_000_000_000 + clockShiftMs);
+      elapsedClockMs += 24;
+      expect(state.flow.acknowledge(50)).toBe(true);
+      expect(state.sent).toEqual([50, 51]);
+      expect(state.flow.snapshot()).toMatchObject({
+        last_ack_rtt_ms: 24,
+        max_ack_rtt_ms: 24,
+        awaiting_frame_id: 51,
+        ack_timeouts: 0,
+      });
+      elapsedClockMs += 6;
+      expect(state.flow.acknowledge(51)).toBe(true);
+      expect(state.flow.snapshot()).toMatchObject({
+        last_ack_rtt_ms: 6,
+        max_ack_rtt_ms: 24,
+        awaiting_frame_id: null,
+      });
+      expect(state.timers.size).toBe(0);
+    } finally {
+      state.flow.close();
+      elapsedClock.mockRestore();
+      wallClock.mockRestore();
+    }
+  });
+
   test("未确认期间只保留最新帧", () => {
     const state = harness();
     state.flow.offer({ frameId: 1 });

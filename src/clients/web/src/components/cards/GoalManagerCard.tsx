@@ -13,8 +13,10 @@ import WarmActionDialog from "../overlays/WarmActionDialog";
 import { useWarmConfirm } from "../shell/WarmConfirmProvider";
 import { errorMessage } from "../../utils/errorMessage";
 
-function formatTokens(tokens: number): string {
-  return new Intl.NumberFormat("zh-CN").format(tokens);
+const TOKEN_COUNT_FORMATTER = new Intl.NumberFormat("zh-CN");
+
+function formatTokenCount(tokens: number): string {
+  return TOKEN_COUNT_FORMATTER.format(tokens);
 }
 
 function formatDuration(totalSeconds: number): string {
@@ -68,7 +70,7 @@ export default function GoalManagerCard({
     });
   };
 
-  const clear = async () => {
+  const clearGoal = async () => {
     if (!goal) {
       throw new Error("当前会话没有 Goal");
     }
@@ -117,10 +119,10 @@ export default function GoalManagerCard({
           <div className="goal-manager-metrics">
             <span>耗时 {formatDuration(goal.time_used_seconds)}</span>
             <span>
-              Token {formatTokens(goal.tokens_used)}
+              Token {formatTokenCount(goal.tokens_used)}
               {goal.token_budget === null
                 ? ""
-                : ` / ${formatTokens(goal.token_budget)}`}
+                : ` / ${formatTokenCount(goal.token_budget)}`}
             </span>
           </div>
           <div className="goal-manager-actions">
@@ -159,7 +161,7 @@ export default function GoalManagerCard({
             <button
               type="button"
               disabled={!canManage}
-              onClick={() => run(clear)}
+              onClick={() => run(clearGoal)}
             >
               清除
             </button>

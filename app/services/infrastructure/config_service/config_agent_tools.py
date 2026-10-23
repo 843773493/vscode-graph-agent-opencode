@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Any
 
 from app.agents.custom_tools import load_custom_tool_factory
@@ -279,40 +278,39 @@ class ConfigAgentToolsMixin:
             )
 
     @staticmethod
-    def _preflight_custom_tool_factories(
-        config: dict[str, Any],
-        *,
-        source_path: Path,
-    ) -> None:
+    def _preflight_custom_tool_factories(config: dict[str, Any]) -> None:
+        """只校验内存声明和工厂；公开诊断使用结构位置，原始原因留在异常链。"""
         agents = config.get("agents")
         if agents is None:
             return
         if not isinstance(agents, dict):
-            raise ValueError(f"配置源 agents 必须是对象: {source_path}")
-        for agent_id, agent_config in agents.items():
+            raise ValueError("配置源 agents 必须是对象")
+        for agent_ordinal, agent_config in enumerate(agents.values()):
             if not isinstance(agent_config, dict):
                 continue
             tools = agent_config.get("tools")
             if not isinstance(tools, dict) or "custom" not in tools:
                 continue
+            location = f"agents[{agent_ordinal}].tools.custom"
             raw_custom = tools["custom"]
             if not isinstance(raw_custom, list):
-                raise ValueError(
-                    f"配置源 {source_path} 的 agents.{agent_id}.tools.custom 必须是数组"
-                )
-            specs = parse_custom_tool_specs(
-                raw_custom,
-                context=(f"配置源 {source_path} 的 agents.{agent_id}.tools.custom"),
-            )
+                raise ValueError(f"配置源 {location} 必须是数组")
+            try:
+                specs = parse_custom_tool_specs(raw_custom, context=location)
+            except (TypeError, ValueError) as error:
+                raise type(error)(
+                    f"配置源扩展工具声明无效: field={location}; cause_type={type(error).__name__}"
+                ) from error
             for spec in specs:
                 try:
                     load_custom_tool_factory(spec.factory_path)
-                except (ImportError, AttributeError, TypeError, ValueError) as exc:
+                except Exception as error:
+                    # 名称与 factory 已通过闭合字符集校验，不回显原生来源或任意输入。
                     raise ValueError(
                         "配置源扩展工具预检失败: "
-                        f"path={source_path}, agent={agent_id}, "
-                        f"tool={spec.name}, factory={spec.factory_path}"
-                    ) from exc
+                        f"field={location}, tool={spec.name}, factory={spec.factory_path}, "
+                        f"cause_type={type(error).__name__}"
+                    ) from error
 
     def _resolved_mcp_tool_names(
         self,

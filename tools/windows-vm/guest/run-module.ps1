@@ -308,7 +308,7 @@ switch ($Module) {
             throw "Linux cross-package artifact copy failed: exit_code=$LASTEXITCODE"
         }
         $env:BOXTEAM_PROJECT_ROOT = $projectRoot
-        $verifier = Join-Path $projectRoot "packaging\runtime\verify-windows-x64.mjs"
+        $verifier = Join-Path $projectRoot "packaging\runtime\verification\verify-windows-x64.mjs"
         Invoke-Native "node" @($verifier)
         $artifactRoot = Join-Path $projectRoot "out\windows-vm\verify-windows-x64-cross"
         New-Item -ItemType Directory -Force -Path $artifactRoot | Out-Null

@@ -1,4 +1,6 @@
 const TERMINAL_ID = "uuid:12";
+const TERMINAL_RESIZE_DEBOUNCE_MS = 80;
+const TERMINAL_RENDER_FAILURE_CLOSE_CODE = 4001;
 const terminalHost = document.querySelector("#terminal-host");
 const attachToggle = document.querySelector("#attach-toggle");
 const agentSend = document.querySelector("#agent-send");
@@ -23,15 +25,19 @@ const fitAddon = new FitAddon.FitAddon();
 let socket = null;
 let attached = false;
 let pendingDetach = false;
+let terminalExitMessage = null;
+let terminalServerErrorMessage = null;
+let resizeTimer = null;
+let lastSentTerminalSize = null;
 
 terminal.loadAddon(fitAddon);
 terminal.open(terminalHost);
 resizeTerminal();
 terminal.write("点击 Attach 连接到 uuid:12\r\n");
 
-function setStatus(nextStatus, message) {
+function setStatus(nextStatus, statusMessage) {
   statusDot.className = `status-dot ${nextStatus}`;
-  statusText.textContent = message;
+  statusText.textContent = statusMessage;
 }
 
 function setAttachedState(nextAttached) {
@@ -45,73 +51,120 @@ function socketUrl() {
   return `${protocol}//${window.location.host}/terminal`;
 }
 
-function send(message) {
+function sendClientMessage(outboundMessage) {
   if (!socket || socket.readyState !== WebSocket.OPEN) {
     throw new Error("WebSocket 未连接，无法发送终端消息");
   }
-  socket.send(JSON.stringify(message));
+  socket.send(JSON.stringify(outboundMessage));
 }
 
 function attach() {
-  if (socket && socket.readyState === WebSocket.OPEN) {
-    throw new Error("WebSocket 已连接，不能重复 attach");
+  if (socket && socket.readyState !== WebSocket.CLOSED) {
+    setStatus("connecting", "终端连接正在处理中...");
+    return;
   }
   pendingDetach = false;
-  socket = new WebSocket(socketUrl());
+  terminalExitMessage = null;
+  terminalServerErrorMessage = null;
+  const connectionSocket = new WebSocket(socketUrl());
+  let terminalOutputWriteFailure = null;
+  socket = connectionSocket;
   setStatus("connecting", "正在连接...");
 
-  socket.addEventListener("open", () => {
-    const { cols, rows } = currentTerminalSize();
-    send({ type: "attach", terminalId: TERMINAL_ID, cols, rows });
+  connectionSocket.addEventListener("open", () => {
+    if (socket !== connectionSocket) {
+      return;
+    }
+    const { cols, rows } = resizeTerminal();
+    sendClientMessage({ type: "attach", terminalId: TERMINAL_ID, cols, rows });
+    lastSentTerminalSize = { cols, rows };
   });
 
-  socket.addEventListener("message", (event) => {
-    const message = JSON.parse(event.data);
-    if (message.type === "attached") {
+  connectionSocket.addEventListener("message", (event) => {
+    if (socket !== connectionSocket) {
+      return;
+    }
+    const serverMessage = JSON.parse(event.data);
+    if (serverMessage.type === "attached") {
       setAttachedState(true);
-      setStatus("attached", `已 attach 到 ${message.terminalId}`);
+      resizeTerminal();
+      setStatus("attached", `已 attach 到 ${serverMessage.terminalId}`);
       return;
     }
-    if (message.type === "detached") {
+    if (serverMessage.type === "detached") {
       setAttachedState(false);
-      setStatus("detached", `已 detach ${message.terminalId}`);
-      socket.close(1000, "detached");
+      setStatus("detached", `已 detach ${serverMessage.terminalId}`);
+      connectionSocket.close(1000, "detached");
       return;
     }
-    if (message.type === "output") {
-      terminal.write(message.data);
+    if (serverMessage.type === "output") {
+      if (terminalOutputWriteFailure !== null) {
+        return;
+      }
+      try {
+        terminal.write(serverMessage.data);
+      } catch (error) {
+        terminalOutputWriteFailure = error instanceof Error ? error.message : String(error);
+        setAttachedState(false);
+        setStatus("error", `终端输出渲染失败：${terminalOutputWriteFailure}`);
+        connectionSocket.close(
+          TERMINAL_RENDER_FAILURE_CLOSE_CODE,
+          "terminal output rendering failed",
+        );
+      }
       return;
     }
-    if (message.type === "exit") {
+    if (serverMessage.type === "exit") {
       setAttachedState(false);
-      setStatus("detached", `终端已退出 exitCode=${message.exitCode ?? "null"}`);
+      terminalExitMessage = `终端已退出 exitCode=${serverMessage.exitCode ?? "null"}`;
+      setStatus("detached", terminalExitMessage);
       return;
     }
-    if (message.type === "error") {
-      setStatus("error", message.message);
-      terminal.write(`\r\n[server error] ${message.message}\r\n`);
+    if (serverMessage.type === "error") {
+      terminalServerErrorMessage = serverMessage.message;
+      setStatus("error", serverMessage.message);
+      terminal.write(`\r\n[server error] ${serverMessage.message}\r\n`);
       return;
     }
-    throw new Error(`未知服务端消息类型: ${message.type}`);
+    throw new Error(`未知服务端消息类型: ${serverMessage.type}`);
   });
 
-  socket.addEventListener("close", () => {
+  connectionSocket.addEventListener("close", (event) => {
+    if (socket !== connectionSocket) {
+      return;
+    }
+    window.clearTimeout(resizeTimer);
+    resizeTimer = null;
+    lastSentTerminalSize = null;
     setAttachedState(false);
     if (!pendingDetach) {
-      setStatus("detached", "连接已关闭");
+      const outputRenderFailed = terminalOutputWriteFailure !== null;
+      const serverReportedFailure = terminalServerErrorMessage !== null;
+      const fallbackStatusMessage = event.code === 1013
+        ? "终端输出接收过慢，连接已关闭"
+        : terminalExitMessage ?? "连接已关闭";
+      const statusMessage = outputRenderFailed
+        ? `终端输出渲染失败，连接已关闭：${terminalOutputWriteFailure}`
+        : terminalServerErrorMessage ?? fallbackStatusMessage;
+      setStatus(outputRenderFailed || serverReportedFailure ? "error" : "detached", statusMessage);
     }
+    terminalExitMessage = null;
+    terminalServerErrorMessage = null;
     socket = null;
     pendingDetach = false;
   });
 
-  socket.addEventListener("error", () => {
+  connectionSocket.addEventListener("error", () => {
+    if (socket !== connectionSocket) {
+      return;
+    }
     setStatus("error", "WebSocket 连接错误");
   });
 }
 
 function detach() {
+  sendClientMessage({ type: "detach", terminalId: TERMINAL_ID });
   pendingDetach = true;
-  send({ type: "detach", terminalId: TERMINAL_ID });
 }
 
 function currentTerminalSize() {
@@ -119,25 +172,40 @@ function currentTerminalSize() {
   if (!proposed) {
     throw new Error("无法计算 xterm 终端尺寸");
   }
-  return {
-    cols: proposed.cols,
-    rows: proposed.rows,
-  };
+  return proposed;
 }
 
 function resizeTerminal() {
-  fitAddon.fit();
-  const { cols, rows } = currentTerminalSize();
-  if (attached && socket?.readyState === WebSocket.OPEN) {
-    send({ type: "resize", terminalId: TERMINAL_ID, cols, rows });
+  let { cols, rows } = currentTerminalSize();
+  if (terminal.cols !== cols || terminal.rows !== rows) {
+    fitAddon.fit();
+    cols = terminal.cols;
+    rows = terminal.rows;
   }
+  if (
+    attached
+    && socket?.readyState === WebSocket.OPEN
+    && (lastSentTerminalSize?.cols !== cols || lastSentTerminalSize?.rows !== rows)
+  ) {
+    sendClientMessage({ type: "resize", terminalId: TERMINAL_ID, cols, rows });
+    lastSentTerminalSize = { cols, rows };
+  }
+  return { cols, rows };
+}
+
+function scheduleTerminalResize() {
+  window.clearTimeout(resizeTimer);
+  resizeTimer = window.setTimeout(() => {
+    resizeTimer = null;
+    resizeTerminal();
+  }, TERMINAL_RESIZE_DEBOUNCE_MS);
 }
 
 terminal.onData((data) => {
   if (!attached) {
     return;
   }
-  send({ type: "input", terminalId: TERMINAL_ID, data });
+  sendClientMessage({ type: "input", terminalId: TERMINAL_ID, data });
 });
 
 attachToggle.addEventListener("click", () => {
@@ -154,7 +222,7 @@ agentSend.addEventListener("click", () => {
     throw new Error("Agent 输入命令不能为空");
   }
   const data = rawCommand.endsWith("\n") ? rawCommand : `${rawCommand}\n`;
-  send({ type: "agentInput", terminalId: TERMINAL_ID, data });
+  sendClientMessage({ type: "agentInput", terminalId: TERMINAL_ID, data });
 });
 
-window.addEventListener("resize", resizeTerminal);
+window.addEventListener("resize", scheduleTerminalResize);

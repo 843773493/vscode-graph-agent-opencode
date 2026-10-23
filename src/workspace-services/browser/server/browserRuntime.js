@@ -14,11 +14,8 @@ export class BrowserToolTimeoutError extends Error {
 }
 
 export function browserLaunchArgs() {
-  const args = ["--disable-dev-shm-usage"];
-  if (process.platform === "linux") {
-    args.push("--no-sandbox");
-  }
-  return args;
+  if (process.platform !== "linux") return [];
+  return ["--disable-dev-shm-usage", "--no-sandbox"];
 }
 
 export function browserLaunchOptions() {

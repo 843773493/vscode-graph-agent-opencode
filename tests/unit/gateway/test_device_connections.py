@@ -70,7 +70,7 @@ async def test_device_access_addresses_offer_network_candidate(
 ) -> None:
     monkeypatch.setattr(
         device_connections,
-        "_preferred_network_addresses",
+        "_route_selected_source_addresses",
         lambda: set(),
     )
     monkeypatch.setattr(
@@ -107,3 +107,40 @@ async def test_device_access_addresses_offer_network_candidate(
     ]
     assert response.data.items[0].is_loopback is True
     assert response.data.items[1].is_loopback is False
+
+
+def test_route_selected_source_addresses_use_ipv4_and_ipv6_udp_routes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    route_calls: list[tuple[int, tuple[str, int]]] = []
+
+    class RouteProbe:
+        def __init__(self, family: int) -> None:
+            self.family = family
+
+        def __enter__(self) -> RouteProbe:
+            return self
+
+        def __exit__(self, *_: object) -> None:
+            return None
+
+        def connect(self, destination: tuple[str, int]) -> None:
+            route_calls.append((self.family, destination))
+
+        def getsockname(self) -> tuple[str, int]:
+            address = "192.0.2.42" if self.family == device_connections.socket.AF_INET else "2001:db8::42"
+            return address, 0
+
+    monkeypatch.setattr(
+        device_connections.socket,
+        "socket",
+        lambda family, _kind: RouteProbe(family),
+    )
+
+    addresses = device_connections._route_selected_source_addresses()
+
+    assert addresses == {"192.0.2.42", "2001:db8::42"}
+    assert route_calls == [
+        (device_connections.socket.AF_INET, ("192.0.2.1", 9)),
+        (device_connections.socket.AF_INET6, ("2001:db8::1", 9)),
+    ]

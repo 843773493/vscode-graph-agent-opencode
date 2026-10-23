@@ -30,7 +30,8 @@ def tool_set_manifest_compatibility_key(ref: ToolSetRef) -> str:
     ref.validate_manifest()
     manifest_token = ref.content_hash
     return toolset_compatibility_key(
-        ref, policy_hash=sha256_jcs({"tool_manifest": manifest_token}),
+        ref,
+        policy_hash=sha256_jcs({"tool_manifest": manifest_token}),
     )
 
 
@@ -72,7 +73,9 @@ class ToolSetSnapshot:
         object.__setattr__(self, "selection_revision", selection_revision)
         object.__setattr__(self, "policy_keys", keys)
         object.__setattr__(self, "policy_version", policy_version)
-        object.__setattr__(self, "wire_tool_order", tuple(_tool_identity(tool) for tool in tools))
+        object.__setattr__(
+            self, "wire_tool_order", tuple(_tool_identity(tool) for tool in tools)
+        )
         object.__setattr__(self, "_tools_json", canonical_json_bytes(ordered))
         names = self.tool_names
         if len(names) != len(set(names)):
@@ -87,18 +90,24 @@ class ToolSetSnapshot:
         result = []
         for tool in self.tools:
             function = tool.get("function")
-            name = function.get("name") if isinstance(function, Mapping) else tool.get("name")
+            name = (
+                function.get("name")
+                if isinstance(function, Mapping)
+                else tool.get("name")
+            )
             result.append(_non_empty_string(name, "ToolSetSnapshot.tools[].name"))
         return tuple(result)
 
     @property
     def revision(self) -> str:
-        return sha256_jcs({
-            "tools": self.tools,
-            "policy_keys": self.policy_keys,
-            "policy_version": self.policy_version,
-            "wire_tool_order": self.wire_tool_order,
-        })
+        return sha256_jcs(
+            {
+                "tools": self.tools,
+                "policy_keys": self.policy_keys,
+                "policy_version": self.policy_version,
+                "wire_tool_order": self.wire_tool_order,
+            }
+        )
 
     @property
     def snapshot_id(self) -> str:
@@ -106,12 +115,13 @@ class ToolSetSnapshot:
 
     def bind(self, *, session_id: str, thread_id: str, plan_id: str) -> ToolSetRef:
         """只在真正的 ContextStore owner 创建 plan 时取得 plan 归属。"""
+        revision = self.revision
         return ToolSetRef.from_tool_snapshot(
-            snapshot_id=self.snapshot_id,
+            snapshot_id=f"tool-set:{revision}",
             session_id=session_id,
             thread_id=thread_id,
             plan_id=plan_id,
-            source_revision=self.revision,
+            source_revision=revision,
             tools=self.tools,
             tool_policy={
                 "enabled_policy_keys": list(self.policy_keys),
@@ -122,10 +132,13 @@ class ToolSetSnapshot:
 
     def compatibility_key(self, ref: ToolSetRef) -> str:
         """兼容键必须使用本快照创建的精确 ToolSetRef，不允许伪造 owner。"""
+        revision = self.revision
         if (
-            ref.ref_id != self.snapshot_id or ref.source_revision != self.revision
+            ref.ref_id != f"tool-set:{revision}"
+            or ref.source_revision != revision
             or ref.tools != self.tools
-            or ref.tool_policy != {
+            or ref.tool_policy
+            != {
                 "enabled_policy_keys": list(self.policy_keys),
                 "wire_tool_order": list(self.wire_tool_order),
             }

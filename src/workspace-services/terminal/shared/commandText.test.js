@@ -30,6 +30,24 @@ test("退出码解析保留ANSI与换行处理，显式标记按字面量匹配"
   assert.equal(latestCommandExitCode("__BOXTEAM_CMD_DONE_axbbb__:99", marker), null);
 });
 
+test("多条OSC标题或超链接之间的完成标记不得被吞掉", () => {
+  const marker = "__BOXTEAM_CMD_DONE_cafe__";
+  for (const firstEnd of ["\x07", "\x1b\\"]) {
+    for (const lastEnd of ["\x07", "\x1b\\"]) {
+      const input = `\x1b]0;标题🙂${firstEnd}\r\n${marker}:7\r\n\x1b]8;;https://example.test/${lastEnd}`;
+      assert.equal(latestCommandExitCode(input, marker), 7);
+      assert.equal(latestCommandExitCode(input), 7);
+    }
+  }
+});
+
+test("OSC元数据内的伪完成标记仍被忽略，真实退出码保留", () => {
+  const marker = "__BOXTEAM_CMD_DONE_cafe__";
+  const input = `\x1b]0;${marker}:99\x1b\\${marker}:7\n\x1b]0;${marker}:88\x1b\\`;
+  assert.equal(latestCommandExitCode(input, marker), 7);
+  assert.equal(latestCommandExitCode(input), 7);
+});
+
 test("输入标签取最后非空CR或LF行，保留行内空白、ANSI及Unicode正文", () => {
   const cases = [
     ["", null],

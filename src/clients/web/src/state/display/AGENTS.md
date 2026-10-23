@@ -2,6 +2,23 @@
 
 `src/clients/web/src/state/display/` 放浏览器前端的"展示投影"族纯派生逻辑：把后端权威数据（Agent State 原始消息、工具事件、会话资源、事件队列）转换成组件可直接渲染的展示模型与文案，供 `components/` 与 `hooks/` 消费。
 
+## 职责树
+
+```text
+display/
+├── agentStateDisplay.ts          JSONL 解析诊断、原始消息定位和摘要
+│   └── agentStateDisplay.test.ts
+├── eventQueueDisplay.ts          Trace 队列排序、折叠展示项和关键链路摘要
+│   └── eventQueueDisplay.test.ts
+├── toolDisplay.ts                聚合工具项的展示、内部工具判定和折叠文案
+│   └── toolDisplay.test.ts
+├── resourceDisplay.ts            会话资源分组、状态标签和详情行
+│   └── resourceDisplay.test.ts
+└── workspaceResourceDisplay.ts   Workspace DTO 到会话资源的转换及 Thread 关联
+```
+
+先按输入数据归属选择模块：workspace DTO 转换走 `workspaceResourceDisplay`；已进入会话资源模型后的分组、名称和状态展示走 `resourceDisplay`。Trace 配对归 `state/trace/`，此处只整理已聚合事件的展示形状。
+
 与相邻子包的边界：
 
 - `state/timeline/`：聊天时间线族，产出统一的 `TimelineItem` 序列。`display/toolDisplay` 与之相邻但不属于同一契约——它只负责工具项的展示判定与文案（`isRoutineInternalToolItem`、`formatToolCardContent`、`toolCollapsedText`），由 `timeline` 的渲染方在拿到 `TimelineItem` 后调用，不得反向依赖 `timeline/`。

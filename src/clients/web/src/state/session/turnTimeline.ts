@@ -47,8 +47,8 @@ export interface SessionTurnTimeline {
 }
 
 const TURN_TIMELINE_CACHE_LIMIT = 64;
-const TURN_DETAIL_CACHE_LIMIT = 8;
-const TURN_DETAIL_CACHE_MAX_UNITS = 1_000_000;
+const TURN_DETAIL_CACHE_MAX_COUNT = 8;
+const TURN_DETAIL_CACHE_MAX_PROJECTION_UNITS = 1_000_000;
 
 export function createSessionTurnTimeline(
   scopeKey: string,
@@ -490,43 +490,48 @@ export function upsertTurns(
 
 function compactTurnDetails(
   timeline: SessionTurnTimeline,
-  maxDetails = TURN_DETAIL_CACHE_LIMIT,
-  maxUnits = TURN_DETAIL_CACHE_MAX_UNITS,
+  maxDetailCount = TURN_DETAIL_CACHE_MAX_COUNT,
+  maxProjectionUnits = TURN_DETAIL_CACHE_MAX_PROJECTION_UNITS,
 ): SessionTurnTimeline {
-  const detailIds = timeline.detailAccessOrder.filter((turnId) =>
-    isTurnDetail(timeline.turnsById[turnId])
-  );
-  let detailUnits = detailIds.reduce(
-    (total, turnId) => total + projectionRichness(timeline.turnsById[turnId]),
-    0,
-  );
-  let detailCount = detailIds.length;
+  const detailEntries: { turnId: string; projectionUnits: number }[] = [];
+  let totalProjectionUnits = 0;
+  for (const turnId of timeline.detailAccessOrder) {
+    const detail = timeline.turnsById[turnId];
+    if (!isTurnDetail(detail)) continue;
+    const projectionUnits = projectionRichness(detail);
+    detailEntries.push({ turnId, projectionUnits });
+    totalProjectionUnits += projectionUnits;
+  }
+  let retainedDetailCount = detailEntries.length;
   let turnsById = timeline.turnsById;
-  const retainedOrder = [...detailIds];
-  let changed = detailIds.length !== timeline.detailAccessOrder.length;
+  const retainedDetailIds: string[] = [];
+  let changed = detailEntries.length !== timeline.detailAccessOrder.length;
 
-  while (detailCount > maxDetails || detailUnits > maxUnits) {
-    const candidateIndex = retainedOrder.findIndex((turnId) => {
-      const detail = turnsById[turnId];
-      const summary = timeline.summaryTurnsById[turnId];
-      return Boolean(
-        detail
-        && summary
-        && isTurnDetail(detail)
-        && summary.revision === detail.revision
-        && summary.source_view_id === detail.source_view_id
-        && summary.source_view_revision === detail.source_view_revision,
-      );
-    });
-    if (candidateIndex === -1) break;
-    const [turnId] = retainedOrder.splice(candidateIndex, 1);
+  for (const { turnId, projectionUnits } of detailEntries) {
+    if (
+      retainedDetailCount <= maxDetailCount
+      && totalProjectionUnits <= maxProjectionUnits
+    ) {
+      retainedDetailIds.push(turnId);
+      continue;
+    }
     const detail = turnsById[turnId];
     const summary = timeline.summaryTurnsById[turnId];
-    if (!detail || !summary) continue;
+    if (
+      !detail
+      || !summary
+      || !isTurnDetail(detail)
+      || summary.revision !== detail.revision
+      || summary.source_view_id !== detail.source_view_id
+      || summary.source_view_revision !== detail.source_view_revision
+    ) {
+      retainedDetailIds.push(turnId);
+      continue;
+    }
     if (turnsById === timeline.turnsById) turnsById = { ...turnsById };
     turnsById[turnId] = summary;
-    detailUnits -= projectionRichness(detail);
-    detailCount -= 1;
+    totalProjectionUnits -= projectionUnits;
+    retainedDetailCount -= 1;
     changed = true;
   }
 
@@ -534,7 +539,7 @@ function compactTurnDetails(
   return {
     ...timeline,
     turnsById,
-    detailAccessOrder: retainedOrder,
+    detailAccessOrder: retainedDetailIds,
   };
 }
 

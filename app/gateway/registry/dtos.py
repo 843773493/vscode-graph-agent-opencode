@@ -21,6 +21,8 @@ from app.schemas.gateway.workspaces import (
 from .core import WorkspaceTarget
 
 if TYPE_CHECKING:
+    from app.gateway.runtime.managed_backend import ManagedBackendContract
+
     from . import GatewayWorkspaceRegistry
 
 
@@ -29,14 +31,30 @@ class RegistryDtosMixin:
         active_workspace_id = self._active_workspace_id
         targets = list(self._targets.values())
         backend_owners = tuple((owner, owner.contract) for owner in self._backend_owners.values())
-        backend_contracts = {
+        backend_by_workspace_id = {
             workspace_id: (owner, contract)
             for owner, contract in backend_owners
             for workspace_id in contract.workspace_ids
         }
+        backend_mount_digests: dict[str, str] = {}
+
+        def expected_backend_mount_digest(
+            contract: ManagedBackendContract,
+        ) -> str:
+            digest = backend_mount_digests.get(contract.owner_id)
+            if digest is None:
+                mounts = cast("GatewayWorkspaceRegistry", self).resolve_backend_mounts(
+                    contract
+                )
+                digest = mounted_workspace_manifest_digest(mounts)
+                backend_mount_digests[contract.owner_id] = digest
+            return digest
+
         async with httpx.AsyncClient(timeout=2, trust_env=False) as client:
             async def build_dto(target: WorkspaceTarget) -> GatewayWorkspaceDTO:
-                backend_owner, backend_contract = backend_contracts.get(target.workspace_id, (None, None))
+                backend_owner, backend_contract = backend_by_workspace_id.get(
+                    target.workspace_id, (None, None)
+                )
                 runtime = self._runtimes.get(target.workspace_id)
                 runtime_service_urls = (
                     dict(runtime.service_urls) if runtime is not None else {}
@@ -92,11 +110,15 @@ class RegistryDtosMixin:
                                 response.json(), target.backend_workspace_id,
                             )
                             if backend_owner is not None and (
-                                health_payload.get("backend_generation") != backend_contract.generation
-                                or health_payload.get("mount_manifest_digest") != mounted_workspace_manifest_digest(cast("GatewayWorkspaceRegistry", self).resolve_backend_mounts(backend_contract))
+                                health_payload.get("backend_generation")
+                                != backend_contract.generation
+                                or health_payload.get("mount_manifest_digest")
+                                != expected_backend_mount_digest(backend_contract)
                                 or health_payload.get("status") != "ok"
                             ):
-                                raise RuntimeError("managed Backend 完整组健康证明不匹配")
+                                raise RuntimeError(
+                                    "managed Backend 完整组健康证明不匹配"
+                                )
                             status = "ready"
                             workspace_service_status = "ready"
                             workspace_service_error = None

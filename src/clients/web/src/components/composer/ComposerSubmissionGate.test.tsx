@@ -11,7 +11,7 @@ import WarmConfirmProvider from "../shell/WarmConfirmProvider";
 import type { AppState } from "../../types/frontend";
 import type { Agent } from "../../types/backend";
 import Composer from "./Composer";
-import { restoreGlobalDescriptor } from "../../tests/testGlobals";
+import { installComposerTestGlobals } from "./composerTestFixtures";
 
 const WORKSPACE_ID = "workspace";
 const SESSION_ID = "session";
@@ -124,59 +124,15 @@ function mountComposer(state: AppState, actions: Actions): ReactTestRenderer {
   return renderer;
 }
 
-const originalWindow = Object.getOwnPropertyDescriptor(globalThis, "window");
-const originalBroadcastChannel = Object.getOwnPropertyDescriptor(globalThis, "BroadcastChannel");
-const originalDocument = Object.getOwnPropertyDescriptor(globalThis, "document");
-const OVERLAY_CONSTRUCTOR_NAMES = ["Element", "Node", "HTMLElement"] as const;
-
-class OverlayElementStub {}
-class OverlayNodeStub {}
-const OVERLAY_CONSTRUCTORS = {
-  Element: OverlayElementStub,
-  Node: OverlayNodeStub,
-  HTMLElement: OverlayElementStub,
-};
+let restoreComposerGlobals = () => {};
 
 function installComposerEnvironment(): void {
-  for (const [name, value] of Object.entries(OVERLAY_CONSTRUCTORS)) {
-    Object.defineProperty(globalThis, name, { configurable: true, value });
-  }
-  const storage = new Map<string, string>();
-  Object.defineProperty(globalThis, "window", {
-    configurable: true,
-    value: {
-      localStorage: {
-        getItem: (key: string) => storage.get(key) ?? null,
-        setItem: (key: string, value: string) => {
-          storage.set(key, value);
-        },
-        removeItem: (key: string) => {
-          storage.delete(key);
-        },
-      },
-      ...OVERLAY_CONSTRUCTORS,
-      location: { origin: "http://127.0.0.1:8011" },
-      addEventListener: () => undefined,
-      removeEventListener: () => undefined,
-    },
-  });
-  Object.defineProperty(globalThis, "BroadcastChannel", {
-    configurable: true,
-    value: class {
-      addEventListener() {}
-      removeEventListener() {}
-      close() {}
-    },
-  });
+  restoreComposerGlobals = installComposerTestGlobals();
 }
 
 afterEach(() => {
-  restoreGlobalDescriptor("document", originalDocument);
-  for (const name of OVERLAY_CONSTRUCTOR_NAMES) {
-    Reflect.deleteProperty(globalThis, name);
-  }
-  restoreGlobalDescriptor("window", originalWindow);
-  restoreGlobalDescriptor("BroadcastChannel", originalBroadcastChannel);
+  restoreComposerGlobals();
+  restoreComposerGlobals = () => {};
 });
 
 function typeInput(renderer: ReactTestRenderer, value: string): void {

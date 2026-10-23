@@ -26,8 +26,9 @@ _CHANNEL = config_lifecycle_channel_name("workspace")
 
 def _make_adapter(
     *,
+    event_service: EventChannelService,
     validator_error: Exception | None = None,
-) -> tuple[ConfigShadowLifecycleAdapter, EventChannelService, object]:
+) -> tuple[ConfigShadowLifecycleAdapter, object]:
     """构造真实 EventChannelService + 真实 owner 的适配器与订阅句柄。"""
 
     def validate(config: Mapping[str, object]) -> None:
@@ -44,16 +45,15 @@ def _make_adapter(
 
             scope.register(_boom, label="drain-boom")
 
-    service = EventChannelService()
     adapter = ConfigShadowLifecycleAdapter(
         validator=validate,
         reconcile=reconcile,
-        event_service=service,
+        event_service=event_service,
         bootstrap_guard_keys=("context",),
     )
-    channel = service.channel(_CHANNEL)
+    channel = event_service.channel(_CHANNEL)
     subscription = channel.subscribe(label="test-consumer")
-    return adapter, service, subscription
+    return adapter, subscription
 
 
 def _kind_pairs(subscription: object) -> list[tuple[str, str | None]]:
@@ -62,9 +62,11 @@ def _kind_pairs(subscription: object) -> list[tuple[str, str | None]]:
 
 
 @pytest.mark.asyncio
-async def test_bootstrap_and_apply_publish_typed_lifecycle_events() -> None:
+async def test_bootstrap_and_apply_publish_typed_lifecycle_events(
+    event_channel_service: EventChannelService,
+) -> None:
     """bootstrap/apply/unchanged 按序发布 typed published/unchanged 事件。"""
-    adapter, _service, subscription = _make_adapter()
+    adapter, subscription = _make_adapter(event_service=event_channel_service)
 
     active = await adapter.bootstrap({"name": "valid", "context": {}})
     assert adapter.readiness == "ready"
@@ -87,9 +89,11 @@ async def test_bootstrap_and_apply_publish_typed_lifecycle_events() -> None:
 
 
 @pytest.mark.asyncio
-async def test_stale_generation_conflict_raises_without_events() -> None:
+async def test_stale_generation_conflict_raises_without_events(
+    event_channel_service: EventChannelService,
+) -> None:
     """过期 generation fence 拒绝：只抛原始错误，不发任何事件。"""
-    adapter, _service, subscription = _make_adapter()
+    adapter, subscription = _make_adapter(event_service=event_channel_service)
     await adapter.bootstrap({"name": "valid", "context": {}})
     subscription.pending()
 
@@ -104,13 +108,14 @@ async def test_stale_generation_conflict_raises_without_events() -> None:
 
 @pytest.mark.asyncio
 async def test_event_unavailable_fails_apply_and_keeps_old_active(
+    event_channel_service: EventChannelService,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """事件通道不可用：发布失败即业务失败，旧 active generation 保留。"""
-    adapter, service, subscription = _make_adapter()
+    adapter, subscription = _make_adapter(event_service=event_channel_service)
     active = await adapter.bootstrap({"name": "valid", "context": {}})
     subscription.pending()
-    channel = service.channel(_CHANNEL)
+    channel = event_channel_service.channel(_CHANNEL)
 
     def _broken_publish(event: object) -> tuple:
         raise EventChannelError("事件通道不可用")
@@ -132,9 +137,11 @@ async def test_event_unavailable_fails_apply_and_keeps_old_active(
 
 
 @pytest.mark.asyncio
-async def test_old_scope_release_failure_surfaces_and_publishes_failed() -> None:
+async def test_old_scope_release_failure_surfaces_and_publishes_failed(
+    event_channel_service: EventChannelService,
+) -> None:
     """旧 generation scope 排空失败：原始错误不被吞掉，failed 事件显式投递。"""
-    adapter, _service, subscription = _make_adapter()
+    adapter, subscription = _make_adapter(event_service=event_channel_service)
     await adapter.bootstrap({"name": "drain-boom", "context": {}})
     subscription.pending()
 
@@ -160,9 +167,12 @@ async def test_old_scope_release_failure_surfaces_and_publishes_failed() -> None
 
 
 @pytest.mark.asyncio
-async def test_bootstrap_failure_publishes_failed_event_and_stays_failed() -> None:
+async def test_bootstrap_failure_publishes_failed_event_and_stays_failed(
+    event_channel_service: EventChannelService,
+) -> None:
     """冷启动校验失败：发布 failed 事件（无 generation），readiness 停在 failed。"""
-    adapter, _service, subscription = _make_adapter(
+    adapter, subscription = _make_adapter(
+        event_service=event_channel_service,
         validator_error=ValueError("bad bootstrap"),
     )
 
@@ -173,9 +183,11 @@ async def test_bootstrap_failure_publishes_failed_event_and_stays_failed() -> No
 
 
 @pytest.mark.asyncio
-async def test_close_publishes_closed_event_once() -> None:
+async def test_close_publishes_closed_event_once(
+    event_channel_service: EventChannelService,
+) -> None:
     """close 排空 scope 后发布 closed 事件；重复 close 不重复发布。"""
-    adapter, _service, subscription = _make_adapter()
+    adapter, subscription = _make_adapter(event_service=event_channel_service)
     await adapter.bootstrap({"name": "valid", "context": {}})
     subscription.pending()
 

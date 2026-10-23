@@ -49,16 +49,24 @@ class HistoryLoadingConfig:
         raise ValueError(f"锚点窗口方向非法: {direction}")
 
     def as_dict(self) -> dict[str, object]:
-        return {
-            "initial_turns": self.initial_turns,
-            "initial_include": list(self.initial_include),
-            "anchor_before_turns": self.anchor_before_turns,
-            "anchor_after_turns": self.anchor_after_turns,
-            "anchor_include": list(self.anchor_include),
-        }
+        value = self._as_json_mapping()
+        value["initial_include"] = list(self.initial_include)
+        value["anchor_include"] = list(self.anchor_include)
+        return value
 
     def as_header_value(self) -> str:
-        return json.dumps(self.as_dict(), ensure_ascii=False, separators=(",", ":"))
+        return json.dumps(
+            self._as_json_mapping(), ensure_ascii=False, separators=(",", ":")
+        )
+
+    def _as_json_mapping(self) -> dict[str, object]:
+        return {
+            "initial_turns": self.initial_turns,
+            "initial_include": self.initial_include,
+            "anchor_before_turns": self.anchor_before_turns,
+            "anchor_after_turns": self.anchor_after_turns,
+            "anchor_include": self.anchor_include,
+        }
 
     @classmethod
     def from_mapping(cls, value: object) -> HistoryLoadingConfig:
@@ -71,8 +79,8 @@ class HistoryLoadingConfig:
         anchor_after_turns = value.get(
             "anchor_after_turns", DEFAULT_ANCHOR_AFTER_TURNS
         )
-        initial_include = value.get("initial_include", list(DEFAULT_INITIAL_INCLUDE))
-        anchor_include = value.get("anchor_include", list(DEFAULT_ANCHOR_INCLUDE))
+        initial_include = value.get("initial_include", DEFAULT_INITIAL_INCLUDE)
+        anchor_include = value.get("anchor_include", DEFAULT_ANCHOR_INCLUDE)
         if (
             isinstance(initial_turns, bool)
             or not isinstance(initial_turns, int)

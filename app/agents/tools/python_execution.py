@@ -14,33 +14,36 @@ from app.core.path_utils import get_workspace_root
 
 
 def get_python_executable() -> Path:
-    candidates = []
+    venv_python_path = (
+        Path("Scripts") / "python.exe" if os.name == "nt" else Path("bin") / "python"
+    )
 
     env_python = os.environ.get("BOXTEAM_PYTHON_EXECUTABLE")
     if env_python:
-        candidates.append(Path(env_python).expanduser())
+        executable_path = Path(env_python).expanduser()
+        if not executable_path.is_file():
+            raise FileNotFoundError(
+                f"BOXTEAM_PYTHON_EXECUTABLE 未指向现存 Python 文件: {executable_path}"
+            )
+        return executable_path
 
     uv_project_environment = os.environ.get("UV_PROJECT_ENVIRONMENT")
     if uv_project_environment:
         uv_env_path = Path(uv_project_environment).expanduser()
-        candidates.extend(
-            [
-                uv_env_path / "Scripts" / "python.exe",
-                uv_env_path / "bin" / "python",
-            ]
-        )
+        uv_python_path = uv_env_path / venv_python_path
+        if not uv_python_path.is_file():
+            raise FileNotFoundError(
+                "UV_PROJECT_ENVIRONMENT 未包含当前平台的 Python 解释器: "
+                f"{uv_python_path}"
+            )
+        return uv_python_path
 
+    candidates = [
+        get_workspace_root() / ".venv" / venv_python_path,
+        get_project_root() / ".venv" / venv_python_path,
+    ]
     if sys.executable:
         candidates.append(Path(sys.executable).expanduser())
-
-    candidates.extend(
-        [
-            get_workspace_root() / ".venv" / "Scripts" / "python.exe",
-            get_workspace_root() / ".venv" / "bin" / "python",
-            get_project_root() / ".venv" / "Scripts" / "python.exe",
-            get_project_root() / ".venv" / "bin" / "python",
-        ]
-    )
 
     for python_executable in candidates:
         if python_executable.is_file():
@@ -112,10 +115,7 @@ def create_python_execution_tool(session_id: str, agent_id: str = "default") -> 
                     f"STDERR:\n{stderr_bytes.decode('utf-8', errors='replace')}"
                 )
         finally:
-            try:
-                script_path.unlink(missing_ok=True)
-            except OSError:
-                pass
+            script_path.unlink(missing_ok=True)
 
         stdout_text = stdout_bytes.decode("utf-8", errors="replace")
         stderr_text = stderr_bytes.decode("utf-8", errors="replace")

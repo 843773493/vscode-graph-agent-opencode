@@ -1,13 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import React from "react";
-import { act, create, type ReactTestRenderer } from "react-test-renderer";
+import {
+  attachFakeScrollList,
+  mountHookProbe,
+  type FakeScrollList,
+} from "./eventQueueHookTestFixture";
 import { useScrollWindow } from "./useScrollWindow";
-
-interface FakeList {
-  scrollHeight: number;
-  scrollTop: number;
-  clientHeight: number;
-}
 
 interface WindowOptions {
   active: boolean;
@@ -18,42 +15,20 @@ interface WindowOptions {
   onExhaustedOlderItems?: () => void;
 }
 
-/**
- * 直接挂载共享滚动窗口 hook，并用受控的假列表元素驱动滚动路径；
- * 组件级测试走 renderToStaticMarkup，不会触发 onScroll，因此这里补上该覆盖。
- */
 function mountWindow(initial: WindowOptions) {
   let options: WindowOptions = { ...initial };
-  let latest: ReturnType<typeof useScrollWindow> | undefined;
-  let renderer: ReactTestRenderer | undefined;
-
-  function Probe(): React.ReactNode {
-    latest = useScrollWindow(options);
-    return null;
-  }
-
-  act(() => {
-    renderer = create(<Probe />);
-  });
-
-  const attachList = (list: FakeList) => {
-    (latest!.listRef as unknown as { current: FakeList }).current = list;
-  };
+  const probe = mountHookProbe(() => useScrollWindow(options));
 
   return {
-    hook: () => latest!,
-    attachList,
-    /** 状态更新必须包在 act 内，否则滚动恢复副作用不会冲刷。 */
-    run(action: () => void) {
-      act(action);
-    },
+    hook: () => probe.current,
+    attachList: (list: FakeScrollList) =>
+      attachFakeScrollList(probe.current.listRef, list),
+    run: probe.run,
     update(patch: Partial<WindowOptions>) {
       options = { ...options, ...patch };
-      act(() => renderer!.update(<Probe />));
+      probe.rerender();
     },
-    unmount() {
-      act(() => renderer!.unmount());
-    },
+    unmount: probe.unmount,
   };
 }
 
@@ -94,7 +69,7 @@ describe("共享滚动窗口", () => {
       initialVisibleCount: 10,
       olderBatchSize: 10,
     });
-    const list: FakeList = { scrollHeight: 200, scrollTop: 50, clientHeight: 50 };
+    const list: FakeScrollList = { scrollHeight: 200, scrollTop: 50, clientHeight: 50 };
     windowed.attachList(list);
 
     // 记录锚点后内容变高：scrollTop 应保持「距底部偏移不变」。
@@ -125,7 +100,7 @@ describe("共享滚动窗口", () => {
       olderBatchSize: 10,
       onExhaustedOlderItems: () => { exhausted += 1; },
     });
-    const list: FakeList = { scrollHeight: 100, scrollTop: 0, clientHeight: 100 };
+    const list: FakeScrollList = { scrollHeight: 100, scrollTop: 0, clientHeight: 100 };
     windowed.attachList(list);
 
     // 条目总数少于初始窗口：firstVisibleIndex 为 0，没有可展开的客户端窗口。

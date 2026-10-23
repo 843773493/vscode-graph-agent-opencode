@@ -21,16 +21,18 @@ def test_bootstrap_assembles_platform_with_fixed_capabilities(tmp_path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_bootstrap_scope_close_releases_in_reverse_order(tmp_path) -> None:
+async def test_bootstrap_scope_close_releases_in_reverse_order(
+    tmp_path,
+    event_channel_service: EventChannelService,
+) -> None:
     """进程根 scope 关闭时按登记逆序释放：registry -> watch。"""
-    service = EventChannelService()
     platform = bootstrap_resource_platform(
         workspace_root=tmp_path,
-        event_service=service,
+        event_service=event_channel_service,
     )
     watch_service = platform.file_watch_service
     registry = platform.file_registry
-    subscription = service.channel(
+    subscription = event_channel_service.channel(
         "resource.state/workspace_resource_platform"
     ).subscribe(label="test")
     await platform.close()
@@ -47,14 +49,16 @@ async def test_bootstrap_scope_close_releases_in_reverse_order(tmp_path) -> None
 
 
 @pytest.mark.asyncio
-async def test_bootstrap_close_publishes_release_failure(tmp_path) -> None:
+async def test_bootstrap_close_publishes_release_failure(
+    tmp_path,
+    event_channel_service: EventChannelService,
+) -> None:
     """释放失败保留原始错误，并由实际 owner 发布 release_failed。"""
-    service = EventChannelService()
     platform = bootstrap_resource_platform(
         workspace_root=tmp_path,
-        event_service=service,
+        event_service=event_channel_service,
     )
-    subscription = service.channel(
+    subscription = event_channel_service.channel(
         "resource.state/workspace_resource_platform"
     ).subscribe(label="test")
 
@@ -71,15 +75,17 @@ async def test_bootstrap_close_publishes_release_failure(tmp_path) -> None:
 @pytest.mark.asyncio
 async def test_bootstrap_close_event_failure_is_explicit(
     tmp_path,
+    event_channel_service: EventChannelService,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """通知不可用不改变已释放事实，但 owner 必须显式抛出事件错误。"""
-    service = EventChannelService()
     platform = bootstrap_resource_platform(
         workspace_root=tmp_path,
-        event_service=service,
+        event_service=event_channel_service,
     )
-    channel = service.channel("resource.state/workspace_resource_platform")
+    channel = event_channel_service.channel(
+        "resource.state/workspace_resource_platform"
+    )
 
     def fail_publish(_event) -> None:
         raise RuntimeError("event unavailable")
@@ -92,10 +98,14 @@ async def test_bootstrap_close_event_failure_is_explicit(
 
 @pytest.mark.asyncio
 async def test_bootstrap_preserves_release_and_event_failure(
-    tmp_path, monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+    event_channel_service: EventChannelService,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    service = EventChannelService()
-    platform = bootstrap_resource_platform(workspace_root=tmp_path, event_service=service)
+    platform = bootstrap_resource_platform(
+        workspace_root=tmp_path,
+        event_service=event_channel_service,
+    )
     release_error = OSError("resource still attached")
     event_error = RuntimeError("event unavailable")
 
@@ -106,7 +116,9 @@ async def test_bootstrap_preserves_release_and_event_failure(
         raise event_error
 
     platform.process_root_scope.register(fail_release, label="failing-resource")
-    channel = service.channel("resource.state/workspace_resource_platform")
+    channel = event_channel_service.channel(
+        "resource.state/workspace_resource_platform"
+    )
     monkeypatch.setattr(channel, "publish", fail_publish)
     with pytest.raises(ExceptionGroup) as captured:
         await platform.close()

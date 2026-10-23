@@ -33,7 +33,7 @@ from app.services.business.session_navigation.queue_store import (
 from tests.harness.python.run_context import TestRunContext
 from tests.support.canonical_id_at import session_id_at
 from tests.support.catalog_session_bundle import seed_catalog_session_bundle
-from tests.support.workspaces import prepare_default_test_workspace
+from tests.support.workspaces import prepare_test_workspace
 
 
 def _build_owned_container(
@@ -121,9 +121,10 @@ async def test_main_lifespan_recovers_running_operation_and_cleans_up_owner_conf
 ) -> None:
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
     workspace_root = context.workspace_root
-    prepare_default_test_workspace(
+    prepare_test_workspace(
         workspace_root=workspace_root,
         template_root=Path.cwd() / "tests" / "fixtures" / "workspaces" / "default_test_workspace",
+        template_items=(),
     )
     monkeypatch.setenv("WORKSPACE_ROOT", str(workspace_root))
     monkeypatch.setenv("BOXTEAM_HOME", str(context.boxteam_home))
@@ -213,9 +214,10 @@ async def test_rejected_retained_session_delete_does_not_block_lifespan_restart(
 ) -> None:
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
     workspace_root = context.workspace_root
-    prepare_default_test_workspace(
+    prepare_test_workspace(
         workspace_root=workspace_root,
         template_root=Path.cwd() / "tests" / "fixtures" / "workspaces" / "default_test_workspace",
+        template_items=(),
     )
     monkeypatch.setenv("WORKSPACE_ROOT", str(workspace_root))
     monkeypatch.setenv("BOXTEAM_HOME", str(context.boxteam_home))

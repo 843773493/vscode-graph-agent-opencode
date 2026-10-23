@@ -16,3 +16,4 @@
 
 - 每个测试文件使用独立模型端口、后端端口和工作区。
 - 模型桩必须校验请求协议和认证信息，并保留可审计请求状态。
+- 只验证会话目录、catalog 或生命周期 owner 的测试用 `prepare_test_workspace(..., template_items=())` 创建独立空工作区；确实读取工作区文件或配置时才通过 `template_items` 复制所需 fixture 项，避免无关文件 I/O。

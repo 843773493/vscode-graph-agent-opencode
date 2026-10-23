@@ -127,7 +127,9 @@ export function buildVisibleFileTreeRows({
 }: BuildVisibleFileTreeRowsOptions): WorkspaceFileTreeRow[] {
   const rows: WorkspaceFileTreeRow[] = [];
   const nodeMatchesSearch = searchMatcher
-    ?? createFileTreeSearchMatcher(directories, searchQuery);
+    ?? (searchQuery.trim()
+      ? createFileTreeSearchMatcher(directories, searchQuery)
+      : undefined);
   // 展开是深度优先树遍历：后端构造子路径时始终是 `父路径/子项名`，子路径必然
   // 严格长于父路径，因此合法数据不可能成环。但损坏载荷可能给出自引用目录，
   // 使递归无限深入。这里只对**当前递归链**去重：合法数据中同一目录可在多个根下
@@ -174,7 +176,9 @@ export function buildVisibleFileTreeRows({
       });
       return;
     }
-    const visibleItems = directory.items.filter(nodeMatchesSearch);
+    const visibleItems = nodeMatchesSearch
+      ? directory.items.filter(nodeMatchesSearch)
+      : directory.items;
     if (directory.items.length === 0 || visibleItems.length === 0) {
       rows.push({
         key: `status:${directory.items.length === 0 ? "empty" : "no-match"}:${directoryPath}`,

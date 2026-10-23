@@ -3,10 +3,12 @@ import { createServer, request as proxyRequest } from "node:http";
 import { createServer as createTcpServer } from "node:net";
 import { spawn } from "node:child_process";
 import { createWriteStream } from "node:fs";
-import { mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import path from "node:path";
 import { chromium } from "playwright";
+
+import { configureChromiumTemporaryDirectory } from "./chromium-temporary-directory.mjs";
 
 const root = process.cwd();
 const mode = process.argv[2] ?? "full";
@@ -157,20 +159,16 @@ server.on("connection", (socket) => {
 });
 let browser;
 let context;
-let browserAlias;
+let releaseChromiumTemporaryDirectory;
 let failure;
 const evidence = {};
 function assert(condition, message) { if (!condition) throw new Error(message); }
 async function launchBrowser() {
-  await mkdir(browserTemporary, { recursive: true });
   await mkdir(downloads, { recursive: true });
-  // Unix socket 有真实路径长度限制；短别名仍指向正式测试 runtime。
-  browserAlias = path.join(root, "out", "wf" + process.pid);
-  await symlink(browserTemporary, browserAlias);
-  process.env.TMPDIR = browserAlias;
+  releaseChromiumTemporaryDirectory = await configureChromiumTemporaryDirectory(browserTemporary);
   return await chromium.launch({
     executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH || undefined,
-    headless: true, downloadsPath: downloads, env: { ...process.env, TMPDIR: browserAlias },
+    headless: true, downloadsPath: downloads, env: { ...process.env },
   });
 }
 async function openContext() {
@@ -435,8 +433,8 @@ try {
   });
   await close("Chromium context", async () => { await context?.close(); });
   await close("Chromium browser", async () => { await browser?.close(); });
+  await close("Chromium temporary path", async () => { await releaseChromiumTemporaryDirectory?.(); });
   await close("Chromium profile", async () => {
-    if (browserAlias) await rm(browserAlias);
     await rm(browserTemporary, { recursive: true, force: true });
   });
   await close("HTTP/SSE proxy", () => new Promise((resolve) => {

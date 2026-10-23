@@ -15,7 +15,7 @@ import pytest
 from app.services.infrastructure.config_service import ConfigService
 from app.services.infrastructure.workspace_service import WorkspaceService
 from tests.harness.python.run_context import TestRunContext
-from tests.support.workspaces import prepare_default_test_workspace
+from tests.support.workspaces import prepare_test_workspace
 
 PROBE = r'''
 import asyncio, io, os, sys
@@ -76,8 +76,11 @@ asyncio.run(main())
 @pytest.fixture
 def recovery_case(request):
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
-    workspace = prepare_default_test_workspace(workspace_root=context.workspace_root,
-        template_root=Path.cwd() / "tests/fixtures/workspaces/model_tool_test_workspace")
+    workspace = prepare_test_workspace(
+        workspace_root=context.workspace_root,
+        template_root=Path.cwd() / "tests/fixtures/workspaces/model_tool_test_workspace",
+        template_items=(),
+    )
     (workspace / "target").mkdir()
     config = Mock(spec=ConfigService)
     config.get_workspace_file_default_limit.return_value = 500

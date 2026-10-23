@@ -2,6 +2,20 @@
 
 协调 rollout 历史的只读 snapshot、索引缓存和有界分页查询。
 
+## 职责树与依赖方向
+
+```text
+rollout_history/
+├── snapshot.py  IndexedHistorySnapshots、已提交 snapshot 与索引视图缓存
+├── cursor.py    HistoryCursorBinding、请求绑定、游标校验和编解码
+└── paging.py    HistoryPageReadMixin、基于单一 snapshot 的有界读取
+```
+
+`RolloutHistoryReader` 继承 `paging.py` 的 `HistoryPageReadMixin`；该 mixin 继承
+`cursor.py` 的 `HistoryCursorMixin`。分页模块读取 `snapshot.py` 提供的索引视图；游标
+模块用同一视图的 revision 和 upper bound 绑定 continuation cursor。保留该方向，避免
+snapshot 缓存依赖分页实现，或在分页代码中重新实现 cursor 合同。
+
 # 可修改内容
 
 - 统一 reader 上的快照生命周期、缓存失效和游标绑定。
