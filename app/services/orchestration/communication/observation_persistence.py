@@ -3,8 +3,12 @@
 from __future__ import annotations
 
 import hashlib
+import logging
+from contextlib import closing
 from dataclasses import asdict
+from typing import TYPE_CHECKING
 
+from app.core.exceptions import NotFoundError
 from app.core.session_control_communication_ledger.observations import (
     RemoteObservation,
     RemoteObservationError,
@@ -14,9 +18,18 @@ from app.core.session_control_communication_ledger.observations import (
 from app.core.session_control_store import SessionControlStore
 from app.core.session_lifecycle_gate import (
     SESSION_OPERATION_LEASE_TERMINAL_STATES,
+    SessionDeletionPendingError,
     SessionOperationLease,
 )
 from app.services.business.communication.addresses import GlobalThreadAddress
+
+if TYPE_CHECKING:
+    from app.schemas.internal_v2.communication import CommunicationObservationRequest
+    from app.services.orchestration.communication.service import (
+        SessionCommunicationService,
+    )
+
+logger = logging.getLogger(__name__)
 
 
 def _observation_hash(value: object) -> str:
@@ -146,3 +159,46 @@ def _raise_for_observation_error(value: dict[str, object]) -> dict[str, object]:
     if code is not None:
         raise RemoteObservationError(code)
     return value
+
+
+async def record_observation_failure(
+    communication: SessionCommunicationService, session_id: str, request: CommunicationObservationRequest,
+    root_lease: SessionOperationLease, page_lease: SessionOperationLease,
+    error: Exception, *, side: str,
+) -> None:
+    code = error.code if isinstance(error, RemoteObservationError) else "read-snapshot-mismatch"
+    result = {"error": RemoteObservationError(code).to_wire()}
+    if not isinstance(error, RemoteObservationError):
+        facts: dict[str, object] = {"type": type(error).__name__}
+        for name in ("errno", "winerror", "sqlite_errorcode"):
+            if isinstance(system_code := getattr(error, name, None), int):
+                facts[name] = system_code
+        result["owner_failure"] = facts
+        logger.error(
+            "冷观察 owner 失败: session_id=%s, side=%s, operation=%s, observation_id=%s, page_identity=%s；完整诊断见异常链",
+            session_id, side, request.operation, request.observation_id, request.page_identity,
+            exc_info=error,
+        )
+    try:
+        async with communication._sessions.session_write_admission(session_id):
+            with closing(communication._store(session_id)) as store:
+                try:
+                    current = store.get_lease(page_lease.lease_id)
+                except KeyError:
+                    raise RemoteObservationError("operation-retry-expired") from None
+                if current.fencing_token != page_lease.fencing_token:
+                    raise RemoteObservationError("operation-retry-expired")
+                if current.state in SESSION_OPERATION_LEASE_TERMINAL_STATES:
+                    return
+                _require_current_observation_lease(store, page_lease)
+                root = _require_current_observation_lease(store, root_lease, allow_completed=True)
+                store.commit_remote_page(request.observation_id, side=side, page_identity=request.page_identity, result=result)
+                outcome = "cancelled" if code == "target-deleted" else "failed"
+                _settle_observation_lease(store, page_lease, outcome=outcome)
+                if root.state != "completed":
+                    store.commit_remote_observation(request.observation_id, side=side, result=result)
+                    _settle_observation_lease(store, root_lease, outcome=outcome)
+    except (SessionDeletionPendingError, NotFoundError):
+        # 原生产删除 callback 已在同一 gate 中提交并终结这些记录。
+        return
+

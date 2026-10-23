@@ -471,3 +471,10 @@
 - 成功 HTTP 回执的目标地址与 main pointer 在原 discovery 解码点校验，错误只公开 API path、request_id、阶段和异常类别；保留原内置异常类型或 CommunicationContractError/原code，完整原异常留cause与诊断日志。没有改变目标身份规则、HTTP分类、请求/响应身份校验或持久化。
 - 固定完整tree `7d5cd4abdc869b06b571146745d3429f09fde269` 的新增12项通过，覆盖未知目标字段、Session/Thread非法值及main pointer漂移×POSIX/drive/UNC，核精确cause对象、原code、日志及同请求修正后重试。相同生产的上一候选客户端/通信合同/观察回归221项通过，另12项中10通过、2因TypeError原文与repr转义比较错误失败；最终只修该cause断言并补验全部12项，不将混合运行改为全绿。真实Gateway/Backend/Agent与model_stream的C1 send→worker→wait→read为1 passed/53.73秒，Ruff最终exit0；旧生产完整archive的12项均检出普通错误原生路径。
 - 首次回归因HEAD测试误导入尚未提交的support模块新位置而收集失败，私有候选仅对齐实际HEAD平面support，保留共享树其它代理的搬迁；Ruff首次import格式及所有失败原件保留。准确命令、全树前后指纹、raw/退出码及只读独审见 `out/tests/temp/communication_discovery_errors_20261024/artifacts/`。真实C1验证正常发现与后继执行，畸形回执用显式HTTP stub；不代真实外部Provider、完整Web或Windows实机，2.2/7.2继续未勾。
+
+
+### 2026-10-23 冷观察失败记录与普通 HTTP 错误（2.2/7.2 部分收口）
+
+- source/target 两处观察失败统一交给既有 observation_persistence owner，在原 Session gate、page/root fencing 与 lease 结算边界提交；删除 service 内旧方法。owner_failure 只持久异常类型及可用整数系统码，不再保存原异常文本，完整异常保留本机日志。普通观察 API 的 Runtime/Value/Key 仍为409，OSError/SQLite仍为500；保留原500的code/message/data/request_id信封及同一X-Request-ID，专门观察拒绝仍保持原闭集和409。
+- 固定完整 tree `f2ecd17c84c7105aa9d0ec5afc8e4e9bff750599` 最终定向24 passed/11.63秒；其中15项覆盖POSIX/drive/UNC×Runtime/Value/Key/OSError/SQLite，经真实catalog/Session/control准入和ASGI路由核HTTP、持久事实、数字码、原异常日志对象、冷owner重开同记录/lease、失败重放不重复读取及修复后新读取。相同存储/恢复代码的上一候选87 passed、1 deselected，另补选真实Gateway/Backend HTTP lifecycle为1 passed/35.34秒；最终仅500投影与精确响应断言变化，已定向补验。Ruff最终exit0，仅忽略messages.py原有15条B008，Depends默认值AST与HEAD相同。
+- 旧生产完整archive的15项负例全失败；早期候选漏捕500、初次静态import错误及004缺少.env导致恢复读取失败均保留，不计通过。005只补接既有.env后同源码通过。准确命令、4322项源码前后指纹、raw/退出码、真实HTTP原件SHA与只读补审见 `out/tests/temp/observation_failure_records_20261023/artifacts/`。故障矩阵使用受控projection故障和本地授权override，不代完整外部Gateway/Web/Windows；真实HTTP单测补验正常生命周期，不声称覆盖真实网络故障。2.2/7.2总门保持未勾。

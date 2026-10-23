@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import logging
+import sqlite3
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Response
+from fastapi.responses import JSONResponse
 
 from app.abstractions.job_service import JobServiceProtocol
 from app.abstractions.turn_history import TurnSessionLookupProtocol
@@ -273,8 +275,18 @@ async def observe_communication(
         result = await service.observations.observe(payload)
     except RemoteObservationError as error:
         raise HTTPException(status_code=409, detail=error.to_wire()) from error
-    except (ValueError, RuntimeError, KeyError) as error:
-        raise HTTPException(status_code=409, detail=str(error)) from error
+    except (ValueError, RuntimeError, KeyError, OSError, sqlite3.Error) as error:
+        detail = (
+            f"冷观察操作失败: session_id={session_id}, thread_id={payload.target.thread_id}, "
+            f"operation={payload.operation}, stage=target_observation, error_type={type(error).__name__}"
+        )
+        logger.error("%s；完整诊断见异常链", detail, exc_info=error)
+        if isinstance(error, (OSError, sqlite3.Error)):
+            return JSONResponse(
+                status_code=500, headers={"X-Request-ID": request_id},
+                content={"code": 500, "message": detail, "data": None, "request_id": request_id},
+            )
+        raise HTTPException(status_code=409, detail=detail) from error
     return APIResponse(data=result, request_id=request_id)
 
 

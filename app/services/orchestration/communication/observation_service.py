@@ -75,6 +75,7 @@ from app.services.orchestration.communication.observation_persistence import (
     _raise_for_observation_error,
     _require_current_observation_lease,
     _settle_observation_lease,
+    record_observation_failure,
 )
 
 if TYPE_CHECKING:
@@ -280,7 +281,7 @@ class CommunicationObservationService:
                         raise RemoteObservationError("operation-retry-expired") from error
                     return _raise_for_observation_error(previous)
                 if not deleted and previous is None:
-                    await self._record_failure(session_id, request, root_lease, page_lease, error, side="source")
+                    await record_observation_failure(service, session_id, request, root_lease, page_lease, error, side="source")
                 raise
             if deleted:
                 if envelope.expires_at <= self._clock.utc_now():
@@ -539,40 +540,9 @@ class CommunicationObservationService:
             return await self._replay_target(request)
         except Exception as error:
             if root_lease is not None and page_lease is not None:
-                await self._record_failure(target.session_id, request, root_lease, page_lease, error, side="target")
+                await record_observation_failure(service, target.session_id, request, root_lease, page_lease, error, side="target")
             raise
 
-    async def _record_failure(
-        self, session_id: str, request: CommunicationObservationRequest,
-        root_lease: SessionOperationLease, page_lease: SessionOperationLease,
-        error: Exception, *, side: str,
-    ) -> None:
-        code = error.code if isinstance(error, RemoteObservationError) else "read-snapshot-mismatch"
-        result = {"error": RemoteObservationError(code).to_wire()}
-        if not isinstance(error, RemoteObservationError):
-            result["owner_failure"] = {"type": type(error).__name__, "message": str(error)}
-        try:
-            async with self._communication._sessions.session_write_admission(session_id):
-                with closing(self._communication._store(session_id)) as store:
-                    try:
-                        current = store.get_lease(page_lease.lease_id)
-                    except KeyError:
-                        raise RemoteObservationError("operation-retry-expired") from None
-                    if current.fencing_token != page_lease.fencing_token:
-                        raise RemoteObservationError("operation-retry-expired")
-                    if current.state in SESSION_OPERATION_LEASE_TERMINAL_STATES:
-                        return
-                    _require_current_observation_lease(store, page_lease)
-                    root = _require_current_observation_lease(store, root_lease, allow_completed=True)
-                    store.commit_remote_page(request.observation_id, side=side, page_identity=request.page_identity, result=result)
-                    outcome = "cancelled" if code == "target-deleted" else "failed"
-                    _settle_observation_lease(store, page_lease, outcome=outcome)
-                    if root.state != "completed":
-                        store.commit_remote_observation(request.observation_id, side=side, result=result)
-                        _settle_observation_lease(store, root_lease, outcome=outcome)
-        except _DELETED:
-            # 原生产删除 callback 已在同一 gate 中提交并终结这些记录。
-            return
 
     def _snapshot(self, request: CommunicationObservationRequest, identities: list[dict[str, str]] | None) -> tuple[list[WaitObservation], list[dict[str, str]]]:
         service = self._communication

@@ -10,10 +10,10 @@ communication/
 ├── inbox_admission_worker.py  target_accepted Inbox 的 claim 恢复与 execution binding
 ├── observation_service.py      冷读分页、wait deadline、目标观察与清理恢复编排
 ├── observation_cursor.py       冷观察游标的认证编码、结构校验与期限检查
-└── observation_persistence.py 观察/page identity、lease 状态迁移与持久错误映射
+└── observation_persistence.py 观察/page identity、lease 状态迁移与 gate 内失败事实提交
 ```
 
-`observation_service.py` 只编排查询、远端传输和恢复；游标加解密与格式校验集中在 `observation_cursor.py`，持久 identity 与 lease 转换集中在 `observation_persistence.py`，通过 `SessionControlStore` 的 owner 方法读写，不直接实现 SQLite schema。拆分后的模块仍属于同一 observation 链路，不能复制一套 store 或提供旧 helper 转发层。
+`observation_service.py` 只编排查询、远端传输和恢复；游标加解密与格式校验集中在 `observation_cursor.py`，持久 identity、lease 转换及同 Session gate 内的失败记录集中在 `observation_persistence.py`，通过 `SessionControlStore` 的 owner 方法读写，不直接实现 SQLite schema。拆分后的模块仍属于同一 observation 链路，不能复制一套 store 或提供旧 helper 转发层。
 
 # 可修改内容
 

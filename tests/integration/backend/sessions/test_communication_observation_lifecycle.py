@@ -189,8 +189,8 @@ class _Case:
 
 
 @pytest.fixture
-async def lifecycle_case() -> AsyncIterator[_Case]:
-    context = TestRunContext.from_test_file(Path(__file__)).prepare()
+async def lifecycle_case(request: pytest.FixtureRequest) -> AsyncIterator[_Case]:
+    context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
     if context.workspace_root.exists():
         shutil.rmtree(context.workspace_root)
     workspace = build_catalog_workspace(context.output_root)
