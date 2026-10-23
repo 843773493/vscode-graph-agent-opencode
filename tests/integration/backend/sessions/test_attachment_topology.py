@@ -339,3 +339,99 @@ async def test_child_fork_reservation_rejects_catalog_delete_with_active_local_f
             proceed.set()
             if deletion is not None:
                 await asyncio.gather(deletion, return_exceptions=True)
+
+
+@pytest.mark.parametrize("creation_kind", ["new_session_main", "new_child_thread"])
+@pytest.mark.parametrize("replay", [False, True], ids=["fresh", "published-replay"])
+@pytest.mark.parametrize("commit_first", [True, False], ids=["commit-first", "delete-first"])
+async def test_product_fork_reply_follows_attachment_commit_before_target_delete(
+    runtime_case: RuntimeCase, history_client: httpx.AsyncClient, fork_client: httpx.AsyncClient,
+    monkeypatch: pytest.MonkeyPatch, creation_kind: str, replay: bool, commit_first: bool,
+) -> None:
+    """真实消息与图生成来源；提交后的回执保留，删除先行则拒绝新的附件发布。"""
+    case = runtime_case
+    container = case.runner.container
+    store = container.attachment_blob_store
+    resolver = container.session_service.path_resolver
+    catalog = resolver.catalog_store
+    with workspace_context(container.workspace_id, case.runner.workspace, session_catalog=container.session_catalog):
+        source, source_thread = await _source_with_attachment(case, history_client)
+        source_items = case.runner.saver.read_canonical_items(source, source_thread)
+        target_uri = None
+        if creation_kind == "new_child_thread":
+            parent, _ = await _session(case.runner)
+            target_uri = (await container.session_service.get(parent)).uri
+        request = await _fork_request(
+            _production_fork_context(container), source, mode="full_rollout_copy",
+            creation_kind=creation_kind, target_container_uri=target_uri,
+        )
+        endpoint = f"/api/v1/sessions/{source}/fork-context"
+        if replay:
+            first = await fork_client.post(endpoint, json=request.model_dump(mode="json"))
+            assert first.status_code == 200, first.text
+            result = first.json()["data"]
+            assert store.read(result["session"]["session_id"], result["resources"][0]["target_uri"],
+                              owner_thread_id=result["thread_id"]).data == b"fork-topology-source"
+        finalizer = store.finalize_copy_attachments
+        entered, release = asyncio.Event(), asyncio.Event()
+        observed = {}
+        pending = None
+
+        async def observe(operation_id, phase, *, details=None):
+            if phase == "deletion.catalog_deleting":
+                entered.set()
+                await release.wait()
+
+        async def ordered_finalizer(capture, *, publication_preimage_hash):
+            nonlocal pending
+            observed["capture"] = capture
+            observed["path"] = resolver.resolve_session_node(capture.target_session_id)
+            observed["resources"] = store.copy_resource_results(capture)
+            key = "fork-reply-delete-" + capture.target_session_id
+            if commit_first:
+                await finalizer(capture, publication_preimage_hash=publication_preimage_hash)
+                await resolver.delete_subtree(idempotency_key=key, root_node_id=capture.target_session_id)
+            else:
+                pending = asyncio.create_task(resolver.delete_subtree(
+                    idempotency_key=key, root_node_id=capture.target_session_id,
+                ))
+                try:
+                    await asyncio.wait_for(entered.wait(), 5)
+                    assert catalog.get_node(capture.target_session_id).state == "deleting"
+                    with closing(store._open_control_store(capture.target_session_id)) as control:
+                        assert control.get_fence()[0] == "active"
+                    await finalizer(capture, publication_preimage_hash=publication_preimage_hash)
+                finally:
+                    release.set()
+                    await asyncio.wait_for(asyncio.shield(pending), 10)
+            assert not observed["path"].exists()
+
+        monkeypatch.setattr(store, "finalize_copy_attachments", ordered_finalizer)
+        if not commit_first:
+            monkeypatch.setattr("app.core.session_subtree_delete.observe_phase", observe)
+        try:
+            response = await asyncio.wait_for(fork_client.post(endpoint, json=request.model_dump(mode="json")), 25)
+        finally:
+            release.set()
+            if pending is not None:
+                await asyncio.wait_for(asyncio.gather(pending, return_exceptions=True), 10)
+        assert response.status_code == (200 if commit_first else 409), response.text
+        capture = observed["capture"]
+        if commit_first:
+            result = response.json()["data"]
+            assert (result["session"]["session_id"], result["thread_id"], result["creation_kind"]) == (
+                capture.target_session_id, capture.target_thread_id, creation_kind,
+            )
+            assert result["resources"] == observed["resources"]
+        else:
+            assert "Session catalog 节点非 active" in response.json()["detail"]
+        assert not observed["path"].exists()
+        assert catalog.get_fork_source_capture(copy_operation_id=capture.copy_operation_id).state == "materialized"
+        assert [row[0] for row in store._catalog.connection.execute(
+            "SELECT state FROM fork_attachment_claims WHERE copy_operation_id=?", (capture.copy_operation_id,),
+        )] == ["target_deleted"]
+        retry = await fork_client.post(endpoint, json=request.model_dump(mode="json"))
+        assert retry.status_code == 404, retry.text
+        assert not observed["path"].exists()
+        assert case.runner.saver.read_canonical_items(source, source_thread) == source_items
+        assert len(case.model_admissions) == 1

@@ -21,6 +21,7 @@ from app.schemas.internal_v2.attachment import AttachmentRef
 from app.schemas.internal_v2.common import JobStatus
 from app.schemas.internal_v2.message import (
     MessageCreateRequest,
+    MessageRunAccepted,
     MessageRunRequest,
     RunOptions,
 )
@@ -30,74 +31,91 @@ from tests.harness.python.run_context import TestRunContext
 
 
 @pytest.fixture
-async def fork_execution_source(
+async def fork_execution_message(
     production_fork_container: AppContainer, inprocess_model_replay, request: pytest.FixtureRequest,
-) -> SessionDTO:
+):
+    """按需启动真实执行面；来源和副本续写共用 model_stream 与产品消息入口。"""
     container = production_fork_container
     replay, controller = inprocess_model_replay
     controller.ensure_installed()
+
+    async def execute(
+        session_id: str, *, content: str, attachments: list[AttachmentRef] | None = None,
+        gateway_id: str | None = None,
+    ) -> MessageRunAccepted:
+        async with AsyncExitStack() as cleanup:
+            cleanup.callback(reset_current_gateway_id, set_current_gateway_id(gateway_id))
+            if gateway_id is not None:
+                # 仅隔离无关 Skill HTTP 传输；发布与接受仍走原 Gateway/Workspace owner。
+                context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
+                skills = GatewaySkillSourceOwner(gateway_id=gateway_id, skills_root=context.boxteam_home / "skills")
+                await skills.start()
+                cleanup.push_async_callback(skills.close)
+                sources = container.resource_platform.gateway_skill_sources
+                assert sources is not None
+
+                def skill_response(request: httpx.Request) -> httpx.Response:
+                    assert request.url.path == f"/api/gateway/skill-source-connections/{gateway_id}/workspaces/{container.workspace_id}"
+                    request_id = request.headers.get("X-Request-ID", "cold-fork-independent-skill-poll")
+                    return httpx.Response(200, headers={"X-Request-ID": request_id}, json={
+                        "code": 0, "data": skills.snapshot(workspace_id=container.workspace_id).model_dump(mode="json"),
+                        "request_id": request_id,
+                    })
+
+                sources._state(gateway_id).client = httpx.AsyncClient(transport=httpx.MockTransport(skill_response))
+                cleanup.push_async_callback(sources.close)
+            # 每个成功启动都有逆序释放；失败不留下半初始化的执行面。
+            await type(container.mcp_catalog_owner).start(container.mcp_catalog_owner)
+            cleanup.push_async_callback(type(container.mcp_catalog_owner).shutdown, container.mcp_catalog_owner)
+            await type(container.workspace_file_resource_registry).start(container.workspace_file_resource_registry)
+            cleanup.push_async_callback(type(container.workspace_file_resource_registry).stop, container.workspace_file_resource_registry)
+            await container.team_fanout_service.start()
+            cleanup.push_async_callback(container.team_fanout_service.stop)
+            cleanup.push_async_callback(type(container.agent_execution_service).shutdown, container.agent_execution_service)
+            thread = container.session_service.path_resolver.main_thread_id(session_id)
+            calls_before = controller.transport.call_count
+            cassette = build_cassette(
+                asset_id="fork-recovery-source", model="big-pickle",
+                url="http://127.0.0.1:1/v1/chat/completions",
+                frames=chat_completion_frames(
+                    response_id="chatcmpl-fork-recovery", model="big-pickle",
+                    deltas=({"role": "assistant", "content": "回答一"},), finish_reason="stop",
+                    usage={"prompt_tokens": 32, "completion_tokens": 8, "total_tokens": 40},
+                ),
+            )
+            replay.control.plan_model_calls(session_id, thread, [cassette.raw["interactions"][0]])
+            with workspace_context(container.workspace_id, container.workspace_root):
+                accepted = await container.session_orchestrator.create_message(session_id, MessageRunRequest(
+                    message=MessageCreateRequest(content=content, attachments=attachments or []), run=RunOptions(),
+                ))
+                async with asyncio.timeout(45):
+                    while True:
+                        job = await container.job_service.get(accepted.job_id)
+                        if job.status in {JobStatus.completed, JobStatus.failed, JobStatus.cancelled}:
+                            assert job.status == JobStatus.completed, job.error_message
+                            break
+                        await asyncio.sleep(0.05)
+                await container.job_service.drain_finalizations()
+            record = container.checkpointer.execution_queue_record(session_id, thread, accepted.job_id)
+            assert record.phase == "terminal" and record.outcome == "completed"
+            assert controller.transport.call_count == calls_before + 1
+            return accepted
+
+    return execute
+
+
+@pytest.fixture
+async def fork_execution_source(
+    production_fork_container: AppContainer, fork_execution_message, request: pytest.FixtureRequest,
+) -> SessionDTO:
+    source = await production_fork_container.session_service.create(SessionCreateRequest(title="真实执行的 fork 恢复来源"))
     with_attachment = getattr(request, "param", False)
-    # 普通来源由工作区原生入口执行；附件用例保留真实入口的 Gateway URI。
-    async with AsyncExitStack() as cleanup:
-        gateway_id = "gateway_bc453186347b952303da1c0634d46150" if with_attachment else None
-        cleanup.callback(reset_current_gateway_id, set_current_gateway_id(gateway_id))
-        if gateway_id is not None:
-            # 仅隔离无关 Skill HTTP 传输；发布与接受仍由真实 Gateway/Workspace owner 执行。
-            context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
-            skills = GatewaySkillSourceOwner(gateway_id=gateway_id, skills_root=context.boxteam_home / "skills")
-            await skills.start()
-            cleanup.push_async_callback(skills.close)
-            sources = container.resource_platform.gateway_skill_sources
-            assert sources is not None
-
-            def skill_response(request: httpx.Request) -> httpx.Response:
-                assert request.url.path == f"/api/gateway/skill-source-connections/{gateway_id}/workspaces/{container.workspace_id}"
-                request_id = request.headers.get("X-Request-ID", "cold-fork-independent-skill-poll")
-                return httpx.Response(200, headers={"X-Request-ID": request_id}, json={
-                    "code": 0, "data": skills.snapshot(workspace_id=container.workspace_id).model_dump(mode="json"),
-                    "request_id": request_id,
-                })
-
-            sources._state(gateway_id).client = httpx.AsyncClient(transport=httpx.MockTransport(skill_response))
-            cleanup.push_async_callback(sources.close)
-        # 只登记已成功启动的服务，任何后续失败都按逆序释放。
-        await type(container.mcp_catalog_owner).start(container.mcp_catalog_owner)
-        cleanup.push_async_callback(type(container.mcp_catalog_owner).shutdown, container.mcp_catalog_owner)
-        await type(container.workspace_file_resource_registry).start(container.workspace_file_resource_registry)
-        cleanup.push_async_callback(type(container.workspace_file_resource_registry).stop, container.workspace_file_resource_registry)
-        await container.team_fanout_service.start()
-        cleanup.push_async_callback(container.team_fanout_service.stop)
-        # 冷恢复不能依赖 resident graph；先释放执行面，再释放辅助服务。
-        cleanup.push_async_callback(type(container.agent_execution_service).shutdown, container.agent_execution_service)
-        source = await container.session_service.create(SessionCreateRequest(title="真实执行的 fork 恢复来源"))
-        thread = container.session_service.path_resolver.main_thread_id(source.session_id)
-        cassette = build_cassette(
-            asset_id="fork-recovery-source", model="big-pickle",
-            url="http://127.0.0.1:1/v1/chat/completions",
-            frames=chat_completion_frames(
-                response_id="chatcmpl-fork-recovery", model="big-pickle",
-                deltas=({"role": "assistant", "content": "回答一"},), finish_reason="stop",
-                usage={"prompt_tokens": 32, "completion_tokens": 8, "total_tokens": 40},
-            ),
-        )
-        replay.control.plan_model_calls(source.session_id, thread, [cassette.raw["interactions"][0]])
-        with workspace_context(container.workspace_id, container.workspace_root):
-            attachments = [AttachmentRef(
-                file_id="inline:cold-fork.txt", name="cold-fork.txt", content_type="text/plain",
-                data_url="data:text/plain;base64," + base64.b64encode("冷恢复附件正文".encode()).decode("ascii"),
-            )] if with_attachment else []
-            accepted = await container.session_orchestrator.create_message(source.session_id, MessageRunRequest(
-                message=MessageCreateRequest(content="问题一", attachments=attachments), run=RunOptions(),
-            ))
-            async with asyncio.timeout(45):
-                while True:
-                    job = await container.job_service.get(accepted.job_id)
-                    if job.status in {JobStatus.completed, JobStatus.failed, JobStatus.cancelled}:
-                        assert job.status == JobStatus.completed, job.error_message
-                        break
-                    await asyncio.sleep(0.05)
-            await container.job_service.drain_finalizations()
-        record = container.checkpointer.execution_queue_record(source.session_id, thread, accepted.job_id)
-        assert record.phase == "terminal" and record.outcome == "completed"
-        assert controller.transport.call_count == 1
-        return source
+    attachments = [AttachmentRef(
+        file_id="inline:cold-fork.txt", name="cold-fork.txt", content_type="text/plain",
+        data_url="data:text/plain;base64," + base64.b64encode("冷恢复附件正文".encode()).decode("ascii"),
+    )] if with_attachment else []
+    await fork_execution_message(
+        source.session_id, content="问题一", attachments=attachments,
+        gateway_id="gateway_bc453186347b952303da1c0634d46150" if with_attachment else None,
+    )
+    return source

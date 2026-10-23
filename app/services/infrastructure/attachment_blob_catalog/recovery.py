@@ -156,8 +156,12 @@ class AttachmentIngestRecoveryMixin:
             if not holder.acquired:
                 return ()
             async with self._gate.exclusive(session_id):
-                # 等 gate 期间删除可能已关闭准入，由删除 owner 收敛其 pin。
-                if self._path_resolver.catalog_store.get_node(session_id).state != "active":
+                # 删除 journal 接管原 pin；成功 fork 回执不再解析已隔离的节点。
+                catalog = self._path_resolver.catalog_store
+                if catalog.find_operation_replay_delete(self._path_resolver.workspace_id, session_id) is not None:
+                    return ()
+                # 没有删除原件的缺失仍须报错，不能把外部损坏当作已删除。
+                if catalog.get_node(session_id).state != "active":
                     return ()
                 return self.recover_session(session_id, messages=messages)
 

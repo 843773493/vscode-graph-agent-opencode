@@ -33,6 +33,9 @@ from app.services.business.session_navigation.operations_service import (
 )
 from tests.harness.python.run_context import TestRunContext
 from tests.integration.backend.sessions.fork_execution_source import (
+    fork_execution_message as fork_execution_message,  # noqa: PLC0414
+)
+from tests.integration.backend.sessions.fork_execution_source import (
     fork_execution_source as fork_execution_source,  # noqa: PLC0414
 )
 from tests.integration.backend.sessions.test_navigation_worker_lifespan import (

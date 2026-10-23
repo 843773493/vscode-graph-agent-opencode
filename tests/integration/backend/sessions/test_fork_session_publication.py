@@ -19,6 +19,9 @@ from app.core.session_control_store.copy_attachment_settlement import (
 from app.schemas.internal_v2.session import SessionDTO
 from tests.harness.python.run_context import TestRunContext
 from tests.integration.backend.sessions.fork_execution_source import (
+    fork_execution_message as fork_execution_message,  # noqa: PLC0414
+)
+from tests.integration.backend.sessions.fork_execution_source import (
     fork_execution_source as fork_execution_source,  # noqa: PLC0414
 )
 from tests.integration.backend.sessions.test_navigation_worker_lifespan import (

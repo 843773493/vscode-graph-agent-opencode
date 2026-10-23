@@ -231,6 +231,9 @@ from app.services.mapping.itemized.resource_activation import (
 )
 from tests.harness.python.run_context import TestRunContext
 from tests.integration.backend.sessions.fork_execution_source import (
+    fork_execution_message as fork_execution_message,  # noqa: PLC0414
+)
+from tests.integration.backend.sessions.fork_execution_source import (
     fork_execution_source as fork_execution_source,  # noqa: PLC0414 - 产品执行生成来源历史
 )
 from tests.integration.backend.sessions.rollout_test_workspace import (
@@ -388,6 +391,13 @@ def production_fork_container(request: pytest.FixtureRequest,
             record = None
         if record is None and fork_request.creation_kind == "new_child_thread":
             _, target_session_id, _ = parse_session_thread_uri(fork_request.target_container_uri)
+            try:
+                target_node = catalog.get_node(target_session_id)
+            except KeyError:
+                # 已删除目标无法从 live owner 证明终态；由外层真实 HTTP 回执结清期限。
+                return False
+            if target_node.state != "active":
+                return False
             control = service._threads.for_owner_session(target_session_id).control_store
             try:
                 record = control.get_thread_creation_record(key)
@@ -8803,6 +8813,7 @@ async def test_full_copy_missing_selected_attachment_aborts_without_publication(
 async def test_http_published_fork_without_attachment_claim_rejects_deleting_target(
     fork_provider_prepare, production_fork_container: AppContainer,
     monkeypatch: pytest.MonkeyPatch, resource_case: str, fork_gateway_request_context: None,
+    fork_execution_message,
 ) -> None:
     """无 claim 的空资源、历史缺正文、omit 和引用复用仍受真实删除 gate 约束。"""
     context = _production_fork_context(production_fork_container)
@@ -8939,24 +8950,22 @@ async def test_http_published_fork_without_attachment_claim_rejects_deleting_tar
                         TurnHistoryLoadRequest(turn_ids=["turn-retry"], include=["user", "final_response"]))
                     references = [ref for turn in history.items for message in turn.user_messages for ref in message.attachments]
                     assert len(references) == 1 and references[0].availability == "unavailable"
-                    accepted = cold.accept_turn(
-                        target_session_id, thread_id=target_thread, accepted_ingress_id="missing-copy-successor",
-                        acceptance_idempotency_key="missing-copy-successor-accept", job_id="missing-copy-successor-job",
-                        admission_idempotency_key="missing-copy-successor-admit", payload="继续压缩后的副本",
-                        root_item_id="missing-copy-successor-root",
-                    )
-                    successor = fork_provider_prepare(
-                        replace(context, saver=cold), target_session_id, str(accepted["initial_execution_id"]),
-                        ContextSourceManager(owner=ContextSourceOwnerKey(target_session_id, target_thread), control_state_port=cold),
-                        "missing-copy-successor", attempt=1,
-                    )
-                    assert "item-retry-user" not in {
-                        entry.ref.ref_id for entry in successor["snapshot"].selection
-                        if entry.included and entry.ref.ref_type == "canonical_item"
-                    }
-                    assert all(message.id != "retry-user" for message in successor["messages"])
             finally:
                 cold_store.close()
+
+            # 续写必须由产品消息准入、队列和真实图执行生成，不能手工补执行状态。
+            accepted = await fork_execution_message(target_session_id, content="继续压缩后的副本")
+            (successor,) = context.saver.list_context_assemblies(target_session_id, target_thread, turn_id=accepted.turn_id)
+            assert "item-retry-user" not in {
+                entry.ref.ref_id for entry in successor.selection
+                if entry.included and entry.ref.ref_type == "canonical_item"
+            }
+            with session_thread_owner_scope(MutationIntentOwner(target_session_id, target_thread), langgraph_thread_id=target_thread):
+                current = await context.saver.aget_tuple(build_checkpoint_config(target_thread))
+                assert current is not None
+                restored = await acheckpoint_messages(context.saver, current)
+            assert all(message.id != "retry-user" for message in restored)
+            assert any(message.id == accepted.message_id and message.content == "继续压缩后的副本" for message in restored)
 
         async def paused_delete(operation_id: str, phase: str, **kwargs: object) -> None:
             if phase == "deletion.catalog_deleting":
