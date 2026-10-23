@@ -64,6 +64,8 @@ _EVENT_COLUMNS = (
     "error_code, error_detail, created_at"
 )
 
+_OWNER_COLUMNS = "workspace_id, owner_id, owner_generation, updated_at"
+
 
 class NavigationBackpressureError(RuntimeError):
     """workspace 未终态 operation 超限：明确可重试，客户端须保留 outbox。"""
@@ -296,4 +298,19 @@ def _event_from_row(row: sqlite3.Row) -> NavigationEventRecord:
         error_code=event.error_code,
         error_detail=event.error_detail,
         created_at=row["created_at"],
+    )
+
+
+def _owner_from_row(row: sqlite3.Row) -> NavigationQueueOwner:
+    """读取原始owner元数据；generation不能由浮点或文本隐式转换。"""
+    for name in ("workspace_id", "owner_id"):
+        if not isinstance(row[name], str) or not row[name]:
+            raise ValueError(f"navigation queue owner {name}必须是非空字符串")
+    generation = row["owner_generation"]
+    if type(generation) is not int or generation < 1:
+        raise ValueError(f"navigation queue owner generation必须是正整数: {generation!r}")
+    if datetime.fromisoformat(row["updated_at"]).tzinfo is None:
+        raise ValueError("navigation queue owner updated_at必须带时区")
+    return NavigationQueueOwner(
+        workspace_id=row["workspace_id"], owner_id=row["owner_id"], generation=generation,
     )

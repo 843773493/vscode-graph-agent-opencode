@@ -48,6 +48,7 @@ from app.services.business.session_navigation.queue_events import (
 )
 from app.services.business.session_navigation.queue_records import (
     _EVENT_COLUMNS,
+    _OWNER_COLUMNS,
     _RECORD_COLUMNS,
     NAVIGATION_BACKPRESSURE_PENDING_LIMIT,
     NavigationBackpressureError,
@@ -57,6 +58,7 @@ from app.services.business.session_navigation.queue_records import (
     NavigationQueueOwner,
     NavigationQueueOwnerError,
     _event_from_row,
+    _owner_from_row,
     _params_json,
     _record_from_row,
     compute_intent_preimage_hash,
@@ -127,6 +129,16 @@ class NavigationMutationQueueStore(
                     ) from error
             for row in connection.execute(f"SELECT {_EVENT_COLUMNS} FROM navigation_events"):
                 self._event_in(connection, row, workspace_id=workspace_id)
+            for row in connection.execute(f"SELECT {_OWNER_COLUMNS} FROM navigation_queue_owners"):
+                try:
+                    owner = _owner_from_row(row)
+                    if owner.workspace_id != workspace_id:
+                        raise ValueError(f"workspace归属不符: expected={workspace_id!r}")
+                except (TypeError, ValueError) as error:
+                    raise CatalogMaintenanceRequiredError(
+                        "navigation queue owner 原始记录损坏，拒绝接管或改写: "
+                        f"path={self._store.database_path}, workspace_id={row['workspace_id']!r}, detail={error}"
+                    ) from error
 
     # ------------------------------------------------------------------
     # enqueue
@@ -515,6 +527,12 @@ class NavigationMutationQueueStore(
         now: str,
     ) -> NavigationQueueOwner:
         """OS lock 已证明旧 owner 退出后，CAS 递增 durable generation。"""
+        previous = connection.execute(
+            f"SELECT {_OWNER_COLUMNS} FROM navigation_queue_owners WHERE workspace_id = ?",
+            (workspace_id,),
+        ).fetchone()
+        if previous is not None:
+            _owner_from_row(previous)
         connection.execute(
             "INSERT INTO navigation_queue_owners "
             "(workspace_id, owner_id, owner_generation, updated_at) "
@@ -525,7 +543,7 @@ class NavigationMutationQueueStore(
             (workspace_id, owner_id, now),
         )
         row = connection.execute(
-            "SELECT owner_generation FROM navigation_queue_owners "
+            f"SELECT {_OWNER_COLUMNS} FROM navigation_queue_owners "
             "WHERE workspace_id = ?",
             (workspace_id,),
         ).fetchone()
@@ -533,11 +551,7 @@ class NavigationMutationQueueStore(
             raise RuntimeError(
                 f"queue owner generation 更新后缺失: workspace_id={workspace_id}"
             )
-        return NavigationQueueOwner(
-            workspace_id=workspace_id,
-            owner_id=owner_id,
-            generation=int(row[0]),
-        )
+        return _owner_from_row(row)
 
     @staticmethod
     def require_owner_generation(
@@ -549,20 +563,13 @@ class NavigationMutationQueueStore(
     ) -> None:
         """在业务 claim 同一事务中校验本 worker 的 durable fencing token。"""
         row = connection.execute(
-            "SELECT owner_id, owner_generation FROM navigation_queue_owners "
+            f"SELECT {_OWNER_COLUMNS} FROM navigation_queue_owners "
             "WHERE workspace_id = ?",
             (workspace_id,),
         ).fetchone()
-        if (
-            row is None
-            or str(row["owner_id"]) != owner_id
-            or int(row["owner_generation"]) != generation
-        ):
-            current = (
-                None
-                if row is None
-                else f"{row['owner_id']}:{int(row['owner_generation'])}"
-            )
+        owner = None if row is None else _owner_from_row(row)
+        if owner is None or owner.owner_id != owner_id or owner.generation != generation:
+            current = None if owner is None else owner.holder_id
             raise NavigationQueueOwnerError(
                 "navigation queue owner fencing token 已失效: "
                 f"workspace_id={workspace_id}, expected={owner_id}:{generation}, "
