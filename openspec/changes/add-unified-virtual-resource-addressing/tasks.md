@@ -410,3 +410,10 @@
 - 复制选中文本与页内查找在各自原生 evaluate 边界复用既有运行时错误 owner，调用前冻结 page 身份；普通响应及 last_operation 仅保存 browser/page、read_clipboard/find_text 阶段和原 code/status，完整异常与位置留诊断/cause。正常选中文本、window.find 参数与结果合同不变，不增加解析或执行链。
 - 固定完整 tree `ab0a39718ae19b1fc9d39192b5ee8da7b3aa5d79`：134 项操作/诊断单测、Ruff、JS 语法、Python compile 和 strict OpenSpec 通过；2 项真实 Chromium/Browser Manager HTTP/WebSocket 集成通过（18.41秒），核授权、安全错误与落盘记录、owner/lease、原日志原因，以及原页面重试后的精确复制文本和查找结果。旧生产完整 archive 的单测2项及集成2项全部失败，真实 WS 明确回显隔离 workspace 原生路径。
 - 准确命令、4310项源码前后指纹、raw/SHA、退出码、零进程组残留和只读审查见 `out/tests/temp/browser_text_query_20261023/artifacts/validation-proof-001.json`、`review-001.json`。故障为一次性原生方法注入；非可见 clipboard 失败记录经后续真实 policy writer 序列化，不声称该 writer 前硬退出仍耐久。Workspace API 使用 ASGI，不代完整 Gateway/Web 或 Windows 实机，2.2/7.2 保持未勾。
+
+
+### 2026-10-23 团队任务分派与 recipient 失败记录（2.2/7.2 部分收口）
+
+- 团队任务dispatch与逐recipient投递的唯一失败写口只保存Session/Thread/team/task或ledger revision、阶段、异常类别及可用errno/winerror/SQLite code；完整原异常留诊断，任务抛错保原cause，部分recipient失败仍以原ExceptionGroup聚合。失败任务/事件和recipient pending记录不再复制异常正文，无新schema、writer或错误文本过滤；原receipt/finalizer/lease及显式恢复顺序不变。
+- 最终完整tree `ecbfa0d267298b398f763558c8d80c0f56681d9b`：fanout集成全文件与团队business/infrastructure单测42项通过/61.21秒，Ruff及compileall通过。三种平台路径文本在回执后/任务绑定后与recipient故障共9项经真实TeamStore/ControlStore/Saver入口验证，另开read-only ControlStore核持久数据、DTO无位置，原日志/cause保原因，原Job与通知回执不重复，恢复只补失败recipient且冻结payload/hash/lease不漂移。完整旧生产archive的相同9项全部失败/13.53秒；Windows文本不代Windows实机，故障为受控原生异常注入。
+- 4311项源码前后指纹、准确命令/raw/SHA、退出码、零进程残留及非作者行为/架构审查见 `out/tests/temp/team_failure_boundaries_20261023/artifacts/validation-proof-004.json`、`review-003.json`。初次runner因隔离HOME目录尚未创建在child启动前拒绝，零测试；static003发现新增logger使旧BLE001 noqa无用，移除后AST不变且最终全回归通过，原件保留。仅为服务/SQLite与cold reader、fanout owner重建，不冒充真实HTTP/完整Web/OS重启，2.2/7.2总门仍未勾。

@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+import errno
 import json
 import sqlite3
 import sys
 from collections import Counter
+from contextlib import closing
 from pathlib import Path
 from threading import RLock
 from types import SimpleNamespace
@@ -22,7 +24,7 @@ from app.core.path_utils import (
     get_session_path_resolver,
     workspace_context,
 )
-from app.core.session_control_store import CollaborationMemberInput
+from app.core.session_control_store import CollaborationMemberInput, SessionControlStore
 from app.core.session_thread_context import session_thread_owner_scope
 from app.core.workspace_identity import load_or_create_workspace_id
 from app.domain.itemized.epoch.tool_set import ToolSetSnapshot
@@ -121,6 +123,11 @@ raise AssertionError("fanout退出注入未命中")
 class RejectDispatcher:
     async def submit(self, *args, **kwargs):
         raise AssertionError("cold collaboration pending 不得派生 runtime wakeup")
+
+
+@pytest.fixture(params=["/private/team/state.sqlite", r"C:\private\team\state.sqlite", r"\\host\private\team\state.sqlite"])
+def native_team_failure(request):
+    return PermissionError(errno.EACCES, "原生团队存储不可读", request.param)
 
 
 @pytest.fixture
@@ -611,7 +618,7 @@ async def test_process_exit_after_zero_partial_all_delivery_recovers_same_origin
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("crash_point", ["receipt", "task_binding"])
-async def test_original_wakeup_receipt_recovers_without_second_admission_or_job(team_case, crash_point):
+async def test_original_wakeup_receipt_recovers_without_second_admission_or_job(team_case, crash_point, native_team_failure, caplog):
     case = team_case
     child = await create_member(case, "receipt-member")
     intent = case.control.get_initial_execution_intent("delegate-receipt-member")
@@ -638,10 +645,10 @@ async def test_original_wakeup_receipt_recovers_without_second_admission_or_job(
     async def failed_finalize(record, job_id):
         if crash_point == "task_binding":
             await service.finalize_wakeup(record, job_id)
-        raise OSError("回执已提交，业务finalizer收口前退出")
+        raise native_team_failure
 
     case.fanout.bind_wakeup_finalizer(failed_finalize)
-    with pytest.raises(RuntimeError, match="目标线程调度失败"):
+    with pytest.raises(RuntimeError, match="目标线程调度失败") as caught:
         await service.assign_task(requester_session_id=SESSION, requester_thread_id=case.main,
             team_id=case.board.team_id, assignee_thread_id=child, title="原始任务", description="恢复原通知回执",
             phase="test", cycle=1, depends_on_task_ids=[], start_assignee=True)
@@ -649,6 +656,17 @@ async def test_original_wakeup_receipt_recovers_without_second_admission_or_job(
     assert original.wakeup_receipt_json is not None and original.state == "pending"
     original_task = case.store.get(SESSION, case.board.team_id).tasks[0]
     assert original_task.status == "failed"
+    assert caught.value.__cause__ is native_team_failure
+    assert original_task.error == str(caught.value)
+    assert native_team_failure.filename not in original_task.error
+    assert all(value in original_task.error for value in (
+        SESSION, case.board.team_id, original_task.task_id, "stage=task_dispatch", "PermissionError", "errno=13",
+    ))
+    visible = await service.get_board(requester_session_id=SESSION, requester_thread_id=case.main, team_id=case.board.team_id)
+    assert "private" not in visible.model_dump_json()
+    with closing(SessionControlStore(case.control.database_path, read_only=True)) as cold:
+        assert "private" not in "\n".join(cold.connection.iterdump())
+    assert any(record.exc_info and record.exc_info[1] is native_team_failure for record in caplog.records)
     await service._boards.set_task_dispatch_failure(session_id=SESSION, team_id=case.board.team_id,
         task_id=original_task.task_id, actor_thread_id=case.main, error="同一原操作再次未收口")
     # 超过展示页的无关任务事件不能抹掉原任务 dispatch_failed 的恢复因果。
@@ -679,6 +697,57 @@ async def test_original_wakeup_receipt_recovers_without_second_admission_or_job(
             assert connection.execute("SELECT count(*) FROM executions").fetchone()[0] == 1
     finally:
         await recovered.stop()
+
+
+@pytest.mark.asyncio
+async def test_recipient_native_failure_retains_pending_identity_and_recovers_only_failed_recipient(
+    team_case, native_team_failure, monkeypatch, caplog,
+):
+    case = team_case
+    child = await create_member(case, "native-failure")
+    await case.fanout.reconcile(SESSION)
+    revision = await commit_board(case, name="固定失败与恢复身份")
+    original = case.control.get_collaboration_fanout(revision)
+    receive = case.saver.receive_team_source_observation
+    calls = Counter()
+
+    def fail_one(session_id, thread_id, **kwargs):
+        calls[thread_id] += 1
+        if thread_id == child:
+            raise native_team_failure
+        receive(session_id, thread_id, **kwargs)
+
+    with monkeypatch.context() as fault:
+        fault.setattr(case.saver, "receive_team_source_observation", fail_one)
+        with pytest.raises(ExceptionGroup) as caught:
+            await case.fanout.reconcile(SESSION)
+    assert caught.value.exceptions == (native_team_failure,)
+    failed = case.control.get_collaboration_fanout(revision)
+    recipient = next(item for item in failed.recipients if item.thread_id == child)
+    assert recipient.state == "pending"
+    assert native_team_failure.filename not in recipient.error
+    assert all(value in recipient.error for value in (
+        SESSION, child, f"ledger_revision={revision}", "stage=recipient_delivery", "PermissionError", "errno=13",
+    ))
+    with closing(SessionControlStore(case.control.database_path, read_only=True)) as cold:
+        assert cold.get_collaboration_fanout(revision) == failed
+        assert "private" not in "\n".join(cold.connection.iterdump())
+    assert any(record.exc_info and record.exc_info[1] is native_team_failure for record in caplog.records)
+    assert next(item for item in failed.recipients if item.thread_id == case.main).state == "delivered"
+    assert {thread for thread in (case.main, child) if any(row[0] == revision for row in observation_rows(case, thread))} == {case.main}
+
+    def retry(session_id, thread_id, **kwargs):
+        calls[thread_id] += 1
+        receive(session_id, thread_id, **kwargs)
+
+    with monkeypatch.context() as retrying:
+        retrying.setattr(case.saver, "receive_team_source_observation", retry)
+        await case.fanout.reconcile(SESSION)
+    finished = case.control.get_collaboration_fanout(revision)
+    assert (finished.lease_id, finished.payload_json, finished.event_hash) == (original.lease_id, original.payload_json, original.event_hash)
+    assert finished.state == "completed" and all(item.state == "delivered" and item.error is None for item in finished.recipients)
+    assert calls == Counter({child: 2, case.main: 1})
+    assert all(sum(row[0] == revision for row in observation_rows(case, thread)) == 1 for thread in (case.main, child))
 
 
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 
 from app.abstractions.session_subagent import (
     OwnerThreadCreationFactoryProtocol,
@@ -24,6 +25,8 @@ from app.schemas.internal_v2.team import (
 from .board_manager import TeamBoardManager
 from .messages import trusted_team_context
 from .rules import find_task, require_active_member, required_text
+
+logger = logging.getLogger(__name__)
 
 
 class TeamCoordinationService:
@@ -91,11 +94,20 @@ class TeamCoordinationService:
             try:
                 job_id = await self._fanout.dispatch(requester_session_id, revision)
             except Exception as error:
+                detail = (
+                    f"团队任务已记录，目标线程调度失败: session_id={requester_session_id}, "
+                    f"team_id={team_id}, task_id={task.task_id}, "
+                    f"stage=task_dispatch, error={type(error).__name__}"
+                )
+                for name in ("errno", "winerror", "sqlite_errorcode"):
+                    if isinstance(code := getattr(error, name, None), int):
+                        detail += f", {name}={code}"
+                logger.error("%s；完整诊断见异常链", detail, exc_info=error)
                 await self._boards.set_task_dispatch_failure(
                     session_id=requester_session_id, team_id=team_id, task_id=task.task_id,
-                    actor_thread_id=requester_thread_id, error=str(error),
+                    actor_thread_id=requester_thread_id, error=detail,
                 )
-                raise RuntimeError(f"团队任务已记录，目标线程调度失败: team_id={team_id} task_id={task.task_id}: {error}") from error
+                raise RuntimeError(detail) from error
             board = self._boards.get_for_coordinator(session_id=requester_session_id, thread_id=requester_thread_id, team_id=team_id)
             task = find_task(board, task.task_id)
         return TeamTaskOperationDTO(board=board, task=task, dispatched_job_id=job_id)

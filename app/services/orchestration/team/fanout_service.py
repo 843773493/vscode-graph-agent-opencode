@@ -203,9 +203,18 @@ class TeamFanoutService:
                 except (SessionDeletionPendingError, NotFoundError):
                     control.finish_collaboration_delivery(record.ledger_revision, recipient.thread_id,
                                                           fencing_token=lease.fencing_token, outcome="fence_closed")
-                except Exception as error:  # noqa: BLE001 - 记录部分失败后继续其它 recipient，最终原样聚合抛出
+                except Exception as error:  # 记录部分失败后继续其它 recipient，最终原样聚合抛出
+                    detail = (
+                        f"collaboration 投递失败: session_id={session_id}, "
+                        f"thread_id={recipient.thread_id}, ledger_revision={record.ledger_revision}, "
+                        f"stage=recipient_delivery, error={type(error).__name__}"
+                    )
+                    for name in ("errno", "winerror", "sqlite_errorcode"):
+                        if isinstance(code := getattr(error, name, None), int):
+                            detail += f", {name}={code}"
+                    logger.error("%s；完整诊断见异常链", detail, exc_info=error)
                     control.record_collaboration_delivery_failure(record.ledger_revision, recipient.thread_id,
-                                                                  fencing_token=lease.fencing_token, error=f"{type(error).__name__}: {error}")
+                                                                  fencing_token=lease.fencing_token, error=detail)
                     failures.append(error)
             if record.wakeup_json is None and all(item.state != "pending" for item in control.get_collaboration_fanout(record.ledger_revision).recipients):
                 control.finish_collaboration_fanout(record.ledger_revision, fencing_token=lease.fencing_token,
