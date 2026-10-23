@@ -141,7 +141,9 @@ export function useTurnBootstrap({
         };
       }
       const timeline = shouldLoadInitialHistory
-        ? createSessionTurnTimeline(sessionCacheKey)
+        // 重建历史窗口不能清空同一 Session 已确认的不可变 owner，否则跳转控件会重挂载。
+        ? { ...createSessionTurnTimeline(sessionCacheKey),
+            threadId: timelineForScope(previous.turnTimelinesBySession, sessionCacheKey).threadId }
         : isNewScope && !hasVisitedScope
           ? createSessionTurnTimeline(sessionCacheKey)
           : timelineForScope(previous.turnTimelinesBySession, sessionCacheKey);

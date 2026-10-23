@@ -2664,14 +2664,24 @@ async function assertTranscriptDom(owner, history, stage, { onTurn = null, navig
           activeSessionIds: [...document.querySelectorAll('.session-item.active[data-session-id]')]
             .slice(0, 8).map((element) => element.getAttribute("data-session-id")),
           shell: shell ? { sessionId: shell.getAttribute("data-owner-session-id"), firstItemIndex: shell.getAttribute("data-first-item-index"),
+            threadId: shell.getAttribute("data-owner-thread-id"),
             firstTurnId: shell.getAttribute("data-first-turn-id"), turnCount: shell.getAttribute("data-turn-count"),
             transcriptItemCount: shell.getAttribute("data-transcript-item-count") } : null,
+          navigation: (() => {
+            const form = document.querySelector('form[aria-label="跳到指定轮次"]');
+            return form ? { input: form.querySelector("input")?.value,
+              status: form.querySelector('[role="status"]')?.textContent,
+              error: form.querySelector('[role="alert"]')?.textContent } : null;
+          })(),
+          viewport: scroller ? { scrollTop: scroller.scrollTop, scrollHeight: scroller.scrollHeight,
+            clientHeight: scroller.clientHeight, top: viewport.top, bottom: viewport.bottom } : null,
           renderedCount: cells.length,
           cells: cells.slice(0, 64).map((cell) => {
             const turn = cell.querySelector(".chat-turn");
             const display = cell.querySelector(".chat-internal-execution-display");
             const bounds = cell.getBoundingClientRect();
             return { index: cell.getAttribute("data-index"), itemIndex: cell.getAttribute("data-item-index"),
+              top: bounds.top, bottom: bounds.bottom, ariaCurrent: cell.getAttribute("aria-current"),
               visible: Boolean(viewport && bounds.bottom > viewport.top && bounds.top < viewport.bottom),
               turnId: turn?.getAttribute("data-turn-id") ?? null, rootLogicalItemOrdinal: turn?.getAttribute("data-root-logical-item-ordinal") ?? null,
               internalText: display?.querySelector(".chat-internal-execution-text")?.textContent?.slice(0, 300) ?? null };
@@ -11493,7 +11503,7 @@ try {
   // TODO: 按完整default测量继续定位driver内存增长；释放响应尚未证明解决target detach时的OOM。
   const diagnostics = {};
   for (const [name, value] of Object.entries({ ...result.diagnostics,
-    conflictResponses, historyErrorResponses, lifecycleErrorResponses, lifecycleDeletionProofs,
+    conflictResponses, historyErrorResponses, lifecycleErrorResponses, lifecycleDeletionProofs, transcriptDomFailures,
   })) {
     if (Array.isArray(value)) {
       const file = `${resultPath}.${name}.jsonl`;

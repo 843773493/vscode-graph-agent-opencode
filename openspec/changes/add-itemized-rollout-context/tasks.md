@@ -1061,3 +1061,8 @@ pending 恢复的硬错误重试已闭合（2026-10-22）：进程内装载阶�
 
 - Thread creation 的唯一 before_publish 边界按原 owner/阶段处理 OSError，保留异常类型、errno/winerror 与原 cause；持久 abort reason 只记录 Session/Thread、fork_materialize 阶段和错误类别。领域 RuntimeError 仍按原对象抛出，完整原错归诊断日志；清理、aborted 终态及同键重放顺序不变，未改 schema 或新增 writer。
 - 固定完整 tree `86698f3fb2dd1e4cb36eb6a158ddf0d5bf96e73e`：新增六例通过（55.44秒），覆盖 POSIX、Windows 盘符与 UNC 字符串分别进入原生/领域错误，核 creation/capture 中止、目录清理、冷 control 记录及原来源字节不变；相邻恢复26例通过（244.98秒），包含 partial capture、损坏 proof 拒绝和合法中止。旧生产完整 archive 的相同六例全部失败；Ruff/compileall exit0，源码前后指纹相同且进程组零残留。只读非作者审查无 actionable finding，未独立跑测试。准确命令、raw、退出码和限定证明见 `out/tests/temp/fork_materialization_errors_20261023/artifacts/validation-proof-003.json`。不代表 OS 重启、完整 Web 或 Windows 实机；2.2/7.2、8.3 等总门保持未勾。
+
+### 2026-10-23 历史校准保持已确认的 Thread owner
+
+- 真实 `navigation_dates` 失败原件捕获输入后控件重建、草稿被清空；同 Session 刷新重建历史窗口时改为保留该 scope 已确认的不可变 main thread ID。旧 Turn/cursor 仍清空，跨 workspace/Session 不继承 owner，后续 bootstrap 返回不同 thread 仍明确拒绝。不新增 owner 副本或兼容链；Web driver 仅补失败时 owner、输入、坐标的持久诊断，原业务断言不变。
+- 完整候选 tree `de296946521dc0c67357973945d25f827b759ee7`：两项新回归通过，旧生产完整 archive 同两项均在 owner 变 null 处失败；相邻历史/队列/控件47项及滚动定位26项通过，真实 TypeScript 与 strict OpenSpec exit0。唯一 Web owner 的 `owner-web-navigation-dates-001` 为1 passed/265.16秒、exit0，含 fixture Web build、跨 UTC 日期 Session/child/fork、活跃 main/child 目录移动与封存字节不变、live/refresh 正式 Turn 跳转、递归删除及 Backend 硬重启恢复。非作者独立复跑新回归2项通过且只读审查无 finding；全源码前后指纹一致、运行组零残留。准确命令/raw/退出码和限定证明位于 `out/tests/temp/turn_navigation_resume_20261023/artifacts/validation-proof-owner-001.json`。本条不替代完整 default、8.13/9.7 总门或 Windows 实机。
