@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import errno
 import json
 import sqlite3
@@ -10,8 +11,10 @@ from contextlib import closing
 from dataclasses import asdict
 
 import pytest
+from pydantic import ValidationError
 
 from app.core.session_control_store import SessionControlStore
+from app.services.business.communication.errors import CommunicationContractError
 from app.services.orchestration.communication.inbox_admission_worker import (
     InboxAdmissionError,
     InboxAdmissionTarget,
@@ -125,3 +128,84 @@ async def test_send_failure_keeps_safe_diagnostics_and_original_inbox_restart(
         binding.job_id, binding.execution_id, binding.turn_id,
     )
     assert len(calls) == 1
+
+
+@pytest.mark.parametrize("damage", ["extra_field", "state", "payload_hash", "target_thread"])
+async def test_invalid_target_receipt_keeps_original_send_retry_identity(
+    admission_case: tuple[_Case, _AdmissionProbe], native_path: str, damage: str,
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
+) -> None:
+    case, probe = admission_case
+    original_operation = case.transport.operation
+    requests: list[dict[str, object]] = []
+    received: list[dict[str, object]] = []
+    rejected = True
+
+    async def malformed_operation(**kwargs):
+        requests.append(copy.deepcopy(kwargs))
+        result = await original_operation(**kwargs)
+        received.append(copy.deepcopy(result))
+        if rejected:
+            if damage == "extra_field":
+                result[native_path] = "unexpected"
+            elif damage == "target_thread":
+                result["target"]["thread_id"] = native_path
+            elif damage == "payload_hash":
+                result["payload_hash"] = {native_path: "unexpected"}
+            else:
+                result["state"] = native_path
+        return result
+
+    monkeypatch.setattr(case.transport, "operation", malformed_operation)
+    operation_id = "cop_invalid_target_receipt"
+    expected_type = CommunicationContractError if damage == "target_thread" else ValueError
+    with pytest.raises(expected_type) as failed:
+        await case.send(operation_id)
+    public = str(failed.value)
+    assert native_path not in public and "private" not in public
+    original = failed.value.__cause__
+    original_type = CommunicationContractError if damage == "target_thread" else ValidationError
+    assert isinstance(original, original_type) and "private" in str(original)
+    detail = (
+        f"通信目标回执无效: session_id={case.source}, thread_id={case.source_thread}, "
+        f"communication_id={received[0]['communication_id']}, request_id=req_communication_lifecycle, "
+        f"stage=target_receipt_validation, error_type={type(original).__name__}"
+    )
+    if damage == "target_thread":
+        assert failed.value.code == original.code == "communication-target-not-main"
+        assert failed.value.detail == detail
+    else:
+        assert public == detail
+    assert any(record.exc_info and record.exc_info[1] is original for record in caplog.records)
+    with closing(case.service._store(case.source)) as store:
+        outbox = store.get_communication_outbox(operation_id)
+        lease = store.find_lease_by_operation("communication-source|" + operation_id)
+        assert outbox.state == "routing" and outbox.latest_receipt is None
+        assert lease.state == "settling"
+        assert "private" not in json.dumps(asdict(outbox))
+    communication_id = outbox.communication_id
+    async with asyncio.timeout(5):
+        while True:
+            with closing(case.service._store(case.target)) as store:
+                inbox = store.get_communication_inbox(communication_id)
+            if inbox.state == "execution_bound":
+                break
+            await asyncio.sleep(0)
+    assert list(probe.bindings) == [communication_id]
+    rejected = False
+    retry = await case.send(operation_id)
+    assert retry.model_dump(mode="json") == received[0] == received[1]
+    assert requests[0] == requests[1]
+    with closing(case.service._store(case.source)) as store:
+        recovered = store.get_communication_outbox(operation_id)
+        assert recovered.state == "target_accepted"
+        assert recovered.latest_receipt == retry.model_dump_json()
+        assert (recovered.communication_id, recovered.payload_hash, recovered.target_ref,
+                recovered.request_id, recovered.content) == (
+            outbox.communication_id, outbox.payload_hash, outbox.target_ref,
+            outbox.request_id, outbox.content,
+        )
+        assert store.get_lease(lease.lease_id).state == "completed"
+    with closing(case.service._store(case.target)) as store:
+        assert store.get_communication_inbox(communication_id) == inbox
+    assert list(probe.bindings) == [communication_id] and case.service._failure is None

@@ -17,7 +17,7 @@ import json
 from dataclasses import dataclass
 from typing import Literal
 
-from app.schemas.internal_v2.pending_request import DeliveryPolicy
+from app.domain.itemized.execution_queue import DeliveryPolicy
 from app.services.business.communication.addresses import (
     GlobalThreadAddress,
     ResolvedMainTargetBinding,

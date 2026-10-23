@@ -11,6 +11,8 @@ from dataclasses import asdict
 from datetime import datetime
 from typing import cast
 
+from pydantic import ValidationError
+
 from app.core.key_lock_pool import KeyLockPool
 from app.core.phase_observer import observe_phase
 from app.core.session_control_primitives import CONTROL_DATABASE_NAME
@@ -42,6 +44,7 @@ from app.services.business.communication.addresses import (
     ResolvedMainTargetBinding,
 )
 from app.services.business.communication.admission import CommunicationPayload
+from app.services.business.communication.errors import CommunicationContractError
 from app.services.business.communication.ledger import CommunicationLedgerService
 from app.services.business.communication.wait import (
     DeadlineTimer,
@@ -169,7 +172,18 @@ class SessionCommunicationService:
                     operation="reply" if payload.kind == "reply" else "send", target=target,
                     body=acceptance.model_dump(mode="json"),
                 )
-                receipt = CommunicationReceipt.model_validate(data)
+                try:
+                    receipt = CommunicationReceipt.model_validate(data)
+                except (ValidationError, CommunicationContractError) as error:
+                    detail = (
+                        f"通信目标回执无效: session_id={session_id}, thread_id={thread_id}, "
+                        f"communication_id={communication_id}, request_id={outbox.request_id}, "
+                        f"stage=target_receipt_validation, error_type={type(error).__name__}"
+                    )
+                    logger.error("%s；完整诊断见异常链", detail, exc_info=error)
+                    if isinstance(error, CommunicationContractError):
+                        raise CommunicationContractError(error.code, detail) from error
+                    raise ValueError(detail) from error
                 if (receipt.communication_id, receipt.source, receipt.target, receipt.payload_hash) != (
                     communication_id, source, target, outbox.payload_hash,
                 ):

@@ -31,6 +31,7 @@ def wait_body() -> dict[str, object]:
         "page_ordinal": 0,
         "expires_at": (admitted + timedelta(days=1)).isoformat().replace("+00:00", "Z"),
         "operation": "wait",
+        "terminal_replay": False,
         "source": asdict(
             GlobalThreadAddress(
                 "gateway_source", WORKSPACE_ID, SOURCE_SESSION, SOURCE_THREAD
