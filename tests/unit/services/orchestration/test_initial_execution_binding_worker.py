@@ -142,7 +142,7 @@ def test_partial_round_failure_keeps_other_binding_and_cold_next_round_recovers(
 
     worker = make_worker(store, binder=partial)
     worker.start()
-    with pytest.raises(InitialExecutionBindingError, match="首项暂时无法绑定"):
+    with pytest.raises(InitialExecutionBindingError, match="error=RuntimeError"):
         worker.bind_pending_once()
     assert seen == ["key-1", "key-2"]
     assert store.get_initial_execution_intent("key-1").state == "pending"
@@ -218,7 +218,7 @@ def test_bind_success_marks_bound(store: SessionControlStore) -> None:
 
 
 def test_binder_exception_recorded_and_raised(
-    store: SessionControlStore,
+    store: SessionControlStore, caplog: pytest.LogCaptureFixture,
 ) -> None:
     """binder 异常 → last_error 记录、intent 保持 pending、显式抛出。"""
     prepare_published_intent(store)
@@ -230,11 +230,14 @@ def test_binder_exception_recorded_and_raised(
 
     worker = make_worker(store, binder=failing_binder)
     worker.start()
-    with pytest.raises(InitialExecutionBindingError, match="binder boom"):
+    with pytest.raises(InitialExecutionBindingError, match="error=RuntimeError"):
         worker.bind_pending_once()
     intent = store.get_initial_execution_intent("key-1")
     assert intent.state == "pending"
-    assert "binder boom" in str(intent.last_error)
+    assert "binder boom" not in str(intent.last_error)
+    assert "error=RuntimeError" in str(intent.last_error)
+    assert "binder boom: graph unavailable" in caplog.text
+    assert any(record.exc_info and isinstance(record.exc_info[1], RuntimeError) for record in caplog.records)
     assert intent.claim_owner == "worker-a"
     # 同 claim 幂等重入恢复：binder 成功后完成绑定。
     recovered = make_worker(store)

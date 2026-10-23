@@ -7,6 +7,7 @@ Job；claim 与 bound 状态由唯一 store 管理。失败保留 pending 与 la
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Protocol
@@ -17,6 +18,8 @@ from app.core.session_control_store import (
     SessionControlStore,
     ThreadExecutionIntent,
 )
+
+logger = logging.getLogger(__name__)
 
 __all__ = [
     "InitialExecutionBindOutcome",
@@ -172,9 +175,7 @@ class InitialExecutionBindingWorker:
             attempt = self._consume_one(intent, binder)
             attempts.append(attempt)
             if attempt.error is not None:
-                failures.append(
-                    f"{intent.admission_idempotency_key}: {attempt.error}"
-                )
+                failures.append(attempt.error)
         if failures:
             raise InitialExecutionBindingError(failures)
         return tuple(attempts)
@@ -221,26 +222,26 @@ class InitialExecutionBindingWorker:
             outcome = binder(target)
         except Exception as error:  # noqa: BLE001 —— 记录后显式暴露
             return self._record_failure(
-                key, f"{type(error).__name__}: {error}", claim_kwargs
+                intent, "binder 异常", error=error,
             )
         if not isinstance(outcome, InitialExecutionBindOutcome):
             return self._record_failure(
-                key,
+                intent,
                 f"binder 返回类型非法: {type(outcome).__name__}",
-                claim_kwargs,
+                actual=outcome,
             )
         if (
             outcome.execution_binding_id != intent.execution_binding_id
             or outcome.job_id != intent.job_id
         ):
             return self._record_failure(
-                key,
+                intent,
                 "binder 返回 identity 与冻结值漂移: "
-                f"expected=({intent.execution_binding_id!r}, "
-                f"{intent.job_id!r}), "
-                f"actual=({outcome.execution_binding_id!r}, "
-                f"{outcome.job_id!r})",
-                claim_kwargs,
+                "fields=" + ",".join(
+                    field for field in ("execution_binding_id", "job_id")
+                    if getattr(outcome, field) != getattr(intent, field)
+                ),
+                actual=outcome,
             )
         observe_phase_sync(key, "thread.initial.admitted_before_bound", details={
             "session_id": intent.session_id, "thread_id": intent.thread_id,
@@ -260,19 +261,35 @@ class InitialExecutionBindingWorker:
 
     def _record_failure(
         self,
-        admission_idempotency_key: str,
-        message: str,
-        claim_kwargs: dict[str, object],
+        intent: ThreadExecutionIntent,
+        reason: str,
+        *,
+        error: Exception | None = None,
+        actual: object = None,
     ) -> InitialExecutionBindingAttempt:
         """写 ``last_error``（intent 保持 pending 可恢复）并返回失败
         attempt；调用方在本轮结束时统一显式抛出。"""
+        # 持久记录只含冻结身份与错误类别；原始异常链和非法返回值留在诊断日志。
+        message = (
+            f"session_id={intent.session_id}, thread_id={intent.thread_id}, "
+            f"execution_binding_id={intent.execution_binding_id}, job_id={intent.job_id}, "
+            f"stage=initial_execution_binding: {reason}"
+        )
+        if error is not None:
+            message += f", error={type(error).__name__}"
+            for name in ("errno", "winerror", "sqlite_errorcode"):
+                code = getattr(error, name, None)
+                if isinstance(code, int):
+                    message += f", {name}={code}"
+        logger.error("初始执行绑定失败: %s; actual=%r", message, actual, exc_info=error)
         self._store.record_initial_execution_failure(
-            admission_idempotency_key,
+            intent.admission_idempotency_key,
             last_error=message,
-            **claim_kwargs,  # type: ignore[arg-type]
+            claim_owner=self._claim_owner,
+            claim_generation=self._claim_generation,
         )
         return InitialExecutionBindingAttempt(
-            admission_idempotency_key=admission_idempotency_key,
+            admission_idempotency_key=intent.admission_idempotency_key,
             outcome="error",
             error=message,
         )
