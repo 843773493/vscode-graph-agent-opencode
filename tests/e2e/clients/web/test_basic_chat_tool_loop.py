@@ -396,6 +396,15 @@ async def test_basic_chat_tool_loop_through_real_web_surface(
         assert isinstance(selected, list)
         assert result["focusedScenarios"] == requested
         assert set(result["section8"]) == set(selected)
+        if "lifecycle_admission_deletion" in selected:
+            cold = result["section8"]["lifecycle_admission_deletion"]["cold"]
+            assert cold["guarded"]["phase"] == "history.read.guarded"
+            assert cold["deleting"]["phase"] == "deletion.catalog_deleting"
+            assert cold["deleting"]["at"] >= cold["guarded"]["at"]
+            assert cold["metadata"][0]["state"] == "deleting"
+            assert cold["fenceBeforeReadCompleted"] == [{"state": "active", "generation": 1}]
+            assert cold["history"]["thread_id"] == cold["guarded"]["details"]["thread_id"]
+            assert cold["journal"]["state"] == "completed"
         captures = {}
         for path in sorted((artifacts / "model-stream").glob("*.json")):
             capture = json.loads(path.read_text(encoding="utf-8"))

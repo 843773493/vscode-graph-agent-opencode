@@ -3843,17 +3843,20 @@ async function runLifecycleAdmissionDeletion(surfaces) {
     const deletion = await prepareDelete(reader);
     const guard = await armMatch(reader, "history.read.guarded", { thread_id: reader.threadId, kind: "history" });
     const reading = loadThreadHistory(reader);
-    await ack(guard);
+    const guarded = await ack(guard);
     await enqueueNavigationIntent(reader, deletion.operation);
-    assert.deepEqual(await readCatalog(reader, "SELECT state FROM nodes WHERE node_id=?", [reader.sessionId]), [{ state: "active" }], "cold reader shared guard 必须阻止 catalog deleting 线性化");
-    assert.ok(!(await testControl({ action: "events" })).some((event) => event.operation_id === deletion.operation.operationId && event.phase === "deletion.catalog_deleting"));
-    await release(guard);
-    const history = await reading;
+    // Session guard 覆盖原读取；topology 已释放，删除应先关闭新的 catalog 准入。
     await ack(deletion.barrier);
     await pendingCatalog(reader);
-    assert.equal((await testControl({ action: "events" })).filter((event) => event.phase === "agent.graph.compiled" && event.details?.session_id === reader.sessionId).length, 0, "cold history 不得构建 Agent graph");
     const pending = await deniedHistory(reader);
     const metadata = await readCatalog(reader, "SELECT * FROM nodes WHERE node_id=?", [reader.sessionId]);
+    const fenceBeforeReadCompleted = await readFrozenControl(reader, readerNode, "SELECT state,generation FROM lifecycle_fence WHERE id=1");
+    assert.deepEqual(fenceBeforeReadCompleted, [{ state: "active", generation: 1 }]);
+    const deleting = (await testControl({ action: "events" })).find((event) => event.operation_id === deletion.operation.operationId && event.phase === "deletion.catalog_deleting");
+    assert.ok(deleting.at >= guarded.at, "原 reader 尚持 guard 时，catalog 删除已提交");
+    await release(guard);
+    const history = await reading;
+    assert.equal((await testControl({ action: "events" })).filter((event) => event.phase === "agent.graph.compiled" && event.details?.session_id === reader.sessionId).length, 0, "cold history 不得构建 Agent graph");
     assert.equal(metadata.length, 1);
     assert.equal(metadata[0].state, "deleting");
     assert.deepEqual(await readFrozenControl(reader, readerNode, "SELECT state,generation FROM lifecycle_fence WHERE id=1"), [{ state: "active", generation: 1 }]);
@@ -3873,7 +3876,7 @@ async function runLifecycleAdmissionDeletion(surfaces) {
     const journal = (await readCatalog(reader, "SELECT * FROM subtree_delete_records WHERE subtree_delete_idempotency_key=?", [deletion.operation.operationId]))[0];
     assert.equal(journal.state, "completed");
     assert.equal((await readCatalog(reader, "SELECT COUNT(*) AS count FROM navigation_mutation_records WHERE operation_id=?", [deletion.operation.operationId]))[0].count, 1);
-    facts.cold = { readerNode, history, pending, metadata, killed, restarted, terminal, journal };
+    facts.cold = { readerNode, guarded, deleting, fenceBeforeReadCompleted, history, pending, metadata, killed, restarted, terminal, journal };
     return facts;
   } finally {
     for (const barrier of matches) await release(barrier);

@@ -287,7 +287,7 @@ Session Trace 的历史与 SSE 入口 SHALL 默认保留 Session 诊断聚合范
 #### Scenario: Session 删除与新副作用在 Web E2E 中线性化
 
 - **WHEN**E2E用外置barrier分别让child发布、team fanout、target inbox/execution binding及独立`skill_load`/ToolSet control与同一Session删除竞争，并在workspace catalog已deleting但部分local fence仍active的故障点重启backend
-- **THEN**操作先行时只存在捕获旧generation的可恢复lease且删除等待terminal；删除先行时没有新thread/context/inbox/ambient/wakeup/Job/attachment副作用。已开始且持有shared `SessionReadGuard`的cold history阻塞删除取得topology exclusive并提交catalog deleting，reader完成后删除才线性化；catalog已deleting但部分local fence仍active的崩溃恢复窗口只允许catalog metadata观察，新的thread history/detail和mutation明确`session_deletion_pending`。删除排空期间不持gate，受许可旧lease可短时重取gate完成settlement，随后继续同一删除且不重新active或接受late callback
+- **THEN**操作先行时只存在捕获旧generation的可恢复lease且删除等待terminal；删除先行时没有新thread/context/inbox/ambient/wakeup/Job/attachment副作用。cold history在topology shared内取得shared `SessionReadGuard`后立即释放topology，原reader尚未完成时删除即可提交catalog deleting并拒绝新reader；已开始的reader可完成，删除等待其guard及全部handle关闭后才关闭local fence并隔离目录；catalog已deleting但部分local fence仍active的崩溃恢复窗口只允许catalog metadata观察，新的thread history/detail和mutation明确`session_deletion_pending`。删除排空期间不持gate，受许可旧lease可短时重取gate完成settlement，随后继续同一删除且不重新active或接受late callback
 - **AND**target read/wait在建立`RemoteObservationRecord`前同样竞争gate；删除先行时无snapshot/baseline/subscription，observation先行时删除返回明确target-deleted或完成原冻结结果并等待lease terminal。catalog tombstone后普通resolver不可打开隔离节点，但source丢失response后可在恢复窗口内以同一source call和新授权定点取得相同terminal envelope；窗口结束才物理清理并明确`operation-retry-expired`，不因最长300秒wait遗失恢复事实或静默重开
 
 #### Scenario: Web E2E 验证 copy 的 source snapshot 与删除竞态
