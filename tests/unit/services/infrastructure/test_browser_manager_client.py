@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from io import BytesIO
 from typing import Self
 from unittest.mock import Mock, patch
@@ -165,6 +166,84 @@ def test_browser_backend_url_is_resolved_from_current_config_snapshot() -> None:
         "http://browser-a/api/browsers",
         "http://browser-b/api/browsers",
     ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation, data, stage", [
+    ("list", "/private/browser", "list.data"),
+    ("list", ["/private/browser"], "list.data"),
+    ("grant", "/private/browser", "record.data"),
+])
+async def test_malformed_list_and_grant_fail_at_protocol_boundary(
+    browser_manager_client: BrowserManagerClient, monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture, operation: str, data: object, stage: str,
+) -> None:
+    response = {"data": data}
+    monkeypatch.setattr(
+        "app.services.infrastructure.browser_manager_client.urlopen",
+        lambda *_args, **_kwargs: BytesIO(json.dumps(response).encode()),
+    )
+    with caplog.at_level(logging.ERROR), pytest.raises(TypeError) as caught:
+        if operation == "list":
+            await browser_manager_client.list_resources()
+        else:
+            await browser_manager_client.issue_transport_grant("browser_1", owner_revision=1, association=None)
+    assert str(caught.value) == f"浏览器管理器响应协议错误: stage={stage}；请查看工作区浏览器服务日志"
+    assert any(isinstance(record.args, tuple) and record.args[-1] == response for record in caplog.records)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("url", ["file:///private/page.html", "file:///C:/Users/owner/page.html", "file://server/share/page.html"])
+async def test_valid_local_page_url_survives_the_same_response_decoder(
+    browser_manager_client: BrowserManagerClient, monkeypatch: pytest.MonkeyPatch, url: str,
+) -> None:
+    record = {
+        "browser_id": "browser_1", "page_id": "page_1", "workspace_id": WORKSPACE_ID,
+        "status": "running", "transport_owner_revision": 1, "reconciliation_status": "verified",
+        "url": url, "pages": [{"page_id": "page_1", "url": url, "active": True}],
+    }
+    monkeypatch.setattr(
+        "app.services.infrastructure.browser_manager_client.urlopen",
+        lambda *_args, **_kwargs: _JsonResponse({"data": record}),
+    )
+    assert await browser_manager_client.get_resource("browser_1") == record
+
+
+@pytest.fixture
+def revision_receipt() -> dict[str, object]:
+    return {
+        "browser_id": "browser_1", "page_id": "page_1", "workspace_id": WORKSPACE_ID,
+        "status": "running", "transport_owner_revision": 2, "reconciliation_status": "verified",
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("field, value", [
+    ("browser_id", "browser_other"), ("workspace_id", "00000000-0000-4000-8000-000000000002"),
+    ("transport_owner_revision", 1), ("transport_owner_revision", 3),
+])
+async def test_revision_sync_rejects_a_snapshot_for_another_identity_or_version(
+    browser_manager_client: BrowserManagerClient, revision_receipt: dict[str, object],
+    monkeypatch: pytest.MonkeyPatch, field: str, value: object,
+) -> None:
+    revision_receipt[field] = value
+    monkeypatch.setattr(
+        "app.services.infrastructure.browser_manager_client.urlopen",
+        lambda *_args, **_kwargs: _JsonResponse({"data": revision_receipt}),
+    )
+    with pytest.raises(TypeError, match="stage=owner_revision.receipt"):
+        await browser_manager_client.sync_owner_revision("browser_1", 2)
+
+
+@pytest.mark.asyncio
+async def test_revision_sync_consumes_the_complete_successful_snapshot(
+    browser_manager_client: BrowserManagerClient, revision_receipt: dict[str, object], monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "app.services.infrastructure.browser_manager_client.urlopen",
+        lambda *_args, **_kwargs: _JsonResponse({"data": revision_receipt}),
+    )
+    await browser_manager_client.sync_owner_revision("browser_1", 2)
 
 
 @pytest.mark.asyncio

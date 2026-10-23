@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
@@ -14,6 +15,7 @@ from app.services.infrastructure.config_service import ConfigService
 DEFAULT_BROWSER_BACKEND_URL = "http://127.0.0.1:8015"
 DEFAULT_BROWSER_REQUEST_TIMEOUT_SECONDS = 30
 BROWSER_RUN_REQUEST_GRACE_SECONDS = 10
+logger = logging.getLogger(__name__)
 _ACTION_METHODS = {
     "read": "GET", "navigate": "POST", "click": "POST", "hover": "POST", "type": "POST",
     "drag": "POST", "dialog": "POST", "screenshot": "POST", "run": "POST",
@@ -68,7 +70,7 @@ class BrowserManagerClient:
         response = await self._json_request("GET", "/api/browsers")
         data = response.get("data")
         if not isinstance(data, list) or any(not isinstance(item, dict) for item in data):
-            raise TypeError(f"Browser 运行列表格式错误: {response}")
+            raise self._protocol_error("list.data", response)
         return [self._normalize_browser_record(item) for item in data]
 
     async def perform(
@@ -97,15 +99,21 @@ class BrowserManagerClient:
         return self._normalize_browser_record_envelope(delete_receipt)
 
     async def sync_owner_revision(self, browser_id: str, owner_revision: int) -> None:
-        await self._request_data("POST", f"/api/browsers/{browser_id}/owner-revision",
-                                 {"owner_revision": owner_revision})
+        data = await self._request_data("POST", f"/api/browsers/{browser_id}/owner-revision",
+                                        {"owner_revision": owner_revision})
+        browser = self._normalize_browser_record(data)
+        if (
+            browser["browser_id"] != browser_id or browser["workspace_id"] != self._workspace_id
+            or browser["transport_owner_revision"] != owner_revision
+        ):
+            raise self._protocol_error("owner_revision.receipt", data)
 
     async def issue_transport_grant(
         self, browser_id: str, *, owner_revision: int, association: str | None,
     ) -> dict[str, object]:
         path = f"/api/browsers/{browser_id}/transport-grant"
         try:
-            return await self._request_data(
+            grant = await self._request_data(
                 "POST", path, {"owner_revision": owner_revision, "association": association},
             )
         except BrowserRequestError as error:
@@ -135,17 +143,27 @@ class BrowserManagerClient:
             ):
                 raise
             raise ResourceTransportGrantRejected(message, snapshot=browser_record) from error
+        if (
+            grant.get("resource_id") != browser_id
+            or type(grant.get("owner_revision")) is not int
+            or grant["owner_revision"] != owner_revision
+            or any(not isinstance(grant.get(key), str) or not grant[key] for key in ("grant_token", "expires_at"))
+        ):
+            raise self._protocol_error("grant.receipt", grant)
+        return grant
 
-    @staticmethod
-    def _normalize_browser_record(data: dict[str, object]) -> dict[str, object]:
-        return browser_page_to_json(browser_page_to_proto(data))
+    def _normalize_browser_record(self, data: dict[str, object]) -> dict[str, object]:
+        try:
+            return browser_page_to_json(browser_page_to_proto(data))
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise self._protocol_error("browser", data, cause=exc) from exc
 
     def _normalize_browser_record_envelope(
         self, data: dict[str, object]
     ) -> dict[str, object]:
         browser = data.get("browser")
         if not isinstance(browser, dict):
-            raise TypeError("Browser 操作回执缺少 browser")
+            raise self._protocol_error("envelope.browser", data)
         return {**data, "browser": self._normalize_browser_record(browser)}
 
     async def _request_data(
@@ -155,8 +173,20 @@ class BrowserManagerClient:
         response = await self._json_request(method, path, payload, actor=actor)
         data = response.get("data")
         if not isinstance(data, dict):
-            raise TypeError(f"Browser 管理器返回格式错误: {response}")
+            raise self._protocol_error("record.data", response)
         return data
+
+    @staticmethod
+    def _protocol_error(
+        stage: str, response: object, *, cause: Exception | None = None,
+    ) -> TypeError | ValueError | OverflowError:
+        logger.error("Browser 传输响应协议错误: stage=%s response=%r", stage, response, exc_info=cause)
+        message = f"浏览器管理器响应协议错误: stage={stage}；请查看工作区浏览器服务日志"
+        if isinstance(cause, ValueError):
+            return ValueError(message)
+        if isinstance(cause, OverflowError):
+            return OverflowError(message)
+        return TypeError(message)
 
     async def _json_request(
         self,
@@ -226,9 +256,13 @@ class BrowserManagerClient:
                 request,
                 timeout=self._request_timeout_seconds(method, path, payload),
             ) as response:
-                return json.loads(response.read().decode("utf-8"))
+                response_body = response.read()
         except HTTPError as exc:
             detail = exc.read().decode("utf-8", errors="replace")
+            logger.exception(
+                "Browser 传输 HTTP 请求失败: method=%s path=%s status=%s response=%s",
+                method, path, exc.code, detail,
+            )
             try:
                 error_payload = json.loads(detail)
             except json.JSONDecodeError:
@@ -241,8 +275,15 @@ class BrowserManagerClient:
                     payload=error_payload,
                 ) from exc
             raise RuntimeError(
-                f"浏览器管理器请求失败: method={method}, path={path}, status={exc.code}, detail={detail}"
+                f"浏览器管理器请求失败: method={method}, status={exc.code}；请查看工作区浏览器服务日志"
             ) from exc
+        try:
+            result = json.loads(response_body.decode("utf-8"))
+        except ValueError as exc:
+            raise self._protocol_error("json", response_body, cause=exc) from exc
+        if not isinstance(result, dict):
+            raise self._protocol_error("response", result)
+        return result
 
     @staticmethod
     def _request_timeout_seconds(
