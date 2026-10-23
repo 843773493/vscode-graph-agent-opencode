@@ -24,7 +24,9 @@ from app.schemas.internal_v2.workspace_file_operations import (
 )
 from app.services.infrastructure import workspace_service as workspace_service_module
 from app.services.infrastructure.config_service import ConfigService
-from app.services.infrastructure.workspace_files import runtime as workspace_file_runtime
+from app.services.infrastructure.workspace_files import (
+    runtime as workspace_file_runtime,
+)
 from app.services.infrastructure.workspace_files import text_publication
 from app.services.infrastructure.workspace_service import (
     WorkspaceFileConflictError,
@@ -249,7 +251,7 @@ async def test_update_file_content_rejects_symlink(
     assert target.read_text(encoding="utf-8") == "target\n"
 
 
-def test_resolve_raw_file_returns_safe_path_and_media_type(
+def test_prepare_raw_download_returns_safe_path_and_media_type(
     workspace_service: WorkspaceService,
     tmp_path: Path,
 ) -> None:
@@ -257,19 +259,20 @@ def test_resolve_raw_file_returns_safe_path_and_media_type(
     target.parent.mkdir()
     target.write_text('<svg xmlns="http://www.w3.org/2000/svg"/>', encoding="utf-8")
 
-    resolved_path, media_type = workspace_service.resolve_raw_file(
-        path="asset/diagram.svg"
+    download = workspace_service.prepare_file_download(
+        path="asset/diagram.svg", archive_directory=False,
     )
 
-    assert resolved_path == target
-    assert media_type == "image/svg+xml"
+    assert download.path == target
+    assert download.media_type == "image/svg+xml"
+    assert download.metadata == target.stat()
 
 
-def test_resolve_raw_file_rejects_path_outside_workspace(
+def test_prepare_raw_download_rejects_path_outside_workspace(
     workspace_service: WorkspaceService,
 ) -> None:
     with pytest.raises(ForbiddenError):
-        workspace_service.resolve_raw_file(path="../secret.png")
+        workspace_service.prepare_file_download(path="../secret.png", archive_directory=False)
 
 
 @pytest.mark.asyncio
@@ -512,18 +515,19 @@ def test_file_manager_prepares_directory_download_as_zip(
     directory.mkdir()
     (directory / "readme.txt").write_bytes(b"download\n")
 
-    archive_path, filename, media_type, temporary = service.prepare_file_download(
+    download = service.prepare_file_download(
         path="bundle",
         scope="workspace",
     )
     try:
-        assert filename == "bundle.zip"
-        assert media_type == "application/zip"
-        assert temporary is True
-        with zipfile.ZipFile(archive_path) as archive:
+        assert download.filename == "bundle.zip"
+        assert download.media_type == "application/zip"
+        assert download.temporary is True
+        assert download.metadata == download.path.stat()
+        with zipfile.ZipFile(download.path) as archive:
             assert archive.read("bundle/readme.txt") == b"download\n"
     finally:
-        archive_path.unlink(missing_ok=True)
+        download.path.unlink(missing_ok=True)
 
 
 def test_file_manager_reveals_path_with_host_file_manager(

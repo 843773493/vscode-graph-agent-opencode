@@ -6,6 +6,7 @@ import heapq
 import mimetypes
 import os
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -38,6 +39,10 @@ from app.schemas.internal_v2.workspace_file_operations import (
     WorkspaceFileOperationReceiptDTO,
 )
 from app.services.infrastructure.config_service import ConfigService
+from app.services.infrastructure.workspace_files.filesystem import (
+    PreparedFileDownload,
+    file_download_access,
+)
 from app.services.infrastructure.workspace_files.mutation_lock import (
     workspace_file_mutation_lock,
 )
@@ -383,25 +388,6 @@ class WorkspaceService:
             revision=sha256_hex(raw_content),
         )
 
-    def resolve_raw_file(
-        self,
-        *,
-        path: str,
-        scope: WorkspaceFileScope = "workspace",
-    ) -> tuple[Path, str]:
-        target_path, relative_path = self.file_paths.resolve(
-            path,
-            scope=scope,
-            allow_empty=False,
-        )
-        if not target_path.exists():
-            raise FileNotFoundError(f"工作区文件不存在: {relative_path}")
-        if not target_path.is_file():
-            raise IsADirectoryError(f"工作区路径不是文件: {relative_path}")
-
-        media_type, _ = mimetypes.guess_type(target_path.name)
-        return target_path, media_type or "application/octet-stream"
-
     async def update_file_content(
         self,
         *,
@@ -460,32 +446,37 @@ class WorkspaceService:
         self,
         *,
         path: str,
-        scope: WorkspaceFileScope,
-    ) -> tuple[Path, str, str, bool]:
-        target, display_path = self.file_paths.resolve(
-            path,
-            scope=scope,
-            allow_empty=False,
-        )
-        if target.is_symlink():
-            raise ValueError(f"暂不支持下载符号链接: {display_path}")
-        if not target.exists():
-            raise FileNotFoundError(f"下载路径不存在: {display_path}")
-        if target.is_file():
+        scope: WorkspaceFileScope = "workspace",
+        archive_directory: bool = True,
+    ) -> PreparedFileDownload:
+        with file_download_access(None, "目标解析"):
+            target, display_path = self.file_paths.resolve(
+                path,
+                scope=scope,
+                allow_empty=False,
+            )
+        with file_download_access(display_path, "文件检查"):
+            if target.is_symlink():
+                raise ValueError(f"暂不支持下载符号链接: {display_path}")
+            metadata = target.stat()
+        if stat.S_ISREG(metadata.st_mode):
             media_type, _ = mimetypes.guess_type(target.name)
-            return target, target.name, media_type or "application/octet-stream", False
-        if not target.is_dir():
+            return PreparedFileDownload(target, display_path, target.name,
+                                        media_type or "application/octet-stream", metadata)
+        if not archive_directory:
+            raise IsADirectoryError(f"工作区路径不是文件: {display_path}")
+        if not stat.S_ISDIR(metadata.st_mode):
             raise ValueError(f"下载路径不是文件或目录: {display_path}")
 
-        temporary_fd, temporary_name = tempfile.mkstemp(
-            prefix=f"{target.name or 'workspace'}-",
-            suffix=".zip",
-        )
-        os.close(temporary_fd)
+        with file_download_access(display_path, "临时文件创建"):
+            temporary_fd, temporary_name = tempfile.mkstemp(
+                prefix=f"{target.name or 'workspace'}-",
+                suffix=".zip",
+            )
         temporary_path = Path(temporary_name)
         try:
-            with zipfile.ZipFile(
-                temporary_path,
+            with file_download_access(display_path, "目录归档"), os.fdopen(temporary_fd, "w+b") as output, zipfile.ZipFile(
+                output,
                 mode="w",
                 compression=zipfile.ZIP_DEFLATED,
             ) as archive:
@@ -498,14 +489,22 @@ class WorkspaceService:
                         if child.is_dir():
                             add_children(child)
                 add_children(target)
-        except BaseException:
-            temporary_path.unlink(missing_ok=True)
+            with file_download_access(display_path, "归档检查"):
+                metadata = temporary_path.stat()
+        except BaseException as error:
+            try:
+                with file_download_access(display_path, "临时文件清理"):
+                    temporary_path.unlink(missing_ok=True)
+            except OSError as cleanup_error:
+                raise BaseExceptionGroup("目录下载准备失败且临时文件清理失败", [error, cleanup_error]) from None
             raise
-        return (
+        return PreparedFileDownload(
             temporary_path,
+            display_path,
             f"{target.name or 'workspace'}.zip",
             "application/zip",
-            True,
+            metadata,
+            temporary=True,
         )
 
     def reveal_file_entry(

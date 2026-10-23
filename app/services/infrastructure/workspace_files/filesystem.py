@@ -1,11 +1,14 @@
-"""原 operation 的内容清单、durable staging 与无覆盖发布证明。"""
+"""文件操作的内容清单、durable staging、无覆盖发布证明与下载访问边界。"""
 
 from __future__ import annotations
 
 import hashlib
+import logging
 import os
 import shutil
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
+from dataclasses import dataclass
 from pathlib import Path
 from typing import BinaryIO
 
@@ -14,6 +17,32 @@ from app.services.infrastructure.workspace_files.runtime import (
     rename_entry_exclusive,
 )
 from app.services.infrastructure.workspace_files.store import canonical_json, digest
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True, slots=True)
+class PreparedFileDownload:
+    path: Path
+    uri: str
+    filename: str
+    media_type: str
+    metadata: os.stat_result
+    temporary: bool = False
+
+
+@contextmanager
+def file_download_access(reference: str | None, stage: str) -> Iterator[None]:
+    """下载的原生文件操作只发布 URI、实际阶段与系统错误码。"""
+    try:
+        yield
+    except OSError as error:
+        logger.exception("文件下载失败: uri=%s stage=%s", reference, stage)
+        raise type(error)(
+            error.errno,
+            f"文件下载失败: uri={reference}, stage={stage}, error={type(error).__name__}, "
+            f"errno={error.errno}, winerror={getattr(error, 'winerror', None)}",
+        ) from error
 
 
 class FileEffectUnverifiedError(RuntimeError):

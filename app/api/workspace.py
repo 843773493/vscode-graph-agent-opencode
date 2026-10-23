@@ -3,14 +3,12 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import os
 from collections.abc import AsyncIterator
 from contextlib import aclosing
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
-from starlette.background import BackgroundTask
 
 from app.api.deps import (
     get_request_id,
@@ -24,6 +22,7 @@ from app.api.sse_heartbeat import (
     SSE_NO_CACHE_HEADERS,
     stream_sse_with_heartbeat,
 )
+from app.api.workspace_file_response import WorkspaceFileResponse
 from app.core.exceptions import ForbiddenError
 from app.protocol.codecs.workspace_events import (
     file_change_batch_to_json,
@@ -346,9 +345,10 @@ async def get_workspace_raw_file(
     workspace_service: WorkspaceService = Depends(get_workspace_service),
 ):
     try:
-        target_path, media_type = await asyncio.to_thread(workspace_service.resolve_raw_file,
+        download = await asyncio.to_thread(workspace_service.prepare_file_download,
             path=path,
             scope=scope,
+            archive_directory=False,
         )
     except FileNotFoundError as error:
         raise HTTPException(status_code=404, detail=_file_error_detail(error)) from error
@@ -356,16 +356,7 @@ async def get_workspace_raw_file(
         raise forbidden_http_error(error) from error
     except (IsADirectoryError, ValueError) as error:
         raise HTTPException(status_code=400, detail=_file_error_detail(error)) from error
-    return FileResponse(
-        target_path,
-        media_type=media_type,
-        filename=target_path.name,
-        content_disposition_type="inline",
-        headers={
-            "Cache-Control": "no-store",
-            "X-Content-Type-Options": "nosniff",
-        },
-    )
+    return WorkspaceFileResponse(download, disposition="inline")
 
 
 @router.get(
@@ -380,23 +371,14 @@ async def download_workspace_file_entry(
     workspace_service: WorkspaceService = Depends(get_workspace_service),
 ):
     try:
-        target_path, filename, media_type, temporary = (
-            await asyncio.to_thread(workspace_service.prepare_file_download, path=path, scope=scope)
-        )
+        download = await asyncio.to_thread(workspace_service.prepare_file_download, path=path, scope=scope)
     except FileNotFoundError as error:
         raise HTTPException(status_code=404, detail=_file_error_detail(error)) from error
     except ForbiddenError as error:
         raise forbidden_http_error(error) from error
     except (IsADirectoryError, ValueError) as error:
         raise HTTPException(status_code=400, detail=_file_error_detail(error)) from error
-    return FileResponse(
-        target_path,
-        media_type=media_type,
-        filename=filename,
-        content_disposition_type="attachment",
-        headers={"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"},
-        background=BackgroundTask(os.unlink, target_path) if temporary else None,
-    )
+    return WorkspaceFileResponse(download, disposition="attachment")
 
 
 @router.put(

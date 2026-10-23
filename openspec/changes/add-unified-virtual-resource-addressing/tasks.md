@@ -334,3 +334,10 @@
 - 实际存储owner按读写阶段发布workspace/artifact/stage/code，完整位置和原异常只留日志/cause；仅正文读取ENOENT表示无状态。临时写入/发布失败才清理本次临时文件，清理次错按顺序保留且不覆盖主错。首次resize已生效但保存失败时保留既有待写标记，同尺寸显式重试完成落盘；在途同尺寸请求等待同一保存结果，干净同尺寸零重写，不自动重试PTY操作或伪报回滚。
 - 产品tree `a63b27772afac25a781a5804c60e7db7e9c17155`：Node语法/Ruff、33项存储/Manager单测及79项Session/输出/进程回归通过；真实PTY/HTTP集成1项通过（2.38秒），依次覆盖真实mkdir冲突、非特权Linux EACCES、rename发布失败，核安全响应、旧字节、内存已变化、同请求恢复后落盘和完整诊断。Windows/root不冒充chmod权限验收。旧Manager完整archive的新增3项红测均失败；旧StateStore真实HTTP红测回显原生存储位置。初次集成误用了另一聊天未提交fixture签名，修正后002明确复现同值重试不落盘，003修产品后通过，原件保留。
 - 非作者003只读独审无阻断finding；4284个blob、前后指纹与零进程组残留核验见 `out/tests/temp/openspec_resume_20261023/artifacts/terminal-state-contract-proof-003.json`。共享测试文件的既有fixture优化未纳入本切片。不代替完整Gateway/Web、Windows或2.2/7.2全量门。
+
+
+### 2026-10-23 Workspace原始文件与目录ZIP下载错误出口（部分收口）
+
+- raw与download共用唯一准备入口，移除旧resolve_raw_file及其消费者；目标解析、stat、临时归档及延迟open/read/close在实际I/O边界发布URI/阶段/异常类型/errno/winerror，原生位置和原异常保留诊断/cause。复用Starlette的Range和响应头实现，首body前保留响应头，首读失败可返回原request_id错误；流开始后失败中断连接，不拼接错误正文。临时ZIP在成功、非法Range、传输失败和取消时清理，主错与清理次错按序保留。
+- 固定产品tree `76111cb761d89d9e60aaaf7c502a88c58ba06953`：Ruff通过（API原有27项B008与HEAD完全一致，未新增，限定检查显式忽略）；60项文件/API定向回归通过，14项真实HTTP测试通过（10.22秒），核三种输入原字节、中文空格百分号文件名、单/多Range、目录ZIP、原件保持、真实非特权POSIX EACCES、注入stat/归档/延迟读取失败及流中断/显式重试。传输与清理双失败、close及取消由定点单测覆盖，不冒充真实磁盘EIO。
+- 完整旧HEAD archive加新HTTP回归5项失败，其中stat两路、mkstemp及归档write回显原生路径；归档检查项因旧链无该阶段返回200，只计行为区分。固定001的测试import排版诊断已修，002仅import格式化，7个相关Python AST等价，复用60项通过结果；共享测试目录重组与helper调整不纳入本切片。4287个blob、前后指纹、无残留进程组及独立只读审查见 `out/tests/temp/openspec_resume_20261023/artifacts/workspace-download-proof-001.json`。不以此关闭2.2/7.2或声称完整Gateway/Web/Windows验收。
