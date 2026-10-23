@@ -16,19 +16,63 @@ from datetime import UTC, datetime
 
 from app.core.session_catalog_store._schema import _FORK_RETENTION_CLAIM_COLUMNS
 from app.core.session_catalog_store.contracts import (
+    CatalogMaintenanceRequiredError,
     ForkRetentionClaim,
     SourceRetainedByForkError,
     SourceRetentionOperationPendingError,
     _validate_workspace_id,
 )
-from app.core.session_catalog_store.validators import validate_session_id
+from app.core.session_catalog_store.validators import (
+    validate_journal_timestamps,
+    validate_session_id,
+)
+
+
+def _validate_claim_identity(
+    claim_id: str, workspace_id: str, source_session_id: str, target_session_id: str,
+    source_lifecycle_generation: int,
+) -> None:
+    """writer 与原始行共用冻结身份合同，不按当前节点重绑历史引用。"""
+    if not isinstance(claim_id, str) or not claim_id:
+        raise ValueError(f"claim_id 不能为空: {claim_id!r}")
+    _validate_workspace_id(workspace_id)
+    validate_session_id(source_session_id)
+    validate_session_id(target_session_id)
+    if not isinstance(source_lifecycle_generation, int) or isinstance(
+        source_lifecycle_generation, bool
+    ):
+        raise TypeError(
+            f"source_lifecycle_generation 必须是整数: "
+            f"{source_lifecycle_generation!r}"
+        )
 
 
 class ForkRetentionMixin:
     """fork retention claim 方法族（唯一实现点）。"""
 
+    def verify_fork_retention_claims(self, *, connection: sqlite3.Connection) -> None:
+        """同一启动快照校验所有保留状态；released 的历史引用仍须可解释。"""
+        for row in connection.execute(f"SELECT {_FORK_RETENTION_CLAIM_COLUMNS} FROM fork_retention_claims"):
+            try:
+                self._fork_retention_claim_from_row(row)
+            except (TypeError, ValueError) as error:
+                raise CatalogMaintenanceRequiredError(
+                    "fork retention claim 损坏，须进入维护模式核对并保留原数据: "
+                    f"claim_id={row['fork_retention_claim_id']}"
+                ) from error
+
     @staticmethod
     def _fork_retention_claim_from_row(row: sqlite3.Row) -> ForkRetentionClaim:
+        _validate_claim_identity(
+            row["fork_retention_claim_id"], row["workspace_id"], row["source_session_id"],
+            row["target_session_id"], row["source_lifecycle_generation"],
+        )
+        if row["state"] == "released":
+            if not isinstance(row["release_reason"], str) or not row["release_reason"]:
+                raise ValueError("released claim 必须保留非空 release_reason")
+        elif row["release_reason"] is not None:
+            raise ValueError("未释放 claim 不得携带 release_reason")
+        validate_journal_timestamps(row["record_created_at"], row["record_updated_at"])
         return ForkRetentionClaim(
             fork_retention_claim_id=str(row["fork_retention_claim_id"]),
             workspace_id=str(row["workspace_id"]),
@@ -77,18 +121,9 @@ class ForkRetentionMixin:
         ``connection`` 非 None 时在调用方写事务连接上执行，不自行 BEGIN/COMMIT
         （供 fork journal 与 claim 占位原子提交）。
         """
-        if not isinstance(claim_id, str) or not claim_id:
-            raise ValueError(f"claim_id 不能为空: {claim_id!r}")
-        _validate_workspace_id(workspace_id)
-        validate_session_id(source_session_id)
-        validate_session_id(target_session_id)
-        if not isinstance(source_lifecycle_generation, int) or isinstance(
-            source_lifecycle_generation, bool
-        ):
-            raise TypeError(
-                f"source_lifecycle_generation 必须是整数: "
-                f"{source_lifecycle_generation!r}"
-            )
+        _validate_claim_identity(
+            claim_id, workspace_id, source_session_id, target_session_id, source_lifecycle_generation,
+        )
         transaction = (
             self.write_transaction()
             if connection is None

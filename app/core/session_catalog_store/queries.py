@@ -304,6 +304,7 @@ class CatalogQueriesMixin:
                 )
             self.verify_subtree_delete_records(connection=connection)
             self.verify_creation_record_envelopes(connection=connection)
+            self.verify_fork_retention_claims(connection=connection)
             rows = connection.execute(
                 "SELECT node_id, parent_node_id, workspace_id FROM nodes"
             ).fetchall()

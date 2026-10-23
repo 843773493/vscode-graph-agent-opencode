@@ -47,6 +47,11 @@ def validate_operation_journal_metadata(
             raise ValueError("aborted journal 必须保留非空 abort_reason")
     elif abort_reason is not None:
         raise ValueError("非 aborted journal 不得携带 abort_reason")
+    validate_journal_timestamps(record_created_at, record_updated_at)
+
+
+def validate_journal_timestamps(record_created_at: str, record_updated_at: str) -> None:
+    """记账时间必须可解析且带时区；墙钟回拨与时区文本不改变历史事实。"""
     for field, value in (("record_created_at", record_created_at), ("record_updated_at", record_updated_at)):
         moment = datetime.fromisoformat(value)
         if moment.tzinfo is None:
