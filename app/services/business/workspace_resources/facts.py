@@ -3,11 +3,10 @@
 from __future__ import annotations
 
 import logging
-import re
 from collections.abc import Collection
 from dataclasses import asdict
 from datetime import datetime, timedelta
-from pathlib import Path
+from pathlib import PureWindowsPath
 from urllib.error import URLError
 
 from app.abstractions.workspace_resources import ResourceKind, ResourceSnapshot
@@ -47,9 +46,10 @@ def validate_runtime(runtime: ResourceSnapshot, workspace_id: str) -> None:
         raise ValueError("Node 运行时 回执包含禁止上浮的真实路径")
     relative = runtime.get("cwd_relative")
     if relative is not None and (
-        not isinstance(relative, str) or Path(relative).is_absolute()
-        or re.match(r"^[A-Za-z]:", relative)
+        not isinstance(relative, str) or PureWindowsPath(relative).anchor
     ):
+        # Windows anchor 同时识别盘符、根路径和 UNC；也覆盖 POSIX 的斜杠根，不依赖中继平台。
+        logger.error("Node 运行时 工作目录拒绝: cwd_relative=%r", relative)
         raise ValueError("Node 运行时 工作目录不是工作区内相对目录")
     revision = runtime.get("transport_owner_revision")
     if not isinstance(revision, int) or revision < 1:

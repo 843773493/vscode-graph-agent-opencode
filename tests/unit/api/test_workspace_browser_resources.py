@@ -75,6 +75,82 @@ def test_runtime_inventory_rejection_publishes_facts_without_foreign_identity(
     assert recovered.json()["data"]["items"] == [resource]
 
 
+
+@pytest.mark.parametrize("kind", ["terminal", "browser"])
+@pytest.mark.parametrize("entry", ["inventory", "single"])
+@pytest.mark.parametrize("native_path", [
+    "/private/runtime-cwd", r"C:\private\runtime-cwd", r"C:private\runtime-cwd",
+    r"\private\runtime-cwd", r"\\server\share\private\runtime-cwd",
+    r"\\?\UNC\server\share\private\runtime-cwd",
+], ids=["posix", "drive", "drive-relative", "rooted", "unc", "extended-unc"])
+def test_runtime_working_directory_rejects_native_root_without_changing_owner(
+    resource_api_client: TestClient, terminal_owner_bundle: TerminalOwnerFixture,
+    browser_owner_bundle: BrowserOwnerFixture, monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture, kind: str, entry: str, native_path: str,
+) -> None:
+    created = resource_api_client.post(f"/api/v1/resources/{kind}s", json={
+        "session_id": SESSION_A, "thread_id": THREAD_A,
+    })
+    assert created.status_code == 200, created.text
+    resource = created.json()["data"]
+    bundle = terminal_owner_bundle if kind == "terminal" else browser_owner_bundle
+    resource_id = resource["resource_id"]
+    original = dict(bundle.transport.records[resource_id])
+    owner_file = bundle.root / ".boxteam" / f"{kind}-resources.json"
+    lease_file = bundle.root / ".boxteam" / "resources.json"
+    before = (owner_file.read_bytes(), lease_file.read_bytes())
+
+    async def invalid_inventory() -> list[dict[str, object]]:
+        return [{**original, "cwd_relative": native_path}]
+
+    request_id = f"cwd-rejection-{kind}-{entry}"
+    headers = {"X-Request-ID": request_id}
+    with monkeypatch.context() as patch:
+        patch.setattr(bundle.transport, "list_resources", invalid_inventory)
+        failed = (resource_api_client.get("/api/v1/resources", params={"kind": kind}, headers=headers)
+                  if entry == "inventory" else resource_api_client.get(f"/api/v1/resources/{resource_id}", headers=headers))
+    assert failed.status_code == 400, failed.text
+    assert failed.headers["X-Request-ID"] == request_id
+    assert failed.json()["detail"] == "ValueError: Node 运行时 工作目录不是工作区内相对目录"
+    assert "runtime-cwd" not in failed.text
+    assert any(record.name == "app.services.business.workspace_resources.facts"
+               and record.args == (native_path,) for record in caplog.records)
+    assert (owner_file.read_bytes(), lease_file.read_bytes()) == before
+    assert bundle.transport.records[resource_id] == original
+    assert bundle.transport.creates == 1 and bundle.transport.deleted == []
+    assert bundle.leases.leases_for_resource(resource_id) == []
+    recovered = resource_api_client.get(f"/api/v1/resources/{resource_id}")
+    assert recovered.status_code == 200, recovered.text
+    assert recovered.json()["data"] == resource
+
+
+
+@pytest.mark.parametrize("kind", ["terminal", "browser"])
+@pytest.mark.parametrize("relative", [".", "app", "../external", r"..\external"])
+def test_runtime_working_directory_preserves_relative_external_target(
+    resource_api_client: TestClient, terminal_owner_bundle: TerminalOwnerFixture,
+    browser_owner_bundle: BrowserOwnerFixture, monkeypatch: pytest.MonkeyPatch,
+    kind: str, relative: str,
+) -> None:
+    created = resource_api_client.post(f"/api/v1/resources/{kind}s", json={
+        "session_id": SESSION_A, "thread_id": THREAD_A,
+    })
+    assert created.status_code == 200, created.text
+    resource = created.json()["data"]
+    bundle = terminal_owner_bundle if kind == "terminal" else browser_owner_bundle
+    original = dict(bundle.transport.records[resource["resource_id"]])
+
+    async def relative_inventory() -> list[dict[str, object]]:
+        return [{**original, "cwd_relative": relative}]
+
+    monkeypatch.setattr(bundle.transport, "list_resources", relative_inventory)
+    listed = resource_api_client.get("/api/v1/resources", params={"kind": kind})
+    observed = resource_api_client.get(f"/api/v1/resources/{resource['resource_id']}")
+    assert listed.status_code == observed.status_code == 200
+    assert listed.json()["data"]["items"] == [observed.json()["data"]]
+    assert observed.json()["data"]["metadata"]["cwd_relative"] == relative
+
+
 def _create_browser_resource(resource_api_client: TestClient) -> dict[str, object]:
     response = resource_api_client.post("/api/v1/resources/browsers", json={
         "session_id": SESSION_A, "thread_id": CHILD_THREAD_A, "retention_scope": "thread",
