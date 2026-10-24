@@ -3,11 +3,16 @@
 from __future__ import annotations
 
 import asyncio
+import json
+import os
+import shlex
+import subprocess
 import sys
 from collections.abc import Iterator
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from textwrap import dedent
 
 import psutil
 import pytest
@@ -16,6 +21,7 @@ from app.agents.tools.terminal import create_exec_command_tool
 from app.core.resource_uri import file_uri_child, parse_resource_uri
 from app.core.trace_middleware import reset_current_gateway_id, set_current_gateway_id
 from app.schemas.internal_v2.message import MessageCreateRequest
+from configs.runtime import read_jsonc_object
 from tests.integration.backend.sessions.test_attachment_directory_entry import upload
 from tests.integration.test_terminal_owner_tool_invocation import (
     terminal_runtime as terminal_runtime,  # noqa: PLC0414
@@ -25,7 +31,17 @@ from tests.integration.test_terminal_owner_tool_invocation import (
 )
 from tests.support.workspace_tool_runtime import WorkspaceToolRuntime
 
-pytestmark = pytest.mark.skipif(sys.platform != "linux", reason="Windows 原生 Shell 另行验收")
+
+@pytest.fixture(autouse=True)
+def shell_model_configuration(terminal_workspace_root_path: str) -> None:
+    """Shell 验收不调用模型，配置不得依赖个人凭据或外部 Provider。"""
+    config_path = Path(terminal_workspace_root_path) / ".boxteam/workspace.jsonc"
+    config = read_jsonc_object(config_path)
+    for provider in config["llm"]["providers"]:
+        provider["api_key"] = "shell-contract-unused-key"
+        provider["endpoint"] = "http://127.0.0.1:1/v1"
+        provider.pop("auth", None)
+    config_path.write_text(json.dumps(config, ensure_ascii=False) + "\n", encoding="utf-8")
 
 
 @pytest.fixture(params=[None, "gateway_6c8b2f9317a5a2c6c4569958b1e23d84"], ids=["local", "gateway"])
@@ -59,8 +75,22 @@ async def test_shell_process_holds_directory_after_tool_returns_until_verified_s
     requested = {"uri": file_uri_child(ref.directory_uri, "derived"), "absolute": str(workdir),
                  "relative": workdir.relative_to(container.workspace_root).as_posix()}[input_form]
     execute = create_exec_command_tool(session_id, terminal_owner=owner, invocation_context=context)
+    # 同一目标端程序经真实原生 Shell 启动，保留各平台路径和进程树语义。
+    probe = workdir / "attachment_shell_probe.py"
+    probe.write_text(dedent("""\
+        import subprocess
+        import sys
+        from pathlib import Path
+
+        Path("output.txt").write_text("derived", encoding="utf-8")
+        child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(600)"])
+        Path("child.pid").write_text(str(child.pid), encoding="ascii")
+        print(Path("../original/content").read_text(encoding="utf-8"), flush=True)
+        child.wait()
+    """), encoding="utf-8")
+    command = [sys.executable, "-u", probe.name]
     result = await execute.ainvoke({
-        "cmd": 'cat ../original/content; printf derived > output.txt; sleep 600 & child=$!; printf "%s" "$child" > child.pid; wait "$child"',
+        "cmd": subprocess.list2cmdline(command) if os.name == "nt" else shlex.join(command),
         "workdir": requested, "yield_time_ms": 1000,
     })
     terminal_id = result["terminal_id"]

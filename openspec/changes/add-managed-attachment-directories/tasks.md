@@ -67,6 +67,7 @@ Web 定向 `BOXTEAM_E2E_SECTION8_FOCUS=copy_missing_attachment` 通过真实 Gat
 ## 6. 真实验收与旧链物理下线
 
 - [ ] 6.1 经产品入口上传、Shell 预处理、读取处理结果、fork 与重启恢复；覆盖 Linux/Windows 原生 cwd 和远端 URI 始终在目标机器解释。
+  - 2026-10-24 原生 Shell 验收共用目标端 Python 处理程序，删除 Linux-only skip，保留 URI/绝对/相对 cwd × 本地/具 Gateway 身份六例及 admission/GC 竞争一例；显式测试配置不再依赖个人模型凭据。完整候选 `27f6cf1c959961e1068d2a738712d7db82fe3c1c` 在 Linux 真实 Terminal HTTP/PTY 全部 7 passed/65.27 秒，核实后台子进程在工具返回后仍存活、到期 GC 受保护、原 owner 停止后真实终态及 lease 结清。Windows `hyf-win` 已激活同一候选并由目标 Windows Job Object（600 秒/4 GiB）运行；Session staging 创建触发 WinError 206，尚未进入 Shell 断言，不能记为 Windows 通过。TODO：由配置明确的 Windows 短路径目标或启用长路径支持的环境重验，不在本切片改系统设置或缩减业务断言。初次同步误收本地依赖链接导致激活失败，已按激活前干净状态恢复目标，再排除依赖链接成功同步；两次配置装具失败和原始结果全部保留。源码指纹、命令、真实退出码及原始输出在 `out/tests/temp/attachment_windows_20261024/artifacts/`；6.1/6.2 仍未完成，不外推完整 Gateway/fork/重启和挂起操作合同。
 - [ ] 6.2 外置时钟/故障点覆盖 29 天重关联、30 天到期、处理进程保活、attach/GC/fork竞争、漏 detach 崩溃、旧代迟到释放和删除中途重启；核对真实目录和外部进程终态。
 - [x] 6.3 迁齐调用方后物理移除旧可变附件 blob 身份合并、owner-ref 私有访问、Session 新引用生成与即时 GC 生产链及死测试；保留历史冻结资产及必要来源解析，不双读或提供兼容 fallback。
 - [ ] 6.4 按 design 的替代顺序同步相关 owner 规范与验收项，测量目录增长、查询/回收及恢复耗时；短期性能长尾以原始测量证据登记 TODO，不降低正确性门槛。
