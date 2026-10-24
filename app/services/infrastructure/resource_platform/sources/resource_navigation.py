@@ -25,6 +25,7 @@ from app.core.exceptions import ForbiddenError
 from app.core.path_utils import is_resource_uri_input
 from app.core.resource_uri import (
     ParsedResourceUri,
+    file_uri_root,
     parse_resource_uri,
     resource_display_uri,
 )
@@ -236,6 +237,10 @@ class ResourceNavigation:
         if request.operation == "describe":
             return self._response(ResourceNavigationResultDTO(node=node), request, deadline)
         if request.operation == "read":
+            if parsed.kind == "attachments":
+                # 原件无扩展名；MIME 与完整性仍由附件 owner 决定，正文投影复用原读取链。
+                # 工作区附件按工作区权限访问；Session 私有产物才消费调用者的精确 capability。
+                return self._navigate_artifact(parsed, request, gateway_id, deadline, self._artifact_reader)
             return self._read(path, node, request, deadline)
         binding = hashlib.sha256(json.dumps(
             {**request.model_dump(exclude={"uri", "cursor"}), "uri": parsed.display_uri, "gateway_id": gateway_id},
@@ -529,7 +534,7 @@ class ResourceNavigation:
                 self._check_deadline(deadline)
                 child_parts = (*relative, child.name)
                 # 私有存储不作为文件树 child 发布；直接请求和别名仍在 _contained 拒绝。
-                if parsed.kind == "files" and self._file_paths.is_private(child):
+                if parsed.kind in {"files", "attachments"} and self._file_paths.is_private(child, root_uri=parsed.display_uri):
                     continue
                 if request.search_mode == "content" and child.name in {".git", "node_modules", ".boxteam"}:
                     continue
@@ -584,8 +589,8 @@ class ResourceNavigation:
         return value["offset"], value["prefix"]
 
     def _root(self, parsed: ParsedResourceUri) -> tuple[Path, tuple[str, ...]]:
-        if parsed.kind == "files" and self._file_paths is not None:
-            root_uri = resource_display_uri(scope=parsed.scope, scope_id=parsed.scope_id, kind="files",
+        if parsed.kind in {"files", "attachments"} and self._file_paths is not None:
+            root_uri = resource_display_uri(scope=parsed.scope, scope_id=parsed.scope_id, kind=parsed.kind,
                                             tail_segments=parsed.tail_segments[:1])
             try:
                 root, _uri = self._file_paths.resolve(root_uri)
@@ -623,9 +628,9 @@ class ResourceNavigation:
         path = _resolve_path(resolved_root.joinpath(*children))
         if not path.is_relative_to(resolved_root):
             raise ResourceUriResolveError("capability_denied", "文件节点越出已公布根")
-        if parsed.kind == "files":
+        if parsed.kind in {"files", "attachments"}:
             try:
-                self._file_paths.require_public_path(resolved_root.joinpath(*children))
+                self._file_paths.require_access(resolved_root.joinpath(*children), root_uri=file_uri_root(parsed.display_uri))
             except ForbiddenError as error:
                 raise ResourceUriResolveError("capability_denied", "私有存储只允许由业务 owner 访问") from error
         for depth in range(1, len(children)):

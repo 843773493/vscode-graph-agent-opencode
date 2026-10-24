@@ -608,6 +608,7 @@ def _build_app_container(
         event_channel_service=job_event_bus.event_channel_service,
         startup_mount=startup_mount,
     )
+    # TODO：完成 schema 4 离线安装与唯一切换后，在此注入附件目录 owner。
     workspace_service = WorkspaceService(
         config_service=config_service,
         workspace_root=resolved_workspace_root,

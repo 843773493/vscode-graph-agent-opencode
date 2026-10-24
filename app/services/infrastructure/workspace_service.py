@@ -51,6 +51,7 @@ from app.services.infrastructure.workspace_files.operations import (
     WorkspaceFileOperations,
 )
 from app.services.infrastructure.workspace_files.paths import (
+    AttachmentDirectoryPaths,
     NativeDirectoryBindings,
     WorkspaceFilePaths,
 )
@@ -101,6 +102,7 @@ class WorkspaceService:
         config_service: ConfigService,
         workspace_root: Path | None = None,
         native_directories: NativeDirectoryBindings | None = None,
+        attachments: AttachmentDirectoryPaths | None = None,
     ):
         self._workspace_root = (
             workspace_root or get_workspace_root()
@@ -111,7 +113,7 @@ class WorkspaceService:
         self.name = os.path.basename(self.root_path)
         self._config_service = config_service
         self._file_operations: WorkspaceFileOperations | None = None
-        self.file_paths = WorkspaceFilePaths(workspace=self._workspace_root, workspace_id=self.workspace_id, bindings=native_directories)
+        self.file_paths = WorkspaceFilePaths(workspace=self._workspace_root, workspace_id=self.workspace_id, bindings=native_directories, attachments=attachments)
 
     @property
     def file_operations(self) -> WorkspaceFileOperations:
@@ -262,7 +264,7 @@ class WorkspaceService:
         def observed_entries(directory_entries):
             nonlocal fingerprint, count
             for entry in directory_entries:
-                if Path(entry.path) in staging or self.file_paths.is_private(Path(entry.path)):
+                if Path(entry.path) in staging or self.file_paths.is_private(Path(entry.path), root_uri=display_path):
                     continue
                 node = self._entry_to_file_node(entry, display_path, scope=scope)
                 fingerprint ^= int(digest({"name": node.name, "kind": node.kind, "size": node.size,
@@ -400,7 +402,7 @@ class WorkspaceService:
     def _update_file_content(self, path: str, content: str, expected_revision: str,
                              scope: WorkspaceFileScope) -> WorkspaceFileContentDTO:
         with workspace_file_mutation_lock(self._workspace_root):
-            target_path, reference = self.file_paths.resolve(path, scope=scope, allow_empty=False, reject_symlink=True)
+            target_path, reference = self.file_paths.resolve(path, scope=scope, allow_empty=False, reject_symlink=True, for_write=True)
             observed = read_file_preimage(target_path, reference=reference,
                                           max_bytes=self._config_service.get_workspace_preview_max_bytes())
             if sha256_hex(observed.content) != expected_revision:
@@ -481,7 +483,7 @@ class WorkspaceService:
             ) as archive:
                 def add_children(directory: Path) -> None:
                     for child in sorted(directory.iterdir()):
-                        self.file_paths.require_public_path(child)
+                        self.file_paths.require_access(child, root_uri=display_path)
                         if child.is_symlink():
                             raise ValueError(f"下载目录包含暂不支持的符号链接: {file_uri_child(display_path, *child.relative_to(target).parts)}")
                         archive.write(child, Path(target.name) / child.relative_to(target))

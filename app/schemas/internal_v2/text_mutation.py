@@ -53,8 +53,8 @@ class TextMutationRequest(_Model):
             raise ValueError("文本修改必须恰好提供 create/edit/patch 之一")
         # 此封套属于跨进程传输；原生路径由普通工具在其明确目标 owner 解释。
         parsed = parse_resource_uri(self.command.target)
-        if parsed.scope != "workspace" or parsed.kind != "files":
-            raise ValueError("文本传输只接受固定 Workspace files URI")
+        if parsed.scope != "workspace" or parsed.kind not in {"files", "attachments"}:
+            raise ValueError("文本传输只接受固定 Workspace 文件或附件目录 URI")
         return self
 
     @property

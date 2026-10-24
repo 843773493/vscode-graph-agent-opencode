@@ -64,7 +64,7 @@ def resolve_text_target(paths: WorkspaceFilePaths, target: str) -> tuple[Path, s
         parsed = parse_resource_uri(target, local_gateway_id=get_current_gateway_id())
         if parsed.gateway_authority is not None:
             raise ResourceUriResolveError("capability_denied", "本机条件发布入口不接受另一个 Gateway 的目标")
-        if parsed.scope != "workspace" or parsed.kind != "files":
+        if parsed.scope != "workspace" or parsed.kind not in {"files", "attachments"}:
             raise ResourceUriResolveError("capability_denied", "该资源没有工作区文本写入能力")
         if parsed.scope_id != paths.workspace_id:
             raise ResourceUriResolveError("unknown_resource", "不是本次固定工作区目标")
@@ -90,7 +90,7 @@ def execute_text_mutation(*, paths: WorkspaceFilePaths, target: str, declared: l
             validate_text_paths(declared, root)
             if set(expected_versions) != set(declared):
                 raise ValueError("expected_versions 必须精确覆盖全部文件路径，包含移动的源与目的")
-            snapshots = _capture_snapshots(declared, root, paths, expected_versions, authorize, max_journal_bytes)
+            snapshots = _capture_snapshots(declared, root, root_uri, paths, expected_versions, authorize, max_journal_bytes)
             steps = prepare(snapshots)
             touched: set[str] = set()
             for step in steps:
@@ -137,7 +137,7 @@ def execute_text_mutation(*, paths: WorkspaceFilePaths, target: str, declared: l
     return result
 
 
-def _capture_snapshots(names: list[str], root: Path, paths: WorkspaceFilePaths,
+def _capture_snapshots(names: list[str], root: Path, root_uri: str, paths: WorkspaceFilePaths,
                        expected: dict[str, str], authorize: Callable[[str], None] | None, max_bytes: int | None) -> dict[str, FileSnapshot]:
     snapshots = {}
     captured_bytes = 0
@@ -147,7 +147,8 @@ def _capture_snapshots(names: list[str], root: Path, paths: WorkspaceFilePaths,
             raise ValueError(f"文件预期版本必须是 sha256:<hex> 或 absent: {name}")
         path = _resolve_workspace_file(name, root)
         try:
-            uri = paths.reference(path)
+            paths.require_access(path, root_uri=root_uri, for_write=True)
+            uri = paths.reference(path, root_uri=root_uri)
         except ForbiddenError as error:
             raise ResourceUriResolveError("capability_denied", "私有存储只允许由业务 owner 访问") from error
         if authorize is not None:

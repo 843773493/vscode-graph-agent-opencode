@@ -162,8 +162,8 @@ class TextMutationGrantTarget:
 
         resource = parse_resource_uri(self.uri, local_gateway_id=self.gateway_id)
         if (self.mutation_kind != "text" or resource.gateway_authority is not None
-                or resource.scope != "workspace" or resource.kind != "files"):
-            raise ValueError("文本写入 grant 必须绑定 audience 的 Workspace files 目标")
+                or resource.scope != "workspace" or resource.kind not in {"files", "attachments"}):
+            raise ValueError("文本写入 grant 必须绑定 audience 的 Workspace 文件或附件目标")
 
     def to_payload(self) -> dict[str, object]:
         return {"gateway_id": self.gateway_id, "uri": self.uri, "mutation_kind": self.mutation_kind}

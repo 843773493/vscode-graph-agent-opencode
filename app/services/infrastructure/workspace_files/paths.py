@@ -30,6 +30,10 @@ from app.schemas.internal_v2.common import APIResponse
 from app.services.infrastructure.gateway_client_common import GatewayTransportConnection
 
 
+class AttachmentDirectoryPaths(Protocol):
+    def resolve_directory_uri(self, parsed: ParsedResourceUri, *, for_write: bool = False) -> Path: ...
+
+
 class NativeDirectoryBindings(Protocol):
     def bind(self, root: Path) -> str: ...
     def resolve(self, parsed: ParsedResourceUri) -> Path: ...
@@ -88,8 +92,10 @@ class GatewayNativeDirectoryClient:
 
 
 class WorkspaceFilePaths:
-    def __init__(self, *, workspace: Path, workspace_id: str, bindings: NativeDirectoryBindings | None) -> None:
+    def __init__(self, *, workspace: Path, workspace_id: str, bindings: NativeDirectoryBindings | None,
+                 attachments: AttachmentDirectoryPaths | None = None) -> None:
         self.workspace, self.workspace_id, self.bindings = workspace, workspace_id, bindings
+        self.attachments = attachments
         self.workspace_uri = resource_display_uri(scope="workspace", scope_id=workspace_id, kind="files", tail_segments=("root",))
 
     def _bindings(self) -> NativeDirectoryBindings:
@@ -97,10 +103,14 @@ class WorkspaceFilePaths:
             raise RuntimeError("目标文件 owner 尚未装配原生 Gateway 目录根绑定")
         return self.bindings
 
-    def is_private(self, target: Path) -> bool:
+    def is_private(self, target: Path, *, root_uri: str | None = None) -> bool:
         """普通文件树不公布保留存储目录；原生根和 symlink 别名遵守同一边界。"""
         # 分类保留循环/断链的 symlink 节点；真正访问仍经 resolve/safe_join 明确失败。
         resolved = Path(os.path.realpath(target))
+        if root_uri is not None and parse_resource_uri(root_uri).kind == "attachments":
+            root, _ = self.resolve(resource_uri.file_uri_root(root_uri))
+            return (not target.is_relative_to(root) or not resolved.is_relative_to(root)
+                    or any(os.path.normcase(part) == ".boxteam" for part in target.relative_to(root).parts))
         return (any(os.path.normcase(part) == ".boxteam" for part in (*target.parts, *resolved.parts))
                 or resolved.is_relative_to(Path(os.path.realpath(self.workspace / ".boxteam"))))
 
@@ -108,10 +118,29 @@ class WorkspaceFilePaths:
         if self.is_private(target):
             raise ForbiddenError("私有存储只允许由业务 owner 访问")
 
+    def require_access(self, target: Path, *, root_uri: str, for_write: bool = False) -> None:
+        """原生私有路径不因附件可访问而放开；授权始终保留明确 URI 根。"""
+        if parse_resource_uri(root_uri).kind != "attachments":
+            self.require_public_path(target)
+            return
+        root, _ = self.resolve(root_uri)
+        if not target.is_relative_to(root):
+            raise ForbiddenError("文件节点越出明确的附件根")
+        uri = resource_uri.file_uri_child(root_uri, *target.relative_to(root).parts)
+        resolved, _ = self.resolve(uri, for_write=for_write)
+        if resolved != target:
+            raise ForbiddenError("文件节点与附件 URI 的目标不一致")
+
     def resolve(self, value: str, *, scope: str = "workspace", allow_empty: bool = True,
-                reject_symlink: bool = False, allow_external: bool = True) -> tuple[Path, str]:
+                reject_symlink: bool = False, allow_external: bool = True, for_write: bool = False) -> tuple[Path, str]:
         if is_resource_uri_input(value):
             parsed = parse_resource_uri(value, local_gateway_id=get_current_gateway_id())
+            if parsed.kind == "attachments":
+                if self.attachments is None:
+                    raise RuntimeError("文件 owner 尚未装配附件目录解析")
+                if any(os.path.normcase(part) == ".boxteam" for part in parsed.tail_segments[1:]):
+                    raise ForbiddenError("附件目录不公开嵌套的私有存储")
+                return self.attachments.resolve_directory_uri(parsed, for_write=for_write), parsed.display_uri
             if parsed.kind != "files" or parsed.scope not in {"workspace", "gateway"}:
                 raise ValueError("文件入口必须指向 Workspace 或 Gateway files 资源")
             if parsed.gateway_authority is not None:
@@ -143,7 +172,11 @@ class WorkspaceFilePaths:
             target = resolve_native_file_path(self.workspace, value, allow_absolute_outside=allow_external)
         return target, self.reference(target)
 
-    def reference(self, target: Path) -> str:
+    def reference(self, target: Path, *, root_uri: str | None = None) -> str:
+        if root_uri is not None and parse_resource_uri(root_uri).kind == "attachments":
+            self.require_access(target, root_uri=root_uri)
+            root, _ = self.resolve(root_uri)
+            return resource_uri.file_uri_child(root_uri, *target.relative_to(root).parts)
         self.require_public_path(target)
         if target.is_relative_to(self.workspace):
             return resource_uri.file_uri_child(self.workspace_uri, *target.relative_to(self.workspace).parts)
@@ -151,5 +184,5 @@ class WorkspaceFilePaths:
         uri = self._bindings().bind(root)
         return uri if root == target else resource_uri.file_uri_child(uri, target.name)
 
-    def native(self, uri: str) -> Path:
-        return self.resolve(uri)[0]
+    def native(self, uri: str, *, for_write: bool = False) -> Path:
+        return self.resolve(uri, for_write=for_write)[0]

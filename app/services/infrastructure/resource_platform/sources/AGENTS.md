@@ -21,3 +21,5 @@
 - 显式追踪的本机文件来源必须通过共享 `WorkspaceFileWatchService` 接收变更并稳定读取；Gateway Skill 来源仅接受认证 owner 的无路径快照，在接受时校验身份、受众及 UTF-8/hash，不得回读 Gateway 宿主路径。普通导航从固定根有界读取，不创建 watcher/source/revision；Gateway 导航沿既有认证连接与 Workspace audience 交给同一个文件导航实现。
 - 快照是不可变值；错误状态显式返回，旧有效快照只能作为保留事实，不能冒充新版本。
 - 新源码目录必须遵守仓库的四段式 `AGENTS.md` 约定。
+
+- workspace attachments 目录沿唯一文件路径 owner 导航，单文件读取复用原附件 owner 的 MIME/完整性及原正文投影；工作区资源访问不借用 Session 私有附件的 assembly membership。旧 Session 产物仍只消费调用者精确 capability，拒绝后不得回退。

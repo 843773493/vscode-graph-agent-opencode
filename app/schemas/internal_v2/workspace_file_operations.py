@@ -23,9 +23,9 @@ class WorkspaceDirectoryKeyDTO(BaseModel):
     @model_validator(mode="after")
     def validate_uri_key(self) -> WorkspaceDirectoryKeyDTO:
         parsed = parse_resource_uri(self.path)
-        if parsed.kind != "files" or parsed.scope not in {"workspace", "gateway"}:
-            raise ValueError("目录键必须使用 files 资源 URI")
-        root = resource_display_uri(scope=parsed.scope, scope_id=parsed.scope_id, kind="files",
+        if parsed.kind not in {"files", "attachments"} or parsed.scope not in {"workspace", "gateway"}:
+            raise ValueError("目录键必须使用 files 或 attachments 资源 URI")
+        root = resource_display_uri(scope=parsed.scope, scope_id=parsed.scope_id, kind=parsed.kind,
                                     tail_segments=parsed.tail_segments[:1], gateway_authority=parsed.gateway_authority)
         scope = "workspace" if parsed.scope == "workspace" else "filesystem"
         if self.root != root or self.scope != scope:
@@ -37,8 +37,8 @@ class WorkspaceDirectoryKeyDTO(BaseModel):
 
 def validate_file_uri(value: str) -> str:
     parsed = parse_resource_uri(value)
-    if parsed.kind != "files":
-        raise ValueError("文件引用必须使用 files 资源 URI")
+    if parsed.kind not in {"files", "attachments"}:
+        raise ValueError("文件引用必须使用 files 或 attachments 资源 URI")
     return parsed.display_uri
 
 

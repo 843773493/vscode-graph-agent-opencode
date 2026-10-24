@@ -9,7 +9,12 @@ from collections.abc import Callable
 import httpx
 
 from app.core.path_utils import is_resource_uri_input
-from app.core.resource_uri import parse_resource_uri, resource_display_uri
+from app.core.resource_uri import (
+    file_uri_child,
+    file_uri_root,
+    parse_resource_uri,
+    resource_display_uri,
+)
 from app.core.trace_middleware import get_current_gateway_id, require_current_gateway_id
 from app.gateway.federation.errors import FederationError
 from app.schemas.internal_v2.text_mutation import (
@@ -100,7 +105,7 @@ class WorkspaceTextMutationOwner:
         parsed = parse_resource_uri(request.target, local_gateway_id=get_current_gateway_id())
         if parsed.gateway_authority is None and not (parsed.scope == "workspace" and parsed.scope_id != self._paths.workspace_id):
             return None
-        if parsed.scope != "workspace" or parsed.kind != "files" or self._gateway is None:
+        if parsed.scope != "workspace" or parsed.kind not in {"files", "attachments"} or self._gateway is None:
             raise ResourceUriResolveError("capability_denied", "此目标尚无已授权的文本写入 owner")
         return request.model_copy(update={"target": resource_display_uri(
             scope=parsed.scope, scope_id=parsed.scope_id, kind=parsed.kind, tail_segments=parsed.tail_segments,
@@ -148,7 +153,9 @@ class WorkspaceTextMutationOwner:
             result["fuzz"] = preparation.fuzz
             return result
         actual, uri = resolve_text_target(self._paths, request.target)
-        relative = actual.relative_to(self._paths.workspace).as_posix()
+        relative = actual.name
+        parsed = parse_resource_uri(uri)
+        parent_uri = file_uri_child(file_uri_root(uri), *parsed.tail_segments[1:-1])
 
         def prepare(snapshots: dict[str, FileSnapshot]) -> list[TextPublication]:
             snapshot = snapshots[relative]
@@ -156,7 +163,7 @@ class WorkspaceTextMutationOwner:
             return [TextPublication(snapshot, content, "add" if isinstance(request, CreateText) else "update")]
 
         result = execute_text_mutation(
-            paths=self._paths, target=".", declared=[relative],
+            paths=self._paths, target=parent_uri, declared=[relative],
             expected_versions={relative: request.expected_version}, prepare=prepare, authorize=authorize, max_journal_bytes=max_journal_bytes,
         )
         result["target"] = uri

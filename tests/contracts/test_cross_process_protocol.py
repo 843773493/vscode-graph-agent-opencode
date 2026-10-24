@@ -28,7 +28,12 @@ from app.schemas.internal_v2.resource_navigation import (
 )
 from app.schemas.internal_v2.session_changes import SessionFileChangeDTO
 from app.schemas.internal_v2.session_interaction import SessionExecutionSseDTO
+from app.schemas.internal_v2.text_mutation import CreateText, TextMutationRequest
 from app.schemas.internal_v2.turn import TurnAttachmentDTO
+from app.schemas.internal_v2.workspace_file_operations import (
+    WorkspaceDirectoryKeyDTO,
+    WorkspaceFileListDTO,
+)
 
 BASELINE_PATH = Path(__file__).with_name("protocol_baseline.json")
 
@@ -117,3 +122,24 @@ def test_representative_boundaries_round_trip_through_protobuf_wire() -> None:
     assert decoded_proxy.workspace_id == "workspace_123"
     assert decoded_proxy.service == "terminal"
     assert decoded_proxy.path == "/api/terminals/terminal_123"
+
+
+@pytest.mark.parametrize("kind,resource_id", [("files", "root"), ("attachments", "att_0123456789abcdef0123456789abcdef")])
+def test_workspace_file_list_directory_identity_survives_proto_wire(kind: str, resource_id: str) -> None:
+    workspace = "019d1b4a-1111-7000-8000-000000000001"
+    root = f"boxteam://workspace/{workspace}/resources/{kind}/{resource_id}"
+    path = root + "/derived"
+    key = WorkspaceDirectoryKeyDTO(workspace_id=workspace, scope="workspace", root=root, path=path)
+    value = WorkspaceFileListDTO(root_path=root, path=path, items=[{"name": "output.txt", "path": path + "/output.txt", "kind": "file"}],
+        directory_key=key, directory_revision=3)
+    encoded = ParseDict(value.model_dump(exclude_none=True), public_pb2.WorkspaceFileListDTO()).SerializeToString()
+    decoded = public_pb2.WorkspaceFileListDTO.FromString(encoded)
+    assert WorkspaceFileListDTO.model_validate(MessageToDict(decoded, preserving_proto_field_name=True)) == value
+
+
+def test_attachment_text_mutation_keeps_exact_target_through_proto_wire() -> None:
+    uri = "boxteam://gateway_0123456789abcdef0123456789abcdef/workspace/019d1b4a-1111-7000-8000-000000000001/resources/attachments/att_0123456789abcdef0123456789abcdef/derived/output.txt"
+    value = TextMutationRequest.from_command(CreateText(target=uri, content="处理结果 Ω\n", expected_version="absent"))
+    encoded = ParseDict(value.model_dump(exclude_none=True), public_pb2.TextMutationRequest()).SerializeToString()
+    decoded = public_pb2.TextMutationRequest.FromString(encoded)
+    assert TextMutationRequest.model_validate(MessageToDict(decoded, preserving_proto_field_name=True)) == value
