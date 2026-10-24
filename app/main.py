@@ -241,6 +241,7 @@ async def _workspace_lifespan(container: AppContainer):
             with _workspace_startup_stage(container, "pending_request_store.migrate_all"):
                 await container.pending_request_store.migrate_all()
             with _workspace_startup_stage(container, "runtime_service.reconcile_stale_executions"):
+                await container.checkpointer.recover_internal_interrupts()
                 reconciled = await container.runtime_service.reconcile_stale_executions()
             if reconciled:
                 logger.warning("已收敛 %s 项遗留 Job 与消息流执行状态", reconciled)

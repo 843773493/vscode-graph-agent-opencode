@@ -15,6 +15,7 @@ from app.domain.itemized.enums import (
     CommitMode,
     ControlOutcome,
 )
+from app.domain.itemized.errors import InternalExecutionInterruptedError
 from app.domain.itemized.records import (
     CanonicalItemRecord,
 )
@@ -149,6 +150,17 @@ class RolloutInternalConvergenceMixin:
                 f"internal terminal convergence 只接受 Turn-less internal execution: {execution_id}"
             )
         current_outcome = strict_text(execution[0], field="executions.outcome")
+        admission = self.execution_admission(
+            session_id, thread_id=thread_id, execution_id=execution_id,
+            checkpoint_ns=checkpoint_ns, writer_connection=connection,
+        )
+        interrupt = self.internal_execution_interrupt(admission, connection=connection)
+        if interrupt is not None and outcome in {ControlOutcome.COMPLETED.value, ControlOutcome.COMPLETED_EMPTY.value}:
+            raise InternalExecutionInterruptedError(interrupt.interrupt_request_id)
+        terminal_metadata = (
+            {"interrupt_request_id": interrupt.interrupt_request_id, "after_interrupt_requested": True}
+            if interrupt is not None else {}
+        )
         control_correction = (
             current_outcome == ControlOutcome.EXECUTION_LOST.value
             and outcome in {ControlOutcome.CANCELLED.value, ControlOutcome.INTERRUPTED.value}
@@ -172,7 +184,7 @@ class RolloutInternalConvergenceMixin:
             idempotency_key=idempotency_key,
             commit_mode=commit_mode,
             outcome=outcome,
-            metadata={},
+            metadata=terminal_metadata,
             item_count=len(items),
         )
         if committed is not None:
@@ -199,7 +211,7 @@ class RolloutInternalConvergenceMixin:
                 idempotency_key=f"internal-terminal:{execution_id}:execution_lost",
                 commit_mode=CommitMode.METADATA_ONLY.value,
                 outcome=ControlOutcome.EXECUTION_LOST.value,
-                metadata={},
+                metadata=terminal_metadata,
                 item_count=0,
             )
             if lost_commit is None:
@@ -257,7 +269,6 @@ class RolloutInternalConvergenceMixin:
             replace(item, item_sequence=last_item_sequence + index + 1)
             for index, item in enumerate(items)
         )
-        connection.execute("BEGIN IMMEDIATE")
         commit_id, _offset = self._storage._append_v2_records_transaction(
             connection,
             thread_id,
@@ -269,6 +280,7 @@ class RolloutInternalConvergenceMixin:
             outcome=outcome,
             subject_id=execution_id,
             idempotency_key=idempotency_key,
+            metadata=terminal_metadata,
             begin_transaction=False,
         )
         for item in converged_items:

@@ -113,7 +113,7 @@ class SessionInterruptService:
 
         cancellation_prepared = False
 
-        def prepare_cancellation() -> None:
+        def prepare_cancellation(*, reminder_persisted: bool = False) -> None:
             nonlocal cancellation_prepared
             # durable accept 后、取消信号前同步发布；runner 收尾必须先看到该身份。
             SessionInterruptState.set(
@@ -122,11 +122,12 @@ class SessionInterruptService:
                 cancellation_reason="user_requested",
             )
             cancellation_prepared = True
-            self._append_user_interrupt_reminder(
-                session_id=session_id, thread_id=thread_id,
-                execution_id=admission.execution_id, phase=phase,
-                tool_name=tool_name, interrupted_at=interrupted_at,
-            )
+            if not reminder_persisted:
+                self._append_user_interrupt_reminder(
+                    session_id=session_id, thread_id=thread_id,
+                    execution_id=admission.execution_id, phase=phase,
+                    tool_name=tool_name, interrupted_at=interrupted_at,
+                )
             SessionInterruptState.set(
                 session_id, thread_id=thread_id,
                 user_interrupt_reminder_injected=True,
@@ -135,6 +136,35 @@ class SessionInterruptService:
         try:
             message_stream = None
             control_inbox = None
+            if turn_id is None:
+                reminder, metadata = self._user_interrupt_reminder_payload(
+                    phase=phase, tool_name=tool_name, interrupted_at=interrupted_at,
+                    interrupt_request_id=interrupt_request_id,
+                )
+                async with self._session_service.session_read_admission(session_id):
+                    try:
+                        result = self._message_service.request_internal_execution_interrupt(
+                            admission, interrupt_request_id=interrupt_request_id,
+                            reminder=reminder, response_metadata=metadata,
+                        )
+                    finally:
+                        # 接受提交后 lease 结算失败也必须取消原 Job；读取 rollout
+                        # 事实，不能凭创建 lease 或本地 callback 猜测接受成功。
+                        accepted = self._message_service.internal_execution_interrupt(admission)
+                        if accepted is not None:
+                            interrupt_request_id = accepted.interrupt_request_id
+                            prepare_cancellation(reminder_persisted=True)
+                if accepted is None:
+                    if not isinstance(result, str):
+                        raise RuntimeError("内部中断缺少接受事实或终态拒绝")
+                    return SessionInterruptResultDTO(
+                        session_id=session_id, thread_id=thread_id, job_id=active_job.job_id,
+                        status={"completed_empty": "completed", "execution_lost": "failed"}.get(result, result),
+                        interrupt_request_id=interrupt_request_id, phase=phase,
+                        tool_name=tool_name, interrupted_at=interrupted_at,
+                    )
+                if self._execution_scope_registry is not None:
+                    await self._execution_scope_registry.cancel(admission.execution_id, "user_requested")
             if turn_id is not None:
                 message_stream = await self._message_stream_store.open(
                     session_id=session_id,
@@ -187,8 +217,7 @@ class SessionInterruptService:
                         tool_name=tool_name,
                         interrupted_at=interrupted_at,
                     )
-            # TODO: internal execution 的自然终结与中断仍需统一原子边界；不重选后继 Job。
-            if turn_id is None or control_inbox is None or scope is None:
+            if turn_id is not None and (control_inbox is None or scope is None):
                 try:
                     prepare_cancellation()
                 finally:
@@ -247,21 +276,10 @@ class SessionInterruptService:
         tool_name: str | None,
         interrupted_at: datetime,
     ) -> bool:
-        reminder = build_user_interrupt_reminder(
-            phase=phase,
-            active_tool_name=tool_name,
-            interrupted_at=interrupted_at,
+        reminder, metadata = self._user_interrupt_reminder_payload(
+            phase=phase, tool_name=tool_name, interrupted_at=interrupted_at,
+            interrupt_request_id=SessionInterruptState.get(session_id, thread_id=thread_id).interrupt_request_id,
         )
-        metadata: dict[str, object] = {
-            "phase": phase,
-            "tool_name": tool_name,
-            "source": "user_interrupt",
-            "user_initiated": True,
-            "interrupted_at": interrupted_at.isoformat(),
-            "checkpoint_event_id": (
-                SessionInterruptState.get(session_id, thread_id=thread_id).interrupt_request_id
-            ),
-        }
         injected = self._message_service.submit_system_reminder(
             session_id=session_id,
             thread_id=thread_id,
@@ -277,3 +295,16 @@ class SessionInterruptService:
                 f"session_id={session_id} phase={phase} tool={tool_name}"
             )
         return injected
+
+    @staticmethod
+    def _user_interrupt_reminder_payload(
+        *, phase: str, tool_name: str | None, interrupted_at: datetime,
+        interrupt_request_id: str,
+    ) -> tuple[str, dict[str, object]]:
+        return build_user_interrupt_reminder(
+            phase=phase, active_tool_name=tool_name, interrupted_at=interrupted_at,
+        ), {
+            "phase": phase, "tool_name": tool_name, "source": "user_interrupt",
+            "user_initiated": True, "interrupted_at": interrupted_at.isoformat(),
+            "checkpoint_event_id": interrupt_request_id,
+        }

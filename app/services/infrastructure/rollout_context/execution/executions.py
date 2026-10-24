@@ -219,6 +219,7 @@ class RolloutExecutionsMixin:
             ) as connection:
                 self._storage._require_v2_runtime(connection)
                 if turn_id is None:
+                    connection.execute("BEGIN IMMEDIATE")
                     return self._converge_internal_execution(
                         connection,
                         session_id=session_id,

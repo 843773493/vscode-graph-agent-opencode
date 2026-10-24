@@ -69,9 +69,8 @@ def _event_identity(
     raise ValueError(f"checkpoint reminder 缺少真实 event identity: session_id={session_id} source={checkpoint_source}")
 
 
-def submit_checkpoint_reminder(
+def build_checkpoint_reminder_decision(
     *,
-    checkpointer: object,
     session_id: str,
     thread_id: str,
     reminder: str,
@@ -79,8 +78,8 @@ def submit_checkpoint_reminder(
     checkpoint_source: str,
     event_identity: str | None = None,
     execution_id: str,
-) -> bool:
-    """向唯一 source intent owner 提交一次 pending runtime reminder。"""
+) -> ApplySourceLifecycleDecision:
+    """冻结提醒；普通提交和内部中断共用同一 source intent。"""
     if not isinstance(session_id, str) or not session_id:
         raise ValueError("checkpoint reminder session_id 必须是非空字符串")
     if not isinstance(thread_id, str) or not thread_id:
@@ -108,7 +107,7 @@ def submit_checkpoint_reminder(
     )
     source_id = f"checkpoint:{checkpoint_source}:{identity}"
     revision = _revision(prepared.content)
-    decision = ApplySourceLifecycleDecision(
+    return ApplySourceLifecycleDecision(
         owner=MutationIntentOwner(
             session_id=session_id,
             thread_id=thread_id,
@@ -129,6 +128,19 @@ def submit_checkpoint_reminder(
             "extension_version": "1", "protection": "public",
             "value": dict(prepared.metadata),
         }},
+    )
+
+
+def submit_checkpoint_reminder(
+    *, checkpointer: object, session_id: str, thread_id: str, reminder: str,
+    response_metadata: Mapping[str, object], checkpoint_source: str,
+    event_identity: str | None = None, execution_id: str,
+) -> bool:
+    """向唯一 source intent owner 提交一次 pending runtime reminder。"""
+    decision = build_checkpoint_reminder_decision(
+        session_id=session_id, thread_id=thread_id, reminder=reminder,
+        response_metadata=response_metadata, checkpoint_source=checkpoint_source,
+        event_identity=event_identity, execution_id=execution_id,
     )
     consume = getattr(checkpointer, "submit_execution_pending_source", None)
     if not callable(consume):
@@ -193,6 +205,7 @@ def persist_interrupt_checkpoint(
 
 
 __all__ = [
+    "build_checkpoint_reminder_decision",
     "build_user_interrupt_reminder",
     "persist_interrupt_checkpoint",
     "submit_checkpoint_reminder",

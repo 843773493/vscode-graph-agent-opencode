@@ -105,15 +105,28 @@ class RolloutExecutionRecoveryMixin:
         if turn_id is None:
             if execution_id is None:
                 raise ValueError("Turn-less execution lost 必须指定 execution_id")
-            self.converge_execution(
-                session_id,
-                thread_id=owner_thread_id,
-                turn_id=None,
-                execution_id=execution_id,
-                outcome=ControlOutcome.EXECUTION_LOST.value,
-                turn_status=None,
-                checkpoint_ns=checkpoint_ns,
-            )
+            with self._storage._lock(owner_thread_id, checkpoint_ns, session_id=session_id):
+                admission = self.execution_admission(
+                    session_id, thread_id=owner_thread_id, execution_id=execution_id,
+                    checkpoint_ns=checkpoint_ns,
+                )
+                if admission.execution_origin != "internal":
+                    raise ValueError("Turn-less execution lost 不得收敛 user execution")
+                with self._storage.read_connection(session_id, owner_thread_id, checkpoint_ns) as connection:
+                    outcome = strict_text(connection.execute(
+                        "SELECT outcome FROM executions WHERE execution_id=?", (execution_id,),
+                    ).fetchone()[0], field="executions.outcome")
+                if outcome not in {ControlOutcome.UNKNOWN.value, ControlOutcome.EXECUTION_LOST.value}:
+                    return {"execution_id": execution_id, "status": outcome, "outcome": outcome}
+                self.converge_execution(
+                    session_id,
+                    thread_id=owner_thread_id,
+                    turn_id=None,
+                    execution_id=execution_id,
+                    outcome=ControlOutcome.EXECUTION_LOST.value,
+                    turn_status=None,
+                    checkpoint_ns=checkpoint_ns,
+                )
             return {
                 "execution_id": execution_id,
                 "status": ControlOutcome.EXECUTION_LOST.value,

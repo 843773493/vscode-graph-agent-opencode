@@ -88,6 +88,9 @@ from app.services.infrastructure.rollout_context.checkpoint.owner.context_source
 from app.services.infrastructure.rollout_context.checkpoint.owner.context_source_control_port import (
     ContextSourceControlOwnerMixin,
 )
+from app.services.infrastructure.rollout_context.checkpoint.owner.internal_execution_control import (
+    InternalExecutionControlOwnerMixin,
+)
 from app.services.infrastructure.rollout_context.checkpoint.owner.runtime_execution import (
     RuntimeExecutionOwnerMixin,
 )
@@ -121,6 +124,7 @@ if TYPE_CHECKING:
 
 
 class RolloutCheckpointSaver(
+    InternalExecutionControlOwnerMixin,
     RuntimeExecutionOwnerMixin,
     RolloutMutationIntentPortMixin,
     ContextPlanRegistryOwnerMixin,

@@ -300,6 +300,7 @@ def agent_execution_dependencies(
             "update_model_call_outcome",
             "execution_for_turn",
             "execution_admission_for_job",
+            "internal_execution_interrupt",
             "get_canonical_item",
             "converge_execution",
             "mark_execution_lost",
@@ -313,6 +314,7 @@ def agent_execution_dependencies(
     )
     saver.accepted_user_message.side_effect = accepted_inputs.read_user_message
     saver.execution_admission_for_job.side_effect = accepted_inputs.read_admission
+    saver.internal_execution_interrupt.return_value = None
     saver.context_owner_namespace.side_effect = lambda checkpoint_ns: checkpoint_ns
     saver.frozen_resource_activation_for_admission.return_value = None
     saver.find_resource_activation_snapshot.return_value = None

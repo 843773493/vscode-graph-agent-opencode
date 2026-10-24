@@ -20,7 +20,9 @@ from app.core.identifier import create_prefixed_id
 from app.core.session_thread_context import session_thread_owner_scope
 from app.core.shielded_cleanup import run_sync_shielded
 from app.domain.itemized.execution_admission import (
+    ExecutionAdmission,
     InternalExecutionIntent,
+    InternalExecutionInterrupt,
     UserExecutionIdentity,
 )
 from app.domain.itemized.execution_queue import (
@@ -42,6 +44,7 @@ from app.schemas.internal_v2.message import (
 from app.schemas.internal_v2.pending_request import PendingRequestControl
 from app.services.business.session_turn_history.visible_page import visible_message_page
 from app.services.business.system_reminder_checkpoint_service import (
+    build_checkpoint_reminder_decision,
     submit_checkpoint_reminder,
 )
 from app.services.business.user_content_builder import (
@@ -463,6 +466,26 @@ class MessageService(MessageContentProjectionMixin):
             event_identity=event_identity,
             execution_id=execution_id,
         )
+
+    def request_internal_execution_interrupt(
+        self, admission: ExecutionAdmission, *, interrupt_request_id: str,
+        reminder: str, response_metadata: dict[str, object],
+    ) -> InternalExecutionInterrupt | str:
+        if self._checkpointer is None:
+            raise RuntimeError("MessageService 缺少 internal interrupt owner")
+        decision = build_checkpoint_reminder_decision(
+            session_id=admission.session_id, thread_id=admission.thread_id,
+            execution_id=admission.execution_id, reminder=reminder,
+            response_metadata=response_metadata, checkpoint_source="user_interrupt",
+            event_identity=interrupt_request_id,
+        )
+        request = InternalExecutionInterrupt(admission, interrupt_request_id, decision.item_id)
+        return self._checkpointer.request_internal_execution_interrupt(request, decision)
+
+    def internal_execution_interrupt(self, admission: ExecutionAdmission) -> InternalExecutionInterrupt | None:
+        if self._checkpointer is None:
+            raise RuntimeError("MessageService 缺少 internal interrupt owner")
+        return self._checkpointer.internal_execution_interrupt(admission)
 
     async def _load_raw_messages(
         self,

@@ -181,12 +181,32 @@ class ExecutionAdmissionCursor:
             raise ValueError("准入游标 commit kind 与 execution origin 不一致")
 
 
+@dataclass(frozen=True, slots=True)
+class InternalExecutionInterrupt:
+    """原 owner 接受的内部执行中断；历史复制不赋予目标操作权。"""
+
+    admission: ExecutionAdmission
+    interrupt_request_id: str
+    reminder_item_id: str
+    reason: Literal["user_requested"] = "user_requested"
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.admission, ExecutionAdmission) or self.admission.execution_origin != "internal":
+            raise ValueError("内部中断必须绑定 Turn-less internal admission")
+        for name in ("interrupt_request_id", "reminder_item_id"):
+            if not isinstance(getattr(self, name), str) or not getattr(self, name).strip():
+                raise ValueError(f"InternalExecutionInterrupt.{name} 必须是非空身份")
+        if self.reason != "user_requested":
+            raise ValueError("内部 execution 中断必须保留明确的用户请求原因")
+
+
 __all__ = [
     "ExecutionAdmission",
     "ExecutionAdmissionCursor",
     "ExecutionBinding",
     "ExecutionOrigin",
     "InternalExecutionIntent",
+    "InternalExecutionInterrupt",
     "UserExecutionIdentity",
     "internal_execution_request_preimage",
     "user_turn_admission_payload_hash",

@@ -47,6 +47,7 @@ from app.core.turn_execution_scope import (
     reset_current_turn_execution_scope,
     set_current_turn_execution_scope,
 )
+from app.domain.itemized.errors import InternalExecutionInterruptedError
 from app.domain.itemized.execution_admission import (
     ExecutionAdmission,
     ExecutionBinding,
@@ -497,6 +498,11 @@ class StepRunner:
             admission = await asyncio.shield(admission_read_task)
             validate_admission(admission)
 
+            if admission.execution_origin == "internal":
+                interrupt = await asyncio.to_thread(checkpointer.internal_execution_interrupt, admission)
+                if interrupt is not None:
+                    raise InternalExecutionInterruptedError(interrupt.interrupt_request_id)
+
             job_token = set_current_job_id(job_id)
             agent_token = set_current_agent_id(resolved_agent_id)
             interruptible_phase_token = set_interruptible_phase("text")
@@ -765,8 +771,16 @@ class StepRunner:
             )
             return final_text
 
-        except asyncio.CancelledError as cancellation_error:
+        except (asyncio.CancelledError, InternalExecutionInterruptedError) as caught_error:
+            cancellation_error = caught_error
             settled.clear()
+            if isinstance(cancellation_error, InternalExecutionInterruptedError):
+                SessionInterruptState.set(
+                    session_id, thread_id=thread_id,
+                    interrupt_request_id=cancellation_error.interrupt_request_id,
+                    cancellation_reason="user_requested", user_interrupt_reminder_injected=True,
+                )
+                cancellation_error = asyncio.CancelledError("user_requested")
 
             async def converge_cancellation(
                 cancellation: asyncio.CancelledError = cancellation_error,
@@ -793,6 +807,8 @@ class StepRunner:
                 await run_cleanup_shielded(converge_cancellation)
             except Exception as cleanup_error:
                 raise cancellation_error from cleanup_error
+            if isinstance(caught_error, InternalExecutionInterruptedError):
+                raise cancellation_error from caught_error
             raise
         except Exception as error:
             settled.clear()

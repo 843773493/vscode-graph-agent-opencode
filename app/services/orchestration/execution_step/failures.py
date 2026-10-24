@@ -128,12 +128,13 @@ async def handle_step_cancelled(
                     f"internal user interruption 缺少 execution_id: job_id={job_id}"
                 )
             await asyncio.to_thread(
-                checkpointer.mark_execution_lost,
+                checkpointer.converge_execution,
                 session_id,
                 thread_id=thread_id,
                 turn_id=None,
                 execution_id=execution_id,
-                reason="user_interrupt",
+                outcome="cancelled",
+                turn_status=None,
                 checkpoint_ns=checkpoint_ns,
             )
             return
@@ -194,34 +195,10 @@ async def handle_step_failure(
     if execution_id is None:
         await publish(EventType.ERROR, {"error": str(error), "phase": "agent_execution"})
         return
-    if interrupt_state.interrupt_request_id is not None:
+    if turn_id is not None and interrupt_state.interrupt_request_id is not None:
         if message_stream_runtime is not None:
             await message_stream_runtime.finalize_interruption_facts()
-        if turn_id is None:
-            if message_stream_runtime is not None:
-                await message_stream_runtime.complete_model(
-                    outcome="user_interrupt",
-                    reason="用户中断 internal execution",
-                )
-            if execution_id is None:
-                raise RuntimeError(
-                    f"internal user interruption 缺少 execution_id: job_id={job_id}"
-                )
-            mark_execution_lost = getattr(checkpointer, "mark_execution_lost", None)
-            if not callable(mark_execution_lost):
-                raise TypeError(
-                    "v2 checkpoint saver 缺少可调用端口: mark_execution_lost"
-                )
-            await asyncio.to_thread(
-                mark_execution_lost,
-                session_id,
-                thread_id=thread_id,
-                turn_id=None,
-                execution_id=execution_id,
-                reason="user_interrupt",
-                checkpoint_ns=checkpoint_ns,
-            )
-        elif message_stream_writer is not None:
+        if message_stream_writer is not None:
             await message_stream_writer.close_interrupted(interrupt_state.interrupt_request_id)
         return
     failure_code = (
@@ -288,10 +265,22 @@ async def handle_step_failure(
             checkpoint_ns=checkpoint_ns,
         )
     if message_stream_writer is not None:
+        after_interrupt_requested = bool(interrupt_state.cancellation_reason)
+        if turn_id is None:
+            # 内部执行以持久接受事实为准，不能依赖尚未发布的进程内状态。
+            admission = await asyncio.to_thread(
+                checkpointer.execution_admission,
+                session_id, thread_id=thread_id, execution_id=execution_id,
+                checkpoint_ns=checkpoint_ns,
+            )
+            interrupt = await asyncio.to_thread(
+                checkpointer.internal_execution_interrupt, admission,
+            )
+            after_interrupt_requested = interrupt is not None
         await message_stream_writer.close_failed(
             code=failure_code,
             message=failure_message,
-            after_interrupt_requested=bool(interrupt_state.cancellation_reason),
+            after_interrupt_requested=after_interrupt_requested,
             resumable=False,
         )
     await publish(EventType.ERROR, {"error": str(error), "phase": "agent_execution"})

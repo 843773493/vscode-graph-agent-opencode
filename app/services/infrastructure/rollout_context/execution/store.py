@@ -12,6 +12,9 @@ from app.services.infrastructure.rollout_context.execution.executions import (
 from app.services.infrastructure.rollout_context.execution.internal_admission import (
     RolloutInternalExecutionAdmissionMixin,
 )
+from app.services.infrastructure.rollout_context.execution.internal_control import (
+    InternalExecutionControlMixin,
+)
 from app.services.infrastructure.rollout_context.execution.internal_convergence import (
     RolloutInternalConvergenceMixin,
 )
@@ -54,6 +57,7 @@ if TYPE_CHECKING:
 
 
 class RolloutExecutionStore(
+    InternalExecutionControlMixin,
     RuntimeNoticeConsumptionMixin,
     RuntimeWakeupStorageMixin,
     RolloutTurnsMixin,

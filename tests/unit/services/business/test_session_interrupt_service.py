@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from contextlib import nullcontext
+from contextlib import closing, nullcontext
 from datetime import UTC, datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
@@ -546,14 +546,8 @@ async def test_interrupt_ignores_interrupt_pending_job(
 
     assert job_service.control_requests == []
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize("control_status", [JobStatus.cancelling, JobStatus.cancelled])
-async def test_internal_job_interrupt_never_opens_a_turn_stream(
-    tmp_path,
-    session_bundle_factory,
-    interrupt_sessions,
-    control_status,
-) -> None:
+@pytest.fixture
+async def internal_interrupt_case(tmp_path, session_bundle_factory, interrupt_sessions):
     session_id = "ses_019c75960c0c763d844344c4deaada6e"
     job_id = "job_internal_interrupt"
     message_id = "msg_internal_interrupt"
@@ -588,7 +582,7 @@ async def test_internal_job_interrupt_never_opens_a_turn_stream(
     job_service = FakeJobService(
         job,
         execution_binding=execution_binding,
-        control_status=control_status,
+        control_status=JobStatus.cancelling,
     )
     event_bus = FakeJobEventBus()
     service = SessionInterruptService(
@@ -599,15 +593,207 @@ async def test_internal_job_interrupt_never_opens_a_turn_stream(
         message_stream_store=message_stream_store,
     )
 
+    return SimpleNamespace(
+        saver=saver, binding=binding, admission=admission, messages=message_service,
+        streams=message_stream_store, jobs=job_service, events=event_bus, service=service,
+        session_id=session_id,
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("control_status", [JobStatus.cancelling, JobStatus.cancelled])
+@pytest.mark.parametrize("terminal_first", [None, "completed_empty", "failed", "cancelled", "execution_lost"])
+async def test_internal_job_interrupt_never_opens_a_turn_stream(
+    internal_interrupt_case, control_status, terminal_first,
+) -> None:
+    case = internal_interrupt_case
+    saver, binding, admission = case.saver, case.binding, case.admission
+    job_service, event_bus, service = case.jobs, case.events, case.service
+    message_stream_store = case.streams
+    session_id, job_id = case.session_id, admission.job_id
+    job_service.control_status = control_status
+    if terminal_first is not None:
+        saver.converge_execution(
+            session_id, thread_id=binding.thread_id, turn_id=None,
+            execution_id=admission.execution_id, outcome=terminal_first, turn_status=None,
+        )
+    before = saver._storage.storage.read_items(session_id, binding.thread_id)
     result = await service.interrupt(session_id=session_id)
 
     assert result.thread_id == binding.thread_id
     assert result.job_id == job_id
+    if terminal_first is not None:
+        assert result.status == {"completed_empty": "completed", "execution_lost": "failed"}.get(terminal_first, terminal_first)
+        assert not job_service.control_requests
+        assert not event_bus.events
+        assert saver.internal_execution_interrupt(admission) is None
+        assert saver._storage.storage.read_items(session_id, binding.thread_id) == before
+        assert SessionInterruptState.get(session_id, thread_id=binding.thread_id).is_default()
+        return
     assert result.status == control_status.value
     message_stream_store.open.assert_not_awaited()
     assert [request.action for request in job_service.control_requests] == [
         ControlAction.cancel
     ]
+    accepted = saver.internal_execution_interrupt(admission)
+    assert accepted is not None and accepted.interrupt_request_id == result.interrupt_request_id
+    items = saver._storage.storage.read_items(session_id, binding.thread_id)
+    assert len(items) == len(before) + 1
+    assert items[-1].item_id == accepted.reminder_item_id
+    from app.domain.itemized.errors import InternalExecutionInterruptedError
+
+    with pytest.raises(InternalExecutionInterruptedError):
+        saver.converge_execution(
+            session_id, thread_id=binding.thread_id, turn_id=None,
+            execution_id=admission.execution_id, outcome="completed_empty", turn_status=None,
+        )
+    repeated = case.messages.request_internal_execution_interrupt(
+        admission, interrupt_request_id="different-command", reminder="新的请求不能再追加提醒。", response_metadata={},
+    )
+    assert repeated == accepted
+    assert saver._storage.storage.read_items(session_id, binding.thread_id) == items
     assert SessionInterruptState.get(session_id, thread_id=binding.thread_id).interrupt_request_id
     assert event_bus.events[-1]["event_type"] == "session_interrupted"
     SessionInterruptState.clear(session_id, thread_id=binding.thread_id)
+
+
+@pytest.mark.asyncio
+async def test_internal_interrupt_source_and_event_rollback_together(internal_interrupt_case, monkeypatch):
+    case = internal_interrupt_case
+    storage = case.saver._storage.storage
+    before = storage.read_items(case.session_id, case.binding.thread_id)
+    jsonl = storage.jsonl_path(case.session_id, thread_id=case.binding.thread_id)
+    original_bytes = jsonl.read_bytes()
+
+    def fail_event(*_args, **_kwargs):
+        raise OSError("接受事件写入失败")
+
+    monkeypatch.setattr(case.saver._storage.executions, "_append_internal_interrupt", fail_event)
+    with pytest.raises(OSError, match="接受事件写入失败"):
+        await case.service.interrupt(case.session_id)
+    assert case.saver.internal_execution_interrupt(case.admission) is None
+    assert storage.read_items(case.session_id, case.binding.thread_id) == before
+    assert jsonl.read_bytes() == original_bytes
+    assert not case.jobs.control_requests and not case.events.events
+    assert SessionInterruptState.get(case.session_id, thread_id=case.binding.thread_id).is_default()
+    assert await case.saver.recover_internal_interrupts() == 0
+    from app.core.session_control_primitives import CONTROL_DATABASE_NAME
+    from app.core.session_control_store import SessionControlStore
+
+    with closing(SessionControlStore(storage._path_resolver.resolve_session_node(case.session_id) / CONTROL_DATABASE_NAME)) as control:
+        assert not control.list_non_terminal_leases()
+
+
+@pytest.mark.asyncio
+async def test_internal_accepted_interrupt_cold_recovery_preserves_unconfirmed_stop(
+    internal_interrupt_case, monkeypatch,
+):
+    case = internal_interrupt_case
+
+    def fail_lease_settlement(_control, _event):
+        raise OSError("接受已提交但 lease 结算前进程退出")
+
+    monkeypatch.setattr(case.saver, "_settle_internal_interrupt_lease", fail_lease_settlement)
+    with pytest.raises(OSError, match="lease 结算前"):
+        await case.service.interrupt(case.session_id)
+    assert [request.action for request in case.jobs.control_requests] == [ControlAction.cancel]
+    accepted = case.saver.internal_execution_interrupt(case.admission)
+    assert accepted is not None
+    storage = case.saver._storage.storage
+    original_items = storage.read_items(case.session_id, case.binding.thread_id)
+    with storage.read_connection(case.session_id, case.binding.thread_id, "") as connection:
+        original_events = connection.execute("SELECT * FROM control_events").fetchall()
+    with RolloutCheckpointSaver(storage.sessions_dir) as cold:
+        assert await cold.recover_internal_interrupts() == 1
+        assert await cold.recover_internal_interrupts() == 0
+        assert cold.internal_execution_interrupt(case.admission) == accepted
+        assert cold.runtime_execution_outcome(case.session_id, case.binding.thread_id, case.admission.execution_id) == "execution_lost"
+        assert cold._storage.storage.read_items(case.session_id, case.binding.thread_id) == original_items
+        with cold._storage.storage.read_connection(case.session_id, case.binding.thread_id, "") as connection:
+            assert connection.execute("SELECT * FROM control_events").fetchall() == original_events
+            metadata = json.loads(connection.execute(
+                "SELECT metadata_json FROM storage_commits WHERE commit_kind='terminal_convergence' AND subject_id=?",
+                (case.admission.execution_id,),
+            ).fetchone()[0])
+            assert metadata == {"after_interrupt_requested": True, "interrupt_request_id": accepted.interrupt_request_id}
+    SessionInterruptState.clear(case.session_id, thread_id=case.binding.thread_id)
+
+
+@pytest.mark.asyncio
+async def test_fork_inherited_internal_interrupt_is_historical_not_target_control(
+    internal_interrupt_case, session_bundle_factory, fork_deadlines,
+):
+    from tests.integration.backend.sessions.itemized_projection_helpers import (
+        copy_rollout_snapshot,
+    )
+
+    case = internal_interrupt_case
+    await case.service.interrupt(case.session_id)
+    target_id = "ses_019c49da91667f7b842224c1bfc58b01"
+    storage = case.saver._storage.storage
+    session_bundle_factory(storage.sessions_dir, target_id)
+    target_thread = storage.main_thread_id(target_id)
+    await copy_rollout_snapshot(case.saver, case.session_id, target_id, fork_deadlines=fork_deadlines)
+    assert case.saver._storage.executions.local_internal_interrupts(target_id, target_thread) == ()
+    with storage.read_connection(target_id, target_thread, "") as connection:
+        before_executions = connection.execute("SELECT * FROM executions").fetchall()
+        before_events = connection.execute("SELECT * FROM control_events").fetchall()
+        assert any(row[2] == "interrupt.requested" for row in before_events)
+    with RolloutCheckpointSaver(storage.sessions_dir) as cold:
+        assert await cold.recover_internal_interrupts() == 1
+        with cold._storage.storage.read_connection(target_id, target_thread, "") as connection:
+            assert connection.execute("SELECT * FROM executions").fetchall() == before_executions
+            assert connection.execute("SELECT * FROM control_events").fetchall() == before_events
+    SessionInterruptState.clear(case.session_id, thread_id=case.binding.thread_id)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("memory_published", [False, True])
+@pytest.mark.parametrize("failure_kind", ["execution_error", "execution_lost"])
+async def test_internal_failure_after_accepted_interrupt_keeps_real_outcome(
+    internal_interrupt_case, memory_published, failure_kind,
+):
+    from app.core.turn_execution_scope import ScopeCancelledError
+    from app.services.orchestration.execution_step.failures import handle_step_failure
+
+    case = internal_interrupt_case
+    await case.service.interrupt(case.session_id)
+    accepted = case.saver.internal_execution_interrupt(case.admission)
+    assert accepted is not None
+    error = (RuntimeError("中断接受后发生真实执行异常") if failure_kind == "execution_error"
+             else ScopeCancelledError("scope_deadline_exceeded"))
+    runtime, writer, publish = AsyncMock(), AsyncMock(), AsyncMock()
+    await handle_step_failure(
+        error=error,
+        interrupt_state=SimpleNamespace(
+            interrupt_request_id=accepted.interrupt_request_id if memory_published else None,
+            cancellation_reason="user_requested" if memory_published else None,
+            tool_name=None,
+        ),
+        message_stream_runtime=runtime, message_stream_writer=writer,
+        checkpointer=case.saver, session_id=case.session_id,
+        thread_id=case.binding.thread_id, job_id=case.admission.job_id,
+        turn_id=None, execution_id=case.admission.execution_id, checkpoint_ns="",
+        publish=publish, logger=Mock(),
+    )
+    expected_outcome = "failed" if failure_kind == "execution_error" else "execution_lost"
+    assert case.saver.runtime_execution_outcome(
+        case.session_id, case.binding.thread_id, case.admission.execution_id,
+    ) == expected_outcome
+    runtime.fail_model.assert_awaited_once()
+    runtime.complete_model.assert_not_awaited()
+    writer.close_failed.assert_awaited_once()
+    assert writer.close_failed.await_args.kwargs["after_interrupt_requested"] is True
+    writer.close_interrupted.assert_not_awaited()
+    with case.saver._storage.storage.read_connection(case.session_id, case.binding.thread_id, "") as connection:
+        metadata = json.loads(connection.execute(
+            "SELECT metadata_json FROM storage_commits WHERE commit_kind='terminal_convergence' AND subject_id=?",
+            (case.admission.execution_id,),
+        ).fetchone()[0])
+        assert metadata == {"after_interrupt_requested": True, "interrupt_request_id": accepted.interrupt_request_id}
+    with RolloutCheckpointSaver(case.saver._storage.storage.sessions_dir) as cold:
+        assert await cold.recover_internal_interrupts() == 0
+        assert cold.runtime_execution_outcome(
+            case.session_id, case.binding.thread_id, case.admission.execution_id,
+        ) == expected_outcome
+    SessionInterruptState.clear(case.session_id, thread_id=case.binding.thread_id)

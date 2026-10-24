@@ -258,12 +258,13 @@ async def test_writerless_internal_user_cancel_converges_tool_result_and_executi
     assert completion.tool_name == "read_file"
     assert completion.tool_outcome == "unknown"
     outcome_sink.assert_awaited_with("model_internal_cancel", "cancelled")
-    checkpointer.mark_execution_lost.assert_called_once_with(
+    checkpointer.converge_execution.assert_called_once_with(
         "session",
         thread_id="thread",
         turn_id=None,
         execution_id="execution_internal",
-        reason="user_interrupt",
+        outcome="cancelled",
+        turn_status=None,
         checkpoint_ns="",
     )
 

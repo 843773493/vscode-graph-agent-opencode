@@ -1,3 +1,5 @@
+当前范围裁定（2026-10-24，用户授权）：TODO：Agent 团队与协作部分等待用户调整设计，暂缓后续功能实现、专项验证和性能优化。8.10 的会话协作通信、8.11 的团队与成员机制，以及 8.3/8.13 中对应的团队协作验收继续保留未完成状态；复合任务的其它通用执行、存储、fork、URI 部分继续推进。已有实现与验收记录保留作后续设计输入，暂缓不计作通过。
+
 当前验收坐标（2026-10-10）：核心最终批、索引查询与恢复fixture已集成e11c8c6b，Sol013失败收敛闭包经固定增审后集成faad271c；§10.3原合取要求已完成。导航029独立full真实失败（exit1/636.73s）：300文件完成后跨页UI等待超时，Gateway0；037核两操作已提交，终态分别由另一页处理，同Sol041修完整等待callee，保原300/40/20及计时门。单正文036已集成375600b2，原4.7四门经有限证据合取及独审闭合；Section8身份另验。7.5/8/9/10其它任务按完整原子要求验收，旧Provider403与C1外部前置仍UNMET；043另外确认原8.13确定性thread/model-call replay与外置harness尚待实施，不能全部归为配额阻塞。原goal未完，具名收据与实时租约见团队协作台账。
 
 ## 1. Canonical item 与格式合同
@@ -1104,3 +1106,11 @@ pending 恢复的硬错误重试已闭合（2026-10-22）：进程内装载阶�
 - 固定完整候选 tree `beb6e7a2a1ba04df61f17a36a5662d3c7d20279b` 的正式 matrix `product-capture-and-delete-004` 为10 passed/326 deselected、177.67秒、exit0；覆盖四个partial capture/完整marker恢复、pinned前删源、缺失附件目标删除、两种已提交阶段删源后真实lifespan冷恢复，以及image/video预览故障。来源与恢复后的续写统一由产品消息准入→持久Job→Agent/model_stream生成关键状态，保留原60秒fork期限。
 - 真实来源包含两轮工具循环和一组并发结果；恢复后逐字段核消息身份/顺序、canonical前缀不变及目标owner，实际transport请求与sealed preimage一致，重算request_hash并核工具调用/结果配对。共用执行装具迁齐全部调用，lifespan持有fanout时不重复启动。
 - 三个变更文件Ruff exit0，非作者只读独审无阻断，未独立复跑；准确命令、完整源码前后指纹、原始输出、退出码及零残留见 `out/tests/temp/fork_capture_current_20261024/artifacts/runs/{static-product-004,product-capture-and-delete-004}/`，审查见 `review-product-004.json`。本证据为限定模型回放集成验证，不代替跨Gateway、真实Provider、Windows或完整default Web总门，7.5/8.3等总项保持未勾。
+
+
+### 2026-10-24 通用内部执行中断与自然完成裁决（部分收口）
+
+- Turn-less internal execution 的中断绑定精确 admission、Job、Thread 与 command identity；提醒和 `interrupt.requested` 在同一 rollout 事务接受，复用既有控制日志与哈希链，不新增表或 schema 版本。自然终结先提交则拒绝中断且无取消副作用；接受先提交则拒绝后续自然完成，确认取消才记录 `cancelled`。
+- 接受后发生真实异常仍按 `failed` 或 `execution_lost` 收敛，terminal metadata 与失败流统一从持久接受事实判断中断，不把请求等同于已经停止。启动先收敛中断交付 lease，再处理 stale execution；fork 继承日志保留原 owner，只能作为历史读取。
+- 固定候选 `7c4f5774b0c8237b8198dc71808386d39e71e483`：`out/tests/temp/internal_interrupt_arbitration_20261024/artifacts/runs/unit-005/` 43 passed/1 deselected、`adjacent-005/` 44 passed、正式 `unit-python` matrix `cold-fork-005/` 6 passed/18 deselected（含重复覆盖的冷恢复和异常归因），全部 exit 0；`product-005/` 2 passed/26.27 秒、exit 0，通过真实 runtime source→durable Job→compiled Agent/model→HTTP 中断复现两种赢家，核无 Turn、精确控制事件、canonical outcome 及 lease 结算。`static-005/` Ruff exit 0。独立只读审查 `artifacts/review-implementation-002.json` 指出的失败流事实来源缺口已修，并补两种内存发布时序及 failed/lost 冷恢复测试。
+- 本证据只关闭通用执行竞态子边界，不勾选整个 8.3/8.13，不覆盖团队或协作专项；相关部分继续遵守本文件顶部 TODO 裁定。最终提交相对该受测候选仅增加本证据和移除空白行，未改变执行行为。

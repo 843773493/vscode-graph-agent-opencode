@@ -152,6 +152,12 @@ class RolloutMutationIntentPortMixin:
         intent: ApplySourceLifecycleDecision,
     ) -> None:
         """source 分支：正文与 control state 在同一 owner transaction 提交。"""
+        item = self._source_lifecycle_item(intent)
+        self._storage.checkpoints.apply_source_lifecycle_decision(intent, item)
+
+    @staticmethod
+    def _source_lifecycle_item(intent: ApplySourceLifecycleDecision) -> CanonicalItemRecord | None:
+        """所有 source 提交共用唯一 canonical item 构造。"""
         item: CanonicalItemRecord | None = None
         if intent.content is not None:
             if intent.item_id is None:
@@ -183,7 +189,7 @@ class RolloutMutationIntentPortMixin:
                 message_group_id=f"message-{message_id}",
                 wire_role="user",
             )
-        self._storage.checkpoints.apply_source_lifecycle_decision(intent, item)
+        return item
 
     def _consume_append_intent(self, intent: AppendCanonicalItemIntent) -> None:
         """append 分支：批内首个 intent 消费时单事务提交整批。"""

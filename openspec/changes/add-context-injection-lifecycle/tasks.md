@@ -1,3 +1,5 @@
+当前范围裁定（2026-10-24，用户授权）：TODO：Agent 团队与协作设计待调整，暂停继续扩展该部分实现与专项验收。4.7/4.9/6.8 及总验收中涉及团队、成员、委派与会话协作通信的剩余内容保留 TODO 和未完成状态，待新设计确定后重新规划；通用来源注入、执行恢复、fork、资源和 URI 链路继续推进。已有证据保留，不能据此将延期部分勾选完成。
+
 当前验收坐标（2026-10-19）：A01–A03 已接受范围沿原具名收据复用；4.6 已由 instruction generation、条件来源与 Skill metadata 的具名验收收口，见本节对应收据。最终 Sol 批已将八个 summarization caller 迁唯一 owner 并物理删除旧 facade，TC001 真实 canonical 提交后 observer 失败、namespace 归一及锁内 writer connection 闭包已通过核心/受影响边界及独立审查，已集成 `e11c8c6b`。6.8 的真实产品 Provider403 仍 UNMET，integration 不能代替。旧阶段缺口仅作历史事实，不据未勾复建已关闭链路。
 
 ## 1. Context mutation、stable-prefix 与 source domain contract
