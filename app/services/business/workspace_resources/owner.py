@@ -211,14 +211,15 @@ class WorkspaceResourceOwner:
         if outcome == "not_created" and receipt.get("resource") is None:
             record.status = "deleted"
             record.thread_associations.clear()
-        elif outcome == "failed" and self.kind == "browser":
+        elif outcome == "failed":
             runtime = receipt.get("resource")
-            if not isinstance(runtime, dict) or (
-                runtime.get("browser_id"), runtime.get("workspace_id"),
+            expected_status = "failed" if self.kind == "browser" else "terminated"
+            if not isinstance(runtime, dict) or type(runtime.get("transport_owner_revision")) is not int or (
+                runtime.get(f"{self.kind}_id"), runtime.get("workspace_id"),
                 runtime.get("transport_owner_revision"), runtime.get("status"),
                 runtime.get("reconciliation_status"),
-            ) != (record.resource_id, record.workspace_id, record.owner_revision, "failed", "verified"):
-                logger.error("Browser 创建失败回执未核实: resource_id=%s", record.resource_id)
+            ) != (record.resource_id, record.workspace_id, record.owner_revision, expected_status, "verified"):
+                logger.error("外部资源创建失败回执未核实: resource_id=%s", record.resource_id)
                 return False
             observe_resource(record, runtime, self.kind)
         else:

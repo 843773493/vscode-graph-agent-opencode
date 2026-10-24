@@ -80,6 +80,74 @@ test("Worker 错误不进入持久状态，仍保留 unknown 与原始诊断", a
   assert.equal(diagnostic.mock.calls[0].arguments[1], original);
 });
 
+for (const cleanupResult of ["missing", "terminated", "force_killed", "still_running", "cleanup_failed", null]) {
+  test(`启动失败仅凭正式进程树结果签发回执：${cleanupResult}`, async (t) => {
+    const session = completedSession(t, { status: "created" });
+    const original = new Error("受控启动失败");
+    const shutdown = Promise.withResolvers();
+    session.ptyProcess = { pid: 42002, startupCleanupResult: cleanupResult, shutdown: () => shutdown.promise };
+    const states = [];
+    session.manager.persist = async () => { states.push(session.toRecord()); };
+    const rejected = assert.rejects(session.failStartup(original), error => error === original);
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(original.creationReceipt, undefined, "Worker退出确认前不能签回执");
+    assert.equal(states.length, 1);
+    assert.equal(states[0].reconciliation_status, "unknown");
+    assert.equal(states[0].os_pid, 42002);
+    shutdown.resolve();
+    await rejected;
+    const stopped = ["missing", "terminated", "force_killed"].includes(cleanupResult);
+    assert.equal(states.length, 2);
+    assert.equal(session.ptyProcess, null);
+    assert.equal(session.reconciliationStatus, stopped ? "verified" : "unknown");
+    assert.equal(session.status, stopped ? "terminated" : "created");
+    if (stopped) {
+      assert.deepEqual(original.creationReceipt, {
+        resource_id: session.id, workspace_id: session.workspaceId, owner_revision: 1,
+        outcome: "failed", resource: session.snapshot(),
+      });
+      assert(Number.isFinite(Date.parse(states[1].ended_at)));
+    } else assert.equal(original.creationReceipt, undefined);
+  });
+}
+
+test("启动收尾失败保留原Worker句柄、未知记录及两份异常", async (t) => {
+  const session = completedSession(t, { status: "created" });
+  const original = new Error("原启动失败");
+  const cleanup = new Error("Worker未确认退出");
+  t.mock.method(console, "error", () => {});
+  const worker = { pid: 42002, startupCleanupResult: "terminated", async shutdown() { throw cleanup; } };
+  session.ptyProcess = worker;
+  const states = [];
+  session.manager.persist = async () => { states.push(session.toRecord()); };
+  await assert.rejects(session.failStartup(original), error => {
+    assert(error instanceof AggregateError);
+    assert.deepEqual(error.errors, [original, cleanup]);
+    assert.equal(error.cause, original);
+    return true;
+  });
+  assert.equal(session.ptyProcess, worker);
+  assert.equal(session.reconciliationStatus, "unknown");
+  assert.equal(states.length, 1);
+  assert.equal(original.creationReceipt, undefined);
+});
+
+for (const failedSave of [1, 2]) {
+  test(`启动收尾第${failedSave}次落盘失败不能签回执`, async (t) => {
+    const session = completedSession(t, { status: "created" });
+    const original = new Error("原启动失败");
+    const disk = new Error("结果落盘失败");
+    const worker = { pid: 42002, startupCleanupResult: "terminated", async shutdown() {} };
+    session.ptyProcess = worker;
+    let saves = 0;
+    session.manager.persist = async () => { if (++saves === failedSave) throw disk; };
+    await assert.rejects(session.failStartup(original), error => error === disk);
+    assert.equal(saves, failedSave);
+    assert.equal(original.creationReceipt, undefined);
+    if (failedSave === 1) assert.equal(session.ptyProcess, worker);
+  });
+}
+
 test("退出清理失败只广播阶段，原始异常只留在诊断", async (t) => {
   const session = completedSession(t);
   const original = new Error(`EIO: ${session.cwd}/private-cleanup`);

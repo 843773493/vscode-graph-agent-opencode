@@ -382,3 +382,62 @@ async def test_creation_failure_requires_a_receipt_for_the_exact_intent(
         finally:
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)
+
+
+@pytest.mark.parametrize("snapshot_case", ["verified", "wrong_identity", "wrong_workspace", "wrong_revision", "bool_revision", "running", "unknown"])
+async def test_failed_creation_receipt_requires_a_verified_snapshot_for_the_same_owner(
+    bundle: TerminalOwnerFixture | BrowserOwnerFixture, pending_http: PendingHTTP,
+    monkeypatch: pytest.MonkeyPatch, snapshot_case: str,
+) -> None:
+    kind = bundle.owner.kind
+    pending_http.status = 500
+    error_type = TerminalRequestError if kind == "terminal" else BrowserRequestError
+    async with pending_http.serve() as url:
+        monkeypatch.setattr(bundle.transport, f"create_{kind}", getattr(transport(bundle, url), f"create_{kind}"))
+        task = asyncio.create_task(bundle.create())
+        try:
+            await asyncio.wait_for(pending_http.arrived.wait(), 5)
+            record, = bundle.owner._store.records.values()
+            original, = bundle.leases.leases_for_resource(record.resource_id)
+            snapshot = {
+                f"{kind}_id": record.resource_id, "workspace_id": WORKSPACE_ID,
+                "transport_owner_revision": record.owner_revision,
+                "status": "terminated" if kind == "terminal" else "failed",
+                "reconciliation_status": "verified", "title": record.title,
+            }
+            if snapshot_case == "wrong_identity":
+                snapshot[f"{kind}_id"] = "other_resource"
+            elif snapshot_case == "wrong_workspace":
+                snapshot["workspace_id"] = "other_workspace"
+            elif snapshot_case == "wrong_revision":
+                snapshot["transport_owner_revision"] = record.owner_revision + 1
+            elif snapshot_case == "bool_revision":
+                snapshot["transport_owner_revision"] = True
+            elif snapshot_case == "running":
+                snapshot["status"] = "running"
+            elif snapshot_case == "unknown":
+                snapshot["reconciliation_status"] = "unknown"
+            receipt = {
+                "resource_id": record.resource_id, "workspace_id": WORKSPACE_ID,
+                "owner_revision": record.owner_revision, "outcome": "failed", "resource": snapshot,
+            }
+            pending_http.response = json.dumps({"error": "创建已失败", "creation_receipt": receipt}).encode()
+            pending_http.respond.set()
+            with pytest.raises(error_type) as rejected:
+                await task
+            assert rejected.value.creation_receipt == receipt
+            assert bundle.leases.get_lease(original.lease_id).status == (
+                "settled" if snapshot_case == "verified" else "reconcile_required"
+            )
+            assert record.reconciliation_status == ("verified" if snapshot_case == "verified" else "unknown")
+            if snapshot_case == "verified":
+                assert record.status == snapshot["status"]
+                bundle.transport.records[record.resource_id] = snapshot
+                bundle.restart()
+                recovered = await bundle.owner.get_resource(record.resource_id)
+                assert recovered["status"] == snapshot["status"]
+                assert bundle.leases.get_lease(original.lease_id).status == "settled"
+            assert len(pending_http.requests) == 1
+        finally:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)

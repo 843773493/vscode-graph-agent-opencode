@@ -261,12 +261,8 @@ export class TerminalManager {
     try {
       await session.start();
     } catch (error) {
-      // TODO（5.2）：此清理尚无完整进程树停止证明，不能签发未创建回执；
-      // Python 保留创建 intent 和原 lease，等待正式终止核实链接管。
-      this.terminalsById.delete(id);
-      await session.dispose();
-      await this.persist();
-      throw error;
+      // 保留原身份与恢复记录；只有原 Worker 的正式停止证明才能结清创建。
+      await session.failStartup(error);
     }
     await this.persist();
     return session.snapshot();

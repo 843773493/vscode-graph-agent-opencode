@@ -185,3 +185,43 @@ test("就绪前退出直接报告退出事实，不向已退出worker再发信�
   assert.equal(isolated.workerState, "exited");
   assert.equal(worker.kill.mock.callCount(), 0);
 });
+
+for (const cleanupResult of ["missing", "terminated", "force_killed", "still_running", "cleanup_failed", undefined]) {
+  test(`就绪前PTY失败保留原PID及清理结果：${cleanupResult}`, async t => {
+    const { isolated, worker, start } = createStartingWorker(t);
+    const exits = [];
+    isolated.onExit(event => exits.push(event));
+    const startup = start();
+    const rejected = assert.rejects(startup, /PTY启动即退出/);
+    worker.emit("message", { type: "startupError", pid: 42002, cleanupResult, message: "PTY启动即退出" });
+    await rejected;
+    worker.emit("message", { type: "ready", pid: 43003 });
+    worker.emit("message", { type: "startupError", pid: 43003, cleanupResult: "terminated" });
+    worker.emit("exit", 1, null);
+    t.mock.timers.tick(20_000);
+    assert.equal(isolated.pid, 42002, "迟到消息不能替换失败创建的原身份");
+    assert.equal(isolated.startupCleanupResult, cleanupResult ?? null);
+    assert.equal(isolated.workerState, "exited");
+    assert.deepEqual(exits, [], "就绪前的失败不能冒充运行中PTY退出");
+    assert.equal(worker.kill.mock.callCount(), 1);
+  });
+}
+
+test("普通Worker退出与无效PID不能提供PTY停止证明", async t => {
+  const { isolated, worker, start } = createStartingWorker(t);
+  const rejected = assert.rejects(start(), /身份不明/);
+  worker.emit("message", { type: "startupError", pid: true, cleanupResult: "missing", message: "身份不明" });
+  await rejected;
+  worker.emit("exit", 0, null);
+  assert.equal(isolated.pid, null);
+  assert.equal(isolated.startupCleanupResult, null);
+});
+
+test("成功就绪后迟到的启动消息不能污染运行身份", async t => {
+  const { isolated, worker } = await createReadyWorker(t);
+  worker.emit("message", { type: "startupError", pid: 44004, cleanupResult: "missing" });
+  worker.emit("message", { type: "ready", pid: 45005 });
+  assert.equal(isolated.pid, 42001);
+  assert.equal(isolated.startupCleanupResult, null);
+  assert.equal(isolated.workerState, "running");
+});

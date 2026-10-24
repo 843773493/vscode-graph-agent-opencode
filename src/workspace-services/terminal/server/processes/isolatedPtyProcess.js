@@ -14,6 +14,8 @@ export class IsolatedPtyProcess {
     this.workerProcess = null;
     /** @type {number|null} worker就绪消息中的PTY执行根PID；保留与node-pty相同的pid含义。 */
     this.pid = null;
+    /** @type {string|null} 只记录本次就绪前 PTY 退出的正式进程树清理结果。 */
+    this.startupCleanupResult = null;
     this.ptyOutputHandlers = new Set();
     this.exitObservationHandlers = new Set();
     /** @type {"created"|"starting"|"running"|"stopping"|"exited"} worker生命周期，不是终端业务状态。 */
@@ -50,6 +52,7 @@ export class IsolatedPtyProcess {
     this.workerProcess = workerProcess;
     const ptyReadyPromise = new Promise((resolve, reject) => {
       let readySettled = false;
+      let readyReceived = false;
       const timeout = setTimeout(() => {
         failStart(new Error(`隔离 PTY Worker 启动超时: worker_pid=${workerProcess.pid}`));
       }, WORKER_START_TIMEOUT_MS);
@@ -59,6 +62,7 @@ export class IsolatedPtyProcess {
           return;
         }
         readySettled = true;
+        readyReceived = true;
         clearTimeout(timeout);
         this.workerState = "running";
         resolve(value);
@@ -90,6 +94,7 @@ export class IsolatedPtyProcess {
           return;
         }
         if (message.type === "ready") {
+          if (readySettled) return;
           this.pid = message.pid;
           completeStart({ pid: message.pid });
           return;
@@ -118,12 +123,17 @@ export class IsolatedPtyProcess {
           return;
         }
         if (message.type === "startupError") {
+          if (readySettled) return;
+          if (Number.isSafeInteger(message.pid) && message.pid > 0) {
+            this.pid = message.pid;
+            this.startupCleanupResult = message.cleanupResult ?? null;
+          }
           failStart(new Error(`隔离 PTY Worker 错误: ${message.message}`));
           return;
         }
         if (message.type === "error") {
           const error = new Error(`隔离 PTY Worker 错误: ${message.message}`);
-          if (this.pid === null) {
+          if (!readyReceived) {
             failStart(error);
           } else {
             this._emitExit({ exitCode: -1, signal: 0, workerExit: true, error });
@@ -134,7 +144,7 @@ export class IsolatedPtyProcess {
       });
 
       workerProcess.once("error", (error) => {
-        if (this.pid === null) {
+        if (!readyReceived) {
           failStart(error);
         } else {
           this._emitExit({ exitCode: -1, signal: 0, workerExit: true, error });
@@ -144,7 +154,7 @@ export class IsolatedPtyProcess {
       });
       workerProcess.once("exit", (code, signal) => {
         this.workerState = "exited";
-        if (this.pid === null) {
+        if (!readyReceived) {
           failStart(
             new Error(
               `隔离 PTY Worker 在终端就绪前退出: code=${code}, signal=${signal}`,

@@ -603,9 +603,37 @@ export class TerminalSession {
       await this.releasePromise;
     }
     const isolatedPty = this.ptyProcess;
-    this.ptyProcess = null;
     this.outputMultiplexer.dispose();
     await isolatedPty?.shutdown({ terminatePty });
+    this.ptyProcess = null;
+  }
+
+  async failStartup(error) {
+    const isolatedPty = this.ptyProcess;
+    // TODO（5.2）：native 未交付 PID 或没有正式停止证明时，保留未知记录供原 owner 接管。
+    const stopped = isolatedPty !== null && new Set(["missing", "terminated", "force_killed"])
+      .has(isolatedPty.startupCleanupResult);
+    this.osPid = isolatedPty?.pid ?? this.osPid;
+    this.markReconciliationStatus("unknown");
+    this.releaseReason = "terminal_startup_failed";
+    await this.manager.persist();
+    try {
+      await this.dispose();
+    } catch (cleanupError) {
+      console.error(`[terminal-session] 启动失败清理未完成: terminal_id=${this.id}`, cleanupError);
+      throw new AggregateError([error, cleanupError], `终端启动失败且清理未完成: terminal_id=${this.id}`, { cause: error });
+    }
+    if (stopped) {
+      this.status = "terminated";
+      this.endedAt = nowIso();
+      this.markReconciliationStatus("verified");
+    }
+    await this.manager.persist();
+    if (stopped) error.creationReceipt = {
+      resource_id: this.id, workspace_id: this.workspaceId, owner_revision: this.transportOwnerRevision,
+      outcome: "failed", resource: this.snapshot(),
+    };
+    throw error;
   }
 
   async kill({ reason = "terminal_cancel" } = {}) {

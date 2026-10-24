@@ -87,7 +87,7 @@ async function handlePtyExit(activePty, { exitCode, signal }) {
   }
   if (!readySent) {
     send({
-      type: "startupError",
+      type: "startupError", pid: activePty.pid, cleanupResult,
       message: `PTY 启动后立即退出: command=${spawnContext?.command || "unknown"}, cwd=${spawnContext?.cwd || "unknown"}, exit_code=${exitCode}, signal=${signal}, cleanup=${cleanupResult === "missing" ? "already_exited" : cleanupResult}`,
     });
     setImmediate(() => process.exit(cleanupResult === "still_running" ? 1 : 0));
@@ -106,7 +106,11 @@ function handleStart(message) {
     cwd: message.options?.cwd,
   };
   ptyProcess = pty.spawn(message.command, message.args, message.options);
-  shellProcessMetadata = readProcessStat(ptyProcess.pid);
+  const activePty = ptyProcess;
+  // Linux forkpty 创建的 SID 等于 PTY 根 PID；根已被 waitpid 时仍核对同 SID 后代。
+  shellProcessMetadata = readProcessStat(activePty.pid).then((metadata) => metadata ?? (
+    process.platform === "linux" ? { processSessionId: activePty.pid, processStartTime: null } : null
+  ));
   ptyProcess.onData((data) => {
     if (shuttingDown) {
       return;
@@ -121,12 +125,11 @@ function handleStart(message) {
       ptyProcess.pause();
     }
   });
-  const activePty = ptyProcess;
   ptyProcess.onExit((event) => {
     exitCleanupPromise = handlePtyExit(activePty, event).catch((error) => {
       const message = error instanceof Error ? error.message : String(error);
       if (!readySent) {
-        send({ type: "startupError", message });
+        send({ type: "startupError", pid: activePty.pid, cleanupResult: "cleanup_failed", message });
       } else {
         send({
           type: "exit",

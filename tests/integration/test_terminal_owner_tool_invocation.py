@@ -3,7 +3,9 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import signal
 import subprocess
+import sys
 from collections.abc import AsyncIterator
 from pathlib import Path
 from textwrap import dedent
@@ -58,6 +60,23 @@ async def terminal_runtime(
     monkeypatch: pytest.MonkeyPatch,
 ) -> AsyncIterator[WorkspaceToolRuntime]:
     root = Path(terminal_workspace_root_path)
+    startup_mode = getattr(request, "param", None)
+    if startup_mode is not None:
+        if sys.platform != "linux":
+            pytest.skip("真实 Linux forkpty 启动退出与 SID 后代核实")
+        if startup_mode == "missing":
+            monkeypatch.setenv("SHELL", "./missing-native-shell")
+        else:
+            shell = root / "startup-shell"
+            shell.write_text(
+                "#!/bin/sh\ntrap '' HUP\n"
+                + ("sleep 600 </dev/null >/dev/null 2>&1 &\nIFS= read -r child_stat < /proc/$!/stat\nprintf '%s\\n' \"$child_stat\" > startup-child.stat\n"
+                   if startup_mode == "orphan" else "")
+                + "IFS= read -r root_stat < /proc/$$/stat\nprintf '%s\\n' \"$root_stat\" > startup-root.stat\nexit 13\n",
+                encoding="utf-8",
+            )
+            shell.chmod(0o700)
+            monkeypatch.setenv("SHELL", "./startup-shell")
     port = integration_port_block_for_file(Path(request.node.path)).port(40)
     process = start_terminal_backend(backend_port=port, workspace_root=str(root), artifacts_dir=TestRunContext.from_test_file(Path(request.node.path)).artifacts_dir)
     try:
@@ -67,6 +86,16 @@ async def terminal_runtime(
             yield runtime
     finally:
         terminate_process(process)
+        # 失败的候选也必须回收本例子进程；按原生启动标记核身份，不能杀复用 PID。
+        for marker in root.glob("startup-*.stat"):
+            original = marker.read_text()
+            pid = int(original.split(" ", 1)[0])
+            stat_path = Path(f"/proc/{pid}/stat")
+            if stat_path.exists():
+                current = stat_path.read_text().rsplit(") ", 1)[1].split()
+                expected = original.rsplit(") ", 1)[1].split()
+                if current[19] == expected[19] and current[0] not in {"Z", "X"}:
+                    os.kill(pid, signal.SIGKILL)
 
 
 @pytest.mark.asyncio
@@ -83,15 +112,13 @@ async def test_real_terminal_http_failures_keep_native_details_in_server_diagnos
     )
     not_directory = root / "not-a-terminal-directory.txt"
     not_directory.write_text("原件不能被终端创建改写", encoding="utf-8")
-    missing_command = root / "missing-native-shell"
     cases = [
-        ("missing-relative-cwd", None, "终端工作目录不存在或不是目录"),
-        (str(root / "missing-absolute-cwd"), None, "终端工作目录不存在或不是目录"),
-        (str(not_directory), None, "终端工作目录不存在或不是目录"),
-        ("bad\0directory", None, "终端工作目录检查失败"),
-        (str(root), str(missing_command), "终端 PTY 启动失败"),
+        ("missing-relative-cwd", "终端工作目录不存在或不是目录"),
+        (str(root / "missing-absolute-cwd"), "终端工作目录不存在或不是目录"),
+        (str(not_directory), "终端工作目录不存在或不是目录"),
+        ("bad\0directory", "终端工作目录检查失败"),
     ]
-    for cwd, command, reason in cases:
+    for cwd, reason in cases:
         terminal_id = f"term_{uuid4().hex}"
         payload = {
             "workspace_id": owner.workspace_id,
@@ -99,9 +126,6 @@ async def test_real_terminal_http_failures_keep_native_details_in_server_diagnos
             "owner_revision": 1,
             "cwd": cwd,
         }
-        if command is not None:
-            payload["command"] = command
-            payload["args"] = []
         with pytest.raises(TerminalRequestError) as rejected:
             await client._json_request("POST", "/api/terminals", payload)
         error = rejected.value
@@ -109,17 +133,13 @@ async def test_real_terminal_http_failures_keep_native_details_in_server_diagnos
         assert error.__cause__.response.status_code == 500
         assert (error.method, error.path, error.status) == ("POST", "/api/terminals", 500)
         detail = json.loads(error.response_body)
-        expected = f"{reason}: terminal_id={terminal_id}" if command else reason
         expected_receipt = {
             "resource_id": terminal_id, "workspace_id": owner.workspace_id,
             "owner_revision": 1, "outcome": "not_created",
         }
-        assert detail == ({"error": expected} if command else {
-            "error": expected, "creation_receipt": expected_receipt,
-        })
-        assert error.creation_receipt == (None if command else expected_receipt)
+        assert detail == {"error": reason, "creation_receipt": expected_receipt}
+        assert error.creation_receipt == expected_receipt
         assert str(root) not in str(error)
-        assert str(missing_command) not in str(error)
         assert await client.list_resources() == []
     assert not_directory.read_text(encoding="utf-8") == "原件不能被终端创建改写"
     state = json.loads((root / ".boxteam/terminal-manager/terminals.json").read_text())
@@ -139,8 +159,108 @@ async def test_real_terminal_http_failures_keep_native_details_in_server_diagnos
     logs = TestRunContext.from_test_file(Path(__file__)).artifacts_dir
     diagnostic = "\n".join(path.read_text() for path in logs.glob("terminal-backend-*.stderr.log"))
     assert str(not_directory) in diagnostic
-    assert str(missing_command) in diagnostic
     assert "ENOENT" in diagnostic
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("terminal_runtime", ["exit", "orphan", "missing"], indirect=True)
+@pytest.mark.parametrize("lose_receipt", [False, True])
+async def test_real_terminal_startup_failure_preserves_identity_and_requires_stop_proof(
+    request: pytest.FixtureRequest,
+    terminal_runtime: WorkspaceToolRuntime,
+    monkeypatch: pytest.MonkeyPatch,
+    lose_receipt: bool,
+) -> None:
+    from app.services.business.terminal_resources.owner import TerminalResourceOwner
+    from app.services.infrastructure.external_resource_leases import (
+        ExternalResourceLeaseLedger,
+    )
+
+    container, session_id, context = terminal_runtime
+    owner = container.terminal_resource_owner
+    root = owner.workspace_root
+    mode = request.node.callspec.params["terminal_runtime"]
+    create = owner._transport.create_terminal
+    calls: list[str] = []
+
+    async def create_with_lost_receipt(**kwargs: object) -> dict[str, object]:
+        calls.append(str(kwargs["terminal_id"]))
+        try:
+            return await create(**kwargs)
+        except TerminalRequestError as error:
+            # 只在真实 HTTP 返回后模拟连接结果丢失，不替产品制造进程或恢复事实。
+            raise ConnectionError("真实创建回执丢失") from error
+
+    if lose_receipt:
+        monkeypatch.setattr(owner._transport, "create_terminal", create_with_lost_receipt)
+    with pytest.raises(ConnectionError if lose_receipt else TerminalRequestError) as rejected:
+        await owner.create_terminal(
+            session_id=session_id, thread_id=context.thread_binding.thread_id,
+            holder_id="request:startup-failure", operation_id="startup-failure",
+        )
+    error = rejected.value.__cause__ if lose_receipt else rejected.value
+    assert isinstance(error, TerminalRequestError)
+    assert error.status == 500
+    record, = owner._store.records.values()
+    rid = record.resource_id
+    assert str(root) not in str(error)
+    state = json.loads((root / ".boxteam/terminal-manager/terminals.json").read_text())
+    native, = state["terminals"]
+    assert native["terminal_id"] == rid
+    assert native["release_reason"] == "terminal_startup_failed"
+    ledger = json.loads((root / ".boxteam/resources.json").read_text())
+    lease, = [item for item in ledger["leases"] if item["resource_id"] == rid]
+    original_lease_id = lease["lease_id"]
+    receipt = error.creation_receipt
+    assert receipt is not None
+    assert receipt == {
+        "resource_id": rid, "workspace_id": owner.workspace_id, "owner_revision": 1,
+        "outcome": "failed", "resource": receipt["resource"],
+    }
+    assert native["status"] == "terminated" and native["reconciliation_status"] == "verified"
+    assert isinstance(native["os_pid"], int) and native["os_pid"] > 0
+    assert receipt["resource"]["os_pid"] == native["os_pid"]
+    if mode != "missing":
+        root_stat = (root / "startup-root.stat").read_text()
+        assert int(root_stat.split(" ", 1)[0]) == native["os_pid"]
+        assert int(root_stat.rsplit(") ", 1)[1].split()[3]) == native["os_pid"]
+        if mode == "orphan":
+            child_stat = (root / "startup-child.stat").read_text()
+            assert int(child_stat.rsplit(") ", 1)[1].split()[3]) == native["os_pid"]
+        for marker in root.glob("startup-*.stat"):
+            original = marker.read_text()
+            pid = int(original.split(" ", 1)[0])
+            current_path = Path(f"/proc/{pid}/stat")
+            if current_path.exists():
+                current = current_path.read_text().rsplit(") ", 1)[1].split()
+                expected = original.rsplit(") ", 1)[1].split()
+                assert current[19] != expected[19] or current[0] in {"Z", "X"}, f"真实进程尚未停止: pid={pid}"
+    unknown = lose_receipt
+    assert owner._leases.get_lease(original_lease_id).status == ("reconcile_required" if unknown else "settled")
+    assert record.reconciliation_status == ("unknown" if unknown else "verified")
+    if lose_receipt:
+        assert calls == [rid]
+    # 新建领域 owner 从原文件恢复；不得重放 POST 或替产品填写终态。
+    cold_leases = ExternalResourceLeaseLedger(state_path=root / ".boxteam/resources.json")
+    cold = TerminalResourceOwner(
+        working_directories=owner._working_directories, file_paths=owner._file_paths,
+        sessions=owner._sessions, threads=owner._threads, transport=owner._transport,
+        leases=cold_leases, thread_release_fence=owner._thread_release_fence,
+    )
+    recovered = await cold.get_resource(rid)
+    assert recovered["resource_id"] == rid
+    assert recovered["source_thread_id"] == context.thread_binding.thread_id
+    assert recovered["status"] == "terminated"
+    assert recovered["reconciliation_status"] == "verified"
+    assert cold_leases.get_lease(original_lease_id).status == "settled"
+    if lose_receipt:
+        assert calls == [rid]
+    logs = TestRunContext.from_test_file(Path(__file__)).artifacts_dir
+    diagnostic = "\n".join(path.read_text() for path in logs.glob("terminal-backend-*.stderr.log"))
+    assert str(root) in diagnostic
+    if mode == "missing":
+        assert "missing-native-shell" in diagnostic and "exit_code=1" in diagnostic
+        assert "No such file or directory" in native["buffer"]
 
 
 @pytest.mark.asyncio

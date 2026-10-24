@@ -93,6 +93,16 @@ fork SHALL 沿用统一资源目标检查及现有 journal/claim/publication，�
 - **WHEN** 外部 owner 确认尚未接纳具有唯一 resource/workspace/revision 的本次创建，并返回绑定该 intent 的正式未创建回执
 - **THEN** Python owner 核对身份与版本后关闭该 intent、解除关联并结清其原占用；普通 HTTP 错误、冲突身份和其它创建的回执不得触发同样处理
 
+#### Scenario: Terminal 在就绪前退出并取得停止证明
+
+- **WHEN** 已接纳的 Terminal 在就绪前退出，原 Worker 沿唯一进程树终止链核实停止，宿主确认 Worker 退出且终态持久化成功
+- **THEN** 外部 owner 保留原资源身份与恢复记录，返回绑定本次 intent 的正式失败回执和 verified 终态快照；Python owner 核对身份、整数版本及终态后结清本次 lease 和受管工作目录占用，回执丢失后可从原终态记录恢复对账，不重放创建
+
+#### Scenario: 启动异常尚无进程树停止证明
+
+- **WHEN** native 启动抛错、Worker 异常退出或清理失败，尚未取得本次 PTY 进程树的正式停止证明
+- **THEN** 外部 owner 保留已取得的原身份与未知记录，不签发未创建或已停止回执；Python 保留本次待核实 lease，Worker 退出、已发送信号及普通 HTTP 错误均不能代替停止证明
+
 ### Requirement: 单个 Thread 清理失败不得停止其它 Thread 的周期回收
 
 闲置清理 SHALL 独立尝试每个候选 Thread；失败 SHALL 保留该 Thread 的 scope/generation 和未核实资源，并明确报告 owner 与原始原因。事件循环正常调度时，扫描对单个卸载任务的等待 SHALL 最多为 30 秒，到期明确报告尚未完成并继续其它候选 Thread。该预算 MUST NOT 被解释为外部资源已经停止；唯一在途卸载任务 SHALL 继续由原 owner 持有，后续扫描 MUST NOT 为同代重复发起清理，新 admission MUST 等原任务完成。迟到成功 SHALL 沿原链释放，迟到失败 SHALL 记录原始原因并保留状态供后续周期重试。周期 worker SHALL 记录整批异常并继续原周期，不得因单项失败永久停止或把失败声明为已卸载；任务取消与关闭 MUST 正常传播。

@@ -17,6 +17,7 @@ from textwrap import dedent
 import psutil
 import pytest
 
+from app.abstractions.terminal_resources import TerminalRequestError
 from app.agents.tools.terminal import create_exec_command_tool
 from app.core.resource_uri import file_uri_child, parse_resource_uri
 from app.core.trace_middleware import reset_current_gateway_id, set_current_gateway_id
@@ -58,6 +59,39 @@ def process_running(pid: int) -> bool:
         return psutil.Process(pid).status() not in {psutil.STATUS_ZOMBIE, psutil.STATUS_DEAD}
     except psutil.NoSuchProcess:
         return False
+
+
+@pytest.mark.parametrize("terminal_runtime", ["missing"], indirect=True)
+async def test_verified_startup_failure_releases_the_real_attachment_workdir(
+    terminal_runtime: WorkspaceToolRuntime, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    container, session_id, context = terminal_runtime
+    store, owner, leases = container.attachment_blob_store, container.terminal_resource_owner, container.external_resource_leases
+    message = await container.message_service.create(
+        session_id, MessageCreateRequest(content="启动失败目录占用", attachments=[upload(b"original-for-startup-failure")]),
+    )
+    ref, = message.attachments
+    directory = store.resolve_directory_uri(parse_resource_uri(ref.directory_uri))
+    with pytest.raises(TerminalRequestError) as rejected:
+        await owner.create_terminal(
+            session_id=session_id, thread_id=context.thread_binding.thread_id,
+            holder_id="request:attachment-startup", operation_id="attachment-startup",
+            cwd=file_uri_child(ref.directory_uri, "derived"),
+        )
+    receipt = rejected.value.creation_receipt
+    assert receipt is not None and receipt["outcome"] == "failed"
+    terminal_id = receipt["resource_id"]
+    snapshot = await owner.get_resource(terminal_id)
+    assert snapshot["status"] == "terminated" and snapshot["reconciliation_status"] == "verified"
+    attachment_id = parse_resource_uri(ref.directory_uri).tail_segments[0]
+    assert owner._store.records[terminal_id].working_directory_uri == ref.directory_uri
+    assert leases.leases_for_resource(attachment_id) == []
+    assert leases.leases_for_resource(terminal_id) == []
+    assert (directory / "original/content").read_bytes() == b"original-for-startup-failure"
+    store.release_thread_references(session_id, message.thread_id)
+    monkeypatch.setattr(store, "_clock", lambda: datetime.now(UTC) + timedelta(days=31))
+    assert await store.collect_garbage(leases=leases) == (attachment_id,)
+    assert not directory.exists()
 
 
 @pytest.mark.parametrize("input_form", ["uri", "absolute", "relative"])
