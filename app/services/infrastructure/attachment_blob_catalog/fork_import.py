@@ -2,14 +2,15 @@
 
 from __future__ import annotations
 
+import shutil
 from collections.abc import Callable
 from pathlib import Path
 
-from app.abstractions.session_context import SessionForkTransportProtocol
+from app.core.atomic_fs import fsync_directory, fsync_file
 from app.core.phase_observer import observe_phase
 from app.core.session_catalog_store.contracts import ForkSourceCaptureRecord
 from app.core.session_lifecycle_gate import OperationHolderGate
-from app.schemas.internal_v2.session import SessionForkRequest
+from app.core.shielded_cleanup import run_sync_shielded
 from app.services.infrastructure.attachment_blob_catalog.blob_identity import (
     BlobIdentity,
 )
@@ -20,13 +21,14 @@ from app.services.infrastructure.attachment_blob_catalog.locator import (
     fork_import_ingest_id,
     ingest_staging_relative_locator,
     resolve_blob_path,
+    resolve_captured_attachment,
     resolve_staging_path,
 )
 from app.services.infrastructure.attachment_blob_catalog.records import (
     ForkAttachmentSnapshot,
 )
-from app.services.infrastructure.rollout_context.fork.transfer import (
-    receive_transfer_file,
+from app.services.infrastructure.rollout_context.fork.source_capture import (
+    capture_directory,
 )
 
 
@@ -35,6 +37,7 @@ class ForkAttachmentImportMixin:
 
     _catalog: AttachmentBlobCatalog
     _attachments_root: Path
+    _sessions_root: Path
     _fork_imports: OperationHolderGate
     _blob_commits: OperationHolderGate
     _parse_logical_file_id: Callable[[str, str], str]
@@ -43,7 +46,6 @@ class ForkAttachmentImportMixin:
 
     async def accept_fork_import(
         self, capture: ForkSourceCaptureRecord, snapshots: tuple[ForkAttachmentSnapshot, ...],
-        *, transport: SessionForkTransportProtocol, request: SessionForkRequest,
     ) -> None:
         """来源 receipt 与冻结 snapshot 已完整校验；只为本 target 创建 reserved claim。"""
         async with self._fork_imports.lock_for(capture.copy_operation_id):
@@ -77,13 +79,19 @@ class ForkAttachmentImportMixin:
                 staging = resolve_staging_path(self._attachments_root, ingest_staging_relative_locator(ingest_id))
                 if staging.is_symlink():
                     raise RuntimeError("fork imported 附件 staging 不得是符号链接")
+                staging.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
                 staging.unlink(missing_ok=True)
                 try:
-                    # 网络接收只受原 fork claim 保活，不占正文提交分片或 Session gate。
-                    await receive_transfer_file(
-                        transport, request, capture, path=staging, size_bytes=snapshot.length,
-                        action="attachment_chunk", blob_id=snapshot.blob_id,
+                    # 原 artifact importer 已完成网络接收；只消费本地核验的冻结文件。
+                    frozen = resolve_captured_attachment(
+                        capture_directory(self._sessions_root, capture) / capture.source_session_id,
+                        snapshot.blob_id,
                     )
+                    self._verify_blob_content(frozen, snapshot.digest, snapshot.length, snapshot.blob_id)
+                    # 取消也须等同步 writer 真正退出，holder 和 staging 不能提前释放。
+                    await run_sync_shielded(shutil.copyfile, frozen, staging)
+                    fsync_file(staging)
+                    fsync_directory(staging.parent)
                     self._verify_blob_content(staging, snapshot.digest, snapshot.length, snapshot.blob_id)
                     await observe_phase(capture.copy_operation_id, "copy.attachments.import_staged", details={"blob_id": snapshot.blob_id, "ingest_id": ingest_id})
                     async with self._blob_commits.lock_for(snapshot.blob_id):
@@ -98,7 +106,7 @@ class ForkAttachmentImportMixin:
                     staging.unlink(missing_ok=True)
 
     async def collect_fork_import_staging(self, copy_operation_id: str | None = None) -> tuple[str, ...]:
-        """只消费终态 claim 的冻结快照，不扫盘，也不等待仍在接收网络数据的 writer。"""
+        """只消费终态 claim 的冻结快照，不扫盘，也不等待仍在复制冻结文件的 writer。"""
         operations = ((copy_operation_id,) if copy_operation_id is not None
                       else self._catalog.terminal_fork_attachment_operations())
         removed = []

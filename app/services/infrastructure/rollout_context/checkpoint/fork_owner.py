@@ -501,7 +501,7 @@ class CheckpointForkOwner:
                     raise RuntimeError("fork import 附件缺少目标 AttachmentBlobStore owner")
                 await self.source.attachment_store.accept_fork_import(
                     replace(capture, snapshot_sha256=source_snapshot.snapshot_sha256, marker_sha256=marker_hash),
-                    source_snapshot.attachments, transport=source_transport, request=transfer_request,
+                    source_snapshot.attachments,
                 )
             await observe_phase(operation_id, "copy.source.before_captured_cas")
             capture = catalog.mark_fork_source_captured(capture, snapshot_sha256=source_snapshot.snapshot_sha256, marker_sha256=marker_hash)

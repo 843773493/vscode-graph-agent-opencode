@@ -624,7 +624,7 @@ async def test_same_backend_two_gateway_routes_fork_and_cold_replay(
 
 @pytest.mark.asyncio
 async def test_real_b_to_c_full_copy_cold_read_and_new_input_with_source_offline(transfer_triad):
-    nodes, model, artifacts, _, fork_deadlines = transfer_triad
+    nodes, model, artifacts, control, fork_deadlines = transfer_triad
     source, target = nodes["b"], nodes["c"]
     original = "来源 B 冻结正文：跨 Gateway 原字节历史必须独立保留。"
     successor = "目标 C 首次新输入：继续使用已经导入的本地历史。"
@@ -715,10 +715,46 @@ async def test_real_b_to_c_full_copy_cold_read_and_new_input_with_source_offline
     assert unchanged_source_goal.status_code == 200, unchanged_source_goal.text
     assert unchanged_source_goal.json()["data"] == source_goal
     assert _provider_call_count(model) == provider_requests_before_fork
-    response = await _post_fork(
-        source, source_session_id, request, _fork_deadline(target, request, fork_deadlines),
-        stage="fork_http_response",
-    )
+    key = "fork-" + hashlib.sha256(request["idempotency_key"].encode()).hexdigest()
+    phase = "copy.source.marker_published"
+    control.arm(key, phase)
+    deadline = _fork_deadline(target, request, fork_deadlines)
+    fork_call = asyncio.create_task(_post_fork(
+        source, source_session_id, request, deadline, stage="fork_http_response",
+    ))
+    reached = asyncio.create_task(asyncio.to_thread(control.acknowledged, key, phase))
+    hidden = live = None
+    try:
+        done, _ = await deadline.wait(
+            asyncio.wait((fork_call, reached), return_when=asyncio.FIRST_COMPLETED),
+            "wait_for_frozen_attachment_or_http_response",
+        )
+        if fork_call in done:
+            early = await fork_call
+            pytest.fail(f"fork 未到冻结文件验证窗口即返回: {early.status_code}: {early.text}")
+        await deadline.wait(reached, "source_attachment_frozen")
+        source_capture = _capture_record(source, key)
+        capture_root = source.workspace / ".boxteam/navigation" / source_capture["snapshot_relative_locator"]
+        marker = json.loads((capture_root / "captured.json").read_bytes())
+        assert marker["schema"] == "source-copy-snapshot:v3"
+        (snapshot,) = marker["attachments"]
+        frozen_file = capture_root / source_session_id / "attachment-files" / snapshot["blob_id"]
+        assert frozen_file.read_bytes() == attachment_body
+        live = source.workspace / ".boxteam/attachments" / snapshot["relative_locator"]
+        assert frozen_file.stat().st_ino != live.stat().st_ino
+        # 关键状态由真实上传/执行/fork 生成；在 marker 发布后注入来源原件丢失故障。
+        hidden = live.with_name(live.name + ".fault-hidden")
+        live.rename(hidden)
+        control.release(key, phase)
+        response = await deadline.wait(fork_call, "fork_from_frozen_attachment")
+    finally:
+        control.release(key, phase)
+        if hidden is not None and hidden.exists():
+            hidden.rename(live)
+        if not fork_call.done():
+            fork_call.cancel()
+        await asyncio.gather(fork_call, return_exceptions=True)
+        await asyncio.gather(reached, return_exceptions=True)
     (artifacts / "published-response.json").write_text(response.text)
     assert response.status_code == 200, response.text
     published = response.json()["data"]

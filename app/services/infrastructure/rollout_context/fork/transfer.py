@@ -40,7 +40,7 @@ _TRANSFER_FILE_CONCURRENCY = 4
 def source_transfer_request(
     request: SessionForkRequest, capture: ForkSourceCaptureRecord | None, *, action: str,
     cursor: int = 0, file_name: str | None = None, offset: int = 0,
-    release_state: str | None = None, blob_id: str | None = None,
+    release_state: str | None = None,
 ) -> SessionForkTransferRequest:
     origin = require_current_gateway_id("fork source artifact transport")
     source = parse_resource_uri(request.source_uri, local_gateway_id=origin)
@@ -48,7 +48,7 @@ def source_transfer_request(
         source_gateway_id=origin,
         fork_target=ForkGrantTarget(gateway_id=source.gateway_authority or origin, uri=request.source_uri, fork_role="source"),
         action=action, request=request, capture=ForkSourceCaptureDTO.from_record(capture) if capture is not None else None,
-        cursor=cursor, file_name=file_name, offset=offset, release_state=release_state, blob_id=blob_id,
+        cursor=cursor, file_name=file_name, offset=offset, release_state=release_state,
     )
 
 
@@ -134,7 +134,7 @@ async def import_captured_artifact(
     async def receive_file(file: ForkTransferFileDTO) -> None:
         path = _artifact_file(root, record, file.name)
         await receive_transfer_file(transport, request, frozen, path=path, size_bytes=file.size_bytes,
-                                    action="chunk", file_name=file.name)
+                                    file_name=file.name)
 
     try:
         reply = await transport.fork_transfer(source_transfer_request(request, record, action="capture"))
@@ -178,15 +178,15 @@ async def import_captured_artifact(
 
 async def receive_transfer_file(
     transport: SessionForkTransportProtocol, request: SessionForkRequest, capture: ForkSourceCaptureRecord,
-    *, path: Path, size_bytes: int, action: str, file_name: str | None = None, blob_id: str | None = None,
+    *, path: Path, size_bytes: int, file_name: str,
 ) -> None:
-    """快照文件与附件共用固定块 reader；正文总长度不影响单次内存。"""
+    """全部冻结文件共用固定块 reader；正文总长度不影响单次内存。"""
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     with path.open("xb") as stream:
         offset = 0
         while offset < size_bytes:
             chunk = await transport.fork_transfer(source_transfer_request(
-                request, capture, action=action, file_name=file_name, blob_id=blob_id, offset=offset,
+                request, capture, action="chunk", file_name=file_name, offset=offset,
             ))
             verify_capture_receipt(capture, chunk.capture)
             if chunk.offset != offset or chunk.chunk_base64 is None or chunk.chunk_sha256 is None:

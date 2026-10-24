@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-import base64
 import hashlib
 import json
+import shutil
 from collections.abc import Callable, Sequence
 from dataclasses import replace
 from pathlib import Path
@@ -31,11 +31,6 @@ from app.core.workspace_identity import read_workspace_id
 from app.schemas.internal_v2.session import (
     SessionForkResourceSourceDTO,
 )
-from app.schemas.internal_v2.session_fork_transfer import (
-    FORK_TRANSFER_CHUNK_BYTES,
-    ForkSourceCaptureDTO,
-    SessionForkTransferResultDTO,
-)
 from app.services.infrastructure.attachment_blob_catalog.catalog import (
     AttachmentBlobCatalog,
     derive_attachment_id,
@@ -45,6 +40,7 @@ from app.services.infrastructure.attachment_blob_catalog.fork_import import (
 )
 from app.services.infrastructure.attachment_blob_catalog.locator import (
     resolve_blob_path,
+    resolve_captured_attachment,
 )
 from app.services.infrastructure.attachment_blob_catalog.records import (
     ForkAttachmentSnapshot,
@@ -56,6 +52,9 @@ from app.services.infrastructure.resource_platform.virtual_resources.values impo
     ResourceTargetAction,
     ResourceTargetContext,
     ResourceTargetFacts,
+)
+from app.services.infrastructure.rollout_context.fork.source_capture import (
+    capture_directory,
 )
 
 
@@ -217,6 +216,19 @@ class ForkAttachmentStoreMixin(ForkAttachmentImportMixin):
             copy_operation_id=record.copy_operation_id, source_snapshot_id=record.snapshot_id,
             operation_preimage_hash=record.preimage_hash, snapshots=result,
         )
+        # 正文进入已有 capture 文件树；generic files/chunk 负责全部跨域传输。
+        # 新目录的多文件版本沿同一文件树扩展，不新增附件专用 transport。
+        root = capture_directory(self._sessions_root, record) / record.source_session_id
+        for snapshot in result:
+            if snapshot.availability != "available" or snapshot.target_action != "copy_snapshot":
+                continue
+            target = resolve_captured_attachment(root, snapshot.blob_id)
+            if not target.exists():
+                target.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+                source = resolve_blob_path(self._attachments_root, snapshot.relative_locator)
+                with source.open("rb") as reader, target.open("xb") as writer:
+                    shutil.copyfileobj(reader, writer, length=1024 * 1024)
+            self._verify_blob_content(target, snapshot.digest, snapshot.length, snapshot.blob_id)
         return result
 
     def _decide_fork_attachment(
@@ -288,24 +300,6 @@ class ForkAttachmentStoreMixin(ForkAttachmentImportMixin):
         if path.is_symlink():
             raise RuntimeError(f"fork attachment 正文不得是符号链接: blob_id={snapshot.blob_id}, path={path}")
         self._verify_blob_content(path, snapshot.digest, snapshot.length, snapshot.blob_id)
-
-    def export_fork_attachment_chunk(self, capture: ForkSourceCaptureRecord, blob_id: str, offset: int) -> SessionForkTransferResultDTO:
-        snapshots = tuple(snapshot for snapshot in self._catalog.fork_attachment_snapshots(
-            capture.copy_operation_id, target_session_id=capture.target_session_id, target_thread_id=capture.target_thread_id,
-        ) if snapshot.blob_id == blob_id and snapshot.availability == "available" and snapshot.target_action == "copy_snapshot")
-        if not snapshots or offset > snapshots[0].length:
-            raise ValueError("fork 附件分块不属于冻结的显式 copy_snapshot 或 bytes offset 越界")
-        snapshot = snapshots[0]
-        if snapshot.claim_id not in self._catalog.fork_attachment_claim_ids(capture.copy_operation_id):
-            raise RuntimeError("fork 附件导出缺少精确 source 保活 claim")
-        self._verify_fork_attachment(snapshot)
-        blob = self._catalog.get_blob(blob_id)
-        with resolve_blob_path(self._attachments_root, blob.relative_locator).open("rb") as stream:
-            stream.seek(offset)
-            chunk = stream.read(FORK_TRANSFER_CHUNK_BYTES)
-        return SessionForkTransferResultDTO(capture=ForkSourceCaptureDTO.from_record(capture), offset=offset,
-                                            chunk_base64=base64.b64encode(chunk).decode("ascii"),
-                                            chunk_sha256=hashlib.sha256(chunk).hexdigest())
 
     def release_fork_export(self, capture: ForkSourceCaptureRecord) -> None:
         """只消费 fork owner 已核实的独立 source export，不按域标签推导角色。"""

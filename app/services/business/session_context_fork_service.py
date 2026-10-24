@@ -502,10 +502,6 @@ class SessionContextForkService:
                         return export_file_batch(sessions_root, capture, payload.cursor)
                     if payload.action == "chunk":
                         return export_file_chunk(sessions_root, capture, payload.file_name, payload.offset)
-                    if payload.action == "attachment_chunk":
-                        if owner.source.attachment_store is None:
-                            raise RuntimeError("fork source export 缺少 AttachmentBlobStore owner")
-                        return owner.source.attachment_store.export_fork_attachment_chunk(capture, payload.blob_id, payload.offset)
                     raise ValueError("fork transfer action 未派发")
             return SessionForkTransferResultDTO(capture=ForkSourceCaptureDTO.from_record(capture))
 

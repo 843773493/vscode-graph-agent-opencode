@@ -32,6 +32,7 @@
 
 - [ ] 4.1 使用既有 immutable asset/version 冻结模型实际使用的原件、预览与派生输入；目录变化/回收后仍可重建原请求 hash，普通查看明确展示不可用。
 - [ ] 4.2 迁齐统一目标检查与 fork journal/claim：同工作区共享目录关联、跨工作区冻结版本复制，保留原历史身份和 URI，失败/删除释放本次保留且不发布半个目标。
+  - 2026-10-24 完成目录迁移前的冻结传输边界：复制所需附件先进入原 capture 文件树，v3 marker 核对完整集合及 digest/length，网络统一复用 files/chunk；删除 live attachment_chunk、blob_id 请求字段及其调用方，Proto 保留编号和名称。目标导入只复制已核验的本地冻结文件，取消须等真实 writer 退出后释放 holder；v2 封存载荷/hash 保持原文读取，不回源补造文件。代码候选 `cdbe3b89d34d258e233dddbb2fcfcaa8c1285972` 的33项 fork 单测、16项协议测试及真实三 Gateway HTTP/SSH/PTY 的来源离线续写场景通过；该产品测试在 marker 发布后移走来源原件，目标仍正确复制、冷读和新输入执行。仅测试入口调整的候选 `69ca0959e2a4ccfe9bdb689aa4a12dfddc4263b1` 又通过2项产品生成附件历史的 Session/child 重启恢复。Ruff、compileall、真实 Web 类型检查/build、协议 lint/build/生成一致性及严格规范验证通过；相对真实提交 e6e6caed2 的 breaking 报告仅包含本次明确下线的 blob_id 删除。首轮 staging 父目录遗漏已修复；候选依赖链接缺失及脱离 matrix 的 fixture 准入失败原件保留。准确命令、完整候选指纹、raw/退出码在 `out/tests/temp/attachment_frozen_transfer_20261024/artifacts/`。目录 manifest、新目录 fork/恢复、线上切换与 Windows 验收仍 TODO，本项未勾选；未追加团队/委派专项实现或验证。
 
 ## 5. owner 对账与延迟回收（后续实施）
 

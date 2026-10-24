@@ -306,3 +306,13 @@ def test_text_mutation_wire_binds_one_command_and_preserves_unknown_observations
     assert not file.HasField("exists") and not file.HasField("intended_version")
     parsed = public_pb2.TextMutationTransferDTO.FromString(response.SerializeToString())
     assert parsed.receipt.effect == "unknown" and parsed.snapshots == []
+
+
+def test_fork_transfer_uses_only_frozen_file_coordinates() -> None:
+    descriptor = public_pb2.SessionForkTransferRequest.DESCRIPTOR
+    assert "blob_id" not in descriptor.fields_by_name
+    assert descriptor.fields_by_name["file_name"].number == 7
+    proto = descriptor_pb2.DescriptorProto()
+    descriptor.CopyToProto(proto)
+    assert "blob_id" in proto.reserved_name
+    assert any(span.start <= 11 < span.end for span in proto.reserved_range)

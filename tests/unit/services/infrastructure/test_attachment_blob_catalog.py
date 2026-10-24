@@ -13,11 +13,13 @@ import asyncio
 import base64
 import json
 import os
+import shutil
 from contextlib import closing
 from dataclasses import asdict, replace
 from datetime import UTC, datetime, timedelta
 from io import BytesIO
 from pathlib import Path
+from threading import Event
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -73,6 +75,7 @@ from app.services.infrastructure.attachment_blob_catalog.locator import (
     fork_import_ingest_id,
     ingest_staging_relative_locator,
     resolve_blob_path,
+    resolve_captured_attachment,
     resolve_staging_path,
 )
 from app.services.infrastructure.attachment_blob_catalog.store import (
@@ -84,6 +87,9 @@ from app.services.infrastructure.attachment_content_service import (
 )
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
+)
+from app.services.infrastructure.rollout_context.fork.source_capture import (
+    capture_directory,
 )
 from app.services.infrastructure.rollout_context.runtime.composer import (
     ContextPlanComposer,
@@ -1499,12 +1505,12 @@ async def test_cross_domain_fork_import_reuses_verified_target_blob_without_stre
         before = path.stat()
         if damage_existing:
             path.write_bytes(b"x" * len(body))
-        transport = SimpleNamespace(fork_transfer=AsyncMock(side_effect=AssertionError("目标已有正文不得请求传输 chunk")))
+        shutil.copytree(capture_directory(source._sessions_root, record), capture_directory(target._sessions_root, record))
         if damage_existing:
             with pytest.raises(RuntimeError, match="hash/length"):
-                await target.accept_fork_import(record, snapshots, transport=transport, request=request)
+                await target.accept_fork_import(record, snapshots)
         else:
-            await target.accept_fork_import(record, snapshots, transport=transport, request=request)
+            await target.accept_fork_import(record, snapshots)
             await target.reserve_copy_attachments(record, None, snapshots)
             await target.finalize_copy_attachments(record, publication_preimage_hash=record.preimage_hash)
             projection = target.project_attachment(SESSION_B, target_thread, source_ref.file_id)
@@ -1516,7 +1522,6 @@ async def test_cross_domain_fork_import_reuses_verified_target_blob_without_stre
                 before.st_ino, before.st_mtime_ns, before.st_ctime_ns,
             )
             assert _blob_files(target_root) == [path]
-        transport.fork_transfer.assert_not_awaited()
     finally:
         target.close()
 
@@ -1566,6 +1571,7 @@ async def fork_import_target(fork_capture, tmp_path, session_bundle_factory):
         "target_gateway_id": get_current_gateway_id(),
     }))
     snapshots = source.capture_fork_attachments(record, same_storage_owner=False, references=((ref.file_id, True),))
+    shutil.copytree(capture_directory(source._sessions_root, record), capture_directory(target._sessions_root, record))
     try:
         yield SimpleNamespace(source=source, target=target, record=record, snapshots=snapshots, request=request, body=body)
     finally:
@@ -1581,8 +1587,7 @@ async def test_fork_staging_gc_uses_terminal_claim_and_exact_operation(fork_impo
     # 已存在目标正文走真实 import 复用，collector 只验证终态残留文件，不代替完整 fork。
     await target.persist_inline(SESSION_B, [_attach("target.txt", "text/plain", case.body)],
         thread_id=record.target_thread_id, message_id="msg_existing_staging")
-    transport = SimpleNamespace(fork_transfer=AsyncMock(side_effect=AssertionError("已有正文不得发起网络请求")))
-    await target.accept_fork_import(record, case.snapshots, transport=transport, request=case.request)
+    await target.accept_fork_import(record, case.snapshots)
     staging_id = fork_import_ingest_id(record.copy_operation_id, snapshot.blob_id)
     staging = resolve_staging_path(target._attachments_root, ingest_staging_relative_locator(staging_id))
     other = resolve_staging_path(target._attachments_root, ingest_staging_relative_locator(
@@ -1608,7 +1613,6 @@ async def test_fork_staging_gc_uses_terminal_claim_and_exact_operation(fork_impo
         assert await target.collect_fork_import_staging() == ()
     assert other.read_bytes() == b"other-operation-writer"
     assert case.source.read(SESSION_A, snapshot.source_file_id).data == case.body
-    transport.fork_transfer.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -1641,36 +1645,78 @@ async def test_terminal_fork_staging_removal_failure_retries_without_scanning(fo
 
 
 @pytest.mark.asyncio
-async def test_fork_import_holds_writer_gate_while_receiving(fork_import_target):
+@pytest.mark.parametrize("cancelled", [False, True])
+async def test_fork_import_holds_writer_gate_until_frozen_copy_exits(fork_import_target, monkeypatch, cancelled):
     case = fork_import_target
     target, record = case.target, case.record
     (snapshot,) = case.snapshots
-    received, release = asyncio.Event(), asyncio.Event()
-    async def receive(request):
-        assert request.action == "attachment_chunk" and request.blob_id == snapshot.blob_id
-        received.set()
-        await release.wait()
-        raise ConnectionError("import interrupted after settlement")
-    token = set_current_gateway_id("gateway_332f92ee6191880e797569a47e22922b")
-    importing = asyncio.create_task(target.accept_fork_import(record, case.snapshots,
-        transport=SimpleNamespace(fork_transfer=receive), request=case.request))
+    copying, release = Event(), Event()
+    copyfile = shutil.copyfile
+    def copy_frozen(source, destination):
+        Path(destination).write_bytes(b"partial")
+        copying.set()
+        assert release.wait(timeout=10)
+        if not cancelled:
+            raise OSError("frozen copy interrupted after settlement")
+        return copyfile(source, destination)
+    monkeypatch.setattr("app.services.infrastructure.attachment_blob_catalog.fork_import.shutil.copyfile", copy_frozen)
+    importing = asyncio.create_task(target.accept_fork_import(record, case.snapshots))
     path = resolve_staging_path(target._attachments_root, ingest_staging_relative_locator(
         fork_import_ingest_id(record.copy_operation_id, snapshot.blob_id)))
     try:
-        await asyncio.wait_for(received.wait(), timeout=3)
+        assert await asyncio.to_thread(copying.wait, 3)
         assert path.is_file()
         target._catalog.settle_fork_attachment_claims(copy_operation_id=record.copy_operation_id,
             claim_ids=(snapshot.claim_id,), state="aborted")
+        if cancelled:
+            importing.cancel()
+            await asyncio.sleep(0)
+            assert not importing.done()
         assert await asyncio.wait_for(target.collect_fork_import_staging(), timeout=1) == ()
         assert path.is_file()
         async with target._fork_imports.lock_for(record.copy_operation_id, wait=False) as holder:
             assert not holder.acquired
     finally:
         release.set()
-        try:
-            with pytest.raises(ConnectionError, match="import interrupted"):
-                await importing
-        finally:
-            reset_current_gateway_id(token)
+        with pytest.raises(asyncio.CancelledError if cancelled else OSError, match=None if cancelled else "frozen copy interrupted"):
+            await importing
     assert not path.exists()
     assert await target.collect_fork_import_staging() == ()
+
+
+@pytest.mark.asyncio
+async def test_fork_import_uses_frozen_file_after_live_source_changes(fork_import_target):
+    case = fork_import_target
+    (snapshot,) = case.snapshots
+    live = resolve_blob_path(case.source._attachments_root, snapshot.relative_locator)
+    live.write_bytes(b"changed live source")
+    await case.target.accept_fork_import(case.record, case.snapshots)
+    await case.target.reserve_copy_attachments(case.record, None, case.snapshots)
+    await case.target.finalize_copy_attachments(case.record, publication_preimage_hash=case.record.preimage_hash)
+    assert case.target.read(SESSION_B, snapshot.target_file_id).data == case.body
+    frozen = resolve_captured_attachment(
+        capture_directory(case.target._sessions_root, case.record) / case.record.source_session_id,
+        snapshot.blob_id,
+    )
+    assert frozen.read_bytes() == case.body
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("damage", ["missing", "changed", "symlink"])
+async def test_fork_import_rejects_damaged_frozen_file(fork_import_target, damage):
+    case = fork_import_target
+    (snapshot,) = case.snapshots
+    frozen = resolve_captured_attachment(
+        capture_directory(case.target._sessions_root, case.record) / case.record.source_session_id,
+        snapshot.blob_id,
+    )
+    if damage == "changed":
+        frozen.write_bytes(b"corrupt frozen file")
+    else:
+        frozen.unlink()
+        if damage == "symlink":
+            frozen.symlink_to(resolve_blob_path(case.source._attachments_root, snapshot.relative_locator))
+    with pytest.raises((OSError, RuntimeError)):
+        await case.target.accept_fork_import(case.record, case.snapshots)
+    assert case.target._catalog.get_owner_ref(snapshot.target_attachment_id) is None
+    assert _blob_files(case.target._workspace_root) == []

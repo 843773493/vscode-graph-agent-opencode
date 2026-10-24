@@ -22,6 +22,7 @@ from pathlib import Path
 from app.core.session_catalog_store import validate_path_budget
 from app.services.infrastructure.attachment_blob_catalog.blob_identity import (
     utc_bucket_date,
+    validate_blob_id,
     validate_blob_relative_locator,
 )
 
@@ -32,6 +33,7 @@ __all__ = [
     "ingest_staging_relative_locator",
     "resolve_attachment_directory",
     "resolve_blob_path",
+    "resolve_captured_attachment",
     "resolve_staging_path",
     "validate_attachment_directory_relative_locator",
     "validate_ingest_staging_relative_locator",
@@ -120,3 +122,14 @@ def resolve_staging_path(attachments_root: Path, relative_locator: str) -> Path:
 def fork_import_ingest_id(copy_operation_id: str, blob_id: str) -> str:
     """导入与清理共用原 operation/blob preimage，不改写已有 staging 身份。"""
     return "ing_" + hashlib.sha256(f"fork-import:{copy_operation_id}:{blob_id}".encode()).hexdigest()[:32]
+
+
+def resolve_captured_attachment(captured_root: Path, blob_id: str) -> Path:
+    """附件冻结文件属于原 capture，不再从 live blob 提供跨域分块。"""
+    validate_blob_id(blob_id)
+    locator = "attachment-files/" + blob_id
+    validate_path_budget(captured_root, locator)
+    path = captured_root / locator
+    if any(candidate.is_symlink() for candidate in (captured_root.parent, captured_root, path.parent, path)):
+        raise RuntimeError("fork 附件冻结文件不能经过符号链接")
+    return path

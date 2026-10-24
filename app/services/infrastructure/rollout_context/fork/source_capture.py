@@ -17,6 +17,12 @@ from app.core.session_catalog_store.contracts import (
 from app.core.session_control_primitives import CONTROL_DATABASE_NAME
 from app.domain.itemized.hashing import canonical_json_bytes
 from app.schemas.internal_v2.session_fork_transfer import ForkSourceCaptureDTO
+from app.services.infrastructure.attachment_blob_catalog.blob_identity import (
+    digest_for_blob_id,
+)
+from app.services.infrastructure.attachment_blob_catalog.locator import (
+    resolve_captured_attachment,
+)
 from app.services.infrastructure.attachment_blob_catalog.records import (
     ForkAttachmentSnapshot,
 )
@@ -65,8 +71,9 @@ def capture_directory(sessions_root: Path, record: ForkSourceCaptureRecord) -> P
 
 def publish_captured_snapshot(record: ForkSourceCaptureRecord, snapshot: ForkSourceSnapshot) -> str:
     """source guard 内写 marker；所有快照 bytes fsync 后原子 rename 并 fsync 目录。"""
+    _verify_attachment_files(snapshot)
     payload = {
-        "schema": "source-copy-snapshot:v2", "state": "captured",
+        "schema": "source-copy-snapshot:v3", "state": "captured",
         "copy_operation_id": record.copy_operation_id, "preimage_hash": record.preimage_hash,
         "source_snapshot_id": record.snapshot_id, "snapshot_sha256": snapshot.snapshot_sha256,
         "rollout": {
@@ -120,9 +127,9 @@ def read_captured_snapshot(sessions_root: Path, record: ForkSourceCaptureRecord)
     encoded = marker.read_bytes()
     marker_hash = hashlib.sha256(encoded).hexdigest()
     raw = json.loads(encoded)
-    if canonical_json_bytes(raw) != encoded or (
-        raw["schema"], raw["state"], raw["copy_operation_id"], raw["preimage_hash"], raw["source_snapshot_id"],
-    ) != ("source-copy-snapshot:v2", "captured", record.copy_operation_id, record.preimage_hash, record.snapshot_id):
+    if canonical_json_bytes(raw) != encoded or raw["schema"] not in {"source-copy-snapshot:v2", "source-copy-snapshot:v3"} or (
+        raw["state"], raw["copy_operation_id"], raw["preimage_hash"], raw["source_snapshot_id"],
+    ) != ("captured", record.copy_operation_id, record.preimage_hash, record.snapshot_id):
         raise RuntimeError("fork captured marker identity/preimage 冲突")
     if record.marker_sha256 is not None and record.marker_sha256 != marker_hash:
         raise RuntimeError("fork captured marker hash 与 journal 不一致")
@@ -163,12 +170,36 @@ def read_captured_snapshot(sessions_root: Path, record: ForkSourceCaptureRecord)
         attachments=tuple(ForkAttachmentSnapshot(**item) for item in raw["attachments"]),
         node_debug=NodeDebugSourceCopySnapshot.from_payload(raw["node_debug"]) if raw["node_debug"] is not None else None,
     )
+    # v2 仅保留旧封存载荷的读取，不从 live owner 补造其缺少的冻结文件。
+    if raw["schema"] == "source-copy-snapshot:v3":
+        _verify_attachment_files(snapshot)
     claim_ids = sorted(item.claim_id for item in snapshot.attachments if item.claim_id is not None)
     if claim_ids != raw["claim_ids"] or hashlib.sha256(canonical_json_bytes(claim_ids)).hexdigest() != raw["claim_manifest_sha256"] or (
         snapshot.snapshot_sha256 != raw["snapshot_sha256"] or record.snapshot_sha256 not in {None, snapshot.snapshot_sha256}
     ):
         raise RuntimeError("fork captured snapshot/claim manifest hash 不一致")
     return snapshot, marker_hash
+
+
+def _verify_attachment_files(snapshot: ForkSourceSnapshot) -> None:
+    """复制所需正文纳入原 capture，完整集合与原冻结 digest/length 必须一致。"""
+    expected: dict[str, ForkSnapshotFile] = {}
+    root = snapshot.captured_root / "attachment-files"
+    for attachment in snapshot.attachments:
+        if attachment.availability != "available" or attachment.target_action != "copy_snapshot":
+            continue
+        path = resolve_captured_attachment(snapshot.captured_root, attachment.blob_id)
+        if digest_for_blob_id(attachment.blob_id) != attachment.digest:
+            raise RuntimeError("fork 附件冻结身份与 digest 不一致")
+        row = ForkSnapshotFile(path.name, attachment.length, attachment.digest.removeprefix("sha256:"))
+        if attachment.blob_id in expected and expected[attachment.blob_id] != row:
+            raise RuntimeError("fork 附件相同冻结身份对应不同版本")
+        expected[attachment.blob_id] = row
+    if root.is_symlink() or (root.exists() and not root.is_dir()):
+        raise RuntimeError("fork 附件冻结根不是普通目录")
+    actual = _tree_manifest(root) if root.is_dir() else ()
+    if actual != tuple(expected[key] for key in sorted(expected)):
+        raise RuntimeError("fork 附件冻结文件集合或 hash/length 不一致；不能回读 live 来源补造")
 
 
 def remove_captured_snapshot(sessions_root: Path, record: ForkSourceCaptureRecord) -> None:

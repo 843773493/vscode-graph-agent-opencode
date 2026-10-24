@@ -6605,11 +6605,6 @@ export declare type SessionForkTransferRequest = Message<"boxteam.workspace.v2.S
    * @generated from field: optional string release_state = 10;
    */
   releaseState?: string | undefined;
-
-  /**
-   * @generated from field: optional string blob_id = 11;
-   */
-  blobId?: string | undefined;
 };
 
 /**

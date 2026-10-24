@@ -1519,7 +1519,8 @@ message SessionForkTransferRequest {
   optional int64 offset = 8;
   optional SessionGenerationOriginDTO generation_origin = 9;
   optional string release_state = 10;
-  optional string blob_id = 11;
+  reserved 11;
+  reserved "blob_id";
 }
 
 message ForkTransferFileDTO {

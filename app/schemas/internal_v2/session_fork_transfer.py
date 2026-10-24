@@ -57,15 +57,14 @@ class SessionForkTransferRequest(BaseModel):
 
     source_gateway_id: str
     fork_target: ForkGrantTarget
-    action: Literal["intent", "capture", "files", "chunk", "attachment_chunk", "release", "create"]
+    action: Literal["intent", "capture", "files", "chunk", "release", "create"]
     request: SessionForkRequest
     capture: ForkSourceCaptureDTO | None = None
     cursor: int = Field(default=0, ge=0)
     file_name: str | None = None
-    offset: int = Field(default=0, ge=0, description="分块起点，单位 bytes；chunk 相对 file_name 冻结文件，attachment_chunk 相对 blob_id 冻结正文")
+    offset: int = Field(default=0, ge=0, description="分块起点，单位 bytes；相对 file_name 冻结文件")
     generation_origin: SessionGenerationOriginDTO | None = None
     release_state: Literal["committed", "aborted"] | None = None
-    blob_id: str | None = None
 
     @model_validator(mode="after")
     def validate_scope(self) -> SessionForkTransferRequest:
@@ -77,14 +76,12 @@ class SessionForkTransferRequest(BaseModel):
         actual = parse_resource_uri(self.fork_target.uri, local_gateway_id=self.fork_target.gateway_id)
         if expected != actual:
             raise ValueError("fork transfer 固定 URI 与 request 不一致")
-        if self.action in {"capture", "files", "chunk", "attachment_chunk", "release"} and self.capture is None:
+        if self.action in {"capture", "files", "chunk", "release"} and self.capture is None:
             raise ValueError("fork artifact 操作必须绑定完整冻结 capture")
         if self.action == "chunk" and self.file_name is None:
             raise ValueError("fork chunk 必须指定冻结 artifact 文件")
         if self.action == "release" and self.release_state is None:
             raise ValueError("fork export 释放必须携带目标 commit/abort 回执")
-        if self.action == "attachment_chunk" and self.blob_id is None:
-            raise ValueError("fork 附件分块必须绑定冻结 blob_id")
         return self
 
 
@@ -104,7 +101,7 @@ class SessionForkTransferResultDTO(BaseModel):
     next_cursor: int | None = Field(default=None, ge=0)
     chunk_base64: str | None = Field(default=None, max_length=4 * ((FORK_TRANSFER_CHUNK_BYTES + 2) // 3))
     chunk_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
-    offset: int | None = Field(default=None, ge=0, description="响应块起点，单位 bytes；基准与请求的 file_name 冻结文件或 blob_id 冻结正文相同，下一位置为它加实际块长度")
+    offset: int | None = Field(default=None, ge=0, description="响应块起点，单位 bytes；基准与请求的 file_name 冻结文件相同，下一位置为它加实际块长度")
     result: SessionForkResultDTO | None = None
 
     def validate_for_request(self, request: SessionForkTransferRequest) -> SessionForkTransferResultDTO:
@@ -123,6 +120,6 @@ class SessionForkTransferResultDTO(BaseModel):
                    and (name != "files" or self.files)}
         if not required <= present or not present <= allowed:
             raise ValueError(f"fork transfer 回执字段与 action 不一致: action={request.action}, fields={sorted(present)}")
-        if request.action in {"chunk", "attachment_chunk"} and self.offset != request.offset:
+        if request.action == "chunk" and self.offset != request.offset:
             raise ValueError("fork transfer 回执 offset 与冻结请求不一致")
         return self

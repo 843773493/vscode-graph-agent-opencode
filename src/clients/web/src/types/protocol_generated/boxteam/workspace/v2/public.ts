@@ -1530,7 +1530,6 @@ export interface SessionForkTransferRequest {
   offset?: number | undefined;
   generation_origin?: SessionGenerationOriginDTO | undefined;
   release_state?: string | undefined;
-  blob_id?: string | undefined;
 }
 
 export interface ForkTransferFileDTO {
@@ -12239,7 +12238,6 @@ function createBaseSessionForkTransferRequest(): SessionForkTransferRequest {
     offset: undefined,
     generation_origin: undefined,
     release_state: undefined,
-    blob_id: undefined,
   };
 }
 
@@ -12258,7 +12256,6 @@ export const SessionForkTransferRequest: MessageFns<SessionForkTransferRequest> 
         ? SessionGenerationOriginDTO.fromJSON(object.generation_origin)
         : undefined,
       release_state: isSet(object.release_state) ? globalThis.String(object.release_state) : undefined,
-      blob_id: isSet(object.blob_id) ? globalThis.String(object.blob_id) : undefined,
     };
   },
 
@@ -12294,9 +12291,6 @@ export const SessionForkTransferRequest: MessageFns<SessionForkTransferRequest> 
     if (message.release_state !== undefined) {
       obj.release_state = message.release_state;
     }
-    if (message.blob_id !== undefined) {
-      obj.blob_id = message.blob_id;
-    }
     return obj;
   },
 
@@ -12323,7 +12317,6 @@ export const SessionForkTransferRequest: MessageFns<SessionForkTransferRequest> 
       ? SessionGenerationOriginDTO.fromPartial(object.generation_origin)
       : undefined;
     message.release_state = object.release_state ?? undefined;
-    message.blob_id = object.blob_id ?? undefined;
     return message;
   },
 };
