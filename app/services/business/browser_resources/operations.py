@@ -44,7 +44,7 @@ class BrowserOperations(ResourceOperations):
     async def perform(
         self, browser_id: str, action: BrowserAction, payload: ResourceSnapshot | None = None,
     ) -> ResourceSnapshot:
-        async with self._owner._lock:
+        async with self._owner._resource_lock(browser_id):
             self._use(browser_id)
             return await self.call_locked(
                 self._owner, self._owner._require(browser_id), action, payload or {},
@@ -52,7 +52,7 @@ class BrowserOperations(ResourceOperations):
             )
 
     async def promote(self, browser_id: str) -> ResourceSnapshot:
-        async with self._owner._lock:
+        async with self._owner._resource_lock(browser_id):
             self._use(browser_id)
             record = self._owner._require(browser_id)
             return await self._owner._command_record(

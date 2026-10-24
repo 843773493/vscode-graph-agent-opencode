@@ -611,7 +611,7 @@ async def test_promotion_and_unload_race_at_real_owner_revision_barrier(
     )
     try:
         await asyncio.sleep(0)
-        assert owner._lock.locked()
+        assert owner._resource_lock(rid).locked()
         assert not second_task.done()
     finally:
         release.set()
@@ -669,7 +669,7 @@ async def test_reattach_and_due_orphan_reclaim_race_at_real_owner_revision_barri
     )
     try:
         await asyncio.sleep(0)
-        assert owner._lock.locked()
+        assert owner._resource_lock(rid).locked()
         assert not second_task.done()
     finally:
         release.set()

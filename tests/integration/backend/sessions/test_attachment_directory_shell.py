@@ -176,3 +176,98 @@ async def test_shell_directory_admission_and_process_lease_exclude_due_gc(
         assert stopped["status"] == "terminated"
     assert await store.collect_garbage(leases=leases) == (attachment_id,)
     assert not directory.exists()
+
+
+async def test_pending_stop_receipt_keeps_its_directory_but_does_not_block_another_pty(
+    terminal_runtime: WorkspaceToolRuntime, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    container, session_id, context = terminal_runtime
+    store, owner, leases = container.attachment_blob_store, container.terminal_resource_owner, container.external_resource_leases
+    execute = create_exec_command_tool(session_id, terminal_owner=owner, invocation_context=context)
+    terminals: list[str] = []
+    directories: list[Path] = []
+    attachments: list[str] = []
+    pids: list[int] = []
+    entered, release = asyncio.Event(), asyncio.Event()
+    stopping = None
+    try:
+        for index in range(2):
+            message = await container.message_service.create(session_id, MessageCreateRequest(
+                content=f"独立处理目录 {index}", attachments=[upload(f"original-{index}".encode())],
+            ))
+            ref, = message.attachments
+            directory = store.resolve_directory_uri(parse_resource_uri(ref.directory_uri))
+            directories.append(directory)
+            attachments.append(parse_resource_uri(ref.directory_uri).tail_segments[0])
+            probe = directory / "derived/independent.py"
+            probe.write_text(dedent("""\
+                import os
+                import time
+                from pathlib import Path
+
+                Path("shell.pid").write_text(str(os.getpid()), encoding="ascii")
+                Path("output.txt").write_text("independent", encoding="utf-8")
+                print("started", flush=True)
+                time.sleep(600)
+            """), encoding="utf-8")
+            command = [sys.executable, "-u", probe.name]
+            result = await execute.ainvoke({
+                "cmd": subprocess.list2cmdline(command) if os.name == "nt" else shlex.join(command),
+                "workdir": file_uri_child(ref.directory_uri, "derived"), "yield_time_ms": 1000,
+            })
+            terminals.append(result["terminal_id"])
+            assert "started" in result["output"] and "exit_code" not in result
+            pids.append(int((directory / "derived/shell.pid").read_text()))
+            assert process_running(pids[-1])
+
+        original_stop = owner._transport.stop_resource
+        calls: list[str] = []
+
+        async def hold_receipt(terminal_id: str, *, reason: str | None = None):
+            calls.append(terminal_id)
+            receipt = await original_stop(terminal_id, reason=reason)
+            if terminal_id == terminals[0]:
+                # HTTP/PTY 已真正停止，故障点只挂起返回 owner 的最终回执。
+                entered.set()
+                await release.wait()
+            return receipt
+
+        monkeypatch.setattr(owner._transport, "stop_resource", hold_receipt)
+        first = await owner.get_resource(terminals[0])
+        stopping = asyncio.create_task(owner.command(
+            terminals[0], action="stop", expected_revision=first["owner_revision"],
+            holder_id="request:pending-receipt", operation_id="pending-receipt",
+        ))
+        await asyncio.wait_for(entered.wait(), 5)
+        assert not process_running(pids[0]) and process_running(pids[1])
+        store.release_thread_references(session_id, message.thread_id)
+        monkeypatch.setattr(store, "_clock", lambda: datetime.now(UTC) + timedelta(days=31))
+        assert await store.collect_garbage(leases=leases) == ()
+        second = await asyncio.wait_for(owner.get_resource(terminals[1]), 5)
+        stopped = await asyncio.wait_for(owner.command(
+            terminals[1], action="stop", expected_revision=second["owner_revision"],
+            holder_id="request:independent-stop", operation_id="independent-stop",
+        ), 5)
+        assert stopped["status"] == "terminated" and stopped["reconciliation_status"] == "verified"
+        assert not process_running(pids[1])
+        assert (directories[1] / "derived/output.txt").read_text() == "independent"
+        assert not stopping.done() and leases.leases_for_resource(attachments[0])
+        assert not leases.leases_for_resource(attachments[1])
+        assert await store.collect_garbage(leases=leases) == (attachments[1],)
+        assert directories[0].is_dir() and not directories[1].exists()
+        assert calls == terminals
+        release.set()
+        first_stopped = await stopping
+        assert first_stopped["status"] == "terminated" and first_stopped["reconciliation_status"] == "verified"
+        assert not leases.leases_for_resource(attachments[0])
+        assert await store.collect_garbage(leases=leases) == (attachments[0],)
+        assert not directories[0].exists() and calls == terminals
+    finally:
+        release.set()
+        if stopping is not None:
+            await stopping
+        for terminal_id in terminals:
+            resource = await owner.get_resource(terminal_id)
+            if resource["status"] not in {"terminated", "completed", "exited", "deleted"}:
+                await owner.command(terminal_id, action="stop", expected_revision=resource["owner_revision"],
+                    holder_id="request:independent-cleanup", operation_id="independent-cleanup")

@@ -42,10 +42,10 @@ class ResourceOperations:
             self._owner._leases.release(lease_id)
 
     async def close(self) -> None:
-        async with self._owner._lock:
+        self._closed = True
+        async with self._owner._lock_resources(tuple(self._lease_refs)):
             for resource_id in tuple(self._lease_refs):
                 self._release_locked(resource_id)
-            self._closed = True
 
     def _assert_open(self) -> None:
         if self._closed:

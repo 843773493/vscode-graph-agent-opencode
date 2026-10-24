@@ -84,7 +84,7 @@ class BrowserResourceOwner(WorkspaceResourceOwner):
         self, resource_id: str, action: BrowserAction, payload: ResourceSnapshot,
         revision: int, holder_id: str, operation_id: str, thread: ThreadRef | None,
     ) -> ResourceSnapshot:
-        async with self._lock:
+        async with self._resource_lock(resource_id):
             record = self._require(resource_id)
             self._verified(record)
             if record.owner_revision != revision:

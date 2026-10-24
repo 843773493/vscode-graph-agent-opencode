@@ -64,6 +64,8 @@ Web 定向 `BOXTEAM_E2E_SECTION8_FOCUS=copy_missing_attachment` 通过真实 Gat
 - [x] 5.3 实现最后一次零关联起算的默认 30 天持久 deadline、重新 attach 取消期限，以及启动/低频到期查询；删除与 attach/lease/fork互斥复核，并可在中途重启后继续。
 - [ ] 5.4 统一清理 operation 的截止时间、取消/终止核实与迟到回执，隔离共享 owner 锁对无关资源的阻塞，处理同步阻塞回调/线程池排队；明确 admission、Session 删除和 shutdown 的有界等待及失败返回，保留未核实状态和原 locator，不重复副作用或以扫描超时假报释放。覆盖真实锁竞争、网络未回执、事件循环阻塞及重启恢复。
 
+  - 2026-10-24 完成 5.4 的资源锁纵向切片：全部 Terminal/Browser owner、管理/工具/授权、fork attach、Thread/Session 清理和 operation 关闭改用原记录对应的同一把资源锁，恢复只保留首次对账 gate；相关集合按固定资源 ID 顺序取锁，仍整组预检 lease 后才 detach，查询在等锁后重检关联。没有新增持久事实或兼容锁入口。完整原 HEAD 归档加新增公开入口反例为 2 failed/10.96 秒，两类 owner 都在 A 的挂起停止阻塞 B 查询时超时；代码候选 `4daa604d6a52b5160d827f6af80e6566537fd694` 的 62 项 owner 回归通过/2.04 秒，保留原代次、未知回执、fork 幂等、冲突及顺序断言。真实 Linux Terminal HTTP/PTY 8 passed/80.09 秒，其中新增两目录场景在 A 已经外部停止但最终回执被屏障挂起时，B 仍独立查询、停止并 GC；A 的目录/lease 直至原回执返回才释放，原停止不重放。Browser 创建/工具、真实 Node 锁拒绝和取消队列重入共 3 passed/22.18 秒。相同候选在 `hyf_win` 的 Windows Job Object（600 秒/4 GiB）下 6 项两类 owner 竞争及 8 项真实 PTY 共 14 passed/54.95 秒；前后源码 tree、工作树 blob 与 Git EOL 规范化 hash 已核验。Ruff、编译、strict 和作者结构自查原件及共享改动合并依据在 `out/tests/temp/resource_lock_isolation_20261024/artifacts/`；保留现有记录查询改名/批量 lease 对账改动，不清共享暂存内容。本项不证明网络未回执的终止接管、同步阻塞/线程池、聚合查询或 Session 删除/shutdown 的总截止时间，也不是完整跨端 fork/重启验收；生产相应位置保留 TODO，5.2/5.4/6.1/6.2 继续未勾，团队和协作专项继续 TODO。
+
 ## 6. 真实验收与旧链物理下线
 
 - [ ] 6.1 经产品入口上传、Shell 预处理、读取处理结果、fork 与重启恢复；覆盖 Linux/Windows 原生 cwd 和远端 URI 始终在目标机器解释。
