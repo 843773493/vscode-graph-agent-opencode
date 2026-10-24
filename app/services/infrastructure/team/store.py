@@ -65,7 +65,10 @@ class TeamStore:
     def recent_events(self, session_id: str, team_id: str, *, limit: int = 20) -> list[TeamEventDTO]:
         self._validate_team_id(team_id)
         _observe_read(session_id)
-        return [TeamEventDTO.model_validate_json(row) for row in self.control(session_id).collaboration_recent_events(team_id, limit)]
+        events = [TeamEventDTO.model_validate_json(row) for row in self.control(session_id).collaboration_recent_events(team_id, limit)]
+        if any((event.session_id, event.team_id) != (session_id, team_id) for event in events):
+            raise RuntimeError("团队事件与权威 owner/ID 不一致")
+        return events
 
     def latest_task_event(self, session_id: str, team_id: str, task_id: str) -> TeamEventDTO | None:
         self._validate_team_id(team_id)

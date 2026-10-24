@@ -14,6 +14,7 @@ from pydantic import ValidationError
 
 from app.agents.tools.team import create_team_tools
 from app.container import AppContainer
+from app.core.identifier import create_prefixed_id
 from app.core.mounted_workspaces import MountedWorkspace
 from app.core.workspace_identity import load_or_create_workspace_id
 from tests.harness.python.run_context import TestRunContext
@@ -130,3 +131,43 @@ async def test_tools_reject_retired_session_fields_without_rewriting_ledger(
         "team_id": team_id, "task_id": task_id, "ledger_revision": current_revision,
         "rejections": receipts, "event_read_rejections": 2, "restored_board": current,
     }, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+@pytest.mark.parametrize("field,prefix", [("session_id", "ses"), ("team_id", "team")])
+async def test_tools_reject_foreign_event_owner_without_rewriting_ledger(
+    team_runtime: tuple[AppContainer, str, dict[str, BaseTool]], field: str, prefix: str,
+) -> None:
+    container, session_id, tools = team_runtime
+    board = await tools["create_team"].ainvoke({"name": "事件归属验收"})
+    team_id = board["team_id"]
+    # 先由原 worker 完成创建 fanout，避免把合法异步结算误判为只读入口写入。
+    await container.team_fanout_service.reconcile(session_id)
+    store = container.team_service._boards._store
+    control = store.control(session_id)
+    event, = store.recent_events(session_id, team_id)
+    raw_event, = control.collaboration_recent_events(team_id, 20)
+    encoded = json.dumps(event.model_dump(mode="json") | {field: create_prefixed_id(prefix)})
+    control.connection.execute(
+        "UPDATE collaboration_events SET event_json=? WHERE event_id=?", (encoded, event.event_id),
+    )
+    tables = ("collaboration_ledger", "collaboration_boards", "collaboration_events",
+              "collaboration_fanouts", "collaboration_deliveries", "session_operation_leases", "thread_catalog")
+
+    def ledger_rows():
+        return {table: control.connection.execute(f"SELECT * FROM {table}").fetchall() for table in tables}
+
+    damaged_rows = ledger_rows()
+    try:
+        for tool, arguments in (("get_team_board", {"team_id": team_id}), ("list_my_teams", {})):
+            with pytest.raises(RuntimeError, match="团队事件.*owner/ID"):
+                await tools[tool].ainvoke(arguments)
+            assert ledger_rows() == damaged_rows
+        with pytest.raises(RuntimeError, match="团队事件.*owner/ID"):
+            store.recent_events(session_id, team_id)
+        assert ledger_rows() == damaged_rows
+    finally:
+        control.connection.execute(
+            "UPDATE collaboration_events SET event_json=? WHERE event_id=?", (raw_event, event.event_id),
+        )
+    assert await tools["get_team_board"].ainvoke({"team_id": team_id}) == board
+    assert (await tools["list_my_teams"].ainvoke({}))["items"] == [board]

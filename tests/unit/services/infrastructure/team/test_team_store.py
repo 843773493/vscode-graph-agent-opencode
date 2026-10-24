@@ -100,6 +100,30 @@ async def test_team_store_exposes_corrupt_board(team_store_case):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("field,value", [
+    ("session_id", "ses_019c3df7f8527d568e834acf3c0f6612"),
+    ("team_id", "team_ffffffffffffffffffffffffffffffff"),
+])
+async def test_recent_events_reject_other_owner_without_rewriting_ledger(team_store_case, field, value):
+    case = team_store_case
+    revision = await case.store.commit(case.board, case.event)
+    damaged = case.event.model_dump(mode="json") | {field: value}
+    encoded = json.dumps(damaged)
+    case.control.connection.execute(
+        "UPDATE collaboration_events SET event_json=? WHERE event_id=?", (encoded, case.event.event_id),
+    )
+    fanout = case.control.get_collaboration_fanout(revision)
+    leases = case.control.list_non_terminal_leases()
+    with pytest.raises(RuntimeError, match="团队事件.*owner/ID"):
+        case.store.recent_events(SESSION_ID, case.board.team_id)
+    assert case.control.collaboration_recent_events(case.board.team_id, 20) == (encoded,)
+    assert case.control.get_collaboration_ledger_revision() == revision
+    assert case.control.get_collaboration_fanout(revision) == fanout
+    assert case.control.list_non_terminal_leases() == leases
+    assert case.store.get(SESSION_ID, case.board.team_id) == case.board
+
+
+@pytest.mark.asyncio
 async def test_team_board_event_fanout_and_lease_rollback_together(team_store_case):
     case = team_store_case
     case.control.connection.execute("CREATE TRIGGER reject_event BEFORE INSERT ON collaboration_events "
