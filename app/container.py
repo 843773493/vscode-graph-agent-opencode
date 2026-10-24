@@ -89,6 +89,12 @@ from app.services.business.team.service import TeamCoordinationService
 from app.services.business.terminal_resources.owner import TerminalResourceOwner
 from app.services.event_service import EventService
 from app.services.infrastructure.artifact_service import ArtifactService
+from app.services.infrastructure.attachment_blob_catalog.blob_identity import (
+    ATTACHMENT_ROOT_DIRECTORY_NAME,
+)
+from app.services.infrastructure.attachment_blob_catalog.maintenance import (
+    AttachmentMaintenanceLock,
+)
 from app.services.infrastructure.attachment_blob_catalog.store import (
     AttachmentBlobStore,
 )
@@ -1139,11 +1145,14 @@ def build_app_container(
     """在显式工作区上下文中装配唯一完整服务图。"""
 
     resolved_root = Path(workspace_root).expanduser().resolve(strict=True)
-    workspace_id = load_or_create_workspace_id(resolved_root)
-    with workspace_context(workspace_id, resolved_root):
-        return _build_app_container(
-            project_root=project_root,
-            workspace_root=resolved_root,
-            startup_mount=startup_mount,
-            clock_ports=clock_ports,
-        )
+    with AttachmentMaintenanceLock(
+        resolved_root / ".boxteam" / ATTACHMENT_ROOT_DIRECTORY_NAME, exclusive=False,
+    ):
+        workspace_id = load_or_create_workspace_id(resolved_root)
+        with workspace_context(workspace_id, resolved_root):
+            return _build_app_container(
+                project_root=project_root,
+                workspace_root=resolved_root,
+                startup_mount=startup_mount,
+                clock_ports=clock_ports,
+            )

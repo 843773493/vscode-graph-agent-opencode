@@ -186,6 +186,7 @@ class AttachmentBlobStore(ForkAttachmentStoreMixin, AttachmentIngestRecoveryMixi
             raise ValueError("附件上传必须绑定非空且不含冒号的 message_id")
         if not attachments:
             return []
+        self._catalog.acquire_access()
         persisted: list[AttachmentRef] = []
         # 正文 I/O 只持长操作 holder；恢复和删除在 Session gate 外等待它退出。
         async with self.deletion_holder.lock_for(session_id, exclusive=False):
@@ -577,6 +578,7 @@ class AttachmentBlobStore(ForkAttachmentStoreMixin, AttachmentIngestRecoveryMixi
             control.close()
 
     def _open_control_store(self, session_id: str) -> SessionControlStore:
+        self._catalog.acquire_access()
         session_dir = self._path_resolver.resolve_session_node(session_id)
         return SessionControlStore(session_dir / "session-control.sqlite")
 

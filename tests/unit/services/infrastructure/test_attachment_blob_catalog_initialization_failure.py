@@ -68,11 +68,15 @@ def test_initialization_failure_with_close_failure_isolates_catalog(
     initialization_error = RuntimeError("initialization failed")
 
     class CloseFailureBoundary:
+        fail_close = True
+
         def execute(self, statement: str, *parameters: object):
             return connection.execute(statement, *parameters)
 
         def close(self) -> None:
-            raise OSError("injected close failure")
+            if self.fail_close:
+                raise OSError("injected close failure")
+            connection.close()
 
     boundary = CloseFailureBoundary()
     connect_calls = 0
@@ -97,7 +101,7 @@ def test_initialization_failure_with_close_failure_isolates_catalog(
 
         assert caught.value is initialization_error
         assert any("injected close failure" in note for note in initialization_error.__notes__)
-        assert catalog._connection is None
+        assert catalog._connection is boundary
         assert catalog._closed is True
         assert connection.execute(
             "SELECT count(*) FROM sqlite_master "
@@ -110,4 +114,5 @@ def test_initialization_failure_with_close_failure_isolates_catalog(
             catalog.mark_claim_published(blob_id="blb_" + "a" * 64)
         assert connect_calls == 1
     finally:
-        connection.close()
+        boundary.fail_close = False
+        catalog.close()

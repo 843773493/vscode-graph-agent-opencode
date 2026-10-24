@@ -37,6 +37,9 @@ from app.services.infrastructure.attachment_blob_catalog.fork_claims import (
     ForkAttachmentClaimsMixin,
 )
 from app.services.infrastructure.attachment_blob_catalog.ingest import IngestMixin
+from app.services.infrastructure.attachment_blob_catalog.maintenance import (
+    AttachmentMaintenanceLock,
+)
 from app.services.infrastructure.attachment_blob_catalog.queries import QueriesMixin
 from app.services.infrastructure.attachment_blob_catalog.records import (
     AttachmentBlobRecord,
@@ -90,6 +93,7 @@ class AttachmentBlobCatalog(IngestMixin, BlobsMixin, QueriesMixin, ForkAttachmen
         # 惰性连接：构造不建立目录与数据库文件，首个真实读写才落盘。只读
         # 路径（例如只复验工作区文件附件、只读 fixture 模板）绝不产生副作用。
         self._connection: sqlite3.Connection | None = None
+        self._access = AttachmentMaintenanceLock(self.database_path.parent, exclusive=False)
 
     # ------------------------------------------------------------------
     # 连接与 schema
@@ -101,13 +105,18 @@ class AttachmentBlobCatalog(IngestMixin, BlobsMixin, QueriesMixin, ForkAttachmen
         return self._connected()
 
     def close(self) -> None:
-        """关闭连接；重复 close 幂等。"""
-        if self._closed:
-            return
+        """确认连接关闭后归还访问锁；关闭失败保留连接与锁，允许重试。"""
         self._closed = True
         if self._connection is not None:
             self._connection.close()
             self._connection = None
+        self._access.release()
+
+    def acquire_access(self) -> None:
+        """首个目录操作前取共享锁，持有至 close；不创建附件库或正文目录。"""
+        if self._closed:
+            raise RuntimeError(f"附件 blob catalog 已关闭: {self.database_path}")
+        self._access.acquire()
 
     def _connected(self) -> sqlite3.Connection:
         """返回已就绪连接；惰性初始化的唯一入口。"""
@@ -116,16 +125,17 @@ class AttachmentBlobCatalog(IngestMixin, BlobsMixin, QueriesMixin, ForkAttachmen
         connection = self._connection
         if connection is not None:
             return connection
-        self.database_path.parent.mkdir(parents=True, exist_ok=True)
-        connection = self._connect()
-        self._connection = connection
+        self.acquire_access()
         try:
+            self.database_path.parent.mkdir(parents=True, exist_ok=True)
+            connection = self._connect()
+            self._connection = connection
             self._initialize(connection)
         except BaseException as error:
             try:
-                connection.close()
+                if self._connection is not None:
+                    self._connection.close()
             except BaseException as close_error:  # noqa: BLE001 - 保留原始初始化异常
-                self._connection = None
                 self._closed = True
                 error.add_note(
                     "附件 blob catalog 初始化失败后连接关闭失败；原始初始化异常仍优先保留: "
@@ -133,6 +143,7 @@ class AttachmentBlobCatalog(IngestMixin, BlobsMixin, QueriesMixin, ForkAttachmen
                 )
             else:
                 self._connection = None
+                self._access.release()
             raise
         return connection
 
@@ -143,6 +154,8 @@ class AttachmentBlobCatalog(IngestMixin, BlobsMixin, QueriesMixin, ForkAttachmen
             isolation_level=None,
             check_same_thread=False,
         )
+        # PRAGMA 失败也由外层统一关闭；关闭未核实时仍保留连接与访问锁。
+        self._connection = connection
         connection.row_factory = sqlite3.Row
         try:
             connection.execute("PRAGMA foreign_keys = ON")
@@ -151,13 +164,11 @@ class AttachmentBlobCatalog(IngestMixin, BlobsMixin, QueriesMixin, ForkAttachmen
                 connection.execute("PRAGMA journal_mode = WAL").fetchone()[0]
             )
         except sqlite3.DatabaseError as error:
-            connection.close()
             raise RuntimeError(
                 "附件 blob catalog 无法打开（文件损坏或被外部改写，须人工核对）: "
                 f"path={self.database_path}: {error}"
             ) from error
         if journal_mode.lower() != "wal":
-            connection.close()
             raise RuntimeError(
                 "附件 blob catalog 无法启用 WAL: "
                 f"path={self.database_path}, journal_mode={journal_mode}"

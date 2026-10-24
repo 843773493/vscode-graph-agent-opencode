@@ -25,6 +25,7 @@ catalog 侧原先的单文件 `catalog.py` 已按垂直链路拆入本包，faca
 
 # 规范
 
+- 在线目录访问与离线维护共用 `maintenance.py` 的跨进程共享/独占锁，锁文件位于附件根同级，不得删除或随 catalog/目录切换替换。Backend 在任何业务初始化前持共享锁至全部 writer 排空；catalog 的惰性目录访问另持共享锁至连接确认关闭，关闭失败保留连接与锁并允许重试。独占冲突直接报错，不以端口/PID/锁文件存在推断停机。该保护不替代离线迁移对持久 operation、原件和历史依赖的核对，schema 3 → 4 迁移未实现前不得升版本或声称已迁移。
 - 严格照 saga 顺序：取 gate + fresh 校验 + create-or-get `AttachmentOperationPin` → create-or-get `AttachmentIngestRecord(preparing)` → 写 staging 并 durable → 推进 `hashed` 并竞争唯一 `BlobCommitClaim` → 原子 rename 到 claim 冻结 locator 并复验 → 再次取同一 gate 复验 pin/fence/thread 后发布 availability/attachment/owner ref → 主体 durable 后才把 pin 推进终态。
 - 正文提交复用 `OperationHolderGate(namespace="attachment_blob_commit")` 的固定分片跨进程锁。普通上传在该锁内推进 hashed、完成唯一 locator 的 rename/复验；释放锁后才取得 Session gate 发布。hashed record 在 catalog 事务中保护尚未发布的正文，fork import 则由原 preparing/owner_reserved claim 保活。正文提交锁内不得等待 Session gate、网络或另一把正文锁。
 - 上传 pin、owner-ref 发布及 fork owner reservation/finalize 的短临界区锁序为 `NavigationTopologyGate` shared → 一个 `SessionLifecycleGate` → 至多一个 catalog/SQLite 写事务；新 child reservation 也须 fresh 验证所属 Session catalog active。正文写入和传输不持有 topology/Session gate。GC 可在删除 gate 内调用，但只能非阻塞探测正文提交锁（wait=False）；未取得即留待下次回收，绝不反向等待。GC 取得锁后事务重查 owner/retention、非终态 ingest 和 fork claim，再提交 tombstone/aborted，最后按冻结 locator 删除；不扫盘。

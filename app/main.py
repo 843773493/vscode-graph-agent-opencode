@@ -49,6 +49,12 @@ from app.protocol.codecs.http_validation import request_validation_error_respons
 from app.runtime.model_stream import configure_model_stream_from_environment
 from app.runtime.runtime_ports import DEFAULT_RUNTIME_CLOCK_PORTS
 from app.schemas.internal_v2.sse import install_sse_openapi_components
+from app.services.infrastructure.attachment_blob_catalog.blob_identity import (
+    ATTACHMENT_ROOT_DIRECTORY_NAME,
+)
+from app.services.infrastructure.attachment_blob_catalog.maintenance import (
+    AttachmentMaintenanceLock,
+)
 from app.services.infrastructure.config import (
     ConfigRestartRequiredError,
     ConfigSnapshot,
@@ -322,6 +328,12 @@ async def lifespan(application: FastAPI):
             if _model_stream_controller is not None:
                 workspaces.push_async_callback(_model_stream_controller.aclose)
             mounted = MountedWorkspaceRegistry.from_environment()
+            # 任何工作区业务初始化之前取得全部共享锁，排空全部 writer 后再归还。
+            for mount in mounted.mounts:
+                workspaces.enter_context(AttachmentMaintenanceLock(
+                    mount.workspace_root / ".boxteam" / ATTACHMENT_ROOT_DIRECTORY_NAME,
+                    exclusive=False,
+                ))
             registry = WorkspaceContainerRegistry(
                 mounted_workspaces=mounted,
                 project_root=Path.cwd(),

@@ -76,6 +76,7 @@ class ForkAttachmentStoreMixin(ForkAttachmentImportMixin):
 
     def project_attachment(self, target_session_id: str, target_thread_id: str, file_id: str) -> dict[str, str]:
         """同一次冻结 mapping 读取保留引用和可用性，不修改 immutable rollout。"""
+        self._catalog.acquire_access()
         if not self._catalog.database_path.is_file():
             return {"file_id": file_id, "availability": "unavailable"}
         self._assert_session_active(target_session_id, target_thread_id)
