@@ -2,6 +2,8 @@
 
 让用户在工作区内发现和管理 Browser、Terminal 等跨 Turn 资源，并明确资源何时随 Thread 回收、何时脱离 Thread 生命周期长期保留。
 
+后继附件修订见 `add-managed-attachment-directories`：附件只复用本能力的 owner/关联/operation lease 机制，目录级零关联默认保留 30 天，不套用下文 Shell/Browser 的 unload 即删、30 分钟临时回收或 workspace 永不过期规则。目录、代次关联和 GC 已由该 change 接入唯一附件 owner；Windows、完整 Web 与挂起操作关闭期限仍以其未完成任务为准。本 change 的完成状态只代表既有 Shell/Browser 基线。
+
 ## ADDED Requirements
 
 ### Requirement: 领域 owner 是跨 Turn 资源的唯一权威

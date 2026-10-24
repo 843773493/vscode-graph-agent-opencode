@@ -1,12 +1,9 @@
-"""附件定位、读取与预览变体等基础设施能力。
+"""附件引用、读取与预览变体等基础设施能力。
 
-Session/thread 附件正文统一走 workspace 内容寻址 blob store
-（:class:`AttachmentBlobStore`）：逻辑引用是
-统一的 Workspace Session 单文件资源 URI，物理 locator
-只由 catalog 冻结，调用方不得拼路径。工作区文件附件接受原生路径或 files URI，
-经同一文件 owner 解析后，只向模型和持久化层提供 URI。
-
-旧「按 session 目录拼 `attachments/{sha256}{suffix}`」的物理定位已物理下线。
+上传附件统一由工作区目录 owner 管理，目录与文件使用规范资源 URI，
+物理 locator 仅由 catalog 解析。旧 Session 附件 URI 通过迁移来源绑定读取。
+普通文件附件接受原生路径或 files URI，经同一文件 owner 解析后，
+只向模型和持久化层提供 URI。
 """
 
 from __future__ import annotations
@@ -24,7 +21,6 @@ from PIL import Image, ImageOps
 from app.core.path_utils import get_workspace_root
 from app.core.resource_uri import (
     parse_resource_uri,
-    parse_session_artifact_uri,
     resource_display_uri,
 )
 from app.core.trace_middleware import get_current_gateway_id
@@ -51,16 +47,21 @@ ATTACHMENT_PREVIEW_MAX_EDGE = 512
 VIDEO_FRAME_TIMEOUT_SECONDS = 30
 
 
-def _session_id_from_file_id(file_id: str) -> str:
+def _session_id_from_file_id(file_id: str) -> str | None:
     """从逻辑引用取出 owner session id（形态非法即失败）。"""
-    parsed = parse_session_artifact_uri(file_id)
+    parsed = parse_resource_uri(file_id)
+    if parsed.kind == "attachments":
+        return None
     if parsed.session_artifact_kind != "attachments":
         raise ValueError("附件引用不是附件 owner 的单文件资源")
     return parsed.tail_segments[0]
 
 
-def _is_session_attachment(file_id: str) -> bool:
-    return "://" in file_id and parse_resource_uri(file_id).session_artifact_kind == "attachments"
+def _is_managed_attachment(file_id: str) -> bool:
+    if not file_id.startswith("boxteam://"):
+        return False
+    parsed = parse_resource_uri(file_id)
+    return parsed.kind == "attachments" or parsed.session_artifact_kind == "attachments"
 
 
 def _attachment_content_type(attachment: AttachmentRef, file_path: Path, uri: str) -> str:
@@ -110,17 +111,18 @@ class AttachmentContentService:
                 "Agent 运行阶段不接受 data_url 附件；浏览器上传内容必须先持久化为 "
                 "资源 URI"
             )
-        if _is_session_attachment(attachment.file_id):
+        if _is_managed_attachment(attachment.file_id):
             session_id = _session_id_from_file_id(attachment.file_id)
-            uri = self._attachment_store.relative_path(session_id, attachment.file_id)
-            content_type = attachment.content_type or self._read_session_attachment(attachment).content_type
-            name = attachment.name
+            return self._attachment_store.describe_reference(attachment, session_id=session_id)
         else:
+            if attachment.directory_uri is not None:
+                raise ValueError("普通文件附件不能伪造受管附件目录身份")
+            directory_uri = None
             file_path, uri = self._workspace_file(attachment.file_id)
             content_type = _attachment_content_type(attachment, file_path, uri)
             name = attachment.name or file_path.name
         return attachment.model_copy(
-            update={"file_id": uri, "name": name, "content_type": content_type}
+            update={"file_id": uri, "directory_uri": directory_uri, "name": name, "content_type": content_type}
         )
 
     def _workspace_file(self, file_id: str) -> tuple[Path, str]:
@@ -148,7 +150,7 @@ class AttachmentContentService:
             raise OSError(error.errno, error.strerror, uri) from error
 
     def image_preview_data_url(self, attachment: AttachmentRef) -> str:
-        if _is_session_attachment(attachment.file_id):
+        if _is_managed_attachment(attachment.file_id):
             session_id = _session_id_from_file_id(attachment.file_id)
             preview = self._attachment_store.read_thumbnail(
                 session_id,
@@ -194,7 +196,7 @@ class AttachmentContentService:
         return self._attachment_store.read(session_id, attachment.file_id)
 
     def _read_attachment(self, attachment: AttachmentRef) -> tuple[str, bytes]:
-        if _is_session_attachment(attachment.file_id):
+        if _is_managed_attachment(attachment.file_id):
             stored = self._read_session_attachment(attachment)
             return stored.content_type, stored.data
         resolved = self.resolve_reference(attachment)

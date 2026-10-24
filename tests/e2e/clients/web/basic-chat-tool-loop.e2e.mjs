@@ -5980,7 +5980,7 @@ async function publishedForkOwner(source, request, fork, sourceEvidence, targetS
     request.resources.filter((choice) => !choice.owner_reference).map((choice) => [choice.resource_uri.startsWith(requestedDebugPrefix)
       ? frozen.source_uri + choice.resource_uri.slice(request.source_uri.length) : choice.resource_uri, choice.action]));
   const mappings = await readAttachmentSql(targetSurface,
-    "SELECT m.source_file_id,m.target_session_id,m.target_thread_id,m.snapshot_json,r.owner_session_id,r.owner_thread_id,r.attachment_id,r.state AS owner_state,r.blob_id AS owner_blob_id,r.digest AS owner_digest,r.variant AS owner_variant,r.item_ref AS owner_item_ref,b.availability AS blob_availability,b.digest AS blob_digest,b.length AS blob_length,c.claim_id,c.state AS claim_state,c.target_owner_ref_id AS claim_owner_ref FROM fork_attachment_mappings m LEFT JOIN attachment_owner_refs r ON r.owner_ref_id=json_extract(m.snapshot_json,'$.target_owner_ref_id') LEFT JOIN attachment_blobs b ON b.blob_id=r.blob_id LEFT JOIN fork_attachment_claims c ON c.claim_id=json_extract(m.snapshot_json,'$.claim_id') WHERE m.copy_operation_id=? AND m.target_session_id=? AND m.target_thread_id=? ORDER BY m.source_file_id",
+    "SELECT m.source_file_id,m.target_session_id,m.target_thread_id,m.snapshot_json,r.attachment_id,r.state AS owner_state,b.availability AS directory_availability,f.digest AS original_digest,f.length AS original_length,c.claim_id,c.state AS claim_state FROM attachment_directory_fork_aliases m LEFT JOIN attachment_directory_associations r ON r.attachment_id=json_extract(m.snapshot_json,'$.target_attachment_id') AND r.session_id=m.target_session_id AND r.thread_id=m.target_thread_id LEFT JOIN attachment_directories b ON b.attachment_id=r.attachment_id LEFT JOIN attachment_directory_files f ON f.attachment_id=b.attachment_id AND f.relative_path='original/content' LEFT JOIN attachment_directory_fork_claims c ON c.claim_id=json_extract(m.snapshot_json,'$.claim_id') WHERE m.copy_operation_id=? AND m.target_session_id=? AND m.target_thread_id=? ORDER BY m.source_file_id",
     [capture.copy_operation_id, target.sessionId, target.threadId]);
   const attachmentSnapshots = [];
   const resources = [];
@@ -5990,13 +5990,13 @@ async function publishedForkOwner(source, request, fork, sourceEvidence, targetS
     if (row.source_file_id !== snapshot.source_file_id) continue;
     attachmentSnapshots.push(snapshot);
     if (snapshot.availability === "available") {
-      assert.deepEqual([row.owner_session_id, row.owner_thread_id, row.attachment_id, row.owner_state, row.owner_blob_id,
-        row.owner_digest, row.owner_variant, row.owner_item_ref, row.blob_availability, row.blob_digest, row.blob_length],
-      [target.sessionId, snapshot.target_owner_thread_id, snapshot.target_attachment_id, "active", snapshot.blob_id,
-        snapshot.digest, snapshot.variant, snapshot.target_item_ref, "available", snapshot.digest, snapshot.length],
-      "可用附件必须由目标消费 scope 的真实保活 owner 与 blob 发布，复用 main 引用时保活 Thread 可以不同");
-      if (snapshot.claim_id !== null) assert.deepEqual([row.claim_id, row.claim_state, row.claim_owner_ref],
-        [snapshot.claim_id, "committed", snapshot.target_owner_ref_id]);
+      assert.equal(snapshot.format_version, "attachment-directory:v1");
+      const original = snapshot.files.find((file) => file.relative_path === "original/content");
+      assert.ok(original);
+      assert.deepEqual([row.attachment_id, row.owner_state, row.directory_availability, row.original_digest, row.original_length],
+        [snapshot.target_attachment_id, "active", "available", original.digest, original.length],
+        "可用附件必须由目标 Thread 的目录关联、已登记原件版本及原 claim 一起发布");
+      assert.deepEqual([row.claim_id, row.claim_state], [snapshot.claim_id, "committed"]);
     } else assert.equal(snapshot.availability, "unavailable");
     resources.push({ resource_uri: snapshot.source_file_id, action: snapshot.target_action, availability: snapshot.availability,
       target_uri: snapshot.availability === "available" ? snapshot.target_file_id : null,
@@ -6893,7 +6893,7 @@ async function readAttachmentSql(surface, query, parameters = []) {
 }
 
 async function copyAttachmentClaims(surface, operationId) {
-  return readAttachmentSql(surface, "SELECT c.*,r.state AS target_owner_state,r.blob_id AS target_owner_blob_id FROM fork_attachment_claims c LEFT JOIN attachment_owner_refs r ON r.owner_ref_id=c.target_owner_ref_id WHERE c.copy_operation_id=? ORDER BY c.claim_id", [operationId]);
+  return readAttachmentSql(surface, "SELECT c.*,r.state AS target_owner_state FROM attachment_directory_fork_claims c LEFT JOIN attachment_directory_associations r ON r.attachment_id=c.target_attachment_id AND r.session_id=c.target_session_id AND r.thread_id=c.target_thread_id WHERE c.copy_operation_id=? ORDER BY c.claim_id", [operationId]);
 }
 
 async function createAttachmentSource(surface, title, owners, { prefixTurns = 0, turnOptions = {} } = {}) {
@@ -6912,14 +6912,15 @@ async function createAttachmentSource(surface, title, owners, { prefixTurns = 0,
   const refs = material.turn.user_messages.flatMap((message) => message.attachments);
   assert.equal(refs.length, 1);
   const attachment = refs[0];
-  assert.match(attachment.file_id, new RegExp(`^boxteam://(?:${source.gatewayId}/)?workspace/${source.workspaceIdentity}/resources/session/${source.sessionId}/attachments/att_[0-9a-f]{32}$`));
+  assert.match(attachment.directory_uri, new RegExp(`^boxteam://(?:${source.gatewayId}/)?workspace/${source.workspaceIdentity}/resources/attachments/att_[0-9a-f]{32}$`));
+  assert.equal(attachment.file_id, `${attachment.directory_uri}/original/content`);
   const content = await readAttachmentContent(source, attachment.file_id);
   assert.deepEqual(Buffer.from(content.bytes), buffer);
-  const blob = (await readAttachmentSql(source, "SELECT b.* FROM attachment_blobs b JOIN attachment_owner_refs r USING(blob_id) WHERE r.owner_session_id=? AND r.attachment_id=?", [source.sessionId, attachment.file_id.split("/").at(-1)]))[0];
-  assert.equal(blob.availability, "available");
-  assert.equal(blob.length, buffer.length);
-  assert.equal(blob.digest, "sha256:" + createHash("sha256").update(buffer).digest("hex"));
-  return { source, prefix, material, attachment, blob, buffer };
+  const directory = (await readAttachmentSql(source, "SELECT d.*,f.digest,f.length FROM attachment_directories d JOIN attachment_directory_files f USING(attachment_id) JOIN attachment_directory_associations r USING(attachment_id) WHERE r.session_id=? AND r.thread_id=? AND d.attachment_id=? AND f.relative_path='original/content'", [source.sessionId, source.threadId, attachment.directory_uri.split("/").at(-1)]))[0];
+  assert.equal(directory.availability, "available");
+  assert.equal(directory.length, buffer.length);
+  assert.equal(directory.digest, "sha256:" + createHash("sha256").update(buffer).digest("hex"));
+  return { source, prefix, material, attachment, directory, buffer };
 }
 
 async function enableAttachmentCapabilityTools(surface) {
@@ -6943,7 +6944,7 @@ async function runMessageStreamAfter20(surface) {
   const published = await publishedForkOwner(source, request, fork, before);
   const targetFile = published.targetHistory.items.flatMap((turn) => turn.user_messages)
     .flatMap((message) => message.attachments).find((item) => item.name === attachment.name)?.file_id;
-  assert.ok(targetFile?.startsWith(`boxteam://${published.owner.gatewayId}/workspace/${published.owner.workspaceIdentity}/resources/session/${published.owner.sessionId}/attachments/`));
+  assert.ok(targetFile?.startsWith(`boxteam://${published.owner.gatewayId}/workspace/${published.owner.workspaceIdentity}/resources/attachments/`));
   const capabilityBoundary = await runAttachmentCapabilityBoundary(published.owner, source,
     targetFile, attachment.file_id, "message-stream-after20");
   const response = messageStreamResponses.findLast((fact) => fact.status === 200
@@ -6999,14 +7000,14 @@ async function runMessageStreamAfter20(surface) {
 
 async function runAttachmentCapabilityBoundary(owner, source, targetFile, sourceFile, label) {
   const alias = targetFile.replace(`boxteam://${owner.gatewayId}/`, "boxteam://");
-  const completed = await completeOwnerTurn(owner, "读取附件的规范路径，并确认其它会话引用及两种路径的写入都被明确拒绝。", [
+  const completed = await completeOwnerTurn(owner, "读取同一工作区附件的规范引用与来源引用，并确认两种路径都不能覆盖原件。", [
     { label: `attachment-capability-boundary-${label}`, calls: [
       { id: "attachment-alias-read", name: "read_file", arguments: { path: alias } },
       { id: "attachment-source-read", name: "read_file", arguments: { path: sourceFile } },
       { id: "attachment-uri-write", name: "write_file", arguments: { file_path: targetFile, content: "forbidden rewrite", expected_version: "absent" } },
       { id: "attachment-alias-write", name: "write_file", arguments: { file_path: alias, content: "forbidden rewrite", expected_version: "absent" } },
       { id: "attachment-alias-edit", name: "edit_file", arguments: { file_path: alias, expected_version: `sha256:${"0".repeat(64)}`, old_string: "独占附件事实", new_string: "forbidden rewrite" } },
-    ] }, finalResponse(`attachment-capability-boundary-final-${label}`, "附件规范路径可读，跨会话与写入能力已明确拒绝。"),
+    ] }, finalResponse(`attachment-capability-boundary-final-${label}`, "同一工作区附件引用均可读，原件写入已明确拒绝。"),
   ]);
   assert.equal(completed.turn.response_parts.filter((part) => part.kind === "tool_result").length, 5);
   const boundaryResult = (callId) => {
@@ -7014,9 +7015,12 @@ async function runAttachmentCapabilityBoundary(owner, source, targetFile, source
     return String(assertBoundToolResult(owner, completed.sent, completed.turn, completed.calls[0], callId, toolName).result);
   };
   assert.ok(boundaryResult("attachment-alias-read").includes(source.sessionId), "规范 alias 必须消费同一受信附件 capability");
-  assert.match(boundaryResult("attachment-source-read"), /产物 URI 不属于当前 Agent SessionThread/);
+  assert.ok(boundaryResult("attachment-source-read").includes(source.sessionId), "工作区读取授权不得依赖上传 Thread 的保活关联");
   for (const callId of ["attachment-uri-write", "attachment-alias-write", "attachment-alias-edit"]) {
-    assert.equal(JSON.parse(boundaryResult(callId)).code, "capability_denied");
+    const denied = JSON.parse(boundaryResult(callId));
+    assert.deepEqual([denied.status, denied.effect, denied.code, denied.error_type],
+      ["error", "not_executed", "execution_failed", "PermissionError"]);
+    assert.equal(denied.error, "附件原件和预览只读，处理结果必须写入 derived 目录");
   }
   return completed;
 }
@@ -7026,7 +7030,7 @@ async function runCopyAttachmentLifecycle(surface, owners) {
   const facts = [];
   for (const phase of ["copy.attachments.preparing", "copy.attachments.owner_reserved", "copy.attachments.before_finalize"]) {
     const input = await createAttachmentSource(surface, `公开 copy 附件恢复 ${phase}`, owners);
-    const { source, attachment, blob, buffer } = input;
+    const { source, attachment, directory, buffer } = input;
     const before = await forkHistoryEvidence(source);
     const request = await freezeForkRequest(source);
     const operationId = forkOperationId(request);
@@ -7042,9 +7046,12 @@ async function runCopyAttachmentLifecycle(surface, owners) {
     assert.equal(snapshot.required, true);
     assert.equal(snapshot.availability, "available");
     assert.equal(snapshot.source_file_id, attachment.file_id);
-    assert.equal(snapshot.blob_id, blob.blob_id);
-    assert.equal(claim.state, phase.endsWith(".preparing") ? "preparing" : "owner_reserved");
-    assert.equal(claim.target_owner_state, phase.endsWith(".preparing") ? null : "active");
+    assert.equal(snapshot.source_attachment_id, directory.attachment_id);
+    assert.equal(snapshot.target_attachment_id, directory.attachment_id, "同工作区 fork 必须共享原目录身份");
+    assert.deepEqual(snapshot.files.find((file) => file.relative_path === "original/content"),
+      { relative_path: "original/content", digest: directory.digest, length: directory.length });
+    assert.equal(claim.state, phase.endsWith(".preparing") ? "prepared" : "owner_reserved");
+    assert.equal(claim.target_owner_state, null, "reservation 由原 claim 保活，目标关联只在 finalizer 提交时发布");
     const target = { ...source, sessionId: captured.target_session_id, threadId: captured.target_thread_id };
     const targetFile = snapshot.target_file_id;
     let sourceDelete;
@@ -7052,8 +7059,8 @@ async function runCopyAttachmentLifecycle(surface, owners) {
       sourceDelete = await deleteOwner(source);
       const gc = (await testControl({ action: "events" })).findLast((event) => event.operation_id === source.sessionId && event.phase === "attachments.gc.completed");
       assert.ok(gc);
-      assert.ok(!gc.details.collected_blob_ids.includes(blob.blob_id), "已提交 claim 必须阻止 source 删除后的正文 GC");
-      assert.deepEqual(await readFile(`${source.workspace}/.boxteam/attachments/${blob.relative_locator}`), buffer);
+      assert.ok(!gc.details.collected_attachment_ids.includes(directory.attachment_id), "已提交 claim 必须阻止 source 删除后的正文 GC");
+      assert.deepEqual(await readFile(`${source.workspace}/.boxteam/attachments/${directory.relative_locator}/original/content`), buffer);
     }
     if (phase === "copy.attachments.before_finalize") {
       const publishedSession = await ownerApiResponse(surface, `/api/v1/sessions/${target.sessionId}`);
@@ -7065,12 +7072,15 @@ async function runCopyAttachmentLifecycle(surface, owners) {
       assert.equal(missingSession.status, 404);
       assert.equal(missingSession.body.detail, `Session ${target.sessionId} not found`);
     }
-    const missingAttachment = await ownerApiResponse(target,
-      `/api/v1/sessions/${target.sessionId}/attachments/content?${new URLSearchParams({ file_id: targetFile, variant: "original" })}`);
-    assert.equal(missingAttachment.status, 404);
-    assert.equal(missingAttachment.body.detail, phase === "copy.attachments.before_finalize"
-      ? `附件引用尚未完成发布: ${targetFile}`
-      : `Session ${target.sessionId} not found`);
+    if (phase === "copy.attachments.before_finalize") {
+      const available = await readAttachmentContent(target, targetFile);
+      assert.deepEqual(Buffer.from(available.bytes), buffer, "Session 已发布时可读取同工作区已有目录；保活关联不是读取授权");
+    } else {
+      const missingAttachment = await ownerApiResponse(target,
+        `/api/v1/sessions/${target.sessionId}/attachments/content?${new URLSearchParams({ file_id: targetFile, variant: "original" })}`);
+      assert.equal(missingAttachment.status, 404);
+      assert.equal(missingAttachment.body.detail, `Session ${target.sessionId} not found`);
+    }
     await drainPageResponseBodies(requestSurface.page);
     await requestSurface.page.close();
     const reopen = await replaceNodePage(surface, owners);
@@ -7125,12 +7135,15 @@ async function runCopyAttachmentLifecycle(surface, owners) {
     }
     const finalClaims = await copyAttachmentClaims(surface, operationId);
     assert.equal(finalClaims[0].state, phase.endsWith(".preparing") ? "aborted" : "target_deleted");
-    const blobs = await readAttachmentSql(surface, "SELECT * FROM attachment_blobs WHERE digest=?", [blob.digest]);
-    assert.equal(blobs.length, 1, "同一正文全程只能保留一个 blob-id");
-    assert.equal(blobs[0].blob_id, blob.blob_id);
-    assert.equal(blobs[0].availability, "tombstoned", "所有 owner/claim 终结后不得留下可用正文泄漏");
+    const directories = await readAttachmentSql(surface, "SELECT * FROM attachment_directories WHERE attachment_id=?", [directory.attachment_id]);
+    assert.equal(directories.length, 1, "同工作区 fork 不复制共享目录");
+    assert.equal(directories[0].availability, "available");
+    assert.ok(directories[0].unattached_since);
+    assert.equal(Date.parse(directories[0].gc_after) - Date.parse(directories[0].unattached_since), 30 * 24 * 3600 * 1000);
+    assert.deepEqual(await readAttachmentSql(surface, "SELECT session_id,thread_id FROM attachment_directory_associations WHERE attachment_id=? AND state='active'", [directory.attachment_id]), []);
+    assert.deepEqual(await readFile(`${source.workspace}/.boxteam/attachments/${directory.relative_locator}/original/content`), buffer);
     facts.push({ phase, source: source.sessionId, captured, claims, sourceDelete, killed, restarted, settledClaims, settlement,
-      published: published ? { sessionId: published.owner.sessionId, history: published.targetHistory, displayed: published.displayed } : null, tool, capabilityBoundary, finalClaims, blobs });
+      published: published ? { sessionId: published.owner.sessionId, history: published.targetHistory, displayed: published.displayed } : null, tool, capabilityBoundary, finalClaims, directories });
   }
   return facts;
 }
@@ -7138,7 +7151,7 @@ async function runCopyAttachmentLifecycle(surface, owners) {
 async function runCopyAttachmentDeletionRace(surface, owners) {
   const facts = [];
   for (const finalizerFirst of [true, false]) {
-    const { source, attachment, blob, buffer } = await createAttachmentSource(surface, `copy finalizer/delete ${finalizerFirst}`, owners);
+    const { source, attachment, directory, buffer } = await createAttachmentSource(surface, `copy finalizer/delete ${finalizerFirst}`, owners);
     const request = await freezeForkRequest(source);
     const operationId = forkOperationId(request);
     const initial = { operation_id: operationId, phase: finalizerFirst ? "copy.attachments.published_pending" : "copy.attachments.before_finalize" };
@@ -7261,10 +7274,12 @@ async function runCopyAttachmentDeletionRace(surface, owners) {
     assert.deepEqual(await copyAttachmentClaims(surface, operationId), deletedClaims, "重启不得复活已释放 reserved/committed target owner");
     assert.deepEqual(Buffer.from((await readAttachmentContent(source, attachment.file_id)).bytes), buffer);
     const sourceDelete = await deleteOwner(source);
-    const blobs = await readAttachmentSql(surface, "SELECT * FROM attachment_blobs WHERE digest=?", [blob.digest]);
-    assert.equal(blobs.length, 1);
-    assert.equal(blobs[0].availability, "tombstoned");
-    assert.equal((await readAttachmentSql(surface, "SELECT COUNT(*) AS count FROM attachment_owner_refs WHERE blob_id=? AND state='active'", [blob.blob_id]))[0].count, 0);
+    const directories = await readAttachmentSql(surface, "SELECT * FROM attachment_directories WHERE attachment_id=?", [directory.attachment_id]);
+    assert.equal(directories.length, 1);
+    assert.equal(directories[0].availability, "available");
+    assert.ok(directories[0].unattached_since);
+    assert.equal(Date.parse(directories[0].gc_after) - Date.parse(directories[0].unattached_since), 30 * 24 * 3600 * 1000);
+    assert.equal((await readAttachmentSql(surface, "SELECT COUNT(*) AS count FROM attachment_directory_associations WHERE attachment_id=? AND state='active'", [directory.attachment_id]))[0].count, 0);
     facts.push({ finalizerFirst, sourceSessionId: source.sessionId, sourceThreadId: source.threadId,
       targetSessionId: target.sessionId, targetThreadId: target.threadId, workspaceId: requestSurface.gatewayWorkspaceId,
       operationId, request: structuredClone(request), requestPageId, requestDocumentId, requestStartedAt,
@@ -7272,7 +7287,7 @@ async function runCopyAttachmentDeletionRace(surface, owners) {
       deletionCatalogBarrier: finalizerFirst ? null : catalogDeleting, deletionCatalogAt,
       initialReleasedAt, deletionDrainBarrier: finalizerFirst ? null : drainWaiting, deletionDrainReleasedAt,
       capture, claims, publishedSettlement, deletion, claimsBeforeRelease, settlementBeforeRelease, deletedClaims,
-      deletedSettlement, lease, killed, restarted, terminal, sourceDelete, blobs });
+      deletedSettlement, lease, killed, restarted, terminal, sourceDelete, directories });
   }
   return facts;
 }
@@ -7285,10 +7300,12 @@ async function runCopyMissingAttachment(surface, owners) {
   const input = await createAttachmentSource(surface, "公开 copy required 与 optional 正文缺失", owners, {
     turnOptions: { verifyHistory: false, openBeforeSend: true },
   });
-  const { source, material, attachment, blob } = input;
-  const blobPath = `${source.workspace}/.boxteam/attachments/${blob.relative_locator}`;
+  const { source, material, attachment, directory } = input;
+  const originalPath = `${source.workspace}/.boxteam/attachments/${directory.relative_locator}/original/content`;
   const requiredRequest = await freezeForkRequest(source);
-  await unlink(blobPath);
+  await chmod(dirname(originalPath), 0o700);
+  await chmod(originalPath, 0o600);
+  await unlink(originalPath);
   const requiredOperation = forkOperationId(requiredRequest);
   const missing = await requestForkResponse(source, requiredRequest);
   progress.requiredMissingResponse = {
@@ -7297,13 +7314,13 @@ async function runCopyMissingAttachment(surface, owners) {
   assert.equal(missing.status, 500, "required 正文真实缺失必须使整个公开 copy 明确失败");
   assert.equal(missing.body.code, 500);
   assert.equal(missing.body.data, null);
-  assert.equal(missing.body.message, `FileNotFoundError: [Errno 2] No such file or directory: '${blobPath}'`);
+  assert.equal(missing.body.message, "FileNotFoundError: 附件目录缺少原件，不能发布 fork");
   const failedCapture = await readCopyCapture(surface, requiredOperation);
   assert.equal(failedCapture.state, "aborted");
   assert.deepEqual(await readCatalog(surface, "SELECT node_id FROM nodes WHERE node_id=?", [failedCapture.target_session_id]), []);
   assert.deepEqual(await copyAttachmentClaims(surface, requiredOperation), []);
   assert.equal((await readCatalog(surface, "SELECT state FROM session_creation_records WHERE session_creation_idempotency_key=?", [requiredOperation]))[0].state, "aborted");
-  assert.equal((await readAttachmentSql(source, "SELECT availability FROM attachment_blobs WHERE blob_id=?", [blob.blob_id]))[0].availability, "available", "真实字节缺失输入不得改写 catalog 业务事实");
+  assert.equal((await readAttachmentSql(source, "SELECT availability FROM attachment_directories WHERE attachment_id=?", [directory.attachment_id]))[0].availability, "available", "真实字节缺失输入不得改写 catalog 业务事实");
   await finishForkDeadline(forkOperationDeadlines.get(requiredRequest.idempotency_key));
   const tools = (await ownerApi(surface, "/api/v1/tools?agent_id=default")).data;
   const compactTool = tools.find((tool) => tool.name === "compact_conversation");
@@ -7315,7 +7332,7 @@ async function runCopyMissingAttachment(surface, owners) {
     createAttachmentSource(surface, "optional source 保留历史与真实 compaction", owners, {
       prefixTurns: 4, turnOptions: { verifyHistory: false, openBeforeSend: true },
     }));
-  const earlier = optionalInput.source, optionalTurn = optionalInput.material, optionalAttachment = optionalInput.attachment, optionalBlob = optionalInput.blob;
+  const earlier = optionalInput.source, optionalTurn = optionalInput.material, optionalAttachment = optionalInput.attachment, optionalDirectory = optionalInput.directory;
   const seeds = [];
   for (let index = 0; index < 3; index += 1) seeds.push(await completeOwnerTurn(earlier,
     `附件后的上下文素材 ${index}：${"这段详细过程必须由真实压缩归纳。".repeat(160)}`, [
@@ -7351,12 +7368,15 @@ async function runCopyMissingAttachment(surface, owners) {
   assert.deepEqual(optionalPoint.resources.filter((resource) => resource.resource_uri === optionalAttachment.file_id)
     .map((resource) => [resource.availability, resource.required_for_context]), [["available", false]], "真实 fork 候选必须按冻结 selection 将历史附件列为 optional");
   assert.ok(before.history.items.some((turn) => turn.user_messages.some((message) => message.attachments.some((ref) => ref.file_id === optionalAttachment.file_id))), "历史仍必须有实际附件引用");
-  await unlink(`${earlier.workspace}/.boxteam/attachments/${optionalBlob.relative_locator}`);
+  const optionalOriginal = `${earlier.workspace}/.boxteam/attachments/${optionalDirectory.relative_locator}/original/content`;
+  await chmod(dirname(optionalOriginal), 0o700);
+  await chmod(optionalOriginal, 0o600);
+  await unlink(optionalOriginal);
   const fork = (await requestFork(earlier, optionalRequest)).data;
   const target = await publishedForkOwner(earlier, optionalRequest, fork, before);
   owners.push(target.owner);
   const mappings = await readAttachmentSql(surface,
-    "SELECT source_file_id,snapshot_json FROM fork_attachment_mappings WHERE copy_operation_id=? AND target_session_id=? AND target_thread_id=? ORDER BY source_file_id",
+    "SELECT source_file_id,snapshot_json FROM attachment_directory_fork_aliases WHERE copy_operation_id=? AND target_session_id=? AND target_thread_id=? ORDER BY source_file_id",
     [optionalOperation, target.owner.sessionId, target.owner.threadId]);
   const unavailable = mappings.map((row) => ({ source_file_id: row.source_file_id, snapshot: JSON.parse(row.snapshot_json) }))
     .filter(({ source_file_id, snapshot }) => source_file_id === snapshot.source_file_id
@@ -10866,8 +10886,8 @@ function classifyConsoleErrors(input = {}) {
           || ["bootstrap", "main_thread", "session", "goal"].includes(refusal.kind) && detail !== `Session ${nodeId} not found`
           || refusal.kind === "file_tree_settings" && detail !== `会话不存在: ${nodeId}`
           || refusal.kind === "attachment_content" && (typeof refusal.attachmentFileId !== "string"
-            || !refusal.attachmentFileId.includes(`/resources/session/${nodeId}/attachments/`)
-            || detail !== `会话附件已释放: ${refusal.attachmentFileId}`))) return null;
+            || !/\/resources\/attachments\/att_[0-9a-f]{32}\/original\/content$/.test(refusal.attachmentFileId)
+            || detail !== `Session ${nodeId} not found`))) return null;
       if (refusal.kind === "job") {
         if (status !== 404 || detail !== `Job ${refusal.jobId} not found`) return null;
         const responses = jobOwnerResponses.filter((response) => response.pageId === refusal.pageId

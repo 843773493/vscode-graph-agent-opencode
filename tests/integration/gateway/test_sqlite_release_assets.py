@@ -70,7 +70,7 @@ for _ in range(2):
         assert files.path.is_file()
     with closing(WorkspaceSourceOwner(path=Path("state/source-owner.sqlite"))) as source:
         assert source.high_water_mark() == 0
-    with closing(AttachmentBlobCatalog(Path("state/attachments/catalog.sqlite"))) as attachments:
+    with closing(AttachmentBlobCatalog(Path("state/attachments/catalog.sqlite"), workspace_id="a475d596-039d-48db-a14c-a0cbf7b4b58c")) as attachments:
         assert attachments.connection.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
     rollout_path = Path("state/rollout.sqlite")
     fresh_rollout = not rollout_path.exists()

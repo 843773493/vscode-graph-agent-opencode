@@ -1,353 +1,200 @@
-"""附件 catalog 内的 copy claim 与 target owner reservation，沿原 SQLite owner。"""
+"""目录 fork 的冻结载荷、保留与关联结算；不维护第二份历史正文。"""
 
 from __future__ import annotations
 
 import hashlib
 import json
-from collections.abc import Mapping, Sequence
+import sqlite3
+from collections.abc import Sequence
 from datetime import UTC, datetime
 
-from app.core.resource_uri import parse_session_artifact_uri
-from app.services.infrastructure.attachment_blob_catalog.blob_identity import (
-    BlobIdentity,
-)
-from app.services.infrastructure.attachment_blob_catalog.blobs import (
-    _publish_blob_metadata,
-)
-from app.services.infrastructure.attachment_blob_catalog.ingest import (
-    _claim_blob_identity,
-)
-from app.services.infrastructure.attachment_blob_catalog.locator import (
-    fork_import_ingest_id,
-)
+from app.domain.itemized.hashing import canonical_json_bytes
 from app.services.infrastructure.attachment_blob_catalog.records import (
-    AttachmentBlobRecord,
-    AttachmentOwnerRef,
-    ForkAttachmentSnapshot,
-    _blob_from_row,
-    _claim_snapshot,
-    _mapping_snapshot,
-    _owner_ref_from_row,
+    ForkAttachmentDirectorySnapshot,
+    attachment_snapshot_from_payload,
 )
+
+
+def _encode(snapshot: ForkAttachmentDirectorySnapshot) -> str:
+    return canonical_json_bytes(snapshot.to_payload()).decode()
+
+
+def _claim_snapshot(row) -> ForkAttachmentDirectorySnapshot:
+    snapshot = attachment_snapshot_from_payload(json.loads(row["snapshot_json"]))
+    if not isinstance(snapshot, ForkAttachmentDirectorySnapshot):
+        raise TypeError("新目录 claim 不能写入旧 blob 快照")
+    preimage = hashlib.sha256(canonical_json_bytes([
+        row["copy_operation_id"], row["source_snapshot_id"], row["operation_preimage_hash"], snapshot.to_payload(),
+    ])).hexdigest()
+    if preimage != row["preimage_hash"] or (
+        snapshot.claim_id, snapshot.source_attachment_id, snapshot.target_attachment_id,
+        snapshot.target_session_id, snapshot.target_thread_id,
+    ) != (row["claim_id"], row["source_attachment_id"], row["target_attachment_id"], row["target_session_id"], row["target_thread_id"]):
+        raise RuntimeError("目录 fork claim 的原文、身份或 preimage 已损坏")
+    return snapshot
 
 
 class ForkAttachmentClaimsMixin:
-    """同一 copy operation 的 claim 集合只允许原子冻结、保留、终结。"""
-
-    def freeze_fork_attachment_sources(self, attachment_ids: tuple[str, ...]) -> tuple[int, tuple[tuple[AttachmentOwnerRef, AttachmentBlobRecord], ...]]:
-        connection = self._connected()
-        connection.execute("BEGIN")
-        try:
-            revision = connection.execute("SELECT revision FROM attachment_catalog_revision WHERE id = 1").fetchone()[0]
-            records = []
-            for attachment_id in attachment_ids:
-                source = connection.execute("SELECT * FROM attachment_owner_refs WHERE attachment_id = ?", (attachment_id,)).fetchone()
-                if source is None:
-                    raise RuntimeError("source-mismatch: fork logical attachment 缺少 owner ref")
-                blob = connection.execute("SELECT * FROM attachment_blobs WHERE blob_id = ?", (source["blob_id"],)).fetchone()
-                if blob is None:
-                    raise RuntimeError("source-mismatch: fork owner ref 缺少 blob catalog 行")
-                records.append((_owner_ref_from_row(source), _blob_from_row(blob)))
-        finally:
-            connection.rollback()
-        return revision, tuple(records)
-
-    def prepare_fork_attachment_claims(
-        self, *, copy_operation_id: str, source_snapshot_id: str,
-        operation_preimage_hash: str,
-        snapshots: Sequence[ForkAttachmentSnapshot],
-        imported_locators: Mapping[str, str | None] | None = None,
-    ) -> None:
-        """来源冻结本地 owner；目标凭导出回执先建立 claim，再原子登记已校验正文。"""
-        with self.write_transaction() as connection:
-            for snapshot in snapshots:
-                if imported_locators is not None and snapshot.availability == "available":
-                    if snapshot.target_action != "copy_snapshot" or snapshot.claim_id is None or snapshot.blob_id not in imported_locators:
-                        raise RuntimeError("fork imported 附件必须绑定冻结 copy_snapshot claim")
-                    locator = imported_locators[snapshot.blob_id]
-                    if locator is not None:
-                        _publish_blob_metadata(
-                            connection, identity=BlobIdentity(snapshot.blob_id, snapshot.digest, snapshot.length),
-                            relative_locator=locator, mime_type=snapshot.mime_type, protection="private",
-                            now_text=datetime.now(UTC).isoformat(), restore_available=True,
-                        )
-                        connection.execute(
-                            "UPDATE attachment_blob_commit_claims SET state='published', updated_at=? WHERE blob_id=? AND state='claimed'",
-                            (datetime.now(UTC).isoformat(), snapshot.blob_id),
-                        )
-                encoded = json.dumps(snapshot.to_payload(), ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-                target_file_id = snapshot.target_file_id
-                target = parse_session_artifact_uri(target_file_id)
-                if target.tail_segments != (snapshot.target_session_id, "attachments", snapshot.target_attachment_id):
-                    raise RuntimeError("fork attachment target URI 与冻结身份不一致")
-                for alias in dict.fromkeys((snapshot.source_file_id, *snapshot.source_file_aliases, target_file_id)):
-                    mapping = connection.execute(
-                        "SELECT snapshot_json FROM fork_attachment_mappings WHERE copy_operation_id=? AND source_file_id=?",
-                        (copy_operation_id, alias),
-                    ).fetchone()
-                    if mapping is not None and mapping[0] != encoded:
-                        raise RuntimeError("fork attachment mapping 冻结前像冲突")
-                    connection.execute(
-                        "INSERT INTO fork_attachment_mappings VALUES (?, ?, ?, ?, ?) ON CONFLICT DO NOTHING",
-                        (copy_operation_id, alias, snapshot.target_session_id, snapshot.target_thread_id, encoded),
-                    )
-                if snapshot.claim_id is None:
-                    if snapshot.availability == "available":
-                        owner = self.get_reusable_attachment_owner(snapshot.target_attachment_id)
-                        blob = connection.execute("SELECT * FROM attachment_blobs WHERE blob_id=?", (snapshot.blob_id,)).fetchone()
-                        if snapshot.target_action != "reuse_reference" or owner is None or blob is None or (
-                            owner.owner_ref_id, owner.owner_session_id, owner.owner_thread_id,
-                            owner.blob_id, owner.digest, owner.variant, owner.item_ref,
-                            blob["digest"], blob["length"], blob["relative_locator"],
-                        ) != (
-                            snapshot.target_owner_ref_id, snapshot.target_session_id, snapshot.target_owner_thread_id,
-                            snapshot.blob_id, snapshot.digest, snapshot.variant, snapshot.target_item_ref,
-                            snapshot.digest, snapshot.length, snapshot.relative_locator,
-                        ):
-                            raise RuntimeError("fork attachment claimless reuse 缺少精确已发布 owner/blob")
-                    elif snapshot.required:
-                        raise RuntimeError("required fork attachment 不可用")
-                    continue
-                preimage = hashlib.sha256((copy_operation_id + source_snapshot_id + operation_preimage_hash + encoded).encode()).hexdigest()
-                row = connection.execute("SELECT * FROM fork_attachment_claims WHERE claim_id = ?", (snapshot.claim_id,)).fetchone()
-                if row is not None:
-                    if (row["copy_operation_id"], row["source_snapshot_id"], row["snapshot_json"], row["preimage_hash"]) != (
-                        copy_operation_id, source_snapshot_id, encoded, preimage,
-                    ) or row["state"] in {"aborted", "target_deleted"}:
-                        raise RuntimeError("fork attachment claim 同 key 不同 preimage 或已终结")
-                    continue
-                if imported_locators is None:
-                    source = connection.execute("SELECT * FROM attachment_owner_refs WHERE owner_ref_id = ?", (snapshot.source_owner_ref_id,)).fetchone()
-                    blob = connection.execute("SELECT * FROM attachment_blobs WHERE blob_id = ?", (snapshot.blob_id,)).fetchone()
-                    if source is None or blob is None or (
-                        source["attachment_id"], source["owner_session_id"], source["owner_thread_id"], source["state"],
-                        source["blob_id"], source["digest"], source["variant"], source["item_ref"],
-                        blob["availability"], blob["digest"], blob["length"], blob["relative_locator"],
-                    ) != (
-                        snapshot.source_attachment_id, snapshot.source_session_id, snapshot.source_thread_id, "active",
-                        snapshot.blob_id, snapshot.digest, snapshot.variant, snapshot.source_item_ref,
-                        "available", snapshot.digest, snapshot.length, snapshot.relative_locator,
-                    ):
-                        raise RuntimeError("source-mismatch: fork attachment owner/blob 冻结前像已变化")
-                connection.execute(
-                    "INSERT INTO fork_attachment_claims VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'preparing')",
-                    (snapshot.claim_id, copy_operation_id, source_snapshot_id, snapshot.source_attachment_id,
-                     snapshot.target_owner_ref_id, snapshot.target_session_id, snapshot.target_thread_id,
-                     snapshot.blob_id, encoded, operation_preimage_hash, preimage),
-                )
-
-    def reserve_fork_blob_import(self, copy_operation_id: str, snapshot: ForkAttachmentSnapshot) -> tuple[str, str]:
-        """正文 staging 属于本 operation；最终 locator 仍由唯一 digest claim 决定。"""
-        ingest_id = fork_import_ingest_id(copy_operation_id, snapshot.blob_id)
-        with self.write_transaction() as connection:
-            row = connection.execute("SELECT * FROM attachment_blobs WHERE blob_id=?", (snapshot.blob_id,)).fetchone()
-            if row is not None:
-                blob = _blob_from_row(row)
-                if (blob.digest, blob.length) != (snapshot.digest, snapshot.length):
-                    raise RuntimeError("fork imported blob 与目标已有 digest/length 冲突")
-                return ingest_id, blob.relative_locator
-            claim = _claim_blob_identity(connection, identity=BlobIdentity(snapshot.blob_id, snapshot.digest, snapshot.length),
-                                         winning_ingest_id=ingest_id, now=datetime.now(UTC))
-            return ingest_id, claim.final_relative_locator
-
-    def release_fork_export_claims(self, copy_operation_id: str) -> None:
-        """来源导出从未预留外部 target owner；仅移除本导出的保活和 alias。"""
-        with self.write_transaction() as connection:
-            rows = connection.execute("SELECT * FROM fork_attachment_claims WHERE copy_operation_id=?", (copy_operation_id,)).fetchall()
-            for row in rows:
-                _claim_snapshot(row)
-                if row["state"] != "preparing":
-                    raise RuntimeError("fork export 释放发现目标 owner reservation，拒绝混用本地 settlement")
-            connection.execute("DELETE FROM fork_attachment_claims WHERE copy_operation_id=?", (copy_operation_id,))
-            connection.execute("DELETE FROM fork_attachment_mappings WHERE copy_operation_id=?", (copy_operation_id,))
-
-    def reserve_fork_attachment_owners(self, *, copy_operation_id: str, claim_ids: tuple[str, ...]) -> None:
-        """全量 required claim 达到 owner_reserved 后才允许 target publication。"""
+    def prepare_fork_attachment_claims(self, *, copy_operation_id: str, source_snapshot_id: str, operation_preimage_hash: str, snapshots: Sequence[ForkAttachmentDirectorySnapshot]) -> None:
         now = datetime.now(UTC).isoformat()
         with self.write_transaction() as connection:
-            rows = connection.execute("SELECT * FROM fork_attachment_claims WHERE copy_operation_id = ? ORDER BY claim_id", (copy_operation_id,)).fetchall()
-            if tuple(row["claim_id"] for row in rows) != claim_ids:
-                raise RuntimeError("fork attachment claim 集合与 captured marker 不一致")
-            mappings = connection.execute(
-                "SELECT DISTINCT snapshot_json FROM fork_attachment_mappings WHERE copy_operation_id=?",
-                (copy_operation_id,),
-            ).fetchall()
-            for mapping in mappings:
-                snapshot = ForkAttachmentSnapshot(**json.loads(mapping[0]))
-                if snapshot.availability == "available" and snapshot.claim_id is None:
-                    owner = self.get_reusable_attachment_owner(snapshot.target_attachment_id)
-                    if owner is None or (owner.owner_ref_id, owner.owner_session_id, owner.owner_thread_id,
-                                         owner.blob_id, owner.digest, owner.variant, owner.item_ref) != (
-                        snapshot.target_owner_ref_id, snapshot.target_session_id, snapshot.target_owner_thread_id,
-                        snapshot.blob_id, snapshot.digest, snapshot.variant, snapshot.target_item_ref,
-                    ):
-                        raise RuntimeError("fork attachment claimless owner 在 target publication 前已变化")
-            for row in rows:
-                if row["state"] in {"aborted", "target_deleted"}:
-                    raise RuntimeError("fork attachment claim 已终结，不得重建 owner")
-                snapshot = _claim_snapshot(row)
-                blob = connection.execute("SELECT * FROM attachment_blobs WHERE blob_id = ?", (snapshot.blob_id,)).fetchone()
-                if blob is None or (blob["availability"], blob["digest"], blob["length"]) != (
-                    "available", snapshot.digest, snapshot.length,
-                ):
-                    raise RuntimeError("fork attachment reservation blob 已变化")
-                existing = connection.execute("SELECT * FROM attachment_owner_refs WHERE owner_ref_id = ?", (snapshot.target_owner_ref_id,)).fetchone()
-                if existing is None:
-                    connection.execute(
-                        "INSERT INTO attachment_owner_refs (owner_ref_id, attachment_id, blob_id, digest, owner_session_id, "
-                        "owner_thread_id, file_name, mime_type, variant, item_ref, state, created_at, updated_at) "
-                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?)",
-                        (snapshot.target_owner_ref_id, snapshot.target_attachment_id, snapshot.blob_id, snapshot.digest,
-                          snapshot.target_session_id, snapshot.target_owner_thread_id, snapshot.file_name, snapshot.mime_type,
-                         snapshot.variant, snapshot.target_item_ref, now, now),
-                    )
-                elif (existing["attachment_id"], existing["owner_session_id"], existing["owner_thread_id"], existing["blob_id"], existing["digest"], existing["state"]) != (
-                    snapshot.target_attachment_id, snapshot.target_session_id, snapshot.target_owner_thread_id,
-                    snapshot.blob_id, snapshot.digest, "active",
-                ):
-                    raise RuntimeError("fork attachment owner reservation 冲突，拒绝复活 released reference")
-                if row["state"] == "preparing":
-                    connection.execute("UPDATE fork_attachment_claims SET state = 'owner_reserved' WHERE claim_id = ? AND state = 'preparing'", (row["claim_id"],))
-
-    def settle_fork_attachment_claims(self, *, copy_operation_id: str, claim_ids: tuple[str, ...], state: str) -> None:
-        if state not in {"committed", "aborted", "target_deleted"}:
-            raise ValueError("fork attachment claim 终态非法")
-        with self.write_transaction() as connection:
-            rows = connection.execute("SELECT * FROM fork_attachment_claims WHERE copy_operation_id = ? ORDER BY claim_id", (copy_operation_id,)).fetchall()
-            if tuple(row["claim_id"] for row in rows) != claim_ids:
-                raise RuntimeError("fork attachment settlement claim 集合不一致")
-            for row in rows:
-                snapshot = _claim_snapshot(row)
-                current = row["state"]
-                if current == state or (current == "aborted" and state == "target_deleted"):
-                    # 删除可清理已经中止操作的残留 alias，但不得改写终态或释放别人的引用。
-                    continue
-                if current in {"aborted", "target_deleted"} or (state == "committed" and current != "owner_reserved") or (state == "aborted" and current == "committed"):
-                    raise RuntimeError("fork attachment claim 终态 CAS 冲突")
-                owner = connection.execute("SELECT * FROM attachment_owner_refs WHERE owner_ref_id = ?", (snapshot.target_owner_ref_id,)).fetchone()
-                if owner is None:
-                    if current != "preparing":
-                        raise RuntimeError("fork attachment reserved/committed claim 缺少 target owner ref")
-                elif (owner["attachment_id"], owner["blob_id"], owner["digest"], owner["owner_session_id"], owner["owner_thread_id"], owner["variant"], owner["item_ref"]) != (
-                    snapshot.target_attachment_id, snapshot.blob_id, snapshot.digest,
-                    snapshot.target_session_id, snapshot.target_owner_thread_id, snapshot.variant, snapshot.target_item_ref,
-                ):
-                    raise RuntimeError("fork attachment settlement target owner ref 与冻结 claim 不一致")
-                if state == "committed" and (owner is None or owner["state"] != "active"):
-                    raise RuntimeError("fork attachment committed claim 必须有 active target owner ref")
-                if state != "committed":
-                    connection.execute("UPDATE attachment_owner_refs SET state = 'released', released_reason = ?, updated_at = ? WHERE owner_ref_id = ? AND state = 'active'", (state, datetime.now(UTC).isoformat(), row["target_owner_ref_id"]))
-                connection.execute("UPDATE fork_attachment_claims SET state = ? WHERE claim_id = ?", (state, row["claim_id"]))
-            if state in {"aborted", "target_deleted"}:
-                # 未发布或已删除目标不再拥有 alias，尤其不能留下无 claim 的 main 引用保活。
-                connection.execute("DELETE FROM fork_attachment_mappings WHERE copy_operation_id=?", (copy_operation_id,))
+            for snapshot in snapshots:
+                encoded = _encode(snapshot)
+                if snapshot.claim_id is not None:
+                    existing = connection.execute("SELECT * FROM attachment_directory_fork_claims WHERE claim_id=?", (snapshot.claim_id,)).fetchone()
+                    preimage = hashlib.sha256(canonical_json_bytes([copy_operation_id, source_snapshot_id, operation_preimage_hash, snapshot.to_payload()])).hexdigest()
+                    if existing is not None:
+                        if _claim_snapshot(existing) != snapshot or (existing["copy_operation_id"], existing["source_snapshot_id"], existing["operation_preimage_hash"]) != (copy_operation_id, source_snapshot_id, operation_preimage_hash):
+                            raise RuntimeError("同一目录 fork claim 的冻结输入冲突")
+                        if existing["state"] in {"aborted", "target_deleted"}:
+                            raise RuntimeError("目录 fork claim 已终止，不能重新准备")
+                    else:
+                        connection.execute(
+                            "INSERT INTO attachment_directory_fork_claims (claim_id,copy_operation_id,source_snapshot_id,operation_preimage_hash,preimage_hash,"
+                            "source_attachment_id,target_attachment_id,target_session_id,target_thread_id,snapshot_json,state,created_at,updated_at) "
+                            "VALUES (?,?,?,?,?,?,?,?,?,?, 'prepared',?,?)",
+                            (snapshot.claim_id, copy_operation_id, source_snapshot_id, operation_preimage_hash, preimage,
+                             snapshot.source_attachment_id, snapshot.target_attachment_id, snapshot.target_session_id,
+                             snapshot.target_thread_id, encoded, now, now),
+                        )
+                for alias in {snapshot.source_file_id, *snapshot.source_file_aliases, snapshot.target_file_id} - {""}:
+                    identity = (copy_operation_id, alias, snapshot.target_session_id, snapshot.target_thread_id, encoded)
+                    existing = connection.execute(
+                        "SELECT * FROM attachment_directory_fork_aliases WHERE (copy_operation_id=? AND source_file_id=?) "
+                        "OR (target_session_id=? AND target_thread_id=? AND source_file_id=?)",
+                        (copy_operation_id, alias, snapshot.target_session_id, snapshot.target_thread_id, alias),
+                    ).fetchall()
+                    if existing:
+                        if len(existing) != 1 or tuple(existing[0]) != identity:
+                            raise RuntimeError("目录 alias 的 operation、消费 owner 或冻结来源冲突")
+                    else:
+                        connection.execute("INSERT INTO attachment_directory_fork_aliases VALUES (?,?,?,?,?)", identity)
 
     def fork_attachment_claim_ids(self, copy_operation_id: str) -> tuple[str, ...]:
-        rows = self._connected().execute("SELECT claim_id FROM fork_attachment_claims WHERE copy_operation_id = ? ORDER BY claim_id", (copy_operation_id,)).fetchall()
-        return tuple(row[0] for row in rows)
+        rows = self._connected().execute("SELECT * FROM attachment_directory_fork_claims WHERE copy_operation_id=? ORDER BY claim_id", (copy_operation_id,)).fetchall()
+        for row in rows:
+            _claim_snapshot(row)
+        return tuple(row["claim_id"] for row in rows)
 
-    def fork_attachment_snapshots(self, copy_operation_id: str, *, target_session_id: str, target_thread_id: str) -> tuple[ForkAttachmentSnapshot, ...]:
-        rows = self._connected().execute(
-            "SELECT source_file_id,snapshot_json FROM fork_attachment_mappings "
-            "WHERE copy_operation_id=? AND target_session_id=? AND target_thread_id=? ORDER BY source_file_id",
-            (copy_operation_id, target_session_id, target_thread_id),
-        ).fetchall()
-        snapshots = []
-        for alias, encoded in rows:
-            snapshot = ForkAttachmentSnapshot(**json.loads(encoded))
-            if alias == snapshot.source_file_id:
-                if (snapshot.target_session_id, snapshot.target_thread_id) != (target_session_id, target_thread_id):
-                    raise RuntimeError("fork attachment mapping 与目标 owner 不一致")
-                snapshots.append(snapshot)
-        return tuple(snapshots)
+    def fork_attachment_snapshots(self, copy_operation_id: str, *, target_session_id: str, target_thread_id: str) -> tuple[ForkAttachmentDirectorySnapshot, ...]:
+        result: dict[str, ForkAttachmentDirectorySnapshot] = {}
+        for row in self._connected().execute("SELECT snapshot_json FROM attachment_directory_fork_aliases WHERE copy_operation_id=? AND target_session_id=? AND target_thread_id=?", (copy_operation_id, target_session_id, target_thread_id)):
+            snapshot = attachment_snapshot_from_payload(json.loads(row[0]))
+            if not isinstance(snapshot, ForkAttachmentDirectorySnapshot):
+                raise TypeError("新目录 alias 包含旧 blob 快照")
+            previous = result.setdefault(snapshot.source_attachment_id, snapshot)
+            if previous != snapshot:
+                raise RuntimeError("同一目录 fork 的 alias 冻结输入不一致")
+        return tuple(result[key] for key in sorted(result))
+
+    def fork_attachment_snapshot_for_alias(self, *, target_session_id: str, target_thread_id: str, source_file_id: str) -> ForkAttachmentDirectorySnapshot | None:
+        row = self._connected().execute(
+            "SELECT snapshot_json FROM attachment_directory_fork_aliases WHERE target_session_id=? AND target_thread_id=? AND source_file_id=?",
+            (target_session_id, target_thread_id, source_file_id),
+        ).fetchone()
+        if row is None:
+            return None
+        snapshot = attachment_snapshot_from_payload(json.loads(row[0]))
+        if not isinstance(snapshot, ForkAttachmentDirectorySnapshot) or (snapshot.target_session_id, snapshot.target_thread_id) != (target_session_id, target_thread_id) or source_file_id not in {snapshot.source_file_id, *snapshot.source_file_aliases, snapshot.target_file_id}:
+            raise RuntimeError("目录 alias 与精确消费 Thread 不一致")
+        if snapshot.claim_id is not None:
+            claim = self._connected().execute("SELECT * FROM attachment_directory_fork_claims WHERE claim_id=?", (snapshot.claim_id,)).fetchone()
+            if claim is None or _claim_snapshot(claim) != snapshot:
+                raise RuntimeError("目录 alias 与原 claim 的冻结内容不一致")
+        return snapshot
+
+    def reserve_fork_attachment_owners(self, *, copy_operation_id: str, claim_ids: Sequence[str]) -> None:
+        with self.write_transaction() as connection:
+            for claim_id in claim_ids:
+                row = connection.execute("SELECT * FROM attachment_directory_fork_claims WHERE claim_id=? AND copy_operation_id=?", (claim_id, copy_operation_id)).fetchone()
+                if row is None:
+                    raise RuntimeError("目录 fork reservation 缺少原 claim")
+                snapshot = _claim_snapshot(row)
+                self.require_available_directory(snapshot.target_attachment_id)
+                if row["state"] in {"aborted", "target_deleted"}:
+                    raise RuntimeError("不能预留已终止的目录 fork")
+                if row["state"] == "prepared":
+                    connection.execute("UPDATE attachment_directory_fork_claims SET state='owner_reserved',updated_at=? WHERE claim_id=?", (datetime.now(UTC).isoformat(), claim_id))
+
+    def settle_fork_attachment_claims(self, *, copy_operation_id: str, claim_ids: Sequence[str], state: str) -> None:
+        if state not in {"committed", "aborted", "target_deleted"}:
+            raise ValueError("目录 fork 结算状态非法")
+        with self.write_transaction() as connection:
+            now = datetime.now(UTC)
+            for claim_id in claim_ids:
+                row = connection.execute("SELECT * FROM attachment_directory_fork_claims WHERE claim_id=? AND copy_operation_id=?", (claim_id, copy_operation_id)).fetchone()
+                if row is None:
+                    raise RuntimeError("目录 fork 结算缺少原 claim")
+                snapshot = _claim_snapshot(row)
+                if row["state"] == state:
+                    continue
+                if row["state"] in {"aborted", "target_deleted"} or (row["state"] == "committed" and state != "target_deleted"):
+                    raise RuntimeError("目录 fork 不能改变已结算的终态")
+                if state == "committed":
+                    if row["state"] != "owner_reserved":
+                        raise RuntimeError("目录 fork 尚未完成目标 reservation")
+                    self.require_available_directory(snapshot.target_attachment_id)
+                    self._attach(connection, snapshot.target_attachment_id, snapshot.target_session_id, snapshot.target_thread_id, "fork:" + copy_operation_id, now)
+                else:
+                    connection.execute(
+                        "UPDATE attachment_directory_associations SET state='released',updated_at=? WHERE attachment_id=? AND session_id=? AND thread_id=? AND binding_token=? AND state='active'",
+                        (now.isoformat(), snapshot.target_attachment_id, snapshot.target_session_id, snapshot.target_thread_id, "fork:" + copy_operation_id),
+                    )
+                    self._mark_zero_associations(connection, snapshot.target_attachment_id, now)
+                connection.execute("UPDATE attachment_directory_fork_claims SET state=?,updated_at=? WHERE claim_id=?", (state, now.isoformat(), claim_id))
+
+    def release_fork_export_claims(self, copy_operation_id: str) -> None:
+        with self.write_transaction() as connection:
+            connection.execute("UPDATE attachment_directory_fork_claims SET export_released=1,updated_at=? WHERE copy_operation_id=?", (datetime.now(UTC).isoformat(), copy_operation_id))
 
     def fork_attachment_operations_for_target(self, target_session_id: str, *, target_thread_id: str | None = None) -> tuple[str, ...]:
-        rows = self._connected().execute(
-            "SELECT copy_operation_id FROM fork_attachment_claims WHERE target_session_id=? "
-            "AND (? IS NULL OR target_thread_id=?) AND state NOT IN ('aborted','target_deleted') "
-            "UNION SELECT copy_operation_id FROM fork_attachment_mappings WHERE target_session_id=? "
-            "AND (? IS NULL OR target_thread_id=?) ORDER BY copy_operation_id",
-            (target_session_id, target_thread_id, target_thread_id, target_session_id, target_thread_id, target_thread_id),
-        ).fetchall()
-        return tuple(row[0] for row in rows)
+        query = "SELECT DISTINCT copy_operation_id FROM attachment_directory_fork_claims WHERE target_session_id=? AND state NOT IN ('aborted','target_deleted')"
+        values = [target_session_id]
+        if target_thread_id is not None:
+            query += " AND target_thread_id=?"
+            values.append(target_thread_id)
+        return tuple(row[0] for row in self._connected().execute(query, values))
 
-    def fork_attachment_snapshot_for_alias(
-        self, *, target_session_id: str, target_thread_id: str, source_file_id: str,
-    ) -> ForkAttachmentSnapshot | None:
-        """读取 target 本地冻结事实；不可用附件也不回读更早来源。"""
-        rows = self._connected().execute(
-            "SELECT * FROM fork_attachment_mappings "
-            "WHERE target_session_id=? AND target_thread_id=? AND source_file_id=? LIMIT 2",
-            (target_session_id, target_thread_id, source_file_id),
-        ).fetchall()
-        if len(rows) > 1:
-            raise RuntimeError("fork attachment target-local alias 歧义")
-        if not rows:
-            return None
-        return _mapping_snapshot(rows[0])
-
-    def project_fork_attachment(
-        self, *, target_session_id: str, target_thread_id: str, source_file_id: str,
-        workspace_id: str, gateway_id: str | None,
-    ) -> dict[str, str]:
-        """只投影精确目标 Thread 的冻结 alias，并核当前 owner ref 是否仍保活。"""
-        connection = self._connected()
-        snapshot = self.fork_attachment_snapshot_for_alias(
-            target_session_id=target_session_id, target_thread_id=target_thread_id, source_file_id=source_file_id,
+    def publish_fork_directory(self, connection: sqlite3.Connection, snapshot: ForkAttachmentDirectorySnapshot) -> None:
+        """与调用方的最终 rename 共用事务；关联仍由原 publication finalizer 提交。"""
+        from app.services.infrastructure.attachment_blob_catalog.locator import (
+            attachment_directory_relative_locator,
         )
-        if snapshot is not None:
-            owner = connection.execute(
-                "SELECT owner.state,blob.availability,owner.attachment_id,owner.blob_id,owner.digest,"
-                "owner.variant,owner.item_ref,blob.digest,blob.length FROM attachment_owner_refs owner "
-                "JOIN attachment_blobs blob ON blob.blob_id=owner.blob_id "
-                "WHERE owner.owner_ref_id=? AND owner.owner_session_id=? AND owner.owner_thread_id=?",
-                (snapshot.target_owner_ref_id, target_session_id, snapshot.target_owner_thread_id),
-            ).fetchone()
-            published = snapshot.claim_id is None or connection.execute(
-                "SELECT 1 FROM fork_attachment_claims WHERE claim_id=? AND target_owner_ref_id=? AND state='committed'",
-                (snapshot.claim_id, snapshot.target_owner_ref_id),
-            ).fetchone() is not None
-            return {
-                "file_id": snapshot.target_file_id,
-                "availability": "available" if snapshot.availability == "available" and published and owner is not None and tuple(owner) == (
-                    "active", "available", snapshot.target_attachment_id, snapshot.blob_id, snapshot.digest,
-                    snapshot.variant, snapshot.target_item_ref, snapshot.digest, snapshot.length,
-                ) else "unavailable",
-            }
-        if "://" not in source_file_id:
-            return {"file_id": source_file_id, "availability": "unavailable"}
-        source = parse_session_artifact_uri(source_file_id, local_gateway_id=gateway_id)
-        if source.session_artifact_kind != "attachments":
-            raise ValueError("附件投影必须引用附件 owner 的资源")
-        if (source.gateway_authority is not None or source.scope_id != workspace_id
-                or source.tail_segments[0] != target_session_id):
-            # 未发布映射的外部引用仍可展示，但没有目标 owner 的可读正文。
-            return {"file_id": source_file_id, "availability": "unavailable"}
-        owner = connection.execute(
-            "SELECT owner.state,blob.availability FROM attachment_owner_refs owner "
-            "JOIN attachment_blobs blob ON blob.blob_id=owner.blob_id "
-            "WHERE owner.owner_session_id=? AND owner.owner_thread_id=? "
-            "AND owner.attachment_id=? "
-            "AND NOT EXISTS (SELECT 1 FROM fork_attachment_claims claim "
-            "WHERE claim.target_owner_ref_id=owner.owner_ref_id AND claim.state IN ('preparing','owner_reserved'))",
-            (target_session_id, target_thread_id, source.tail_segments[2]),
-        ).fetchone()
-        return {"file_id": source_file_id,
-                "availability": "available" if owner is not None and tuple(owner) == ("active", "available") else "unavailable"}
+        from app.services.infrastructure.attachment_blob_catalog.records import (
+            AttachmentFileVersion,
+        )
+
+        created = datetime.fromisoformat(snapshot.target_created_at)
+        locator = attachment_directory_relative_locator(snapshot.target_attachment_id, created)
+        claim = connection.execute("SELECT * FROM attachment_directory_fork_claims WHERE claim_id=?", (snapshot.claim_id,)).fetchone()
+        if claim is None or _claim_snapshot(claim) != snapshot or claim["state"] not in {"prepared", "owner_reserved"}:
+            raise RuntimeError("目录 fork 发布缺少有效的原冻结 claim")
+        previous = self.get_directory(snapshot.target_attachment_id)
+        if previous is not None:
+            if (previous.relative_locator, previous.created_at, previous.availability) != (locator, created.isoformat(), "available"):
+                raise RuntimeError("目录 fork 目标与原冻结 intent 不一致，不能覆盖")
+        else:
+            connection.execute("INSERT INTO attachment_directories VALUES (?,?,'available','private',?,?,NULL,NULL,NULL)", (snapshot.target_attachment_id, locator, created.isoformat(), datetime.now(UTC).isoformat()))
+        for file in snapshot.files:
+            if file.relative_path.split("/")[0] not in {"original", "preview"}:
+                continue
+            version = AttachmentFileVersion(snapshot.target_attachment_id, file.relative_path, file.relative_path.split("/")[0], file.digest, file.length,
+                                            snapshot.file_name if file.relative_path == "original/content" else None,
+                                            snapshot.mime_type if file.relative_path == "original/content" else "image/webp")
+            current = self.file_version(snapshot.target_attachment_id, file.relative_path)
+            if current is not None and current != version:
+                raise RuntimeError("fork 导入的原件或预览与已发布版本冲突")
+            if current is None:
+                self._insert_file_version(connection, version)
 
     def terminal_fork_attachment_operations(self) -> tuple[str, ...]:
-        rows = self._connected().execute(
-            "SELECT copy_operation_id FROM fork_attachment_claims GROUP BY copy_operation_id "
-            "HAVING SUM(state IN ('preparing','owner_reserved'))=0 ORDER BY copy_operation_id",
-        ).fetchall()
-        return tuple(row[0] for row in rows)
+        return tuple(row[0] for row in self._connected().execute(
+            "SELECT copy_operation_id FROM attachment_directory_fork_claims GROUP BY copy_operation_id "
+            "HAVING SUM(state IN ('prepared','owner_reserved'))=0 ORDER BY copy_operation_id",
+        ))
 
-    def terminal_fork_attachment_snapshots(self, copy_operation_id: str) -> tuple[ForkAttachmentSnapshot, ...]:
-        """终结时 mappings 可已删除；只按仍保留的 claim 冻结事实定位。"""
-        rows = self._connected().execute(
-            "SELECT * FROM fork_attachment_claims WHERE copy_operation_id=? ORDER BY claim_id",
+    def terminal_fork_attachment_snapshots(self, copy_operation_id: str) -> tuple[ForkAttachmentDirectorySnapshot, ...]:
+        return tuple(_claim_snapshot(row) for row in self._connected().execute(
+            "SELECT * FROM attachment_directory_fork_claims WHERE copy_operation_id=? AND state IN ('committed','aborted','target_deleted') ORDER BY claim_id",
             (copy_operation_id,),
-        ).fetchall()
-        if any(row["state"] in {"preparing", "owner_reserved"} for row in rows):
-            return ()
-        return tuple(_claim_snapshot(row) for row in rows)
+        ))

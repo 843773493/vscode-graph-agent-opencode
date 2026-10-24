@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections.abc import Callable, Mapping, Sequence
 from contextvars import Context
 from pathlib import Path
@@ -93,6 +94,7 @@ from app.services.orchestration.thread_residency import (
 # 工具面 blueprint 检查用的合成会话：只用于装配一次完整工具面并抽取定义，
 # 不进入任何业务会话账目。抽出的定义不捕获该会话，仅用于 Provider 工具目录。
 _TOOL_INSPECTION_SESSION_ID: Final[str] = "tools_inspection_session"
+logger = logging.getLogger(__name__)
 
 
 class AgentExecutionService(JobStepExecutor):
@@ -367,17 +369,23 @@ class AgentExecutionService(JobStepExecutor):
             task.result()
             raise RuntimeError("ThreadRuntime residency worker 意外停止")
 
+    async def _sweep_idle_runtimes(self) -> None:
+        try:
+            await self._residency_tracker.sweep()
+        except Exception:  # tracker 保留失败 owner；显式报告后按原周期重试。
+            logger.exception("ThreadRuntime 闲置清理未收敛；保留失败 owner，下一周期重试")
+
     async def start(self) -> None:
         """lifespan 启动 idle worker，不读取或编译 cold thread。"""
         if self._sweep_task is not None:
             self._check_sweeper()
             return
-        await self._residency_tracker.sweep()
+        await self._sweep_idle_runtimes()
 
         async def sweep_periodically() -> None:
             while True:
                 await asyncio.sleep(60)
-                await self._residency_tracker.sweep()
+                await self._sweep_idle_runtimes()
 
         self._sweep_task = asyncio.create_task(
             sweep_periodically(),

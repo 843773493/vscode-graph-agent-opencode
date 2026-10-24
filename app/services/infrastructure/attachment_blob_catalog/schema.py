@@ -1,12 +1,4 @@
-"""attachment blob catalog 的 SQL 加载、共享常量与形态校验。
-
-表、索引和触发器唯一定义在 sql/；本模块显式加载并保留必需表清单、库文件名
-与 ingest 终态闭集；records/ingest/blobs/queries 各 mixin 从这里取用，不复制。
-
-本模块同时承载两个只做形态归一/解析的模块级小工具
-（_validate_non_empty、_date_from_locator）；它们被 ingest/blobs 两个 mixin
-共用，放在此处避免在多个模块复制同一份实现。
-"""
+"""仅供显式离线迁移核对 schema 3；线上只使用 directory_schema 的 schema 4。"""
 
 from __future__ import annotations
 
@@ -93,16 +85,3 @@ _REQUIRED_TABLES = (
     "fork_attachment_mappings",
     "attachment_catalog_revision",
 )
-
-
-def _validate_non_empty(name: str, value: str) -> None:
-    if not isinstance(value, str) or not value:
-        raise ValueError(f"{name} 必须是非空字符串: {value!r}")
-
-
-def _date_from_locator(relative_locator: str):
-    """从受检 locator 取日期部分（形态已由 validate 保证）。"""
-    year_text, month_text, day_text, _blob = relative_locator.split("/")
-    from datetime import date as _date
-
-    return _date(int(year_text), int(month_text), int(day_text))

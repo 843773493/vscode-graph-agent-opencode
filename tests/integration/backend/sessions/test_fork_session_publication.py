@@ -176,7 +176,7 @@ async def test_copy_session_publication_recovers_original_attachment_settlement(
                 assert getattr(committed, field) == getattr(reserved, field)
             assert control.get_lease(committed.lease_id).state == "completed"
         claims_before = [tuple(row) for row in restarted.attachment_blob_store._catalog._connected().execute(
-            "SELECT claim_id,state FROM fork_attachment_claims WHERE copy_operation_id=? ORDER BY claim_id", (key,),
+            "SELECT claim_id,state FROM attachment_directory_fork_claims WHERE copy_operation_id=? ORDER BY claim_id", (key,),
         )]
         assert claims_before == [(claim_id, "committed") for claim_id in reserved.claim_ids]
         replies = []
@@ -201,7 +201,7 @@ async def test_copy_session_publication_recovers_original_attachment_settlement(
         assert replies[0] == replies[1]
         assert cold_catalog.get_creation_record(key) == published
         assert [tuple(row) for row in restarted.attachment_blob_store._catalog._connected().execute(
-            "SELECT claim_id,state FROM fork_attachment_claims WHERE copy_operation_id=? ORDER BY claim_id", (key,),
+            "SELECT claim_id,state FROM attachment_directory_fork_claims WHERE copy_operation_id=? ORDER BY claim_id", (key,),
         )] == claims_before
         assert (cold_root / "threads" / frozen.main_thread_id / "rollout/rollout.jsonl").read_bytes() == frozen_bytes
         assert (await recovered.sessions.list(limit=100)).total == 2
@@ -227,5 +227,5 @@ async def test_copy_session_publication_recovers_original_attachment_settlement(
             assert cold_catalog.get_creation_record(key) == damaged
             assert (cold_root / "threads" / frozen.main_thread_id / "rollout/rollout.jsonl").read_bytes() == frozen_bytes
             assert [tuple(row) for row in restarted.attachment_blob_store._catalog._connected().execute(
-                "SELECT claim_id,state FROM fork_attachment_claims WHERE copy_operation_id=? ORDER BY claim_id", (key,),
+                "SELECT claim_id,state FROM attachment_directory_fork_claims WHERE copy_operation_id=? ORDER BY claim_id", (key,),
             )] == claims_before

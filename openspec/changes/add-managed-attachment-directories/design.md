@@ -1,6 +1,6 @@
 ## Context
 
-见 proposal 的动机。当前附件正文位于工作区，blob 身份由 digest 推导，但逻辑附件及访问仍绑定 Session/Thread；fork 可为同一正文建立目标 owner 引用。启动与 Session 删除调用 `collect_garbage(retention=timedelta(0))`，候选按 blob 创建时间筛选，不是从最后一次 detach 开始计时。
+变更前附件正文位于工作区，blob 身份由 digest 推导，逻辑附件及访问绑定 Session/Thread；启动与 Session 删除按 blob 创建时间即时回收。当前线上仅支持 schema 4 独立目录；schema 3 通过下文离线迁移显式安装，新上传不再写 blob/owner-ref 表或生成旧 Session URI。原件、预览、派生区、运行时代次与最后一次零关联后的 30 天期限由同一目录 owner 管理。
 
 Terminal/Browser 已共用资源关联和 operation lease 规则：正常 unload 立即删除 thread 临时资源，手动 detach 后才等待 30 分钟。孤儿扫描跳过仍有关联的记录；恢复只核外部资源状态，不能解决失效关联。Thread residency 只保存本进程真实 runtime；重启后的冷 Thread 不会凭空取得可卸载的 generation。
 
@@ -8,7 +8,7 @@ Terminal/Browser 已共用资源关联和 operation lease 规则：正常 unload
 
 **Goals:** 目录是关联、Shell 工作目录和回收单位；异常退出不依赖 Agent 主动 detach；复用原 owner、URI、文件操作和冻结输入链路。
 
-**Non-Goals:** 不新增云端存储、每文件引用计数、通用文件版本控制或附件专用工具。已完成的首个边界只修复 Thread 回收扫描的失败隔离、周期重试与有界等待，以及资源记录查询改名后遗漏的直接/间接调用；目录迁移继续按后续纵向切片实施，不能将盘点完成视为目录功能完成。Agent 团队、成员、委派及会话协作通信按用户裁定保留 TODO，不在此变更追加实现或专项验证。
+**Non-Goals:** 不新增云端存储、每文件引用计数、通用文件版本控制或附件专用工具。目录主链及原文件/Shell 注入已经完成；完整 Web、Windows 实机、冻结输入回收验收与挂起操作/关闭期限仍按后续纵向切片推进，不将局部通过视为整个变更完成。Agent 团队、成员、委派及会话协作通信按用户裁定保留 TODO，不在此变更追加实现或专项验证。
 
 ## Decisions
 
@@ -22,13 +22,13 @@ Terminal/Browser 已共用资源关联和 operation lease 规则：正常 unload
 
 统一 URI owner 登记 `boxteam://{gateway_authority?}/workspace/{workspace_id}/resources/attachments/{attachment_id}` 为 directory 根，并登记其文件 child 规则；在该 owner 的 kind 闭集中增加 `attachments`，不新增 scheme、query 或真实路径字段。新上传消息使用该根下原件 URI，并提供目录 URI、文件名、MIME 和处理结果写入提示。既有 Session 产物 URI 只能作为原历史身份保留，按原 provenance/owner 授权解析，不能继续生成新旧两套附件地址。
 
-2026-10-24 目录寻址基础已接入唯一 grammar：附件根只接受 workspace scope 和稳定 `att_<32 hex>` 身份，保留旧 ID；child 复用 files/skills 的单次解码及规范编码。原 `file_uri_root`/`file_uri_child` 移入该 owner，迁齐全部生产和测试调用后移除原定义，不留转发。导航 shape 将根限定为 directory。Web 文件树父级与 Markdown 相对链接共用后端已校验 URI 的根拆分，不在客户端另建完整 grammar；附件相对链接停在其目录根，原生绝对路径仍交目标机器解释。协议现有 kind/URI 为 string，此片不改变 DTO 字段或生成类型；上传仍沿原链，物理目录解析、目录/原件 DTO 和新引用发布留待统一切换，不能把语法可解析当作原件已可读取。证据见 `out/tests/temp/attachment_uri_contract_20261024/artifacts/`。扩大导航集成的旧删除诊断断言在原 HEAD 同样失败，原件保留；另一项因 fixture 重用目录失败，单独场景通过，未放宽任何断言。
+2026-10-24 目录寻址基础已接入唯一 grammar：附件根只接受 workspace scope 和稳定 `att_<32 hex>` 身份，保留旧 ID；child 复用 files/skills 的单次解码及规范编码。原 `file_uri_root`/`file_uri_child` 移入该 owner，迁齐全部生产和测试调用后移除原定义，不留转发。导航 shape 将根限定为 directory。Web 文件树父级与 Markdown 相对链接共用后端已校验 URI 的根拆分，不在客户端另建完整 grammar；附件相对链接停在其目录根，原生绝对路径仍交目标机器解释。协议的可选 directory_uri 已经由原生成脚本迁齐，线上上传、媒体读取与文件入口均注入同一个目录 owner；旧历史缺少目录字段时不补造或重写。证据见 `out/tests/temp/attachment_uri_contract_20261024/artifacts/`。扩大导航集成的旧删除诊断断言在原 HEAD 同样失败，原件保留；另一项因 fixture 重用目录失败，单独场景通过，未放宽任何断言。
 
 Shell 的结构化 workdir 接受目录 URI，在 URI 指定目标的文件 owner 内取得短期本地 cwd 和操作 lease，再复用原 PTY 执行。URI 目标与 Shell 目标不一致时明确拒绝；不把远端 URI 当本机路径，不改写任意 command 字符串，不把真实 cwd写进普通业务记录。整个执行期间保留目录使用 lease；后台进程仍访问目录时，其真实进程 owner 延续占用，不能在工具提前返回时解除保活。
 
-2026-10-24 的先行切片只接入既有 `files` 目录 URI：Terminal owner 依赖 container 已装配的 `WorkspaceFilePaths`，在创建记录/PTY 前解析精确 `boxteam://` 前缀的 URI；POSIX 原生目录名中的其它 `://` 不改变含义，全部原生 cwd 也在同一 Terminal owner 锚定目标工作区。工具层不再自行解析 cwd、接受另一份 workspace root 或重算公开位置，回执直接消费真实 PTY 的 `cwd_relative`。Shell 原生工作区外/私有目录行为保持，命令正文不做 URI 替换。目录解析中的系统异常和符号链接环完整留在诊断/cause，普通错误只包含资源 URI 和错误类型。附件目录 kind、全进程占用及其回收保护仍未实现，不能将这个切片算作任务 3.3 全部完成。
+2026-10-24 的先行切片只接入既有 `files` 目录 URI：Terminal owner 依赖 container 已装配的 `WorkspaceFilePaths`，在创建记录/PTY 前解析精确 `boxteam://` 前缀的 URI；POSIX 原生目录名中的其它 `://` 不改变含义，全部原生 cwd 也在同一 Terminal owner 锚定目标工作区。工具层不再自行解析 cwd、接受另一份 workspace root 或重算公开位置，回执直接消费真实 PTY 的 `cwd_relative`。Shell 原生工作区外/私有目录行为保持，命令正文不做 URI 替换。目录解析中的系统异常和符号链接环完整留在诊断/cause，普通错误只包含资源 URI 和错误类型。该先行切片之后，附件目录 workdir 与进程持久占用也已接入；Windows 实机和远端产品入口验收仍由任务 6.1 负责。
 
-后续 Shell 公共边界已在原 Terminal owner 接入 `TerminalWorkingDirectories` 准入端口，持久记录只增加同工作区附件目录根 URI；目录使用继续写入唯一 `ExternalResourceLeaseLedger`，holder 使用持久终端身份而非本次工具/Turn。准入锁内发布占用后才启动 PTY；工具提前返回不结清，核实终态与冷恢复才结清，未知/缺失回执保留。当前 schema 3 生产装配显式传入 None，并以代码 TODO 登记 schema 4 唯一切换时注入目录 owner；没有引入另一套文件或进程执行链。完整 schema 4 候选已验证三种 cwd 的真实后台进程保活、准入与到期 GC 竞争及原文件入口，但线上目录注入、全进程重启、Windows 和代次对账仍未完成，任务 3.3 保持未勾选。准确候选指纹、命令和原始结果在 `out/tests/temp/attachment_shell_directory_20261024/artifacts/`。
+后续 Shell 公共边界已在原 Terminal owner 接入 `TerminalWorkingDirectories` 准入端口，持久记录只增加同工作区附件目录根 URI；目录使用继续写入唯一 `ExternalResourceLeaseLedger`，holder 使用持久终端身份而非本次工具/Turn。准入锁内发布占用后才启动 PTY；工具提前返回不结清，核实终态与冷恢复才结清，未知/缺失回执保留。线上 container 已注入 schema 4 目录 owner，不保留空准入或另一套文件/进程执行链。Linux 真实 PTY 已验证相对/绝对/目录 URI 三种 cwd、后台进程保活、准入与到期 GC 竞争及核实停止后的释放；未知停止结果继续由原 owner 保留，Windows 与远端产品验收仍 TODO。准确候选指纹、命令和原始结果在 `out/tests/temp/attachment_shell_directory_20261024/artifacts/`。
 
 ### 3. 目录关联与 30 天回收
 
@@ -62,7 +62,7 @@ Shell 的结构化 workdir 接受目录 URI，在 URI 指定目标的文件 owne
 
 ## Conflict Review
 
-本 change 是附件目录修订的后继 owner。以下旧 change 的已完成任务只证明旧基线；目录链路迁齐前保留原产品实现，不宣称这张表对应的迁移已完成。合入/归档顺序为先落现有基础 change，再应用本 change；不得在最后归档旧 change 时覆盖本修订。
+本 change 是附件目录修订的后继 owner。以下旧 change 的既有验收只证明对应基线；目录主链已在本变更迁齐，尚未完成的 Web/平台和关闭期限验收继续保留。合入/归档顺序为先落现有基础 change，再应用本 change；不得在最后归档旧 change 时覆盖本修订。
 
 | 冲突来源 | 处理决定 | 必须保留的约束 |
 | --- | --- | --- |
@@ -72,7 +72,7 @@ Shell 的结构化 workdir 接受目录 URI，在 URI 指定目标的文件 owne
 | persistent-resources 的 thread unload 即时 delete、零关联 30 分钟、workspace 永不自动过期 | 这些规则继续适用于既有 Shell/Browser；附件复用机制但采用明确的零关联 30 天策略 | 显式 detach 不等于停止、有效 operation 阻止回收、未知停止结果不伪报成功 |
 | deduplicate-execution-history-storage 的不可变内容复用及恢复/fork保护 | 可变目录不参与 digest 身份合并；已冻结历史输入仍按原 immutable asset/version 复用 | 历史 request_hash 可重建，GC 不删除 checkpoint/assembly 所需版本；不从当前目录补历史 |
 | 当前附件 GC 的 `created_at < now-retention` 与 `retention=0` 调用 | 改为最后一次零关联后的 deadline；不能简单把参数改成 30 天 | 在 detach 第 30 天前不删，重启不重置 deadline，删除与 reattach 互斥 |
-| 当前恢复只核运行状态、关联存活无对账，以及单项异常停止 sweep | 失效关联/代次对账属于后续纵向切片；本轮只完成 sweep 失败隔离与重试 | 不把日志或任务勾选当作异常退出后的真实资源释放证据 |
+| 当前恢复只核运行状态、关联存活无对账，以及单项异常停止 sweep | 已接入 tracker 实例/generation token、权威 pin/queue 核对与旧代解绑；外部未知结果的取消/终止核实仍 TODO | 不把日志或任务勾选当作异常退出后的真实资源释放证据 |
 | persistent-resources 的 unload 必须核实终态，与扫描等待期限 | 30 秒只限制本轮等待；唯一卸载任务继续持有全部未结清事实，原 admission/Session 删除/关闭仍等真实清理 | 不把超时当停止证明，不重复删除，不提前释放 lease；共享锁/同步阻塞和关闭期限尚待 5.4 |
 
 ## Risks / Trade-offs
@@ -117,14 +117,14 @@ Shell 的结构化 workdir 接受目录 URI，在 URI 指定目标的文件 owne
 6. 旧 active 引用按其精确 Session/Thread 与权威任务状态建立关联/必要占用；不能把全部冷 Thread 当失效，也不能仅因 Thread ID 存在而永久保活。旧 released 引用保留原释放 `updated_at`，某目录已零关联时用其可核验释放时刻起算 30 天，不能改按创建日或每次重启重置；原显式 `retention_until` 更晚时继续保护至该时刻，不缩短既有保护。未知释放时刻明确拒绝该记录并保全。迁移期间只登记到期事实，不夹带物理 GC；删除终态及保留中的 fork/恢复依赖独立核对。
 7. 在隔离准备区完成新 catalog、目录及映射校验，通过原 owner 的持久迁移记录冻结源备份指纹、schema 和目标集合；全部 durable 后才提交唯一切换点。启动只接受已完成的 schema 4，未完成迁移明确失败并由原迁移入口继续/撤销；不从源/目标双读猜测成功。中断前后的恢复、重复执行和回退必须验证。切换成功也不自动删除 schema 3 备份；应用有新写入后的回退不得直接覆盖新数据。旧生产表/方法与全部调用方在切换批次移除，目录维护互斥及迁移记录不成为第二套业务状态。
 
-   已提供 `install --workspace <root> --backup <dir>` 和 `rollback --workspace <root> --backup <dir>`。唯一 `.boxteam/attachment-migration.json` 冻结备份、目标 catalog、原源集合和文件/WAL 指纹；SQLite 内容用完整 schema/行核对，避免将 backup API 的页头变化当作内容变化。ready 恢复且尚未首次移出原目录时，再跑完整 preflight 核对集合，不只复验旧清单中的文件。先将旧根保全为 `.attachments-{backup_id}.schema3`，再发布已 durable 的准备目录，最后提交 installed；中间状态均阻止业务准入。撤销保全新目录副本，原目录恢复并 durable 后才发布 aborted。重复 install 不覆盖安装后的新写入；存在新写入时 rollback 明确拒绝。这里仅完成离线根发布，线上 schema 4 owner、Shell 全程占用、GC 和完整恢复验收仍按后续任务实施。
+   已提供 `install --workspace <root> --backup <dir>` 和 `rollback --workspace <root> --backup <dir>`。唯一 `.boxteam/attachment-migration.json` 冻结备份、目标 catalog、原源集合和文件/WAL 指纹；SQLite 内容用完整 schema/行核对，避免将 backup API 的页头变化当作内容变化。ready 恢复且尚未首次移出原目录时，再跑完整 preflight 核对集合，不只复验旧清单中的文件。先将旧根保全为 `.attachments-{backup_id}.schema3`，再发布已 durable 的准备目录，最后提交 installed；中间状态均阻止业务准入。撤销保全新目录副本，原目录恢复并 durable 后才发布 aborted。重复 install 不覆盖安装后的新写入；存在新写入时 rollback 明确拒绝。离线安装与当前线上 schema 4 owner 已接通；实际启动后可读取旧历史并生成新目录，Shell 全程占用与目录 GC 共用原 lease 账本。Windows 与完整深历史验收继续保留。
 
 离线迁移验收的 schema 3 输入固定来自 `cb90835523b9ff6d91e3f8dfaf3491855d55191d`：测试用完整 Git archive 导出该版本，独立 Python 进程复用其产品 fixture 和 `model_stream`，经真实上传、接受、执行及两代 fork 生成状态。当前产品不再承担生成旧结构的职责，也不保留旧线上 owner 或手写执行/fork 状态。旧进程及 owner 关闭后才复制工作区供当前迁移入口使用；保留源 commit/tree、命令、退出码、原始输出及来源回执。旧源码与生成工作区分别隔离，测试工作区沿用正式镜像输出路径，避免嵌套归档将 fork 临时 SQLite 路径拉长；旧 fork watchdog 的产物仍留在其认可的源码输出根。缺少固定历史 Git 对象时明确失败，不回退到当前源码或伪造旧表。团队服务仅沿用该旧版本执行入口既有的初始化依赖，团队功能与专项验证继续 TODO。
 
-2026-10-24 此输入切片在精确公开 HEAD 候选（仍 schema 3）和完整 schema 4 候选各通过 86 项离线迁移/安装检查，覆盖共享旧 blob、已有预览、排队输入、两代真实 fork、冻结来源 hash、安装/撤销及进程退出窗口；Ruff 和 compileall 通过。准确源码指纹、失败归因及最终原始输出位于 `out/tests/temp/attachment_legacy_product_20261024/artifacts/`。这里只完成旧产品输入与验收的解耦；线上目录 owner、旧调用迁齐和整体切换仍未完成，任务 2.2 继续保持未勾选。
+2026-10-24 此输入切片在精确公开 HEAD 候选（仍 schema 3）和完整 schema 4 候选各通过 86 项离线迁移/安装检查，覆盖共享旧 blob、已有预览、排队输入、两代真实 fork、冻结来源 hash、安装/撤销及进程退出窗口；Ruff 和 compileall 通过。准确源码指纹、失败归因及最终原始输出位于 `out/tests/temp/attachment_legacy_product_20261024/artifacts/`。这一批只证明旧产品输入解耦；随后线上 owner、原调用方及唯一切换已迁齐，证据与未完成验收按 tasks 最新记录。
 
 ### 实施顺序与验证门
 
-已完成的扫描小修不改变附件格式、URI 或资源删除行为。下一实施批次以目录创建/上传接受/原件与预览读取为完整入口，同时迁齐统一 URI、冻结输入及对应 fork/历史解析所需端口；不能先暴露一个无消费者的新 catalog。接着补齐统一文件写入、Shell 全进程占用、代次对账和低频 GC；每个批次迁齐声明、写入和消费者后集中验证，任务未满足全部合同则保持未勾选。
+目录创建、上传接受、原件/预览、统一文件读写、Shell 占用、运行时代次与低频 GC 已纵向切换，blobs.py/queries.py 旧生产实现物理移除；schema.py、旧 SQL 和旧快照仅用于显式迁移或封存历史读取。后续优先补齐冻结历史/完整 Web/平台验收，再处理挂起操作终止、共享锁与关闭期限；每个批次迁齐调用方并验证后提交，未满足全部合同的任务保持未勾选。
 
 迁移本身须覆盖从产品生成的 schema 3 历史、相同内容重复上传、共享旧 blob 的多个 owner、已释放/已回收资源、终态深历史 fork、排队输入、非终态明确拒绝，以及切换前/切换点后崩溃与重复执行。核对原件字节、URI 身份、owner/claim、历史请求 hash 和备份；目录回收不删除历史 immutable asset。Agent 团队/委派专项验收继续 TODO；附件链实际必需的用户/内部消息接受和通用 fork 仍验证。

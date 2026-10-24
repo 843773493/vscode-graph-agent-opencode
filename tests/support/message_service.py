@@ -5,7 +5,11 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from app.core.identifier import create_prefixed_id
 from app.core.path_utils import get_session_path_resolver
+from app.domain.itemized.execution_admission import UserExecutionIdentity
+from app.domain.itemized.execution_queue import ExecutionQueueInput
+from app.schemas.internal_v2.message import MessageDTO
 from app.services.business.message_service import MessageService
 
 
@@ -25,4 +29,16 @@ def build_message_service(
     )
 
 
-__all__ = ["build_message_service"]
+def accept_queued_message(service: MessageService, message: MessageDTO) -> None:
+    """通过真实接受入口冻结现有消息与排队输入，不伪造执行状态。"""
+    identity = UserExecutionIdentity(
+        job_id=create_prefixed_id("job"), turn_id=create_prefixed_id("turn"),
+        admission_idempotency_key=create_prefixed_id("adm"),
+    )
+    service.accept_user_message(message, execution_identity=identity, queue_input=ExecutionQueueInput(
+        execution_binding=identity, message_id=message.message_id, agent_id="default", provider_id=None,
+        delivery_policy="after_turn", gateway_id=None, request_id=None, created_at=message.created_at.isoformat(),
+    ))
+
+
+__all__ = ["accept_queued_message", "build_message_service"]

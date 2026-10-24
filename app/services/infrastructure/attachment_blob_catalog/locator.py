@@ -101,6 +101,18 @@ def resolve_attachment_file(directory: Path, parts: tuple[str, ...]) -> Path:
     return _checked_descendant(directory, parts)
 
 
+def resolve_captured_directory_file(captured_root: Path, attachment_id: str, relative_path: str) -> Path:
+    """目录多文件快照进入原 capture 的文件树，不另建网络读取入口。"""
+    return resolve_attachment_file(resolve_captured_directory(captured_root, attachment_id), tuple(relative_path.split("/")))
+
+
+def resolve_captured_directory(captured_root: Path, attachment_id: str) -> Path:
+    """捕获目录根由 locator 单点定位，调用方不从某个文件倒推布局。"""
+    validate_attachment_directory_relative_locator("2000/01/01/" + attachment_id)
+    parts = ("attachment-files", attachment_id)
+    validate_path_budget(captured_root, "/".join(parts))
+    return _checked_descendant(captured_root, parts)
+
 
 def ingest_staging_relative_locator(ingest_id: str) -> str:
     """由软件生成的 ingest id 派生受控 staging relative locator。

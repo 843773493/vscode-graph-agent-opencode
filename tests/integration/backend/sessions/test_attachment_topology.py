@@ -8,6 +8,7 @@ import json
 import sqlite3
 from contextlib import closing
 from contextvars import ContextVar
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import httpx
@@ -27,8 +28,9 @@ from app.core.session_lifecycle_gate import (
     SessionDeletionPendingError,
     _CrossProcessFileLock,
 )
+from app.services.infrastructure.attachment_blob_catalog import store as store_module
 from app.services.infrastructure.attachment_blob_catalog.locator import (
-    resolve_blob_path,
+    resolve_attachment_directory,
     resolve_staging_path,
 )
 from tests.integration.backend.sessions.test_cold_rollout_history import (
@@ -101,39 +103,47 @@ async def test_message_attachment_commit_serializes_with_catalog_delete(
     locks: list[tuple[bool, bool]] = []
     upload = deletion = None
     acquire = _CrossProcessFileLock.__aenter__
-    method_name = "_acquire_pin" if boundary == "pin" else "_publish"
-    operation = getattr(store, method_name)
-    write_staging = store._write_staging
+    persist = store._persist_one
+    write_directory = store._write_directory
+    phase_observer = store_module.observe_phase
+    stage: ContextVar[str] = ContextVar("attachment_stage_under_test", default="pin")
 
     async def observed_acquire(lock):
         if lock.path == topology_path and lock._exclusive and asyncio.current_task() is deletion:
             delete_attempt.set()
         result = await acquire(lock)
-        if selected.get() and lock.path == session_path and lock._exclusive:
+        if selected.get() and stage.get() == boundary and lock.path == session_path and lock._exclusive:
             locks.append((_exclusive_available(topology_path), _exclusive_available(session_path)))
             if upload_first:
                 entered.set()
                 await release.wait()
         return result
 
-    async def selected_operation(**kwargs):
-        assert _exclusive_available(topology_path), "正文阶段不得继续持有 topology 锁"
-        if not upload_first:
+    async def selected_operation(*args, **kwargs):
+        if boundary == "pin" and not upload_first:
             entered.set()
             await release.wait()
         token = selected.set(True)
         try:
-            result = await operation(**kwargs)
+            return await persist(*args, **kwargs)
         finally:
             selected.reset(token)
-        committed.set()
-        await continue_upload.wait()
-        return result
+
+    async def observed_phase(operation_id, phase, *, details=None):
+        if phase == "attachment.ingest.directory_durable":
+            stage.set("publish")
+            if boundary == "publish" and not upload_first:
+                entered.set()
+                await release.wait()
+        await phase_observer(operation_id, phase, details=details)
+        if phase == ("attachment.ingest.pin_acquired" if boundary == "pin" else "attachment.ingest.published"):
+            committed.set()
+            await continue_upload.wait()
 
     def stage_outside_gates(*args, **kwargs):
         assert _exclusive_available(topology_path)
         assert _exclusive_available(session_path)
-        return write_staging(*args, **kwargs)
+        return write_directory(*args, **kwargs)
 
     async def observe(operation_id, phase, *, details=None):
         if operation_id == delete_key and phase == "deletion.catalog_deleting":
@@ -141,8 +151,9 @@ async def test_message_attachment_commit_serializes_with_catalog_delete(
             await continue_delete.wait()
 
     monkeypatch.setattr(_CrossProcessFileLock, "__aenter__", observed_acquire)
-    monkeypatch.setattr(store, method_name, selected_operation)
-    monkeypatch.setattr(store, "_write_staging", stage_outside_gates)
+    monkeypatch.setattr(store, "_persist_one", selected_operation)
+    monkeypatch.setattr(store, "_write_directory", stage_outside_gates)
+    monkeypatch.setattr("app.services.infrastructure.attachment_blob_catalog.store.observe_phase", observed_phase)
     monkeypatch.setattr("app.core.session_subtree_delete.observe_phase", observe)
     with workspace_context(container.workspace_id, case.runner.workspace, session_catalog=container.session_catalog):
         with closing(SessionControlStore(control_path, read_only=True)) as control:
@@ -180,12 +191,13 @@ async def test_message_attachment_commit_serializes_with_catalog_delete(
                     assert tuple(control.connection.iterdump()) == initial_leases
                 else:
                     assert len(pins) == 1 and pins[0].operation_kind == "attachment"
-            refs = store._catalog.list_owner_refs_for_session(session_id, active_only=True)
+            refs = store._catalog.connection.execute("SELECT * FROM attachment_directory_associations WHERE session_id=? AND state='active'", (session_id,)).fetchall()
             assert len(refs) == int(boundary == "publish" and upload_first)
             release.set()
             continue_upload.set()
-            with pytest.raises(SessionDeletionPendingError):
-                await asyncio.wait_for(upload, 5)
+            rejected = await asyncio.wait_for(upload, 5)
+            assert rejected.status_code == 409, rejected.text
+            assert rejected.json()["detail"]
             assert case.runner.saver.read_canonical_items(session_id, thread_id) == ()
             assert case.model_requests == []
             assert container.job_service._jobs == {}
@@ -194,14 +206,14 @@ async def test_message_attachment_commit_serializes_with_catalog_delete(
             continue_delete.set()
             await asyncio.wait_for(deletion, 10)
             assert not locator.exists()
-            assert store._catalog.list_owner_refs_for_session(session_id, active_only=True) == ()
+            assert store._catalog.connection.execute("SELECT * FROM attachment_directory_associations WHERE session_id=? AND state='active'", (session_id,)).fetchall() == []
             record = service.path_resolver.catalog_store.get_subtree_delete_record(delete_key)
             assert record.state == "completed" and record.drained_session_ids == (session_id,)
             isolated = store._sessions_root / ".deleting" / delete_key / session_id
             with closing(SessionControlStore(isolated / "session-control.sqlite", read_only=True)) as control:
                 assert control.list_non_terminal_leases() == ()
             if boundary == "pin" and not upload_first:
-                assert store._catalog.connection.execute("SELECT COUNT(*) FROM attachment_ingest_records").fetchone()[0] == 0
+                assert store._catalog.connection.execute("SELECT COUNT(*) FROM attachment_directory_ingests").fetchone()[0] == 0
         finally:
             release.set()
             continue_upload.set()
@@ -346,7 +358,7 @@ async def test_child_fork_reservation_rejects_catalog_delete_with_active_local_f
             ), 25)
             assert response.status_code == 409, response.text
             assert len(observed) == 1
-            assert store._catalog.list_owner_refs_for_session(parent_id, active_only=True) == ()
+            assert store._catalog.connection.execute("SELECT * FROM attachment_directory_associations WHERE session_id=? AND state='active'", (parent_id,)).fetchall() == []
             proceed.set()
             await asyncio.wait_for(deletion, 10)
             assert case.runner.saver.read_canonical_items(source_id, source_thread) == original_items
@@ -443,7 +455,7 @@ async def test_product_fork_reply_follows_attachment_commit_before_target_delete
         assert not observed["path"].exists()
         assert catalog.get_fork_source_capture(copy_operation_id=capture.copy_operation_id).state == "materialized"
         assert [row[0] for row in store._catalog.connection.execute(
-            "SELECT state FROM fork_attachment_claims WHERE copy_operation_id=?", (capture.copy_operation_id,),
+            "SELECT state FROM attachment_directory_fork_claims WHERE copy_operation_id=?", (capture.copy_operation_id,),
         )] == ["target_deleted"]
         retry = await fork_client.post(endpoint, json=request.model_dump(mode="json"))
         assert retry.status_code == 404, retry.text
@@ -461,10 +473,10 @@ def _upload_state(case: CommunicationCase, session: str) -> dict[str, list[dict[
             "pins": "SELECT * FROM session_operation_leases WHERE operation_kind='attachment' ORDER BY lease_id",
         },
         case.workspace / ".boxteam/attachments/catalog.sqlite": {
-            "ingests": "SELECT * FROM attachment_ingest_records ORDER BY ingest_id",
-            "claims": "SELECT * FROM attachment_blob_commit_claims ORDER BY digest",
-            "refs": "SELECT * FROM attachment_owner_refs ORDER BY attachment_id",
-            "blobs": "SELECT * FROM attachment_blobs ORDER BY blob_id",
+            "ingests": "SELECT * FROM attachment_directory_ingests ORDER BY ingest_id",
+            "refs": "SELECT * FROM attachment_directory_associations ORDER BY attachment_id,session_id,thread_id",
+            "directories": "SELECT * FROM attachment_directories ORDER BY attachment_id",
+            "files": "SELECT * FROM attachment_directory_files ORDER BY attachment_id,relative_path",
         },
         node / "rollout/index.sqlite": {
             "acceptances": "SELECT * FROM turn_acceptances ORDER BY created_at,turn_id",
@@ -477,9 +489,9 @@ def _upload_state(case: CommunicationCase, session: str) -> dict[str, list[dict[
     }
     state = {}
     for database, tables in queries.items():
-        if database == node / "rollout/index.sqlite":
+        if database in {node / "rollout/index.sqlite", case.workspace / ".boxteam/attachments/catalog.sqlite"}:
             # 上传接受前允许尚未物化 rollout；显式记录缺库，不能靠读探针创建业务库。
-            state["rollout_database"] = [{"exists": database.exists()}]
+            state["rollout_database" if database == node / "rollout/index.sqlite" else "attachment_database"] = [{"exists": database.exists()}]
             if not database.exists():
                 state.update({name: [] for name in tables})
                 continue
@@ -490,7 +502,7 @@ def _upload_state(case: CommunicationCase, session: str) -> dict[str, list[dict[
 
 
 @pytest.mark.parametrize("boundary", [
-    "pin_acquired", "preparing", "staging_durable", "hashed", "blob_committed", "published", "accepted",
+    "pin_acquired", "preparing", "directory_staged", "directory_renamed", "directory_durable", "published", "accepted",
 ])
 async def test_gateway_attachment_upload_recovers_after_process_loss(
     communication_case: CommunicationCase, boundary: str,
@@ -513,7 +525,7 @@ async def test_gateway_attachment_upload_recovers_after_process_loss(
     try:
         crash = await asyncio.to_thread(control.acknowledged_match, barrier)
         assert crash["pid"] == case.backend.process.pid
-        assert set(crash["details"]) == {"session_id", "thread_id", "message_id", "blob_id", "lease_id"}
+        assert set(crash["details"]) == {"session_id", "thread_id", "message_id", "lease_id"} | ({"attachment_id"} if boundary != "pin_acquired" else set())
         before = _upload_state(case, session)
         pin, = before["pins"]
         assert pin["state"] == "active"
@@ -524,25 +536,23 @@ async def test_gateway_attachment_upload_recovers_after_process_loss(
         published = boundary in {"published", "accepted"}
         assert before["rollout_database"] == [{"exists": accepted}]
         assert len(before["acceptances"]) == len(before["roots"]) == len(before["queue_identity"]) == int(accepted)
-        assert len(before["refs"]) == len(before["blobs"]) == int(published)
+        assert len(before["refs"]) == len(before["directories"]) == int(published)
         assert before["queue"] == ([{"job_id": before["queue_identity"][0]["job_id"], "phase": "queued"}] if accepted else [])
         attachments_root = case.workspace / ".boxteam/attachments"
         staging = None
         if boundary == "pin_acquired":
-            assert before["ingests"] == before["claims"] == []
+            assert before["ingests"] == before["files"] == []
         else:
             ingest, = before["ingests"]
             assert ingest["pin_lease_id"] == pin["lease_id"]
             assert ingest["owner_session_id"] == session and ingest["owner_thread_id"] == thread
-            assert ingest["state"] == ("published" if published else "hashed" if boundary in {"hashed", "blob_committed"} else "preparing")
+            assert ingest["state"] == ("published" if published else "durable" if boundary == "directory_durable" else "preparing")
             staging = resolve_staging_path(attachments_root, ingest["staging_relative_locator"])
-            assert staging.exists() == (boundary in {"staging_durable", "hashed"})
-        if before["claims"]:
-            claim, = before["claims"]
-            blob_path = resolve_blob_path(attachments_root, claim["final_relative_locator"])
-            assert blob_path.exists() == (boundary in {"blob_committed", "published", "accepted"})
-            if blob_path.exists():
-                assert blob_path.read_bytes() == body
+            assert staging.exists() == (boundary == "directory_staged")
+            directory = resolve_attachment_directory(attachments_root, ingest["relative_locator"])
+            assert directory.exists() == (boundary in {"directory_renamed", "directory_durable", "published", "accepted"})
+            if directory.exists():
+                assert (directory / "original/content").read_bytes() == body
         assert not (case.replay.artifacts / (call + ".json")).exists()
         case.record("upload-before-crash", {"boundary": boundary, "state": before, "ack": crash})
 
@@ -591,18 +601,44 @@ async def test_gateway_attachment_upload_recovers_after_process_loss(
         final = _upload_state(case, session)
         assert len(final["acceptances"]) == len(final["roots"]) == len(final["queue"]) == 1
         assert final["queue"] == [{"job_id": job_id, "phase": "terminal"}]
-        assert len(final["blobs"]) == len(final["claims"]) == 1
+        # 已发布但未接受的上传进入30天宽限期；重新上传拥有另一个独立目录。
+        assert len(final["directories"]) == len(final["files"]) == 1 + int(boundary == "published")
         assert len([ref for ref in final["refs"] if ref["state"] == "active"]) == 1
         assert all(row["state"] in {"failed", "completed"} for row in final["pins"])
         assert len(final["pins"]) == (1 if accepted else 2)
 
         await case.hard_restart()
-        assert _upload_state(case, session) == final
+        settled = _upload_state(case, session)
+        for name in final.keys() - {"refs", "directories"}:
+            assert settled[name] == final[name], name
+        released_at = {}
+        assert len(settled["refs"]) == len(final["refs"])
+        for previous, current in zip(final["refs"], settled["refs"], strict=True):
+            if previous["state"] == "active":
+                # 执行已终结，重启对账必须释放旧 runtime，不能永久保活原件。
+                assert previous["binding_token"].startswith("runtime:")
+                assert datetime.fromisoformat(current["updated_at"]) >= datetime.fromisoformat(previous["updated_at"])
+                assert current == {**previous, "state": "released", "updated_at": current["updated_at"]}
+                released_at[current["attachment_id"]] = current["updated_at"]
+            else:
+                assert current == previous
+        assert len(settled["directories"]) == len(final["directories"])
+        for previous, current in zip(final["directories"], settled["directories"], strict=True):
+            timestamp = released_at.get(previous["attachment_id"])
+            if timestamp is None:
+                assert current == previous
+            else:
+                assert previous["unattached_since"] is None and previous["gc_after"] is None
+                assert current == {**previous, "unattached_since": timestamp, "updated_at": timestamp,
+                                   "gc_after": (datetime.fromisoformat(timestamp) + timedelta(days=30)).isoformat()}
+        if accepted:
+            await case.hard_restart()
+            assert _upload_state(case, session) == settled
         content = await case.client.get(f"/api/v1/sessions/{session}/attachments/content", params={"file_id": file_id})
         assert content.status_code == 200 and content.content == body
         assert [event["operation_id"] for event in control.events if event["phase"] == "model.response_ready"] == [call]
         assert session_node.exists()
-        case.record("upload-terminal-after-second-restart", {"state": final, "history": history.json()})
+        case.record("upload-terminal-after-restarts", {"state": settled, "history": history.json()})
     finally:
         control_request(json.loads(control.environment["BOXTEAM_E2E_TEST_CONTROL"]), {
             "action": "release_match", "barrier_id": barrier,

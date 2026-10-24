@@ -24,6 +24,7 @@ from app.core.checkpoint_config import build_checkpoint_config
 from app.core.execution_admission_context import execution_admission_scope
 from app.core.identifier import create_prefixed_id, create_uuid_hex
 from app.core.job_event_bus import JobEventBus
+from app.core.phase_observer import observe_phase_sync
 from app.core.resource_uri import resource_display_uri
 from app.core.session_thread_context import session_thread_owner_scope
 from app.core.trace_middleware import (
@@ -336,7 +337,7 @@ def message_lifetime_app(message_lifetime_case):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("boundary", ["staging", "hashed", "renamed"])
+@pytest.mark.parametrize("boundary", ["directory_staged", "directory_renamed", "directory_durable"])
 async def test_message_http_retry_accepts_same_attachment_after_failed_upload(
     message_lifetime_case, message_lifetime_app, integration_workspace_root_path, monkeypatch, boundary,
 ):
@@ -350,25 +351,26 @@ async def test_message_http_retry_accepts_same_attachment_after_failed_upload(
             data_url="data:text/plain;base64," + base64.b64encode(body).decode(),
         )],
     )).model_dump(mode="json", by_alias=True)
-    method = "_write_staging" if boundary == "staging" else "_commit_staged_blob"
-    original = getattr(case.store, method)
+    def fail_sync(operation_id, phase, *, details=None):
+        if phase == "attachment.ingest." + boundary:
+            raise OSError("注入上传失败")
+        observe_phase_sync(operation_id, phase, details=details)
 
-    def fail_once(*args, **kwargs):
-        if boundary != "hashed":
-            original(*args, **kwargs)
-        raise OSError("注入上传失败")
+    async def fail_async(operation_id, phase, *, details=None):
+        fail_sync(operation_id, phase, details=details)
 
     transport = ASGITransport(app=message_lifetime_app, raise_app_exceptions=False)
     async with AsyncClient(transport=transport, base_url="http://workspace") as client:
         path = f"/api/v1/sessions/{session_id}/threads/{thread_id}/messages"
         with monkeypatch.context() as patch:
-            patch.setattr(case.store, method, fail_once)
+            patch.setattr("app.services.infrastructure.attachment_blob_catalog.store.observe_phase", fail_async)
+            patch.setattr("app.services.infrastructure.attachment_blob_catalog.store.observe_phase_sync", fail_sync)
             failed = await client.post(path, json=request)
         assert failed.status_code == 500, failed.text
         assert case.started_jobs == []
         assert case.saver.read_canonical_items(session_id, case.saver._storage.storage.main_thread_id(session_id)) == ()
         (old,) = case.store._catalog.connection.execute(
-            "SELECT * FROM attachment_ingest_records WHERE owner_session_id=?", (session_id,),
+            "SELECT * FROM attachment_directory_ingests WHERE owner_session_id=?", (session_id,),
         ).fetchall()
         old = dict(old)
         assert old["state"] == "aborted"
@@ -381,11 +383,11 @@ async def test_message_http_retry_accepts_same_attachment_after_failed_upload(
         assert accepted["thread_id"] == thread_id
         assert case.started_jobs == [accepted["message_id"]]
         assert dict(case.store._catalog.connection.execute(
-            "SELECT * FROM attachment_ingest_records WHERE ingest_idempotency_key=?",
+            "SELECT * FROM attachment_directory_ingests WHERE ingest_idempotency_key=?",
             (old["ingest_idempotency_key"],),
         ).fetchone()) == old
         records = case.store._catalog.connection.execute(
-            "SELECT state FROM attachment_ingest_records WHERE owner_session_id=?", (session_id,),
+            "SELECT state FROM attachment_directory_ingests WHERE owner_session_id=?", (session_id,),
         ).fetchall()
         assert sorted(row["state"] for row in records) == ["aborted", "published"]
         frozen = case.saver.accepted_user_message(
@@ -473,8 +475,10 @@ async def test_thread_delete_drains_message_before_releasing_real_attachment(
     deletion = None
     try:
         assert await asyncio.to_thread(paused.wait, 3)
-        (ref,) = case.store._catalog.list_owner_refs_for_session(session_id, active_only=True)
-        file_id = case.store.reference(session_id, ref.attachment_id)
+        ((attachment_id,),) = case.store._catalog.connection.execute(
+            "SELECT attachment_id FROM attachment_directory_associations WHERE session_id=? AND state='active'", (session_id,),
+        ).fetchall()
+        file_id = case.store.reference(attachment_id)
         assert case.store.read(session_id, file_id).data == BODY
         deletion = asyncio.create_task(case.delete_thread())
         with pytest.raises(TimeoutError):
@@ -498,7 +502,9 @@ async def test_thread_delete_drains_message_before_releasing_real_attachment(
         assert file_id in str(canonical.content)
         assert data == BODY
         assert case.started_jobs == ([] if cancel else [message.message_id])
-        assert case.store._catalog.list_owner_refs_for_session(session_id, active_only=True) == ()
+        assert case.store._catalog.connection.execute(
+            "SELECT attachment_id FROM attachment_directory_associations WHERE session_id=? AND state='active'", (session_id,),
+        ).fetchall() == []
         assert not case.saver._storage.storage.root(session_id, thread_id=thread_id).exists()
     finally:
         release.set()
@@ -550,7 +556,7 @@ async def test_native_attachment_ingress_freezes_one_uri_for_dispatch_and_cold_h
         assert generated[0]["metadata"]["file_id"] == expected_uri
         assert generated[0]["metadata"]["path"] == expected_uri
         assert str(root) not in json.dumps(generated, ensure_ascii=False)
-        assert frozen.response_metadata["attachments"] == [expected.model_dump(exclude={"data_url"})]
+        assert frozen.response_metadata["attachments"] == [expected.model_dump(exclude={"data_url", "directory_uri"})]
         assert str(root) not in json.dumps(frozen.response_metadata, ensure_ascii=False)
         # 新建 Saver，排除 MessageService DTO 或热消息缓存替持久化作证。
         with RolloutCheckpointSaver(root / ".boxteam" / "sessions", attachment_store=case.store) as cold:

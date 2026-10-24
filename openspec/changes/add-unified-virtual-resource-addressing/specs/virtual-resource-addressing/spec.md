@@ -1,5 +1,7 @@
 ## Purpose
 
+附件目录修订由 `add-managed-attachment-directories` 实施：本唯一 owner 已登记 workspace `attachments` kind 和目录/文件 child 模板，新上传只发布目录与原件 URI。旧 Session 附件 URI 仅供迁入后的历史身份解析，不再生成；完整验收状态见该 change，不新增另一套 URI parser。
+
 为软件内部与模型可见载荷中的资源引用建立**唯一**的寻址抽象与词汇：严格区分资源身份（ResourceIdentity）、资源 URI与真实路径（real path），把 `workspace`、`user`、`gateway`、`inline` 等作用域与其它工作区、其它 gateway 收敛到同一套寻址，并以顶层 gateway 之间的**星型解析**完成跨边界定位。本 capability 是这套抽象、scope 闭集、scope_id 语义表、URI 语法、kind 闭集与拒绝码登记处的唯一 owner。
 
 **契约版本**：本 capability 采用**契约修正 v2**（保留既有段序，`resources` 为保留固定段，`scope_id` 对**所有** scope 都必填），并已依据**仓库内受版本控制的事实源**（`app/core/resource_uri.py` 与 `app/services/infrastructure/resource_platform/virtual_resources/` 下的 `resolver.py`、`values.py` 三处逐字取值，关键取值已内联在本 spec 各处；不引用任何 `out/tests/temp/**` 临时产物）**定稿** scope 闭集、scope_id 语义、kind 闭集与拒绝码登记。`memory` 已确证**不是 URI scope**，MUST NOT 出现在闭集内。
@@ -55,7 +57,7 @@
 #### Scenario: 原生文件附件在消息创建时取得统一引用
 
 - **WHEN** 用户以工作区内相对路径、绝对路径或 files URI 添加同一文件附件
-- **THEN** 消息创建先经同一文件 owner 取得规范 URI，返回 DTO、Job 输入、SSE、canonical 附件字段及系统生成的模型标记使用同一引用；默认显示名取文件名，不复制原生输入路径。工作区外绝对路径沿附件既有能力明确拒绝，不改投工作区内同名文件；Session 附件继续由原 blob owner 校验和读取，不重建其正文或归属
+- **THEN** 消息创建先经同一文件 owner 取得规范 URI，返回 DTO、Job 输入、SSE、canonical 附件字段及系统生成的模型标记使用同一引用；默认显示名取文件名，不复制原生输入路径。工作区外绝对路径沿附件既有能力明确拒绝，不改投工作区内同名文件；旧 Session 附件由原附件目录 owner 按迁移来源绑定校验和读取，不重建其正文或归属
 - **AND** 用户主动写在消息正文中的路径字面量原样保留；预览失败继续明确报告资源身份与错误原因，最终文件访问的系统异常保留 errno 和服务端 cause，不把物理 locator 复制进持久化诊断
 
 #### Scenario: URI 允许悬空
@@ -410,7 +412,7 @@ boxteam://{gateway_authority?}/{scope}/{scope_id}/resources/{kind}/{...canonical
 
 ### Requirement: kind 闭集定稿且描述符闭集独立不可混用
 
-URI kind 闭集 MUST 为 `agent-spec` | `skills` | `config` | `session` | `files` | `workspace` | `folder`。`files` 用于 `workspace` scope 的文件树根 `boxteam://{gateway_authority?}/workspace/{workspace_id}/resources/files/root`，以及 requirement「原生目录根绑定必须由目标 Gateway 唯一持有」登记的 `gateway` scope 原生目录根；`workspace`/`folder` 沿用现行领域导航模板。config 定位配置逻辑来源，session 定位领域对象或由原 owner 公布的产物引用，二者不得被文件工具自行解释成私有目录。
+URI kind 闭集 MUST 为 `agent-spec` | `skills` | `config` | `session` | `files` | `attachments` | `workspace` | `folder`。`attachments` 只允许 workspace scope，目录根为 `boxteam://{gateway_authority?}/workspace/{workspace_id}/resources/attachments/{attachment_id}`，其后按同一文件路径段规则访问 child；原件与预览只读，派生区复用原文件 owner 的写入能力。`files` 用于 `workspace` scope 的文件树根 `boxteam://{gateway_authority?}/workspace/{workspace_id}/resources/files/root`，以及 requirement「原生目录根绑定必须由目标 Gateway 唯一持有」登记的 `gateway` scope 原生目录根；`workspace`/`folder` 沿用现行领域导航模板。config 定位配置逻辑来源，session 定位领域对象或由原 owner 公布的产物引用，二者不得被文件工具自行解释成私有目录。
 
 语法 kind 与语义来源描述符 kind MUST 分开：描述符仍只有 `agent-spec`/`skills`，普通 files 导航不会创建来源描述符。后续扩展必须先在本 owner 更新模板和能力，不存在通用未知 kind fallback；旧 memory 两点式仍拒绝。
 
@@ -433,7 +435,7 @@ URI kind 闭集 MUST 为 `agent-spec` | `skills` | `config` | `session` | `files
 
 资源根 MUST 公布 `resource_shape=directory|file|domain_object` 和允许的 operations。仅 directory 根或其真实目录子节点、且公布 child path 规则时可追加相对文件段；file 节点不可追加子路径，domain_object 按 owner 给出的引用、结构化 view 和领域操作访问。导航能力不等于写权限；固定修订文件和受 owner 管理的产物不可由通用写工具覆盖。根定位和读取必须校验实际 containment，越界 symlink 不得成为访问另一根的后门。 工作区 files 根也不得绕过业务 owner 导航或修改其私有存储（例如 .boxteam 下的会话、catalog、checkpoint 和运行状态）；这类路径按 owner 能力拒绝，不以禁止所有点号目录代替该边界。
 
-技能包根为 `.../resources/skills/{name}`，name 仍是 catalog 的身份段；其后是文件路径段，可定位 SKILL.md、references、scripts 和其它真实多层文件。工作区文件树使用本 owner 登记的 files/root 根。agent-spec 和 config 的现有逻辑地址是单文件引用；session/assembly 是领域对象，附件与工具结果由各自 owner 在 `session/{session_id}/attachments/{attachment_id}` 和 `session/{session_id}/tool-results/{result_id}` 模板下公布单文件引用（各段均是原业务身份，非文件路径；完整前缀仍遵循统一 scope/authority 语法），不公开底层私有存储树。根名与 URI 模板由本 owner 固定登记，不运行动态插件注册。
+技能包根为 `.../resources/skills/{name}`，name 仍是 catalog 的身份段；其后是文件路径段，可定位 SKILL.md、references、scripts 和其它真实多层文件。工作区文件树使用本 owner 登记的 files/root 根。附件目录使用本 owner 登记的 workspace attachments 根；原件为其 `original/content` child，预览和处理结果仍在同一根内。agent-spec 和 config 的现有逻辑地址是单文件引用；session/assembly 是领域对象，工具结果由原 owner 在 `session/{session_id}/tool-results/{result_id}` 模板下公布单文件引用。旧 `session/{session_id}/attachments/{attachment_id}` 模板仅保留封存历史解析，各身份段不是任意文件路径，不用于新上传；全部模板遵循统一 scope/authority 语法，不公开底层私有存储树。根名与 URI 模板由本 owner 固定登记，不运行动态插件注册。
 
 #### Scenario: 目录结果可继续访问
 

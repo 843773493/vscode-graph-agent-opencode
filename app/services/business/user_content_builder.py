@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from html import escape
 from pathlib import Path
 
+from app.core.resource_uri import file_uri_child
 from app.schemas.internal_v2.message import AttachmentRef
 from app.services.infrastructure.attachment_content_service import (
     SUPPORTED_VIDEO_MIME_TYPES,
@@ -177,6 +178,12 @@ class UserContentBuilder:
                 "content_type": content_type,
                 "preview_status": preview_status,
             }
+            if attachment.directory_uri is not None:
+                manifest_attributes.update(
+                    directory_uri=attachment.directory_uri,
+                    output_directory=file_uri_child(attachment.directory_uri, "derived"),
+                    processing="保留原件，使用现有文件工具或 Shell 处理，输出写入新文件或子目录",
+                )
             if preview_error:
                 manifest_attributes["preview_error"] = preview_error
             manifest = " ".join(
@@ -222,6 +229,8 @@ class UserContentBuilder:
             "content_type": content_type,
             "preview_status": preview_status,
         }
+        if attachment.directory_uri is not None:
+            metadata["directory_uri"] = attachment.directory_uri
         if variant is not None:
             metadata["variant"] = variant
         return metadata

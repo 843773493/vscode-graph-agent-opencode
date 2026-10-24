@@ -18,7 +18,6 @@ from pydantic import ValidationError
 from app.core.identifier import create_prefixed_id
 from app.core.resource_uri import (
     parse_resource_uri,
-    parse_session_artifact_uri,
     parse_session_thread_uri,
     resource_display_uri,
     thread_resource_uri,
@@ -29,9 +28,8 @@ from app.services.business.session_context_resource import (
     workspace_session_inventory_uri,
 )
 from app.services.infrastructure.attachment_blob_catalog.locator import (
-    fork_import_ingest_id,
-    ingest_staging_relative_locator,
-    resolve_staging_path,
+    resolve_attachment_directory,
+    resolve_captured_directory,
 )
 from app.testing.model_stream import build_cassette, chat_completion_frames
 from tests.harness.python.run_context import TestRunContext
@@ -451,7 +449,7 @@ def _attachment_claims(node: CommunicationNode, key: str) -> list[dict[str, obje
     with sqlite3.connect(database.as_uri() + "?mode=ro", uri=True) as connection:
         connection.row_factory = sqlite3.Row
         rows = connection.execute(
-            "SELECT * FROM fork_attachment_claims WHERE copy_operation_id=? ORDER BY claim_id", (key,),
+            "SELECT * FROM attachment_directory_fork_claims WHERE copy_operation_id=? ORDER BY claim_id", (key,),
         ).fetchall()
     return [dict(row) for row in rows]
 
@@ -510,8 +508,8 @@ async def test_same_backend_two_gateway_routes_fork_and_cold_replay(
     (artifacts / "same-owner-request.json").write_text(json.dumps(request, ensure_ascii=False, indent=2) + "\n")
     source_database = source.workspace / ".boxteam/attachments/catalog.sqlite"
     with sqlite3.connect(source_database.as_uri() + "?mode=ro", uri=True) as connection:
-        source_blobs = connection.execute("SELECT * FROM attachment_blobs ORDER BY blob_id").fetchall()
-        source_refs = connection.execute("SELECT * FROM attachment_owner_refs ORDER BY owner_ref_id").fetchall()
+        source_directories = connection.execute("SELECT attachment_id,relative_locator,availability,protection,created_at,retention_until FROM attachment_directories ORDER BY attachment_id").fetchall()
+        source_refs = connection.execute("SELECT attachment_id,session_id,thread_id,created_at FROM attachment_directory_associations ORDER BY attachment_id,session_id,thread_id").fetchall()
     key = "fork-" + hashlib.sha256(request["idempotency_key"].encode()).hexdigest()
     session_node = await target.session_node(session_id)
     child_node = session_node if creation_kind == "new_child_thread" else None
@@ -562,7 +560,7 @@ async def test_same_backend_two_gateway_routes_fork_and_cold_replay(
     assert published["export_release"] is None
     assert len(published["resources"]) == 1
     resource = published["resources"][0]
-    assert resource["action"] == ("reuse_reference" if creation_kind == "new_child_thread" else "retain_reference")
+    assert resource["action"] == "reuse_reference"
     assert resource["availability"] == "available"
     capture = _capture_record(target, key)
     assert capture is not None and capture["state"] == "materialized"
@@ -573,20 +571,18 @@ async def test_same_backend_two_gateway_routes_fork_and_cold_replay(
     assert "source_target_creation_preimage_hash" not in capture["request_json"]
     assert capture["export_release_state"] is None
     claims = _attachment_claims(target, key)
-    if creation_kind == "new_child_thread":
-        assert claims == []
-    else:
-        assert len(claims) == 1 and claims[0]["state"] == "committed"
+    assert len(claims) == 1 and claims[0]["state"] == "committed"
     assert not (target.workspace / ".boxteam/navigation" / capture["snapshot_relative_locator"]).exists()
     creation = _creation_record(target, key, child_node)
     with sqlite3.connect(source_database.as_uri() + "?mode=ro", uri=True) as connection:
-        assert connection.execute("SELECT * FROM attachment_blobs ORDER BY blob_id").fetchall() == source_blobs
-        refs = connection.execute("SELECT * FROM attachment_owner_refs ORDER BY owner_ref_id").fetchall()
+        assert connection.execute("SELECT attachment_id,relative_locator,availability,protection,created_at,retention_until FROM attachment_directories ORDER BY attachment_id").fetchall() == source_directories
+        refs = connection.execute("SELECT attachment_id,session_id,thread_id,created_at FROM attachment_directory_associations ORDER BY attachment_id,session_id,thread_id").fetchall()
     assert all(row in refs for row in source_refs)
-    assert len(refs) == len(source_refs) + (creation_kind == "new_session_main")
+    assert len(refs) == len(source_refs) + 1
+    assert (claims[0]["target_attachment_id"], target_session_id, target_thread_id) in {row[:3] for row in refs}
     if creation_kind == "new_child_thread":
         with sqlite3.connect((session_node / "session-control.sqlite").as_uri() + "?mode=ro", uri=True) as connection:
-            assert connection.execute("SELECT * FROM copy_attachment_settlements WHERE copy_operation_id=?", (key,)).fetchall() == []
+            assert connection.execute("SELECT state,target_thread_id FROM copy_attachment_settlements WHERE copy_operation_id=?", (key,)).fetchall() == [("committed", target_thread_id)]
     assert creation["state"] == "published"
     assert creation["request_intent_json"] == preparing["request_intent_json"]
     assert creation["preimage_hash"] == preparing["preimage_hash"]
@@ -736,14 +732,18 @@ async def test_real_b_to_c_full_copy_cold_read_and_new_input_with_source_offline
         source_capture = _capture_record(source, key)
         capture_root = source.workspace / ".boxteam/navigation" / source_capture["snapshot_relative_locator"]
         marker = json.loads((capture_root / "captured.json").read_bytes())
-        assert marker["schema"] == "source-copy-snapshot:v3"
+        assert marker["schema"] == "source-copy-snapshot:v4"
         (snapshot,) = marker["attachments"]
-        frozen_file = capture_root / source_session_id / "attachment-files" / snapshot["blob_id"]
+        frozen_file = resolve_captured_directory(capture_root / source_session_id, snapshot["source_attachment_id"]) / "original/content"
         assert frozen_file.read_bytes() == attachment_body
-        live = source.workspace / ".boxteam/attachments" / snapshot["relative_locator"]
+        database = source.workspace / ".boxteam/attachments/catalog.sqlite"
+        with sqlite3.connect(database.as_uri() + "?mode=ro", uri=True) as connection:
+            (locator,) = connection.execute("SELECT relative_locator FROM attachment_directories WHERE attachment_id=?", (snapshot["source_attachment_id"],)).fetchone()
+        live = resolve_attachment_directory(source.workspace / ".boxteam/attachments", locator) / "original/content"
         assert frozen_file.stat().st_ino != live.stat().st_ino
         # 关键状态由真实上传/执行/fork 生成；在 marker 发布后注入来源原件丢失故障。
         hidden = live.with_name(live.name + ".fault-hidden")
+        live.parent.chmod(0o700)
         live.rename(hidden)
         control.release(key, phase)
         response = await deadline.wait(fork_call, "fork_from_frozen_attachment")
@@ -772,16 +772,25 @@ async def test_real_b_to_c_full_copy_cold_read_and_new_input_with_source_offline
     assert attachment_result["resource_uri"] == attachment_source["resource_uri"]
     assert attachment_result["action"] == "copy_snapshot" and attachment_result["availability"] == "available"
     target_file_id = attachment_result["target_uri"]
-    assert parse_session_artifact_uri(target_file_id).tail_segments[:2] == (target_session_id, "attachments")
+    target_file = parse_resource_uri(target_file_id)
+    assert (target_file.scope_id, target_file.kind, target_file.tail_segments[1:]) == (target.workspace_id, "attachments", ("original", "content"))
     attachment_response = await target.client.get(f"/api/v1/sessions/{target_session_id}/attachments/content", params={
         "file_id": target_file_id, "variant": "original",
     })
     assert attachment_response.status_code == 200, attachment_response.text
     assert attachment_response.content == attachment_body
     key = "fork-" + hashlib.sha256(request["idempotency_key"].encode()).hexdigest()
-    assert _attachment_claims(source, key) == []
+    source_claims = _attachment_claims(source, key)
+    assert len(source_claims) == 1
+    source_claim = source_claims[0]
+    assert (source_claim["state"], source_claim["export_released"]) == ("prepared", 1)
     target_claims = _attachment_claims(target, key)
     assert len(target_claims) == 1 and target_claims[0]["state"] == "committed"
+    # 来源保留冻结回执但不再保活；目标提交与原 claim 的身份及正文必须完全相同。
+    assert {field: value for field, value in source_claim.items() if field not in {"state", "export_released", "created_at", "updated_at"}} == {
+        field: value for field, value in target_claims[0].items() if field not in {"state", "export_released", "created_at", "updated_at"}
+    }
+    assert target_claims[0]["export_released"] == 0
     assert (target_claims[0]["target_session_id"], target_claims[0]["target_thread_id"]) == (
         target_session_id, published["thread_id"],
     )
@@ -864,8 +873,8 @@ async def test_real_b_to_c_full_copy_cold_read_and_new_input_with_source_offline
     database = target.workspace / ".boxteam/attachments/catalog.sqlite"
     with sqlite3.connect(database.as_uri() + "?mode=ro", uri=True) as connection:
         assert connection.execute(
-            "SELECT state FROM attachment_owner_refs WHERE owner_ref_id=?",
-            (target_claims[0]["target_owner_ref_id"],),
+            "SELECT state FROM attachment_directory_associations WHERE attachment_id=? AND session_id=? AND thread_id=?",
+            (target_claims[0]["target_attachment_id"], target_session_id, published["thread_id"]),
         ).fetchall() == [("released",)]
     (artifacts / "target-deletion.json").write_text(json.dumps(deletion, ensure_ascii=False, indent=2) + "\n")
 
@@ -1072,7 +1081,8 @@ async def test_real_source_child_fork_cold_history_attachment_and_successor(
     assert _attachment_claims(source, key) == []
     assert len(published["resources"]) == 1
     target_file_id = published["resources"][0]["target_uri"]
-    assert parse_session_artifact_uri(target_file_id).tail_segments[:2] == (target_session_id, "attachments")
+    target_file = parse_resource_uri(target_file_id)
+    assert (target_file.scope_id, target_file.kind, target_file.tail_segments[1:]) == (target.workspace_id, "attachments", ("original", "content"))
     lifecycle = {"source_offline": source.restart_backend("kill"), "target_cold_restart": target.restart_backend()}
     assert lifecycle["target_cold_restart"]["before_pid"] != lifecycle["target_cold_restart"]["after_pid"]
     (artifacts / "source-child-backend-lifecycle.json").write_text(json.dumps(lifecycle, ensure_ascii=False, indent=2) + "\n")
@@ -1377,10 +1387,12 @@ async def test_real_fork_delivery_trace_survives_owner_failure(
             else:
                 target_capture = _capture_record(target, key)
                 (staged_claim,) = _attachment_claims(target, key)
-                assert staged_claim["state"] == "preparing"
+                assert staged_claim["state"] == "prepared"
                 snapshot = json.loads(staged_claim["snapshot_json"])
-                staged = resolve_staging_path(target.workspace / ".boxteam/attachments", ingest_staging_relative_locator(
-                    fork_import_ingest_id(key, snapshot["blob_id"])))
+                database = target.workspace / ".boxteam/attachments/catalog.sqlite"
+                with sqlite3.connect(database.as_uri() + "?mode=ro", uri=True) as connection:
+                    (locator,) = connection.execute("SELECT relative_locator FROM attachment_directories WHERE attachment_id=?", (snapshot["target_attachment_id"],)).fetchone()
+                staged = resolve_attachment_directory(target.workspace / ".boxteam/attachments", locator) / "original/content"
                 assert staged.read_bytes() == attachment_body
                 assert target_capture["snapshot_sha256"] is None and target_capture["marker_sha256"] is None
             deadline.set_stage("kill_target_backend_before_capture")
@@ -1493,7 +1505,8 @@ async def test_real_fork_delivery_trace_survives_owner_failure(
     assert attachment_result["resource_uri"] == attachment_source["resource_uri"]
     assert attachment_result["action"] == "copy_snapshot" and attachment_result["availability"] == "available"
     target_file_id = attachment_result["target_uri"]
-    assert parse_session_artifact_uri(target_file_id).tail_segments[:2] == (target_session_id, "attachments")
+    target_file = parse_resource_uri(target_file_id)
+    assert (target_file.scope_id, target_file.kind, target_file.tail_segments[1:]) == (target.workspace_id, "attachments", ("original", "content"))
     assert _attachment_claims(source, key) == []
     target_claims = _attachment_claims(target, key)
     assert len(target_claims) == 1 and target_claims[0]["state"] == "committed"

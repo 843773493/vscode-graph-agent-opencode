@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import os
 import sqlite3
@@ -13,6 +14,8 @@ from pathlib import Path
 
 import pytest
 
+from app.schemas.internal_v2.message import AttachmentRef, MessageCreateRequest
+from app.schemas.internal_v2.turn import TurnHistoryLoadRequest
 from app.services.infrastructure.attachment_blob_catalog.directory_schema import (
     require_directory_schema,
 )
@@ -39,6 +42,10 @@ from tests.integration.backend.sessions.test_attachment_offline_backup import (
 from tests.integration.backend.sessions.test_attachment_offline_catalog import (
     frozen_files,
 )
+from tests.integration.backend.sessions.test_navigation_worker_lifespan import (
+    _build_owned_container,
+)
+from tests.support.message_service import accept_queued_message
 
 
 @pytest.fixture
@@ -98,6 +105,75 @@ async def test_cli_install_retry_and_rollback_keep_history_and_both_directory_ve
     assert cli("rollback", "--workspace", str(case.workspace), "--backup", str(case.output)).returncode == 0
     with AttachmentMaintenanceLock(live, exclusive=False):
         pass
+
+
+async def test_installed_catalog_starts_product_owner_preserves_history_and_accepts_new_upload(
+    prepared_install: BackupCase, monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest,
+) -> None:
+    case = prepared_install
+    canonical_path = case.index_path.with_name("rollout.jsonl")
+    canonical_bytes = canonical_path.read_bytes()
+    canonical_message = next(
+        json.loads(line) for line in canonical_bytes.splitlines()
+        if json.loads(line).get("projection_identity", {}).get("projection_message_id") == case.message_id
+    )
+    (canonical_attachment,) = canonical_message["payload"]["attachments"]
+    legacy_file_id = canonical_attachment["file_id"]
+    assert "/session/" in legacy_file_id and "directory_uri" not in canonical_attachment
+    with closing(sqlite3.connect(case.index_path)) as connection:
+        queued = tuple(connection.execute(
+            "SELECT job_id,input_hash,input_json,phase,admission_commit_id FROM execution_queue ORDER BY admission_commit_id",
+        ))
+    assert len(queued) == 1 and queued[0][3] == "queued"
+    install.install_converted_catalog(case.workspace, case.output)
+    journal, live = assert_installed(case)
+    retired = live.with_name(".attachments-" + journal["backup_id"] + ".schema3")
+    offline = retired.with_name(retired.name + ".offline")
+    retired.rename(offline)
+    try:
+        monkeypatch.setenv("WORKSPACE_ROOT", str(case.workspace))
+        container = _build_owned_container(case.workspace, monkeypatch, request)
+        store = container.attachment_blob_store
+        assert store._catalog.connection.execute("PRAGMA user_version").fetchone()[0] == 4
+        history = container.checkpointer.load_history(case.session_id, case.thread_id, TurnHistoryLoadRequest(direction="tail"))
+        original = next(message for turn in history.items for message in turn.user_messages if message.message_id == case.message_id)
+        (reference,) = original.attachments
+        assert reference.directory_uri is not None and reference.file_id == reference.directory_uri + "/original/content"
+        assert reference.availability == "available"
+        assert reference.name == canonical_attachment["name"] and reference.content_type == canonical_attachment["content_type"]
+        assert store.read(case.session_id, legacy_file_id, owner_thread_id=case.thread_id).data == BODY
+        assert store.read(case.session_id, reference.file_id, owner_thread_id=case.thread_id).data == BODY
+        assert canonical_path.read_bytes() == canonical_bytes
+        with closing(sqlite3.connect(case.index_path)) as connection:
+            assert tuple(connection.execute("SELECT item_id, content_hash FROM item_catalog ORDER BY item_sequence")) == case.canonical_items
+        new = await container.message_service.create(case.session_id, MessageCreateRequest(
+            content="迁移后继续上传", attachments=[AttachmentRef(
+                file_id="inline:new.txt", name="new.txt", content_type="text/plain",
+                data_url="data:text/plain;base64," + base64.b64encode(BODY).decode(),
+            )],
+        ))
+        accept_queued_message(container.message_service, new)
+        history = container.checkpointer.load_history(case.session_id, case.thread_id, TurnHistoryLoadRequest(direction="tail"))
+        restored = next(message for turn in history.items for message in turn.user_messages if message.message_id == new.message_id)
+        assert [attachment.model_dump(mode="json", exclude_none=True, exclude={"availability"}) for attachment in restored.attachments] == [
+            attachment.model_dump(mode="json", exclude_none=True, exclude={"data_url"}) for attachment in new.attachments
+        ]
+        (created,) = restored.attachments
+        assert created.availability == "available"
+        assert created.directory_uri is not None and "/resources/attachments/" in created.file_id
+        assert created.file_id != reference.file_id
+        assert store.read(case.session_id, created.file_id, owner_thread_id=case.thread_id).data == BODY
+        assert canonical_path.read_bytes()[:len(canonical_bytes)] == canonical_bytes
+        with closing(sqlite3.connect(case.index_path)) as connection:
+            persisted = dict(connection.execute("SELECT item_id, content_hash FROM item_catalog"))
+            assert all(persisted[item_id] == digest for item_id, digest in case.canonical_items)
+            current_queue = tuple(connection.execute(
+                "SELECT job_id,input_hash,input_json,phase,admission_commit_id FROM execution_queue ORDER BY admission_commit_id",
+            ))
+            assert len(current_queue) == 2 and current_queue[:1] == queued
+            assert current_queue[-1][3] == "queued" and json.loads(current_queue[-1][2])["message_id"] == new.message_id
+    finally:
+        offline.rename(retired)
 
 
 _EXIT_AFTER_RENAME = '''

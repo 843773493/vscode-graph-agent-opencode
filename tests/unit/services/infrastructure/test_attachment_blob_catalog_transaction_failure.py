@@ -2,39 +2,49 @@ from __future__ import annotations
 
 import hashlib
 import sqlite3
+import threading
+from collections.abc import Iterator
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
 
+from app.core.session_lifecycle_gate import SessionOperationLease
 from app.services.infrastructure.attachment_blob_catalog.catalog import (
     AttachmentBlobCatalog,
 )
 
 
-def _catalog(tmp_path: Path) -> AttachmentBlobCatalog:
-    return AttachmentBlobCatalog(tmp_path / "catalog.sqlite")
+@pytest.fixture
+def catalog(tmp_path: Path) -> Iterator[AttachmentBlobCatalog]:
+    value = AttachmentBlobCatalog(tmp_path / "catalog.sqlite", workspace_id="a475d596-039d-48db-a14c-a0cbf7b4b58c")
+    try:
+        yield value
+    finally:
+        value.close()
 
 
 def _write_ingest_record(catalog: AttachmentBlobCatalog, suffix: str) -> None:
     ingest_id = f"ing_{hashlib.sha256(suffix.encode()).hexdigest()[:32]}"
-    catalog.create_or_get_ingest_record(
-        ingest_idempotency_key=f"attkey_{suffix}",
-        ingest_id=ingest_id,
-        owner_session_id="ses_" + "a" * 32,
-        owner_thread_id="thr_" + "b" * 32,
-        pin_lease_id=f"lease_{suffix}",
-        pin_fencing_token=1,
-        pin_captured_generation=1,
-        preimage_hash="c" * 64,
-        staging_relative_locator=f".staging/{ingest_id}",
-        max_bytes=1024,
+    now = datetime.now(UTC)
+    catalog.create_ingest(
+        operation_id=f"attkey_{suffix}", ingest_id=ingest_id,
+        session_id="ses_" + "a" * 32, thread_id="thr_" + "b" * 32,
+        message_id="msg_" + "c" * 32,
+        pin=SessionOperationLease(
+            lease_id=f"lease_{suffix}", operation_kind="attachment_ingest", operation_identity=suffix,
+            preimage_hash="d" * 64, captured_lifecycle_generation=1, holder_generation=1,
+            fencing_token=1, state="active", revision=1, recovery_ref=None,
+            created_at=now.isoformat(), updated_at=now.isoformat(),
+        ),
+        digest=hashlib.sha256(suffix.encode()).hexdigest(), length=len(suffix),
+        file_name="probe.txt", mime_type="text/plain", now=now,
     )
 
 
 def test_commit_failure_rolls_back_and_allows_next_public_write(
-    tmp_path: Path,
+    catalog: AttachmentBlobCatalog,
 ) -> None:
-    catalog = _catalog(tmp_path)
     connection = catalog.connection
     connection.executescript(
         """
@@ -57,13 +67,12 @@ def test_commit_failure_rolls_back_and_allows_next_public_write(
     _write_ingest_record(catalog, "commit_recovery")
     assert connection.in_transaction is False
     assert connection.execute(
-        "SELECT count(*) FROM attachment_ingest_records"
+        "SELECT count(*) FROM attachment_directory_ingests"
     ).fetchone()[0] == 1
     catalog.close()
 
 
-def test_body_failure_rolls_back_and_allows_next_public_write(tmp_path: Path) -> None:
-    catalog = _catalog(tmp_path)
+def test_body_failure_rolls_back_and_allows_next_public_write(catalog: AttachmentBlobCatalog) -> None:
     connection = catalog.connection
     connection.execute("CREATE TABLE body_failure_probe (value TEXT)")
     failure = ValueError("body failure")
@@ -86,10 +95,9 @@ def test_body_failure_rolls_back_and_allows_next_public_write(tmp_path: Path) ->
 
 @pytest.mark.parametrize("close_fails", [False, True])
 def test_rollback_failure_preserves_original_and_isolates_catalog(
-    tmp_path: Path,
+    catalog: AttachmentBlobCatalog,
     close_fails: bool,
 ) -> None:
-    catalog = _catalog(tmp_path)
     connection = catalog.connection
     connection.execute("CREATE TABLE rollback_failure_probe (value TEXT)")
 
@@ -108,7 +116,7 @@ def test_rollback_failure_preserves_original_and_isolates_catalog(
                 raise OSError("close unavailable")
             connection.close()
 
-    catalog._connection = RollbackFailureBoundary()  # type: ignore[assignment]
+    catalog._connections[threading.get_ident()] = RollbackFailureBoundary()  # type: ignore[assignment]
     failure = ValueError("original body failure")
     try:
         with pytest.raises(ValueError) as caught, catalog.write_transaction() as transaction:
@@ -134,4 +142,5 @@ def test_rollback_failure_preserves_original_and_isolates_catalog(
         if close_fails:
             if connection.in_transaction:
                 connection.execute("ROLLBACK")
-            connection.close()
+            close_fails = False
+            catalog.close()

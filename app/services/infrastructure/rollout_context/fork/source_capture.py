@@ -22,9 +22,11 @@ from app.services.infrastructure.attachment_blob_catalog.blob_identity import (
 )
 from app.services.infrastructure.attachment_blob_catalog.locator import (
     resolve_captured_attachment,
+    resolve_captured_directory_file,
 )
 from app.services.infrastructure.attachment_blob_catalog.records import (
-    ForkAttachmentSnapshot,
+    ForkAttachmentDirectorySnapshot,
+    attachment_snapshot_from_payload,
 )
 from app.services.infrastructure.node_debug.session.fork import (
     NodeDebugSourceCopySnapshot,
@@ -73,7 +75,7 @@ def publish_captured_snapshot(record: ForkSourceCaptureRecord, snapshot: ForkSou
     """source guard 内写 marker；所有快照 bytes fsync 后原子 rename 并 fsync 目录。"""
     _verify_attachment_files(snapshot)
     payload = {
-        "schema": "source-copy-snapshot:v3", "state": "captured",
+        "schema": "source-copy-snapshot:v4" if any(isinstance(item, ForkAttachmentDirectorySnapshot) for item in snapshot.attachments) else "source-copy-snapshot:v3", "state": "captured",
         "copy_operation_id": record.copy_operation_id, "preimage_hash": record.preimage_hash,
         "source_snapshot_id": record.snapshot_id, "snapshot_sha256": snapshot.snapshot_sha256,
         "rollout": {
@@ -127,7 +129,7 @@ def read_captured_snapshot(sessions_root: Path, record: ForkSourceCaptureRecord)
     encoded = marker.read_bytes()
     marker_hash = hashlib.sha256(encoded).hexdigest()
     raw = json.loads(encoded)
-    if canonical_json_bytes(raw) != encoded or raw["schema"] not in {"source-copy-snapshot:v2", "source-copy-snapshot:v3"} or (
+    if canonical_json_bytes(raw) != encoded or raw["schema"] not in {"source-copy-snapshot:v2", "source-copy-snapshot:v3", "source-copy-snapshot:v4"} or (
         raw["state"], raw["copy_operation_id"], raw["preimage_hash"], raw["source_snapshot_id"],
     ) != ("captured", record.copy_operation_id, record.preimage_hash, record.snapshot_id):
         raise RuntimeError("fork captured marker identity/preimage 冲突")
@@ -167,11 +169,11 @@ def read_captured_snapshot(sessions_root: Path, record: ForkSourceCaptureRecord)
             manifest_sha256=rollout["manifest_sha256"], control_sha256=rollout["control_sha256"],
             source_lifecycle_generation=rollout["source_lifecycle_generation"],
         ),
-        attachments=tuple(ForkAttachmentSnapshot(**item) for item in raw["attachments"]),
+        attachments=tuple(attachment_snapshot_from_payload(item) for item in raw["attachments"]),
         node_debug=NodeDebugSourceCopySnapshot.from_payload(raw["node_debug"]) if raw["node_debug"] is not None else None,
     )
     # v2 仅保留旧封存载荷的读取，不从 live owner 补造其缺少的冻结文件。
-    if raw["schema"] == "source-copy-snapshot:v3":
+    if raw["schema"] in {"source-copy-snapshot:v3", "source-copy-snapshot:v4"}:
         _verify_attachment_files(snapshot)
     claim_ids = sorted(item.claim_id for item in snapshot.attachments if item.claim_id is not None)
     if claim_ids != raw["claim_ids"] or hashlib.sha256(canonical_json_bytes(claim_ids)).hexdigest() != raw["claim_manifest_sha256"] or (
@@ -187,6 +189,15 @@ def _verify_attachment_files(snapshot: ForkSourceSnapshot) -> None:
     root = snapshot.captured_root / "attachment-files"
     for attachment in snapshot.attachments:
         if attachment.availability != "available" or attachment.target_action != "copy_snapshot":
+            continue
+        if isinstance(attachment, ForkAttachmentDirectorySnapshot):
+            for file in attachment.files:
+                path = resolve_captured_directory_file(snapshot.captured_root, attachment.source_attachment_id, file.relative_path)
+                key = path.relative_to(root).as_posix()
+                row = ForkSnapshotFile(key, file.length, file.digest.removeprefix("sha256:"))
+                if key in expected and expected[key] != row:
+                    raise RuntimeError("fork 附件目录同一文件对应不同冻结版本")
+                expected[key] = row
             continue
         path = resolve_captured_attachment(snapshot.captured_root, attachment.blob_id)
         if digest_for_blob_id(attachment.blob_id) != attachment.digest:

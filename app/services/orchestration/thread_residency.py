@@ -15,6 +15,7 @@ from contextvars import Context
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Generic, Literal, Protocol, TypeAlias, TypeVar, cast
+from uuid import uuid4
 
 from app.core.lifecycle import LifetimeScope
 from app.core.phase_observer import observe_phase_sync
@@ -33,6 +34,9 @@ class ThreadUnloadBlocked(RuntimeError):
 #: 测试必须用 fake clock 推进到 29:59（仍 resident）与 30:00（cold-eligible）验证
 #: 边界，绝不缩短该常量。
 THREAD_IDLE_UNLOAD_SECONDS: float = 30 * 60
+
+#: 单个 idle unload 的扫描等待预算；到期不取消 owner 持有的真实清理任务。
+THREAD_IDLE_UNLOAD_WAIT_SECONDS: float = 30
 
 #: idle 计时的唯一时钟形态：单调秒。默认 ``time.monotonic``，测试注入可推进 fake。
 ResidencyClock: TypeAlias = Callable[[], float]
@@ -199,8 +203,10 @@ class ThreadResidencyTracker:
         self._closing = False
         self._blocker_sources: list[ResidencyBlockerSource] = []
         self._unload_listeners: list[Callable[[str, str, int], Awaitable[None]]] = []
+        self._acquire_listeners: list[Callable[[str, str, str], None]] = []
         self._states: dict[tuple[str, str], _ThreadResidencyState] = {}
         self._next_generation = 0
+        self._instance_id = uuid4().hex
 
     # ---- 装配期（app/container.py） ----
 
@@ -214,6 +220,24 @@ class ThreadResidencyTracker:
         self._blocker_sources.append(source)
 
     # ---- owner / 活动入口 ----
+
+    def runtime_binding_token(self, generation: int) -> str:
+        """持久关联使用进程实例与真实 generation，重启后不会碰撞。"""
+        if generation <= 0:
+            raise ValueError("runtime 关联必须使用已经物化的正 generation")
+        return f"runtime:{self._instance_id}:{generation}"
+
+    def is_current_runtime_binding(self, session_id: str, thread_id: str, token: str) -> bool:
+        state = self._states.get((session_id, thread_id))
+        return bool(
+            state is not None and state.runtime is not None
+            and self.is_current_generation(session_id, thread_id, state.runtime.generation)
+            and token == self.runtime_binding_token(state.runtime.generation)
+        )
+
+    def add_acquire_listener(self, listener: Callable[[str, str, str], None]) -> None:
+        """lease 发布前同步绑定领域资源；失败不增加使用计数，也不跨 await 留窗口。"""
+        self._acquire_listeners.append(listener)
 
     def add_unload_listener(
         self, listener: Callable[[str, str, int], Awaitable[None]],
@@ -297,6 +321,9 @@ class ThreadResidencyTracker:
                     ):
                         await asyncio.shield(self._start_runtime_unload(state, runtime))
                         continue
+                    token = self.runtime_binding_token(runtime.generation)
+                    for listener in self._acquire_listeners:
+                        listener(runtime.session_id, runtime.thread_id, token)
                     runtime.active_leases += 1
                     runtime.drained.clear()
                     state.unblocked_since = None
@@ -604,15 +631,28 @@ class ThreadResidencyTracker:
         return self._build_snapshot(state, blockers)
 
     async def sweep(self) -> tuple[ThreadResidencySnapshot, ...]:
-        """关闭全部 cold-eligible 的真实 scope；同代去重，失败保留 scope 并显式抛出。"""
+        """逐 Thread 清理；失败保留 owner，整批尝试后显式报告，供下一轮重试。"""
         fired: list[ThreadResidencySnapshot] = []
+        errors: list[Exception] = []
         for key in list(self._states):
             state = self._states.get(key)
             if state is None:
                 continue
-            snapshot = await self._sweep_thread(state)
+            try:
+                snapshot = await self._sweep_thread(state)
+            except Exception as error:  # noqa: BLE001 - 单项失败不饿死其它 owner，整批结束后抛出。
+                error.add_note(
+                    f"Thread 闲置清理失败: session_id={state.session_id} "
+                    f"thread_id={state.thread_id} generation={state.generation}"
+                )
+                errors.append(error)
+                continue
             if snapshot is not None:
                 fired.append(snapshot)
+        if len(errors) == 1:
+            raise errors[0]
+        if errors:
+            raise ExceptionGroup("Thread 闲置清理存在未收敛 owner", errors)
         return tuple(fired)
 
     async def _sweep_thread(
@@ -635,7 +675,19 @@ class ThreadResidencyTracker:
                 return None
             unload = self._start_runtime_unload(state, runtime)
             try:
-                await asyncio.shield(unload)
+                done, _ = await asyncio.wait(
+                    {unload}, timeout=THREAD_IDLE_UNLOAD_WAIT_SECONDS,
+                )
+                if not done:
+                    # TODO(add-managed-attachment-directories 5.4): 由 owner 核实挂起终止；
+                    # 等待超时不证明外部进程已停止，不能取消任务后重复发起释放。
+                    raise TimeoutError(
+                        f"Thread 闲置清理等待超过 {THREAD_IDLE_UNLOAD_WAIT_SECONDS:g} 秒；"
+                        "原卸载任务仍由 owner 持有，资源尚未释放: "
+                        f"session_id={state.session_id} thread_id={state.thread_id} "
+                        f"generation={state.generation}"
+                    )
+                unload.result()
             except ThreadUnloadBlocked:
                 return None
             return self._build_snapshot(state, blockers)

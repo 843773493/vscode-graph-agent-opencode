@@ -122,9 +122,9 @@ async def test_cli_prepares_independent_resources_and_complete_legacy_bindings(s
     assert frozen_files(case.output / "data") == source
     with closing(sqlite3.connect(case.workspace / ".boxteam/attachments/catalog.sqlite")) as connection:
         assert connection.execute("PRAGMA user_version").fetchone() == (3,)
-    # 该隔离目标尚未提供线上切换，旧 owner 必须拒绝把新结构当 schema 3 使用。
-    with pytest.raises(RuntimeError), closing(AttachmentBlobCatalog(path)) as online:
-        online.connection.execute("SELECT 1")
+    # 线上 owner 只接受新目录 catalog；同一数据库直接取得转换后的原件记录。
+    with closing(AttachmentBlobCatalog(path, workspace_id=response["workspace_id"])) as online:
+        assert online.connection.execute("SELECT count(*) FROM attachment_directories").fetchone()[0] == 2
 
 
 @pytest.mark.parametrize("state", ["released", "tombstoned", "preview"])

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
-from datetime import timedelta
 from pathlib import Path
 from threading import RLock
 from types import TracebackType
@@ -37,7 +36,7 @@ from app.core.path_utils import (
     workspace_context,
 )
 from app.core.phase_observer import observe_phase
-from app.core.resource_uri import parse_session_artifact_uri
+from app.core.resource_uri import parse_resource_uri
 from app.core.session_catalog_resolver import SessionCatalogPathResolver
 from app.core.session_control_primitives import CONTROL_DATABASE_NAME
 from app.core.session_control_store import SessionControlStore
@@ -361,6 +360,7 @@ class AppContainer:
     job_service: JobServiceProtocol
     message_service: MessageService
     attachment_blob_store: AttachmentBlobStore
+    external_resource_leases: ExternalResourceLeaseLedger
     runtime_service: RuntimeService
     goal_service: SessionGoalService
     goal_runtime_service: GoalRuntimeService
@@ -608,10 +608,11 @@ def _build_app_container(
         event_channel_service=job_event_bus.event_channel_service,
         startup_mount=startup_mount,
     )
-    # TODO：完成 schema 4 离线安装与唯一切换后，在此注入附件目录 owner。
+    attachment_blob_store = AttachmentBlobStore(resolved_workspace_root, path_resolver=session_path_resolver)
     workspace_service = WorkspaceService(
         config_service=config_service,
         workspace_root=resolved_workspace_root,
+        attachments=attachment_blob_store,
         native_directories=GatewayNativeDirectoryClient(
             workspace_id=workspace_id,
             connection=GatewayTransportConnection(
@@ -638,7 +639,6 @@ def _build_app_container(
         config_service=config_service,
     )
 
-    attachment_blob_store = AttachmentBlobStore(resolved_workspace_root, path_resolver=session_path_resolver)
     rollout_checkpoint_runtime = RolloutCheckpointRuntime(
         sessions_dir=resolved_sessions_root,
         attachment_store=attachment_blob_store,
@@ -710,11 +710,13 @@ def _build_app_container(
     artifact_outputs = ToolOutputStore(workspace_root=resolved_workspace_root)
 
     def read_artifact(uri: str, max_bytes: int) -> ResourceFileContent:
-        artifact = parse_session_artifact_uri(uri)
-        session_id = artifact.tail_segments[0]
-        if artifact.session_artifact_kind == "attachments":
+        artifact = parse_resource_uri(uri)
+        if artifact.attachment_id is not None:
+            session_id = artifact.tail_segments[0] if artifact.session_artifact_kind else None
             return attachment_blob_store.read(session_id, uri)
-        return artifact_outputs.read(session_id, uri, max_bytes)
+        if artifact.session_artifact_kind != "tool-results":
+            raise ValueError("产物读取必须指向附件或工具结果")
+        return artifact_outputs.read(artifact.tail_segments[0], uri, max_bytes)
 
     resource_platform = bootstrap_resource_platform(
         workspace_root=resolved_workspace_root,
@@ -739,8 +741,7 @@ def _build_app_container(
         local_token_supplier=get_gateway_local_token,
     ))
     terminal_resource_owner = TerminalResourceOwner(
-        # TODO: schema 4 目录 owner 唯一切换时接入附件准入；当前线上仍为 schema 3。
-        working_directories=None,
+        working_directories=attachment_blob_store,
         file_paths=workspace_service.file_paths,
         sessions=session_service, threads=session_path_resolver,
         transport=terminal_manager_client, leases=external_resource_leases,
@@ -781,6 +782,14 @@ def _build_app_container(
     # dispose/LifetimeScope 抽象；tracker 直接持有真实 thread generation scope。
     thread_residency_tracker.add_unload_listener(terminal_resource_owner.release_thread)
     thread_residency_tracker.add_unload_listener(browser_resource_owner.release_thread)
+    thread_residency_tracker.add_acquire_listener(attachment_blob_store.bind_thread_runtime)
+
+    async def release_attachment_runtime(session_id: str, thread_id: str, generation: int) -> None:
+        attachment_blob_store.release_runtime_binding(
+            session_id, thread_id, thread_residency_tracker.runtime_binding_token(generation), messages=checkpointer,
+        )
+
+    thread_residency_tracker.add_unload_listener(release_attachment_runtime)
     node_debug_service = NodeDebugService(
         workspace_root=resolved_workspace_root,
         file_paths=workspace_service.file_paths,
@@ -1012,9 +1021,9 @@ def _build_app_container(
             # 隔离：删除 owner 按 pin 阻断 canonical 使用、释放 reference 后
             # 才隔离 Session 节点，且不留下指向已删除 owner 的 reference。
             attachment_blob_store.release_session_references(session_id)
-            collected = await attachment_blob_store.collect_garbage(retention=timedelta(0))
+            collected = await attachment_blob_store.collect_garbage(leases=external_resource_leases)
             await observe_phase(session_id, "attachments.gc.completed", details={
-                "collected_blob_ids": list(collected),
+                "collected_attachment_ids": list(collected),
             })
 
         session_path_resolver.bind_fork_retention_release_callback(checkpointer.release_fork_retentions)
@@ -1082,6 +1091,7 @@ def _build_app_container(
         job_service=job_service,
         message_service=message_service,
         attachment_blob_store=attachment_blob_store,
+        external_resource_leases=external_resource_leases,
         runtime_service=runtime_service,
         goal_service=goal_service,
         goal_runtime_service=goal_runtime_service,

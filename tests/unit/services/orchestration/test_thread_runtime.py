@@ -13,6 +13,7 @@ from app.domain.itemized.execution_admission import ExecutionAdmission
 from app.domain.itemized.mutation_intents import MutationIntentOwner
 from app.services.orchestration.thread_residency import (
     THREAD_IDLE_UNLOAD_SECONDS,
+    THREAD_IDLE_UNLOAD_WAIT_SECONDS,
     ThreadResidencyTracker,
 )
 
@@ -55,6 +56,264 @@ def _admission(session_id: str, thread_id: str) -> ExecutionAdmission:
 
 def _tracker(clock: _FakeClock) -> ThreadResidencyTracker:
     return ThreadResidencyTracker(clock=clock, idle_timeout_seconds=30 * 60)
+
+
+async def test_runtime_binding_distinguishes_restart_and_rebinds_each_lease() -> None:
+    first, cold = _tracker(_FakeClock()), _tracker(_FakeClock())
+    seen: list[str] = []
+    first.add_acquire_listener(lambda _sid, _tid, token: seen.append(token))
+    pair = MutationIntentOwner("ses-a", "thread-a")
+    admission = _admission(pair.session_id, pair.thread_id)
+    lease = await first.acquire(pair, admission, "v1", lambda *_: object())
+    first_token = first.runtime_binding_token(lease.generation)
+    assert first.is_current_runtime_binding(pair.session_id, pair.thread_id, first_token)
+    lease.release()
+    second = await first.acquire(pair, admission, "v1", lambda *_: object())
+    assert seen == [first_token, first_token]
+    second.release()
+    restarted = await cold.acquire(pair, admission, "v1", lambda *_: object())
+    assert restarted.generation == lease.generation == 1
+    assert cold.runtime_binding_token(restarted.generation) != first_token
+    assert not cold.is_current_runtime_binding(pair.session_id, pair.thread_id, first_token)
+    restarted.release()
+    await first.close()
+    assert not first.is_current_runtime_binding(pair.session_id, pair.thread_id, first_token)
+    await cold.close()
+
+
+async def test_acquire_binding_failure_does_not_publish_or_leak_runtime_lease() -> None:
+    tracker = _tracker(_FakeClock())
+    reject = True
+    calls = []
+
+    def bind(sid: str, tid: str, token: str) -> None:
+        calls.append((sid, tid, token))
+        if reject:
+            raise OSError("关联写入未提交")
+
+    tracker.add_acquire_listener(bind)
+    pair = MutationIntentOwner("ses-a", "thread-a")
+    admission = _admission(pair.session_id, pair.thread_id)
+    with pytest.raises(OSError, match="关联写入未提交"):
+        await tracker.acquire(pair, admission, "v1", lambda *_: object())
+    assert tracker.snapshot(pair.session_id, pair.thread_id).execution_state == "idle"
+    reject = False
+    lease = await tracker.acquire(pair, admission, "v1", lambda *_: object())
+    assert lease.generation == 1 and calls[0] == calls[1]
+    lease.release()
+    await tracker.close()
+
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failed_threads", [("thread-a",), ("thread-a", "thread-b")])
+async def test_sweep_attempts_other_owners_before_reporting_and_retries_failed_scopes(
+    failed_threads: tuple[str, ...],
+) -> None:
+    clock = _FakeClock()
+    tracker = _tracker(clock)
+    scopes: dict[str, LifetimeScope] = {}
+    attempts: list[str] = []
+    failures = {thread_id: ConnectionError(f"资源回执丢失: {thread_id}") for thread_id in failed_threads}
+
+    async def release(session_id: str, thread_id: str, generation: int) -> None:
+        attempts.append(thread_id)
+        if attempts.count(thread_id) == 1 and thread_id in failures:
+            raise failures[thread_id]
+
+    def build(session_id: str, thread_id: str, scope: LifetimeScope) -> object:
+        scopes[thread_id] = scope
+        return object()
+
+    tracker.add_unload_listener(release)
+    for thread_id in ("thread-a", "thread-b", "thread-c"):
+        lease = await tracker.acquire(
+            MutationIntentOwner("ses-a", thread_id),
+            _admission("ses-a", thread_id), "config-v1", build,
+        )
+        lease.release()
+    clock.advance(THREAD_IDLE_UNLOAD_SECONDS)
+
+    expected_error = ConnectionError if len(failed_threads) == 1 else ExceptionGroup
+    with pytest.raises(expected_error) as captured:
+        await tracker.sweep()
+    reported = captured.value.exceptions if isinstance(captured.value, ExceptionGroup) else (captured.value,)
+    assert tuple(reported) == tuple(failures.values()), "必须保留每个 owner 的原始异常"
+    for thread_id, error in failures.items():
+        assert any(f"thread_id={thread_id}" in note and "session_id=ses-a" in note for note in error.__notes__)
+    assert attempts == ["thread-a", "thread-b", "thread-c"]
+    for thread_id, scope in scopes.items():
+        assert scope.state == ("open" if thread_id in failures else "closed")
+        assert tracker.snapshot("ses-a", thread_id).residency == (
+            "resident" if thread_id in failures else "cold"
+        )
+        if thread_id in failures:
+            assert tracker.snapshot("ses-a", thread_id).cold_eligible is True
+
+    recovered = await tracker.sweep()
+    assert {item.thread_id for item in recovered} == set(failed_threads)
+    assert attempts == ["thread-a", "thread-b", "thread-c", *failed_threads]
+    assert all(scope.state == "closed" for scope in scopes.values())
+    assert tracker._states == {}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("phase", ["listener", "scope"])
+@pytest.mark.parametrize("fails_later", [False, True])
+async def test_sweep_wait_budget_keeps_single_unload_and_other_threads_progress(
+    phase: str, fails_later: bool,
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
+) -> None:
+    clock = _FakeClock()
+    tracker = _tracker(clock)
+    entered, finish, deadline = asyncio.Event(), asyncio.Event(), asyncio.Event()
+    scopes: dict[str, LifetimeScope] = {}
+    attempts: list[str] = []
+    native_wait = asyncio.wait
+    wait_expired = False
+
+    async def release(thread_id: str) -> None:
+        attempts.append(thread_id)
+        if thread_id == "thread-a" and attempts.count(thread_id) == 1:
+            entered.set()
+            await finish.wait()
+            if fails_later:
+                raise ConnectionError("超时后收到真实清理失败回执")
+
+    async def listener(session_id: str, thread_id: str, generation: int) -> None:
+        if phase == "listener":
+            await release(thread_id)
+
+    def build(session_id: str, thread_id: str, scope: LifetimeScope) -> object:
+        scopes[thread_id] = scope
+        if phase == "scope":
+            scope.register(lambda: release(thread_id), label="受控释放")
+        return object()
+
+    async def controlled_wait(
+        tasks: set[asyncio.Task[None]], *, timeout: float,
+    ) -> tuple[set[asyncio.Task[None]], set[asyncio.Task[None]]]:
+        nonlocal wait_expired
+        assert timeout == THREAD_IDLE_UNLOAD_WAIT_SECONDS == 30
+        task, = tasks
+        if "thread-a:" in task.get_name() and not wait_expired:
+            # 外部触发期限到达，不缩短产品的等待预算或取消原清理任务。
+            await deadline.wait()
+            wait_expired = True
+            if not task.done():
+                return set(), tasks
+        return await native_wait(tasks, timeout=timeout)
+
+    monkeypatch.setattr("app.services.orchestration.thread_residency.asyncio.wait", controlled_wait)
+    tracker.add_unload_listener(listener)
+    generations: dict[str, int] = {}
+    for thread_id in ("thread-a", "thread-b"):
+        lease = await tracker.acquire(
+            MutationIntentOwner("ses-a", thread_id),
+            _admission("ses-a", thread_id), "config-v1", build,
+        )
+        generations[thread_id] = lease.generation
+        lease.release()
+    clock.advance(THREAD_IDLE_UNLOAD_SECONDS)
+    sweep = asyncio.create_task(tracker.sweep())
+    waiter = None
+    try:
+        await asyncio.wait_for(entered.wait(), timeout=5)
+        unload = tracker._states[("ses-a", "thread-a")].runtime_unload
+        assert unload is not None
+        deadline.set()
+        with pytest.raises(TimeoutError, match="原卸载任务仍由 owner 持有") as timed_out:
+            await asyncio.wait_for(sweep, timeout=5)
+        assert "thread_id=thread-a" in str(timed_out.value)
+        assert not unload.done()
+        assert tracker.snapshot("ses-a", "thread-a").residency == "unloading"
+        assert scopes["thread-a"].state != "closed"
+        assert scopes["thread-b"].state == "closed"
+        assert tracker.snapshot("ses-a", "thread-b").residency == "cold"
+        assert await tracker.sweep() == ()
+        assert attempts == ["thread-a", "thread-b"]
+        assert tracker._states[("ses-a", "thread-a")].runtime_unload is unload
+
+        waiter = asyncio.create_task(tracker.acquire(
+            MutationIntentOwner("ses-a", "thread-a"),
+            _admission("ses-a", "thread-a"), "config-v2", build,
+        ))
+        await asyncio.sleep(0)
+        assert not waiter.done(), "卸载超时不能允许新 execution 复用旧 runtime"
+        old_scope = scopes["thread-a"]
+        finish.set()
+        if fails_later:
+            expected_error = ConnectionError if phase == "listener" else ExceptionGroup
+            with pytest.raises(expected_error) as failure:
+                await asyncio.wait_for(asyncio.shield(unload), timeout=5)
+            with pytest.raises(type(failure.value)) as admission_failure:
+                await asyncio.wait_for(waiter, timeout=5)
+            assert admission_failure.value is failure.value
+            assert "超时后收到真实清理失败回执" in caplog.text
+            assert unload.get_name() in caplog.text
+            assert tracker.snapshot("ses-a", "thread-a").cold_eligible is True
+            await tracker.sweep()
+            assert attempts == ["thread-a", "thread-b", "thread-a"]
+        else:
+            next_lease = await asyncio.wait_for(waiter, timeout=5)
+            assert next_lease.generation > generations["thread-a"]
+            assert scopes["thread-a"] is not old_scope
+            next_lease.release()
+        assert old_scope.state == "closed"
+    finally:
+        deadline.set()
+        finish.set()
+        await asyncio.gather(sweep, *([waiter] if waiter is not None else []), return_exceptions=True)
+        pending = [state.runtime_unload for state in tracker._states.values() if state.runtime_unload is not None]
+        await asyncio.gather(*pending, return_exceptions=True)
+        await tracker.close()
+
+
+@pytest.mark.asyncio
+async def test_cancelling_sweep_keeps_original_unload_owned_until_close() -> None:
+    clock = _FakeClock()
+    tracker = _tracker(clock)
+    entered, finish = asyncio.Event(), asyncio.Event()
+    calls: list[int] = []
+    scopes: list[LifetimeScope] = []
+
+    async def listener(session_id: str, thread_id: str, generation: int) -> None:
+        calls.append(generation)
+        entered.set()
+        await finish.wait()
+
+    def build(session_id: str, thread_id: str, scope: LifetimeScope) -> object:
+        scopes.append(scope)
+        return object()
+
+    tracker.add_unload_listener(listener)
+    lease = await tracker.acquire(
+        MutationIntentOwner("ses-a", "thread-a"),
+        _admission("ses-a", "thread-a"), "config-v1", build,
+    )
+    generation = lease.generation
+    lease.release()
+    clock.advance(THREAD_IDLE_UNLOAD_SECONDS)
+    sweep = asyncio.create_task(tracker.sweep())
+    try:
+        await asyncio.wait_for(entered.wait(), timeout=5)
+        unload = tracker._states[("ses-a", "thread-a")].runtime_unload
+        assert unload is not None
+        sweep.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await sweep
+        assert not unload.done()
+        assert tracker.snapshot("ses-a", "thread-a").residency == "unloading"
+        finish.set()
+        await asyncio.wait_for(tracker.close(), timeout=5)
+        assert unload.done() and not unload.cancelled()
+        assert calls == [generation]
+        assert scopes[0].state == "closed"
+        assert tracker._states == {}
+    finally:
+        finish.set()
+        await asyncio.gather(sweep, return_exceptions=True)
+        await tracker.close()
 
 
 @pytest.mark.asyncio

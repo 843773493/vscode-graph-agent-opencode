@@ -1,27 +1,4 @@
-"""workspace 附件内容寻址 blob store 的写入/读取/恢复/GC 垂直链路（8.3 附件链）。
-
-写入是 pin 与 workspace ingest 之间的显式跨库 saga，**不假设两个 SQLite
-原子提交**，也不跨正文写入或模型执行持有 gate：
-
-1. 取得按 canonical session ID 互斥的 workspace `SessionLifecycleGate`，
-   在 gate 内确认 owner Session catalog/thread/fence 仍为同一 active
-   generation，并于 `session-control.sqlite` create-or-get 承担 operation
-   lease 的 durable `AttachmentOperationPin`（`operation_kind=attachment`），
-   冻结 generation、ingest operation、精确 session/thread 与 preimage；
-2. `catalog.sqlite` create-or-get `AttachmentIngestRecord(state=preparing)`，
-   冻结 pin identity、workspace/preimage、限制与受控 staging locator；
-3. 正文只写入 record 指定的 staging，完成有界写入、hash/length 与 durability barrier；
-4. catalog 事务内推进 record→`hashed` 并以 digest 唯一约束 create-or-get
-   `BlobCommitClaim`；
-5. 持有 digest 提交锁，把 staging 原子 rename 到 claim 冻结的最终 locator
-   并复验正文；后续上传可完成尚未落盘的同内容 claim，不改写其身份；
-6. 发布 availability/owner reference **必须再次取得同一 gate**，持锁期间
-   复验 pin 有效、fence 仍为 pin 捕获的 active generation、thread 未失效，
-   提交 attachment catalog 事务后才释放 gate 与 pin。
-
-reader 只按 catalog 冻结的 record 取受检 locator，绝不扫盘、绝不把调用方
-字符串拼成路径。同一 digest 的后续上传复用既有 blob 与首次 locator。
-"""
+"""附件目录上传、读取与回收的唯一链路；每次独立上传拥有独立可变目录。"""
 
 from __future__ import annotations
 
@@ -29,10 +6,9 @@ import base64
 import hashlib
 import mimetypes
 import os
-import threading
-from collections import OrderedDict
-from collections.abc import Sequence
-from datetime import UTC, datetime, timedelta
+from collections.abc import AsyncIterator, Callable, Sequence
+from contextlib import asynccontextmanager
+from datetime import UTC, datetime
 from io import BytesIO
 from pathlib import Path
 from urllib.parse import unquote_to_bytes
@@ -40,10 +16,16 @@ from urllib.parse import unquote_to_bytes
 from PIL import Image, ImageOps
 
 from app.abstractions.resource_file_content import ResourceFileContent
-from app.core.identifier import create_uuid_hex
+from app.core.atomic_fs import fsync_directory
+from app.core.file_permissions import restrict_private_path_access
 from app.core.path_utils import get_session_path_resolver
-from app.core.phase_observer import observe_phase
-from app.core.resource_uri import parse_session_artifact_uri, session_artifact_uri
+from app.core.phase_observer import observe_phase, observe_phase_sync
+from app.core.resource_uri import (
+    ParsedResourceUri,
+    file_uri_child,
+    parse_resource_uri,
+    resource_display_uri,
+)
 from app.core.session_catalog_resolver import SessionCatalogPathResolver
 from app.core.session_control_store import SessionControlStore
 from app.core.session_lifecycle_gate import (
@@ -51,502 +33,386 @@ from app.core.session_lifecycle_gate import (
     OperationHolderGate,
     SessionDeletionPendingError,
     SessionLifecycleGate,
-    SessionOperationLease,
 )
+from app.core.shielded_cleanup import run_sync_shielded
 from app.core.trace_middleware import get_current_gateway_id
 from app.core.workspace_identity import read_workspace_id
+from app.domain.itemized.hashing import canonical_json_bytes
 from app.schemas.internal_v2.message import AttachmentRef
-from app.services.infrastructure.attachment_blob_catalog.blob_identity import (
-    ATTACHMENT_ROOT_DIRECTORY_NAME,
-    BlobIdentity,
-    compute_blob_identity,
-)
 from app.services.infrastructure.attachment_blob_catalog.catalog import (
     CATALOG_DATABASE_NAME,
     AttachmentBlobCatalog,
-    AttachmentOwnerRef,
-    derive_attachment_id,
+    AttachmentDirectoryRetainedError,
+)
+from app.services.infrastructure.attachment_blob_catalog.directories import (
+    protect_original,
+    remove_directory,
+    verify_content,
 )
 from app.services.infrastructure.attachment_blob_catalog.fork_store import (
     ForkAttachmentStoreMixin,
 )
+from app.services.infrastructure.attachment_blob_catalog.legacy_references import (
+    resolve_legacy_attachment,
+)
 from app.services.infrastructure.attachment_blob_catalog.locator import (
-    ingest_staging_relative_locator,
-    resolve_blob_path,
+    resolve_attachment_directory,
+    resolve_attachment_file,
     resolve_staging_path,
 )
-from app.services.infrastructure.attachment_blob_catalog.queries import (
-    AttachmentBlobRetainedError,
+from app.services.infrastructure.attachment_blob_catalog.records import (
+    AttachmentFileVersion,
+    DirectoryIngestRecord,
 )
 from app.services.infrastructure.attachment_blob_catalog.recovery import (
     AttachmentIngestRecoveryMixin,
 )
+from app.services.infrastructure.external_resource_leases import (
+    ExternalResourceLeaseLedger,
+)
+from app.services.infrastructure.workspace_files.mutation_lock import (
+    workspace_file_mutation_lock,
+)
 
-__all__ = [
-    "ATTACHMENT_ROOT_DIRECTORY_NAME",
-    "DERIVED_DIRECTORY_NAME",
-    "MAX_ATTACHMENT_BYTES",
-    "AttachmentBlobStore",
-    "parse_logical_file_id",
-]
-
-DERIVED_DIRECTORY_NAME = ".derived"
+ATTACHMENT_ROOT_DIRECTORY_NAME = "attachments"
 MAX_ATTACHMENT_BYTES = 30 * 1024 * 1024
-_VERIFIED_BLOB_SIGNATURE_CACHE_SIZE = 256
-
-
-def _sha256_hex(text: str) -> str:
-    return hashlib.sha256(text.encode("utf-8")).hexdigest()
-
-
-def parse_logical_file_id(session_id: str, file_id: str) -> str:
-    """解析逻辑引用并返回 attachment_id；不属于该 session 即失败。"""
-    parsed = parse_session_artifact_uri(file_id)
-    if parsed.session_artifact_kind != "attachments" or parsed.tail_segments[0] != session_id:
-        raise ValueError("附件逻辑定位符不属于指定会话")
-    return parsed.tail_segments[2]
 
 
 class AttachmentBlobStore(ForkAttachmentStoreMixin, AttachmentIngestRecoveryMixin):
-    """workspace 级内容寻址附件 store（唯一权威是 catalog.sqlite）。"""
+    """原附件服务的目录实现；不再写入或读取旧 blob 表。"""
 
-    def __init__(
-        self,
-        workspace_root: Path,
-        *,
-        path_resolver: SessionCatalogPathResolver | None = None,
-    ) -> None:
+    def __init__(self, workspace_root: Path, *, path_resolver: SessionCatalogPathResolver | None = None,
+                 clock: Callable[[], datetime] = lambda: datetime.now(UTC)) -> None:
         self._workspace_root = workspace_root.expanduser().resolve()
-        self._verified_blob_signatures: OrderedDict[
-            tuple[str, str, str, int], tuple[int, int, int, int, int]
-        ] = OrderedDict()
-        self._verified_blob_signatures_lock = threading.Lock()
-        self._sessions_root = self._workspace_root / ".boxteam" / "sessions"
-        self._fork_imports = OperationHolderGate(self._sessions_root, namespace="attachment_fork_import")
-        self._blob_commits = OperationHolderGate(self._sessions_root, namespace="attachment_blob_commit")
-        self._attachments_root = (
-            self._workspace_root / ".boxteam" / ATTACHMENT_ROOT_DIRECTORY_NAME
-        )
-        self._catalog = AttachmentBlobCatalog(
-            self._attachments_root / CATALOG_DATABASE_NAME
-        )
-        self._path_resolver = path_resolver or get_session_path_resolver(
-            self._sessions_root
-        )
+        self.workspace_id = read_workspace_id(self._workspace_root)
+        self._clock = clock
+        self._sessions_root = self._workspace_root / ".boxteam/sessions"
+        self._attachments_root = self._workspace_root / ".boxteam/attachments"
+        self._catalog = AttachmentBlobCatalog(self._attachments_root / CATALOG_DATABASE_NAME, workspace_id=self.workspace_id)
+        self._path_resolver = path_resolver or get_session_path_resolver(self._sessions_root)
         self._gate = SessionLifecycleGate(self._sessions_root)
         self._topology_gate = NavigationTopologyGate(self._sessions_root)
         self.deletion_holder = OperationHolderGate(self._sessions_root, namespace="attachment_ingest")
-
-    def reference(self, session_id: str, attachment_id: str) -> str:
-        return session_artifact_uri(read_workspace_id(self._workspace_root), session_id, "attachments", attachment_id,
-                                    gateway_authority=get_current_gateway_id())
-
-    def _parse_logical_file_id(self, session_id: str, file_id: str) -> str:
-        parsed = parse_session_artifact_uri(file_id, local_gateway_id=get_current_gateway_id())
-        if parsed.gateway_authority is not None or parsed.scope_id != read_workspace_id(self._workspace_root):
-            raise ValueError("附件资源引用不属于本工作区 owner")
-        return parse_logical_file_id(session_id, file_id)
-
-    def _parse_canonical_attachment_id(self, session_id: str, file_id: str) -> str:
-        """解析已接受的历史引用；历史 Gateway 身份不充当本地正文访问路由。
-
-        调用方仍须用精确 catalog owner ref/pin 核验使用事实；外部请求继续走
-        _parse_logical_file_id 的当前 Gateway 校验，不能借此访问远端引用。
-        """
-        parsed = parse_session_artifact_uri(file_id)
-        if (
-            parsed.scope_id != read_workspace_id(self._workspace_root)
-            or parsed.session_artifact_kind != "attachments"
-            or parsed.tail_segments[0] != session_id
-        ):
-            raise ValueError("附件资源引用不属于本工作区 owner")
-        return parse_logical_file_id(session_id, file_id)
+        self._fork_imports = OperationHolderGate(self._sessions_root, namespace="attachment_fork_import")
+        self._directory_operations = OperationHolderGate(self._sessions_root, namespace="attachment_directory")
 
     def close(self) -> None:
-        """关闭 catalog 连接。"""
         self._catalog.close()
 
-    # ------------------------------------------------------------------
-    # 写入 saga
-    # ------------------------------------------------------------------
+    def directory_uri(self, attachment_id: str) -> str:
+        return resource_display_uri(scope="workspace", scope_id=self.workspace_id, kind="attachments", tail_segments=(attachment_id,), gateway_authority=get_current_gateway_id())
 
-    async def persist_inline(
-        self,
-        session_id: str,
-        attachments: Sequence[AttachmentRef],
-        *,
-        thread_id: str,
-        message_id: str,
-    ) -> list[AttachmentRef]:
-        """持久化带 `data_url` 的内联附件，返回逻辑引用。
+    def reference(self, attachment_id: str) -> str:
+        return file_uri_child(self.directory_uri(attachment_id), "original", "content")
 
-        调用方先冻结消息身份；pin 保留到该消息的 canonical 接受提交完成。
-        """
-        if not isinstance(message_id, str) or not message_id or ":" in message_id:
+    def reference_for_path(self, target: Path) -> str | None:
+        """仅按路径中的稳定 ID 核 catalog；不扫描日期桶或吸收未知目录。"""
+        if not target.is_relative_to(self._attachments_root):
+            return None
+        parts = target.relative_to(self._attachments_root).parts
+        if len(parts) < 4:
+            return None
+        record = self._catalog.get_directory(parts[3])
+        if record is None or tuple(record.relative_locator.split("/")) != parts[:4]:
+            return None
+        directory = resolve_attachment_directory(self._attachments_root, record.relative_locator)
+        resolve_attachment_file(directory, parts[4:])
+        return file_uri_child(self.directory_uri(record.attachment_id), *parts[4:])
+
+    def _resource_id(self, file_id: str, *, session_id: str | None, thread_id: str | None = None, canonical: bool = False) -> tuple[str, tuple[str, ...]]:
+        parsed = parse_resource_uri(file_id, local_gateway_id=parse_resource_uri(file_id).gateway_authority if canonical else get_current_gateway_id())
+        if session_id is not None and thread_id is not None:
+            snapshot = self._catalog.fork_attachment_snapshot_for_alias(
+                target_session_id=session_id, target_thread_id=thread_id, source_file_id=file_id,
+            )
+            if snapshot is not None:
+                target = parse_resource_uri(snapshot.target_file_id, local_gateway_id=get_current_gateway_id())
+                if target.scope != "workspace" or target.scope_id != self.workspace_id or (target.gateway_authority is not None and not canonical):
+                    raise ValueError("附件目录 alias 不属于本工作区 owner")
+                claim = self._catalog.connection.execute(
+                    "SELECT state FROM attachment_directory_fork_claims WHERE claim_id=?", (snapshot.claim_id,),
+                ).fetchone()
+                if snapshot.availability != "available" or claim is None or claim[0] != "committed":
+                    raise FileNotFoundError("历史附件没有已发布的目标目录")
+                children = parsed.tail_segments[1:] if parsed.kind == "attachments" else ("original", "content")
+                return snapshot.target_attachment_id, children
+        if parsed.kind == "attachments":
+            if parsed.scope != "workspace" or parsed.scope_id != self.workspace_id or (parsed.gateway_authority is not None and not canonical):
+                raise ValueError("附件目录 URI 不属于固定目标工作区")
+            return parsed.tail_segments[0], parsed.tail_segments[1:]
+        if parsed.session_artifact_kind != "attachments":
+            raise ValueError("附件引用必须指向目录文件或已迁移的旧历史附件")
+        if session_id is None:
+            raise ValueError("旧 Session 附件解析必须提供真实消费 Session")
+        if thread_id is None:
+            # 无消费 Thread 的原附件 HTTP 入口只能解析其精确本地旧 owner。
+            owner = self._catalog.connection.execute("SELECT source_thread_id FROM attachment_legacy_bindings WHERE attachment_id=? AND source_session_id=?", (parsed.tail_segments[2], session_id)).fetchone()
+            if owner is None:
+                raise FileNotFoundError("旧附件引用没有精确消费 owner")
+            thread_id = owner[0]
+        reference = resolve_legacy_attachment(self._catalog.connection, session_id=session_id, thread_id=thread_id, file_id=file_id, workspace_id=self.workspace_id, gateway_id=parse_resource_uri(file_id).gateway_authority if canonical else get_current_gateway_id())
+        if reference is None:
+            raise FileNotFoundError("旧附件引用没有迁入的目录来源绑定")
+        return reference.attachment_id, ("original", "content")
+
+    def _parse_canonical_attachment_id(self, session_id: str, file_id: str, *, thread_id: str | None = None) -> str:
+        return self._resource_id(file_id, session_id=session_id, thread_id=thread_id, canonical=True)[0]
+
+    def _parse_logical_file_id(self, session_id: str, file_id: str) -> str:
+        return self._resource_id(file_id, session_id=session_id)[0]
+
+    async def persist_inline(self, session_id: str, attachments: Sequence[AttachmentRef], *, thread_id: str, message_id: str) -> list[AttachmentRef]:
+        if not message_id or ":" in message_id:
             raise ValueError("附件上传必须绑定非空且不含冒号的 message_id")
-        if not attachments:
-            return []
         self._catalog.acquire_access()
-        persisted: list[AttachmentRef] = []
-        # 正文 I/O 只持长操作 holder；恢复和删除在 Session gate 外等待它退出。
+        persisted = []
         async with self.deletion_holder.lock_for(session_id, exclusive=False):
-            for attachment in attachments:
-                if not attachment.data_url:
-                    persisted.append(attachment)
-                    continue
-                persisted.append(await self._persist_one(session_id, thread_id, message_id, attachment))
+            for ordinal, attachment in enumerate(attachments):
+                if attachment.data_url:
+                    attachment = await self._persist_one(session_id, thread_id, message_id, ordinal, attachment)
+                else:
+                    await self._pin_reference(session_id, thread_id, message_id, ordinal, attachment)
+                persisted.append(attachment)
+            if persisted:
+                # 普通读取按工作区授权；消息上传完成仍须核对真实消费 Thread 的准入。
+                async with self._topology_gate.shared(), self._gate.exclusive(session_id):
+                    self._assert_session_active(session_id, thread_id)
         return persisted
 
-    async def _persist_one(
-        self, session_id: str, thread_id: str, message_id: str, attachment: AttachmentRef
-    ) -> AttachmentRef:
-        content_type, data = _parse_data_url(attachment.data_url or "")
-        declared_type = attachment.content_type or content_type
-        if declared_type != content_type:
-            raise ValueError(
-                "附件 content_type 与 data_url MIME 不一致: "
-                f"{declared_type!r} != {content_type!r}"
-            )
-        if len(data) > MAX_ATTACHMENT_BYTES:
-            raise ValueError(
-                f"附件超过 {MAX_ATTACHMENT_BYTES // (1024 * 1024)} MiB 限制"
-            )
-        identity = compute_blob_identity(data)
-        # 上传尝试与正文身份分开；失败尝试终态不可重开，同内容新上传仍可复用 blob。
-        idempotency_key = "attkey_" + create_uuid_hex(namespace="attachment_ingest")
-        ingest_id = "ing_" + _sha256_hex(idempotency_key)[:32]
-        staging_locator = ingest_staging_relative_locator(ingest_id)
-        preimage_hash = _sha256_hex(
-            f"{session_id}|{thread_id}|{message_id}|{identity.digest}|{identity.length}"
-        )
-
+    async def _pin_reference(self, session_id: str, thread_id: str, message_id: str, ordinal: int, attachment: AttachmentRef) -> None:
+        """既有 URI 输入也先取得原消息 pin，覆盖读正文到 canonical 接受的窗口。"""
+        if not attachment.file_id.startswith("boxteam://"):
+            return
+        parsed = parse_resource_uri(attachment.file_id, local_gateway_id=get_current_gateway_id())
+        if parsed.kind != "attachments" and parsed.session_artifact_kind != "attachments":
+            return
+        attachment_id, children = self._resource_id(attachment.file_id, session_id=session_id, thread_id=thread_id)
+        if not children:
+            raise IsADirectoryError("附件输入必须指向目录内的文件")
+        operation_id = "attref_" + hashlib.sha256(f"{session_id}|{thread_id}|{message_id}|{ordinal}".encode()).hexdigest()
+        preimage = hashlib.sha256(canonical_json_bytes([session_id, thread_id, message_id, operation_id, attachment_id, attachment.file_id])).hexdigest()
         control = self._open_control_store(session_id)
         try:
-            pin = await self._acquire_pin(
-                session_id=session_id,
-                thread_id=thread_id,
-                message_id=message_id,
-                control=control,
-                operation_identity=idempotency_key,
-                preimage_hash=preimage_hash,
-            )
-            phase_details = {
-                "session_id": session_id, "thread_id": thread_id, "message_id": message_id,
-                "blob_id": identity.blob_id, "lease_id": pin.lease_id,
-            }
-            await observe_phase(idempotency_key, "attachment.ingest.pin_acquired", details=phase_details)
-            record = self._catalog.create_or_get_ingest_record(
-                ingest_idempotency_key=idempotency_key,
-                ingest_id=ingest_id,
-                owner_session_id=session_id,
-                owner_thread_id=thread_id,
-                pin_lease_id=pin.lease_id,
-                pin_fencing_token=pin.fencing_token,
-                pin_captured_generation=pin.captured_lifecycle_generation,
-                preimage_hash=preimage_hash,
-                staging_relative_locator=staging_locator,
-                max_bytes=MAX_ATTACHMENT_BYTES,
-            )
-            await observe_phase(idempotency_key, "attachment.ingest.preparing", details=phase_details)
-            staging_path = resolve_staging_path(
-                self._attachments_root, record.staging_relative_locator
-            )
-            try:
-                self._write_staging(staging_path, data)
-                await observe_phase(idempotency_key, "attachment.ingest.staging_durable", details=phase_details)
-                async with self._blob_commits.lock_for(identity.blob_id):
-                    _record, claim = self._catalog.mark_ingest_hashed(
-                        ingest_idempotency_key=idempotency_key, identity=identity
-                    )
-                    await observe_phase(idempotency_key, "attachment.ingest.hashed", details=phase_details)
-                    blob = self._catalog.get_blob(identity.blob_id)
-                    if blob is None or blob.availability == "tombstoned":
-                        # 同内容 staging 可完成原 claim；首次日期、locator 和活 winner 不变。
-                        self._commit_staged_blob(
-                            staging_path=staging_path,
-                            final_path=resolve_blob_path(self._attachments_root, claim.final_relative_locator),
-                            identity=identity,
-                        )
-                    else:
-                        # 已发布正文损坏或丢失必须暴露，不能借重传静默修复。
-                        published_path = self._verified_blob_path(identity.blob_id, claim.final_relative_locator)
-                        self._verify_blob_content(published_path, identity.digest, identity.length, identity.blob_id)
-                        _remove_file(staging_path)
-                    await observe_phase(idempotency_key, "attachment.ingest.blob_committed", details=phase_details)
-                # hashed record 在 GC 事务中保活；释放正文锁后才取得 Session gate。
-                await self._publish(
-                    session_id=session_id,
-                    thread_id=thread_id,
-                    control=control,
-                    pin=pin,
-                    identity=identity,
-                    claim=claim,
-                    record_key=idempotency_key,
-                    attachment=attachment,
-                    content_type=content_type,
-                )
-                await observe_phase(idempotency_key, "attachment.ingest.published", details=phase_details)
-            except BaseException:
-                # catalog 是 durable 主体；发布后的结算失败不能倒写为 failed。
-                if self._catalog.get_ingest_record(idempotency_key).state == "published":
-                    raise
-                _remove_file(staging_path)
-                self._catalog.abort_ingest_record(
-                    ingest_idempotency_key=idempotency_key,
-                    reason="附件写入或发布失败，清理 staging",
-                )
-                if control.verify_lease_token(lease_id=pin.lease_id, fencing_token=pin.fencing_token):
-                    self._settle_pin(control, pin, outcome="failed")
-                raise
-            return self._attachment_ref_for_record(
-                session_id, thread_id, identity.blob_id, attachment, content_type
-            )
+            async with self._directory_operations.lock_for(attachment_id), self._topology_gate.shared(), self._gate.exclusive(session_id):
+                generation = self._assert_session_active(session_id, thread_id)
+                self._catalog.require_available_directory(attachment_id)
+                pin = control.create_or_get_lease(operation_kind="attachment", operation_identity=operation_id,
+                    preimage_hash=preimage, expected_generation=generation,
+                    recovery_ref=f"attachment-ref:{session_id}:{thread_id}:{message_id}:{attachment_id}")
+                if pin.state == "active":
+                    self._catalog.attach_directory(attachment_id, session_id=session_id, thread_id=thread_id,
+                        binding_token=f"reference:{operation_id}", now=self._clock())
+                elif pin.state != "completed":
+                    raise RuntimeError("附件引用 pin 已终止，不能重开原操作")
         finally:
             control.close()
 
-    async def _acquire_pin(
-        self,
-        *,
-        session_id: str,
-        thread_id: str,
-        message_id: str,
-        control: SessionControlStore,
-        operation_identity: str,
-        preimage_hash: str,
-    ) -> SessionOperationLease:
-        """gate 内 fresh 校验 + create-or-get durable `AttachmentOperationPin`。"""
-        async with self._topology_gate.shared(), self._gate.exclusive(session_id):
-            generation = self._assert_session_active(session_id, thread_id)
-            return control.create_or_get_lease(
-                operation_kind="attachment",
-                operation_identity=operation_identity,
-                preimage_hash=preimage_hash,
-                expected_generation=generation,
-                recovery_ref=f"attachment:{session_id}:{thread_id}:{message_id}",
-            )
-
-    async def _publish(
-        self,
-        *,
-        session_id: str,
-        thread_id: str,
-        control: SessionControlStore,
-        pin: SessionOperationLease,
-        identity: BlobIdentity,
-        claim,
-        record_key: str,
-        attachment: AttachmentRef,
-        content_type: str,
-    ) -> AttachmentOwnerRef:
-        """再次取得同一 gate，复验 pin/fence/thread 后原子发布。"""
-        async with self._topology_gate.shared(), self._gate.exclusive(session_id):
-            if not control.verify_lease_token(
-                lease_id=pin.lease_id, fencing_token=pin.fencing_token
-            ):
-                raise SessionDeletionPendingError(
-                    "附件 pin 已失效，拒绝发布 owner reference: "
-                    f"session_id={session_id}, lease_id={pin.lease_id}"
-                )
-            generation = self._assert_session_active(session_id, thread_id)
-            if generation != pin.captured_lifecycle_generation:
-                raise SessionDeletionPendingError(
-                    "Session lifecycle generation 已漂移，拒绝发布附件引用: "
-                    f"session_id={session_id}, "
-                    f"pinned={pin.captured_lifecycle_generation}, "
-                    f"actual={generation}"
-                )
-            attachment_id = derive_attachment_id(
-                blob_id=identity.blob_id,
-                owner_session_id=session_id,
-                owner_thread_id=thread_id,
-            )
-            ref = self._catalog.publish_blob_and_owner_ref(
-                identity=identity,
-                relative_locator=claim.final_relative_locator,
-                ingest_idempotency_key=record_key,
-                attachment_id=attachment_id,
-                owner_session_id=session_id,
-                owner_thread_id=thread_id,
-                file_name=attachment.name,
-                mime_type=content_type,
-                max_bytes=MAX_ATTACHMENT_BYTES,
-            )
-            # 正文已发布，但对应消息尚未接受；pin 继续保留到 canonical 提交。
-        return ref
-
-    # ------------------------------------------------------------------
-    # 读取
-    # ------------------------------------------------------------------
-
-    def read(self, session_id: str, file_id: str, *, owner_thread_id: str | None = None) -> ResourceFileContent:
-        """按逻辑引用读取正文；逐字节复验 digest/length。"""
-        ref, blob = self._resolve_published(session_id, file_id, owner_thread_id=owner_thread_id)
-        path = self._verified_blob_path(blob.blob_id, blob.relative_locator)
+    async def _persist_one(self, session_id: str, thread_id: str, message_id: str, ordinal: int, attachment: AttachmentRef) -> AttachmentRef:
+        mime_type, data = _parse_data_url(attachment.data_url or "")
+        if attachment.content_type is not None and attachment.content_type != mime_type:
+            raise ValueError("附件 content_type 与 data_url MIME 不一致")
+        if len(data) > MAX_ATTACHMENT_BYTES:
+            raise ValueError(f"附件超过 {MAX_ATTACHMENT_BYTES // (1024 * 1024)} MiB 限制")
+        digest = "sha256:" + hashlib.sha256(data).hexdigest()
+        # 操作按明确消息及序号幂等；字节相同的不同消息/序号仍是独立上传。
+        operation_id = "attkey_" + hashlib.sha256(f"{session_id}|{thread_id}|{message_id}|{ordinal}".encode()).hexdigest()
+        preimage = hashlib.sha256(canonical_json_bytes([session_id, thread_id, message_id, operation_id, digest, len(data), attachment.name, mime_type])).hexdigest()
+        control = self._open_control_store(session_id)
         try:
-            data = path.read_bytes()
-        except OSError as error:
-            raise OSError(error.errno, error.strerror, file_id) from error
-        _verify_content(data, blob.digest, blob.length, blob.blob_id)
-        content_type = ref.mime_type or _guess_content_type(path)
-        return ResourceFileContent(data=data, content_type=content_type)
+            async with self._topology_gate.shared(), self._gate.exclusive(session_id):
+                generation = self._assert_session_active(session_id, thread_id)
+                pin = control.create_or_get_lease(operation_kind="attachment", operation_identity=operation_id, preimage_hash=preimage, expected_generation=generation, recovery_ref=f"attachment:{session_id}:{thread_id}:{message_id}")
+            details = {"session_id": session_id, "thread_id": thread_id, "message_id": message_id, "lease_id": pin.lease_id}
+            await observe_phase(operation_id, "attachment.ingest.pin_acquired", details=details)
+            record = self._catalog.create_ingest(operation_id=operation_id, ingest_id="ing_" + hashlib.sha256(operation_id.encode()).hexdigest()[:32], session_id=session_id, thread_id=thread_id, message_id=message_id, pin=pin, digest=digest, length=len(data), file_name=attachment.name, mime_type=mime_type, now=self._clock())
+            if pin.state != "active":
+                if pin.state != "completed" or record.state != "published":
+                    raise RuntimeError("附件上传 pin 已终止，不能重开原操作")
+                self._catalog.require_available_directory(record.attachment_id)
+                verify_content(resolve_attachment_file(resolve_attachment_directory(self._attachments_root, record.relative_locator), ("original", "content")), record.digest, record.length, record.attachment_id)
+                return AttachmentRef(file_id=self.reference(record.attachment_id), directory_uri=self.directory_uri(record.attachment_id), name=record.file_name, content_type=record.mime_type)
+            details["attachment_id"] = record.attachment_id
+            await observe_phase(operation_id, "attachment.ingest.preparing", details=details)
+            try:
+                async with self._directory_operations.lock_for(record.attachment_id):
+                    await run_sync_shielded(self._write_directory, record, data)
+                    self._catalog.mark_ingest_durable(operation_id, now=self._clock())
+                    await observe_phase(operation_id, "attachment.ingest.directory_durable", details=details)
+                async with self._topology_gate.shared(), self._gate.exclusive(session_id):
+                    if not control.verify_lease_token(lease_id=pin.lease_id, fencing_token=pin.fencing_token) or self._assert_session_active(session_id, thread_id) != pin.captured_lifecycle_generation:
+                        raise SessionDeletionPendingError("附件 pin 或 Session 代次已失效，拒绝发布")
+                    record = self._catalog.publish_ingest(operation_id, now=self._clock())
+                await observe_phase(operation_id, "attachment.ingest.published", details=details)
+            except BaseException:
+                if self._catalog.get_ingest_record(operation_id).state == "published":
+                    raise
+                self._catalog.abort_ingest_record(ingest_idempotency_key=operation_id, reason="附件写入或发布失败", now=self._clock())
+                # writer 已退出才清理本 intent 的目录，不能碰其它上传的正文。
+                remove_directory(resolve_staging_path(self._attachments_root, record.staging_relative_locator))
+                remove_directory(resolve_attachment_directory(self._attachments_root, record.relative_locator))
+                if control.verify_lease_token(lease_id=pin.lease_id, fencing_token=pin.fencing_token):
+                    self._settle_pin(control, pin, outcome="failed")
+                raise
+            return AttachmentRef(file_id=self.reference(record.attachment_id), directory_uri=self.directory_uri(record.attachment_id), name=record.file_name, content_type=record.mime_type)
+        finally:
+            control.close()
 
-    def read_thumbnail(
-        self, session_id: str, file_id: str, *, max_edge: int = 512
-    ) -> ResourceFileContent:
-        """读取缓存缩略图；首次请求时从原图派生 WebP。"""
-        if max_edge < 64 or max_edge > 1024:
-            raise ValueError("图片缩略图 max_edge 必须在 64 到 1024 之间")
-        source = self.read(session_id, file_id)
-        if not source.content_type.startswith("image/"):
-            raise ValueError(f"附件不是图片，无法生成缩略图: {file_id}")
-        attachment_id = self._parse_logical_file_id(session_id, file_id)
-        derived_root = self._attachments_root / DERIVED_DIRECTORY_NAME
-        target = derived_root / f"{attachment_id}-{max_edge}.webp"
-        if not target.is_file():
+    def _write_directory(self, record: DirectoryIngestRecord, data: bytes) -> None:
+        destination = resolve_attachment_directory(self._attachments_root, record.relative_locator)
+        if destination.exists():
+            verify_content(resolve_attachment_file(destination, ("original", "content")), record.digest, record.length, record.attachment_id)
+            return
+        staging = resolve_staging_path(self._attachments_root, record.staging_relative_locator)
+        if staging.exists():
+            raise RuntimeError("上传 staging 已存在；须先沿原恢复入口核实，不能覆盖")
+        staging.mkdir(parents=True, mode=0o700)
+        restrict_private_path_access(staging, is_directory=True)
+        for name in ("original", "preview", "derived"):
+            child = staging / name
+            child.mkdir(mode=0o700)
+            restrict_private_path_access(child, is_directory=True)
+        original = staging / "original/content"
+        with original.open("xb") as stream:
+            restrict_private_path_access(original, descriptor=stream.fileno())
+            stream.write(data)
+            stream.flush()
+            os.fsync(stream.fileno())
+        protect_original(staging)
+        for name in ("original", "preview", "derived"):
+            fsync_directory(staging / name)
+        fsync_directory(staging)
+        details = {"session_id": record.owner_session_id, "thread_id": record.owner_thread_id,
+                   "message_id": record.message_id, "attachment_id": record.attachment_id, "lease_id": record.pin_lease_id}
+        observe_phase_sync(record.ingest_idempotency_key, "attachment.ingest.directory_staged", details=details)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        os.rename(staging, destination)
+        fsync_directory(destination.parent)
+        fsync_directory(staging.parent)
+        observe_phase_sync(record.ingest_idempotency_key, "attachment.ingest.directory_renamed", details=details)
+        verify_content(resolve_attachment_file(destination, ("original", "content")), record.digest, record.length, record.attachment_id)
+
+    def resolve_directory_uri(self, parsed: ParsedResourceUri, *, for_write: bool = False) -> Path:
+        if parsed.kind != "attachments" or parsed.scope != "workspace" or parsed.scope_id != self.workspace_id or parsed.gateway_authority is not None:
+            raise ValueError("附件目录 URI 不属于本机固定工作区")
+        record = self._catalog.require_available_directory(parsed.tail_segments[0])
+        children = parsed.tail_segments[1:]
+        if for_write and (not children or children[0] != "derived"):
+            raise PermissionError("附件原件和预览只读，处理结果必须写入 derived 目录")
+        root = resolve_attachment_directory(self._attachments_root, record.relative_locator)
+        if not root.is_dir():
+            raise FileNotFoundError("附件目录的物理正文缺失")
+        return resolve_attachment_file(root, children)
+
+    def read(self, session_id: str | None, file_id: str, *, owner_thread_id: str | None = None) -> ResourceFileContent:
+        with workspace_file_mutation_lock(self._workspace_root):
+            attachment_id, children = self._resource_id(file_id, session_id=session_id, thread_id=owner_thread_id)
+            record = self._catalog.require_available_directory(attachment_id)
+            path = resolve_attachment_file(resolve_attachment_directory(self._attachments_root, record.relative_locator), children)
+            if not path.is_file():
+                raise FileNotFoundError(f"附件文件不存在：{file_id}")
             try:
-                with Image.open(BytesIO(source.data)) as image:
-                    normalized = ImageOps.exif_transpose(image)
-                    normalized.thumbnail(
-                        (max_edge, max_edge), Image.Resampling.LANCZOS
-                    )
-                    if normalized.mode not in {"RGB", "RGBA"}:
-                        normalized = normalized.convert(
-                            "RGBA" if "A" in normalized.mode else "RGB"
-                        )
-                    output = BytesIO()
-                    normalized.save(output, format="WEBP", quality=78, method=4)
-            except (OSError, ValueError) as error:
-                # 损坏或被截断的图片必须给出可诊断的领域错误，而不是让 PIL 的
-                # OSError 冒泡成 500。调用方据此返回 4xx。
-                raise ValueError(
-                    f"附件图片已损坏或不是有效图片，无法生成缩略图: {file_id}"
-                ) from error
-            try:
-                derived_root.mkdir(parents=True, exist_ok=True)
-                _write_once(target, output.getvalue())
+                data = path.read_bytes()
             except OSError as error:
                 raise OSError(error.errno, error.strerror, file_id) from error
+            version = self._catalog.file_version(attachment_id, "/".join(children))
+            if children and children[0] in {"original", "preview"}:
+                if version is None:
+                    raise RuntimeError("附件原件或预览缺少已登记版本")
+                verify_content(data, version.digest, version.length, attachment_id)
+            mime_type = version.mime_type if version is not None else mimetypes.guess_type(path.name)[0]
+            return ResourceFileContent(data, mime_type or "application/octet-stream")
+
+    def describe_reference(self, attachment: AttachmentRef, *, session_id: str | None) -> AttachmentRef:
+        attachment_id, children = self._resource_id(attachment.file_id, session_id=session_id)
+        self._catalog.require_available_directory(attachment_id)
+        if not children:
+            raise IsADirectoryError("附件输入必须明确指向目录内的文件")
+        directory_uri = self.directory_uri(attachment_id)
+        if attachment.directory_uri is not None and parse_resource_uri(attachment.directory_uri, local_gateway_id=get_current_gateway_id()).display_uri != parse_resource_uri(directory_uri, local_gateway_id=get_current_gateway_id()).display_uri:
+            raise ValueError("附件 directory_uri 与原件身份不一致")
+        version = self._catalog.file_version(attachment_id, "/".join(children))
+        return attachment.model_copy(update={
+            "directory_uri": directory_uri,
+            "name": attachment.name or (version.file_name if version is not None else children[-1]),
+            "content_type": attachment.content_type or self.read(session_id, attachment.file_id).content_type,
+        })
+
+    def read_thumbnail(self, session_id: str | None, file_id: str, *, max_edge: int = 512) -> ResourceFileContent:
+        if not 64 <= max_edge <= 1024:
+            raise ValueError("图片缩略图 max_edge 必须在 64 到 1024 之间")
+        attachment_id, _ = self._resource_id(file_id, session_id=session_id)
+        uri = file_uri_child(self.directory_uri(attachment_id), "preview", "512.webp")
+        if max_edge == 512 and self._catalog.file_version(attachment_id, "preview/512.webp") is not None:
+            return self.read(session_id, uri)
+        source = self.read(session_id, file_id)
+        if not source.content_type.startswith("image/"):
+            raise ValueError(f"附件不是图片，无法生成缩略图：{file_id}")
         try:
-            return ResourceFileContent(data=target.read_bytes(), content_type="image/webp")
-        except OSError as error:
-            raise OSError(error.errno, error.strerror, file_id) from error
-
-    def relative_path(self, session_id: str, file_id: str) -> str:
-        """返回供模型/canonical content 使用的逻辑引用（绝不暴露物理 locator）。
-
-        附件正文的受控内容通过 variant/preview block 提供；manifest 只携带
-        逻辑 ``attachment_id`` 引用，模型或 projector 不得拿到 blob 物理路径。
-        """
-        self._resolve_published(session_id, file_id)
-        return file_id
-
-    def _resolve_published(self, session_id: str, file_id: str, *, owner_thread_id: str | None = None):
-        """按逻辑引用解析 owner reference 与 blob；越权/已 tombstone 一律失败。"""
-        if owner_thread_id is not None:
-            snapshot = self._catalog.fork_attachment_snapshot_for_alias(
-                target_session_id=session_id, target_thread_id=owner_thread_id, source_file_id=file_id,
-            )
-            if snapshot is not None:
-                self._assert_session_active(session_id, owner_thread_id)
-                projected = self.project_attachment(session_id, owner_thread_id, file_id)
-                if projected["availability"] != "available":
-                    raise FileNotFoundError(f"当前 Thread 的冻结附件引用不可用: {file_id}")
-                file_id, owner_thread_id = projected["file_id"], snapshot.target_owner_thread_id
-        attachment_id = self._parse_logical_file_id(session_id, file_id)
-        ref = self._catalog.get_owner_ref(attachment_id)
-        if ref is None:
-            raise FileNotFoundError(f"会话附件不存在: {file_id}")
-        if ref.owner_session_id != session_id:
-            raise ValueError("附件逻辑定位符不属于指定会话")
-        if owner_thread_id is not None and ref.owner_thread_id != owner_thread_id:
-            raise PermissionError("附件逻辑定位符不属于当前 SessionThread")
-        if ref.state != "active":
-            # 已释放（owner session/thread 删除）的 reference 只表示附件不再可用。
-            raise FileNotFoundError(f"会话附件已释放: {file_id}")
-        if self._catalog.get_reusable_attachment_owner(attachment_id) is None:
-            raise FileNotFoundError(f"附件引用尚未完成发布: {file_id}")
-        self._assert_session_active(session_id, ref.owner_thread_id)
-        blob = self._catalog.get_blob(ref.blob_id)
-        if blob is None or blob.availability != "available":
-            raise FileNotFoundError(f"附件正文不可用: {file_id}")
-        return ref, blob
-
-    def _verified_blob_path(self, blob_id: str, relative_locator: str) -> Path:
-        path = resolve_blob_path(self._attachments_root, relative_locator)
-        if not path.is_file() or path.is_symlink():
-            raise FileNotFoundError(
-                "附件正文缺失或不是普通文件（fail closed）: "
-                f"blob_id={blob_id}"
-            )
-        return path
-
-    # ------------------------------------------------------------------
-    # 恢复与 GC
-    # ------------------------------------------------------------------
-
-    def _verify_blob_content(self, path: Path, digest: str, length: int, blob_id: str) -> None:
-        """冷读按固定缓冲核正文；仅复用同一文件未变化的完整校验结果。"""
-        metadata = path.stat()
-        signature = (metadata.st_dev, metadata.st_ino, metadata.st_size, metadata.st_mtime_ns, metadata.st_ctime_ns)
-        key = (str(path), blob_id, digest, length)
-        with self._verified_blob_signatures_lock:
-            if self._verified_blob_signatures.get(key) == signature:
-                self._verified_blob_signatures.move_to_end(key)
-                return
-        _verify_content(path, digest, length, blob_id)
-        checked = path.stat()
-        if (checked.st_dev, checked.st_ino, checked.st_size, checked.st_mtime_ns, checked.st_ctime_ns) != signature:
-            raise RuntimeError(f"附件正文在完整性校验期间发生变化: blob_id={blob_id}, path={path}")
-        with self._verified_blob_signatures_lock:
-            self._verified_blob_signatures[key] = signature
-            self._verified_blob_signatures.move_to_end(key)
-            if len(self._verified_blob_signatures) > _VERIFIED_BLOB_SIGNATURE_CACHE_SIZE:
-                self._verified_blob_signatures.popitem(last=False)
-
-    async def collect_garbage(self, *, retention: timedelta) -> tuple[str, ...]:
-        """定点回收无操作依赖的正文；不等待正在提交的 digest 分片。"""
-        if not isinstance(retention, timedelta):
-            raise TypeError(f"retention 必须是 timedelta: {retention!r}")
-        await self.collect_fork_import_staging()
-        before = datetime.now(UTC) - retention
-        collected: list[str] = []
-        for claim in self._catalog.list_unpublished_gc_claims(before=before):
-            async with self._blob_commits.lock_for(claim.blob_id, wait=False) as holder:
-                if not holder.acquired:
-                    continue
-                claim = self._catalog.abort_unused_blob_claim(claim.blob_id)
-                if claim is None:
-                    continue
-                path = resolve_blob_path(self._attachments_root, claim.final_relative_locator)
-                if path.is_symlink():
-                    raise RuntimeError(f"未发布附件正文不得是符号链接: blob_id={claim.blob_id}")
+            with Image.open(BytesIO(source.data)) as image:
+                normalized = ImageOps.exif_transpose(image)
+                normalized.thumbnail((max_edge, max_edge), Image.Resampling.LANCZOS)
+                if normalized.mode not in {"RGB", "RGBA"}:
+                    normalized = normalized.convert("RGBA" if "A" in normalized.mode else "RGB")
+                output = BytesIO()
+                normalized.save(output, format="WEBP", quality=78, method=4)
+        except (OSError, ValueError) as error:
+            raise ValueError(f"附件图片已损坏或不是有效图片：{file_id}") from error
+        content = output.getvalue()
+        if max_edge == 512:
+            with workspace_file_mutation_lock(self._workspace_root):
+                path = self.resolve_directory_uri(parse_resource_uri(uri, local_gateway_id=get_current_gateway_id()))
                 if path.exists():
-                    self._verify_blob_content(path, claim.digest, claim.expected_length, claim.blob_id)
-                    _remove_file(path)
-                    collected.append(claim.blob_id)
-        blobs = {blob.blob_id: blob for blob in (
-            *self._catalog.list_gc_candidates(before=before), *self._catalog.list_tombstoned_blobs(),
-        )}
-        for blob in blobs.values():
-            async with self._blob_commits.lock_for(blob.blob_id, wait=False) as holder:
+                    # 未登记的成品只能与本次确定生成结果一致，不能吸收半写或损坏字节。
+                    verify_content(path, "sha256:" + hashlib.sha256(content).hexdigest(), len(content), attachment_id)
+                else:
+                    with path.open("xb") as stream:
+                        restrict_private_path_access(path, descriptor=stream.fileno())
+                        stream.write(content)
+                        stream.flush()
+                        os.fsync(stream.fileno())
+                    fsync_directory(path.parent)
+                self._catalog.publish_file_version(AttachmentFileVersion(attachment_id, "preview/512.webp", "preview", "sha256:" + hashlib.sha256(content).hexdigest(), len(content), None, "image/webp"))
+        return ResourceFileContent(content, "image/webp")
+
+    @asynccontextmanager
+    async def admit_working_directory(self, target: Path) -> AsyncIterator[str | None]:
+        """短时保护准入；真实进程的持久 lease 由 Terminal owner 在此边界内发布。"""
+        reference = self.reference_for_path(target)
+        if reference is None:
+            yield None
+            return
+        attachment_id = parse_resource_uri(reference).tail_segments[0]
+        async with self._directory_operations.lock_for(attachment_id):
+            self._catalog.require_available_directory(attachment_id)
+            if self.reference_for_path(target) != reference or not target.is_dir():
+                raise FileNotFoundError("Shell 工作目录的附件版本不可用")
+            # 公开引用带当前 Gateway 身份，持久终端 intent 保存同一目标的本机规范 URI。
+            yield parse_resource_uri(self.directory_uri(attachment_id), local_gateway_id=get_current_gateway_id()).display_uri
+
+    async def collect_garbage(self, *, leases: ExternalResourceLeaseLedger) -> tuple[str, ...]:
+        await self.collect_fork_import_staging()
+        collected = []
+        for candidate in self._catalog.gc_candidates(now=self._clock()):
+            async with self._directory_operations.lock_for(candidate.attachment_id, wait=False) as holder:
                 if not holder.acquired:
+                    continue
+                if leases.get(candidate.attachment_id) is not None and leases.leases_for_resource(candidate.attachment_id):
                     continue
                 try:
-                    # 事务内重查 ingest/fork/owner 保活；也重查已 tombstone 的删除重试。
-                    self._catalog.tombstone_blob(blob.blob_id)
-                except AttachmentBlobRetainedError:
+                    # 与普通文件写入/读取共用真实临界区；不另建一套文件执行链。
+                    await run_sync_shielded(self._delete_directory, candidate.attachment_id)
+                except AttachmentDirectoryRetainedError:
                     continue
-                path = resolve_blob_path(self._attachments_root, blob.relative_locator)
-                existed = path.exists()
-                _remove_file(path)
-                if existed or blob.availability == "available":
-                    collected.append(blob.blob_id)
+                if leases.get(candidate.attachment_id) is not None:
+                    leases.update_external_state(candidate.attachment_id, lifetime_scope="workspace", status="stopped")
+                collected.append(candidate.attachment_id)
         return tuple(collected)
 
-    # ------------------------------------------------------------------
-    # 内部
-    # ------------------------------------------------------------------
-
+    def _delete_directory(self, attachment_id: str) -> None:
+        with workspace_file_mutation_lock(self._workspace_root):
+            record = self._catalog.begin_delete(attachment_id, now=self._clock())
+            remove_directory(resolve_attachment_directory(self._attachments_root, record.relative_locator))
+            self._catalog.finish_delete(attachment_id, now=self._clock())
     def _assert_session_active(self, session_id: str, thread_id: str) -> int:
         """gate 内 fresh 校验 catalog 节点 active、fence active 且 thread 未失效。"""
         node = self._path_resolver.catalog_store.get_node(session_id)
@@ -581,112 +447,6 @@ class AttachmentBlobStore(ForkAttachmentStoreMixin, AttachmentIngestRecoveryMixi
         self._catalog.acquire_access()
         session_dir = self._path_resolver.resolve_session_node(session_id)
         return SessionControlStore(session_dir / "session-control.sqlite")
-
-    def _attachment_ref_for_record(
-        self,
-        session_id: str,
-        thread_id: str,
-        blob_id: str | None,
-        attachment: AttachmentRef,
-        content_type: str,
-    ) -> AttachmentRef:
-        if blob_id is None:
-            raise RuntimeError(
-                "ingest record 缺少 blob_id，无法构造逻辑引用: "
-                f"session_id={session_id}"
-            )
-        attachment_id = derive_attachment_id(
-            blob_id=blob_id,
-            owner_session_id=session_id,
-            owner_thread_id=thread_id,
-        )
-        return AttachmentRef(
-            file_id=self.reference(session_id, attachment_id),
-            name=attachment.name,
-            content_type=content_type,
-        )
-
-    def _write_staging(self, staging_path: Path, data: bytes) -> None:
-        staging_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(staging_path, "wb") as handle:
-            handle.write(data)
-            handle.flush()
-            os.fsync(handle.fileno())
-        _fsync_directory(staging_path.parent)
-
-    def _commit_staged_blob(
-        self,
-        *,
-        staging_path: Path,
-        final_path: Path,
-        identity: BlobIdentity,
-    ) -> None:
-        """原子 rename 到最终 locator 并复验正文（已存在则复验后清理 staging）。"""
-        final_path.parent.mkdir(parents=True, exist_ok=True)
-        if final_path.is_symlink():
-            raise RuntimeError(f"attachment blob 不得是符号链接: {final_path}")
-        if final_path.is_file():
-            self._verify_blob_content(final_path, identity.digest, identity.length, identity.blob_id)
-            _remove_file(staging_path)
-            return
-        os.replace(staging_path, final_path)
-        _fsync_directory(final_path.parent)
-        self._verify_blob_content(final_path, identity.digest, identity.length, identity.blob_id)
-
-
-
-def _verify_content(data: bytes | Path, digest: str, length: int, blob_id: str) -> None:
-    """逐字节复验正文与 catalog 冻结的 hash/length 一致（fail closed）。"""
-    if isinstance(data, Path):
-        hasher = hashlib.sha256()
-        actual_length = 0
-        with data.open("rb") as stream:
-            while chunk := stream.read(1024 * 1024):
-                hasher.update(chunk)
-                actual_length += len(chunk)
-        actual_digest = "sha256:" + hasher.hexdigest()
-    else:
-        actual_digest = "sha256:" + hashlib.sha256(data).hexdigest()
-        actual_length = len(data)
-    if actual_digest != digest or actual_length != length:
-        raise RuntimeError(
-            "附件正文与 catalog 冻结的 hash/length 不一致（拒绝以损坏正文冒充成功）: "
-            f"blob_id={blob_id}, expected={digest}/{length}, "
-            f"actual={actual_digest}/{actual_length}"
-        )
-
-
-def _guess_content_type(path: Path) -> str:
-    content_type, _ = mimetypes.guess_type(path.name)
-    return content_type or "application/octet-stream"
-
-
-def _fsync_directory(directory: Path) -> None:
-    if os.name == "nt":
-        return
-    fd = os.open(directory, os.O_RDONLY)
-    try:
-        os.fsync(fd)
-    finally:
-        os.close(fd)
-
-
-def _remove_file(path: Path) -> None:
-    try:
-        path.unlink()
-    except FileNotFoundError:
-        return
-
-
-def _write_once(target: Path, data: bytes) -> None:
-    if target.exists():
-        return
-    temporary = target.parent / f".{target.name}.{os.getpid()}.tmp"
-    temporary.write_bytes(data)
-    # TODO: Windows 使用继承 ACL；不要把 POSIX mode bits 当作安全边界。
-    if os.name != "nt":
-        temporary.chmod(0o600)
-    os.replace(temporary, target)
 
 
 def _parse_data_url(data_url: str) -> tuple[str, bytes]:

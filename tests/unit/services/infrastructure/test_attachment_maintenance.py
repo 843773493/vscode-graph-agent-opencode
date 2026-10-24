@@ -2,17 +2,20 @@
 
 from __future__ import annotations
 
-import json
 import os
 import sqlite3
 import subprocess
 import sys
 import time
 from collections.abc import Callable, Iterator
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
 
+from app.services.infrastructure.attachment_blob_catalog import (
+    catalog as catalog_module,
+)
 from app.services.infrastructure.attachment_blob_catalog.catalog import (
     AttachmentBlobCatalog,
 )
@@ -44,7 +47,7 @@ def attachments_root(tmp_path: Path) -> Path:
 
 @pytest.fixture
 def catalog(attachments_root: Path) -> Iterator[AttachmentBlobCatalog]:
-    value = AttachmentBlobCatalog(attachments_root / "catalog.sqlite")
+    value = AttachmentBlobCatalog(attachments_root / "catalog.sqlite", workspace_id="a475d596-039d-48db-a14c-a0cbf7b4b58c")
     try:
         yield value
     finally:
@@ -73,10 +76,10 @@ def test_lazy_catalog_does_not_create_state(catalog: AttachmentBlobCatalog, atta
 def test_all_online_catalogs_must_close_before_maintenance(
     catalog: AttachmentBlobCatalog, attachments_root: Path, probe: Callable[[bool], int],
 ) -> None:
-    second = AttachmentBlobCatalog(catalog.database_path)
+    second = AttachmentBlobCatalog(catalog.database_path, workspace_id=catalog.workspace_id)
     try:
-        assert catalog.connection.execute("PRAGMA user_version").fetchone()[0] == 3
-        assert second.connection.execute("SELECT count(*) FROM attachment_blobs").fetchone()[0] == 0
+        assert catalog.connection.execute("PRAGMA user_version").fetchone()[0] == 4
+        assert second.connection.execute("SELECT count(*) FROM attachment_directories").fetchone()[0] == 0
         assert probe(False) == 0
         assert probe(True) == 73
         catalog.close()
@@ -93,22 +96,8 @@ def test_maintenance_blocks_catalog_before_database_creation_then_allows_retry(
         with pytest.raises(AttachmentMaintenanceBusyError, match="在线访问"):
             _ = catalog.connection
         assert not attachments_root.exists()
-        assert catalog._connection is None
-    assert catalog.connection.execute("PRAGMA user_version").fetchone()[0] == 3
-
-
-@pytest.mark.parametrize("state", ["preparing", "ready", "rolling_back", "installed", "aborted"])
-def test_migration_journal_never_allows_missing_catalog_to_be_initialized(
-    catalog: AttachmentBlobCatalog, attachments_root: Path, probe: Callable[[bool], int], state: str,
-) -> None:
-    attachments_root.parent.mkdir(parents=True)
-    journal = attachments_root.with_name("attachment-migration.json")
-    journal.write_text(json.dumps({"format_version": 1, "state": state}), encoding="utf-8")
-    with pytest.raises(RuntimeError, match="尚未完成|catalog 缺失"):
-        _ = catalog.connection
-    assert catalog._connection is None
-    assert not attachments_root.exists()
-    assert probe(True) == 0
+        assert catalog._connections == {}
+    assert catalog.connection.execute("PRAGMA user_version").fetchone()[0] == 4
 
 
 def test_access_only_guards_without_creating_database_or_originals(
@@ -123,32 +112,36 @@ def test_access_only_guards_without_creating_database_or_originals(
         catalog.acquire_access()
 
 
-@pytest.mark.parametrize("failure_stage", ["connect", "schema"])
+@pytest.mark.parametrize("failure_stage", ["path_budget", "connect", "schema"])
 def test_failed_open_releases_access_and_preserves_original_error(
     catalog: AttachmentBlobCatalog, probe: Callable[[bool], int],
     monkeypatch: pytest.MonkeyPatch, failure_stage: str,
 ) -> None:
     failure = OSError("受控的连接或 schema 失败")
 
-    def fail(*_args: object) -> None:
+    def fail(*_args: object, **_kwargs: object) -> None:
         raise failure
 
     with monkeypatch.context() as patch:
-        patch.setattr(catalog, "_connect" if failure_stage == "connect" else "_initialize", fail)
+        if failure_stage == "connect":
+            patch.setattr(sqlite3, "connect", fail)
+        else:
+            patch.setattr(catalog_module, "validate_sqlite_path_budget" if failure_stage == "path_budget" else "initialize_directory_schema", fail)
         with pytest.raises(OSError) as caught:
             _ = catalog.connection
         assert caught.value is failure
         assert probe(True) == 0
-    assert catalog.connection.execute("PRAGMA user_version").fetchone()[0] == 3
+    assert catalog.connection.execute("PRAGMA user_version").fetchone()[0] == 4
 
 
+@pytest.mark.parametrize("version", [1, 2, 3, 99])
 def test_unknown_schema_rejection_does_not_leak_online_lock(
-    catalog: AttachmentBlobCatalog, probe: Callable[[bool], int],
+    catalog: AttachmentBlobCatalog, probe: Callable[[bool], int], version: int,
 ) -> None:
     catalog.database_path.parent.mkdir(parents=True)
     with sqlite3.connect(catalog.database_path) as connection:
-        connection.execute("PRAGMA user_version = 99")
-    with pytest.raises(RuntimeError, match="schema 版本未知"):
+        connection.execute(f"PRAGMA user_version = {version}")
+    with pytest.raises(RuntimeError, match="只支持 schema 4"):
         _ = catalog.connection
     assert probe(True) == 0
 
@@ -158,42 +151,76 @@ def test_unconfirmed_close_keeps_lock_until_successful_retry(
     catalog: AttachmentBlobCatalog, probe: Callable[[bool], int],
     monkeypatch: pytest.MonkeyPatch, failed_during_init: bool,
 ) -> None:
-    connection = catalog.connection
+    connect = sqlite3.connect
+    opened: list[sqlite3.Connection] = []
 
-    class FailingClose:
-        fail = True
+    class FailingClose(sqlite3.Connection):
+        fail = False
 
         def close(self) -> None:
             if self.fail:
                 raise OSError("连接关闭未核实")
-            connection.close()
+            super().close()
 
-    boundary = FailingClose()
-    if failed_during_init:
-        catalog._connection = None
-        failure = ValueError("初始化未完成")
+    def capture_connection(*args, **kwargs) -> sqlite3.Connection:
+        connection = connect(*args, **kwargs, factory=FailingClose)
+        opened.append(connection)
+        return connection
 
-        def fail_init(_connection: object) -> None:
-            raise failure
+    monkeypatch.setattr(sqlite3, "connect", capture_connection)
+    try:
+        if failed_during_init:
+            failure = ValueError("初始化未完成")
 
-        monkeypatch.setattr(catalog, "_connect", lambda: boundary)
-        monkeypatch.setattr(catalog, "_initialize", fail_init)
-        with pytest.raises(ValueError) as caught:
+            def fail_init(connection: FailingClose, **_kwargs: object) -> None:
+                connection.fail = True
+                raise failure
+
+            monkeypatch.setattr(catalog_module, "initialize_directory_schema", fail_init)
+            with pytest.raises(ValueError) as caught:
+                _ = catalog.connection
+            assert caught.value is failure
+            assert "连接关闭未核实" in " ".join(failure.__notes__)
+        else:
+            connection = catalog.connection
+            connection.fail = True
+            with pytest.raises(OSError, match="连接关闭未核实"):
+                catalog.close()
+        (connection,) = opened
+        assert probe(True) == 73
+        with pytest.raises(RuntimeError, match="已关闭"):
             _ = catalog.connection
-        assert caught.value is failure
-        assert "连接关闭未核实" in " ".join(failure.__notes__)
-    else:
-        catalog._connection = boundary
-        with pytest.raises(OSError, match="连接关闭未核实"):
-            catalog.close()
-    assert probe(True) == 73
-    with pytest.raises(RuntimeError, match="已关闭"):
-        _ = catalog.connection
-    boundary.fail = False
-    catalog.close()
+    finally:
+        FailingClose.fail = False
+        for opened_connection in opened:
+            opened_connection.fail = False
+        catalog.close()
     assert probe(True) == 0
     with pytest.raises(sqlite3.ProgrammingError, match="closed"):
         connection.execute("SELECT 1")
+
+
+def test_another_thread_open_failure_keeps_existing_connection_and_maintenance_lock(
+    catalog: AttachmentBlobCatalog, probe: Callable[[bool], int], monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    connection = catalog.connection
+    failure = OSError("另一个线程连接失败")
+
+    def fail(*_args: object, **_kwargs: object) -> None:
+        raise failure
+
+    with monkeypatch.context() as patch:
+        patch.setattr(sqlite3, "connect", fail)
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            pending = executor.submit(lambda: catalog.connection)
+            with pytest.raises(OSError) as caught:
+                pending.result(timeout=5)
+        assert caught.value is failure
+    assert catalog.connection is connection
+    assert connection.execute("SELECT count(*) FROM attachment_directories").fetchone()[0] == 0
+    assert probe(True) == 73
+    catalog.close()
+    assert probe(True) == 0
 
 
 @pytest.mark.parametrize("exclusive", [False, True])

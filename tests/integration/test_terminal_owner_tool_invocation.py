@@ -59,7 +59,7 @@ async def terminal_runtime(
 ) -> AsyncIterator[WorkspaceToolRuntime]:
     root = Path(terminal_workspace_root_path)
     port = integration_port_block_for_file(Path(request.node.path)).port(40)
-    process = start_terminal_backend(backend_port=port, workspace_root=str(root), artifacts_dir=TestRunContext.from_test_file(Path(__file__)).artifacts_dir)
+    process = start_terminal_backend(backend_port=port, workspace_root=str(root), artifacts_dir=TestRunContext.from_test_file(Path(request.node.path)).artifacts_dir)
     try:
         async with workspace_tool_runtime(root, startup_mount=MountedWorkspace(
             load_or_create_workspace_id(root), root, terminal_backend_url=f"http://127.0.0.1:{port}",
@@ -315,7 +315,7 @@ async def test_actual_python_crash_stopped_pty_settles_persisted_lease_and_allow
 
     root = Path(terminal_workspace_root_path)
     port = integration_port_block_for_file(Path(request.node.path)).port(40)
-    process = start_terminal_backend(backend_port=port, workspace_root=str(root), artifacts_dir=TestRunContext.from_test_file(Path(__file__)).artifacts_dir)
+    process = start_terminal_backend(backend_port=port, workspace_root=str(root), artifacts_dir=TestRunContext.from_test_file(Path(request.node.path)).artifacts_dir)
     child = dedent(r"""
         import asyncio, json, os, sys
         from pathlib import Path

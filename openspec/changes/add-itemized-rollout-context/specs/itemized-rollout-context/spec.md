@@ -2,6 +2,8 @@
 
 为会话 rollout 建立独立于 LangChain 和具体 Provider 的不可变语义 item 层，使上下文、历史、恢复和 Provider 请求都能从同一份有序事实重建。
 
+附件目录后继修订见 `add-managed-attachment-directories`：本文 workspace blob/owner-ref 与单 blob fork 验收为旧基线；线上新上传已使用独立目录、目录级关联与 30 天回收，旧库显式离线迁移。canonical 原历史身份、冻结输入、请求 hash、fork journal/claim 和 publication 约束继续保留；目录完整验收以该 change 为准，归档不得用旧基线覆盖目录修订。
+
 ## ADDED Requirements
 
 ### Requirement: 产品 Session、durable Thread 与 LangGraph namespace 必须严格分层
@@ -102,10 +104,10 @@ catalog批量deleting commit之后，即使部分Session local fence尚active，
 - **WHEN** 启动完整性检查发现workspace catalog损坏，或恢复的备份generation低于已提交Session/Folder操作
 - **THEN** 工作区业务准入停止并给出明确损坏/代际缺口报告；只在维护模式核对备份、operation record和Session manifest，未登记日期目录保留供审计，不能自动成为active node或被GC清理
 
-#### Scenario: canonical attachment 只保存 workspace blob 引用
+#### Scenario: canonical attachment 保存目录文件资源引用
 
 - **WHEN** user input 或其它 canonical item 使用上传附件
-- **THEN** item 只保存稳定 `attachment_id`/variant、digest、length、MIME/protection 和 availability，不保存 `.boxteam/attachments` 物理 locator；workspace attachment catalog 验证该 reference 属于当前 session/thread/view 后才允许读取正文
+- **THEN** item 保存规范文件 URI、可选目录 URI 与既有冻结版本/MIME 等元信息，不保存 `.boxteam/attachments` 物理 locator；工作区访问授权与用于保活的 Thread 关联分离，旧历史来源 URI 只经原附件 owner 的精确消费 owner/已提交 fork alias 解析。独立上传不按 digest 合并可变目录，原 canonical 身份和 hash 不重写
 
 #### Scenario: subgraph namespace 不能越过产品边界
 

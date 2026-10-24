@@ -12,8 +12,10 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from app.core.atomic_fs import fsync_directory
+from app.core.file_permissions import restrict_private_path_access
 from app.core.session_control_primitives import CONTROL_DATABASE_NAME
 from app.services.infrastructure.attachment_blob_catalog.records import (
+    ForkAttachmentDirectorySnapshot,
     ForkAttachmentSnapshot,
 )
 from app.services.infrastructure.node_debug.session.fork import (
@@ -69,7 +71,7 @@ class ForkSourceSnapshot:
     """原文件与资源 ref 的冻结合同；正文仅留在既有持久化 owner 中。"""
 
     rollout: ForkRolloutSourceSnapshot
-    attachments: tuple[ForkAttachmentSnapshot, ...] = ()
+    attachments: tuple[ForkAttachmentSnapshot | ForkAttachmentDirectorySnapshot, ...] = ()
     node_debug: NodeDebugSourceCopySnapshot | None = None
 
     @property
@@ -87,7 +89,7 @@ class ForkSourceSnapshot:
     @property
     def snapshot_sha256(self) -> str:
         payload = {
-            "schema": "fork-source-snapshot:v2",
+            "schema": "fork-source-snapshot:v3" if any(isinstance(item, ForkAttachmentDirectorySnapshot) for item in self.attachments) else "fork-source-snapshot:v2",
             "rollout_manifest_sha256": self.rollout.manifest_sha256,
             "session_control_sha256": self.rollout.control_sha256,
             "attachments": [item.to_payload() for item in self.attachments],
@@ -121,17 +123,17 @@ def capture_fork_rollout_snapshot(
         raise ValueError("fork source snapshot id 必须是单一路径段")
     captured_root.mkdir(parents=True, exist_ok=False, mode=0o700)
     snapshot_rollout = captured_root / "rollout"
-    captured_root.chmod(0o700)
 
     source_lock_path = source_rollout.parent / ".rollout.write.lock"
     lock = None
-    if not rollout_lock_held:
-        lock = _RolloutFileLock(
-            source_lock_path,
-            exclusive=False,
-        )
-        lock.acquire()
     try:
+        restrict_private_path_access(captured_root, is_directory=True)
+        if not rollout_lock_held:
+            lock = _RolloutFileLock(
+                source_lock_path,
+                exclusive=False,
+            )
+            lock.acquire()
         if not source_lock_path.is_file() or source_lock_path.is_symlink():
             raise RuntimeError("source-mismatch: fork source 缺少既有普通写锁文件")
         # 显式冻结副本携带既有锁，后续共享读取不得自行创建文件。

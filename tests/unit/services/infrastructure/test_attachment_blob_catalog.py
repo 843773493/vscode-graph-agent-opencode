@@ -1,16 +1,10 @@
-"""workspace 附件 content-addressed blob store 的分层测试（8.3 附件链）。
-
-覆盖点：日期分桶物理定位、逻辑引用、去重与跨 Session 复用、权限隔离、
-缩略图派生、损坏图片诊断、digest 唯一 claim、blob identity conflict、
-pin/fence 发布复核、上传与删除竞态、定点恢复与引用感知 GC。
-
-全部使用 tmp_path 隔离，不依赖网络或真实 LLM。
-"""
+"""附件目录 owner 的引用、完整性、事务发布、冻结 fork 与定点清理合同。"""
 
 from __future__ import annotations
 
 import asyncio
 import base64
+import hashlib
 import json
 import os
 import shutil
@@ -36,11 +30,19 @@ from app.agents.graph_binding import (
 from app.core.checkpoint_config import build_checkpoint_config
 from app.core.execution_admission_context import execution_admission_scope
 from app.core.identifier import create_uuid_hex
-from app.core.resource_uri import parse_session_artifact_uri, session_artifact_uri
+from app.core.resource_uri import (
+    file_uri_root,
+    parse_attachment_uri,
+    parse_resource_uri,
+    resource_display_uri,
+)
 from app.core.session_catalog_store import SessionCatalogStore
 from app.core.session_catalog_store.contracts import ForkSourceCaptureRecord
 from app.core.session_control_store import SessionControlStore
-from app.core.session_lifecycle_gate import SessionDeletionPendingError
+from app.core.session_lifecycle_gate import (
+    SessionDeletionPendingError,
+    SessionOperationLease,
+)
 from app.core.session_thread_context import session_thread_owner_scope
 from app.core.thread_creation import ThreadCreationService
 from app.core.trace_middleware import (
@@ -49,7 +51,7 @@ from app.core.trace_middleware import (
     set_current_gateway_id,
 )
 from app.domain.itemized.epoch.tool_set import ToolSetSnapshot
-from app.domain.itemized.hashing import sha256_jcs
+from app.domain.itemized.hashing import canonical_json_bytes, sha256_jcs
 from app.domain.itemized.identity.refs import ContextRef
 from app.domain.itemized.mutation_intents import MutationIntentOwner
 from app.domain.itemized.plans.request import ContextRequestPlan
@@ -60,30 +62,31 @@ from app.schemas.internal_v2.turn import TurnHistoryLoadRequest
 from app.services.business.session_context_fork_service import SessionContextForkService
 from app.services.business.user_content_builder import UserContentBuilder
 from app.services.infrastructure.attachment_blob_catalog import (
-    store as attachment_blob_store_module,
+    fork_import as fork_import_module,
 )
-from app.services.infrastructure.attachment_blob_catalog.blob_identity import (
-    compute_blob_identity,
-    date_bucket_relative_locator,
-    validate_blob_relative_locator,
+from app.services.infrastructure.attachment_blob_catalog import (
+    store as attachment_blob_store_module,
 )
 from app.services.infrastructure.attachment_blob_catalog.catalog import (
     AttachmentBlobCatalog,
-    BlobIdentityConflictError,
+    AttachmentDirectoryRetainedError,
 )
+from app.services.infrastructure.attachment_blob_catalog.fork_import import _import_id
 from app.services.infrastructure.attachment_blob_catalog.locator import (
-    fork_import_ingest_id,
+    attachment_directory_relative_locator,
     ingest_staging_relative_locator,
-    resolve_blob_path,
-    resolve_captured_attachment,
+    resolve_attachment_directory,
+    resolve_captured_directory,
     resolve_staging_path,
 )
 from app.services.infrastructure.attachment_blob_catalog.store import (
     AttachmentBlobStore,
-    parse_logical_file_id,
 )
 from app.services.infrastructure.attachment_content_service import (
     AttachmentContentService,
+)
+from app.services.infrastructure.external_resource_leases import (
+    ExternalResourceLeaseLedger,
 )
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
@@ -120,18 +123,74 @@ def _attach(name: str, content_type: str, data: bytes) -> AttachmentRef:
     )
 
 
-def _blob_files(workspace_root: Path) -> list[Path]:
-    return sorted(
-        path
-        for path in (workspace_root / ".boxteam" / "attachments").rglob("blb_*")
-        if path.is_file()
-    )
+def _original_files(workspace_root: Path) -> list[Path]:
+    return sorted((workspace_root / ".boxteam/attachments").glob("*/*/*/att_*/original/content"))
+
+
+def _original_path(store: AttachmentBlobStore, file_id: str) -> Path:
+    return store.resolve_directory_uri(parse_resource_uri(file_id, local_gateway_id=get_current_gateway_id()))
 
 
 def _store(tmp_path: Path, session_bundle_factory, *session_ids: str) -> AttachmentBlobStore:
     for session_id in session_ids:
         session_bundle_factory(tmp_path / ".boxteam" / "sessions", session_id)
     return AttachmentBlobStore(tmp_path)
+
+
+async def test_upload_restricts_original_before_publication(
+    tmp_path: Path, session_bundle_factory, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = _store(tmp_path, session_bundle_factory, SESSION_A)
+    thread = store._path_resolver.main_thread_id(SESSION_A)
+    restricted_originals: list[tuple[Path, int]] = []
+    restrict = attachment_blob_store_module.restrict_private_path_access
+
+    def restrict_and_record(path: Path, **kwargs) -> None:
+        if path.name == "content":
+            restricted_originals.append((path, path.stat().st_size))
+        restrict(path, **kwargs)
+
+    monkeypatch.setattr(attachment_blob_store_module, "restrict_private_path_access", restrict_and_record)
+    try:
+        ref, = await store.persist_inline(SESSION_A, [_attach("private.txt", "text/plain", b"private attachment")],
+                                         thread_id=thread, message_id="private-upload")
+        target = _original_path(store, ref.file_id)
+        assert target.read_bytes() == b"private attachment"
+        staged, size = restricted_originals[0]
+        assert len(restricted_originals) == 1 and size == 0
+        assert staged != target and not staged.exists()
+        if os.name != "nt":
+            assert target.stat().st_mode & 0o077 == 0
+            assert target.parent.stat().st_mode & 0o077 == 0
+    finally:
+        store.close()
+
+
+async def test_upload_permission_failure_aborts_without_publishing_directory(
+    tmp_path: Path, session_bundle_factory, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = _store(tmp_path, session_bundle_factory, SESSION_A)
+    thread = store._path_resolver.main_thread_id(SESSION_A)
+    restrict = attachment_blob_store_module.restrict_private_path_access
+
+    def reject_original(path: Path, **kwargs) -> None:
+        if path.name == "content":
+            raise PermissionError("ACL update denied")
+        restrict(path, **kwargs)
+
+    monkeypatch.setattr(attachment_blob_store_module, "restrict_private_path_access", reject_original)
+    try:
+        with pytest.raises(PermissionError, match="ACL update denied"):
+            await store.persist_inline(SESSION_A, [_attach("private.txt", "text/plain", b"private attachment")],
+                                       thread_id=thread, message_id="private-upload-failed")
+        assert store._catalog.connection.execute("SELECT * FROM attachment_directories").fetchall() == []
+        assert [row[0] for row in store._catalog.connection.execute("SELECT state FROM attachment_directory_ingests")] == ["aborted"]
+        assert _original_files(tmp_path) == []
+        assert list((tmp_path / ".boxteam/attachments/.staging").iterdir()) == []
+        with closing(store._open_control_store(SESSION_A)) as control:
+            assert [row[0] for row in control.connection.execute("SELECT state FROM session_operation_leases")] == ["failed"]
+    finally:
+        store.close()
 
 
 @pytest.fixture
@@ -275,7 +334,7 @@ async def test_source_point_projects_ingress_attachment_with_frozen_scope(
         raise AssertionError("SourcePoint 展示不能解析 canonical 或附件正文")
 
     monkeypatch.setattr(attachment_tool_owner.saver._storage.storage, "_read_v2_item_at", unexpected_body_read)
-    monkeypatch.setattr(attachment_tool_owner.store, "_verify_fork_attachment", unexpected_body_read)
+    monkeypatch.setattr(attachment_tool_owner.store, "_fork_directory_manifest", unexpected_body_read)
     point = await fork_source_point_service.source_point(
         session_id=owner.session_id, thread_id=owner.thread_id, turn_id=attachment_tool_owner.turn_id,
         source_view_id=display.source_view_id, source_view_revision=display.source_view_revision,
@@ -316,67 +375,34 @@ def fork_attachment_projection(fork_capture, tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_fork_capture_accepts_historical_gateway_uri_with_no_ambient_context(
-    attachment_tool_owner, fork_capture,
-):
+async def test_fork_capture_accepts_historical_gateway_uri_with_no_ambient_context(attachment_tool_owner, fork_capture):
     case = attachment_tool_owner
     _, record = fork_capture
     storage = case.saver._storage.storage
     with storage._connect(case.owner.thread_id, "", session_id=SESSION_A) as connection:
-        canonical_refs = tuple(row[0] for row in connection.execute(
-            "SELECT DISTINCT resource_uri FROM item_resource_references WHERE resource_kind='attachment'",
-        ))
+        canonical_refs = tuple(row[0] for row in connection.execute("SELECT DISTINCT resource_uri FROM item_resource_references WHERE resource_kind='attachment'"))
     assert canonical_refs == (case.ref.file_id,)
-
-    parsed = parse_session_artifact_uri(canonical_refs[0])
+    parsed = parse_resource_uri(case.ref.file_id)
     historical_gateway = "gateway_6c8c19e583c1f236c73a80810503bc7e"
-    historical_uri = session_artifact_uri(
-        parsed.scope_id, SESSION_A, "attachments", parsed.tail_segments[-1],
-        gateway_authority=historical_gateway,
-    )
-    gateway_token = set_current_gateway_id(None)
+    historical_uri = resource_display_uri(scope="workspace", scope_id=parsed.scope_id, kind="attachments",
+        tail_segments=parsed.tail_segments, gateway_authority=historical_gateway)
+    token = set_current_gateway_id(None)
     try:
-        assert get_current_gateway_id() is None
-        with pytest.raises(ValueError, match="本工作区 owner"):
+        with pytest.raises(ValueError, match="固定目标工作区"):
             case.store._parse_logical_file_id(SESSION_A, historical_uri)
-        snapshots = case.store.capture_fork_attachments(
-            record, references=((historical_uri, True),), same_storage_owner=True,
+        (snapshot,) = case.store.capture_fork_attachments(record, references=((historical_uri, True),), same_storage_owner=True)
+        assert (snapshot.source_session_id, snapshot.source_thread_id, snapshot.source_attachment_id, snapshot.source_file_id) == (
+            SESSION_A, case.owner.thread_id, parsed.attachment_id, historical_uri,
         )
+        assert snapshot.availability == "available" and snapshot.claim_id is not None
+        wrong = historical_uri.replace(parsed.scope_id, "019d1b4a-1111-7000-8000-000000000001")
+        with pytest.raises(ValueError, match="固定目标工作区"):
+            case.store.capture_fork_attachments(replace(record, copy_operation_id="foreign-workspace"), references=((wrong, True),), same_storage_owner=True)
+        missing = historical_uri.replace(parsed.attachment_id, "att_" + "9" * 32)
+        with pytest.raises(FileNotFoundError, match="context_required_resource_unavailable"):
+            case.store.capture_fork_attachments(replace(record, copy_operation_id="missing-directory"), references=((missing, True),), same_storage_owner=True)
     finally:
-        reset_current_gateway_id(gateway_token)
-
-    (snapshot,) = snapshots
-    assert snapshot.source_session_id == SESSION_A
-    assert snapshot.source_thread_id == case.owner.thread_id
-    assert snapshot.source_attachment_id == parsed.tail_segments[-1]
-    assert snapshot.source_file_id == historical_uri
-    assert snapshot.availability == "available"
-    assert snapshot.claim_id is not None
-
-    wrong_session_uri = session_artifact_uri(
-        parsed.scope_id, SESSION_B, "attachments", parsed.tail_segments[-1],
-        gateway_authority=historical_gateway,
-    )
-    with pytest.raises(ValueError, match="本工作区 owner"):
-        case.store._freeze_fork_attachment_candidates(
-            source_session_id=SESSION_A,
-            source_thread_id=case.owner.thread_id,
-            target_session_id=SESSION_B,
-            target_thread_id=case.store._path_resolver.main_thread_id(SESSION_B),
-            references=((wrong_session_uri, True),),
-        )
-    missing_owner_uri = session_artifact_uri(
-        parsed.scope_id, SESSION_A, "attachments", "att_" + "9" * 32,
-        gateway_authority=historical_gateway,
-    )
-    with pytest.raises(RuntimeError, match="缺少 owner ref"):
-        case.store._freeze_fork_attachment_candidates(
-            source_session_id=SESSION_A,
-            source_thread_id=case.owner.thread_id,
-            target_session_id=SESSION_B,
-            target_thread_id=case.store._path_resolver.main_thread_id(SESSION_B),
-            references=((missing_owner_uri, True),),
-        )
+        reset_current_gateway_id(token)
 
 
 @pytest.mark.asyncio
@@ -398,15 +424,15 @@ async def test_attachment_capability_uses_original_model_call_after_new_ingress(
 
 
 @pytest.mark.asyncio
-async def test_attachment_capability_rejects_other_session_even_with_same_blob(attachment_tool_owner):
+async def test_attachment_capability_requires_assembly_membership_despite_workspace_read_access(attachment_tool_owner):
     case = attachment_tool_owner
     peer = (await case.store.persist_inline(SESSION_B, [_attach("peer.txt", "text/plain", b"first\noriginal attachment\n")], thread_id=case.store._path_resolver.main_thread_id(SESSION_B), message_id="msg_" + create_uuid_hex(namespace="message")))[0]
-    assert len(_blob_files(case.store._workspace_root)) == 1
+    assert len(_original_files(case.store._workspace_root)) == 2
     with pytest.raises(PermissionError, match="原始 assembly"):
         case.saver.read_tool_call_attachment(SESSION_A, thread_id=case.owner.thread_id,
             tool_call_id=case.call_id, model_call_id=case.model_call_id, file_id=peer.file_id)
-    with pytest.raises(PermissionError, match="SessionThread"):
-        case.store.read(SESSION_A, case.ref.file_id, owner_thread_id=case.store._path_resolver.main_thread_id(SESSION_B))
+    assert case.store.read(SESSION_A, peer.file_id).data == b"first\noriginal attachment\n"
+    assert case.store.read(SESSION_A, case.ref.file_id, owner_thread_id=case.store._path_resolver.main_thread_id(SESSION_B)).data == b"first\noriginal attachment\n"
     with pytest.raises(RuntimeError, match="identity 缺失或歧义"):
         case.saver.read_tool_call_attachment(SESSION_A, thread_id=case.owner.thread_id,
             tool_call_id="unissued-call", model_call_id=case.model_call_id, file_id=case.ref.file_id)
@@ -556,8 +582,8 @@ async def test_fork_projects_generated_attachment_blocks_without_mutating_user_t
     captured = snapshots[0]
     await store.reserve_copy_attachments(record, None, snapshots)
     assert store.project_attachment(SESSION_B, record.target_thread_id, ref.file_id)["availability"] == "unavailable"
-    with pytest.raises(FileNotFoundError, match="尚未完成发布"):
-        store.read(SESSION_B, captured.target_file_id)
+    with pytest.raises(FileNotFoundError, match="没有已发布的目标目录"):
+        store.read(SESSION_B, captured.target_file_id, owner_thread_id=record.target_thread_id)
     await store.finalize_copy_attachments(record, publication_preimage_hash=record.preimage_hash)
     projection, calls = fork_attachment_projection
     message = message_to_dict(HumanMessage(content=built.content, response_metadata={"attachments": [ref.model_dump(mode="json", exclude={"data_url"})]}))
@@ -578,45 +604,40 @@ async def test_fork_projects_generated_attachment_blocks_without_mutating_user_t
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("required", [False, True])
-async def test_fork_attachment_missing_bytes_respects_required(fork_capture, required: bool) -> None:
+async def test_fork_reclaimed_directory_respects_required_without_recreating_bytes(fork_capture, required: bool) -> None:
     store, record = fork_capture
-    ref = (await store.persist_inline(SESSION_A, [_attach("capture.txt", "text/plain", b"fork-body")], thread_id=record.source_thread_id, message_id="msg_" + create_uuid_hex(namespace="message")))[0]
-    attachment_id = parse_logical_file_id(SESSION_A, ref.file_id)
-    source = store._catalog.get_owner_ref(attachment_id)
-    blob = store._catalog.get_blob(source.blob_id)
-    path = resolve_blob_path(store._attachments_root, blob.relative_locator)
-    path.unlink()
+    (ref,) = await store.persist_inline(SESSION_A, [_attach("capture.txt", "text/plain", b"fork-body")],
+        thread_id=record.source_thread_id, message_id="msg_reclaimed")
+    attachment_id = parse_resource_uri(ref.file_id).attachment_id
+    store.release_session_references(SESSION_A)
+    current = datetime.now(UTC)
+    store._clock = lambda: current + timedelta(days=31)
+    assert await store.collect_garbage(leases=ExternalResourceLeaseLedger()) == (attachment_id,)
+    before = store._catalog.get_directory(attachment_id)
     if required:
-        with pytest.raises(FileNotFoundError):
+        with pytest.raises(FileNotFoundError, match="context_required_resource_unavailable"):
             store.capture_fork_attachments(record, same_storage_owner=True, references=((ref.file_id, True),))
-        assert store._catalog.fork_attachment_claim_ids(record.copy_operation_id) == ()
-        assert store.project_attachment(SESSION_B, record.target_thread_id, ref.file_id) == {"file_id": ref.file_id, "availability": "unavailable"}
     else:
-        snapshots = store.capture_fork_attachments(record, same_storage_owner=True, references=((ref.file_id, False),))
-        assert len(snapshots) == 1
-        assert snapshots[0].availability == "unavailable"
-        assert snapshots[0].claim_id is None
-        assert store._catalog.fork_attachment_claim_ids(record.copy_operation_id) == ()
-        projection = store.project_attachment(SESSION_B, record.target_thread_id, ref.file_id)
-        assert projection == {"file_id": snapshots[0].target_file_id, "availability": "unavailable"}
-        mappings = store._catalog._connected().execute("SELECT source_file_id,snapshot_json FROM fork_attachment_mappings WHERE copy_operation_id=?", (record.copy_operation_id,)).fetchall()
-        assert {row[0] for row in mappings} == {ref.file_id, projection["file_id"]}
-        assert all(json.loads(row[1])["availability"] == "unavailable" for row in mappings)
-    assert store._catalog.get_owner_ref(attachment_id) == source
-    assert store._catalog.get_blob(source.blob_id) == blob
+        (snapshot,) = store.capture_fork_attachments(record, same_storage_owner=True, references=((ref.file_id, False),))
+        assert snapshot.availability == "unavailable" and snapshot.claim_id is None
+        assert snapshot.target_action == "omit" and snapshot.unavailable_reason
+        assert store.project_attachment(SESSION_B, record.target_thread_id, ref.file_id) == {"file_id": ref.file_id, "availability": "unavailable"}
+    assert store._catalog.fork_attachment_claim_ids(record.copy_operation_id) == ()
+    assert store._catalog.get_directory(attachment_id) == before
+    assert _original_files(store._workspace_root) == []
 
 
 @pytest.mark.asyncio
 async def test_fork_attachment_same_domain_different_owner_rejects_before_claim(fork_capture) -> None:
     store, record = fork_capture
     ref = (await store.persist_inline(SESSION_A, [_attach("owner.txt", "text/plain", b"same-domain")], thread_id=record.source_thread_id, message_id="msg_" + create_uuid_hex(namespace="message")))[0]
-    source = store._catalog.get_owner_ref(parse_logical_file_id(SESSION_A, ref.file_id))
+    source = store._catalog.get_directory(parse_resource_uri(ref.file_id).attachment_id)
     with pytest.raises(ValueError, match="fork_owner_overlap"):
         store.capture_fork_attachments(record, references=((ref.file_id, True),), same_storage_owner=False)
     assert store._catalog.fork_attachment_claim_ids(record.copy_operation_id) == ()
     assert store._catalog.fork_attachment_snapshots(record.copy_operation_id, target_session_id=record.target_session_id,
                                                   target_thread_id=record.target_thread_id) == ()
-    assert store._catalog.get_owner_ref(source.attachment_id) == source
+    assert store._catalog.get_directory(source.attachment_id) == source
 
 
 @pytest.mark.asyncio
@@ -624,12 +645,13 @@ async def test_fork_attachment_same_domain_different_owner_rejects_before_claim(
 async def test_optional_fork_attachment_damage_is_not_unavailable(fork_capture, damage: str) -> None:
     store, record = fork_capture
     ref = (await store.persist_inline(SESSION_A, [_attach("capture.txt", "text/plain", b"fork-body")], thread_id=record.source_thread_id, message_id="msg_" + create_uuid_hex(namespace="message")))[0]
-    source = store._catalog.get_owner_ref(parse_logical_file_id(SESSION_A, ref.file_id))
-    blob = store._catalog.get_blob(source.blob_id)
-    path = resolve_blob_path(store._attachments_root, blob.relative_locator)
+    source = store._catalog.get_directory(parse_resource_uri(ref.file_id).attachment_id)
+    path = _original_path(store, ref.file_id)
+    path.chmod(0o600)
+    path.parent.chmod(0o700)
     if damage == "hash":
         path.write_bytes(b"changed-bytes")
-        error = "hash/length"
+        error = "已登记版本不一致"
     else:
         path.unlink()
         path.symlink_to(path.with_name("missing-body"))
@@ -637,7 +659,8 @@ async def test_optional_fork_attachment_damage_is_not_unavailable(fork_capture, 
     with pytest.raises(RuntimeError, match=error):
         store.capture_fork_attachments(record, same_storage_owner=True, references=((ref.file_id, False),))
     assert store._catalog.fork_attachment_claim_ids(record.copy_operation_id) == ()
-    assert store.project_attachment(SESSION_B, record.target_thread_id, ref.file_id) == {"file_id": ref.file_id, "availability": "unavailable"}
+    assert store._catalog.fork_attachment_snapshots(record.copy_operation_id, target_session_id=SESSION_B, target_thread_id=record.target_thread_id) == ()
+    assert store._catalog.get_directory(source.attachment_id) == source
 
 
 # ----------------------------------------------------------------------
@@ -651,57 +674,32 @@ async def test_fork_attachment_same_length_damage_never_reuses_stat_cache(fork_c
     """冷读与已验证文件均拒绝同长度损坏，即使调用方把 mtime 恢复为原值。"""
     store, record = fork_capture
     ref = (await store.persist_inline(SESSION_A, [_attach("capture.txt", "text/plain", b"fork-body")], thread_id=record.source_thread_id, message_id="msg_" + create_uuid_hex(namespace="message")))[0]
-    source = store._catalog.get_owner_ref(parse_logical_file_id(SESSION_A, ref.file_id))
-    blob = store._catalog.get_blob(source.blob_id)
-    path = resolve_blob_path(store._attachments_root, blob.relative_locator)
+    source = store._catalog.get_directory(parse_resource_uri(ref.file_id).attachment_id)
+    path = _original_path(store, ref.file_id)
+    path.chmod(0o600)
+    path.parent.chmod(0o700)
     metadata = path.stat()
     if warm:
         store.capture_fork_attachments(record, same_storage_owner=True, references=((ref.file_id, True),))
     claims = store._catalog.fork_attachment_claim_ids(record.copy_operation_id)
     path.write_bytes(b"bad-bytes")
     os.utime(path, ns=(metadata.st_atime_ns, metadata.st_mtime_ns))
-    with pytest.raises(RuntimeError, match="hash/length"):
+    with pytest.raises(RuntimeError, match="已登记版本不一致"):
         store.capture_fork_attachments(record, same_storage_owner=True, references=((ref.file_id, True),))
     assert store._catalog.fork_attachment_claim_ids(record.copy_operation_id) == claims
-    assert store._catalog.get_owner_ref(source.attachment_id) == source
-    assert store._catalog.get_blob(blob.blob_id) == blob
+    assert store._catalog.get_directory(source.attachment_id) == source
 
 
-def test_blob_identity_is_pure_sha256_of_bytes() -> None:
-    identity = compute_blob_identity(b"hello")
-    assert identity.blob_id == "blb_" + compute_blob_identity(b"hello").blob_id[4:]
-    assert identity.digest == "sha256:" + identity.blob_id[4:]
-    assert identity.length == 5
 
 
-def test_date_bucket_locator_has_no_extra_shard() -> None:
-    locator = date_bucket_relative_locator(
-        "blb_" + "a" * 64, datetime(2026, 3, 4, tzinfo=UTC).date()
-    )
-    assert locator == "2026/03/04/blb_" + "a" * 64
-    validate_blob_relative_locator(locator)
 
 
-@pytest.mark.parametrize(
-    "locator",
-    [
-        "2026/03/04/blb_" + "A" * 64,
-        "2026/03/04/blb_" + "a" * 63,
-        "../2026/03/04/blb_" + "a" * 64,
-        "/2026/03/04/blb_" + "a" * 64,
-        "2026/03/04/blb_" + "a" * 64 + "/x",
-        "blb_" + "a" * 64,
-    ],
-)
-def test_validate_blob_relative_locator_rejects_non_canonical(locator: str) -> None:
-    with pytest.raises(ValueError):
-        validate_blob_relative_locator(locator)
 
 
-def test_resolve_blob_path_rejects_caller_supplied_escape(tmp_path: Path) -> None:
-    """resolver 只接受受检 locator：调用方字符串路径必须失败。"""
-    with pytest.raises(ValueError):
-        resolve_blob_path(tmp_path / "attachments", "../../etc/passwd")
+
+
+
+
 
 
 @pytest.mark.parametrize(
@@ -719,12 +717,15 @@ def test_resolve_blob_path_rejects_caller_supplied_escape(tmp_path: Path) -> Non
 )
 def test_parse_logical_file_id_rejects_traversal_and_foreign(file_id: str) -> None:
     with pytest.raises(ValueError):
-        parse_logical_file_id(SESSION_A, file_id)
+        parse_attachment_uri(file_id, require_file=True)
 
 
-def test_parse_logical_file_id_rejects_other_session() -> None:
-    with pytest.raises(ValueError, match="不属于指定会话"):
-        parse_logical_file_id(SESSION_B, session_artifact_uri("019d1b4a-1111-7000-8000-000000000001", SESSION_A, "attachments", "att_" + "1" * 32))
+def test_directory_reference_rejects_foreign_workspace(tmp_path, session_bundle_factory) -> None:
+    with closing(_store(tmp_path, session_bundle_factory, SESSION_A)) as store:
+        foreign = resource_display_uri(scope="workspace", scope_id="019d1b4a-1111-7000-8000-000000000001",
+            kind="attachments", tail_segments=("att_" + "1" * 32, "original", "content"))
+        with pytest.raises(ValueError, match="固定目标工作区"):
+            store.read(SESSION_A, foreign)
 
 
 # ----------------------------------------------------------------------
@@ -733,177 +734,95 @@ def test_parse_logical_file_id_rejects_other_session() -> None:
 
 
 @pytest.mark.asyncio
-async def test_persist_inline_writes_date_bucketed_blob_and_reads_back(
-    tmp_path, session_bundle_factory
-) -> None:
-    store = _store(tmp_path, session_bundle_factory, SESSION_A)
-    payload = b"\x89PNG\r\n\x1a\nimage-data"
-
-    stored = (
-        await store.persist_inline(SESSION_A, [_attach("example.png", "image/png", payload)], thread_id=store._path_resolver.main_thread_id(SESSION_A), message_id="msg_" + create_uuid_hex(namespace="message"))
-    )[0]
-
-    assert stored.data_url is None
-    assert parse_session_artifact_uri(stored.file_id).tail_segments[:2] == (SESSION_A, "attachments")
-    blobs = _blob_files(tmp_path)
-    assert len(blobs) == 1
-    identity = compute_blob_identity(payload)
-    assert blobs[0].name == identity.blob_id
-    assert blobs[0].parent.parent.parent.name == str(datetime.now(UTC).year)
-
-    content = store.read(SESSION_A, stored.file_id)
-    assert content.data == payload
-    assert content.content_type == "image/png"
-    store.close()
+async def test_persist_inline_writes_independent_directory_and_reads_original(tmp_path, session_bundle_factory) -> None:
+    with closing(_store(tmp_path, session_bundle_factory, SESSION_A)) as store:
+        payload = b"original-image-bytes"
+        (stored,) = await store.persist_inline(SESSION_A, [_attach("example.png", "image/png", payload)],
+            thread_id=store._path_resolver.main_thread_id(SESSION_A), message_id="msg_" + create_uuid_hex(namespace="message"))
+        parsed = parse_attachment_uri(stored.file_id, require_file=True)
+        assert stored.data_url is None and parsed.kind == "attachments" and parsed.scope_id == store.workspace_id
+        assert parsed.tail_segments[1:] == ("original", "content")
+        assert stored.directory_uri == file_uri_root(stored.file_id)
+        (original,) = _original_files(tmp_path)
+        directory = store._catalog.get_directory(parsed.attachment_id)
+        assert original == resolve_attachment_directory(store._attachments_root, directory.relative_locator) / "original/content"
+        assert directory.relative_locator.startswith(datetime.now(UTC).strftime("%Y/%m/%d/"))
+        assert (original.parent.parent / "preview").is_dir() and (original.parent.parent / "derived").is_dir()
+        assert store.read(SESSION_A, stored.file_id).data == payload
+        assert store.read(SESSION_A, stored.file_id).content_type == "image/png"
 
 
 @pytest.mark.asyncio
-async def test_persist_inline_deduplicates_and_reuses_first_locator(
-    tmp_path, session_bundle_factory
-) -> None:
-    store = _store(tmp_path, session_bundle_factory, SESSION_A)
-    attachment = _attach("duplicate.png", "image/png", b"same-image")
-
-    first = (await store.persist_inline(SESSION_A, [attachment], thread_id=store._path_resolver.main_thread_id(SESSION_A), message_id="msg_" + create_uuid_hex(namespace="message")))[0]
-    second = (await store.persist_inline(SESSION_A, [attachment], thread_id=store._path_resolver.main_thread_id(SESSION_A), message_id="msg_" + create_uuid_hex(namespace="message")))[0]
-
-    assert first.file_id == second.file_id
-    assert len(_blob_files(tmp_path)) == 1
-    store.close()
+async def test_independent_uploads_with_same_body_have_distinct_directory_identities(tmp_path, session_bundle_factory) -> None:
+    with closing(_store(tmp_path, session_bundle_factory, SESSION_A)) as store:
+        attachment = _attach("duplicate.txt", "text/plain", b"same-body")
+        thread = store._path_resolver.main_thread_id(SESSION_A)
+        (first,) = await store.persist_inline(SESSION_A, [attachment], thread_id=thread, message_id="msg_first")
+        (second,) = await store.persist_inline(SESSION_A, [attachment], thread_id=thread, message_id="msg_second")
+        assert first.file_id != second.file_id and first.directory_uri != second.directory_uri
+        assert len(_original_files(tmp_path)) == 2
+        (_original_path(store, first.file_id).parent.parent / "derived/result.txt").write_text("first-only")
+        assert not (_original_path(store, second.file_id).parent.parent / "derived/result.txt").exists()
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("boundary", ["staging", "hashed", "renamed"])
-async def test_failed_upload_can_retry_same_body_without_reopening_old_ingest(
-    tmp_path, session_bundle_factory, monkeypatch, boundary,
-) -> None:
-    store = _store(tmp_path, session_bundle_factory, SESSION_A)
-    thread = store._path_resolver.main_thread_id(SESSION_A)
-    attachment = _attach("retry.txt", "text/plain", b"retry-identical-content")
-    method = "_write_staging" if boundary == "staging" else "_commit_staged_blob"
-    original = getattr(store, method)
-
-    def fail_once(*args, **kwargs):
-        if boundary != "hashed":
-            original(*args, **kwargs)
-        raise OSError("注入上传失败")
-
-    with monkeypatch.context() as patch:
-        patch.setattr(store, method, fail_once)
-        with pytest.raises(OSError, match="注入上传失败"):
-            await store.persist_inline(SESSION_A, [attachment], thread_id=thread, message_id="msg_" + create_uuid_hex(namespace="message"))
-    (failed,) = store._catalog.connection.execute("SELECT * FROM attachment_ingest_records").fetchall()
-    failed_before = dict(failed)
-    assert failed_before["state"] == "aborted"
-    claims = store._catalog.connection.execute("SELECT * FROM attachment_blob_commit_claims").fetchall()
-    frozen_locator = claims[0]["final_relative_locator"] if claims else None
-
-    result = (await store.persist_inline(SESSION_A, [attachment], thread_id=thread, message_id="msg_" + create_uuid_hex(namespace="message")))[0]
-    assert store.read(SESSION_A, result.file_id).data == b"retry-identical-content"
-    assert dict(store._catalog.connection.execute(
-        "SELECT * FROM attachment_ingest_records WHERE ingest_idempotency_key = ?",
-        (failed_before["ingest_idempotency_key"],),
-    ).fetchone()) == failed_before
-    records = store._catalog.connection.execute("SELECT * FROM attachment_ingest_records").fetchall()
-    assert sorted(row["state"] for row in records) == ["aborted", "published"]
-    (claim,) = store._catalog.connection.execute("SELECT * FROM attachment_blob_commit_claims").fetchall()
-    assert claim["state"] == "published"
-    assert claim["winning_ingest_id"] != failed_before["ingest_id"]
-    if frozen_locator is not None:
-        assert claim["final_relative_locator"] == frozen_locator
-    assert len(_blob_files(tmp_path)) == 1
-    store.close()
+@pytest.mark.parametrize("boundary", ["before-write", "after-write", "before-publish"])
+async def test_failed_upload_can_retry_same_body_without_reopening_old_ingest(tmp_path, session_bundle_factory, monkeypatch, boundary) -> None:
+    with closing(_store(tmp_path, session_bundle_factory, SESSION_A)) as store:
+        thread = store._path_resolver.main_thread_id(SESSION_A)
+        attachment = _attach("retry.txt", "text/plain", b"retry-identical-content")
+        write = store._write_directory
+        def fail_write(*args):
+            if boundary == "after-write":
+                write(*args)
+            raise OSError("注入上传失败")
+        def fail_publish(*args, **kwargs):
+            raise OSError("注入上传失败")
+        with monkeypatch.context() as patch:
+            if boundary == "before-publish":
+                patch.setattr(store._catalog, "publish_ingest", fail_publish)
+            else:
+                patch.setattr(store, "_write_directory", fail_write)
+            with pytest.raises(OSError, match="注入上传失败"):
+                await store.persist_inline(SESSION_A, [attachment], thread_id=thread, message_id="msg_failed")
+        (failed,) = store._catalog.connection.execute("SELECT * FROM attachment_directory_ingests").fetchall()
+        before = dict(failed)
+        assert before["state"] == "aborted"
+        assert not resolve_attachment_directory(store._attachments_root, before["relative_locator"]).exists()
+        (result,) = await store.persist_inline(SESSION_A, [attachment], thread_id=thread, message_id="msg_retry")
+        assert store.read(SESSION_A, result.file_id).data == b"retry-identical-content"
+        assert parse_resource_uri(result.file_id).attachment_id != before["attachment_id"]
+        assert dict(store._catalog.connection.execute("SELECT * FROM attachment_directory_ingests WHERE ingest_idempotency_key=?", (before["ingest_idempotency_key"],)).fetchone()) == before
+        assert len(_original_files(tmp_path)) == 1
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("damage", ["missing", "corrupt"])
-async def test_repeated_upload_does_not_publish_missing_or_corrupt_winner(
-    tmp_path, session_bundle_factory, damage,
-) -> None:
-    store = _store(tmp_path, session_bundle_factory, SESSION_A)
-    attachment = _attach("winner.txt", "text/plain", b"winner-content")
-    thread = store._path_resolver.main_thread_id(SESSION_A)
-    try:
-        (first,) = await store.persist_inline(SESSION_A, [attachment], thread_id=thread, message_id="msg_" + create_uuid_hex(namespace="message"))
-        (path,) = _blob_files(tmp_path)
+async def test_same_upload_retry_rejects_damage_while_new_upload_keeps_separate_original(tmp_path, session_bundle_factory, damage) -> None:
+    with closing(_store(tmp_path, session_bundle_factory, SESSION_A)) as store:
+        attachment = _attach("winner.txt", "text/plain", b"winner-content")
+        thread = store._path_resolver.main_thread_id(SESSION_A)
+        (first,) = await store.persist_inline(SESSION_A, [attachment], thread_id=thread, message_id="msg_same")
+        path = _original_path(store, first.file_id)
+        path.chmod(0o600)
         if damage == "missing":
+            path.parent.chmod(0o700)
             path.unlink()
         else:
             path.write_bytes(b"wrong-content!")
-        refs_before = store._catalog.list_owner_refs_for_session(SESSION_A, active_only=True)
-        error_type = FileNotFoundError if damage == "missing" else RuntimeError
-        error_text = "附件正文缺失" if damage == "missing" else "hash/length 不一致"
-        with pytest.raises(error_type, match=error_text):
-            await store.persist_inline(SESSION_A, [attachment], thread_id=thread, message_id="msg_" + create_uuid_hex(namespace="message"))
-        records = store._catalog.connection.execute("SELECT state FROM attachment_ingest_records").fetchall()
-        assert sorted(row["state"] for row in records) == ["aborted", "published"]
-        assert store._catalog.list_owner_refs_for_session(SESSION_A, active_only=True) == refs_before
-        assert refs_before[0].attachment_id == parse_logical_file_id(SESSION_A, first.file_id)
+        with pytest.raises(FileNotFoundError if damage == "missing" else RuntimeError):
+            await store.persist_inline(SESSION_A, [attachment], thread_id=thread, message_id="msg_same")
+        (second,) = await store.persist_inline(SESSION_A, [attachment], thread_id=thread, message_id="msg_distinct")
+        assert second.file_id != first.file_id and store.read(SESSION_A, second.file_id).data == b"winner-content"
         if damage == "corrupt":
-            assert path.read_bytes() == b"wrong-content!", "不得用重试覆盖损坏的已发布正文"
-    finally:
-        store.close()
+            assert path.read_bytes() == b"wrong-content!"
 
 
-def test_verified_blob_signature_cache_is_bounded_lru(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    store = AttachmentBlobStore(tmp_path)
-    payload = b"verified attachment"
-    identity = compute_blob_identity(payload)
-    cache_limit = attachment_blob_store_module._VERIFIED_BLOB_SIGNATURE_CACHE_SIZE
-    paths = [tmp_path / f"blob-{index}" for index in range(cache_limit + 1)]
-    for path in paths:
-        path.write_bytes(payload)
 
-    verification_count = 0
-    verify_content = attachment_blob_store_module._verify_content
-
-    def count_verification(
-        data: bytes | Path,
-        expected_digest: str,
-        expected_length: int,
-        blob_id: str,
-    ) -> None:
-        nonlocal verification_count
-        verification_count += 1
-        verify_content(data, expected_digest, expected_length, blob_id)
-
-    monkeypatch.setattr(
-        attachment_blob_store_module,
-        "_verify_content",
-        count_verification,
-    )
-    try:
-        for path in paths[:-1]:
-            store._verify_blob_content(
-                path,
-                identity.digest,
-                identity.length,
-                identity.blob_id,
-            )
-        store._verify_blob_content(
-            paths[0], identity.digest, identity.length, identity.blob_id
-        )
-        store._verify_blob_content(
-            paths[-1], identity.digest, identity.length, identity.blob_id
-        )
-        store._verify_blob_content(
-            paths[0], identity.digest, identity.length, identity.blob_id
-        )
-        store._verify_blob_content(
-            paths[1], identity.digest, identity.length, identity.blob_id
-        )
-
-        assert verification_count == cache_limit + 2
-        assert len(store._verified_blob_signatures) == cache_limit
-    finally:
-        store.close()
 
 
 @pytest.mark.asyncio
-async def test_same_digest_across_sessions_reuses_single_physical_blob(
+async def test_same_digest_across_sessions_uses_independent_directories(
     tmp_path, session_bundle_factory
 ) -> None:
     store = _store(tmp_path, session_bundle_factory, SESSION_A, SESSION_B)
@@ -912,7 +831,7 @@ async def test_same_digest_across_sessions_reuses_single_physical_blob(
     ref_a = (await store.persist_inline(SESSION_A, [_attach("a.bin", "application/pdf", payload)], thread_id=store._path_resolver.main_thread_id(SESSION_A), message_id="msg_" + create_uuid_hex(namespace="message")))[0]
     ref_b = (await store.persist_inline(SESSION_B, [_attach("b.bin", "application/pdf", payload)], thread_id=store._path_resolver.main_thread_id(SESSION_B), message_id="msg_" + create_uuid_hex(namespace="message")))[0]
 
-    assert len(_blob_files(tmp_path)) == 1
+    assert len(_original_files(tmp_path)) == 2
     assert ref_a.file_id != ref_b.file_id
     assert store.read(SESSION_A, ref_a.file_id).data == payload
     assert store.read(SESSION_B, ref_b.file_id).data == payload
@@ -939,17 +858,13 @@ async def test_generic_mime_and_name_suffix_are_preserved(
 
 
 @pytest.mark.asyncio
-async def test_read_rejects_attachment_from_another_session(
-    tmp_path, session_bundle_factory
-) -> None:
-    store = _store(tmp_path, session_bundle_factory, SESSION_A, SESSION_B)
-    ref_a = (await store.persist_inline(SESSION_A, [_attach("a.png", "image/png", b"a")], thread_id=store._path_resolver.main_thread_id(SESSION_A), message_id="msg_" + create_uuid_hex(namespace="message")))[0]
-    ref_b = (await store.persist_inline(SESSION_B, [_attach("b.png", "image/png", b"b")], thread_id=store._path_resolver.main_thread_id(SESSION_B), message_id="msg_" + create_uuid_hex(namespace="message")))[0]
-
-    with pytest.raises(ValueError, match="不属于指定会话"):
-        store.read(SESSION_B, ref_a.file_id)
-    assert store.read(SESSION_B, ref_b.file_id).data == b"b"
-    store.close()
+async def test_workspace_directory_read_does_not_create_retaining_association(tmp_path, session_bundle_factory) -> None:
+    with closing(_store(tmp_path, session_bundle_factory, SESSION_A, SESSION_B)) as store:
+        (ref,) = await store.persist_inline(SESSION_A, [_attach("a.txt", "text/plain", b"workspace-readable")],
+            thread_id=store._path_resolver.main_thread_id(SESSION_A), message_id="msg_workspace")
+        before = tuple(store._catalog.connection.execute("SELECT * FROM attachment_directory_associations"))
+        assert store.read(SESSION_B, ref.file_id).data == b"workspace-readable"
+        assert tuple(store._catalog.connection.execute("SELECT * FROM attachment_directory_associations")) == before
 
 
 @pytest.mark.asyncio
@@ -965,23 +880,21 @@ async def test_persist_rejects_mismatched_content_type(
 
     with pytest.raises(ValueError, match="MIME 不一致"):
         await store.persist_inline(SESSION_A, [attachment], thread_id=store._path_resolver.main_thread_id(SESSION_A), message_id="msg_" + create_uuid_hex(namespace="message"))
-    assert _blob_files(tmp_path) == []
+    assert _original_files(tmp_path) == []
     store.close()
 
 
 @pytest.mark.asyncio
-async def test_relative_path_exposes_logical_ref_not_physical_locator(
-    tmp_path, session_bundle_factory
-) -> None:
-    """模型/canonical content 只拿逻辑引用，绝不暴露 blob 物理 locator。"""
-    store = _store(tmp_path, session_bundle_factory, SESSION_A)
-    stored = (await store.persist_inline(SESSION_A, [_attach("a.png", "image/png", b"a")], thread_id=store._path_resolver.main_thread_id(SESSION_A), message_id="msg_" + create_uuid_hex(namespace="message")))[0]
-
-    relative = store.relative_path(SESSION_A, stored.file_id)
-    assert relative == stored.file_id
-    assert parse_session_artifact_uri(relative).tail_segments[:2] == (SESSION_A, "attachments")
-    assert ".boxteam/attachments" not in relative
-    store.close()
+async def test_model_manifest_exposes_directory_and_file_uris_without_physical_locator(tmp_path, session_bundle_factory) -> None:
+    with closing(_store(tmp_path, session_bundle_factory, SESSION_A)) as store:
+        (stored,) = await store.persist_inline(SESSION_A, [_attach("a.txt", "text/plain", b"content")],
+            thread_id=store._path_resolver.main_thread_id(SESSION_A), message_id="msg_manifest")
+        built = UserContentBuilder(attachment_service=AttachmentContentService(workspace_root=tmp_path, attachment_store=store)).build("读取附件", [stored])
+        manifest = built.content[1]
+        assert manifest["metadata"]["file_id"] == stored.file_id
+        assert manifest["metadata"]["directory_uri"] == stored.directory_uri
+        assert stored.file_id in manifest["text"] and stored.directory_uri in manifest["text"]
+        assert ".boxteam/attachments" not in str(built) and str(tmp_path) not in str(built)
 
 
 # ----------------------------------------------------------------------
@@ -1031,10 +944,6 @@ async def test_preview_cache_io_error_keeps_uri_and_errno_in_generated_diagnosti
 ) -> None:
     import errno
 
-    from app.services.infrastructure.attachment_blob_catalog import (
-        store as store_module,
-    )
-
     store = _store(tmp_path, session_bundle_factory, SESSION_A)
     buffer = BytesIO()
     Image.new("RGB", (64, 64)).save(buffer, format="PNG")
@@ -1043,16 +952,23 @@ async def test_preview_cache_io_error_keeps_uri_and_errno_in_generated_diagnosti
         thread_id=store._path_resolver.main_thread_id(SESSION_A),
      message_id="msg_" + create_uuid_hex(namespace="message")))[0]
 
-    def denied_write(target, data):
-        raise PermissionError(errno.EACCES, "Permission denied", str(target))
+    original_open = Path.open
 
-    monkeypatch.setattr(store_module, "_write_once", denied_write)
+    def denied_preview_open(target, mode="r", *args, **kwargs):
+        if target.parts[-2:] == ("preview", "512.webp") and mode == "xb":
+            raise PermissionError(errno.EACCES, "Permission denied", str(target))
+        return original_open(target, mode, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", denied_preview_open)
     try:
         built = UserContentBuilder(attachment_service=AttachmentContentService(
             workspace_root=tmp_path, attachment_store=store,
         )).build("读取附件", [attachment])
         assert built.diagnostics[0]["file_id"] == attachment.file_id
-        assert "Errno 13" in built.diagnostics[0]["detail"]
+        assert built.diagnostics[0]["detail"] == (
+            f"附件预览生成失败: file_id={attachment.file_id}, "
+            "stage=image_preview, error=PermissionError, errno=13"
+        )
         assert attachment.file_id in built.diagnostics[0]["detail"]
         assert str(tmp_path) not in str(built)
         assert built.content[1]["metadata"]["preview_status"] == "failed"
@@ -1073,160 +989,106 @@ async def test_read_thumbnail_rejects_non_image(tmp_path, session_bundle_factory
 
 
 # ----------------------------------------------------------------------
-# digest 唯一 claim 与 identity conflict（catalog 层，确定性）
+# 目录 intent 与不可变版本冲突（catalog 层，确定性）
 # ----------------------------------------------------------------------
 
 
 def _catalog(tmp_path: Path) -> AttachmentBlobCatalog:
-    return AttachmentBlobCatalog(
-        tmp_path / ".boxteam" / "attachments" / "catalog.sqlite"
-    )
+    return AttachmentBlobCatalog(tmp_path / ".boxteam/attachments/catalog.sqlite",
+                                 workspace_id="a475d596-039d-48db-a14c-a0cbf7b4b58c")
+
+
+def _create_ingest(catalog: AttachmentBlobCatalog, operation: str, now: datetime, **changes):
+    stamp = now.isoformat()
+    arguments = {
+        "operation_id": operation, "ingest_id": "ing_" + hashlib.sha256(operation.encode()).hexdigest()[:32],
+        "session_id": SESSION_A, "thread_id": "thr_" + "a" * 32, "message_id": "msg_" + "b" * 32,
+        "pin": SessionOperationLease(lease_id="lease_" + operation, operation_kind="attachment",
+            operation_identity=operation, preimage_hash="c" * 64, captured_lifecycle_generation=1,
+            holder_generation=1, fencing_token=1, state="active", revision=1, recovery_ref=None,
+            created_at=stamp, updated_at=stamp),
+        "digest": "sha256:" + hashlib.sha256(b"same").hexdigest(), "length": 4,
+        "file_name": "input.txt", "mime_type": "text/plain", "now": now,
+    }
+    return catalog.create_ingest(**{**arguments, **changes})
 
 
 @pytest.mark.parametrize("abort_first", [False, True])
-def test_mark_hashed_claims_single_locator_per_digest(tmp_path: Path, abort_first: bool) -> None:
-    """并发相同 digest：唯一 claim 冻结首次日期与 locator，不产生第二 locator。"""
-    catalog = _catalog(tmp_path)
-    identity = compute_blob_identity(b"same")
-    ingest_ids = {
-        "first": "a7937b64b8caa58f03721bb6bacf5c78",
-        "second": "16367aacb67a4a017c8da8ab95682ccb",
-    }
-    for index, ingest_hex in ingest_ids.items():
-        catalog.create_or_get_ingest_record(
-            ingest_idempotency_key=f"attkey_{index}",
-            ingest_id=f"ing_{ingest_hex}",
-            owner_session_id=SESSION_A,
-            owner_thread_id="thr_" + "a" * 32,
-            pin_lease_id=f"lease_{index}",
-            pin_fencing_token=1,
-            pin_captured_generation=1,
-            preimage_hash="b" * 64,
-            staging_relative_locator=ingest_staging_relative_locator(
-                f"ing_{ingest_hex}"
-            ),
-            max_bytes=1024,
-        )
-
-    _first_record, first_claim = catalog.mark_ingest_hashed(
-        ingest_idempotency_key="attkey_first", identity=identity
-    )
-    if abort_first:
-        catalog.abort_ingest_record(ingest_idempotency_key="attkey_first", reason="上传失败")
-    frozen_first = catalog.get_ingest_record("attkey_first")
-    _second_record, second_claim = catalog.mark_ingest_hashed(
-        ingest_idempotency_key="attkey_second", identity=identity
-    )
-
-    assert first_claim.winning_ingest_id == "ing_a7937b64b8caa58f03721bb6bacf5c78"
-    assert second_claim.final_relative_locator == first_claim.final_relative_locator
-    assert second_claim.winning_ingest_id == (
-        "ing_16367aacb67a4a017c8da8ab95682ccb" if abort_first else first_claim.winning_ingest_id
-    )
-    assert second_claim.first_claim_utc_date == first_claim.first_claim_utc_date
-    assert catalog.get_ingest_record("attkey_first") == frozen_first
-    assert len(catalog.list_non_terminal_claims()) == 1
-    catalog.close()
+def test_independent_ingests_do_not_merge_directory_identity_or_creation_date(tmp_path: Path, abort_first: bool) -> None:
+    now = datetime(2026, 10, 23, 23, 59, 59, tzinfo=UTC)
+    with closing(_catalog(tmp_path)) as catalog:
+        first = _create_ingest(catalog, "attkey_first", now)
+        if abort_first:
+            catalog.abort_ingest_record(ingest_idempotency_key=first.ingest_idempotency_key, reason="上传失败", now=now)
+        before = catalog.get_ingest_record(first.ingest_idempotency_key)
+        second = _create_ingest(catalog, "attkey_second", now + timedelta(seconds=2))
+        assert first.digest == second.digest and first.length == second.length
+        assert first.attachment_id != second.attachment_id
+        assert first.relative_locator == "2026/10/23/" + first.attachment_id
+        assert second.relative_locator == "2026/10/24/" + second.attachment_id
+        assert catalog.get_ingest_record(first.ingest_idempotency_key) == before
+        assert catalog.connection.execute("SELECT count(*) FROM attachment_directories").fetchone()[0] == 0
 
 
-def test_publish_rejects_same_blob_id_with_different_length(tmp_path: Path) -> None:
-    """同一 blob-id 不同 length → blob-identity-conflict，不覆盖。"""
-    catalog = _catalog(tmp_path)
-    payload = b"correct-bytes"
-    identity = compute_blob_identity(payload)
-    tampered = type(identity)(blob_id=identity.blob_id, digest=identity.digest, length=99)
-
-    catalog.create_or_get_ingest_record(
-        ingest_idempotency_key="attkey_x",
-        ingest_id="ing_2d711642b726b04401627ca9fbac32f5",
-        owner_session_id=SESSION_A,
-        owner_thread_id="thr_" + "a" * 32,
-        pin_lease_id="lease_x",
-        pin_fencing_token=1,
-        pin_captured_generation=1,
-        preimage_hash="c" * 64,
-        staging_relative_locator=ingest_staging_relative_locator("ing_2d711642b726b04401627ca9fbac32f5"),
-        max_bytes=1024,
-    )
-    catalog.publish_blob_and_owner_ref(
-        identity=identity,
-        relative_locator=date_bucket_relative_locator(identity.blob_id, datetime.now(UTC).date()),
-        ingest_idempotency_key="attkey_x",
-        attachment_id="att_first",
-        owner_session_id=SESSION_A,
-        owner_thread_id="thr_" + "a" * 32,
-        file_name="a.bin",
-        mime_type="application/pdf",
-    )
-
-    with pytest.raises(BlobIdentityConflictError):
-        catalog.publish_blob_and_owner_ref(
-            identity=tampered,
-            relative_locator=date_bucket_relative_locator(
-                identity.blob_id, datetime.now(UTC).date()
-            ),
-            ingest_idempotency_key="attkey_x",
-            attachment_id="att_second",
-            owner_session_id=SESSION_A,
-            owner_thread_id="thr_" + "a" * 32,
-            file_name="b.bin",
-            mime_type="application/pdf",
-        )
-    catalog.close()
+@pytest.mark.parametrize("field,value", [("digest", "sha256:" + "d" * 64), ("length", 99)])
+def test_published_file_version_rejects_different_content_without_overwriting(tmp_path: Path, field: str, value: object) -> None:
+    now = datetime.now(UTC)
+    with closing(_catalog(tmp_path)) as catalog:
+        ingest = _create_ingest(catalog, "attkey_version", now)
+        with pytest.raises(RuntimeError, match="尚未 durable"):
+            catalog.publish_ingest(ingest.ingest_idempotency_key, now=now)
+        assert catalog.get_directory(ingest.attachment_id) is None
+        catalog.mark_ingest_durable(ingest.ingest_idempotency_key, now=now)
+        published = catalog.publish_ingest(ingest.ingest_idempotency_key, now=now)
+        original = catalog.file_version(ingest.attachment_id, "original/content")
+        assert original.digest == ingest.digest and original.length == ingest.length
+        assert catalog.publish_ingest(ingest.ingest_idempotency_key, now=now) == published
+        catalog.publish_file_version(original)
+        with pytest.raises(RuntimeError, match="版本冲突"):
+            catalog.publish_file_version(replace(original, **{field: value}))
+        assert catalog.file_version(ingest.attachment_id, "original/content") == original
+        assert catalog.connection.execute("SELECT count(*) FROM attachment_directory_files").fetchone()[0] == 1
 
 
-def test_ingest_record_rejects_preimage_conflict(tmp_path: Path) -> None:
-    catalog = _catalog(tmp_path)
-    kwargs = {
-        "ingest_idempotency_key": "attkey_k",
-        "ingest_id": "ing_8254c329a92850f6d539dd376f4816ee",
-        "owner_session_id": SESSION_A,
-        "owner_thread_id": "thr_" + "a" * 32,
-        "pin_lease_id": "lease_k",
-        "pin_fencing_token": 1,
-        "pin_captured_generation": 1,
-        "staging_relative_locator": ingest_staging_relative_locator("ing_8254c329a92850f6d539dd376f4816ee"),
-        "max_bytes": 1024,
-    }
-    catalog.create_or_get_ingest_record(preimage_hash="a" * 64, **kwargs)
-
-    with pytest.raises(RuntimeError, match="preimage 冲突"):
-        catalog.create_or_get_ingest_record(preimage_hash="b" * 64, **kwargs)
-    catalog.close()
+@pytest.mark.parametrize("field,value", [
+    ("digest", "sha256:" + "d" * 64), ("length", 99), ("file_name", "other.txt"),
+    ("mime_type", "application/pdf"), ("session_id", SESSION_B), ("thread_id", "thr_" + "d" * 32),
+    ("message_id", "msg_" + "d" * 32),
+])
+def test_ingest_record_rejects_frozen_input_conflict(tmp_path: Path, field: str, value: object) -> None:
+    now = datetime.now(UTC)
+    with closing(_catalog(tmp_path)) as catalog:
+        original = _create_ingest(catalog, "attkey_conflict", now)
+        assert _create_ingest(catalog, "attkey_conflict", now + timedelta(days=1)) == original
+        with pytest.raises(RuntimeError, match="冻结输入冲突"):
+            _create_ingest(catalog, "attkey_conflict", now, **{field: value})
+        assert catalog.get_ingest_record(original.ingest_idempotency_key) == original
 
 
 @pytest.mark.parametrize("future", [False, True])
-def test_released_owner_retention_blocks_gc_until_deadline(tmp_path: Path, future: bool) -> None:
-    """引用释放不提前撤销持久 retention；候选与原子 tombstone 使用同一截止时间。"""
-    catalog = _catalog(tmp_path)
-    identity = compute_blob_identity(b"retained-owner")
-    ingest_id = "ing_2d711642b726b04401627ca9fbac32f5"
-    catalog.create_or_get_ingest_record(
-        ingest_idempotency_key="retained-owner", ingest_id=ingest_id,
-        owner_session_id=SESSION_A, owner_thread_id="thr_" + "a" * 32,
-        pin_lease_id="lease_retained", pin_fencing_token=1,
-        pin_captured_generation=1, preimage_hash="a" * 64,
-        staging_relative_locator=ingest_staging_relative_locator(ingest_id), max_bytes=1024,
-    )
+def test_released_directory_retention_and_thirty_days_both_protect_deletion(tmp_path: Path, future: bool) -> None:
     now = datetime.now(UTC)
-    deadline = now + timedelta(days=1 if future else -1)
-    catalog.publish_blob_and_owner_ref(
-        identity=identity, relative_locator=date_bucket_relative_locator(identity.blob_id, now.date()),
-        ingest_idempotency_key="retained-owner", attachment_id="att_retained",
-        owner_session_id=SESSION_A, owner_thread_id="thr_" + "a" * 32,
-        file_name="retained.bin", mime_type="application/octet-stream",
-        retention_until=deadline.isoformat(),
-    )
-    released = catalog.release_owner_refs_for_session(owner_session_id=SESSION_A, reason="删除 owner")
-    assert released[0].retention_until == deadline.isoformat()
-    assert bool(catalog.list_gc_candidates(before=now + timedelta(seconds=1))) is not future
-    if future:
-        with pytest.raises(RuntimeError, match="owner retention"):
-            catalog.tombstone_blob(identity.blob_id)
-        assert catalog.get_blob(identity.blob_id).availability == "available"
-    else:
-        assert catalog.tombstone_blob(identity.blob_id).availability == "tombstoned"
-    catalog.close()
+    with closing(_catalog(tmp_path)) as catalog:
+        ingest = _create_ingest(catalog, "attkey_retained", now - timedelta(days=100))
+        catalog.mark_ingest_durable(ingest.ingest_idempotency_key, now=now)
+        catalog.publish_ingest(ingest.ingest_idempotency_key, now=now)
+        catalog.release_associations(session_id=SESSION_A, now=now - timedelta(days=31))
+        before = catalog.get_directory(ingest.attachment_id)
+        assert before.gc_after == (now - timedelta(days=1)).isoformat()
+        catalog.release_associations(session_id=SESSION_A, now=now)
+        assert catalog.get_directory(ingest.attachment_id) == before
+        deadline = now + timedelta(days=1 if future else -1)
+        with catalog.write_transaction() as connection:
+            connection.execute("UPDATE attachment_directories SET retention_until=? WHERE attachment_id=?", (deadline.isoformat(), ingest.attachment_id))
+        assert bool(catalog.gc_candidates(now=now)) is not future
+        if future:
+            with pytest.raises(AttachmentDirectoryRetainedError, match="尚未到期"):
+                catalog.begin_delete(ingest.attachment_id, now=now)
+            assert catalog.get_directory(ingest.attachment_id).availability == "available"
+        else:
+            assert catalog.begin_delete(ingest.attachment_id, now=now).availability == "deleting"
+            catalog.finish_delete(ingest.attachment_id, now=now)
+            assert catalog.get_directory(ingest.attachment_id).availability == "tombstoned"
 
 
 # ----------------------------------------------------------------------
@@ -1254,13 +1116,13 @@ async def test_publish_rechecks_active_session_under_same_gate(
 ) -> None:
     """rename 后若 Session 已进入 deleting，发布必须被拒绝且不提交 owner ref。"""
     store = _store(tmp_path, session_bundle_factory, SESSION_A)
-    original = store._commit_staged_blob
+    original = store._write_directory
 
-    def _rename_then_delete(**kwargs):
-        original(**kwargs)
+    def _rename_then_delete(*args, **kwargs):
+        original(*args, **kwargs)
         _flip_fence_to_deleting(tmp_path)
 
-    monkeypatch.setattr(store, "_commit_staged_blob", _rename_then_delete)
+    monkeypatch.setattr(store, "_write_directory", _rename_then_delete)
 
     with pytest.raises(SessionDeletionPendingError):
         await store.persist_inline(
@@ -1268,7 +1130,7 @@ async def test_publish_rechecks_active_session_under_same_gate(
             thread_id=store._path_resolver.main_thread_id(SESSION_A),
          message_id="msg_" + create_uuid_hex(namespace="message"))
 
-    assert store._catalog.list_owner_refs_for_session(SESSION_A, active_only=True) == ()
+    assert store._catalog.connection.execute("SELECT 1 FROM attachment_directory_associations WHERE state='active'").fetchall() == []
     store.close()
 
 
@@ -1278,11 +1140,11 @@ async def test_publish_rejects_when_pin_token_invalidated(
 ) -> None:
     """pin 未生效（token 被接管/失效）时不得发布 owner reference。"""
     store = _store(tmp_path, session_bundle_factory, SESSION_A)
-    original = store._commit_staged_blob
+    original = store._write_directory
     captured: dict[str, object] = {}
 
-    def _rename_then_takeover(**kwargs):
-        original(**kwargs)
+    def _rename_then_takeover(*args, **kwargs):
+        original(*args, **kwargs)
         sessions_root = tmp_path / ".boxteam" / "sessions"
         session_dir = next(path for path in sessions_root.rglob(SESSION_A) if path.is_dir())
         control = SessionControlStore(session_dir / "session-control.sqlite")
@@ -1295,16 +1157,16 @@ async def test_publish_rejects_when_pin_token_invalidated(
         finally:
             control.close()
 
-    monkeypatch.setattr(store, "_commit_staged_blob", _rename_then_takeover)
+    monkeypatch.setattr(store, "_write_directory", _rename_then_takeover)
 
-    with pytest.raises(SessionDeletionPendingError, match="pin 已失效"):
+    with pytest.raises(SessionDeletionPendingError, match="pin 或 Session 代次已失效"):
         await store.persist_inline(
             SESSION_A, [_attach("pin.png", "image/png", b"pin-bytes")],
             thread_id=store._path_resolver.main_thread_id(SESSION_A),
          message_id="msg_" + create_uuid_hex(namespace="message"))
 
     assert captured["lease_id"] is not None
-    assert store._catalog.list_owner_refs_for_session(SESSION_A, active_only=True) == ()
+    assert store._catalog.connection.execute("SELECT 1 FROM attachment_directory_associations WHERE state='active'").fetchall() == []
     store.close()
 
 
@@ -1317,8 +1179,8 @@ async def test_persist_rejected_when_session_already_deleting(
 
     with pytest.raises(SessionDeletionPendingError):
         await store.persist_inline(SESSION_A, [_attach("x.png", "image/png", b"x")], thread_id=store._path_resolver.main_thread_id(SESSION_A), message_id="msg_" + create_uuid_hex(namespace="message"))
-    assert _blob_files(tmp_path) == []
-    assert store._catalog.list_owner_refs_for_session(SESSION_A) == ()
+    assert _original_files(tmp_path) == []
+    assert store._catalog.connection.execute("SELECT 1 FROM attachment_directory_associations").fetchall() == []
     store.close()
 
 
@@ -1328,123 +1190,103 @@ async def test_persist_rejected_when_session_already_deleting(
 
 
 @pytest.mark.asyncio
-async def test_release_session_references_keeps_other_session_blob(
-    tmp_path, session_bundle_factory
-) -> None:
-    store = _store(tmp_path, session_bundle_factory, SESSION_A, SESSION_B)
-    payload = b"shared"
-    ref_a = (await store.persist_inline(SESSION_A, [_attach("a.bin", "application/pdf", payload)], thread_id=store._path_resolver.main_thread_id(SESSION_A), message_id="msg_" + create_uuid_hex(namespace="message")))[0]
-    ref_b = (await store.persist_inline(SESSION_B, [_attach("b.bin", "application/pdf", payload)], thread_id=store._path_resolver.main_thread_id(SESSION_B), message_id="msg_" + create_uuid_hex(namespace="message")))[0]
-
-    released = store.release_session_references(SESSION_A)
-
-    assert ref_a.file_id.rsplit("/", 1)[-1] in "".join(released)
-    with pytest.raises(FileNotFoundError):
-        store.read(SESSION_A, ref_a.file_id)
-    assert store.read(SESSION_B, ref_b.file_id).data == payload
-    # 另有 session 的 active reference，GC 不得回收该正文。
-    await store.collect_garbage(retention=timedelta(0))
-    assert len(_blob_files(tmp_path)) == 1
-    store.close()
-
-
-@pytest.mark.asyncio
-async def test_collect_garbage_tombstones_then_deletes_unreferenced_blob(
-    tmp_path, session_bundle_factory
-) -> None:
-    store = _store(tmp_path, session_bundle_factory, SESSION_A)
-    ref = (await store.persist_inline(SESSION_A, [_attach("a.bin", "application/pdf", b"gone")], thread_id=store._path_resolver.main_thread_id(SESSION_A), message_id="msg_" + create_uuid_hex(namespace="message")))[0]
-
-    store.release_session_references(SESSION_A)
-    collected = await store.collect_garbage(retention=timedelta(0))
-
-    assert collected
-    assert _blob_files(tmp_path) == []
-    with pytest.raises(FileNotFoundError):
-        store.read(SESSION_A, ref.file_id)
-    store.close()
+async def test_release_session_starts_own_deadline_and_keeps_other_session_directory(tmp_path, session_bundle_factory) -> None:
+    with closing(_store(tmp_path, session_bundle_factory, SESSION_A, SESSION_B)) as store:
+        payload = b"shared"
+        refs = []
+        for session in (SESSION_A, SESSION_B):
+            (ref,) = await store.persist_inline(session, [_attach("input.txt", "text/plain", payload)],
+                thread_id=store._path_resolver.main_thread_id(session), message_id="msg_" + create_uuid_hex(namespace="message"))
+            refs.append(ref)
+        first_id = parse_resource_uri(refs[0].file_id).attachment_id
+        assert first_id in store.release_session_references(SESSION_A)
+        assert store.read(SESSION_A, refs[0].file_id).data == payload
+        assert await store.collect_garbage(leases=ExternalResourceLeaseLedger()) == ()
+        current = datetime.now(UTC)
+        store._clock = lambda: current + timedelta(days=31)
+        assert await store.collect_garbage(leases=ExternalResourceLeaseLedger()) == (first_id,)
+        assert store.read(SESSION_B, refs[1].file_id).data == payload
+        assert len(_original_files(tmp_path)) == 1
 
 
 @pytest.mark.asyncio
-async def test_recover_session_cleans_orphan_staging_from_record(
-    tmp_path, session_bundle_factory
-) -> None:
-    """无 record 文件不得被吸收；有 record 的 staging 按 record 定点清理。"""
-    store = _store(tmp_path, session_bundle_factory, SESSION_A)
-    staging_root = tmp_path / ".boxteam" / "attachments" / ".staging"
-    staging_root.mkdir(parents=True, exist_ok=True)
-    orphan = staging_root / "ing_88f6811ab5d8fc6d3177f9b7609ae0fc"
-    orphan.write_bytes(b"orphan-without-record")
+async def test_collect_garbage_marks_deleting_before_physical_removal_then_tombstones(tmp_path, session_bundle_factory, monkeypatch) -> None:
+    with closing(_store(tmp_path, session_bundle_factory, SESSION_A)) as store:
+        (ref,) = await store.persist_inline(SESSION_A, [_attach("input.txt", "text/plain", b"garbage")],
+            thread_id=store._path_resolver.main_thread_id(SESSION_A), message_id="msg_gc")
+        attachment_id = parse_resource_uri(ref.file_id).attachment_id
+        store.release_session_references(SESSION_A)
+        current = datetime.now(UTC)
+        store._clock = lambda: current + timedelta(days=31)
+        remove = attachment_blob_store_module.remove_directory
+        seen = []
+        def observe(path):
+            seen.append(store._catalog.get_directory(attachment_id).availability)
+            remove(path)
+        monkeypatch.setattr(attachment_blob_store_module, "remove_directory", observe)
+        assert await store.collect_garbage(leases=ExternalResourceLeaseLedger()) == (attachment_id,)
+        assert seen == ["deleting"] and store._catalog.get_directory(attachment_id).availability == "tombstoned"
+        assert _original_files(tmp_path) == []
+        with pytest.raises(FileNotFoundError):
+            store.read(SESSION_A, ref.file_id)
 
-    saver = RolloutCheckpointSaver(tmp_path / ".boxteam/sessions", attachment_store=store)
-    assert store.recover_session(SESSION_A, messages=saver) == ()
-    assert orphan.is_file()
 
-    thread_id = store._path_resolver.main_thread_id(SESSION_A)
-    control = store._open_control_store(SESSION_A)
-    pin = await store._acquire_pin(
-        session_id=SESSION_A, thread_id=thread_id, message_id="msg_orphan", control=control,
-        operation_identity="attkey_orphan", preimage_hash="d" * 64,
-    )
-    control.close()
-    store._catalog.create_or_get_ingest_record(
-        ingest_idempotency_key="attkey_orphan",
-        ingest_id="ing_88f6811ab5d8fc6d3177f9b7609ae0fc",
-        owner_session_id=SESSION_A,
-        owner_thread_id=thread_id,
-        pin_lease_id=pin.lease_id,
-        pin_fencing_token=pin.fencing_token,
-        pin_captured_generation=pin.captured_lifecycle_generation,
-        preimage_hash="d" * 64,
-        staging_relative_locator=ingest_staging_relative_locator("ing_88f6811ab5d8fc6d3177f9b7609ae0fc"),
-        max_bytes=1024,
-    )
-
-    actions = store.recover_session(SESSION_A, messages=saver)
-    assert "aborted-ingest" in actions
-    assert not orphan.exists()
-    store.close()
+@pytest.mark.asyncio
+async def test_recover_session_cleans_only_staging_owned_by_original_ingest_record(tmp_path, session_bundle_factory) -> None:
+    with closing(_store(tmp_path, session_bundle_factory, SESSION_A)) as store:
+        staging_root = store._attachments_root / ".staging"
+        unknown = staging_root / ("ing_" + "8" * 32)
+        unknown.mkdir(parents=True)
+        (unknown / "unknown.txt").write_text("无归属文件不得被扫描吸收或删除")
+        saver = RolloutCheckpointSaver(tmp_path / ".boxteam/sessions", attachment_store=store)
+        assert store.recover_session(SESSION_A, messages=saver) == ()
+        now = datetime.now(UTC)
+        thread = store._path_resolver.main_thread_id(SESSION_A)
+        operation, message = "attkey_owned_staging", "msg_owned_staging"
+        digest = "sha256:" + hashlib.sha256(b"data").hexdigest()
+        preimage = hashlib.sha256(canonical_json_bytes([SESSION_A, thread, message, operation, digest, 4, "input.txt", "text/plain"])).hexdigest()
+        with closing(store._open_control_store(SESSION_A)) as control:
+            pin = control.create_or_get_lease(operation_kind="attachment", operation_identity=operation,
+                preimage_hash=preimage, expected_generation=1, recovery_ref=f"attachment:{SESSION_A}:{thread}:{message}")
+        record = store._catalog.create_ingest(operation_id=operation, ingest_id="ing_" + "9" * 32,
+            session_id=SESSION_A, thread_id=thread, message_id=message, pin=pin, digest=digest, length=4,
+            file_name="input.txt", mime_type="text/plain", now=now)
+        owned = resolve_staging_path(store._attachments_root, record.staging_relative_locator)
+        owned.mkdir()
+        (owned / "partial.txt").write_bytes(b"partial")
+        assert "aborted-ingest" in store.recover_session(SESSION_A, messages=saver)
+        assert not owned.exists() and (unknown / "unknown.txt").is_file()
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("terminal", ["aborted", "target_deleted"])
-async def test_pending_fork_reuse_keeps_upload_pin_until_mapping_is_released(fork_capture, tmp_path, terminal):
-    """仅 fork 准备映射保活时不能丢掉上传恢复入口，撤销后定点回收。"""
+async def test_pending_fork_claim_retains_only_source_directory_until_original_operation_settles(fork_capture, tmp_path, terminal):
     store, record = fork_capture
-    body = b"pending-fork-reuses-unaccepted-upload"
-    (source,) = await store.persist_inline(
-        SESSION_A, [_attach("source.txt", "text/plain", body)], thread_id=record.source_thread_id, message_id="msg_pending_source",
-    )
-    (target,) = await store.persist_inline(
-        SESSION_B, [_attach("target.txt", "text/plain", body)], thread_id=record.target_thread_id, message_id="msg_pending_target",
-    )
-    snapshots = store.capture_fork_attachments(record, same_storage_owner=True, references=((source.file_id, True),))
-    assert snapshots[0].target_action == "reuse_reference"
-    assert snapshots[0].claim_id is None
-    assert snapshots[0].target_file_id == target.file_id
-    with RolloutCheckpointSaver(tmp_path / ".boxteam/sessions", attachment_store=store) as saver:
-        with closing(store._open_control_store(SESSION_B)) as control:
-            (pin,) = control.list_non_terminal_leases()
-        assert await store.recover_pending_ingests(messages=saver) == 1  # 仅无依赖的 source。
-        with closing(store._open_control_store(SESSION_B)) as control:
-            assert control.get_lease(pin.lease_id) == pin
-        assert store.read(SESSION_B, target.file_id).data == body
-        assert store._catalog.fork_attachment_operations_for_target(SESSION_B) == (record.copy_operation_id,)
-        store._catalog.settle_fork_attachment_claims(copy_operation_id=record.copy_operation_id, claim_ids=(), state=terminal)
-        assert store._catalog.fork_attachment_operations_for_target(SESSION_B) == ()
-        assert (await store.recover_idle_session(SESSION_B, messages=saver)).count("settled-pin") == 1
-        with closing(store._open_control_store(SESSION_B)) as control:
-            settled = control.get_lease(pin.lease_id)
-            assert settled.state == "failed" and settled.fencing_token == pin.fencing_token + 1
-        assert await store.recover_pending_ingests(messages=saver) == 0
-        await store.collect_garbage(retention=timedelta(0))
-        with pytest.raises(FileNotFoundError):
-            store.read(SESSION_B, target.file_id)
+    body = b"pending-fork-unaccepted-upload"
+    (source,) = await store.persist_inline(SESSION_A, [_attach("source.txt", "text/plain", body)], thread_id=record.source_thread_id, message_id="msg_pending_source")
+    (target,) = await store.persist_inline(SESSION_B, [_attach("target.txt", "text/plain", body)], thread_id=record.target_thread_id, message_id="msg_pending_target")
+    (snapshot,) = store.capture_fork_attachments(record, same_storage_owner=True, references=((source.file_id, True),))
+    assert snapshot.target_action == "reuse_reference" and snapshot.claim_id is not None
+    assert snapshot.target_file_id == source.file_id and snapshot.target_file_id != target.file_id
+    saver = RolloutCheckpointSaver(tmp_path / ".boxteam/sessions", attachment_store=store)
+    assert await store.recover_pending_ingests(messages=saver) == 2
+    with closing(store._open_control_store(SESSION_A)) as control:
+        assert control.list_non_terminal_leases() == ()
+    with closing(store._open_control_store(SESSION_B)) as control:
+        assert control.list_non_terminal_leases() == ()
+    current = datetime.now(UTC)
+    store._clock = lambda: current + timedelta(days=31)
+    assert await store.collect_garbage(leases=ExternalResourceLeaseLedger()) == (parse_resource_uri(target.file_id).attachment_id,)
+    assert store.read(SESSION_A, source.file_id).data == body
+    store._catalog.settle_fork_attachment_claims(copy_operation_id=record.copy_operation_id, claim_ids=(snapshot.claim_id,), state=terminal)
+    assert await store.collect_garbage(leases=ExternalResourceLeaseLedger()) == (snapshot.source_attachment_id,)
+    with pytest.raises(FileNotFoundError):
+        store.read(SESSION_A, source.file_id)
 
 
 @pytest.mark.asyncio
 async def test_target_deletion_cleans_terminal_fork_mapping_without_rewriting_claim(fork_capture):
-    """已有同 schema 库的中止 claim 可残留 alias；删除只清理 alias，不改终态。"""
+    """删除不重写终态 claim；冻结 alias 仍用于历史不可用投影。"""
     store, record = fork_capture
     (ref,) = await store.persist_inline(SESSION_A, [_attach("source.txt", "text/plain", b"terminal-fork")],
         thread_id=record.source_thread_id, message_id="msg_terminal_source")
@@ -1452,89 +1294,66 @@ async def test_target_deletion_cleans_terminal_fork_mapping_without_rewriting_cl
     assert snapshot.claim_id is not None
     # 仅此局部清理用例准备旧持久形态，真实 fork 发布/中止由产品入口测试覆盖。
     with store._catalog.write_transaction() as connection:
-        connection.execute("UPDATE fork_attachment_claims SET state='aborted' WHERE claim_id=?", (snapshot.claim_id,))
-    source_owner = store._catalog.get_owner_ref(snapshot.source_attachment_id)
+        connection.execute("UPDATE attachment_directory_fork_claims SET state='aborted' WHERE claim_id=?", (snapshot.claim_id,))
+    source_owner = store._catalog.get_directory(snapshot.source_attachment_id)
     claim_before = tuple(store._catalog._connected().execute(
-        "SELECT * FROM fork_attachment_claims WHERE claim_id=?", (snapshot.claim_id,)).fetchone())
+        "SELECT * FROM attachment_directory_fork_claims WHERE claim_id=?", (snapshot.claim_id,)).fetchone())
     store.release_session_references(SESSION_B)
     assert store._catalog.fork_attachment_operations_for_target(SESSION_B) == ()
     assert tuple(store._catalog._connected().execute(
-        "SELECT * FROM fork_attachment_claims WHERE claim_id=?", (snapshot.claim_id,)).fetchone()) == claim_before
-    assert store._catalog.get_owner_ref(snapshot.source_attachment_id) == source_owner
+        "SELECT * FROM attachment_directory_fork_claims WHERE claim_id=?", (snapshot.claim_id,)).fetchone()) == claim_before
+    assert store._catalog.get_directory(snapshot.source_attachment_id) == source_owner
+    assert store._catalog.fork_attachment_snapshot_for_alias(target_session_id=SESSION_B, target_thread_id=record.target_thread_id, source_file_id=ref.file_id) == snapshot
+    assert store.project_attachment(SESSION_B, record.target_thread_id, ref.file_id)["availability"] == "unavailable"
     assert store.read(SESSION_A, ref.file_id).data == b"terminal-fork"
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("damage_existing", [False, True], ids=["reuse", "reject-damaged"])
-async def test_cross_domain_fork_import_reuses_verified_target_blob_without_streaming(
-    fork_capture, tmp_path: Path, session_bundle_factory, damage_existing: bool,
-) -> None:
+@pytest.mark.parametrize("damage_existing", [False, True], ids=["independent", "unrelated-damaged"])
+async def test_cross_domain_fork_import_does_not_merge_unrelated_target_upload(fork_capture, tmp_path, session_bundle_factory, damage_existing):
     source, initial = fork_capture
     body = b"same-content-across-domains"
-    source_ref = (await source.persist_inline(SESSION_A, [_attach("source.txt", "text/plain", body)],
-                                             thread_id=initial.source_thread_id, message_id="msg_" + create_uuid_hex(namespace="message")))[0]
+    (ref,) = await source.persist_inline(SESSION_A, [_attach("source.txt", "text/plain", body)], thread_id=initial.source_thread_id, message_id="msg_import_source")
     target_root = tmp_path / "target"
-    target_root.mkdir()
-    target = _store(target_root, session_bundle_factory, SESSION_B)
-    try:
-        target_thread = target._path_resolver.main_thread_id(SESSION_B)
-        existing_ref = (await target.persist_inline(SESSION_B, [_attach("target.txt", "text/plain", body)],
-                                                    thread_id=target_thread, message_id="msg_" + create_uuid_hex(namespace="message")))[0]
-        source_domain = source._path_resolver.catalog_store.get_node(SESSION_A).workspace_id
-        target_domain = target._path_resolver.catalog_store.get_node(SESSION_B).workspace_id
-        assert source_domain != target_domain
-        request = SessionForkRequest(
-            idempotency_key="existing-content-import",
+    with closing(_store(target_root, session_bundle_factory, SESSION_B)) as target:
+        thread = target._path_resolver.main_thread_id(SESSION_B)
+        (existing,) = await target.persist_inline(SESSION_B, [_attach("target.txt", "text/plain", body)], thread_id=thread, message_id="msg_existing")
+        source_domain, target_domain = source.workspace_id, target.workspace_id
+        request = SessionForkRequest(idempotency_key="independent-import", mode="context_fork", source_view_id="source-view", source_view_revision=0,
             source_uri=f"boxteam://workspace/{source_domain}/resources/session/{SESSION_A}/threads/{initial.source_thread_id}",
-            source_view_id="frozen-source-view", source_view_revision=0, mode="context_fork",
-            target_container_uri=f"boxteam://workspace/{target_domain}/resources/workspace_sessions",
-            creation_kind="new_session_main",
-            resources=[{"resource_uri": source_ref.file_id, "action": "copy_snapshot"}],
-        )
-        record = replace(initial, target_thread_id=target_thread, request_json=json.dumps({
-            **request.model_dump(mode="json"), "target_main_thread_id": target_thread,
-            "source_storage_domain_id": source_domain, "target_storage_domain_id": target_domain, "target_gateway_id": get_current_gateway_id(),
-        }))
-        snapshots = source.capture_fork_attachments(
-            record, same_storage_owner=False, references=((source_ref.file_id, True),),
-        )
-        assert len(snapshots) == 1 and snapshots[0].target_action == "copy_snapshot"
-        existing_owner = target._catalog.get_owner_ref(parse_logical_file_id(SESSION_B, existing_ref.file_id))
-        blob = target._catalog.get_blob(existing_owner.blob_id)
-        path = resolve_blob_path(target._attachments_root, blob.relative_locator)
-        before = path.stat()
+            target_container_uri=f"boxteam://workspace/{target_domain}/resources/workspace_sessions", creation_kind="new_session_main",
+            resources=[{"resource_uri": ref.file_id, "action": "copy_snapshot"}])
+        record = replace(initial, target_thread_id=thread, request_json=json.dumps({**request.model_dump(mode="json"),
+            "target_main_thread_id": thread, "source_storage_domain_id": source_domain, "target_storage_domain_id": target_domain,
+            "target_gateway_id": get_current_gateway_id()}))
+        (snapshot,) = source.capture_fork_attachments(record, same_storage_owner=False, references=((ref.file_id, True),))
+        path = _original_path(target, existing.file_id)
         if damage_existing:
+            path.chmod(0o600)
             path.write_bytes(b"x" * len(body))
+        before, metadata = path.read_bytes(), path.stat()
         shutil.copytree(capture_directory(source._sessions_root, record), capture_directory(target._sessions_root, record))
-        if damage_existing:
-            with pytest.raises(RuntimeError, match="hash/length"):
-                await target.accept_fork_import(record, snapshots)
-        else:
-            await target.accept_fork_import(record, snapshots)
-            await target.reserve_copy_attachments(record, None, snapshots)
-            await target.finalize_copy_attachments(record, publication_preimage_hash=record.preimage_hash)
-            projection = target.project_attachment(SESSION_B, target_thread, source_ref.file_id)
-            assert projection["availability"] == "available"
-            assert target.read(SESSION_B, projection["file_id"]).data == body
-            assert path.read_bytes() == body
-            after = path.stat()
-            assert (after.st_ino, after.st_mtime_ns, after.st_ctime_ns) == (
-                before.st_ino, before.st_mtime_ns, before.st_ctime_ns,
-            )
-            assert _blob_files(target_root) == [path]
-    finally:
-        target.close()
+        await target.accept_fork_import(record, (snapshot,))
+        await target.reserve_copy_attachments(record, None, (snapshot,))
+        await target.finalize_copy_attachments(record, publication_preimage_hash=record.preimage_hash)
+        projected = target.project_attachment(SESSION_B, thread, ref.file_id)
+        assert projected["availability"] == "available" and projected["file_id"] != existing.file_id
+        assert target.read(SESSION_B, projected["file_id"]).data == body
+        after = path.stat()
+        assert path.read_bytes() == before
+        assert (after.st_ino, after.st_mtime_ns, after.st_ctime_ns) == (metadata.st_ino, metadata.st_mtime_ns, metadata.st_ctime_ns)
+        assert len(_original_files(target_root)) == 2
 
 
 @pytest.mark.asyncio
 async def test_model_attachment_capability_normalizes_only_current_gateway(attachment_tool_owner):
     case = attachment_tool_owner
     gateway = "gateway_332f92ee6191880e797569a47e22922b"
-    parsed = parse_session_artifact_uri(case.ref.file_id)
+    parsed = parse_resource_uri(case.ref.file_id)
     read = {"thread_id": case.owner.thread_id, "tool_call_id": case.call_id, "model_call_id": case.model_call_id}
     token = set_current_gateway_id(gateway)
     try:
-        qualified = session_artifact_uri(parsed.scope_id, SESSION_A, "attachments", parsed.tail_segments[-1], gateway_authority=gateway)
+        qualified = resource_display_uri(scope="workspace", scope_id=parsed.scope_id, kind="attachments", tail_segments=parsed.tail_segments, gateway_authority=gateway)
         assert case.saver.read_tool_call_attachment(SESSION_A, file_id=qualified, **read).data == b"first\noriginal attachment\n"
         for foreign in (
             qualified.replace(gateway, "gateway_ce27c875d842690955440795c9de8a35"),
@@ -1579,7 +1398,7 @@ async def fork_import_target(fork_capture, tmp_path, session_bundle_factory):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("terminal", ["preparing", "aborted", "target_deleted", "committed"])
+@pytest.mark.parametrize("terminal", ["prepared", "aborted", "target_deleted", "committed"])
 async def test_fork_staging_gc_uses_terminal_claim_and_exact_operation(fork_import_target, terminal):
     case = fork_import_target
     target, record = case.target, case.record
@@ -1588,30 +1407,31 @@ async def test_fork_staging_gc_uses_terminal_claim_and_exact_operation(fork_impo
     await target.persist_inline(SESSION_B, [_attach("target.txt", "text/plain", case.body)],
         thread_id=record.target_thread_id, message_id="msg_existing_staging")
     await target.accept_fork_import(record, case.snapshots)
-    staging_id = fork_import_ingest_id(record.copy_operation_id, snapshot.blob_id)
+    staging_id = _import_id(record.copy_operation_id, snapshot.target_attachment_id)
     staging = resolve_staging_path(target._attachments_root, ingest_staging_relative_locator(staging_id))
     other = resolve_staging_path(target._attachments_root, ingest_staging_relative_locator(
-        fork_import_ingest_id("other-operation", snapshot.blob_id)))
-    staging.parent.mkdir(parents=True, exist_ok=True)
-    staging.write_bytes(b"incomplete")
-    other.write_bytes(b"other-operation-writer")
+        _import_id("other-operation", snapshot.target_attachment_id)))
+    staging.mkdir(parents=True)
+    (staging / "partial.txt").write_bytes(b"incomplete")
+    other.mkdir()
+    (other / "partial.txt").write_bytes(b"other-operation-writer")
     if terminal == "committed":
         target._catalog.reserve_fork_attachment_owners(copy_operation_id=record.copy_operation_id, claim_ids=(snapshot.claim_id,))
-    if terminal != "preparing":
+    if terminal != "prepared":
         target._catalog.settle_fork_attachment_claims(copy_operation_id=record.copy_operation_id,
             claim_ids=(snapshot.claim_id,), state=terminal)
     # 删除 owner 可能已持 Session gate；清理不得阻塞等待 importer。
     async with target._fork_imports.lock_for(record.copy_operation_id), target._gate.exclusive(SESSION_B):
         assert await asyncio.wait_for(target.collect_fork_import_staging(), timeout=1) == ()
-        assert staging.read_bytes() == b"incomplete"
-    if terminal == "preparing":
+        assert (staging / "partial.txt").read_bytes() == b"incomplete"
+    if terminal == "prepared":
         assert await target.collect_fork_import_staging() == ()
         assert staging.exists()
     else:
-        assert await target.collect_fork_import_staging() == (staging_id,)
+        assert await target.collect_fork_import_staging() == (snapshot.target_attachment_id,)
         assert not staging.exists()
         assert await target.collect_fork_import_staging() == ()
-    assert other.read_bytes() == b"other-operation-writer"
+    assert (other / "partial.txt").read_bytes() == b"other-operation-writer"
     assert case.source.read(SESSION_A, snapshot.source_file_id).data == case.body
 
 
@@ -1622,24 +1442,24 @@ async def test_terminal_fork_staging_removal_failure_retries_without_scanning(fo
     (snapshot,) = case.snapshots
     target._catalog.prepare_fork_attachment_claims(copy_operation_id=record.copy_operation_id,
         source_snapshot_id=record.snapshot_id, operation_preimage_hash=record.preimage_hash,
-        snapshots=case.snapshots, imported_locators={snapshot.blob_id: None})
+        snapshots=case.snapshots)
     target._catalog.settle_fork_attachment_claims(copy_operation_id=record.copy_operation_id,
         claim_ids=(snapshot.claim_id,), state="aborted")
-    staging_id = fork_import_ingest_id(record.copy_operation_id, snapshot.blob_id)
+    staging_id = _import_id(record.copy_operation_id, snapshot.target_attachment_id)
     path = resolve_staging_path(target._attachments_root, ingest_staging_relative_locator(staging_id))
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_bytes(b"partial")
-    unlink = Path.unlink
-    def interrupted(candidate, *args, **kwargs):
+    path.mkdir(parents=True)
+    (path / "partial.txt").write_bytes(b"partial")
+    remove = fork_import_module.remove_directory
+    def interrupted(candidate):
         if candidate == path:
             raise OSError("terminal staging deletion interrupted")
-        return unlink(candidate, *args, **kwargs)
+        return remove(candidate)
     with monkeypatch.context() as patch:
-        patch.setattr(Path, "unlink", interrupted)
+        patch.setattr(fork_import_module, "remove_directory", interrupted)
         with pytest.raises(OSError, match="deletion interrupted"):
-            await target.collect_garbage(retention=timedelta(0))
+            await target.collect_garbage(leases=ExternalResourceLeaseLedger())
     assert path.exists()
-    await target.collect_garbage(retention=timedelta(0))
+    await target.collect_garbage(leases=ExternalResourceLeaseLedger())
     assert not path.exists()
     assert json.dumps([asdict(snapshot) for snapshot in target._catalog.terminal_fork_attachment_snapshots(record.copy_operation_id)], sort_keys=True) == json.dumps([asdict(snapshot) for snapshot in case.snapshots], sort_keys=True)
 
@@ -1651,29 +1471,29 @@ async def test_fork_import_holds_writer_gate_until_frozen_copy_exits(fork_import
     target, record = case.target, case.record
     (snapshot,) = case.snapshots
     copying, release = Event(), Event()
-    copyfile = shutil.copyfile
-    def copy_frozen(source, destination):
-        Path(destination).write_bytes(b"partial")
+    copy = fork_import_module.copy_directory_files
+    def copy_frozen(source, destination, files, directories):
+        destination.mkdir(parents=True)
+        partial = destination / "partial.txt"
+        partial.write_bytes(b"partial")
         copying.set()
         assert release.wait(timeout=10)
         if not cancelled:
             raise OSError("frozen copy interrupted after settlement")
-        return copyfile(source, destination)
-    monkeypatch.setattr("app.services.infrastructure.attachment_blob_catalog.fork_import.shutil.copyfile", copy_frozen)
+        partial.unlink()
+        return copy(source, destination, files, directories)
+    monkeypatch.setattr(fork_import_module, "copy_directory_files", copy_frozen)
     importing = asyncio.create_task(target.accept_fork_import(record, case.snapshots))
-    path = resolve_staging_path(target._attachments_root, ingest_staging_relative_locator(
-        fork_import_ingest_id(record.copy_operation_id, snapshot.blob_id)))
+    path = resolve_staging_path(target._attachments_root, ingest_staging_relative_locator(_import_id(record.copy_operation_id, snapshot.target_attachment_id)))
     try:
-        assert await asyncio.to_thread(copying.wait, 3)
-        assert path.is_file()
-        target._catalog.settle_fork_attachment_claims(copy_operation_id=record.copy_operation_id,
-            claim_ids=(snapshot.claim_id,), state="aborted")
+        assert await asyncio.to_thread(copying.wait, 3) and path.is_dir()
+        target._catalog.settle_fork_attachment_claims(copy_operation_id=record.copy_operation_id, claim_ids=(snapshot.claim_id,), state="aborted")
         if cancelled:
             importing.cancel()
             await asyncio.sleep(0)
             assert not importing.done()
         assert await asyncio.wait_for(target.collect_fork_import_staging(), timeout=1) == ()
-        assert path.is_file()
+        assert path.is_dir()
         async with target._fork_imports.lock_for(record.copy_operation_id, wait=False) as holder:
             assert not holder.acquired
     finally:
@@ -1681,6 +1501,9 @@ async def test_fork_import_holds_writer_gate_until_frozen_copy_exits(fork_import
         with pytest.raises(asyncio.CancelledError if cancelled else OSError, match=None if cancelled else "frozen copy interrupted"):
             await importing
     assert not path.exists()
+    assert target._catalog.get_directory(snapshot.target_attachment_id) is None
+    destination = resolve_attachment_directory(target._attachments_root, attachment_directory_relative_locator(snapshot.target_attachment_id, datetime.fromisoformat(snapshot.target_created_at)))
+    assert not destination.exists()
     assert await target.collect_fork_import_staging() == ()
 
 
@@ -1688,16 +1511,17 @@ async def test_fork_import_holds_writer_gate_until_frozen_copy_exits(fork_import
 async def test_fork_import_uses_frozen_file_after_live_source_changes(fork_import_target):
     case = fork_import_target
     (snapshot,) = case.snapshots
-    live = resolve_blob_path(case.source._attachments_root, snapshot.relative_locator)
+    live = _original_path(case.source, snapshot.source_file_id)
+    live.chmod(0o600)
     live.write_bytes(b"changed live source")
     await case.target.accept_fork_import(case.record, case.snapshots)
     await case.target.reserve_copy_attachments(case.record, None, case.snapshots)
     await case.target.finalize_copy_attachments(case.record, publication_preimage_hash=case.record.preimage_hash)
     assert case.target.read(SESSION_B, snapshot.target_file_id).data == case.body
-    frozen = resolve_captured_attachment(
+    frozen = resolve_captured_directory(
         capture_directory(case.target._sessions_root, case.record) / case.record.source_session_id,
-        snapshot.blob_id,
-    )
+        snapshot.source_attachment_id,
+    ) / "original/content"
     assert frozen.read_bytes() == case.body
 
 
@@ -1706,17 +1530,17 @@ async def test_fork_import_uses_frozen_file_after_live_source_changes(fork_impor
 async def test_fork_import_rejects_damaged_frozen_file(fork_import_target, damage):
     case = fork_import_target
     (snapshot,) = case.snapshots
-    frozen = resolve_captured_attachment(
+    frozen = resolve_captured_directory(
         capture_directory(case.target._sessions_root, case.record) / case.record.source_session_id,
-        snapshot.blob_id,
-    )
+        snapshot.source_attachment_id,
+    ) / "original/content"
     if damage == "changed":
         frozen.write_bytes(b"corrupt frozen file")
     else:
         frozen.unlink()
         if damage == "symlink":
-            frozen.symlink_to(resolve_blob_path(case.source._attachments_root, snapshot.relative_locator))
+            frozen.symlink_to(_original_path(case.source, snapshot.source_file_id))
     with pytest.raises((OSError, RuntimeError)):
         await case.target.accept_fork_import(case.record, case.snapshots)
-    assert case.target._catalog.get_owner_ref(snapshot.target_attachment_id) is None
-    assert _blob_files(case.target._workspace_root) == []
+    assert case.target._catalog.get_directory(snapshot.target_attachment_id) is None
+    assert _original_files(case.target._workspace_root) == []

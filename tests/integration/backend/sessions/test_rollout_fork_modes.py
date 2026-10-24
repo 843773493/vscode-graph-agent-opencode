@@ -136,6 +136,7 @@ from app.schemas.internal_v2.session_fork_transfer import (
 )
 from app.schemas.internal_v2.turn import TurnHistoryLoadRequest, TurnHistoryPageDTO
 from app.services.business.job.service import JobService
+from app.services.business.message_service import MessageService
 from app.services.business.session_context_fork_service import SessionContextForkService
 from app.services.business.session_context_resource import (
     workspace_session_inventory_uri,
@@ -1510,7 +1511,7 @@ def _message_history_clocks(context: ForkIntegrationContext, session_id: str) ->
 async def test_child_message_ingest_keeps_exact_attachment_owner_through_source_point(
     production_fork_container: AppContainer, fork_provider_prepare,
 ) -> None:
-    """真实消息入口写入 child 附件，候选读取与同字节 main 附件仍分别归属。"""
+    """独立消息上传各有目录；工作区读取权限不建立额外保活关联。"""
     container = production_fork_container
     context = _production_fork_context(container)
     source = await _seed_source(context, fork_provider_prepare)
@@ -1525,18 +1526,23 @@ async def test_child_message_ingest_keeps_exact_attachment_owner_through_source_
     message = await container.message_service.create(source.session_id, request, thread_id=child.thread_id)
     ref = message.attachments[0]
     store = container.attachment_blob_store
-    attachment_id = ref.file_id.rsplit("/", 1)[1]
-    owner = store._catalog.get_owner_ref(attachment_id)
-    assert owner is not None and (owner.owner_session_id, owner.owner_thread_id) == (source.session_id, child.thread_id)
+    attachment_id = parse_resource_uri(ref.file_id).attachment_id
+    owner = store._catalog.get_directory(attachment_id)
+    assert owner is not None
+    assert [tuple(row) for row in store._catalog.connection.execute(
+        "SELECT session_id,thread_id FROM attachment_directory_associations WHERE attachment_id=? AND state='active'", (attachment_id,),
+    )] == [(source.session_id, child.thread_id)]
     assert store.read(source.session_id, ref.file_id, owner_thread_id=child.thread_id).data == body
-    with pytest.raises(PermissionError, match="当前 SessionThread"):
-        store.read(source.session_id, ref.file_id, owner_thread_id=source.thread_id)
+    assert store.read(source.session_id, ref.file_id, owner_thread_id=source.thread_id).data == body
     repeated = await container.message_service.create(source.session_id, request, thread_id=child.thread_id)
-    assert repeated.attachments[0].file_id == ref.file_id
+    assert repeated.message_id != message.message_id
+    assert repeated.attachments[0].file_id != ref.file_id
     main_message = await container.message_service.create(source.session_id, request, thread_id=source.thread_id)
-    assert main_message.attachments[0].file_id != ref.file_id
-    main_owner = store._catalog.get_owner_ref(main_message.attachments[0].file_id.rsplit("/", 1)[1])
-    assert main_owner is not None and (main_owner.owner_thread_id, main_owner.blob_id) == (source.thread_id, owner.blob_id)
+    assert len({main_message.attachments[0].file_id, repeated.attachments[0].file_id, ref.file_id}) == 3
+    assert store.read(source.session_id, main_message.attachments[0].file_id).data == body
+    assert [tuple(row) for row in store._catalog.connection.execute(
+        "SELECT session_id,thread_id FROM attachment_directory_associations WHERE attachment_id=? AND state='active'", (parse_resource_uri(main_message.attachments[0].file_id).attachment_id,),
+    )] == [(source.session_id, source.thread_id)]
 
     identity = container.job_service.reserve_user_execution_identity()
     container.message_service.accept_user_message(message, execution_identity=identity, queue_input=ExecutionQueueInput(
@@ -1570,7 +1576,7 @@ async def test_fork_attachment_retention_uses_real_owner_and_cold_target_tool(
     production_fork_container: AppContainer, fork_provider_prepare, creation_kind: SessionForkCreationKind,
     mode: SessionForkMode, input_kind: str,
 ) -> None:
-    """真实 fork 证明 main 复用、独立保活、删除源后冷读和目标新工具 capability。"""
+    """真实 fork 建立独立目录关联，覆盖删除源后冷读和目标新工具 capability。"""
     context = _production_fork_context(production_fork_container)
     store = production_fork_container.attachment_blob_store
     source = await context.sessions.create(SessionCreateRequest(title="附件 fork 来源"))
@@ -1643,41 +1649,48 @@ async def test_fork_attachment_retention_uses_real_owner_and_cold_target_tool(
     assert len(result.resources) == 1
     receipt = result.resources[0]
     assert receipt.resource_uri == ref.file_id and receipt.availability == "available"
-    assert receipt.action == ("reuse_reference" if creation_kind == "new_child_thread" else "retain_reference")
+    assert receipt.action == "reuse_reference"
     assert receipt.target_uri is not None
     assert store.read(result.session.session_id, ref.file_id, owner_thread_id=result.thread_id).data == body
     copied = context.saver._storage.storage.read_items(result.session.session_id, result.thread_id)
     assert {item.item_id: item.to_dict() for item in copied} == {item.item_id: item.to_dict() for item in original}
-    blob = store._catalog.get_blob_by_digest("sha256:" + hashlib.sha256(body).hexdigest())
-    assert blob is not None
-    assert len(store._catalog.list_active_owner_refs_for_blob(blob.blob_id)) == (1 if creation_kind == "new_child_thread" else 2)
+    attachment_id = parse_resource_uri(ref.file_id).attachment_id
+    directory = store._catalog.get_directory(attachment_id)
+    assert directory is not None
+    assert store._catalog.file_version(attachment_id, "original/content").digest == "sha256:" + hashlib.sha256(body).hexdigest()
+    assert [tuple(row) for row in store._catalog.connection.execute(
+        "SELECT session_id,thread_id FROM attachment_directory_associations WHERE attachment_id=? AND state='active' ORDER BY session_id,thread_id", (attachment_id,),
+    )] == sorted([(source.session_id, source_thread), (result.session.session_id, result.thread_id)])
     claims = store._catalog._connected().execute(
-        "SELECT state FROM fork_attachment_claims WHERE target_session_id=? AND target_thread_id=?",
+        "SELECT state FROM attachment_directory_fork_claims WHERE target_session_id=? AND target_thread_id=?",
         (result.session.session_id, result.thread_id),
     ).fetchall()
     control = context.forks._threads.for_owner_session(result.session.session_id).control_store
     settlements = read_copy_attachment_settlements(control)
-    assert [row[0] for row in claims] == ([] if creation_kind == "new_child_thread" else ["committed"])
-    assert [row.state for row in settlements if row.target_thread_id == result.thread_id] == (
-        [] if creation_kind == "new_child_thread" else ["committed"]
-    )
+    assert [row[0] for row in claims] == ["committed"]
+    assert [row.state for row in settlements if row.target_thread_id == result.thread_id] == ["committed"]
     if creation_kind == "new_session_main":
         await context.sessions.path_resolver.delete_subtree(
             idempotency_key="resource-source-delete", root_node_id=source.session_id,
         )
         assert not source_node.exists()
-    assert store._catalog.list_gc_candidates(before=datetime.now(UTC)) == ()
+    assert store._catalog.gc_candidates(now=datetime.now(UTC)) == ()
     cold_store = AttachmentBlobStore(context.workspace, path_resolver=context.sessions.path_resolver)
     cold = RolloutCheckpointSaver(context.sessions.path_resolver.sessions_root, attachment_store=cold_store)
     try:
         assert cold_store.read(result.session.session_id, ref.file_id, owner_thread_id=result.thread_id).data == body
-        new_turn = cold.accept_turn(
-            result.session.session_id, thread_id=result.thread_id, accepted_ingress_id="resource-target-input",
-            acceptance_idempotency_key="resource-target-accept", job_id="resource-target-job",
-            admission_idempotency_key="resource-target-admission", root_item_id="resource-target-root", payload="读取继承附件",
-        )
-        target_admission = cold.execution_admission(
-            result.session.session_id, thread_id=result.thread_id, execution_id=new_turn["initial_execution_id"],
+        target_messages = MessageService(main_thread_resolver=context.sessions.path_resolver.main_thread_id,
+            checkpointer=cold, attachment_store=cold_store, workspace_root=context.workspace)
+        target_message = await target_messages.create(result.session.session_id,
+            MessageCreateRequest(content="读取继承附件"), thread_id=result.thread_id)
+        target_identity = production_fork_container.job_service.reserve_user_execution_identity()
+        target_messages.accept_user_message(target_message, execution_identity=target_identity, queue_input=ExecutionQueueInput(
+            execution_binding=target_identity, message_id=target_message.message_id, agent_id="default", provider_id=None,
+            delivery_policy="after_turn", gateway_id=None, request_id=None, created_at=target_message.created_at.isoformat(),
+        ))
+        new_turn = {"turn_id": target_identity.turn_id}
+        target_admission = cold.execution_admission_for_job(
+            result.session.session_id, thread_id=result.thread_id, job_id=target_identity.job_id,
         )
         prepared = fork_provider_prepare(
             replace(context, saver=cold), result.session.session_id, target_admission.execution_id,
@@ -1709,16 +1722,20 @@ async def test_fork_attachment_retention_uses_real_owner_and_cold_target_tool(
                 await cold.adelete_thread(result.thread_id)
         if creation_kind == "new_child_thread":
             assert cold_store.read(source.session_id, ref.file_id, owner_thread_id=source_thread).data == body
-            assert len(cold_store._catalog.list_active_owner_refs_for_blob(blob.blob_id)) == 1
+            assert [tuple(row) for row in cold_store._catalog.connection.execute(
+                "SELECT session_id,thread_id FROM attachment_directory_associations WHERE attachment_id=? AND state='active'", (attachment_id,),
+            )] == [(source.session_id, source_thread)]
         else:
             target_node = _main_thread_node(context, result.session.session_id)
             await context.sessions.path_resolver.delete_subtree(
                 idempotency_key="resource-target-delete", root_node_id=result.session.session_id,
             )
             assert not target_node.exists()
-            assert store._catalog.list_active_owner_refs_for_blob(blob.blob_id) == ()
+            assert store._catalog.connection.execute(
+                "SELECT * FROM attachment_directory_associations WHERE attachment_id=? AND state='active'", (attachment_id,),
+            ).fetchall() == []
             assert [row[0] for row in store._catalog._connected().execute(
-                "SELECT state FROM fork_attachment_claims WHERE target_session_id=?", (result.session.session_id,),
+                "SELECT state FROM attachment_directory_fork_claims WHERE target_session_id=?", (result.session.session_id,),
             )] == ["target_deleted"]
     finally:
         cold_store.close()
@@ -5052,7 +5069,7 @@ async def test_shared_owner_cold_recovery_uses_frozen_creation_decision(
         else:
             assert frozen.state == "published" and capture.state == "materialized" and not root.exists()
     claims = [tuple(row) for row in production_fork_container.attachment_blob_store._catalog._connected().execute(
-        "SELECT claim_id,state FROM fork_attachment_claims WHERE copy_operation_id=? ORDER BY claim_id", (key,),
+        "SELECT claim_id,state FROM attachment_directory_fork_claims WHERE copy_operation_id=? ORDER BY claim_id", (key,),
     )]
     if crash_phase == "copy.attachments.preparing":
         assert [row[1] for row in claims] == (["preparing"] if creation_kind == "new_session_main" else [])
@@ -5122,7 +5139,7 @@ async def test_shared_owner_cold_recovery_uses_frozen_creation_decision(
                 )
             assert captures == 1
             terminal_claims = [tuple(row) for row in restarted.attachment_blob_store._catalog._connected().execute(
-                "SELECT claim_id,state FROM fork_attachment_claims WHERE copy_operation_id=? ORDER BY claim_id", (key,),
+                "SELECT claim_id,state FROM attachment_directory_fork_claims WHERE copy_operation_id=? ORDER BY claim_id", (key,),
             )]
             if incomplete:
                 assert terminal_claims == [(claim_id, "aborted") for claim_id, _ in claims]
@@ -5160,7 +5177,7 @@ async def test_shared_owner_cold_recovery_uses_frozen_creation_decision(
             assert await recovered.forks.recover_prepared_forks() == 0
             assert cold_catalog.get_fork_source_capture(copy_operation_id=key) == terminal_capture
             assert [tuple(row) for row in restarted.attachment_blob_store._catalog._connected().execute(
-                "SELECT claim_id,state FROM fork_attachment_claims WHERE copy_operation_id=? ORDER BY claim_id", (key,),
+                "SELECT claim_id,state FROM attachment_directory_fork_claims WHERE copy_operation_id=? ORDER BY claim_id", (key,),
             )] == terminal_claims
             assert (_main_thread_node(recovered, source.session_id) / "rollout/rollout.jsonl").read_bytes() == source_jsonl
             assert get_current_gateway_id() is None and get_current_request_id() is None
@@ -5261,7 +5278,7 @@ async def test_child_capture_missing_final_locator_is_not_rebuilt(
         assert not root.exists() and not staging.exists() and not removed_target.exists()
         assert final.is_dir() and captures == int(crash_phase == "copy.source.reserved")
         assert [tuple(row) for row in cleanup_container.attachment_blob_store._catalog._connected().execute(
-            "SELECT state FROM fork_attachment_claims WHERE copy_operation_id=?", (key,),
+            "SELECT state FROM attachment_directory_fork_claims WHERE copy_operation_id=?", (key,),
         )] == [], "默认不继承附件，不得额外建立保活 claim"
         result = await cleanup.forks.fork(request)
         assert (result.session.session_id, result.thread_id) == (source.session_id, frozen.child_thread_id)
@@ -5345,7 +5362,7 @@ async def test_child_aborted_capture_resumes_original_cleanup_without_rebuilding
         assert not final.exists() and not staging.exists()
         assert not capture_directory(recovered.saver._storage.storage.sessions_dir, capture).exists()
         assert [tuple(row) for row in restarted.attachment_blob_store._catalog._connected().execute(
-            "SELECT state FROM fork_attachment_claims WHERE copy_operation_id=?", (key,),
+            "SELECT state FROM attachment_directory_fork_claims WHERE copy_operation_id=?", (key,),
         )] == [("aborted",)]
         with pytest.raises(RuntimeError, match="已中止"):
             await recovered.forks.fork(request)
@@ -5387,7 +5404,7 @@ async def test_main_fork_conflicting_capture_is_preserved_before_abort(
     captured_bytes = {str(path.relative_to(root)): path.read_bytes() for path in root.rglob("*") if path.is_file()}
     source_jsonl = (_main_thread_node(context, source.session_id) / "rollout/rollout.jsonl").read_bytes()
     claims = [tuple(row) for row in production_fork_container.attachment_blob_store._catalog._connected().execute(
-        "SELECT * FROM fork_attachment_claims WHERE copy_operation_id=? ORDER BY claim_id", (key,),
+        "SELECT * FROM attachment_directory_fork_claims WHERE copy_operation_id=? ORDER BY claim_id", (key,),
     )]
     attachment_catalog_path = production_fork_container.attachment_blob_store._catalog.database_path
     source_node = _main_thread_node(context, source.session_id)
@@ -5446,7 +5463,7 @@ async def test_main_fork_conflicting_capture_is_preserved_before_abort(
     assert {str(path.relative_to(root)): path.read_bytes() for path in root.rglob("*") if path.is_file()} == captured_bytes
     with closing(sqlite3.connect(attachment_catalog_path.as_uri() + "?mode=ro", uri=True)) as connection:
         assert connection.execute(
-            "SELECT * FROM fork_attachment_claims WHERE copy_operation_id=? ORDER BY claim_id", (key,),
+            "SELECT * FROM attachment_directory_fork_claims WHERE copy_operation_id=? ORDER BY claim_id", (key,),
         ).fetchall() == claims
     assert (source_node / "rollout/rollout.jsonl").read_bytes() == source_jsonl
 
@@ -5507,7 +5524,7 @@ async def test_main_fork_abort_rejects_rebound_creation_capability(
     root = capture_directory(context.saver._storage.storage.sessions_dir, capture)
     captured_bytes = {str(path.relative_to(root)): path.read_bytes() for path in root.rglob("*") if path.is_file()}
     claims = [tuple(row) for row in production_fork_container.attachment_blob_store._catalog._connected().execute(
-        "SELECT * FROM fork_attachment_claims WHERE copy_operation_id=?", (key,),
+        "SELECT * FROM attachment_directory_fork_claims WHERE copy_operation_id=?", (key,),
     )]
     for name, value in {
         "session_id": source.session_id, "main_thread_id": _main_thread_id(context, source.session_id),
@@ -5524,7 +5541,7 @@ async def test_main_fork_abort_rejects_rebound_creation_capability(
     assert catalog.get_fork_source_capture(copy_operation_id=key) == capture
     assert {str(path.relative_to(root)): path.read_bytes() for path in root.rglob("*") if path.is_file()} == captured_bytes
     assert [tuple(row) for row in production_fork_container.attachment_blob_store._catalog._connected().execute(
-        "SELECT * FROM fork_attachment_claims WHERE copy_operation_id=?", (key,),
+        "SELECT * FROM attachment_directory_fork_claims WHERE copy_operation_id=?", (key,),
     )] == claims
 
     # 错误 capability 的零副作用已核验；原 owner 必须在原期限内完成合法中止。
@@ -5534,7 +5551,7 @@ async def test_main_fork_abort_rejects_rebound_creation_capability(
     assert terminal_capture is not None and terminal_capture.state == "aborted"
     assert not root.exists()
     assert [tuple(row) for row in production_fork_container.attachment_blob_store._catalog._connected().execute(
-        "SELECT state FROM fork_attachment_claims WHERE copy_operation_id=?", (key,),
+        "SELECT state FROM attachment_directory_fork_claims WHERE copy_operation_id=?", (key,),
     )] == [("aborted",)]
     with pytest.raises(RuntimeError, match="已中止"):
         await context.forks.fork(request)
@@ -6849,7 +6866,7 @@ async def test_local_partial_capture_abort_does_not_block_complete_marker_recove
     complete_snapshot, complete_marker_hash = read_captured_snapshot(context.saver._storage.storage.sessions_dir, complete_capture)
     assert complete_capture.snapshot_sha256 is None and complete_capture.marker_sha256 is None
     claims = store._catalog._connected().execute(
-        "SELECT claim_id,state FROM fork_attachment_claims WHERE copy_operation_id=? ORDER BY claim_id", (partial_key,),
+        "SELECT claim_id,state FROM attachment_directory_fork_claims WHERE copy_operation_id=? ORDER BY claim_id", (partial_key,),
     ).fetchall()
     assert [row[1] for row in claims] == (["preparing"] if partial_phase == "copy.attachments.preparing" else [])
     assert catalog.get_fork_retention_claim(partial_capture.fork_id) is not None
@@ -6900,7 +6917,7 @@ async def test_local_partial_capture_abort_does_not_block_complete_marker_recove
         assert not partial_root.exists() and not partial_target.exists()
         assert cold_catalog.get_fork_retention_claim(partial_capture.fork_id).state == "released"
         assert [tuple(row) for row in restarted.attachment_blob_store._catalog._connected().execute(
-            "SELECT claim_id,state FROM fork_attachment_claims WHERE copy_operation_id=? ORDER BY claim_id", (partial_key,),
+            "SELECT claim_id,state FROM attachment_directory_fork_claims WHERE copy_operation_id=? ORDER BY claim_id", (partial_key,),
         )] == [(row[0], "aborted") for row in claims]
         assert published.state == "published" and published.preimage_hash == complete.preimage_hash
         assert materialized_capture is not None and materialized_capture.state == "materialized"
@@ -7703,16 +7720,14 @@ async def test_fork_preserves_real_retry_internal_and_closed_tool_lineage(
     target_file_id = target_reference["file_id"]
     assert target_reference["availability"] == "available"
     assert [(resource.resource_uri, resource.action, resource.target_uri, resource.availability) for resource in fork_result.resources] == [
-        (source_file_id, "retain_reference", target_file_id, "available"),
+        (source_file_id, "reuse_reference", target_file_id, "available"),
     ]
-    source_ref, source_blob = production_fork_container.attachment_blob_store._resolve_published(
-        source.session_id, source_file_id, owner_thread_id=source_owner.thread_id,
-    )
-    target_ref, target_blob = production_fork_container.attachment_blob_store._resolve_published(
-        child.session_id, target_file_id, owner_thread_id=target_owner.thread_id,
-    )
-    assert target_ref.owner_session_id == child.session_id and target_ref.owner_thread_id == target_owner.thread_id
-    assert target_ref.owner_ref_id != source_ref.owner_ref_id and target_blob == source_blob
+    attachment_store = production_fork_container.attachment_blob_store
+    attachment_id = parse_resource_uri(source_file_id).attachment_id
+    assert parse_resource_uri(target_file_id).attachment_id == attachment_id
+    assert [tuple(row) for row in attachment_store._catalog.connection.execute(
+        "SELECT session_id,thread_id FROM attachment_directory_associations WHERE attachment_id=? AND state='active' ORDER BY session_id,thread_id", (attachment_id,),
+    )] == sorted([(source.session_id, source_owner.thread_id), (child.session_id, target_owner.thread_id)])
     restored_user = next(message for message in messages if message.response_metadata.get("attachments"))
     assert restored_user.content == source_user.payload["content"]
     assert restored_user.response_metadata["attachments"] == source_user.payload["attachments"]
@@ -8828,7 +8843,7 @@ async def test_http_fork_reply_preserves_committed_copy_across_target_delete(
         capture = catalog.get_fork_source_capture(creation_key=key)
         assert capture is not None and capture.state == "materialized"
         assert [row[0] for row in store._catalog._connected().execute(
-            "SELECT state FROM fork_attachment_claims WHERE copy_operation_id=?", (capture.copy_operation_id,),
+            "SELECT state FROM attachment_directory_fork_claims WHERE copy_operation_id=?", (capture.copy_operation_id,),
         )] == ["target_deleted"]
         deleted_content = await client.get(
             f"/api/v1/sessions/{target_session_id}/attachments/content", params={"file_id": target_uri, "variant": "original"},
@@ -8863,8 +8878,11 @@ async def test_full_copy_missing_selected_attachment_aborts_without_publication(
             "SELECT visible,context_selected FROM context_view_items WHERE view_id=? AND item_id='item-retry-user'",
             (point.source_view_id,),
         ).fetchone() == (1, 1)
-    _, blob = store._resolve_published(source.session_id, point.resources[0].resource_uri, owner_thread_id=source_thread)
-    (context.workspace / ".boxteam" / "attachments" / blob.relative_locator).unlink()
+    attachment_id = parse_resource_uri(point.resources[0].resource_uri).attachment_id
+    directory = store._catalog.get_directory(attachment_id)
+    path = store.resolve_directory_uri(parse_resource_uri(point.resources[0].resource_uri, local_gateway_id=get_current_gateway_id()))
+    path.parent.chmod(0o700)
+    path.unlink()
     catalog = context.sessions.path_resolver.catalog_store
     before = (await context.sessions.list(limit=100)).total
     with pytest.raises(FileNotFoundError):
@@ -8881,7 +8899,7 @@ async def test_full_copy_missing_selected_attachment_aborts_without_publication(
     assert store._catalog.fork_attachment_snapshots(
         capture.copy_operation_id, target_session_id=capture.target_session_id, target_thread_id=capture.target_thread_id,
     ) == ()
-    assert store._catalog.get_blob(blob.blob_id).availability == "available"
+    assert store._catalog.get_directory(attachment_id) == directory
 
 
 @pytest.mark.asyncio
@@ -8972,8 +8990,9 @@ async def test_http_published_fork_without_attachment_claim_rejects_deleting_tar
         assert any(attachment.file_id == point.resources[0].resource_uri
                    for message in visible.items for attachment in message.attachments)
         if resource_case == "missing":
-            _, blob = store._resolve_published(source.session_id, point.resources[0].resource_uri, owner_thread_id=thread_id)
-            (context.workspace / ".boxteam" / "attachments" / blob.relative_locator).unlink()
+            path = store.resolve_directory_uri(parse_resource_uri(point.resources[0].resource_uri, local_gateway_id=get_current_gateway_id()))
+            path.parent.chmod(0o700)
+            path.unlink()
             assert request.resources == []
         else:
             request = request.model_copy(update={"resources": [SessionForkResourceChoice(

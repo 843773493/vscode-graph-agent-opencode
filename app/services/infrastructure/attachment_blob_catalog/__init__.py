@@ -1,1 +1,1 @@
-"""workspace 附件 content-addressed blob catalog 垂直链路。"""
+"""工作区附件目录及冻结历史来源的唯一存储链路。"""

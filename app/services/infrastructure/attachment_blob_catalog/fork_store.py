@@ -1,17 +1,20 @@
-"""附件 fork 的冻结引用、必要保活与 publication 协调。"""
+"""附件目录 fork：同工作区关联原身份，跨工作区复制已冻结的完整目录版本。"""
 
 from __future__ import annotations
 
 import hashlib
 import json
-import shutil
-from collections.abc import Callable, Sequence
-from dataclasses import replace
-from pathlib import Path
+from collections.abc import Sequence
 
+from app.core.identifier import create_uuid_hex
 from app.core.phase_observer import observe_phase
-from app.core.resource_uri import session_artifact_uri
-from app.core.session_catalog_resolver import SessionCatalogPathResolver
+from app.core.resource_uri import (
+    file_uri_child,
+    file_uri_root,
+    parse_attachment_uri,
+    parse_resource_uri,
+    resource_display_uri,
+)
 from app.core.session_catalog_store import SessionCreationRecord
 from app.core.session_catalog_store.contracts import ForkSourceCaptureRecord
 from app.core.session_control_store import SessionControlStore, ThreadCreationRecord
@@ -20,294 +23,188 @@ from app.core.session_control_store.copy_attachment_settlement import (
     read_copy_attachment_settlements,
     transition_copy_attachment_settlement,
 )
-from app.core.session_lifecycle_gate import (
-    NavigationTopologyGate,
-    OperationHolderGate,
-    SessionDeletionPendingError,
-    SessionLifecycleGate,
-)
-from app.core.trace_middleware import get_current_gateway_id
-from app.core.workspace_identity import read_workspace_id
-from app.schemas.internal_v2.session import (
-    SessionForkResourceSourceDTO,
-)
-from app.services.infrastructure.attachment_blob_catalog.catalog import (
-    AttachmentBlobCatalog,
-    derive_attachment_id,
+from app.core.session_lifecycle_gate import SessionDeletionPendingError
+from app.schemas.internal_v2.session import SessionForkResourceSourceDTO
+from app.services.infrastructure.attachment_blob_catalog.directories import (
+    copy_directory_files,
+    directory_manifest,
 )
 from app.services.infrastructure.attachment_blob_catalog.fork_import import (
     ForkAttachmentImportMixin,
 )
 from app.services.infrastructure.attachment_blob_catalog.locator import (
-    resolve_blob_path,
-    resolve_captured_attachment,
+    resolve_attachment_directory,
+    resolve_captured_directory,
 )
 from app.services.infrastructure.attachment_blob_catalog.records import (
-    ForkAttachmentSnapshot,
+    ForkAttachmentDirectorySnapshot,
 )
 from app.services.infrastructure.resource_platform.virtual_resources.resolver import (
     check_resource_target,
 )
 from app.services.infrastructure.resource_platform.virtual_resources.values import (
-    ResourceTargetAction,
     ResourceTargetContext,
     ResourceTargetFacts,
 )
 from app.services.infrastructure.rollout_context.fork.source_capture import (
     capture_directory,
 )
+from app.services.infrastructure.workspace_files.mutation_lock import (
+    workspace_file_mutation_lock,
+)
 
 
 class ForkAttachmentStoreMixin(ForkAttachmentImportMixin):
-    """宿主显式提供唯一 catalog、locator、gate、正文验证及控制库端口。"""
-
-    _catalog: AttachmentBlobCatalog
-    _path_resolver: SessionCatalogPathResolver
-    _attachments_root: Path
-    _gate: SessionLifecycleGate
-    _topology_gate: NavigationTopologyGate
-    _blob_commits: OperationHolderGate
-    _parse_canonical_attachment_id: Callable[[str, str], str]
-    _assert_session_active: Callable[[str, str], int]
-    _open_control_store: Callable[[str], SessionControlStore]
-    _verify_blob_content: Callable[[Path, str, int, str], None]
-    _commit_staged_blob: Callable[..., None]
-
     def project_attachment(self, target_session_id: str, target_thread_id: str, file_id: str) -> dict[str, str]:
-        """同一次冻结 mapping 读取保留引用和可用性，不修改 immutable rollout。"""
         self._catalog.acquire_access()
         if not self._catalog.database_path.is_file():
             return {"file_id": file_id, "availability": "unavailable"}
         self._assert_session_active(target_session_id, target_thread_id)
-        return self._catalog.project_fork_attachment(
-            target_session_id=target_session_id, target_thread_id=target_thread_id,
-            source_file_id=file_id, workspace_id=read_workspace_id(self._workspace_root), gateway_id=get_current_gateway_id(),
-        )
+        snapshot = self._catalog.fork_attachment_snapshot_for_alias(target_session_id=target_session_id, target_thread_id=target_thread_id, source_file_id=file_id)
+        if snapshot is not None:
+            if snapshot.availability != "available":
+                return {"file_id": file_id, "availability": "unavailable"}
+            claim = self._catalog.connection.execute("SELECT state FROM attachment_directory_fork_claims WHERE claim_id=?", (snapshot.claim_id,)).fetchone()
+            record = self._catalog.get_directory(snapshot.target_attachment_id)
+            parsed = parse_attachment_uri(file_id, require_file=True)
+            target_uri = file_uri_root(snapshot.target_file_id)
+            projected_file = file_uri_child(target_uri, *parsed.tail_segments[1:]) if parsed.kind == "attachments" else file_uri_child(target_uri, "original", "content")
+            return {"file_id": projected_file, "directory_uri": target_uri,
+                    "availability": "available" if claim is not None and claim[0] == "committed" and record is not None and record.availability == "available" else "unavailable"}
+        parsed = parse_resource_uri(file_id)
+        if parsed.kind == "attachments" and parsed.scope_id != self.workspace_id:
+            return {"file_id": file_id, "availability": "unavailable"}
+        try:
+            attachment_id, _ = self._resource_id(file_id, session_id=target_session_id, thread_id=target_thread_id, canonical=True)
+        except FileNotFoundError:
+            return {"file_id": file_id, "availability": "unavailable"}
+        record = self._catalog.get_directory(attachment_id)
+        projected_file = self.reference(attachment_id) if parsed.session_artifact_kind == "attachments" else parsed.display_uri
+        return {"file_id": projected_file,
+                "directory_uri": file_uri_root(projected_file),
+                "availability": "available" if record is not None and record.availability == "available" else "unavailable"}
 
-    def _freeze_fork_attachment_candidates(
-        self, *, source_session_id: str, source_thread_id: str,
-        target_session_id: str, target_thread_id: str,
-        references: Sequence[tuple[str, bool]],
-    ) -> list[tuple[ForkAttachmentSnapshot, set[str], bool]]:
-        """展示与 capture 共用精确 alias/owner 元数据核验，不建立 claim。"""
-        grouped: dict[str, tuple[set[str], bool, ForkAttachmentSnapshot | None]] = {}
-        unavailable: dict[str, tuple[ForkAttachmentSnapshot, set[str], bool]] = {}
+    def _fork_candidates(self, *, source_session_id: str, source_thread_id: str, references: Sequence[tuple[str, bool]]):
+        grouped = {}
         for file_id, required in references:
             projected = self.project_attachment(source_session_id, source_thread_id, file_id)
-            inherited = self._catalog.fork_attachment_snapshot_for_alias(
-                target_session_id=source_session_id, target_thread_id=source_thread_id, source_file_id=file_id,
-            )
-            if inherited is not None and projected["availability"] == "unavailable":
-                previous, aliases, previous_required = unavailable.setdefault(
-                    inherited.target_attachment_id, (inherited, set(), False),
-                )
-                if previous != inherited:
-                    raise RuntimeError("fork unavailable 附件 alias 的冻结 metadata 冲突")
-                aliases.update((file_id, projected["file_id"]))
-                unavailable[inherited.target_attachment_id] = previous, aliases, previous_required or required
-                continue
-            source_id = self._parse_canonical_attachment_id(source_session_id, projected["file_id"])
-            aliases, previous_required, previous = grouped.setdefault(source_id, (set(), False, inherited))
-            if previous != inherited:
-                raise RuntimeError("fork attachment alias 的 backing owner 冻结 metadata 冲突")
-            aliases.update((file_id, self.reference(source_session_id, source_id)))
-            grouped[source_id] = aliases, previous_required or required, inherited
-        source_ids = tuple(sorted(grouped))
-        revision, sources = self._catalog.freeze_fork_attachment_sources(source_ids)
-        candidates: list[tuple[ForkAttachmentSnapshot, set[str], bool]] = []
-        for source_id, (inherited, aliases, required) in sorted(unavailable.items()):
-            candidates.append((replace(
-                inherited, source_attachment_id=source_id,
-                source_owner_ref_id=inherited.target_owner_ref_id,
-                source_session_id=source_session_id,
-                source_thread_id=inherited.target_owner_thread_id,
-                source_item_ref=inherited.target_item_ref,
-                target_session_id=target_session_id, target_thread_id=target_thread_id,
-                catalog_revision=revision, availability="unavailable", claim_id=None,
-            ), aliases, required))
-        for source_id, (source, blob) in zip(source_ids, sources, strict=True):
-            aliases, required, inherited = grouped[source_id]
-            if inherited is None:
-                authorized = (source.owner_session_id, source.owner_thread_id) == (source_session_id, source_thread_id)
+            inherited = self._catalog.fork_attachment_snapshot_for_alias(target_session_id=source_session_id, target_thread_id=source_thread_id, source_file_id=file_id)
+            if inherited is not None:
+                attachment_id = inherited.target_attachment_id
             else:
-                authorized = (source.owner_session_id, source.owner_thread_id, source.owner_ref_id, source.blob_id, source.digest, source.variant) == (
-                    source_session_id, inherited.target_owner_thread_id, inherited.target_owner_ref_id,
-                    inherited.blob_id, inherited.digest, inherited.variant,
-                )
-            if not authorized:
-                raise RuntimeError("source-mismatch: fork attachment ref 缺失或不属于精确 source owner")
-            candidates.append((ForkAttachmentSnapshot(
-                source_attachment_id=source_id, source_file_id="", source_owner_ref_id=source.owner_ref_id,
-                source_session_id=source.owner_session_id, source_thread_id=source.owner_thread_id,
-                target_attachment_id="", target_file_id="", target_owner_ref_id="",
-                target_session_id=target_session_id, target_thread_id=target_thread_id,
-                target_owner_thread_id=target_thread_id,
-                source_item_ref=source.item_ref, target_item_ref=None,
-                blob_id=blob.blob_id, digest=blob.digest, length=blob.length, relative_locator=blob.relative_locator,
-                variant=source.variant, file_name=source.file_name, mime_type=source.mime_type,
-                catalog_revision=revision,
-                availability="available" if source.state == "active" and blob.availability == "available" else "unavailable",
-                required=required, claim_id=None,
-            ), aliases, required))
-        return candidates
-
-    def project_fork_attachment_sources(
-        self, *, source_session_id: str, source_thread_id: str,
-        references: Sequence[tuple[str, bool]],
-    ) -> tuple[SessionForkResourceSourceDTO, ...]:
-        """只投影来源 metadata；真实目标决策、正文校验与保活仍在 capture。"""
-        candidates = self._freeze_fork_attachment_candidates(
-            source_session_id=source_session_id, source_thread_id=source_thread_id,
-            target_session_id=source_session_id, target_thread_id=source_thread_id,
-            references=references,
-        )
-        actual_uris = {uri for uri, _ in references}
-        return tuple(SessionForkResourceSourceDTO(
-            resource_uri=min(aliases & actual_uris), name=candidate.file_name,
-            content_type=candidate.mime_type,
-            availability="available" if candidate.availability == "available" else "unavailable",
-            required_for_context=required,
-        ) for candidate, aliases, required in candidates)
-
-    def capture_fork_attachments(
-        self, record: ForkSourceCaptureRecord, *, references: Sequence[tuple[str, bool]], same_storage_owner: bool,
-    ) -> tuple[ForkAttachmentSnapshot, ...]:
-        """source guard 内冻结实际 backing owner，事务结束后原子建立必要 claim。"""
-        request = json.loads(record.request_json)
-        source_domain = request["source_storage_domain_id"]
-        target_domain = request["target_storage_domain_id"]
-        actual_domain = self._path_resolver.catalog_store.get_node(record.source_session_id).workspace_id
-        if source_domain != actual_domain or (source_domain == target_domain) != same_storage_owner:
-            raise ValueError("fork_owner_overlap: 冻结附件资源域与实际 owner 不一致")
-        choices = {choice["resource_uri"]: choice["action"] for choice in request["resources"]}
-        source_main = self._path_resolver.main_thread_id(record.source_session_id)
-        target_main = request["target_main_thread_id"]
-        candidates = self._freeze_fork_attachment_candidates(
-            source_session_id=record.source_session_id, source_thread_id=record.source_thread_id,
-            target_session_id=record.target_session_id, target_thread_id=record.target_thread_id,
-            references=references,
-        )
-        snapshots = []
-        for candidate, aliases, required in candidates:
-            source_file_id, *other_aliases = sorted(aliases)
-            actions = {choices[alias] for alias in aliases if alias in choices}
-            if len(actions) > 1:
-                raise ValueError("同一附件的 alias 不能选择不同继承动作")
-            snapshot = self._decide_fork_attachment(
-                replace(candidate, source_file_id=source_file_id, source_file_aliases=tuple(other_aliases)),
-                source_storage_domain_id=source_domain,
-                target_storage_domain_id=target_domain,
-                target_gateway_id=request["target_gateway_id"],
-                source_main_thread_id=source_main, target_main_thread_id=target_main,
-                copy_operation_id=record.copy_operation_id, required=required, choice=next(iter(actions), None),
-            )
-            if snapshot.availability == "available":
                 try:
-                    self._verify_fork_attachment(snapshot)
+                    attachment_id, _ = self._resource_id(projected["file_id"], session_id=source_session_id, thread_id=source_thread_id, canonical=True)
                 except FileNotFoundError:
-                    if required:
-                        raise
-                    # 可选历史正文真实缺失时冻结不可用；损坏、越权等错误不降级。
-                    snapshot = replace(snapshot, availability="unavailable", required=False, claim_id=None,
-                                       target_action="omit", unavailable_reason="附件正文缺失")
-            snapshots.append(snapshot)
-        result = tuple(sorted(snapshots, key=lambda snapshot: (snapshot.source_attachment_id, snapshot.source_file_id)))
-        self._catalog.prepare_fork_attachment_claims(
-            copy_operation_id=record.copy_operation_id, source_snapshot_id=record.snapshot_id,
-            operation_preimage_hash=record.preimage_hash, snapshots=result,
-        )
-        # 正文进入已有 capture 文件树；generic files/chunk 负责全部跨域传输。
-        # 新目录的多文件版本沿同一文件树扩展，不新增附件专用 transport。
-        root = capture_directory(self._sessions_root, record) / record.source_session_id
+                    parsed = parse_resource_uri(file_id)
+                    attachment_id = parsed.tail_segments[0] if parsed.kind == "attachments" else parsed.tail_segments[2]
+            aliases, previous_required, previous = grouped.setdefault(attachment_id, (set(), False, projected))
+            if (previous.get("directory_uri"), previous["availability"]) != (projected.get("directory_uri"), projected["availability"]):
+                raise RuntimeError("同一附件目录的 alias 对应不同目录归属或可用性")
+            aliases.add(file_id)
+            grouped[attachment_id] = aliases, previous_required or required, projected
+        return grouped
+
+    def project_fork_attachment_sources(self, *, source_session_id: str, source_thread_id: str, references: Sequence[tuple[str, bool]]) -> tuple[SessionForkResourceSourceDTO, ...]:
+        result = []
+        for attachment_id, (aliases, required, projected) in sorted(self._fork_candidates(source_session_id=source_session_id, source_thread_id=source_thread_id, references=references).items()):
+            original = self._catalog.file_version(attachment_id, "original/content")
+            result.append(SessionForkResourceSourceDTO(resource_uri=min(aliases), name=original.file_name if original else None, content_type=original.mime_type if original else None,
+                                                       availability=projected["availability"], required_for_context=required))
+        return tuple(result)
+
+    def capture_fork_attachments(self, record: ForkSourceCaptureRecord, *, references: Sequence[tuple[str, bool]], same_storage_owner: bool) -> tuple[ForkAttachmentDirectorySnapshot, ...]:
+        request = json.loads(record.request_json)
+        source_domain, target_domain = request["source_storage_domain_id"], request["target_storage_domain_id"]
+        if source_domain != self.workspace_id or (source_domain == target_domain) != same_storage_owner:
+            raise ValueError("fork_owner_overlap：目录资源域与实际 owner 不一致")
+        choices = {choice["resource_uri"]: choice["action"] for choice in request["resources"]}
+        candidates = self._fork_candidates(source_session_id=record.source_session_id, source_thread_id=record.source_thread_id, references=references)
+        previous = self._catalog.fork_attachment_snapshots(record.copy_operation_id, target_session_id=record.target_session_id, target_thread_id=record.target_thread_id)
+        if previous:
+            if {snapshot.source_attachment_id: ({snapshot.source_file_id, *snapshot.source_file_aliases}, snapshot.required) for snapshot in previous} != {key: (value[0], value[1]) for key, value in candidates.items()}:
+                raise RuntimeError("重复目录 capture 的来源集合与原冻结操作不一致")
+            result = previous
+        else:
+            snapshots = []
+            for attachment_id, (aliases, required, projected) in sorted(candidates.items()):
+                actions = {choices[alias] for alias in aliases if alias in choices}
+                if len(actions) > 1:
+                    raise ValueError("同一目录的 alias 不能选择不同继承动作")
+                original = self._catalog.file_version(attachment_id, "original/content")
+                directory = self._catalog.get_directory(attachment_id)
+                available = projected["availability"] == "available" and directory is not None and original is not None
+                files, directories = (), ()
+                if available and actions != {"omit"}:
+                    try:
+                        files, directories = self._fork_directory_manifest(attachment_id)
+                    except FileNotFoundError:
+                        if required:
+                            raise
+                        available = False
+                decision = check_resource_target(ResourceTargetFacts(
+                    resource_uri=min(aliases), storage_domain_id=source_domain, lifecycle="workspace", available=available,
+                    required_for_context=required, snapshot_import_supported=True,
+                ), ResourceTargetContext(storage_domain_id=target_domain, owner_session_id=record.target_session_id, owner_thread_id=record.target_thread_id), choice=next(iter(actions), None))
+                if not decision.available:
+                    files, directories = (), ()
+                target_id = attachment_id if same_storage_owner else "att_" + create_uuid_hex(namespace="attachment_directory")
+                target_root_uri = resource_display_uri(scope="workspace", scope_id=target_domain, kind="attachments", tail_segments=(target_id,), gateway_authority=request["target_gateway_id"])
+                source_uri = parse_attachment_uri(min(aliases), require_file=True)
+                children = source_uri.tail_segments[1:] if source_uri.kind == "attachments" else ("original", "content")
+                target_file_id = file_uri_child(target_root_uri, *children) if decision.available else min(aliases)
+                claim_id = "aclm_" + hashlib.sha256(f"{record.copy_operation_id}|{attachment_id}".encode()).hexdigest() if decision.available else None
+                source_file_id, *other_aliases = sorted(aliases)
+                snapshots.append(ForkAttachmentDirectorySnapshot(
+                    source_attachment_id=attachment_id, source_file_id=source_file_id, source_file_aliases=tuple(other_aliases),
+                    source_session_id=record.source_session_id, source_thread_id=record.source_thread_id,
+                    target_attachment_id=target_id, target_file_id=target_file_id,
+                    target_session_id=record.target_session_id, target_thread_id=record.target_thread_id,
+                    target_created_at=directory.created_at if same_storage_owner and directory is not None else self._clock().isoformat(),
+                    file_name=original.file_name if original else None, mime_type=original.mime_type if original else None,
+                    files=files, directories=directories, availability="available" if decision.available else "unavailable",
+                    required=required, target_action=decision.action, claim_id=claim_id, unavailable_reason=decision.reason,
+                ))
+            result = tuple(snapshots)
+        # 重试仍校验受保护正文，不以过去的 capture 或文件 stat 代替当前完整性。
+        if previous:
+            for snapshot in result:
+                if snapshot.availability == "available":
+                    self._fork_directory_manifest(snapshot.source_attachment_id)
+        self._catalog.prepare_fork_attachment_claims(copy_operation_id=record.copy_operation_id, source_snapshot_id=record.snapshot_id, operation_preimage_hash=record.preimage_hash, snapshots=result)
         for snapshot in result:
             if snapshot.availability != "available" or snapshot.target_action != "copy_snapshot":
                 continue
-            target = resolve_captured_attachment(root, snapshot.blob_id)
-            if not target.exists():
-                target.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-                source = resolve_blob_path(self._attachments_root, snapshot.relative_locator)
-                with source.open("rb") as reader, target.open("xb") as writer:
-                    shutil.copyfileobj(reader, writer, length=1024 * 1024)
-            self._verify_blob_content(target, snapshot.digest, snapshot.length, snapshot.blob_id)
+            directory = self._catalog.require_available_directory(snapshot.source_attachment_id)
+            source = resolve_attachment_directory(self._attachments_root, directory.relative_locator)
+            capture_root = capture_directory(self._sessions_root, record) / record.source_session_id
+            target = resolve_captured_directory(capture_root, snapshot.source_attachment_id)
+            with workspace_file_mutation_lock(self._workspace_root):
+                if directory_manifest(source) != (snapshot.files, snapshot.directories):
+                    raise RuntimeError("附件目录在捕获后发生变化，拒绝混合版本")
+                copy_directory_files(source, target, snapshot.files, snapshot.directories)
+                if directory_manifest(source) != (snapshot.files, snapshot.directories):
+                    raise RuntimeError("附件目录在复制期间发生变化，拒绝混合版本")
         return result
 
-    def _decide_fork_attachment(
-        self, snapshot: ForkAttachmentSnapshot, *, source_storage_domain_id: str, target_storage_domain_id: str,
-        target_gateway_id: str | None,
-        source_main_thread_id: str, target_main_thread_id: str, copy_operation_id: str,
-        required: bool, choice: ResourceTargetAction | None,
-    ) -> ForkAttachmentSnapshot:
-        target_id = derive_attachment_id(blob_id=snapshot.blob_id, owner_session_id=snapshot.target_session_id,
-                                         owner_thread_id=target_main_thread_id, variant=snapshot.variant)
-        existing = (self._catalog.get_reusable_attachment_owner(target_id)
-                    if source_storage_domain_id == target_storage_domain_id else None)
-        if existing is not None and (existing.blob_id, existing.digest, existing.mime_type) != (
-            snapshot.blob_id, snapshot.digest, snapshot.mime_type,
-        ):
-            existing = None
-        if existing is not None:
-            self._assert_session_active(existing.owner_session_id, existing.owner_thread_id)
-        existing_facts = None if existing is None else ResourceTargetFacts(
-            resource_uri=session_artifact_uri(target_storage_domain_id, existing.owner_session_id, "attachments", existing.attachment_id,
-                                             gateway_authority=target_gateway_id),
-            storage_domain_id=target_storage_domain_id, lifecycle="owner", available=True,
-            owner_session_id=existing.owner_session_id, owner_thread_id=existing.owner_thread_id,
-            retention_scope="session", revision=existing.blob_id, content_hash=existing.digest,
-            content_length=snapshot.length,
-        )
-        source_retains = (snapshot.source_thread_id == source_main_thread_id
-                          and self._catalog.get_reusable_attachment_owner(snapshot.source_attachment_id) is not None)
-        decision = check_resource_target(
-            ResourceTargetFacts(
-                resource_uri=snapshot.source_file_id, storage_domain_id=source_storage_domain_id,
-                lifecycle="owner", available=snapshot.availability == "available", required_for_context=required,
-                snapshot_import_supported=True, owner_session_id=snapshot.source_session_id,
-                owner_thread_id=snapshot.source_thread_id, retention_scope="session" if source_retains else "thread",
-                revision=snapshot.blob_id, content_hash=snapshot.digest, content_length=snapshot.length,
-            ),
-            ResourceTargetContext(storage_domain_id=target_storage_domain_id,
-                                  owner_session_id=snapshot.target_session_id, owner_thread_id=snapshot.target_thread_id,
-                                  existing_reference=existing_facts),
-            choice=choice,
-        )
-        if decision.action == "reuse_reference":
-            if existing is None:
-                raise RuntimeError("fork attachment reuse_reference 缺少目标 Session 的实际保活引用")
-            target_id, target_owner_ref, target_item_ref = existing.attachment_id, existing.owner_ref_id, existing.item_ref
-            target_owner_thread = existing.owner_thread_id
-            claim_id = None
-        else:
-            target_id = derive_attachment_id(blob_id=snapshot.blob_id, owner_session_id=snapshot.target_session_id,
-                                             owner_thread_id=snapshot.target_thread_id, variant=snapshot.variant)
-            target_owner_ref, target_item_ref = "oref_" + target_id.removeprefix("att_"), None
-            target_owner_thread = snapshot.target_thread_id
-            claim_id = ("fac_" + hashlib.sha256(
-                f"{copy_operation_id}|{snapshot.source_owner_ref_id}|{target_owner_ref}".encode()
-            ).hexdigest()[:32] if decision.available else None)
-        return replace(snapshot, target_attachment_id=target_id, target_owner_ref_id=target_owner_ref,
-                       target_file_id=session_artifact_uri(target_storage_domain_id, snapshot.target_session_id, "attachments", target_id,
-                                                          gateway_authority=target_gateway_id),
-                       target_item_ref=target_item_ref, target_owner_thread_id=target_owner_thread,
-                       required=required and decision.available, claim_id=claim_id,
-                       availability="available" if decision.available else "unavailable",
-                       target_action=decision.action, unavailable_reason=decision.reason)
-
-    def _verify_fork_attachment(self, snapshot: ForkAttachmentSnapshot) -> None:
-        blob = self._catalog.get_blob(snapshot.blob_id)
-        if (blob.digest, blob.length, blob.availability) != (snapshot.digest, snapshot.length, "available"):
-            raise RuntimeError("fork attachment 正文身份或 availability 与冻结回执不一致")
-        path = resolve_blob_path(self._attachments_root, blob.relative_locator)
-        if path.is_symlink():
-            raise RuntimeError(f"fork attachment 正文不得是符号链接: blob_id={snapshot.blob_id}, path={path}")
-        self._verify_blob_content(path, snapshot.digest, snapshot.length, snapshot.blob_id)
+    def _fork_directory_manifest(self, attachment_id: str):
+        directory = self._catalog.require_available_directory(attachment_id)
+        root = resolve_attachment_directory(self._attachments_root, directory.relative_locator)
+        with workspace_file_mutation_lock(self._workspace_root):
+            files, directories = directory_manifest(root)
+            for file in files:
+                if file.relative_path.split("/")[0] in {"original", "preview"}:
+                    version = self._catalog.file_version(attachment_id, file.relative_path)
+                    if version is None or (version.digest, version.length) != (file.digest, file.length):
+                        raise RuntimeError("附件目录中的原件或预览与已登记版本不一致")
+            if not any(file.relative_path == "original/content" for file in files):
+                raise FileNotFoundError("附件目录缺少原件，不能发布 fork")
+            return files, directories
 
     def release_fork_export(self, capture: ForkSourceCaptureRecord) -> None:
-        """只消费 fork owner 已核实的独立 source export，不按域标签推导角色。"""
         self._catalog.release_fork_export_claims(capture.copy_operation_id)
-
     async def reserve_copy_attachments(
         self, capture: ForkSourceCaptureRecord, creation: SessionCreationRecord | ThreadCreationRecord | None,
-        snapshots: tuple[ForkAttachmentSnapshot, ...],
+        snapshots: tuple[ForkAttachmentDirectorySnapshot, ...],
     ) -> None:
         claim_ids = tuple(sorted(item.claim_id for item in snapshots if item.claim_id is not None))
         if not any(item.availability == "available" for item in snapshots):
