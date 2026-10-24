@@ -1960,6 +1960,7 @@ async def test_browser_startup_failure_keeps_native_details_in_diagnostics(
     listed = await integration_client.get(f"/api/v1/sessions/{browser_context.session_id}/resources")
     listed_failure, = [item for item in listed.json()["data"]["items"] if item["kind"] == "browser" and item["resource_id"] != seed_id]
     assert listed_failure["available_actions"] == []
+    assert listed_failure["metadata"]["reconciliation_status"] == "verified"
     browser_id = listed_failure["resource_id"]
     observed = (await integration_client.get(f"/api/v1/resources/{browser_id}")).json()["data"]
     assert observed["status"] == "failed"
@@ -1980,7 +1981,7 @@ async def test_browser_startup_failure_keeps_native_details_in_diagnostics(
     artifacts = TestRunContext.from_test_file(Path(__file__)).artifacts_dir
     diagnostics = "\n".join(item.read_text() for item in artifacts.glob("browser-backend-*.stderr.log"))
     assert reason in diagnostics
-    # 首次creating观察采用Node已核实的失败事实；仍通过显式stop关闭资源，再解除关联。
+    # 创建失败已由正式回执核实；仍通过显式stop关闭资源，再解除关联。
     reconciled = await integration_client.post(f"/api/v1/resources/{browser_id}/stop", json={
         "expected_revision": observed["owner_revision"],
     })

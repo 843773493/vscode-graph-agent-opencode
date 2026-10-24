@@ -339,6 +339,7 @@ async function main() {
       const status = error.statusCode ?? (message.startsWith("终端不存在") ? 404 : 500);
       sendJson(response, status, {
         error: message,
+        ...(error.creationReceipt ? { creation_receipt: error.creationReceipt } : {}),
       });
     }
   });

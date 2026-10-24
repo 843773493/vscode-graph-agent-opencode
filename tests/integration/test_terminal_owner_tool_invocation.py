@@ -110,13 +110,31 @@ async def test_real_terminal_http_failures_keep_native_details_in_server_diagnos
         assert (error.method, error.path, error.status) == ("POST", "/api/terminals", 500)
         detail = json.loads(error.response_body)
         expected = f"{reason}: terminal_id={terminal_id}" if command else reason
-        assert detail == {"error": expected}
+        expected_receipt = {
+            "resource_id": terminal_id, "workspace_id": owner.workspace_id,
+            "owner_revision": 1, "outcome": "not_created",
+        }
+        assert detail == ({"error": expected} if command else {
+            "error": expected, "creation_receipt": expected_receipt,
+        })
+        assert error.creation_receipt == (None if command else expected_receipt)
         assert str(root) not in str(error)
         assert str(missing_command) not in str(error)
         assert await client.list_resources() == []
     assert not_directory.read_text(encoding="utf-8") == "原件不能被终端创建改写"
     state = json.loads((root / ".boxteam/terminal-manager/terminals.json").read_text())
     assert state["terminals"] == []
+    assert await owner.list_resources() == []
+    # 真实 Python 创建入口消费同一正式拒绝，不能留下 phantom 资源或原 operation 占用。
+    with pytest.raises(TerminalRequestError):
+        await owner.create_terminal(
+            session_id=_session_id, holder_id="request:rejected-cwd", operation_id="rejected-cwd",
+            cwd=str(not_directory),
+        )
+    rejected_record, = owner._store.records.values()
+    assert rejected_record.status == "deleted" and rejected_record.reconciliation_status == "verified"
+    assert rejected_record.thread_associations == []
+    assert owner._leases.leases_for_resource(rejected_record.resource_id) == []
     assert await owner.list_resources() == []
     logs = TestRunContext.from_test_file(Path(__file__)).artifacts_dir
     diagnostic = "\n".join(path.read_text() for path in logs.glob("terminal-backend-*.stderr.log"))

@@ -485,3 +485,24 @@ for (const fails of [false, true]) {
     }
   });
 }
+
+
+test("创建前目录拒绝回执绑定唯一 intent，重复身份不伪报未创建", async () => {
+  const root = createTerminalTestWorkspace();
+  const workspaceId = "00000000-0000-4000-8000-000000000001";
+  const manager = new TerminalManager({ workspaceRoot: root, workspaceId });
+  const terminalId = `term_${randomUUID().replaceAll("-", "")}`;
+  const options = { workspaceId, terminalId, ownerRevision: 1, cwd: path.join(root, "missing") };
+  await assert.rejects(manager.create(options), (error) => {
+    assert.deepEqual(error.creationReceipt, {
+      resource_id: terminalId, workspace_id: workspaceId, owner_revision: 1, outcome: "not_created",
+    });
+    return true;
+  });
+  assert.equal(manager.terminalsById.has(terminalId), false);
+  manager.terminalsById.set(terminalId, {});
+  await assert.rejects(manager.create(options), (error) => {
+    assert.equal(error.creationReceipt, undefined);
+    return true;
+  });
+});

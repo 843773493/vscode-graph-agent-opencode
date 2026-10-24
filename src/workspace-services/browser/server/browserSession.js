@@ -980,6 +980,10 @@ export class BrowserSession extends EventEmitter {
         failure.statusCode = error.statusCode;
         throw failure;
       }
+      error.creationReceipt = {
+        resource_id: this.id, workspace_id: this.record.workspace_id,
+        owner_revision: this.transportOwnerRevision, outcome: "failed", resource: this.snapshot(),
+      };
       throw error;
     }
   }

@@ -14,6 +14,7 @@ from pathlib import Path
 import pytest
 
 from app.abstractions.browser_resources import BrowserRequestError
+from app.abstractions.terminal_resources import TerminalRequestError
 from app.services.business.workspace_resources.owner import ResourceConflict
 from app.services.infrastructure.browser_manager_client import BrowserManagerClient
 from app.services.infrastructure.terminal_manager_client import TerminalManagerClient
@@ -35,6 +36,7 @@ class PendingHTTP:
     respond: asyncio.Event = field(default_factory=asyncio.Event)
     requests: list[bytes] = field(default_factory=list)
     response: bytes = b""
+    status: int = 200
     slow_response: bool = False
     sent: int = 0
 
@@ -57,7 +59,7 @@ class PendingHTTP:
                     assert eof.result() == b""
                     self.disconnected.set()
                 else:
-                    writer.write(b"HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Length: "
+                    writer.write(f"HTTP/1.1 {self.status} Result\r\nConnection: close\r\nContent-Length: ".encode()
                                  + str(len(self.response)).encode() + b"\r\n\r\n")
                     await writer.drain()
                     if self.slow_response:
@@ -277,3 +279,106 @@ async def test_slow_response_cannot_extend_the_total_http_deadline(
         assert 1 < pending_http.sent < len(pending_http.response)
         assert len(pending_http.requests) == 1
         assert bundle.owner._store.records[rid].reconciliation_status == "unknown"
+
+
+@pytest.mark.parametrize("external_record", [True, False])
+async def test_cancelled_creation_preserves_its_exact_lease_and_never_accepts_a_live_snapshot(
+    bundle: TerminalOwnerFixture | BrowserOwnerFixture, pending_http: PendingHTTP,
+    monkeypatch: pytest.MonkeyPatch, external_record: bool,
+) -> None:
+    assert bundle.owner is not None
+    kind = bundle.owner.kind
+    create_name = f"create_{kind}"
+    original_create = getattr(bundle.transport, create_name)
+    async with pending_http.serve() as url:
+        client_create = getattr(transport(bundle, url), create_name)
+
+        async def create(**arguments: object) -> dict[str, object]:
+            if external_record:
+                await original_create(**arguments)
+            return await client_create(**arguments)
+
+        monkeypatch.setattr(bundle.transport, create_name, create)
+        task = asyncio.create_task(bundle.create())
+        try:
+            await asyncio.wait_for(pending_http.arrived.wait(), 5)
+            record, = bundle.owner._store.records.values()
+            original, = bundle.leases.leases_for_resource(record.resource_id)
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+            await asyncio.wait_for(pending_http.disconnected.wait(), 1)
+            assert record.reconciliation_status == "unknown"
+            assert bundle.leases.get_lease(original.lease_id).status == "reconcile_required"
+            assert bundle.leases.release_turn_leases(original.turn_stream_id) == []
+            # 首次存活快照和冷恢复都不能消除未回执的创建。
+            observed = await bundle.owner.get_resource(record.resource_id)
+            assert observed["reconciliation_status"] == "unknown" and observed["available_actions"] == []
+            bundle.restart()
+            observed = await bundle.owner.get_resource(record.resource_id)
+            assert observed["reconciliation_status"] == "unknown" and observed["available_actions"] == []
+            assert bundle.leases.get_lease(original.lease_id).status == "reconcile_required"
+            if external_record:
+                with pytest.raises(ResourceConflict, match="尚待 owner 核实"):
+                    await bundle.command(record.resource_id, action="stop", expected_revision=observed["owner_revision"])
+                bundle.transport.records[record.resource_id]["status"] = "terminated" if kind == "terminal" else "closed"
+                await bundle.command(record.resource_id, action="stop", expected_revision=observed["owner_revision"])
+                assert bundle.leases.get_lease(original.lease_id).status == "settled"
+            assert len(pending_http.requests) == 1
+        finally:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+
+@pytest.mark.parametrize("receipt_case", ["not_created", "missing", "wrong_identity", "wrong_workspace", "wrong_revision", "bool_revision"])
+async def test_creation_failure_requires_a_receipt_for_the_exact_intent(
+    bundle: TerminalOwnerFixture | BrowserOwnerFixture, pending_http: PendingHTTP,
+    monkeypatch: pytest.MonkeyPatch, receipt_case: str,
+) -> None:
+    assert bundle.owner is not None
+    kind = bundle.owner.kind
+    pending_http.status = 500
+    error_type = TerminalRequestError if kind == "terminal" else BrowserRequestError
+    async with pending_http.serve() as url:
+        monkeypatch.setattr(bundle.transport, f"create_{kind}", getattr(transport(bundle, url), f"create_{kind}"))
+        task = asyncio.create_task(bundle.create())
+        try:
+            await asyncio.wait_for(pending_http.arrived.wait(), 5)
+            record, = bundle.owner._store.records.values()
+            original, = bundle.leases.leases_for_resource(record.resource_id)
+            receipt = {"resource_id": record.resource_id, "workspace_id": WORKSPACE_ID,
+                       "owner_revision": record.owner_revision, "outcome": "not_created"}
+            if receipt_case == "wrong_identity":
+                receipt["resource_id"] = "other_resource"
+            elif receipt_case == "wrong_workspace":
+                receipt["workspace_id"] = "other_workspace"
+            elif receipt_case == "wrong_revision":
+                receipt["owner_revision"] = record.owner_revision + 1
+            elif receipt_case == "bool_revision":
+                receipt["owner_revision"] = True
+            payload = {"error": "explicit test rejection"}
+            if receipt_case != "missing":
+                payload["creation_receipt"] = receipt
+            pending_http.response = json.dumps(payload).encode()
+            pending_http.respond.set()
+            with pytest.raises(error_type) as caught:
+                await task
+            assert caught.value.status == 500
+            if kind == "terminal":
+                assert json.loads(caught.value.response_body) == payload
+            else:
+                assert caught.value.payload == payload
+            if receipt_case == "not_created":
+                assert record.status == "deleted" and record.reconciliation_status == "verified"
+                assert record.thread_associations == []
+                assert bundle.leases.get_lease(original.lease_id).status == "settled"
+                assert await bundle.owner.list_resources() == []
+                bundle.restart()
+                assert await bundle.owner.list_resources() == []
+            else:
+                assert record.reconciliation_status == "unknown"
+                assert bundle.leases.get_lease(original.lease_id).status == "reconcile_required"
+            assert len(pending_http.requests) == 1
+        finally:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)

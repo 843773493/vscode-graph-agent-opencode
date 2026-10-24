@@ -6,7 +6,7 @@ from contextlib import AbstractAsyncContextManager
 from pathlib import Path
 from typing import Protocol
 
-from app.abstractions.workspace_resources import ResourceTransport
+from app.abstractions.workspace_resources import ResourceRequestError, ResourceTransport
 
 TerminalSnapshot = dict[str, object]
 
@@ -17,7 +17,7 @@ class TerminalWorkingDirectories(Protocol):
         ...
 
 
-class TerminalRequestError(RuntimeError):
+class TerminalRequestError(ResourceRequestError):
     """PTY 服务的 HTTP 失败；响应正文只供诊断，不能投影为业务错误。"""
 
     def __init__(self, *, method: str, path: str, status: int, response_body: str) -> None:

@@ -507,3 +507,39 @@ describe("浏览器状态持久化", () => {
     });
   });
 });
+
+
+test("创建拒绝回执绑定唯一 intent，重复身份不伪报未创建", async () => {
+  const manager = createBrowserManagerWithStateWriter(async () => undefined, { maxLogicalBrowsersPerWorkspace: 1 });
+  const options = createOptions();
+  manager.browsersById.set("existing", { status: "running" });
+  await expect(manager.create(options)).rejects.toMatchObject({ creationReceipt: {
+    resource_id: options.browserId, workspace_id: WORKSPACE_ID, owner_revision: 1, outcome: "not_created",
+  } });
+  expect(manager.browsersById.has(options.browserId)).toBe(false);
+  manager.browsersById.set(options.browserId, { status: "running" });
+  try { await manager.create(options); throw new Error("应拒绝重复身份"); }
+  catch (error) {
+    expect(error.message).toContain("唯一身份");
+    expect(error.creationReceipt).toBeUndefined();
+  }
+});
+
+
+for (const stage of ["delete_checkpoint", "persist_failure"]) {
+  test(`启动清理未完成时不签发创建失败回执: ${stage}`, async () => {
+    const manager = createBrowserManagerWithStateWriter(async () => undefined);
+    const options = createOptions();
+    const cleanupError = new Error(`injected ${stage}`);
+    manager.runtimePool.acquireContext = async () => { throw new Error("injected startup failure"); };
+    if (stage === "delete_checkpoint") manager.stateStore.deleteCheckpoint = async () => { throw cleanupError; };
+    else manager.persist = async () => { throw cleanupError; };
+    try { await manager.create(options); throw new Error("应报告启动与清理失败"); }
+    catch (error) {
+      expect(error).toBeInstanceOf(AggregateError);
+      expect(error.errors[1]).toBe(cleanupError);
+      expect(error.creationReceipt).toBeUndefined();
+    }
+    expect(manager.browsersById.has(options.browserId)).toBe(true);
+  });
+}

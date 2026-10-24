@@ -562,6 +562,7 @@ async function main() {
           : 500);
       sendJson(response, status, {
         error: message,
+        ...(error?.creationReceipt ? { creation_receipt: error.creationReceipt } : {}),
         ...(error?.browser ? { browser: error.browser, operation_outcome: error.operationOutcome } : {}),
         ...(error?.code
           ? { code: error.code }

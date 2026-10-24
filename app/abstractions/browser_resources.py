@@ -4,14 +4,18 @@ from __future__ import annotations
 
 from typing import Literal
 
-from app.abstractions.workspace_resources import ResourceSnapshot, ResourceTransport
+from app.abstractions.workspace_resources import (
+    ResourceRequestError,
+    ResourceSnapshot,
+    ResourceTransport,
+)
 
 BrowserAction = Literal[
     "read", "navigate", "click", "hover", "type", "drag", "dialog", "screenshot", "run",
     "resource-policy", "freeze", "wake", "discard", "device-profile", "agent-lock",
 ]
 
-class BrowserRequestError(RuntimeError):
+class BrowserRequestError(ResourceRequestError):
     def __init__(
         self,
         *,
@@ -24,6 +28,8 @@ class BrowserRequestError(RuntimeError):
         self.path = path
         self.status = status
         self.payload = payload
+        if method == "POST" and path == "/api/browsers" and isinstance(payload, dict):
+            self.creation_receipt = payload.get("creation_receipt")
         self.code = payload.get("code") if isinstance(payload, dict) else None
         self.retryable = (
             payload.get("retryable") if isinstance(payload, dict) else None

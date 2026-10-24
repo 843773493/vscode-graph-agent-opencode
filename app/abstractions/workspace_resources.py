@@ -14,6 +14,12 @@ ResourceKind = Literal["terminal", "browser"]
 ResourceSnapshot = dict[str, object]
 
 
+class ResourceRequestError(RuntimeError):
+    """保留原请求错误；创建回执是尚待领域 owner 核验的传输数据。"""
+
+    creation_receipt: object = None
+
+
 class ResourceTransportGrantRejected(RuntimeError):
     """传输方已确认没有签发授权，并返回本次拒绝时的资源快照。"""
 

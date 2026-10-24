@@ -12,6 +12,7 @@ from pathlib import Path
 
 from app.abstractions.workspace_resources import (
     ResourceKind,
+    ResourceRequestError,
     ResourceSessionReader,
     ResourceSnapshot,
     ResourceThreadResolver,
@@ -189,9 +190,47 @@ class WorkspaceResourceOwner:
                 self._sync_ledger(record)
                 return resource_projection(record, runtime, self.kind)
             except BaseException as error:
-                # TODO（5.2）：创建需补正式失败回执及未知 lease 接管，不能仅凭 HTTP 状态推断终态。
-                self._unknown(record, error)
+                lease_id = lease_refs[record.resource_id]
+                receipt = error.creation_receipt if isinstance(error, ResourceRequestError) else None
+                self._unknown(record, error, lease_id=lease_id)
+                self._record_creation_failure(record, receipt, lease_id)
                 raise
+
+    def _record_creation_failure(
+        self, record: OwnedResourceRecord, receipt: object, lease_id: str,
+    ) -> bool:
+        if receipt is None:
+            return False
+        # 正式拒绝必须绑定本次创建 intent；HTTP 状态或任意资源快照都不能替代它。
+        if not isinstance(receipt, dict) or type(receipt.get("owner_revision")) is not int or (
+            receipt.get("resource_id"), receipt.get("workspace_id"), receipt.get("owner_revision")
+        ) != (record.resource_id, record.workspace_id, record.owner_revision):
+            logger.error("外部资源创建失败回执身份冲突: resource_id=%s", record.resource_id)
+            return False
+        outcome = receipt.get("outcome")
+        if outcome == "not_created" and receipt.get("resource") is None:
+            record.status = "deleted"
+            record.thread_associations.clear()
+        elif outcome == "failed" and self.kind == "browser":
+            runtime = receipt.get("resource")
+            if not isinstance(runtime, dict) or (
+                runtime.get("browser_id"), runtime.get("workspace_id"),
+                runtime.get("transport_owner_revision"), runtime.get("status"),
+                runtime.get("reconciliation_status"),
+            ) != (record.resource_id, record.workspace_id, record.owner_revision, "failed", "verified"):
+                logger.error("Browser 创建失败回执未核实: resource_id=%s", record.resource_id)
+                return False
+            observe_resource(record, runtime, self.kind)
+        else:
+            logger.error("外部资源创建失败回执无效: resource_id=%s", record.resource_id)
+            return False
+        record.reconciliation_status = "verified"
+        record.error = None
+        record.updated_at = self._now()
+        self._store.persist()
+        self._leases.settle(lease_id)
+        self._sync_ledger(record)
+        return True
 
     async def list_resources(
         self,

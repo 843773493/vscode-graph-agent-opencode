@@ -223,10 +223,19 @@ export class TerminalManager {
     if (!Number.isSafeInteger(ownerRevision) || ownerRevision < 1 || this.terminalsById.has(terminalId)) {
       throw new Error(`Terminal owner revision 或身份冲突: ${terminalId}`);
     }
-    await this.pruneTerminalHistory();
-    await this.ensureExecutionCapacity();
+    let resolvedCwd;
+    try {
+      await this.pruneTerminalHistory();
+      await this.ensureExecutionCapacity();
+      resolvedCwd = resolveTerminalCwd(this.workspaceRoot, cwd);
+    } catch (error) {
+      error.creationReceipt = {
+        resource_id: terminalId, workspace_id: workspaceId, owner_revision: ownerRevision,
+        outcome: "not_created",
+      };
+      throw error;
+    }
     // 按工作区根保存原生相对路径，允许 .. 保留外部 cwd；绝对路径只在调用栈内解析。
-    const resolvedCwd = resolveTerminalCwd(this.workspaceRoot, cwd);
     const cwdRelative = path.relative(this.workspaceRoot, resolvedCwd);
     const id = terminalId;
     const session = new TerminalSession({
@@ -252,6 +261,8 @@ export class TerminalManager {
     try {
       await session.start();
     } catch (error) {
+      // TODO（5.2）：此清理尚无完整进程树停止证明，不能签发未创建回执；
+      // Python 保留创建 intent 和原 lease，等待正式终止核实链接管。
       this.terminalsById.delete(id);
       await session.dispose();
       await this.persist();

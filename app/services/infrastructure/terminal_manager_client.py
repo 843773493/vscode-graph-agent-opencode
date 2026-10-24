@@ -245,9 +245,17 @@ class TerminalManagerClient:
                 "终端传输 HTTP 请求失败: method=%s path=%s status=%s response=%s",
                 method, path, exc.response.status_code, detail,
             )
-            raise TerminalRequestError(
+            error = TerminalRequestError(
                 method=method, path=path, status=exc.response.status_code, response_body=detail,
-            ) from exc
+            )
+            if method == "POST" and path == "/api/terminals":
+                try:
+                    payload = json.loads(detail)
+                except json.JSONDecodeError:
+                    payload = None
+                if isinstance(payload, dict):
+                    error.creation_receipt = payload.get("creation_receipt")
+            raise error from exc
         except TimeoutException as exc:
             raise TimeoutError("终端管理器传输超时") from exc
         except RequestError as exc:

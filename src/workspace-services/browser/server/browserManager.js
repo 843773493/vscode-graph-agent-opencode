@@ -338,73 +338,81 @@ export class BrowserManager {
         || !Number.isSafeInteger(ownerRevision) || ownerRevision < 1 || this.browsersById.has(browserId)) {
         throw new Error("Browser 创建必须使用当前 Python owner 的唯一身份、工作区与版本");
       }
-      const pressureLevel = this.resourceGovernor?.snapshot().last_sample?.level || "normal";
-      if (["critical", "emergency"].includes(pressureLevel)) {
-        const error = new Error(`当前内存压力为 ${pressureLevel}，暂时不能新建浏览器`);
-        error.code = "browser_creation_paused_memory_pressure";
+      try {
+        const pressureLevel = this.resourceGovernor?.snapshot().last_sample?.level || "normal";
+        if (["critical", "emergency"].includes(pressureLevel)) {
+          const error = new Error(`当前内存压力为 ${pressureLevel}，暂时不能新建浏览器`);
+          error.code = "browser_creation_paused_memory_pressure";
+          throw error;
+        }
+        const managedStatuses = new Set(["created", "running"]);
+        const logicalBrowserCount = [...this.browsersById.values()].filter((session) => (
+          managedStatuses.has(session.status)
+        )).length;
+        if (logicalBrowserCount >= this.maxLogicalBrowsersPerWorkspace) {
+          const error = new Error(
+            `工作区浏览器数量达到硬上限: workspace_id=${workspaceId}, count=${logicalBrowserCount}, max=${this.maxLogicalBrowsersPerWorkspace}`,
+          );
+          error.code = "browser_workspace_logical_limit_exceeded";
+          throw error;
+        }
+        const budget = await this.stateStore.checkpointBudgetSnapshot();
+        const uncheckpointedManagedCount = [...this.browsersById.values()].filter((session) => (
+          managedStatuses.has(session.status) && !session.record.checkpoint
+        )).length;
+        const projectedReservedBytes = budget.used_bytes
+          + (uncheckpointedManagedCount + 1) * this.checkpointReservationBytes;
+        if (projectedReservedBytes > budget.max_bytes) {
+          const error = new Error(
+            `工作区浏览器检查点预留预算不足: used=${budget.used_bytes}, uncheckpointed=${uncheckpointedManagedCount}, reservation=${this.checkpointReservationBytes}, max=${budget.max_bytes}`,
+          );
+          error.code = "browser_checkpoint_workspace_quota_exceeded";
+          error.projected_workspace_bytes = projectedReservedBytes;
+          error.max_workspace_bytes = budget.max_bytes;
+          throw error;
+        }
+        const id = browserId;
+        const browserCreatedAtIso = nowIso();
+        const deviceState = resolveBrowserDeviceState(deviceProfile, deviceOrientation);
+        const session = new BrowserSession({
+          manager: this,
+          record: {
+            browser_id: id,
+            page_id: id,
+            workspace_id: workspaceId,
+            transport_owner_revision: ownerRevision,
+            reconciliation_status: "verified",
+            title,
+            url: normalizeBrowserUrl(url),
+            viewport: viewport || { ...deviceState.viewport },
+            device_profile: deviceState.id,
+            device_orientation: deviceState.orientation,
+            device_scale_factor: deviceState.deviceScaleFactor,
+            touch_simulation_enabled: deviceState.hasTouch,
+            resource_state: "background",
+            resource_policy: "automatic",
+            // 尚无用户交互观察时，以资源创建时刻初始化空闲计算基线。
+            last_user_interaction_at: browserCreatedAtIso,
+            last_agent_operation_at: null,
+            last_attach_at: null,
+            last_detach_at: null,
+            last_network_activity_at: null,
+            agent_access_locked: false,
+            agent_lock_updated_at: null,
+            status: "created",
+            created_at: browserCreatedAtIso,
+            updated_at: browserCreatedAtIso,
+          },
+        });
+        this.browsersById.set(id, session);
+        return session;
+      } catch (error) {
+        error.creationReceipt = {
+          resource_id: browserId, workspace_id: workspaceId, owner_revision: ownerRevision,
+          outcome: "not_created",
+        };
         throw error;
       }
-      const managedStatuses = new Set(["created", "running"]);
-      const logicalBrowserCount = [...this.browsersById.values()].filter((session) => (
-        managedStatuses.has(session.status)
-      )).length;
-      if (logicalBrowserCount >= this.maxLogicalBrowsersPerWorkspace) {
-        const error = new Error(
-          `工作区浏览器数量达到硬上限: workspace_id=${workspaceId}, count=${logicalBrowserCount}, max=${this.maxLogicalBrowsersPerWorkspace}`,
-        );
-        error.code = "browser_workspace_logical_limit_exceeded";
-        throw error;
-      }
-      const budget = await this.stateStore.checkpointBudgetSnapshot();
-      const uncheckpointedManagedCount = [...this.browsersById.values()].filter((session) => (
-        managedStatuses.has(session.status) && !session.record.checkpoint
-      )).length;
-      const projectedReservedBytes = budget.used_bytes
-        + (uncheckpointedManagedCount + 1) * this.checkpointReservationBytes;
-      if (projectedReservedBytes > budget.max_bytes) {
-        const error = new Error(
-          `工作区浏览器检查点预留预算不足: used=${budget.used_bytes}, uncheckpointed=${uncheckpointedManagedCount}, reservation=${this.checkpointReservationBytes}, max=${budget.max_bytes}`,
-        );
-        error.code = "browser_checkpoint_workspace_quota_exceeded";
-        error.projected_workspace_bytes = projectedReservedBytes;
-        error.max_workspace_bytes = budget.max_bytes;
-        throw error;
-      }
-      const id = browserId;
-      const browserCreatedAtIso = nowIso();
-      const deviceState = resolveBrowserDeviceState(deviceProfile, deviceOrientation);
-      const session = new BrowserSession({
-        manager: this,
-        record: {
-          browser_id: id,
-          page_id: id,
-          workspace_id: workspaceId,
-          transport_owner_revision: ownerRevision,
-          reconciliation_status: "verified",
-          title,
-          url: normalizeBrowserUrl(url),
-          viewport: viewport || { ...deviceState.viewport },
-          device_profile: deviceState.id,
-          device_orientation: deviceState.orientation,
-          device_scale_factor: deviceState.deviceScaleFactor,
-          touch_simulation_enabled: deviceState.hasTouch,
-          resource_state: "background",
-          resource_policy: "automatic",
-          // 尚无用户交互观察时，以资源创建时刻初始化空闲计算基线。
-          last_user_interaction_at: browserCreatedAtIso,
-          last_agent_operation_at: null,
-          last_attach_at: null,
-          last_detach_at: null,
-          last_network_activity_at: null,
-          agent_access_locked: false,
-          agent_lock_updated_at: null,
-          status: "created",
-          created_at: browserCreatedAtIso,
-          updated_at: browserCreatedAtIso,
-        },
-      });
-      this.browsersById.set(id, session);
-      return session;
     });
     this.createAdmissionTail = admission.then(() => undefined, () => undefined);
     const session = await admission;

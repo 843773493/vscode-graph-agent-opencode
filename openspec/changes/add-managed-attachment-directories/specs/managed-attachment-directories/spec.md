@@ -83,6 +83,16 @@ fork SHALL 沿用统一资源目标检查及现有 journal/claim/publication，�
 - **WHEN** 后端在关联资源后退出且未发送 detach，随后重启
 - **THEN** owner 按原持久事实区分待恢复任务、新代关联和已失效持有者，解除可证明失效的关联并开始相应回收规则，未知外部进程仍要求核实
 
+#### Scenario: 创建请求取消或回执丢失
+
+- **WHEN** 创建 intent 已登记原 operation lease，但创建 HTTP 请求被取消、超时或未收到正式结果
+- **THEN** 原 lease 保持待核实并跨调用收尾、Turn 清理和重启保留；存活快照不能自动核实创建结果，只有原 owner 核实终态或本次正式创建结果后才能结清
+
+#### Scenario: 创建在接纳前明确拒绝
+
+- **WHEN** 外部 owner 确认尚未接纳具有唯一 resource/workspace/revision 的本次创建，并返回绑定该 intent 的正式未创建回执
+- **THEN** Python owner 核对身份与版本后关闭该 intent、解除关联并结清其原占用；普通 HTTP 错误、冲突身份和其它创建的回执不得触发同样处理
+
 ### Requirement: 单个 Thread 清理失败不得停止其它 Thread 的周期回收
 
 闲置清理 SHALL 独立尝试每个候选 Thread；失败 SHALL 保留该 Thread 的 scope/generation 和未核实资源，并明确报告 owner 与原始原因。事件循环正常调度时，扫描对单个卸载任务的等待 SHALL 最多为 30 秒，到期明确报告尚未完成并继续其它候选 Thread。该预算 MUST NOT 被解释为外部资源已经停止；唯一在途卸载任务 SHALL 继续由原 owner 持有，后续扫描 MUST NOT 为同代重复发起清理，新 admission MUST 等原任务完成。迟到成功 SHALL 沿原链释放，迟到失败 SHALL 记录原始原因并保留状态供后续周期重试。周期 worker SHALL 记录整批异常并继续原周期，不得因单项失败永久停止或把失败声明为已卸载；任务取消与关闭 MUST 正常传播。

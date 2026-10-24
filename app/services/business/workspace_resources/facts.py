@@ -83,7 +83,7 @@ def observe_resource(
     validate_runtime(runtime, record.workspace_id)
     if runtime.get(f"{kind}_id") != record.resource_id:
         raise ValueError(f"Node 运行时 身份与 外部资源 owner 冲突: {record.resource_id}")
-    was_creating = record.status == "creating"
+    was_creating = record.status == "creating" and record.reconciliation_status != "unknown"
     record.status = str(runtime["status"])
     recovery = str(runtime.get("reconciliation_status", "unknown"))
     # 已持久化的未知动作结果跨重启保留，存活快照不能证明旧动作是否执行。
