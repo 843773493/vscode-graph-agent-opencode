@@ -97,7 +97,7 @@ def user_input_payload(content: object, attachments: object) -> object:
         if not isinstance(file_id, str) or not file_id:
             continue
         record = {"file_id": file_id}
-        for key in ("name", "content_type", "path", "preview_status"):
+        for key in ("name", "content_type", "path", "preview_status", "directory_uri"):
             child = attachment.get(key)
             if isinstance(child, str) and child:
                 record[key] = child

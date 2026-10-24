@@ -20,8 +20,13 @@ from app.domain.itemized.records import (
     InternalDisplayPart,
     InternalDisplayProvenance,
     RuntimeNoticePayload,
+    user_input_payload,
 )
 from app.domain.itemized.schema import validate_item_compatibility
+from app.schemas.internal_v2.message import AttachmentRef
+from app.services.infrastructure.rollout_context.checkpoint.message_codec import (
+    LangChainMessageCodec,
+)
 
 # 独立抄录规范值域；预期矩阵来自文本 fixture，不能从生产 ALLOWED_* 生成。
 KINDS = (
@@ -46,6 +51,28 @@ PAYLOADS = (
     "extension",
 )
 STATUSES = ("completed", "partial", "incomplete", "cancelled", "failed", "unknown")
+
+
+@pytest.mark.parametrize("has_directory", [False, True])
+def test_user_attachment_identity_survives_canonical_serialization_and_job_projection(
+    user_item: CanonicalItemRecord, has_directory: bool,
+) -> None:
+    directory = "boxteam://workspace/admission-tests/resources/attachments/att_0123456789abcdef0123456789abcdef"
+    reference = AttachmentRef(file_id=directory + "/original/content", name="输入.txt", content_type="text/plain",
+                              directory_uri=directory if has_directory else None)
+    original = reference.model_dump(mode="json", exclude_none=True)
+    payload = user_input_payload("用户原文", [original])
+    item = replace(user_item, payload_kind=PayloadKind.STRUCTURED_CONTENT, payload=payload,
+                   content_hash=content_hash(PayloadKind.STRUCTURED_CONTENT, payload))
+    restored = CanonicalItemRecord.from_dict(json.loads(canonical_json_bytes(item.to_dict())))
+    codec = LangChainMessageCodec()
+    message = codec.from_dict(codec.project_message((restored,)))
+    projected, = message.response_metadata["attachments"]
+    assert AttachmentRef.model_validate(projected) == reference
+    assert message.content == "用户原文"
+    assert restored.content_hash == item.content_hash
+    if not has_directory:
+        assert "directory_uri" not in restored.payload["attachments"][0]
 
 
 @pytest.fixture(params=["legacy", "directory"])
