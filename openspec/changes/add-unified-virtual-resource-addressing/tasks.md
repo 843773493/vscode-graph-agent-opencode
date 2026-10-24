@@ -534,3 +534,11 @@
 - 导航 owner 统一处理最终读写、JSON/UTF-8、typed节点与关系校验失败，普通错误只报告固定artifact、规则/位置及系统错误事实，不复制物理位置或损坏值；原生异常类别、errno、完整cause与诊断日志保留。原子发布仍由原writer负责，发布后清理失败保留实际新状态；不新增导航队列、schema或兼容reader。
 - 固定完整tree `fabd9a80f9c6ffafc691af9ad06fff22f12ea555` 的新增及既有导航/catalog回归26 passed/31.53秒，真实Gateway HTTP 1 passed/21.30秒，Ruff/compileall均exit0。产品入口创建目录后分别损坏对象、nodes、JSON/UTF8及kind/position/parent，GET与POST保持原500/400归属、request_id、原坏字节不变；恢复原件后同revision可读并继续更新。旧完整实现unit反例12 failed/2 passed，真实HTTP反例在首个GET精确捕获物理路径。
 - 准确命令、4331项源码前后指纹、raw、实际退出码、零进程残留与独立只读审查见 `out/tests/temp/gateway_navigation_errors_20261024/artifacts/validation-proof-001.json`、`validation-proof-http-red-001.json`及`review-001.json`。I/O注入与发布后错误由unit覆盖；未验Windows实机或完整Web，不据此关闭2.2/7.2全局门。
+
+
+### 2026-10-24 普通文件正文与模型文本修改的写锁错误（2.2/7.2 部分收口）
+
+- 唯一文件写锁 owner 逐阶段处理 prepare/open/acquire/release/close 的原生 I/O；公开错误只含逻辑 artifact、阶段、异常类型、errno/winerror，完整原异常与真实位置保留在管理诊断及原因链。OSError 保原类型与 errno，portalocker 非竞争错误转换为显式 RuntimeError 供原文本执行链收口。AlreadyLocked 沿原有等待和超时合同处理，临界区业务异常不被重写，不新增第二锁或文件写入链。
+- 固定完整 tree `d49f713f1c29b7b5837816c12ab7262d9fd81e7f` 的 `out/tests/temp/file_mutation_lock_errors_20261024/artifacts/runs/unit-003/` 为94 passed/2.69秒、exit0，覆盖POSIX/盘符/UNC异常正文、有无filename、五阶段、原异常日志对象、文件及本地锁释放、原锁超时和模型apply_patch真实入口。释放/关闭失败仍保已发布文件及 completed effect，不伪报未执行；业务异常保持原对象。
+- `http-env-003/` 为真实独立后端HTTP 1 passed/12.79秒、exit0：通过磁盘目录阻塞锁文件打开，正文PUT保400与request_id、无真实路径且原文件不变；修复锁位置后，同一URI和原revision成功写入。首次 `http-003/` 仅因归档树未接现有.env导致必需秘密引用解析失败，补接已有环境后同源码通过，不计首轮为行为证据。`static-003/` Ruff exit0；只读独审 `artifacts/review-003.json` 无可行动缺陷。
+- 同一完整归档恢复旧锁实现的 `red-003/` exit1，区分原始路径/原因及模型工具结果错误；原件、准确命令与源码指纹保留。早期unit-002因新用例漏声明补丁末尾空行而有1项字节预期失败，已修正测试输入明确生成末尾换行；static-002的with语法检查已修，未改变产品补丁语义。上述故障注入不代Windows实机、完整Gateway/Web或2.2/7.2总门，两项仍保持未勾；最终提交相对受测候选仅新增此证据。

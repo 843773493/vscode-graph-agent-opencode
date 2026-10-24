@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import threading
 import time
 from collections.abc import Iterator
@@ -10,6 +11,8 @@ from pathlib import Path
 from typing import BinaryIO
 
 import portalocker
+
+logger = logging.getLogger(__name__)
 
 _workspace_locks_guard = threading.Lock()
 _workspace_locks: dict[Path, threading.Lock] = {}
@@ -39,30 +42,39 @@ def workspace_file_mutation_lock(workspace_root: Path) -> Iterator[None]:
         )
     try:
         lock_path = workspace_root / _LOCK_PATH
-        lock_path.parent.mkdir(parents=True, exist_ok=True)
-        with lock_path.open("a+b") as lock_file:
+        with _lock_access("prepare"):
+            lock_path.parent.mkdir(parents=True, exist_ok=True)
+        with _lock_access("open"):
+            lock_file = lock_path.open("a+b")
+        try:
             _acquire_workspace_file_lock(lock_file)
             try:
                 yield
             finally:
-                _release_workspace_file_lock(lock_file)
+                with _lock_access("release"):
+                    _release_workspace_file_lock(lock_file)
+        finally:
+            with _lock_access("close"):
+                lock_file.close()
     finally:
         thread_lock.release()
 
 
 def _acquire_workspace_file_lock(lock_file: BinaryIO) -> None:
     """在跨进程锁被占用时有界等待，避免文件写入永久卡住调用者。"""
-    lock_file.seek(0, 2)
-    if lock_file.tell() == 0:
-        lock_file.write(b" ")
-        lock_file.flush()
-    lock_file.seek(0)
+    with _lock_access("acquire"):
+        lock_file.seek(0, 2)
+        if lock_file.tell() == 0:
+            lock_file.write(b" ")
+            lock_file.flush()
+        lock_file.seek(0)
     deadline = time.monotonic() + MUTATION_LOCK_TIMEOUT_SECONDS
     while True:
         try:
-            portalocker.lock(
-                lock_file, portalocker.LOCK_EX | portalocker.LOCK_NB
-            )
+            with _lock_access("acquire"):
+                portalocker.lock(
+                    lock_file, portalocker.LOCK_EX | portalocker.LOCK_NB
+                )
         except portalocker.AlreadyLocked as error:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
@@ -77,3 +89,21 @@ def _acquire_workspace_file_lock(lock_file: BinaryIO) -> None:
 
 def _release_workspace_file_lock(lock_file: BinaryIO) -> None:
     portalocker.unlock(lock_file)
+
+
+@contextmanager
+def _lock_access(stage: str) -> Iterator[None]:
+    """只覆盖锁本身的原生访问，临界区业务错误保留原归属。"""
+    try:
+        yield
+    except (OSError, portalocker.LockException) as error:
+        if stage == "acquire" and isinstance(error, portalocker.AlreadyLocked):
+            # 竞争只由原有有界等待处理，不改变超时合同。
+            raise
+        logger.exception("工作区文件写锁失败: artifact=workspace_file_lock, stage=%s", stage)
+        detail = (f"文件写锁失败: artifact=workspace_file_lock, stage={stage}, "
+                  f"error={type(error).__name__}, errno={getattr(error, 'errno', None)}, "
+                  f"winerror={getattr(error, 'winerror', None)}")
+        if isinstance(error, OSError):
+            raise type(error)(error.errno, detail) from error
+        raise RuntimeError(detail) from error
