@@ -520,3 +520,10 @@
 - UserProfileStore 唯一 owner 为 initialize/read/write/theme-assets/delete 的 OS 故障生成具名操作、user_id、原异常类别与 errno，保留原异常类别/cause及完整诊断日志，普通错误不携带原路径。读取统一至 read_profile，移除仅接收Path的旧私有读取入口；非对象/版本错误使用user_id，JSON/UTF-8失败报类型及位置，损坏内容不重写。原子写入、首用户主题初始化、创建账户回滚与先删账户后删profile的顺序不变。
 - 固定完整tree `5a570c8edf82219608d5121325fa3295be153028`：152项定向回归/8.98秒，真实独立Gateway故障与恢复1 passed/21.19秒；39项旧生产完整archive反例全部失败/4.65秒。覆盖POSIX/drive/UNC故障诊断、回滚、原字节与临时文件、配置缺失/损坏、四类设置/主题入口、lease阻止删除及原删除顺序。compileall通过；Ruff exit1的五项TRY004逐项与HEAD基线相同，无新增，保留原ValueError以维持create捕获及回滚合同。
 - 准确命令、4326项源码前后指纹、raw/真实退出码、进程回收、基线对照与只读独审见 `out/tests/temp/gateway_profile_errors_20261024/artifacts/validation-proof-001.json`。权限故障为unit注入，产品用例使用真实磁盘损坏/缺失/错误类型；不代真实ACL、Windows、完整Web或全局不变量审计，2.2/7.2总门未勾。
+
+
+### 2026-10-24 Gateway 主题图片 owner 错误与清单校验（2.2/7.2 部分收口）
+
+- 图片owner统一投影manifest/image/local-image的读写删除故障，保留原OS异常类别/cause与完整原始诊断，普通错误只含操作、已验证asset身份、异常类别及errno。清单读取一次校验身份/摘要/文件名与全部消费元数据，TypedDict记录进入DTO时不再用str/int隐式转换；损坏数据明确失败且不重写。原内容寻址、上传去重、API URL及各路由既有状态分类不变。普通主题file:背景URL仅报scheme，原URL留具名诊断日志，不套用Browser页面例外。
+- 固定完整tree `8bd8fa8c0adae6260cf39289f7db78271dd399ee`：173项定向/5.59秒、真实独立Gateway上传→损坏→恢复→同内容去重→删除1 passed/21.48秒，Ruff及compileall全部exit0。最终旧生产完整archive的52项反例失败、11项通过，覆盖POSIX/drive/UNC存储异常与清单字段污染。审查发现的size等元数据遗漏已修并补入同一产品入口矩阵。首轮产品误期望DELETE409，按原route仅捕获KeyError的实际500合同校正测试，无产品状态分类变更；全部旧收据保留。
+- 准确命令、4329项源码前后指纹、raw/真实退出码、进程回收及只读独审见 `out/tests/temp/gateway_theme_errors_20261024/artifacts/validation-proof-004.json`。权限故障为unit注入，产品损坏来自真实磁盘；原始日志适用已登记管理入口例外。未验完整Web、Windows及全局配置持久引用，2.2/7.2总门未勾。

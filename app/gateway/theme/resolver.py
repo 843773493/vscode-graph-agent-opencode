@@ -1,3 +1,4 @@
+import logging
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -19,6 +20,7 @@ from app.schemas.gateway.ui_settings import (
     WebUISettingsDTO,
 )
 
+logger = logging.getLogger(__name__)
 
 def theme_definitions(config: GatewayConfig) -> dict[str, ThemeDefinition]:
     definitions = {
@@ -65,8 +67,10 @@ def _background(
     kind = str(background_data["type"])
     if kind == "remote":
         url = str(background_data["url"])
-        if urlparse(url).scheme not in {"http", "https"}:
-            raise ValueError(f"网络背景只支持 http/https URL: {url}")
+        scheme = urlparse(url).scheme
+        if scheme not in {"http", "https"}:
+            logger.error("网络背景只支持 http/https URL: url=%s", url)
+            raise ValueError(f"网络背景只支持 http/https URL: scheme={scheme or '<empty>'}")
     elif kind == "local_file":
         asset = import_ui_asset_file(
             Path(str(background_data["path"])), gateway_root=gateway_root
