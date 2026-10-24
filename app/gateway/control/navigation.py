@@ -2,9 +2,14 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 from pathlib import Path
 
+from pydantic import ValidationError
+
 from app.core.identifier import create_prefixed_id
+from app.gateway.control.storage import atomic_write_json
+from app.gateway.registry import WorkspaceTarget
 from app.schemas.gateway_control import (
     WorkspaceFolderCreateRequest,
     WorkspaceNavigationBreadcrumbDTO,
@@ -14,8 +19,8 @@ from app.schemas.gateway_control import (
     WorkspaceNavigationReorderRequest,
     WorkspaceNavigationTreeDTO,
 )
-from app.gateway.control.storage import atomic_write_json, read_json_object
-from app.gateway.registry import WorkspaceTarget
+
+logger = logging.getLogger(__name__)
 
 
 class WorkspaceNavigationStore:
@@ -247,25 +252,56 @@ class WorkspaceNavigationStore:
         )
 
     def _load_nodes(self) -> list[WorkspaceNavigationNodeDTO]:
-        payload = read_json_object(
-            self._storage_path,
-            default={"schema_version": 1, "nodes": []},
-        )
+        try:
+            payload = json.loads(self._storage_path.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            return []
+        except OSError as error:
+            raise self._io_error("read", error) from error
+        except (UnicodeDecodeError, json.JSONDecodeError) as error:
+            logger.exception("Gateway 工作区导航解码失败: path=%s", self._storage_path)
+            position = (
+                f"line={error.lineno}, column={error.colno}"
+                if isinstance(error, json.JSONDecodeError)
+                else f"encoding={error.encoding}, start={error.start}, end={error.end}"
+            )
+            raise ValueError(
+                "Gateway 工作区导航解码失败: artifact=workspace_navigation, "
+                f"error_type={type(error).__name__}, {position}"
+            ) from error
+        if not isinstance(payload, dict):
+            raise RuntimeError("Gateway 工作区导航必须是 JSON 对象: artifact=workspace_navigation")  # noqa: TRY004 -- 保留原存储错误类别。
         raw_nodes = payload.get("nodes", [])
         if not isinstance(raw_nodes, list):
-            raise RuntimeError(
-                f"Gateway 工作区导航 nodes 必须是数组: {self._storage_path}"
-            )
-        return [WorkspaceNavigationNodeDTO.model_validate(item) for item in raw_nodes]
+            raise RuntimeError("Gateway 工作区导航 nodes 必须是数组: artifact=workspace_navigation")  # noqa: TRY004 -- 保留原存储错误类别。
+        try:
+            return [WorkspaceNavigationNodeDTO.model_validate(item) for item in raw_nodes]
+        except ValidationError as error:
+            logger.exception("Gateway 工作区导航节点校验失败: path=%s", self._storage_path)
+            rules = sorted({item["type"] for item in error.errors()})
+            raise ValueError(
+                "Gateway 工作区导航节点校验失败: artifact=workspace_navigation, "
+                f"error_count={error.error_count()}, rules={','.join(rules)}"
+            ) from error
 
     def _save(self, serialized_nodes: list[dict[str, object]]) -> None:
-        atomic_write_json(
-            self._storage_path,
-            {
-                "schema_version": 1,
-                "nodes": serialized_nodes,
-            },
+        try:
+            atomic_write_json(
+                self._storage_path,
+                {"schema_version": 1, "nodes": serialized_nodes},
+            )
+        except OSError as error:
+            raise self._io_error("write", error) from error
+
+    def _io_error(self, operation: str, error: OSError) -> OSError:
+        message = (
+            "Gateway 工作区导航存储失败: artifact=workspace_navigation, "
+            f"operation={operation}, error_type={type(error).__name__}, errno={error.errno}"
         )
+        if getattr(error, "winerror", None) is not None:
+            message += f", winerror={error.winerror}"
+        logger.exception("%s, path=%s", message, self._storage_path)
+        return type(error)(error.errno, message)
 
     @staticmethod
     def _synchronize_workspace_refs(
@@ -319,32 +355,34 @@ class WorkspaceNavigationStore:
         workspace_refs: set[str] = set()
         for node in nodes:
             if node.node_id in nodes_by_id:
-                raise ValueError(f"Gateway 导航节点 ID 重复: {node.node_id}")
+                logger.error("Gateway 导航节点 ID 重复: node=%r", node)
+                raise ValueError("Gateway 导航节点 ID 重复")
             nodes_by_id[node.node_id] = node
             if node.kind == "workspace_ref":
                 assert node.workspace_id is not None
                 if node.workspace_id not in valid_workspace_ids:
-                    raise ValueError(f"Gateway 导航引用未知工作区: {node.workspace_id}")
+                    logger.error("Gateway 导航引用未知工作区: node=%r", node)
+                    raise ValueError("Gateway 导航引用未知工作区")
                 if node.workspace_id in workspace_refs:
-                    raise ValueError(f"Gateway 工作区存在重复规范引用: {node.workspace_id}")
+                    logger.error("Gateway 工作区存在重复规范引用: node=%r", node)
+                    raise ValueError("Gateway 工作区存在重复规范引用")
                 workspace_refs.add(node.workspace_id)
         validated_acyclic_node_ids: set[str] = set()
         for node in nodes:
             if node.parent_node_id is not None:
                 parent = nodes_by_id.get(node.parent_node_id)
                 if parent is None:
-                    raise ValueError(
-                        f"Gateway 导航父节点不存在: {node.parent_node_id}"
-                    )
+                    logger.error("Gateway 导航父节点不存在: node=%r", node)
+                    raise ValueError("Gateway 导航父节点不存在")
                 if parent.kind != "workspace_folder":
-                    raise ValueError(
-                        f"Gateway 导航父节点不是工作区文件夹: {parent.node_id}"
-                    )
+                    logger.error("Gateway 导航父节点不是工作区文件夹: node=%r, parent=%r", node, parent)
+                    raise ValueError("Gateway 导航父节点不是工作区文件夹")
             ancestor_id = node.parent_node_id
             current_chain_node_ids = {node.node_id}
             while ancestor_id is not None:
                 if ancestor_id in current_chain_node_ids:
-                    raise ValueError(f"Gateway 工作区导航包含循环关系: {node.node_id}")
+                    logger.error("Gateway 工作区导航包含循环关系: node=%r", node)
+                    raise ValueError("Gateway 工作区导航包含循环关系")
                 if ancestor_id in validated_acyclic_node_ids:
                     break
                 current_chain_node_ids.add(ancestor_id)

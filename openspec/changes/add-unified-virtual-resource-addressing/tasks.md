@@ -527,3 +527,10 @@
 - 图片owner统一投影manifest/image/local-image的读写删除故障，保留原OS异常类别/cause与完整原始诊断，普通错误只含操作、已验证asset身份、异常类别及errno。清单读取一次校验身份/摘要/文件名与全部消费元数据，TypedDict记录进入DTO时不再用str/int隐式转换；损坏数据明确失败且不重写。原内容寻址、上传去重、API URL及各路由既有状态分类不变。普通主题file:背景URL仅报scheme，原URL留具名诊断日志，不套用Browser页面例外。
 - 固定完整tree `8bd8fa8c0adae6260cf39289f7db78271dd399ee`：173项定向/5.59秒、真实独立Gateway上传→损坏→恢复→同内容去重→删除1 passed/21.48秒，Ruff及compileall全部exit0。最终旧生产完整archive的52项反例失败、11项通过，覆盖POSIX/drive/UNC存储异常与清单字段污染。审查发现的size等元数据遗漏已修并补入同一产品入口矩阵。首轮产品误期望DELETE409，按原route仅捕获KeyError的实际500合同校正测试，无产品状态分类变更；全部旧收据保留。
 - 准确命令、4329项源码前后指纹、raw/真实退出码、进程回收及只读独审见 `out/tests/temp/gateway_theme_errors_20261024/artifacts/validation-proof-004.json`。权限故障为unit注入，产品损坏来自真实磁盘；原始日志适用已登记管理入口例外。未验完整Web、Windows及全局配置持久引用，2.2/7.2总门未勾。
+
+
+### 2026-10-24 Gateway 工作区导航存储错误
+
+- 导航 owner 统一处理最终读写、JSON/UTF-8、typed节点与关系校验失败，普通错误只报告固定artifact、规则/位置及系统错误事实，不复制物理位置或损坏值；原生异常类别、errno、完整cause与诊断日志保留。原子发布仍由原writer负责，发布后清理失败保留实际新状态；不新增导航队列、schema或兼容reader。
+- 固定完整tree `fabd9a80f9c6ffafc691af9ad06fff22f12ea555` 的新增及既有导航/catalog回归26 passed/31.53秒，真实Gateway HTTP 1 passed/21.30秒，Ruff/compileall均exit0。产品入口创建目录后分别损坏对象、nodes、JSON/UTF8及kind/position/parent，GET与POST保持原500/400归属、request_id、原坏字节不变；恢复原件后同revision可读并继续更新。旧完整实现unit反例12 failed/2 passed，真实HTTP反例在首个GET精确捕获物理路径。
+- 准确命令、4331项源码前后指纹、raw、实际退出码、零进程残留与独立只读审查见 `out/tests/temp/gateway_navigation_errors_20261024/artifacts/validation-proof-001.json`、`validation-proof-http-red-001.json`及`review-001.json`。I/O注入与发布后错误由unit覆盖；未验Windows实机或完整Web，不据此关闭2.2/7.2全局门。
