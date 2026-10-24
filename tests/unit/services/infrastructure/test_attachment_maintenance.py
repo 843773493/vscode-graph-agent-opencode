@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import sqlite3
 import subprocess
@@ -94,6 +95,20 @@ def test_maintenance_blocks_catalog_before_database_creation_then_allows_retry(
         assert not attachments_root.exists()
         assert catalog._connection is None
     assert catalog.connection.execute("PRAGMA user_version").fetchone()[0] == 3
+
+
+@pytest.mark.parametrize("state", ["preparing", "ready", "rolling_back", "installed", "aborted"])
+def test_migration_journal_never_allows_missing_catalog_to_be_initialized(
+    catalog: AttachmentBlobCatalog, attachments_root: Path, probe: Callable[[bool], int], state: str,
+) -> None:
+    attachments_root.parent.mkdir(parents=True)
+    journal = attachments_root.with_name("attachment-migration.json")
+    journal.write_text(json.dumps({"format_version": 1, "state": state}), encoding="utf-8")
+    with pytest.raises(RuntimeError, match="尚未完成|catalog 缺失"):
+        _ = catalog.connection
+    assert catalog._connection is None
+    assert not attachments_root.exists()
+    assert probe(True) == 0
 
 
 def test_access_only_guards_without_creating_database_or_originals(

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 from threading import Lock
@@ -22,13 +23,14 @@ class AttachmentMaintenanceLock:
     文件永不删除，进程退出由操作系统释放锁；锁文件存在不代表正在占用。
     """
 
-    # TODO: schema 3 离线迁移取得独占后，仍须核对持久 operation 与外部任务终态，
-    # 完成一致备份和可恢复切换；取得锁本身不证明遗留副作用已收敛。
+    # 取得锁本身不证明遗留副作用已收敛；离线命令仍须核对原 owner 持久状态。
 
     def __init__(self, attachments_root: Path, *, exclusive: bool) -> None:
         root = attachments_root.expanduser().resolve()
         self.path = root.with_name(f".{root.name}-maintenance.lock")
         self._exclusive = exclusive
+        self._attachments_root = root
+        self._install_journal = root.with_name("attachment-migration.json") if root.name == "attachments" else None
         self._fd: int | None = None
         self._mutex = Lock()
 
@@ -41,6 +43,14 @@ class AttachmentMaintenanceLock:
             mode = portalocker.LOCK_EX if self._exclusive else portalocker.LOCK_SH
             try:
                 portalocker.lock(fd, mode | portalocker.LOCK_NB)
+                if not self._exclusive and self._install_journal is not None and self._install_journal.exists():
+                    if self._install_journal.is_symlink():
+                        raise RuntimeError("附件迁移记录不能经过符号链接")
+                    journal = json.loads(self._install_journal.read_bytes())
+                    if journal.get("format_version") != 1 or journal.get("state") not in {"installed", "aborted"}:
+                        raise RuntimeError("附件目录离线安装尚未完成；须用原备份继续 install 或 rollback，禁止启动业务 owner")
+                    if not (self._attachments_root / "catalog.sqlite").is_file():
+                        raise RuntimeError("附件安装已终结但原 catalog 缺失，拒绝创建空库")
             except portalocker.AlreadyLocked as error:
                 os.close(fd)
                 action = "离线维护" if self._exclusive else "在线访问"

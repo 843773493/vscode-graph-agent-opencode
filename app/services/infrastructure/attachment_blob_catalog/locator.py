@@ -17,7 +17,7 @@ from __future__ import annotations
 import hashlib
 import re
 from datetime import date, datetime
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 
 from app.core.session_catalog_store import validate_path_budget
 from app.services.infrastructure.attachment_blob_catalog.blob_identity import (
@@ -71,7 +71,35 @@ def resolve_attachment_directory(attachments_root: Path, relative_locator: str) 
     """按唯一 catalog 冻结的目录 locator 检查完整路径预算后定位。"""
     validate_attachment_directory_relative_locator(relative_locator)
     validate_path_budget(attachments_root, relative_locator)
-    return attachments_root / relative_locator
+    return _checked_descendant(attachments_root, tuple(relative_locator.split("/")))
+
+
+def _checked_descendant(root: Path, parts: tuple[str, ...]) -> Path:
+    validate_attachment_file_segments(parts)
+    path = root
+    if root.is_symlink():
+        raise RuntimeError("附件目录根不能是符号链接")
+    for part in parts:
+        path /= part
+        if path.is_symlink():
+            raise RuntimeError("附件目录及文件不能经过符号链接")
+    return path
+
+
+def validate_attachment_file_segments(parts: tuple[str, ...]) -> None:
+    """冻结 manifest 和物理解析共用路径段校验，不做文件系统访问。"""
+    for part in parts:
+        if (not isinstance(part, str) or not part or part in {".", ".."}
+                or "/" in part or "\\" in part or PureWindowsPath(part).drive
+                or any(ord(char) < 32 or 127 <= ord(char) <= 159 for char in part)):
+            raise ValueError("附件文件必须是受检目录内的原生单路径段")
+
+
+def resolve_attachment_file(directory: Path, parts: tuple[str, ...]) -> Path:
+    """读取、派生写入和冻结复制共用同一 containment 边界。"""
+    validate_path_budget(directory, "/".join(parts))
+    return _checked_descendant(directory, parts)
+
 
 
 def ingest_staging_relative_locator(ingest_id: str) -> str:

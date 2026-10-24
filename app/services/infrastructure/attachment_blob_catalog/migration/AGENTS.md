@@ -1,6 +1,6 @@
 # 目录用途
 
-附件目录迁移的离线维护入口。`preflight.py` 只读核对 schema 3 的持久状态、原件及权威 locator；`backup.py` 在独占维护锁内生成并核验可恢复备份；`directories.py` 消费备份，在其 `converted/` 内准备独立目录；`catalog.py` 准备和核验对应的隔离目标 catalog，保全旧 owner 与终态 fork 原文；`__main__.py` 提供显式命令。
+附件目录迁移的离线维护入口。`preflight.py` 只读核对 schema 3 的持久状态、原件及权威 locator；`backup.py` 在独占维护锁内生成并核验可恢复备份；`directories.py` 消费备份，在其 `converted/` 内准备独立目录；`catalog.py` 准备和核验对应的隔离目标 catalog，保全旧 owner 与终态 fork 原文；`install.py` 编排唯一目录根安装与撤销；`__main__.py` 提供显式命令。
 
 # 可修改内容
 
@@ -17,7 +17,7 @@
 
 - 使用原附件 owner 的维护锁。SQL 结构仍由现有 SQL 文件负责，此处只保留读取和执行协调。
 - 外部占用同时核对通用 lease 账本和 Terminal/Browser 领域记录；复用原 owner 的格式与终态闭集，不调用恢复或修改关联。已核实终态的领域记录必须逐字进入备份，创建中、待核实及 dispatching fork attach 明确拒绝。
-- prepare 仅准备 schema 3 备份；convert/verify-directories 只处理备份内独立目录。prepare-catalog/verify-catalog 在 `converted/catalog.sqlite` 准备 schema 4 的目录、文件版本、关联及不可变来源绑定，DDL 唯一定义在 `../sql/managed_directory_schema.sql`。旧线上 owner 仍只支持 schema 3；线上上传/读取、新 fork/ingest 及切换/撤销仍 TODO，不能把 catalog_prepared 当成线上可用。
+- prepare 仅准备 schema 3 备份；convert/verify-directories 只处理备份内独立目录。prepare-catalog/verify-catalog 在 `converted/catalog.sqlite` 准备 schema 4 的目录、文件版本、关联及不可变来源绑定，DDL 唯一定义在 `../sql/managed_directory_schema.sql`。旧线上 owner 仍只支持 schema 3；线上上传/读取、新 fork/ingest 与最终 owner 切换仍 TODO；install/rollback 只负责离线目录根发布，不能把 catalog_prepared 或 installed 当成线上可用。
 - 每个旧 attachment_id 单独复制原件到 `original/content`，已有预览逐字复制到 `preview/512.webp`，`derived/` 留空；不使用硬链接，不重新生成预览。完整旧 owner/blob 行保留在转换清单，UTC 日期来自 owner 创建时间。released 的释放时间与显式 retention 保护保留，tombstoned 不造目录。
 - 转换和核验复用原维护锁互斥；复制中断只回收本计划的 `.partial` 副本，已完成文件核 hash/length 后复用，损坏成品不覆盖。全量来源与目标校验、durability 完成后才发布目录准备完成。
 - convert 的初始化元数据先写入由完整计划 hash 定位的 `.converted-{hash}.preparing`，manifest/journal 全部 durable 后才原子发布 `converted/`，再复制正文。重试只回收同一计划的未发布初始化目录，不清理其它计划或原备份；已存在但缺失身份元数据的旧 `converted/` 仍明确拒绝，不猜测归属。
@@ -25,3 +25,6 @@
 - 目标 catalog journal 绑定原备份、目录清单和 DDL 指纹；写库或 rename 后中断可沿同一准备身份续跑，成品必须完整核验且绝不覆盖。终态 fork snapshot_json 和 preimage 原样保存，来源表禁止 UPDATE/DELETE；新结构不得重算旧历史 hash。
 - catalog 发布核验除逐行对照外，必须调用原 owner 的 `verify_legacy_references`，实际解析每个旧 owner/alias，核对 committed claim 与迁入的精确正文版本。保留中的 released 关联不等于目录字节已回收；历史来源 locator 不得替代目标 locator。线上上传、操作 lease 和唯一切换仍按未完成任务推进。
 - 完成物化或中止的临时 capture 可已由原 owner 清理；残留 capture 仍按原 snapshot/marker hash 核验并逐字保存。离线准入不得要求重建已清理的终态临时目录。Linux 的既有执行明细文件名可含冒号，locator 按目标原生语义保留，同时拒绝各段盘符、逃逸与符号链接；Windows 继续拒绝冒号文件名。
+
+- install/rollback 在 workspace 独占维护锁和 converted 共享锁内执行；唯一 `attachment-migration.json` 绑定原备份、目标 catalog 和源集合。首次移动旧根前重新做完整 preflight，SQLite 以逻辑 schema/行核对备份、源文件及 WAL 另冻结指纹。preparing/ready/rolling_back 阻止线上准入；目录和 catalog 缺失不初始化空库。
+- 原目录保全为 `.attachments-{backup_id}.schema3`，未发布目标及撤销副本保存在 `.attachment-install-{backup_id}`；中断只沿同一记录继续，不自动删备份。已 installed 的 install 重试只核归属/结构，不重放旧内容；rollback 必须证明未有后续写入，不覆盖新数据。

@@ -44,3 +44,5 @@ catalog 侧原先的单文件 `catalog.py` 已按垂直链路拆入本包，faca
 - `ForkAttachmentSnapshot.to_payload()` 是旧 v2 附件冻结载荷的唯一序列化入口，claim、captured marker 和 source hash 都复用它；不得用 dataclass 全字段反射隐式扩展 v2。目录快照必须显式登记新版本，旧原文和 hash 不改写。
 
 - 跨域附件正文先复制进原 fork capture 的 `attachment-files/`，captured marker v3 核对其完整集合与冻结 digest/length；网络统一使用原 files/chunk，不提供 live blob 分块接口。目标 importer 只消费已传入的冻结文件，复制线程由原 operation holder 覆盖，取消须等待真实 writer 退出。旧 v2 marker/载荷只保留原文读取，不补造历史文件；升级前须在旧版本收敛非终态跨域导出。
+
+- `directories.py` 在 live 目录发布前保护原件；冻结 capture 不在此设置只读权限。目录文件通过 `locator.py` 的受检 child 解析，拒绝 symlink 与逃逸。schema 4 SQL 同时登记 ingest/fork 运行表和不可变版本约束；离线安装已提供，但当前线上 owner 仍是 schema 3，最终切换另按 OpenSpec 完成。

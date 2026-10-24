@@ -151,8 +151,8 @@ def _materialize(directory: Path, root: Path, row: DirectoryFile) -> None:
     fsync_directory(target.parent)
 
 
-def _verify_contents(root: Path, plan: DirectoryPlan) -> int:
-    expected: set[str] = set()
+def _verify_contents(root: Path, plan: DirectoryPlan, *, catalog: bool = False) -> int:
+    expected: set[str] = {"catalog.sqlite"} if catalog else set()
     expected_directories: set[str] = set()
     count = 0
     for resource in plan.resources:

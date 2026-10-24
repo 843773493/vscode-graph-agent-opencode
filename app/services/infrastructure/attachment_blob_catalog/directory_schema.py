@@ -1,4 +1,4 @@
-"""目录 catalog 的唯一 schema 4 SQL；当前由离线转换准备，尚未切换线上 owner。"""
+"""附件目录 catalog 的唯一 schema 4 SQL，线上初始化与离线转换共用。"""
 
 from __future__ import annotations
 
@@ -13,12 +13,31 @@ DIRECTORY_SCHEMA_SQL = load_sql(__package__, "sql/managed_directory_schema.sql")
 DIRECTORY_SCHEMA_SHA256 = hashlib.sha256(DIRECTORY_SCHEMA_SQL.encode()).hexdigest()
 
 
-def initialize_directory_schema(connection: sqlite3.Connection) -> None:
+def initialize_directory_schema(connection: sqlite3.Connection, *, workspace_id: str | None = None) -> None:
     """只初始化新的空目标，不迁移或修复已有库。"""
     version = connection.execute("PRAGMA user_version").fetchone()[0]
     if version != 0 or connection.execute("SELECT 1 FROM sqlite_master LIMIT 1").fetchone() is not None:
         raise RuntimeError("目录 schema 4 只能在新的空目标初始化，不能覆盖已有 catalog")
-    connection.executescript("BEGIN IMMEDIATE;\n" + DIRECTORY_SCHEMA_SQL + "\nCOMMIT;")
+    # executescript 会先提交调用方事务；逐条执行才能把 workspace 归属和 DDL 一起发布。
+    connection.execute("BEGIN IMMEDIATE")
+    try:
+        pending = ""
+        for line in DIRECTORY_SCHEMA_SQL.splitlines(keepends=True):
+            pending += line
+            if sqlite3.complete_statement(pending):
+                connection.execute(pending)
+                pending = ""
+        if pending.strip():
+            raise RuntimeError("附件目录 SQL 末尾存在未完成语句")
+        if workspace_id is not None:
+            connection.execute(
+                "INSERT INTO attachment_directory_metadata VALUES (1, ?, ?)",
+                (workspace_id, DIRECTORY_SCHEMA_VERSION),
+            )
+        connection.execute("COMMIT")
+    except BaseException:
+        connection.execute("ROLLBACK")
+        raise
 
 
 def require_directory_schema(connection: sqlite3.Connection) -> None:

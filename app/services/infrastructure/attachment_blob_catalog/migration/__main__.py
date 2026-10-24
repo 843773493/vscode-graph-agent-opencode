@@ -1,4 +1,4 @@
-"""显式准备或核验附件目录迁移备份，不切换线上存储。"""
+"""显式准备、核验、安装或撤销附件目录迁移。"""
 
 from __future__ import annotations
 
@@ -18,6 +18,10 @@ from app.services.infrastructure.attachment_blob_catalog.migration.directories i
     convert_backup,
     verify_directories,
 )
+from app.services.infrastructure.attachment_blob_catalog.migration.install import (
+    install_converted_catalog,
+    rollback_install,
+)
 
 
 def main() -> None:
@@ -36,9 +40,15 @@ def main() -> None:
     catalog.add_argument("--backup", type=Path, required=True)
     verify_catalog = commands.add_parser("verify-catalog", help="核验目标 catalog 与冻结旧引用，不切换线上 owner")
     verify_catalog.add_argument("--backup", type=Path, required=True)
+    for name, help_text in (("install", "停机安装已核验目录，沿原记录继续中断操作"), ("rollback", "撤销未被后续写入的安装并保全两份目录")):
+        command = commands.add_parser(name, help=help_text)
+        command.add_argument("--workspace", type=Path, required=True)
+        command.add_argument("--backup", type=Path, required=True)
     args = parser.parse_args()
     if args.command == "prepare":
         result = prepare_backup(args.workspace, args.output)
+    elif args.command in {"install", "rollback"}:
+        result = {"install": install_converted_catalog, "rollback": rollback_install}[args.command](args.workspace, args.backup)
     else:
         result = {"verify": verify_backup, "convert": convert_backup, "verify-directories": verify_directories,
                   "prepare-catalog": prepare_converted_catalog, "verify-catalog": verify_converted_catalog}[args.command](args.backup)

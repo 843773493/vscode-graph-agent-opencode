@@ -394,6 +394,9 @@ async def test_product_execution_and_two_forks_preserve_frozen_payloads_and_capt
                 mapping = broken.execute("SELECT * FROM attachment_legacy_fork_payloads WHERE record_kind='mapping' LIMIT 1").fetchone()
                 metadata, frozen = json.loads(mapping["metadata_json"]), json.loads(mapping["snapshot_json"])
                 if damage == "version":
+                    with pytest.raises(sqlite3.IntegrityError, match="versions are immutable"):
+                        broken.execute("UPDATE attachment_directory_files SET length=length+1 WHERE attachment_id=?", (frozen["target_attachment_id"],))
+                    broken.execute("DROP TRIGGER attachment_directory_files_no_update")
                     broken.execute("UPDATE attachment_directory_files SET length=length+1 WHERE attachment_id=?", (frozen["target_attachment_id"],))
                 elif damage in {"owner", "target_uri"}:
                     if damage == "owner":
