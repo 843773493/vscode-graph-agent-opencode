@@ -43,6 +43,8 @@ async function scenario(phase) {
   const action = barrier();
   const enteredAction = barrier();
   let operation;
+  let peerOperation;
+  let closingAttempt;
   let closing;
   let restored;
   const order = [];
@@ -50,6 +52,12 @@ async function scenario(phase) {
     await manager.init();
     await manager.create({ workspaceId, browserId, ownerRevision: 1, url: `http://127.0.0.1:${server.address().port}/` });
     const session = manager.get(browserId);
+    let peer = null;
+    if (phase === "manager_batch_timeout") {
+      const peerId = `browser_${randomUUID().replaceAll("-", "")}`;
+      await manager.create({ workspaceId, browserId: peerId, ownerRevision: 1, url: `http://127.0.0.1:${server.address().port}/` });
+      peer = manager.get(peerId);
+    }
     const cold = phase !== "executing";
     if (cold) {
       await session.freeze({ allowSoftProtection: true });
@@ -69,6 +77,17 @@ async function scenario(phase) {
     });
     operation.catch(() => undefined);
     await (cold ? navigation.entered.promise : enteredAction.promise);
+    const peerEntered = barrier();
+    const peerPage = peer?.page;
+    if (peer) {
+      peerOperation = peer.runInteractiveOperation({ actor: "user", action: "peer_blocked" }, async () => {
+        peerEntered.release();
+        await action.promise;
+        await peer.page.locator("#field").fill("peer-completed");
+      });
+      peerOperation.catch(() => undefined);
+      await peerEntered.promise;
+    }
     const context = session.context;
     const page = cold ? context.pages()[0] : session.page;
     assert(context && page, "真实context和页面已经进入操作准备或执行阶段");
@@ -76,16 +95,36 @@ async function scenario(phase) {
     assert.equal(session.inFlightOperations, cold ? 0 : 1);
     assert.equal(session.operationQueue.acceptedOperationExecutions.size, 1);
 
-    if (phase === "prepare_timeout" || phase === "manager_timeout") {
-      if (phase === "manager_timeout") {
-        await assert.rejects(manager.shutdown("integration_timeout"), (error) => {
+    let drainElapsedMs = null;
+    if (["prepare_timeout", "manager_timeout", "manager_batch_timeout"].includes(phase)) {
+      if (phase !== "prepare_timeout") {
+        const started = performance.now();
+        closingAttempt = manager.shutdown("integration_timeout");
+        closingAttempt.catch(() => undefined);
+        if (peer) {
+          await new Promise((resolve) => setTimeout(resolve, 30));
+          assert.equal(peer.closingRequested, true, "首个资源等待时其它资源也必须关闭准入");
+          await assert.rejects(peer.runInteractiveOperation({ actor: "user", action: "peer_late" }, async () => {
+            throw new Error("关闭准入后不能执行第二个Browser的新动作");
+          }), { code: "browser_closing" });
+        }
+        await assert.rejects(closingAttempt, (error) => {
           assert(error instanceof AggregateError);
-          assert.equal(error.errors.length, 1);
-          assert.equal(error.errors[0].code, "browser_shutdown_operation_drain_timeout");
+          assert.equal(error.errors.length, peer ? 2 : 1);
+          for (const cause of error.errors) assert.equal(cause.code, "browser_shutdown_operation_drain_timeout");
           return true;
         });
+        drainElapsedMs = performance.now() - started;
+        assert(drainElapsedMs >= 4500 && drainElapsedMs < 8000, `整批排空只使用一次默认5秒预算: ${drainElapsedMs}`);
         assert.equal(manager.runtimePool.browser.isConnected(), true);
         assert.equal(session.record.status, "running");
+        if (peer) {
+          assert.equal(peer.record.status, "running");
+          assert.equal(peer.context.pages()[0], peerPage);
+          assert.equal(peerPage.isClosed(), false);
+          assert.equal(peer.operationQueue.acceptedOperationExecutions.size, 1);
+          assert.equal(peer.inFlightOperations, 1);
+        }
       } else {
         await assert.rejects(session.checkpointForManagerShutdown("integration_timeout", { operationDrainTimeoutMs: 20 }),
           { code: "browser_shutdown_operation_drain_timeout" });
@@ -110,7 +149,7 @@ async function scenario(phase) {
     }), { code: "browser_closing" });
     navigation.response.release();
     action.release();
-    await operation;
+    await Promise.all([operation, peerOperation].filter(Boolean));
     if (!closing) closing = manager.shutdown().then(() => { order.push("shutdown_done"); });
     await closing;
     assert.deepEqual(order, ["operation_done", "shutdown_done"]);
@@ -120,6 +159,11 @@ async function scenario(phase) {
     assert.equal(session.operationQueue.acceptedOperationExecutions.size, 0);
     const checkpoint = await manager.stateStore.readCheckpoint(browserId);
     assert.equal(checkpoint.pages[0].controls.find((control) => control.selector === "#field").value, value);
+    if (peer) {
+      assert.equal(peerPage.isClosed(), true);
+      const peerCheckpoint = await manager.stateStore.readCheckpoint(peer.id);
+      assert.equal(peerCheckpoint.pages[0].controls.find((control) => control.selector === "#field").value, "peer-completed");
+    }
 
     restored = new BrowserManager({ workspaceRoot, workspaceId });
     await restored.init();
@@ -129,12 +173,18 @@ async function scenario(phase) {
     const response = await recovered.runInteractiveOperation({ actor: "user", action: "read_after_restart" },
       async () => ({ value: await recovered.page.locator("#field").inputValue() }));
     assert.equal(response.value, value);
-    return { browserId, order, restoredValue: response.value, originalPageClosed: page.isClosed() };
+    if (peer) {
+      const peerRecovered = restored.get(peer.id);
+      const peerResponse = await peerRecovered.runInteractiveOperation({ actor: "user", action: "peer_after_restart" },
+        async () => ({ value: await peerRecovered.page.locator("#field").inputValue() }));
+      assert.equal(peerResponse.value, "peer-completed");
+    }
+    return { browserId, peerBrowserId: peer?.id ?? null, order, drainElapsedMs, restoredValue: response.value, originalPageClosed: page.isClosed() };
   } finally {
     blockedNavigation = null;
     navigation.response.release();
     action.release();
-    await Promise.allSettled([operation, closing].filter(Boolean));
+    await Promise.allSettled([operation, peerOperation, closingAttempt, closing].filter(Boolean));
     try {
       if (restored) await restored.shutdown();
     } finally {
@@ -149,7 +199,7 @@ try {
     server.close((error) => error ? reject(error) : resolve());
     server.closeAllConnections();
   }));
-  for (const phase of ["prepare", "executing", "prepare_timeout", "manager_timeout"]) {
+  for (const phase of ["prepare", "executing", "prepare_timeout", "manager_timeout", "manager_batch_timeout"]) {
     try {
       results.push({ phase, status: "passed", observations: await scenario(phase) });
     } catch (error) {

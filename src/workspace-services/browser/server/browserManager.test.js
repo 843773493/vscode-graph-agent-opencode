@@ -582,6 +582,88 @@ describe("浏览器状态持久化", () => {
     expect(browser.operationQueue.acceptedOperationExecutions.size).toBe(0);
   });
 
+  test("管理器等待首个资源前关闭本批其它资源的操作准入", async () => {
+    const manager = createBrowserManagerWithStateWriter(async () => undefined);
+    const browsers = Array.from({ length: 2 }, () => new BrowserSession({ manager, record: {
+      browser_id: createOptions().browserId,
+      workspace_id: WORKSPACE_ID, transport_owner_revision: 1,
+      status: "running", resource_state: "discarded", reconciliation_status: "verified",
+    } }));
+    for (const browser of browsers) manager.browsersById.set(browser.id, browser);
+    let release;
+    let enter;
+    const entered = new Promise((resolve) => { enter = resolve; });
+    const barrier = new Promise((resolve) => { release = resolve; });
+    browsers[0].wake = async () => { enter(); await barrier; };
+    const original = browsers[0].runInteractiveOperation({ actor: "user", action: "preparing" }, async () => undefined);
+    await entered;
+    const closing = manager.shutdown();
+    let lateExecutions = 0;
+    try {
+      expect(browsers.map((browser) => browser.closingRequested)).toEqual([true, true]);
+      await expect(browsers[1].runInteractiveOperation({ actor: "user", action: "late" }, async () => {
+        lateExecutions += 1;
+      })).rejects.toMatchObject({ code: "browser_closing" });
+      expect(lateExecutions).toBe(0);
+      expect(browsers[0].operationQueue.acceptedOperationExecutions.size).toBe(1);
+    } finally {
+      release();
+      await original;
+      await closing;
+    }
+  });
+
+  test("管理器本批资源共用排空预算，超时保留全部原操作并允许结束后重试", async () => {
+    const manager = createBrowserManagerWithStateWriter(async () => undefined);
+    const browsers = Array.from({ length: 4 }, () => new BrowserSession({ manager, record: {
+      browser_id: createOptions().browserId,
+      workspace_id: WORKSPACE_ID, transport_owner_revision: 1,
+      status: "running", resource_state: "discarded", reconciliation_status: "verified",
+    } }));
+    const releases = [];
+    const entered = [];
+    const executions = [];
+    let completed = 0;
+    let poolCloses = 0;
+    manager.runtimePool.shutdown = async () => { poolCloses += 1; };
+    for (const [index, browser] of browsers.entries()) {
+      manager.browsersById.set(browser.id, browser);
+      const checkpoint = browser.checkpointForManagerShutdown.bind(browser);
+      browser.checkpointForManagerShutdown = (reason, options = { operationDrainTimeoutMs: 200 }) => checkpoint(reason, options);
+      if (index === 3) continue;
+      let enter;
+      const barrier = new Promise((resolve) => { releases.push(resolve); });
+      entered.push(new Promise((resolve) => { enter = resolve; }));
+      browser.wake = async () => { enter(); await barrier; };
+      executions.push(browser.runInteractiveOperation({ actor: "user", action: "blocked" }, async () => { completed += 1; }));
+    }
+    await Promise.all(entered);
+    const accepted = browsers.map((browser) => [...browser.operationQueue.acceptedOperationExecutions]);
+    const before = browsers.map((browser) => browser.toRecord());
+    const started = performance.now();
+    try {
+      const failure = await manager.shutdown("batch_timeout", { operationDrainTimeoutMs: 200 }).catch((error) => error);
+      const elapsed = performance.now() - started;
+      expect(failure).toBeInstanceOf(AggregateError);
+      expect(failure.errors.map((error) => error.code)).toEqual(Array(3).fill("browser_shutdown_operation_drain_timeout"));
+      for (const browser of browsers.slice(0, 3)) expect(failure.message).toContain(browser.id);
+      expect(elapsed).toBeGreaterThanOrEqual(180);
+      expect(elapsed).toBeLessThan(450);
+      expect(browsers.map((browser) => [...browser.operationQueue.acceptedOperationExecutions])).toEqual(accepted);
+      expect(browsers.map((browser) => browser.toRecord())).toEqual(before);
+      expect(browsers.map((browser) => browser.closingRequested)).toEqual([true, true, true, true]);
+      expect(poolCloses).toBe(0);
+      expect(completed).toBe(0);
+    } finally {
+      for (const release of releases) release();
+      await Promise.all(executions);
+      await manager.shutdown();
+    }
+    expect(completed).toBe(3);
+    expect(poolCloses).toBe(1);
+    expect(browsers.every((browser) => browser.operationQueue.acceptedOperationExecutions.size === 0)).toBe(true);
+  });
+
   test("工作区逻辑浏览器达到硬上限时明确拒绝新建", async () => {
     const manager = createBrowserManagerWithStateWriter(async () => undefined, {
       maxLogicalBrowsersPerWorkspace: 2,

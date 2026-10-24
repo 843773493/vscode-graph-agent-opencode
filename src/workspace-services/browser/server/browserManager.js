@@ -452,16 +452,24 @@ export class BrowserManager {
     return await this.get(id).discard({ reason });
   }
 
-  async shutdown(reason = "browser_manager_shutdown") {
+  async shutdown(reason = "browser_manager_shutdown", {
+    operationDrainTimeoutMs = DEFAULT_OPERATION_DRAIN_TIMEOUT_MS,
+  } = {}) {
     this.stopResourceGovernor();
+    const sessions = this.runningSessions();
+    const drainDeadline = performance.now() + operationDrainTimeoutMs;
+    // 先关闭整批准入，再共用同一单调预算；不能让后续资源继续接纳或重置等待。
+    for (const session of sessions) session.closingRequested = true;
     const checkpointFailures = [];
     let operationsDrained = true;
-    for (const session of this.browsersById.values()) {
+    for (const session of sessions) {
       if (session.status !== "running") {
         continue;
       }
       try {
-        await session.checkpointForManagerShutdown(reason);
+        await session.checkpointForManagerShutdown(reason, {
+          operationDrainTimeoutMs: Math.max(0, drainDeadline - performance.now()),
+        });
       } catch (error) {
         checkpointFailures.push({ browserId: session.id, error });
         if (error.code === "browser_shutdown_operation_drain_timeout") {

@@ -957,6 +957,7 @@ async function main() {
     try {
       await manager.shutdown(reason);
     } catch (shutdownError) {
+      // TODO：信号关闭失败后仍退出进程；Manager重试尚未接入此入口，需统一退出期限和终止核实。
       resolvedExitCode = 1;
       console.error(
         "[browser-backend] 关闭检查点失败:",

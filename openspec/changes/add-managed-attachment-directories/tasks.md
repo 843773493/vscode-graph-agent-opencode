@@ -81,6 +81,8 @@ Web 定向 `BOXTEAM_E2E_SECTION8_FOCUS=copy_missing_attachment` 通过真实 Gat
 
   - 2026-10-24 完成 5.4 的 HTTP 传输取消切片：Terminal/Browser 原入口统一使用异步 HTTPX，物理删除 `_json_request_sync`，迁齐所有调用与测试；默认 10/30 秒和 Browser run 预算余量保持，同次网络传输增加总期限。取消关闭客户端 socket，网络失败仍为 503，原 HTTP 错误正文仅进诊断，Browser 408 恢复字段与 owner unknown/重启拒绝重放保持。完整原 HEAD 归档加真实 HTTP 反例为 4 failed/7.02秒，分别复现两类客户端取消后连接未关及默认线程池饱和阻塞请求；最终6项真实 HTTP 竞争/慢速响应验证和正式矩阵通过，259项相关单元/API/工具回归通过/14.10秒，真实 Terminal HTTP/PTY 8 passed/92.14秒，Browser故障/恢复32 passed/214.31秒。仅对已删除的同步私有入口移除重复模式，独有故障场景及原身份、错误归属、持久状态、路径/Browser file:合同断言保留。首轮 Browser 协议桩漏填 page_id 的失败原件保留，未修改产品协议或放宽断言。Ruff、编译、完整候选差异、准确命令/指纹与 raw/退出码在 `out/tests/temp/resource_http_cancellation_20261024/artifacts/`；本轮未重跑Windows。取消 socket不证明服务端操作已停止，真实operation总期限、终止接管、同步阻塞/DNS排队和Session删除/shutdown仍TODO，本项及5.2保持未勾；团队与协作专项继续TODO。
 
+  - 2026-10-24 Manager 整批排空切片：先同步关闭本批所有运行资源准入，默认 5 秒单调排空截止只冻结一次，后续资源只用余量，原空集合仍能即时确认；超时按原身份汇总，不关闭共享池或重置原操作。原 HEAD 完整工作树的两个反例均失败，复现后项准入仍开放和 3×200ms 累计约 605ms；候选 154 项单元回归通过。正式 Chromium/HTTP/磁盘检查点矩阵 5 场景通过，新增双 Browser 在约 5.003 秒整批失败而非各等 5 秒，页面和原操作保留，放行后同 Manager 重试关闭、冷 Manager 重开保留双方最终表单值。静态、strict、准确命令、源码指纹和原始退出码见 `out/tests/temp/browser_shutdown_batch_20261024/artifacts/`。这是 Manager 层组合门：生产 backend 信号关闭仍在失败后退出，未接同 Manager 重试，已在唯一调用方登记 TODO；整个 shutdown、创建中的资源准入、检查点持久化/转换期限和强制终止继续 TODO，5.2/5.4/6.2 不勾选。未运行 Windows、Gateway/主 Web 或团队/协作专项。
+
 ## 6. 真实验收与旧链物理下线
 
 - [x] 6.1 经产品入口上传、Shell 预处理、读取处理结果、fork 与重启恢复；覆盖 Linux/Windows 原生 cwd 和远端 URI 始终在目标机器解释。
