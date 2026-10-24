@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+from collections.abc import Iterator
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -289,7 +290,7 @@ async def test_reconcile_removes_forward_owned_by_stale_projection(
 
 @pytest.mark.asyncio
 async def test_restore_failure_remains_visible_on_workspace_list(
-    tmp_path: Path,
+    tmp_path: Path, caplog: pytest.LogCaptureFixture,
 ) -> None:
     storage_path = tmp_path / "port-forwards.json"
     storage_path.write_text(
@@ -324,7 +325,8 @@ async def test_restore_failure_remains_visible_on_workspace_list(
     restored = await manager.list("workspace_a")
 
     assert restored[0].status == "error"
-    assert "绑定的远程 Gateway 已变化" in (restored[0].error or "")
+    assert "error_type=RuntimeError" in (restored[0].error or "")
+    assert "绑定的远程 Gateway 已变化" in caplog.text
     with pytest.raises(RuntimeError, match="SSH 端口转发健康检查失败"):
         manager.assert_healthy()
 
@@ -457,7 +459,9 @@ async def test_restore_limits_parallel_process_starts(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_failed_start_retains_process_when_close_fails(tmp_path: Path) -> None:
+async def test_failed_start_retains_process_when_close_fails(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture,
+) -> None:
     processes: list[_FakeManagedProcess] = []
     manager = _manager(tmp_path, _registry(tmp_path), [], processes)
     close_attempts = 0
@@ -489,7 +493,8 @@ async def test_failed_start_retains_process_when_close_fails(tmp_path: Path) -> 
     )
 
     assert created.status == "error"
-    assert "close failed" in (created.error or "")
+    assert "error_type=RuntimeError" in (created.error or "")
+    assert "close failed" in caplog.text
     assert processes[0].closed is False
     assert manager._runtimes[created.forward_id].process is processes[0]
 
@@ -640,3 +645,142 @@ def test_create_api_returns_complete_workspace_forward_list(tmp_path: Path) -> N
     assert items[0]["connection_id"] == "rgw_server"
     assert items[0]["status"] == "active"
     assert items[0]["local_url"] == "https://127.0.0.1:41241"
+
+
+@pytest.fixture
+def forward_http(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> Iterator[tuple[TestClient, SshPortForwardManager, list[_FakeManagedProcess]]]:
+    processes: list[_FakeManagedProcess] = []
+    manager = _manager(tmp_path, _registry(tmp_path), [], processes)
+    monkeypatch.setitem(app.dependency_overrides, verify_gateway_token, lambda: "test-token")
+    monkeypatch.setitem(app.dependency_overrides, get_port_forward_manager, lambda: manager)
+    client = TestClient(app)
+    try:
+        yield client, manager, processes
+    finally:
+        client.close()
+
+
+@pytest.mark.parametrize("native_path", [
+    "/srv/private/key.pem", r"C:\private\key.pem",
+    r"\\server\private\key.pem", r"\\?\UNC\server\private\key.pem",
+], ids=["posix", "drive", "unc", "extended-unc"])
+@pytest.mark.parametrize("stage", ["spawn", "readiness", "exit", "close", "restore", "reconnect"])
+def test_error_response_excludes_native_location(
+    forward_http: tuple[TestClient, SshPortForwardManager, list[_FakeManagedProcess]],
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
+    native_path: str, stage: str,
+) -> None:
+    client, manager, processes = forward_http
+    log_path = tmp_path / "ssh.log"
+    original_log = f"Identity file {native_path} is not accessible\n".encode()
+    log_path.write_bytes(original_log)
+    native_error = OSError(2, "SSH 文件访问失败", native_path)
+    native_error.winerror = 206
+
+    def start(**_: object) -> tuple[_FakeManagedProcess, Path]:
+        if stage == "spawn":
+            raise native_error
+        process = _FakeManagedProcess()
+        processes.append(process)
+        return process, log_path
+
+    async def failed_readiness(*_: object) -> None:
+        raise native_error
+
+    monkeypatch.setattr(manager, "_process_starter", start)
+    if stage == "readiness":
+        monkeypatch.setattr(manager, "_wait_until_listening", failed_readiness)
+    endpoint = "/api/gateway/workspaces/workspace_a/port-forwards"
+    headers = {"X-Request-ID": "req-forward-location"}
+    response = client.post(endpoint, headers=headers, json={"remote_port": 5173, "local_port": 41241})
+    assert response.status_code == 200
+    item = response.json()["data"]["items"][0]
+    forward_id = item["forward_id"]
+    stored = (tmp_path / "port-forwards.json").read_bytes()
+    original_close = processes[0].close if processes else None
+    if stage == "exit":
+        processes[0].process.poll = lambda: 27
+    elif stage == "close":
+        def failed_close(*, timeout_seconds: float = 8) -> None:
+            del timeout_seconds
+            raise native_error
+        monkeypatch.setattr(processes[0], "close", failed_close)
+        response = client.delete(f"{endpoint}/{forward_id}", headers=headers)
+        assert response.status_code == 502
+        assert manager._runtimes[forward_id].process is processes[0]
+        assert processes[0].closed is False
+    elif stage == "restore":
+        asyncio.run(manager.close())
+        monkeypatch.setattr(manager, "_wait_until_listening", failed_readiness)
+        asyncio.run(manager.restore())
+    elif stage == "reconnect":
+        monkeypatch.setattr(manager, "_wait_until_listening", failed_readiness)
+        response = client.post(f"{endpoint}/{forward_id}/reconnect", headers=headers)
+        assert response.status_code == 200
+        assert len(processes) == 2 and all(process.closed for process in processes)
+    if stage != "close":
+        response = client.get(endpoint, headers=headers)
+        assert response.status_code == 200
+        item = response.json()["data"]["items"][0]
+        assert item["status"] == "error"
+        assert item["forward_id"] == forward_id
+        if stage == "exit":
+            assert "returncode=27" in item["error"]
+        else:
+            assert "errno=2" in item["error"] and "winerror=206" in item["error"]
+    else:
+        assert "errno=2" in response.json()["detail"]
+        assert "winerror=206" in response.json()["detail"]
+    assert response.headers["X-Request-ID"] == headers["X-Request-ID"]
+    assert response.json()["request_id"] == headers["X-Request-ID"]
+    error_text = response.json()["detail"] if stage == "close" else item["error"]
+    assert native_path not in error_text
+    assert json.dumps(native_path)[1:-1] not in response.text
+    assert "请查看 Gateway 原始诊断日志" in response.text
+    assert log_path.read_bytes() == original_log
+    assert (tmp_path / "port-forwards.json").read_bytes() == stored
+    assert any(
+        native_path in str(record.args)
+        or isinstance(record.args, tuple) and any(native_path in str(arg) for arg in record.args)
+        or record.exc_info and getattr(record.exc_info[1], "filename", None) == native_path
+        for record in caplog.records
+    )
+    if stage == "close":
+        monkeypatch.setattr(processes[0], "close", original_close)
+        deleted = client.delete(f"{endpoint}/{forward_id}", headers=headers)
+        assert deleted.status_code == 200 and deleted.json()["data"]["items"] == []
+        assert len(processes) == 1 and processes[0].closed is True
+    elif stage == "exit":
+        recovered = client.post(f"{endpoint}/{forward_id}/reconnect", headers=headers)
+        assert recovered.status_code == 200
+        assert recovered.json()["data"]["items"][0]["forward_id"] == forward_id
+        assert recovered.json()["data"]["items"][0]["status"] == "active"
+        assert len(processes) == 2 and processes[0].closed is True
+
+
+@pytest.mark.parametrize(("error_type", "status"), [(LookupError, 404), (ValueError, 409), (OSError, 502)])
+def test_request_failure_preserves_status_without_native_detail(
+    forward_http: tuple[TestClient, SshPortForwardManager, list[_FakeManagedProcess]],
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
+    error_type: type[Exception], status: int,
+) -> None:
+    client, manager, _ = forward_http
+    native_path = "/srv/private/port-forwards.json"
+    original_error = error_type(native_path)
+
+    async def fail(_: str) -> None:
+        raise original_error
+
+    monkeypatch.setattr(manager, "list", fail)
+    response = client.get(
+        "/api/gateway/workspaces/workspace_a/port-forwards",
+        headers={"X-Request-ID": "req-forward-rejected"},
+    )
+    assert response.status_code == status
+    assert response.json()["request_id"] == response.headers["X-Request-ID"] == "req-forward-rejected"
+    assert native_path not in response.text
+    assert f"error_type={error_type.__name__}" in response.json()["detail"]
+    assert any(record.exc_info and record.exc_info[1] is original_error for record in caplog.records)
+    assert manager._definitions == {} and not manager._storage_path.exists()

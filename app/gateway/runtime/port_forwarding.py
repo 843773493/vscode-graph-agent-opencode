@@ -37,6 +37,16 @@ _RESTORE_CONCURRENCY = 8
 logger = logging.getLogger(__name__)
 
 
+def port_forward_failure(error: Exception, *, stage: str) -> str:
+    """普通回执仅发布错误事实，原异常和 SSH 日志由诊断入口保存。"""
+    details = [f"stage={stage}", f"error_type={type(error).__name__}"]
+    for name in ("errno", "winerror"):
+        value = getattr(error, name, None)
+        if isinstance(value, int):
+            details.append(f"{name}={value}")
+    return f"SSH 端口转发失败: {', '.join(details)}；请查看 Gateway 原始诊断日志"
+
+
 @dataclass(frozen=True, slots=True)
 class _PortForwardDefinition:
     forward_id: str
@@ -426,7 +436,7 @@ class SshPortForwardManager:
             runtime = _PortForwardRuntime()
             self._runtimes[forward_id] = runtime
         runtime.status = "error"
-        runtime.error = f"{prefix}{type(error).__name__}: {error}"
+        runtime.error = prefix + port_forward_failure(error, stage="runtime")
 
     def _owned_definition(
         self,
@@ -531,13 +541,14 @@ class SshPortForwardManager:
             await asyncio.shield(asyncio.to_thread(process.close))
             runtime.process = None
             raise
-        except Exception as error:
+        except Exception:
             await asyncio.to_thread(process.close)
             runtime.process = None
-            log_detail = self._read_log_tail(log_path)
-            raise RuntimeError(
-                f"{error}" + (f"；SSH 日志: {log_detail}" if log_detail else "")
-            ) from error
+            logger.exception(
+                "SSH 端口转发监听失败: forward_id=%s log_path=%s log_tail=%s",
+                definition.forward_id, log_path, self._read_log_tail(log_path),
+            )
+            raise
         runtime.status = "active"
         runtime.error = None
 
@@ -626,11 +637,13 @@ class SshPortForwardManager:
         runtime.process.close(timeout_seconds=0.1)
         runtime.process = None
         runtime.status = "error"
-        log_detail = self._read_log_tail(runtime.log_path)
         runtime.error = (
             f"SSH 端口转发进程已退出: forward_id={forward_id}, "
-            f"returncode={return_code}"
-            + (f"；日志: {log_detail}" if log_detail else "")
+            f"returncode={return_code}；请查看 Gateway 原始诊断日志"
+        )
+        logger.error(
+            "SSH 端口转发进程已退出: forward_id=%s returncode=%s log_path=%s log_tail=%s",
+            forward_id, return_code, runtime.log_path, self._read_log_tail(runtime.log_path),
         )
 
     @staticmethod

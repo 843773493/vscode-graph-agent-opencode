@@ -1,10 +1,15 @@
 from __future__ import annotations
 
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException, Request
 
 from app.core.trace_middleware import get_request_id
 from app.gateway.auth import verify_gateway_token
-from app.gateway.runtime.port_forwarding import SshPortForwardManager
+from app.gateway.runtime.port_forwarding import (
+    SshPortForwardManager,
+    port_forward_failure,
+)
 from app.schemas.gateway.port_forwarding import (
     ChangePortForwardLabelRequest,
     ChangePortForwardLocalPortRequest,
@@ -14,6 +19,7 @@ from app.schemas.gateway.port_forwarding import (
 from app.schemas.internal_v2.common import APIResponse
 
 router = APIRouter(tags=["gateway-port-forwards"])
+logger = logging.getLogger(__name__)
 
 
 def get_port_forward_manager(request: Request) -> SshPortForwardManager:
@@ -24,11 +30,13 @@ def get_port_forward_manager(request: Request) -> SshPortForwardManager:
 
 
 def _http_error(error: Exception) -> HTTPException:
+    logger.exception("Gateway SSH 端口转发请求失败")
+    detail = port_forward_failure(error, stage="request")
     if isinstance(error, LookupError):
-        return HTTPException(status_code=404, detail=str(error))
+        return HTTPException(status_code=404, detail=detail)
     if isinstance(error, ValueError):
-        return HTTPException(status_code=409, detail=str(error))
-    return HTTPException(status_code=502, detail=str(error))
+        return HTTPException(status_code=409, detail=detail)
+    return HTTPException(status_code=502, detail=detail)
 
 
 @router.get(
