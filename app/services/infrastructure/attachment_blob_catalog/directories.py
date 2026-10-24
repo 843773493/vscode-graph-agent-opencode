@@ -8,7 +8,7 @@ import shutil
 import stat
 from pathlib import Path
 
-from app.core.atomic_fs import fsync_directory, fsync_file
+from app.core.atomic_fs import fsync_directory
 from app.core.file_permissions import restrict_private_path_access
 from app.services.infrastructure.attachment_blob_catalog.locator import (
     resolve_attachment_file,
@@ -99,8 +99,13 @@ def protect_original(root: Path) -> None:
     original = resolve_attachment_file(root, ("original",))
     for file in original.iterdir():
         if file.is_file():
-            file.chmod(0o400)
-            fsync_file(file)
+            # 本入口只处理发布前的目录。Windows 重试须先撤下只读位取得
+            # 可写句柄，再保护并同步同一文件，不能跳过失败后的 durability。
+            if os.name == "nt":
+                file.chmod(0o600)
+            with file.open("r+b" if os.name == "nt" else "rb") as stream:
+                file.chmod(0o400)
+                os.fsync(stream.fileno())
     original.chmod(0o500)
     fsync_directory(original)
 
