@@ -8,7 +8,7 @@ Terminal/Browser 已共用资源关联和 operation lease 规则：正常 unload
 
 **Goals:** 目录是关联、Shell 工作目录和回收单位；异常退出不依赖 Agent 主动 detach；复用原 owner、URI、文件操作和冻结输入链路。
 
-**Non-Goals:** 不新增云端存储、每文件引用计数、通用文件版本控制或附件专用工具。目录主链及原文件/Shell 注入已经完成；Windows 实机、完整跨端组合验收与挂起操作/关闭期限仍按后续纵向切片推进，不将局部通过视为整个变更完成。Agent 团队、成员、委派及会话协作通信按用户裁定保留 TODO，不在此变更追加实现或专项验证。
+**Non-Goals:** 不新增云端存储、每文件引用计数、通用文件版本控制或附件专用工具。目录主链、原文件/Shell 注入及 Linux/Windows 本地和真实跨机器 URI 产品流已经完成；完整生命周期故障组合与挂起操作/关闭期限仍按后续纵向切片推进，不将局部通过视为整个变更完成。Agent 团队、成员、委派及会话协作通信按用户裁定保留 TODO，不在此变更追加实现或专项验证。
 
 ## Decisions
 
@@ -142,6 +142,8 @@ SQLite 文件连接现统一经过 `sqlite_file_uri` 编码原生 I/O 路径，�
 目录创建、上传接受、原件/预览、统一文件读写、Shell 占用、运行时代次与低频 GC 已纵向切换，blobs.py/queries.py 旧生产实现物理移除；schema.py、旧 SQL 和旧快照仅用于显式迁移或封存历史读取。后续优先补齐冻结历史/完整 Web/平台验收，再处理挂起操作终止、共享锁与关闭期限；每个批次迁齐调用方并验证后提交，未满足全部合同的任务保持未勾选。
 
 迁移本身须覆盖从产品生成的 schema 3 历史、相同内容重复上传、共享旧 blob 的多个 owner、已释放/已回收资源、终态深历史 fork、排队输入、非终态明确拒绝，以及切换前/切换点后崩溃与重复执行。核对原件字节、URI 身份、owner/claim、历史请求 hash 和备份；目录回收不删除历史 immutable asset。Agent 团队/委派专项验收继续 TODO；附件链实际必需的用户/内部消息接受和通用 fork 仍验证。
+
+2026-10-24 真实 SSH 产品验收补齐任务 6.1：Windows 原用例经产品上传、PTY 处理、read_file、公开 fork、Backend 硬退出重启及目标冷读后，Linux Gateway 再经原配对/SSH 隧道和 canonical workspace HTTP 代理提交目标执行。附件 derived URI 仅由 Windows owner 解析，原生 Shell 读取原件并写新结果，read_file 与普通文件 API 读回相同内容；相对路径、Windows 盘符绝对路径及资源 URI 同指目标机器的普通文件，响应位置仍为 URI，Linux 同名 decoy 不变，来源 canonical 与原件保持。协调器不写执行、fork、恢复或关联事实，模型继续复用原 model_stream。准确双端源码、原始失败与通过、SSH/HTTP 和 Windows 终态收据见 tasks 6.1 的 `cross_machine_attachment_uri_20261024` 证据；Linux 为 `dee803f02`、Windows 为已验证的 `e5168fba`，不能表述为相同源码全平台通过。Windows 最近 Terminal 启动失败专项回归、UNC、旧 Linux 非法 Windows 文件名迁入及 5.2/5.4/6.2 完整故障组合继续保留，Agent 团队和协作不新增实现或专项验证。
 
 ### 目录增长与回收测量（任务 6.4）
 
