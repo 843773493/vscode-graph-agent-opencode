@@ -75,7 +75,7 @@ async def test_failed_preview_keeps_uri_through_execution_and_cold_history(
         data_url=f"data:{content_type};base64," + base64.b64encode(body).decode("ascii"),
     )
     with caplog.at_level(logging.ERROR, logger="app.services.business.user_content_builder"):
-        accepted = await fork_execution_message(session.session_id, content="请检查附件", attachments=[attachment])
+        accepted = await fork_execution_message(container, session.session_id, content="请检查附件", attachments=[attachment])
     saver = container.checkpointer
     frozen = saver.accepted_user_message(
         session.session_id, thread_id=accepted.thread_id,

@@ -1097,3 +1097,10 @@ pending 恢复的硬错误重试已闭合（2026-10-22）：进程内装载阶�
 - Session/Thread 纯身份校验移入现有 `app.core.identifier`，三个函数 AST 与旧定义一致；catalog 只保留 locator/storage 规则。全迁生产、测试与三个协议 codec 的调用，删除 catalog/protocol 两处再导出；URI grammar 冷导入不再加载 catalog 与 itemized 业务存储，解除完整协议生成的循环依赖，不改变 ID 规则、错误合同或数据库结构。
 - 完整候选 `31e588e3ff5cf24e72b7c7082fa0388cf56b06b8` 的 `identity-codecs-004` 64 passed/9.27秒，覆盖独立解释器冷导入、canonical ID 矩阵及真实 codec 序列化；Ruff `identity-static-004` 与完整 `gen:protocol`（含 lint/build/breaking/SSE 导出）`identity-protocol-004` 均exit0，生成绑定和SSE schema逐字不变。旧完整候选冷导入1 failed，精确复现部分初始化模块 ImportError；最终 AST 审计旧导入与 facade export 均为零。
 - 更广的身份/catalog 回归为646 passed/3 failed：两个静态前缀/注释锚点问题在旧候选同样失败，UUID同毫秒密集生成排序失败涉及未改变的 factory，旧候选相关项通过，未宣称该波动已解决。扩展 API/schema 契约在90秒外部超时124、仅输出27个完成点，未计通过；本批不依赖其为完成证明。准确命令、全树指纹、raw、退出码及只读独审保留于 `out/tests/temp/resource_uri_import_20261023/artifacts/`。本收据只闭合该导入/调用方链路，不代替7.5、URI全出口、完整Web或Windows总门。
+
+
+### 2026-10-24 fork 来源删除后的真实执行恢复验收
+
+- 固定完整候选 tree `beb6e7a2a1ba04df61f17a36a5662d3c7d20279b` 的正式 matrix `product-capture-and-delete-004` 为10 passed/326 deselected、177.67秒、exit0；覆盖四个partial capture/完整marker恢复、pinned前删源、缺失附件目标删除、两种已提交阶段删源后真实lifespan冷恢复，以及image/video预览故障。来源与恢复后的续写统一由产品消息准入→持久Job→Agent/model_stream生成关键状态，保留原60秒fork期限。
+- 真实来源包含两轮工具循环和一组并发结果；恢复后逐字段核消息身份/顺序、canonical前缀不变及目标owner，实际transport请求与sealed preimage一致，重算request_hash并核工具调用/结果配对。共用执行装具迁齐全部调用，lifespan持有fanout时不重复启动。
+- 三个变更文件Ruff exit0，非作者只读独审无阻断，未独立复跑；准确命令、完整源码前后指纹、原始输出、退出码及零残留见 `out/tests/temp/fork_capture_current_20261024/artifacts/runs/{static-product-004,product-capture-and-delete-004}/`，审查见 `review-product-004.json`。本证据为限定模型回放集成验证，不代替跨Gateway、真实Provider、Windows或完整default Web总门，7.5/8.3等总项保持未勾。

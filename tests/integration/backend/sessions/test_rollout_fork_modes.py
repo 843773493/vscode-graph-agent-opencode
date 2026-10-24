@@ -96,6 +96,7 @@ from app.domain.itemized.execution_admission import (
     user_turn_admission_payload_hash,
 )
 from app.domain.itemized.execution_queue import ExecutionQueueInput
+from app.domain.itemized.hash.request_hash import context_request_hash_preimage
 from app.domain.itemized.hashing import (
     canonical_json_bytes,
     sha256_jcs,
@@ -108,6 +109,7 @@ from app.domain.itemized.mutation_intents import MutationIntentOwner
 from app.domain.itemized.plans.contributions import ContextContribution
 from app.domain.itemized.records import CanonicalItemRecord, user_input_payload
 from app.domain.itemized.resource_activation import ResourceActivationPolicySnapshot
+from app.domain.itemized.serialization import normalize_wire_request
 from app.gateway.federation.grants import ForkGrantTarget
 from app.prompting.factory import PromptSection, internal_message_factory
 from app.schemas.internal_v2.message import AttachmentRef, MessageCreateRequest
@@ -9028,7 +9030,9 @@ async def test_http_published_fork_without_attachment_claim_rejects_deleting_tar
                 cold_store.close()
 
             # 续写必须由产品消息准入、队列和真实图执行生成，不能手工补执行状态。
-            accepted = await fork_execution_message(target_session_id, content="继续压缩后的副本")
+            accepted = await fork_execution_message(
+                production_fork_container, target_session_id, content="继续压缩后的副本", start_fanout=False,
+            )
             (successor,) = context.saver.list_context_assemblies(target_session_id, target_thread, turn_id=accepted.turn_id)
             assert "item-retry-user" not in {
                 entry.ref.ref_id for entry in successor.selection
@@ -9114,11 +9118,11 @@ async def test_catalog_deleting_rejects_fork_before_local_fence_closes(
 
 @pytest.mark.asyncio
 async def test_source_deletion_before_pinned_claim_aborts_prepared_target(
-    fork_provider_prepare,
+    fork_execution_source: SessionDTO,
     production_fork_container: AppContainer, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     context = _production_fork_context(production_fork_container)
-    source = await _seed_source(context, fork_provider_prepare)
+    source = fork_execution_source
     prepare = context.sessions.prepare_context_fork
 
     async def prepare_then_delete(**kwargs: object):
@@ -9178,13 +9182,25 @@ async def test_unpublished_fork_proof_or_publish_failure_releases_exact_retentio
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("fork_execution_source", ["tools"], indirect=True)
 @pytest.mark.parametrize("crash_state", ["target_committed", "committed"])
 async def test_production_lifespan_recovers_detached_fork_after_source_deletion(
-    fork_provider_prepare,
+    fork_execution_source: SessionDTO, fork_execution_message, inprocess_model_replay,
     production_fork_container: AppContainer, monkeypatch: pytest.MonkeyPatch, crash_state: str,
 ) -> None:
     context = _production_fork_context(production_fork_container)
-    source, _ = await _seed_retry_tool_source(context, fork_provider_prepare)
+    source = fork_execution_source
+    source_owner = context.saver.forks.source.resolve_main_thread_owner(source.session_id)
+    with session_thread_owner_scope(source_owner, langgraph_thread_id=source_owner.thread_id):
+        source_checkpoint = await _get_tuple(context, source.session_id)
+        assert source_checkpoint is not None
+        source_messages = await acheckpoint_messages(context.saver, source_checkpoint)
+    assert [message.type for message in source_messages] == ["human", "ai", "tool", "tool", "ai", "tool", "ai"]
+    source_calls = [call["id"] for message in source_messages if isinstance(message, AIMessage) for call in message.tool_calls]
+    assert source_calls == ["fork-read-a", "fork-read-b", "fork-read-c"]
+    assert [message.tool_call_id for message in source_messages if isinstance(message, ToolMessage)] == source_calls
+    assert all("fork-source-body" in str(message.content) for message in source_messages if isinstance(message, ToolMessage))
+    source_items = context.saver._storage.storage.read_items(source.session_id, source_owner.thread_id)
     request = await _fork_request(context, source.session_id, creation_kind="new_session_main", mode="context_fork")
     capture = context.saver.forks.source._capture_fork_source_snapshot
 
@@ -9228,25 +9244,45 @@ async def test_production_lifespan_recovers_detached_fork_after_source_deletion(
         assert (await restarted.session_service.get(record.session_id)).context_source_session_id == source.session_id
         restored = await _get_tuple(_production_fork_context(restarted), record.session_id)
         assert restored is not None
-        assert [message.id for message in restored.checkpoint["channel_values"]["messages"]] == [
-            "retry-notice", "retry-user", "retry-call", "retry-result", "retry-final",
-        ]
         recovered = _production_fork_context(restarted)
         target_thread = _main_thread_id(recovered, record.session_id)
-        accepted = recovered.saver.accept_turn(
-            record.session_id, thread_id=target_thread, accepted_ingress_id="restart-successor-input",
-            acceptance_idempotency_key="restart-successor-accept", job_id="restart-successor-job",
-            admission_idempotency_key="restart-successor-admission", payload="恢复后的目标新问题",
+        with session_thread_owner_scope(MutationIntentOwner(record.session_id, target_thread), langgraph_thread_id=target_thread):
+            restored_messages = await acheckpoint_messages(recovered.saver, restored)
+        assert [message_to_dict(message) for message in restored_messages] == [message_to_dict(message) for message in source_messages]
+        assert recovered.saver._storage.storage.read_items(record.session_id, target_thread) == source_items
+        # 恢复后的续写继续走消息准入、持久队列和真实图执行，不手工补状态。
+        accepted = await fork_execution_message(
+            restarted, record.session_id, content="恢复后的目标新问题", start_fanout=False,
+            gateway_id="gateway_bc453186347b952303da1c0634d46150",
         )
-        prepared = fork_provider_prepare(
-            recovered, record.session_id, str(accepted["initial_execution_id"]),
-            ContextSourceManager(owner=ContextSourceOwnerKey(record.session_id, target_thread), control_state_port=recovered.saver),
-            "restart-successor", attempt=1,
-        )
-        assert all(message.id != "retry-notice" for message in prepared["messages"])
-        assert all(entry.ref.ref_id != "item-retry-notice" for entry in prepared["snapshot"].selection if entry.included and entry.ref.ref_type == "canonical_item")
-        assert [message.tool_call_id for message in prepared["messages"] if isinstance(message, ToolMessage)] == ["retry-tool-call"]
-        assert any(isinstance(message, HumanMessage) and message.content == "恢复后的目标新问题" for message in prepared["messages"])
+        (assembly,) = recovered.saver.list_context_assemblies(record.session_id, target_thread, turn_id=accepted.turn_id)
+        snapshot = recovered.saver.get_context_assembly(record.session_id, target_thread, assembly_id=assembly.assembly_id)
+        assert (snapshot.session_id, snapshot.thread_id) == (record.session_id, target_thread)
+        replay, _controller = inprocess_model_replay
+        transport = json.loads((replay.artifacts / f"{snapshot.model_call_id}.json").read_text())
+        assert transport["identity"] == {
+            "session_id": record.session_id, "thread_id": target_thread, "model_call_id": snapshot.model_call_id,
+        }
+        assert normalize_wire_request(transport["request"]) == snapshot.request_hash_preimage
+        assert sha256_jcs(context_request_hash_preimage(
+            snapshot.as_sealed_plan(), snapshot.provider_version,
+            projector_id=snapshot.projector_id, projector_version=snapshot.projector_version,
+            target_format=snapshot.target_format, wire_request=snapshot.request_hash_preimage,
+        )) == snapshot.request_hash
+        wire = transport["request"]["messages"]
+        assert [message["tool_call_id"] for message in wire if message["role"] == "tool"] == source_calls
+        assert [call["id"] for message in wire for call in message.get("tool_calls", [])] == source_calls
+        with session_thread_owner_scope(MutationIntentOwner(record.session_id, target_thread), langgraph_thread_id=target_thread):
+            completed = await _get_tuple(recovered, record.session_id)
+            assert completed is not None
+            continued_messages = await acheckpoint_messages(recovered.saver, completed)
+        assert [message_to_dict(message) for message in continued_messages[:len(source_messages)]] == [
+            message_to_dict(message) for message in source_messages
+        ]
+        assert continued_messages[-2].id == accepted.message_id
+        assert continued_messages[-2].content == "恢复后的目标新问题"
+        assert isinstance(continued_messages[-1], AIMessage) and continued_messages[-1].content == [{"type": "text", "text": "回答一"}]
+        assert recovered.saver._storage.storage.read_items(record.session_id, target_thread)[:len(source_items)] == source_items
 
 
 @pytest.mark.asyncio

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import json
 from contextlib import AsyncExitStack
 from pathlib import Path
 
@@ -30,18 +31,39 @@ from app.testing.model_stream import build_cassette, chat_completion_frames
 from tests.harness.python.run_context import TestRunContext
 
 
+def _source_interactions(*, tool_loop: bool) -> list[dict[str, object]]:
+    replies: list[dict[str, object]] = []
+    if tool_loop:
+        for identifiers in (("fork-read-a", "fork-read-b"), ("fork-read-c",)):
+            replies.append({"tool_calls": [{
+                "index": index, "id": identifier, "type": "function",
+                "function": {"name": "read_file", "arguments": json.dumps({"path": "fork-source.txt"})},
+            } for index, identifier in enumerate(identifiers)]})
+    replies.append({"content": "回答一"})
+    return [build_cassette(
+        asset_id="fork-recovery-source", model="big-pickle",
+        url="http://127.0.0.1:1/v1/chat/completions",
+        frames=chat_completion_frames(
+            response_id=f"chatcmpl-fork-recovery-{index}", model="big-pickle",
+            deltas=({"role": "assistant", **reply},),
+            finish_reason="tool_calls" if "tool_calls" in reply else "stop",
+            usage={"prompt_tokens": 32, "completion_tokens": 8, "total_tokens": 40},
+        ),
+    ).raw["interactions"][0] for index, reply in enumerate(replies)]
+
+
 @pytest.fixture
 async def fork_execution_message(
-    production_fork_container: AppContainer, inprocess_model_replay, request: pytest.FixtureRequest,
+    inprocess_model_replay, request: pytest.FixtureRequest,
 ):
     """按需启动真实执行面；来源和副本续写共用 model_stream 与产品消息入口。"""
-    container = production_fork_container
     replay, controller = inprocess_model_replay
     controller.ensure_installed()
 
     async def execute(
-        session_id: str, *, content: str, attachments: list[AttachmentRef] | None = None,
-        gateway_id: str | None = None,
+        container: AppContainer, session_id: str, *, content: str,
+        attachments: list[AttachmentRef] | None = None, gateway_id: str | None = None,
+        tool_loop: bool = False, start_fanout: bool = True,
     ) -> MessageRunAccepted:
         async with AsyncExitStack() as cleanup:
             cleanup.callback(reset_current_gateway_id, set_current_gateway_id(gateway_id))
@@ -69,21 +91,14 @@ async def fork_execution_message(
             cleanup.push_async_callback(type(container.mcp_catalog_owner).shutdown, container.mcp_catalog_owner)
             await type(container.workspace_file_resource_registry).start(container.workspace_file_resource_registry)
             cleanup.push_async_callback(type(container.workspace_file_resource_registry).stop, container.workspace_file_resource_registry)
-            await container.team_fanout_service.start()
-            cleanup.push_async_callback(container.team_fanout_service.stop)
+            if start_fanout:
+                await container.team_fanout_service.start()
+                cleanup.push_async_callback(container.team_fanout_service.stop)
             cleanup.push_async_callback(type(container.agent_execution_service).shutdown, container.agent_execution_service)
             thread = container.session_service.path_resolver.main_thread_id(session_id)
             calls_before = controller.transport.call_count
-            cassette = build_cassette(
-                asset_id="fork-recovery-source", model="big-pickle",
-                url="http://127.0.0.1:1/v1/chat/completions",
-                frames=chat_completion_frames(
-                    response_id="chatcmpl-fork-recovery", model="big-pickle",
-                    deltas=({"role": "assistant", "content": "回答一"},), finish_reason="stop",
-                    usage={"prompt_tokens": 32, "completion_tokens": 8, "total_tokens": 40},
-                ),
-            )
-            replay.control.plan_model_calls(session_id, thread, [cassette.raw["interactions"][0]])
+            interactions = _source_interactions(tool_loop=tool_loop)
+            replay.control.plan_model_calls(session_id, thread, interactions)
             with workspace_context(container.workspace_id, container.workspace_root):
                 accepted = await container.session_orchestrator.create_message(session_id, MessageRunRequest(
                     message=MessageCreateRequest(content=content, attachments=attachments or []), run=RunOptions(),
@@ -98,7 +113,7 @@ async def fork_execution_message(
                 await container.job_service.drain_finalizations()
             record = container.checkpointer.execution_queue_record(session_id, thread, accepted.job_id)
             assert record.phase == "terminal" and record.outcome == "completed"
-            assert controller.transport.call_count == calls_before + 1
+            assert controller.transport.call_count == calls_before + len(interactions)
             return accepted
 
     return execute
@@ -109,13 +124,16 @@ async def fork_execution_source(
     production_fork_container: AppContainer, fork_execution_message, request: pytest.FixtureRequest,
 ) -> SessionDTO:
     source = await production_fork_container.session_service.create(SessionCreateRequest(title="真实执行的 fork 恢复来源"))
-    with_attachment = getattr(request, "param", False)
+    with_attachment = getattr(request, "param", False) is True
+    tool_loop = getattr(request, "param", False) == "tools"
+    if tool_loop:
+        (production_fork_container.workspace_root / "fork-source.txt").write_text("fork-source-body\n")
     attachments = [AttachmentRef(
         file_id="inline:cold-fork.txt", name="cold-fork.txt", content_type="text/plain",
         data_url="data:text/plain;base64," + base64.b64encode("冷恢复附件正文".encode()).decode("ascii"),
     )] if with_attachment else []
     await fork_execution_message(
-        source.session_id, content="问题一", attachments=attachments,
-        gateway_id="gateway_bc453186347b952303da1c0634d46150" if with_attachment else None,
+        production_fork_container, source.session_id, content="问题一", attachments=attachments, tool_loop=tool_loop,
+        gateway_id="gateway_bc453186347b952303da1c0634d46150" if with_attachment or tool_loop else None,
     )
     return source
