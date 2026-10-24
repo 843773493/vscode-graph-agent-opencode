@@ -48,14 +48,18 @@ PAYLOADS = (
 STATUSES = ("completed", "partial", "incomplete", "cancelled", "failed", "unknown")
 
 
-@pytest.fixture
-def notice_attachment_payload():
+@pytest.fixture(params=["legacy", "directory"])
+def notice_attachment_payload(request):
     uri = "boxteam://workspace/notice-tests/resources/session/ses_019c3635a6c278efb831fe265bdcd656/attachments/att_00000000000000000000000000000000"
     metadata = {
         "origin": "generated", "schema_version": 1, "file_id": uri, "path": uri,
         "name": "input.png", "content_type": "image/png", "preview_status": "available",
     }
-    return {
+    directory = "boxteam://workspace/notice-tests/resources/attachments/att_00000000000000000000000000000000"
+    if request.param == "directory":
+        uri = directory + "/original/content"
+        metadata.update(file_id=uri, path=uri, directory_uri=directory)
+    payload = {
         "prompt": "<system_reminder>私有正文</system_reminder>",
         "display_part": {"kind": "generated_session_result", "text": "正在处理结果。", "provenance": {}},
         "attachments": [{"file_id": uri, "name": "input.png", "content_type": "image/png"}],
@@ -66,6 +70,13 @@ def notice_attachment_payload():
              "metadata": {**metadata, "kind": "attachment_preview", "variant": "preview"}},
         ],
     }
+    if request.param == "directory":
+        payload["attachments"][0]["directory_uri"] = directory
+        payload["attachment_blocks"][0]["text"] = (
+            f'<attachment id="{uri}" path="{uri}" name="input.png" directory_uri="{directory}" '
+            f'output_directory="{directory}/derived" processing="保留原件，输出写入新文件">'
+        )
+    return payload
 
 
 @pytest.mark.parametrize("hidden", [False, True])
@@ -648,3 +659,18 @@ def test_canonical_item_factory_rejects_coerced_ingress_values(
     kwargs[field_name] = value
     with pytest.raises(ItemSchemaError):
         CanonicalItemRecord.create(**kwargs)
+
+
+@pytest.mark.parametrize("fault", ["reference", "metadata", "manifest", "output"])
+def test_runtime_notice_rejects_conflicting_attachment_directory(notice_attachment_payload, fault):
+    raw = notice_attachment_payload
+    other = "boxteam://workspace/other/resources/attachments/att_11111111111111111111111111111111"
+    if fault == "reference":
+        raw["attachments"][0]["directory_uri"] = other
+    elif fault == "metadata":
+        raw["attachment_blocks"][0]["metadata"]["directory_uri"] = other
+    else:
+        attribute = "directory_uri" if fault == "manifest" else "output_directory"
+        raw["attachment_blocks"][0]["text"] = raw["attachment_blocks"][0]["text"][:-1] + f' {attribute}="{other}">'
+    with pytest.raises(ValueError):
+        RuntimeNoticePayload.from_dict(raw)

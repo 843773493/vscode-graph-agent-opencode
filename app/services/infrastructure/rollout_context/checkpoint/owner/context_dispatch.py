@@ -12,7 +12,7 @@ from app.abstractions.resource_file_content import ResourceFileContent
 from app.agents.providers.wire_finalize import ChatWireProfile, ResponsesWireProfile
 from app.core.execution_admission_context import require_current_execution_admission
 from app.core.model_request_context import SummaryCandidateScope
-from app.core.resource_uri import parse_session_artifact_uri
+from app.core.resource_uri import parse_attachment_uri
 from app.core.sqlite_state import utc_now_text
 from app.core.trace_middleware import get_current_gateway_id
 from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
@@ -443,7 +443,7 @@ class ContextDispatchOwnerMixin:
         """附件 capability 只来自 emitting model-call 的已封存 selection。"""
         if self._attachment_store is None:
             raise RuntimeError("附件工具未装配唯一 AttachmentBlobStore")
-        target = parse_session_artifact_uri(file_id, local_gateway_id=get_current_gateway_id()).display_uri
+        target = parse_attachment_uri(file_id, local_gateway_id=get_current_gateway_id(), require_file=True).display_uri
         assembly = self.load_tool_call_context_assembly(
             session_id, thread_id=thread_id, tool_call_id=tool_call_id,
             model_call_id=model_call_id, checkpoint_ns=checkpoint_ns,
@@ -465,7 +465,7 @@ class ContextDispatchOwnerMixin:
             attachments = payload.get("attachments", ())
             if any(isinstance(ref, Mapping) and isinstance(ref.get("file_id"), str)
                    and "://" in ref["file_id"]
-                   and parse_session_artifact_uri(ref["file_id"], local_gateway_id=get_current_gateway_id()).display_uri == target
+                   and parse_attachment_uri(ref["file_id"], local_gateway_id=get_current_gateway_id(), require_file=True).display_uri == target
                    for ref in attachments):
                 return self._attachment_store.read(session_id, file_id, owner_thread_id=thread_id)
         raise PermissionError("附件未属于当前工具原始 assembly 的 item/view membership")

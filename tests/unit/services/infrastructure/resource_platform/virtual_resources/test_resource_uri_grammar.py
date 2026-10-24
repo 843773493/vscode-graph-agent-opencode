@@ -8,6 +8,7 @@ from app.core.resource_uri import (
     ResourceUriGrammarError,
     file_uri_child,
     file_uri_root,
+    parse_attachment_uri,
     parse_resource_uri,
     parse_session_thread_uri,
     resource_display_uri,
@@ -741,3 +742,26 @@ def test_uri_constructor_rejection_does_not_publish_native_input(field: str, rea
         resource_display_uri(**arguments)
     assert captured.value.reason_code == reason
     assert "native-uri-marker" not in str(captured.value)
+
+
+@pytest.mark.parametrize("path", ["", "/original/content", "/derived/%E4%B8%AD%E6%96%87%20%E6%96%87%E4%BB%B6.txt"])
+def test_attachment_identity_uses_the_shared_grammar(path):
+    root = "boxteam://gw-1/workspace/ws-1/resources/attachments/att_" + "1" * 32
+    parsed = parse_attachment_uri(root + path, local_gateway_id="gw-1")
+    assert parsed.attachment_id == "att_" + "1" * 32
+    assert parsed.gateway_authority is None
+    assert parsed.display_uri == root.replace("gw-1/", "") + path
+    if path:
+        assert parse_attachment_uri(root + path, require_file=True).attachment_id == parsed.attachment_id
+    else:
+        with pytest.raises(ResourceUriGrammarError):
+            parse_attachment_uri(root, require_file=True)
+
+
+def test_attachment_identity_keeps_legacy_history_and_rejects_other_kinds():
+    legacy = "boxteam://workspace/ws-1/resources/session/ses_019c3635a6c278efb831fe265bdcd656/attachments/att_" + "2" * 32
+    assert parse_attachment_uri(legacy, require_file=True).attachment_id == "att_" + "2" * 32
+    for uri in ("boxteam://workspace/ws-1/resources/files/root/original/content",
+                legacy.rsplit("/attachments/", 1)[0] + "/tool-results/tool_" + "2" * 24 + ".txt"):
+        with pytest.raises(ResourceUriGrammarError):
+            parse_attachment_uri(uri)

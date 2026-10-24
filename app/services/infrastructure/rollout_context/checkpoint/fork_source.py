@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from app.core.phase_observer import observe_phase
-from app.core.resource_uri import parse_resource_uri, parse_session_artifact_uri
+from app.core.resource_uri import parse_attachment_uri, parse_resource_uri
 from app.core.session_catalog_store import SessionCreationRecord
 from app.core.session_catalog_store.contracts import ForkSourceCaptureRecord
 from app.core.session_control_primitives import CONTROL_DATABASE_NAME
@@ -79,8 +79,7 @@ def _attachment_references(references: Iterable[tuple[str, int]]) -> tuple[tuple
     for uri, required in references:
         if "://" not in uri:
             continue
-        if parse_session_artifact_uri(uri).session_artifact_kind != "attachments":
-            raise ValueError("fork 的附件引用登记了非附件资源")
+        parse_attachment_uri(uri, require_file=True)
         result.append((uri, bool(required)))
     return tuple(result)
 

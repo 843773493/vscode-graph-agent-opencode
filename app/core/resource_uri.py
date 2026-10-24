@@ -88,6 +88,15 @@ class ParsedResourceUri:
     tail_segments: tuple[str, ...]
     session_artifact_kind: Literal["attachments", "tool-results"] | None = None
 
+    @property
+    def attachment_id(self) -> str | None:
+        """目录引用和旧历史引用共用附件身份分类，不在消费者复制模板。"""
+        if self.kind == "attachments":
+            return self.tail_segments[0]
+        if self.session_artifact_kind == "attachments":
+            return self.tail_segments[2]
+        return None
+
 
 def _has_control_char(value: str) -> bool:
     return any(ord(char) < 0x20 or 0x7F <= ord(char) <= 0x9F for char in value)
@@ -452,6 +461,18 @@ def parse_session_artifact_uri(uri: str, *, local_gateway_id: str | None = None)
     parsed = parse_resource_uri(uri, local_gateway_id=local_gateway_id)
     if parsed.session_artifact_kind is None:
         raise ResourceUriGrammarError("malformed_path", "资源引用必须精确指向一个会话产物")
+    return parsed
+
+
+def parse_attachment_uri(
+    uri: str, *, local_gateway_id: str | None = None, require_file: bool = False,
+) -> ParsedResourceUri:
+    """附件目录/文件及已封存 Session 引用均由同一 grammar 严格解析。"""
+    parsed = parse_resource_uri(uri, local_gateway_id=local_gateway_id)
+    if parsed.attachment_id is None:
+        raise ResourceUriGrammarError("malformed_path", "资源引用必须指向附件")
+    if require_file and parsed.kind == "attachments" and len(parsed.tail_segments) == 1:
+        raise ResourceUriGrammarError("malformed_path", "附件输入必须明确指向目录内文件")
     return parsed
 
 

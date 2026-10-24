@@ -11,7 +11,7 @@ from langchain_core.messages import HumanMessage
 
 from app.abstractions.internal_message import PreparedInternalMessage
 from app.abstractions.turn_terminal_status import ToolResultCompletion
-from app.core.resource_uri import parse_session_artifact_uri
+from app.core.resource_uri import parse_attachment_uri
 from app.core.session_control_primitives import CONTROL_DATABASE_NAME
 from app.core.session_control_store import SessionControlStore
 from app.domain.itemized.enums import SemanticKind, TurnScope
@@ -139,6 +139,7 @@ class RuntimeExecutionOwnerMixin:
         resolver = storage._path_resolver
         with closing(SessionControlStore(resolver.resolve_session_node(session_id) / CONTROL_DATABASE_NAME)) as control:
             threads = (resolver.main_thread_id(session_id), *(row.thread_id for row in control.list_child_thread_rows()))
+        workspace_id = resolver.catalog_store.get_node(session_id).workspace_id
         if thread_id not in threads:
             raise RuntimeError("附件 owner Thread 不属于权威 Session catalog")
         for candidate in threads:
@@ -151,9 +152,10 @@ class RuntimeExecutionOwnerMixin:
                         "attachments": [{"file_id": uri} for uri in references],
                     })
                     for entry in projected["attachments"]:
-                        parsed = parse_session_artifact_uri(entry["file_id"])
+                        parsed = parse_attachment_uri(entry["file_id"])
                         # 未继承的外部引用可以保留在历史中，不归本 Session owner。
-                        if parsed.tail_segments == (session_id, "attachments", attachment_id):
+                        if (parsed.scope_id == workspace_id and parsed.attachment_id == attachment_id
+                                and (parsed.kind == "attachments" or parsed.tail_segments[0] == session_id)):
                             return True
             except RolloutNotMaterializedError:
                 continue

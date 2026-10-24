@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from xml.etree import ElementTree
 
-from app.core.resource_uri import parse_session_artifact_uri
+from app.core.resource_uri import file_uri_child, file_uri_root, parse_attachment_uri
 from app.domain.itemized.enums import (
     CanonicalItemStatus,
     PayloadKind,
@@ -197,13 +197,15 @@ class RuntimeNoticePayload:
             raise ItemSchemaError("runtime_notice.display_part 必须是 typed display part")
         if self.display_part is None and not self.attachments:
             raise ItemSchemaError("RuntimeNoticePayload 缺少字段: display_part 或附件")
-        references = set()
+        references: dict[str, str | None] = {}
         for attachment in self.attachments:
-            raw = _strict_mapping(attachment, frozenset({"file_id", "name", "content_type", "availability"}), "runtime_notice.attachment")
+            raw = _strict_mapping(attachment, frozenset({"file_id", "directory_uri", "name", "content_type", "availability"}), "runtime_notice.attachment")
             file_id = _non_empty_string(raw.get("file_id"), "runtime_notice.attachment.file_id")
-            if parse_session_artifact_uri(file_id).session_artifact_kind != "attachments":
-                raise ItemSchemaError("runtime_notice 附件必须使用逻辑附件 URI")
-            references.add(file_id)
+            parse_attachment_uri(file_id, require_file=True)
+            directory_uri = raw.get("directory_uri")
+            if directory_uri is not None and directory_uri != file_uri_root(file_id):
+                raise ItemSchemaError("runtime_notice 附件目录与文件身份不一致")
+            references[file_id] = directory_uri
             for key, value in raw.items():
                 _non_empty_string(value, f"runtime_notice.attachment.{key}")
             if "availability" in raw and raw["availability"] not in {"available", "unavailable"}:
@@ -211,11 +213,13 @@ class RuntimeNoticePayload:
         manifests = []
         for block in self.attachment_blocks:
             raw = _strict_mapping(block, frozenset({"type", "text", "image_url", "metadata"}), "runtime_notice.attachment_block")
-            metadata = _strict_mapping(raw.get("metadata"), frozenset({"origin", "kind", "schema_version", "file_id", "path", "name", "content_type", "variant", "preview_status", "availability"}), "runtime_notice.attachment_block.metadata")
+            metadata = _strict_mapping(raw.get("metadata"), frozenset({"origin", "kind", "schema_version", "file_id", "path", "name", "content_type", "variant", "preview_status", "availability", "directory_uri"}), "runtime_notice.attachment_block.metadata")
             file_id = _non_empty_string(metadata.get("file_id"), "runtime_notice.attachment_block.file_id")
             if (metadata.get("origin") != "generated" or type(metadata.get("schema_version")) is not int or metadata["schema_version"] != 1
                     or file_id not in references or metadata.get("path") != file_id):
                 raise ItemSchemaError("runtime_notice 附件块缺少精确生成来源")
+            if metadata.get("directory_uri") != references[file_id]:
+                raise ItemSchemaError("runtime_notice 附件块目录与引用不一致")
             if "availability" in metadata and metadata["availability"] not in {"available", "unavailable"}:
                 raise ItemSchemaError("runtime_notice 附件块 availability 非法")
             kind = metadata.get("kind")
@@ -229,8 +233,15 @@ class RuntimeNoticePayload:
                     raise ItemSchemaError("runtime_notice 附件 manifest 结构非法") from error
                 if (manifest.tag != "attachment" or list(manifest) or manifest.text or manifest.tail
                         or manifest.attrib.get("id") != file_id or manifest.attrib.get("path") != file_id
-                        or set(manifest.attrib) - {"id", "path", "name", "content_type", "preview_status", "preview_error"}):
+                        or set(manifest.attrib) - {"id", "path", "name", "content_type", "preview_status", "preview_error", "directory_uri", "output_directory", "processing"}):
                     raise ItemSchemaError("runtime_notice 附件 manifest 与生成来源不一致")
+                directory_uri = references[file_id]
+                if directory_uri is not None:
+                    if (manifest.attrib.get("directory_uri") != directory_uri
+                            or manifest.attrib.get("output_directory") != file_uri_child(directory_uri, "derived")):
+                        raise ItemSchemaError("runtime_notice 附件 manifest 目录或输出与引用不一致")
+                elif {"directory_uri", "output_directory", "processing"} & manifest.attrib.keys():
+                    raise ItemSchemaError("runtime_notice 附件 manifest 缺少目录来源")
                 manifests.append(file_id)
             elif kind == "attachment_preview":
                 if not manifests or manifests[-1] != file_id:

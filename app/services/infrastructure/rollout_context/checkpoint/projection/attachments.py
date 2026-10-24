@@ -6,7 +6,7 @@ from collections.abc import Callable, Mapping
 from html import escape
 from xml.etree.ElementTree import fromstring
 
-from app.core.resource_uri import parse_session_artifact_uri
+from app.core.resource_uri import file_uri_child, file_uri_root, parse_attachment_uri
 
 
 class RolloutAttachmentProjection:
@@ -41,7 +41,11 @@ class RolloutAttachmentProjection:
 
         def project(file_id: str) -> dict[str, str]:
             if file_id not in cache:
-                cache[file_id] = self._attachment_ref_projector(session_id, thread_id, file_id)
+                reference = self._attachment_ref_projector(session_id, thread_id, file_id)
+                directory_uri = reference.get("directory_uri")
+                if directory_uri is not None and directory_uri != file_uri_root(reference["file_id"]):
+                    raise ValueError("source-mismatch: 投影附件目录与文件身份不一致")
+                cache[file_id] = reference
             return cache[file_id]
 
         if isinstance(payload, Mapping):
@@ -54,6 +58,8 @@ class RolloutAttachmentProjection:
                 for attachment in attachments:
                     if not isinstance(attachment, Mapping) or not isinstance(attachment.get("file_id"), str):
                         raise TypeError("message attachment projection 必须使用 typed logical file_id")
+                    if "directory_uri" in attachment and attachment["directory_uri"] is not None and attachment["directory_uri"] != file_uri_root(attachment["file_id"]):
+                        raise ValueError("source-mismatch: typed 附件目录与文件不一致")
                     mapped.append({**attachment, **project(attachment["file_id"])})
                 projected["attachments"] = mapped
             for field in ("content", "attachment_blocks"):
@@ -74,21 +80,34 @@ class RolloutAttachmentProjection:
             if "://" not in file_id:
                 blocks.append(block)
                 continue
-            if parse_session_artifact_uri(file_id).session_artifact_kind != "attachments":
-                raise ValueError("generated attachment block 不是附件资源 URI")
+            parse_attachment_uri(file_id, require_file=True)
             if metadata.get("schema_version") != 1 or metadata.get("path") != file_id:
                 raise ValueError("source-mismatch: generated attachment block 缺少精确 logical reference")
+            if "directory_uri" in metadata and metadata["directory_uri"] != file_uri_root(file_id):
+                raise ValueError("source-mismatch: generated attachment block 目录与文件不一致")
             reference = project(file_id)
             projected_block = {**block, "metadata": {**metadata, **reference, "path": reference["file_id"]}}
-            if metadata["kind"] == "attachment_manifest" and reference["file_id"] != file_id:
+            if metadata["kind"] == "attachment_manifest":
                 text = block.get("text")
                 if not isinstance(text, str):
                     raise TypeError("generated attachment manifest 必须有 text")
                 element = fromstring(text + "</attachment>")
                 if element.tag != "attachment" or element.attrib.get("id") != file_id or element.attrib.get("path") != file_id:
                     raise ValueError("source-mismatch: attachment manifest 与 metadata 不一致")
+                original_attributes = dict(element.attrib)
+                directory_uri = reference.get("directory_uri")
+                if "directory_uri" in element.attrib:
+                    source_directory = file_uri_root(file_id)
+                    if (element.attrib["directory_uri"] != source_directory
+                            or element.attrib.get("output_directory") != file_uri_child(source_directory, "derived")):
+                        raise ValueError("source-mismatch: attachment manifest 目录与文件不一致")
+                elif "output_directory" in element.attrib:
+                    raise ValueError("source-mismatch: attachment manifest 输出缺少目录身份")
+                if directory_uri is not None:
+                    element.attrib.update(directory_uri=directory_uri, output_directory=file_uri_child(directory_uri, "derived"))
                 element.attrib.update(id=reference["file_id"], path=reference["file_id"])
-                attributes = " ".join(f'{key}="{escape(value, quote=True)}"' for key, value in element.attrib.items())
-                projected_block["text"] = f"<attachment {attributes}>"
+                if element.attrib != original_attributes:
+                    attributes = " ".join(f'{key}="{escape(value, quote=True)}"' for key, value in element.attrib.items())
+                    projected_block["text"] = f"<attachment {attributes}>"
             blocks.append(projected_block)
         return blocks
