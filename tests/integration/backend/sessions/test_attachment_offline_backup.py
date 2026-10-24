@@ -7,19 +7,28 @@ import json
 import sqlite3
 import subprocess
 import sys
-from collections.abc import AsyncIterator
 from contextlib import closing
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
+from typing import cast
+from unittest.mock import AsyncMock
 
 import pytest
 
+from app.abstractions.workspace_resources import ResourceKind
 from app.container import AppContainer
 from app.core.identifier import create_prefixed_id
 from app.domain.itemized.execution_admission import UserExecutionIdentity
 from app.domain.itemized.execution_queue import ExecutionQueueInput
 from app.schemas.internal_v2.message import AttachmentRef, MessageCreateRequest
 from app.schemas.internal_v2.session import SessionCreateRequest
+from app.services.business.workspace_resources.records import (
+    ForkAttachReceipt,
+    OwnedResourceRecord,
+    ResourceRecordStore,
+    ThreadRef,
+)
 from app.services.infrastructure.attachment_blob_catalog.migration import backup
 from app.services.infrastructure.attachment_blob_catalog.migration.preflight import (
     BackupSource,
@@ -41,12 +50,13 @@ class BackupCase:
     index_path: Path
     original: Path
     session_id: str
+    thread_id: str
     message_id: str
     canonical_items: tuple[tuple[object, ...], ...]
 
 
 @pytest.fixture
-async def backup_case(startup_container: AppContainer, tmp_path: Path) -> AsyncIterator[BackupCase]:
+async def online_backup_case(startup_container: AppContainer, tmp_path: Path) -> BackupCase:
     container = startup_container
     session = await container.session_service.create(SessionCreateRequest(title="离线迁移原件保全"))
     message = await container.message_service.create(session.session_id, MessageCreateRequest(
@@ -70,10 +80,35 @@ async def backup_case(startup_container: AppContainer, tmp_path: Path) -> AsyncI
     store = container.attachment_blob_store
     blob = store._catalog.connection.execute("SELECT relative_locator FROM attachment_blobs").fetchone()[0]
     original = container.workspace_root / ".boxteam/attachments" / blob
-    store.close()
-    container.session_catalog.close()
-    yield BackupCase(container.workspace_root, tmp_path / "snapshot", index, original,
-                     session.session_id, message.message_id, items)
+    return BackupCase(container.workspace_root, tmp_path / "snapshot", index, original,
+                      session.session_id, message.thread_id, message.message_id, items)
+
+
+@pytest.fixture
+def backup_case(online_backup_case: BackupCase, startup_container: AppContainer) -> BackupCase:
+    startup_container.attachment_blob_store.close()
+    startup_container.session_catalog.close()
+    return online_backup_case
+
+
+@pytest.fixture(params=["terminal", "browser"])
+def offline_owner_record(
+    backup_case: BackupCase, request: pytest.FixtureRequest,
+) -> tuple[BackupCase, ResourceRecordStore, OwnedResourceRecord]:
+    # 本组只测离线记录准入和字节保全，不充当真实外部进程停止验收。
+    kind = cast(ResourceKind, request.param)
+    root = backup_case.workspace
+    identity = json.loads((root / ".boxteam/workspace-identity.json").read_bytes())["workspace_id"]
+    store = ResourceRecordStore(workspace_root=root, workspace_id=identity, kind=kind)
+    stamp = datetime.now(UTC).isoformat()
+    record = OwnedResourceRecord(
+        resource_id=("term_" if kind == "terminal" else "browser_") + "a" * 32,
+        workspace_id=identity, source_thread=ThreadRef(backup_case.session_id, backup_case.thread_id),
+        retention_scope="workspace", title="离线资源记录", created_at=stamp, updated_at=stamp,
+        status="completed" if kind == "terminal" else "closed", reconciliation_status="verified",
+    )
+    store.records[record.resource_id] = record
+    return backup_case, store, record
 
 
 def cli(*args: str) -> subprocess.CompletedProcess[str]:
@@ -188,6 +223,88 @@ async def test_released_external_lease_requires_its_resource_record(backup_case:
         "records": [], "leases": [{"status": "released", "resource_id": "missing-resource"}],
     }))
     with pytest.raises(RuntimeError, match="缺少资源记录"):
+        backup.prepare_backup(case.workspace, case.output)
+    assert not case.output.exists()
+
+
+@pytest.mark.parametrize("kind", ["terminal", "browser"])
+async def test_owner_creation_before_ledger_registration_blocks_offline_backup(
+    online_backup_case: BackupCase, startup_container: AppContainer,
+    monkeypatch: pytest.MonkeyPatch, kind: str,
+) -> None:
+    case = online_backup_case
+    container = startup_container
+    owner = container.terminal_resource_owner if kind == "terminal" else container.browser_resource_owner
+    # 外部清单为空，创建尚未发给外部服务；故障点只截断产品真实的登记步骤。
+    monkeypatch.setattr(owner._transport, "list_resources", AsyncMock(return_value=[]))
+    create = owner.create_terminal if kind == "terminal" else owner.create_browser
+    external_create = AsyncMock(side_effect=AssertionError("登记失败后不应创建外部资源"))
+    monkeypatch.setattr(owner._transport, f"create_{kind}", external_create)
+
+    def fail_registration(**_kwargs: object) -> None:
+        raise OSError("受控的资源登记落盘失败")
+
+    monkeypatch.setattr(owner._leases, "register_external", fail_registration)
+    with pytest.raises(OSError, match="登记落盘失败"):
+        await create(session_id=case.session_id, thread_id=case.thread_id,
+                     holder_id="offline-backup-source", operation_id="create-before-ledger")
+    external_create.assert_not_awaited()
+    source = case.workspace / f".boxteam/{kind}-resources.json"
+    original = source.read_bytes()
+    (record,) = json.loads(original)["records"]
+    assert record["status"] == "creating" and record["reconciliation_status"] == "reconcile_required"
+    ledger = case.workspace / ".boxteam/resources.json"
+    if ledger.exists():
+        assert record["resource_id"] not in {row["resource_id"] for row in json.loads(ledger.read_bytes())["records"]}
+    container.attachment_blob_store.close()
+    container.session_catalog.close()
+    with pytest.raises(RuntimeError, match="外部资源 owner 尚未收敛"):
+        backup.prepare_backup(case.workspace, case.output)
+    assert not case.output.exists()
+    assert source.read_bytes() == original
+
+
+@pytest.mark.parametrize("status,reconciliation", [
+    ("running", "verified"), ("closed", "unknown"),
+    ("deleting", "verified"), ("deleted", "reconcile_required"),
+])
+async def test_owner_record_requires_both_terminal_and_verified(
+    offline_owner_record: tuple[BackupCase, ResourceRecordStore, OwnedResourceRecord],
+    status: str, reconciliation: str,
+) -> None:
+    case, store, record = offline_owner_record
+    record.status, record.reconciliation_status = status, reconciliation
+    store.persist()
+    original = store.path.read_bytes()
+    with pytest.raises(RuntimeError, match="外部资源 owner 尚未收敛"):
+        backup.prepare_backup(case.workspace, case.output)
+    assert not case.output.exists()
+    assert store.path.read_bytes() == original
+
+
+async def test_terminal_owner_record_is_preserved_without_mutating_associations(
+    offline_owner_record: tuple[BackupCase, ResourceRecordStore, OwnedResourceRecord],
+) -> None:
+    case, store, record = offline_owner_record
+    record.thread_associations.append(record.source_thread)
+    store.persist()
+    original = store.path.read_bytes()
+    response = backup.prepare_backup(case.workspace, case.output)
+    assert response == backup.verify_backup(case.output)
+    assert store.path.read_bytes() == original
+    assert (case.output / "data" / store.path.name).read_bytes() == original
+
+
+async def test_terminal_owner_with_dispatching_fork_attach_is_rejected(
+    offline_owner_record: tuple[BackupCase, ResourceRecordStore, OwnedResourceRecord],
+) -> None:
+    case, store, record = offline_owner_record
+    record.fork_attachments["pending-fork"] = ForkAttachReceipt(
+        creation_key="pending-fork", target_thread=record.source_thread,
+        expected_revision=record.owner_revision, state="dispatching", lease_id="unsettled-lease",
+    )
+    store.persist()
+    with pytest.raises(RuntimeError, match="fork attach 尚未收敛"):
         backup.prepare_backup(case.workspace, case.output)
     assert not case.output.exists()
 

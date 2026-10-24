@@ -13,6 +13,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Literal
 
+from app.abstractions.workspace_resources import ResourceKind
 from app.core.session_catalog_store import SessionCatalogStore
 from app.core.session_catalog_store.fork_source_capture import ForkSourceCaptureMixin
 from app.core.session_catalog_store.queries import _register_session_list_functions
@@ -21,6 +22,8 @@ from app.core.session_catalog_store.validators import validate_session_storage_i
 from app.core.session_control_store import SessionControlStore
 from app.core.workspace_identity import read_workspace_id
 from app.domain.itemized.enums import ControlOutcome
+from app.services.business.workspace_resources.facts import STOPPED_STATUSES
+from app.services.business.workspace_resources.records import ResourceRecordStore
 from app.services.infrastructure.attachment_blob_catalog.blob_identity import (
     digest_for_blob_id,
     validate_blob_relative_locator,
@@ -176,6 +179,34 @@ def _verify_attachment_schema(connection: sqlite3.Connection) -> None:
         raise RuntimeError("离线迁移附件 revision 单例缺失")
 
 
+def _external_owner_sources(workspace: Path, workspace_id: str) -> list[BackupSource]:
+    """只读复用原 owner 格式；通用账本不覆盖领域记录先落盘的崩溃窗口。"""
+    root = workspace / ".boxteam"
+    sources = []
+    kinds: tuple[ResourceKind, ...] = ("terminal", "browser")
+    for kind in kinds:
+        locator = f"{kind}-resources.json"
+        if not checked_path(root, locator).exists():
+            continue
+        source = _source(root, locator)
+        store = ResourceRecordStore(workspace_root=workspace, workspace_id=workspace_id, kind=kind)
+        for record in store.records.values():
+            if record.status not in STOPPED_STATUSES or record.reconciliation_status != "verified":
+                raise RuntimeError(
+                    "离线迁移外部资源 owner 尚未收敛: "
+                    f"kind={kind}, resource_id={record.resource_id}, state={record.status}, "
+                    f"reconciliation={record.reconciliation_status}"
+                )
+            for receipt in record.fork_attachments.values():
+                if receipt.state == "dispatching":
+                    raise RuntimeError(
+                        "离线迁移外部资源 fork attach 尚未收敛: "
+                        f"resource_id={record.resource_id}, creation_key={receipt.creation_key}"
+                    )
+        sources.append(source)
+    return sources
+
+
 def plan_backup(workspace: Path) -> tuple[str, int, list[BackupSource]]:
     """调用方持独占维护锁；排队输入保留，未知操作和外部任务不猜测终态。"""
     workspace_id = read_workspace_id(workspace)
@@ -253,6 +284,8 @@ def plan_backup(workspace: Path) -> tuple[str, int, list[BackupSource]]:
                 add(_source(root, preview.relative_to(root).as_posix()))
     add(_source(root, "attachments/catalog.sqlite", database=True))
     add(_source(root, "workspace-identity.json"))
+    for source in _external_owner_sources(workspace, workspace_id):
+        add(source)
     ledger = checked_path(root, "resources.json")
     if ledger.exists():
         payload = json.loads(ledger.read_text())
