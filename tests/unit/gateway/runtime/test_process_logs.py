@@ -146,20 +146,65 @@ def test_log_filesystem_failure_keeps_location_in_cause_and_diagnostics(
         assert (log_root / "gateway.log").read_text() == "old"
 
 
-def test_spawn_logged_process_closes_log_when_spawn_fails(
+@pytest.mark.parametrize("marker", ["/private/runtime/node", r"C:\private\node.exe", r"\\server\private\node.exe"])
+@pytest.mark.parametrize("with_filename", [False, True])
+def test_spawn_logged_process_closes_log_and_preserves_native_failure(
     monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture, marker: str, with_filename: bool,
 ) -> None:
     log_file = io.StringIO()
+    original = (
+        PermissionError(errno.EACCES, "access denied", marker)
+        if with_filename else PermissionError(errno.EACCES, f"access denied: {marker}")
+    )
 
     def fail_spawn(*_: object, **__: object) -> subprocess.Popen[str]:
-        raise OSError("测试进程创建失败")
+        raise original
 
     monkeypatch.setattr(
         "app.gateway.runtime.process_lifecycle.subprocess.Popen",
         fail_spawn,
     )
 
-    with pytest.raises(OSError, match="测试进程创建失败"):
-        _spawn_logged_process(["missing-command"], log_file=log_file)
+    with pytest.raises(PermissionError, match="stage=spawn") as failure:
+        _spawn_logged_process([marker, "credential-argument-marker"], log_file=log_file)
 
     assert log_file.closed is True
+    assert failure.value.errno == errno.EACCES
+    assert failure.value.filename is None
+    assert failure.value.__cause__ is original
+    assert marker not in str(failure.value)
+    assert str(original) in caplog.text
+    assert "credential-argument-marker" not in caplog.text
+    assert any(record.exc_info and record.exc_info[1] is original for record in caplog.records)
+
+
+@pytest.mark.parametrize("system_error", [False, True])
+def test_log_close_failure_does_not_replace_startup_failure(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, system_error: bool,
+) -> None:
+    original = PermissionError(errno.EACCES, "native startup error", "/private/runtime/node") if system_error else ValueError("invalid environment")
+    cleanup_error = OSError(errno.EIO, "native close error", "/private/runtime/log")
+
+    class FailingLog(io.StringIO):
+        def close(self) -> None:
+            super().close()
+            raise cleanup_error
+
+    def fail_spawn(*_: object, **__: object) -> subprocess.Popen[str]:
+        raise original
+
+    monkeypatch.setattr("app.gateway.runtime.process_lifecycle.subprocess.Popen", fail_spawn)
+    log_file = FailingLog()
+    with pytest.raises(type(original)) as failure:
+        _spawn_logged_process(["configured-node"], log_file=log_file)
+    if system_error:
+        assert failure.value.__cause__ is original
+        assert failure.value.errno == errno.EACCES
+    else:
+        assert failure.value is original
+    assert log_file.closed
+    assert "/private/runtime" not in str(failure.value)
+    assert any("error_type=OSError, errno=5" in note for note in failure.value.__notes__)
+    assert all("/private/runtime" not in note for note in failure.value.__notes__)
+    assert any(record.exc_info and record.exc_info[1] is cleanup_error for record in caplog.records)

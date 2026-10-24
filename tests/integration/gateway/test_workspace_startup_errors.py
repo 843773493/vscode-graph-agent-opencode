@@ -143,18 +143,21 @@ async def test_managed_startup_access_failure_keeps_root_out_of_public_and_persi
 
 
 @pytest.mark.asyncio
-async def test_log_directory_failure_stays_explicit_without_persisting_native_location(
-    request: pytest.FixtureRequest, integration_workspace_root_path: str,
+@pytest.mark.parametrize("failure", ["log_directory", "executable"])
+async def test_managed_process_failure_stays_explicit_without_persisting_native_location(
+    request: pytest.FixtureRequest, integration_workspace_root_path: str, failure: str,
 ) -> None:
     context = TestRunContext.from_test_file(Path(__file__)).prepare()
     primary = Path(integration_workspace_root_path)
     reset_gateway_persistent_state(workspace_root=primary)
     ports = integration_port_block_for_file(Path(request.node.fspath))
-    workspace = primary / "managed-log-failure"
+    workspace = primary / f"managed-{failure}-failure"
     workspace.mkdir()
     workspace_id = build_managed_local_workspace_id(str(workspace))
     gateway_root = context.boxteam_home / "state/gateway"
     log_root = gateway_root / "logs"
+    missing_executable = primary / "private-missing-node"
+    native_location = str(log_root if failure == "log_directory" else missing_executable)
     evidence = {}
     with ExitStack() as processes:
         backend = start_backend_process(workspace_root=str(primary), port=ports.port(0), log_name="primary-backend")
@@ -164,13 +167,15 @@ async def test_log_directory_failure_stays_explicit_without_persisting_native_lo
             gateway = start_gateway_process(
                 workspace_root=primary, default_backend_url=f"http://127.0.0.1:{backend.port}",
                 port=ports.port(1), artifacts_dir=context.artifacts_dir,
+                extra_env={"BOXTEAM_NODE_BIN": str(missing_executable)} if failure == "executable" else None,
             )
             processes.callback(close_gateway_process, gateway)
             return gateway
 
         gateway = start_gateway()
         assert not log_root.exists()
-        log_root.write_text("not a directory", encoding="utf-8")
+        if failure == "log_directory":
+            log_root.write_text("not a directory", encoding="utf-8")
         for stage in ("registered", "restarted"):
             if stage == "restarted":
                 close_gateway_process(gateway)
@@ -183,22 +188,24 @@ async def test_log_directory_failure_stays_explicit_without_persisting_native_lo
                     response = await client.post("/api/gateway/workspaces/local", json={"root_path": str(workspace)})
                     assert response.status_code == 500, response.text
                     assert response.json()["request_id"] == response.headers["X-Request-ID"]
-                    assert str(log_root) not in response.text
+                    assert native_location not in response.text
                     evidence["registration"] = response.json()
                 for check_health in (False, True):
                     response = await client.get("/api/gateway/workspaces", params={"check_health": check_health})
                     assert response.status_code == 200, response.text
                     body = response.json()
                     assert body["request_id"] == response.headers["X-Request-ID"]
-                    assert str(log_root) not in response.text
+                    assert native_location not in response.text
                     assert str(workspace) not in response.text
                     item = next(item for item in body["data"]["items"] if item["workspace_id"] == workspace_id)
                     assert item["status"] == "offline"
                     assert item["connection_error"]
                     assert item["services"]["workspace_api"]["status"] == "offline"
                     if stage == "registered" and not check_health:
-                        assert "stage=create_directory" in item["connection_error"]
-                        assert "FileExistsError" in item["connection_error"]
+                        expected_stage = "create_directory" if failure == "log_directory" else "spawn"
+                        expected_type = "FileExistsError" if failure == "log_directory" else "FileNotFoundError"
+                        assert f"stage={expected_stage}" in item["connection_error"]
+                        assert expected_type in item["connection_error"]
                     evidence[f"{stage}-{check_health}"] = item
             with closing(sqlite3.connect(f"{(gateway_root / 'gateway.sqlite').as_uri()}?mode=ro", uri=True)) as connection:
                 row, = connection.execute(
@@ -207,12 +214,15 @@ async def test_log_directory_failure_stays_explicit_without_persisting_native_lo
             record = json.loads(row)
             assert record["root_path"] == str(workspace)
             assert record["connection_error"]
-            assert str(log_root) not in record["connection_error"]
+            assert native_location not in record["connection_error"]
             evidence[f"persisted-{stage}"] = record["connection_error"]
         logs = (context.artifacts_dir / "gateway.stderr.log").read_text()
-        assert str(log_root) in logs
-        assert "FileExistsError" in logs
-        assert log_root.read_text() == "not a directory"
-        (context.artifacts_dir / "managed-log-directory-errors.json").write_text(
+        assert native_location in logs
+        assert ("FileExistsError" if failure == "log_directory" else "FileNotFoundError") in logs
+        if failure == "log_directory":
+            assert log_root.read_text() == "not a directory"
+        else:
+            assert not missing_executable.exists()
+        (context.artifacts_dir / f"managed-{failure}-errors.json").write_text(
             json.dumps(evidence, ensure_ascii=False, indent=2) + "\n", encoding="utf-8",
         )

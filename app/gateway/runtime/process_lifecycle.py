@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import os
 import signal
 import subprocess
@@ -15,6 +16,8 @@ from app.gateway.runtime.process_groups import (
     _posix_group_is_alive,
     _wait_until_closed,
 )
+
+logger = logging.getLogger(__name__)
 
 WindowsProcessStartTimesByPid = dict[int, float]
 
@@ -427,6 +430,27 @@ def _spawn_logged_process(
             text=True,
             start_new_session=os.name == "posix",
         )
-    except Exception:
-        log_file.close()
-        raise
+    except Exception as error:
+        # 只记可执行文件和 cwd，不把命令参数或环境中的凭据复制到日志。
+        logger.exception("受管进程启动失败: executable=%s cwd=%s", command[:1], cwd)
+        cleanup_note = None
+        try:
+            log_file.close()
+        except Exception as cleanup_error:
+            logger.exception("受管进程启动失败后日志关闭失败")
+            cleanup_note = (
+                "受管进程启动失败后日志关闭失败: "
+                f"error_type={type(cleanup_error).__name__}"
+            )
+            if isinstance(cleanup_error, OSError):
+                cleanup_note += f", errno={cleanup_error.errno}"
+            error.add_note(cleanup_note)
+        if not isinstance(error, OSError):
+            raise
+        detail = f"受管进程启动失败: stage=spawn, error_type={type(error).__name__}"
+        if getattr(error, "winerror", None) is not None:
+            detail += f", winerror={error.winerror}"
+        public_error = type(error)(error.errno, detail)
+        if cleanup_note is not None:
+            public_error.add_note(cleanup_note)
+        raise public_error from error

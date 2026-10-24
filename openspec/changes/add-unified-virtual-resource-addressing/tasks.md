@@ -566,3 +566,11 @@
 - 唯一 ProcessLogStore 在最终日志目录创建、权限设置、轮转及文件打开处保留系统异常类别、errno、可用的 winerror 和原 cause；公开错误只含逻辑日志名与阶段。非法文件名、日志与轮转符号链接明确拒绝，原输入和完整文件位置只进原始诊断日志。所有本地 Backend、Terminal/Browser 和 SSH 隧道继续复用同一日志 owner，不在注册表或路由增加脱敏与第二写入链。
 - 完整源码 tree `d8de0c4a98905484bb3c947355010a870a9d588b` 的日志、Workspace/SSH 进程单测 38 passed/0.51 秒；真实独立 Gateway 与 Workspace HTTP 验收 2 passed/57.26 秒。产品注册入口由真实日志目录阻塞触发 FileExistsError，注册返回 500、request_id 一致；普通列表、健康检查与 SQLite connection_error 不复制原生位置，Gateway 重启后仍明确离线，诊断原文与原阻塞字节保留。既有工作区权限拒绝及重启验收同时通过。
 - Ruff、compileall 通过；准确命令、完整源码前后指纹、原始输出和实际退出码保留于 `out/tests/temp/gateway_log_errors_20261024/artifacts/`。unit-002 因测试把轮转目录放在会先被合法移走的 .1 而未制造故障，改在 .3 阻塞 .2 后 unit-003 通过，未改轮转规则。http-001 在装具选择 Python 阶段发现候选缺少 .venv 链接，接入已有依赖后同源码 http-002 通过。以上不代替 Windows 实机、完整 Web、其它运行时启动边界或 2.2/7.2 全局门；Agent 团队与协作继续按用户裁定保留 TODO。
+
+
+### 2026-10-24 Gateway 原生进程创建错误（2.2/7.2 部分收口）
+
+- 统一 `_spawn_logged_process` 在 Popen 的原生系统失败处发布阶段、系统错误类型及 errno/可用的 winerror，保留原异常 cause 和完整诊断。日志只额外记录可执行文件与 cwd，不复制命令参数或环境；启动失败仍关闭原日志句柄，关闭再次失败明确记录并附系统事实，不能覆盖首个启动错误。非系统异常保留原对象和传播方式；本地 Backend、Terminal/Browser 与 SSH 隧道仍共用原创建链，注册表/路由没有新增异常文本脱敏层。
+- 最终代码候选 tree `aaa7cf6537d1b2e34023e9bf4c453e0562d22ff9` 的日志、进程关闭、Workspace/SSH 启动单测 55 passed/0.71 秒；Ruff、compileall 通过。POSIX/盘符/UNC 字面量、有无 filename、系统/非系统启动错误及日志二次关闭失败覆盖类型、errno、原异常对象、日志记录、句柄关闭与安全错误注记；这些不代替 Windows 实机。
+- 生产代码与上述相同的完整 tree `0ef894b2d1de29b4f2c87cf3e6331d28e446442f` 的真实 Gateway/Workspace HTTP 为 3 passed/84.23 秒，含新增的目标 Node 可执行文件缺失：经普通注册入口实际调用原生 Popen，500 与 request_id 保持一致，列表/健康投影及 SQLite connection_error 没有真实位置，Gateway 重启后明确离线，完整位置仍在诊断日志。两个 tree 仅差 unit-001 中 Windows filename 的日志断言：Python 按 repr 转义反斜杠，unit-002 改为核对完整原异常文本，不改变产品源码或 HTTP 用例。
+- 完整 Git archive 的反例 tree `9ddce203f1fe724777df9ab6c5992869a8800de9` 仅恢复旧进程 owner，`http-red-001` 在注册 500 响应中精确捕获可执行文件路径，1 failed/20.73 秒，证明新验收能区分原缺陷。准确命令、完整源码前后指纹、原始输出、实际退出码和进程回收记录在 `out/tests/temp/gateway_spawn_errors_20261024/artifacts/`。未验 Windows 实机和完整 Web，不关闭 2.2/7.2 全局门；团队与协作专项继续 TODO。
