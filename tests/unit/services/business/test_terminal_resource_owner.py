@@ -469,7 +469,7 @@ async def test_lost_transport_grant_receipt_is_discoverable_unknown(bundle: Term
     discovered = await bundle.owner.list_resources(thread_id=THREAD_A)
     assert discovered[0]["resource_id"] == rid
     assert discovered[0]["reconciliation_status"] == "unknown"
-    assert discovered[0]["available_actions"] == []
+    assert discovered[0]["available_actions"] == ["stop"]
 
 
 @pytest.mark.asyncio
@@ -528,6 +528,103 @@ async def test_stopped_unknown_identity_never_settles_crashed_operation(bundle: 
     assert bundle.leases.get_lease("crashed-unknown").status == "reconcile_required"
     with pytest.raises(ResourceConflict):
         await bundle.owner.cleanup_session(SESSION_A)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("receipt", ["verified", "running", "unknown", "stale", "future", "boolean", "wrong_identity"])
+async def test_new_management_stop_settles_old_operation_only_with_current_verified_receipt(
+    bundle: TerminalOwnerFixture, monkeypatch: pytest.MonkeyPatch, receipt: str,
+) -> None:
+    resource = await bundle.create()
+    rid = str(resource["resource_id"])
+    old = bundle.leases.acquire_operation(
+        resource_id=rid, turn_stream_id="crashed-holder", operation_id="crashed-operation",
+        lease_id="crashed-lease", holder_session_id=SESSION_A, holder_thread_id=THREAD_A,
+    )
+    bundle.restart()
+    current = await bundle.owner.get_resource(rid)
+    assert current["reconciliation_status"] == "reconcile_required"
+    assert current["available_actions"] == ["stop"]
+    calls = []
+
+    async def stop(resource_id: str, *, reason: str | None = None) -> dict[str, object]:
+        calls.append(resource_id)
+        original = bundle.leases.get_lease(old.lease_id)
+        assert (original.turn_stream_id, original.operation_id, original.status) == (
+            "crashed-holder", "crashed-operation", "reconcile_required",
+        )
+        active, = [lease for lease in bundle.leases.leases_for_resource(rid) if lease.status == "active"]
+        assert (active.turn_stream_id, active.operation_id) == ("request:new-stop", "new-stop")
+        runtime = dict(bundle.transport.records[resource_id])
+        runtime["status"] = "terminated"
+        if receipt == "running":
+            runtime["status"] = "running"
+        elif receipt == "unknown":
+            runtime["reconciliation_status"] = "unknown"
+        elif receipt in {"stale", "future"}:
+            runtime["transport_owner_revision"] += -1 if receipt == "stale" else 1
+        elif receipt == "boolean":
+            runtime["transport_owner_revision"] = True
+        elif receipt == "wrong_identity":
+            runtime["terminal_id"] = "term_other"
+        return {"terminal": runtime}
+
+    monkeypatch.setattr(bundle.transport, "stop_resource", stop)
+    command = bundle.owner.command(
+        rid, action="stop", expected_revision=int(current["owner_revision"]),
+        holder_id="request:new-stop", operation_id="new-stop",
+    )
+    if receipt == "verified":
+        result = await command
+        assert result["status"] == "terminated" and result["reconciliation_status"] == "verified"
+        assert bundle.leases.get_lease(old.lease_id).status == "settled"
+        assert bundle.leases.leases_for_resource(rid) == []
+    else:
+        with pytest.raises((ValueError, RuntimeError)):
+            await command
+        assert bundle.leases.get_lease(old.lease_id).status == "reconcile_required"
+        assert bundle.owner._store.records[rid].reconciliation_status == "unknown"
+        assert len(bundle.leases.leases_for_resource(rid)) == 2
+    assert calls == [rid]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("blocker", ["same_operation", "active", "stale", "future", "deleted"])
+async def test_unverified_stop_does_not_bypass_original_operation_or_transport_fence(
+    bundle: TerminalOwnerFixture, monkeypatch: pytest.MonkeyPatch, blocker: str,
+) -> None:
+    resource = await bundle.create()
+    rid = str(resource["resource_id"])
+    old = bundle.leases.acquire_operation(
+        resource_id=rid, turn_stream_id="crashed-holder", operation_id="crashed-operation",
+    )
+    bundle.restart()
+    current = await bundle.owner.get_resource(rid)
+    original = bundle.leases.get_lease(old.lease_id)
+    if blocker == "active":
+        bundle.leases.acquire_operation(
+            resource_id=rid, turn_stream_id="current-holder", operation_id="current-operation", allow_unverified=True,
+        )
+    elif blocker in {"stale", "future"}:
+        bundle.transport.records[rid]["transport_owner_revision"] += -1 if blocker == "stale" else 1
+    elif blocker == "deleted":
+        bundle.transport.records[rid].update(status="deleted", reconciliation_status="unknown")
+    calls = []
+
+    async def stop(resource_id: str, *, reason: str | None = None) -> dict[str, object]:
+        calls.append(resource_id)
+        raise AssertionError("有阻断事实时不得派发停止请求")
+
+    monkeypatch.setattr(bundle.transport, "stop_resource", stop)
+    with pytest.raises(ResourceConflict):
+        await bundle.owner.command(
+            rid, action="stop", expected_revision=int(current["owner_revision"]),
+            holder_id="crashed-holder" if blocker == "same_operation" else "new-holder",
+            operation_id="crashed-operation" if blocker == "same_operation" else "new-operation",
+        )
+    assert calls == []
+    assert bundle.leases.get_lease(old.lease_id) == original
+    assert bundle.owner._store.records[rid].owner_revision == current["owner_revision"]
 
 
 @pytest.mark.asyncio

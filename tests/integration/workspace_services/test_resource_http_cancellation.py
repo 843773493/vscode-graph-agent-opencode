@@ -164,10 +164,13 @@ async def test_cancel_closes_the_socket_and_keeps_the_original_lease_until_verif
             bundle.restart()
             assert bundle.owner is not None
             observed = await bundle.owner.get_resource(rid)
-            assert observed["reconciliation_status"] == "unknown" and observed["available_actions"] == []
+            assert observed["reconciliation_status"] == "unknown" and observed["available_actions"] == ["stop"]
             assert bundle.leases.get_lease(original.lease_id).status == "reconcile_required"
-            with pytest.raises(ResourceConflict, match="尚待 owner 核实"):
-                await bundle.command(rid, action="stop", expected_revision=observed["owner_revision"])
+            with pytest.raises(ResourceConflict, match="原 operation"):
+                await bundle.owner.command(
+                    rid, action="stop", expected_revision=observed["owner_revision"],
+                    holder_id=original.turn_stream_id, operation_id=original.operation_id,
+                )
             assert len(pending_http.requests) == 1
             # 传输桩提供外部终态；结清仍须走真实 owner 的管理入口，不能重发旧副作用。
             bundle.transport.records[rid]["status"] = "terminated" if bundle.owner.kind == "terminal" else "closed"
@@ -313,14 +316,19 @@ async def test_cancelled_creation_preserves_its_exact_lease_and_never_accepts_a_
             assert bundle.leases.release_turn_leases(original.turn_stream_id) == []
             # 首次存活快照和冷恢复都不能消除未回执的创建。
             observed = await bundle.owner.get_resource(record.resource_id)
-            assert observed["reconciliation_status"] == "unknown" and observed["available_actions"] == []
+            assert observed["reconciliation_status"] == "unknown"
+            assert observed["available_actions"] == (["stop"] if external_record else [])
             bundle.restart()
             observed = await bundle.owner.get_resource(record.resource_id)
-            assert observed["reconciliation_status"] == "unknown" and observed["available_actions"] == []
+            assert observed["reconciliation_status"] == "unknown"
+            assert observed["available_actions"] == (["stop"] if external_record else [])
             assert bundle.leases.get_lease(original.lease_id).status == "reconcile_required"
             if external_record:
-                with pytest.raises(ResourceConflict, match="尚待 owner 核实"):
-                    await bundle.command(record.resource_id, action="stop", expected_revision=observed["owner_revision"])
+                with pytest.raises(ResourceConflict, match="原 operation"):
+                    await bundle.owner.command(
+                        record.resource_id, action="stop", expected_revision=observed["owner_revision"],
+                        holder_id=original.turn_stream_id, operation_id=original.operation_id,
+                    )
                 bundle.transport.records[record.resource_id]["status"] = "terminated" if kind == "terminal" else "closed"
                 await bundle.command(record.resource_id, action="stop", expected_revision=observed["owner_revision"])
                 assert bundle.leases.get_lease(original.lease_id).status == "settled"

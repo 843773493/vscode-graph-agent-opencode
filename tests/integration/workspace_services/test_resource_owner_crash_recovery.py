@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Literal
 
 import httpx
+import psutil
 import pytest
 
 from app.abstractions.workspace_resources import (
@@ -36,6 +37,15 @@ from tests.support.processes.workspace import terminate_process
 from tests.support.workspace_tool_runtime import workspace_tool_runtime
 
 ResourceKind = Literal["terminal", "browser"]
+
+
+def _startup_mount(workspace: Path) -> MountedWorkspace:
+    """子进程显式接入本装具启动的真实服务，不依赖产品默认端口。"""
+    return MountedWorkspace(
+        load_or_create_workspace_id(workspace), workspace,
+        terminal_backend_url=os.environ["BOXTEAM_TERMINAL_BACKEND_URL"],
+        browser_backend_url=os.environ["BOXTEAM_BROWSER_BACKEND_URL"],
+    )
 
 
 def _publish_barrier(path: Path, identity: dict[str, object]) -> None:
@@ -120,7 +130,7 @@ async def _crash_worker(
     workspace: Path, barrier: Path, kind: ResourceKind, happened: bool,
     retention_scope: RetentionScope,
 ) -> None:
-    async with workspace_tool_runtime(workspace) as (container, session_id, context):
+    async with workspace_tool_runtime(workspace, startup_mount=_startup_mount(workspace)) as (container, session_id, context):
         owner = container.terminal_resource_owner if kind == "terminal" else container.browser_resource_owner
         arguments = {
             "session_id": session_id, "thread_id": context.thread_binding.thread_id,
@@ -163,7 +173,7 @@ async def _recover_worker(workspace: Path, barrier: Path, output: Path, kind: Re
     workspace_id = load_or_create_workspace_id(workspace)
     with (
         WorkspaceContainerRegistry(
-            mounted_workspaces=MountedWorkspaceRegistry([MountedWorkspace(workspace_id, workspace)]),
+            mounted_workspaces=MountedWorkspaceRegistry([_startup_mount(workspace)]),
             project_root=Path.cwd(),
         ) as registry,
         catalog_provider_scope(registry),
@@ -203,7 +213,7 @@ async def _recover_worker(workspace: Path, barrier: Path, output: Path, kind: Re
                     assert resource["reconciliation_status"] == "reconcile_required"
                     assert lease.status == "reconcile_required"
                     assert observed["status"] not in {"terminated", "closed", "deleted"}
-                    with pytest.raises(ResourceConflict, match="尚待 owner 核实"):
+                    with pytest.raises(ResourceConflict, match="原 operation"):
                         await owner.command(
                             rid, action="stop", expected_revision=int(resource["owner_revision"]),
                             holder_id="request:unknown-stop", operation_id="unknown-stop",
@@ -216,13 +226,19 @@ async def _recover_worker(workspace: Path, barrier: Path, output: Path, kind: Re
                     "lease_status": lease.status, "recovery_side_effects": list(calls),
                 }
                 if not identity["happened"]:
-                    # 单独取得真实终态证据，再核实旧 lease；不重放结果未知的操作。
-                    await original_stop(rid)
-                    await owner.command(
+                    # 新管理操作沿原停止链核实外部终态，不借助测试先行停止资源。
+                    stopped = await owner.command(
                         rid, action="stop", expected_revision=int(resource["owner_revision"]),
                         holder_id="request:explicit-proof", operation_id="explicit-proof",
                     )
-                    assert calls == []
+                    assert calls == ["stop"]
+                    assert stopped["reconciliation_status"] == "verified"
+                    assert stopped["status"] == ("terminated" if kind == "terminal" else "closed")
+                    assert owner._leases.get_lease(identity["lease_id"]).status == "settled"
+                    assert owner._leases.leases_for_resource(rid) == []
+                    result["explicit_stop"] = stopped
+                    result["explicit_stop_side_effects"] = list(calls)
+                    calls.clear()
                 await owner.cleanup_session(identity["session_id"])
                 if identity["retention_scope"] == "workspace":
                     # Session 释放只解除关联，工作区保留资源须由 owner 显式删除。
@@ -253,7 +269,7 @@ async def _recover_worker(workspace: Path, barrier: Path, output: Path, kind: Re
 
 
 async def _orphan_worker(workspace: Path, barrier: Path, kind: ResourceKind, reattach: bool) -> None:
-    async with workspace_tool_runtime(workspace) as (container, session_id, context):
+    async with workspace_tool_runtime(workspace, startup_mount=_startup_mount(workspace)) as (container, session_id, context):
         owner = container.terminal_resource_owner if kind == "terminal" else container.browser_resource_owner
         arguments = {
             "session_id": session_id, "thread_id": context.thread_binding.thread_id,
@@ -291,7 +307,7 @@ async def _recover_orphan_worker(workspace: Path, barrier: Path, output: Path, k
     workspace_id = load_or_create_workspace_id(workspace)
     with (
         WorkspaceContainerRegistry(
-            mounted_workspaces=MountedWorkspaceRegistry([MountedWorkspace(workspace_id, workspace)]),
+            mounted_workspaces=MountedWorkspaceRegistry([_startup_mount(workspace)]),
             project_root=Path.cwd(),
         ) as registry,
         catalog_provider_scope(registry),
@@ -402,6 +418,15 @@ def test_force_termination_unknown_stop_new_process_preserves_owner_and_does_not
         assert receipt["resource"]["retention_scope"] == retention_scope
         assert receipt["recovery_side_effects"] == []
         assert receipt["cleanup_status"] == "deleted"
+        if kind == "terminal":
+            native_pids = {observed["os_pid"], observed["pty_worker_pid"]} - {None}
+            running_pids = {
+                process.info["pid"] for process in psutil.process_iter(attrs=["pid", "status"])
+                if process.info["status"] != psutil.STATUS_ZOMBIE
+            }
+            assert native_pids.isdisjoint(running_pids), f"真实 PTY/Worker 仍存活: {native_pids & running_pids}"
+            receipt["verified_stopped_native_pids"] = sorted(native_pids)
+            result.write_text(json.dumps(receipt, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 @pytest.mark.parametrize("kind", ["terminal", "browser"])
@@ -447,7 +472,7 @@ async def test_real_browser_target_rejection_keeps_owner_verified_and_grant_unis
     resource_processes: tuple[Path, Path], monkeypatch: pytest.MonkeyPatch, race: str,
 ) -> None:
     workspace, runtime = resource_processes
-    async with workspace_tool_runtime(workspace) as (container, session_id, context):
+    async with workspace_tool_runtime(workspace, startup_mount=_startup_mount(workspace)) as (container, session_id, context):
         owner = container.browser_resource_owner
         browser = await owner.create_browser(
             session_id=session_id, thread_id=context.thread_binding.thread_id,

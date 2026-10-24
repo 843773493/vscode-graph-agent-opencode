@@ -418,15 +418,27 @@ class WorkspaceResourceOwner:
             raise ResourceConflict(
                 f"外部资源 版本冲突: expected={expected_revision}, actual={record.owner_revision}"
             )
+        takeover = False
         if record.reconciliation_status != "verified" and action in {"stop", "delete"}:
-            # 显式重试先核终态；运行中/未知的前次副作用绝不重放。
+            # 已停止时只对账；仍未知时必须以新的管理身份沿原停止链终止。
             runtime = await self._transport.get_resource(resource_id)
             self._reconcile_stopped_record(record, runtime)
             self._store.persist()
-            self._verified(record)
-            if record.status == "deleted" or (action == "stop" and record.status in STOPPED_STATUSES):
+            if record.reconciliation_status == "verified" and (
+                record.status == "deleted" or (action == "stop" and record.status in STOPPED_STATUSES)
+            ):
                 return resource_projection(record, runtime, self.kind)
-        self._verified(record)
+            if record.reconciliation_status != "verified":
+                observe_resource(record, runtime, self.kind)
+                if runtime["transport_owner_revision"] != record.owner_revision:
+                    raise ResourceConflict("外部资源 接管观察版本与当前 owner 不一致；请刷新资源")
+                if lease_id is not None:
+                    raise ResourceConflict("外部资源 接管必须取得新的管理 operation 身份")
+                if action == "stop" and record.status in {"deleted", "deleting"}:
+                    raise ResourceConflict("外部资源 删除尚未核实；请显式完成 delete")
+                takeover = True
+        if not takeover:
+            self._verified(record)
         leases = [
             lease
             for lease in self._leases.leases_for_resource(resource_id)
@@ -441,8 +453,11 @@ class WorkspaceResourceOwner:
                 raise ResourceConflict(
                     "目标 Thread 仍持有有效或待核实 operation lease"
                 )
-        elif action in {"stop", "delete"} and leases:
-            raise ResourceConflict("外部资源 仍有有效或待核实 operation lease")
+        elif action in {"stop", "delete"}:
+            if any(lease.status == "active" for lease in leases) or (leases and not takeover):
+                raise ResourceConflict("外部资源 仍有有效或待核实 operation lease")
+            if any((lease.turn_stream_id, lease.operation_id) == (holder_id, operation_id) for lease in leases):
+                raise ResourceConflict("外部资源 原 operation 结果尚未核实；请发起新的管理操作")
         if action == "delete" and record.thread_associations:
             raise ResourceConflict("外部资源 仍有关联；请先解除关联")
         if (
@@ -455,7 +470,9 @@ class WorkspaceResourceOwner:
             )
         if action not in {"promote", "attach", "detach", "stop", "delete"}:
             raise ValueError(f"外部资源 不支持操作: {action}")
-        with self._management_lease(record, thread, holder_id, operation_id, lease_id) as acquired_lease_id:
+        with self._management_lease(
+            record, thread, holder_id, operation_id, lease_id, allow_unverified=takeover,
+        ) as acquired_lease_id:
             associations_before = list(record.thread_associations)
             if fork_attachment is not None:
                 fork_attachment.state = "dispatching"
@@ -535,14 +552,18 @@ class WorkspaceResourceOwner:
             if type(runtime.get("transport_owner_revision")) is not int or runtime["transport_owner_revision"] != record.owner_revision:
                 raise ResourceConflict("外部资源 停止/删除回执版本与本次操作不一致")
             observe_resource(record, runtime, self.kind)
-            self._verified(record)
-            if record.status not in STOPPED_STATUSES or (delete and record.status != "deleted"):
+            if runtime.get("reconciliation_status") != "verified" or record.status not in STOPPED_STATUSES or (delete and record.status != "deleted"):
                 raise RuntimeError(
                     f"外部资源 停止/删除结果尚未核实: status={record.status}"
                 )
+            record.reconciliation_status = "verified"
+            record.error = None
             record.unattached_since = None if delete else record.unattached_since
             self._store.persist()
             self._sync_ledger(record)
+            for pending in self._leases.leases_for_resource(record.resource_id):
+                if pending.status == "reconcile_required":
+                    self._leases.settle(pending.lease_id)
             return resource_projection(record, runtime, self.kind)
         except BaseException as error:
             self._unknown(record, error, lease_id=lease_id)
@@ -813,6 +834,8 @@ class WorkspaceResourceOwner:
         ref: ThreadRef | None,
         holder_id: str,
         operation_id: str,
+        *,
+        allow_unverified: bool = False,
     ) -> str:
         return self._leases.acquire_operation(
             resource_id=record.resource_id,
@@ -822,6 +845,7 @@ class WorkspaceResourceOwner:
             holder_thread_id=None if ref is None else ref.thread_id,
             lease_id=f"{self.kind}:{create_uuid_hex()}",
             allow_stopped=True,
+            allow_unverified=allow_unverified,
         ).lease_id
 
     @contextmanager
@@ -832,6 +856,8 @@ class WorkspaceResourceOwner:
         holder_id: str,
         operation_id: str,
         lease_id: str | None = None,
+        *,
+        allow_unverified: bool = False,
     ) -> Iterator[str]:
         if lease_id is not None:
             lease = self._leases.get_lease(lease_id)
@@ -842,7 +868,9 @@ class WorkspaceResourceOwner:
                 != (record.resource_id, holder_id, operation_id)
             ):
                 raise ResourceConflict("外部资源 操作引用不是当前有效 lease")
-        acquired = lease_id or self._acquire(record, ref, holder_id, operation_id)
+        acquired = lease_id or self._acquire(
+            record, ref, holder_id, operation_id, allow_unverified=allow_unverified,
+        )
         try:
             yield acquired
         finally:

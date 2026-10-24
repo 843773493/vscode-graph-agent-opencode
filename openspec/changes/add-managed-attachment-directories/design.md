@@ -56,6 +56,8 @@ Shell 的结构化 workdir 接受目录 URI，在 URI 指定目标的文件 owne
 
 Browser 的关闭/删除继续复用原 resource transition。原 context 关闭后，检查点删除和最终终态写盘仍属于本次关闭；失败将内存和可持久化记录恢复为 unknown，原错误上抛，unknown 写盘也失败时保留两份异常及 cause。deleted 只有在 verified 时才可幂等短路，失败后的显式重试仍完成原检查点清理与写盘，不重开 context。`browser_stop_receipts_20261024` 的真实 HTTP/Chromium 验收在原生检查点文件边界制造目录冲突，核对原页面只关闭一次、unknown 与精确 lease 保留、故障移除后外部 owner 重试落盘，再由 Python 核终态结清；该验证不代表 unknown 的普通管理入口接管或 Browser 挂起 operation 总期限已完成。
 
+显式管理停止现在使用现有 stop/delete 入口的新请求身份：未知资源先核当前外部身份/版本及原 lease，有 active 操作、重复的未知 operation 或版本冲突时拒绝；新管理 lease 只表示正在处理未知资源，不把账本状态改成 running。新请求提升并同步传输版本，继续唯一停止链；只有精确当前版本的 verified 终态与 owner 落盘成功后，才以 settled 结清旧待核实占用。未知资源投影按当前可观察身份/版本提供 stop 和无关联时的 delete，不能恢复使用、关联或传输授权。自动恢复、周期清理和卸载仍仅核实已有终态，不自动派发新停止；新停止不证明旧工具/导航等操作成功。Browser 检查点故障移除后可直接从产品管理入口完成；冷恢复的存活 Terminal/Browser 也可由新操作停止。缺少外部身份的 native 创建、同进程仍持锁/active 的操作、Browser 挂起队列和总期限仍 TODO，不因候选动作可见便宣称这些边界完成。
+
 ### 6. 本轮实施的失败隔离
 
 `ThreadResidencyTracker.sweep()` 对每个 Thread 独立尝试清理，失败保留原 scope、generation 和 owner 记录，其它 Thread 仍完成。整批结束后向调用方抛出原错误（单项）或汇总错误（多项），附精确 owner 信息；不改变已有单错误类型或把失败算成成功卸载。`AgentExecutionService` 的唯一周期 worker 记录完整异常后按原 60 秒周期重试，取消和关闭正常传播。这里不解决失效关联或外部未知结果，也不绕过原 owner 核实规则。

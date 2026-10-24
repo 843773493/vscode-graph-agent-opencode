@@ -118,6 +118,16 @@ fork SHALL 沿用统一资源目标检查及现有 journal/claim/publication，�
 - **WHEN** Browser 已关闭原 context，但删除检查点或最终终态写盘失败
 - **THEN** 原外部 owner 将该关闭结果保留为 unknown 并明确返回失败，Python 保留原精确 operation lease；下一次显式关闭沿原转换链完成检查点删除与终态落盘，不能凭内存中的 deleted 状态提前返回成功，也不能创建替代 context；关闭与 unknown 写盘都失败时保留两份异常及 cause
 
+#### Scenario: 未知资源由新管理操作核实停止
+
+- **WHEN** 用户从现有资源管理入口对 unknown 或 reconcile_required 的资源显式发起 stop，或对无关联资源显式发起 delete
+- **THEN** owner 先核对外部资源身份与当前传输版本；已有正式终态时只对账，否则为新管理请求创建独立 operation lease，提升并同步版本后复用原停止链；本次正式终态回执与 owner 持久化成功后才结清原待核实占用，不能把新停止当作旧工具动作成功
+
+#### Scenario: 显式停止不能绕过仍有效的操作或复用未知身份
+
+- **WHEN** 管理停止仍遇到 active lease、重复的未知 operation 身份、不匹配的外部版本或尚未核实完成的删除
+- **THEN** 原 owner 明确拒绝冲突并保留原占用；普通资源列表为身份和版本可核对的未知资源提供候选停止/删除动作，使用、关联和授权仍须 verified；自动恢复、卸载与扫描不得据此重发未知副作用，缺少外部身份或 native 停止证明仍保持待核实
+
 ### Requirement: 单个 Thread 清理失败不得停止其它 Thread 的周期回收
 
 闲置清理 SHALL 独立尝试每个候选 Thread；失败 SHALL 保留该 Thread 的 scope/generation 和未核实资源，并明确报告 owner 与原始原因。事件循环正常调度时，扫描对单个卸载任务的等待 SHALL 最多为 30 秒，到期明确报告尚未完成并继续其它候选 Thread。该预算 MUST NOT 被解释为外部资源已经停止；唯一在途卸载任务 SHALL 继续由原 owner 持有，后续扫描 MUST NOT 为同代重复发起清理，新 admission MUST 等原任务完成。迟到成功 SHALL 沿原链释放，迟到失败 SHALL 记录原始原因并保留状态供后续周期重试。周期 worker SHALL 记录整批异常并继续原周期，不得因单项失败永久停止或把失败声明为已卸载；任务取消与关闭 MUST 正常传播。

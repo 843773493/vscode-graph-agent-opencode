@@ -18,6 +18,27 @@ from app.services.infrastructure.external_resource_leases import (
 
 
 @pytest.mark.parametrize("status", ["unknown", "orphaned"])
+def test_management_lease_can_occupy_unverified_resource_without_changing_original_facts(
+    tmp_path: Path, status: str,
+) -> None:
+    path = tmp_path / "resources.json"
+    ledger = ExternalResourceLeaseLedger(state_path=path)
+    ledger.register_external(resource_id="terminal_a", kind="terminal", lifetime_scope="workspace")
+    original = ledger.acquire_operation(resource_id="terminal_a", turn_stream_id="old", operation_id="old")
+    ledger.update_external_state("terminal_a", lifetime_scope="workspace", status=status, unresolved_lease_id=original.lease_id)
+    retained = ledger.get_lease(original.lease_id)
+    with pytest.raises(RuntimeError, match="不可获取 lease"):
+        ledger.acquire_operation(resource_id="terminal_a", turn_stream_id="ordinary", operation_id="ordinary", allow_stopped=True)
+    management = ledger.acquire_operation(
+        resource_id="terminal_a", turn_stream_id="management", operation_id="stop", allow_unverified=True,
+    )
+    cold = ExternalResourceLeaseLedger(state_path=path)
+    assert cold.get("terminal_a").status == status
+    assert cold.get_lease(original.lease_id) == retained
+    assert cold.get_lease(management.lease_id).status == "active"
+
+
+@pytest.mark.parametrize("status", ["unknown", "orphaned"])
 @pytest.mark.parametrize("unresolved_lease_id", [None, "pending"])
 def test_external_state_retains_only_the_explicit_unresolved_operation(
     tmp_path: Path, status: str, unresolved_lease_id: str | None,

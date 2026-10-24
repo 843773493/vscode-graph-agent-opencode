@@ -123,9 +123,16 @@ class ExternalResourceLeaseLedger:
         holder_session_id: str | None = None,
         holder_thread_id: str | None = None,
         allow_stopped: bool = False,
+        allow_unverified: bool = False,
     ) -> ResourceLease:
         record = self._require_record(resource_id)
-        if record.status not in ({"running", "recovered", "stopped"} if allow_stopped else {"running", "recovered"}):
+        allowed_statuses = {"running", "recovered"}
+        if allow_stopped:
+            allowed_statuses.add("stopped")
+        if allow_unverified:
+            # 原 owner 的新管理操作可占用未知资源；不改变资源事实或结清旧占用。
+            allowed_statuses.update({"unknown", "orphaned"})
+        if record.status not in allowed_statuses:
             raise RuntimeError(
                 f"资源当前不可获取 lease: resource_id={resource_id} status={record.status}"
             )
@@ -183,6 +190,7 @@ class ExternalResourceLeaseLedger:
         holder_session_id: str | None = None,
         holder_thread_id: str | None = None,
         allow_stopped: bool = False,
+        allow_unverified: bool = False,
     ) -> ResourceLease:
         """为一次 Tool/Activity 操作取得 lease；不自动重放操作。"""
         resolved_lease_id = lease_id or f"{turn_stream_id}:{operation_id}:{resource_id}"
@@ -194,6 +202,7 @@ class ExternalResourceLeaseLedger:
             holder_session_id=holder_session_id,
             holder_thread_id=holder_thread_id,
             allow_stopped=allow_stopped,
+            allow_unverified=allow_unverified,
         )
 
     def release(self, lease_id: str, *, reason: str = "operation_finished") -> ResourceLease:

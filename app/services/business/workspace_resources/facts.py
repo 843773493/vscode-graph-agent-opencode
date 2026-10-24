@@ -125,6 +125,12 @@ def resource_projection(
             actions.append("delete")
         if record.retention_scope == "thread":
             actions.insert(0, "promote")
+    elif record.reconciliation_status != "verified" and runtime is not None and runtime.get("transport_owner_revision") == record.owner_revision:
+        # 候选动作仍须核版本与原 lease；未知状态不允许重新使用或关联资源。
+        if record.status not in {"deleted", "deleting"}:
+            actions.append("stop")
+        if not record.thread_associations:
+            actions.append("delete")
     reclaim_at = (
         (datetime.fromisoformat(record.unattached_since)
          + timedelta(seconds=ORPHAN_GRACE_SECONDS)).isoformat()

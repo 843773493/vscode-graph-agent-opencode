@@ -32,7 +32,7 @@ class WorkspaceResourceDTO(BaseModel):
     reconciliation_status: str
     unattached_since: str | None
     reclaim_at: str | None
-    # 候选管理动作只过滤已核实状态和持久 Thread 关联阻断，不保证 lease 或版本校验通过。
+    # 候选管理动作按核实状态、外部观察和持久关联过滤，未知资源可显式停止；仍须核 lease 与版本。
     available_actions: list[str]
     metadata: dict[str, object]
     created_at: str

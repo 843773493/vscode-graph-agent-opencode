@@ -374,22 +374,24 @@ async def test_stop_checkpoint_failure_keeps_unknown_until_explicit_retry_is_per
         rejected = await integration_client.post(f"/api/v1/resources/{browser_id}/{action}", json={
             "expected_revision": record.owner_revision,
         })
-        assert rejected.status_code == 409, rejected.text
-        retained, = owner._leases.leases_for_resource(browser_id)
-        assert retained.lease_id == pending.lease_id and retained.status == "reconcile_required"
+        assert rejected.status_code == 500, rejected.text
+        retained = owner._leases.leases_for_resource(browser_id)
+        assert len(retained) == 2
+        assert all(lease.status == "reconcile_required" for lease in retained)
+        assert pending in retained
+        assert len({lease.operation_id for lease in retained}) == 2
     finally:
         checkpoint.rmdir()
-    # 修复文件故障后，由原外部 owner 显式重试；Python 仅核终态，不能重放原请求。
-    receipt = await (transport.delete_resource(browser_id) if action == "delete" else transport.stop_resource(browser_id))
-    assert receipt["browser"]["reconciliation_status"] == "verified"
-    records = json.loads((root / ".boxteam/browser-manager/browsers.json").read_text())
-    saved, = [item for item in records["browsers"] if item["browser_id"] == browser_id]
-    assert saved["status"] == expected_status and saved["reconciliation_status"] == "verified"
+    # 修复文件故障后，经产品管理入口取得新的停止身份，原占用只按正式终态结清。
     reconciled = await integration_client.post(f"/api/v1/resources/{browser_id}/{action}", json={
         "expected_revision": record.owner_revision,
     })
     assert reconciled.status_code == 200, reconciled.text
-    assert owner._leases.get_lease(pending.lease_id).status == "settled"
+    for lease in retained:
+        assert owner._leases.get_lease(lease.lease_id).status == "settled"
+    records = json.loads((root / ".boxteam/browser-manager/browsers.json").read_text())
+    saved, = [item for item in records["browsers"] if item["browser_id"] == browser_id]
+    assert saved["status"] == expected_status and saved["reconciliation_status"] == "verified"
     diagnostics = "\n".join(item.read_text() for item in browser_manager_artifacts.glob("browser-backend-*.stderr.log"))
     assert diagnostics.count(marker) == 1
     assert "检查点" in response.text
