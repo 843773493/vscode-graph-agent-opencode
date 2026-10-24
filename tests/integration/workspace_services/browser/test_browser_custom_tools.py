@@ -313,6 +313,84 @@ async def _detach_delete(client: httpx.AsyncClient, resource_id: str, context: C
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("action", ["stop", "delete"])
+async def test_stop_checkpoint_failure_keeps_unknown_until_explicit_retry_is_persisted(
+    action: str, integration_client: httpx.AsyncClient, browser_context: CustomToolFactoryContext,
+    browser_runtime: WorkspaceToolRuntime, browser_manager_processes: tuple[int, int],
+) -> None:
+    container, _session, _invocation = browser_runtime
+    created = await integration_client.post("/api/v1/resources/browsers", json={
+        "session_id": browser_context.session_id,
+        "thread_id": browser_context.invocation_context.thread_binding.thread_id,
+        "url": "about:blank",
+    })
+    assert created.status_code == 200, created.text
+    resource = created.json()["data"]
+    browser_id = resource["resource_id"]
+    transport = BrowserManagerClient(workspace_id=container.workspace_id,
+        backend_url=f"http://127.0.0.1:{browser_manager_processes[0]}")
+    marker = f"browser-stop-page-closed-{browser_id}"
+    await transport.perform(browser_id, "run", {"code":
+        f"page.once('close', () => console.error({json.dumps(marker)}));"}, actor="agent")
+    if action == "delete":
+        detached = await integration_client.post(f"/api/v1/resources/{browser_id}/detach", json={
+            "expected_revision": resource["owner_revision"], "thread": resource["source_thread"],
+        })
+        assert detached.status_code == 200, detached.text
+        resource = detached.json()["data"]
+    root = Path(container.workspace_root)
+    checkpoint = root / ".boxteam/browser-manager/checkpoints" / f"{browser_id}.json"
+    checkpoint.parent.mkdir(parents=True, exist_ok=True)
+    # 只在原生文件边界制造失败；创建、真实 context 关闭和终态落盘仍执行产品代码。
+    checkpoint.mkdir()
+    try:
+        response = await integration_client.post(f"/api/v1/resources/{browser_id}/{action}", json={
+            "expected_revision": resource["owner_revision"],
+        })
+        assert response.status_code == 500, response.text
+        assert response.headers["X-Request-ID"]
+        assert str(root) not in response.text
+        stopped = await transport.get_resource(browser_id)
+        expected_status = "deleted" if action == "delete" else "closed"
+        assert stopped["status"] == expected_status
+        assert stopped["reconciliation_status"] == "unknown"
+        records = json.loads((root / ".boxteam/browser-manager/browsers.json").read_text())
+        saved, = [item for item in records["browsers"] if item["browser_id"] == browser_id]
+        assert saved["status"] == expected_status and saved["reconciliation_status"] == "unknown"
+        owner = container.browser_resource_owner
+        pending, = owner._leases.leases_for_resource(browser_id)
+        assert pending.status == "reconcile_required"
+        record = owner._store.records[browser_id]
+        assert record.reconciliation_status == "unknown"
+        rejected = await integration_client.post(f"/api/v1/resources/{browser_id}/{action}", json={
+            "expected_revision": record.owner_revision,
+        })
+        assert rejected.status_code == 409, rejected.text
+        retained, = owner._leases.leases_for_resource(browser_id)
+        assert retained.lease_id == pending.lease_id and retained.status == "reconcile_required"
+    finally:
+        checkpoint.rmdir()
+    # 修复文件故障后，由原外部 owner 显式重试；Python 仅核终态，不能重放原请求。
+    receipt = await (transport.delete_resource(browser_id) if action == "delete" else transport.stop_resource(browser_id))
+    assert receipt["browser"]["reconciliation_status"] == "verified"
+    records = json.loads((root / ".boxteam/browser-manager/browsers.json").read_text())
+    saved, = [item for item in records["browsers"] if item["browser_id"] == browser_id]
+    assert saved["status"] == expected_status and saved["reconciliation_status"] == "verified"
+    reconciled = await integration_client.post(f"/api/v1/resources/{browser_id}/{action}", json={
+        "expected_revision": record.owner_revision,
+    })
+    assert reconciled.status_code == 200, reconciled.text
+    assert owner._leases.get_lease(pending.lease_id).status == "settled"
+    artifacts = TestRunContext.from_test_file(Path(__file__)).artifacts_dir
+    diagnostics = "\n".join(item.read_text() for item in artifacts.glob("browser-backend-*.stderr.log"))
+    assert diagnostics.count(marker) == 1
+    assert "检查点" in response.text
+    if action == "stop":
+        deleted = await _detach_delete(integration_client, browser_id, browser_context)
+        assert deleted.status_code == 200, deleted.text
+
+
+@pytest.mark.asyncio
 async def test_checkpoint_failure_reports_stage_without_publishing_native_path(
     integration_client: httpx.AsyncClient, browser_context: CustomToolFactoryContext,
     browser_manager_processes: tuple[int, int], browser_runtime: WorkspaceToolRuntime,

@@ -113,6 +113,11 @@ fork SHALL 沿用统一资源目标检查及现有 journal/claim/publication，�
 - **WHEN** 原 PTY 进程树已进入停止链，但 Worker 退出未确认或最终终态写盘失败
 - **THEN** 保留原 Worker 句柄和未知状态，不提前发布停止完成事件；显式重试复用原执行及唯一停止链，只有进程树停止、Worker 退出确认与终态写盘均成功后才清除句柄和返回成功；未知状态写盘也失败时保留两份原异常及因果关系
 
+#### Scenario: Browser 已关闭运行时但最终发布失败
+
+- **WHEN** Browser 已关闭原 context，但删除检查点或最终终态写盘失败
+- **THEN** 原外部 owner 将该关闭结果保留为 unknown 并明确返回失败，Python 保留原精确 operation lease；下一次显式关闭沿原转换链完成检查点删除与终态落盘，不能凭内存中的 deleted 状态提前返回成功，也不能创建替代 context；关闭与 unknown 写盘都失败时保留两份异常及 cause
+
 ### Requirement: 单个 Thread 清理失败不得停止其它 Thread 的周期回收
 
 闲置清理 SHALL 独立尝试每个候选 Thread；失败 SHALL 保留该 Thread 的 scope/generation 和未核实资源，并明确报告 owner 与原始原因。事件循环正常调度时，扫描对单个卸载任务的等待 SHALL 最多为 30 秒，到期明确报告尚未完成并继续其它候选 Thread。该预算 MUST NOT 被解释为外部资源已经停止；唯一在途卸载任务 SHALL 继续由原 owner 持有，后续扫描 MUST NOT 为同代重复发起清理，新 admission MUST 等原任务完成。迟到成功 SHALL 沿原链释放，迟到失败 SHALL 记录原始原因并保留状态供后续周期重试。周期 worker SHALL 记录整批异常并继续原周期，不得因单项失败永久停止或把失败声明为已卸载；任务取消与关闭 MUST 正常传播。

@@ -602,6 +602,54 @@ describe("浏览器统一操作队列", () => {
     pool.cancelIdleShutdown();
   });
 
+  test.each([
+    ["closed", "checkpoint"], ["deleted", "checkpoint"],
+    ["closed", "persist"], ["deleted", "persist"],
+  ])("关闭为 %s 在 %s 失败后保留 unknown，显式重试必须真正落盘", async (status, stage) => {
+    const { browser } = transitionSession();
+    const cause = new Error(`受控 ${stage} 失败`);
+    const saved = [];
+    let releases = 0;
+    let checkpointDeletes = 0;
+    let writes = 0;
+    browser.record.checkpoint = { version: 1 };
+    browser.manager.runtimePool.releaseContext = async () => { releases += 1; };
+    browser.manager.stateStore.deleteCheckpoint = async () => {
+      if (++checkpointDeletes === 1 && stage === "checkpoint") throw cause;
+    };
+    browser.manager.persist = async () => {
+      if (++writes === 1 && stage === "persist") throw cause;
+      saved.push(browser.toRecord());
+    };
+    await expect(browser.close({ status })).rejects.toBe(cause);
+    expect(browser.context).toBeNull();
+    expect(releases).toBe(1);
+    expect(browser.snapshot()).toMatchObject({ status, reconciliation_status: "unknown" });
+    expect(saved.at(-1)).toMatchObject({ status, reconciliation_status: "unknown" });
+    const writesBeforeRetry = writes;
+    await expect(browser.close({ status })).resolves.toMatchObject({ status, reconciliation_status: "verified" });
+    expect(writes).toBe(writesBeforeRetry + 1);
+    expect(checkpointDeletes).toBe(2);
+    expect(releases).toBe(1);
+    expect(saved.at(-1)).toMatchObject({ status, reconciliation_status: "verified", checkpoint: null });
+  });
+
+  test("关闭与 unknown 写盘都失败时保留两份原始异常并允许重试", async () => {
+    const { browser } = transitionSession();
+    const original = new Error("正式终态写盘失败");
+    const unknown = new Error("unknown 写盘失败");
+    let writes = 0;
+    browser.manager.persist = async () => { throw ++writes === 1 ? original : unknown; };
+    const failure = await browser.close({ status: "deleted" }).catch(error => error);
+    expect(failure).toBeInstanceOf(AggregateError);
+    expect(failure.errors).toEqual([original, unknown]);
+    expect(failure.cause).toBe(original);
+    expect(browser.snapshot()).toMatchObject({ status: "deleted", reconciliation_status: "unknown" });
+    browser.manager.persist = async () => { writes += 1; };
+    await expect(browser.close({ status: "deleted" })).resolves.toMatchObject({ status: "deleted", reconciliation_status: "verified" });
+    expect(writes).toBe(3);
+  });
+
   test.each(["queued", "interactive"])("prepare await 期间撤销 %s 操作不泄漏计数，也不执行 callback", async (mode) => {
     const browser = session();
     let release;

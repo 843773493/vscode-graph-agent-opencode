@@ -54,6 +54,8 @@ Shell 的结构化 workdir 接受目录 URI，在 URI 指定目标的文件 owne
 
 正式停止回执与冷恢复观察承担不同职责：本次 stop/delete 的回执必须具有当前资源/工作区身份及与本次发布版本相等的整数 `transport_owner_revision`，不能接受旧代或未来版本；未知版本继续保留本次原 lease。Terminal 的原停止链在进程树核实后仍持有同一 Worker 句柄，等待 Worker 退出确认和终态写盘后才清除句柄、发布完成事件并返回。任一阶段失败持久保留 unknown；终态已在内存变化但写盘失败时，允许原句柄沿同一停止链重试，不为未取得 PID 的 native 创建异常扩大释放许可。停止与 unknown 写盘都失败时以 AggregateError 保留两份原异常及 cause。相关反例和 Linux 回归见 tasks 5.2 的 `resource_stop_receipts_20261024`；完整旧代接管、unknown 的显式管理、挂起队列终止与 5.4 总期限继续 TODO。
 
+Browser 的关闭/删除继续复用原 resource transition。原 context 关闭后，检查点删除和最终终态写盘仍属于本次关闭；失败将内存和可持久化记录恢复为 unknown，原错误上抛，unknown 写盘也失败时保留两份异常及 cause。deleted 只有在 verified 时才可幂等短路，失败后的显式重试仍完成原检查点清理与写盘，不重开 context。`browser_stop_receipts_20261024` 的真实 HTTP/Chromium 验收在原生检查点文件边界制造目录冲突，核对原页面只关闭一次、unknown 与精确 lease 保留、故障移除后外部 owner 重试落盘，再由 Python 核终态结清；该验证不代表 unknown 的普通管理入口接管或 Browser 挂起 operation 总期限已完成。
+
 ### 6. 本轮实施的失败隔离
 
 `ThreadResidencyTracker.sweep()` 对每个 Thread 独立尝试清理，失败保留原 scope、generation 和 owner 记录，其它 Thread 仍完成。整批结束后向调用方抛出原错误（单项）或汇总错误（多项），附精确 owner 信息；不改变已有单错误类型或把失败算成成功卸载。`AgentExecutionService` 的唯一周期 worker 记录完整异常后按原 60 秒周期重试，取消和关闭正常传播。这里不解决失效关联或外部未知结果，也不绕过原 owner 核实规则。

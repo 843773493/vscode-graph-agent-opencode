@@ -1762,23 +1762,35 @@ export class BrowserSession extends EventEmitter {
     this.closingRequested = true;
     return await this.runResourceTransition(async () => {
       if (this.record.status === "deleted" && this.record.reconciliation_status === "verified") return this.snapshot();
-      if (this.streaming && this.browser && this.cdpSession && this.record.status === "running") {
-        await this.stopScreencast();
+      try {
+        if (this.streaming && this.browser && this.cdpSession && this.record.status === "running") {
+          await this.stopScreencast();
+        }
+        for (const client of this.transports.keys()) client.close(4009, "browser stopped");
+        this.transports.clear();
+        await this.releaseRuntime();
+        this.record.status = status;
+        this.record.reconciliation_status = "verified";
+        this.record.release_reason = reason;
+        this.record.ended_at = this.record.ended_at || nowIso();
+        this.record.updated_at = nowIso();
+        this.clients.clear();
+        await this.manager.stateStore.deleteCheckpoint(this.id);
+        this.record.checkpoint = null;
+        this.record.discarded_pages = null;
+        await this.manager.persist();
+        return this.snapshot();
+      } catch (error) {
+        this.record.reconciliation_status = "unknown";
+        this.record.updated_at = nowIso();
+        try {
+          await this.manager.persist();
+        } catch (persistError) {
+          throw new AggregateError([error, persistError],
+            `浏览器关闭失败且未知状态持久化失败: browser_id=${this.id}`, { cause: error });
+        }
+        throw error;
       }
-      for (const client of this.transports.keys()) client.close(4009, "browser stopped");
-      this.transports.clear();
-      await this.releaseRuntime();
-      this.record.status = status;
-      this.record.reconciliation_status = "verified";
-      this.record.release_reason = reason;
-      this.record.ended_at = this.record.ended_at || nowIso();
-      this.record.updated_at = nowIso();
-      this.clients.clear();
-      await this.manager.stateStore.deleteCheckpoint(this.id);
-      this.record.checkpoint = null;
-      this.record.discarded_pages = null;
-      await this.manager.persist();
-      return this.snapshot();
     });
   }
 
