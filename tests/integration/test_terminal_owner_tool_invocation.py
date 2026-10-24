@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import subprocess
 from collections.abc import AsyncIterator
 from pathlib import Path
@@ -14,6 +15,7 @@ import pytest
 from app.abstractions.terminal_resources import TerminalRequestError
 from app.agents.tools.terminal import create_exec_command_tool, create_write_stdin_tool
 from app.core.mounted_workspaces import MountedWorkspace
+from app.core.resource_uri import resource_display_uri
 from app.core.workspace_identity import load_or_create_workspace_id
 from app.services.infrastructure.terminal_manager_client import TerminalManagerClient
 from tests.harness.python.run_context import TestRunContext
@@ -157,6 +159,100 @@ async def test_real_terminal_tool_preserves_native_external_workdir(
     finally:
         probe.unlink()
         external.rmdir()
+
+
+@pytest.mark.asyncio
+async def test_real_terminal_tool_uses_one_cwd_for_native_paths_and_directory_uri(
+    terminal_runtime: WorkspaceToolRuntime, caplog: pytest.LogCaptureFixture,
+) -> None:
+    container, session_id, context = terminal_runtime
+    owner = container.terminal_resource_owner
+    directory = owner.workspace_root / "附件处理 with spaces"
+    directory.mkdir()
+    original = directory / "probe.txt"
+    original.write_text("BOXTEAM_SHARED_DIRECTORY_INPUT", encoding="utf-8")
+    uri = resource_display_uri(
+        scope="workspace", scope_id=owner.workspace_id, kind="files",
+        tail_segments=("root", directory.name),
+    )
+    execute = create_exec_command_tool(
+        session_id, terminal_owner=owner, invocation_context=context,
+    )
+    receipts: list[dict[str, object]] = []
+    for workdir in (directory.name, str(directory), uri):
+        result = await execute.ainvoke({
+            "cmd": "cat probe.txt; printf boxteam://literal-command-text; printf 'BOXTEAM_DERIVED_OUTPUT' > output.txt",
+            "workdir": workdir, "yield_time_ms": 1000,
+        })
+        assert result["exit_code"] == 0
+        assert "BOXTEAM_SHARED_DIRECTORY_INPUT" in result["output"]
+        assert "boxteam://literal-command-text" in result["output"]
+        assert result["cwd_relative"] == directory.name
+        assert str(owner.workspace_root) not in json.dumps(result)
+        assert (directory / "output.txt").read_text() == "BOXTEAM_DERIVED_OUTPUT"
+        (directory / "output.txt").unlink()
+        record = await owner.get_resource(result["terminal_id"])
+        assert record["status"] == "deleted"
+        assert record["reconciliation_status"] == "verified"
+        assert owner._leases.leases_for_resource(result["terminal_id"]) == []
+        receipts.append(result)
+    assert len({item["terminal_id"] for item in receipts}) == 3
+    assert original.read_text(encoding="utf-8") == "BOXTEAM_SHARED_DIRECTORY_INPUT"
+    if os.name != "nt":
+        native_directory = owner.workspace_root / "build:" / "debug"
+        native_directory.mkdir(parents=True)
+        (native_directory / "probe.txt").write_text("BOXTEAM_NATIVE_COLON_DIRECTORY", encoding="utf-8")
+        for workdir in ("build://debug", str(owner.workspace_root) + "/build://debug"):
+            result = await execute.ainvoke({"cmd": "cat probe.txt", "workdir": workdir, "yield_time_ms": 1000})
+            assert result["exit_code"] == 0
+            assert "BOXTEAM_NATIVE_COLON_DIRECTORY" in result["output"]
+            assert result["cwd_relative"] == "build:/debug"
+            assert str(owner.workspace_root) not in json.dumps(result)
+            assert (await owner.get_resource(result["terminal_id"]))["status"] == "deleted"
+            assert owner._leases.leases_for_resource(result["terminal_id"]) == []
+            receipts.append(result)
+    state_files = [
+        owner._store.path, owner.workspace_root / ".boxteam/resources.json",
+        owner.workspace_root / ".boxteam/terminal-manager/terminals.json",
+    ]
+    before = {path: path.read_bytes() for path in state_files}
+    rejected_uris = [
+        resource_display_uri(
+            scope="workspace", scope_id=str(uuid4()), kind="files", tail_segments=("root",),
+        ),
+        resource_display_uri(
+            scope="workspace", scope_id=owner.workspace_id, kind="files", tail_segments=("root",),
+            gateway_authority="gateway_abcdef0123456789abcdef0123456789",
+        ),
+        uri + "/%2Fetc",
+    ]
+    for rejected_uri in rejected_uris:
+        with pytest.raises(ValueError):
+            await execute.ainvoke({"cmd": "printf SHOULD_NOT_RUN > unexpected.txt", "workdir": rejected_uri})
+        assert {path: path.read_bytes() for path in state_files} == before
+    if os.name != "nt":
+        # 真实符号链接环经 Path.resolve 抛出含本机路径的 RuntimeError。
+        loop = directory / "loop"
+        loop.symlink_to("loop")
+        try:
+            with pytest.raises(RuntimeError) as rejected:
+                await execute.ainvoke({"cmd": "printf SHOULD_NOT_RUN", "workdir": uri + "/loop"})
+            assert "Terminal 目录 URI 解析失败" in str(rejected.value)
+            assert str(owner.workspace_root) not in str(rejected.value)
+            assert isinstance(rejected.value.__cause__, RuntimeError)
+            assert str(loop) in str(rejected.value.__cause__)
+            diagnostic = next(record for record in caplog.records if record.msg == "Terminal 目录 URI 解析失败: uri=%s")
+            assert diagnostic.exc_info is not None
+            assert diagnostic.exc_info[1] is rejected.value.__cause__
+            assert {path: path.read_bytes() for path in state_files} == before
+        finally:
+            loop.unlink()
+    assert set(owner._store.records) == {item["terminal_id"] for item in receipts}
+    assert not (directory / "unexpected.txt").exists()
+    artifacts = TestRunContext.from_test_file(Path(__file__)).artifacts_dir
+    (artifacts / f"directory-uri-cwd-{uuid4().hex}.json").write_text(
+        json.dumps({"uri": uri, "receipts": receipts, "rejected_uris": rejected_uris}, ensure_ascii=False, indent=2), encoding="utf-8",
+    )
 
 
 @pytest.mark.asyncio

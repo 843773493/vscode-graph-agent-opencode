@@ -11,6 +11,7 @@ from app.services.business.terminal_resources.owner import TerminalResourceOwner
 from app.services.infrastructure.external_resource_leases import (
     ExternalResourceLeaseLedger,
 )
+from app.services.infrastructure.workspace_files.paths import WorkspaceFilePaths
 from tests.support.resource_owners.sessions import (
     SESSION_A,
     WORKSPACE_ID,
@@ -103,7 +104,7 @@ class TerminalOwnerFixture:
     def restart(self) -> TerminalResourceOwner:
         self.leases = ExternalResourceLeaseLedger(state_path=self.root / ".boxteam" / "resources.json")
         self.owner = TerminalResourceOwner(
-            workspace_root=self.root, workspace_id=WORKSPACE_ID,
+            file_paths=WorkspaceFilePaths(workspace=self.root, workspace_id=WORKSPACE_ID, bindings=None),
             sessions=self.sessions, threads=self.sessions, transport=self.transport,
             leases=self.leases, clock=lambda: self.now,
             thread_release_fence=self.sessions.accepts_release,

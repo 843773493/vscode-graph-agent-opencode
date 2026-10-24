@@ -16,7 +16,6 @@ from app.agents.tool_invocation_context import (
     ToolInvocationContext,
 )
 from app.agents.tools.terminal import (
-    _resolve_terminal_workdir,
     create_exec_command_tool,
     create_kill_terminal_tool,
     create_list_terminal_sessions_tool,
@@ -25,7 +24,9 @@ from app.agents.tools.terminal import (
 from app.agents.tools.terminal_command import _build_terminal_input
 from app.agents.tools.terminal_contract import tool_output
 from app.core.execution_admission_context import execution_admission_scope
+from app.core.resource_uri import resource_display_uri
 from app.core.session_thread_context import session_thread_owner_scope
+from app.core.trace_middleware import reset_current_gateway_id, set_current_gateway_id
 from app.core.turn_execution_scope import (
     TurnExecutionScope,
     reset_current_turn_execution_scope,
@@ -37,6 +38,7 @@ from app.services.business.terminal_resources.owner import TerminalResourceOwner
 from app.services.infrastructure.external_resource_leases import (
     ExternalResourceLeaseLedger,
 )
+from app.services.infrastructure.workspace_files.paths import WorkspaceFilePaths
 from tests.support.resource_owners.sessions import (
     SESSION_A,
     SESSION_B,
@@ -260,7 +262,8 @@ def terminal_env(tmp_path: Path) -> Iterator[TerminalEnvironment]:
     sessions = ResourceOwnerSessionsFake(tmp_path)
     client = _FakeTerminalClient(tmp_path)
     owner = TerminalResourceOwner(
-        workspace_root=tmp_path, workspace_id=WORKSPACE_ID, sessions=sessions,
+        file_paths=WorkspaceFilePaths(workspace=tmp_path, workspace_id=WORKSPACE_ID, bindings=None),
+        sessions=sessions,
         threads=sessions, transport=client, leases=ExternalResourceLeaseLedger(),
         thread_release_fence=sessions.accepts_release,
     )
@@ -314,7 +317,6 @@ async def test_exec_command_creates_independent_terminals_and_applies_options(te
     tool = create_exec_command_tool(
         session_id=SESSION_A,
         terminal_owner=terminal_env.owner, invocation_context=terminal_env.context,
-        workspace_root=workspace_root,
     )
 
     first = await tool.ainvoke(
@@ -370,26 +372,113 @@ async def test_exec_command_requires_trusted_thread_binding_before_create(termin
     assert client.next_id == 1
 
 
-def test_resolves_relative_workdir_once_against_workspace_root(tmp_path: Path) -> None:
-    assert _resolve_terminal_workdir(
-        "parry_arena",
-        workspace_root=tmp_path,
-    ) == str((tmp_path / "parry_arena").resolve())
+@pytest.mark.asyncio
+@pytest.mark.parametrize("workdir", ["parry_arena", "..", ".boxteam", ""])
+async def test_exec_command_keeps_shell_native_relative_workdirs(
+    terminal_env: TerminalEnvironment, workdir: str,
+) -> None:
+    execute = create_exec_command_tool(
+        SESSION_A, terminal_owner=terminal_env.owner, invocation_context=terminal_env.context,
+    )
+    result = await execute.ainvoke({"cmd": "printf native", "workdir": workdir, "yield_time_ms": 1})
+    expected = (terminal_env.root / workdir).resolve()
+    assert terminal_env.client.created_cwds[result["terminal_id"]] == str(expected)
+    assert result["cwd_relative"] == os.path.relpath(expected, terminal_env.root)
 
 
-def test_resolve_terminal_workdir_honors_absolute_path_outside_workspace(
-    tmp_path: Path,
+@pytest.mark.asyncio
+@pytest.mark.skipif(os.name == "nt", reason="POSIX 原生文件名允许冒号")
+@pytest.mark.parametrize("absolute", [False, True])
+async def test_exec_command_preserves_uri_like_native_directory_names(
+    terminal_env: TerminalEnvironment, absolute: bool,
+) -> None:
+    workdir = str(terminal_env.root) + "/build://debug" if absolute else "build://debug"
+    execute = create_exec_command_tool(
+        SESSION_A, terminal_owner=terminal_env.owner, invocation_context=terminal_env.context,
+    )
+    result = await execute.ainvoke({"cmd": "printf native", "workdir": workdir, "yield_time_ms": 1})
+    assert terminal_env.client.created_cwds[result["terminal_id"]] == str(terminal_env.root / "build:/debug")
+    assert result["cwd_relative"] == "build:/debug"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("qualified", [False, True])
+async def test_exec_command_resolves_directory_uri_in_bound_workspace(
+    terminal_env: TerminalEnvironment, qualified: bool,
+) -> None:
+    gateway_id = "gateway_0123456789abcdef0123456789abcdef"
+    token = set_current_gateway_id(gateway_id)
+    directory = terminal_env.root / "子目录 with spaces"
+    directory.mkdir()
+    uri = resource_display_uri(
+        scope="workspace", scope_id=WORKSPACE_ID, kind="files",
+        tail_segments=("root", directory.name),
+        gateway_authority=gateway_id if qualified else None,
+    )
+    command = "printf boxteam://literal-command-text"
+    try:
+        execute = create_exec_command_tool(
+            SESSION_A, terminal_owner=terminal_env.owner, invocation_context=terminal_env.context,
+        )
+        result = await execute.ainvoke({"cmd": command, "workdir": uri, "yield_time_ms": 1})
+        assert terminal_env.client.created_cwds[result["terminal_id"]] == str(directory)
+        assert result["cwd_relative"] == directory.name
+        assert str(terminal_env.root) not in json.dumps(result)
+        assert terminal_env.client.writes[-1]["command"] == command
+        assert command in terminal_env.client.writes[-1]["data"]
+    finally:
+        reset_current_gateway_id(token)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("target", ["workspace", "gateway", "artifact", "malformed"])
+async def test_exec_command_rejects_other_uri_targets_before_creating_pty(
+    terminal_env: TerminalEnvironment, target: str,
+) -> None:
+    local_gateway = "gateway_0123456789abcdef0123456789abcdef"
+    token = set_current_gateway_id(local_gateway)
+    uri = resource_display_uri(
+        scope="workspace",
+        scope_id="00000000-0000-4000-8000-000000000002" if target == "workspace" else WORKSPACE_ID,
+        kind="files", tail_segments=("root",),
+        gateway_authority="gateway_abcdef0123456789abcdef0123456789" if target == "gateway" else None,
+    )
+    if target == "artifact":
+        uri = resource_display_uri(
+            scope="workspace", scope_id=WORKSPACE_ID, kind="session",
+            tail_segments=(SESSION_A, "attachments", "att_" + "a" * 32),
+        )
+    elif target == "malformed":
+        uri += "/%2Fetc"
+    try:
+        execute = create_exec_command_tool(
+            SESSION_A, terminal_owner=terminal_env.owner, invocation_context=terminal_env.context,
+        )
+        with pytest.raises(ValueError):
+            await execute.ainvoke({"cmd": "printf SHOULD_NOT_RUN", "workdir": uri})
+        assert terminal_env.client.created_cwds == {}
+        assert terminal_env.client.writes == []
+        assert terminal_env.owner._store.records == {}
+    finally:
+        reset_current_gateway_id(token)
+
+
+@pytest.mark.asyncio
+async def test_exec_command_honors_absolute_path_outside_workspace(
+    terminal_env: TerminalEnvironment,
 ) -> None:
     """contract：相对 workdir 锚定 workspace 根；显式绝对路径按原样采用。
 
     PTY 不提供文件沙箱（cmd 本身即可访问任意路径），因此 workdir 不做
     workspace 边界校验；此处锁定该现状，避免后续把它误当作安全边界。
     """
-    assert _resolve_terminal_workdir("/etc", workspace_root=tmp_path) == "/etc"
-    assert _resolve_terminal_workdir(
-        "..",
-        workspace_root=tmp_path / "nested" / "proj",
-    ) == str((tmp_path / "nested").resolve())
+    external = terminal_env.root.with_name("external-cwd")
+    execute = create_exec_command_tool(
+        SESSION_A, terminal_owner=terminal_env.owner, invocation_context=terminal_env.context,
+    )
+    result = await execute.ainvoke({"cmd": "printf native", "workdir": str(external), "yield_time_ms": 1})
+    assert terminal_env.client.created_cwds[result["terminal_id"]] == str(external)
+    assert result["cwd_relative"] == os.path.relpath(external, terminal_env.root)
 
 
 @pytest.mark.asyncio

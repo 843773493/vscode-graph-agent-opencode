@@ -4,7 +4,6 @@ import asyncio
 import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from pathlib import Path
 from time import monotonic
 from typing import Any, Literal
 
@@ -29,38 +28,6 @@ from app.core.identifier import create_uuid_hex
 from app.core.turn_execution_scope import get_current_turn_execution_scope
 from app.services.business.terminal_resources.operations import TerminalOperations
 from app.services.business.terminal_resources.owner import TerminalResourceOwner
-
-
-def _resolve_terminal_workdir(
-    workdir: str | None,
-    *,
-    workspace_root: Path,
-) -> str:
-    """解析 PTY 唯一使用的绝对 cwd。
-
-    相对路径以 workspace 根目录解析一次；显式绝对路径（含 '..' 越界）原样
-    采用，不施加 workspace 边界。PTY 不提供文件沙箱，cmd 本身即可访问任意
-    路径，因此这里不做仅具表面意义的边界校验。
-    """
-    root = workspace_root.resolve()
-    raw_workdir = workdir.strip() if isinstance(workdir, str) else ""
-    if not raw_workdir:
-        return str(root)
-    requested = Path(raw_workdir).expanduser()
-    if not requested.is_absolute():
-        requested = root / requested
-    return str(requested.resolve())
-
-
-def _visibility_workdir(workspace_root: Path, absolute_workdir: str) -> str:
-    """把调用栈内的绝对 cwd 收窄为对模型只读的工作区相对表达。
-
-    模型可见载荷 MUST NOT 出现绝对真实路径（裁定 D-A2/D-A3）；这里返回相对
-    workspace 根目录的路径，与持久记录 `cwd_relative` 语义一致（``"."`` 表示根）。
-    """
-    root = workspace_root.resolve()
-    relative = os.path.relpath(absolute_workdir, root)
-    return relative
 
 
 @asynccontextmanager
@@ -110,10 +77,8 @@ def create_exec_command_tool(
     *,
     terminal_owner: TerminalResourceOwner,
     invocation_context: ToolInvocationContext,
-    workspace_root: Path | None = None,
 ) -> BaseTool:
     """创建 Codex 风格的持久终端命令工具。"""
-    resolved_workspace_root = (workspace_root or terminal_owner.workspace_root).resolve()
 
     @tool("exec_command")
     async def exec_command(
@@ -128,8 +93,8 @@ def create_exec_command_tool(
     ) -> dict[str, Any]:
         """运行命令；未在等待窗口内结束时返回可供 write_stdin 使用的 session_id。
 
-        workdir 是一次性 PTY cwd：相对路径以 workspace 根目录解析一次，显式绝对
-        路径按原样使用。不要在 cmd 中再次 cd 到该目录。
+        workdir 是一次性 PTY cwd：接受目标工作区目录 URI、相对路径和原生绝对路径；
+        相对路径固定以 workspace 根目录解析。不要在 cmd 中再次 cd 到该目录。
         Godot 使用 ``--path project`` 时，``--export-release`` 的输出路径相对于 project；
         例如从 workspace 根运行时使用 ``godot_export/game.html``，不要重复写成
         ``project/godot_export/game.html``。
@@ -144,16 +109,11 @@ def create_exec_command_tool(
             validate_max_output_tokens(max_output_tokens)
             resolved_yield_time_ms = effective_yield_time_ms(yield_time_ms)
             started_at = monotonic()
-            resolved_workdir = _resolve_terminal_workdir(
-                workdir,
-                workspace_root=resolved_workspace_root,
-            )
-
             terminal = await terminal_client.create_terminal(
                 retention_scope=retention_scope,
                 title=f"{agent_id} terminal",
                 agent_id=agent_id,
-                cwd=resolved_workdir,
+                cwd=workdir.strip() if workdir is not None else None,
             )
             terminal_id = str(terminal["terminal_id"])
             run_id = create_uuid_hex()
@@ -212,9 +172,7 @@ def create_exec_command_tool(
                             exit_code,
                         ),
                     )
-                    result["cwd_relative"] = _visibility_workdir(
-                        resolved_workspace_root, resolved_workdir
-                    )
+                    result["cwd_relative"] = terminal["cwd_relative"]
                     return result
                 remaining_seconds = deadline - asyncio.get_running_loop().time()
                 if remaining_seconds <= 0:
@@ -234,7 +192,7 @@ def create_exec_command_tool(
                 max_output_tokens=max_output_tokens,
                 running=True,
             )
-            result["cwd_relative"] = _visibility_workdir(resolved_workspace_root, resolved_workdir)
+            result["cwd_relative"] = terminal["cwd_relative"]
             return result
 
     return exec_command

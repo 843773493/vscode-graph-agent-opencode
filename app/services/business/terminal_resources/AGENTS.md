@@ -25,5 +25,6 @@ terminal_resources/
 ## 规范
 
 - 显式绑定工作区 UUID 与根目录；真实 SessionThread 必须经过 catalog 和生命周期准入。
+- 创建依赖已装配的 `WorkspaceFilePaths`；所有 Terminal 创建入口在 owner 内解析 cwd。目录 URI 复用该文件 owner 的目标/权限校验，原生 Shell 路径继续允许工作区外和私有目录；不改写命令正文。工具回执直接使用真实 PTY 的 `cwd_relative`，不另建 cwd 投影或按工具参数猜测执行位置。
 - 外部结果未知时保留可发现记录并显式报错；停止/删除只在核实后结清。
 - 持久化不包含绝对真实路径，客户端连接不隐式建立 Thread 关联。

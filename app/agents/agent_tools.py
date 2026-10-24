@@ -110,7 +110,6 @@ def build_default_tools(
             agent_id=agent_id,
             terminal_owner=terminal_resource_owner,
             invocation_context=invocation_context,
-            workspace_root=workspace_root,
         ),
         create_write_stdin_tool(
             session_id=session_id,

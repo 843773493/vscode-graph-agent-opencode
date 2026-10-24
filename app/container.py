@@ -732,7 +732,7 @@ def _build_app_container(
         local_token_supplier=get_gateway_local_token,
     ))
     terminal_resource_owner = TerminalResourceOwner(
-        workspace_root=resolved_workspace_root, workspace_id=workspace_id,
+        file_paths=workspace_service.file_paths,
         sessions=session_service, threads=session_path_resolver,
         transport=terminal_manager_client, leases=external_resource_leases,
         thread_release_fence=thread_residency_tracker.is_unloading_generation,
