@@ -496,6 +496,7 @@ async def test_legacy_snapshot_locations_are_not_accepted_as_cold_read_targets(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("reference", [
     "boxteam://workspace/absent-target/resources/files/root/%e4%b8%ad.txt",
+    "boxteam://workspace/target/resources/attachments/att_0123456789abcdef0123456789abcdef/derived/%e4%b8%ad.txt",
     "boxteam://gateway_0123456789abcdef0123456789abcdef/gateway/gateway_01900000000070008000000000000001/resources/files/01900000000070008000000000000001/%e4%b8%ad.txt",
 ])
 async def test_dangling_workspace_and_gateway_change_uris_preserve_content_after_cold_read(

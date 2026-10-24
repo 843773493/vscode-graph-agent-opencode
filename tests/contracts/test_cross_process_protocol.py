@@ -55,10 +55,14 @@ def test_attachment_and_turn_directory_reference_survive_proto_wire(has_director
         assert schema.model_validate(MessageToDict(received, preserving_proto_field_name=True)) == value
 
 
-def test_session_file_change_wire_and_openapi_use_uri_and_content_without_snapshot_locations() -> None:
+@pytest.mark.parametrize("file_path", [
+    "boxteam://workspace/absent-target/resources/files/root/%e4%b8%ad.txt",
+    "boxteam://workspace/absent-target/resources/attachments/att_0123456789abcdef0123456789abcdef/derived/%e4%b8%ad.txt",
+])
+def test_session_file_change_wire_and_openapi_use_uri_and_content_without_snapshot_locations(file_path: str) -> None:
     from app.main import app
 
-    value = SessionFileChangeDTO(file_path="boxteam://workspace/absent-target/resources/files/root/%e4%b8%ad.txt",
+    value = SessionFileChangeDTO(file_path=file_path,
         kind="edit", latest_edit_id="edit_0123456789ab", diff_text="-before\n+after\n",
         before_preview="before\n", after_preview="after\n")
     assert value.file_path.endswith("/%E4%B8%AD.txt")

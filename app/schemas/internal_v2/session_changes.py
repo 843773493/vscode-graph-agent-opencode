@@ -16,8 +16,8 @@ def validate_change_file_reference(value: str, *, local_gateway_id: str | None =
         resource = parse_resource_uri(value, local_gateway_id=local_gateway_id)
     except ResourceUriGrammarError as error:
         raise ValueError(f"文件变更 URI 校验失败: reason={error.reason_code}") from error
-    if resource.kind != "files" or len(resource.tail_segments) < 2:
-        raise ValueError("文件变更只能引用明确的 Workspace/Gateway 文件 URI")
+    if resource.kind not in {"files", "attachments"} or len(resource.tail_segments) < 2:
+        raise ValueError("文件变更只能引用明确的普通文件或附件目录 child URI")
     return resource.display_uri
 
 
