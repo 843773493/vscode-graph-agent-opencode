@@ -7,7 +7,7 @@ import hashlib
 import json
 import sqlite3
 import subprocess
-from collections.abc import AsyncIterator, Generator
+from collections.abc import AsyncIterator, Callable, Generator
 from contextlib import closing
 from dataclasses import asdict
 from itertools import pairwise
@@ -24,6 +24,13 @@ from app.domain.itemized.epoch.prefix_epoch import (
     stable_prefix_bytes,
     stable_prefix_digest,
 )
+from app.domain.itemized.hashing import (
+    canonical_json_bytes,
+    contribution_content_hash,
+    sha256_jcs,
+)
+from app.schemas.internal_v2.session_context import SessionContextReadResultDTO
+from app.services.business.resource_derivations.agents import WORKSPACE_AGENTS_SOURCE_ID
 from app.services.business.session_context_resource import context_assembly_identity
 from app.services.infrastructure.rollout_context.assembly.content_store import (
     load_snapshot,
@@ -47,11 +54,21 @@ from tests.support.processes.gateway import (
     start_gateway_process,
 )
 from tests.support.processes.workspace import (
+    BackendProcess,
     close_backend_process,
     start_backend_process,
     terminate_process,
 )
 from tests.support.sealed_request_audit import logged_provider_wire
+
+_AGENTS_VERSIONS = (
+    ("CIL_PROVIDER_AGENTS_A\n审计回执：CIL_PROVENANCE_TURN_1_OK\n"
+     "回复规则：只输出上下文中最后出现的 CIL_PROVENANCE_TURN_<数字>_OK 完整标记，不添加其它内容，不调用工具。\n"),
+    ("CIL_PROVIDER_AGENTS_B\r\n保留末尾空白  \n审计回执：CIL_PROVENANCE_TURN_2_OK\n"
+     "回复规则：只输出上下文中最后出现的 CIL_PROVENANCE_TURN_<数字>_OK 完整标记，不添加其它内容，不调用工具。\n"),
+    ("CIL_PROVIDER_AGENTS_C 🧭\n保留末尾空白  \n审计回执：CIL_PROVENANCE_TURN_3_OK\n"
+     "回复规则：只输出上下文中最后出现的 CIL_PROVENANCE_TURN_<数字>_OK 完整标记，不添加其它内容，不调用工具。\n"),
+)
 
 
 @pytest.fixture(scope="module")
@@ -67,6 +84,31 @@ def e2e_backend_composition(request: pytest.FixtureRequest) -> tuple[str, dict[s
     """真实工作区的 Skill 回查必须指向同一隔离 Gateway。"""
     port = e2e_port_block_for_file(Path(request.node.fspath)).port(1)
     return "app.main:app", {"BOXTEAM_GATEWAY_URL": f"http://127.0.0.1:{port}"}
+
+
+@pytest.fixture
+def provenance_backend_start(
+    e2e_workspace_root_path: str, e2e_backend_port: int,
+    e2e_backend_composition: tuple[str, dict[str, str]],
+) -> Generator[Callable[[str], subprocess.Popen[str]], None, None]:
+    """所有重启进程归同一 fixture 持有，中途断言失败也必须回收。"""
+    processes: list[BackendProcess] = []
+
+    def start(log_name: str) -> subprocess.Popen[str]:
+        asgi_app, environment = e2e_backend_composition
+        process = start_backend_process(
+            workspace_root=e2e_workspace_root_path, port=e2e_backend_port,
+            log_name=log_name, asgi_app=asgi_app, env_overrides=environment,
+            refresh_user_configuration=False,
+        )
+        processes.append(process)
+        return process.process
+
+    try:
+        yield start
+    finally:
+        for process in reversed(processes):
+            close_backend_process(process)
 
 
 @pytest.fixture(scope="module")
@@ -147,6 +189,30 @@ async def _audit_log_api(
         for field in ("session_id", "job_id", "timestamp", "request", "response", "upstream"):
             assert record[field] == raw[field], f"日志 API 丢失或改变 {field}: {path.name}"
     return records
+
+
+async def _trace_events(
+    client: httpx.AsyncClient, session_id: str, artifacts: Path, ordinal: int,
+) -> list[dict]:
+    """诊断页从尾部向前读取，合并后仍按原始发生顺序审计。"""
+    events: list[dict] = []
+    cursors: set[str] = set()
+    params: dict[str, str | int] = {"limit": 200}
+    while True:
+        page = _response(
+            await client.get(f"/api/v1/sessions/{session_id}/traces", params=params),
+            artifacts / f"turn-{ordinal}-trace-page-{len(cursors) + 1}.json",
+        )["data"]
+        events[0:0] = page["items"]
+        if not page["has_more"]:
+            assert page["next_cursor"] is None
+            break
+        cursor = page["next_cursor"]
+        assert isinstance(cursor, str) and cursor and cursor not in cursors
+        cursors.add(cursor)
+        params["cursor"] = cursor
+    assert len({event["event_id"] for event in events}) == len(events), "trace 分页重复事件"
+    return events
 
 
 def _audit_calls(
@@ -340,19 +406,17 @@ async def _assembly_history(
         "include": ["visible_text", "reasoning", "tool_calls", "tool_results", "system", "raw_record"],
         "limit": 200, "max_chars": 65536,
     })
-    page = _response(await client.post("/api/v1/context/read", json=request), artifacts / f"{phase}-{snapshot.assembly_id}-history.json")["data"]
-    assert not page["has_more"] and not page["truncated"], page
-    assert not page["partial_errors"]
-    selected = [item["data"] for item in page["items"] if item["kind"] == "selection"]
+    items = await _context_items(client, request, artifacts, f"{phase}-{snapshot.assembly_id}-history")
+    selected = [item["data"] for item in items if item["kind"] == "selection"]
     assert selected == [entry.to_dict() for entry in snapshot.selection]
-    messages = [item for item in page["items"] if item["kind"] == "message"]
+    messages = [item for item in items if item["kind"] == "message"]
     # assembly history 只投影 canonical selection；request-only prefix frame 不物化为历史消息。
     assert [item["data"]["message_id"] for item in messages] == selected_message_ids
     request.update({"view": "records"})
     request.pop("assembly_ref")
-    records = _response(await client.post("/api/v1/context/read", json=request), artifacts / f"{phase}-{snapshot.assembly_id}-canonical-records.json")["data"]
-    assert not records["has_more"] and not records["truncated"] and not records["partial_errors"]
-    canonical = {item["raw_record"]["response_metadata"]["message_id"]: item for item in records["items"]}
+    records = await _context_items(client, request, artifacts, f"{phase}-{snapshot.assembly_id}-canonical-records")
+    canonical = {item["raw_record"]["response_metadata"]["message_id"]: item for item in records}
+    assert len(canonical) == len(records), "records 分页重复消息"
     for message in messages:
         expected = canonical[message["data"]["message_id"]]
         for field in ("role", "text", "reasoning", "tool_calls", "tool_results"):
@@ -381,6 +445,49 @@ async def _assembly_history(
             assert actual_blocks[part["index"]]["type"] == part["type"]
             assert expected_blocks[part["index"]]["id"] == part["id"]
     return messages
+
+
+async def _context_items(
+    client: httpx.AsyncClient, request: dict, artifacts: Path, name: str,
+) -> list[dict]:
+    """消费公开游标和 JSON item 分片，不能把有预算的单页当完整历史。"""
+    items: list[dict] = []
+    cursors: set[str] = set()
+    chunk = ""
+    revision = None
+    request = dict(request)
+    while True:
+        page = _response(
+            await client.post("/api/v1/context/read", json=request),
+            artifacts / f"{name}-page-{len(cursors) + 1}.json",
+        )["data"]
+        assert not page["partial_errors"] and not page["omitted_partial_error_count"]
+        assert page["returned_chars"] == len(SessionContextReadResultDTO.model_validate(page).model_dump_json())
+        assert page["returned_chars"] <= request["max_chars"]
+        assert len(page["items"]) <= request["limit"]
+        for field in ("resource_identity", "uri", "scope", "view"):
+            assert page[field] == request[field]
+        assert page["assembly_ref"] == request.get("assembly_ref")
+        if revision is None:
+            revision = page["revision"]
+        assert page["revision"] == revision, "同一分页不能混入不同历史版本"
+        for item in page["items"]:
+            if item["kind"].endswith("_chunk"):
+                assert item["data"]["chunk_start"] == len(chunk)
+                chunk += item["text"]
+                if not item["truncated"]:
+                    items.append(json.loads(chunk))
+                    chunk = ""
+            else:
+                assert not chunk and not item["truncated"]
+                items.append(item)
+        if not page["has_more"]:
+            assert page["next_cursor"] is None and not chunk and not page["truncated"]
+            return items
+        cursor = page["next_cursor"]
+        assert isinstance(cursor, str) and cursor and cursor not in cursors
+        cursors.add(cursor)
+        request["cursor"] = cursor
 
 
 def _checkpoint_state(thread_node: Path) -> dict:
@@ -442,28 +549,79 @@ def _checkpoint_state(thread_node: Path) -> dict:
         return state
 
 
+def _audit_agents_versions(
+    audited: list[tuple[ContextAssemblySnapshot, dict]], *, ordinal: int, artifacts: Path,
+) -> None:
+    """真实请求只追加精确 A→B→C delta，路由重投影仍保留原 A root。"""
+    revisions = [sha256_jcs({"content": content}) for content in _AGENTS_VERSIONS]
+    deltas = (
+        (f"--- AGENTS.md@{revisions[0]}\n+++ AGENTS.md@{revisions[1]}\n"
+         "@@ -1,3 +1,4 @@\n-CIL_PROVIDER_AGENTS_A\n-审计回执：CIL_PROVENANCE_TURN_1_OK\n"
+         "+CIL_PROVIDER_AGENTS_B\r\n+保留末尾空白  \n+审计回执：CIL_PROVENANCE_TURN_2_OK\n"
+         " 回复规则：只输出上下文中最后出现的 CIL_PROVENANCE_TURN_<数字>_OK 完整标记，不添加其它内容，不调用工具。\n"),
+        (f"--- AGENTS.md@{revisions[1]}\n+++ AGENTS.md@{revisions[2]}\n"
+         "@@ -1,4 +1,4 @@\n-CIL_PROVIDER_AGENTS_B\r\n+CIL_PROVIDER_AGENTS_C 🧭\n 保留末尾空白  \n"
+         "-审计回执：CIL_PROVENANCE_TURN_2_OK\n+审计回执：CIL_PROVENANCE_TURN_3_OK\n"
+         " 回复规则：只输出上下文中最后出现的 CIL_PROVENANCE_TURN_<数字>_OK 完整标记，不添加其它内容，不调用工具。\n"),
+    )
+    applied = []
+    frames_by_assembly = {}
+    for snapshot, _ in audited:
+        binding = snapshot.seal_binding
+        assert binding is not None and binding.root is not None
+        root_source, = [source for source in binding.root.sources
+                        if source.source_identity == WORKSPACE_AGENTS_SOURCE_ID]
+        assert root_source.revision == revisions[0]
+        assert root_source.content_hash == contribution_content_hash("root_source", _AGENTS_VERSIONS[0])
+        assert _AGENTS_VERSIONS[0] in binding.root.content
+        frames = [frame for frame in binding.prefix.state.frames
+                  if frame.item_ref.source_identity == WORKSPACE_AGENTS_SOURCE_ID]
+        assert [(frame.item_ref.source_revision, frame.role, frame.content) for frame in frames] == [
+            (revisions[index + 1], "user", deltas[index]) for index in range(ordinal - 1)
+        ]
+        frames_by_assembly[snapshot.assembly_id] = [frame.to_dict() for frame in frames]
+        for revision in binding.source_revisions:
+            if revision.source_id == WORKSPACE_AGENTS_SOURCE_ID:
+                assert revision.revision == revisions[ordinal - 1]
+                assert revision.previous_revision == (revisions[ordinal - 2] if ordinal > 1 else None)
+                applied.append(asdict(revision))
+    assert applied, "该轮真实 seal 未应用对应 AGENTS revision"
+    _save(artifacts / f"turn-{ordinal}-agents-source-audit.json", {
+        "source_id": WORKSPACE_AGENTS_SOURCE_ID, "revision": revisions[ordinal - 1],
+        "applied": applied, "frames_by_assembly": frames_by_assembly,
+    })
+
+
 @pytest.mark.asyncio
 async def test_real_provider_provenance_survives_cold_history(
     client: httpx.AsyncClient, e2e_workspace_root_path: str, e2e_backend_process: subprocess.Popen[str],
-    e2e_backend_port: int, e2e_backend_composition: tuple[str, dict[str, str]],
-    provenance_artifacts: Path,
+    provenance_backend_start: Callable[[str], subprocess.Popen[str]], provenance_artifacts: Path,
 ) -> None:
     artifacts = provenance_artifacts
+    workspace = Path(e2e_workspace_root_path)
+    agents_path = workspace / "AGENTS.md"
+    agents_path.write_bytes(_AGENTS_VERSIONS[0].encode())
+    active_backend = e2e_backend_process
     for endpoint in ("/api/gateway/health", "/api/gateway/workspaces", "/api/v1/workspace"):
         _response(await client.get(endpoint), artifacts / f"{endpoint.rsplit('/', 1)[1]}-initialization.json")
     session = _response(await client.post("/api/v1/sessions", json={"title": "真实 Provider provenance"}), artifacts / "created-session.json")["data"]
     session_id, thread_id = session["session_id"], session["thread_id"]
     # 只选择隔离 Session 已配置的真实 Responses Provider，不改全局配置或增加请求覆盖。
     session = _response(await client.patch(f"/api/v1/sessions/{session_id}", json={"provider_id": "backup_3"}), artifacts / "selected-provider.json")["data"]
-    workspace = Path(e2e_workspace_root_path)
     resolver = get_session_path_resolver(workspace / ".boxteam" / "sessions")
     session_node = resolver.resolve_session_node(session_id)
     thread_node = resolver.resolve_thread_node(session_id, thread_id)
     desired = ToolSelectionStore(boxteam_root=workspace / ".boxteam").snapshot("default")
     snapshots = []
     receipts = []
+    response_mismatches = []
     failed_job = None
-    for ordinal in (1, 2):
+    for ordinal, source_body in enumerate(_AGENTS_VERSIONS, 1):
+        if ordinal > 1:
+            # 停机期间只改真实来源文件；历史、checkpoint 与 CSM 状态全部由产品恢复。
+            terminate_process(active_backend)
+            agents_path.write_bytes(source_body.encode())
+            active_backend = provenance_backend_start(f"provenance-source-{ordinal}-backend")
         marker = f"CIL_PROVENANCE_TURN_{ordinal}_OK"
         prompt = f"不要调用任何工具。只回复这一行且不添加其它内容：{marker}"
         sent = _response(await client.post(f"/api/v1/sessions/{session_id}/messages", json={
@@ -471,12 +629,12 @@ async def test_real_provider_provenance_survives_cold_history(
         }), artifacts / f"turn-{ordinal}-entry.json")["data"]
         job = await _terminal_job(client, sent["job_id"], artifacts / f"turn-{ordinal}-job.json")
         succeeded = job["status"] in {"completed", "succeeded"}
-        traces = _response(await client.get(f"/api/v1/sessions/{session_id}/traces", params={"limit": 200}), artifacts / f"turn-{ordinal}-trace.json")["data"]
-        assert not traces["has_more"]
+        traces = await _trace_events(client, session_id, artifacts, ordinal)
         audited = _audit_calls(session_node, thread_node, session_id=session_id, thread_id=thread_id,
             job_id=sent["job_id"], desired_revision=desired.revision, artifacts=artifacts,
             ordinal=ordinal, succeeded=succeeded)
-        model_events = [event for event in traces["items"]
+        _audit_agents_versions(audited, ordinal=ordinal, artifacts=artifacts)
+        model_events = [event for event in traces
                         if event["job_id"] == sent["job_id"] and event["type"] == "llm_request"]
         assert [event["raw"]["payload"]["model"] for event in model_events] == [
             receipt["upstream_model"] for _, receipt in audited
@@ -499,7 +657,9 @@ async def test_real_provider_provenance_survives_cold_history(
         projected_ids = {part["source"]["item_id"] for part in turn["response_parts"]}
         assert output_item_ids == projected_ids, "历史必须精确投影有效输出，不能重复 stream/shadow"
         if succeeded:
-            assert turn["final_response"].strip() == marker
+            # 先收齐来源链和冷恢复证据，最终仍以精确 marker 判定整场通过。
+            if turn["final_response"].strip() != marker:
+                response_mismatches.append({"turn": ordinal, "expected": marker, "actual": turn["final_response"]})
         else:
             if not output_item_ids:
                 assert not projected_ids and not turn["final_response"], "失败调用不得伪造 assistant 输出"
@@ -525,33 +685,36 @@ async def test_real_provider_provenance_survives_cold_history(
     before = _checkpoint_state(thread_node)
     _save(artifacts / "before-cold-checkpoint-state.json", before)
     live_history = _response(await client.post(f"/api/v1/sessions/{session_id}/history", json={
-        "direction": "head", "turns": 2, "include": ["user", "text", "final_response", "metadata"],
+        "direction": "head", "turns": len(_AGENTS_VERSIONS), "include": ["user", "text", "final_response", "metadata"],
     }), artifacts / "live-history.json")["data"]
     live_logs = await _audit_log_api(client, session_node, session_id, artifacts, phase="before-cold")
-    terminate_process(e2e_backend_process)
-    asgi_app, environment = e2e_backend_composition
-    restarted = start_backend_process(
-        workspace_root=e2e_workspace_root_path, port=e2e_backend_port,
-        log_name="provenance-cold-backend", asgi_app=asgi_app, env_overrides=environment,
-        refresh_user_configuration=False,
-    )
-    try:
-        cold_history = _response(await client.post(f"/api/v1/sessions/{session_id}/history", json={
-            "direction": "head", "turns": 2, "include": ["user", "text", "final_response", "metadata"],
-        }), artifacts / "cold-history.json")["data"]
-        assert cold_history["items"] == live_history["items"]
-        assert await _audit_log_api(client, session_node, session_id, artifacts, phase="cold") == live_logs
-        for snapshot, receipt in zip(snapshots, receipts, strict=True):
-            await _assembly_history(client, session, snapshot, artifacts, phase="cold",
-                                    selected_message_ids=receipt["selected_history_message_ids"])
-        after = _checkpoint_state(thread_node)
-        _save(artifacts / "after-cold-checkpoint-state.json", after)
-        assert after == before, "冷 history/assembly projection 不得创建或改写 checkpoint/seal"
-    finally:
-        close_backend_process(restarted)
+    terminate_process(active_backend)
+    agents_path.write_bytes(b"CIL_PROVIDER_AGENTS_CURRENT_FILE_IS_NOT_HISTORY\n")
+    provenance_backend_start("provenance-cold-backend")
+    cold_history = _response(await client.post(f"/api/v1/sessions/{session_id}/history", json={
+        "direction": "head", "turns": len(_AGENTS_VERSIONS), "include": ["user", "text", "final_response", "metadata"],
+    }), artifacts / "cold-history.json")["data"]
+    assert cold_history["items"] == live_history["items"]
+    assert await _audit_log_api(client, session_node, session_id, artifacts, phase="cold") == live_logs
+    with closing(sqlite3.connect(f"file:{thread_node / 'rollout' / 'index.sqlite'}?mode=ro", uri=True)) as connection:
+        for snapshot in snapshots:
+            manifest, = connection.execute(
+                "SELECT snapshot_json FROM context_assemblies WHERE assembly_id=?", (snapshot.assembly_id,),
+            ).fetchone()
+            assert canonical_json_bytes(load_snapshot(connection, manifest)) == canonical_json_bytes(snapshot.to_dict()), (
+                "来源变化或重启改写了旧 assembly"
+            )
+    for snapshot, receipt in zip(snapshots, receipts, strict=True):
+        await _assembly_history(client, session, snapshot, artifacts, phase="cold",
+                                selected_message_ids=receipt["selected_history_message_ids"])
+    after = _checkpoint_state(thread_node)
+    _save(artifacts / "after-cold-checkpoint-state.json", after)
+    assert after == before, "冷 history/assembly projection 不得创建或改写 checkpoint/seal"
     _save(artifacts / "provenance-audit.json", {
-        "status": "failed_call" if failed_job is not None else "passed",
+        "status": "failed_call" if failed_job is not None else "failed_response" if response_mismatches else "passed",
         "session_id": session_id, "thread_id": thread_id, "calls": receipts,
         "failed_job": failed_job,
+        "response_mismatches": response_mismatches,
     })
     assert failed_job is None, f"真实调用失败；完整失败审计与冷恢复收据已保存: {failed_job}"
+    assert not response_mismatches, f"真实 Provider 未遵守精确回复要求: {response_mismatches}"
