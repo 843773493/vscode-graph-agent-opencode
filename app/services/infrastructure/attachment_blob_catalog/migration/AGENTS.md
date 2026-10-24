@@ -20,6 +20,7 @@
 - prepare 仅准备 schema 3 备份；convert/verify-directories 只处理备份内独立目录。prepare-catalog/verify-catalog 在 `converted/catalog.sqlite` 准备 schema 4 的目录、文件版本、关联及不可变来源绑定，DDL 唯一定义在 `../sql/managed_directory_schema.sql`。旧线上 owner 仍只支持 schema 3；线上上传/读取、新 fork/ingest 及切换/撤销仍 TODO，不能把 catalog_prepared 当成线上可用。
 - 每个旧 attachment_id 单独复制原件到 `original/content`，已有预览逐字复制到 `preview/512.webp`，`derived/` 留空；不使用硬链接，不重新生成预览。完整旧 owner/blob 行保留在转换清单，UTC 日期来自 owner 创建时间。released 的释放时间与显式 retention 保护保留，tombstoned 不造目录。
 - 转换和核验复用原维护锁互斥；复制中断只回收本计划的 `.partial` 副本，已完成文件核 hash/length 后复用，损坏成品不覆盖。全量来源与目标校验、durability 完成后才发布目录准备完成。
+- convert 的初始化元数据先写入由完整计划 hash 定位的 `.converted-{hash}.preparing`，manifest/journal 全部 durable 后才原子发布 `converted/`，再复制正文。重试只回收同一计划的未发布初始化目录，不清理其它计划或原备份；已存在但缺失身份元数据的旧 `converted/` 仍明确拒绝，不猜测归属。
 - 命令只输出稳定身份、状态与计数，清单只保存相对 locator，不输出普通业务原生路径。
 - 目标 catalog journal 绑定原备份、目录清单和 DDL 指纹；写库或 rename 后中断可沿同一准备身份续跑，成品必须完整核验且绝不覆盖。终态 fork snapshot_json 和 preimage 原样保存，来源表禁止 UPDATE/DELETE；新结构不得重算旧历史 hash。
 - 完成物化或中止的临时 capture 可已由原 owner 清理；残留 capture 仍按原 snapshot/marker hash 核验并逐字保存。离线准入不得要求重建已清理的终态临时目录。Linux 的既有执行明细文件名可含冒号，locator 按目标原生语义保留，同时拒绝各段盘符、逃逸与符号链接；Windows 继续拒绝冒号文件名。

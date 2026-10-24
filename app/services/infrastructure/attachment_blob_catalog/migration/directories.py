@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
+import shutil
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -217,9 +219,18 @@ def convert_backup(directory: Path) -> dict[str, object]:
             if journal != {"format_version": 1, "state": "preparing"}:
                 raise RuntimeError("附件转换 journal 状态未知")
         else:
-            root.mkdir(mode=0o700)
-            atomic_write_bytes(root / "manifest.json", payload)
-            atomic_write_bytes(root / "journal.json", _json({"format_version": 1, "state": "preparing"}))
+            # 初始化只包含可重建元数据；完整计划 hash 限定本次可回收的临时目录。
+            preparing = checked_path(directory, ".converted-" + hashlib.sha256(payload).hexdigest() + ".preparing")
+            if preparing.exists():
+                if not preparing.is_dir():
+                    raise RuntimeError("附件转换初始化位置不是普通目录，拒绝覆盖")
+                shutil.rmtree(preparing)
+            preparing.mkdir(mode=0o700)
+            atomic_write_bytes(preparing / "manifest.json", payload)
+            atomic_write_bytes(preparing / "journal.json", _json({"format_version": 1, "state": "preparing"}))
+            fsync_directory(preparing)
+            os.replace(preparing, root)
+            fsync_directory(directory)
         attachments = checked_path(root, "attachments")
         attachments.mkdir(exist_ok=True, mode=0o700)
         for resource in plan.resources:
@@ -237,6 +248,5 @@ def convert_backup(directory: Path) -> dict[str, object]:
             fsync_directory(path)
         atomic_write_bytes(root / "journal.json", _json({"format_version": 1, "state": "directories_prepared", "plan_sha256": file_digest(root / "manifest.json")}))
         fsync_directory(directory)
-        # TODO: 补齐初始化 manifest/journal 发布前的崩溃恢复；目前缺失即明确报错并保留。
-        # 接续 schema 4 catalog、旧冻结 alias/claim 解析与唯一线上切换点。
+        # TODO: 接续旧冻结 alias/claim 的线上解析与唯一切换点。
         return _verify(root, plan)

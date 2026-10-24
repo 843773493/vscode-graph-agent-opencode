@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import json
 import sqlite3
+import subprocess
+import sys
 from contextlib import closing
 from datetime import UTC, datetime, timedelta
 from io import BytesIO
@@ -246,6 +249,72 @@ async def test_interrupted_copy_can_resume_without_rewriting_completed_files(sha
     assert directories.convert_backup(case.output)["directories"] == 2
     assert completed.stat().st_ino == original_stat.st_ino and completed.stat().st_mtime_ns == original_stat.st_mtime_ns
     assert not list((case.output / "converted").rglob("*.partial"))
+
+
+@pytest.mark.parametrize("window", [
+    "before_manifest", "manifest_partial", "manifest_published", "journal_partial",
+    "journal_published", "before_root_rename", "after_root_rename",
+])
+async def test_initialization_process_exit_resumes_without_exposing_incomplete_root(
+    backup_case: BackupCase, window: str,
+) -> None:
+    case = backup_case
+    backup.prepare_backup(case.workspace, case.output)
+    original_files = {row["locator"]: file_digest(case.output / "data" / row["locator"])
+                      for row in json.loads((case.output / "manifest.json").read_bytes())["files"]}
+    unrelated = case.output / ".converted-unrelated.preparing"
+    unrelated.mkdir()
+    (unrelated / "keep.txt").write_bytes(b"unrelated preparation")
+    probe = r'''
+import os
+import sys
+from pathlib import Path
+from app.services.infrastructure.attachment_blob_catalog.migration import directories
+
+directory, window = Path(sys.argv[1]), sys.argv[2]
+write, replace = directories.atomic_write_bytes, directories.os.replace
+
+def interrupted_write(path, payload):
+    if path.name == "manifest.json" and window == "before_manifest":
+        os._exit(86)
+    if (path.name, window) in {("manifest.json", "manifest_partial"), ("journal.json", "journal_partial")}:
+        # 模拟原子写尚未 rename 时进程退出，不能执行 finally 清理。
+        path.with_name("." + path.name + ".crash").write_bytes(payload[:7])
+        os._exit(86)
+    write(path, payload)
+    if (path.name, window) in {("manifest.json", "manifest_published"), ("journal.json", "journal_published")}:
+        os._exit(86)
+
+def interrupted_replace(source, target):
+    publishing = Path(target) == directory / "converted"
+    if publishing and window == "before_root_rename":
+        os._exit(86)
+    result = replace(source, target)
+    if publishing and window == "after_root_rename":
+        os._exit(86)
+    return result
+
+directories.atomic_write_bytes = interrupted_write
+directories.os.replace = interrupted_replace
+directories.convert_backup(directory)
+'''
+    crashed = await asyncio.to_thread(
+        subprocess.run, [sys.executable, "-c", probe, str(case.output), window],
+        capture_output=True, text=True, check=False, timeout=30,
+    )
+    assert crashed.returncode == 86, (crashed.stdout, crashed.stderr)
+    root = case.output / "converted"
+    if root.exists():
+        assert (root / "manifest.json").is_file() and (root / "journal.json").is_file()
+    prepared = cli("convert", "--backup", str(case.output))
+    assert prepared.returncode == 0, prepared.stderr
+    response = json.loads(prepared.stdout)
+    assert response["state"] == "directories_prepared"
+    assert directories.verify_directories(case.output) == response
+    assert list(case.output.glob(".converted-*.preparing")) == [unrelated]
+    assert (unrelated / "keep.txt").read_bytes() == b"unrelated preparation"
+    assert {name: file_digest(case.output / "data" / name) for name in original_files} == original_files
+    assert case.original.read_bytes() == BODY
 
 
 @pytest.mark.parametrize("damage", ["body", "extra_directory", "manifest", "source", "symlink"])
