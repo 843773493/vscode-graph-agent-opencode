@@ -2523,6 +2523,91 @@ async def test_tool_runtime_reentry_retains_cancelled_queue_and_releases_holder(
 
 
 @pytest.mark.asyncio
+async def test_script_native_failure_keeps_paths_out_of_http_and_operation_records(
+    integration_client: httpx.AsyncClient, browser_context: CustomToolFactoryContext,
+    browser_runtime: WorkspaceToolRuntime, browser_manager_processes: tuple[int, int],
+) -> None:
+    container, _session, _invocation = browser_runtime
+    created = await integration_client.post("/api/v1/resources/browsers", json={
+        "session_id": browser_context.session_id,
+        "thread_id": browser_context.invocation_context.thread_binding.thread_id,
+        "url": "about:blank",
+    })
+    assert created.status_code == 200, created.text
+    resource = created.json()["data"]
+    browser_id = resource["resource_id"]
+    root = Path(container.workspace_root)
+    # 用真实文件阻挡截图父目录，异常由原生 Playwright/文件系统产生。
+    blocker = root / "script-output-parent"
+    blocker.write_bytes(b"keep-original-file")
+    native_path = str(blocker / "screenshot.png")
+    payload = {"code": f"await page.screenshot({{path: {json.dumps(native_path)}}});"}
+    transport = BrowserManagerClient(
+        workspace_id=container.workspace_id,
+        backend_url=f"http://127.0.0.1:{browser_manager_processes[0]}",
+    )
+    command = {"action": "run", "expected_revision": resource["owner_revision"], "thread": resource["source_thread"]}
+    receipts: list[dict[str, object]] = []
+    for mode in ("sync", "async", "api"):
+        if mode == "api":
+            failed = await integration_client.post(f"/api/v1/resources/{browser_id}/browser-operation", json={**command, "payload": payload})
+            assert failed.status_code == 500, failed.text
+            assert failed.json()["request_id"] == failed.headers["X-Request-ID"]
+            detail = failed.json()["detail"]
+            assert detail == f"BrowserRequestError: {receipts[0]['error']} (code={receipts[0]['code']})"
+            assert str(root) not in failed.text
+        else:
+            with pytest.raises(BrowserRequestError) as caught:
+                if mode == "sync":
+                    await asyncio.to_thread(transport._json_request_sync, "POST", f"/api/browsers/{browser_id}/run", payload)
+                else:
+                    await transport._json_request("POST", f"/api/browsers/{browser_id}/run", payload)
+            failure = caught.value
+            assert failure.status == 500
+            assert isinstance(failure.code, str) and failure.code
+            receipt = failure.payload
+            assert receipt["code"] == failure.code
+            assert receipt["operation_outcome"] == "failed"
+            assert f"browser_id={browser_id}" in receipt["error"]
+            assert "page_id=" in receipt["error"] and "stage=run_code" in receipt["error"]
+            assert "code=" in receipt["error"]
+            assert str(root) not in json.dumps(receipt)
+            receipts.append(receipt)
+        observed = (await integration_client.get(f"/api/v1/resources/{browser_id}")).json()["data"]
+        assert observed["reconciliation_status"] == "verified"
+        assert observed["metadata"]["last_operation"]["status"] == "failed"
+        assert observed["metadata"]["last_operation"]["error"] == receipts[0]["error"]
+        assert str(root) not in json.dumps(observed)
+        records = json.loads((root / ".boxteam/browser-manager/browsers.json").read_text())
+        record, = [item for item in records["browsers"] if item["browser_id"] == browser_id]
+        assert record["last_operation"] == observed["metadata"]["last_operation"]
+        assert str(root) not in json.dumps(record)
+        assert blocker.read_bytes() == b"keep-original-file"
+        assert container.browser_resource_owner._leases.leases_for_resource(browser_id) == []
+    user_error = await integration_client.post(f"/api/v1/resources/{browser_id}/browser-operation", json={
+        **command, "payload": {"code": "throw Object.assign(new Error('脚本校验 marker'), {code: 'user_script_validation'});"},
+    })
+    assert user_error.status_code == 500, user_error.text
+    assert user_error.json()["detail"] == "BrowserRequestError: 脚本校验 marker (code=user_script_validation)"
+    assert user_error.json()["request_id"] == user_error.headers["X-Request-ID"]
+    recovered = await integration_client.post(f"/api/v1/resources/{browser_id}/browser-operation", json={
+        **command, "payload": {"code": "return {marker: 'script-retry-ok', url: page.url()};"},
+    })
+    assert recovered.status_code == 200, recovered.text
+    assert recovered.json()["data"]["result"] == {"marker": "script-retry-ok", "url": "about:blank"}
+    artifacts = TestRunContext.from_test_file(Path(__file__)).artifacts_dir
+    diagnostics = "\n".join(item.read_text() for item in artifacts.glob("browser-backend-*.stderr.log"))
+    assert "[browser-runtime] 资源生命周期操作失败" in diagnostics
+    assert native_path in diagnostics
+    (artifacts / f"script-native-failure-{time.time_ns()}.json").write_text(json.dumps({
+        "transport_receipts": receipts, "api_status": failed.status_code, "api_body": failed.json(),
+        "owner_projection": observed, "node_record": record, "user_error": user_error.json(), "recovered": recovered.json(),
+    }, ensure_ascii=False, indent=2), encoding="utf-8")
+    deleted = await _detach_delete(integration_client, browser_id, browser_context)
+    assert deleted.status_code == 200, deleted.text
+
+
+@pytest.mark.asyncio
 async def test_state_publish_failure_reports_workspace_stage_and_allows_explicit_retry(
     integration_client: httpx.AsyncClient, browser_context: CustomToolFactoryContext,
     browser_manager_processes: tuple[int, int], browser_runtime: WorkspaceToolRuntime,

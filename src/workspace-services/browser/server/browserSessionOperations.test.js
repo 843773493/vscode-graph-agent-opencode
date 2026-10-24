@@ -271,6 +271,55 @@ describe("浏览器启动的运行时错误归属", () => {
 });
 
 describe("浏览器资源生命周期错误归属", () => {
+  test.each([
+    "/private/browser/script-output", String.raw`C:\private\browser\script-output`,
+    String.raw`\\host\share\script-output`, String.raw`\\?\UNC\host\share\script-output`,
+  ])("脚本失败在写操作回执前发布执行阶段，原异常仅留诊断: %s", async (nativePath) => {
+    const { browser } = liveSession();
+    const cause = Object.assign(new Error(`EACCES ${nativePath}`), { code: "EACCES", statusCode: 503, errno: -13, syscall: "open" });
+    browser.page.evaluate = async () => { throw cause; };
+    const logged = spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      const failure = await browser.runInteractiveOperation({ actor: "user:test", action: "run" },
+        () => browser.runPlaywrightCode({ code: "return await page.evaluate(() => 1);" }))
+        .catch((error) => error);
+      expect(failure).toMatchObject({ cause, code: "EACCES", statusCode: 503 });
+      expect(failure.message).toBe(`浏览器运行时操作失败: browser_id=${browser.id}, page_id=page_device, stage=run_code, code=EACCES`);
+      expect(browser.record.last_operation).toMatchObject({ action: "run", status: "failed", error: failure.message });
+      expect(JSON.stringify(browser.toRecord())).not.toContain(nativePath);
+      expect(browser.record.status).toBe("running");
+      expect(browser.pageEntries.size).toBe(1);
+      expect(logged.mock.calls.some((args) => args.at(-1) === cause)).toBe(true);
+      const retried = await browser.runInteractiveOperation({ actor: "user:test", action: "run" },
+        () => browser.runPlaywrightCode({ code: "return 'script-retry-ok';" }));
+      expect(retried.result).toBe("script-retry-ok");
+      expect(browser.record.last_operation).toMatchObject({ action: "run", status: "completed" });
+    } finally { logged.mockRestore(); }
+  });
+
+  test.each([
+    ["throw new Error('用户脚本失败 /api/example');", "用户脚本失败 /api/example", "Error", undefined],
+    ["throw Object.assign(new Error('业务校验失败'), {code: 'business_rule'});", "业务校验失败", "Error", "business_rule"],
+    ["const = ;", null, "SyntaxError", undefined],
+    ["throw '用户脚本拒绝';", "用户脚本拒绝", undefined, undefined],
+  ])("普通脚本与语法错误保持既有正文和分类: %s", async (code, message, name, errorCode) => {
+    const { browser } = liveSession();
+    const failure = await browser.runInteractiveOperation({ actor: "user:test", action: "run" },
+      () => browser.runPlaywrightCode({ code })).catch((error) => error);
+    const observedMessage = typeof failure === "string" ? failure : failure.message;
+    if (message === null) {
+      // JS 引擎的语法文案不同；保留原生分类与正文，不改写为运行时阶段错误。
+      expect(typeof observedMessage).toBe("string");
+      expect(observedMessage.length).toBeGreaterThan(0);
+      expect(failure.cause).toBeUndefined();
+    } else {
+      expect(observedMessage).toBe(message);
+    }
+    expect(failure.name).toBe(name);
+    expect(failure.code).toBe(errorCode);
+    expect(browser.record.last_operation).toMatchObject({ action: "run", status: "failed", error: observedMessage });
+  });
+
   test.each(["read_clipboard", "find_text"])(
     "文本查询原生失败保留页面身份和原因，不复制到操作记录: %s", async (stage) => {
       const { browser } = liveSession();

@@ -551,3 +551,10 @@
 - 固定完整 tree `0599daee63368474967b5f6bb6fc450be4c2661d` 的 `unit-002` 为51 passed/13.74秒，包含POSIX、盘符、UNC、扩展UNC的显式/通知刷新，启动OS/RPC/HTTP/异常组、原cause/log、目录原子性及恢复。真实独立后端 HTTP→本地 stdio MCP 的 `http-002` 为1 passed/14.07秒：四种协议错误正文/data不进入503，request_id一致，原文在后端日志、协议原件可核，恢复后同目录可读；没有模型替身或外部模型请求。旧实现 `unit-red-001` 的8项全部失败，完整候选仅恢复旧owner的 `http-red-004` 在首个协议故障精确复现真实路径外泄。
 - 最终源码相对受测 tree 仅调整测试import排版；`static-003` Ruff与`compile-003`均exit0。owner为802行，按1.6登记完整文件清单、AST符号/职责、import graph及目录计数：目录7个Python文件，仍为单一目录状态机，无新增循环；非作者结构复核未发现需在本切片强拆的职责混杂，后续增长应重新评估纯错误投影/session adapter边界。
 - 准确命令、前后源码指纹、raw/真实退出码、零进程残留、协议/HTTP/原始日志及SHA清单见 `out/tests/temp/mcp_catalog_failures_20261024/artifacts/validation-proof-003.json`、`architecture-003.json`与`review-002.json`。首次static-002仅报新增import排版，已修正；unit反例的首次runner调用因隔离BOXTEAM_HOME目录未创建而未启动测试，补建任务目录后才运行。此切片不代Windows实机、完整Gateway/Web或2.2/7.2全局审计，两项继续未勾。
+
+
+### 2026-10-24 Browser脚本原生I/O错误出口（2.2/7.2部分收口）
+
+- 真实脚本通过Playwright保存截图时，Node原生系统错误携带errno/syscall及文件位置；执行owner在队列写入last_operation之前按此结构发布browser/page/run_code阶段与原code/status，完整错误和位置只留诊断/cause。不按自由正文或路径形状猜测；普通脚本Error、带业务code的Error、SyntaxError与字符串throw保持原合同，超时和页面file: URL例外不变。
+- 完整HEAD archive上的真实Chromium红测http-red-001明确复现ENOTDIR路径进入HTTP与last_operation。最终代码候选006（tree `8a47054675f1676a87dafc090940454cbeed4f95`）unit-006为133 passed/888断言，http-006为3 passed/20.40秒：覆盖sync/async真实HTTP、资源API/request_id、Node记录/GET投影无原生位置、verified和lease释放、原件不变、业务错误原文及显式重试；并复验本地file页面导航/检查点/恢复和工具超时后立即继续动作。Ruff及Node语法检查均exit0。
+- 004只读独审发现初版包装所有脚本错误的P2，006已收窄并新增反向回归，复核无新增finding。static-003的新测试循环变量引用和unit-005的JS引擎语法文案假定均已修正，失败原件保留。准确命令、退出码、源码前后指纹、零进程组残留及产品原件在 `out/tests/temp/browser_script_errors_20261024/artifacts/`（mechanical-006.json、product-evidence-006/及SHA清单）；不把Linux原生错误与词法Windows用例称为Windows实机通过，不代替完整Gateway/Web或2.2/7.2全局门。

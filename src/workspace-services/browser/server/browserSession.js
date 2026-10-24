@@ -2710,13 +2710,19 @@ export class BrowserSession extends EventEmitter {
     };
     let result = null;
     const modalKind = await this.runPageActionWithModalDetection(async () => {
-      result = await runPlaywrightCode(
-        { page: this.page, context: this.context, browser: this.browserHandle },
-        args,
-        {
-          onTimeout: () => this.recoverAfterPlaywrightTimeout(execution),
-        },
-      );
+      try {
+        result = await runPlaywrightCode(
+          { page: this.page, context: this.context, browser: this.browserHandle },
+          args,
+          {
+            onTimeout: () => this.recoverAfterPlaywrightTimeout(execution),
+          },
+        );
+      } catch (cause) {
+        // 原生系统错误携带 syscall/errno 与文件位置；普通脚本及超时错误仍遵循各自合同。
+        if (typeof cause?.errno !== "number" || typeof cause?.syscall !== "string") throw cause;
+        throw browserRuntimeFailure({ browserId: this.id, pageId: execution.pageId, stage: "run_code", cause });
+      }
     });
     await this.syncAndEmitState();
     if (modalKind) {
