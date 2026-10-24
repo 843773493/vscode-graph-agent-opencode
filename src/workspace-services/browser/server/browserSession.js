@@ -832,20 +832,36 @@ export class BrowserSession extends EventEmitter {
 
   async markManagerShutdownCheckpointFailed(reason, error) {
     this.closingRequested = true;
-    this.record.status = "lost";
+    const previousStatus = this.record.status;
+    const previousEndedAt = this.record.ended_at;
     this.record.resource_state = "lost";
+    this.record.reconciliation_status = "unknown";
     this.record.release_reason = `${reason}_checkpoint_failed`;
     this.record.error_message = error instanceof Error ? error.message : String(error);
-    this.record.ended_at = nowIso();
-    this.record.updated_at = this.record.ended_at;
-    await this.releaseRuntime();
-    this.clients.clear();
-    await this.manager.stateStore.deleteCheckpoint(this.id);
-    this.record.checkpoint = null;
-    this.record.discarded_pages = null;
-    await this.manager.persist();
-    this.emit("state", this.snapshot());
-    return this.snapshot();
+    this.record.updated_at = nowIso();
+    try {
+      await this.releaseRuntime();
+      this.clients.clear();
+      await this.manager.stateStore.deleteCheckpoint(this.id);
+      this.record.checkpoint = null;
+      this.record.discarded_pages = null;
+      this.record.status = "lost";
+      this.record.ended_at = nowIso();
+      await this.manager.persist();
+      this.emit("state", this.snapshot());
+      return this.snapshot();
+    } catch (cleanupError) {
+      // 收尾未完成不能提前落为终态，否则下一次Manager关闭会跳过原资源。
+      this.record.status = previousStatus;
+      this.record.ended_at = previousEndedAt;
+      try {
+        await this.manager.persist();
+      } catch (persistError) {
+        throw new AggregateError([cleanupError, persistError],
+          `浏览器失败收尾与未知状态保存均失败: browser_id=${this.id}`, { cause: cleanupError });
+      }
+      throw cleanupError;
+    }
   }
 
   async suspendPageRendering(entry) {

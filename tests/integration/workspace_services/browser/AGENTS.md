@@ -18,7 +18,7 @@ browser/
 
 `browser_checkpoint_form_state.mjs` 验证混合控件的精确定位、值/选择/存储/滚动位置恢复，DOM变更后重新采集，以及大型匿名表单的有界兄弟扫描；使用真实BrowserSession、运行时池、Chromium和受控HTTP页面，Manager持久化为空操作。通过 `bun run test:matrix -- --suite=integration-browser-checkpoint-form-state` 运行，固定60秒/4GiB，原生临时目录归本测试正式runtime；不代表磁盘检查点或Gateway/主Web验收。
 
-`browser_shutdown_operations.mjs` 经真实Manager创建、冻结/冷回收和交互入口，使用HTTP响应与动作屏障覆盖准备、执行、Session排空超时及Manager默认预算超时后的保留/重试，并核对双Browser在首项等待时全部关闭准入、整批共用一次默认5秒预算、原操作完成后两份检查点冷恢复；核对关闭顺序、原页面终态、磁盘检查点与冷Manager重开后的表单值。通过 `bun run test:matrix -- --suite=integration-browser-shutdown-operations` 运行，固定60秒/4GiB；不代表其它失败收尾、挂起动作终止、Gateway或主Web验收。
+`browser_shutdown_operations.mjs` 经真实Manager创建、冻结/冷回收和交互入口，使用HTTP响应与动作屏障覆盖准备、执行、Session排空超时及Manager默认预算超时后的保留/重试，并核对双Browser在首项等待时全部关闭准入、整批共用一次默认5秒预算、原操作完成后两份检查点冷恢复；核对关闭顺序、原页面终态、磁盘检查点与冷Manager重开后的表单值。原生检查点目录冲突同时触发采集/收尾失败，核对两份首因、其它Browser完成检查点、失败资源unknown及原身份重试与健康资源冷恢复。通过 `bun run test:matrix -- --suite=integration-browser-shutdown-operations` 运行，固定60秒/4GiB；不代表其它失败收尾、挂起动作终止、Gateway或主Web验收。
 
 `test_browser_owner_revision_drain.py` 经Python客户端、真实Node与Chromium验证默认5秒的旧版本排空超时、持久新版本、原动作仍执行、独立Browser可读、迟到回执拒绝和同版本重试；受控HTTP服务只暂停原脚本的fetch。通过 `bun run test:matrix -- --suite=integration-browser-owner-revision-drain` 运行，固定60秒/4GiB；不代表Python业务owner的恢复gate隔离、强制终止或Gateway/主Web验收。
 

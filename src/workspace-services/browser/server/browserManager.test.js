@@ -664,6 +664,82 @@ describe("浏览器状态持久化", () => {
     expect(browsers.every((browser) => browser.operationQueue.acceptedOperationExecutions.size === 0)).toBe(true);
   });
 
+  test.each(["release_context", "delete_checkpoint", "persist", "unknown_persist"])("检查点失败后的%s收尾错误保留首因并继续其它资源，原身份可重试", async (stage) => {
+    const states = [];
+    let failing = true;
+    const checkpointError = new Error("原检查点采集失败");
+    const cleanupError = new Error(`收尾失败: ${stage}`);
+    const unknownSaveError = new Error("unknown状态保存失败");
+    const manager = createBrowserManagerWithStateWriter(async (state) => {
+      if (failing && stage === "persist" && state.browsers.some((record) => record.status === "lost")) throw cleanupError;
+      if (failing && stage === "unknown_persist" && state.browsers.some((record) => record.reconciliation_status === "unknown")) throw unknownSaveError;
+      states.push(structuredClone(state));
+    });
+    const browser = new BrowserSession({ manager, record: {
+      browser_id: createOptions().browserId, workspace_id: WORKSPACE_ID, transport_owner_revision: 1,
+      status: "running", resource_state: "background", reconciliation_status: "verified",
+      checkpoint: { captured_at: "2026-10-24T00:00:00.000Z", size_bytes: 123 },
+    } });
+    const peer = new BrowserSession({ manager, record: {
+      browser_id: createOptions().browserId, workspace_id: WORKSPACE_ID, transport_owner_revision: 1,
+      status: "running", resource_state: "discarded", reconciliation_status: "verified",
+    } });
+    manager.browsersById.set(browser.id, browser);
+    manager.browsersById.set(peer.id, peer);
+    browser.checkpointForManagerShutdown = async () => { throw checkpointError; };
+    const context = {};
+    browser.context = context;
+    const attempted = [];
+    const peerCheckpoint = peer.checkpointForManagerShutdown.bind(peer);
+    peer.checkpointForManagerShutdown = async (...args) => { attempted.push(peer.id); return await peerCheckpoint(...args); };
+    let releases = 0;
+    let poolCloses = 0;
+    manager.runtimePool.releaseContext = async (released) => {
+      expect(released).toBe(context);
+      releases += 1;
+      if (failing && stage === "release_context") throw cleanupError;
+    };
+    manager.runtimePool.shutdown = async () => { poolCloses += 1; };
+    manager.stateStore.deleteCheckpoint = async () => { if (failing && ["delete_checkpoint", "unknown_persist"].includes(stage)) throw cleanupError; };
+
+    const failure = await manager.shutdown().catch((error) => error);
+
+    expect(failure).toBeInstanceOf(AggregateError);
+    expect(failure.errors).toHaveLength(1);
+    const combined = failure.errors[0];
+    expect(combined).toBeInstanceOf(AggregateError);
+    expect(combined.cause).toBe(checkpointError);
+    expect(combined.errors[0]).toBe(checkpointError);
+    const failedCleanup = combined.errors[1];
+    if (stage === "unknown_persist") {
+      expect(failedCleanup).toBeInstanceOf(AggregateError);
+      expect(failedCleanup.cause).toBe(cleanupError);
+      expect(failedCleanup.errors).toEqual([cleanupError, unknownSaveError]);
+    } else {
+      expect(stage === "release_context" ? failedCleanup.cause : failedCleanup).toBe(cleanupError);
+    }
+    expect(attempted).toEqual([peer.id]);
+    expect(poolCloses).toBe(0);
+    expect(browser.record.status).toBe("running");
+    expect(browser.record.reconciliation_status).toBe("unknown");
+    expect(browser.snapshot().reconciliation_status).toBe("unknown");
+    expect(browser.context).toBe(stage === "release_context" ? context : null);
+    if (stage === "unknown_persist") expect(states).toEqual([]);
+    else expect(states.at(-1).browsers.find((record) => record.browser_id === browser.id)).toMatchObject({
+      status: "running", reconciliation_status: "unknown",
+    });
+    failing = false;
+    const retry = await manager.shutdown().catch((error) => error);
+    expect(retry).toBeInstanceOf(AggregateError);
+    expect(retry.errors).toEqual([checkpointError]);
+    expect(browser.record.status).toBe("lost");
+    expect(browser.context).toBeNull();
+    expect(browser.record.checkpoint).toBeNull();
+    expect(releases).toBe(stage === "release_context" ? 2 : 1);
+    expect(poolCloses).toBe(1);
+    expect(attempted).toEqual([peer.id, peer.id]);
+  });
+
   test("工作区逻辑浏览器达到硬上限时明确拒绝新建", async () => {
     const manager = createBrowserManagerWithStateWriter(async () => undefined, {
       maxLogicalBrowsersPerWorkspace: 2,

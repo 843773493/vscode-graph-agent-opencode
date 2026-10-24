@@ -461,7 +461,7 @@ export class BrowserManager {
     // 先关闭整批准入，再共用同一单调预算；不能让后续资源继续接纳或重置等待。
     for (const session of sessions) session.closingRequested = true;
     const checkpointFailures = [];
-    let operationsDrained = true;
+    let canShutdownRuntime = true;
     for (const session of sessions) {
       if (session.status !== "running") {
         continue;
@@ -471,12 +471,19 @@ export class BrowserManager {
           operationDrainTimeoutMs: Math.max(0, drainDeadline - performance.now()),
         });
       } catch (error) {
-        checkpointFailures.push({ browserId: session.id, error });
+        let failure = error;
         if (error.code === "browser_shutdown_operation_drain_timeout") {
-          operationsDrained = false;
+          canShutdownRuntime = false;
         } else {
-          await session.markManagerShutdownCheckpointFailed(reason, error);
+          try {
+            await session.markManagerShutdownCheckpointFailed(reason, error);
+          } catch (cleanupError) {
+            canShutdownRuntime = false;
+            failure = new AggregateError([error, cleanupError],
+              `浏览器关闭检查点与失败收尾均失败: browser_id=${session.id}`, { cause: error });
+          }
         }
+        checkpointFailures.push({ browserId: session.id, error: failure });
       }
     }
     const failure = checkpointFailures.length > 0
@@ -484,8 +491,8 @@ export class BrowserManager {
         checkpointFailures.map((item) => item.error),
         `Browser Manager 关闭时有 ${checkpointFailures.length} 个浏览器无法生成检查点: ${checkpointFailures.map((item) => item.browserId).join(",")}`,
       ) : null;
-    // 排空超时只结束本次等待；原操作和运行时仍由原owner持有，不能销毁恢复依据。
-    if (!operationsDrained) throw failure;
+    // 排空或失败收尾未核实完成时，原owner仍持有运行时，不能关闭共享池。
+    if (!canShutdownRuntime) throw failure;
     // TODO：统一整个shutdown期限和挂起操作终止核实，不能将排空预算当作取消。
     await this.runtimePool.shutdown();
     await this.persist();

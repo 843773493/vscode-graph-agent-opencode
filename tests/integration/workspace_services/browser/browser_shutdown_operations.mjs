@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
-import { cp, mkdir, readFile, writeFile } from "node:fs/promises";
+import { cp, mkdir, readFile, rmdir, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -193,6 +193,79 @@ async function scenario(phase) {
   }
 }
 
+async function checkpointCleanupFailure() {
+  const workspaceId = randomUUID();
+  const workspaceRoot = path.join(run.workspaceRoot, `cleanup-failure-${randomUUID()}`);
+  await cp(path.join(run.projectRoot, "tests/fixtures/workspaces/default_test_workspace"), workspaceRoot, { recursive: true });
+  await mkdir(path.join(workspaceRoot, ".boxteam"), { recursive: true });
+  await writeFile(path.join(workspaceRoot, ".boxteam/workspace-identity.json"), JSON.stringify({ workspace_id: workspaceId }));
+  const manager = new BrowserManager({ workspaceRoot, workspaceId });
+  const firstId = `browser_${randomUUID().replaceAll("-", "")}`;
+  const secondId = `browser_${randomUUID().replaceAll("-", "")}`;
+  const conflict = manager.stateStore.checkpointPath(firstId);
+  let conflictCreated = false;
+  let restored;
+  try {
+    await manager.init();
+    for (const browserId of [firstId, secondId]) {
+      await manager.create({ workspaceId, browserId, ownerRevision: 1, url: `http://127.0.0.1:${server.address().port}/` });
+    }
+    const first = manager.get(firstId);
+    const second = manager.get(secondId);
+    await second.runInteractiveOperation({ actor: "user", action: "edit_peer" },
+      async () => { await second.page.locator("#field").fill("peer-survived-cleanup-failure"); });
+    const firstPage = first.page;
+    const secondPage = second.page;
+    // 原生目录冲突同时使第一个检查点发布和随后的删除失败，不替换产品owner。
+    await mkdir(conflict, { recursive: true });
+    conflictCreated = true;
+    let failure;
+    try { await manager.shutdown("integration_cleanup_failure"); } catch (error) { failure = error; }
+    assert(failure instanceof AggregateError);
+    assert.equal(failure.errors.length, 1);
+    const combined = failure.errors[0];
+    assert(combined instanceof AggregateError);
+    assert.equal(combined.cause, combined.errors[0]);
+    assert.equal(combined.errors.length, 2);
+    assert.match(combined.errors[0].message, /写入浏览器检查点失败/);
+    assert.match(combined.errors[1].message, /删除浏览器检查点失败/);
+    assert.equal(first.record.status, "running");
+    assert.equal(first.record.reconciliation_status, "unknown");
+    assert.equal(firstPage.isClosed(), true);
+    assert.equal(secondPage.isClosed(), true, "首个资源收尾失败不能跳过第二个资源");
+    assert.equal(second.record.resource_state, "discarded");
+    assert.equal(manager.runtimePool.browser.isConnected(), true, "收尾失败不能关闭共享池");
+    const stored = JSON.parse(await readFile(manager.stateStore.stateFile, "utf8"));
+    assert.equal(stored.browsers.find((record) => record.browser_id === firstId).reconciliation_status, "unknown");
+    const peerCheckpoint = await manager.stateStore.readCheckpoint(secondId);
+    assert.equal(peerCheckpoint.pages[0].controls.find((control) => control.selector === "#field").value, "peer-survived-cleanup-failure");
+    await rmdir(conflict);
+    conflictCreated = false;
+    await assert.rejects(manager.shutdown("integration_cleanup_retry"), (error) => {
+      assert(error instanceof AggregateError);
+      assert.equal(error.errors.length, 1);
+      return true;
+    });
+    assert.equal(first.record.status, "lost");
+    assert.equal(first.record.checkpoint, null);
+    assert.equal(first.context, null);
+    assert.equal(manager.runtimePool.browser, null);
+    assert.deepEqual(await manager.stateStore.readCheckpoint(secondId), peerCheckpoint);
+    await manager.shutdown();
+    restored = new BrowserManager({ workspaceRoot, workspaceId });
+    await restored.init();
+    assert.equal(restored.get(firstId).record.status, "lost");
+    const recovered = restored.get(secondId);
+    const read = await recovered.runInteractiveOperation({ actor: "user", action: "read_peer_after_restart" },
+      async () => ({ value: await recovered.page.locator("#field").inputValue() }));
+    assert.equal(read.value, "peer-survived-cleanup-failure");
+    return { firstId, secondId, failureCount: combined.errors.length, peerRestoredValue: read.value };
+  } finally {
+    if (conflictCreated) await rmdir(conflict);
+    try { if (restored) await restored.shutdown(); } finally { await manager.shutdown(); }
+  }
+}
+
 try {
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
   run.addCleanup("页面HTTP服务", () => new Promise((resolve, reject) => {
@@ -205,6 +278,11 @@ try {
     } catch (error) {
       results.push({ phase, status: "failed", error: error.stack ?? String(error) });
     }
+  }
+  try {
+    results.push({ phase: "checkpoint_cleanup_failure", status: "passed", observations: await checkpointCleanupFailure() });
+  } catch (error) {
+    results.push({ phase: "checkpoint_cleanup_failure", status: "failed", error: error.stack ?? String(error) });
   }
   const failed = results.filter((result) => result.status === "failed");
   await run.writeResult(failed.length ? "failed" : "passed", {

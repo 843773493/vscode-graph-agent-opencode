@@ -66,6 +66,8 @@ Browser 的关闭排空统一复用 `BrowserOperationQueue.drain()` 的完整已
 
 Manager 关闭先同步关闭当前所有运行资源的操作准入，再逐项调用原检查点链；本批从入口冻结一次默认 5 秒的单调排空截止，每项只取得剩余预算。已排空的空闲资源即使预算耗尽仍能由原队列即时确认；多个挂起资源不再各自重置 5 秒。超时按原资源身份汇总，原操作、页面、检查点和共享运行时继续保留；放行原操作后同一入口重试保存两份最终状态。Manager 层可重试不代表生产信号入口可重试：backend 的唯一关闭回调失败后仍关闭 HTTP 并退出进程，尚未接回原 Manager 重试；该调用方退出协调明确保留 TODO，本次不以直接调用 Manager 的集成场景覆盖它。该预算仍只约束队列等待，创建中的资源接纳、检查点持久化/转换、其它失败收尾与整个 shutdown 的截止及强制终止继续 TODO。
 
+Manager 对检查点失败后的收尾继续按原资源隔离：若 context 释放、检查点删除或状态保存再次失败，将本次采集首因与收尾错误按顺序聚合，继续其它 Browser；原资源未核实完成时不关闭共享运行时池。Session 只在这条原收尾链全部完成后发布 lost，失败保持原 status 与 unknown，原 context 仅在释放成功后清除，避免下一轮关闭提前跳过；unknown 持久化也失败时保留收尾与保存异常及因果关系。检查点损坏仍明确报告失败，重试不伪造丢失状态恢复成功。此处不改变生产信号退出协调或完整关闭期限 TODO。
+
 关闭与版本撤销现共用原队列的单次有界`drain(timeoutMs)`：默认5秒，true表示快照集合已settle，false只表示本次等待结束，原Promise继续由唯一集合持有。撤销先关闭旧连接/删除旧grant，冻结原集合并持久化新版本；超时返回独立`browser_owner_revision_drain_timeout`/408，不使用工具的page_reset语义，不停止或遗忘原动作。原动作结束后旧结果仍被授权版本检查拒绝，同版本重试只排空原集合。真实Python客户端→Node→Chromium/HTTP屏障验证磁盘版本、未结束原动作、另一Browser可读、迟到结果拒绝及核实关闭。持久化阻塞、Python首次recover single-flight gate和整个operation总期限继续TODO，不能把Node单资源有界等待称为恢复全局隔离或真实终止完成。
 
 `ThreadResidencyTracker.sweep()` 对每个 Thread 独立尝试清理，失败保留原 scope、generation 和 owner 记录，其它 Thread 仍完成。整批结束后向调用方抛出原错误（单项）或汇总错误（多项），附精确 owner 信息；不改变已有单错误类型或把失败算成成功卸载。`AgentExecutionService` 的唯一周期 worker 记录完整异常后按原 60 秒周期重试，取消和关闭正常传播。这里不解决失效关联或外部未知结果，也不绕过原 owner 核实规则。
