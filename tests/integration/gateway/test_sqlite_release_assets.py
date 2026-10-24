@@ -160,3 +160,33 @@ print(expected)
         "stdout": result.stdout, "stderr": result.stderr,
     }, ensure_ascii=False, indent=2))
     assert result.returncode == 0, result.stderr
+
+
+def test_release_copy_loads_managed_directory_schema(staged_application: Path, tmp_path: Path):
+    script = """
+import sqlite3
+from pathlib import Path
+from app.services.infrastructure.attachment_blob_catalog.directory_schema import (
+    initialize_directory_schema, require_directory_schema,
+)
+assert Path(__import__("app").__file__).is_relative_to(Path.cwd())
+with sqlite3.connect(":memory:") as connection:
+    initialize_directory_schema(connection)
+    require_directory_schema(connection)
+    assert connection.execute("PRAGMA user_version").fetchone()[0] == 4
+"""
+    environment = {**os.environ, "PYTHONPATH": str(staged_application)}
+    for name, available in (("managed-directory-present", True), ("managed-directory-missing", False)):
+        if not available:
+            (staged_application / "app/services/infrastructure/attachment_blob_catalog/sql/managed_directory_schema.sql").unlink()
+        result = subprocess.run([sys.executable, "-c", script], cwd=staged_application,
+                                env=environment, capture_output=True, text=True, timeout=30, check=False)
+        (tmp_path / f"{name}.json").write_text(json.dumps({
+            "argv": result.args, "cwd": str(staged_application), "exit_code": result.returncode,
+            "stdout": result.stdout, "stderr": result.stderr,
+        }, ensure_ascii=False, indent=2))
+        if available:
+            assert result.returncode == 0, result.stderr
+        else:
+            assert result.returncode != 0 and "FileNotFoundError" in result.stderr
+            assert "managed_directory_schema.sql" in result.stderr

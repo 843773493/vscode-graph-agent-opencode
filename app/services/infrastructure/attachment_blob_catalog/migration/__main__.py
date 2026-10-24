@@ -10,6 +10,10 @@ from app.services.infrastructure.attachment_blob_catalog.migration.backup import
     prepare_backup,
     verify_backup,
 )
+from app.services.infrastructure.attachment_blob_catalog.migration.catalog import (
+    prepare_converted_catalog,
+    verify_converted_catalog,
+)
 from app.services.infrastructure.attachment_blob_catalog.migration.directories import (
     convert_backup,
     verify_directories,
@@ -28,11 +32,16 @@ def main() -> None:
     convert.add_argument("--backup", type=Path, required=True)
     directories = commands.add_parser("verify-directories", help="核验已准备目录与来源备份，不切换线上存储")
     directories.add_argument("--backup", type=Path, required=True)
+    catalog = commands.add_parser("prepare-catalog", help="从已核验目录准备隔离的 schema 4 catalog")
+    catalog.add_argument("--backup", type=Path, required=True)
+    verify_catalog = commands.add_parser("verify-catalog", help="核验目标 catalog 与冻结旧引用，不切换线上 owner")
+    verify_catalog.add_argument("--backup", type=Path, required=True)
     args = parser.parse_args()
     if args.command == "prepare":
         result = prepare_backup(args.workspace, args.output)
     else:
-        result = {"verify": verify_backup, "convert": convert_backup, "verify-directories": verify_directories}[args.command](args.backup)
+        result = {"verify": verify_backup, "convert": convert_backup, "verify-directories": verify_directories,
+                  "prepare-catalog": prepare_converted_catalog, "verify-catalog": verify_converted_catalog}[args.command](args.backup)
     print(json.dumps(result, ensure_ascii=False))
 
 

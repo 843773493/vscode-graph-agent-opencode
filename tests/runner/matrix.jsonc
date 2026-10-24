@@ -41,6 +41,20 @@
       "command": ["uv", "run", "pytest", "tests/integration"]
     },
     {
+      "id": "integration-attachment-offline-migration",
+      "layer": "integration",
+      "client": null,
+      "enabled": true,
+      "timeoutMs": 240000,
+      "dataLimitKb": 4194304,
+      "command": [
+        "uv", "run", "--no-sync", "pytest", "-q",
+        "tests/integration/backend/sessions/test_attachment_offline_backup.py",
+        "tests/integration/backend/sessions/test_attachment_offline_directories.py",
+        "tests/integration/backend/sessions/test_attachment_offline_catalog.py"
+      ]
+    },
+    {
       "id": "integration-execution-history-delta",
       "layer": "integration",
       "client": null,

@@ -4,13 +4,14 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import sqlite3
 import stat
 from collections.abc import Iterator
 from contextlib import closing, contextmanager
 from dataclasses import dataclass
 from datetime import datetime
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from typing import Literal
 
 from app.abstractions.workspace_resources import ResourceKind
@@ -68,7 +69,9 @@ def checked_path(root: Path, locator: str) -> Path:
     if root.is_symlink():
         raise RuntimeError("离线维护根目录不能是符号链接")
     parts = locator.split("/")
-    if not parts or any(part in {"", ".", ".."} or "\\" in part or ":" in part for part in parts):
+    # Linux 的既有执行明细含冒号；拒绝盘符/逃逸，不把合法原生文件名当成 URI。
+    if not parts or any(part in {"", ".", ".."} or "\\" in part or PureWindowsPath(part).drive
+                        or (os.name == "nt" and ":" in part) for part in parts):
         raise ValueError("备份 locator 不是受检相对路径")
     path = root
     for part in parts:
@@ -255,8 +258,8 @@ def plan_backup(workspace: Path) -> tuple[str, int, list[BackupSource]]:
                 read_captured_snapshot(root / "sessions", record)
                 for source in _tree(root, capture, frozen=True):
                     add(source)
-            elif row["state"] != "aborted":
-                raise RuntimeError(f"离线迁移冻结 fork capture 缺失: snapshot_id={snapshot_id}")
+            # materialized/aborted 的临时快照可已由原 owner 清理；终态已在上方核对。
+            # 残留快照仍逐字保全并核 hash，不从当前 source 重建已清理的历史。
     add(_source(root, "navigation/session-catalog.sqlite", database=True))
     attachment_path = checked_path(root, "attachments/catalog.sqlite")
     with read_database(attachment_path) as attachment:

@@ -378,7 +378,7 @@ async def test_verify_rejects_changed_backup(backup_case: BackupCase, damage: st
 
 
 def test_backup_locator_rejects_escape_and_symlink(tmp_path: Path) -> None:
-    for locator in ("../outside", "/absolute", "C:/target", "a\\b", "a//b"):
+    for locator in ("../outside", "/absolute", "C:/target", "C:target", "nested/C:/target", "nested/C:target", "a\\b", "a//b"):
         with pytest.raises(ValueError):
             checked_path(tmp_path, locator)
     (tmp_path / "outside").mkdir()
