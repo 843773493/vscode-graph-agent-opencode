@@ -297,6 +297,9 @@ def test_user_scope_resolves_through_catalog() -> None:
     ("uri", "shape", "operations", "child_path"),
     [
         ("boxteam://workspace/ws-1/resources/files/root", "directory", ("describe", "list", "search"), "file_segments"),
+        ("boxteam://workspace/ws-1/resources/attachments/att_00000000000000000000000000000000", "directory", ("describe", "list", "search"), "file_segments"),
+        ("boxteam://workspace/ws-1/resources/attachments/att_00000000000000000000000000000000/derived", "directory", ("describe", "list", "search"), "file_segments"),
+        ("boxteam://workspace/ws-1/resources/attachments/att_00000000000000000000000000000000/original/content", "file", ("describe", "read", "search"), None),
         ("boxteam://inline/dist-1/resources/skills/review", "directory", ("describe", "list", "search"), "file_segments"),
         ("boxteam://workspace/ws-1/resources/skills/review/references", "directory", ("describe", "list", "search"), "file_segments"),
         ("boxteam://workspace/ws-1/resources/skills/review/SKILL.md", "file", ("describe", "read", "search"), None),
@@ -317,6 +320,8 @@ def test_fixed_navigation_templates_publish_shape_and_capabilities(uri, shape, o
     ("uri", "shape"),
     [
         ("boxteam://workspace/ws-1/resources/files/root", "file"),
+        ("boxteam://workspace/ws-1/resources/attachments/att_00000000000000000000000000000000", "file"),
+        ("boxteam://workspace/ws-1/resources/attachments/att_00000000000000000000000000000000/derived", "domain_object"),
         ("boxteam://workspace/ws-1/resources/skills/review", "file"),
         ("boxteam://inline/dist-1/resources/config/workspace_inline/guess", "file"),
         ("boxteam://workspace/ws-1/resources/session/sess-1/checkpoints", "directory"),

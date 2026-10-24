@@ -3,8 +3,22 @@ import { resolveWorkspaceMarkdownTarget } from "./workspaceMarkdown";
 
 const ROOT = "boxteam://workspace/backend_files/resources/files/root";
 const EXTERNAL = "boxteam://gateway/gateway_01900000000070008000000000000001/resources/files/01900000000070008000000000000001";
+const ATTACHMENT = "boxteam://gateway_01900000000070008000000000000001/workspace/backend_files/resources/attachments/att_00000000000000000000000000000000";
 
 describe("工作区 Markdown 资源地址", () => {
+  test("附件文档的相对链接停在同一目录资源，并保留绝对路径输入", () => {
+    expect(resolveWorkspaceMarkdownTarget(`${ATTACHMENT}/derived/docs/readme.md`, "../../original/content#原件"))
+      .toEqual({ kind: "workspace", path: `${ATTACHMENT}/original/content`, fragment: "#原件" });
+    expect(resolveWorkspaceMarkdownTarget(`${ATTACHMENT}/derived/readme.md`, "./中文%20图.png"))
+      .toEqual({ kind: "workspace", path: `${ATTACHMENT}/derived/%E4%B8%AD%E6%96%87%20%E5%9B%BE.png`, fragment: "" });
+    expect(() => resolveWorkspaceMarkdownTarget(`${ATTACHMENT}/original/content`, "../../secret.png"))
+      .toThrow("越过工作区根目录");
+    expect(resolveWorkspaceMarkdownTarget(`${ATTACHMENT}/original/content`, "/etc/hosts"))
+      .toEqual({ kind: "workspace", path: "/etc/hosts", fragment: "" });
+    expect(resolveWorkspaceMarkdownTarget(`${ATTACHMENT}/original/content`, "C:\\data\\a.md"))
+      .toEqual({ kind: "workspace", path: "C:\\data\\a.md", fragment: "" });
+  });
+
   test("相对于 Markdown 文件所在目录解析图片和文档", () => {
     expect(resolveWorkspaceMarkdownTarget(`${ROOT}/docs/guide/readme.md`, "./image.png"))
       .toEqual({ kind: "workspace", path: `${ROOT}/docs/guide/image.png`, fragment: "" });

@@ -16,7 +16,7 @@ utils/
 ├── format.ts                    日期、数字等展示格式
 ├── jsonDisplay.ts               JSON 展示共用判定
 ├── pointerDrag.ts               DOM 指针拖拽生命周期
-├── workspaceFileReferences.ts   工作区文件引用文本
+├── workspaceFileReferences.ts   工作区文件引用文本及后端已校验 URI 的目录根拆分
 ├── markdown/                    Markdown 渲染与链接目标解析
 ├── media/                       媒体附件构造与归一
 └── selection/                   浏览器元素和工作区目录选择

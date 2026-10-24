@@ -21,10 +21,10 @@ from fastapi import FastAPI
 
 from app.api import workspace as workspace_api
 from app.api.deps import get_workspace_service, verify_local_token
+from app.core.resource_uri import file_uri_child
 from app.core.trace_middleware import TraceMiddleware
 from app.services.infrastructure import workspace_service as service_module
 from app.services.infrastructure.config_service import ConfigService
-from app.services.infrastructure.workspace_files.paths import file_uri_child
 from app.services.infrastructure.workspace_service import WorkspaceService
 from tests.support.ports import integration_port_block_for_file
 

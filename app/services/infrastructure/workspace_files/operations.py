@@ -16,7 +16,7 @@ from uuid import uuid4
 from app.core.atomic_fs import fsync_directory, native_io_path
 from app.core.exceptions import ForbiddenError
 from app.core.path_utils import safe_join
-from app.core.resource_uri import parse_resource_uri
+from app.core.resource_uri import file_uri_child, file_uri_root, parse_resource_uri
 from app.core.session_lifecycle_gate import OperationHolderGate
 from app.schemas.internal_v2.session_navigation.operations import (
     NAVIGATION_MUTATION_TERMINAL_STATES,
@@ -37,11 +37,7 @@ from app.services.infrastructure.workspace_files.filesystem import (
     verify_published,
     write_upload,
 )
-from app.services.infrastructure.workspace_files.paths import (
-    WorkspaceFilePaths,
-    file_uri_child,
-    file_uri_root,
-)
+from app.services.infrastructure.workspace_files.paths import WorkspaceFilePaths
 from app.services.infrastructure.workspace_files.store import (
     FileOperationRecord,
     WorkspaceFileOperationConflictError,

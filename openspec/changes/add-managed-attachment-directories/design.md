@@ -22,6 +22,8 @@ Terminal/Browser 已共用资源关联和 operation lease 规则：正常 unload
 
 统一 URI owner 登记 `boxteam://{gateway_authority?}/workspace/{workspace_id}/resources/attachments/{attachment_id}` 为 directory 根，并登记其文件 child 规则；在该 owner 的 kind 闭集中增加 `attachments`，不新增 scheme、query 或真实路径字段。新上传消息使用该根下原件 URI，并提供目录 URI、文件名、MIME 和处理结果写入提示。既有 Session 产物 URI 只能作为原历史身份保留，按原 provenance/owner 授权解析，不能继续生成新旧两套附件地址。
 
+2026-10-24 目录寻址基础已接入唯一 grammar：附件根只接受 workspace scope 和稳定 `att_<32 hex>` 身份，保留旧 ID；child 复用 files/skills 的单次解码及规范编码。原 `file_uri_root`/`file_uri_child` 移入该 owner，迁齐全部生产和测试调用后移除原定义，不留转发。导航 shape 将根限定为 directory。Web 文件树父级与 Markdown 相对链接共用后端已校验 URI 的根拆分，不在客户端另建完整 grammar；附件相对链接停在其目录根，原生绝对路径仍交目标机器解释。协议现有 kind/URI 为 string，此片不改变 DTO 字段或生成类型；上传仍沿原链，物理目录解析、目录/原件 DTO 和新引用发布留待统一切换，不能把语法可解析当作原件已可读取。证据见 `out/tests/temp/attachment_uri_contract_20261024/artifacts/`。扩大导航集成的旧删除诊断断言在原 HEAD 同样失败，原件保留；另一项因 fixture 重用目录失败，单独场景通过，未放宽任何断言。
+
 Shell 的结构化 workdir 接受目录 URI，在 URI 指定目标的文件 owner 内取得短期本地 cwd 和操作 lease，再复用原 PTY 执行。URI 目标与 Shell 目标不一致时明确拒绝；不把远端 URI 当本机路径，不改写任意 command 字符串，不把真实 cwd写进普通业务记录。整个执行期间保留目录使用 lease；后台进程仍访问目录时，其真实进程 owner 延续占用，不能在工具提前返回时解除保活。
 
 2026-10-24 的先行切片只接入既有 `files` 目录 URI：Terminal owner 依赖 container 已装配的 `WorkspaceFilePaths`，在创建记录/PTY 前解析精确 `boxteam://` 前缀的 URI；POSIX 原生目录名中的其它 `://` 不改变含义，全部原生 cwd 也在同一 Terminal owner 锚定目标工作区。工具层不再自行解析 cwd、接受另一份 workspace root 或重算公开位置，回执直接消费真实 PTY 的 `cwd_relative`。Shell 原生工作区外/私有目录行为保持，命令正文不做 URI 替换。目录解析中的系统异常和符号链接环完整留在诊断/cause，普通错误只包含资源 URI 和错误类型。附件目录 kind、全进程占用及其回收保护仍未实现，不能将这个切片算作任务 3.3 全部完成。

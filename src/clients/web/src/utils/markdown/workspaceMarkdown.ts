@@ -1,3 +1,5 @@
+import { resourceFileRootUri } from "../workspaceFileReferences";
+
 export type WorkspaceMarkdownTarget =
   | { kind: "external"; href: string }
   | { kind: "anchor"; href: string }
@@ -41,12 +43,10 @@ export function resolveWorkspaceMarkdownTarget(
   if (decodedPath.startsWith("/") || /^[A-Za-z]:[\\/]/.test(decodedPath)) {
     return { kind: "workspace", path: decodedPath, fragment };
   }
-  const marker = "/resources/files/";
-  const resourceMarkerIndex = markdownPath.indexOf(marker);
-  if (resourceMarkerIndex < 0) throw new Error("Markdown 文件缺少资源 URI");
-  const resourceRootEndIndex = markdownPath.indexOf("/", resourceMarkerIndex + marker.length);
-  if (resourceRootEndIndex < 0) throw new Error("Markdown 地址没有指向文件");
-  const resourceRootUri = markdownPath.slice(0, resourceRootEndIndex);
+  const resourceRootUri = resourceFileRootUri(markdownPath);
+  if (resourceRootUri === null) throw new Error("Markdown 文件缺少资源 URI");
+  const resourceRootEndIndex = resourceRootUri.length;
+  if (resourceRootEndIndex === markdownPath.length) throw new Error("Markdown 地址没有指向文件");
   const baseSegments = markdownPath.slice(resourceRootEndIndex + 1).split("/").slice(0, -1).map(decodeURIComponent);
   for (const segment of decodedPath.replace(/\\/g, "/").split("/")) {
     if (!segment || segment === ".") {

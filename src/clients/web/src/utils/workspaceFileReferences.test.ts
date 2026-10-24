@@ -1,11 +1,27 @@
+import { expect, test } from "bun:test";
+
 import {
   isLikelyWorkspaceFileReference,
   isWorkspaceTextFilePath,
   parseWorkspaceFileReference,
   plainWorkspaceFileReferences,
   remarkWorkspaceFileReferences,
+  resourceFileRootUri,
   shouldResolveWorkspaceFileReference,
 } from "./workspaceFileReferences";
+
+test("文件与附件目录的已校验 URI 保留 scope、authority 和独立根", () => {
+  for (const root of [
+    "boxteam://workspace/ws-1/resources/files/root",
+    "boxteam://gateway/gateway_01900000000070008000000000000001/resources/files/01900000000070008000000000000001",
+    "boxteam://gateway_01900000000070008000000000000001/workspace/ws-1/resources/attachments/att_00000000000000000000000000000000",
+  ]) {
+    expect(resourceFileRootUri(root)).toBe(root);
+    expect(resourceFileRootUri(`${root}/derived/%E4%B8%AD%E6%96%87.txt`)).toBe(root);
+  }
+  expect(resourceFileRootUri("/resources/files/root/a.txt")).toBeNull();
+  expect(resourceFileRootUri("boxteam://workspace/ws-1/resources/session/ses-1")).toBeNull();
+});
 
 const relative = parseWorkspaceFileReference("src/main.py#L12-L14");
 if (

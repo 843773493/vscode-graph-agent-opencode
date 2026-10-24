@@ -13,12 +13,8 @@ from pathlib import Path
 
 import pytest
 
-from app.core.resource_uri import parse_resource_uri
+from app.core.resource_uri import file_uri_child, file_uri_root, parse_resource_uri
 from app.core.workspace_identity import workspace_identity_path
-from app.services.infrastructure.workspace_files.paths import (
-    file_uri_child,
-    file_uri_root,
-)
 from tests.integration.backend.sessions.test_session_communication_pipeline import (
     _completed,
 )

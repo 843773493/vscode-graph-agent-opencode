@@ -22,7 +22,7 @@ from app.api.deps import get_workspace_service, verify_local_token
 from app.core.exceptions import ForbiddenError
 from app.core.identifier import create_prefixed_id
 from app.core.path_utils import get_session_path_resolver
-from app.core.resource_uri import parse_resource_uri
+from app.core.resource_uri import file_uri_child, parse_resource_uri
 from app.core.trace_middleware import TraceMiddleware
 from app.gateway.auth import get_gateway_local_token
 from app.gateway.control.gateway_state import GatewayStateStore
@@ -39,7 +39,6 @@ from app.services.infrastructure.file_tree_settings_service import (
 from app.services.infrastructure.gateway_client_common import GatewayTransportConnection
 from app.services.infrastructure.workspace_files.paths import (
     GatewayNativeDirectoryClient,
-    file_uri_child,
 )
 from app.services.infrastructure.workspace_service import WorkspaceService
 from tests.harness.python.run_context import TestRunContext

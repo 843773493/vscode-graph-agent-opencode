@@ -9,6 +9,14 @@ export interface WorkspaceFileReference {
   selection: WorkspaceFileSelection | null;
 }
 
+// 仅拆分后端已校验的文件 URI；grammar 与真实目录绑定仍由目标 owner 负责。
+export function resourceFileRootUri(uri: string): string | null {
+  const root = uri.startsWith("boxteam://")
+    ? /\/resources\/(?:files|attachments)\/[^/]+/.exec(uri)
+    : null;
+  return root ? uri.slice(0, root.index + root[0].length) : null;
+}
+
 interface MarkdownNode {
   type: string;
   value?: string;

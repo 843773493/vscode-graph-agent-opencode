@@ -4,12 +4,12 @@ from __future__ import annotations
 
 import os
 from collections.abc import Callable
-from functools import lru_cache
 from pathlib import Path
 from typing import Protocol
 
 import httpx
 
+from app.core import resource_uri
 from app.core.exceptions import ForbiddenError
 from app.core.path_utils import (
     is_resource_uri_input,
@@ -28,31 +28,6 @@ from app.schemas.gateway.native_directories import (
 )
 from app.schemas.internal_v2.common import APIResponse
 from app.services.infrastructure.gateway_client_common import GatewayTransportConnection
-
-
-def file_uri_root(uri: str) -> str:
-    parsed = parse_resource_uri(uri)
-    if parsed.kind != "files":
-        raise ValueError("文件入口只接受 files 资源 URI")
-    return resource_display_uri(scope=parsed.scope, scope_id=parsed.scope_id, kind="files",
-                                tail_segments=parsed.tail_segments[:1], gateway_authority=parsed.gateway_authority)
-
-
-@lru_cache(maxsize=256)
-def _parse_parent_resource_uri(uri: str) -> ParsedResourceUri:
-    return parse_resource_uri(uri)
-
-
-def file_uri_child(uri: str, *parts: str) -> str:
-    parsed = (
-        _parse_parent_resource_uri(uri)
-        if isinstance(uri, str)
-        else parse_resource_uri(uri)
-    )
-    if parsed.kind != "files":
-        raise ValueError("文件 child 必须属于 files 资源")
-    return resource_display_uri(scope=parsed.scope, scope_id=parsed.scope_id, kind="files",
-                                tail_segments=(*parsed.tail_segments, *parts), gateway_authority=parsed.gateway_authority)
 
 
 class NativeDirectoryBindings(Protocol):
@@ -101,7 +76,7 @@ class GatewayNativeDirectoryClient:
         return parsed.display_uri
 
     def resolve(self, parsed: ParsedResourceUri) -> Path:
-        root_uri = file_uri_root(parsed.display_uri)
+        root_uri = resource_uri.file_uri_root(parsed.display_uri)
         response = self._request("GET", f"/{parsed.scope_id}/{parsed.tail_segments[0]}")
         result = APIResponse[NativeDirectoryResolveDTO].model_validate_json(response.content)
         if result.code != 0 or result.data is None or result.request_id != response.headers["X-Request-ID"] or result.data.uri != root_uri:
@@ -171,10 +146,10 @@ class WorkspaceFilePaths:
     def reference(self, target: Path) -> str:
         self.require_public_path(target)
         if target.is_relative_to(self.workspace):
-            return file_uri_child(self.workspace_uri, *target.relative_to(self.workspace).parts)
+            return resource_uri.file_uri_child(self.workspace_uri, *target.relative_to(self.workspace).parts)
         root = target if target.is_dir() else target.parent
         uri = self._bindings().bind(root)
-        return uri if root == target else file_uri_child(uri, target.name)
+        return uri if root == target else resource_uri.file_uri_child(uri, target.name)
 
     def native(self, uri: str) -> Path:
         return self.resolve(uri)[0]

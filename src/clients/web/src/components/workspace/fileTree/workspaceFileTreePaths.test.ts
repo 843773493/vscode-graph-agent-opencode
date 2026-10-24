@@ -13,6 +13,7 @@ const workspaceRoot = "boxteam://workspace/ws-1/resources/files/root";
 const workspaceSource = `${workspaceRoot}/src`;
 const gatewayId = "gateway_0123456789abcdef0123456789abcdef";
 const gatewayRoot = `boxteam://${gatewayId}/gateway/${gatewayId}/resources/files/0123456789ab7abc8abc012345678901`;
+const attachmentRoot = `boxteam://${gatewayId}/workspace/ws-1/resources/attachments/att_00000000000000000000000000000000`;
 
 describe("文件树 URI 路径语义", () => {
   test("文件与根目录的父级按 URI segment 收敛，根停在自身", () => {
@@ -23,6 +24,9 @@ describe("文件树 URI 路径语义", () => {
     expect(parentFileTreePath(sourceDirectory)).toBe(workspaceSource);
     expect(parentFileTreePath(sourceFile)).toBe(sourceDirectory);
     expect(parentFileTreePath(gatewayRoot)).toBe(gatewayRoot);
+    expect(parentFileTreePath(attachmentRoot)).toBe(attachmentRoot);
+    expect(parentFileTreePath(`${attachmentRoot}/original/content`)).toBe(`${attachmentRoot}/original`);
+    expect(parentFileTreePath(`${attachmentRoot}/derived`)).toBe(attachmentRoot);
   });
 
   test("祖先判断使用 URI segment 边界并隔离不同资源根", () => {
@@ -33,6 +37,9 @@ describe("文件树 URI 路径语义", () => {
     expect(isTreePathInside(`${workspaceRoot}/srcs/a.ts`, workspaceSource)).toBe(false);
     expect(isTreePathInside(child, workspaceRoot)).toBe(true);
     expect(isTreePathInside(child, gatewayRoot)).toBe(false);
+    expect(isTreePathInside(`${attachmentRoot}/derived/result.md`, attachmentRoot)).toBe(true);
+    expect(isTreePathInside(`${attachmentRoot}1/derived/result.md`, attachmentRoot)).toBe(false);
+    expect(isTreePathInside(`${attachmentRoot}/derived/result.md`, workspaceRoot)).toBe(false);
     expect(isTreePathInside(
       "boxteam://workspace/ws-2/resources/files/root/src/a.ts",
       workspaceSource,

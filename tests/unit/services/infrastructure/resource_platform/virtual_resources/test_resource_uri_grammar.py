@@ -6,6 +6,8 @@ import pytest
 
 from app.core.resource_uri import (
     ResourceUriGrammarError,
+    file_uri_child,
+    file_uri_root,
     parse_resource_uri,
     parse_session_thread_uri,
     resource_display_uri,
@@ -518,16 +520,56 @@ def test_grammar_error_codes_remain_closed() -> None:
         ResourceUriGrammarError("unregistered_reason", "不得新增隐式拒绝码")
 
 
+@pytest.mark.parametrize(("kind", "root"), [("files", "root"), ("attachments", "att_" + "a" * 32)])
 @pytest.mark.parametrize("children", [(), ("src", "中文 文档.v2.md"), (".github", "100%.txt"), ("%2e", "a?#.md")])
-def test_workspace_files_root_uses_same_file_segment_profile(children: tuple[str, ...]) -> None:
+def test_file_directory_roots_use_same_file_segment_profile(kind: str, root: str, children: tuple[str, ...]) -> None:
     uri = resource_display_uri(
-        scope="workspace", scope_id="ws-1", kind="files", tail_segments=("root", *children),
+        scope="workspace", scope_id="ws-1", kind=kind, tail_segments=(root, *children),
         gateway_authority="gw-1",
     )
     parsed = parse_resource_uri(uri)
-    assert parsed.tail_segments == ("root", *children)
-    assert (parsed.scope_id, parsed.kind, parsed.gateway_authority) == ("ws-1", "files", "gw-1")
+    assert parsed.tail_segments == (root, *children)
+    assert (parsed.scope_id, parsed.kind, parsed.gateway_authority) == ("ws-1", kind, "gw-1")
     assert parse_resource_uri(parsed.display_uri) == parsed
+    root_uri = resource_display_uri(scope="workspace", scope_id="ws-1", kind=kind, tail_segments=(root,), gateway_authority="gw-1")
+    assert file_uri_root(uri) == root_uri
+    assert file_uri_child(root_uri, *children) == uri
+
+
+@pytest.mark.parametrize("scope", ["gateway", "user", "inline"])
+def test_attachment_directory_rejects_non_workspace_scope(scope: str) -> None:
+    for operation in (
+        lambda: parse_resource_uri(f"boxteam://{scope}/test/resources/attachments/att_{'a' * 32}"),
+        lambda: resource_display_uri(scope=scope, scope_id="test", kind="attachments", tail_segments=("att_" + "a" * 32,)),
+    ):
+        with pytest.raises(ResourceUriGrammarError) as excinfo:
+            operation()
+        assert excinfo.value.reason_code == "malformed_path"
+
+
+@pytest.mark.parametrize(("tail", "reason"), [
+    ("", "malformed_path"), ("root", "invalid_character"), ("att_" + "a" * 31, "invalid_character"),
+    ("att_" + "A" * 32, "invalid_character"), ("%61tt_" + "a" * 32, "invalid_percent_encoding"),
+    ("att_" + "a" * 32 + "/%2e%2e", "dot_segment"),
+    ("att_" + "a" * 32 + "/derived/a%2fb", "invalid_character"),
+    ("att_" + "a" * 32 + "/derived/%FF", "invalid_path_encoding"),
+])
+def test_attachment_directory_rejects_invalid_identity_and_child(tail: str, reason: str) -> None:
+    uri = "boxteam://workspace/ws-1/resources/attachments" + ("/" + tail if tail else "")
+    with pytest.raises(ResourceUriGrammarError) as excinfo:
+        parse_resource_uri(uri)
+    assert excinfo.value.reason_code == reason
+
+
+def test_attachment_child_canonicalization_preserves_root_and_target() -> None:
+    root = "boxteam://gw-1/workspace/ws-1/resources/attachments/att_" + "a" * 32
+    uri = file_uri_child(root, "derived", "中文 %2e.txt")
+    assert uri == root + "/derived/%E4%B8%AD%E6%96%87%20%252e.txt"
+    parsed = parse_resource_uri(uri, local_gateway_id="gw-1")
+    assert parsed.gateway_authority is None
+    assert parsed.tail_segments == ("att_" + "a" * 32, "derived", "中文 %2e.txt")
+    assert file_uri_root(parsed.display_uri) == root.replace("gw-1/", "")
+    assert parse_resource_uri(uri.replace("%E4", "%e4")).display_uri == uri
 
 
 @pytest.mark.parametrize("scope", ["user", "inline"])

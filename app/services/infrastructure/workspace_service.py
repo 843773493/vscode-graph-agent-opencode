@@ -20,6 +20,7 @@ from app.core.path_utils import (
     get_user_workspace_root,
     get_workspace_root,
 )
+from app.core.resource_uri import file_uri_child, file_uri_root
 from app.core.workspace_identity import load_or_create_workspace_id
 from app.schemas.internal_v2.workspace import (
     WorkspaceContextDTO,
@@ -52,8 +53,6 @@ from app.services.infrastructure.workspace_files.operations import (
 from app.services.infrastructure.workspace_files.paths import (
     NativeDirectoryBindings,
     WorkspaceFilePaths,
-    file_uri_child,
-    file_uri_root,
 )
 from app.services.infrastructure.workspace_files.store import (
     WorkspaceFileOperationConflictError,

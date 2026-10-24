@@ -12,6 +12,7 @@ import re
 import string
 from collections.abc import Sequence
 from dataclasses import dataclass
+from functools import lru_cache
 from typing import Final, Literal
 from urllib.parse import quote, unquote
 
@@ -22,7 +23,7 @@ _SCOPE_KEYWORDS: Final = frozenset({"workspace", "user", "gateway", "inline"})
 # 语法 kind 闭集（parse_resource_uri 侧）；与 values.py 的描述符闭集 _DESCRIPTOR_KINDS 是两个
 # 独立闭集，不可混用。「config」承载配置来源文件本身，「session」承载会话上下文资源
 # （工作区集合根、Session 定位和 Thread 定位）。
-_RESOURCE_KINDS: Final = frozenset({"agent-spec", "skills", "config", "session", "workspace", "folder", "files"})
+_RESOURCE_KINDS: Final = frozenset({"agent-spec", "skills", "config", "session", "workspace", "folder", "files", "attachments"})
 _NAME_CHARSET: Final = frozenset(string.ascii_letters + string.digits + "_-")
 _INVALID_PERCENT_ESCAPE: Final = re.compile(r"%(?![0-9A-Fa-f]{2})")
 _DIRECTORY_ID: Final = re.compile(r"[0-9a-f]{12}7[0-9a-f]{3}[89ab][0-9a-f]{15}")
@@ -182,8 +183,16 @@ def _expect_fixed_segment(segment: str, expected: str) -> None:
     )
 
 
-def _validate_files_root(scope: str, scope_id: str, root: str) -> None:
-    if scope == "workspace":
+def _validate_directory_root(scope: str, scope_id: str, kind: str, root: str) -> None:
+    if kind == "skills":
+        _validate_dynamic_segment(root, field="skill name")
+    elif kind == "attachments":
+        if scope != "workspace":
+            raise ResourceUriGrammarError("malformed_path", "附件目录只属于 workspace scope")
+        _validate_dynamic_segment(root, field="attachment id")
+        if _SESSION_ARTIFACT_ID_PATTERNS["attachments"].fullmatch(root) is None:
+            raise ResourceUriGrammarError("invalid_character", "附件目录必须使用稳定 attachment_id")
+    elif scope == "workspace":
         _expect_fixed_segment(root, "root")
     elif scope == "gateway":
         _validate_dynamic_segment(root, field="directory id")
@@ -278,16 +287,13 @@ def parse_resource_uri(uri: str, *, local_gateway_id: str | None = None) -> Pars
         _validate_dynamic_segment(tails[0], field="folder id")
         return _parsed(scope, body[0], kind, tails, tails[0], uri, authority)
 
-    if kind in {"skills", "files"}:
+    if kind in {"skills", "files", "attachments"}:
         if not tails:
             raise ResourceUriGrammarError(
                 "malformed_path",
                 f"{kind} URI 必须携带已登记的目录根",
             )
-        if kind == "files":
-            _validate_files_root(scope, body[0], tails[0])
-        else:
-            _validate_dynamic_segment(tails[0], field="skill name")
+        _validate_directory_root(scope, body[0], kind, tails[0])
         children = [_decode_file_segment(segment) for segment in tails[1:]]
         body[3:] = [tails[0], *(_encode_file_segment(child) for child in children)]
         prefix = () if authority is None else (authority,)
@@ -392,11 +398,8 @@ def resource_display_uri(
         _validate_dynamic_segment(gateway_authority, field="gateway authority")
     if any("/" in segment for segment in tail_segments):
         raise ResourceUriGrammarError("invalid_character", "URI 构造的单个尾段不得包含分隔符")
-    if kind in {"skills", "files"} and tail_segments:
-        if kind == "skills":
-            _validate_dynamic_segment(tail_segments[0], field="skill name")
-        else:
-            _validate_files_root(scope, scope_id, tail_segments[0])
+    if kind in {"skills", "files", "attachments"} and tail_segments:
+        _validate_directory_root(scope, scope_id, kind, tail_segments[0])
         tail_segments = (
             tail_segments[0], *(_encode_file_segment(segment) for segment in tail_segments[1:])
         )
@@ -408,6 +411,31 @@ def resource_display_uri(
     else:
         uri = _SCHEME + "/".join((*prefix, scope, scope_id, "resources", kind, *tail_segments))
     return parse_resource_uri(uri).display_uri
+
+
+def file_uri_root(uri: str) -> str:
+    parsed = parse_resource_uri(uri)
+    if parsed.kind not in {"files", "attachments"}:
+        raise ValueError("文件入口只接受 files 或 attachments 资源 URI")
+    return resource_display_uri(scope=parsed.scope, scope_id=parsed.scope_id, kind=parsed.kind,
+                                tail_segments=parsed.tail_segments[:1], gateway_authority=parsed.gateway_authority)
+
+
+@lru_cache(maxsize=256)
+def _parse_parent_resource_uri(uri: str) -> ParsedResourceUri:
+    return parse_resource_uri(uri)
+
+
+def file_uri_child(uri: str, *parts: str) -> str:
+    parsed = (
+        _parse_parent_resource_uri(uri)
+        if isinstance(uri, str)
+        else parse_resource_uri(uri)
+    )
+    if parsed.kind not in {"files", "attachments"}:
+        raise ValueError("文件 child 必须属于 files 或 attachments 资源")
+    return resource_display_uri(scope=parsed.scope, scope_id=parsed.scope_id, kind=parsed.kind,
+                                tail_segments=(*parsed.tail_segments, *parts), gateway_authority=parsed.gateway_authority)
 
 
 def session_artifact_uri(

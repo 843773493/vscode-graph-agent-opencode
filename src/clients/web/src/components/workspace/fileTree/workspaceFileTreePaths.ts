@@ -1,9 +1,10 @@
+import { resourceFileRootUri } from "../../../utils/workspaceFileReferences";
+
 // 这里只操作后端已通过 grammar 的 URI；不解析原生目标机器路径。
 export function parentFileTreePath(uri: string): string {
-  const files = uri.indexOf("/resources/files/");
-  if (files < 0) return "";
-  const rootEnd = uri.indexOf("/", files + "/resources/files/".length);
-  if (rootEnd < 0) return uri;
+  const root = resourceFileRootUri(uri);
+  if (root === null) return "";
+  if (root === uri) return uri;
   return uri.slice(0, uri.lastIndexOf("/"));
 }
 

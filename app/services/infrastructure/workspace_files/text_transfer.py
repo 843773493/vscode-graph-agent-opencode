@@ -3,7 +3,11 @@ from __future__ import annotations
 
 from pathlib import PurePosixPath, PureWindowsPath
 
-from app.core.resource_uri import parse_resource_uri, resource_display_uri
+from app.core.resource_uri import (
+    file_uri_child,
+    parse_resource_uri,
+    resource_display_uri,
+)
 from app.gateway.federation.errors import FederationError
 from app.schemas.internal_v2.text_mutation import (
     CreateText,
@@ -14,7 +18,6 @@ from app.schemas.internal_v2.text_mutation import (
 from app.services.infrastructure.resource_platform.virtual_resources.resolver import (
     ResourceUriResolveError,
 )
-from app.services.infrastructure.workspace_files.paths import file_uri_child
 from app.services.infrastructure.workspace_files.text_patch.parser import (
     identify_files_affected,
 )

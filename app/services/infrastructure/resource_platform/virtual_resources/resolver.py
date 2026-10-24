@@ -134,7 +134,7 @@ def resource_navigation_node(
     parsed: ParsedResourceUri, *, resource_shape: ResourceShape,
 ) -> ResourceNavigationNode:
     """固定根模板的唯一导航合同；实际节点 shape 由持有文件的 owner 核实。"""
-    if parsed.kind in {"skills", "files"}:
+    if parsed.kind in {"skills", "files", "attachments"}:
         if len(parsed.tail_segments) == 1 and resource_shape != "directory":
             raise ResourceUriResolveError("capability_denied", "已公布的资源根必须是目录")
         if resource_shape not in {"directory", "file"}:
@@ -146,7 +146,7 @@ def resource_navigation_node(
         raise ResourceUriResolveError("capability_denied", "领域资源不公开私有文件树")
     operations = (
         ("describe", "list", "search") if resource_shape == "directory"
-        else ("describe", "read", "search") if resource_shape == "file" and (parsed.kind in {"files", "skills"} or parsed.session_artifact_kind == "tool-results")
+        else ("describe", "read", "search") if resource_shape == "file" and (parsed.kind in {"files", "skills", "attachments"} or parsed.session_artifact_kind == "tool-results")
         else ("describe", "read") if resource_shape == "file" else ("describe",)
     )
     return ResourceNavigationNode(

@@ -7,6 +7,7 @@ from collections.abc import AsyncIterator
 from contextlib import aclosing, suppress
 from pathlib import Path
 
+from app.core.resource_uri import file_uri_child
 from app.schemas.internal_v2.workspace_file_operations import (
     WorkspaceDirectoryRevisionDTO,
     WorkspaceFileListDTO,
@@ -19,7 +20,6 @@ from app.services.infrastructure.workspace_file_watch_service import (
 from app.services.infrastructure.workspace_files.operations import (
     WorkspaceFileOperations,
 )
-from app.services.infrastructure.workspace_files.paths import file_uri_child
 
 
 async def file_events(owner: WorkspaceFileOperations, watcher: WorkspaceFileWatchService,
