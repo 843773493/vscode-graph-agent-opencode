@@ -4,7 +4,7 @@ import json
 import shutil
 from functools import lru_cache
 from pathlib import Path
-from stat import S_ISDIR
+from stat import S_IRUSR, S_ISDIR, S_ISLNK, S_IWUSR, S_IXUSR
 
 import commentjson
 
@@ -20,6 +20,19 @@ def render_test_workspace_config(source_text: str) -> str:
     return json.dumps(payload, ensure_ascii=False, indent=2) + "\n"
 
 
+def _make_test_tree_writable(path: Path) -> None:
+    """只放开待删除副本的 owner 权限，不跟随指向模板或其它目录的链接。"""
+    mode = path.lstat().st_mode
+    if S_ISLNK(mode):
+        return
+    writable = mode | S_IWUSR | (S_IRUSR | S_IXUSR if S_ISDIR(mode) else 0)
+    if writable != mode:
+        path.chmod(writable)
+    if S_ISDIR(mode):
+        for child in path.iterdir():
+            _make_test_tree_writable(child)
+
+
 def prepare_test_workspace(
     *,
     workspace_root: Path,
@@ -30,6 +43,7 @@ def prepare_test_workspace(
     """从只读模板创建全新的隔离测试工作区。"""
 
     if workspace_root.exists():
+        _make_test_tree_writable(native_io_path(workspace_root))
         shutil.rmtree(native_io_path(workspace_root))
     workspace_root.mkdir(parents=True, exist_ok=True)
 
