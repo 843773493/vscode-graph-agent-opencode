@@ -16,6 +16,7 @@ import {
 } from "./operations/browserPageActions.js";
 import {
   BrowserToolTimeoutError,
+  DEFAULT_OPERATION_DRAIN_TIMEOUT_MS,
   DEFAULT_VIEWPORT,
   NAVIGATION_TIMEOUT_MS,
   TOOL_TIMEOUT_MS,
@@ -46,7 +47,6 @@ const AGENT_LOCK_LEASE_MS = 45_000;
 const SOFT_PROTECTION_LEASE_MS = 5 * 60_000;
 const PROTECTION_INSPECTION_RETRY_MS = 5_000;
 const STREAM_RELAX_DELAY_MS = 5_000;
-const SHUTDOWN_OPERATION_DRAIN_MS = 5_000;
 const STREAM_PROFILES = Object.freeze({
   interactive: Object.freeze({ quality: 65, everyNthFrame: 2 }),
   relaxed: Object.freeze({ quality: 50, everyNthFrame: 4 }),
@@ -794,20 +794,10 @@ export class BrowserSession extends EventEmitter {
 
   async checkpointForManagerShutdown(
     reason,
-    { operationDrainTimeoutMs = SHUTDOWN_OPERATION_DRAIN_MS } = {},
+    { operationDrainTimeoutMs = DEFAULT_OPERATION_DRAIN_TIMEOUT_MS } = {},
   ) {
     this.closingRequested = true;
-    let drainTimer = null;
-    const operationsDrained = await Promise.race([
-      this.operationQueue.drain().then(() => true),
-      new Promise((resolve) => {
-        drainTimer = setTimeout(resolve, operationDrainTimeoutMs, false);
-      }),
-    ]);
-    if (drainTimer !== null) {
-      clearTimeout(drainTimer);
-    }
-    if (!operationsDrained) {
+    if (!await this.operationQueue.drain(operationDrainTimeoutMs)) {
       const error = new Error(
         `浏览器关闭前已接纳操作未能排空: browser_id=${this.id}, pending=${this.pendingOperations}, in_flight=${this.inFlightOperations}`,
       );
@@ -1989,7 +1979,7 @@ export class BrowserSession extends EventEmitter {
     });
   }
 
-  async drainScreencastFrames(entries, timeoutMs = SHUTDOWN_OPERATION_DRAIN_MS) {
+  async drainScreencastFrames(entries, timeoutMs = DEFAULT_OPERATION_DRAIN_TIMEOUT_MS) {
     // Page.stopScreencast 的回执不代表此前帧的截图和 ACK 已经完成。
     const retiring = new Set(entries);
     for (const entry of retiring) entry.retiring = true;

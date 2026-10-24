@@ -20,6 +20,8 @@ browser/
 
 `browser_shutdown_operations.mjs` 经真实Manager创建、冻结/冷回收和交互入口，使用HTTP响应与动作屏障覆盖准备、执行、Session排空超时及Manager默认预算超时后的保留/重试；核对关闭顺序、原页面终态、磁盘检查点与冷Manager重开后的表单值。通过 `bun run test:matrix -- --suite=integration-browser-shutdown-operations` 运行，固定60秒/4GiB；不代表其它失败收尾、挂起动作终止、Gateway或主Web验收。
 
+`test_browser_owner_revision_drain.py` 经Python客户端、真实Node与Chromium验证默认5秒的旧版本排空超时、持久新版本、原动作仍执行、独立Browser可读、迟到回执拒绝和同版本重试；受控HTTP服务只暂停原脚本的fetch。通过 `bun run test:matrix -- --suite=integration-browser-owner-revision-drain` 运行，固定60秒/4GiB；不代表Python业务owner的恢复gate隔离、强制终止或Gateway/主Web验收。
+
 性能测试通过 `psutil` 遍历 Browser 后端的子进程，避免依赖 `/proc` 与 `sysconf`：CPU统一累计用户态和系统态秒数；内存 Linux 采样 PSS，Windows/macOS 采样 USS，结果同时记录指标名。服务关闭在 POSIX 发送 SIGTERM，在 Windows 使用独立进程组和 CTRL_BREAK_EVENT，以触发 Browser Manager 的检查点保存。
 
 ## 可修改内容

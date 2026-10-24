@@ -361,6 +361,51 @@ describe("浏览器状态持久化", () => {
     }
   });
 
+  test.each(["prepare", "executing"])("撤销版本等待%s超时仍持久化新版本并保留原操作，迟到结果拒绝", async (phase) => {
+    const writes = [];
+    const manager = createBrowserManagerWithStateWriter(async (state) => { writes.push(structuredClone(state)); });
+    const browser = new BrowserSession({ manager, record: {
+      browser_id: createOptions().browserId, workspace_id: WORKSPACE_ID,
+      status: "running", transport_owner_revision: 1, reconciliation_status: "verified",
+    } });
+    manager.browsersById.set(browser.id, browser);
+    const grant = manager.issueTransportGrant(browser.id, { ownerRevision: 1, association: null });
+    let release;
+    let enter;
+    const barrier = new Promise((resolve) => { release = resolve; });
+    const entered = new Promise((resolve) => { enter = resolve; });
+    const effects = [];
+    browser.wake = async () => { if (phase === "prepare") { enter(); await barrier; } };
+    const operation = browser.runInteractiveOperation({ actor: "user", action: "old", transportOwnerRevision: 1 }, async () => {
+      effects.push("entered");
+      if (phase === "executing") { enter(); await barrier; }
+      effects.push("completed");
+    }).catch((error) => error);
+    await entered;
+    const accepted = [...browser.operationQueue.acceptedOperationExecutions];
+    let outcome;
+    const syncing = manager.syncOwnerRevision(browser.id, 2, { operationDrainTimeoutMs: 5 })
+      .then(() => { outcome = "success"; }, (error) => { outcome = error; });
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(outcome).toMatchObject({ code: "browser_owner_revision_drain_timeout", statusCode: 408 });
+      expect(writes.at(-1).browsers[0].transport_owner_revision).toBe(2);
+      expect(() => manager.consumeTransportGrant(browser.id, grant.grant_token)).toThrow("无效");
+      expect([...browser.operationQueue.acceptedOperationExecutions]).toEqual(accepted);
+      expect(browser.record.status).toBe("running");
+      expect(browser.closingRequested).toBe(false);
+      expect(effects).toEqual(phase === "prepare" ? [] : ["entered"]);
+    } finally {
+      release();
+      await syncing;
+      expect(await operation).toMatchObject({ code: "browser_transport_revoked" });
+    }
+    await manager.syncOwnerRevision(browser.id, 2);
+    expect(browser.operationQueue.acceptedOperationExecutions.size).toBe(0);
+    expect(browser.transportOwnerRevision).toBe(2);
+    expect(effects).toEqual(phase === "prepare" ? [] : ["entered", "completed"]);
+  });
+
   test("短时间内的后台写入请求合并为一次", async () => {
     let writes = 0;
     const manager = createBrowserManagerWithStateWriter(async () => {

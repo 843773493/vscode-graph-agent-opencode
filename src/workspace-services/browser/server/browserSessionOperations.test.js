@@ -668,7 +668,7 @@ describe("浏览器统一操作队列", () => {
     browser.syncOwnerRevision(2);
     release();
     expect(await result).toMatchObject({ code: "browser_transport_revoked" });
-    await browser.operationQueue.drain();
+    expect(await browser.operationQueue.drain()).toBe(true);
     expect(calls).toBe(0);
     expect(browser.pendingOperations).toBe(0);
     expect(browser.inFlightOperations).toBe(0);
@@ -692,7 +692,7 @@ describe("浏览器统一操作队列", () => {
       .catch((error) => error);
     browser.syncOwnerRevision(2);
     let drained = false;
-    const drain = browser.operationQueue.drain().then(() => { drained = true; });
+    const drain = browser.operationQueue.drain().then((completed) => { expect(completed).toBe(true); drained = true; });
     await Promise.resolve();
     expect(drained).toBe(false);
     release();

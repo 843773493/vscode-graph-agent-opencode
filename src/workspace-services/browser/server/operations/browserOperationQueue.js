@@ -1,4 +1,5 @@
 import { nowIso } from "../url.js";
+import { DEFAULT_OPERATION_DRAIN_TIMEOUT_MS } from "../browserRuntime.js";
 
 /**
  * @typedef {object} BrowserOperationOptions
@@ -107,8 +108,17 @@ export class BrowserOperationQueue {
     }
   }
 
-  async drain() {
-    await Promise.allSettled([...this.acceptedOperationExecutions]);
+  // false只表示本次等待超时；原Promise仍留在唯一集合中，由原执行链结束。
+  async drain(timeoutMs = DEFAULT_OPERATION_DRAIN_TIMEOUT_MS) {
+    let timer;
+    try {
+      return await Promise.race([
+        Promise.allSettled([...this.acceptedOperationExecutions]).then(() => true),
+        new Promise((resolve) => { timer = setTimeout(resolve, timeoutMs, false); }),
+      ]);
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
   assertTransportOwnerRevision(transportOwnerRevision) {

@@ -13,7 +13,7 @@ operations/
 
 先区分业务操作与传输：Session通过操作队列安排动作并提供页面状态，连接入口用移动调度器合并尚未执行的连续移动。动作函数处理DOM或CDP，不拥有WebSocket封包、ACK、Chromium启动或持久化目录。队列通过注入的Session调用状态发布和保存，不另建Session状态或存储owner。
 
-队列的`browserSession`是执行动作的BrowserSession资源宿主，不是聊天Session或传输授权身份。`serialOperationTail`只串联排队操作；`acceptedOperationExecutions`记录全部已接纳而未结束的Promise，包含尚未开始的串行操作和并发操作。`drain()`等待调用时这份集合的快照，拒绝新操作仍由宿主的关闭准入负责；不能把串行尾部当作全部并发动作已经结束。
+队列的`browserSession`是执行动作的BrowserSession资源宿主，不是聊天Session或传输授权身份。`serialOperationTail`只串联排队操作；`acceptedOperationExecutions`记录全部已接纳而未结束的Promise，包含尚未开始的串行操作和并发操作。`drain(timeoutMs)`以默认5秒的单次预算等待调用时这份集合的快照，true表示已排空，false仅表示等待超时；调用方必须据此决定失败，不能假报取消、清除原Promise或重发动作。关闭与版本撤销复用本入口，不另建计数轮询或无限等待链；拒绝新操作仍由宿主的关闭准入负责，串行尾部不表示全部并发动作结束。
 
 指针移动调度器的`pendingPointerMove`仅保存尚未交给回调的最新事件；`drainPromise`表示整轮排空何时结束，供后续键盘/点击等操作等待，不是页面活动标记。`supersededMoveCount`只累计待处理事件被替换的次数，不表示动作执行次数。`close()`丢弃待处理事件并拒绝后续输入，已经交给回调的动作仍由其原owner结束；关闭不等于取消该动作。
 

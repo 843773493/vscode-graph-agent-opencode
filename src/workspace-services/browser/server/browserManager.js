@@ -4,6 +4,7 @@ import { readFile } from "node:fs/promises";
 import { existsSync, statSync } from "node:fs";
 import { validateWorkspaceId } from "./workspaceIdentity.js";
 import { BrowserSession } from "./browserSession.js";
+import { DEFAULT_OPERATION_DRAIN_TIMEOUT_MS } from "./browserRuntime.js";
 import { BrowserStateStore } from "./browserStateStore.js";
 import { normalizeBrowserUrl, nowIso } from "./url.js";
 import { BrowserRuntimePool } from "./resources/browserRuntimePool.js";
@@ -285,13 +286,23 @@ export class BrowserManager {
     return session;
   }
 
-  async syncOwnerRevision(id, transportOwnerRevision) {
-    this.get(id).syncOwnerRevision(transportOwnerRevision);
+  async syncOwnerRevision(id, transportOwnerRevision, {
+    operationDrainTimeoutMs = DEFAULT_OPERATION_DRAIN_TIMEOUT_MS,
+  } = {}) {
+    const session = this.get(id);
+    session.syncOwnerRevision(transportOwnerRevision);
     for (const [token, grant] of this.transportGrants) {
       if (grant.browserId === id && grant.transportOwnerRevision !== transportOwnerRevision) this.transportGrants.delete(token);
     }
-    await this.get(id).operationQueue.drain();
+    const draining = session.operationQueue.drain(operationDrainTimeoutMs);
+    // 旧授权立即撤销并先持久化新版本；排空失败不回退版本，也不销毁原操作。
     await this.persist();
+    if (!await draining) {
+      const error = new Error(`Browser 撤销旧授权后操作未能排空: browser_id=${id}, owner_revision=${transportOwnerRevision}`);
+      error.code = "browser_owner_revision_drain_timeout";
+      error.statusCode = 408;
+      throw error;
+    }
   }
 
   issueTransportGrant(id, { ownerRevision, association }) {

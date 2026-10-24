@@ -1,6 +1,7 @@
 export const DEFAULT_VIEWPORT = Object.freeze({ width: 1280, height: 800 });
 export const NAVIGATION_TIMEOUT_MS = 30000;
 export const TOOL_TIMEOUT_MS = 10000;
+export const DEFAULT_OPERATION_DRAIN_TIMEOUT_MS = 5000;
 
 export function browserRuntimeFailure({ browserId, pageId = null, stage, cause }) {
   const error = new Error(
