@@ -101,6 +101,11 @@
 - **WHEN** 工作区为 `/work/project`，输入 `/etc/hosts`，且工作区内另有 `etc/hosts` 作为对照文件
 - **THEN** 读取或写入仅按目标端能力和授权访问真正的 `/etc/hosts`，或明确拒绝且零写入；MUST NOT 读取或修改 `/work/project/etc/hosts`，也不得伪报成功
 
+#### Scenario: 原生目录名包含协议样式字符
+
+- **WHEN** POSIX 文件目录含冒号，用户以 `./build://debug/probe.txt`、对应原生绝对路径或文件 owner 返回的资源 URI 读取或写入
+- **THEN** 三者访问同一实际文件；不能仅因原生路径中含 `://` 就将其交给 URI grammar。以协议形式开头的 URI 输入仍由唯一 grammar 校验，未知协议和非法资源 URI 明确拒绝，不回退为文件路径
+
 #### Scenario: 相对路径不依赖中继当前目录
 
 - **WHEN** 相对路径的目标目录已明确，而 source 或 relay 进程的当前目录不同或发生变化

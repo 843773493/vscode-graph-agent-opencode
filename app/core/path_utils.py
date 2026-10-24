@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 from collections.abc import Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar, Token
@@ -22,6 +23,11 @@ _WORKSPACE_CONTEXT: ContextVar[tuple[str, Path] | None] = ContextVar(
     "boxteam_workspace_context",
     default=None,
 )
+
+
+def is_resource_uri_input(value: str) -> bool:
+    """只识别输入开头的 URI 协议；原生绝对路径优先按目标平台解释。"""
+    return not Path(value).is_absolute() and re.match(r"[A-Za-z][A-Za-z0-9+.-]*://", value) is not None
 
 
 @dataclass(slots=True)

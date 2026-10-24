@@ -11,7 +11,11 @@ from typing import Protocol
 import httpx
 
 from app.core.exceptions import ForbiddenError
-from app.core.path_utils import resolve_native_file_path, safe_join
+from app.core.path_utils import (
+    is_resource_uri_input,
+    resolve_native_file_path,
+    safe_join,
+)
 from app.core.resource_uri import (
     ParsedResourceUri,
     parse_resource_uri,
@@ -131,7 +135,7 @@ class WorkspaceFilePaths:
 
     def resolve(self, value: str, *, scope: str = "workspace", allow_empty: bool = True,
                 reject_symlink: bool = False, allow_external: bool = True) -> tuple[Path, str]:
-        if "://" in value:
+        if is_resource_uri_input(value):
             parsed = parse_resource_uri(value, local_gateway_id=get_current_gateway_id())
             if parsed.kind != "files" or parsed.scope not in {"workspace", "gateway"}:
                 raise ValueError("文件入口必须指向 Workspace 或 Gateway files 资源")

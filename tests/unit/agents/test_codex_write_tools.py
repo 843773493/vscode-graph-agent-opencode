@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
+import os
 import re
 from types import SimpleNamespace
 from unittest.mock import Mock
@@ -15,6 +17,8 @@ from pydantic import ValidationError
 
 from app.agents.tools.apply_patch import create_apply_patch_tool
 from app.agents.workspace_backend import build_workspace_backend
+from app.core.resource_uri import resource_display_uri
+from app.core.workspace_identity import read_workspace_id
 from app.services.infrastructure.config_service import ConfigService
 from app.services.infrastructure.workspace_service import (
     WorkspaceFileConflictError,
@@ -41,11 +45,59 @@ async def _read_version(tools, path, runtime):
     return re.search(r"sha256:[0-9a-f]{64}", result.content).group()
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX 原生路径允许冒号")
+@pytest.mark.parametrize("synchronous", [False, True])
+@pytest.mark.parametrize("input_kind", ["relative", "absolute", "uri"])
+async def test_native_colon_paths_share_read_search_and_text_writers(
+    write_tools, tmp_path, monkeypatch, synchronous, input_kind,
+):
+    root, tools, runtime = write_tools
+    directory = root / "build:" / "debug"
+    directory.mkdir(parents=True)
+    original = b"before native marker\n"
+    source = directory / "probe.txt"
+    source.write_bytes(original)
+    uri = resource_display_uri(scope="workspace", scope_id=read_workspace_id(root), kind="files",
+                               tail_segments=("root", "build:", "debug"))
+    target = {"relative": "./build://debug", "absolute": str(root) + "/build://debug", "uri": uri}[input_kind]
+    relay = tmp_path / "relay"
+    relay.mkdir()
+    monkeypatch.chdir(relay)
+    operations = [
+        ("ls", {"path": target}),
+        ("read_file", {"path": target + "/probe.txt"}),
+        ("glob", {"path": target, "pattern": "*.txt"}),
+        ("grep", {"path": target, "pattern": "native marker", "output_mode": "content"}),
+        ("write_file", {"file_path": target + "/created.txt", "content": "created native\n", "expected_version": "absent"}),
+        ("edit_file", {"file_path": target + "/probe.txt", "old_string": "before", "new_string": "after",
+                       "expected_version": "sha256:" + hashlib.sha256(original).hexdigest()}),
+    ]
+    results = []
+    for name, arguments in operations:
+        call = {"type": "tool_call", "name": name, "id": runtime.tool_call_id, "args": {**arguments, "runtime": runtime}}
+        message = tools[name].invoke(call) if synchronous else await tools[name].ainvoke(call)
+        results.append((name, message))
+    assert [(name, message.content) for name, message in results if message.status != "success"] == []
+    for _, message in results:
+        assert str(root) not in message.model_dump_json()
+    for _, message in (results[0], results[2], results[3]):
+        assert uri + "/probe.txt" in message.content
+    assert results[1][1].additional_kwargs["resource_navigation"]["node"]["uri"] == uri + "/probe.txt"
+    assert "before native marker" in results[1][1].content
+    assert "before native marker" in results[3][1].content
+    for (_, message), expected in zip(results[4:], ("created.txt", "probe.txt"), strict=True):
+        receipt = json.loads(message.content)
+        assert receipt["target"] == uri + "/" + expected
+        assert receipt["files"][0]["path"] == receipt["target"]
+        assert receipt["effect"] == "completed"
+    assert source.read_bytes() == b"after native marker\n"
+    assert (directory / "created.txt").read_bytes() == b"created native\n"
+    assert list(relay.iterdir()) == []
+
+
 @pytest.mark.parametrize("input_kind", ["relative", "absolute", "uri"])
 async def test_write_and_edit_share_three_inputs_and_preserve_original_bytes(write_tools, input_kind):
     root, tools, runtime = write_tools
-    from app.core.resource_uri import resource_display_uri
-    from app.core.workspace_identity import read_workspace_id
     uri = resource_display_uri(scope="workspace", scope_id=read_workspace_id(root), kind="files", tail_segments=("root", "原 文%25.txt"))
     target = {"relative": "原 文%25.txt", "absolute": str(root / "原 文%25.txt"), "uri": uri}[input_kind]
     created = await _invoke(tools, "write_file", runtime, file_path=target, content="\ufeffold\r\nkeep\r\n", expected_version="absent")

@@ -5,9 +5,12 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import os
 import re
 import sqlite3
 from contextlib import closing
+
+import pytest
 
 from app.core.identifier import create_prefixed_id
 from app.core.resource_uri import parse_resource_uri, resource_display_uri
@@ -22,6 +25,43 @@ from tests.integration.backend.sessions.test_session_communication_pipeline impo
 )
 
 # TODO：Linux 跨 Gateway 三输入与 Windows 本机 Gateway 盘符读写/盘符相对路径拒绝已实测；跨平台联邦及真实 UNC 共享仍需验收。
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX 原生路径允许冒号")
+async def test_native_colon_file_api_roundtrip(communication_case: CommunicationCase) -> None:
+    case = communication_case
+    directory = case.workspace / "build:" / "debug"
+    directory.mkdir(parents=True)
+    file = directory / "probe.txt"
+    file.write_bytes(b"native original\n")
+    uri = resource_display_uri(scope="workspace", scope_id=case.backend.workspace_id, kind="files",
+                               tail_segments=("root", "build:", "debug", file.name))
+    values = ("./build://debug/probe.txt", str(case.workspace) + "/build://debug/probe.txt", uri)
+    records = []
+
+    def checked(response):
+        assert response.status_code == 200, response.text
+        assert str(case.workspace) not in response.text
+        assert response.headers["X-Request-ID"] == response.json()["request_id"]
+        records.append(response.json())
+        return response.json()["data"]
+
+    references = checked(await case.client.post("/api/v1/workspace/files/references", json={"paths": list(values)}))
+    assert references["uris"] == [uri] * 3
+    content = "native original\n"
+    for index, value in enumerate(values):
+        opened = checked(await case.client.get("/api/v1/workspace/files/content", params={"path": value}))
+        assert (opened["path"], opened["content"]) == (uri, content)
+        content = f"native saved {index}\n"
+        saved = checked(await case.client.put("/api/v1/workspace/files/content", params={"path": value},
+            json={"content": content, "expected_revision": opened["revision"]}))
+        assert saved["path"] == uri and saved["revision"] == hashlib.sha256(content.encode()).hexdigest()
+        assert file.read_bytes() == content.encode()
+        for other in values:
+            reopened = checked(await case.client.get("/api/v1/workspace/files/content", params={"path": other}))
+            assert (reopened["path"], reopened["content"], reopened["revision"]) == (uri, content, saved["revision"])
+    assert list(case.replay.artifacts.glob("*.json")) == []
+    (case.artifacts / "native-colon-file-api.json").write_text(json.dumps(records, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 async def test_remote_file_api_resolves_native_and_uri_targets_on_target_machine(communication_triad):

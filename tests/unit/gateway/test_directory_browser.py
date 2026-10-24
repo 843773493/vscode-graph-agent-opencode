@@ -83,6 +83,26 @@ async def test_directory_uri_native_and_relative_input_share_target_owner(
 
 
 @pytest.mark.asyncio
+@pytest.mark.skipif(os.name == "nt", reason="POSIX 原生路径允许冒号")
+@pytest.mark.parametrize("absolute", [False, True])
+async def test_native_colon_directory_selection_uses_selected_gateway(
+    gateway_directory_request: Request, directory_root: Path, absolute: bool,
+) -> None:
+    selected = directory_root / "build:" / "debug"
+    selected.mkdir(parents=True)
+    (selected / "child").mkdir()
+    base = await _directory_listing(gateway_directory_request, str(directory_root), limit=120)
+    native = str(directory_root) + "/build://debug" if absolute else "./build://debug"
+    result = await _directory_listing(gateway_directory_request, native, base_path=base.path, limit=120)
+    reopened = await _directory_listing(gateway_directory_request, result.path, limit=120)
+    assert result == reopened
+    assert [entry.name for entry in result.entries] == ["child"]
+    assert resolve_management_directory(gateway_directory_request, result.path) == selected
+    assert str(directory_root) not in result.model_dump_json()
+    assert not (selected / ".boxteam").exists()
+
+
+@pytest.mark.asyncio
 async def test_absolute_input_is_never_reinterpreted_as_workspace_relative(
     gateway_directory_request: Request, directory_root: Path,
 ) -> None:

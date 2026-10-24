@@ -22,6 +22,7 @@ from wcmatch import glob as wcglob
 from app.abstractions.resource_file_content import ResourceFileReader
 from app.core.distribution_identity import load_distribution_id
 from app.core.exceptions import ForbiddenError
+from app.core.path_utils import is_resource_uri_input
 from app.core.resource_uri import (
     ParsedResourceUri,
     parse_resource_uri,
@@ -138,7 +139,7 @@ class ResourceNavigation:
 
     def input_uri(self, value: str) -> str:
         """原生输入只在固定文件 owner 解释；资源 URI 留给唯一 grammar 校验。"""
-        if "://" in value:
+        if is_resource_uri_input(value):
             return value
         if self._file_paths is None:
             raise ResourceUriResolveError("capability_denied", "此 owner 不接受原生文件路径")

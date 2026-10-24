@@ -8,6 +8,7 @@ from collections.abc import Callable
 
 import httpx
 
+from app.core.path_utils import is_resource_uri_input
 from app.core.resource_uri import parse_resource_uri, resource_display_uri
 from app.core.trace_middleware import get_current_gateway_id, require_current_gateway_id
 from app.gateway.federation.errors import FederationError
@@ -94,7 +95,7 @@ class WorkspaceTextMutationOwner:
         return result
 
     def _routed_command(self, request: TextMutation) -> TextMutation | None:
-        if "://" not in request.target:
+        if not is_resource_uri_input(request.target):
             return None
         parsed = parse_resource_uri(request.target, local_gateway_id=get_current_gateway_id())
         if parsed.gateway_authority is None and not (parsed.scope == "workspace" and parsed.scope_id != self._paths.workspace_id):

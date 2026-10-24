@@ -15,7 +15,12 @@ from fastapi import (
 )
 
 from app.core.exceptions import ForbiddenError
-from app.core.path_utils import get_gateway_root, resolve_native_file_path, safe_join
+from app.core.path_utils import (
+    get_gateway_root,
+    is_resource_uri_input,
+    resolve_native_file_path,
+    safe_join,
+)
 from app.core.resource_uri import parse_resource_uri, resource_display_uri
 from app.gateway.config import GatewayConfigReloadService
 from app.gateway.control.user_access import (
@@ -69,7 +74,7 @@ def resolve_management_directory(
     request: Request, directory_reference: str, *, base_path: str | None = None,
 ) -> Path:
     """目录选择与注册共用目标 Gateway 的根绑定；相对输入必须有显式基准。"""
-    if "://" in directory_reference:
+    if is_resource_uri_input(directory_reference):
         parsed = parse_resource_uri(
             directory_reference,
             local_gateway_id=request.app.state.gateway_id,

@@ -9,7 +9,7 @@ from pathlib import Path, PureWindowsPath
 
 from app.core.exceptions import ForbiddenError
 from app.core.hashing import sha256_hex
-from app.core.path_utils import resolve_native_file_path
+from app.core.path_utils import is_resource_uri_input, resolve_native_file_path
 from app.core.resource_uri import ResourceUriGrammarError, parse_resource_uri
 from app.core.trace_middleware import get_current_gateway_id
 from app.services.infrastructure.resource_platform.virtual_resources.resolver import (
@@ -60,7 +60,7 @@ class TextPublication:
 
 
 def resolve_text_target(paths: WorkspaceFilePaths, target: str) -> tuple[Path, str]:
-    if "://" in target:
+    if is_resource_uri_input(target):
         parsed = parse_resource_uri(target, local_gateway_id=get_current_gateway_id())
         if parsed.gateway_authority is not None:
             raise ResourceUriResolveError("capability_denied", "本机条件发布入口不接受另一个 Gateway 的目标")
