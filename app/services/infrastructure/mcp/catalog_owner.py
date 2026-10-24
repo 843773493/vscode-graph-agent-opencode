@@ -29,6 +29,7 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Literal, Protocol, TypeAlias
 
+from httpx import HTTPStatusError
 from langchain_core.tools import BaseTool
 from langchain_mcp_adapters.sessions import Connection, create_session
 from langchain_mcp_adapters.tools import load_mcp_tools
@@ -49,6 +50,7 @@ from app.services.infrastructure.mcp.extension_catalog import (
 from app.services.infrastructure.mcp.naming import build_mcp_tool_id
 from mcp import types as mcp_types
 from mcp.client.session import ClientSession
+from mcp.shared.exceptions import McpError
 
 if TYPE_CHECKING:
     from app.services.infrastructure.resource_platform.registry.semantic_registry import (
@@ -62,9 +64,6 @@ McpSessionFactory: TypeAlias = Callable[
     [McpServerConfig, McpChangeNotifyCallback],
     AbstractAsyncContextManager["McpServerSessionPort"],
 ]
-
-_MAX_ERROR_TEXT_LENGTH = 300
-
 
 class McpCatalogError(RuntimeError):
     """MCP 目录 owner 的显式错误基类。"""
@@ -89,7 +88,7 @@ class McpServerSnapshot:
     enabled: bool
     status: str
     tools: tuple[McpToolDescriptor, ...]
-    # 最近一次 relist 的有界错误摘要；成功 relist 后清空。None 表示无失败记录。
+    # 最近一次 relist 的错误事实；原始异常仅留诊断，成功 relist 后清空。
     last_relist_error: str | None = None
 
 
@@ -195,8 +194,34 @@ def production_mcp_session_factory(
     return _session_context()
 
 
-def _bounded_error_text(error: Exception) -> str:
-    return f"{type(error).__name__}: {error}"[:_MAX_ERROR_TEXT_LENGTH]
+def _catalog_failure_text(
+    error: BaseException, *, server_id: str | None, stage: str,
+) -> str:
+    """普通出口只发布类型和数值事实，不能复制异常自由正文或路径。"""
+    failures: list[str] = []
+    pending = [error]
+    visited: set[int] = set()
+    while pending:
+        current = pending.pop()
+        if id(current) in visited:
+            continue
+        visited.add(id(current))
+        facts = [type(current).__name__]
+        if isinstance(current, OSError):
+            for name in ("errno", "winerror"):
+                value = getattr(current, name, None)
+                if type(value) is int:
+                    facts.append(f"{name}={value}")
+        if isinstance(current, McpError):
+            facts.append(f"rpc_code={current.error.code}")
+        if isinstance(current, HTTPStatusError):
+            facts.append(f"http_status={current.response.status_code}")
+        failures.append(" ".join(facts))
+        if isinstance(current, BaseExceptionGroup):
+            pending.extend(reversed(current.exceptions))
+        if current.__cause__ is not None:
+            pending.append(current.__cause__)
+    return f"MCP 目录失败: server_id={server_id} stage={stage} errors=[{'; '.join(failures)}]"
 
 
 def _compute_catalog_revision(
@@ -323,10 +348,12 @@ class McpCatalogOwner:
             raise RuntimeError("McpCatalogOwner 不允许重复启动")
         session_stack = AsyncExitStack()
         await session_stack.__aenter__()
+        failed_server_id: str | None = None
         try:
             for server in self._servers:
                 if not server.enabled:
                     continue
+                failed_server_id = server.server_id
                 runtime = _ServerRuntime(
                     server=server,
                     generation=1,
@@ -352,10 +379,11 @@ class McpCatalogOwner:
                             candidate_descriptors={},
                         )
         except Exception as error:
+            logger.exception("MCP Server 启动或工具目录发现失败: server_id=%s", failed_server_id)
             await session_stack.aclose()
             self._runtimes.clear()
             raise McpCatalogError(
-                f"MCP Server 启动或工具目录发现失败: {error}"
+                _catalog_failure_text(error, server_id=failed_server_id, stage="startup")
             ) from error
         self._session_stack = session_stack
         self._started = True
@@ -616,7 +644,9 @@ class McpCatalogOwner:
                         raise McpCatalogRelistError(
                             f"MCP relist 连接或请求代际已过期: servers={server_ids}"
                         ) from error
-                    error_text = _bounded_error_text(error)
+                    error_text = _catalog_failure_text(
+                        error, server_id=failed_server_id, stage="relist",
+                    )
                     self._runtimes[failed_server_id].last_relist_error = error_text
                     self._dirty_servers.update(server_ids)
                     if self._publication is not None:
@@ -626,12 +656,10 @@ class McpCatalogOwner:
                             raise ExceptionGroup(
                                 "MCP relist 与失效广播失败", [error, invalidation_error]
                             ) from error
+                logger.exception("MCP relist 失败，保留旧 valid 目录: servers=%s source=%s", server_ids, source)
                 if source == "notification":
-                    logger.exception("MCP relist 失败，Registry 已标记不可用: servers=%s", server_ids)
                     return
-                raise McpCatalogRelistError(
-                    f"MCP 工具目录 relist 失败: server_id={failed_server_id}: {error}"
-                ) from error
+                raise McpCatalogRelistError(error_text) from error
 
     def _mark_dirty(self, server_id: str) -> None:
         with self._publication_lock:

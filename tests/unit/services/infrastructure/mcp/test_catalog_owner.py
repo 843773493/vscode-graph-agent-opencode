@@ -6,7 +6,10 @@ import asyncio
 import dataclasses
 from pathlib import Path
 
+import httpx
 import pytest
+from mcp.shared.exceptions import McpError
+from mcp.types import ErrorData
 
 from app.services.infrastructure.events.channel_events import (
     McpCatalogEvent,
@@ -16,7 +19,11 @@ from app.services.infrastructure.events.event_channel_service import (
     EventChannelService,
     EventChannelSpec,
 )
-from app.services.infrastructure.mcp import McpCatalogOwner, McpCatalogRelistError
+from app.services.infrastructure.mcp import (
+    McpCatalogError,
+    McpCatalogOwner,
+    McpCatalogRelistError,
+)
 from tests.support.mcp_session_doubles import (
     FakeMcpSessionFactory as _FakeSessionFactory,
 )
@@ -47,6 +54,55 @@ def _make_owner(
         event_service=event_service,
         session_factory=factory,
     )
+
+
+@pytest.fixture(params=["native", "rpc", "http", "group"])
+def startup_failure(request: pytest.FixtureRequest) -> tuple[Exception, tuple[str, ...]]:
+    native = FileNotFoundError(2, "private diagnostic", "/private/mcp/command")
+    rpc = McpError(ErrorData(
+        code=-32603, message="private diagnostic /private/mcp/catalog", data={"path": "/private/data"},
+    ))
+    if request.param == "native":
+        return native, ("FileNotFoundError", "errno=2")
+    if request.param == "rpc":
+        return rpc, ("McpError", "rpc_code=-32603")
+    if request.param == "http":
+        response = httpx.Response(403, request=httpx.Request("GET", "http://localhost/private/mcp"))
+        return httpx.HTTPStatusError("private diagnostic /private/http", request=response.request, response=response), (
+            "HTTPStatusError", "http_status=403",
+        )
+    wrapped = RuntimeError("private diagnostic /private/wrapper")
+    wrapped.__cause__ = native
+    return ExceptionGroup("private diagnostic /private/group", [wrapped, rpc]), (
+        "ExceptionGroup", "RuntimeError", "FileNotFoundError", "errno=2", "McpError", "rpc_code=-32603",
+    )
+
+
+async def test_startup_failure_keeps_exception_chain_without_public_raw_text(
+    tmp_path: Path, event_channel_service: EventChannelService, startup_failure,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    failure, expected = startup_failure
+
+    def fail_connect(server, on_change):
+        raise failure
+
+    owner = McpCatalogOwner(
+        raw_config={"servers": _stdio_server()}, workspace_root=tmp_path,
+        event_service=event_channel_service, session_factory=fail_connect,
+    )
+    with pytest.raises(McpCatalogError) as raised:
+        await owner.start()
+    public_error = str(raised.value)
+    assert "server_id=mini" in public_error
+    assert "stage=startup" in public_error
+    assert all(fact in public_error for fact in expected)
+    assert "private" not in public_error
+    assert raised.value.__cause__ is failure
+    assert not owner.started
+    assert owner._runtimes == {}
+    assert any(record.exc_info and record.exc_info[1] is failure for record in caplog.records)
+    assert "private diagnostic" in caplog.text
 
 
 async def _next_event(
@@ -226,12 +282,14 @@ async def test_server_without_notifications_relists_at_activation_boundary(
 
         # 显式 relist 失败 → 显式抛出，且保留旧 valid revision 与错误记录。
         factory.sessions["mini"].relist_error = RuntimeError("connection lost")
-        with pytest.raises(McpCatalogRelistError, match="connection lost"):
+        with pytest.raises(McpCatalogRelistError, match="RuntimeError") as raised:
             await owner.relist_servers_without_notifications()
+        assert raised.value.__cause__ is factory.sessions["mini"].relist_error
         assert "mcp__mini__polled" in owner.get_tool_ids()
         snapshot = owner.list_servers()[0]
         assert snapshot.last_relist_error is not None
-        assert "connection lost" in snapshot.last_relist_error
+        assert snapshot.last_relist_error == str(raised.value)
+        assert "connection lost" not in snapshot.last_relist_error
     finally:
         await owner.shutdown()
 
@@ -281,8 +339,9 @@ async def test_explicit_refresh_keeps_entire_old_catalog_until_all_servers_valid
             label="atomic-refresh"
         )
         factory.sessions["beta"].relist_error = RuntimeError("beta candidate invalid")
-        with pytest.raises(McpCatalogRelistError, match="beta candidate invalid"):
+        with pytest.raises(McpCatalogRelistError, match="server_id=beta.*RuntimeError") as raised:
             await owner.relist_servers_without_notifications()
+        assert raised.value.__cause__ is factory.sessions["beta"].relist_error
         assert owner.get_tool_ids() == frozenset(previous.tools)
         assert all(value.binding_ref == previous.binding_ref for value in publications)
         assert owner.publication_snapshot().status == "unavailable"

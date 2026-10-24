@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import errno
 import shutil
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
@@ -30,6 +31,7 @@ from app.domain.itemized.resource_activation import (
 from app.services.infrastructure.events.event_channel_service import EventChannelService
 from app.services.infrastructure.mcp import (
     McpCatalogOwner,
+    McpCatalogRelistError,
     McpCatalogResourcePublisher,
 )
 from app.services.infrastructure.mcp.catalog_activation import (
@@ -185,10 +187,70 @@ async def test_relist_failure_blocks_registry_and_preserves_last_valid(catalog_r
     unavailable = registry.snapshot(MCP_TOOL_CATALOG_RESOURCE_ID)
     assert not unavailable.available
     assert unavailable.payload is None
-    assert "controlled tools/list failed" in unavailable.error
+    assert "RuntimeError" in unavailable.error
+    assert "controlled tools/list failed" not in unavailable.error
     assert registry.last_valid_snapshot(MCP_TOOL_CATALOG_RESOURCE_ID) == before
     assert unavailable.members == before.members
     assert unavailable.retained_revision == before.revision
+
+
+@pytest.mark.parametrize("native_path", [
+    "/private/mcp/catalog.json",
+    r"C:\private\mcp\catalog.json",
+    r"\\server\private\mcp\catalog.json",
+    r"\\?\UNC\server\private\mcp\catalog.json",
+])
+@pytest.mark.parametrize("source", ["explicit", "notification"])
+async def test_catalog_failure_publishes_facts_and_keeps_raw_diagnostics(
+    catalog_runtime, native_path: str, source: str, caplog: pytest.LogCaptureFixture,
+):
+    owner, factory, registry, _scope = catalog_runtime
+    before = registry.snapshot(MCP_TOOL_CATALOG_RESOURCE_ID)
+    binding = owner.binding_snapshot()
+    failure = PermissionError(errno.EACCES, "private server diagnostic", native_path)
+    failure.winerror = 5
+    factory.session.error = failure
+    if source == "explicit":
+        factory.session.supports_tool_list_changed = lambda: False
+        with pytest.raises(McpCatalogRelistError) as raised:
+            await owner.relist_servers_without_notifications()
+        assert raised.value.__cause__ is failure
+    else:
+        factory.changed()
+        await drain_pending_relists(owner)
+
+    unavailable = registry.snapshot(MCP_TOOL_CATALOG_RESOURCE_ID)
+    public_error = unavailable.error
+    assert public_error == owner.list_servers()[0].last_relist_error
+    assert public_error == owner.publication_snapshot().error
+    if source == "explicit":
+        assert public_error == str(raised.value)
+    assert "server_id=mini" in public_error
+    assert "relist" in public_error
+    assert "PermissionError" in public_error
+    assert "errno=13" in public_error
+    assert "winerror=5" in public_error
+    assert native_path not in public_error
+    assert "private server diagnostic" not in public_error
+    assert any(record.exc_info and record.exc_info[1] is failure for record in caplog.records)
+    assert str(failure) in caplog.text
+    assert not unavailable.available
+    assert unavailable.payload is None
+    assert registry.last_valid_snapshot(MCP_TOOL_CATALOG_RESOURCE_ID) == before
+    assert unavailable.members == before.members
+    assert unavailable.retained_revision == before.revision
+    assert owner.binding_snapshot() == binding
+
+    factory.session.error = None
+    if source == "explicit":
+        await owner.relist_servers_without_notifications()
+    else:
+        factory.changed()
+        await drain_pending_relists(owner)
+    assert registry.snapshot(MCP_TOOL_CATALOG_RESOURCE_ID).available
+    assert owner.list_servers()[0].last_relist_error is None
+    assert owner.publication_snapshot().error is None
+    assert owner.binding_snapshot() == binding
 
 
 async def test_subscription_is_released_by_runtime_scope(catalog_runtime):

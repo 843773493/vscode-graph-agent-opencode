@@ -542,3 +542,10 @@
 - 固定完整 tree `d49f713f1c29b7b5837816c12ab7262d9fd81e7f` 的 `out/tests/temp/file_mutation_lock_errors_20261024/artifacts/runs/unit-003/` 为94 passed/2.69秒、exit0，覆盖POSIX/盘符/UNC异常正文、有无filename、五阶段、原异常日志对象、文件及本地锁释放、原锁超时和模型apply_patch真实入口。释放/关闭失败仍保已发布文件及 completed effect，不伪报未执行；业务异常保持原对象。
 - `http-env-003/` 为真实独立后端HTTP 1 passed/12.79秒、exit0：通过磁盘目录阻塞锁文件打开，正文PUT保400与request_id、无真实路径且原文件不变；修复锁位置后，同一URI和原revision成功写入。首次 `http-003/` 仅因归档树未接现有.env导致必需秘密引用解析失败，补接已有环境后同源码通过，不计首轮为行为证据。`static-003/` Ruff exit0；只读独审 `artifacts/review-003.json` 无可行动缺陷。
 - 同一完整归档恢复旧锁实现的 `red-003/` exit1，区分原始路径/原因及模型工具结果错误；原件、准确命令与源码指纹保留。早期unit-002因新用例漏声明补丁末尾空行而有1项字节预期失败，已修正测试输入明确生成末尾换行；static-002的with语法检查已修，未改变产品补丁语义。上述故障注入不代Windows实机、完整Gateway/Web或2.2/7.2总门，两项仍保持未勾；最终提交相对受测候选仅新增此证据。
+
+### 2026-10-24 MCP 目录失败诊断（2.2/7.2 部分收口）
+
+- 唯一目录 owner 删除异常正文截断链路，启动、显式刷新、通知刷新统一发布已校验 server ID、阶段、异常树类型及 errno/winerror/RPC code/HTTP status 数值事实；原始异常、cause 与完整堆栈保留在诊断日志。普通 API 503、owner 最近错误和 Registry unavailable 复用同一错误值，不新增 writer 或解析器；失败保持整个旧有效目录、binding、revision 与成员，恢复成功清除错误。
+- 固定完整 tree `0599daee63368474967b5f6bb6fc450be4c2661d` 的 `unit-002` 为51 passed/13.74秒，包含POSIX、盘符、UNC、扩展UNC的显式/通知刷新，启动OS/RPC/HTTP/异常组、原cause/log、目录原子性及恢复。真实独立后端 HTTP→本地 stdio MCP 的 `http-002` 为1 passed/14.07秒：四种协议错误正文/data不进入503，request_id一致，原文在后端日志、协议原件可核，恢复后同目录可读；没有模型替身或外部模型请求。旧实现 `unit-red-001` 的8项全部失败，完整候选仅恢复旧owner的 `http-red-004` 在首个协议故障精确复现真实路径外泄。
+- 最终源码相对受测 tree 仅调整测试import排版；`static-003` Ruff与`compile-003`均exit0。owner为802行，按1.6登记完整文件清单、AST符号/职责、import graph及目录计数：目录7个Python文件，仍为单一目录状态机，无新增循环；非作者结构复核未发现需在本切片强拆的职责混杂，后续增长应重新评估纯错误投影/session adapter边界。
+- 准确命令、前后源码指纹、raw/真实退出码、零进程残留、协议/HTTP/原始日志及SHA清单见 `out/tests/temp/mcp_catalog_failures_20261024/artifacts/validation-proof-003.json`、`architecture-003.json`与`review-002.json`。首次static-002仅报新增import排版，已修正；unit反例的首次runner调用因隔离BOXTEAM_HOME目录未创建而未启动测试，补建任务目录后才运行。此切片不代Windows实机、完整Gateway/Web或2.2/7.2全局审计，两项继续未勾。
