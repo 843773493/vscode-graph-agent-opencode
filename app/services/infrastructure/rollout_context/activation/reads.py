@@ -254,15 +254,15 @@ class ResourceActivationReadMixin:
             ),
         )
 
-    def find_snapshot(
+    def frozen_for_model_call(
         self,
         session_id: str,
         *,
         thread_id: str,
-        activation_snapshot_id: str,
+        model_call_id: str,
         checkpoint_ns: str = "",
     ) -> ResourceActivationSnapshotRef | None:
-        """精确 identity 查找；合法无行返回 None，schema 缺失仍失败。"""
+        """按模型调用的唯一 owner 找回原 ID，不从命名规则重算历史身份。"""
 
         with self._storage.storage._connect(
             self._storage.storage.fork_paths.thread_identity(session_id, thread_id),
@@ -270,16 +270,17 @@ class ResourceActivationReadMixin:
         ) as connection:
             self._storage.storage._require_v2_runtime(connection)
             self.require_schema(connection)
-            exists = connection.execute(
-                "SELECT 1 FROM resource_activation_snapshots WHERE session_id = ? "
-                "AND thread_id = ? AND activation_snapshot_id = ?",
-                (session_id, thread_id, activation_snapshot_id),
+            row = connection.execute(
+                "SELECT activation_snapshot_id FROM resource_activation_snapshots "
+                "WHERE session_id = ? AND thread_id = ? "
+                "AND snapshot_kind = 'model_call' AND model_call_id = ?",
+                (session_id, thread_id, model_call_id),
             ).fetchone()
-            if exists is None:
+            if row is None:
                 return None
             raw = self._read_raw_snapshot(
                 connection, session_id=session_id, thread_id=thread_id,
-                activation_snapshot_id=activation_snapshot_id,
+                activation_snapshot_id=strict_text(row[0], field="activation_snapshot_id"),
             )
         return self._build_snapshot(
             raw, read_lineage_manifest=lambda ref: self._lineage_body.read_lineage_manifest(

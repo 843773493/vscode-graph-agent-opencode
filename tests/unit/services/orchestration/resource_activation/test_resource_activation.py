@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 from dataclasses import replace
 
 import pytest
@@ -56,13 +57,13 @@ class _FakeSaver:
             )
         ), None)
 
-    def find_resource_activation_snapshot(
-        self, session_id, *, thread_id, activation_snapshot_id, checkpoint_ns=""
+    def frozen_resource_activation_for_model_call(
+        self, session_id, *, thread_id, model_call_id, checkpoint_ns=""
     ):
         return next((
             snapshot for snapshot in self.snapshots
             if snapshot.owner_session_id == session_id and snapshot.owner_thread_id == thread_id
-            and snapshot.activation_snapshot_id == activation_snapshot_id
+            and snapshot.snapshot_kind == "model_call" and snapshot.model_call_id == model_call_id
         ), None)
 
     async def save_resource_activation_snapshot(
@@ -242,6 +243,62 @@ async def test_freeze_execution_and_model_call_reuses_parent_bytes() -> None:
         assert resource_ids[: len(turn.bindings)] == [
             binding.resource_id for binding in turn.bindings
         ]
+
+
+@pytest.mark.asyncio
+async def test_snapshot_ids_are_bounded_and_unambiguous_for_native_storage() -> None:
+    saver = _FakeSaver()
+    coordinator = _coordinator(_registry(), saver)
+    policy = _policy()
+    roots = [await coordinator.freeze_execution(
+        admission=_admission(f"turn-{number}", execution_id=execution), policy=policy,
+    ) for number, execution in enumerate(("execution", "execution:call", "长身份:" * 100))]
+    calls = [await coordinator.commit_model_call(await coordinator.capture_model_call(
+        parent=root, model_call_id=call,
+    )) for root, call in zip(roots, ("call:tail", "tail", "模型调用:" * 100), strict=True)]
+    ids = [snapshot.activation_snapshot_id for snapshot in (*roots, *calls)]
+    assert len(set(ids)) == 6
+    assert all(re.fullmatch(r"activation-[0-9a-f]{64}", identity) for identity in ids)
+    repeated = await coordinator.commit_model_call(await coordinator.capture_model_call(
+        parent=roots[0], model_call_id="call:tail",
+    ))
+    assert repeated is calls[0]
+    assert len(saver.snapshots) == 6
+
+
+@pytest.mark.asyncio
+async def test_resume_uses_recorded_snapshot_identity_without_refreezing() -> None:
+    saver = _FakeSaver()
+    coordinator = _coordinator(_registry(), saver)
+    root = await coordinator.freeze_execution(admission=_admission("historical"), policy=_policy())
+    call = await coordinator.commit_model_call(await coordinator.capture_model_call(
+        parent=root, model_call_id="historical-call",
+    ))
+    historical = replace(call, activation_snapshot_id="historical:opaque:model-call")
+    saver.snapshots[-1] = historical
+    # 冷恢复没有 live Registry；若按新命名重算旧 ID 就会尝试重新冻结并失败。
+    restarted = _coordinator(ResourceRegistry(), saver)
+    restored = await restarted.commit_model_call(await restarted.capture_model_call(
+        parent=root, model_call_id="historical-call",
+    ))
+    assert restored is historical
+    assert restored.to_dict() == historical.to_dict()
+    assert len(saver.snapshots) == 2
+
+
+@pytest.mark.asyncio
+async def test_model_call_identity_cannot_reuse_another_execution_snapshot() -> None:
+    saver = _FakeSaver()
+    coordinator = _coordinator(_registry(), saver)
+    first = await coordinator.freeze_execution(admission=_admission("first"), policy=_policy())
+    second = await coordinator.freeze_execution(admission=_admission("second"), policy=_policy())
+    await coordinator.commit_model_call(await coordinator.capture_model_call(
+        parent=first, model_call_id="shared-call",
+    ))
+    with pytest.raises(ResourceActivationError) as error:
+        await coordinator.capture_model_call(parent=second, model_call_id="shared-call")
+    assert error.value.code == "resource-activation-parent-invalid"
+    assert len(saver.snapshots) == 3
 
 
 @pytest.mark.asyncio

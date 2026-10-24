@@ -77,12 +77,11 @@ def _snapshot_id(
     execution_id: str,
     model_call_id: str | None,
 ) -> str:
-    if snapshot_kind == "execution":
-        return f"activation-execution:{owner_session_id}:{owner_thread_id}:{execution_id}"
-    return (
-        f"activation-model-call:{owner_session_id}:{owner_thread_id}:{execution_id}:"
-        f"{model_call_id}"
-    )
+    # ID 同时作为 detail 的目录段；结构化摘要避免分隔符歧义与平台文件名限制。
+    digest = sha256_jcs([
+        snapshot_kind, owner_session_id, owner_thread_id, execution_id, model_call_id,
+    ]).rsplit(":", 1)[1]
+    return f"activation-{digest}"
 
 
 @dataclass(frozen=True, slots=True)
@@ -206,16 +205,9 @@ class ResourceActivationCoordinator:
         frozen_policy = parent.activation_policy
         if not frozen_policy.has_model_call_boundary():
             return _ModelCallPreparation(parent, model_call_id, checkpoint_ns, (), parent)
-        snapshot_id = _snapshot_id(
-            snapshot_kind="model_call",
-            owner_session_id=parent.owner_session_id,
-            owner_thread_id=parent.owner_thread_id,
-            execution_id=parent.execution_id,
-            model_call_id=model_call_id,
-        )
-        frozen = self._saver.find_resource_activation_snapshot(
+        frozen = self._saver.frozen_resource_activation_for_model_call(
             parent.owner_session_id, thread_id=parent.owner_thread_id,
-            activation_snapshot_id=snapshot_id, checkpoint_ns=checkpoint_ns,
+            model_call_id=model_call_id, checkpoint_ns=checkpoint_ns,
         )
         if frozen is not None:
             if frozen.parent != parent or frozen.model_call_id != model_call_id:

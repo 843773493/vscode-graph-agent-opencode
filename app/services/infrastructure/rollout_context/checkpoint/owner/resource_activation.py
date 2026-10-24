@@ -190,17 +190,17 @@ class ResourceActivationOwnerMixin:
             admission, checkpoint_ns=self.context_owner_namespace(checkpoint_ns)
         )
 
-    def find_resource_activation_snapshot(
+    def frozen_resource_activation_for_model_call(
         self,
         session_id: str,
         *,
         thread_id: str,
-        activation_snapshot_id: str,
+        model_call_id: str,
         checkpoint_ns: str = "",
     ) -> ResourceActivationSnapshotRef | None:
-        return self._activation_store().find_snapshot(
+        return self._activation_store().frozen_for_model_call(
             session_id, thread_id=thread_id,
-            activation_snapshot_id=activation_snapshot_id,
+            model_call_id=model_call_id,
             checkpoint_ns=self.context_owner_namespace(checkpoint_ns),
         )
 

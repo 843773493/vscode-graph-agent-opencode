@@ -164,6 +164,29 @@ def activation_store(
 
 
 
+def test_model_call_lookup_recovers_original_identity_after_store_restart(
+    activation_store: ResourceActivationStore, storage: RolloutContextStore,
+    sessions_root: Path,
+) -> None:
+    parent = _execution_snapshot(storage=storage)
+    activation_store.save_snapshot(parent)
+    historical = _model_call_snapshot(parent, storage)
+    activation_store.save_snapshot(historical)
+    restarted = ResourceActivationStore(
+        storage, ActivationLineageBodyStore(storage, ContextPlanDetailStore(sessions_root)),
+    )
+    restored = restarted.frozen_for_model_call(
+        SESSION_ID, thread_id=parent.owner_thread_id, model_call_id=historical.model_call_id,
+    )
+    assert restored is not None
+    assert restored.to_dict() == historical.to_dict()
+    assert restored.parent == parent
+    assert restored.activation_snapshot_id == historical.activation_snapshot_id
+    assert restarted.frozen_for_model_call(
+        SESSION_ID, thread_id=parent.owner_thread_id, model_call_id="absent-call",
+    ) is None
+
+
 def test_save_and_read_round_trip_preserves_identity(
     activation_store: ResourceActivationStore, storage: RolloutContextStore
 ) -> None:
@@ -532,8 +555,8 @@ def test_existing_missing_or_old_marker_is_never_repaired(
             )
         connection.commit()
     with pytest.raises(ResourceActivationStoreError) as error:
-        activation_store.find_snapshot(
-            SESSION_ID, thread_id=storage.storage.main_thread_id(SESSION_ID), activation_snapshot_id="absent"
+        activation_store.frozen_for_model_call(
+            SESSION_ID, thread_id=storage.storage.main_thread_id(SESSION_ID), model_call_id="absent"
         )
     assert error.value.code == SCHEMA_UNAVAILABLE_CODE
     with closing(sqlite3.connect(storage.storage.index_path(SESSION_ID, ""))) as connection:

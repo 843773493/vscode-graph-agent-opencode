@@ -117,12 +117,12 @@ class ResourceActivationSnapshotSaver(Protocol):
         self, admission: ExecutionAdmission, *, checkpoint_ns: str = ""
     ) -> ResourceActivationSnapshotRef | None: ...
 
-    def find_resource_activation_snapshot(
+    def frozen_resource_activation_for_model_call(
         self,
         session_id: str,
         *,
         thread_id: str,
-        activation_snapshot_id: str,
+        model_call_id: str,
         checkpoint_ns: str = "",
     ) -> ResourceActivationSnapshotRef | None: ...
 

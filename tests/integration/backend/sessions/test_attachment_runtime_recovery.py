@@ -46,6 +46,7 @@ async def test_hard_restart_preserves_queued_attachment_and_releases_only_stale_
     assert response.status_code == 200, response.text
     head = response.json()["data"]
     barrier = "attachment-queue-before-new-runtime"
+    barrier_armed = False
     try:
         await asyncio.to_thread(control.acknowledged, head_call, "model.response_ready", 60)
         old_token, state, start, deadline = directory_state(case)
@@ -59,6 +60,7 @@ async def test_hard_restart_preserves_queued_attachment_and_releases_only_stale_
         control.arm_match(barrier, "execution.queue.claimed", {
             "session_id": session, "thread_id": tail["thread_id"], "claim_generation": 1,
         })
+        barrier_armed = True
         control.release(head_call, "model.response_ready")
         await asyncio.to_thread(control.acknowledged_match, barrier)
         database = case.main_thread_node(session) / "rollout/index.sqlite"
@@ -89,6 +91,7 @@ async def test_hard_restart_preserves_queued_attachment_and_releases_only_stale_
     finally:
         control.release(head_call, "model.response_ready")
         control.release(tail_call, "model.response_ready")
-        control_request(json.loads(control.environment["BOXTEAM_E2E_TEST_CONTROL"]), {
-            "action": "release_match", "barrier_id": barrier,
-        })
+        if barrier_armed:
+            control_request(json.loads(control.environment["BOXTEAM_E2E_TEST_CONTROL"]), {
+                "action": "release_match", "barrier_id": barrier,
+            })

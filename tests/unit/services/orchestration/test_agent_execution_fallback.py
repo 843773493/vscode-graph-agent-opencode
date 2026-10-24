@@ -307,7 +307,7 @@ def agent_execution_dependencies(
             "accepted_user_message",
             "context_owner_namespace",
             "frozen_resource_activation_for_admission",
-            "find_resource_activation_snapshot",
+            "frozen_resource_activation_for_model_call",
             "save_resource_activation_snapshot",
             "register_execution_retry_source",
         ]
@@ -317,7 +317,7 @@ def agent_execution_dependencies(
     saver.internal_execution_interrupt.return_value = None
     saver.context_owner_namespace.side_effect = lambda checkpoint_ns: checkpoint_ns
     saver.frozen_resource_activation_for_admission.return_value = None
-    saver.find_resource_activation_snapshot.return_value = None
+    saver.frozen_resource_activation_for_model_call.return_value = None
     saver.save_resource_activation_snapshot = AsyncMock()
     def activation_factory(resource_registry):
         publisher = McpCatalogResourcePublisher(registry=resource_registry)

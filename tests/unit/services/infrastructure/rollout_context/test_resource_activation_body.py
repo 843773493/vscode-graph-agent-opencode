@@ -311,8 +311,8 @@ async def test_coordinator_freezes_through_protected_body_port(
         def frozen_resource_activation_for_admission(self, admission, *, checkpoint_ns=""):
             return None
 
-        def find_resource_activation_snapshot(
-            self, session_id, *, thread_id, activation_snapshot_id, checkpoint_ns=""
+        def frozen_resource_activation_for_model_call(
+            self, session_id, *, thread_id, model_call_id, checkpoint_ns=""
         ):
             return None
 

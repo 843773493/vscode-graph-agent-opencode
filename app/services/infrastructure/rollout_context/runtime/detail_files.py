@@ -9,6 +9,7 @@ import stat
 from contextlib import closing, nullcontext
 from pathlib import Path
 
+from app.core.atomic_fs import native_io_path
 from app.core.session_catalog_resolver import SessionCatalogPathResolver
 from app.core.session_catalog_store import SessionCreationRecord
 from app.domain.itemized.identity.detail_ref import DetailRef
@@ -65,6 +66,8 @@ class DetailFiles:
                 creation_record, ref.thread_id,
             )
         )
+        # locator 与 typed identity 保持原文，只在物理 I/O owner 扩展 Windows 路径。
+        root = native_io_path(root)
         root_info = self._info(root)
         if root_info is None or not stat.S_ISDIR(root_info.st_mode):
             raise DetailUnavailableError("session node 不是安全普通目录")

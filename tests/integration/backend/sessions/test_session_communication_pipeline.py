@@ -5,7 +5,10 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import os
+import signal
 import sqlite3
+import subprocess
 from collections.abc import AsyncIterator
 from contextlib import closing
 from dataclasses import asdict, dataclass, field
@@ -13,6 +16,7 @@ from pathlib import Path
 
 import commentjson
 import httpx
+import psutil
 import pytest
 
 from app.core.path_utils import get_session_path_resolver
@@ -136,8 +140,24 @@ class CommunicationCase:
 
     async def hard_restart(self) -> None:
         previous = self.backend
-        previous.process.kill()
-        assert await asyncio.to_thread(previous.process.wait, timeout=10) < 0
+        descendants = psutil.Process(previous.process.pid).children(recursive=True) if os.name == "nt" else []
+        if os.name == "nt":
+            # venv redirector 的真实解释器是子进程；硬退出必须终止测试拥有的整棵树。
+            self.record(f"hard-exit-{previous.process.pid}", [
+                {"pid": process.pid, "created_at": process.create_time(), "executable": process.exe()}
+                for process in descendants
+            ])
+            await asyncio.to_thread(
+                subprocess.run, ["taskkill", "/PID", str(previous.process.pid), "/T", "/F"],
+                check=True, capture_output=True, timeout=10,
+            )
+            _gone, alive = await asyncio.to_thread(psutil.wait_procs, descendants, timeout=10)
+            assert not alive, [process.pid for process in alive]
+        else:
+            previous.process.kill()
+        exit_code = await asyncio.to_thread(previous.process.wait, timeout=10)
+        # Windows kill 使用 TerminateProcess(1)，POSIX 使用 SIGKILL。
+        assert exit_code == (1 if os.name == "nt" else -signal.SIGKILL)
         await asyncio.to_thread(close_backend_process, previous)
         self.backend = await asyncio.to_thread(
             start_backend_process, workspace_root=str(self.workspace), port=previous.port,
