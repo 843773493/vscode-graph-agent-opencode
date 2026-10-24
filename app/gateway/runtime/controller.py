@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import zlib
 from collections.abc import Awaitable, Callable, Sequence
 from pathlib import Path
@@ -35,6 +36,7 @@ from app.schemas.gateway.lifecycle import (
 from app.schemas.gateway.workspaces import GatewayWorkspaceListDTO
 
 _LOCK_SHARDS = 64
+logger = logging.getLogger(__name__)
 
 
 class GatewayWorkspaceRuntimeController(ManagedBackendGroupActions):
@@ -337,8 +339,14 @@ class GatewayWorkspaceRuntimeController(ManagedBackendGroupActions):
         payload = response.json()
         data = payload.get("data") if isinstance(payload, dict) else None
         if not isinstance(data, dict):
+            logger.error(
+                "Workspace API 生命周期响应缺少 data 对象: status=%s, request_id=%s, body=%r",
+                response.status_code,
+                response.request.headers.get("X-Request-ID"),
+                response.text,
+            )
             raise TypeError(
-                f"Workspace API 生命周期响应缺少 data: {response.text[:300]}"
+                f"Workspace API 生命周期响应缺少 data 对象: status={response.status_code}"
             )
         return data
 

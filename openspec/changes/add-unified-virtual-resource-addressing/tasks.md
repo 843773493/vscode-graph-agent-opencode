@@ -583,3 +583,12 @@
 - 同一生产实现和单测的 tree `2aeb3fa180414fdb37535c89f3c1262bec32e729` 定向单测36 passed/1.05秒，覆盖两类发现响应、管理响应、六类无效envelope、完整诊断正文、HTTP409结构化拒绝、原JSON解码异常和正常响应。最终tree仅改真实HTTP装具的Gateway身份与UUIDv7目录ID格式；源码指纹证明生产及上述单测未变。compileall通过；Ruff在保留原RuntimeError合同、显式排除TRY004后通过。未排除规则时，原HEAD与候选均有同四处TRY004；不为静态偏好改变公开错误类型。
 - 完整Git archive反例 tree `d65ae7ce9a0984db38bfacfb45e7c82982994d64` 只恢复旧响应owner，真实目录响应精确回显路径，1 failed/27.70秒，证明新增场景能区分原缺陷。扩大单测中联邦列表HTTP替身不接受既有trust_env参数的失败，在原owner完整归档也复现；不改无关测试预期。http-001装具占位凭据被真实channel owner拒绝，http-002的恢复装具使用带连字符目录UUID被真实grammar拒绝；均有原始证据，产品实现未因此改变。
 - 准确命令、完整源码前后指纹、实际退出码、零进程组残留和HTTP/诊断原件在 `out/tests/temp/gateway_federation_envelope_20261024/artifacts/`。此切片不覆盖其它远端错误/DTO、Windows实机或完整Web，不关闭2.2/7.2全局门；Agent团队与协作继续TODO。
+
+
+### 2026-10-24 Workspace 生命周期响应 envelope 错误（2.2/7.2 部分收口）
+
+- Gateway runtime controller 继续为本机生命周期查询、drain、配置重启契约及远端生命周期调用使用原唯一响应解析。成功状态的JSON缺少data对象时，原TypeError与HTTP500归属不变，普通错误只报告协议事实与HTTP状态；完整正文和request_id保留原始诊断。没有复制联邦管理的RuntimeError合同，也没有新增通用兼容解析、下游脱敏或异常吞噬。
+- 完整代码tree `aa381eeaaba12fe002496863fc4b3959184bed23` 的两项真实Gateway/独立HTTP替身验收为2 passed/54.27秒：远端start/stop/restart-safe/restart-force的三类无效envelope共12次请求，响应无POSIX/盘符/UNC路径，保留TypeError/500及贯通的request_id，错误后Gateway仍响应；前一切片的目录恢复与具名原始诊断日志同时回归通过。该装具只预置连接、凭据与远端投影，不替代真实SSH或完整远端Backend生命周期验收。
+- 同一生产实现及单测的tree `4539f909aa65afbce59ea5f8c3517a3587fa4fd9` 为174 passed/9.54秒，覆盖状态、动作、pending状态、retry、startup-contract、身份错误及已有完整Backend生命周期场景；新增场景验证六类无效envelope、修复响应后的同请求重试、完整原始诊断、HTTP409结构化拒绝和原JSON解码异常。最终代码tree仅补齐HTTP装具的connection_id，生产与单测源码指纹相同。Ruff不排除规则、compileall均通过。
+- 完整Git archive反例tree `91e3d10d0f46cdca9bdba794fdd3933672b470a4` 只恢复旧controller，真实start入口的普通500响应精确回显路径，1 failed/28.27秒。http-001在装具投影缺少connection_id时被真实registry拒绝、未进入HTTP断言；补齐后通过，产品实现和校验均未改变。
+- 准确命令、4383项源码前后指纹、原始输出、实际退出码、零进程组残留及HTTP原件保留于 `out/tests/temp/gateway_runtime_envelope_20261024/artifacts/`。不代替其它响应字段、Windows实机、完整Web或2.2/7.2全局验收；Agent团队与协作继续TODO。

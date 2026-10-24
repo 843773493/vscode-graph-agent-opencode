@@ -19,6 +19,7 @@ from app.core.path_utils import get_gateway_root
 from app.gateway.credentials import FederationCredentialStore, load_or_create_gateway_id
 from app.gateway.federation import RemoteGatewayConnection
 from app.gateway.lifespan import lifespan
+from app.gateway.registry import WorkspaceTarget
 from app.gateway.runtime.workspace import WorkspaceRuntime
 from tests.harness.python.run_context import TestRunContext
 from tests.support.ports import integration_port_block_for_file
@@ -36,6 +37,8 @@ from tests.support.processes.workspace import (
 
 CONNECTION_ID = "rgw_protocol_integration"
 REMOTE_GATEWAY_ID = "gateway_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+PROJECTED_WORKSPACE_ID = "projected_protocol"
+REMOTE_WORKSPACE_ID = "remote_protocol"
 remote_stub_app = FastAPI()
 
 
@@ -46,6 +49,7 @@ async def stub_health() -> dict[str, str]:
 
 @remote_stub_app.get("/api/gateway/federation/directories")
 @remote_stub_app.get("/api/gateway/federation/diagnostics")
+@remote_stub_app.post("/api/gateway/workspaces/remote_protocol/runtime/{action}")
 async def stub_management(request: Request) -> JSONResponse:
     control = Path(os.environ["BOXTEAM_TEST_FEDERATION_REPLY"])
     response = json.loads(control.read_text())
@@ -72,6 +76,14 @@ async def protocol_lifespan(application: FastAPI) -> AsyncIterator[None]:
                 "workspace_api": f"http://127.0.0.1:{os.environ['BOXTEAM_TEST_FEDERATION_PORT']}",
             }),
         )
+        application.state.registry.upsert(WorkspaceTarget(
+            workspace_id=PROJECTED_WORKSPACE_ID, name="远端协议工作区", root_path=None,
+            backend_url=f"http://127.0.0.1:{os.environ['BOXTEAM_TEST_FEDERATION_PORT']}",
+            connection_kind="remote_gateway", owner="remote_projection", managed=True, connection_id=CONNECTION_ID,
+            backend_workspace_id="00000000-0000-4000-8000-000000000001",
+            remote_gateway_connection_id=CONNECTION_ID, remote_workspace_id=REMOTE_WORKSPACE_ID,
+            remote_service_names=("workspace_api",),
+        ))
         yield
 
 
@@ -170,5 +182,54 @@ async def test_invalid_envelope_and_explicit_raw_diagnostics_use_separate_respon
         "req_protocol_recovered", "req_protocol_raw_logs",
     ]
     (context.artifacts_dir / "protocol-error-receipts.json").write_text(
+        json.dumps({"responses": evidence, "remote_requests": requests}, ensure_ascii=False, indent=2) + "\n",
+    )
+
+
+@pytest.mark.asyncio
+async def test_remote_lifecycle_protocol_failure_keeps_error_type_without_response_body(
+    remote_stub: tuple[TestRunContext, Path, int, int],
+) -> None:
+    context, control, remote_port, gateway_port = remote_stub
+    reset_gateway_persistent_state(workspace_root=context.workspace_root)
+    paths = [str(context.workspace_root / "runtime-private-marker"), r"C:\private\runtime-private-marker",
+             r"\\remote\share\runtime-private-marker"]
+    evidence: dict[str, object] = {}
+    with ExitStack() as processes:
+        gateway = start_gateway_process(
+            workspace_root=context.workspace_root, default_backend_url=None,
+            port=gateway_port, artifacts_dir=context.artifacts_dir,
+            asgi_app=f"{__name__}:create_gateway_app",
+            extra_env={"BOXTEAM_TEST_FEDERATION_PORT": str(remote_port)},
+        )
+        processes.callback(close_gateway_process, gateway)
+        async with httpx.AsyncClient(
+            base_url=f"http://127.0.0.1:{gateway_port}", headers=LOCAL_TOKEN_HEADERS, timeout=20,
+        ) as client:
+            for action in ("start", "stop", "restart-safe", "restart-force"):
+                for index, payload in enumerate(({"detail": paths}, {"data": paths}, paths)):
+                    control.write_text(json.dumps(payload))
+                    request_id = f"req_runtime_{action.replace('-', '_')}_{index}"
+                    response = await client.post(
+                        f"/api/gateway/workspaces/{PROJECTED_WORKSPACE_ID}/runtime/{action}",
+                        headers={"X-Request-ID": request_id},
+                    )
+                    assert response.status_code == 500, response.text
+                    assert response.json()["request_id"] == response.headers["X-Request-ID"] == request_id
+                    assert "runtime-private-marker" not in response.text, response.text
+                    assert response.json()["message"] == "TypeError: Workspace API 生命周期响应缺少 data 对象: status=200"
+                    evidence[request_id] = response.json()
+            health = await client.get("/api/gateway/health")
+            assert health.status_code == 200, health.text
+    log = (context.artifacts_dir / "gateway.stderr.log").read_text()
+    assert "runtime-private-marker" in log
+    requests = [json.loads(line) for line in control.with_suffix(".requests.jsonl").read_text().splitlines()]
+    assert len(requests) == 12
+    assert [request["request_id"] for request in requests] == list(evidence)
+    assert {request["path"] for request in requests} == {
+        f"/api/gateway/workspaces/{REMOTE_WORKSPACE_ID}/runtime/{action}"
+        for action in ("start", "stop", "restart-safe", "restart-force")
+    }
+    (context.artifacts_dir / "runtime-protocol-error-receipts.json").write_text(
         json.dumps({"responses": evidence, "remote_requests": requests}, ensure_ascii=False, indent=2) + "\n",
     )
