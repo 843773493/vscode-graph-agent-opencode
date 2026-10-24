@@ -220,20 +220,27 @@ def integration_startup_mount(
 
 
 @pytest.fixture(scope="module")
+def browser_manager_artifacts() -> Path:
+    # 模块级服务只冻结一次日志位置，读取方不能改用当前测试节点的目录。
+    return TestRunContext.from_test_file(Path(__file__)).artifacts_dir
+
+
+@pytest.fixture(scope="module")
 def browser_manager_processes(
     browser_manager_env: tuple[int, int],
     integration_workspace_root_path: str,
+    browser_manager_artifacts: Path,
 ) -> Generator[tuple[int, int], None, None]:
     backend_port, frontend_port = browser_manager_env
     workspace = Path(integration_workspace_root_path).resolve()
     with ExitStack() as lifetime:
         browser = start_browser_manager_processes(
             workspace_root=workspace, backend_port=backend_port,
-            artifacts_dir=TestRunContext.from_test_file(Path(__file__)).artifacts_dir,
+            artifacts_dir=browser_manager_artifacts,
             frontend_port=frontend_port, backend_host="127.0.0.1",
         )
         lifetime.callback(close_browser_manager_processes, browser)
-        terminal = start_terminal_backend(backend_port=backend_port + 2, workspace_root=str(workspace), artifacts_dir=TestRunContext.from_test_file(Path(__file__)).artifacts_dir)
+        terminal = start_terminal_backend(backend_port=backend_port + 2, workspace_root=str(workspace), artifacts_dir=browser_manager_artifacts)
         lifetime.callback(terminate_process, terminal)
         yield backend_port, frontend_port
 
@@ -255,6 +262,7 @@ async def browser_runtime(
     browser_application: FastAPI,
 ) -> AsyncIterator[WorkspaceToolRuntime]:
     del browser_manager_processes
+    TestRunContext.from_test_file(Path(__file__)).artifacts_dir.mkdir(parents=True, exist_ok=True)
     async with workspace_tool_runtime(
         Path(integration_workspace_root_path), application=browser_application,
         startup_mount=integration_startup_mount,
@@ -317,6 +325,7 @@ async def _detach_delete(client: httpx.AsyncClient, resource_id: str, context: C
 async def test_stop_checkpoint_failure_keeps_unknown_until_explicit_retry_is_persisted(
     action: str, integration_client: httpx.AsyncClient, browser_context: CustomToolFactoryContext,
     browser_runtime: WorkspaceToolRuntime, browser_manager_processes: tuple[int, int],
+    browser_manager_artifacts: Path,
 ) -> None:
     container, _session, _invocation = browser_runtime
     created = await integration_client.post("/api/v1/resources/browsers", json={
@@ -381,8 +390,7 @@ async def test_stop_checkpoint_failure_keeps_unknown_until_explicit_retry_is_per
     })
     assert reconciled.status_code == 200, reconciled.text
     assert owner._leases.get_lease(pending.lease_id).status == "settled"
-    artifacts = TestRunContext.from_test_file(Path(__file__)).artifacts_dir
-    diagnostics = "\n".join(item.read_text() for item in artifacts.glob("browser-backend-*.stderr.log"))
+    diagnostics = "\n".join(item.read_text() for item in browser_manager_artifacts.glob("browser-backend-*.stderr.log"))
     assert diagnostics.count(marker) == 1
     assert "检查点" in response.text
     if action == "stop":
@@ -394,6 +402,7 @@ async def test_stop_checkpoint_failure_keeps_unknown_until_explicit_retry_is_per
 async def test_checkpoint_failure_reports_stage_without_publishing_native_path(
     integration_client: httpx.AsyncClient, browser_context: CustomToolFactoryContext,
     browser_manager_processes: tuple[int, int], browser_runtime: WorkspaceToolRuntime,
+    browser_manager_artifacts: Path,
 ) -> None:
     container, _session, _invocation = browser_runtime
     response = await integration_client.post("/api/v1/resources/browsers", json={
@@ -449,7 +458,7 @@ async def test_checkpoint_failure_reports_stage_without_publishing_native_path(
     assert frozen.status_code == 200, frozen.text
     assert frozen.json()["data"]["browser"]["metadata"]["resource_state"] == "frozen"
     assert checkpoint.is_file()
-    diagnostics = "\n".join(item.read_text() for item in artifacts.glob("browser-backend-*.stderr.log"))
+    diagnostics = "\n".join(item.read_text() for item in browser_manager_artifacts.glob("browser-backend-*.stderr.log"))
     assert "[browser-state-store] 写入浏览器检查点失败" in diagnostics
     assert str(checkpoint) in diagnostics
     assert "文件发布" in diagnostics
@@ -463,6 +472,7 @@ async def test_checkpoint_failure_reports_stage_without_publishing_native_path(
 async def test_download_failure_publishes_stage_without_native_storage(
     integration_client: httpx.AsyncClient, browser_context: CustomToolFactoryContext,
     browser_manager_processes: tuple[int, int], browser_runtime: WorkspaceToolRuntime,
+    browser_manager_artifacts: Path,
 ) -> None:
     container, _session, _invocation = browser_runtime
     created = await integration_client.post("/api/v1/resources/browsers", json={
@@ -516,7 +526,7 @@ return 'download-started';
         assert record["download_error"] == failure
         assert str(root) not in json.dumps(record)
         artifacts = TestRunContext.from_test_file(Path(__file__)).artifacts_dir
-        diagnostics = "\n".join(item.read_text() for item in artifacts.glob("browser-backend-*.stderr.log"))
+        diagnostics = "\n".join(item.read_text() for item in browser_manager_artifacts.glob("browser-backend-*.stderr.log"))
         assert "[browser-state-store] 保存浏览器下载失败" in diagnostics
         assert str(destination) in diagnostics
         (artifacts / f"download-failure-{time.time_ns()}.json").write_text(json.dumps({
@@ -970,6 +980,7 @@ async def test_injected_page_recovery_failure_keeps_native_cause_in_diagnostics(
     mode: str, integration_client: httpx.AsyncClient,
     browser_context: CustomToolFactoryContext, browser_runtime: WorkspaceToolRuntime,
     browser_manager_processes: tuple[int, int],
+    browser_manager_artifacts: Path,
 ) -> None:
     container, _session, _invocation = browser_runtime
     created = await integration_client.post("/api/v1/resources/browsers", json={
@@ -1025,7 +1036,7 @@ async def test_injected_page_recovery_failure_keeps_native_cause_in_diagnostics(
     assert record["last_operation"]["status"] == "failed"
     assert str(root) not in json.dumps(record)
     artifacts = TestRunContext.from_test_file(Path(__file__)).artifacts_dir
-    diagnostics = "\n".join(item.read_text() for item in artifacts.glob("browser-backend-*.stderr.log"))
+    diagnostics = "\n".join(item.read_text() for item in browser_manager_artifacts.glob("browser-backend-*.stderr.log"))
     assert "[browser-runtime] 页面超时恢复失败" in diagnostics
     assert reason in diagnostics
     (artifacts / f"timeout-recovery-failure-{mode}-{time.time_ns()}.json").write_text(json.dumps({
@@ -1043,6 +1054,7 @@ async def test_injected_registration_failure_shares_safe_http_state_and_record(
     mode: str, integration_client: httpx.AsyncClient,
     browser_context: CustomToolFactoryContext, browser_runtime: WorkspaceToolRuntime,
     browser_manager_processes: tuple[int, int],
+    browser_manager_artifacts: Path,
 ) -> None:
     container, _session, _invocation = browser_runtime
     created = await integration_client.post("/api/v1/resources/browsers", json={
@@ -1120,7 +1132,7 @@ async def test_injected_registration_failure_shares_safe_http_state_and_record(
     assert retried["created_page_id"] != resource["metadata"]["active_page_id"]
     assert len(retried["browser"]["pages"]) == 2
     artifacts = TestRunContext.from_test_file(Path(__file__)).artifacts_dir
-    diagnostics = "\n".join(item.read_text() for item in artifacts.glob("browser-backend-*.stderr.log"))
+    diagnostics = "\n".join(item.read_text() for item in browser_manager_artifacts.glob("browser-backend-*.stderr.log"))
     assert "[browser-session] 注册浏览器标签页失败" in diagnostics
     assert reason in diagnostics
     (artifacts / f"registration-failure-{mode}-{time.time_ns()}.json").write_text(json.dumps({
@@ -1140,6 +1152,7 @@ async def test_injected_registration_failure_shares_safe_http_state_and_record(
 async def test_page_control_failure_keeps_native_details_in_diagnostics(
     stage: str, mode: str, integration_client: httpx.AsyncClient, browser_context: CustomToolFactoryContext,
     browser_runtime: WorkspaceToolRuntime, browser_manager_processes: tuple[int, int],
+    browser_manager_artifacts: Path,
 ) -> None:
     container, _session, _invocation = browser_runtime
     created = await integration_client.post("/api/v1/resources/browsers", json={
@@ -1222,7 +1235,7 @@ async def test_page_control_failure_keeps_native_details_in_diagnostics(
     assert observed["reconciliation_status"] == "verified"
     assert container.browser_resource_owner._leases.leases_for_resource(browser_id) == []
     artifacts = TestRunContext.from_test_file(Path(__file__)).artifacts_dir
-    assert reason in "\n".join(item.read_text() for item in artifacts.glob("browser-backend-*.stderr.log"))
+    assert reason in "\n".join(item.read_text() for item in browser_manager_artifacts.glob("browser-backend-*.stderr.log"))
     (artifacts / f"page-control-failure-{stage}-{mode}-{time.time_ns()}.json").write_text(json.dumps({
         "receipt": receipt, "node_record": record, "owner_projection": observed, "retried": retried,
     }, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -1235,6 +1248,7 @@ async def test_page_control_failure_keeps_native_details_in_diagnostics(
 async def test_artifact_stream_and_close_failures_keep_server_available(
     mode: str, integration_client: httpx.AsyncClient, browser_context: CustomToolFactoryContext,
     browser_manager_processes: tuple[int, int], browser_runtime: WorkspaceToolRuntime,
+    browser_manager_artifacts: Path,
 ) -> None:
     container, _session, _invocation = browser_runtime
     created = await integration_client.post("/api/v1/resources/browsers", json={
@@ -1279,7 +1293,6 @@ fs.promises.open = async (...args) => {{
 syncBuiltinESMExports(); return 'armed';
 """}, actor="agent")
     url = f"http://127.0.0.1:{browser_manager_processes[0]}{saved['screenshot_url']}?workspace_id={container.workspace_id}"
-    artifacts = TestRunContext.from_test_file(Path(__file__)).artifacts_dir
     try:
         async with httpx.AsyncClient(timeout=8) as client:
             if mode.startswith("stream"):
@@ -1290,7 +1303,7 @@ syncBuiltinESMExports(); return 'armed';
                 assert completed.status_code == 200 and completed.content == expected
             deadline = time.monotonic() + 8
             while True:
-                diagnostics = "\n".join(item.read_text() for item in artifacts.glob("browser-backend-*.stderr.log"))
+                diagnostics = "\n".join(item.read_text() for item in browser_manager_artifacts.glob("browser-backend-*.stderr.log"))
                 marker = f"读取浏览器产物失败: browser_id={browser_id}, artifact_id={artifact_id}, kind=screenshot, stage="
                 stage, code = ("stream", "EIO") if mode.startswith("stream") else ("close", "EBADF")
                 if marker + f"{stage}, code={code}" in diagnostics:
@@ -1324,6 +1337,7 @@ delete context.__artifactOriginalOpen;
 async def test_browser_artifact_read_failure_reports_identity_and_allows_retry(
     kind: str, integration_client: httpx.AsyncClient, browser_context: CustomToolFactoryContext,
     browser_manager_processes: tuple[int, int], browser_runtime: WorkspaceToolRuntime,
+    browser_manager_artifacts: Path,
 ) -> None:
     container, _session, _invocation = browser_runtime
     created = await integration_client.post("/api/v1/resources/browsers", json={
@@ -1419,7 +1433,7 @@ await started;
             if kind == "download":
                 assert recovered.headers["content-disposition"] == "attachment; filename*=UTF-8''" + quote(saved["filename"], safe="")
     artifacts = TestRunContext.from_test_file(Path(__file__)).artifacts_dir
-    diagnostics = "\n".join(item.read_text() for item in artifacts.glob("browser-backend-*.stderr.log"))
+    diagnostics = "\n".join(item.read_text() for item in browser_manager_artifacts.glob("browser-backend-*.stderr.log"))
     assert str(file) in diagnostics and "ENOTDIR" in diagnostics
     assert (await transport.get_resource(browser_id))["reconciliation_status"] == "verified"
     (artifacts / f"artifact-read-failure-{kind}-{time.time_ns()}.json").write_text(json.dumps({
@@ -1434,6 +1448,7 @@ await started;
 async def test_summary_failure_keeps_native_details_out_of_receipts_and_recovery(
     mode: str, integration_client: httpx.AsyncClient, browser_context: CustomToolFactoryContext,
     browser_runtime: WorkspaceToolRuntime, browser_manager_processes: tuple[int, int],
+    browser_manager_artifacts: Path,
 ) -> None:
     container, _session, _invocation = browser_runtime
     created = await integration_client.post("/api/v1/resources/browsers", json={
@@ -1501,7 +1516,7 @@ async def test_summary_failure_keeps_native_details_out_of_receipts_and_recovery
     assert "读取标记" in retried.json()["data"]["summary"]
     assert retried.json()["data"]["browser"]["metadata"]["last_operation"]["status"] == "completed"
     artifacts = TestRunContext.from_test_file(Path(__file__)).artifacts_dir
-    diagnostics = "\n".join(item.read_text() for item in artifacts.glob("browser-backend-*.stderr.log"))
+    diagnostics = "\n".join(item.read_text() for item in browser_manager_artifacts.glob("browser-backend-*.stderr.log"))
     assert reason in diagnostics and "stage: 'read_summary'" in diagnostics
     (artifacts / f"summary-failure-{mode}-{time.time_ns()}.json").write_text(json.dumps({
         "transport_receipt": failure.payload, "api_body": api_failure.json(),
@@ -1516,6 +1531,7 @@ async def test_summary_failure_keeps_native_details_out_of_receipts_and_recovery
 async def test_text_query_failure_keeps_native_details_in_diagnostics_and_allows_retry(
     stage: str, integration_client: httpx.AsyncClient, browser_context: CustomToolFactoryContext,
     browser_runtime: WorkspaceToolRuntime, browser_manager_processes: tuple[int, int],
+    browser_manager_artifacts: Path,
 ) -> None:
     container, _session, _invocation = browser_runtime
     created = await integration_client.post("/api/v1/resources/browsers", json={
@@ -1577,7 +1593,7 @@ await page.locator('#text').evaluate((input) => input.select());
     assert str(root) not in json.dumps(observed)
     assert container.browser_resource_owner._leases.leases_for_resource(browser_id) == []
     artifacts = TestRunContext.from_test_file(Path(__file__)).artifacts_dir
-    diagnostics = "\n".join(item.read_text() for item in artifacts.glob("browser-backend-*.stderr.log"))
+    diagnostics = "\n".join(item.read_text() for item in browser_manager_artifacts.glob("browser-backend-*.stderr.log"))
     assert reason in diagnostics and f"stage={stage}" in diagnostics
     (artifacts / f"text-query-failure-{stage}-{time.time_ns()}.json").write_text(json.dumps({
         "receipt": receipt, "node_record": record, "owner_projection": observed, "retried": retried,
@@ -1591,6 +1607,7 @@ await page.locator('#text').evaluate((input) => input.select());
 async def test_debug_snapshot_failure_keeps_native_details_in_diagnostics_and_allows_retry(
     stage: str, integration_client: httpx.AsyncClient, browser_context: CustomToolFactoryContext,
     browser_runtime: WorkspaceToolRuntime, browser_manager_processes: tuple[int, int],
+    browser_manager_artifacts: Path,
 ) -> None:
     container, _session, _invocation = browser_runtime
     created = await integration_client.post("/api/v1/resources/browsers", json={
@@ -1648,7 +1665,7 @@ async def test_debug_snapshot_failure_keeps_native_details_in_diagnostics_and_al
     assert str(root) not in json.dumps(observed)
     assert container.browser_resource_owner._leases.leases_for_resource(browser_id) == []
     artifacts = TestRunContext.from_test_file(Path(__file__)).artifacts_dir
-    diagnostics = "\n".join(item.read_text() for item in artifacts.glob("browser-backend-*.stderr.log"))
+    diagnostics = "\n".join(item.read_text() for item in browser_manager_artifacts.glob("browser-backend-*.stderr.log"))
     assert reason in diagnostics and f"stage={stage}" in diagnostics
     (artifacts / f"debug-snapshot-failure-{stage}-{time.time_ns()}.json").write_text(json.dumps({
         "receipt": receipt, "node_record": record, "owner_projection": observed, "retried": retried,
@@ -1668,6 +1685,7 @@ async def test_dialog_failure_keeps_native_details_in_diagnostics_and_allows_ret
     method: str, mode: str, arguments: dict[str, object], integration_client: httpx.AsyncClient,
     browser_context: CustomToolFactoryContext, browser_runtime: WorkspaceToolRuntime,
     browser_manager_processes: tuple[int, int],
+    browser_manager_artifacts: Path,
 ) -> None:
     container, _session, _invocation = browser_runtime
     created = await integration_client.post("/api/v1/resources/browsers", json={
@@ -1728,7 +1746,7 @@ async def test_dialog_failure_keeps_native_details_in_diagnostics_and_allows_ret
     result = await transport.perform(browser_id, "run", {"code": "return await page.evaluate(() => window.dialogResult);"}, actor="agent")
     assert result["result"] == (None if method == "dismiss" else arguments.get("promptText", ""))
     artifacts = TestRunContext.from_test_file(Path(__file__)).artifacts_dir
-    diagnostics = "\n".join(item.read_text() for item in artifacts.glob("browser-backend-*.stderr.log"))
+    diagnostics = "\n".join(item.read_text() for item in browser_manager_artifacts.glob("browser-backend-*.stderr.log"))
     assert reason in diagnostics and f"dialog.{method}" in diagnostics
     (artifacts / f"dialog-failure-{method}-{mode}-{time.time_ns()}.json").write_text(json.dumps({
         "receipt": receipt, "state": state, "node_record": record,
@@ -1742,6 +1760,7 @@ async def test_dialog_failure_keeps_native_details_in_diagnostics_and_allows_ret
 async def test_file_selection_failure_keeps_native_path_in_diagnostics_and_allows_retry(
     integration_client: httpx.AsyncClient, browser_context: CustomToolFactoryContext,
     browser_manager_processes: tuple[int, int], browser_runtime: WorkspaceToolRuntime,
+    browser_manager_artifacts: Path,
 ) -> None:
     container, _session, _invocation = browser_runtime
     created = await integration_client.post("/api/v1/resources/browsers", json={
@@ -1821,7 +1840,7 @@ async def test_file_selection_failure_keeps_native_path_in_diagnostics_and_allow
         await websocket.send(json.dumps({"type": "detach"}))
         await _recv_ws_type(websocket, "detached")
     artifacts = TestRunContext.from_test_file(Path(__file__)).artifacts_dir
-    diagnostics = "\n".join(item.read_text() for item in artifacts.glob("browser-backend-*.stderr.log"))
+    diagnostics = "\n".join(item.read_text() for item in browser_manager_artifacts.glob("browser-backend-*.stderr.log"))
     assert str(missing) in diagnostics and "ENOENT" in diagnostics
     assert "stage: 'select_files'" in diagnostics
     (artifacts / f"file-selection-failure-{time.time_ns()}.json").write_text(json.dumps({
@@ -1844,6 +1863,7 @@ async def test_device_switch_failure_preserves_primary_and_cleanup_details(
     stage: str, enabling: bool, integration_client: httpx.AsyncClient,
     browser_context: CustomToolFactoryContext, browser_runtime: WorkspaceToolRuntime,
     browser_manager_processes: tuple[int, int],
+    browser_manager_artifacts: Path,
 ) -> None:
     container, _session, _invocation = browser_runtime
     root = Path(container.workspace_root)
@@ -1952,7 +1972,7 @@ async def test_device_switch_failure_preserves_primary_and_cleanup_details(
     assert observed["reconciliation_status"] == expected_status
     assert container.browser_resource_owner._leases.leases_for_resource(browser_id) == []
     artifacts = TestRunContext.from_test_file(Path(__file__)).artifacts_dir
-    diagnostics = "\n".join(item.read_text() for item in artifacts.glob("browser-backend-*.stderr.log"))
+    diagnostics = "\n".join(item.read_text() for item in browser_manager_artifacts.glob("browser-backend-*.stderr.log"))
     assert reason in diagnostics
     if stage == "multiple":
         assert reason + "-cleanup" in diagnostics
@@ -1987,6 +2007,7 @@ async def test_device_switch_failure_preserves_primary_and_cleanup_details(
 async def test_browser_startup_failure_keeps_native_details_in_diagnostics(
     stage: str, integration_client: httpx.AsyncClient, browser_context: CustomToolFactoryContext,
     browser_runtime: WorkspaceToolRuntime, browser_manager_processes: tuple[int, int],
+    browser_manager_artifacts: Path,
 ) -> None:
     container, _session, _invocation = browser_runtime
     command = {
@@ -2057,7 +2078,7 @@ async def test_browser_startup_failure_keeps_native_details_in_diagnostics(
     assert str(root) not in json.dumps(record)
     assert str(root) not in json.dumps(observed)
     artifacts = TestRunContext.from_test_file(Path(__file__)).artifacts_dir
-    diagnostics = "\n".join(item.read_text() for item in artifacts.glob("browser-backend-*.stderr.log"))
+    diagnostics = "\n".join(item.read_text() for item in browser_manager_artifacts.glob("browser-backend-*.stderr.log"))
     assert reason in diagnostics
     # 创建失败已由正式回执核实；仍通过显式stop关闭资源，再解除关联。
     reconciled = await integration_client.post(f"/api/v1/resources/{browser_id}/stop", json={
@@ -2088,6 +2109,7 @@ async def test_navigation_failure_keeps_native_details_in_diagnostics(
     navigation_type: str, method: str, mode: str, integration_client: httpx.AsyncClient,
     browser_context: CustomToolFactoryContext, browser_runtime: WorkspaceToolRuntime,
     browser_manager_processes: tuple[int, int],
+    browser_manager_artifacts: Path,
 ) -> None:
     container, _session, _invocation = browser_runtime
     created = await integration_client.post("/api/v1/resources/browsers", json={
@@ -2133,7 +2155,7 @@ async def test_navigation_failure_keeps_native_details_in_diagnostics(
     record, = [item for item in records["browsers"] if item["browser_id"] == browser_id]
     assert str(root) not in json.dumps(record)
     artifacts = TestRunContext.from_test_file(Path(__file__)).artifacts_dir
-    diagnostics = "\n".join(item.read_text() for item in artifacts.glob("browser-backend-*.stderr.log"))
+    diagnostics = "\n".join(item.read_text() for item in browser_manager_artifacts.glob("browser-backend-*.stderr.log"))
     assert reason in diagnostics
     retried = await transport.perform(browser_id, "navigate", {"type": "url", "url": "about:blank"}, actor="agent")
     assert retried["operation"]["status"] == "completed"
@@ -2158,6 +2180,7 @@ async def test_runtime_lifecycle_failure_keeps_native_cause_out_of_receipts(
     stage: str, mode: str, action: str, expected_state: str, reconciliation: str,
     integration_client: httpx.AsyncClient, browser_context: CustomToolFactoryContext,
     browser_runtime: WorkspaceToolRuntime, browser_manager_processes: tuple[int, int],
+    browser_manager_artifacts: Path,
 ) -> None:
     container, _session, _invocation = browser_runtime
     created = await integration_client.post("/api/v1/resources/browsers", json={
@@ -2228,7 +2251,7 @@ async def test_runtime_lifecycle_failure_keeps_native_cause_out_of_receipts(
     assert str(root) not in json.dumps(record)
     assert record["resource_transition_error"] == observed["metadata"]["resource_transition_error"]
     artifacts = TestRunContext.from_test_file(Path(__file__)).artifacts_dir
-    diagnostics = "\n".join(item.read_text() for item in artifacts.glob("browser-backend-*.stderr.log"))
+    diagnostics = "\n".join(item.read_text() for item in browser_manager_artifacts.glob("browser-backend-*.stderr.log"))
     assert reason in diagnostics
     assert "[browser-runtime] 资源生命周期操作失败" in diagnostics
     if reconciliation == "unknown":
@@ -2543,6 +2566,7 @@ async def test_real_node_agent_lock_rejection_preserves_owner_and_never_executes
 async def test_screenshot_failure_reports_stage_and_recovers_through_tool(
     integration_client: httpx.AsyncClient, browser_context: CustomToolFactoryContext,
     browser_manager_processes: tuple[int, int], browser_runtime: WorkspaceToolRuntime,
+    browser_manager_artifacts: Path,
 ) -> None:
     container, _session, _invocation = browser_runtime
     created = await integration_client.post("/api/v1/resources/browsers", json={
@@ -2591,7 +2615,7 @@ async def test_screenshot_failure_reports_stage_and_recovers_through_tool(
         assert str(root) not in json.dumps(record)
         assert "screenshot_error" not in record
         artifacts = TestRunContext.from_test_file(Path(__file__)).artifacts_dir
-        diagnostics = "\n".join(item.read_text() for item in artifacts.glob("browser-backend-*.stderr.log"))
+        diagnostics = "\n".join(item.read_text() for item in browser_manager_artifacts.glob("browser-backend-*.stderr.log"))
         assert "[browser-state-store] 保存浏览器截图失败" in diagnostics
         assert str(destination) in diagnostics
         destination.unlink()
@@ -2665,6 +2689,7 @@ async def test_tool_runtime_reentry_retains_cancelled_queue_and_releases_holder(
 async def test_script_native_failure_keeps_paths_out_of_http_and_operation_records(
     integration_client: httpx.AsyncClient, browser_context: CustomToolFactoryContext,
     browser_runtime: WorkspaceToolRuntime, browser_manager_processes: tuple[int, int],
+    browser_manager_artifacts: Path,
 ) -> None:
     container, _session, _invocation = browser_runtime
     created = await integration_client.post("/api/v1/resources/browsers", json={
@@ -2732,7 +2757,7 @@ async def test_script_native_failure_keeps_paths_out_of_http_and_operation_recor
     assert recovered.status_code == 200, recovered.text
     assert recovered.json()["data"]["result"] == {"marker": "script-retry-ok", "url": "about:blank"}
     artifacts = TestRunContext.from_test_file(Path(__file__)).artifacts_dir
-    diagnostics = "\n".join(item.read_text() for item in artifacts.glob("browser-backend-*.stderr.log"))
+    diagnostics = "\n".join(item.read_text() for item in browser_manager_artifacts.glob("browser-backend-*.stderr.log"))
     assert "[browser-runtime] 资源生命周期操作失败" in diagnostics
     assert native_path in diagnostics
     (artifacts / f"script-native-failure-{time.time_ns()}.json").write_text(json.dumps({
@@ -2747,6 +2772,7 @@ async def test_script_native_failure_keeps_paths_out_of_http_and_operation_recor
 async def test_state_publish_failure_reports_workspace_stage_and_allows_explicit_retry(
     integration_client: httpx.AsyncClient, browser_context: CustomToolFactoryContext,
     browser_manager_processes: tuple[int, int], browser_runtime: WorkspaceToolRuntime,
+    browser_manager_artifacts: Path,
 ) -> None:
     container, _session, _invocation = browser_runtime
     created = await integration_client.post("/api/v1/resources/browsers", json={
@@ -2807,7 +2833,7 @@ async def test_state_publish_failure_reports_workspace_stage_and_allows_explicit
     record, = [entry for entry in records["browsers"] if entry["browser_id"] == browser_id]
     assert record["resource_policy"] == "keep_alive"
     assert str(root) not in json.dumps(record)
-    diagnostics = "\n".join(item.read_text() for item in artifacts.glob("browser-backend-*.stderr.log"))
+    diagnostics = "\n".join(item.read_text() for item in browser_manager_artifacts.glob("browser-backend-*.stderr.log"))
     assert "[browser-state-store] 写入浏览器状态失败" in diagnostics
     assert str(state_file) in diagnostics
     assert failures[0].code in diagnostics

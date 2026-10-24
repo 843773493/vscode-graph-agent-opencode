@@ -1786,8 +1786,11 @@ export class BrowserSession extends EventEmitter {
         try {
           await this.manager.persist();
         } catch (persistError) {
-          throw new AggregateError([error, persistError],
+          const failure = new AggregateError([error, persistError],
             `浏览器关闭失败且未知状态持久化失败: browser_id=${this.id}`, { cause: error });
+          failure.code = error.code;
+          failure.statusCode = error.statusCode;
+          throw failure;
         }
         throw error;
       }

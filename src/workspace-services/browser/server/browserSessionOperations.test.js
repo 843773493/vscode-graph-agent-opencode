@@ -636,7 +636,7 @@ describe("浏览器统一操作队列", () => {
 
   test("关闭与 unknown 写盘都失败时保留两份原始异常并允许重试", async () => {
     const { browser } = transitionSession();
-    const original = new Error("正式终态写盘失败");
+    const original = Object.assign(new Error("正式终态写盘失败"), { code: "EIO", statusCode: 500 });
     const unknown = new Error("unknown 写盘失败");
     let writes = 0;
     browser.manager.persist = async () => { throw ++writes === 1 ? original : unknown; };
@@ -644,6 +644,8 @@ describe("浏览器统一操作队列", () => {
     expect(failure).toBeInstanceOf(AggregateError);
     expect(failure.errors).toEqual([original, unknown]);
     expect(failure.cause).toBe(original);
+    expect(failure.code).toBe("EIO");
+    expect(failure.statusCode).toBe(500);
     expect(browser.snapshot()).toMatchObject({ status: "deleted", reconciliation_status: "unknown" });
     browser.manager.persist = async () => { writes += 1; };
     await expect(browser.close({ status: "deleted" })).resolves.toMatchObject({ status: "deleted", reconciliation_status: "verified" });
