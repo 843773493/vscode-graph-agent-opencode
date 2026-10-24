@@ -15,6 +15,7 @@ import pytest
 from PIL import Image
 
 from app.container import AppContainer
+from app.core.resource_uri import session_artifact_uri
 from app.schemas.internal_v2.message import AttachmentRef, MessageCreateRequest
 from app.schemas.internal_v2.session import SessionCreateRequest
 from app.services.infrastructure.attachment_blob_catalog.catalog import (
@@ -22,6 +23,13 @@ from app.services.infrastructure.attachment_blob_catalog.catalog import (
 )
 from app.services.infrastructure.attachment_blob_catalog.directory_schema import (
     require_directory_schema,
+)
+from app.services.infrastructure.attachment_blob_catalog.legacy_references import (
+    resolve_legacy_attachment,
+    verify_legacy_references,
+)
+from app.services.infrastructure.attachment_blob_catalog.locator import (
+    resolve_attachment_directory,
 )
 from app.services.infrastructure.attachment_blob_catalog.migration import (
     backup,
@@ -114,6 +122,29 @@ async def test_cli_prepares_independent_resources_and_complete_legacy_bindings(s
             provenance = connection.execute("SELECT * FROM attachment_legacy_bindings WHERE attachment_id=?", (owner["attachment_id"],)).fetchone()
             assert json.loads(provenance["source_owner_json"]) == owner
             assert json.loads(provenance["source_blob_json"]) == blobs[0]
+            file_id = session_artifact_uri(response["workspace_id"], owner["owner_session_id"], "attachments", owner["attachment_id"])
+            resolved = resolve_legacy_attachment(
+                connection, session_id=owner["owner_session_id"], thread_id=owner["owner_thread_id"],
+                file_id=file_id, workspace_id=response["workspace_id"],
+            )
+            assert resolved is not None and resolved.attachment_id == owner["attachment_id"]
+            assert resolved.availability == "available" and (resolved.digest, resolved.length) == (blobs[0]["digest"], len(BODY))
+            assert (resolve_attachment_directory(path.parent / "attachments", resolved.relative_locator) / "original/content").read_bytes() == BODY
+            other, = [candidate for candidate in owners if candidate != owner]
+            assert resolve_legacy_attachment(
+                connection, session_id=owner["owner_session_id"], thread_id=other["owner_thread_id"],
+                file_id=file_id, workspace_id=response["workspace_id"],
+            ) is None
+            gateway = "gateway_6c8b2f9317a5a2c6c4569958b1e23d84"
+            qualified = session_artifact_uri(response["workspace_id"], owner["owner_session_id"], "attachments", owner["attachment_id"], gateway_authority=gateway)
+            assert resolve_legacy_attachment(
+                connection, session_id=owner["owner_session_id"], thread_id=owner["owner_thread_id"],
+                file_id=qualified, workspace_id=response["workspace_id"],
+            ) is None
+            assert resolve_legacy_attachment(
+                connection, session_id=owner["owner_session_id"], thread_id=owner["owner_thread_id"],
+                file_id=qualified, workspace_id=response["workspace_id"], gateway_id=gateway,
+            ) == resolved
         assert connection.execute("SELECT count(DISTINCT relative_locator) FROM attachment_directories").fetchone()[0] == 2
     complete = frozen_files(case.output / "converted")
     assert catalog.prepare_converted_catalog(case.output) == response
@@ -162,6 +193,16 @@ async def test_versions_and_retention_survive_catalog_conversion(
     catalog.prepare_converted_catalog(case.output)
     assert catalog.verify_converted_catalog(case.output)["state"] == "catalog_prepared"
     with closing(sqlite3.connect(path)) as connection:
+        connection.row_factory = sqlite3.Row
+        binding = connection.execute("SELECT * FROM attachment_legacy_bindings ORDER BY attachment_id DESC LIMIT 1").fetchone()
+        workspace_id = connection.execute("SELECT workspace_id FROM attachment_directory_metadata").fetchone()[0]
+        resolved = resolve_legacy_attachment(
+            connection, session_id=binding["source_session_id"], thread_id=binding["source_thread_id"],
+            file_id=session_artifact_uri(workspace_id, binding["source_session_id"], "attachments", binding["attachment_id"]),
+            workspace_id=workspace_id,
+        )
+        assert resolved is not None
+        assert resolved.availability == ("tombstoned" if state == "tombstoned" else "available")
         if state == "preview":
             digest, length, locator = connection.execute(
                 "SELECT f.digest,f.length,d.relative_locator FROM attachment_directory_files f "
@@ -175,8 +216,8 @@ async def test_versions_and_retention_survive_catalog_conversion(
             ).fetchone()
             assert (start, deadline, retention) == (released.isoformat(), until.isoformat(), until.isoformat())
             assert availability == ("tombstoned" if state == "tombstoned" else "available")
-            assert connection.execute("SELECT state FROM attachment_directory_associations").fetchone() == ("released",)
-            assert connection.execute("SELECT length FROM attachment_directory_files WHERE role='original'").fetchone() == (len(BODY),)
+            assert tuple(connection.execute("SELECT state FROM attachment_directory_associations").fetchone()) == ("released",)
+            assert tuple(connection.execute("SELECT length FROM attachment_directory_files WHERE role='original'").fetchone()) == (len(BODY),)
             assert (case.output / "converted/attachments" / locator).exists() == (state == "released")
 
 
@@ -310,6 +351,7 @@ async def test_product_execution_and_two_forks_preserve_frozen_payloads_and_capt
         name: digest for name, (digest, _) in frozen_captures.items()
     }
     with closing(sqlite3.connect(output / "converted/catalog.sqlite")) as target:
+        target.row_factory = sqlite3.Row
         actual = [(kind, json.loads(metadata), raw) for kind, metadata, raw in target.execute(
             "SELECT record_kind,metadata_json,snapshot_json FROM attachment_legacy_fork_payloads",
         )]
@@ -318,6 +360,92 @@ async def test_product_execution_and_two_forks_preserve_frozen_payloads_and_capt
             if kind == "claim":
                 preimage = metadata["copy_operation_id"] + metadata["source_snapshot_id"] + metadata["operation_preimage_hash"] + raw
                 assert hashlib.sha256(preimage.encode()).hexdigest() == metadata["preimage_hash"]
+        # 关键历史由产品生成；新解析仅依赖新 catalog 和新目录，来源与备份正文均可离线。
+        originals = [container.workspace_root / ".boxteam/attachments", output / "data/attachments"]
+        for original in originals:
+            original.rename(original.with_name("attachments.offline"))
+        try:
+            for kind, metadata, raw in actual:
+                if kind != "mapping":
+                    continue
+                frozen = json.loads(raw)
+                resolved = resolve_legacy_attachment(
+                    target, session_id=metadata["target_session_id"], thread_id=metadata["target_thread_id"],
+                    file_id=metadata["source_file_id"], workspace_id=response["workspace_id"],
+                )
+                assert resolved is not None and resolved.attachment_id == frozen["target_attachment_id"]
+                assert (resolved.digest, resolved.length, resolved.availability) == (frozen["digest"], len(BODY), "available")
+                assert (resolve_attachment_directory(output / "converted/attachments", resolved.relative_locator) / "original/content").read_bytes() == BODY
+                assert resolve_legacy_attachment(
+                    target, session_id=metadata["target_session_id"], thread_id=metadata["target_thread_id"] + "-unknown",
+                    file_id=metadata["source_file_id"], workspace_id=response["workspace_id"],
+                ) is None
+            verify_legacy_references(target)
+        finally:
+            for original in originals:
+                original.with_name("attachments.offline").rename(original)
+        # 局部损坏验证可复用产品生成的历史；不替产品构造执行或 fork 的关键状态。
+        for damage in ("version", "owner", "target_uri", "claim_hash", "claim_state", "missing_claim", "alias", "ambiguous"):
+            with closing(sqlite3.connect(":memory:")) as broken:
+                target.backup(broken)
+                broken.row_factory = sqlite3.Row
+                broken.execute("DROP TRIGGER attachment_legacy_fork_payloads_no_update")
+                broken.execute("DROP TRIGGER attachment_legacy_fork_payloads_no_delete")
+                mapping = broken.execute("SELECT * FROM attachment_legacy_fork_payloads WHERE record_kind='mapping' LIMIT 1").fetchone()
+                metadata, frozen = json.loads(mapping["metadata_json"]), json.loads(mapping["snapshot_json"])
+                if damage == "version":
+                    broken.execute("UPDATE attachment_directory_files SET length=length+1 WHERE attachment_id=?", (frozen["target_attachment_id"],))
+                elif damage in {"owner", "target_uri"}:
+                    if damage == "owner":
+                        frozen["target_owner_ref_id"] += "-wrong"
+                    else:
+                        frozen["target_file_id"] = frozen["target_file_id"].replace(frozen["target_attachment_id"], "att_" + "f" * 32)
+                    broken.execute("UPDATE attachment_legacy_fork_payloads SET snapshot_json=? WHERE record_kind='mapping' AND record_key=?", (json.dumps(frozen), mapping["record_key"]))
+                    if damage == "target_uri":
+                        # 同步更新 claim 的合法 hash，确保反例真正验证 URI/owner 关系。
+                        claim = broken.execute("SELECT * FROM attachment_legacy_fork_payloads WHERE record_kind='claim' AND record_key=?", (frozen["claim_id"],)).fetchone()
+                        claim_metadata = json.loads(claim["metadata_json"])
+                        raw = json.dumps(frozen)
+                        preimage = claim_metadata["copy_operation_id"] + claim_metadata["source_snapshot_id"] + claim_metadata["operation_preimage_hash"] + raw
+                        claim_metadata["preimage_hash"] = hashlib.sha256(preimage.encode()).hexdigest()
+                        broken.execute("UPDATE attachment_legacy_fork_payloads SET metadata_json=?,snapshot_json=? WHERE record_kind='claim' AND record_key=?", (json.dumps(claim_metadata), raw, frozen["claim_id"]))
+                elif damage in {"claim_hash", "claim_state", "missing_claim"}:
+                    claim = broken.execute("SELECT * FROM attachment_legacy_fork_payloads WHERE record_kind='claim' AND record_key=?", (frozen["claim_id"],)).fetchone()
+                    assert claim is not None
+                    if damage == "missing_claim":
+                        broken.execute("DELETE FROM attachment_legacy_fork_payloads WHERE record_kind='claim' AND record_key=?", (claim["record_key"],))
+                    else:
+                        claim_metadata = json.loads(claim["metadata_json"])
+                        claim_metadata["preimage_hash" if damage == "claim_hash" else "state"] = "wrong" if damage == "claim_hash" else "aborted"
+                        broken.execute("UPDATE attachment_legacy_fork_payloads SET metadata_json=? WHERE record_kind='claim' AND record_key=?", (json.dumps(claim_metadata), claim["record_key"]))
+                elif damage == "alias":
+                    frozen["source_file_id"] = "different-source"
+                    frozen["source_file_aliases"] = []
+                    frozen["target_file_id"] = "different-target"
+                    broken.execute("UPDATE attachment_legacy_fork_payloads SET snapshot_json=? WHERE record_kind='mapping' AND record_key=?", (json.dumps(frozen), mapping["record_key"]))
+                else:
+                    broken.execute("INSERT INTO attachment_legacy_fork_payloads VALUES ('mapping',?,?,?,?)",
+                                   (mapping["record_key"] + "duplicate", mapping["copy_operation_id"], mapping["metadata_json"], mapping["snapshot_json"]))
+                with pytest.raises(RuntimeError):
+                    resolve_legacy_attachment(
+                        broken, session_id=metadata["target_session_id"], thread_id=metadata["target_thread_id"],
+                        file_id=metadata["source_file_id"], workspace_id=response["workspace_id"],
+                    )
+        # 来源机器首次保存日期可以不同；保持 owner/version 后不能拿历史 locator 读目标。
+        with closing(sqlite3.connect(":memory:")) as remote:
+            target.backup(remote)
+            remote.row_factory = sqlite3.Row
+            remote.execute("DROP TRIGGER attachment_legacy_fork_payloads_no_update")
+            for row in remote.execute("SELECT * FROM attachment_legacy_fork_payloads").fetchall():
+                frozen, metadata = json.loads(row["snapshot_json"]), json.loads(row["metadata_json"])
+                frozen["relative_locator"] = "2000/01/02/" + frozen["blob_id"]
+                raw = json.dumps(frozen)
+                if row["record_kind"] == "claim":
+                    preimage = metadata["copy_operation_id"] + metadata["source_snapshot_id"] + metadata["operation_preimage_hash"] + raw
+                    metadata["preimage_hash"] = hashlib.sha256(preimage.encode()).hexdigest()
+                remote.execute("UPDATE attachment_legacy_fork_payloads SET metadata_json=?,snapshot_json=? WHERE record_kind=? AND record_key=?",
+                               (json.dumps(metadata), raw, row["record_kind"], row["record_key"]))
+            verify_legacy_references(remote)
         for table in ("attachment_legacy_bindings", "attachment_legacy_fork_payloads"):
             for operation in (f"UPDATE {table} SET attachment_id=attachment_id" if table.endswith("bindings") else
                               f"UPDATE {table} SET snapshot_json=snapshot_json", f"DELETE FROM {table}"):

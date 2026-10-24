@@ -25,6 +25,7 @@ catalog 侧原先的单文件 `catalog.py` 已按垂直链路拆入本包，faca
 
 # 规范
 
+- `legacy_references.py` 在目录 catalog 内解析旧 Session 附件 URI 与精确 Thread 的冻结 fork alias；离线发布核验实际消费该入口。来源 owner/blob、原件版本和 claim preimage 必须一致；来源 locator 仅作历史事实，跨机器不得用它定位目标。未映射的外部 URI 不以相同 digest 猜测归属；不访问旧库或旧正文。该解析不等于线上 schema 4 已切换。
 - 目录资源的 `YYYY/MM/DD/{attachment_id}` 生成、真实日期/身份校验和路径预算解析唯一定义在 `locator.py`；冻结日期使用显式创建 intent 的 UTC 日期，旧非 UUIDv7 的 attachment_id 原样保留。离线转换复用这些原语，不在迁移脚本或未来上传方各自拼目录。`directory_schema.py` 与 `sql/managed_directory_schema.sql` 定义隔离目标的 schema 4 基础目录结构，由离线转换准备；线上目录上传及切换尚未完成，现有 blob/staging 生产链待调用方迁齐后统一下线。
 - 在线目录访问与离线维护共用 `maintenance.py` 的跨进程共享/独占锁，锁文件位于附件根同级，不得删除或随 catalog/目录切换替换。Backend 在任何业务初始化前持共享锁至全部 writer 排空；catalog 的惰性目录访问另持共享锁至连接确认关闭，关闭失败保留连接与锁并允许重试。独占冲突直接报错，不以端口/PID/锁文件存在推断停机。该保护不替代离线迁移对持久 operation、原件和历史依赖的核对，线上 schema 3 → 4 的唯一切换未实现前不得修改线上版本或声称已迁移。
 - `migration/` 提供显式离线 prepare/verify，持独占锁只读核对原 owner 状态并保存备份；未知占用或不完整 schema 明确拒绝。schema 参照与线上初始化共用 `schema._SCHEMA_STATEMENTS`，不复制 DDL；线上数据库使用 SQLite backup API，冻结 capture 逐字保全，完成备份用 immutable 读取核验。prepared 仅证明备份阶段完成；directories_prepared 和 catalog_prepared 分别证明隔离目录、目标基础 catalog 完成。目标 catalog 保留完整旧 owner/blob 行和终态 fork 冻结原文，不改旧 hash；线上读取解析、上传/fork/ingest、恢复及切换仍 TODO，不增加线上双读或修改历史身份。

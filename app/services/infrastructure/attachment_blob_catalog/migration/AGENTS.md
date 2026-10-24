@@ -23,4 +23,5 @@
 - convert 的初始化元数据先写入由完整计划 hash 定位的 `.converted-{hash}.preparing`，manifest/journal 全部 durable 后才原子发布 `converted/`，再复制正文。重试只回收同一计划的未发布初始化目录，不清理其它计划或原备份；已存在但缺失身份元数据的旧 `converted/` 仍明确拒绝，不猜测归属。
 - 命令只输出稳定身份、状态与计数，清单只保存相对 locator，不输出普通业务原生路径。
 - 目标 catalog journal 绑定原备份、目录清单和 DDL 指纹；写库或 rename 后中断可沿同一准备身份续跑，成品必须完整核验且绝不覆盖。终态 fork snapshot_json 和 preimage 原样保存，来源表禁止 UPDATE/DELETE；新结构不得重算旧历史 hash。
+- catalog 发布核验除逐行对照外，必须调用原 owner 的 `verify_legacy_references`，实际解析每个旧 owner/alias，核对 committed claim 与迁入的精确正文版本。保留中的 released 关联不等于目录字节已回收；历史来源 locator 不得替代目标 locator。线上上传、操作 lease 和唯一切换仍按未完成任务推进。
 - 完成物化或中止的临时 capture 可已由原 owner 清理；残留 capture 仍按原 snapshot/marker hash 核验并逐字保存。离线准入不得要求重建已清理的终态临时目录。Linux 的既有执行明细文件名可含冒号，locator 按目标原生语义保留，同时拒绝各段盘符、逃逸与符号链接；Windows 继续拒绝冒号文件名。

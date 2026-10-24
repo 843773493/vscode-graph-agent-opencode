@@ -8,7 +8,9 @@ _from_row 函数是这些投影的唯一构造点（逐字段 str()/int() 归一
 from __future__ import annotations
 
 import hashlib
+import json
 import sqlite3
+from collections.abc import Mapping
 from dataclasses import dataclass
 
 from app.services.infrastructure.attachment_blob_catalog.blob_identity import (
@@ -169,6 +171,30 @@ class ForkAttachmentSnapshot:
             "target_action": self.target_action,
             "unavailable_reason": self.unavailable_reason,
         }
+
+
+def _claim_snapshot(row: sqlite3.Row | Mapping[str, str]) -> ForkAttachmentSnapshot:
+    snapshot = ForkAttachmentSnapshot(**json.loads(row["snapshot_json"]))
+    digest = hashlib.sha256((row["copy_operation_id"] + row["source_snapshot_id"] + row["operation_preimage_hash"] + row["snapshot_json"]).encode()).hexdigest()
+    if digest != row["preimage_hash"] or (
+        snapshot.claim_id, snapshot.source_attachment_id, snapshot.target_owner_ref_id,
+        snapshot.target_session_id, snapshot.target_thread_id, snapshot.blob_id,
+    ) != (
+        row["claim_id"], row["source_attachment_id"], row["target_owner_ref_id"],
+        row["target_session_id"], row["target_thread_id"], row["blob_id"],
+    ):
+        raise RuntimeError("fork attachment claim frozen preimage/hash 已损坏")
+    return snapshot
+
+
+def _mapping_snapshot(row: sqlite3.Row | Mapping[str, str]) -> ForkAttachmentSnapshot:
+    """在线 alias 与迁移历史共用精确消费 owner/别名校验，不重写冻结原文。"""
+    snapshot = ForkAttachmentSnapshot(**json.loads(row["snapshot_json"]))
+    if (row["target_session_id"], row["target_thread_id"]) != (snapshot.target_session_id, snapshot.target_thread_id) or row["source_file_id"] not in {
+        snapshot.source_file_id, *snapshot.source_file_aliases, snapshot.target_file_id,
+    }:
+        raise RuntimeError("fork attachment mapping 与冻结 owner/alias 不一致")
+    return snapshot
 
 
 def derive_attachment_id(

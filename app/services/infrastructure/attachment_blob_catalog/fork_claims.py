@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import sqlite3
 from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
 
@@ -26,22 +25,10 @@ from app.services.infrastructure.attachment_blob_catalog.records import (
     AttachmentOwnerRef,
     ForkAttachmentSnapshot,
     _blob_from_row,
+    _claim_snapshot,
+    _mapping_snapshot,
     _owner_ref_from_row,
 )
-
-
-def _claim_snapshot(row: sqlite3.Row) -> ForkAttachmentSnapshot:
-    snapshot = ForkAttachmentSnapshot(**json.loads(row["snapshot_json"]))
-    digest = hashlib.sha256((row["copy_operation_id"] + row["source_snapshot_id"] + row["operation_preimage_hash"] + row["snapshot_json"]).encode()).hexdigest()
-    if digest != row["preimage_hash"] or (
-        snapshot.claim_id, snapshot.source_attachment_id, snapshot.target_owner_ref_id,
-        snapshot.target_session_id, snapshot.target_thread_id, snapshot.blob_id,
-    ) != (
-        row["claim_id"], row["source_attachment_id"], row["target_owner_ref_id"],
-        row["target_session_id"], row["target_thread_id"], row["blob_id"],
-    ):
-        raise RuntimeError("fork attachment claim frozen preimage/hash 已损坏")
-    return snapshot
 
 
 class ForkAttachmentClaimsMixin:
@@ -289,7 +276,7 @@ class ForkAttachmentClaimsMixin:
     ) -> ForkAttachmentSnapshot | None:
         """读取 target 本地冻结事实；不可用附件也不回读更早来源。"""
         rows = self._connected().execute(
-            "SELECT snapshot_json FROM fork_attachment_mappings "
+            "SELECT * FROM fork_attachment_mappings "
             "WHERE target_session_id=? AND target_thread_id=? AND source_file_id=? LIMIT 2",
             (target_session_id, target_thread_id, source_file_id),
         ).fetchall()
@@ -297,10 +284,7 @@ class ForkAttachmentClaimsMixin:
             raise RuntimeError("fork attachment target-local alias 歧义")
         if not rows:
             return None
-        snapshot = ForkAttachmentSnapshot(**json.loads(rows[0][0]))
-        if (snapshot.target_session_id, snapshot.target_thread_id) != (target_session_id, target_thread_id):
-            raise RuntimeError("fork attachment 冻结 mapping 不属于指定 Thread")
-        return snapshot
+        return _mapping_snapshot(rows[0])
 
     def project_fork_attachment(
         self, *, target_session_id: str, target_thread_id: str, source_file_id: str,

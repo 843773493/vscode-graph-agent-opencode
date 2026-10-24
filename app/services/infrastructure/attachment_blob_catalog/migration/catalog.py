@@ -17,8 +17,8 @@ from app.services.infrastructure.attachment_blob_catalog.directory_schema import
     initialize_directory_schema,
     require_directory_schema,
 )
-from app.services.infrastructure.attachment_blob_catalog.fork_claims import (
-    _claim_snapshot,
+from app.services.infrastructure.attachment_blob_catalog.legacy_references import (
+    verify_legacy_references,
 )
 from app.services.infrastructure.attachment_blob_catalog.locator import (
     attachment_directory_relative_locator,
@@ -41,7 +41,8 @@ from app.services.infrastructure.attachment_blob_catalog.migration.preflight imp
 from app.services.infrastructure.attachment_blob_catalog.records import (
     AttachmentBlobRecord,
     AttachmentOwnerRef,
-    ForkAttachmentSnapshot,
+    _claim_snapshot,
+    _mapping_snapshot,
 )
 
 # 列顺序只负责参数绑定与逐行核验；结构、约束和版本唯一定义在 SQL 资产。
@@ -97,9 +98,7 @@ def _source_rows(directory: Path, plan: DirectoryPlan) -> dict[str, list[tuple[o
                     _claim_snapshot(row)
                     key = row["claim_id"]
                 else:
-                    snapshot = ForkAttachmentSnapshot(**json.loads(row["snapshot_json"]))
-                    if (row["target_session_id"], row["target_thread_id"]) != (snapshot.target_session_id, snapshot.target_thread_id) or row["source_file_id"] not in {snapshot.source_file_id, *snapshot.source_file_aliases, snapshot.target_file_id}:
-                        raise RuntimeError("目录转换 fork mapping 与冻结 owner/alias 不一致")
+                    _mapping_snapshot(row)
                     key = hashlib.sha256(_json([row["copy_operation_id"], row["source_file_id"]])).hexdigest()
                 metadata = dict(row)
                 # snapshot_json 必须逐字保留，不能 asdict 后重新编码或改写旧 locator。
@@ -132,6 +131,7 @@ def _verify_catalog(path: Path, rows: dict[str, list[tuple[object, ...]]]) -> No
             actual = sorted(tuple(row) for row in target.execute(f"SELECT {','.join(columns)} FROM {table}"))
             if actual != rows[table]:
                 raise RuntimeError(f"附件目录 catalog 与来源记录不一致: table={table}")
+        verify_legacy_references(target)
 
 
 def _binding(root: Path, plan: DirectoryPlan) -> dict[str, object]:
