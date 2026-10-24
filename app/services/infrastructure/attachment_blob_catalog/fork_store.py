@@ -273,7 +273,7 @@ class ForkAttachmentStoreMixin(ForkAttachmentImportMixin):
                 if record.state == "committed":
                     return
                 await observe_phase(capture.copy_operation_id, "copy.attachments.published_pending")
-                self._catalog.settle_fork_attachment_claims(copy_operation_id=capture.copy_operation_id, claim_ids=claim_ids, state="committed")
+                self._catalog.settle_fork_attachment_claims(copy_operation_id=capture.copy_operation_id, claim_ids=claim_ids, state="committed", now=self._clock())
                 transition_copy_attachment_settlement(control, record, state="committed")
                 await observe_phase(capture.copy_operation_id, "copy.attachments.claims_committed")
             finally:
@@ -324,7 +324,7 @@ class ForkAttachmentStoreMixin(ForkAttachmentImportMixin):
         else:
             directory = self._path_resolver.resolve_prepared_session_node(creation)
         claim_ids = self._catalog.fork_attachment_claim_ids(capture.copy_operation_id)
-        self._catalog.settle_fork_attachment_claims(copy_operation_id=capture.copy_operation_id, claim_ids=claim_ids, state="aborted")
+        self._catalog.settle_fork_attachment_claims(copy_operation_id=capture.copy_operation_id, claim_ids=claim_ids, state="aborted", now=self._clock())
         control = SessionControlStore(directory / "session-control.sqlite")
         try:
             for record in read_copy_attachment_settlements(control):

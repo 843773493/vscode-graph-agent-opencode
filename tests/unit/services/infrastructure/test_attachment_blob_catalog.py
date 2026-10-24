@@ -1278,7 +1278,7 @@ async def test_pending_fork_claim_retains_only_source_directory_until_original_o
     store._clock = lambda: current + timedelta(days=31)
     assert await store.collect_garbage(leases=ExternalResourceLeaseLedger()) == (parse_resource_uri(target.file_id).attachment_id,)
     assert store.read(SESSION_A, source.file_id).data == body
-    store._catalog.settle_fork_attachment_claims(copy_operation_id=record.copy_operation_id, claim_ids=(snapshot.claim_id,), state=terminal)
+    store._catalog.settle_fork_attachment_claims(copy_operation_id=record.copy_operation_id, claim_ids=(snapshot.claim_id,), state=terminal, now=store._clock())
     assert await store.collect_garbage(leases=ExternalResourceLeaseLedger()) == (snapshot.source_attachment_id,)
     with pytest.raises(FileNotFoundError):
         store.read(SESSION_A, source.file_id)
@@ -1419,7 +1419,7 @@ async def test_fork_staging_gc_uses_terminal_claim_and_exact_operation(fork_impo
         target._catalog.reserve_fork_attachment_owners(copy_operation_id=record.copy_operation_id, claim_ids=(snapshot.claim_id,))
     if terminal != "prepared":
         target._catalog.settle_fork_attachment_claims(copy_operation_id=record.copy_operation_id,
-            claim_ids=(snapshot.claim_id,), state=terminal)
+            claim_ids=(snapshot.claim_id,), state=terminal, now=target._clock())
     # 删除 owner 可能已持 Session gate；清理不得阻塞等待 importer。
     async with target._fork_imports.lock_for(record.copy_operation_id), target._gate.exclusive(SESSION_B):
         assert await asyncio.wait_for(target.collect_fork_import_staging(), timeout=1) == ()
@@ -1444,7 +1444,7 @@ async def test_terminal_fork_staging_removal_failure_retries_without_scanning(fo
         source_snapshot_id=record.snapshot_id, operation_preimage_hash=record.preimage_hash,
         snapshots=case.snapshots)
     target._catalog.settle_fork_attachment_claims(copy_operation_id=record.copy_operation_id,
-        claim_ids=(snapshot.claim_id,), state="aborted")
+        claim_ids=(snapshot.claim_id,), state="aborted", now=target._clock())
     staging_id = _import_id(record.copy_operation_id, snapshot.target_attachment_id)
     path = resolve_staging_path(target._attachments_root, ingest_staging_relative_locator(staging_id))
     path.mkdir(parents=True)
@@ -1487,7 +1487,7 @@ async def test_fork_import_holds_writer_gate_until_frozen_copy_exits(fork_import
     path = resolve_staging_path(target._attachments_root, ingest_staging_relative_locator(_import_id(record.copy_operation_id, snapshot.target_attachment_id)))
     try:
         assert await asyncio.to_thread(copying.wait, 3) and path.is_dir()
-        target._catalog.settle_fork_attachment_claims(copy_operation_id=record.copy_operation_id, claim_ids=(snapshot.claim_id,), state="aborted")
+        target._catalog.settle_fork_attachment_claims(copy_operation_id=record.copy_operation_id, claim_ids=(snapshot.claim_id,), state="aborted", now=target._clock())
         if cancelled:
             importing.cancel()
             await asyncio.sleep(0)

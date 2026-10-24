@@ -240,7 +240,7 @@ class AttachmentIngestRecoveryMixin:
             for operation in self._catalog.fork_attachment_operations_for_target(session_id, target_thread_id=thread_id):
                 operations.setdefault(operation, self._catalog.fork_attachment_claim_ids(operation))
             for operation, claim_ids in operations.items():
-                self._catalog.settle_fork_attachment_claims(copy_operation_id=operation, claim_ids=claim_ids, state="target_deleted")
+                self._catalog.settle_fork_attachment_claims(copy_operation_id=operation, claim_ids=claim_ids, state="target_deleted", now=self._clock())
             for record in records:
                 if record.state not in {"aborted", "target_deleted"}:
                     transition_copy_attachment_settlement(control, record, state="target_deleted")

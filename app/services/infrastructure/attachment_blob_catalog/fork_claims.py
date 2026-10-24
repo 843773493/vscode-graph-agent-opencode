@@ -116,11 +116,11 @@ class ForkAttachmentClaimsMixin:
                 if row["state"] == "prepared":
                     connection.execute("UPDATE attachment_directory_fork_claims SET state='owner_reserved',updated_at=? WHERE claim_id=?", (datetime.now(UTC).isoformat(), claim_id))
 
-    def settle_fork_attachment_claims(self, *, copy_operation_id: str, claim_ids: Sequence[str], state: str) -> None:
+    def settle_fork_attachment_claims(self, *, copy_operation_id: str, claim_ids: Sequence[str], state: str, now: datetime) -> None:
         if state not in {"committed", "aborted", "target_deleted"}:
             raise ValueError("目录 fork 结算状态非法")
+        # 结算与删除共享原 owner 时钟，最后零关联后的期限不得另取系统时间。
         with self.write_transaction() as connection:
-            now = datetime.now(UTC)
             for claim_id in claim_ids:
                 row = connection.execute("SELECT * FROM attachment_directory_fork_claims WHERE claim_id=? AND copy_operation_id=?", (claim_id, copy_operation_id)).fetchone()
                 if row is None:
