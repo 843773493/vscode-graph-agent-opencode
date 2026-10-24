@@ -33,6 +33,11 @@ export declare type AttachmentRef = Message<"boxteam.workspace.v2.AttachmentRef"
    * @generated from field: optional string data_url = 4;
    */
   dataUrl?: string | undefined;
+
+  /**
+   * @generated from field: optional string directory_uri = 5;
+   */
+  directoryUri?: string | undefined;
 };
 
 /**

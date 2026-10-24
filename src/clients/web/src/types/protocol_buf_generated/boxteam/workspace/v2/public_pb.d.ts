@@ -8706,6 +8706,11 @@ export declare type TurnAttachmentDTO = Message<"boxteam.workspace.v2.TurnAttach
    * @generated from field: optional string availability = 4;
    */
   availability?: string | undefined;
+
+  /**
+   * @generated from field: optional string directory_uri = 5;
+   */
+  directoryUri?: string | undefined;
 };
 
 /**

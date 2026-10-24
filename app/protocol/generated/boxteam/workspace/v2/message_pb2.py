@@ -24,7 +24,7 @@ _sym_db = _symbol_database.Default()
 
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\"boxteam/workspace/v2/message.proto\x12\x14\x62oxteam.workspace.v2\"\xb0\x01\n\rAttachmentRef\x12\x17\n\x07\x66ile_id\x18\x01 \x01(\tR\x06\x66ileId\x12\x17\n\x04name\x18\x02 \x01(\tH\x00R\x04name\x88\x01\x01\x12&\n\x0c\x63ontent_type\x18\x03 \x01(\tH\x01R\x0b\x63ontentType\x88\x01\x01\x12\x1e\n\x08\x64\x61ta_url\x18\x04 \x01(\tH\x02R\x07\x64\x61taUrl\x88\x01\x01\x42\x07\n\x05_nameB\x0f\n\r_content_typeB\x0b\n\t_data_urlb\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\"boxteam/workspace/v2/message.proto\x12\x14\x62oxteam.workspace.v2\"\xec\x01\n\rAttachmentRef\x12\x17\n\x07\x66ile_id\x18\x01 \x01(\tR\x06\x66ileId\x12\x17\n\x04name\x18\x02 \x01(\tH\x00R\x04name\x88\x01\x01\x12&\n\x0c\x63ontent_type\x18\x03 \x01(\tH\x01R\x0b\x63ontentType\x88\x01\x01\x12\x1e\n\x08\x64\x61ta_url\x18\x04 \x01(\tH\x02R\x07\x64\x61taUrl\x88\x01\x01\x12(\n\rdirectory_uri\x18\x05 \x01(\tH\x03R\x0c\x64irectoryUri\x88\x01\x01\x42\x07\n\x05_nameB\x0f\n\r_content_typeB\x0b\n\t_data_urlB\x10\n\x0e_directory_urib\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
@@ -32,5 +32,5 @@ _builder.BuildTopDescriptorsAndMessages(DESCRIPTOR, 'boxteam.workspace.v2.messag
 if not _descriptor._USE_C_DESCRIPTORS:
   DESCRIPTOR._loaded_options = None
   _globals['_ATTACHMENTREF']._serialized_start=61
-  _globals['_ATTACHMENTREF']._serialized_end=237
+  _globals['_ATTACHMENTREF']._serialized_end=297
 # @@protoc_insertion_point(module_scope)

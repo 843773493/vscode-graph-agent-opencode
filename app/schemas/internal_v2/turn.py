@@ -39,6 +39,7 @@ class TurnAttachmentDTO(BaseModel):
     name: str | None = None
     content_type: str | None = None
     availability: Literal["available", "unavailable"] | None = None
+    directory_uri: str | None = None
 
 
 class TurnUserMessageDTO(BaseModel):

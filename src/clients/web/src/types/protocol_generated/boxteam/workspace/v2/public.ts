@@ -2022,6 +2022,7 @@ export interface TurnAttachmentDTO {
     | undefined;
   /** 来自附件 owner 的冻结可用性；不凭预览读取结果推断。 */
   availability?: string | undefined;
+  directory_uri?: string | undefined;
 }
 
 export interface TurnBaseDTO {
@@ -15293,7 +15294,7 @@ export const TurnActivityStatsDTO: MessageFns<TurnActivityStatsDTO> = {
 };
 
 function createBaseTurnAttachmentDTO(): TurnAttachmentDTO {
-  return { file_id: "", name: undefined, content_type: undefined, availability: undefined };
+  return { file_id: "", name: undefined, content_type: undefined, availability: undefined, directory_uri: undefined };
 }
 
 export const TurnAttachmentDTO: MessageFns<TurnAttachmentDTO> = {
@@ -15303,6 +15304,7 @@ export const TurnAttachmentDTO: MessageFns<TurnAttachmentDTO> = {
       name: isSet(object.name) ? globalThis.String(object.name) : undefined,
       content_type: isSet(object.content_type) ? globalThis.String(object.content_type) : undefined,
       availability: isSet(object.availability) ? globalThis.String(object.availability) : undefined,
+      directory_uri: isSet(object.directory_uri) ? globalThis.String(object.directory_uri) : undefined,
     };
   },
 
@@ -15320,6 +15322,9 @@ export const TurnAttachmentDTO: MessageFns<TurnAttachmentDTO> = {
     if (message.availability !== undefined) {
       obj.availability = message.availability;
     }
+    if (message.directory_uri !== undefined) {
+      obj.directory_uri = message.directory_uri;
+    }
     return obj;
   },
 
@@ -15332,6 +15337,7 @@ export const TurnAttachmentDTO: MessageFns<TurnAttachmentDTO> = {
     message.name = object.name ?? undefined;
     message.content_type = object.content_type ?? undefined;
     message.availability = object.availability ?? undefined;
+    message.directory_uri = object.directory_uri ?? undefined;
     return message;
   },
 };

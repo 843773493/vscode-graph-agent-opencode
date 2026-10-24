@@ -2,6 +2,7 @@ import json
 from pathlib import Path
 from typing import cast
 
+import pytest
 from google.protobuf import descriptor_pb2
 from google.protobuf.json_format import MessageToDict, ParseDict
 
@@ -15,15 +16,38 @@ from app.protocol.codecs.terminal import (
 from app.protocol.generated.boxteam.browser.v1 import browser_pb2
 from app.protocol.generated.boxteam.gateway.v1 import proxy_pb2
 from app.protocol.generated.boxteam.terminal.v1 import terminal_pb2
-from app.protocol.generated.boxteam.workspace.v2 import public_pb2, session_stream_pb2
+from app.protocol.generated.boxteam.workspace.v2 import (
+    message_pb2,
+    public_pb2,
+    session_stream_pb2,
+)
+from app.schemas.internal_v2.attachment import AttachmentRef
 from app.schemas.internal_v2.resource_navigation import (
     ResourceNavigationRequest,
     ResourceNavigationResultDTO,
 )
 from app.schemas.internal_v2.session_changes import SessionFileChangeDTO
 from app.schemas.internal_v2.session_interaction import SessionExecutionSseDTO
+from app.schemas.internal_v2.turn import TurnAttachmentDTO
 
 BASELINE_PATH = Path(__file__).with_name("protocol_baseline.json")
+
+
+@pytest.mark.parametrize("has_directory", [True, False], ids=["directory", "legacy"])
+def test_attachment_and_turn_directory_reference_survive_proto_wire(has_directory: bool) -> None:
+    directory = "boxteam://workspace/019d1b4a-1111-7000-8000-000000000001/resources/attachments/att_0123456789abcdef0123456789abcdef"
+    payload = {
+        "file_id": directory + "/original/content" if has_directory else
+            "boxteam://workspace/019d1b4a-1111-7000-8000-000000000001/resources/session/ses_043a718774c572bd8a25adbeb1bfcd5c/attachments/att_0123456789abcdef0123456789abcdef",
+        "directory_uri": directory if has_directory else None,
+        "name": "report.pdf", "content_type": "application/pdf",
+    }
+    for schema, protocol in ((AttachmentRef, message_pb2.AttachmentRef), (TurnAttachmentDTO, public_pb2.TurnAttachmentDTO)):
+        value = schema.model_validate(payload)
+        encoded = ParseDict(value.model_dump(exclude_none=True), protocol()).SerializeToString()
+        received = protocol.FromString(encoded)
+        assert received.HasField("directory_uri") == has_directory
+        assert schema.model_validate(MessageToDict(received, preserving_proto_field_name=True)) == value
 
 
 def test_session_file_change_wire_and_openapi_use_uri_and_content_without_snapshot_locations() -> None:

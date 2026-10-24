@@ -8,7 +8,7 @@ import { fileDesc, messageDesc } from "@bufbuild/protobuf/codegenv2";
  * Describes the file boxteam/workspace/v2/message.proto.
  */
 export const file_boxteam_workspace_v2_message = /*@__PURE__*/
-  fileDesc("CiJib3h0ZWFtL3dvcmtzcGFjZS92Mi9tZXNzYWdlLnByb3RvEhRib3h0ZWFtLndvcmtzcGFjZS52MiKMAQoNQXR0YWNobWVudFJlZhIPCgdmaWxlX2lkGAEgASgJEhEKBG5hbWUYAiABKAlIAIgBARIZCgxjb250ZW50X3R5cGUYAyABKAlIAYgBARIVCghkYXRhX3VybBgEIAEoCUgCiAEBQgcKBV9uYW1lQg8KDV9jb250ZW50X3R5cGVCCwoJX2RhdGFfdXJsYgZwcm90bzM");
+  fileDesc("CiJib3h0ZWFtL3dvcmtzcGFjZS92Mi9tZXNzYWdlLnByb3RvEhRib3h0ZWFtLndvcmtzcGFjZS52MiK6AQoNQXR0YWNobWVudFJlZhIPCgdmaWxlX2lkGAEgASgJEhEKBG5hbWUYAiABKAlIAIgBARIZCgxjb250ZW50X3R5cGUYAyABKAlIAYgBARIVCghkYXRhX3VybBgEIAEoCUgCiAEBEhoKDWRpcmVjdG9yeV91cmkYBSABKAlIA4gBAUIHCgVfbmFtZUIPCg1fY29udGVudF90eXBlQgsKCV9kYXRhX3VybEIQCg5fZGlyZWN0b3J5X3VyaWIGcHJvdG8z");
 
 /**
  * Describes the message boxteam.workspace.v2.AttachmentRef.

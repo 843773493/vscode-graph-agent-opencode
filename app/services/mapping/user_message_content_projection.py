@@ -80,7 +80,7 @@ def _metadata_attachment(metadata: Mapping[str, Any]) -> dict[str, Any] | None:
         "file_id": file_id,
         **{
             key: copy.deepcopy(metadata[key])
-            for key in ("name", "content_type", "path", "preview_status")
+            for key in ("name", "content_type", "path", "preview_status", "directory_uri")
             if key in metadata
         },
     }

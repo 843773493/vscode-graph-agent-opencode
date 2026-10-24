@@ -48,7 +48,8 @@ describe("MessageAttachments", () => {
 
   test("通用文件即使没有图片预览也可以通过右侧入口打开", () => {
     const file: AttachmentRef = {
-      file_id: "boxteam://workspace/019d1b4a-1111-7000-8000-000000000001/resources/session/ses_fea5c0c71d0f76cc8844c3a8f90afede/attachments/att_6466e450a16b77b865c5829d6b6c56d9",
+      file_id: "boxteam://workspace/019d1b4a-1111-7000-8000-000000000001/resources/attachments/att_6466e450a16b77b865c5829d6b6c56d9/original/content",
+      directory_uri: "boxteam://workspace/019d1b4a-1111-7000-8000-000000000001/resources/attachments/att_6466e450a16b77b865c5829d6b6c56d9",
       name: "report.pdf",
       content_type: "application/pdf",
     };

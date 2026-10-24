@@ -2000,6 +2000,7 @@ message TurnAttachmentDTO {
   optional string content_type = 3;
   // 来自附件 owner 的冻结可用性；不凭预览读取结果推断。
   optional string availability = 4;
+  optional string directory_uri = 5;
 }
 
 message TurnBaseDTO {

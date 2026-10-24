@@ -13,10 +13,11 @@ export interface AttachmentRef {
   name?: string | undefined;
   content_type?: string | undefined;
   data_url?: string | undefined;
+  directory_uri?: string | undefined;
 }
 
 function createBaseAttachmentRef(): AttachmentRef {
-  return { file_id: "", name: undefined, content_type: undefined, data_url: undefined };
+  return { file_id: "", name: undefined, content_type: undefined, data_url: undefined, directory_uri: undefined };
 }
 
 export const AttachmentRef: MessageFns<AttachmentRef> = {
@@ -26,6 +27,7 @@ export const AttachmentRef: MessageFns<AttachmentRef> = {
       name: isSet(object.name) ? globalThis.String(object.name) : undefined,
       content_type: isSet(object.content_type) ? globalThis.String(object.content_type) : undefined,
       data_url: isSet(object.data_url) ? globalThis.String(object.data_url) : undefined,
+      directory_uri: isSet(object.directory_uri) ? globalThis.String(object.directory_uri) : undefined,
     };
   },
 
@@ -43,6 +45,9 @@ export const AttachmentRef: MessageFns<AttachmentRef> = {
     if (message.data_url !== undefined) {
       obj.data_url = message.data_url;
     }
+    if (message.directory_uri !== undefined) {
+      obj.directory_uri = message.directory_uri;
+    }
     return obj;
   },
 
@@ -55,6 +60,7 @@ export const AttachmentRef: MessageFns<AttachmentRef> = {
     message.name = object.name ?? undefined;
     message.content_type = object.content_type ?? undefined;
     message.data_url = object.data_url ?? undefined;
+    message.directory_uri = object.directory_uri ?? undefined;
     return message;
   },
 };

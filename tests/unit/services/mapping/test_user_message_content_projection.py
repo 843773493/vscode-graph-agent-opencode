@@ -59,3 +59,24 @@ def test_user_projection_never_json_dumps_unknown_blocks_and_does_not_mutate_sou
     assert projection.blocks[1]["payload"] == {"nested": [1]}
     projection.blocks[1]["payload"]["nested"].append(2)
     assert content[1]["payload"] == {"nested": [1]}
+
+
+def test_generated_attachment_directory_reaches_display_without_response_metadata():
+    directory = "boxteam://workspace/019d1b4a-1111-7000-8000-000000000001/resources/attachments/att_0123456789abcdef0123456789abcdef"
+    file_id = directory + "/original/content"
+    content = [{
+        "type": "text", "text": '<attachment id="' + file_id + '">',
+        "metadata": {
+            "origin": "generated", "kind": "attachment_manifest", "schema_version": 1,
+            "file_id": file_id, "directory_uri": directory,
+            "name": "report.pdf", "content_type": "application/pdf",
+        },
+    }]
+
+    projection = user_content_projection(content)
+
+    assert projection.visible_text == ""
+    assert projection.attachments == ({
+        "file_id": file_id, "directory_uri": directory,
+        "name": "report.pdf", "content_type": "application/pdf",
+    },)
