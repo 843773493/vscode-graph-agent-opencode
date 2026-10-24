@@ -474,3 +474,100 @@ test("模型命令仍解析跨块和ANSI标记，完成后停止扫描且只释�
     await session.dispose();
   }
 });
+
+for (const action of ["kill", "delete"]) {
+  test(`${action} 未确认 Worker 退出时保留原句柄并允许同一执行重试`, async (t) => {
+    const session = completedSession(t);
+    const failure = new Error("受控 Worker 退出未确认");
+    let shutdowns = 0;
+    // 这里只验证句柄和回执顺序；不向宿主进程发信号。
+    const worker = { pid: null, async shutdown() { if (++shutdowns === 1) throw failure; } };
+    session.ptyProcess = worker;
+    const saved = [];
+    session.manager.persist = async () => { saved.push(session.toRecord()); };
+    const events = [];
+    t.mock.method(session, "broadcast", (event) => events.push(event));
+    await assert.rejects(session[action](), error => error === failure);
+    assert.equal(session.ptyProcess, worker);
+    assert.equal(session.reconciliationStatus, "unknown");
+    assert.equal(saved.at(-1).reconciliation_status, "unknown");
+    assert.equal(session.status, "running");
+    assert.equal(session.releasePromise, null);
+    assert.equal(events.length, 0);
+    await session[action]();
+    assert.equal(shutdowns, 2);
+    assert.equal(session.ptyProcess, null);
+    assert.equal(session.reconciliationStatus, "verified");
+    assert.equal(session.status, action === "kill" ? "terminated" : "deleted");
+  });
+}
+
+test("停止必须等待同一次 Worker 确认与最终写盘，不能提前发布完成事件", async (t) => {
+  const session = completedSession(t);
+  const workerExit = Promise.withResolvers();
+  const saved = Promise.withResolvers();
+  const saveStarted = Promise.withResolvers();
+  let shutdowns = 0;
+  session.ptyProcess = { pid: null, async shutdown() { shutdowns += 1; await workerExit.promise; } };
+  session.manager.persist = async () => { saveStarted.resolve(); await saved.promise; };
+  const events = [];
+  t.mock.method(session, "broadcast", (event) => events.push(event));
+  let finished = false;
+  const stopping = session.kill().then(() => { finished = true; });
+  const duplicate = session.kill();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(shutdowns, 1);
+  assert.equal(finished, false);
+  workerExit.resolve();
+  await saveStarted.promise;
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(finished, false);
+  assert.equal(events.length, 0);
+  saved.resolve();
+  await Promise.all([stopping, duplicate]);
+  assert.equal(shutdowns, 1);
+  assert.equal(events.length, 1);
+  assert.equal(events[0].snapshot.reconciliation_status, "verified");
+});
+
+for (const action of ["kill", "delete"]) {
+  test(`${action} 终态写盘失败保留原执行并可重试，不发布停止事件`, async (t) => {
+    const session = completedSession(t);
+    const disk = new Error("受控终态写盘失败");
+    let shutdowns = 0;
+    const worker = { pid: null, async shutdown() { shutdowns += 1; } };
+    session.ptyProcess = worker;
+    let writes = 0;
+    session.manager.persist = async () => { if (++writes === 1) throw disk; };
+    const events = [];
+    t.mock.method(session, "broadcast", (event) => events.push(event));
+    await assert.rejects(session[action](), error => error === disk);
+    assert.equal(session.ptyProcess, worker);
+    assert.equal(session.reconciliationStatus, "unknown");
+    assert.equal(events.length, 0);
+    assert.equal(writes, 2, "原失败后必须尝试持久化 unknown");
+    await session[action]();
+    assert.equal(shutdowns, 2);
+    assert.equal(session.reconciliationStatus, "verified");
+    assert.equal(session.ptyProcess, null);
+    assert.equal(events.length, 1);
+  });
+}
+
+test("停止与未知状态落盘都失败时保留原句柄与两份错误", async (t) => {
+  const session = completedSession(t);
+  const cleanup = new Error("原停止失败");
+  const disk = new Error("未知状态落盘失败");
+  const worker = { pid: null, async shutdown() { throw cleanup; } };
+  session.ptyProcess = worker;
+  session.manager.persist = async () => { throw disk; };
+  await assert.rejects(session.kill(), error => {
+    assert(error instanceof AggregateError);
+    assert.deepEqual(error.errors, [cleanup, disk]);
+    assert.equal(error.cause, cleanup);
+    return true;
+  });
+  assert.equal(session.ptyProcess, worker);
+  assert.equal(session.reconciliationStatus, "unknown");
+  assert.equal(session.status, "running");
+});

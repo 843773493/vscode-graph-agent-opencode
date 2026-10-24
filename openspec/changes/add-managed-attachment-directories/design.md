@@ -52,6 +52,8 @@ Shell 的结构化 workdir 接受目录 URI，在 URI 指定目标的文件 owne
 
 已有资源的工具、管理、卸载和孤儿回收操作丢失回执时，由原 owner 将本次精确 lease 与资源未知状态一同写入原账本。普通收尾及 Turn 清理只释放仍 active 的操作，不能释放待核实占用或覆盖 owner 已结清的 settled。同资源其它已完成操作、明确失败回执及单纯的未知资源快照不因此变成未知操作。冷恢复保留原未知结果与错误原因；只有核实资源身份、当前版本和真实终态后才结清，不能由存活快照自动重发旧副作用。创建链现在同样将本次精确原 lease 持久转为待核实；存活快照不再消除未知创建结果。Terminal/Browser 在有效且唯一的创建 intent 尚未接纳时返回 `creation_receipt`，绑定 resource/workspace/revision 和 `not_created`；owner 核对后将本次未创建 intent 关闭为不可见 tombstone、解除其关联并结清原占用，包括 Terminal 受管 cwd。身份冲突、普通 HTTP 失败、回执丢失或错误版本不能被当作未创建。Browser 只有在原 failStartup 链释放运行态并落盘成功后返回 `failed` 及完整失败快照；失败后的 stop/detach/delete 继续走原管理入口，不将任意 failed 状态加入全局停止集合。未收到正式回执的创建跨 scope/Turn 收尾与冷恢复继续保留未知及原 lease，真实终态仍由原 owner 核实后结清。Terminal 就绪前的 PTY 退出现复用原 Worker 的唯一进程树终止链，将已取得的 PID 和清理结果结构化传回；Linux forkpty 根已消失时仍按原 SID 核实后代。宿主只有在正式停止结果、Worker 退出确认和终态落盘全部成功后签发 `failed` 与 `terminated/verified` 快照；Node 保留原记录供回执丢失后的冷恢复核实，同步结清受管 cwd 占用。没有证明的 native 异常、Worker 异常或清理失败保留原未知记录与已取得的句柄，迟到 ready/启动失败消息不改写已结束的启动身份。创建途中未取得外部身份的接管，以及旧代运行操作的接管/终止与 5.4 总期限继续 TODO；Worker 退出与 HTTP 状态均不能替代停止证明。
 
+正式停止回执与冷恢复观察承担不同职责：本次 stop/delete 的回执必须具有当前资源/工作区身份及与本次发布版本相等的整数 `transport_owner_revision`，不能接受旧代或未来版本；未知版本继续保留本次原 lease。Terminal 的原停止链在进程树核实后仍持有同一 Worker 句柄，等待 Worker 退出确认和终态写盘后才清除句柄、发布完成事件并返回。任一阶段失败持久保留 unknown；终态已在内存变化但写盘失败时，允许原句柄沿同一停止链重试，不为未取得 PID 的 native 创建异常扩大释放许可。停止与 unknown 写盘都失败时以 AggregateError 保留两份原异常及 cause。相关反例和 Linux 回归见 tasks 5.2 的 `resource_stop_receipts_20261024`；完整旧代接管、unknown 的显式管理、挂起队列终止与 5.4 总期限继续 TODO。
+
 ### 6. 本轮实施的失败隔离
 
 `ThreadResidencyTracker.sweep()` 对每个 Thread 独立尝试清理，失败保留原 scope、generation 和 owner 记录，其它 Thread 仍完成。整批结束后向调用方抛出原错误（单项）或汇总错误（多项），附精确 owner 信息；不改变已有单错误类型或把失败算成成功卸载。`AgentExecutionService` 的唯一周期 worker 记录完整异常后按原 60 秒周期重试，取消和关闭正常传播。这里不解决失效关联或外部未知结果，也不绕过原 owner 核实规则。

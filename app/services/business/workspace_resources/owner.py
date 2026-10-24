@@ -532,6 +532,8 @@ class WorkspaceResourceOwner:
             runtime = result.get(self.kind)
             if not isinstance(runtime, dict):
                 raise TypeError("外部资源 owner 未收到停止/删除的完整外部回执")
+            if type(runtime.get("transport_owner_revision")) is not int or runtime["transport_owner_revision"] != record.owner_revision:
+                raise ResourceConflict("外部资源 停止/删除回执版本与本次操作不一致")
             observe_resource(record, runtime, self.kind)
             self._verified(record)
             if record.status not in STOPPED_STATUSES or (delete and record.status != "deleted"):
@@ -776,7 +778,7 @@ class WorkspaceResourceOwner:
         if runtime is None or runtime.get("reconciliation_status") != "verified" or runtime.get("status") not in STOPPED_STATUSES:
             return
         revision = runtime.get("transport_owner_revision")
-        if not isinstance(revision, int) or revision < record.owner_revision:
+        if type(revision) is not int or revision < record.owner_revision:
             return
         observe_resource(record, runtime, self.kind)
         record.reconciliation_status = "verified"

@@ -52,7 +52,7 @@ def validate_runtime(runtime: ResourceSnapshot, workspace_id: str) -> None:
         logger.error("Node 运行时 工作目录拒绝: cwd_relative=%r", relative)
         raise ValueError("Node 运行时 工作目录不是工作区内相对目录")
     revision = runtime.get("transport_owner_revision")
-    if not isinstance(revision, int) or revision < 1:
+    if type(revision) is not int or revision < 1:
         raise ValueError("Node 运行时 回执缺少有效传输版本")
 
 

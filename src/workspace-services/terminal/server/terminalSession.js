@@ -464,7 +464,9 @@ export class TerminalSession {
     if (this.releasePromise) {
       return await this.releasePromise;
     }
-    if (this.status !== "running") {
+    const retainedRelease = this.ptyProcess && this.reconciliationStatus !== "verified"
+      && new Set(["completed", "exited", "terminated", "deleted"]).has(this.status);
+    if (this.status !== "running" && !retainedRelease) {
       return false;
     }
     const releasePromise = this._terminateForRelease({
@@ -475,6 +477,15 @@ export class TerminalSession {
     this.releasePromise = releasePromise;
     try {
       return await releasePromise;
+    } catch (error) {
+      this.markReconciliationStatus("unknown");
+      try {
+        await this.manager.persist();
+      } catch (persistError) {
+        throw new AggregateError([error, persistError],
+          `终端停止失败且未知状态持久化失败: terminal_id=${this.id}`, { cause: error });
+      }
+      throw error;
     } finally {
       if (this.releasePromise === releasePromise) {
         this.releasePromise = null;
@@ -505,7 +516,7 @@ export class TerminalSession {
         `终端进程停止结果无法核实: terminal_id=${this.id}, result=${result}`,
       );
     }
-    this.ptyProcess = null;
+    // 核实 Worker 退出及终态落盘前保留原句柄，失败重试仍操作同一个执行。
     await isolatedPty?.shutdown({ terminatePty: false });
     this.markReconciliationStatus("verified");
     this.status = status;
@@ -516,6 +527,8 @@ export class TerminalSession {
       this.lastCommandStatus = commandStatus;
       this.lastCommandCompletedAt = this.endedAt;
     }
+    await this.manager.persist();
+    this.ptyProcess = null;
     this.closeTransports("terminal stopped");
     this.broadcast({
       type: status === "deleted" ? "deleted" : "exit",
@@ -525,7 +538,6 @@ export class TerminalSession {
       timestamp: this.endedAt,
       snapshot: this.snapshot(),
     });
-    void this.manager.persist();
     return true;
   }
 
@@ -645,23 +657,16 @@ export class TerminalSession {
   }
 
   async delete() {
-    if (this.status === "deleted") {
+    if (this.status === "deleted" && this.reconciliationStatus === "verified") {
       return;
     }
+    await this.terminateForRelease({
+      status: "deleted",
+      commandStatus: "deleted",
+      reason: "terminal_delete",
+    });
+    if (this.status === "deleted" && this.reconciliationStatus === "verified") return;
     this.assertPtyConnected("delete");
-    if (this.releasePromise) {
-      await this.releasePromise;
-    }
-    if (this.status === "running") {
-      await this.terminateForRelease({
-        status: "deleted",
-        commandStatus: "deleted",
-        reason: "terminal_delete",
-      });
-      if (this.status === "deleted") {
-        return;
-      }
-    }
     this.status = "deleted";
     this.closeTransports("terminal deleted");
     this.endedAt = nowIso();

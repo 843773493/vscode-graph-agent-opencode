@@ -441,3 +441,80 @@ async def test_failed_creation_receipt_requires_a_verified_snapshot_for_the_same
         finally:
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)
+
+
+@pytest.mark.parametrize("action", ["stop", "delete"])
+@pytest.mark.parametrize("revision_delta", [-1, 0, 1])
+async def test_stop_receipt_must_match_the_revision_published_by_this_operation(
+    bundle: TerminalOwnerFixture | BrowserOwnerFixture, pending_http: PendingHTTP,
+    monkeypatch: pytest.MonkeyPatch, action: str, revision_delta: int,
+) -> None:
+    from app.services.business.workspace_resources.records import ThreadRef
+
+    resource = await bundle.create()
+    rid = str(resource["resource_id"])
+    assert bundle.owner is not None
+    if action == "delete":
+        resource = await bundle.command(rid, action="detach", expected_revision=resource["owner_revision"],
+                                        thread=ThreadRef(SESSION_A, THREAD_A))
+    kind = bundle.owner.kind
+    async with pending_http.serve() as url:
+        client = transport(bundle, url)
+        method = "stop_resource" if action == "stop" else "delete_resource"
+        monkeypatch.setattr(bundle.transport, method, getattr(client, method))
+        task = asyncio.create_task(bundle.command(rid, action=action, expected_revision=resource["owner_revision"]))
+        try:
+            await asyncio.wait_for(pending_http.arrived.wait(), 5)
+            record = bundle.owner._store.records[rid]
+            original, = bundle.leases.leases_for_resource(rid)
+            assert original.status == "active"
+            runtime = {**bundle.transport.records[rid], "status": "deleted" if action == "delete" else "terminated" if kind == "terminal" else "closed"}
+            if kind == "browser":
+                runtime["page_id"] = "page_internal"
+            runtime["transport_owner_revision"] = record.owner_revision + revision_delta
+            pending_http.response = json.dumps({"data": {kind: runtime}}).encode()
+            pending_http.respond.set()
+            if revision_delta == 0:
+                result = await task
+                assert result["reconciliation_status"] == "verified"
+                assert result["status"] == runtime["status"]
+                assert result["owner_revision"] == runtime["transport_owner_revision"]
+                assert bundle.leases.leases_for_resource(rid) == []
+                assert len(pending_http.requests) == 1
+                return
+            with pytest.raises(ResourceConflict, match="版本"):
+                await task
+            pending, = bundle.leases.leases_for_resource(rid)
+            assert pending.status == "reconcile_required"
+            assert (pending.lease_id, pending.operation_id, pending.turn_stream_id,
+                    pending.holder_session_id, pending.holder_thread_id) == (
+                original.lease_id, original.operation_id, original.turn_stream_id,
+                original.holder_session_id, original.holder_thread_id,
+            )
+            assert record.reconciliation_status == "unknown"
+            saved = json.loads((bundle.root / ".boxteam" / f"{kind}-resources.json").read_text())
+            assert saved["records"][0]["reconciliation_status"] == "unknown"
+            assert len(pending_http.requests) == 1
+        finally:
+            pending_http.respond.set()
+            if not task.done():
+                task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+
+async def test_cold_owner_rejects_boolean_revision_before_releasing_a_crashed_operation(
+    bundle: TerminalOwnerFixture | BrowserOwnerFixture,
+) -> None:
+    resource = await bundle.create()
+    rid = str(resource["resource_id"])
+    crashed = bundle.leases.acquire_operation(resource_id=rid, turn_stream_id="crashed-boolean",
+        operation_id="crashed-operation", holder_session_id=SESSION_A, holder_thread_id=THREAD_A)
+    assert bundle.owner is not None
+    bundle.transport.records[rid].update(status="terminated" if bundle.owner.kind == "terminal" else "closed",
+                                         transport_owner_revision=True)
+    bundle.restart()
+    assert bundle.owner is not None
+    with pytest.raises(ValueError, match="传输版本"):
+        await bundle.owner.get_resource(rid)
+    assert bundle.leases.get_lease(crashed.lease_id).status == "active"
+    assert len(bundle.leases.leases_for_resource(rid)) == 1
