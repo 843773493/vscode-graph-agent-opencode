@@ -10,6 +10,10 @@ from app.services.infrastructure.attachment_blob_catalog.migration.backup import
     prepare_backup,
     verify_backup,
 )
+from app.services.infrastructure.attachment_blob_catalog.migration.directories import (
+    convert_backup,
+    verify_directories,
+)
 
 
 def main() -> None:
@@ -20,8 +24,15 @@ def main() -> None:
     prepare.add_argument("--output", type=Path, required=True)
     verify = commands.add_parser("verify", help="核验已完成备份，不访问线上工作区")
     verify.add_argument("--backup", type=Path, required=True)
+    convert = commands.add_parser("convert", help="在已核验备份内准备独立目录；可重复执行以续跑")
+    convert.add_argument("--backup", type=Path, required=True)
+    directories = commands.add_parser("verify-directories", help="核验已准备目录与来源备份，不切换线上存储")
+    directories.add_argument("--backup", type=Path, required=True)
     args = parser.parse_args()
-    result = prepare_backup(args.workspace, args.output) if args.command == "prepare" else verify_backup(args.backup)
+    if args.command == "prepare":
+        result = prepare_backup(args.workspace, args.output)
+    else:
+        result = {"verify": verify_backup, "convert": convert_backup, "verify-directories": verify_directories}[args.command](args.backup)
     print(json.dumps(result, ensure_ascii=False))
 
 
