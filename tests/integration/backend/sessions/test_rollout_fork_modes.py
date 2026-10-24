@@ -8735,18 +8735,19 @@ async def test_pinned_preparing_claim_blocks_source_deletion_before_capture(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("fork_execution_source", [True], indirect=True)
 @pytest.mark.parametrize("creation_kind", ["new_session_main", "new_child_thread"])
 @pytest.mark.parametrize("replay", [False, True], ids=["fresh", "published_replay"])
 @pytest.mark.parametrize("finalizer_first", [True, False], ids=["commit_first", "delete_first"])
 async def test_http_fork_reply_preserves_committed_copy_across_target_delete(
-    fork_provider_prepare, production_fork_container: AppContainer,
+    fork_execution_source: SessionDTO, production_fork_container: AppContainer,
     monkeypatch: pytest.MonkeyPatch, creation_kind: SessionForkCreationKind,
     replay: bool, finalizer_first: bool,
 ) -> None:
     """真实 POST 以原 finalizer 和真实删除决定先后，不在删除后重新投影成功回执。"""
     context = _production_fork_context(production_fork_container)
     store = production_fork_container.attachment_blob_store
-    source, _ = await _seed_retry_tool_source(context, fork_provider_prepare, attachment_store=store)
+    source = fork_execution_source
     parent = await context.sessions.create(SessionCreateRequest(title="独立 child 目标")) if creation_kind == "new_child_thread" else None
     request = await _fork_request(
         context, source.session_id, creation_kind=creation_kind, mode="full_rollout_copy",
@@ -8760,7 +8761,7 @@ async def test_http_fork_reply_preserves_committed_copy_across_target_delete(
     target_session_id = target_thread_id = target_uri = ""
     target_path: Path | None = None
     expected_resources: list[dict[str, object]] = []
-    body = "文件内容".encode()
+    body = "冷恢复附件正文".encode()
     digest = "sha256:" + hashlib.sha256(body).hexdigest()
 
     async def paused_delete(operation_id: str, phase: str, **kwargs: object) -> None:
@@ -8779,12 +8780,14 @@ async def test_http_fork_reply_preserves_committed_copy_across_target_delete(
         assert len(snapshots) == 1
         snapshot = snapshots[0]
         assert (snapshot.source_session_id, snapshot.source_thread_id) == (source.session_id, _main_thread_id(context, source.session_id))
-        assert (snapshot.target_session_id, snapshot.target_thread_id, snapshot.target_owner_thread_id) == (target_session_id, target_thread_id, target_thread_id)
-        assert (snapshot.digest, snapshot.length, snapshot.variant) == (digest, len(body), "original")
+        assert (snapshot.target_session_id, snapshot.target_thread_id) == (target_session_id, target_thread_id)
+        assert snapshot.target_attachment_id == snapshot.source_attachment_id == parse_resource_uri(snapshot.target_file_id).attachment_id
+        original, = [file for file in snapshot.files if file.relative_path == "original/content"]
+        assert (original.digest, original.length) == (digest, len(body))
         assert snapshot.claim_id is not None and snapshot.availability == "available"
         target_uri = snapshot.target_file_id
         expected_resources = [{
-            "resource_uri": snapshot.source_file_id, "action": "retain_reference", "availability": "available",
+            "resource_uri": snapshot.source_file_id, "action": "reuse_reference", "availability": "available",
             "target_uri": target_uri, "reason": None,
         }]
         if finalizer_first:
@@ -8853,9 +8856,12 @@ async def test_http_fork_reply_preserves_committed_copy_across_target_delete(
         assert retry.status_code == 404, retry.text
         assert catalog.get_fork_source_capture(creation_key=key) == capture
         assert not target_path.exists()
+        source_gateway = parse_resource_uri(expected_resources[0]["resource_uri"]).gateway_authority
+        assert source_gateway is not None
         source_content = await client.get(
             f"/api/v1/sessions/{source.session_id}/attachments/content",
             params={"file_id": expected_resources[0]["resource_uri"], "variant": "original"},
+            headers={"X-BoxTeam-Gateway-Id": source_gateway},
         )
         assert source_content.status_code == 200 and source_content.content == body
         assert "sha256:" + hashlib.sha256(source_content.content).hexdigest() == digest
