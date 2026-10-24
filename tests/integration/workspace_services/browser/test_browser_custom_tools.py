@@ -1362,6 +1362,91 @@ await started;
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["sync", "async"])
+async def test_summary_failure_keeps_native_details_out_of_receipts_and_recovery(
+    mode: str, integration_client: httpx.AsyncClient, browser_context: CustomToolFactoryContext,
+    browser_runtime: WorkspaceToolRuntime, browser_manager_processes: tuple[int, int],
+) -> None:
+    container, _session, _invocation = browser_runtime
+    created = await integration_client.post("/api/v1/resources/browsers", json={
+        "session_id": browser_context.session_id,
+        "thread_id": browser_context.invocation_context.thread_binding.thread_id,
+        "url": "about:blank",
+    })
+    assert created.status_code == 200, created.text
+    resource = created.json()["data"]
+    browser_id = resource["resource_id"]
+    root = Path(container.workspace_root)
+    reason = f"page.evaluate: EACCES {root / '.boxteam/browser-manager/private-summary'}"
+    transport = BrowserManagerClient(workspace_id=container.workspace_id, backend_url=f"http://127.0.0.1:{browser_manager_processes[0]}")
+    # 仅令真实页面的摘要采集失败；操作接纳、HTTP回执、owner投影和恢复写入均由产品完成。
+    installed = await transport.perform(browser_id, "run", {"code": (
+        "await page.setContent('<title>摘要重试</title><button>读取标记</button>');"
+        "page.__summaryOriginalEvaluate = page.evaluate;"
+        "page.evaluate = async function (...args) {"
+        " if (args[1]?.maxElements) {"
+        f" throw Object.assign(new Error({json.dumps(reason)}), {{code: 'EACCES', statusCode: 503}}); }}"
+        " return page.__summaryOriginalEvaluate.apply(this, args); }; return 'installed';"
+    )}, actor="agent")
+    assert installed["result"] == "installed"
+    with pytest.raises(BrowserRequestError) as caught:
+        path = f"/api/browsers/{browser_id}/read"
+        if mode == "sync":
+            await asyncio.to_thread(transport._json_request_sync, "GET", path, None)
+        else:
+            await transport._json_request("GET", path)
+    failure = caught.value
+    assert failure.status == 503 and failure.code == "EACCES"
+    assert failure.payload["operation_outcome"] == "failed"
+    assert "stage=read_summary" in str(failure)
+    assert f"page_id={resource['metadata']['active_page_id']}" in str(failure)
+    assert str(root) not in json.dumps(failure.payload)
+    receipt_state = failure.payload["browser"]
+    assert receipt_state["last_operation"]["status"] == "failed"
+    assert receipt_state["last_operation"]["error"] == failure.payload["error"]
+    command = {
+        "action": "read", "payload": {}, "expected_revision": resource["owner_revision"],
+        "thread": resource["source_thread"],
+    }
+    api_failure = await integration_client.post(f"/api/v1/resources/{browser_id}/browser-operation", json=command)
+    assert api_failure.status_code == 503, api_failure.text
+    assert "stage=read_summary" in api_failure.text and str(root) not in api_failure.text
+    assert api_failure.headers["X-Request-ID"]
+    with pytest.raises(BrowserRequestError) as tool_failure:
+        await create_read_page_tool(browser_context).ainvoke({"pageId": browser_id})
+    assert tool_failure.value.status == 503
+    assert "stage=read_summary" in str(tool_failure.value) and str(root) not in str(tool_failure.value)
+    observed = (await integration_client.get(f"/api/v1/resources/{browser_id}")).json()["data"]
+    assert observed["reconciliation_status"] == "verified"
+    assert str(root) not in json.dumps(observed)
+    assert container.browser_resource_owner._leases.leases_for_resource(browser_id) == []
+    # read为非可见操作；由既有策略写入入口保存当前恢复事实，不替产品手写记录。
+    await transport.perform(browser_id, "resource-policy", {"policy": observed["metadata"]["resource_policy"]}, actor="agent")
+    saved = json.loads((root / ".boxteam/browser-manager/browsers.json").read_text())
+    record, = [item for item in saved["browsers"] if item["browser_id"] == browser_id]
+    assert record["last_operation"]["status"] == "failed"
+    assert record["last_operation"]["error"] == failure.payload["error"]
+    assert str(root) not in json.dumps(record)
+    restored = await transport.perform(browser_id, "run", {"code": (
+        "page.evaluate = page.__summaryOriginalEvaluate; delete page.__summaryOriginalEvaluate; return 'restored';"
+    )}, actor="agent")
+    assert restored["result"] == "restored"
+    retried = await integration_client.post(f"/api/v1/resources/{browser_id}/browser-operation", json=command)
+    assert retried.status_code == 200, retried.text
+    assert "读取标记" in retried.json()["data"]["summary"]
+    assert retried.json()["data"]["browser"]["metadata"]["last_operation"]["status"] == "completed"
+    artifacts = TestRunContext.from_test_file(Path(__file__)).artifacts_dir
+    diagnostics = "\n".join(item.read_text() for item in artifacts.glob("browser-backend-*.stderr.log"))
+    assert reason in diagnostics and "stage: 'read_summary'" in diagnostics
+    (artifacts / f"summary-failure-{mode}-{time.time_ns()}.json").write_text(json.dumps({
+        "transport_receipt": failure.payload, "api_body": api_failure.json(),
+        "owner_projection": observed, "node_record": record, "retried": retried.json(),
+    }, ensure_ascii=False, indent=2), encoding="utf-8")
+    deleted = await _detach_delete(integration_client, browser_id, browser_context)
+    assert deleted.status_code == 200, deleted.text
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("stage", ["read_clipboard", "find_text"])
 async def test_text_query_failure_keeps_native_details_in_diagnostics_and_allows_retry(
     stage: str, integration_client: httpx.AsyncClient, browser_context: CustomToolFactoryContext,

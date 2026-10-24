@@ -594,3 +594,11 @@
 - 同一生产实现及单测的tree `4539f909aa65afbce59ea5f8c3517a3587fa4fd9` 为174 passed/9.54秒，覆盖状态、动作、pending状态、retry、startup-contract、身份错误及已有完整Backend生命周期场景；新增场景验证六类无效envelope、修复响应后的同请求重试、完整原始诊断、HTTP409结构化拒绝和原JSON解码异常。最终代码tree仅补齐HTTP装具的connection_id，生产与单测源码指纹相同。Ruff不排除规则、compileall均通过。
 - 完整Git archive反例tree `91e3d10d0f46cdca9bdba794fdd3933672b470a4` 只恢复旧controller，真实start入口的普通500响应精确回显路径，1 failed/28.27秒。http-001在装具投影缺少connection_id时被真实registry拒绝、未进入HTTP断言；补齐后通过，产品实现和校验均未改变。
 - 准确命令、4383项源码前后指纹、原始输出、实际退出码、零进程组残留及HTTP原件保留于 `out/tests/temp/gateway_runtime_envelope_20261024/artifacts/`。不代替其它响应字段、Windows实机、完整Web或2.2/7.2全局验收；Agent团队与协作继续TODO。
+
+
+### 2026-10-24 Browser 页面摘要采集错误（2.2/7.2 部分收口）
+
+- BrowserSession 在页面摘要采集边界复用既有 browserRuntimeFailure，公开错误与操作记录保留 browser/page 身份、read_summary 阶段和原 code/status；原生异常只进入诊断及 cause。BrowserToolTimeoutError 原对象继续传播，保持既有 timeout/retry/recovery，不修改用户脚本错误、操作可见性、正式 failed 回执或资源核实规则。
+- 完整候选 tree `484f542b3e0b73534ca016cba9f878c421f6282d` 的真实 Chromium、sync/async HTTP、工作区 API 与 readPage 工具验收为3 passed（含既有本地 file 页面检查点/释放/恢复和超时后继续操作）。原生采集故障由脚本入口注入，关键资源与操作状态由产品入口生成；验证失败回执、request_id、verified、lease 释放、显式重试以及恢复记录没有原生位置。read 为非可见操作，使用原有策略写入入口保存当前恢复事实，不把内存观察误作立即落盘。
+- 同一生产实现和单测的 tree `c1f8fccac581ed38e2916d47d53e1c6db0f86862` 为136 passed/918断言，覆盖POSIX/盘符/UNC字面量、原cause/诊断、队列后续重试、页面file URL以及原有超时恢复和普通脚本错误。最终代码tree只修正新增集成测试的同步payload参数、非可见操作持久化触发和DTO metadata读取。Node语法、Python Ruff/AST及差异检查均通过；未改Web源码，不重复Web构建。
+- `red-001` 在旧生产实现上3项失败，显示原生异常直接进入读取失败；`integration-002` 缺少归档外本机.env，接入现有配置后继续；`integration-003` 暴露上述测试调用与落盘假定错误，按既有合同修正，失败原件均保留。`static-002` 仅因运行器将Git index隔离到/dev/null而失败，后续只读差异检查显式使用候选index。准确命令、4384项源码前后指纹、实际退出码、零进程组残留及产品原件见 `out/tests/temp/browser_operation_errors_20261024/artifacts/`。结构自查无新增职责或owner，既有大文件拆分风险仍在；不称为独立代理审查，不代替真实Windows、完整Gateway/Web或2.2/7.2全局门。Agent团队与协作继续TODO。

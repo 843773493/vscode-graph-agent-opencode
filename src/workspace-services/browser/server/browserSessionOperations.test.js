@@ -1214,6 +1214,34 @@ describe("浏览器统一操作队列", () => {
     }
   });
 
+  test.each(["/private/browser/summary", String.raw`C:\private\browser\summary`, String.raw`\\server\private\summary`])(
+    "页面摘要失败只发布阶段事实，队列记录与重试保持一致：%s", async (nativePath) => {
+      const { browser } = liveSession();
+      const cause = Object.assign(new Error(`page.evaluate: EACCES ${nativePath}`), { code: "EACCES", statusCode: 503 });
+      browser.page.evaluate = async () => { throw cause; };
+      const saved = [];
+      browser.manager.persist = async () => { saved.push(browser.toRecord()); };
+      const diagnostics = spyOn(console, "error").mockImplementation(() => undefined);
+      try {
+        const failure = await browser.enqueueOperation({ actor: "agent:test", action: "read" },
+          () => browser.readSummary()).catch((error) => error);
+        expect(failure).toMatchObject({ cause, code: "EACCES", statusCode: 503 });
+        expect(failure.message).toContain(`browser_id=${browser.id}, page_id=page_device, stage=read_summary`);
+        expect(failure.message).not.toContain(nativePath);
+        expect(saved.at(-1).last_operation).toMatchObject({ action: "read", status: "failed", error: failure.message });
+        expect(JSON.stringify(browser.snapshot())).not.toContain(nativePath);
+        expect(JSON.stringify(saved)).not.toContain(nativePath);
+        expect(diagnostics.mock.calls.some((args) => args.at(-1) === cause)).toBe(true);
+        const url = "file:///explicit/local-page.html";
+        browser.page.evaluate = async () => ({ title: "重试成功", url, text: "页面正文", refs: [] });
+        const retried = await browser.enqueueOperation({ actor: "agent:test", action: "read" }, () => browser.readSummary());
+        expect(retried).toMatchObject({ title: "重试成功", url, active_page_id: "page_device" });
+        expect(browser.toRecord().url).toBe(url);
+        expect(browser.record.last_operation.status).toBe("completed");
+      } finally { diagnostics.mockRestore(); }
+    },
+  );
+
   test("readSummary 超时立即返回可重试错误并在下一次操作前恢复页面", async () => {
     const browser = session();
     let oldPageClosed = false;

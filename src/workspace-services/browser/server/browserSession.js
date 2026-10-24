@@ -15,6 +15,7 @@ import {
   typeInPage,
 } from "./operations/browserPageActions.js";
 import {
+  BrowserToolTimeoutError,
   DEFAULT_VIEWPORT,
   NAVIGATION_TIMEOUT_MS,
   TOOL_TIMEOUT_MS,
@@ -2448,14 +2449,21 @@ export class BrowserSession extends EventEmitter {
       pageId: this.activePageId,
       recovery: null,
     };
-    const result = await withTimeout(
-      readBrowserSummary(this.page, this.refSelectors, this.documentRevision),
-      timeoutMs,
-      "浏览器页面读取",
-      {
-        onTimeout: () => this.recoverAfterPlaywrightTimeout(execution),
-      },
-    );
+    let result;
+    try {
+      result = await withTimeout(
+        readBrowserSummary(execution.page, this.refSelectors, this.documentRevision),
+        timeoutMs,
+        "浏览器页面读取",
+        {
+          onTimeout: () => this.recoverAfterPlaywrightTimeout(execution),
+        },
+      );
+    } catch (cause) {
+      // 超时已有重置与重试合同；采集失败按当前页面身份发布，原生原因只进入诊断。
+      if (cause instanceof BrowserToolTimeoutError) throw cause;
+      throw browserRuntimeFailure({ browserId: this.id, pageId: execution.pageId, stage: "read_summary", cause });
+    }
     this.record.url = result.url;
     this.record.title = result.title;
     const activeEntry = this.pageEntries.get(this.activePageId);
