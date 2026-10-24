@@ -10,7 +10,11 @@ from dataclasses import asdict
 from pathlib import Path
 from types import SimpleNamespace
 
-from app.agents.providers.wire_finalize import finalize_chat_wire, wire_request_params
+from app.agents.providers.wire_finalize import (
+    finalize_chat_wire,
+    provider_wire_params,
+    wire_request_params,
+)
 from app.domain.itemized.dispatch_ref import SealedContextDispatchRef
 from app.domain.itemized.hashing import canonical_json_bytes, sha256_jcs
 from app.domain.itemized.serialization import normalize_wire_request
@@ -26,6 +30,22 @@ from app.services.infrastructure.rollout_context.storage.catalog.item_reader imp
 from app.services.infrastructure.rollout_context.storage.checkpoint_state_values import (
     read_state_value,
 )
+
+
+def logged_provider_wire(attempt: dict[str, object], *, target_format: str) -> dict[str, object]:
+    """只用日志冻结的协议与参数，复用真实发送编码，不访问当前配置。"""
+    logged = attempt["request"]
+    assert isinstance(logged, dict)
+    if target_format == "chat_completions":
+        params = wire_request_params(
+            SimpleNamespace(custom_llm_provider=attempt["provider"]),
+            {key: value for key, value in logged.items() if key not in {"messages", "tools"}},
+        )
+        logged = finalize_chat_wire(messages=logged["messages"], tools=logged.get("tools"), params=params)
+    else:
+        assert target_format == "responses", target_format
+        logged = provider_wire_params(logged)
+    return normalize_wire_request(logged)
 
 
 def audit_sealed_requests(
@@ -72,17 +92,7 @@ def audit_sealed_requests(
                 assert model == (ref["execution_id"], ref["assembly_id"], log["job_id"]), path
                 transport = normalize_wire_request(captures[call]["request"])
                 assert canonical_json_bytes(transport) == canonical_json_bytes(snapshot.request_hash_preimage), path
-                logged = attempt["request"]
-                if snapshot.target_format == "chat_completions":
-                    # 只用日志冻结的provider/参数，沿真实发送边界归一extra_body等载体。
-                    params = wire_request_params(
-                        SimpleNamespace(custom_llm_provider=attempt["provider"]),
-                        {key: value for key, value in logged.items() if key not in {"messages", "tools"}},
-                    )
-                    logged = finalize_chat_wire(messages=logged["messages"], tools=logged.get("tools"), params=params)
-                else:
-                    assert snapshot.target_format == "responses", snapshot.target_format
-                assert canonical_json_bytes(normalize_wire_request(logged)) == canonical_json_bytes(transport), path
+                assert canonical_json_bytes(logged_provider_wire(attempt, target_format=snapshot.target_format)) == canonical_json_bytes(transport), path
                 for entry in snapshot.selection:
                     source = entry.ref
                     if not entry.included or source.ref_type != "canonical_item":

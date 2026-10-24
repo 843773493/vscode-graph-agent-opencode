@@ -97,11 +97,13 @@ def compile_prefix_context(
     retained_source_refs: frozenset[tuple[str, str]] = frozenset(),
     retained_source_bodies: Mapping[str, object] | None = None,
     notice_acceptance: RuntimeNoticeAcceptanceRef | None = None,
+    allow_provider_reprojection: bool = False,
 ) -> tuple[ContextRequestPlan, ContextSealPreparation]:
     """同 epoch 精确继承已封存 prefix，只在真实边界重编 root。"""
     tool_ref = plan.tool_set_refs[0]
     compatibility_key = tool_set.compatibility_key(tool_ref)
     previous_binding = previous.seal_binding if previous is not None else None
+    provider_reprojection = False
     if previous is not None and previous_binding is None:
         raise RuntimeError("context-seal-binding-required: applied assembly 缺少 epoch binding")
     if previous_binding is None or initial_assembly:
@@ -116,9 +118,20 @@ def compile_prefix_context(
             provider_profile=provider_profile, tool_compatibility_key=compatibility_key,
             transition=transition, turn_id=turn_id,
         )
+    elif (
+        allow_provider_reprojection
+        and provider_profile != previous_binding.prefix.state.provider_profile
+    ):
+        # 只有路由本次明确选中的候选可授权换投影；未授权的漂移仍由 append 拒绝。
+        state = open_rebuild_epoch(
+            previous_binding.prefix.state, reason=EpochReason.PROVIDER_CHANGED,
+            provider_profile=provider_profile, tool_compatibility_key=compatibility_key,
+            turn_id=turn_id,
+        )
+        provider_reprojection = True
     else:
         state = previous_binding.prefix.state
-    rebuilding = not state.epoch_applied
+    rebuilding = not state.epoch_applied and not provider_reprojection
     source_rebuild = transition is not None and transition.reason in {EpochReason.REWIND, EpochReason.COMPACTION}
     if rebuilding and not source_rebuild and previous_binding is not None and not initial_assembly:
         # ToolSet/notice rebase 不修改 source 状态；已封存的 untracked 用户来源仍属于
@@ -153,6 +166,16 @@ def compile_prefix_context(
     by_contribution = {source.contribution_id: source for source in plan.contributions}
     selected_identities: list[tuple[str, ...]] = []
     root = previous_binding.root if previous_binding is not None else None
+    if provider_reprojection:
+        # 复用原封存的正文、角色、身份与顺序；不重新观察来源或重编 root。
+        if root is not None:
+            root = replace(root, epoch=state.epoch, provider_profile=provider_profile)
+        state = replace(state, frames=tuple(replace(
+            frame, provider_profile=provider_profile,
+            item_ref=AppendedItemRef(
+                "source_item", f"root:{root.epoch.token}", "compiled-root", root.frame_hash(), "tracked",
+            ) if frame.role == "system" and root is not None else frame.item_ref,
+        ) for frame in previous_binding.prefix.state.frames))
     frames: list[ProviderProfileItemFrame] = []
     if rebuilding:
         candidates: dict[str, tuple[RootCandidateSource, tuple[str, ...]]] = {}

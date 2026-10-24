@@ -36,6 +36,6 @@ epoch/
 
 # 规范
 
-- epoch reason 闭集为 initial、compaction、rewind、toolset_changed、runtime_notice_consumed；notice 消费绑定真实 user acceptance，不伪造 source boundary。
+- epoch reason 闭集为 initial、compaction、rewind、toolset_changed、runtime_notice_consumed、provider_changed；Provider 切换只重投影冻结内容，不重编来源/root；notice 消费绑定真实 user acceptance，不伪造 source boundary。
 - pending transition 不是 applied epoch；只有首个 assembly 成功 seal 才应用并消费。
 - 同一 epoch 内只能尾部追加，父前缀必须逐字节一致；hash 算法固定，不可由调用方覆盖。

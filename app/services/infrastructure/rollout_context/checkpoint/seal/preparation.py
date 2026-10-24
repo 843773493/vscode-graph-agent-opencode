@@ -145,6 +145,7 @@ def prepare_registered_context(
     activation_snapshot: ResourceActivationSnapshotRef,
     summary_candidate: SummaryCandidateScope | None = None,
     sealed_context: ContextPlanRegistration | None = None,
+    allow_provider_reprojection: bool = False,
 ) -> dict[str, object]:
     require_key(plan_creation_idempotency_key, field="plan_creation_idempotency_key")
     require_key(seal_idempotency_key, field="seal_idempotency_key")
@@ -398,6 +399,7 @@ def prepare_registered_context(
                 retained_source_bodies=retained_bodies,
                 provider_profile=f"{target_format}:{provider_version}", turn_id=turn_id,
                 notice_acceptance=notice_acceptance,
+                allow_provider_reprojection=allow_provider_reprojection,
             )
             omitted = ()
             if summary_candidate is not None:

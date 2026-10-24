@@ -6,7 +6,7 @@
 
 ### Requirement: 已提交上下文前缀必须保持字节级稳定
 
-系统 SHALL 把 Provider profile 下按 plan ordinal 排序并序列化的 wire context item frames 作为稳定前缀边界。在同一 prefix epoch 内，新 sealed assembly 必须完整保留父 assembly 的 context bytes，并且只能在其后追加新 item；不得修改旧 item 的 role、正文、content block、空白、编码、顺序或序列化。同一 epoch还必须绑定完全相同的 Provider projection profile、ToolSetRef和影响 root/tool visibility的 policy hash。只有首次组装、实际发生的上下文压缩重建、rewind重建和 ToolSet hard rebase可以建立不要求继承旧字节前缀的新 prefix epoch。
+系统 SHALL 把 Provider profile 下按 plan ordinal 排序并序列化的 wire context item frames 作为稳定前缀边界。在同一 prefix epoch 内，新 sealed assembly 必须完整保留父 assembly 的 context bytes，并且只能在其后追加新 item；不得修改旧 item 的 role、正文、content block、空白、编码、顺序或序列化。同一 epoch还必须绑定完全相同的 Provider projection profile、ToolSetRef和影响 root/tool visibility的 policy hash。首次组装、实际发生的上下文压缩重建、rewind重建和 ToolSet hard rebase可以建立重建前缀的新 epoch；此外，模型路由明确选择不同 Provider profile（包括真实失败后的 fallback）时，MUST 以 `provider_changed` 建立仅重投影的 epoch，复用上一 sealed assembly 的正文、角色、来源身份及顺序，不重新观察来源、编译 root、刷新 view 或伪造 ToolSet change。
 
 #### Scenario: 普通 source 更新只追加后缀
 
@@ -30,8 +30,13 @@
 
 #### Scenario: 已组装 thread 切换 Provider profile
 
-- **WHEN**SessionThread已有sealed assembly，用户或控制面把desired model/provider projection profile改为不同值，但没有实际compaction、rewind或有效ToolSet hard rebase
-- **THEN**owner保持原applied profile和assembly，返回`provider-profile-change-requires-rebuild`且不dispatch；不得静默继续使用旧模型、创建第五种epoch reason或用no-op ToolSet变化伪造rebase
+- **WHEN**SessionThread已有sealed assembly，用户或控制面把desired model/provider projection profile改为不同值，但既没有本次实际模型路由的明确选择，也没有实际compaction、rewind或有效ToolSet hard rebase
+- **THEN**owner保持原applied profile和assembly，返回`provider-profile-change-requires-rebuild`且不dispatch；不得静默继续使用旧模型、绕过路由授权创建epoch或用no-op ToolSet变化伪造rebase
+
+#### Scenario: 跨 Provider fallback 保留冻结上下文
+
+- **WHEN** 实际路由选中的 Provider 在请求或流迭代阶段失败，随后选择不同协议或 profile 的候选
+- **THEN** owner 在同一封存事务发布 `provider_changed` epoch 和新 profile 请求，旧 assembly 保持不可变；root 正文及 provenance、已有 canonical/source frame 的正文、角色和顺序完整保留，只转换投影并按原合同追加新 item。失败和成功请求均保留各自可重建的 request hash；工具循环后再次选择候选以及进程重启恢复仍能读取全部历史，不因上次失败的 profile 锁死
 
 #### Scenario: 合法边界应用 pending Provider profile
 

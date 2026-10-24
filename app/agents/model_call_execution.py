@@ -16,6 +16,7 @@ from langchain.agents.structured_output import ResponseFormat, ToolStrategy
 from langchain_core.messages import AIMessage, BaseMessage, ToolMessage
 from langchain_core.runnables import Runnable, RunnableBinding
 
+from app.agents.model_capability_routing import current_selected_provider
 from app.agents.providers.wire_finalize import (
     ChatWireProfile,
     ResponsesWireProfile,
@@ -208,6 +209,7 @@ class _ProviderPreparation:
     include_structured_output: bool
     bound_model: Runnable[Any, AIMessage]
     response_format: ResponseFormat[Any] | None
+    allow_provider_reprojection: bool
 
 
 class _PreparedModelCall(TypedDict):
@@ -306,6 +308,7 @@ class ModelCallExecution:
             )
         # provider_version 只承载实际 wire profile 身份，不用 model name 冒充。
         provider_version = wire_profile.identity()
+        allow_provider_reprojection = current_selected_provider() is request.model
         creation_key, seal_key = _request_idempotency_keys(
             request,
             session_id=session_id,
@@ -337,6 +340,7 @@ class ModelCallExecution:
             wire_profile=wire_profile, wire_params=wire_params,
             include_structured_output=include_structured_output,
             bound_model=bound_model, response_format=response_format,
+            allow_provider_reprojection=allow_provider_reprojection,
         )
 
     def _frozen_preparation(
@@ -517,6 +521,7 @@ class ModelCallExecution:
             activation_snapshot=activation,
             summary_candidate=candidate,
             sealed_context=sealed,
+            allow_provider_reprojection=context.allow_provider_reprojection,
         )
         prepared = dict(prepared)
         prepared["bound_model"] = context.bound_model

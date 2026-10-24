@@ -108,7 +108,7 @@ W(next)[0:len(W(previous))] == W(previous)
 
 稳定范围包括 item 顺序、role、content block 结构、文本、空白、编码和 Provider profile 下的 item serialization。同一 epoch 的 compatibility key 还必须固定 Provider projection profile、精确 `ToolSetRef` 及影响 root/tool visibility 的 policy hash。Provider headers、认证、request ID、模型参数和 JSON envelope 不属于 context prefix；它们继续由 request hash/profile 单独约束。
 
-只有四个边界允许登记并在下一份成功sealed assembly中应用新的`prefix_epoch`：
+以下四个边界允许重建来源/root，并在下一份成功 sealed assembly 中应用新的 `prefix_epoch`；实际模型路由选择不同 profile 的 `provider_changed` 仅重投影边界另述：
 
 1. SessionThread/branch 的首次上下文组装；
 2. 上下文压缩实际执行重建；
@@ -117,7 +117,9 @@ W(next)[0:len(W(previous))] == W(previous)
 
 普通 canonical append、source change、`skill_load`、`untrack`、团队事件、checkpoint restore、重复 model attempt 和 transport retry 都不能重建旧前缀。rewind/compaction可以先在没有model call时提交view和pending transition，但pending状态没有可dispatch wire bytes，也不是已应用prefix epoch；只有首个assembly成功seal时才原子应用。每个sealed assembly保存`prefix_epoch`、`epoch_reason`、`parent_assembly_id`、`stable_prefix_byte_length`、`stable_prefix_hash`、ToolSet compatibility key和新增item references；dispatch前验证父前缀，不一致时fail closed。同一assembly的retry复用已封存的Provider bytes，不能重新投影。
 
-Provider/model projection profile同样不是第五种epoch reason。尚未有sealed assembly的SessionThread可以在initial assembly选择当前desired profile；已有assembly后，控制面改变模型只更新desired profile。若下一次dispatch前没有实际compaction、rewind或有效ToolSet hard rebase这一合法边界，owner必须返回`provider-profile-change-requires-rebuild`并保持原applied profile/assembly不变，不能静默使用旧模型、偷建epoch或把no-op ToolSet change伪造成rebase。合法边界发生时，profile切换与首个新epochassembly一起原子applied并记录旧/新profile provenance。
+普通 Provider/model 配置漂移不能自行创建 epoch；模型路由本次明确选择不同 profile 则使用 `provider_changed` 投影边界。该边界仅重标记冻结的 root/frame profile 并重新投影请求，保留原正文、role、source identity/revision、canonical 顺序与 ToolSet，不运行 root compiler、不观察当前文件、不产生 source restore。新旧 assembly 各自保留完整 request hash，previous_assembly_id 记录真实前驱，不跨 profile 宣称字节级前缀继承。尚未有sealed assembly的SessionThread可以在initial assembly选择当前desired profile；已有assembly后，控制面改变模型只更新desired profile。若下一次dispatch前既没有本次路由明确选择，也没有实际compaction、rewind或有效ToolSet hard rebase这一合法边界，owner必须返回`provider-profile-change-requires-rebuild`并保持原applied profile/assembly不变，不能静默使用旧模型、绕过路由选择偷建epoch或把no-op ToolSet change伪造成rebase。合法边界发生时，profile切换与首个新epochassembly一起原子applied并记录旧/新profile provenance。
+
+下文允许合并来源的“合法新 epoch”只指上述来源/root 重建边界；`provider_changed` 不具备该权限。
 
 该约束同时禁止把新 source 合并进旧 system/user message，也禁止 Provider adapter 为满足交替 role 而合并相邻 user item。某 Provider 无法表达独立追加 item 时必须显式 reject。
 
@@ -374,7 +376,7 @@ app/
 | `app/services/mapping/`、`.../itemized/` | 只把已提交sealed selection/provenance映射为history、LangChain或Provider DTO，不读取当前Registry、provider locator或ContextStore底层表。 |
 | `app/agents/`、`.../tools/` | Agent层只提供模型调用面；`tools/`里的`skill_load`只接受name/mode并调用当前冻结catalog+CSM端口，不能自行拼路径、读`SKILL.md`或建立第二追踪状态。 |
 
-作用域固定为：Gateway进程拥有全局Skill source/catalog及其monitor；Workspace进程拥有本地source/provider、Registry和共享watch；Session只拥有目录/协作控制；SessionThread拥有CSM registration、ContextStore及sealed assembly；active execution仅持有冻结activation snapshot。`LifetimeScope`的所有权只描述进程内对象，不重定义这些durable owner。child idle卸载只释放其线程运行期对象与订阅引用，不删除进程级watch、语义revision或已提交上下文。来源变化可异步发布，但只能在配置的`turn|model_call`边界变为新的尾部item；只有首次组装、实际compaction、rewind重建、ToolSet hard rebase能改变prefix epoch，普通revision/监视事件不能重写旧wire bytes。
+作用域固定为：Gateway进程拥有全局Skill source/catalog及其monitor；Workspace进程拥有本地source/provider、Registry和共享watch；Session只拥有目录/协作控制；SessionThread拥有CSM registration、ContextStore及sealed assembly；active execution仅持有冻结activation snapshot。`LifetimeScope`的所有权只描述进程内对象，不重定义这些durable owner。child idle卸载只释放其线程运行期对象与订阅引用，不删除进程级watch、语义revision或已提交上下文。来源变化可异步发布，但只能在配置的`turn|model_call`边界变为新的尾部item；首次组装、实际 compaction、rewind 重建、ToolSet hard rebase 可建立来源/root 重建 epoch；实际路由选择不同 profile 可建立仅重投影的 `provider_changed` epoch，复用冻结内容。普通 revision/监视事件不能重写旧 wire bytes。
 
 外部terminal/browser/MCP/dev-server/Node调试进程等业务资源不是`LifetimeScope`所拥有的进程内句柄。现有`ResourceManager`在工具参数名中猜`resource_id`、将`cleanup_policy`混入通用账本，并以无法跨进程恢复的stopper执行stop；重启后stopper缺失却仍可能持久化`stopped`。实施时删除该通用控制入口，保留真正需要的跨Turn持久operation lease语义于唯一`ExternalResourceLeaseLedger`；工具/provider以typed resource-use和实际owner验证resource identity/归属后才能登记占用。debug owner提供精确`(workspace_id, session_id, thread_id, debug process identity)`的typed`node_debug_process`占用/恢复引用，核实`starting|running|paused|stopping`及`reconcile_required`阻断后向residency owner提供状态，不把Node停止策略放进通用账本；独立Web/API调试mutation在同一Session gate建立`debug_control`准入lease，Agent内部已有execution lease可覆盖，避免删除与启动交错。用户取消Turn时domain owner先决定停止还是仅释放该operation lease；若其它lease仍有效，不得凭一个holder的结束停止共享外部资源。idle卸载时，terminal/browser的原owner按`add-workspace-persistent-resource-management`的唯一保留合同立即停止、核实并删除`thread`临时资源，保留`workspace`实例且移除该Thread关联；这不是`LifetimeScope.close()`的直接副作用，也不改变MCP/Node各自的owner/lease/blocker合同。实际停止、删除、恢复和状态核实必须经终端/浏览器/MCP/调试等原owner的typed operation，成功证据提交后才更新lease/资源投影；缺少owner/连接或核实失败时返回明确错误或`reconcile_required`，不能宣称已停止。`SessionResourceProviderRegistry`只路由可见列表/控制，其响应必须来自实际owner，不持有另一份独立status。持久`SessionOperationLease`保护Session删除/创建等准入，resident runtime generation lease保护卸载，monitor引用保护共享watch，它们虽都叫lease，却分别具有不同的恢复和所有权语义，不能合并为一个万能计数器。
 

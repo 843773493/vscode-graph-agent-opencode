@@ -31,6 +31,11 @@ from langgraph.runtime import ExecutionInfo, Runtime
 from pydantic import BaseModel
 
 from app.agents.model_call_execution import ModelCallExecution
+from app.agents.model_capability_routing import (
+    CapabilityRoutingMiddleware,
+    ProviderModelCandidate,
+    current_selected_provider,
+)
 from app.agents.providers.litellm_chat import BoxteamLiteLLMChatModel
 from app.agents.providers.openai_responses import BoxteamOpenAIResponsesModel
 from app.agents.providers.wire_finalize import chat_wire_profile, responses_wire_profile
@@ -702,6 +707,74 @@ async def test_cold_dispatch_retry_reads_committed_owner_namespace_before_real_p
     assert len(state.requests) == (1 if missing_assembly else 2)
     assert snapshot.request_hash_preimage == normalize_wire_request(state.requests[-1]["body"])
     assert read_sealed_assembly_dispatch(invocation_purpose="tool_test") is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["sync", "async"])
+@pytest.mark.parametrize("failure", ["http", "stream"])
+async def test_cross_protocol_fallback_keeps_frozen_context_through_tool_loop_and_restart(
+    dispatch_saver, native_http_server, dispatch_bridge, mode, failure,
+) -> None:
+    """真实候选失败→换协议→工具→再次换候选，不能被旧 profile 锁死。"""
+    saver, session_id, turn_id, sessions = dispatch_saver
+    state, endpoint = native_http_server
+    state.responses_failure = failure
+    state.call_tool = True
+    options = {"model": "openai/gpt-4.1", "api_key": state.api_key, "api_base": endpoint,
+               "custom_llm_provider": "openai", "streaming": True, "max_retries": 0}
+    primary = BoxteamOpenAIResponsesModel(**options)
+    backup = BoxteamLiteLLMChatModel(**options)
+    routing = CapabilityRoutingMiddleware([
+        ProviderModelCandidate("responses-first", "gpt-4.1", primary, frozenset({"text_input"})),
+        ProviderModelCandidate("chat-backup", "gpt-4.1", backup, frozenset({"text_input"})),
+    ])
+    agent = create_dispatch_agent(
+        primary, tools=[inspect_file], checkpointer=saver, middleware=[routing],
+        execution=dispatch_bridge(session_id=session_id, instruction="fallback 必须保留的原始说明",
+                                  checkpointer=saver, tools=(inspect_file,)),
+    )
+    thread = saver._storage.storage.main_thread_id(session_id)
+    with dispatch_execution_scope(saver, session_id, turn_id):
+        config = cast(RunnableConfig, build_checkpoint_config(thread))
+        result = await asyncio.to_thread(agent.invoke, {"messages": []}, config) if mode == "sync" else await agent.ainvoke({"messages": []}, config)
+    assert result["messages"][-1].text == "native-http-result"
+    tool_results = [message for message in result["messages"] if isinstance(message, ToolMessage)]
+    assert len(tool_results) == 1
+    assert tool_results[0].text == "inspected:README.md"
+    assert [request["path"] for request in state.requests] == [
+        "/v1/responses", "/v1/chat/completions", "/v1/responses", "/v1/chat/completions",
+    ]
+    snapshots = saver.list_context_assemblies(session_id, thread)
+    assert len(snapshots) == 4
+    assert snapshots[0].seal_binding.prefix.state.epoch.reason == EpochReason.INITIAL
+    assert [snapshot.seal_binding.prefix.state.epoch.ordinal for snapshot in snapshots] == [1, 2, 3, 4]
+    for index, snapshot in enumerate(snapshots):
+        assert snapshot.request_hash_preimage == normalize_wire_request(state.requests[index]["body"])
+        assert snapshot.request_hash == context_request_hash(
+            snapshot.as_sealed_plan(), snapshot.provider_version,
+            projector_id=snapshot.projector_id, projector_version=snapshot.projector_version,
+            target_format=snapshot.target_format, wire_request=snapshot.request_hash_preimage,
+        )
+        assert snapshot.seal_binding.root.content == "fallback 必须保留的原始说明"
+        assert snapshot.seal_binding.root.sources == snapshots[0].seal_binding.root.sources
+        if index:
+            old = snapshots[index - 1]
+            assert snapshot.seal_binding.previous_assembly_id == old.assembly_id
+            assert snapshot.seal_binding.prefix.state.epoch.reason == EpochReason.PROVIDER_CHANGED
+            assert snapshot.seal_binding.prefix.parent is None
+            assert snapshot.seal_binding.prefix.consumed_transition is None
+            old_frames = old.seal_binding.prefix.state.frames
+            new_frames = snapshot.seal_binding.prefix.state.frames[:len(old_frames)]
+            assert [(frame.role, frame.payload_kind, frame.content) for frame in new_frames] == [
+                (frame.role, frame.payload_kind, frame.content) for frame in old_frames
+            ]
+    assert snapshots[0].plan_hash == snapshots[1].plan_hash
+    assert snapshots[0].request_hash != snapshots[1].request_hash
+    with RolloutCheckpointSaver(sessions) as restarted:
+        assert restarted.list_context_assemblies(session_id, thread) == snapshots
+        for snapshot in snapshots:
+            assert restarted.get_context_assembly(session_id, thread, assembly_id=snapshot.assembly_id) == snapshot
+    assert current_selected_provider() is None
 
 
 @pytest.mark.asyncio

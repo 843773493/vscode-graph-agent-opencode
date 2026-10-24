@@ -248,6 +248,7 @@ class ContextDispatchOwnerMixin:
         activation_snapshot: ResourceActivationSnapshotRef,
         summary_candidate: SummaryCandidateScope | None = None,
         sealed_context: ContextPlanRegistration | None = None,
+        allow_provider_reprojection: bool = False,
     ) -> ContextDispatchPayload:
         """最终过滤后显式注册；稳定请求 key 必须由 execution owner 提供。
 
@@ -274,6 +275,7 @@ class ContextDispatchOwnerMixin:
                 checkpoint_ns=self.context_owner_namespace(checkpoint_ns),
                 summary_candidate=summary_candidate,
                 sealed_context=sealed_context,
+                allow_provider_reprojection=allow_provider_reprojection,
             )
             snapshot = prepared["snapshot"]
             if not isinstance(snapshot, ContextAssemblySnapshot):

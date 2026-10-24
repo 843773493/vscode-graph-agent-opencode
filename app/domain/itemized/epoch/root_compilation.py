@@ -252,7 +252,7 @@ def compile_root_item(
             f"prefix epoch {state.epoch.token} 已 applied,同 epoch 只能尾部追加;"
             "重编译 root 必须先开启 compaction/rewind/toolset_changed/runtime_notice_consumed 新 epoch"
         )
-    allowed_reasons = {EpochReason.INITIAL, *REBUILD_EPOCH_REASONS}
+    allowed_reasons = {EpochReason.INITIAL, *REBUILD_EPOCH_REASONS} - {EpochReason.PROVIDER_CHANGED}
     if state.epoch.reason not in allowed_reasons:
         raise RootCompileBoundaryError(
             f"prefix epoch reason {state.epoch.reason!r} 不是合法 root 物化边界;"

@@ -66,6 +66,7 @@ from app.services.orchestration.resource_activation.contracts import (
 from app.testing.model_stream import (
     StreamFrame,
     chat_completion_frames,
+    data_frame,
     get_protocol_codec,
     responses_frames,
 )
@@ -238,6 +239,7 @@ class NativeHTTPState:
     call_tool: bool = False
     response_text: str = "native-http-result"
     response_status: int = 200
+    responses_failure: Literal["http", "stream"] | None = None
     output_tool_name: str | None = None
     reasoning_item: dict[str, object] | None = None
     request_ready: Event = field(default_factory=Event)
@@ -288,7 +290,9 @@ def chat_reply_frames(
     if tool_name is not None:
         delta = {"role": "assistant", "tool_calls": [{
             "index": 0, "id": "call-native", "type": "function",
-            "function": {"name": tool_name, "arguments": json.dumps({"answer": text})},
+            "function": {"name": tool_name, "arguments": json.dumps(
+                {"path": "README.md"} if tool_name == "inspect_file" else {"answer": text}
+            )},
         }]}
     return chat_completion_frames(
         response_id=f"chat-contract-{ordinal}", model="contract-model", deltas=(delta,),
@@ -327,9 +331,10 @@ def native_http_server(
             ):
                 self.send_error(400, "native contract endpoint/auth mismatch")
                 return
-            if state.response_status != 200:
+            response_status = 503 if self.path == "/v1/responses" and state.responses_failure == "http" else state.response_status
+            if response_status != 200:
                 response = json.dumps({"error": {"message": "native contract injected HTTP failure", "type": "server_error"}}).encode()
-                self.send_response(state.response_status)
+                self.send_response(response_status)
                 self.send_header("Content-Type", "application/json")
                 self.send_header("Content-Length", str(len(response)))
                 self.send_header("x-should-retry", "false")
@@ -343,11 +348,24 @@ def native_http_server(
                     reasoning_item=state.reasoning_item if ordinal == 1 else None,
                 )
                 protocol = "openai_responses_sse"
+                if state.responses_failure == "stream":
+                    frames = (frames[0], data_frame({
+                        "type": "error", "code": "server_error", "message": "native contract in-stream failure",
+                        "param": None,
+                    }, event="error"))
             else:
-                frames = chat_reply_frames(ordinal, text=state.response_text, tool_name=state.output_tool_name)
+                call_tool = state.call_tool and not any(message.get("role") == "tool" for message in body["messages"])
+                frames = chat_reply_frames(
+                    ordinal, text=state.response_text,
+                    tool_name=state.output_tool_name or ("inspect_file" if call_tool else None),
+                )
                 protocol = "openai_chat_sse"
             codec = get_protocol_codec(protocol)
-            codec.validate_stream(frames, label="native HTTP response")
+            if self.path == "/v1/responses" and state.responses_failure == "stream":
+                for frame in frames:
+                    codec.validate_frame(frame, label="native HTTP failing response")
+            else:
+                codec.validate_stream(frames, label="native HTTP response")
             response = b"".join(codec.encode(frame) for frame in frames)
             (state.artifacts / f"native-http-{ordinal}.response.sse").write_bytes(
                 response

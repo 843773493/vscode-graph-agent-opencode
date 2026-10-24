@@ -57,6 +57,15 @@ def _candidate(
     )
 
 
+def test_provider_change_cannot_recompile_source_root() -> None:
+    state = open_rebuild_epoch(
+        initial_epoch_state(provider_profile=PROFILE, tool_compatibility_key=KEY_A),
+        reason=EpochReason.PROVIDER_CHANGED, provider_profile="fallback-profile", tool_compatibility_key=KEY_A,
+    )
+    with pytest.raises(RootCompileBoundaryError, match="不是合法 root 物化边界"):
+        compile_root_item(state, [_candidate("agents", 0, content="不能借机刷新来源", revision=REV_1)])
+
+
 def test_compile_initial_epoch_builds_single_system_root() -> None:
     """首次组装把 root_eligible 初始贡献按 ordinal 确定序编译为唯一 system root。"""
     state = initial_epoch_state(

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Awaitable, Callable, Sequence
+from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import Any
 
@@ -35,6 +36,12 @@ class ProviderModelCandidate:
 
 
 MODEL_FAILED_CUSTOM_EVENT = "boxteam_model_failed"
+_SELECTED_PROVIDER: ContextVar[BaseChatModel | None] = ContextVar("boxteam_selected_provider", default=None)
+
+
+def current_selected_provider() -> BaseChatModel | None:
+    """只在本次路由选择的实际候选内授权投影，不跨请求保留。"""
+    return _SELECTED_PROVIDER.get()
 
 
 def _response_has_visible_output(
@@ -123,6 +130,7 @@ class CapabilityRoutingMiddleware(AgentMiddleware[Any, Any, Any]):
         last_error: Exception | None = None
         candidates = self._matching_candidates(request)
         for index, candidate in enumerate(candidates):
+            token = _SELECTED_PROVIDER.set(candidate.model)
             try:
                 response = handler(request.override(model=candidate.model))
             except ScopeCancelledError:
@@ -144,6 +152,8 @@ class CapabilityRoutingMiddleware(AgentMiddleware[Any, Any, Any]):
                     _failure_payload(candidate, error),
                 )
                 continue
+            finally:
+                _SELECTED_PROVIDER.reset(token)
 
             # 摘要响应由摘要 owner 决定无工具/最小系统重试，避免路由先吞掉空正文。
             if (
@@ -175,6 +185,7 @@ class CapabilityRoutingMiddleware(AgentMiddleware[Any, Any, Any]):
         last_error: Exception | None = None
         candidates = self._matching_candidates(request)
         for index, candidate in enumerate(candidates):
+            token = _SELECTED_PROVIDER.set(candidate.model)
             try:
                 response = await handler(request.override(model=candidate.model))
             except ScopeCancelledError:
@@ -195,6 +206,8 @@ class CapabilityRoutingMiddleware(AgentMiddleware[Any, Any, Any]):
                     _failure_payload(candidate, error),
                 )
                 continue
+            finally:
+                _SELECTED_PROVIDER.reset(token)
 
             # 摘要响应由摘要 owner 决定无工具/最小系统重试，避免路由先吞掉空正文。
             if (

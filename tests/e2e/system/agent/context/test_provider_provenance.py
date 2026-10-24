@@ -7,14 +7,15 @@ import json
 import sqlite3
 import subprocess
 from collections.abc import AsyncIterator, Generator
+from contextlib import closing
 from dataclasses import asdict
+from itertools import pairwise
 from pathlib import Path
 from uuid import uuid4
 
 import httpx
 import pytest
 
-from app.agents.providers.wire_finalize import provider_wire_params
 from app.core.path_utils import get_session_path_resolver
 from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
 from app.domain.itemized.dispatch_ref import SealedContextDispatchRef
@@ -22,12 +23,19 @@ from app.domain.itemized.epoch.prefix_epoch import (
     stable_prefix_bytes,
     stable_prefix_digest,
 )
-from app.domain.itemized.serialization import normalize_wire_request
 from app.services.business.session_context_resource import context_assembly_identity
 from app.services.infrastructure.rollout_context.assembly.content_store import (
     load_snapshot,
 )
+from app.services.infrastructure.rollout_context.storage.catalog.item_reader import (
+    RolloutCanonicalReadMixin,
+)
 from app.services.infrastructure.tool_selection_store import ToolSelectionStore
+from app.services.mapping.itemized.carrier_dedup import superseded_item_ids
+from app.services.mapping.itemized.content_blocks import (
+    direct_content_blocks,
+    reasoning_content_rows,
+)
 from tests.support.paths import output_root_for_test
 from tests.support.ports import e2e_port_block_for_file
 from tests.support.processes.gateway import (
@@ -42,6 +50,7 @@ from tests.support.processes.workspace import (
     start_backend_process,
     terminate_process,
 )
+from tests.support.sealed_request_audit import logged_provider_wire
 
 
 @pytest.fixture(scope="module")
@@ -132,50 +141,73 @@ async def _audit_log_api(
     for record, path in zip(records, paths, strict=True):
         raw = json.loads(path.read_text(encoding="utf-8"))
         assert record["file_name"] == path.name
-        assert record["file_path"] == str(path)
+        assert "file_path" not in record, "普通日志响应不得暴露本机存储路径"
         assert record["session_id"] == session_id
         for field in ("session_id", "job_id", "timestamp", "request", "response", "upstream"):
             assert record[field] == raw[field], f"日志 API 丢失或改变 {field}: {path.name}"
     return records
 
 
-def _audit_call(
+def _audit_calls(
     session_node: Path, thread_node: Path, *, session_id: str, thread_id: str, job_id: str,
     desired_revision: str, artifacts: Path, ordinal: int, succeeded: bool,
-) -> tuple[ContextAssemblySnapshot, dict]:
+) -> list[tuple[ContextAssemblySnapshot, dict]]:
     logs = [json.loads(path.read_text(encoding="utf-8"))
             for path in sorted((session_node / "logs" / "llm_requests").glob("*.json"))]
     logs = [log for log in logs if log["job_id"] == job_id]
     _save(artifacts / f"turn-{ordinal}-provider-logs.json", logs)
-    assert len(logs) == 1, "本场景每个真实用户 Turn 应只有一次模型调用"
+    assert len(logs) == 1, "无工具的 Turn 应只有一次模型节点调用，路由可尝试多个候选"
     log = logs[0]
     attempts = log["upstream"]["attempts"]
-    successful = [attempt for attempt in attempts if attempt["response"] is not None]
+    assert attempts, "真实模型节点必须记录全部已发送尝试"
     if succeeded:
-        assert len(successful) == 1, attempts
-        attempt = successful[0]
-        assert attempt["error"] is None
-        assert attempt["response"]["status"] == "completed", "incomplete terminal 不满足真实成功验收门"
         assert log["response"]["error"] is None
+        assert attempts[-1]["error"] is None and attempts[-1]["response"] is not None
+        assert {message["response_metadata"]["model_call_id"] for message in log["response"]["result"]} == {
+            attempts[-1]["sealed_dispatch"]["callback_model_call_id"]
+        }
     else:
-        assert len(attempts) == 1 and not successful, attempts
-        attempt = attempts[0]
-        assert isinstance(attempt["error"], str) and attempt["error"]
         assert log["response"]["error"] and not log["response"]["result"]
+    audited = [
+        _audit_attempt(
+            log, attempt, thread_node, session_id=session_id, thread_id=thread_id,
+            desired_revision=desired_revision, artifacts=artifacts,
+            ordinal=f"{ordinal}-attempt-{index}",
+        )
+        for index, attempt in enumerate(attempts, 1)
+    ]
+    if succeeded:
+        # fallback 候选共用一次图节点；checkpoint 必须指向最终 applied assembly。
+        assert audited[-1][1]["checkpoint"]["source_assembly_id"] == audited[-1][0].assembly_id
+    return audited
+
+
+def _audit_attempt(
+    log: dict, attempt: dict, thread_node: Path, *, session_id: str, thread_id: str,
+    desired_revision: str, artifacts: Path, ordinal: str,
+) -> tuple[ContextAssemblySnapshot, dict]:
+    succeeded = attempt["error"] is None
+    if succeeded:
+        assert attempt["response"] is not None
+        if "input" in attempt["request"]:
+            assert attempt["response"]["status"] == "completed", "incomplete terminal 不满足真实成功验收门"
+        else:
+            choices = attempt["response"]["choices"]
+            # Chat 流日志保存 message 摘要；完成事实另核 model_call/Job 与精确正文。
+            assert len(choices) == 1 and choices[0]["message"]["role"] == "assistant"
+    else:
+        assert isinstance(attempt["error"], str) and attempt["error"]
     reference = attempt["sealed_dispatch"]
     assert reference["session_id"] == session_id
     assert reference["thread_id"] == thread_id
     assert log["session_id"] == session_id
-    assert all(candidate["sealed_dispatch"] == reference for candidate in attempts)
-    if succeeded:
-        assert {message["response_metadata"]["model_call_id"] for message in log["response"]["result"]} == {
-            reference["callback_model_call_id"]
-        }
+    job_id = log["job_id"]
 
     index = thread_node / "rollout" / "index.sqlite"
-    with sqlite3.connect(f"file:{index}?mode=ro", uri=True) as connection:
-        connection.row_factory = sqlite3.Row
-        row = connection.execute(
+    with closing(sqlite3.connect(f"file:{index}?mode=ro", uri=True)) as connection:
+        cursor = connection.cursor()
+        cursor.row_factory = sqlite3.Row
+        row = cursor.execute(
             "SELECT * FROM context_assemblies WHERE assembly_id=? AND session_id=? AND thread_id=?",
             (reference["assembly_id"], session_id, thread_id),
         ).fetchone()
@@ -188,12 +220,12 @@ def _audit_call(
             callback_model_call_id=reference["callback_model_call_id"],
         )
         assert reference == json.loads(json.dumps(asdict(expected_reference)))
-        actual_wire = normalize_wire_request(provider_wire_params(attempt["request"]))
+        actual_wire = logged_provider_wire(attempt, target_format=snapshot.target_format)
         _save(artifacts / f"turn-{ordinal}-actual-wire.json", actual_wire)
         assert actual_wire == snapshot.request_hash_preimage
         assert row["plan_hash"] == reference["plan_hash"]
         assert row["request_hash"] == reference["request_hash"]
-        model_call = connection.execute(
+        model_call = cursor.execute(
             "SELECT * FROM model_calls WHERE model_call_id=?",
             (reference["sealed_model_call_id"],),
         ).fetchone()
@@ -209,7 +241,7 @@ def _audit_call(
         assert len(snapshot.tool_set_refs) == 1
         tool_ref = snapshot.tool_set_refs[0]
         assert binding.applied_toolset_revision == tool_ref.source_revision
-        tools = connection.execute(
+        tools = cursor.execute(
             "SELECT source_revision, content_hash, tools_json, tool_policy_json FROM tool_set_snapshots "
             "WHERE assembly_id=? AND tool_set_snapshot_id=?",
             (snapshot.assembly_id, tool_ref.ref_id),
@@ -219,7 +251,7 @@ def _audit_call(
         assert tools["content_hash"] == tool_ref.content_hash
         assert json.loads(tools["tools_json"]) == list(tool_ref.tools)
         assert json.loads(tools["tool_policy_json"]) == tool_ref.tool_policy
-        selection = [tuple(selected) for selected in connection.execute(
+        selection = [tuple(selected) for selected in cursor.execute(
             "SELECT plan_ordinal, ref_type, ref_id, ref_thread_id, included, content_hash, source_revision "
             "FROM context_assembly_selections WHERE assembly_id=? ORDER BY plan_ordinal",
             (snapshot.assembly_id,),
@@ -232,32 +264,43 @@ def _audit_call(
         history_message_ids = []
         for entry in snapshot.selection:
             if entry.included and entry.ref.ref_type == "canonical_item":
-                identity = connection.execute(
+                identity = cursor.execute(
                     "SELECT json_extract(projection_manifest_json, '$.projection_identity.projection_message_id') "
                     "FROM item_catalog WHERE item_id=?", (entry.ref.ref_id,),
                 ).fetchone()
                 assert identity is not None and isinstance(identity[0], str)
                 if identity[0] not in history_message_ids:
                     history_message_ids.append(identity[0])
-        checkpoint = connection.execute(
-            "SELECT checkpoint_id, view_id, checkpoint_json, metadata_json FROM checkpoints "
-            "WHERE checkpoint_ns=? ORDER BY commit_id DESC, rowid DESC LIMIT 1",
-            (reference["checkpoint_ns"],),
+        checkpoint = cursor.execute(
+            "SELECT p.checkpoint_id, p.view_id, p.checkpoint_json, p.metadata_json, s.source_assembly_id "
+            "FROM checkpoints p JOIN checkpoint_context_source_snapshots s USING(checkpoint_id) "
+            "WHERE p.checkpoint_ns=? AND s.session_id=? AND s.thread_id=? "
+            "ORDER BY p.commit_id DESC, p.rowid DESC LIMIT 1",
+            (reference["checkpoint_ns"], session_id, thread_id),
         ).fetchone()
         assert checkpoint is not None
-        channel = connection.execute(
+        channel = cursor.execute(
             "SELECT storage_kind, context_view_id FROM checkpoint_channels "
             "WHERE checkpoint_id=? AND channel_name='messages'", (checkpoint["checkpoint_id"],),
         ).fetchone()
         assert channel is not None and channel["storage_kind"] == "rollout_view"
-        output_ids = [item[0] for item in connection.execute(
-            "SELECT item_id FROM item_catalog WHERE execution_id=? AND semantic_kind='assistant_output' "
-            "AND json_extract(projection_manifest_json, '$.projection_identity.model_call_id')=?",
+        output_rows = cursor.execute(
+            "SELECT item_sequence, jsonl_offset, jsonl_length FROM item_catalog WHERE execution_id=? "
+            "AND semantic_kind IN ('assistant_output', 'reasoning') "
+            "AND json_extract(projection_manifest_json, '$.projection_identity.model_call_id')=? "
+            "ORDER BY item_sequence",
             (reference["execution_id"], reference["callback_model_call_id"]),
-        )]
+        ).fetchall()
+        with index.with_name("rollout.jsonl").open("rb") as stream:
+            outputs = [RolloutCanonicalReadMixin._read_v2_item_at(
+                connection, stream, sequence=row[0], offset=row[1], length=row[2],
+            ) for row in output_rows]
+        # 原始 stream/shadow 仍留在 canonical；checkpoint/history 按已提交的替代身份投影。
+        superseded = superseded_item_ids(outputs)
+        output_ids = [item.item_id for item in outputs if item.item_id not in superseded]
         if succeeded:
             assert output_ids, "同一次 callback 的真实输出必须进入 canonical checkpoint"
-        checkpoint_items = {item[0] for item in connection.execute(
+        checkpoint_items = {item[0] for item in cursor.execute(
             "SELECT item_id FROM context_view_items WHERE view_id=? AND visible=1",
             (channel["context_view_id"],),
         )}
@@ -273,10 +316,13 @@ def _audit_call(
     receipt = {
         "job_id": job_id, "dispatch_ref": reference, "checkpoint": dict(checkpoint),
         "messages_channel": dict(channel), "output_item_ids": output_ids, "selection": selection,
+        "raw_output_item_ids": [item.item_id for item in outputs],
+        "superseded_output_item_ids": sorted(superseded),
         "selected_history_message_ids": history_message_ids,
         "desired_selection_revision": desired_revision,
         "applied_toolset_revision": binding.applied_toolset_revision,
         "provider_succeeded": succeeded, "upstream_error": attempt["error"],
+        "upstream_model": attempt["model"], "checkpoint_scope": "post_model_node",
         "handler_error": log["response"]["error"], "model_call": dict(model_call),
     }
     _save(artifacts / f"turn-{ordinal}-provenance-receipt.json", receipt)
@@ -308,14 +354,36 @@ async def _assembly_history(
     canonical = {item["raw_record"]["response_metadata"]["message_id"]: item for item in records["items"]}
     for message in messages:
         expected = canonical[message["data"]["message_id"]]
-        assert message["role"] == expected["role"]
-        for field in ("type", "content"):
-            assert message["raw_record"][field] == expected["raw_record"][field]
+        for field in ("role", "text", "reasoning", "tool_calls", "tool_results"):
+            assert message[field] == expected[field]
+        actual_raw, expected_raw = message["raw_record"], expected["raw_record"]
+        assert actual_raw["type"] == expected_raw["type"]
+        assert actual_raw["id"] == expected_raw["response_metadata"]["message_id"]
+        assert actual_raw["response_metadata"].get("model_call_id") == expected_raw["response_metadata"].get("model_call_id")
+        # records 使用展示块，assembly 恢复冻结的 Provider carrier；逐块核原文、坐标和保护状态。
+        actual_blocks = direct_content_blocks(actual_raw["content"])
+        expected_blocks = direct_content_blocks(expected_raw["content"])
+        assert len(actual_blocks) == len(expected_blocks)
+        assert [block["text"] for block in actual_blocks if block["type"] == "text"] == [
+            block["text"] for block in expected_blocks if block["type"] == "text"
+        ]
+        assert [
+            (row.content_block_index, row.item_index, row.reasoning_text or "", row.summary_text or "",
+             row.encrypted, row.signature_present)
+            for row in reasoning_content_rows(actual_raw["content"])
+        ] == [
+            (row.content_block_index, row.item_index, row.reasoning_text or "", row.summary_text or "",
+             row.encrypted, row.signature_present)
+            for row in reasoning_content_rows(expected_raw["content"])
+        ]
+        for part in expected_raw["response_metadata"].get("content_part_refs", []):
+            assert actual_blocks[part["index"]]["type"] == part["type"]
+            assert expected_blocks[part["index"]]["id"] == part["id"]
     return messages
 
 
 def _checkpoint_state(thread_node: Path) -> dict:
-    with sqlite3.connect(f"file:{thread_node / 'rollout' / 'index.sqlite'}?mode=ro", uri=True) as connection:
+    with closing(sqlite3.connect(f"file:{thread_node / 'rollout' / 'index.sqlite'}?mode=ro", uri=True)) as connection:
         return {
             "checkpoints": connection.execute("SELECT checkpoint_id, view_id, checkpoint_json, metadata_json FROM checkpoints ORDER BY rowid").fetchall(),
             "channels": connection.execute(
@@ -359,16 +427,22 @@ async def test_real_provider_provenance_survives_cold_history(
         succeeded = job["status"] in {"completed", "succeeded"}
         traces = _response(await client.get(f"/api/v1/sessions/{session_id}/traces", params={"limit": 200}), artifacts / f"turn-{ordinal}-trace.json")["data"]
         assert not traces["has_more"]
-        assert len([event for event in traces["items"]
-                    if event["job_id"] == sent["job_id"] and event["type"] == "llm_request"]) == 1
-        snapshot, receipt = _audit_call(session_node, thread_node, session_id=session_id, thread_id=thread_id,
+        audited = _audit_calls(session_node, thread_node, session_id=session_id, thread_id=thread_id,
             job_id=sent["job_id"], desired_revision=desired.revision, artifacts=artifacts,
             ordinal=ordinal, succeeded=succeeded)
-        snapshots.append(snapshot)
-        receipts.append(receipt)
+        model_events = [event for event in traces["items"]
+                        if event["job_id"] == sent["job_id"] and event["type"] == "llm_request"]
+        assert [event["raw"]["payload"]["model"] for event in model_events] == [
+            receipt["upstream_model"] for _, receipt in audited
+        ], "每个真实候选请求必须有且只有一条同序模型 trace"
+        for snapshot, receipt in audited:
+            snapshots.append(snapshot)
+            receipts.append(receipt)
+            await _assembly_history(client, session, snapshot, artifacts, phase="live",
+                                    selected_message_ids=receipt["selected_history_message_ids"])
+        snapshot = audited[-1][0]
+        output_item_ids = {item_id for _, receipt in audited for item_id in receipt["output_item_ids"]}
         await _audit_log_api(client, session_node, session_id, artifacts, phase=f"turn-{ordinal}-live")
-        await _assembly_history(client, session, snapshot, artifacts, phase="live",
-                                selected_message_ids=receipt["selected_history_message_ids"])
         history = _response(await client.post(f"/api/v1/sessions/{session_id}/history", json={
             "turn_ids": [snapshot.turn_id], "include": ["user", "text", "final_response", "metadata"],
         }), artifacts / f"turn-{ordinal}-history.json")["data"]
@@ -377,11 +451,11 @@ async def test_real_provider_provenance_survives_cold_history(
         assert (turn["turn_id"], turn["job_id"]) == (snapshot.turn_id, sent["job_id"])
         assert turn["user_messages"][0]["content"] == prompt
         projected_ids = {part["source"]["item_id"] for part in turn["response_parts"]}
-        assert set(receipt["output_item_ids"]) <= projected_ids
+        assert output_item_ids == projected_ids, "历史必须精确投影有效输出，不能重复 stream/shadow"
         if succeeded:
             assert turn["final_response"].strip() == marker
         else:
-            if not receipt["output_item_ids"]:
+            if not output_item_ids:
                 assert not projected_ids and not turn["final_response"], "失败调用不得伪造 assistant 输出"
             failed_job = job
             break
@@ -389,12 +463,18 @@ async def test_real_provider_provenance_survives_cold_history(
     first = snapshots[0].seal_binding
     assert first is not None
     assert first.prefix.state.epoch.reason.value == "initial"
-    if len(snapshots) == 2:
-        second = snapshots[1].seal_binding
-        assert second is not None
-        assert first.prefix.state.epoch == second.prefix.state.epoch
-        assert second.previous_assembly_id == snapshots[0].assembly_id
-        assert stable_prefix_bytes(second.prefix.state.frames).startswith(stable_prefix_bytes(first.prefix.state.frames))
+    for previous, current in pairwise(snapshots):
+        old, new = previous.seal_binding, current.seal_binding
+        assert old is not None and new is not None
+        assert new.previous_assembly_id == previous.assembly_id
+        if old.prefix.state.provider_profile == new.prefix.state.provider_profile:
+            assert old.prefix.state.epoch == new.prefix.state.epoch
+            assert stable_prefix_bytes(new.prefix.state.frames).startswith(stable_prefix_bytes(old.prefix.state.frames))
+        else:
+            assert new.prefix.state.epoch.reason.value == "provider_changed"
+            assert new.prefix.state.epoch.ordinal == old.prefix.state.epoch.ordinal + 1
+            assert old.root is not None and new.root is not None
+            assert (new.root.content, new.root.sources) == (old.root.content, old.root.sources)
     assert ToolSelectionStore(boxteam_root=workspace / ".boxteam").snapshot("default").revision == desired.revision
     before = _checkpoint_state(thread_node)
     _save(artifacts / "before-cold-checkpoint-state.json", before)

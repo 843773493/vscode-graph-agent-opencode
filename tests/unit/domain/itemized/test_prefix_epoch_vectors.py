@@ -482,11 +482,31 @@ def test_illegal_epoch_combinations_are_rejected() -> None:
         {
             EpochReason.COMPACTION, EpochReason.REWIND,
             EpochReason.TOOLSET_CHANGED, EpochReason.RUNTIME_NOTICE_CONSUMED,
+            EpochReason.PROVIDER_CHANGED,
         }
     )
     assert PENDING_TRANSITION_REASONS == frozenset(
         {EpochReason.COMPACTION, EpochReason.REWIND, EpochReason.RUNTIME_NOTICE_CONSUMED}
     )
+
+
+def test_provider_reprojection_requires_real_change_without_toolset_rebuild() -> None:
+    state = initial_epoch_state(provider_profile=PROFILE, tool_compatibility_key=KEY_A)
+    for profile, key in [(PROFILE, KEY_A), (PROFILE_NEW, KEY_B)]:
+        with pytest.raises(EpochContractError, match="必须更换 profile 且保持原 ToolSet"):
+            open_rebuild_epoch(
+                state, reason=EpochReason.PROVIDER_CHANGED,
+                provider_profile=profile, tool_compatibility_key=key,
+            )
+    reprojected = open_rebuild_epoch(
+        state, reason=EpochReason.PROVIDER_CHANGED,
+        provider_profile=PROFILE_NEW, tool_compatibility_key=KEY_A,
+    )
+    assert reprojected.epoch.ordinal == 2
+    assert reprojected.epoch.reason == EpochReason.PROVIDER_CHANGED
+    assert reprojected.provider_profile == PROFILE_NEW
+    assert reprojected.parent is None
+    assert seal_assembly(reprojected, assembly_id="provider-reprojection").consumed_transition is None
 
 
 def test_runtime_notice_epoch_requires_frozen_acceptance_and_one_seal() -> None:

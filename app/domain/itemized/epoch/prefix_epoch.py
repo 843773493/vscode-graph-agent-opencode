@@ -9,7 +9,7 @@ CSM 或任何运行时状态。
 
 合同要点:
 - epoch_reason 包含 initial、compaction、rewind、toolset_changed 与
-  runtime_notice_consumed；Provider profile 变化不是独立原因。
+  runtime_notice_consumed、provider_changed；真实路由选择的 Provider 变化只重投影既有内容。
 - pending transition 没有 wire bytes 且不是 applied epoch;只有首个
   assembly 成功 seal 才应用 epoch 并消费 transition。
 - 同一 epoch 内只能追加,父 assembly 前缀必须逐字节一致;阈值与 hash
@@ -80,6 +80,7 @@ class EpochReason(StrEnum):
     REWIND = "rewind"
     TOOLSET_CHANGED = "toolset_changed"
     RUNTIME_NOTICE_CONSUMED = "runtime_notice_consumed"
+    PROVIDER_CHANGED = "provider_changed"
 
 
 REBUILD_EPOCH_REASONS: frozenset[EpochReason] = frozenset(
@@ -88,6 +89,7 @@ REBUILD_EPOCH_REASONS: frozenset[EpochReason] = frozenset(
         EpochReason.REWIND,
         EpochReason.TOOLSET_CHANGED,
         EpochReason.RUNTIME_NOTICE_CONSUMED,
+        EpochReason.PROVIDER_CHANGED,
     }
 )
 PENDING_TRANSITION_REASONS: frozenset[EpochReason] = frozenset(
@@ -530,7 +532,7 @@ def open_rebuild_epoch(
 
     desired provider profile 与 toolset compatibility key 在此处原子
     applied;compaction/rewind/runtime_notice_consumed 必须携带匹配且未消费的 pending transition,
-    toolset_changed 必须是有效变化且不接受 pending transition。
+    toolset_changed/provider_changed 必须是真实变化且不接受 pending transition。
     """
     if not isinstance(state, PrefixEpochState):
         raise EpochContractError("open_rebuild_epoch 需要当前 PrefixEpochState")
@@ -538,7 +540,7 @@ def open_rebuild_epoch(
     if reason not in REBUILD_EPOCH_REASONS:
         raise EpochContractError(
             f"epoch_reason={reason.value!r} 不是合法重建边界;"
-            "只有首次组装、compaction、rewind、runtime_notice_consumed 与 ToolSet hard rebase 能开新 epoch"
+            "只有登记的来源、ToolSet、notice 与真实 Provider 重投影 边界能开新 epoch"
         )
     if reason in PENDING_TRANSITION_REASONS:
         if not isinstance(transition, PendingPrefixEpochTransition):
@@ -557,12 +559,17 @@ def open_rebuild_epoch(
             )
     elif transition is not None:
         raise EpochContractError(
-            "toolset_changed 是 safe boundary 直接生效,不接受 pending transition"
+            "ToolSet/Provider 重投影 是 safe boundary 直接生效,不接受 pending transition"
         )
     if reason == EpochReason.TOOLSET_CHANGED and (
         tool_compatibility_key == state.tool_compatibility_key
     ):
         raise EpochContractError("no-op ToolSet 变化不得伪造 hard rebase")
+    if reason == EpochReason.PROVIDER_CHANGED and (
+        provider_profile == state.provider_profile
+        or tool_compatibility_key != state.tool_compatibility_key
+    ):
+        raise EpochContractError("Provider 重投影 必须更换 profile 且保持原 ToolSet")
     return PrefixEpochState(
         epoch=PrefixEpoch(ordinal=state.epoch.ordinal + 1, reason=reason, turn_id=turn_id),
         provider_profile=provider_profile,
@@ -664,7 +671,7 @@ def seal_assembly(
                 )
         elif transition is not None:
             raise EpochContractError(
-                "initial/toolset_changed epoch 的 seal 不接受 pending transition"
+                "initial/ToolSet/Provider 重投影 epoch 的 seal 不接受 pending transition"
             )
     if state.parent is not None:
         verify_stable_prefix(state.parent, state.frames)
