@@ -124,10 +124,11 @@ def native_diagnostic(request: pytest.FixtureRequest) -> str:
 
 @pytest.mark.parametrize("endpoint", ["/api/gateway/health", "/api/gateway/workspaces"])
 @pytest.mark.parametrize("failure_type", [httpx.ConnectError, httpx.ConnectTimeout, httpx.ReadTimeout])
+@pytest.mark.parametrize("with_request", [True, False])
 async def test_startup_transport_error_keeps_classification_and_original_diagnostic(
     ready_responses: ReadyResponses, monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture, native_diagnostic: str,
-    endpoint: str, failure_type: type[httpx.RequestError],
+    endpoint: str, failure_type: type[httpx.RequestError], with_request: bool,
 ) -> None:
     failures: list[httpx.RequestError] = []
 
@@ -135,7 +136,7 @@ async def test_startup_transport_error_keeps_classification_and_original_diagnos
         if client.base_url.join(path).path == endpoint:
             request = httpx.Request(method, client.base_url.join(path), headers=client.headers)
             ready_responses.requests.append(request)
-            failure = failure_type("连接失败: " + native_diagnostic, request=request)
+            failure = failure_type("连接失败: " + native_diagnostic, request=request if with_request else None)
             failures.append(failure)
             raise failure
         return await ready_responses.respond(client, method, path, **kwargs)
@@ -151,12 +152,17 @@ async def test_startup_transport_error_keeps_classification_and_original_diagnos
     assert f"workspace_id={WORKSPACE_ID}" in public and f"gateway_id={GATEWAY_ID}" in public
     assert f"stage=connection, error_type={failure_type.__name__}" in public
     assert caught.value.__cause__ is failures[-1]
+    assert native_diagnostic in str(failures[-1])
     assert any(record.exc_info and record.exc_info[1] is failures[-1] for record in caplog.records)
     if retryable:
         assert "恢复等待超时" in public
     else:
         assert type(caught.value) is failure_type and len(failures) == 1
-        assert caught.value.request is failures[0].request
+        if with_request:
+            assert caught.value.request is failures[0].request
+        else:
+            with pytest.raises(RuntimeError, match="request property has not been set"):
+                _ = caught.value.request
 
 
 @pytest.mark.parametrize("status_kind", ["offline", "invalid"])

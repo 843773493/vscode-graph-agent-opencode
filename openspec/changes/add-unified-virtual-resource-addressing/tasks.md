@@ -499,3 +499,10 @@
 - 唯一通信client的连接异常保留HTTPX具体类别、原request及cause；普通错误仅提供API path/request_id/stage/error_type，原异常留诊断日志。startup只重试原有ConnectError/ConnectTimeout，沿用health与精确源backend的同一总deadline；超时仍RuntimeError，非法backend状态仍立即失败，HTTP拒绝仍原HTTPStatusError及request/response。原生services字段/非法状态/连接异常只留诊断，不复制到普通错误。
 - 固定完整tree `f9cafdac460734bedfe4473958c69253eb701b20` 的Gateway客户端全目录212 passed/12.19秒，Ruff exit0；覆盖discovery/send/read/wait×三类连接异常×POSIX/drive/UNC，核类型、原cause/request、原日志及修复后请求逐字段一致；startup分别在health/backend验证两类可重试及ReadTimeout立即失败、offline/非法状态、HTTP拒绝不重试及瞬时连接恢复。可控clock只注入被测模块的原fixture，health消耗0.75秒后backend预算0.25/0.15/0.05，总deadline仍1秒。最终旧生产完整archive的60项反例全failed/3.65秒，明确拒绝普通错误原生路径。
 - 相同生产代码的green-003真实Gateway/Backend/Agent与model_stream source-outbox崩溃窗口1 passed/58.92秒，生成真实outbox后硬杀，正常startup等待与恢复沿用原communication/lease/preimage并完成唯一投递；compileall通过。green-001的17项短预算失败、green-003的84项跨模块fixture依赖错误及早期red均保留，不冒充行为反例；最终fixture自包含修复后全目录通过。准确命令、4323项源码前后指纹、raw/退出码、进程回收与独立审查见 `out/tests/temp/communication_transport_errors_20261024/artifacts/`。畸形诊断矩阵仍是显式HTTP stub，真实进程验收不覆盖真实网络故障、完整Web、Windows或外部Provider；2.2/7.2总门保持未勾。
+
+
+### 2026-10-24 联邦 Workspace HTTP 错误与请求身份（2.2/7.2 部分收口）
+
+- 本地 cold catalog 与联邦工作区 HTTP port 不再将原始响应或连接异常文本复制到普通错误；公开错误保留请求身份、API path、阶段、状态及异常类型，完整原文留原始诊断日志。连接投影保留原具体异常类型、可选 request 和 cause，不访问未初始化的 request getter。所有 HTTP 错误先核对正文/响应头 request_id，再映射 fork、导航、resolver、revision 或 observation 的原 owner 分类；错配或缺失身份只报工作区不可用，不接纳具名拒绝。
+- 固定完整 tree `7914441d2b8b65d7caebfcaa34f05ed82f61081f`：431项定向回归、Ruff、compileall通过；最终候选真实三 Gateway/SSH/WebSocket 反向通道问答1 passed/107.38秒。合法身份保留原拒绝码，body/header漂移及body缺失无法进入这些语义分支。旧生产完整archive的102项路径反例及42项无request连接投影反例均明确失败，原件保留。
+- 4324项源码前后相同、准确命令/raw/退出码、无残留进程与独立审查见 `out/tests/temp/federation_workspace_http_errors_20261024/artifacts/validation-proof-007.json`、`review-007.json`。定向错误验证使用HTTP stub，真实C3验证正常产品流程；不代完整Web、Windows或全部普通响应审计，2.2/7.2总门仍未勾。

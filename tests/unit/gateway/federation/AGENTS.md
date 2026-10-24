@@ -4,7 +4,7 @@
 
 # 可修改内容
 
-精确 channel owner 的登记、取消和资源释放测试，以及测试专用 fixture。
+精确 channel owner 的登记、取消和资源释放测试，以及 Workspace HTTP port 的请求、响应与诊断边界和测试专用 fixture。
 
 # 不可修改内容
 

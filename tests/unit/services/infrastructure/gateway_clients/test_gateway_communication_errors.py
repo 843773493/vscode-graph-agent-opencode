@@ -139,10 +139,11 @@ async def test_communication_observation_rejections_preserve_original_public_cod
 @pytest.mark.parametrize("communication_invocation", ["discovery", "send", "read", "wait"], indirect=True)
 @pytest.mark.parametrize("failure_type", [httpx.ConnectError, httpx.ReadTimeout, httpx.RemoteProtocolError])
 @pytest.mark.parametrize("native_path", ["/private/communication/socket", r"C:\private\communication\socket", r"\\server\private\communication\socket"])
+@pytest.mark.parametrize("with_request", [True, False])
 async def test_communication_connection_failure_preserves_original_type_request_and_retry(
     communication_invocation: tuple[Callable[[], Awaitable[object]], dict[str, object]],
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
-    failure_type: type[httpx.RequestError], native_path: str,
+    failure_type: type[httpx.RequestError], native_path: str, with_request: bool,
 ) -> None:
     invoke, valid = communication_invocation
     requests: list[dict[str, object]] = []
@@ -157,7 +158,7 @@ async def test_communication_connection_failure_preserves_original_type_request_
         }))
         request = httpx.Request(method, client.base_url.join(path), headers=client.headers)
         if rejected:
-            failure = failure_type("原生连接失败: " + native_path, request=request)
+            failure = failure_type("原生连接失败: " + native_path, request=request if with_request else None)
             failures.append(failure)
             raise failure
         return httpx.Response(200, request=request, json={"request_id": REQUEST_ID, "data": valid}, headers={"X-Request-ID": REQUEST_ID})
@@ -166,11 +167,16 @@ async def test_communication_connection_failure_preserves_original_type_request_
     with pytest.raises(failure_type) as caught:
         await invoke()
     assert type(caught.value) is failure_type and caught.value.__cause__ is failures[0]
-    assert caught.value.request is failures[0].request
+    assert native_path in str(failures[0])
+    if with_request:
+        assert caught.value.request is failures[0].request
+    else:
+        with pytest.raises(RuntimeError, match="request property has not been set"):
+            _ = caught.value.request
     public = str(caught.value)
     assert native_path not in public and "private" not in public
     assert f"request_id={REQUEST_ID}, stage=connection, error_type={failure_type.__name__}" in public
-    assert "path=" + failures[0].request.url.path in public
+    assert "path=" + httpx.URL(requests[0]["url"]).path in public
     assert any(record.exc_info and record.exc_info[1] is failures[0] for record in caplog.records)
     rejected = False
     assert await invoke() is not None

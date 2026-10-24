@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from copy import copy
 from dataclasses import asdict
 
 import httpx
@@ -53,7 +54,9 @@ class GatewayCommunicationClient:
                         if not isinstance(error, (httpx.ConnectError, httpx.ConnectTimeout)):
                             detail = f"通信 startup 请求失败: {context}, {last_detail}"
                             logger.error("%s；完整诊断见异常链", detail, exc_info=error)
-                            raise type(error)(detail, request=error.request) from error
+                            projected = copy(error)
+                            projected.args = (detail,)
+                            raise projected from error
                         last_failure, last_response = error, None
                         await asyncio.sleep(min(0.1, max(deadline - loop.time(), 0)))
                         continue
@@ -103,7 +106,9 @@ class GatewayCommunicationClient:
                     f"stage=connection, error_type={type(error).__name__}"
                 )
                 logger.error("%s；完整诊断见异常链", detail, exc_info=error)
-                raise type(error)(detail, request=error.request) from error
+                projected = copy(error)
+                projected.args = (detail,)
+                raise projected from error
         if not response.is_success:
             from app.core.session_control_communication_ledger.observations import (
                 RemoteObservationError,

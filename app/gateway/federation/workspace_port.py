@@ -7,6 +7,7 @@ import json
 import logging
 import time
 from collections.abc import Awaitable, Callable
+from copy import copy
 from dataclasses import dataclass
 
 import httpx
@@ -117,6 +118,7 @@ class WorkspaceCatalogPort:
             timeout=self._request_timeout,
         )
         if response.status_code >= 400:
+            logger.error("cold catalog HTTP 拒绝: workspace_id=%s, request_id=%s, status=%s；原始响应=%s", backend_endpoint.backend_workspace_id, request_id, response.status_code, response.text[:2000])
             raise FederationError(
                 FEDERATION_SESSION_MAIN_UNAVAILABLE,
                 f"工作区 cold catalog 查询失败: status={response.status_code}",
@@ -125,7 +127,9 @@ class WorkspaceCatalogPort:
         try:
             body = response.json()
         except json.JSONDecodeError as error:
-            raise FederationError(FEDERATION_SESSION_MAIN_UNAVAILABLE, f"cold catalog 响应不是 JSON: {response.text[:2000]}") from error
+            detail = f"cold catalog 响应不是 JSON: workspace_id={backend_endpoint.backend_workspace_id}, request_id={request_id}, stage=response_json, error_type={type(error).__name__}"
+            logger.error("%s；原始响应=%s", detail, response.text[:2000], exc_info=error)
+            raise FederationError(FEDERATION_SESSION_MAIN_UNAVAILABLE, detail) from error
         data = body.get("data") if isinstance(body, dict) else None
         if not isinstance(body, dict) or body.get("request_id") != request_id or response.headers.get("X-Request-ID") != request_id:
             raise FederationError(FEDERATION_SESSION_MAIN_UNAVAILABLE, "cold catalog 响应 request_id 漂移")
@@ -150,9 +154,14 @@ class WorkspaceCatalogPort:
             except FederationError:
                 raise
             except Exception as error:  # 不可达即显式失败，不静默
+                detail = (
+                    f"本地工作区 cold catalog 不可达: gateway_workspace_id={gateway_workspace_id}, "
+                    f"request_id={require_current_request_id('联邦 cold catalog 失败')}, stage=catalog_request, error_type={type(error).__name__}"
+                )
+                logger.error("%s；完整诊断见异常链", detail, exc_info=error)
                 raise FederationError(
                     FEDERATION_SESSION_MAIN_UNAVAILABLE,
-                    f"本地工作区 cold catalog 不可达: {gateway_workspace_id}: {error}",
+                    detail,
                 ) from error
             items = data.get("items")
             if not isinstance(items, list):
@@ -218,28 +227,37 @@ class WorkspaceSessionMainPort:
                 NAVIGATION_DEADLINE_HEADER,
             )
             headers[NAVIGATION_DEADLINE_HEADER] = str(navigation_deadline_at)
-        response = await self._http_client.request(method, url + path, json=body, headers=headers,
-            timeout=timeout if timeout is not None else self._request_timeout)
+        try:
+            response = await self._http_client.request(method, url + path, json=body, headers=headers,
+                timeout=timeout if timeout is not None else self._request_timeout)
+        except httpx.RequestError as error:
+            detail = f"工作区通信请求失败: workspace_id={workspace_id}, method={method}, path={path}, request_id={request_id}, stage=connection, error_type={type(error).__name__}"
+            logger.error("%s；完整诊断见异常链", detail, exc_info=error)
+            projected = copy(error)
+            projected.args = (detail,)
+            raise projected from error
         if response.status_code >= 400:
             from app.core.session_control_communication_ledger.observations import (
                 observation_error_code,
             )
-            if path == "/api/v1/sessions/fork-transfer" and response.status_code == 409 and response.headers.get("content-type", "").startswith("application/json"):
-                payload = response.json()
-                detail = payload.get("detail") if isinstance(payload, dict) else None
-                if isinstance(detail, dict) and detail.get("owner") == "fork_source_capture" and detail.get("code") == "fork_source_capture_incomplete":
-                    if payload.get("request_id") != request_id or response.headers.get("X-Request-ID") != request_id:
-                        raise FederationError(FEDERATION_SESSION_MAIN_UNAVAILABLE, "工作区 fork 错误响应 request_id 漂移")
-                    raise FederationError(FEDERATION_TARGET_OWNER_REJECTED, "目标工作区拒绝 fork 来源捕获", detail=detail)
+            payload = None
+            if response.headers.get("content-type", "").startswith("application/json"):
+                try:
+                    payload = response.json()
+                except ValueError:
+                    # 畸形错误正文仍按原 HTTP 拒绝分类；原文保留在诊断中。
+                    payload = None
+            detail = payload.get("detail") if isinstance(payload, dict) else None
+            logger.error("工作区 HTTP 拒绝: workspace_id=%s, method=%s, path=%s, request_id=%s, stage=http_response, status=%s；原始响应=%s", workspace_id, method, path, request_id, response.status_code, response.text[:2000])
+            if response.headers.get("X-Request-ID") != request_id or not isinstance(payload, dict) or payload.get("request_id") != request_id:
+                raise FederationError(FEDERATION_SESSION_MAIN_UNAVAILABLE, f"工作区错误响应 request_id 漂移或信封无效: workspace_id={workspace_id}, method={method}, path={path}, request_id={request_id}, stage=http_response, status={response.status_code}")
+            if path == "/api/v1/sessions/fork-transfer" and response.status_code == 409 and isinstance(detail, dict) and detail.get("owner") == "fork_source_capture" and detail.get("code") == "fork_source_capture_incomplete":
+                raise FederationError(FEDERATION_TARGET_OWNER_REJECTED, "目标工作区拒绝 fork 来源捕获", detail=detail)
             if path in {"/api/v1/context/read", "/api/v1/context/search", "/api/v1/resources/navigation"}:
                 if response.status_code in {403, 404}:
                     raise FederationError(FEDERATION_TARGET_NOT_RESOLVABLE, "上下文资源未共享或不存在")
-                if response.headers.get("content-type", "").startswith("application/json"):
-                    payload = response.json()
-                    detail = payload.get("detail") if isinstance(payload, dict) else None
+                if isinstance(payload, dict):
                     if path == "/api/v1/resources/navigation" and isinstance(detail, dict) and detail.get("owner") == "resource_file_operations":
-                        if payload.get("request_id") != request_id or response.headers.get("X-Request-ID") != request_id:
-                            raise FederationError(FEDERATION_SESSION_MAIN_UNAVAILABLE, "工作区文件错误响应 request_id 漂移")
                         raise FederationError(FEDERATION_TARGET_OWNER_REJECTED, "目标文件操作失败", detail=detail)
                     code = detail.get("code") if isinstance(detail, dict) else None
                     if isinstance(code, str) and (
@@ -261,19 +279,20 @@ class WorkspaceSessionMainPort:
                     FEDERATION_SESSION_MAIN_UNAVAILABLE,
                     f"工作区上下文 HTTP 失败: status={response.status_code}",
                 )
-            if response.headers.get("content-type", "").startswith("application/json"):
-                code = observation_error_code(response.json())
-                if code is not None:
-                    raise FederationError(
-                        FEDERATION_TARGET_OWNER_REJECTED,
-                        "目标工作区拒绝通信 observation",
-                        detail={"owner": "communication_observation", "code": code},
-                    )
-            raise FederationError(FEDERATION_SESSION_MAIN_UNAVAILABLE, f"工作区通信 HTTP 失败: status={response.status_code}, detail={response.text[:2000]}")
+            code = observation_error_code(payload)
+            if code is not None:
+                raise FederationError(
+                    FEDERATION_TARGET_OWNER_REJECTED,
+                    "目标工作区拒绝通信 observation",
+                    detail={"owner": "communication_observation", "code": code},
+                )
+            raise FederationError(FEDERATION_SESSION_MAIN_UNAVAILABLE, f"工作区通信 HTTP 失败: workspace_id={workspace_id}, method={method}, path={path}, request_id={request_id}, stage=http_response, status={response.status_code}")
         try:
             data = response.json()
         except json.JSONDecodeError as error:
-            raise FederationError(FEDERATION_SESSION_MAIN_UNAVAILABLE, f"工作区通信响应不是 JSON: {response.text[:2000]}") from error
+            detail = f"工作区通信响应不是 JSON: workspace_id={workspace_id}, method={method}, path={path}, request_id={request_id}, stage=response_json, error_type={type(error).__name__}"
+            logger.error("%s；原始响应=%s", detail, response.text[:2000], exc_info=error)
+            raise FederationError(FEDERATION_SESSION_MAIN_UNAVAILABLE, detail) from error
         if not isinstance(data, dict) or data.get("request_id") != request_id or response.headers.get("X-Request-ID") != request_id or not isinstance(data.get("data"), dict):
             raise FederationError(FEDERATION_SESSION_MAIN_UNAVAILABLE, "工作区通信响应身份或 data 非法")
         return data["data"]
