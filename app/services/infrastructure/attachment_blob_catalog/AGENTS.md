@@ -25,6 +25,7 @@ catalog 侧原先的单文件 `catalog.py` 已按垂直链路拆入本包，faca
 
 # 规范
 
+- 目录资源的 `YYYY/MM/DD/{attachment_id}` 生成、真实日期/身份校验和路径预算解析唯一定义在 `locator.py`；冻结日期使用显式创建 intent 的 UTC 日期，旧非 UUIDv7 的 attachment_id 原样保留。离线转换复用这些原语，不在迁移脚本或未来上传方各自拼目录。此扩展不表示 schema 4 或线上目录上传已完成，现有 blob/staging 生产链待调用方迁齐后统一下线。
 - 在线目录访问与离线维护共用 `maintenance.py` 的跨进程共享/独占锁，锁文件位于附件根同级，不得删除或随 catalog/目录切换替换。Backend 在任何业务初始化前持共享锁至全部 writer 排空；catalog 的惰性目录访问另持共享锁至连接确认关闭，关闭失败保留连接与锁并允许重试。独占冲突直接报错，不以端口/PID/锁文件存在推断停机。该保护不替代离线迁移对持久 operation、原件和历史依赖的核对，schema 3 → 4 迁移未实现前不得升版本或声称已迁移。
 - `migration/` 提供显式离线 prepare/verify，持独占锁只读核对原 owner 状态并保存备份；未知占用或不完整 schema 明确拒绝。schema 参照与线上初始化共用 `schema._SCHEMA_STATEMENTS`，不复制 DDL；线上数据库使用 SQLite backup API，冻结 capture 逐字保全，完成备份用 immutable 读取核验。prepared 仅证明备份阶段完成，转换、恢复和切换仍 TODO，不增加线上双读或修改历史身份。
 - 严格照 saga 顺序：取 gate + fresh 校验 + create-or-get `AttachmentOperationPin` → create-or-get `AttachmentIngestRecord(preparing)` → 写 staging 并 durable → 推进 `hashed` 并竞争唯一 `BlobCommitClaim` → 原子 rename 到 claim 冻结 locator 并复验 → 再次取同一 gate 复验 pin/fence/thread 后发布 availability/attachment/owner ref → 主体 durable 后才把 pin 推进终态。

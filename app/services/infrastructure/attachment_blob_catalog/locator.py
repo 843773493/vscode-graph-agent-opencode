@@ -5,7 +5,9 @@
 日期生成的 locator），**绝不接受调用方拼出的字符串路径**。staging
 locator 与最终 blob locator 是两个互不重叠的命名空间：staging 位于
 ``<attachments>/.staging/<ingest-id>``，最终正文位于
-``<attachments>/YYYY/MM/DD/<blob-id>``；两者都不允许扫盘枚举定位。
+``<attachments>/YYYY/MM/DD/<blob-id>``。目录资源使用
+``<attachments>/YYYY/MM/DD/<attachment-id>``，日期来自冻结创建时间，
+与不可变正文摘要独立；当前先供离线迁移使用。各命名空间都不允许扫盘枚举定位。
 
 错误分类：``TypeError`` 类型错、``ValueError`` 形态非法。
 """
@@ -14,19 +16,24 @@ from __future__ import annotations
 
 import hashlib
 import re
+from datetime import date, datetime
 from pathlib import Path
 
 from app.core.session_catalog_store import validate_path_budget
 from app.services.infrastructure.attachment_blob_catalog.blob_identity import (
+    utc_bucket_date,
     validate_blob_relative_locator,
 )
 
 __all__ = [
     "STAGING_DIRECTORY_NAME",
+    "attachment_directory_relative_locator",
     "fork_import_ingest_id",
     "ingest_staging_relative_locator",
+    "resolve_attachment_directory",
     "resolve_blob_path",
     "resolve_staging_path",
+    "validate_attachment_directory_relative_locator",
     "validate_ingest_staging_relative_locator",
 ]
 
@@ -35,6 +42,34 @@ STAGING_DIRECTORY_NAME = ".staging"
 
 # staging relative locator 形态：``.staging/ing_[0-9a-f]{32}``。
 _STAGING_RELATIVE_LOCATOR_PATTERN = re.compile(r"\.staging/ing_[0-9a-f]{32}")
+_ATTACHMENT_DIRECTORY_PATTERN = re.compile(r"([0-9]{4})/([0-9]{2})/([0-9]{2})/(att_[0-9a-f]{32})")
+
+
+def attachment_directory_relative_locator(attachment_id: str, created_at: datetime) -> str:
+    """目录身份与内容摘要无关；日期只取显式创建 intent 的 UTC 日期。"""
+    if not isinstance(attachment_id, str):
+        raise TypeError("attachment_id 必须是字符串")
+    bucket = utc_bucket_date(created_at)
+    locator = f"{bucket.year:04d}/{bucket.month:02d}/{bucket.day:02d}/{attachment_id}"
+    validate_attachment_directory_relative_locator(locator)
+    return locator
+
+
+def validate_attachment_directory_relative_locator(locator: str) -> None:
+    """校验目录 locator，不清洗路径、日期或旧附件 ID。"""
+    if not isinstance(locator, str):
+        raise TypeError("附件目录 locator 必须是字符串")
+    match = _ATTACHMENT_DIRECTORY_PATTERN.fullmatch(locator)
+    if match is None:
+        raise ValueError("附件目录 locator 必须为 YYYY/MM/DD/att_<32位小写hex>")
+    date(*(int(part) for part in match.groups()[:3]))
+
+
+def resolve_attachment_directory(attachments_root: Path, relative_locator: str) -> Path:
+    """按唯一 catalog 冻结的目录 locator 检查完整路径预算后定位。"""
+    validate_attachment_directory_relative_locator(relative_locator)
+    validate_path_budget(attachments_root, relative_locator)
+    return attachments_root / relative_locator
 
 
 def ingest_staging_relative_locator(ingest_id: str) -> str:

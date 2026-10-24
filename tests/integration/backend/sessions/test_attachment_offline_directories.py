@@ -192,6 +192,17 @@ async def test_tombstone_does_not_create_an_empty_directory(backup_case: BackupC
     assert list((case.output / "converted/attachments").iterdir()) == []
 
 
+async def test_conversion_uses_owner_utc_date_instead_of_blob_or_migration_date(backup_case: BackupCase) -> None:
+    case = backup_case
+    with closing(sqlite3.connect(case.workspace / ".boxteam/attachments/catalog.sqlite")) as connection:
+        connection.execute("UPDATE attachment_owner_refs SET created_at='2024-03-01T00:30:00+14:00'")
+        connection.commit()
+    backup.prepare_backup(case.workspace, case.output)
+    directories.convert_backup(case.output)
+    resource, = manifest(case)["resources"]
+    assert resource["relative_locator"] == "2024/02/29/" + resource["attachment_id"]
+
+
 @pytest.mark.parametrize("damage", ["missing_thread", "missing_blob", "unknown_release_time"])
 async def test_conversion_rejects_ambiguous_old_ownership_or_time(backup_case: BackupCase, damage: str) -> None:
     case = backup_case

@@ -4,12 +4,15 @@ from __future__ import annotations
 
 import json
 import os
-import re
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from app.core.atomic_fs import atomic_write_bytes, fsync_directory
+from app.services.infrastructure.attachment_blob_catalog.locator import (
+    attachment_directory_relative_locator,
+    resolve_attachment_directory,
+)
 from app.services.infrastructure.attachment_blob_catalog.maintenance import (
     AttachmentMaintenanceLock,
 )
@@ -85,16 +88,14 @@ def _plan(directory: Path) -> DirectoryPlan:
         for row in catalog.execute("SELECT * FROM attachment_owner_refs ORDER BY attachment_id"):
             owner = dict(row)
             attachment_id = owner["attachment_id"]
-            if re.fullmatch(r"att_[0-9a-f]{32}", attachment_id) is None:
-                raise ValueError("附件迁移身份非法")
             blob_row = catalog.execute("SELECT * FROM attachment_blobs WHERE blob_id=?", (owner["blob_id"],)).fetchone()
             if blob_row is None or blob_row["digest"] != owner["digest"]:
                 raise RuntimeError(f"附件迁移缺少一致正文版本: attachment_id={attachment_id}")
             blob = dict(blob_row)
             created = _timestamp(owner["created_at"])
             # 不从备份时间、原 blob 日期或用户文件名派生目录。
-            locator = f"{created:%Y/%m/%d}/{attachment_id}"
-            checked_path(Path("attachments"), locator)
+            locator = attachment_directory_relative_locator(attachment_id, created)
+            resolve_attachment_directory(directory / "converted/attachments", locator)
             if owner["state"] == "active":
                 _require_owner(data, owner["owner_session_id"], owner["owner_thread_id"])
                 unattached_since = gc_after = None
