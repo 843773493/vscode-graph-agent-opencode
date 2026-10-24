@@ -513,3 +513,10 @@
 - 通信与上下文客户端仅在错误正文 request_id 与 X-Request-ID 均匹配本次请求时解释已登记业务码；缺失/漂移身份不接纳远端 owner 语义，保持原 HTTP status 分类。未绑定请求身份的 inventory 不提取业务码；有效身份沿用原拒绝语义，原始正文仍仅留诊断日志。
 - 固定完整 tree `1312da3c7f6da6bfc50ea131ebe8d810bb39c939`：491项定向回归/18.31秒、Ruff、compileall通过；真实三 Gateway/SSH/WebSocket 反向通道问答1 passed/106.95秒。旧生产完整archive的身份反例50 failed、10 passed，准确区分旧实现无身份即采信业务码。早期导入错误收据保留，不计行为证据。
 - 4324项源码前后相同、准确命令/raw/退出码、无残留进程与独立审查见 `out/tests/temp/gateway_error_identity_20261024/artifacts/validation-proof-002.json`。错误矩阵使用HTTP stub，真实C3验证正常产品流程；不代完整Web、Windows或全部路径不变量审计，2.2/7.2总门仍未勾。
+
+
+### 2026-10-24 用户 profile 原生存储错误（2.2/7.2 部分收口）
+
+- UserProfileStore 唯一 owner 为 initialize/read/write/theme-assets/delete 的 OS 故障生成具名操作、user_id、原异常类别与 errno，保留原异常类别/cause及完整诊断日志，普通错误不携带原路径。读取统一至 read_profile，移除仅接收Path的旧私有读取入口；非对象/版本错误使用user_id，JSON/UTF-8失败报类型及位置，损坏内容不重写。原子写入、首用户主题初始化、创建账户回滚与先删账户后删profile的顺序不变。
+- 固定完整tree `5a570c8edf82219608d5121325fa3295be153028`：152项定向回归/8.98秒，真实独立Gateway故障与恢复1 passed/21.19秒；39项旧生产完整archive反例全部失败/4.65秒。覆盖POSIX/drive/UNC故障诊断、回滚、原字节与临时文件、配置缺失/损坏、四类设置/主题入口、lease阻止删除及原删除顺序。compileall通过；Ruff exit1的五项TRY004逐项与HEAD基线相同，无新增，保留原ValueError以维持create捕获及回滚合同。
+- 准确命令、4326项源码前后指纹、raw/真实退出码、进程回收、基线对照与只读独审见 `out/tests/temp/gateway_profile_errors_20261024/artifacts/validation-proof-001.json`。权限故障为unit注入，产品用例使用真实磁盘损坏/缺失/错误类型；不代真实ACL、Windows、完整Web或全局不变量审计，2.2/7.2总门未勾。

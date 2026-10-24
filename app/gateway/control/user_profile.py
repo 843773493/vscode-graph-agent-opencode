@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import shutil
 import tempfile
@@ -13,6 +14,7 @@ from app.gateway.config import ConfiguredTheme, GatewayConfig
 from app.gateway.control.user_access import USER_ID_PATTERN
 from app.schemas.gateway.ui_settings import WebUISettingsDTO
 
+logger = logging.getLogger(__name__)
 _PROFILE_VERSION = 1
 _PROFILE_GITIGNORE = """# 由 BoxTeam 管理；个人主题和 profile.jsonc 可以提交到用户自己的 Git 仓库。
 *.sqlite
@@ -41,7 +43,10 @@ class UserProfileStore:
         """返回用户主题资源目录，并确保它位于用户 profile 内。"""
         profile_root = self.user_path(user_id)
         assets_root = profile_root / "themes" / "assets"
-        assets_root.mkdir(parents=True, exist_ok=True)
+        try:
+            assets_root.mkdir(parents=True, exist_ok=True)
+        except OSError as error:
+            raise _profile_io_error(user_id, "theme-assets", error) from error
         return assets_root
 
     def ensure_user(
@@ -53,38 +58,41 @@ class UserProfileStore:
     ) -> Path:
         profile_root = self.user_path(user_id)
         profile_path = profile_root / "profile.jsonc"
-        first_user_profile = not profile_path.exists() and not any(
-            path.is_dir() for path in self._users_root.glob("*")
-        )
-        profile_root.mkdir(parents=True, exist_ok=True)
-        (profile_root / "themes").mkdir(exist_ok=True)
-        gitignore_path = profile_root / ".gitignore"
-        if not gitignore_path.exists():
-            _atomic_write_text(gitignore_path, _PROFILE_GITIGNORE)
-        if profile_path.exists():
-            self._read_profile(profile_path)
-        else:
-            _atomic_write_text(
-                profile_path,
-                json.dumps(
-                    {
-                        "$schema": "user_profile_schema.jsonc",
-                        "config_version": _PROFILE_VERSION,
-                        "display_name": display_name,
-                        "theme": {},
-                        "layout": {},
-                        "preferences": {},
-                        "custom_themes": (
-                            [asdict(theme) for theme in initial_custom_themes]
-                            if first_user_profile
-                            else []
-                        ),
-                    },
-                    ensure_ascii=False,
-                    indent=2,
-                )
-                + "\n",
+        try:
+            first_user_profile = not profile_path.exists() and not any(
+                path.is_dir() for path in self._users_root.glob("*")
             )
+            profile_root.mkdir(parents=True, exist_ok=True)
+            (profile_root / "themes").mkdir(exist_ok=True)
+            gitignore_path = profile_root / ".gitignore"
+            if not gitignore_path.exists():
+                _atomic_write_text(gitignore_path, _PROFILE_GITIGNORE)
+            if not profile_path.exists():
+                _atomic_write_text(
+                    profile_path,
+                    json.dumps(
+                        {
+                            "$schema": "user_profile_schema.jsonc",
+                            "config_version": _PROFILE_VERSION,
+                            "display_name": display_name,
+                            "theme": {},
+                            "layout": {},
+                            "preferences": {},
+                            "custom_themes": (
+                                [asdict(theme) for theme in initial_custom_themes]
+                                if first_user_profile
+                                else []
+                            ),
+                        },
+                        ensure_ascii=False,
+                        indent=2,
+                    )
+                    + "\n",
+                )
+                return profile_root
+        except OSError as error:
+            raise _profile_io_error(user_id, "initialize", error) from error
+        self.read_profile(user_id=user_id)
         return profile_root
 
     def theme_config(
@@ -123,15 +131,42 @@ class UserProfileStore:
         )
 
     def read_profile(self, *, user_id: str) -> dict[str, object]:
-        return self._read_profile(self.user_path(user_id) / "profile.jsonc")
+        path = self.user_path(user_id) / "profile.jsonc"
+        try:
+            if not path.is_file():
+                raise FileNotFoundError(f"用户 profile 不存在或不是文件: {path}")
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except OSError as error:
+            raise _profile_io_error(user_id, "read", error) from error
+        except (UnicodeDecodeError, json.JSONDecodeError) as error:
+            logger.exception("用户 profile 解码失败: user_id=%s", user_id)
+            position = (
+                f"line={error.lineno}, column={error.colno}"
+                if isinstance(error, json.JSONDecodeError)
+                else f"encoding={error.encoding}, start={error.start}, end={error.end}"
+            )
+            raise ValueError(
+                f"用户 profile 解码失败: user_id={user_id}, error_type={type(error).__name__}, {position}"
+            ) from error
+        if not isinstance(payload, dict):
+            raise ValueError(f"用户 profile 必须是 JSON 对象: user_id={user_id}")
+        if payload.get("config_version") != _PROFILE_VERSION:
+            raise ValueError(f"用户 profile 版本不受支持: user_id={user_id}")
+        preferences = payload.get("preferences", {})
+        if isinstance(preferences, dict) and "recent_local_workspace_paths" in preferences:
+            raise ValueError("用户 profile 含已移除的 recent_local_workspace_paths；请显式清理旧开发数据后重试")
+        return payload
 
     def delete_user(self, *, user_id: str) -> None:
         profile_root = self.user_path(user_id)
-        if not profile_root.exists():
-            return
-        if not profile_root.is_dir():
-            raise OSError(f"用户 profile 路径不是目录: {profile_root}")
-        shutil.rmtree(profile_root)
+        try:
+            if not profile_root.exists():
+                return
+            if not profile_root.is_dir():
+                raise NotADirectoryError(f"用户 profile 路径不是目录: {profile_root}")
+            shutil.rmtree(profile_root)
+        except OSError as error:
+            raise _profile_io_error(user_id, "delete", error) from error
 
     def read_ui_settings(self, *, user_id: str) -> WebUISettingsDTO:
         return self._ui_settings_from_profile(self.read_profile(user_id=user_id), user_id=user_id)
@@ -181,7 +216,10 @@ class UserProfileStore:
             "workspace_file_tree": serialized.pop("workspace_file_tree", {}),
             "gateway_console": serialized.pop("gateway_console", {}),
         }
-        self._write_profile(user_id=user_id, payload=profile)
+        try:
+            self._write_profile(user_id=user_id, payload=profile)
+        except OSError as error:
+            raise _profile_io_error(user_id, "write", error) from error
 
     def _write_profile(self, *, user_id: str, payload: dict[str, object]) -> None:
         profile_path = self.user_path(user_id) / "profile.jsonc"
@@ -190,19 +228,15 @@ class UserProfileStore:
             json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
         )
 
-    @staticmethod
-    def _read_profile(path: Path) -> dict[str, object]:
-        if not path.is_file():
-            raise FileNotFoundError(f"用户 profile 不存在: {path}")
-        payload = json.loads(path.read_text(encoding="utf-8"))
-        if not isinstance(payload, dict):
-            raise ValueError(f"用户 profile 必须是 JSON 对象: {path}")
-        if payload.get("config_version") != _PROFILE_VERSION:
-            raise ValueError(f"用户 profile 版本不受支持: {path}")
-        preferences = payload.get("preferences", {})
-        if isinstance(preferences, dict) and "recent_local_workspace_paths" in preferences:
-            raise ValueError("用户 profile 含已移除的 recent_local_workspace_paths；请显式清理旧开发数据后重试")
-        return payload
+
+def _profile_io_error(user_id: str, operation: str, error: OSError) -> OSError:
+    """原生存储错误留诊断；普通调用方只取得用户身份、操作及系统错误类别。"""
+    message = (
+        f"用户 profile 存储失败: user_id={user_id}, operation={operation}, "
+        f"error_type={type(error).__name__}, errno={error.errno}"
+    )
+    logger.exception(message)
+    return type(error)(message)
 
 
 def _atomic_write_text(path: Path, content: str) -> None:
