@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import logging
 import subprocess
 from dataclasses import dataclass
 from datetime import datetime
@@ -24,6 +25,8 @@ from app.gateway.runtime.workspace_process import wait_for_http_ok
 from app.gateway.service_types import LocalForwardSpec
 from app.gateway.ssh_command import build_ssh_command
 from app.schemas.gateway.federation import FederationWorkspaceDTO
+
+logger = logging.getLogger(__name__)
 
 FEDERATION_PROTOCOL_VERSION = 1
 #: SSH 配对是有界等待：对端 TCP 吞包时必须在有限时间内响亮失败，绝不无限挂起
@@ -281,5 +284,13 @@ def _response_data(response: httpx.Response) -> dict[str, object]:
     payload = response.json()
     data = payload.get("data") if isinstance(payload, dict) else None
     if not isinstance(data, dict):
-        raise RuntimeError(f"远程 Gateway 响应缺少 data: {response.text[:300]}")
+        logger.error(
+            "远程 Gateway 响应缺少 data 对象: status=%s, request_id=%s, body=%r",
+            response.status_code,
+            response.request.headers.get("X-Request-ID"),
+            response.text,
+        )
+        raise RuntimeError(
+            f"远程 Gateway 响应缺少 data 对象: status={response.status_code}"
+        )
     return data

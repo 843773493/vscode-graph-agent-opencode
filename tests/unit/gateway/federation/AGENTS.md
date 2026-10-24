@@ -1,10 +1,10 @@
 # 目录用途
 
-存放 Gateway 联邦通道生命周期的单元测试，与 federation 生产 owner 对应。
+存放 Gateway 联邦通道生命周期、发现与管理协议的单元测试，与 federation 生产 owner 对应。
 
 # 可修改内容
 
-精确 channel owner 的登记、取消和资源释放测试，以及 Workspace HTTP port 的请求、响应与诊断边界和测试专用 fixture。
+精确 channel owner 的登记、取消和资源释放测试，以及联邦发现、管理和 Workspace HTTP port 的请求、响应与诊断边界和测试专用 fixture。
 
 # 不可修改内容
 

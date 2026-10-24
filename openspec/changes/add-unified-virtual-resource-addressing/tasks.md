@@ -574,3 +574,12 @@
 - 最终代码候选 tree `aaa7cf6537d1b2e34023e9bf4c453e0562d22ff9` 的日志、进程关闭、Workspace/SSH 启动单测 55 passed/0.71 秒；Ruff、compileall 通过。POSIX/盘符/UNC 字面量、有无 filename、系统/非系统启动错误及日志二次关闭失败覆盖类型、errno、原异常对象、日志记录、句柄关闭与安全错误注记；这些不代替 Windows 实机。
 - 生产代码与上述相同的完整 tree `0ef894b2d1de29b4f2c87cf3e6331d28e446442f` 的真实 Gateway/Workspace HTTP 为 3 passed/84.23 秒，含新增的目标 Node 可执行文件缺失：经普通注册入口实际调用原生 Popen，500 与 request_id 保持一致，列表/健康投影及 SQLite connection_error 没有真实位置，Gateway 重启后明确离线，完整位置仍在诊断日志。两个 tree 仅差 unit-001 中 Windows filename 的日志断言：Python 按 repr 转义反斜杠，unit-002 改为核对完整原异常文本，不改变产品源码或 HTTP 用例。
 - 完整 Git archive 的反例 tree `9ddce203f1fe724777df9ab6c5992869a8800de9` 仅恢复旧进程 owner，`http-red-001` 在注册 500 响应中精确捕获可执行文件路径，1 failed/20.73 秒，证明新验收能区分原缺陷。准确命令、完整源码前后指纹、原始输出、实际退出码和进程回收记录在 `out/tests/temp/gateway_spawn_errors_20261024/artifacts/`。未验 Windows 实机和完整 Web，不关闭 2.2/7.2 全局门；团队与协作专项继续 TODO。
+
+
+### 2026-10-24 远程 Gateway 响应 envelope 错误（2.2/7.2 部分收口）
+
+- 联邦发现和管理调用继续共用 federation 唯一响应解析。成功状态的 JSON 缺少 data 对象时，原 RuntimeError 类型和路由归属保留，普通错误只报告协议事实与 HTTP 状态；完整正文与请求 ID 仅进入原始诊断日志，不新增下游文本替换或兼容解析。正常 data、HTTP 拒绝及 JSON 解码错误保持既有合同，具名联邦原始日志仍完整传递。
+- 代码 tree `3460b200f96ed1974740a82006569f87c6844e0e` 的真实独立 Gateway 与独立 HTTP 替身为 1 passed/27.60 秒：三类错误 envelope 经普通目录入口返回502、不复制POSIX/盘符/UNC路径且request_id贯通；远端恢复后目录URI可读，用户主动打开的联邦诊断日志保留原文。装具仅预置已连接远端和凭据，不冒充SSH配对或完整联邦E2E。
+- 同一生产实现和单测的 tree `2aeb3fa180414fdb37535c89f3c1262bec32e729` 定向单测36 passed/1.05秒，覆盖两类发现响应、管理响应、六类无效envelope、完整诊断正文、HTTP409结构化拒绝、原JSON解码异常和正常响应。最终tree仅改真实HTTP装具的Gateway身份与UUIDv7目录ID格式；源码指纹证明生产及上述单测未变。compileall通过；Ruff在保留原RuntimeError合同、显式排除TRY004后通过。未排除规则时，原HEAD与候选均有同四处TRY004；不为静态偏好改变公开错误类型。
+- 完整Git archive反例 tree `d65ae7ce9a0984db38bfacfb45e7c82982994d64` 只恢复旧响应owner，真实目录响应精确回显路径，1 failed/27.70秒，证明新增场景能区分原缺陷。扩大单测中联邦列表HTTP替身不接受既有trust_env参数的失败，在原owner完整归档也复现；不改无关测试预期。http-001装具占位凭据被真实channel owner拒绝，http-002的恢复装具使用带连字符目录UUID被真实grammar拒绝；均有原始证据，产品实现未因此改变。
+- 准确命令、完整源码前后指纹、实际退出码、零进程组残留和HTTP/诊断原件在 `out/tests/temp/gateway_federation_envelope_20261024/artifacts/`。此切片不覆盖其它远端错误/DTO、Windows实机或完整Web，不关闭2.2/7.2全局门；Agent团队与协作继续TODO。
