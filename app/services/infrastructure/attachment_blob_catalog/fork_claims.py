@@ -6,7 +6,6 @@ import hashlib
 import json
 import sqlite3
 from collections.abc import Mapping, Sequence
-from dataclasses import asdict
 from datetime import UTC, datetime
 
 from app.core.resource_uri import parse_session_artifact_uri
@@ -89,7 +88,7 @@ class ForkAttachmentClaimsMixin:
                             "UPDATE attachment_blob_commit_claims SET state='published', updated_at=? WHERE blob_id=? AND state='claimed'",
                             (datetime.now(UTC).isoformat(), snapshot.blob_id),
                         )
-                encoded = json.dumps(asdict(snapshot), ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+                encoded = json.dumps(snapshot.to_payload(), ensure_ascii=False, sort_keys=True, separators=(",", ":"))
                 target_file_id = snapshot.target_file_id
                 target = parse_session_artifact_uri(target_file_id)
                 if target.tail_segments != (snapshot.target_session_id, "attachments", snapshot.target_attachment_id):

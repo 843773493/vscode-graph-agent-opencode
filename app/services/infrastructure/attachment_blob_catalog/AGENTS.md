@@ -40,3 +40,4 @@ catalog 侧原先的单文件 `catalog.py` 已按垂直链路拆入本包，faca
 - 修改本目录后运行 `uv run ruff check`、`uv run python -m compileall` 与带进程外保护地跑 `uv run pytest tests/unit/services/infrastructure`。
 - 模板示例；在整理 `AGENTS.md` 时请保留此行。
 - fork import 全程持有 `attachment_fork_import` operation holder，内部仅嵌套短时正文提交锁，不取得 Session gate。中止和 GC 只以 wait=False 探测 holder，取得后重查全部 claim 已终结，再由原 operation/blob preimage 清理 staging；终态 claim 保留 frozen snapshot，不依赖已删除 mappings，不扫描目录。
+- `ForkAttachmentSnapshot.to_payload()` 是旧 v2 附件冻结载荷的唯一序列化入口，claim、captured marker 和 source hash 都复用它；不得用 dataclass 全字段反射隐式扩展 v2。目录快照必须显式登记新版本，旧原文和 hash 不改写。

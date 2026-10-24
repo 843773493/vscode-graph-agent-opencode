@@ -137,6 +137,40 @@ class ForkAttachmentSnapshot:
     unavailable_reason: str | None = None
 
 
+    def to_payload(self) -> dict[str, object]:
+        """显式冻结 v2 载荷；新增运行态字段不能隐式改变已封存 hash。"""
+        # 目录快照须登记新版本；此处不能改用 asdict 或随 dataclass 字段扩展。
+        return {
+            "source_attachment_id": self.source_attachment_id,
+            "source_file_id": self.source_file_id,
+            "source_owner_ref_id": self.source_owner_ref_id,
+            "source_session_id": self.source_session_id,
+            "source_thread_id": self.source_thread_id,
+            "target_attachment_id": self.target_attachment_id,
+            "target_file_id": self.target_file_id,
+            "target_owner_ref_id": self.target_owner_ref_id,
+            "target_session_id": self.target_session_id,
+            "target_thread_id": self.target_thread_id,
+            "target_owner_thread_id": self.target_owner_thread_id,
+            "source_item_ref": self.source_item_ref,
+            "target_item_ref": self.target_item_ref,
+            "blob_id": self.blob_id,
+            "digest": self.digest,
+            "length": self.length,
+            "relative_locator": self.relative_locator,
+            "variant": self.variant,
+            "catalog_revision": self.catalog_revision,
+            "file_name": self.file_name,
+            "mime_type": self.mime_type,
+            "availability": self.availability,
+            "required": self.required,
+            "claim_id": self.claim_id,
+            "source_file_aliases": list(self.source_file_aliases),
+            "target_action": self.target_action,
+            "unavailable_reason": self.unavailable_reason,
+        }
+
+
 def derive_attachment_id(
     *,
     blob_id: str,

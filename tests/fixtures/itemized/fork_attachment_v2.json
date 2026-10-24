@@ -1,0 +1,51 @@
+{
+  "source_commit": "294c8da1ca51c483030e4d63b6d767b0db443d2e",
+  "source_marker_sha256": "6271c9943845a14a627d6de67d0befaa41ebf2689970d5960175b8c4a9d01bb6",
+  "source_snapshot_sha256": "088966866a44d87f439b209a8cd9cde81bbc427f56efdf6c932a43283a8cef06",
+  "rollout_manifest_sha256": "924ccb98e9da7369711eff8914926e70b64bd125dd57a2ae1f4486aa716f49b9",
+  "control_sha256": "f74a9d19cb9412097de3331a8ce318d85d0826974d9d481e3a79d45a3be678fb",
+  "attachments": [
+    {
+      "availability": "available",
+      "blob_id": "blb_6cf9b03aac87372829b081bd056c7140dceef4133128ba251bd32240aa981f06",
+      "catalog_revision": 3,
+      "claim_id": "fac_b7cde46712951e7e11c1a35cb2501cce",
+      "digest": "sha256:6cf9b03aac87372829b081bd056c7140dceef4133128ba251bd32240aa981f06",
+      "file_name": "source.txt",
+      "length": 52,
+      "mime_type": "text/plain",
+      "relative_locator": "2026/10/24/blb_6cf9b03aac87372829b081bd056c7140dceef4133128ba251bd32240aa981f06",
+      "required": true,
+      "source_attachment_id": "att_124b1b1fff490ffd1696eac64bce85e4",
+      "source_file_aliases": [],
+      "source_file_id": "boxteam://gateway_6c8b2f9317a5a2c6c4569958b1e23d84/workspace/50b555bf-4c4a-451d-ba49-4a6fcd40bf89/resources/session/ses_01a16cbade9270318708dad9c4e71014/attachments/att_124b1b1fff490ffd1696eac64bce85e4",
+      "source_item_ref": null,
+      "source_owner_ref_id": "oref_124b1b1fff490ffd1696eac64bce85e4",
+      "source_session_id": "ses_01a16cbade9270318708dad9c4e71014",
+      "source_thread_id": "thr_01a16cbade92769fa667f839a3a38889",
+      "target_action": "retain_reference",
+      "target_attachment_id": "att_ea9fab16ddbe4e0edc3b421a5fd3eaff",
+      "target_file_id": "boxteam://gateway_6c8b2f9317a5a2c6c4569958b1e23d84/workspace/50b555bf-4c4a-451d-ba49-4a6fcd40bf89/resources/session/ses_01a16cbade9279a9a3b44a8bac8e3683/attachments/att_ea9fab16ddbe4e0edc3b421a5fd3eaff",
+      "target_item_ref": null,
+      "target_owner_ref_id": "oref_ea9fab16ddbe4e0edc3b421a5fd3eaff",
+      "target_owner_thread_id": "thr_01a16cbade9279938c083bf794a0e117",
+      "target_session_id": "ses_01a16cbade9279a9a3b44a8bac8e3683",
+      "target_thread_id": "thr_01a16cbade9279938c083bf794a0e117",
+      "unavailable_reason": null,
+      "variant": "original"
+    }
+  ],
+  "node_debug": null,
+  "claims": [
+    {
+      "preimage_prefix": "fork-866f3f53ba70889a37a1414200e4aad79c920496e6e47bc77209ea56099af00401a16cbade927b5981bf9ac4e3d66ad52c5b92917c8193a3f9edd4dad6c1416166838e7c8b4753def0f4e2327bf44c07",
+      "snapshot_json": "{\"availability\":\"available\",\"blob_id\":\"blb_6cf9b03aac87372829b081bd056c7140dceef4133128ba251bd32240aa981f06\",\"catalog_revision\":3,\"claim_id\":\"fac_b7cde46712951e7e11c1a35cb2501cce\",\"digest\":\"sha256:6cf9b03aac87372829b081bd056c7140dceef4133128ba251bd32240aa981f06\",\"file_name\":\"source.txt\",\"length\":52,\"mime_type\":\"text/plain\",\"relative_locator\":\"2026/10/24/blb_6cf9b03aac87372829b081bd056c7140dceef4133128ba251bd32240aa981f06\",\"required\":true,\"source_attachment_id\":\"att_124b1b1fff490ffd1696eac64bce85e4\",\"source_file_aliases\":[],\"source_file_id\":\"boxteam://gateway_6c8b2f9317a5a2c6c4569958b1e23d84/workspace/50b555bf-4c4a-451d-ba49-4a6fcd40bf89/resources/session/ses_01a16cbade9270318708dad9c4e71014/attachments/att_124b1b1fff490ffd1696eac64bce85e4\",\"source_item_ref\":null,\"source_owner_ref_id\":\"oref_124b1b1fff490ffd1696eac64bce85e4\",\"source_session_id\":\"ses_01a16cbade9270318708dad9c4e71014\",\"source_thread_id\":\"thr_01a16cbade92769fa667f839a3a38889\",\"target_action\":\"retain_reference\",\"target_attachment_id\":\"att_ea9fab16ddbe4e0edc3b421a5fd3eaff\",\"target_file_id\":\"boxteam://gateway_6c8b2f9317a5a2c6c4569958b1e23d84/workspace/50b555bf-4c4a-451d-ba49-4a6fcd40bf89/resources/session/ses_01a16cbade9279a9a3b44a8bac8e3683/attachments/att_ea9fab16ddbe4e0edc3b421a5fd3eaff\",\"target_item_ref\":null,\"target_owner_ref_id\":\"oref_ea9fab16ddbe4e0edc3b421a5fd3eaff\",\"target_owner_thread_id\":\"thr_01a16cbade9279938c083bf794a0e117\",\"target_session_id\":\"ses_01a16cbade9279a9a3b44a8bac8e3683\",\"target_thread_id\":\"thr_01a16cbade9279938c083bf794a0e117\",\"unavailable_reason\":null,\"variant\":\"original\"}",
+      "preimage_sha256": "83de6980922bb87d847a0c4637480ab8526fa2822baccda16b8343fd50ebce56"
+    },
+    {
+      "preimage_prefix": "fork-aa6e32b7cf588936e2efbe2e1fa2f56240d94b1e6199d1ad4401907b6f7f483b01a16cbade927d42afdc36c7a188eb655dcc17c2c1c5bfebd452ed5f23ab3cc0fcbe9f35467c6bc9ffce7b48a4b15e1e",
+      "snapshot_json": "{\"availability\":\"available\",\"blob_id\":\"blb_6cf9b03aac87372829b081bd056c7140dceef4133128ba251bd32240aa981f06\",\"catalog_revision\":4,\"claim_id\":\"fac_b4aca65e1d3bdd44007914b7294d1786\",\"digest\":\"sha256:6cf9b03aac87372829b081bd056c7140dceef4133128ba251bd32240aa981f06\",\"file_name\":\"source.txt\",\"length\":52,\"mime_type\":\"text/plain\",\"relative_locator\":\"2026/10/24/blb_6cf9b03aac87372829b081bd056c7140dceef4133128ba251bd32240aa981f06\",\"required\":true,\"source_attachment_id\":\"att_ea9fab16ddbe4e0edc3b421a5fd3eaff\",\"source_file_aliases\":[\"boxteam://gateway_6c8b2f9317a5a2c6c4569958b1e23d84/workspace/50b555bf-4c4a-451d-ba49-4a6fcd40bf89/resources/session/ses_01a16cbade9279a9a3b44a8bac8e3683/attachments/att_ea9fab16ddbe4e0edc3b421a5fd3eaff\"],\"source_file_id\":\"boxteam://gateway_6c8b2f9317a5a2c6c4569958b1e23d84/workspace/50b555bf-4c4a-451d-ba49-4a6fcd40bf89/resources/session/ses_01a16cbade9270318708dad9c4e71014/attachments/att_124b1b1fff490ffd1696eac64bce85e4\",\"source_item_ref\":null,\"source_owner_ref_id\":\"oref_ea9fab16ddbe4e0edc3b421a5fd3eaff\",\"source_session_id\":\"ses_01a16cbade9279a9a3b44a8bac8e3683\",\"source_thread_id\":\"thr_01a16cbade9279938c083bf794a0e117\",\"target_action\":\"retain_reference\",\"target_attachment_id\":\"att_cc7ad6b03fbcdd493b73a128fde5794b\",\"target_file_id\":\"boxteam://gateway_6c8b2f9317a5a2c6c4569958b1e23d84/workspace/50b555bf-4c4a-451d-ba49-4a6fcd40bf89/resources/session/ses_01a16cbade9276c8b5c8e52148a69969/attachments/att_cc7ad6b03fbcdd493b73a128fde5794b\",\"target_item_ref\":null,\"target_owner_ref_id\":\"oref_cc7ad6b03fbcdd493b73a128fde5794b\",\"target_owner_thread_id\":\"thr_01a16cbade92740691d428f9353a5da4\",\"target_session_id\":\"ses_01a16cbade9276c8b5c8e52148a69969\",\"target_thread_id\":\"thr_01a16cbade92740691d428f9353a5da4\",\"unavailable_reason\":null,\"variant\":\"original\"}",
+      "preimage_sha256": "7cf5ac8d7f629bbd9cee2ea55224f80c9f8d586ae7de8577c0879bcaaa72b8db"
+    }
+  ]
+}

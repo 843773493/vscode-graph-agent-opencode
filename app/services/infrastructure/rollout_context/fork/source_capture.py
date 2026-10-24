@@ -77,7 +77,7 @@ def publish_captured_snapshot(record: ForkSourceCaptureRecord, snapshot: ForkSou
             "control_sha256": snapshot.rollout.control_sha256,
             "source_lifecycle_generation": snapshot.rollout.source_lifecycle_generation,
         },
-        "attachments": [asdict(item) for item in snapshot.attachments],
+        "attachments": [item.to_payload() for item in snapshot.attachments],
         "node_debug": snapshot.node_debug.to_payload() if snapshot.node_debug is not None else None,
         "claim_ids": sorted(item.claim_id for item in snapshot.attachments if item.claim_id is not None),
     }

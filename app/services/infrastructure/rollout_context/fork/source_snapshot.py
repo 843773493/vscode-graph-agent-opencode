@@ -8,7 +8,7 @@ import os
 import shutil
 import sqlite3
 from contextlib import closing
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from pathlib import Path
 
 from app.core.atomic_fs import fsync_directory
@@ -90,7 +90,7 @@ class ForkSourceSnapshot:
             "schema": "fork-source-snapshot:v2",
             "rollout_manifest_sha256": self.rollout.manifest_sha256,
             "session_control_sha256": self.rollout.control_sha256,
-            "attachments": [asdict(item) for item in self.attachments],
+            "attachments": [item.to_payload() for item in self.attachments],
             "node_debug": self.node_debug.to_payload() if self.node_debug is not None else None,
         }
         encoded = json.dumps(
