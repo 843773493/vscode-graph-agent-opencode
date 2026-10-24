@@ -122,11 +122,12 @@ class GatewayCommunicationClient:
                 except ValueError:
                     # 错误正文损坏仍按原 HTTP 拒绝处理，不改变重试分类。
                     payload = None
-                observation_code = observation_error_code(payload)
-                detail = payload.get("detail") if isinstance(payload, dict) else None
-                code = detail.get("code") if isinstance(detail, dict) else None
-                if isinstance(code, str) and code in FEDERATION_ERROR_CODES:
-                    message += f", code={code}"
+                if isinstance(payload, dict) and payload.get("request_id") == request_id and response.headers.get("X-Request-ID") == request_id:
+                    observation_code = observation_error_code(payload)
+                    detail = payload.get("detail")
+                    code = detail.get("code") if isinstance(detail, dict) else None
+                    if isinstance(code, str) and code in FEDERATION_ERROR_CODES:
+                        message += f", code={code}"
             logger.error("%s；原始响应=%s", message, response.text[:2000])
             if observation_code is not None:
                 raise RemoteObservationError(observation_code)

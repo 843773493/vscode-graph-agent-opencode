@@ -77,9 +77,10 @@ async def test_communication_http_error_keeps_request_and_classification_without
             "timeout": client.timeout.as_dict(),
         }))
         request = httpx.Request(method, client.base_url.join(path), headers=client.headers)
+        error_body = {**body, "request_id": REQUEST_ID} if isinstance(body, dict) else body
         response = httpx.Response(
             status if rejected else 200, request=request,
-            **({"text": body} if rejected and isinstance(body, str) else {"json": body if rejected else {"request_id": REQUEST_ID, "data": valid}}),
+            **({"text": body} if rejected and isinstance(body, str) else {"json": error_body if rejected else {"request_id": REQUEST_ID, "data": valid}}),
             headers={"X-Request-ID": REQUEST_ID, "Content-Type": content_type},
         )
         responses.append(response)
@@ -120,6 +121,7 @@ async def test_communication_observation_rejections_preserve_original_public_cod
             "timeout": client.timeout.as_dict(),
         }))
         return httpx.Response(409 if rejected else 200, request=httpx.Request(method, client.base_url.join(path)), json={
+            "request_id": REQUEST_ID,
             "detail": {"code": "federation-target-owner-rejected", "detail": {
                 "owner": "communication_observation", "code": code, "message": "/private/communication/observation",
             }},
@@ -134,6 +136,49 @@ async def test_communication_observation_rejections_preserve_original_public_cod
     rejected = False
     assert await communication_invocation[0]() == communication_invocation[1]
     assert requests[0] == requests[1]
+
+
+@pytest.mark.parametrize("communication_invocation", ["discovery", "send", "read", "wait"], indirect=True)
+@pytest.mark.parametrize("identity", ["valid", "body_drift", "header_drift", "body_missing", "header_missing"])
+async def test_communication_error_codes_require_matching_response_identity(
+    communication_invocation: tuple[Callable[[], Awaitable[object]], dict[str, object]],
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, identity: str,
+) -> None:
+    responses: list[httpx.Response] = []
+
+    async def respond(client, method, path, **kwargs):
+        payload = {
+            "request_id": "other" if identity == "body_drift" else REQUEST_ID,
+            "detail": {"code": "federation-target-owner-rejected", "detail": {
+                "owner": "communication_observation", "code": "read-snapshot-invalid",
+                "message": "/private/communication/identity",
+            }},
+        }
+        headers = {"X-Request-ID": "other" if identity == "header_drift" else REQUEST_ID}
+        if identity == "body_missing":
+            del payload["request_id"]
+        if identity == "header_missing":
+            del headers["X-Request-ID"]
+        request = httpx.Request(method, client.base_url.join(path), headers=client.headers)
+        assert request.headers["X-Request-ID"] == REQUEST_ID
+        response = httpx.Response(409, request=request, json=payload, headers=headers)
+        responses.append(response)
+        return response
+
+    monkeypatch.setattr(httpx.AsyncClient, "request", respond)
+    expected_error = RemoteObservationError if identity == "valid" else WorkspaceSessionContextAccessError
+    with pytest.raises(expected_error) as caught:
+        await communication_invocation[0]()
+    if identity == "valid":
+        assert isinstance(caught.value, RemoteObservationError)
+        assert caught.value.code == "read-snapshot-invalid"
+    else:
+        assert type(caught.value) is WorkspaceSessionContextAccessError
+        assert "stage=http_response, status=409" in str(caught.value)
+        assert "read-snapshot-invalid" not in str(caught.value)
+        assert "federation-target-owner-rejected" not in str(caught.value)
+    assert "private" not in str(caught.value)
+    assert any(responses[0].text[:2000] in record.getMessage() for record in caplog.records)
 
 
 @pytest.mark.parametrize("communication_invocation", ["discovery", "send", "read", "wait"], indirect=True)

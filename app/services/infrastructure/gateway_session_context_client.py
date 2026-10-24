@@ -231,21 +231,23 @@ class GatewaySessionContextClient:
             )
             if response.status_code == 404:
                 message += "; Gateway 工作区不存在或目标资源不可访问"
-            message += GatewaySessionContextClient._http_error_codes(response)
+            message += GatewaySessionContextClient._http_error_codes(response, request_id=request_id)
             logger.error("%s；原始响应=%s", message, response.text[:2000])
             if response.status_code in MODEL_RECOVERABLE_HTTP_STATUSES:
                 raise WorkspaceSessionContextAccessError(message)
             raise RuntimeError(message)
 
     @staticmethod
-    def _http_error_codes(response: httpx.Response) -> str:
+    def _http_error_codes(response: httpx.Response, *, request_id: str | None) -> str:
         """只投影原 owner 登记的拒绝码，任意 message/detail 留在原始日志。"""
         try:
             payload = response.json()
         except ValueError:
             # 非 JSON 拒绝仍按原 HTTP status 抛错，不把正文升级为错误协议。
             return ""
-        detail = payload.get("detail") if isinstance(payload, dict) else None
+        if request_id is None or not isinstance(payload, dict) or payload.get("request_id") != request_id or response.headers.get("X-Request-ID") != request_id:
+            return ""
+        detail = payload.get("detail")
         code = detail.get("code") if isinstance(detail, dict) else None
         if not isinstance(code, str) or code not in FEDERATION_ERROR_CODES:
             return ""

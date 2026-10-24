@@ -107,9 +107,12 @@ async def test_http_failure_preserves_status_and_registered_codes_with_raw_log_o
     responses: list[httpx.Response] = []
 
     async def respond(_client, method, url, **kwargs):
+        request_id = kwargs["headers"].get("X-Request-ID")
+        error_body = {**body, "request_id": request_id} if isinstance(body, dict) else body
         response = httpx.Response(
             status, request=httpx.Request(method, url, headers=kwargs["headers"]),
-            **({"text": body} if isinstance(body, str) else {"json": body}),
+            **({"text": body} if isinstance(body, str) else {"json": error_body}),
+            headers={"X-Request-ID": request_id} if request_id is not None else {},
         )
         responses.append(response)
         return response
@@ -123,6 +126,8 @@ async def test_http_failure_preserves_status_and_registered_codes_with_raw_log_o
     assert "request_id=" in public and "fork_response_protocol_invalid" not in public
     assert isinstance(caught.value, WorkspaceSessionContextAccessError) is (status in MODEL_RECOVERABLE_HTTP_STATUSES)
     assert caught.value.__cause__ is None
+    if "X-Request-ID" not in responses[0].request.headers:
+        expected_codes = ()  # 未绑定调用身份的 inventory 请求不接受远端业务错误码。
     assert all(code in public for code in expected_codes)
     if not expected_codes:
         assert ", code=" not in public
@@ -130,4 +135,46 @@ async def test_http_failure_preserves_status_and_registered_codes_with_raw_log_o
         assert ", owner=" not in public and "owner_code=" not in public
     if status == 404:
         assert "Gateway 工作区不存在或目标资源不可访问" in public
+    assert any(responses[0].text[:2000] in record.getMessage() for record in caplog.records)
+
+
+@pytest.mark.parametrize("context_operation", ["read", "search", "fork", "inventory"], indirect=True)
+@pytest.mark.parametrize("owner,code", [
+    ("resource_uri_resolver", "snapshot_unavailable"),
+    ("context_revision", "snapshot_changed"),
+])
+@pytest.mark.parametrize("identity", ["valid", "body_drift", "header_drift", "body_missing", "header_missing"])
+async def test_context_error_codes_require_matching_response_identity(
+    context_operation: Callable[[], Awaitable[object]], monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture, owner: str, code: str, identity: str,
+) -> None:
+    responses: list[httpx.Response] = []
+
+    async def respond(_client, method, url, **kwargs):
+        request_id = kwargs["headers"].get("X-Request-ID")
+        payload = {
+            "request_id": "other" if identity == "body_drift" else request_id,
+            "detail": {"code": "federation-target-owner-rejected", "detail": {
+                "owner": owner, "code": code, "message": "/private/context/identity",
+            }},
+        }
+        headers = {"X-Request-ID": "other" if identity == "header_drift" else request_id} if request_id is not None else {}
+        if identity == "body_missing":
+            del payload["request_id"]
+        if identity == "header_missing":
+            headers.pop("X-Request-ID", None)
+        response = httpx.Response(409, request=httpx.Request(method, url, headers=kwargs["headers"]), json=payload, headers=headers)
+        responses.append(response)
+        return response
+
+    monkeypatch.setattr(httpx.AsyncClient, "request", respond)
+    with pytest.raises(WorkspaceSessionContextAccessError) as caught:
+        await context_operation()
+    public = str(caught.value)
+    if identity == "valid" and "X-Request-ID" in responses[0].request.headers:
+        assert f", owner={owner}, owner_code={code}" in public
+        assert ", code=federation-target-owner-rejected" in public
+    else:
+        assert ", code=" not in public and ", owner=" not in public and "owner_code=" not in public
+    assert "private" not in public and "stage=http_response, status=409" in public
     assert any(responses[0].text[:2000] in record.getMessage() for record in caplog.records)

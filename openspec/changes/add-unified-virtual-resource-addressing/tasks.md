@@ -506,3 +506,10 @@
 - 本地 cold catalog 与联邦工作区 HTTP port 不再将原始响应或连接异常文本复制到普通错误；公开错误保留请求身份、API path、阶段、状态及异常类型，完整原文留原始诊断日志。连接投影保留原具体异常类型、可选 request 和 cause，不访问未初始化的 request getter。所有 HTTP 错误先核对正文/响应头 request_id，再映射 fork、导航、resolver、revision 或 observation 的原 owner 分类；错配或缺失身份只报工作区不可用，不接纳具名拒绝。
 - 固定完整 tree `7914441d2b8b65d7caebfcaa34f05ed82f61081f`：431项定向回归、Ruff、compileall通过；最终候选真实三 Gateway/SSH/WebSocket 反向通道问答1 passed/107.38秒。合法身份保留原拒绝码，body/header漂移及body缺失无法进入这些语义分支。旧生产完整archive的102项路径反例及42项无request连接投影反例均明确失败，原件保留。
 - 4324项源码前后相同、准确命令/raw/退出码、无残留进程与独立审查见 `out/tests/temp/federation_workspace_http_errors_20261024/artifacts/validation-proof-007.json`、`review-007.json`。定向错误验证使用HTTP stub，真实C3验证正常产品流程；不代完整Web、Windows或全部普通响应审计，2.2/7.2总门仍未勾。
+
+
+### 2026-10-24 联邦下游客户端错误身份（2.2/7.2 部分收口）
+
+- 通信与上下文客户端仅在错误正文 request_id 与 X-Request-ID 均匹配本次请求时解释已登记业务码；缺失/漂移身份不接纳远端 owner 语义，保持原 HTTP status 分类。未绑定请求身份的 inventory 不提取业务码；有效身份沿用原拒绝语义，原始正文仍仅留诊断日志。
+- 固定完整 tree `1312da3c7f6da6bfc50ea131ebe8d810bb39c939`：491项定向回归/18.31秒、Ruff、compileall通过；真实三 Gateway/SSH/WebSocket 反向通道问答1 passed/106.95秒。旧生产完整archive的身份反例50 failed、10 passed，准确区分旧实现无身份即采信业务码。早期导入错误收据保留，不计行为证据。
+- 4324项源码前后相同、准确命令/raw/退出码、无残留进程与独立审查见 `out/tests/temp/gateway_error_identity_20261024/artifacts/validation-proof-002.json`。错误矩阵使用HTTP stub，真实C3验证正常产品流程；不代完整Web、Windows或全部路径不变量审计，2.2/7.2总门仍未勾。
