@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import sqlite3
 import subprocess
@@ -384,16 +385,61 @@ async def _assembly_history(
 
 def _checkpoint_state(thread_node: Path) -> dict:
     with closing(sqlite3.connect(f"file:{thread_node / 'rollout' / 'index.sqlite'}?mode=ro", uri=True)) as connection:
-        return {
-            "checkpoints": connection.execute("SELECT checkpoint_id, view_id, checkpoint_json, metadata_json FROM checkpoints ORDER BY rowid").fetchall(),
-            "channels": connection.execute(
-                "SELECT channel.checkpoint_id, channel.channel_name, channel.storage_kind, channel.value_state, "
-                "channel.value_id, channel.value_session_id, channel.value_thread_id, value.value_hash, channel.context_view_id "
-                "FROM checkpoint_channels channel LEFT JOIN checkpoint_state_values value ON value.value_id=channel.value_id "
-                "ORDER BY channel.checkpoint_id, channel.channel_name"
-            ).fetchall(),
-            "assemblies": connection.execute("SELECT assembly_id, snapshot_json FROM context_assemblies ORDER BY rowid").fetchall(),
+        # 比较实际正文和全部引用字段；只比较已存hash会漏掉正文被改写但hash未更新。
+        tables = {
+            "checkpoints": ("checkpoints", "checkpoint_id"),
+            "channels": ("checkpoint_channels", "checkpoint_id, channel_name"),
+            "state_values": ("checkpoint_state_values", "value_id"),
+            "pending_writes": ("pending_writes", "checkpoint_id, task_id, task_path, write_index"),
+            "assemblies": ("context_assemblies", "assembly_id"),
+            "assembly_content": ("assembly_content_nodes", "session_id, thread_id, node_id"),
+            "views": ("context_views", "view_id"),
+            "view_ranges": ("context_view_ranges", "view_id, range_index"),
+            "view_jumps": ("context_view_jumps", "view_id, jump_level"),
+            "membership_blocks": ("context_membership_blocks", "block_id"),
+            "membership_items": ("context_membership_items", "block_id, member_index"),
+            "view_blocks": ("context_view_item_blocks", "view_id, block_ordinal"),
+            "source_snapshots": ("checkpoint_context_source_snapshots", "checkpoint_id"),
+            "source_states": ("checkpoint_context_source_states", "checkpoint_id, source_id"),
         }
+        state = {
+            name: [tuple({"blob_hex": value.hex()} if isinstance(value, bytes) else value for value in row)
+                   for row in connection.execute(f"SELECT * FROM {table} ORDER BY {order}")]
+            for name, (table, order) in tables.items()
+        }
+        cursor = connection.cursor()
+        cursor.row_factory = sqlite3.Row
+        values = {row["value_id"]: row for row in cursor.execute("SELECT * FROM checkpoint_state_values")}
+        for value in values.values():
+            assert len(value["value_blob"]) == value["value_length"], "状态版本正文长度不一致"
+            assert hashlib.sha256(value["value_blob"]).hexdigest() == value["value_hash"], "状态版本正文hash不一致"
+        references: dict[int, int] = {}
+        for channel in cursor.execute(
+            "SELECT channel.*, checkpoint.checkpoint_ns FROM checkpoint_channels channel "
+            "JOIN checkpoints checkpoint USING(checkpoint_id) "
+            "WHERE channel.storage_kind='sqlite_value' AND channel.value_state='present'"
+        ):
+            value = values.get(channel["value_id"])
+            assert value is not None, "checkpoint引用的状态版本正文缺失"
+            assert (channel["value_session_id"], channel["value_thread_id"], channel["checkpoint_ns"],
+                    channel["channel_name"], channel["channel_version"]) == (
+                value["session_id"], value["thread_id"], value["checkpoint_ns"],
+                value["channel_name"], value["channel_version"],
+            ), "checkpoint引用了其它owner/namespace/channel/version的正文"
+            references[value["value_id"]] = references.get(value["value_id"], 0) + 1
+        reused = [{
+            "value_id": value_id, "session_id": values[value_id]["session_id"],
+            "thread_id": values[value_id]["thread_id"], "checkpoint_ns": values[value_id]["checkpoint_ns"],
+            "channel": values[value_id]["channel_name"], "version": values[value_id]["channel_version"],
+            "references": count, "body_bytes": values[value_id]["value_length"],
+        } for value_id, count in sorted(references.items()) if count > 1]
+        assert any(row["body_bytes"] > 0 for row in reused), "真实多步执行未证明非空状态版本复用"
+        message_states = dict(connection.execute(
+            "SELECT value_state,count(*) FROM checkpoint_channels WHERE channel_name='messages' GROUP BY value_state"
+        ))
+        assert message_states.get("snapshot", 0) > 0 and message_states.get("delta", 0) > 0
+        state["version_reuse"] = {"shared_values": reused, "messages": message_states}
+        return state
 
 
 @pytest.mark.asyncio
