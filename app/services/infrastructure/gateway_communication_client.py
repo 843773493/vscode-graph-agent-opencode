@@ -36,18 +36,34 @@ class GatewayCommunicationClient:
         headers = {"X-Local-Token": get_gateway_local_token(), "X-Request-ID": request_id}
         async with httpx.AsyncClient(base_url=self._connection.resolve_gateway_url(), trust_env=False, headers=headers) as client:
             for path in ("/api/gateway/health", "/api/gateway/workspaces?check_health=true"):
-                last_error = "尚未收到就绪响应"
+                context = f"gateway_id={gateway_id}, workspace_id={workspace_id}, path={path}, request_id={request_id}"
+                last_detail = "stage=startup_readiness, status=not_received"
+                last_failure: httpx.RequestError | None = None
+                last_response: httpx.Response | None = None
                 while True:
                     remaining = deadline - loop.time()
                     if remaining <= 0:
-                        raise RuntimeError(f"通信 startup 恢复等待超时: gateway_id={gateway_id}, workspace_id={workspace_id}, path={path}, detail={last_error}")
+                        detail = f"通信 startup 恢复等待超时: {context}, {last_detail}"
+                        logger.error("%s；原始响应=%s", detail, last_response.text[:2000] if last_response is not None else None, exc_info=last_failure)
+                        raise RuntimeError(detail) from last_failure
                     try:
                         response = await client.get(path, timeout=remaining)
-                    except (httpx.ConnectError, httpx.ConnectTimeout) as error:
-                        last_error = str(error)
+                    except httpx.RequestError as error:
+                        last_detail = f"stage=connection, error_type={type(error).__name__}"
+                        if not isinstance(error, (httpx.ConnectError, httpx.ConnectTimeout)):
+                            detail = f"通信 startup 请求失败: {context}, {last_detail}"
+                            logger.error("%s；完整诊断见异常链", detail, exc_info=error)
+                            raise type(error)(detail, request=error.request) from error
+                        last_failure, last_response = error, None
                         await asyncio.sleep(min(0.1, max(deadline - loop.time(), 0)))
                         continue
-                    response.raise_for_status()
+                    try:
+                        response.raise_for_status()
+                    except httpx.HTTPStatusError as error:
+                        detail = f"通信 startup HTTP 失败: {context}, stage=http_response, status={response.status_code}"
+                        logger.error("%s；原始响应=%s", detail, response.text[:2000], exc_info=error)
+                        raise httpx.HTTPStatusError(detail, request=error.request, response=response) from error
+                    last_failure, last_response = None, response
                     value = response.json()
                     if not isinstance(value, dict) or value.get("request_id") != request_id or response.headers.get("X-Request-ID") != request_id or not isinstance(value.get("data"), dict):
                         raise RuntimeError("通信 startup 恢复响应的 request_id/data 漂移")
@@ -66,8 +82,10 @@ class GatewayCommunicationClient:
                     if status == "ready":
                         break
                     if status != "offline":
-                        raise RuntimeError(f"通信 startup 恢复的源 backend 状态非法: {status!r}")
-                    last_error = str(matches[0].get("services", {}).get("workspace_api"))
+                        detail = f"通信 startup 恢复的源 backend 状态非法: {context}, stage=backend_status_validation, status_type={type(status).__name__}"
+                        logger.error("%s；原始响应=%s", detail, response.text[:2000])
+                        raise RuntimeError(detail)
+                    last_detail = "stage=backend_readiness, status=offline"
                     await asyncio.sleep(min(0.1, max(deadline - loop.time(), 0)))
 
     async def _request(self, path: str, body: dict[str, object], *, timeout: float | None = None) -> dict[str, object]:
@@ -77,7 +95,15 @@ class GatewayCommunicationClient:
             timeout=timeout if timeout is not None else self._connection.resolve_timeout_seconds(),
             headers={"X-Local-Token": get_gateway_local_token(), "X-Request-ID": request_id},
         ) as client:
-            response = await client.post(path, json=body)
+            try:
+                response = await client.post(path, json=body)
+            except httpx.RequestError as error:
+                detail = (
+                    f"Gateway 通信请求失败: path={path}, request_id={request_id}, "
+                    f"stage=connection, error_type={type(error).__name__}"
+                )
+                logger.error("%s；完整诊断见异常链", detail, exc_info=error)
+                raise type(error)(detail, request=error.request) from error
         if not response.is_success:
             from app.core.session_control_communication_ledger.observations import (
                 RemoteObservationError,
