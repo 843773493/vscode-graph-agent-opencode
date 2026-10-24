@@ -9,7 +9,12 @@ from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from app.core.sqlite_state import SQLITE_BUSY_TIMEOUT_MS, validate_sqlite_path_budget
+from app.core.atomic_fs import native_io_path
+from app.core.sqlite_state import (
+    SQLITE_BUSY_TIMEOUT_MS,
+    sqlite_file_uri,
+    validate_sqlite_path_budget,
+)
 from app.services.infrastructure.attachment_blob_catalog.directory_schema import (
     DIRECTORY_SCHEMA_VERSION,
     initialize_directory_schema,
@@ -85,9 +90,9 @@ class AttachmentBlobCatalog(IngestMixin, ForkAttachmentClaimsMixin):
 
     def _open_connection(self) -> sqlite3.Connection:
         validate_sqlite_path_budget(self.database_path)
-        self.database_path.parent.mkdir(parents=True, exist_ok=True)
+        native_io_path(self.database_path.parent).mkdir(parents=True, exist_ok=True)
         connection = sqlite3.connect(
-            self.database_path, timeout=SQLITE_BUSY_TIMEOUT_MS / 1000,
+            sqlite_file_uri(self.database_path), uri=True, timeout=SQLITE_BUSY_TIMEOUT_MS / 1000,
             isolation_level=None, check_same_thread=False,
         )
         try:

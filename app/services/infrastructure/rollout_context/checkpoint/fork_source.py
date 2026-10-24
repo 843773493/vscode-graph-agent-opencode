@@ -25,6 +25,7 @@ from app.core.session_lifecycle_gate import (
     SessionDeletionPendingError,
     SessionLifecycleGate,
 )
+from app.core.sqlite_state import sqlite_file_uri
 from app.core.trace_middleware import reset_current_gateway_id, set_current_gateway_id
 from app.domain.itemized.mutation_intents import MutationIntentOwner
 from app.schemas.internal_v2.session import SessionForkResourceSourceDTO
@@ -230,7 +231,7 @@ class CheckpointForkSource:
                     raise RuntimeError("source-mismatch: captured resource selection 缺少 view")
                 stage = rollout_snapshot.captured_root / "rollout"
                 with closing(sqlite3.connect(
-                    (stage / "index.sqlite").as_uri() + "?mode=ro&immutable=1", uri=True,
+                    sqlite_file_uri(stage / "index.sqlite") + "?mode=ro&immutable=1", uri=True,
                 )) as connection:
                     if mode != "full_rollout_copy":
                         select_view_prefix(
@@ -322,7 +323,7 @@ class CheckpointForkSource:
             known = {request["source_uri"], *debug_choices}
             for attachment in attachments:
                 known.update((attachment.source_file_id, *attachment.source_file_aliases))
-            with closing(sqlite3.connect((stage / "index.sqlite").as_uri() + "?mode=ro&immutable=1", uri=True)) as connection:
+            with closing(sqlite3.connect(sqlite_file_uri(stage / "index.sqlite") + "?mode=ro&immutable=1", uri=True)) as connection:
                 known.update(uri for (uri,) in connection.execute(
                     "SELECT DISTINCT display_uri FROM resource_activation_bindings WHERE display_uri IS NOT NULL",
                 ))

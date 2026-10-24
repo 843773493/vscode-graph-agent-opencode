@@ -209,7 +209,7 @@ def _prepare_workspace(context: TestRunContext, model_port: int, gateway_port: i
 async def communication_case(request: pytest.FixtureRequest) -> AsyncIterator[CommunicationCase]:
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
     ports = integration_port_block_for_file(Path(request.node.path))
-    workspace = _prepare_workspace(context, ports.port(10), ports.port(1))
+    workspace = getattr(request, "param", {}).get("prepare_workspace", _prepare_workspace)(context, ports.port(10), ports.port(1))
     reset_gateway_persistent_state(workspace_root=workspace)
     artifacts = context.artifacts_dir / request.node.name
     artifacts.mkdir(parents=True, exist_ok=True)

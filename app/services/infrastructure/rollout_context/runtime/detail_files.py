@@ -12,6 +12,7 @@ from pathlib import Path
 from app.core.atomic_fs import native_io_path
 from app.core.session_catalog_resolver import SessionCatalogPathResolver
 from app.core.session_catalog_store import SessionCreationRecord
+from app.core.sqlite_state import sqlite_file_uri
 from app.domain.itemized.identity.detail_ref import DetailRef
 from app.services.infrastructure.rollout_context.runtime.detail_manifest import (
     DetailUnavailableError,
@@ -53,7 +54,7 @@ class DetailFiles:
                 self._resolver.resolve_thread_node(owner_session, owner_thread)
                 / "rollout" / "index.sqlite"
             )
-            with closing(sqlite3.connect(index_path.as_uri() + "?mode=ro", uri=True)) as connection:
+            with closing(sqlite3.connect(sqlite_file_uri(index_path) + "?mode=ro", uri=True)) as connection:
                 require_historical_scope(
                     connection, ref.session_id, ref.thread_id,
                     current_owner=(owner_session, owner_thread),
@@ -112,7 +113,7 @@ class DetailFiles:
             with (
                 nullcontext(snapshot.connection) if snapshot is not None else closing(
                     sqlite3.connect(
-                        (self._resolver.resolve_thread_node(*owner) / "rollout" / "index.sqlite").as_uri() + "?mode=ro",
+                        sqlite_file_uri(self._resolver.resolve_thread_node(*owner) / "rollout" / "index.sqlite") + "?mode=ro",
                         uri=True,
                     )
                 )

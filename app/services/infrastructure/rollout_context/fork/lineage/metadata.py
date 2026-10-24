@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from uuid import uuid4
 
+from app.core.atomic_fs import native_io_path
 from app.core.session_catalog_store import (
     ForkRetentionClaim,
     SessionCatalogStore,
@@ -115,7 +116,7 @@ class ForkMetadataMixin:
             raise RuntimeError("fork retention 已 released，禁止迟到 activation")
         source_owner_thread_id = self._storage.fork_paths.thread_identity(source_session_id, source_thread_id)
         index = self._storage.index_path(source_session_id, checkpoint_ns, thread_id=source_owner_thread_id)
-        if not index.is_file():
+        if not native_io_path(index).is_file():
             raise RuntimeError(f"fork retention source index 缺失: {index}")
         with (
             self._storage._lock(source_owner_thread_id, checkpoint_ns, session_id=source_session_id),
@@ -149,7 +150,7 @@ class ForkMetadataMixin:
 
         session_dir = self._storage._path_resolver.resolve_session_node(session_id)
         control_path = session_dir / "session-control.sqlite"
-        if not control_path.is_file():
+        if not native_io_path(control_path).is_file():
             raise RuntimeError(
                 "source session 缺少 session-control.sqlite，无法读取 "
                 f"lifecycle generation（fail closed）: session_id={session_id}"

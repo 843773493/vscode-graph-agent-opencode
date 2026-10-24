@@ -12,7 +12,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from threading import RLock
 
-from app.core.sqlite_state import load_sql
+from app.core.atomic_fs import native_io_path
+from app.core.sqlite_state import load_sql, sqlite_file_uri, validate_sqlite_path_budget
 from app.schemas.internal_v2.session_navigation.operations import (
     NAVIGATION_MUTATION_TERMINAL_STATES,
     validate_operation_id,
@@ -74,10 +75,11 @@ class FileOperationRecord:
 class WorkspaceFileStore:
     def __init__(self, workspace: Path, workspace_id: str) -> None:
         self.path = workspace / ".boxteam/navigation/workspace-files.sqlite"
-        self.path.parent.mkdir(parents=True, exist_ok=True)
+        validate_sqlite_path_budget(self.path)
+        native_io_path(self.path.parent).mkdir(parents=True, exist_ok=True)
         self.workspace_id = workspace_id
         self._lock = RLock()
-        self._db = sqlite3.connect(self.path, isolation_level=None, check_same_thread=False)
+        self._db = sqlite3.connect(sqlite_file_uri(self.path), uri=True, isolation_level=None, check_same_thread=False)
         self._db.row_factory = sqlite3.Row
         self._db.execute("PRAGMA journal_mode=WAL")
         self._db.execute("PRAGMA synchronous=FULL")

@@ -12,8 +12,11 @@ from datetime import UTC, datetime
 from importlib.resources import files
 from pathlib import Path
 from typing import BinaryIO, Final, Self
+from urllib.parse import quote
 
 import portalocker
+
+from app.core.atomic_fs import native_io_path
 
 SQLITE_BUSY_TIMEOUT_MS: Final = 5000
 
@@ -99,11 +102,17 @@ def sqlite_vfs_max_pathname() -> int:
     return value.mxPathname
 
 
+def sqlite_file_uri(database_path: Path) -> str:
+    """编码实际交给 VFS 的原生路径；查询参数由连接 owner 显式附加。"""
+    # Windows 扩展路径必须作为 URI 路径编码，不能由 as_uri 把 ? 当作 authority。
+    return "file:" + quote(str(native_io_path(database_path.absolute())), safe="/:")
+
+
 def validate_sqlite_path_budget(database_path: Path) -> None:
     """校验 SQLite 主库及 rollback/WAL sidecar 的绝对 UTF-8 路径预算。"""
     if not isinstance(database_path, Path):
         raise TypeError(f"database_path 必须是 Path: {database_path!r}")
-    absolute_path = database_path.expanduser().resolve()
+    absolute_path = native_io_path(database_path.expanduser().resolve())
     maximum = sqlite_vfs_max_pathname()
     for suffix in ("", "-journal", "-wal", "-shm"):
         candidate = f"{absolute_path}{suffix}"
@@ -177,8 +186,8 @@ class SQLiteProcessOwnership:
         self._lock_handle: BinaryIO | None = None
 
     def acquire(self) -> None:
-        self._lock_path.parent.mkdir(parents=True, exist_ok=True)
-        handle = self._lock_path.open("a+b")
+        native_io_path(self._lock_path.parent).mkdir(parents=True, exist_ok=True)
+        handle = native_io_path(self._lock_path).open("a+b")
         try:
             handle.seek(0, os.SEEK_END)
             if handle.tell() == 0:
@@ -228,7 +237,8 @@ class SQLiteStateDatabase:
         self._ownership = SQLiteProcessOwnership(self.path)
         self._allow_shared_processes = allow_shared_processes
         self._closed = False
-        self.path.parent.mkdir(parents=True, exist_ok=True)
+        validate_sqlite_path_budget(self.path)
+        native_io_path(self.path.parent).mkdir(parents=True, exist_ok=True)
         # 构造期任一步骤失败都必须归还进程所有权锁：异常对象会连同
         # traceback 一起被调用方长期持有，锁 fd 若随之存活，调用方重试
         # 同一路径时只会看到「已被另一个进程占用」，真实迁移错误被掩盖。
@@ -247,7 +257,7 @@ class SQLiteStateDatabase:
         if self._closed:
             raise RuntimeError(f"SQLite 状态库已关闭: {self.path}")
         connection = sqlite3.connect(
-            self.path,
+            sqlite_file_uri(self.path), uri=True,
             timeout=SQLITE_BUSY_TIMEOUT_MS / 1000,
             isolation_level=None,
             check_same_thread=False,

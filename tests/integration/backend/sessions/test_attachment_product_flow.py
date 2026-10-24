@@ -7,10 +7,14 @@ import os
 import shlex
 import subprocess
 import sys
+from dataclasses import replace
+from pathlib import Path
 
 import pytest
 
+from app.core.atomic_fs import native_io_path
 from app.core.resource_uri import file_uri_child, parse_resource_uri
+from tests.harness.python.run_context import TestRunContext
 from tests.integration.backend.sessions.rollout_context.test_execution_history_storage import (
     _fork,
 )
@@ -18,6 +22,7 @@ from tests.integration.backend.sessions.test_attachment_directory_entry import u
 from tests.integration.backend.sessions.test_session_communication_pipeline import (
     CommunicationCase,
     _completed,
+    _prepare_workspace,
     _tool,
 )
 from tests.integration.backend.sessions.test_session_communication_pipeline import (
@@ -26,7 +31,17 @@ from tests.integration.backend.sessions.test_session_communication_pipeline impo
 from tests.support.api_helpers import create_session
 
 
-@pytest.mark.parametrize("communication_case", [{"resources": True}], indirect=True)
+def _sqlite_sidecar_boundary_workspace(context: TestRunContext, model_port: int, gateway_port: int) -> Path:
+    if os.name == "nt":
+        # 主库仍在 MAX_PATH 内，WAL/SHM 跨界；完整产品流不能靠缩短根目录绕过。
+        index = context.workspace_root / ".boxteam/sessions/1970/01/01" / ("s" * 36) / "threads" / ("t" * 36) / "rollout/index.sqlite"
+        padding = 258 - len(str(index))
+        assert padding > 1, str(index)
+        context = replace(context, workspace_root=context.workspace_root / ("x" * (padding - 1)))
+    return _prepare_workspace(context, model_port, gateway_port)
+
+
+@pytest.mark.parametrize("communication_case", [{"resources": True, "prepare_workspace": _sqlite_sidecar_boundary_workspace}], indirect=True)
 async def test_upload_shell_read_fork_and_restart_share_original_directory(
     communication_case: CommunicationCase,
 ) -> None:
@@ -74,7 +89,11 @@ async def test_upload_shell_read_fork_and_restart_share_original_directory(
     assert "original-for-product-flow processed" in read["content"], read
     saved = await case.client.get("/api/v1/workspace/files/content", params={"path": derived})
     assert saved.status_code == 200 and saved.json()["data"]["content"] == "original-for-product-flow processed", saved.text
-    source_canonical = (case.main_thread_node(session) / "rollout/rollout.jsonl").read_bytes()
+    index = case.main_thread_node(session) / "rollout/index.sqlite"
+    if os.name == "nt":
+        assert len(str(index)) == 258
+        assert native_io_path(index).is_file()
+    source_canonical = native_io_path(case.main_thread_node(session) / "rollout/rollout.jsonl").read_bytes()
     point = await case.client.get(f"/api/v1/sessions/{session}/fork-source-point", params={"mode": "full_rollout_copy"})
     assert point.status_code == 200, point.text
     fork = await _fork(case.client, session, point.json()["data"], mode="full_rollout_copy", key="attachment-product-flow")
@@ -84,7 +103,7 @@ async def test_upload_shell_read_fork_and_restart_share_original_directory(
     assert parse_resource_uri(fork["source_uri"], local_gateway_id=case.gateway_id) == parse_resource_uri(
         point.json()["data"]["source_uri"], local_gateway_id=case.gateway_id,
     )
-    assert (case.main_thread_node(target) / "rollout/rollout.jsonl").read_bytes() == source_canonical
+    assert native_io_path(case.main_thread_node(target) / "rollout/rollout.jsonl").read_bytes() == source_canonical
     await case.hard_restart()
     history = await case.client.post(f"/api/v1/sessions/{target}/history", json={"direction": "head", "turns": 10})
     assert history.status_code == 200, history.text
@@ -109,10 +128,10 @@ async def test_upload_shell_read_fork_and_restart_share_original_directory(
         result = case.tool_result(target, call + ":tool-call:" + name)
         assert result["tool_outcome"] == "success" and result["execution_confirmed"] is True, result
         assert expected in result["content"], result
-    assert (case.main_thread_node(session) / "rollout/rollout.jsonl").read_bytes() == source_canonical
-    assert (case.main_thread_node(target) / "rollout/rollout.jsonl").read_bytes().startswith(source_canonical)
+    assert native_io_path(case.main_thread_node(session) / "rollout/rollout.jsonl").read_bytes() == source_canonical
+    assert native_io_path(case.main_thread_node(target) / "rollout/rollout.jsonl").read_bytes().startswith(source_canonical)
     case.record("attachment-product-flow", {
-        "source_session": session, "fork": fork, "attachment": original,
+        "source_session": session, "fork": fork, "attachment": original, "sqlite_path_characters": len(str(index)),
         "source_calls": calls, "target_calls": target_calls,
         "shell_result": shell, "read_result": read,
     })

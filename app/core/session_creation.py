@@ -81,7 +81,7 @@ from app.core.session_catalog_store.creation_envelope import (
 from app.core.session_control_primitives import CONTROL_DATABASE_NAME
 from app.core.session_control_store import SessionControlStore, ThreadGraphBindingRecord
 from app.core.session_lifecycle_gate import NavigationTopologyGate, SessionLifecycleGate
-from app.core.sqlite_state import validate_sqlite_path_budget
+from app.core.sqlite_state import sqlite_file_uri, validate_sqlite_path_budget
 
 __all__ = [
     "ForkCompletionProof",
@@ -822,7 +822,7 @@ class SessionCreationService:
         if not control_path.is_file():
             raise _creation_conflict(record, stage, "session-control.sqlite 缺失", path=control_path)
         with _creation_access(record, f"{stage}/session-control.sqlite/open"):
-            connection = sqlite3.connect(control_path)
+            connection = sqlite3.connect(sqlite_file_uri(control_path), uri=True)
         try:
             with _creation_access(record, f"{stage}/session-control.sqlite/read"):
                 rows = connection.execute(

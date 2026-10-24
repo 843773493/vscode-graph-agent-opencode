@@ -14,6 +14,7 @@ from pathlib import Path
 from app.core.atomic_fs import fsync_directory, native_io_path
 from app.core.file_permissions import restrict_private_path_access
 from app.core.session_control_primitives import CONTROL_DATABASE_NAME
+from app.core.sqlite_state import sqlite_file_uri
 from app.services.infrastructure.attachment_blob_catalog.records import (
     ForkAttachmentDirectorySnapshot,
     ForkAttachmentSnapshot,
@@ -115,13 +116,13 @@ def capture_fork_rollout_snapshot(
         source_session_id,
         thread_id=source_thread_id,
     )
-    if not source_rollout.is_dir() or source_rollout.is_symlink():
+    if not native_io_path(source_rollout).is_dir() or native_io_path(source_rollout).is_symlink():
         raise RuntimeError(
             "source-mismatch: fork source rollout 不存在或不是普通目录"
         )
     if not snapshot_id or Path(snapshot_id).name != snapshot_id:
         raise ValueError("fork source snapshot id 必须是单一路径段")
-    captured_root.mkdir(parents=True, exist_ok=False, mode=0o700)
+    native_io_path(captured_root).mkdir(parents=True, exist_ok=False, mode=0o700)
     snapshot_rollout = captured_root / "rollout"
 
     source_lock_path = source_rollout.parent / ".rollout.write.lock"
@@ -134,22 +135,22 @@ def capture_fork_rollout_snapshot(
                 exclusive=False,
             )
             lock.acquire()
-        if not source_lock_path.is_file() or source_lock_path.is_symlink():
+        if not native_io_path(source_lock_path).is_file() or native_io_path(source_lock_path).is_symlink():
             raise RuntimeError("source-mismatch: fork source 缺少既有普通写锁文件")
         # 显式冻结副本携带既有锁，后续共享读取不得自行创建文件。
-        shutil.copy2(source_lock_path, captured_root / ".rollout.write.lock")
+        shutil.copy2(native_io_path(source_lock_path), native_io_path(captured_root / ".rollout.write.lock"))
         source_files = _tree_manifest(
             source_rollout,
             excluded_root_entries=frozenset((*SQLITE_COPY_FILES, "context-plan-details")),
         )
-        shutil.copytree(source_rollout, snapshot_rollout, ignore=_copy_ignore)
+        shutil.copytree(native_io_path(source_rollout), native_io_path(snapshot_rollout), ignore=_copy_ignore)
         sqlite_files = copy_live_sqlite_snapshot(
             source_rollout, snapshot_rollout, rollout_lock_held=True,
         )
         index_path = snapshot_rollout / "index.sqlite"
         committed_offset = None
-        if index_path.is_file():
-            with closing(sqlite3.connect(index_path.as_uri() + "?mode=ro&immutable=1", uri=True)) as connection:
+        if native_io_path(index_path).is_file():
+            with closing(sqlite3.connect(sqlite_file_uri(index_path) + "?mode=ro&immutable=1", uri=True)) as connection:
                 row = connection.execute("SELECT committed_jsonl_offset FROM database_meta WHERE singleton_id = 1").fetchone()
                 source_files = (*source_files, *_copy_declared_details(
                     connection, source_rollout=source_rollout, snapshot_rollout=snapshot_rollout,
@@ -157,7 +158,7 @@ def capture_fork_rollout_snapshot(
             if row is None or type(row[0]) is not int or row[0] < 0:
                 raise RuntimeError("source-mismatch: fork snapshot committed JSONL offset 非法")
             committed_offset = row[0]
-            jsonl = snapshot_rollout / "rollout.jsonl"
+            jsonl = native_io_path(snapshot_rollout / "rollout.jsonl")
             if not jsonl.is_file() or jsonl.stat().st_size < committed_offset:
                 raise RuntimeError("source-mismatch: fork snapshot JSONL 短于 committed offset")
             with jsonl.open("r+b") as stream:
@@ -184,19 +185,19 @@ def capture_fork_rollout_snapshot(
                        CONTROL_DATABASE_NAME + "-journal"),
         )
         control_path = captured_root / CONTROL_DATABASE_NAME
-        if not control_path.is_file() or control_path.is_symlink():
+        if not native_io_path(control_path).is_file() or native_io_path(control_path).is_symlink():
             raise RuntimeError("source-mismatch: fork source 缺少 session-control snapshot")
         control_digest = hashlib.sha256()
         for name in (CONTROL_DATABASE_NAME, CONTROL_DATABASE_NAME + "-wal",
                      CONTROL_DATABASE_NAME + "-journal"):
-            path = captured_root / name
+            path = native_io_path(captured_root / name)
             if path.exists():
                 control_digest.update(name.encode())
                 with path.open("rb") as stream:
                     while chunk := stream.read(1024 * 1024):
                         control_digest.update(chunk)
         control_sha256 = control_digest.hexdigest()
-        with closing(sqlite3.connect(control_path.as_uri() + "?mode=ro&immutable=1", uri=True)) as connection:
+        with closing(sqlite3.connect(sqlite_file_uri(control_path) + "?mode=ro&immutable=1", uri=True)) as connection:
             owner = connection.execute(
                 "SELECT kind FROM thread_catalog WHERE thread_id = ?", (source_thread_id,),
             ).fetchone()
@@ -250,7 +251,7 @@ def capture_fork_rollout_snapshot(
     ).encode("utf-8")
     manifest_path = captured_root / "snapshot-manifest.json"
     descriptor = os.open(
-        manifest_path,
+        native_io_path(manifest_path),
         os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
         0o600,
     )
@@ -273,7 +274,7 @@ def capture_fork_rollout_snapshot(
 
 def _file_sha256(path: Path) -> str:
     digest = hashlib.sha256()
-    with path.open("rb") as stream:
+    with native_io_path(path).open("rb") as stream:
         while chunk := stream.read(1024 * 1024):
             digest.update(chunk)
     return digest.hexdigest()

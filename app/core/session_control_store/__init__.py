@@ -26,6 +26,7 @@ from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
+from app.core.atomic_fs import native_io_path
 from app.core.identifier import validate_thread_id as validate_thread_id
 from app.core.session_control_communication_ledger.communication_ledger import (
     CommunicationInboxRecord,
@@ -89,6 +90,7 @@ from app.core.session_control_thread_owner_binding.thread_owner_binding import (
 )
 from app.core.sqlite_state import (
     SQLITE_BUSY_TIMEOUT_MS,
+    sqlite_file_uri,
     validate_sqlite_path_budget,
 )
 
@@ -142,7 +144,7 @@ class SessionControlStore(
         self._collaboration_publication: Callable[[CollaborationFanoutRecord], None] | None = None
         self._publication_lock = threading.RLock()
         if not read_only:
-            self.database_path.parent.mkdir(parents=True, exist_ok=True)
+            native_io_path(self.database_path.parent).mkdir(parents=True, exist_ok=True)
         self._closed = False
         self._connection = self._connect()
         try:
@@ -292,8 +294,8 @@ class SessionControlStore(
 
     def _connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(
-            self.database_path.as_uri() + "?mode=ro" if self._read_only else self.database_path,
-            uri=self._read_only,
+            sqlite_file_uri(self.database_path) + ("?mode=ro" if self._read_only else ""),
+            uri=True,
             timeout=SQLITE_BUSY_TIMEOUT_MS / 1000,
             isolation_level=None,
             check_same_thread=False,

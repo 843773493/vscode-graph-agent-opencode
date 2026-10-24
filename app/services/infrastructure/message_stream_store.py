@@ -17,6 +17,7 @@ from app.abstractions.turn_terminal_status import (
     ToolResultCompletion,
     TurnTerminalStatusWriter,
 )
+from app.core.atomic_fs import atomic_write_bytes, native_io_path
 from app.core.bounded_json import bound_json_value
 from app.core.identifier import create_prefixed_id, validate_thread_id
 from app.core.session_catalog_resolver import SessionCatalogPathResolver
@@ -405,7 +406,7 @@ class MessageStreamStore:
         session_id: str,
         turn_stream_id: str,
     ) -> dict[str, dict[str, Any]]:
-        path = self._applied_event_ids_path(session_id, turn_stream_id)
+        path = native_io_path(self._applied_event_ids_path(session_id, turn_stream_id))
         if not path.is_file():
             return {}
         try:
@@ -435,18 +436,9 @@ class MessageStreamStore:
     ) -> None:
         path = self._applied_event_ids_path(session_id, turn_stream_id)
         with self._snapshot_file_lock:
-            path.parent.mkdir(parents=True, exist_ok=True)
-            temp_path = path.with_suffix(".tmp")
-            with temp_path.open("w", encoding="utf-8") as stream:
-                json.dump(
-                    dict(entries),
-                    stream,
-                    ensure_ascii=False,
-                    separators=(",", ":"),
-                )
-                stream.flush()
-                os.fsync(stream.fileno())
-            temp_path.replace(path)
+            atomic_write_bytes(path, json.dumps(
+                dict(entries), ensure_ascii=False, separators=(",", ":"),
+            ).encode("utf-8"))
 
     def _event_ids_from_records(
         self,

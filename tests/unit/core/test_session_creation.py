@@ -16,6 +16,7 @@ from pathlib import Path
 import pytest
 
 from app.core import session_creation, sqlite_state
+from app.core.atomic_fs import native_io_path
 from app.core.identifier import create_uuid_hex
 from app.core.session_catalog_store import (
     SessionCatalogStore,
@@ -226,7 +227,7 @@ def test_sqlite_path_budget_checks_rollback_journal_sidecar(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     path = tmp_path.resolve() / "catalog.sqlite"
-    main_path_bytes = len(str(path).encode("utf-8"))
+    main_path_bytes = len(str(native_io_path(path)).encode("utf-8"))
     monkeypatch.setattr(
         sqlite_state,
         "sqlite_vfs_max_pathname",
@@ -320,7 +321,7 @@ async def test_rollout_index_path_budget_checked_before_record_or_staging(
             await do_create(service)
         assert str(sessions_root) not in str(failure.value)
         assert isinstance(failure.value.__cause__, ValueError)
-        assert "rollout/index.sqlite" in str(failure.value.__cause__)
+        assert str(rollout_database) in str(failure.value.__cause__)
         assert validated_rollouts == [rollout_database]
         assert count_rows(store, "session_creation_records") == 0
         assert not sessions_root.exists()

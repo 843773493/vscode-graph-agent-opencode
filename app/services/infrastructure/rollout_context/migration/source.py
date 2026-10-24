@@ -9,6 +9,7 @@ from collections.abc import Mapping
 from contextlib import closing
 from pathlib import Path
 
+from app.core.sqlite_state import sqlite_file_uri
 from app.domain.itemized.errors import FormatDispatchError
 from app.domain.itemized.hashing import sha256_jcs
 from app.services.infrastructure.rollout_context.migration.artifacts import (
@@ -65,7 +66,7 @@ def read_source_report(
         rollout_jsonl_artifact["sha256"], field="v1 rollout.jsonl sha256"
     )
     with closing(
-        sqlite3.connect(index.as_uri() + "?mode=ro&immutable=1", uri=True)
+        sqlite3.connect(sqlite_file_uri(index) + "?mode=ro&immutable=1", uri=True)
     ) as connection:
         meta_columns = {
             row[1] for row in connection.execute("PRAGMA table_info(database_meta)")

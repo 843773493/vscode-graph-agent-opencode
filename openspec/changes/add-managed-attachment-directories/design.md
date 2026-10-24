@@ -132,6 +132,8 @@ Windows 恢复补验要求 activation 新 ID 同时满足原生文件名单段�
 
 完整附件流程进一步要求持久 detail locator 始终使用 POSIX 字符串；fork source 捕获和目标资源检查与原 manifest 一致，不得用 str(Path) 随宿主平台改变合同。冻结详情从捕获、lineage/前缀读取、artifact 传输、目标安装到发布屏障及失败/恢复清理的原生 I/O 都复用 native_io_path，逻辑 locator、来源身份和原 hash 保持不变。Linux/Windows 的真实 Gateway→上传→PTY处理→读取→公开fork→硬重启→目标冷读已通过；准确源码、原始失败/通过和未覆盖范围见 tasks 6.1，不能据此声称中继远端寻址或全部故障组合已验收。
 
+SQLite 文件连接现统一经过 `sqlite_file_uri` 编码原生 I/O 路径，保留各 owner 原有只读、immutable、WAL 与事务语义；预算按实际交给 VFS 的 UTF-8 路径及 journal/WAL/SHM 后缀核对。Windows 默认 VFS 的 1040 字节缓冲区不等于普通 Win32 路径可用长度，不再靠缩短工作区规避。冻结 SQLite 复制仍在隔离解释器保持原读事务，父进程仅编码 URI，经结构化 stdin 传递，不打开或关闭 live 数据库文件。快照捕获、marker 校验、安装/恢复和消息流去重文件在原生 I/O 边界共用已有扩展路径/原子写；逻辑 locator、来源身份、正文和 hash 不变，不升 schema、不改系统设置。258 字符主库（sidecar 跨 MAX_PATH）、600 字符 ASCII 与含中文路径实机 WAL/重开/只读复制通过，258 字符工作区完整附件产品流也已通过；精确范围见 tasks 6.1 的 `sqlite_windows_path_budget_20261024` 证据，真正中继跨机器 URI 及完整生命周期故障组合继续 TODO。
+
 目录创建、上传接受、原件/预览、统一文件读写、Shell 占用、运行时代次与低频 GC 已纵向切换，blobs.py/queries.py 旧生产实现物理移除；schema.py、旧 SQL 和旧快照仅用于显式迁移或封存历史读取。后续优先补齐冻结历史/完整 Web/平台验收，再处理挂起操作终止、共享锁与关闭期限；每个批次迁齐调用方并验证后提交，未满足全部合同的任务保持未勾选。
 
 迁移本身须覆盖从产品生成的 schema 3 历史、相同内容重复上传、共享旧 blob 的多个 owner、已释放/已回收资源、终态深历史 fork、排队输入、非终态明确拒绝，以及切换前/切换点后崩溃与重复执行。核对原件字节、URI 身份、owner/claim、历史请求 hash 和备份；目录回收不删除历史 immutable asset。Agent 团队/委派专项验收继续 TODO；附件链实际必需的用户/内部消息接受和通用 fork 仍验证。

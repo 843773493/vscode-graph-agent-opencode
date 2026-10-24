@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from app.core.atomic_fs import native_io_path
 from app.core.phase_observer import observe_phase
 from app.core.session_catalog_store import SessionCatalogStore
 from app.core.session_control_primitives import CONTROL_DATABASE_NAME
@@ -32,7 +33,7 @@ async def release_fork_retentions(
     async with topology.shared(), gate.exclusive(target_session_id):
         target_node = storage.fork_paths.session_node(target_session_id)
         control_path = target_node / CONTROL_DATABASE_NAME
-        if not control_path.is_file():
+        if not native_io_path(control_path).is_file():
             raise RuntimeError(f"fork retention release 缺少 target 控制库: {control_path}")
         control = SessionControlStore(control_path)
         try:
@@ -100,7 +101,7 @@ async def _release_source_retention(
         if source.state != "active" or source.workspace_id != record.workspace_id:
             raise RuntimeError("未释放的 fork retention source catalog 非 active 或 workspace 冲突")
         source_control_path = storage.fork_paths.session_node(record.source_session_id) / CONTROL_DATABASE_NAME
-        if not source_control_path.is_file():
+        if not native_io_path(source_control_path).is_file():
             raise RuntimeError(f"fork retention release 缺少 source 控制库: {source_control_path}")
         control = SessionControlStore(source_control_path, read_only=True)
         try:
@@ -117,7 +118,7 @@ async def _release_source_retention(
         index_path = storage.index_path(
             record.source_session_id, record.checkpoint_ns, thread_id=record.source_thread_id,
         )
-        if not index_path.is_file():
+        if not native_io_path(index_path).is_file():
             if claim.state != "preparing":
                 raise RuntimeError(f"active fork retention source index 缺失: {index_path}")
         else:

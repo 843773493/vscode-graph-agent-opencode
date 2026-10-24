@@ -6,7 +6,13 @@ from datetime import datetime
 from pathlib import Path
 from uuid import uuid4
 
-from app.core.sqlite_state import load_sql, utc_now_text
+from app.core.atomic_fs import native_io_path
+from app.core.sqlite_state import (
+    load_sql,
+    sqlite_file_uri,
+    utc_now_text,
+    validate_sqlite_path_budget,
+)
 from app.services.infrastructure.config.state import (
     ConfigConflictError,
     ConfigSourceJournalRecord,
@@ -47,12 +53,13 @@ class WorkspaceSourceOwner:
 
     def __init__(self, *, path: Path) -> None:
         self.path = path.expanduser().resolve()
-        self.path.parent.mkdir(parents=True, exist_ok=True)
+        validate_sqlite_path_budget(self.path)
+        native_io_path(self.path.parent).mkdir(parents=True, exist_ok=True)
         self._initialize()
 
     def _connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(
-            self.path,
+            sqlite_file_uri(self.path), uri=True,
             timeout=5,
             isolation_level=None,
             check_same_thread=False,

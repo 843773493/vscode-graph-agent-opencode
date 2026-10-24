@@ -13,7 +13,7 @@ from uuid import uuid4
 
 from app.core.atomic_fs import fsync_directory, fsync_file, native_io_path
 from app.core.resource_uri import parse_resource_uri
-from app.core.sqlite_state import load_sql, utc_now_text
+from app.core.sqlite_state import load_sql, sqlite_file_uri, utc_now_text
 from app.services.infrastructure.rollout_context.fork.copy_items import (
     prune_view_prefix,
     select_view_prefix,
@@ -51,7 +51,7 @@ def stage_captured_rollout(
 ) -> Path:
     """逐文件验证并复制已捕获产物，内存不随文件正文长度增长。"""
     stage = target_root.with_name(f".fork-{materialization_id}.rollout")
-    stage.mkdir(mode=0o700, exist_ok=False)
+    native_io_path(stage).mkdir(mode=0o700, exist_ok=False)
     try:
         source_root = snapshot.rollout.captured_root / "rollout"
         for captured in snapshot.rollout.files:
@@ -112,7 +112,7 @@ def prepare_target_snapshot(
             "SELECT created_at FROM database_meta WHERE singleton_id = 1",
         ).fetchone()[0]
         columns = tuple(row[1] for row in target.execute("PRAGMA table_info(fork_materializations)"))
-    with closing(sqlite3.connect(stage / "index.sqlite")) as connection:
+    with closing(sqlite3.connect(sqlite_file_uri(stage / "index.sqlite"), uri=True)) as connection:
         connection.execute("PRAGMA journal_mode=DELETE")
         connection.execute(HISTORY_NAMESPACE_SCHEMA_SQL)
         connection.execute("BEGIN IMMEDIATE")
@@ -321,15 +321,15 @@ def recover_target_snapshot_publication(
     stage = target.with_name(f".fork-{materialization_id}.rollout")
     rollback = target.with_name(f".fork-{materialization_id}.rollback")
     with storage._lock(target_thread_id, checkpoint_ns, session_id=target_session_id):
-        if rollback.exists():
-            if not target.exists():
-                rollback.rename(target)
-                if stage.exists():
+        if native_io_path(rollback).exists():
+            if not native_io_path(target).exists():
+                native_io_path(rollback).rename(native_io_path(target))
+                if native_io_path(stage).exists():
                     shutil.rmtree(native_io_path(stage))
                 fsync_directory(target.parent)
-            elif stage.exists():
+            elif native_io_path(stage).exists():
                 raise RuntimeError("fork 发布恢复出现冲突的 target/stage/rollback")
-        elif stage.exists():
+        elif native_io_path(stage).exists():
             shutil.rmtree(native_io_path(stage))
             fsync_directory(target.parent)
 
@@ -342,15 +342,15 @@ def publish_target_snapshot(
     target = storage.root(target_session_id, checkpoint_ns, thread_id=target_thread_id)
     rollback = target.with_name(f".fork-{materialization_id}.rollback")
     with storage._lock(target_thread_id, checkpoint_ns, session_id=target_session_id):
-        target.rename(rollback)
+        native_io_path(target).rename(native_io_path(rollback))
         fsync_directory(target.parent)
         try:
-            stage.rename(target)
+            native_io_path(stage).rename(native_io_path(target))
             fsync_directory(target.parent)
         except BaseException:
-            if target.exists():
+            if native_io_path(target).exists():
                 shutil.rmtree(native_io_path(target))
-            rollback.rename(target)
+            native_io_path(rollback).rename(native_io_path(target))
             fsync_directory(target.parent)
             raise
 
@@ -362,7 +362,7 @@ def finalize_target_snapshot_publication(
     target = storage.root(target_session_id, checkpoint_ns, thread_id=target_thread_id)
     rollback = target.with_name(f".fork-{materialization_id}.rollback")
     with storage._lock(target_thread_id, checkpoint_ns, session_id=target_session_id):
-        if rollback.exists():
+        if native_io_path(rollback).exists():
             shutil.rmtree(native_io_path(rollback))
             fsync_directory(target.parent)
 

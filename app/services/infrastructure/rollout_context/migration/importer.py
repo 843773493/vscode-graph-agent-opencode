@@ -12,7 +12,7 @@ from pathlib import Path
 from uuid import uuid4
 
 from app.core.atomic_fs import fsync_directory
-from app.core.sqlite_state import utc_now_text
+from app.core.sqlite_state import sqlite_file_uri, utc_now_text
 from app.services.infrastructure.rollout_context.migration.artifacts import (
     artifact_manifest,
     copy_source,
@@ -370,7 +370,7 @@ class LegacyRolloutImporter:
                 artifact_manifest(target)
                 with closing(
                     sqlite3.connect(
-                        (target / "index.sqlite").as_uri() + "?mode=ro&immutable=1",
+                        sqlite_file_uri(target / "index.sqlite") + "?mode=ro&immutable=1",
                         uri=True,
                     )
                 ) as connection:

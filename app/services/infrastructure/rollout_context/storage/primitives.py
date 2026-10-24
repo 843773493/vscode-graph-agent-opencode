@@ -16,11 +16,12 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import BinaryIO, Protocol, Self
-from urllib.parse import quote
 from weakref import WeakValueDictionary
 
 import portalocker
 
+from app.core.atomic_fs import native_io_path
+from app.core.sqlite_state import sqlite_file_uri, validate_sqlite_path_budget
 from app.domain.itemized.records import CanonicalItemRecord
 from app.services.infrastructure.rollout_context.storage import (
     schema as storage_version,
@@ -538,36 +539,28 @@ class _RolloutSQLiteConnection(sqlite3.Connection):
         cls, index_path: Path, *, read_only: bool, frozen_source: bool,
     ) -> sqlite3.Connection:
         """打开唯一 rollout 连接，文件形态与 SQLite 初始化由连接类型持有。"""
-        rollout_root = index_path.parent
+        validate_sqlite_path_budget(index_path)
+        rollout_root = native_io_path(index_path.parent)
+        physical_index = native_io_path(index_path)
         if rollout_root.is_symlink():
             raise RuntimeError(f"rollout 目录不能是符号链接: {rollout_root}")
         if rollout_root.exists() and not rollout_root.is_dir():
             raise RuntimeError(f"rollout 路径必须是普通目录: {rollout_root}")
-        if index_path.is_symlink():
+        if physical_index.is_symlink():
             raise RuntimeError(f"rollout index.sqlite 不能是符号链接: {index_path}")
-        if index_path.exists() and not index_path.is_file():
+        if physical_index.exists() and not physical_index.is_file():
             raise RuntimeError(f"rollout index.sqlite 必须是普通文件: {index_path}")
         # 不能裸 open/read/close 数据库文件：POSIX close 会释放同进程
         # 其它 SQLite 连接的文件锁。格式校验由下方 SQLite schema 查询完成。
-        if read_only:
-            # mode=ro 在连接层拒绝业务写入，但在线 WAL 读取仍会更新 SHM read-mark。
-            # SHM 是 SQLite 协调状态；数据库、WAL 与 canonical 正文不得被读取链改写。
-            # 仅冻结 source snapshot 使用 immutable，在线源必须读到已提交 WAL。
-            connection = sqlite3.connect(
-                f"file:{quote(str(index_path), safe='/')}?mode=ro"
-                + ("&immutable=1" if frozen_source else ""),
-                uri=True,
-                timeout=30,
-                check_same_thread=False,
-                factory=cls,
-            )
-        else:
-            connection = sqlite3.connect(
-                index_path,
-                timeout=30,
-                check_same_thread=False,
-                factory=cls,
-            )
+        # 在线只读连接仍读已提交 WAL；仅冻结快照使用 immutable。
+        parameters = "?mode=ro" + ("&immutable=1" if frozen_source else "") if read_only else ""
+        connection = sqlite3.connect(
+            sqlite_file_uri(index_path) + parameters,
+            uri=True,
+            timeout=30,
+            check_same_thread=False,
+            factory=cls,
+        )
         try:
             # 先做只读 schema 探测，避免对损坏的 index.sqlite 直接执行
             # journal_mode=WAL；SQLite 可能因此创建一个看似可用的空数据库。

@@ -134,7 +134,7 @@ def test_sqlite_process_ownership_uses_portable_nonblocking_exclusive_lock(
     assert (tmp_path / ".state.sqlite.lock").read_bytes() == b"\0"
     ownership.release()
 
-    assert lock_calls[0][0].name == str(tmp_path / ".state.sqlite.lock")
+    assert lock_calls[0][0].name == str(sqlite_state.native_io_path(tmp_path / ".state.sqlite.lock"))
     assert lock_calls[0][1] == portalocker.LOCK_EX | portalocker.LOCK_NB
     assert unlock_calls == [lock_calls[0][0]]
     assert lock_calls[0][0].closed

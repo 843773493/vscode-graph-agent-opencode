@@ -10,7 +10,7 @@ from contextlib import closing
 from pathlib import Path
 
 from app.core.atomic_fs import atomic_write_bytes, fsync_directory, fsync_file
-from app.core.sqlite_state import validate_sqlite_path_budget
+from app.core.sqlite_state import sqlite_file_uri, validate_sqlite_path_budget
 from app.services.infrastructure.attachment_blob_catalog.directory_schema import (
     DIRECTORY_SCHEMA_SHA256,
     DIRECTORY_SCHEMA_VERSION,
@@ -111,7 +111,7 @@ def _write_catalog(path: Path, rows: dict[str, list[tuple[object, ...]]]) -> Non
     validate_sqlite_path_budget(path)
     with path.open("xb"):
         path.chmod(0o600)
-    with closing(sqlite3.connect(path, isolation_level=None)) as target:
+    with closing(sqlite3.connect(sqlite_file_uri(path), uri=True, isolation_level=None)) as target:
         target.execute("PRAGMA foreign_keys=ON")
         target.execute("PRAGMA synchronous=FULL")
         initialize_directory_schema(target)

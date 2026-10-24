@@ -8,6 +8,7 @@ from contextvars import ContextVar, Token
 from dataclasses import dataclass
 from pathlib import Path
 
+from app.core.atomic_fs import native_io_path
 from app.core.identifier import validate_session_id, validate_thread_id
 from app.core.session_catalog_resolver import SessionCatalogPathResolver
 from app.core.session_catalog_store import (
@@ -135,7 +136,7 @@ class ForkPathScope:
         finally:
             control.close()
         thread_node = session_node / record.final_relative_locator
-        if thread_node.is_symlink() or not thread_node.is_dir():
+        if native_io_path(thread_node).is_symlink() or not native_io_path(thread_node).is_dir():
             raise RuntimeError("prepared child fork target 缺少已 rename 的普通节点目录")
         target = PreparedForkTarget(session_id, record.child_thread_id, session_node, thread_node, None)
         token = self._prepared_target.set(target)
@@ -167,10 +168,8 @@ class ForkPathScope:
         snapshot_node = captured_root.resolve(strict=True)
         thread_node = snapshot_node
         if (
-            snapshot_node.is_symlink()
-            or not snapshot_node.is_dir()
-            or thread_node.is_symlink()
-            or not thread_node.is_dir()
+            native_io_path(snapshot_node).is_symlink()
+            or not native_io_path(snapshot_node).is_dir()
         ):
             raise RuntimeError(
                 "fork source Thread 的私有 snapshot captured_root 必须是普通目录: "

@@ -21,6 +21,7 @@ from app.core.session_catalog_store.queries import _register_session_list_functi
 from app.core.session_catalog_store.schema_validation import require_catalog_schema
 from app.core.session_catalog_store.validators import validate_session_storage_identity
 from app.core.session_control_store import SessionControlStore
+from app.core.sqlite_state import sqlite_file_uri
 from app.core.workspace_identity import read_workspace_id
 from app.domain.itemized.enums import ControlOutcome
 from app.services.business.workspace_resources.facts import STOPPED_STATUSES
@@ -90,7 +91,7 @@ def read_database(path: Path, *, frozen: bool = False) -> Iterator[sqlite3.Conne
         if sidecar.is_symlink() or (sidecar.exists() and not stat.S_ISREG(sidecar.lstat().st_mode)):
             raise RuntimeError("离线维护数据库 sidecar 不是普通文件")
     # backup API 生成的独立快照以 immutable 核验，不在备份中产生 WAL/SHM。
-    uri = path.as_uri() + "?mode=ro" + ("&immutable=1" if frozen else "")
+    uri = sqlite_file_uri(path) + "?mode=ro" + ("&immutable=1" if frozen else "")
     with closing(sqlite3.connect(uri, uri=True)) as connection:
         connection.row_factory = sqlite3.Row
         _register_session_list_functions(connection)

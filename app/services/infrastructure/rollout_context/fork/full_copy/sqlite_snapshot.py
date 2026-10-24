@@ -6,6 +6,10 @@ import json
 import subprocess
 import sys
 from pathlib import Path
+from tempfile import TemporaryDirectory
+
+from app.core.atomic_fs import native_io_path
+from app.core.sqlite_state import sqlite_file_uri, validate_sqlite_path_budget
 
 SQLITE_COPY_FILES = ("index.sqlite", "index.sqlite-wal", "index.sqlite-journal")
 SQLITE_EXCLUDED_FILES = frozenset((*SQLITE_COPY_FILES, "index.sqlite-shm"))
@@ -18,7 +22,6 @@ import sqlite3
 import sys
 from contextlib import closing
 from pathlib import Path
-from tempfile import TemporaryDirectory
 
 def manifest(path):
     digest = hashlib.sha256()
@@ -29,42 +32,39 @@ def manifest(path):
             size += len(chunk)
     return size, digest.hexdigest()
 
-source, destination = (Path(value) for value in sys.argv[1:3])
-rollout_lock_held = sys.argv[3] == '1'
+request = json.loads(sys.stdin.buffer.read())
+source, destination, private = (Path(request[key]) for key in ('source', 'destination', 'private'))
+rollout_lock_held = request['rollout_lock_held']
 files = []
-with TemporaryDirectory(prefix='.sqlite-copy-', dir=destination) as private:
-    for name in sys.argv[4:]:
-        if not name.endswith('.sqlite'):
-            continue
-        path = source / name
-        if path.is_symlink():
-            raise RuntimeError("source-mismatch: source SQLite 禁止符号链接")
-        if path.exists():
-            if not path.is_file():
-                raise RuntimeError("source-mismatch: source SQLite 必须是普通文件")
-            origin = path
-            if rollout_lock_held:
-                # rollout 共享锁冻结写入，原页/WAL 只在隔离进程内复制。
-                # SQLite 只打开私有副本，不能改 live source 的 WAL-index/read mark。
-                origin = Path(private) / name
-                for suffix in ('', '-wal', '-journal'):
-                    original = source / (name + suffix)
-                    if original.is_symlink():
-                        raise RuntimeError("source-mismatch: source SQLite 禁止符号链接")
-                    if original.exists():
-                        if not original.is_file():
-                            raise RuntimeError("source-mismatch: source SQLite 必须是普通文件")
-                        shutil.copyfile(original, Path(private) / (name + suffix))
-            # session-control 没有 rollout 写排他锁，直接保持固定 online transaction。
-            target = destination / name
-            with closing(sqlite3.connect(origin.as_uri() + '?mode=ro', uri=True)) as reader:
-                reader.execute('BEGIN')
-                reader.execute('SELECT name FROM sqlite_master LIMIT 1').fetchone()
-                with closing(sqlite3.connect(target)) as writer:
-                    reader.backup(writer)
-                    writer.execute('PRAGMA journal_mode=DELETE')
-                reader.rollback()
-            files.append((name, *manifest(target)))
+for entry in request['files']:
+    name = entry['name']
+    path = source / name
+    if path.is_symlink():
+        raise RuntimeError("source-mismatch: source SQLite 禁止符号链接")
+    if path.exists():
+        if not path.is_file():
+            raise RuntimeError("source-mismatch: source SQLite 必须是普通文件")
+        if rollout_lock_held:
+            # rollout 共享锁冻结写入，原页/WAL 只在隔离进程内复制。
+            # SQLite 只打开私有副本，不能改 live source 的 WAL-index/read mark。
+            for suffix in ('', '-wal', '-journal'):
+                original = source / (name + suffix)
+                if original.is_symlink():
+                    raise RuntimeError("source-mismatch: source SQLite 禁止符号链接")
+                if original.exists():
+                    if not original.is_file():
+                        raise RuntimeError("source-mismatch: source SQLite 必须是普通文件")
+                    shutil.copyfile(original, Path(private) / (name + suffix))
+        # session-control 没有 rollout 写排他锁，直接保持固定 online transaction。
+        target = destination / name
+        with closing(sqlite3.connect(entry['origin_uri'] + '?mode=ro', uri=True)) as reader:
+            reader.execute('BEGIN')
+            reader.execute('SELECT name FROM sqlite_master LIMIT 1').fetchone()
+            with closing(sqlite3.connect(entry['target_uri'], uri=True)) as writer:
+                reader.backup(writer)
+                writer.execute('PRAGMA journal_mode=DELETE')
+            reader.rollback()
+        files.append((name, *manifest(target)))
 print(json.dumps(files))
 """
 
@@ -81,13 +81,27 @@ def copy_live_sqlite_snapshot(
     copyfile/copytree；正文 detail 与密钥不经过该子进程。
     源 manifest 与复制校验也在子进程完成，返回源文件名、长度和 SHA。
     """
-    result = subprocess.run(
-        [sys.executable, "-I", "-c", _COPY_SCRIPT, str(source), str(destination),
-         "1" if rollout_lock_held else "0", *filenames],
-        check=False,
-        capture_output=True,
-        timeout=30,
-    )
+    with TemporaryDirectory(prefix=".sqlite-copy-", dir=native_io_path(destination)) as private:
+        entries = []
+        for name in filenames:
+            if not name.endswith(".sqlite"):
+                continue
+            origin = Path(private) / name if rollout_lock_held else source / name
+            target = destination / name
+            validate_sqlite_path_budget(origin)
+            validate_sqlite_path_budget(target)
+            entries.append({"name": name, "origin_uri": sqlite_file_uri(origin), "target_uri": sqlite_file_uri(target)})
+        request = {
+            "source": str(native_io_path(source)), "destination": str(native_io_path(destination)),
+            "private": private, "rollout_lock_held": rollout_lock_held, "files": entries,
+        }
+        result = subprocess.run(
+            [sys.executable, "-I", "-c", _COPY_SCRIPT],
+            input=json.dumps(request).encode("utf-8"),
+            check=False,
+            capture_output=True,
+            timeout=30,
+        )
     if result.returncode != 0:
         raise RuntimeError(
             "source-mismatch: 隔离进程复制 SQLite snapshot 失败: "

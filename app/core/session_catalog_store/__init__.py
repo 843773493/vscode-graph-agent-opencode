@@ -29,6 +29,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
+from app.core.atomic_fs import native_io_path
 from app.core.session_catalog_store._schema import (
     _CATALOG_METADATA_SEED,
     _CATALOG_METADATA_TABLE_DDL,
@@ -82,6 +83,7 @@ from app.core.session_catalog_store.validators import (
 )
 from app.core.sqlite_state import (
     SQLITE_BUSY_TIMEOUT_MS,
+    sqlite_file_uri,
     validate_sqlite_path_budget,
 )
 
@@ -128,7 +130,7 @@ class SessionCatalogStore(
         self.database_path = database_path.expanduser().resolve()
         self.sessions_root = sessions_root.expanduser().resolve()
         validate_sqlite_path_budget(self.database_path)
-        self.database_path.parent.mkdir(parents=True, exist_ok=True)
+        native_io_path(self.database_path.parent).mkdir(parents=True, exist_ok=True)
         self._closed = False
         # R18-3：单连接跨线程串行锁（可重入）。本 store 只持有一条共享
         # sqlite3 连接（check_same_thread=False），历史实现无任何锁——跨
@@ -179,7 +181,7 @@ class SessionCatalogStore(
 
     def _connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(
-            self.database_path,
+            sqlite_file_uri(self.database_path), uri=True,
             timeout=SQLITE_BUSY_TIMEOUT_MS / 1000,
             isolation_level=None,
             check_same_thread=False,

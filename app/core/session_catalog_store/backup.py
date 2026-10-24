@@ -17,6 +17,7 @@ import stat
 from datetime import UTC, datetime
 from pathlib import Path
 
+from app.core.atomic_fs import native_io_path
 from app.core.session_catalog_store.contracts import (
     CatalogBackupManifest,
     CatalogIntegrityReport,
@@ -29,6 +30,7 @@ from app.core.session_catalog_store.sqlite_integrity import (
     verify_catalog_sqlite_integrity,
 )
 from app.core.session_catalog_store.validators import validate_storage_relative_locator
+from app.core.sqlite_state import sqlite_file_uri, validate_sqlite_path_budget
 
 
 def _numeric_child_directories(directory: Path) -> list[Path]:
@@ -68,12 +70,13 @@ class CatalogBackupMixin:
         resolved = backup_path.expanduser().resolve()
         if resolved == self.database_path:
             raise ValueError(f"备份目标不能是 catalog 本体: {resolved}")
-        if resolved.exists():
+        validate_sqlite_path_budget(resolved)
+        if native_io_path(resolved).exists():
             raise RuntimeError(f"备份目标已存在，拒绝覆盖: {resolved}")
-        resolved.parent.mkdir(parents=True, exist_ok=True)
+        native_io_path(resolved.parent).mkdir(parents=True, exist_ok=True)
         with self._connection_lock:
             self._ensure_open()
-            destination = sqlite3.connect(resolved)
+            destination = sqlite3.connect(sqlite_file_uri(resolved), uri=True)
             try:
                 self._connection.backup(destination)
                 # 其它 catalog 连接可在复制前或复制后提交；清单只描述已复制的快照。
@@ -109,7 +112,7 @@ class CatalogBackupMixin:
         if not isinstance(backup_path, Path):
             raise TypeError(f"backup_path 必须是 Path: {backup_path!r}")
         resolved = backup_path.expanduser().resolve()
-        if not resolved.is_file():
+        if not native_io_path(resolved).is_file():
             raise CatalogMaintenanceRequiredError(
                 f"一致性备份缺失，须进入维护模式核对: {resolved}"
             )
@@ -123,7 +126,7 @@ class CatalogBackupMixin:
             )
         # 备份是独立的单文件快照；只读且不创建 WAL/SHM，不调用会初始化的 catalog 构造器。
         try:
-            snapshot = sqlite3.connect(resolved.as_uri() + "?mode=ro&immutable=1", uri=True)
+            snapshot = sqlite3.connect(sqlite_file_uri(resolved) + "?mode=ro&immutable=1", uri=True)
             try:
                 _register_session_list_functions(snapshot)
                 snapshot.execute("BEGIN DEFERRED")
@@ -226,7 +229,7 @@ class CatalogBackupMixin:
 def _sha256_file(path: Path) -> str:
     """计算文件 sha256（备份清单 checksum）。"""
     digest = hashlib.sha256()
-    with path.open("rb") as handle:
+    with native_io_path(path).open("rb") as handle:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()

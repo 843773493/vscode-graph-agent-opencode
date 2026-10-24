@@ -36,6 +36,7 @@ from app.core.session_catalog_store import (
     validate_storage_relative_locator,
 )
 from app.core.session_lifecycle_gate import NavigationTopologyGate, SessionLifecycleGate
+from app.core.sqlite_state import sqlite_file_uri
 from tests.support.canonical_id_at import (
     session_id_at,
     session_id_for_name_at,
@@ -3205,7 +3206,8 @@ def test_backup_manifest_generation_belongs_to_copied_database(
         written.append(create_session(writer, display_name="并发提交的目录"))
 
     def open_destination(path, *args, **kwargs):
-        if Path(path) == backup_path:
+        if path == sqlite_file_uri(backup_path):
+            assert kwargs["uri"] is True
             commit_concurrent_change()
         return connect(path, *args, **kwargs)
 

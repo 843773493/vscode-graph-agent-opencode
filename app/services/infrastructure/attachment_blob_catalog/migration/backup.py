@@ -12,6 +12,7 @@ from pathlib import Path
 from uuid import uuid4
 
 from app.core.atomic_fs import atomic_write_bytes, fsync_directory, fsync_file
+from app.core.sqlite_state import sqlite_file_uri
 from app.services.infrastructure.attachment_blob_catalog.maintenance import (
     AttachmentMaintenanceLock,
 )
@@ -49,7 +50,7 @@ def _copy(source: BackupSource, target: Path) -> dict[str, object]:
             stream.flush()
             os.fsync(stream.fileno())
     if source.kind == "sqlite":
-        with read_database(source.path) as original, closing(sqlite3.connect(target)) as snapshot:
+        with read_database(source.path) as original, closing(sqlite3.connect(sqlite_file_uri(target), uri=True)) as snapshot:
             original.backup(snapshot)
             snapshot.commit()
         fsync_file(target)

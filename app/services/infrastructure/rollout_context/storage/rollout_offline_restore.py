@@ -15,6 +15,7 @@ from pathlib import Path
 from uuid import uuid4
 
 from app.core.atomic_fs import fsync_directory, fsync_file
+from app.core.sqlite_state import sqlite_file_uri
 from app.services.infrastructure.rollout_context.storage.primitives import (
     RolloutReadSnapshot,
 )
@@ -73,12 +74,12 @@ class RolloutOfflineRestoreMixin:
         with (
             closing(
                 sqlite3.connect(
-                    f"{source_path.as_uri()}?mode=ro&cache=private",
+                    f"{sqlite_file_uri(source_path)}?mode=ro&cache=private",
                     uri=True,
                     timeout=0,
                 )
             ) as source,
-            closing(sqlite3.connect(candidate_path)) as candidate,
+            closing(sqlite3.connect(sqlite_file_uri(candidate_path), uri=True)) as candidate,
         ):
             source.execute("BEGIN")
             if source.execute("PRAGMA page_count").fetchone()[0] == 0:
@@ -95,7 +96,7 @@ class RolloutOfflineRestoreMixin:
         fsync_file(candidate_path)
         with closing(
             sqlite3.connect(
-                f"{candidate_path.as_uri()}?mode=ro&cache=private",
+                f"{sqlite_file_uri(candidate_path)}?mode=ro&cache=private",
                 uri=True,
                 timeout=0,
             )
@@ -179,8 +180,8 @@ class RolloutOfflineRestoreMixin:
         target_path.parent.mkdir(parents=True, exist_ok=True)
         temporary_path = target_path.with_name(f".{target_path.name}.{uuid4().hex}.tmp")
         try:
-            source = sqlite3.connect(source_path)
-            target = sqlite3.connect(temporary_path)
+            source = sqlite3.connect(sqlite_file_uri(source_path), uri=True)
+            target = sqlite3.connect(sqlite_file_uri(temporary_path), uri=True)
             try:
                 source.backup(target)
                 target.commit()
@@ -303,7 +304,7 @@ class RolloutOfflineRestoreMixin:
                 fsync_directory(target_root)
                 with closing(
                     sqlite3.connect(
-                        f"{target_path.as_uri()}?mode=ro&cache=private",
+                        f"{sqlite_file_uri(target_path)}?mode=ro&cache=private",
                         uri=True,
                         timeout=0,
                     )
@@ -396,7 +397,7 @@ class RolloutOfflineRestoreMixin:
         try:
             with closing(
                 sqlite3.connect(
-                    f"{source_path.as_uri()}?mode=ro&cache=private", uri=True, timeout=0
+                    f"{sqlite_file_uri(source_path)}?mode=ro&cache=private", uri=True, timeout=0
                 )
             ) as source:
                 # 校验和复制固定在同一个只读快照，源备份不执行任何写操作。
@@ -425,7 +426,7 @@ class RolloutOfflineRestoreMixin:
                         )
                     with closing(
                         sqlite3.connect(
-                            f"{target_path.as_uri()}?mode=rw&cache=private",
+                            f"{sqlite_file_uri(target_path)}?mode=rw&cache=private",
                             uri=True,
                             timeout=0,
                         )
@@ -470,7 +471,7 @@ def _require_offline_restore_target(target_path: Path) -> None:
     try:
         with closing(
             sqlite3.connect(
-                f"{target_path.as_uri()}?mode=ro&cache=private",
+                f"{sqlite_file_uri(target_path)}?mode=ro&cache=private",
                 uri=True,
                 timeout=0,
             )

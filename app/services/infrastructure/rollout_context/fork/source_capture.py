@@ -66,7 +66,7 @@ def capture_directory(sessions_root: Path, record: ForkSourceCaptureRecord) -> P
     if record.snapshot_relative_locator != fork_source_capture_relative_locator(record.snapshot_id):
         raise RuntimeError("fork capture 内部 locator 与预分配 identity 不一致")
     root = sessions_root.parent / "navigation" / "fork-source-captures"
-    if root.is_symlink():
+    if native_io_path(root).is_symlink():
         raise RuntimeError("fork capture 内部目录是符号链接")
     return root / record.snapshot_id
 
@@ -102,11 +102,11 @@ def publish_captured_snapshot(record: ForkSourceCaptureRecord, snapshot: ForkSou
             fsync_file(path)
         fsync_directory(Path(directory))
     temporary = root / "captured.preparing"
-    with temporary.open("xb") as stream:
+    with native_io_path(temporary).open("xb") as stream:
         stream.write(encoded)
         stream.flush()
         os.fsync(stream.fileno())
-    os.replace(temporary, root / "captured.json")
+    os.replace(native_io_path(temporary), native_io_path(root / "captured.json"))
     fsync_directory(root)
     fsync_directory(root.parent)
     return hashlib.sha256(encoded).hexdigest()
@@ -115,9 +115,9 @@ def publish_captured_snapshot(record: ForkSourceCaptureRecord, snapshot: ForkSou
 def read_captured_snapshot(sessions_root: Path, record: ForkSourceCaptureRecord) -> tuple[ForkSourceSnapshot, str]:
     """恢复只接受完整 captured marker 和全部原 frozen hash，不读取 live source。"""
     root = capture_directory(sessions_root, record)
-    if root.is_symlink() or not root.is_dir():
+    if native_io_path(root).is_symlink() or not native_io_path(root).is_dir():
         raise RuntimeError("fork source capture 缺少普通 snapshot 目录")
-    marker = root / "captured.json"
+    marker = native_io_path(root / "captured.json")
     if marker.is_symlink():
         raise RuntimeError("fork source capture captured marker 是符号链接")
     if not marker.exists():
@@ -137,7 +137,7 @@ def read_captured_snapshot(sessions_root: Path, record: ForkSourceCaptureRecord)
         raise RuntimeError("fork captured marker hash 与 journal 不一致")
     rollout = raw["rollout"]
     captured_root = root / record.source_session_id
-    manifest_bytes = (captured_root / "snapshot-manifest.json").read_bytes()
+    manifest_bytes = native_io_path(captured_root / "snapshot-manifest.json").read_bytes()
     if (rollout["source_session_id"], rollout["source_thread_id"]) != (record.source_session_id, record.source_thread_id) or (
         hashlib.sha256(manifest_bytes).hexdigest() != rollout["manifest_sha256"]
     ):
@@ -152,7 +152,7 @@ def read_captured_snapshot(sessions_root: Path, record: ForkSourceCaptureRecord)
         raise RuntimeError(f"fork captured rollout files hash/length 不一致: {changed}")
     digest = hashlib.sha256()
     for name in (CONTROL_DATABASE_NAME, CONTROL_DATABASE_NAME + "-wal", CONTROL_DATABASE_NAME + "-journal"):
-        path = captured_root / name
+        path = native_io_path(captured_root / name)
         if path.exists():
             if path.is_symlink() or not path.is_file():
                 raise RuntimeError("fork captured session-control 含非普通文件")
@@ -206,17 +206,17 @@ def _verify_attachment_files(snapshot: ForkSourceSnapshot) -> None:
         if attachment.blob_id in expected and expected[attachment.blob_id] != row:
             raise RuntimeError("fork 附件相同冻结身份对应不同版本")
         expected[attachment.blob_id] = row
-    if root.is_symlink() or (root.exists() and not root.is_dir()):
+    if native_io_path(root).is_symlink() or (native_io_path(root).exists() and not native_io_path(root).is_dir()):
         raise RuntimeError("fork 附件冻结根不是普通目录")
-    actual = _tree_manifest(root) if root.is_dir() else ()
+    actual = _tree_manifest(root) if native_io_path(root).is_dir() else ()
     if actual != tuple(expected[key] for key in sorted(expected)):
         raise RuntimeError("fork 附件冻结文件集合或 hash/length 不一致；不能回读 live 来源补造")
 
 
 def remove_captured_snapshot(sessions_root: Path, record: ForkSourceCaptureRecord) -> None:
     root = capture_directory(sessions_root, record)
-    if root.is_symlink():
+    if native_io_path(root).is_symlink():
         raise RuntimeError("fork capture 清理拒绝符号链接")
-    if root.exists():
+    if native_io_path(root).exists():
         shutil.rmtree(native_io_path(root))
         fsync_directory(root.parent)
