@@ -172,6 +172,15 @@
       "command": ["bun", "tests/integration/workspace_services/browser/browser_checkpoint_form_state.mjs"]
     },
     {
+      "id": "integration-browser-shutdown-operations",
+      "layer": "integration",
+      "client": null,
+      "enabled": true,
+      "timeoutMs": 60000,
+      "dataLimitKb": 4194304,
+      "command": ["bun", "tests/integration/workspace_services/browser/browser_shutdown_operations.mjs"]
+    },
+    {
       "id": "integration-web-anchored-overlay",
       "layer": "integration",
       "client": "web",

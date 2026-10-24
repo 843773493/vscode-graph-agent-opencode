@@ -393,22 +393,60 @@ describe("浏览器状态持久化", () => {
 
   test("正常关闭管理器时保留已冷回收浏览器及其检查点", async () => {
     const manager = createBrowserManagerWithStateWriter(async () => undefined);
-    let closeCalls = 0;
-    manager.browsersById.set("browser_discarded", {
-      status: "running",
-      record: { resource_state: "discarded" },
-      close: async () => { closeCalls += 1; },
-      toRecord: () => ({
-        browser_id: "browser_discarded",
-        status: "running",
-        resource_state: "discarded",
-      }),
-    });
-    manager.runtimePool.shutdown = async () => undefined;
+    const browser = new BrowserSession({ manager, record: {
+      browser_id: createOptions().browserId,
+      workspace_id: WORKSPACE_ID, transport_owner_revision: 1,
+      status: "running", resource_state: "discarded", reconciliation_status: "verified",
+      checkpoint: { captured_at: "2026-10-24T00:00:00.000Z", size_bytes: 123 },
+    } });
+    manager.browsersById.set(browser.id, browser);
+    const before = browser.toRecord();
 
     await manager.shutdown();
 
-    expect(closeCalls).toBe(0);
+    expect(browser.closingRequested).toBe(true);
+    expect(browser.toRecord()).toEqual(before);
+    expect(browser.context).toBeNull();
+    expect(manager.runtimePool.chromiumInstanceGeneration).toBe(0);
+    await expect(browser.runInteractiveOperation({ actor: "user", action: "late" }, async () => {
+      throw new Error("关闭后不应执行新操作");
+    })).rejects.toMatchObject({ code: "browser_closing" });
+  });
+
+  test("管理器关闭不能跳过冷浏览器正在准备的已接纳操作", async () => {
+    const manager = createBrowserManagerWithStateWriter(async () => undefined);
+    const browser = new BrowserSession({ manager, record: {
+      browser_id: createOptions().browserId,
+      workspace_id: WORKSPACE_ID, transport_owner_revision: 1,
+      status: "running", resource_state: "discarded", reconciliation_status: "verified",
+    } });
+    manager.browsersById.set(browser.id, browser);
+    let releaseWake;
+    let enterWake;
+    const wakeEntered = new Promise((resolve) => { enterWake = resolve; });
+    const wakeBarrier = new Promise((resolve) => { releaseWake = resolve; });
+    browser.wake = async () => { enterWake(); await wakeBarrier; };
+    const order = [];
+    manager.runtimePool.shutdown = async () => { order.push("pool_shutdown"); };
+    const operation = browser.runInteractiveOperation({ actor: "user", action: "preparing" }, async () => {
+      order.push("operation");
+    });
+    await wakeEntered;
+    const closing = manager.shutdown().then(() => { order.push("shutdown_done"); });
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      expect(browser.closingRequested).toBe(true);
+      expect(browser.pendingOperations).toBe(1);
+      expect(browser.inFlightOperations).toBe(0);
+      expect(order).toEqual([]);
+    } finally {
+      releaseWake();
+      await operation;
+      await closing;
+    }
+    expect(order).toEqual(["operation", "pool_shutdown", "shutdown_done"]);
+    expect(browser.operationQueue.acceptedOperationExecutions.size).toBe(0);
+    expect(browser.pendingOperations).toBe(0);
   });
 
   test("正常关闭管理器时将热浏览器转为可恢复检查点", async () => {

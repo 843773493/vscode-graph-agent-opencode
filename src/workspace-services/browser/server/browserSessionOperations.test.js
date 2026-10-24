@@ -1752,113 +1752,182 @@ describe("浏览器统一操作队列", () => {
     ]);
   });
 
+  test.each(["prepare", "executing"])("管理器关闭等待并发交互的%s阶段，原操作结束后才回收", async (stage) => {
+    const browser = session();
+    let release;
+    let enter;
+    const barrier = new Promise(resolve => { release = resolve; });
+    const entered = new Promise(resolve => { enter = resolve; });
+    const order = [];
+    browser.wake = async () => {
+      if (stage === "prepare") { enter(); await barrier; }
+    };
+    browser.freeze = async () => { order.push("freeze"); browser.record.resource_state = "frozen"; };
+    browser.discard = async () => { order.push("discard"); browser.record.resource_state = "discarded"; };
+    const operation = browser.runInteractiveOperation({ actor: "user", action: "move" }, async () => {
+      if (stage === "executing") { enter(); await barrier; }
+      order.push("operation");
+    });
+    await entered;
+    const closing = browser.checkpointForManagerShutdown("shutdown_test", { operationDrainTimeoutMs: 100 });
+    try {
+      for (let index = 0; index < 12; index += 1) await Promise.resolve();
+      expect(order).toEqual([]);
+      expect(browser.operationQueue.acceptedOperationExecutions.size).toBe(1);
+    } finally {
+      release();
+      await Promise.all([operation, closing]);
+    }
+    expect(order).toEqual(["operation", "freeze", "discard"]);
+    expect(browser.pendingOperations).toBe(0);
+    expect(browser.inFlightOperations).toBe(0);
+  });
+
+  test("准备中的并发操作超时不会清连接或伪造检查点，迟到操作仍由原队列持有", async () => {
+    const browser = session();
+    const client = {};
+    browser.clients.add(client);
+    browser.record.agent_access_locked = true;
+    let release;
+    let enter;
+    const barrier = new Promise(resolve => { release = resolve; });
+    const entered = new Promise(resolve => { enter = resolve; });
+    const effects = [];
+    browser.wake = async () => { enter(); await barrier; };
+    browser.freeze = async () => { effects.push("freeze"); };
+    browser.discard = async () => { effects.push("discard"); };
+    browser.manager.persist = async () => { effects.push("persist"); };
+    const operation = browser.runInteractiveOperation({ actor: "user", action: "move" }, async () => { effects.push("operation"); });
+    await entered;
+    try {
+      await expect(browser.checkpointForManagerShutdown("timeout_test", { operationDrainTimeoutMs: 5 }))
+        .rejects.toMatchObject({ code: "browser_shutdown_operation_drain_timeout" });
+      expect(effects).toEqual([]);
+      expect(browser.clients.has(client)).toBe(true);
+      expect(browser.record.agent_access_locked).toBe(true);
+      expect(browser.pendingOperations).toBe(1);
+      expect(browser.operationQueue.acceptedOperationExecutions.size).toBe(1);
+      await expect(browser.runInteractiveOperation({ actor: "user", action: "move" }, async () => { effects.push("late_new"); }))
+        .rejects.toMatchObject({ code: "browser_closing" });
+    } finally {
+      release();
+      await operation;
+    }
+    expect(effects).toEqual(["operation"]);
+    expect(browser.pendingOperations).toBe(0);
+    expect(browser.inFlightOperations).toBe(0);
+    expect(browser.operationQueue.acceptedOperationExecutions.size).toBe(0);
+  });
+
   test("管理器关闭时队列无法排空会明确失败而不无限等待", async () => {
     const browser = session();
-    browser.operationQueue.serialOperationTail = new Promise(() => undefined);
-
-    await expect(
-      browser.checkpointForManagerShutdown("browser_manager_shutdown", {
-        operationDrainTimeoutMs: 5,
-      }),
-    ).rejects.toMatchObject({ code: "browser_shutdown_operation_drain_timeout" });
+    let release;
+    let enter;
+    const entered = new Promise(resolve => { enter = resolve; });
+    const barrier = new Promise(resolve => { release = resolve; });
+    browser.wake = async () => undefined;
+    const operation = browser.enqueueOperation({ actor: "agent", action: "read" }, async () => { enter(); await barrier; });
+    await entered;
+    try {
+      await expect(browser.checkpointForManagerShutdown("browser_manager_shutdown", { operationDrainTimeoutMs: 5 }))
+        .rejects.toMatchObject({ code: "browser_shutdown_operation_drain_timeout" });
+      expect(browser.operationQueue.acceptedOperationExecutions.size).toBe(1);
+    } finally {
+      release();
+      await operation;
+    }
   });
 
   test.each([-60_000, 60_000])("管理器关闭排空不因系统校时提前失败: wall_clock_jump_ms=%s", async (wallClockJumpMs) => {
     const browser = session();
     const transitions = [];
+    let release;
+    let enter;
     let elapsedMs = 0;
     let wallOffsetMs = 0;
-    browser.inFlightOperations = 1;
+    const entered = new Promise(resolve => { enter = resolve; });
+    const barrier = new Promise(resolve => { release = resolve; });
+    browser.wake = async () => undefined;
+    const operation = browser.runInteractiveOperation({ actor: "user", action: "move" }, async () => { enter(); await barrier; });
+    await entered;
     browser.record.resource_state = "frozen";
-    browser.discard = async () => {
-      transitions.push("discard");
-      browser.record.resource_state = "discarded";
-    };
-    browser.operationQueue.serialOperationTail = Promise.resolve().then(() => {
-      wallOffsetMs = wallClockJumpMs;
-    });
-    // 只替换时间边界；队列等待、在途检查和关闭入口仍执行真实Session方法。
-    const elapsedClock = spyOn(performance, "now").mockImplementation(() => elapsedMs);
+    browser.discard = async () => { transitions.push("discard"); browser.record.resource_state = "discarded"; };
     const wallClock = spyOn(Date, "now").mockImplementation(() => 1_800_000_000_000 + elapsedMs + wallOffsetMs);
     const drainTimer = {};
     const clearedTimers = [];
-    const timers = spyOn(globalThis, "setTimeout").mockImplementation((callback, delay, ...args) => {
-      if (delay === 100) return drainTimer;
-      expect(delay).toBe(25);
-      queueMicrotask(() => {
-        elapsedMs += delay;
-        if (elapsedMs >= 50) browser.inFlightOperations = 0;
-        callback(...args);
-      });
-      return {};
+    const timers = spyOn(globalThis, "setTimeout").mockImplementation((_callback, delay) => {
+      expect(delay).toBe(100);
+      // 在原预算内结束同一真实操作；墙上时钟前跳或回拨都不触发超时。
+      queueMicrotask(() => { elapsedMs = 50; wallOffsetMs = wallClockJumpMs; release(); });
+      return drainTimer;
     });
-    const clearTimers = spyOn(globalThis, "clearTimeout").mockImplementation((timer) => {
-      clearedTimers.push(timer);
-    });
+    const clearTimers = spyOn(globalThis, "clearTimeout").mockImplementation(timer => { clearedTimers.push(timer); });
     try {
       const result = await browser.checkpointForManagerShutdown("clock_test", { operationDrainTimeoutMs: 100 });
+      await operation;
       expect(result.resource_state).toBe("discarded");
       expect(elapsedMs).toBe(50);
       expect(transitions).toEqual(["discard"]);
       expect(clearedTimers).toEqual([drainTimer]);
     } finally {
-      clearTimers.mockRestore();
-      timers.mockRestore();
-      wallClock.mockRestore();
-      elapsedClock.mockRestore();
+      clearTimers.mockRestore(); timers.mockRestore(); wallClock.mockRestore();
+      release(); await operation;
     }
   });
 
-  test.each([
-    [-60_000, 0], [60_000, 0], [-60_000, 40], [60_000, 40],
-  ])("管理器关闭串行队列与在途操作共享单调预算: wall_clock_jump_ms=%s, queued_ms=%s", async (wallClockJumpMs, queuedMs) => {
-    const browser = session();
-    const attachedClient = {};
-    browser.clients.add(attachedClient);
-    browser.record.agent_access_locked = true;
-    browser.inFlightOperations = 1;
-    let elapsedMs = 0;
-    let wallOffsetMs = 0;
-    const sideEffects = [];
-    browser.freeze = async () => { sideEffects.push("freeze"); };
-    browser.discard = async () => { sideEffects.push("discard"); };
-    browser.manager.persist = async () => { sideEffects.push("persist"); };
-    browser.operationQueue.serialOperationTail = Promise.resolve().then(() => {
-      elapsedMs = queuedMs;
-      wallOffsetMs = wallClockJumpMs;
-    });
-    const elapsedClock = spyOn(performance, "now").mockImplementation(() => elapsedMs);
-    const wallClock = spyOn(Date, "now").mockImplementation(() => 1_800_000_000_000 + elapsedMs + wallOffsetMs);
-    const drainTimer = {};
-    const clearedTimers = [];
-    const timers = spyOn(globalThis, "setTimeout").mockImplementation((callback, delay, ...args) => {
-      if (delay === 50) return drainTimer;
-      expect(delay).toBe(25);
-      queueMicrotask(() => {
-        elapsedMs += delay;
-        // 错误实现回拨后仍有有限终点，不能让回归测试本身无限循环。
-        if (elapsedMs >= 100) browser.inFlightOperations = 0;
-        callback(...args);
+  test.each([[-60_000, 0], [60_000, 0], [-60_000, 40], [60_000, 40]])(
+    "管理器关闭串行与并发操作共享原截止时间: wall_clock_jump_ms=%s, queued_ms=%s", async (wallClockJumpMs, queuedMs) => {
+      const browser = session();
+      const attachedClient = {};
+      browser.clients.add(attachedClient);
+      browser.record.agent_access_locked = true;
+      let elapsedMs = 0;
+      let wallOffsetMs = 0;
+      let release;
+      let enter;
+      const entered = new Promise(resolve => { enter = resolve; });
+      const barrier = new Promise(resolve => { release = resolve; });
+      browser.wake = async () => undefined;
+      const operation = browser.runInteractiveOperation({ actor: "user", action: "move" }, async () => { enter(); await barrier; });
+      await entered;
+      const sideEffects = [];
+      browser.freeze = async () => { sideEffects.push("freeze"); };
+      browser.discard = async () => { sideEffects.push("discard"); };
+      browser.manager.persist = async () => { sideEffects.push("persist"); };
+      let enterQueued;
+      let releaseQueued;
+      const queuedEntered = new Promise(resolve => { enterQueued = resolve; });
+      const queuedBarrier = new Promise(resolve => { releaseQueued = resolve; });
+      const queued = browser.enqueueOperation({ actor: "agent", action: "read", visible: false }, async () => {
+        enterQueued(); await queuedBarrier;
       });
-      return {};
-    });
-    const clearTimers = spyOn(globalThis, "clearTimeout").mockImplementation((timer) => {
-      clearedTimers.push(timer);
-    });
-    try {
-      await expect(browser.checkpointForManagerShutdown("clock_test", { operationDrainTimeoutMs: 50 }))
-        .rejects.toMatchObject({ code: "browser_shutdown_operation_drain_timeout" });
-      expect(elapsedMs).toBe(queuedMs === 0 ? 50 : 65);
-      expect(browser.inFlightOperations).toBe(1);
-      expect(sideEffects).toEqual([]);
-      expect(browser.clients.has(attachedClient)).toBe(true);
-      expect(browser.record.agent_access_locked).toBe(true);
-      expect(clearedTimers).toEqual([drainTimer]);
-    } finally {
-      clearTimers.mockRestore();
-      timers.mockRestore();
-      wallClock.mockRestore();
-      elapsedClock.mockRestore();
-    }
-  });
+      await queuedEntered;
+      const wallClock = spyOn(Date, "now").mockImplementation(() => 1_800_000_000_000 + elapsedMs + wallOffsetMs);
+      const drainTimer = {};
+      const clearedTimers = [];
+      const timers = spyOn(globalThis, "setTimeout").mockImplementation((callback, delay, ...args) => {
+        expect(delay).toBe(50);
+        queueMicrotask(() => {
+          elapsedMs = queuedMs; wallOffsetMs = wallClockJumpMs; releaseQueued();
+          queueMicrotask(() => { elapsedMs = 50; callback(...args); });
+        });
+        return drainTimer;
+      });
+      const clearTimers = spyOn(globalThis, "clearTimeout").mockImplementation(timer => { clearedTimers.push(timer); });
+      try {
+        await expect(browser.checkpointForManagerShutdown("clock_test", { operationDrainTimeoutMs: 50 }))
+          .rejects.toMatchObject({ code: "browser_shutdown_operation_drain_timeout" });
+        await queued;
+        expect(elapsedMs).toBe(50);
+        expect(browser.inFlightOperations).toBe(1);
+        expect(sideEffects).toEqual([]);
+        expect(browser.clients.has(attachedClient)).toBe(true);
+        expect(browser.record.agent_access_locked).toBe(true);
+        expect(clearedTimers).toEqual([drainTimer]);
+      } finally {
+        clearTimers.mockRestore(); timers.mockRestore(); wallClock.mockRestore();
+        release(); releaseQueued(); await Promise.all([operation, queued]);
+      }
+    },
+  );
 });

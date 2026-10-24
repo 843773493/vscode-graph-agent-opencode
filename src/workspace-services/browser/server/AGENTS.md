@@ -55,7 +55,7 @@ Manager 的 `BrowserTransportGrant` 只保存一次连接所需的授权影子�
 
 Session资源保护使用Node的Unix毫秒时钟：`lastNetworkActivityAtUnixMs`是按一秒节流登记的网络观察时间，`lastWebSocketActivityAtUnixMs`是最近一次WebSocket活动观察时间；持久字段仍为ISO。`softProtectionObservedAtUnixMsByReason`按保护码保存成功页面检查的观察时刻，五分钟租约从这里或WebSocket活动起算。`protectionInspectionFailureExpiresAtUnixMs`是检查失败硬保护的到期时刻，不是五秒重试时长或定时任务；`agentLockExpiresAtUnixMs`是从ISO锁字段解析的到期时刻。`*LEASE_MS/*RETRY_MS`才是持续时长，不能与这些绝对时刻混用。
 
-Manager关闭时的排空预算属于本进程耗时，使用`performance.now()`的单调时钟；`operationDrainDeadline`覆盖串行队列和在途操作两阶段，不在队列排空后重置。它不是资源租约或持久时刻，系统校时不能令它提前到期或延长；排空失败仍在清理连接、解锁与检查点转换之前明确报错。
+Manager关闭时，所有运行资源（含已冷回收资源）先关闭操作准入，再通过队列唯一的`drain()`等待完整已接纳集合，覆盖串行排队及并发准备/执行；不能由`discarded`或在途计数为零跳过。单次定时预算覆盖整份集合，不随操作阶段重置，也不受系统校时影响；它不是资源租约或持久时刻。Session排空超时在清理连接、解锁与检查点转换之前明确报错，原操作仍由队列持有；排空后仍为冷状态的资源保留原检查点。Manager失败收尾的总期限、挂起操作终止核实仍由后续合同推进。
 
 ## 恢复记录与落盘
 

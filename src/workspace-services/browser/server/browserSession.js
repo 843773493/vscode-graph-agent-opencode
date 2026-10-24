@@ -797,10 +797,9 @@ export class BrowserSession extends EventEmitter {
     { operationDrainTimeoutMs = SHUTDOWN_OPERATION_DRAIN_MS } = {},
   ) {
     this.closingRequested = true;
-    const operationDrainDeadline = performance.now() + operationDrainTimeoutMs;
     let drainTimer = null;
-    const queuedOperationsDrained = await Promise.race([
-      this.operationQueue.serialOperationTail.then(() => true),
+    const operationsDrained = await Promise.race([
+      this.operationQueue.drain().then(() => true),
       new Promise((resolve) => {
         drainTimer = setTimeout(resolve, operationDrainTimeoutMs, false);
       }),
@@ -808,23 +807,14 @@ export class BrowserSession extends EventEmitter {
     if (drainTimer !== null) {
       clearTimeout(drainTimer);
     }
-    if (!queuedOperationsDrained) {
+    if (!operationsDrained) {
       const error = new Error(
-        `浏览器关闭前队列未能排空: browser_id=${this.id}, pending=${this.pendingOperations}, in_flight=${this.inFlightOperations}`,
+        `浏览器关闭前已接纳操作未能排空: browser_id=${this.id}, pending=${this.pendingOperations}, in_flight=${this.inFlightOperations}`,
       );
       error.code = "browser_shutdown_operation_drain_timeout";
       throw error;
     }
-    while (this.inFlightOperations > 0 && performance.now() < operationDrainDeadline) {
-      await new Promise((resolve) => setTimeout(resolve, 25));
-    }
-    if (this.inFlightOperations > 0) {
-      const error = new Error(
-        `浏览器关闭前操作未能排空: browser_id=${this.id}, in_flight=${this.inFlightOperations}`,
-      );
-      error.code = "browser_shutdown_operation_drain_timeout";
-      throw error;
-    }
+    if (this.record.resource_state === "discarded") return this.snapshot();
     this.clients.clear();
     this.pendingAttachRequests = 0;
     this.pendingDialog = null;

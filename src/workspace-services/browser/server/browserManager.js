@@ -448,9 +448,6 @@ export class BrowserManager {
       if (session.status !== "running") {
         continue;
       }
-      if (session.record.resource_state === "discarded") {
-        continue;
-      }
       try {
         await session.checkpointForManagerShutdown(reason);
       } catch (error) {
