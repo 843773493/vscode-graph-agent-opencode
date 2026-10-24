@@ -21,6 +21,60 @@ from tests.support.resource_owners.sessions import (
 from tests.support.resource_owners.terminal import TerminalOwnerFixture
 
 
+@pytest.mark.parametrize("kind", ["terminal", "browser"])
+@pytest.mark.parametrize("foreign_identity", [
+    "/private/runtime-id",
+    r"C:\private\runtime-id",
+    r"\\server\share\private\runtime-id",
+    r"\\?\UNC\server\share\private\runtime-id",
+    None,
+], ids=["posix", "drive", "unc", "extended-unc", "duplicate"])
+def test_runtime_inventory_rejection_publishes_facts_without_foreign_identity(
+    resource_api_client: TestClient, terminal_owner_bundle: TerminalOwnerFixture,
+    browser_owner_bundle: BrowserOwnerFixture, monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture, kind: str, foreign_identity: str | None,
+) -> None:
+    created = resource_api_client.post(f"/api/v1/resources/{kind}s", json={
+        "session_id": SESSION_A, "thread_id": THREAD_A,
+    })
+    assert created.status_code == 200, created.text
+    resource = created.json()["data"]
+    bundle = terminal_owner_bundle if kind == "terminal" else browser_owner_bundle
+    resource_id = resource["resource_id"]
+    original = dict(bundle.transport.records[resource_id])
+    rejected_id = foreign_identity if foreign_identity is not None else resource_id
+    reason = "unregistered_identity" if foreign_identity is not None else "duplicate_identity"
+    rejected = {**original, f"{kind}_id": rejected_id}
+    owner_file = bundle.root / ".boxteam" / f"{kind}-resources.json"
+    lease_file = bundle.root / ".boxteam" / "resources.json"
+    before = (owner_file.read_bytes(), lease_file.read_bytes())
+
+    async def invalid_inventory() -> list[dict[str, object]]:
+        return [dict(original), dict(rejected)]
+
+    with monkeypatch.context() as patch:
+        patch.setattr(bundle.transport, "list_resources", invalid_inventory)
+        failed = resource_api_client.get("/api/v1/resources", params={"kind": kind})
+    assert failed.status_code == 500, failed.text
+    assert failed.json()["request_id"] == failed.headers["X-Request-ID"]
+    message = failed.json()["message"]
+    assert f"kind={kind}" in message and f"reason={reason}" in message
+    assert "index=1" in message
+    assert rejected_id not in message
+    assert any(
+        record.name == "app.services.business.workspace_resources.facts"
+        and record.args == (kind, reason, 1, rejected_id)
+        for record in caplog.records
+    ), "原始身份应完整留在诊断日志参数中"
+    assert (owner_file.read_bytes(), lease_file.read_bytes()) == before
+    assert bundle.transport.records[resource_id] == original
+    assert bundle.transport.creates == 1 and bundle.transport.deleted == []
+    assert bundle.leases.leases_for_resource(resource_id) == []
+    recovered = resource_api_client.get("/api/v1/resources", params={"kind": kind})
+    assert recovered.status_code == 200, recovered.text
+    assert recovered.json()["data"]["items"] == [resource]
+
+
 def _create_browser_resource(resource_api_client: TestClient) -> dict[str, object]:
     response = resource_api_client.post("/api/v1/resources/browsers", json={
         "session_id": SESSION_A, "thread_id": CHILD_THREAD_A, "retention_scope": "thread",

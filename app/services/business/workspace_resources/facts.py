@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import re
 from collections.abc import Collection
 from dataclasses import asdict
@@ -19,6 +20,7 @@ from app.services.infrastructure.resource_platform.virtual_resources.values impo
 
 ORPHAN_GRACE_SECONDS = 30 * 60
 STOPPED_STATUSES = frozenset({"completed", "exited", "terminated", "closed", "deleted"})
+logger = logging.getLogger(__name__)
 
 
 def resource_target_facts(snapshot: ResourceSnapshot) -> ResourceTargetFacts:
@@ -58,11 +60,14 @@ def index_resources(
     items: list[ResourceSnapshot], workspace_id: str, owned_ids: Collection[str], kind: ResourceKind,
 ) -> dict[str, ResourceSnapshot]:
     result: dict[str, ResourceSnapshot] = {}
-    for item in items:
+    for index, item in enumerate(items):
         validate_runtime(item, workspace_id)
         rid = str(item[f"{kind}_id"])
         if rid in result or rid not in owned_ids:
-            raise RuntimeError(f"Node 运行时 存在重复或未经 Python owner 登记的身份: {rid}")
+            reason = "duplicate_identity" if rid in result else "unregistered_identity"
+            # 外部身份可能夹带原生路径；原值只进诊断，普通错误发布可核验的拒绝事实。
+            logger.error("Node 运行清单身份拒绝: kind=%s reason=%s index=%s identity=%r", kind, reason, index, rid)
+            raise RuntimeError(f"Node 运行清单身份拒绝: kind={kind}, reason={reason}, index={index}")
         result[rid] = item
     return result
 
