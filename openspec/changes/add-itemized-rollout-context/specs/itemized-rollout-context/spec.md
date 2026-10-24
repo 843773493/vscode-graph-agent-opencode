@@ -2,7 +2,7 @@
 
 为会话 rollout 建立独立于 LangChain 和具体 Provider 的不可变语义 item 层，使上下文、历史、恢复和 Provider 请求都能从同一份有序事实重建。
 
-附件目录后继修订见 `add-managed-attachment-directories`：本文 workspace blob/owner-ref 与单 blob fork 验收为旧基线；线上新上传已使用独立目录、目录级关联与 30 天回收，旧库显式离线迁移。canonical 原历史身份、冻结输入、请求 hash、fork journal/claim 和 publication 约束继续保留；目录完整验收以该 change 为准，归档不得用旧基线覆盖目录修订。
+附件目录后继修订见 `add-managed-attachment-directories`：本 change 的 proposal/design、附件存储 requirement 和 fork 验收已同步独立目录、目录级关联与 30 天回收，旧库仅经显式离线迁移。canonical 原历史身份、冻结输入、请求 hash、fork journal/claim 和 publication 约束继续保留；目录完整验收及未完成边界以该 change 为准，历史任务收据不构成旧 blob writer/owner-ref 生产链的保留依据。
 
 ## ADDED Requirements
 

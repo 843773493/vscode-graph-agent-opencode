@@ -227,7 +227,7 @@ v2 `content_part` 的 canonical 正文固定存于父 item JSONL envelope 的 pa
 
 ### Requirement: 大型正文只保存在 JSONL
 
-系统 SHALL 将大型 canonical assistant output、工具参数、工具结果和 encrypted reasoning 正文完整保存在对应 thread rollout JSONL。SQLite 只能保存类型、状态、长度、哈希、有界投影和 offset/length；`ContextPlanDetailStore` MUST 位于由 session catalog与thread catalog/resolver定位的真实thread node下的精确相对路径 `rollout/context-plan-details/<assembly_id>/<detail_id>`，不得写入全局 `${BOXTEAM_HOME}`、workspace attachment blob store或按显示名定位。该物理 detail store 只服务已分配 assembly 的 sealed manifest；unsealed plan 不得创建或解析 assembly detail path。`detail_id` 是 assembly 内 target-local 的不可变物理叶名；sealed `detail_ref` 是不暴露物理路径、规范化为 `{session_id, thread_id, assembly_id, detail_id}` 的逻辑 typed reference，由 resolver 唯一映射到该路径，调用方不得自行拼接路径。它只允许保存 request-only prompt、middleware 输入和 assembly 诊断详情，必须绑定同一 `session_id`/`thread_id`/`assembly_id` 并受 visibility/protection、retention/GC 和显式 detail capability 控制；credential/token/secret 的存储归来源凭据 owner，attachment 正文归原 blob owner；detail owner 只保存其合同允许的单份精确上下文正文，sensitive 只约束访问和默认外部脱敏。detail store 不得保存可替代 canonical item正文或attachment blob的第二副本。
+系统 SHALL 将大型 canonical assistant output、工具参数、工具结果和 encrypted reasoning 正文完整保存在对应 thread rollout JSONL。SQLite 只能保存类型、状态、长度、哈希、有界投影和 offset/length；`ContextPlanDetailStore` MUST 位于由 session catalog与thread catalog/resolver定位的真实thread node下的精确相对路径 `rollout/context-plan-details/<assembly_id>/<detail_id>`，不得写入全局 `${BOXTEAM_HOME}`、workspace attachment blob store或按显示名定位。该物理 detail store 只服务已分配 assembly 的 sealed manifest；unsealed plan 不得创建或解析 assembly detail path。`detail_id` 是 assembly 内 target-local 的不可变物理叶名；sealed `detail_ref` 是不暴露物理路径、规范化为 `{session_id, thread_id, assembly_id, detail_id}` 的逻辑 typed reference，由 resolver 唯一映射到该路径，调用方不得自行拼接路径。它只允许保存 request-only prompt、middleware 输入和 assembly 诊断详情，必须绑定同一 `session_id`/`thread_id`/`assembly_id` 并受 visibility/protection、retention/GC 和显式 detail capability 控制；credential/token/secret 的存储归来源凭据 owner，attachment live 正文归原目录 owner，历史已用版本归原 immutable asset owner；detail owner 只保存其合同允许的单份精确上下文正文，sensitive 只约束访问和默认外部脱敏。detail store 不得保存可替代 canonical item正文或attachment blob的第二副本。
 
 #### Scenario: 默认工具摘要
 
@@ -288,59 +288,47 @@ storage resolver MUST 在读取catalog或构造路径前用共享canonical valid
 - **WHEN** 为某个 assembly 写入或读取 request-only detail
 - **THEN** 唯一正文位于该 thread 的 thread node 下的 `rollout/context-plan-details/<assembly_id>/<detail_id>`，同一 Session 的另一 thread 不能经 session node 读取或写入这些 detail；不创建本地密钥或第二密文落点
 
-### Requirement: 附件正文必须使用 workspace 级内容寻址 blob store
+### Requirement: 附件目录与历史冻结输入必须由原 owner 分工保存
 
-系统 SHALL将附件正文直接保存到`${workspace_abs_path}/.boxteam/attachments/YYYY/MM/DD/{blob-id}`，不得在日期与blob叶名之间增加Session、thread或digest shard。`blob-id` MUST匹配68-byte ASCII `blb_[0-9a-f]{64}`，payload MUST等于精确正文bytes的SHA-256小写hex，并与`digest=sha256:<同一payload>`及length逐字节一致；不得使用原始文件名、扩展名、MIME、Session或thread参与身份或路径。日期 MUST是该digest首次成功取得catalog唯一claim的UTC日期。`${workspace_abs_path}/.boxteam/attachments/catalog.sqlite` MUST是attachment identity、digest、受校验相对locator、length、MIME/protection、variant lineage、session/thread/item refs、retention、tombstone与GC的唯一权威；reader不得扫描日期目录定位blob或把调用方字符串拼成路径。
+上传正文 SHALL 由 `managed-attachment-directories` 定义的工作区目录 owner 保存，每次独立上传拥有稳定目录身份、冻结 UTC 日期和受检 locator；相同 digest 只证明具体文件字节一致，MUST NOT 合并可变目录或复活已回收目录。目录 catalog 是 live 原件、预览、精确 Thread 关联、ingest/fork claim、期限和可用性的唯一权威；canonical item、模型、API 和跨端传输只使用规范资源 URI，MUST NOT 保存真实路径。文件 child、访问授权和旧历史来源解析分别消费唯一 URI owner 及原附件 owner，不从 digest 猜测消费 Thread 或跨端 alias。
 
-Session/thread所属上传 MUST在写入workspace ingest或任何staging正文前取得按session ID互斥的workspace `SessionLifecycleGate`，在gate内验证Session catalog/thread及`SessionLifecycleFence`仍为同一active generation，并于owner Session的`session-control.sqlite` create-or-get承担operation lease的durable `AttachmentOperationPin`，冻结generation、ingest operation、精确session/thread和preimage；同operation不同preimage MUST冲突。随后以软件生成的ingest idempotency key于attachment catalog create-or-get `AttachmentIngestRecord(state=preparing)`，冻结该pin identity、workspace/preimage、限制和受控内部staging locator。正文只能写入该record指定的staging，完成有界写入、hash/length计算与durability barrier后，record在catalog事务中推进为`hashed`并以digest唯一约束create-or-get `BlobCommitClaim`；胜出claim冻结blob ID、首次UTC日期、最终relative locator和预期hash/length。胜出者原子rename到尚未发布的最终locator并复验正文；发布blob availability、逻辑attachment/variant、owner reference及terminal record/claim前 MUST再次取得同一gate，在持锁期间验证原pin有效、fence仍为pin捕获的active generation且thread未失效并提交attachment catalog事务后才释放gate。canonical `attachment_ref`只能在这些事实已发布后提交。pin只能在owner reference和canonical使用事实durable，或失败清理terminal后释放。并发相同digest的其它ingest MUST复用该claim的首次日期与唯一locator；正文尚未落盘时，可用自身已校验的同内容staging完成原claim，不得提前清除staging后因缺少胜出正文而失败。活winner身份不得推测接管，发布后的正文缺失或损坏仍必须明确拒绝。
+上传 SHALL 先冻结消息 ID，在 topology shared → 单 Session gate 内核对 catalog、Thread 与 lifecycle generation 并建立原 durable attachment pin，再以稳定 operation identity 建立目录 ingest，冻结 pin/preimage、独立目录身份、staging 和最终 locator。正文写入与 durability 由原 holder 保护，在 Session gate 外完成；发布前重新取得短 gate，核对原 pin/fence/Thread，在同一附件 catalog 事务发布目录、文件版本、关联和 ingest。pin 与附件 catalog 是显式跨库 saga，MUST NOT 假设两个 SQLite 原子提交；同 operation 不同输入冲突，旧终态 intent 不重开，未登记文件不扫盘吸收。
 
-fork 跨域附件导入必须用按 copy operation 分片的跨进程 holder 覆盖全部 staging 写入与网络接收，并与短时正文提交锁分离。操作终结不等于旧 writer 已停止：中止与 GC 只能非阻塞取得该 holder 后，重查该 operation 的全部附件 claim 已为 committed/aborted/target_deleted，再按保留 claim 中的冻结 blob 和原 operation 派生 staging locator 并删除；不得依赖已移除的 alias mappings、扫描目录或按 blob 全局删除其它操作的文件。活 writer 保留自身 finally 清理；进程退出后或物理删除中断，由后续 GC/startup 按同一定位规则幂等重试，错误必须暴露。
+正文发布 MUST NOT 提前结清 pin。用户 acceptance 或内部 notice admission 提交后，由 canonical owner 核对精确消息使用事实并结算原 pin；恢复先确认原上传 holder 已排空，定点核对原消息、ingest 与 fork 保活。未接受的失败消息只释放其精确关联，不释放同 Thread 其它已接受输入；已接受但 pin 未结算的窗口必须保留目录及 queued 输入，旧 fencing token 不得再次结算。Session/Thread 删除关闭准入后，排空已有 writer，按冻结操作与 locator 收敛 pin/ingest，不能向已删除 owner 补挂引用。锁序仍为 topology → 至多一个 Session gate → 至多一个 SQLite 写事务，不能跨正文 I/O、网络或模型持有 Session gate。
 
-pin与workspace ingest MUST以稳定operation identity形成显式跨库saga，不得假设两个SQLite原子提交。在附件saga中，`SessionLifecycleGate`串行化pin准入、owner-reference提交和Session进入`deleting`三个短临界区，不得跨正文写入或模型执行持有；它同时遵守Session其它副作用准入的统一gate/fence合同。gate必须在workspace内跨进程互斥、进程退出自动释放且不可用时fail closed。统一锁序为先取得一个gate，再打开至多一个catalog或SQLite写事务；禁止持有任一存储事务后等待gate、同时持有两个Session gate或两个数据库事务。恢复仍只读持久record。恢复只枚举非终态pin、ingest和claim记录冻结的有限locator；pin后、ingest前崩溃可由owner恢复/删除流程终结，rename后但catalog发布前的正文保持不可见并由原claim继续或清理。Session先进入`deleting`时必须拒绝新pin和尚未提交的owner reference；若owner reference已在更早的持锁临界区提交，删除owner必须先阻断canonical使用、释放该reference并收敛已有pin，之后才能隔离Session节点。不得留下指向删除owner的reference。无record文件不得被reader、恢复或GC扫盘吸收。同一blob ID对应不同digest、length或bytes时 MUST返回`blob-identity-conflict`且不得覆盖。
+fork SHALL 复用原 journal/claim/publication 与 copy operation holder：同工作区复用目录身份并建立目标关联，跨工作区只导入冻结 manifest 和已核验文件，经既有 files/chunk 传输。capture 后不得读取 live 目录补造过去版本；失败、取消与目标删除须等待原 writer 退出并只结算本次 claim/关联，迟到回执不能复活目标。旧 v2 snapshot、canonical 原始身份与 hash 保持原文，schema 3 仅作显式离线迁移输入，不保留线上 blob writer、owner-ref 双读或 digest claim 回退。
 
-相同 digest 的后续上传 MUST 复用既有 blob 和首次 locator，不得按上传日期复制。删除 Session/thread/item 时只移除相应 reference；存在 canonical item、active execution、sealed assembly、checkpoint/operation pin 或其它有效 owner reference 时不得删除正文。满足零引用与 retention 后，GC MUST 先原子提交 tombstone/availability，再删除物理 blob；失败可幂等重试。canonical `attachment_ref` 与外部 API不得包含物理 locator，访问必须同时校验 workspace、session、thread、item/view membership、hash/length 和 capability。
+live 目录最后一次零关联后默认保留 30 天，冷上传、queued 输入、有效 fork claim 和经原 owner 核实的处理进程占用阻止回收；runtime 关联包含 tracker 实例和 generation，旧代释放不能移除新代关联。GC 与 attach/operation 互斥复核，先持久标记 deleting，再按原 locator 删除并提交 tombstone；失败或重启继续原记录，不重置期限或把未知进程当作停止。历史 URI 本身不构成永久 live 目录保活；checkpoint/assembly 需要的精确输入版本仍归原 immutable asset/version owner，MUST 从冻结内容重建并校验 request_hash，MUST NOT 随目录 GC 删除或从当前文件重新生成。
 
-上传 MUST 先冻结消息 ID，并将其绑定到原 pin 的恢复引用和 preimage。正文发布不得提前完成 pin；用户 acceptance 或内部 notice admission 提交后，canonical owner MUST 核验原始接受提交及同一 item 的附件使用索引，再结算该消息的 pin。恢复 MUST 先排空消息准备 holder 并取得 Session gate；未接受消息的引用只有在同 Session 所有已发布 Thread 均无 canonical 使用且无 fork 保活时才可定点释放，禁止释放整个 Thread/Session。fork 准备期仍有 claim/mapping 保活时 MUST 保留原 pin，直至发布或撤销后重新核验。fork 发布、中止或目标 Thread 删除后，必须在释放事务和 Session gate 后触发同一定点恢复，不依赖下次进程启动；活上传 holder 仍不得被抢占。缺少消息身份、正文/索引或接受提交不一致 MUST 明确失败；不建立第二份消息正文或附件使用事实。
+#### Scenario: 相同正文独立上传
 
-正文提交 MUST 复用固定分片跨进程 holder 锁串行化同一 blob 的 claim、rename 与校验，普通上传释放正文锁后才取得 Session gate 发布。`hashed` 非终态 ingest MUST 在 catalog GC 事务中保活正文；fork 导入沿原 preparing/owner_reserved claim 保活，网络接收不占正文提交锁。GC MUST 非阻塞取得同一正文锁并在事务内重查操作、owner 与 retention 依赖，不得在 Session gate 内等待正文锁。未发布且无依赖的 claim MUST 先持久推进 aborted，再按冻结 locator 校验并删除正文；删除中断仍由同一 claim 重试，不扫描目录。新上传或授权 fork 导入可以重新领取该 digest claim，保留首次日期与 locator，禁止重开旧 ingest 或 pin。已 tombstone 的正文经新操作校验并发布后可恢复 available，且必须清除旧 tombstone 时间；已 available 正文的缺失或损坏不得由重传静默修复。
-
-#### Scenario: 同正文胜者在 rename 前崩溃
-- **WHEN** 第一个真实上传进程已提交唯一 claim 但尚未 rename，第二个进程上传相同正文，随后第一进程退出
-- **THEN** OS 释放正文锁后第二上传使用自己的已校验 staging 完成原 locator 并正常接受消息；恢复只终止失败消息的 ingest/pin，不改写活 winner 身份或另一 owner 的引用
-
-#### Scenario: 未发布正文清理中断与重新上传
-- **WHEN** 上传在 rename 后、availability 发布前退出，原 holder 已停止，清理在 claim aborted 提交后中断
-- **THEN** 下一次 GC 仍只按该 claim 重试精确正文删除；新操作重新上传时保留首次日期和 locator，旧尝试保持终态，其他仍有 ingest 或 fork 依赖的正文不能被回收
+- **WHEN** 两次独立上传的原件字节相同，或发生在 UTC 日期边界两侧
+- **THEN** 两次上传分别冻结独立目录身份和自己的日期；同 operation 重试复用原目录，其它上传不共享可变派生区或合并关联
 
 #### Scenario: 正文已发布但消息尚未接受时崩溃
 
-- **WHEN** 上传已发布 owner reference，但消息尚未通过用户 acceptance 或内部 notice admission，随后进程退出
-- **THEN** pin 仍非终态；恢复只释放该失败消息无其他 canonical 使用及 fork 保活的精确引用，再终结原 pin，不改变同 Thread 已接受消息或共享 blob 的其他 owner
+- **WHEN** 目录与关联已发布，消息尚未接受，随后原上传进程退出
+- **THEN** pin 保持非终态，恢复按原消息和 ingest 定点释放失败关联并结算 pin，不改变同 Thread 已接受输入或其它目录
 
 #### Scenario: 消息已接受但 pin 尚未结算时崩溃
 
 - **WHEN** canonical 接受事务已提交，进程在 pin active 或 settling 状态退出
-- **THEN** 恢复验证原消息、接受提交和附件使用索引后结算原 pin，保留附件读取；旧 fencing token 不能再次回调，索引损坏时不得视为消息未接受而释放引用
+- **THEN** 恢复核对原消息与附件使用事实后结算原 pin并保留 queued 目录；旧 fencing token 失效，正文/索引冲突明确拒绝
 
-#### Scenario: 相同正文跨日期并发上传
+#### Scenario: 目录 durable 后、catalog 发布前崩溃
 
-- **WHEN**两个ingest在UTC日期边界两侧完成相同正文的hash并竞争digest claim
-- **THEN**catalog只允许一个claim冻结首次日期和唯一locator；另一个ingest清理自身record中的staging并复用胜出blob，两个逻辑attachment可有独立owner reference但不得产生第二份正文
-
-#### Scenario: blob rename 后、catalog 发布前崩溃
-
-- **WHEN**进程已把record中的staging rename到claim冻结的最终locator，但尚未发布blob availability、attachment和owner reference
-- **THEN**普通reader与canonical writer仍看不到该blob；恢复只按非终态claim校验并继续或清理，禁止扫盘吸收、提交悬空`attachment_ref`或改写其它digest的正文
+- **WHEN** 进程完成原 ingest 指定目录的原子发布和 durability，但尚未提交 catalog 可见性
+- **THEN** reader 与 canonical writer 不得看见半成品；恢复确认 holder 已排空后沿冻结 locator 终止未发布 ingest，不扫描或改写其它上传
 
 #### Scenario: 上传与 Session 删除竞态
 
-- **WHEN**附件operation已取得Session-local pin但尚未发布workspace owner reference，并与目标Session进入`deleting`竞争同一`SessionLifecycleGate`
-- **THEN**若删除先取得gate则owner-reference提交被拒绝；若上传先在gate内提交reference，则删除随后按pin阻断canonical使用、释放reference并收敛ingest。只有pin、ingest/claim、reference和staging均terminal后Session节点才可隔离，恢复不得向tombstone Session补挂附件
+- **WHEN** 上传取得原 pin 后，与 Session deleting 竞争同一短 gate
+- **THEN** 删除先行则目录关联发布明确拒绝；上传先行则删除排空该操作并结算精确关联、ingest 与 pin后才隔离 Session，旧 writer 不能补挂关联
 
-#### Scenario: 相同附件跨 Session 复用 blob 但不共享权限
+#### Scenario: 目录回收后重建历史请求
 
-- **WHEN** 两个 Session 上传相同内容并得到相同 digest
-- **THEN** attachment catalog 复用一个物理 blob，但为两个逻辑 attachment/owner reference分别校验权限；删除一个 Session 只释放其 reference，另一个 Session 的读取和 retention 不受影响
+- **WHEN** 零关联目录到期由原 GC 回收，而保留的 assembly/checkpoint 仍引用过去输入
+- **THEN** 当前原件查看明确不可用，原请求从已冻结正文重建且 request_hash 不变，历史身份不重写，恢复资产不随 live 目录删除
 
 ### Requirement: Sealed ContextAssemblySnapshot 与 canonical commit 具有明确边界
 

@@ -8,7 +8,7 @@ Terminal/Browser 已共用资源关联和 operation lease 规则：正常 unload
 
 **Goals:** 目录是关联、Shell 工作目录和回收单位；异常退出不依赖 Agent 主动 detach；复用原 owner、URI、文件操作和冻结输入链路。
 
-**Non-Goals:** 不新增云端存储、每文件引用计数、通用文件版本控制或附件专用工具。目录主链及原文件/Shell 注入已经完成；完整 Web、Windows 实机、冻结输入回收验收与挂起操作/关闭期限仍按后续纵向切片推进，不将局部通过视为整个变更完成。Agent 团队、成员、委派及会话协作通信按用户裁定保留 TODO，不在此变更追加实现或专项验证。
+**Non-Goals:** 不新增云端存储、每文件引用计数、通用文件版本控制或附件专用工具。目录主链及原文件/Shell 注入已经完成；Windows 实机、完整跨端组合验收与挂起操作/关闭期限仍按后续纵向切片推进，不将局部通过视为整个变更完成。Agent 团队、成员、委派及会话协作通信按用户裁定保留 TODO，不在此变更追加实现或专项验证。
 
 ## Decisions
 
@@ -66,9 +66,9 @@ Shell 的结构化 workdir 接受目录 URI，在 URI 指定目标的文件 owne
 
 | 冲突来源 | 处理决定 | 必须保留的约束 |
 | --- | --- | --- |
-| itemized design §8.3、spec 的“canonical attachment 只保存 workspace blob 引用”及单 blob fork 验收 | 新上传改用目录/文件资源身份，取消相同上传强制合并；原 blob/owner-ref 存储迁齐调用方后下线 | canonical 不保存物理 locator，历史原始身份和 frozen digest/length 不改写，fork claim/publication 原子性不降低 |
+| itemized 的旧内容寻址附件布局及单 blob fork 验收 | proposal/design、rollout 存储 requirement 与 fork 验收已同步目录/文件资源身份，取消相同上传强制合并；原 blob/owner-ref writer 已下线 | canonical 不保存物理 locator，历史原始身份和 frozen digest/length 不改写，fork claim/publication 原子性不降低 |
 | virtual-resource-addressing 的 kind 闭集、单文件附件模板及共享 blob 场景 | 由同一 URI owner 登记上述 workspace attachments directory/child；旧 Session URI 只保历史解析，不生成新引用 | 不新增 URI 解析器、不泄漏真实路径、普通 files/root 仍不能直接遍历 `.boxteam` |
-| unified-resource-file-tools 的“会话范围保存原件”“附件单文件只读”“进程执行另行定义” | 本 change 修改消息原件存储范围；目录原件只读、派生区通过原文件 owner 操作，结构化 Shell workdir补齐执行合同 | 512 像素预览、媒体投影、原件读取、文件工具权限及修订语义保持 |
+| unified-resource-file-tools 的旧 Session 单文件产物边界 | 附件目录/child、原件只读与 derived 导航/写入已同步其 design 和文件 requirement，工具结果仍为 Session 单文件；Shell workdir 继续由本 change 定义 | 512 像素预览、媒体投影、原件读取、文件工具权限及修订语义保持 |
 | persistent-resources 的 thread unload 即时 delete、零关联 30 分钟、workspace 永不自动过期 | 这些规则继续适用于既有 Shell/Browser；附件复用机制但采用明确的零关联 30 天策略 | 显式 detach 不等于停止、有效 operation 阻止回收、未知停止结果不伪报成功 |
 | deduplicate-execution-history-storage 的不可变内容复用及恢复/fork保护 | 可变目录不参与 digest 身份合并；已冻结历史输入仍按原 immutable asset/version 复用 | 历史 request_hash 可重建，GC 不删除 checkpoint/assembly 所需版本；不从当前目录补历史 |
 | 当前附件 GC 的 `created_at < now-retention` 与 `retention=0` 调用 | 改为最后一次零关联后的 deadline；不能简单把参数改成 30 天 | 在 detach 第 30 天前不删，重启不重置 deadline，删除与 reattach 互斥 |
@@ -128,3 +128,11 @@ Shell 的结构化 workdir 接受目录 URI，在 URI 指定目标的文件 owne
 目录创建、上传接受、原件/预览、统一文件读写、Shell 占用、运行时代次与低频 GC 已纵向切换，blobs.py/queries.py 旧生产实现物理移除；schema.py、旧 SQL 和旧快照仅用于显式迁移或封存历史读取。后续优先补齐冻结历史/完整 Web/平台验收，再处理挂起操作终止、共享锁与关闭期限；每个批次迁齐调用方并验证后提交，未满足全部合同的任务保持未勾选。
 
 迁移本身须覆盖从产品生成的 schema 3 历史、相同内容重复上传、共享旧 blob 的多个 owner、已释放/已回收资源、终态深历史 fork、排队输入、非终态明确拒绝，以及切换前/切换点后崩溃与重复执行。核对原件字节、URI 身份、owner/claim、历史请求 hash 和备份；目录回收不删除历史 immutable asset。Agent 团队/委派专项验收继续 TODO；附件链实际必需的用户/内部消息接受和通用 fork 仍验证。
+
+### 目录增长与回收测量（任务 6.4）
+
+`integration-attachment-retention-measurements` 通过产品消息和真实 Agent 执行生成 1/32 个独立同内容上传，每个原件 3968 字节，随后沿真实 unload 产生零关联期限；定点冷 owner 恢复、截止前/到期查询与 GC 均消费原记录，不手填 pin、关联、期限或执行。正式原件和测试源码指纹见 tasks 6.4 证据。该场景度量 owner 成本，模型使用现有 model_stream，不代表网络/SSH、Windows 或完整 Backend 启动耗时。
+
+本次 Linux 样本为：1/32 个目录的 live 原件分别 3968/126976 字节，SQLite 分配页合计 143360/196608 字节；冷 owner 恢复约 7.52/9.11 ms，到期查询约 0.087/1.396 ms，GC 约 7.07/131.14 ms。GC 后全部已登记 live 目录消失，canonical bytes 不变，catalog 保留原 tombstone、文件版本、关联与 ingest 行。WAL 在发布后为 98912/2640952 字节，GC 后为 111272/3036472 字节；这反映本次未主动 checkpoint 的日志占用，不能与数据库页重复相加后当成有效正文体积，也不能由两个小样本承诺全链路线性增长。
+
+TODO（性能）：32 个目录的 124 KiB 原件对应约 2.90 MiB GC 后 WAL，终态记录仍保留；后续按同工作负载扩大目录数/正文规模并测 checkpoint 后文件占用、恢复和尾延迟，再评估 WAL checkpoint 与无引用终态元数据整理。清理前仍须证明历史/fork/恢复依赖安全，不自动缩短保留期限、不删除仍有依赖的 tombstone/版本，也不为小样本提前引入后台任务或新索引。挂起 operation 接管、共享 owner 锁和关闭期限继续是 5.2/5.4 未完成的正确性边界，本测量不能替代它们。

@@ -174,7 +174,7 @@
 
 ### Requirement: 会话产物引用必须迁入统一寻址并保留原 owner
 
-附件和工具输出 MUST 使用统一寻址 owner 登记的 Session 单文件引用，保留原 attachment/result 业务 ID、访问授权、保留/删除和历史语义。生成、读取、工具结果、Provider 输入及 Web/历史投影 MUST 同步替换 `boxteam-session://`；该 scheme 与解析分支在全部直接/间接消费者迁移后物理下线，不保留别名或双读。产物可显式读取但不可当作 Session 私有目录遍历或通过通用写工具修改；未授权与不存在遵守原 owner 的披露合同。
+附件 MUST 使用唯一寻址 owner 登记的 workspace attachments 目录及文件 child 引用，按 `managed-attachment-directories` 保留每次独立上传的目录身份、精确关联和 30 天回收；旧 Session 附件 URI只用于迁入后的精确历史解析，不生成新引用。目录可通过同一文件 owner 导航，原件与预览只读，派生区复用现有授权文件写入；MUST NOT 因开放附件目录而暴露其它 `.boxteam` 私有数据。工具输出仍使用 Session 单文件引用，保留原 result ID、精确访问授权及生命周期，不开放产物目录遍历或通用修改。生成、读取、工具结果、Provider 输入及 Web/历史投影 MUST 使用同一规范 URI；`boxteam-session://` scheme 和旧解析分支迁齐调用方后物理下线，不保留别名、旧 blob writer 或双读。未授权与不存在遵守各原 owner 的披露合同。
 
 统一 URI 的读取分派 MUST 将附件交原附件 owner 取得内容，保留既有 `original`/`thumbnail` 变体参数；变体不成为 URI query、fragment 或另一套文件身份。Web 附件内容接口仍消费同一 owner，既有 `read_file` 对受支持媒体返回原有媒体 block，并经现有 `project_tool_message_content` 和目标 Provider 能力处理。通用文本读取仅消费文本能力，不能替代二进制原件或将其以替换字符返回；不新增 `attachment.xxx` 工具、通用二进制写入平台或私有目录读取旁路。
 
@@ -187,6 +187,11 @@
 
 - **WHEN** 经统一 URI 使用既有 read_file 读取受支持图片附件，或客户端请求该附件的 original/thumbnail 变体
 - **THEN** 内容由原附件 owner 在固定目标提供，媒体工具结果与 Provider 投影遵守既有合同，不报 UTF-8 文本错误、不返回真实路径，也不开放 Session 私有目录
+
+#### Scenario: 附件目录派生文件复用原文件链
+
+- **WHEN** 用户或模型导航附件目录，读取原件并在 derived 区生成或编辑文本文件
+- **THEN** 同一 URI 解析和文件 owner 执行访问，原件/预览不可被覆盖，派生结果可继续按资源 URI 读取；其它私有存储仍拒绝，工具输出不因此获得目录或修改能力
 
 #### Scenario: 旧 scheme 被拒绝
 
