@@ -67,6 +67,23 @@ _IDX_INGEST_SESSION_DDL = (
     load_sql(__package__, "sql/idx_attachment_ingest_records_session.sql")
 )
 
+# 线上初始化与离线 schema 参照使用同一顺序，不复制表、约束和触发器定义。
+_SCHEMA_STATEMENTS = (
+    _BLOBS_TABLE_DDL,
+    _INGEST_RECORDS_TABLE_DDL,
+    _IDX_INGEST_STATE_DDL,
+    _IDX_INGEST_SESSION_DDL,
+    _CLAIMS_TABLE_DDL,
+    _OWNER_REFS_TABLE_DDL,
+    _FORK_CLAIMS_TABLE_DDL,
+    _FORK_CLAIMS_INDEX_DDL,
+    _FORK_MAPPINGS_TABLE_DDL,
+    _FORK_MAPPINGS_INDEX_DDL,
+    *_REVISION_DDL,
+    _IDX_OWNER_REFS_BLOB_DDL,
+    _IDX_OWNER_REFS_SESSION_DDL,
+)
+
 _REQUIRED_TABLES = (
     "attachment_blobs",
     "attachment_ingest_records",

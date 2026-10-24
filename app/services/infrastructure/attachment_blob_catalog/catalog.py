@@ -49,20 +49,8 @@ from app.services.infrastructure.attachment_blob_catalog.records import (
     derive_attachment_id,
 )
 from app.services.infrastructure.attachment_blob_catalog.schema import (
-    _BLOBS_TABLE_DDL,
-    _CLAIMS_TABLE_DDL,
-    _FORK_CLAIMS_INDEX_DDL,
-    _FORK_CLAIMS_TABLE_DDL,
-    _FORK_MAPPINGS_INDEX_DDL,
-    _FORK_MAPPINGS_TABLE_DDL,
-    _IDX_INGEST_SESSION_DDL,
-    _IDX_INGEST_STATE_DDL,
-    _IDX_OWNER_REFS_BLOB_DDL,
-    _IDX_OWNER_REFS_SESSION_DDL,
-    _INGEST_RECORDS_TABLE_DDL,
-    _OWNER_REFS_TABLE_DDL,
     _REQUIRED_TABLES,
-    _REVISION_DDL,
+    _SCHEMA_STATEMENTS,
     _SCHEMA_VERSION,
     CATALOG_DATABASE_NAME,
     INGEST_RECORD_TERMINAL_STATES,
@@ -199,20 +187,8 @@ class AttachmentBlobCatalog(IngestMixin, BlobsMixin, QueriesMixin, ForkAttachmen
                 )
         connection.execute("BEGIN IMMEDIATE")
         try:
-            connection.execute(_BLOBS_TABLE_DDL)
-            connection.execute(_INGEST_RECORDS_TABLE_DDL)
-            connection.execute(_IDX_INGEST_STATE_DDL)
-            connection.execute(_IDX_INGEST_SESSION_DDL)
-            connection.execute(_CLAIMS_TABLE_DDL)
-            connection.execute(_OWNER_REFS_TABLE_DDL)
-            connection.execute(_FORK_CLAIMS_TABLE_DDL)
-            connection.execute(_FORK_CLAIMS_INDEX_DDL)
-            connection.execute(_FORK_MAPPINGS_TABLE_DDL)
-            connection.execute(_FORK_MAPPINGS_INDEX_DDL)
-            for statement in _REVISION_DDL:
+            for statement in _SCHEMA_STATEMENTS:
                 connection.execute(statement)
-            connection.execute(_IDX_OWNER_REFS_BLOB_DDL)
-            connection.execute(_IDX_OWNER_REFS_SESSION_DDL)
             if current != self.SCHEMA_VERSION:
                 connection.execute(f"PRAGMA user_version = {self.SCHEMA_VERSION}")
         except BaseException:
