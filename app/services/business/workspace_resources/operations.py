@@ -39,7 +39,7 @@ class ResourceOperations:
     def _release_locked(self, resource_id: str) -> None:
         lease_id = self._lease_refs.pop(resource_id, None)
         if lease_id is not None:
-            self._owner._leases.release(lease_id)
+            self._owner._release_operation_lease(lease_id)
 
     async def close(self) -> None:
         self._closed = True

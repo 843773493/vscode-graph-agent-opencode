@@ -21,7 +21,7 @@ from tests.support.resource_owners.browser import (
     BrowserOwnerFixture,
     build_browser_owner_fixture,
 )
-from tests.support.resource_owners.sessions import WORKSPACE_ID
+from tests.support.resource_owners.sessions import SESSION_A, THREAD_A, WORKSPACE_ID
 from tests.support.resource_owners.terminal import (
     TerminalOwnerFixture,
     build_terminal_owner_fixture,
@@ -108,37 +108,111 @@ def transport(bundle: TerminalOwnerFixture | BrowserOwnerFixture, url: str) -> T
     )
 
 
-async def test_cancel_closes_the_socket_and_keeps_unknown_owner_across_restart(
+@pytest.mark.parametrize("entry", ["management", "tool"])
+async def test_cancel_closes_the_socket_and_keeps_the_original_lease_until_verified_stop(
     bundle: TerminalOwnerFixture | BrowserOwnerFixture, pending_http: PendingHTTP, monkeypatch: pytest.MonkeyPatch,
+    entry: str,
 ) -> None:
     resource = await bundle.create()
     rid = str(resource["resource_id"])
     assert bundle.owner is not None
     pending_http.response = json.dumps({"data": {bundle.owner.kind: bundle.transport.records[rid]}}).encode()
     async with pending_http.serve() as url:
-        monkeypatch.setattr(bundle.transport, "stop_resource", transport(bundle, url).stop_resource)
-        stopping = asyncio.create_task(bundle.command(rid, action="stop", expected_revision=1))
+        client = transport(bundle, url)
+        if entry == "management":
+            monkeypatch.setattr(bundle.transport, "stop_resource", client.stop_resource)
+        elif isinstance(client, TerminalManagerClient):
+            monkeypatch.setattr(bundle.transport, "write_terminal", client.write_terminal)
+        else:
+            monkeypatch.setattr(bundle.transport, "perform", client.perform)
+
+        async def invoke() -> None:
+            assert bundle.owner is not None
+            if entry == "management":
+                await bundle.command(rid, action="stop", expected_revision=1)
+                return
+            async with bundle.owner.operation(
+                session_id=SESSION_A, thread_id=THREAD_A,
+                holder_id="turn:http-cancel", operation_id="call:http-cancel",
+            ) as operation:
+                if isinstance(bundle, TerminalOwnerFixture):
+                    await operation.write_terminal(terminal_id=rid, data="echo cancelled\n")
+                else:
+                    await operation.perform(rid, "navigate", {"url": "https://cancelled.test"})
+
+        stopping = asyncio.create_task(invoke())
         try:
             await asyncio.wait_for(pending_http.arrived.wait(), 5)
+            original, = bundle.leases.leases_for_resource(rid)
+            assert original.status == "active"
             stopping.cancel()
             with pytest.raises(asyncio.CancelledError):
                 await stopping
             # 取消 HTTP 等待必须真正关闭连接；服务端状态仍然未知。
             await asyncio.wait_for(pending_http.disconnected.wait(), 1)
             record = bundle.owner._store.records[rid]
-            assert record.status == "stopping" and record.reconciliation_status == "unknown"
+            assert record.status == ("stopping" if entry == "management" else "running")
+            assert record.reconciliation_status == "unknown"
+            retained, = bundle.leases.leases_for_resource(rid)
+            assert retained.lease_id == original.lease_id and retained.status == "reconcile_required"
+            assert (retained.turn_stream_id, retained.operation_id, retained.holder_session_id, retained.holder_thread_id) == (
+                original.turn_stream_id, original.operation_id, original.holder_session_id, original.holder_thread_id,
+            )
+            assert bundle.leases.release_turn_leases(original.turn_stream_id) == []
             bundle.restart()
             assert bundle.owner is not None
             observed = await bundle.owner.get_resource(rid)
             assert observed["reconciliation_status"] == "unknown" and observed["available_actions"] == []
+            assert bundle.leases.get_lease(original.lease_id).status == "reconcile_required"
             with pytest.raises(ResourceConflict, match="尚待 owner 核实"):
                 await bundle.command(rid, action="stop", expected_revision=observed["owner_revision"])
+            assert len(pending_http.requests) == 1
+            # 传输桩提供外部终态；结清仍须走真实 owner 的管理入口，不能重发旧副作用。
+            bundle.transport.records[rid]["status"] = "terminated" if bundle.owner.kind == "terminal" else "closed"
+            settled = await bundle.command(rid, action="stop", expected_revision=observed["owner_revision"])
+            assert settled["reconciliation_status"] == "verified"
+            assert bundle.leases.get_lease(original.lease_id).status == "settled"
+            assert bundle.leases.leases_for_resource(rid) == []
             assert len(pending_http.requests) == 1
         finally:
             pending_http.respond.set()
             if not stopping.done():
                 stopping.cancel()
             await asyncio.gather(stopping, return_exceptions=True)
+
+
+async def test_verified_stop_is_not_rewritten_by_a_late_tool_scope_close(
+    bundle: TerminalOwnerFixture | BrowserOwnerFixture, pending_http: PendingHTTP, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    resource = await bundle.create()
+    rid = str(resource["resource_id"])
+    assert bundle.owner is not None
+    async with pending_http.serve() as url, bundle.owner.operation(
+        session_id=SESSION_A, thread_id=THREAD_A, holder_id="turn:late-close", operation_id="call:late-close",
+    ) as operation:
+        client = transport(bundle, url)
+        if isinstance(client, TerminalManagerClient):
+            monkeypatch.setattr(bundle.transport, "write_terminal", client.write_terminal)
+            call = asyncio.create_task(operation.write_terminal(terminal_id=rid, data="echo cancelled\n"))
+        else:
+            monkeypatch.setattr(bundle.transport, "perform", client.perform)
+            call = asyncio.create_task(operation.perform(rid, "navigate", {"url": "https://cancelled.test"}))
+        try:
+            await asyncio.wait_for(pending_http.arrived.wait(), 5)
+            original, = bundle.leases.leases_for_resource(rid)
+            call.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await call
+            assert bundle.leases.get_lease(original.lease_id).status == "reconcile_required"
+            bundle.transport.records[rid]["status"] = "terminated" if bundle.owner.kind == "terminal" else "closed"
+            stopped = await bundle.command(rid, action="stop", expected_revision=resource["owner_revision"])
+            assert stopped["reconciliation_status"] == "verified"
+            assert bundle.leases.get_lease(original.lease_id).status == "settled"
+        finally:
+            call.cancel()
+            await asyncio.gather(call, return_exceptions=True)
+    assert bundle.leases.get_lease(original.lease_id).status == "settled"
+    assert bundle.leases.leases_for_resource(rid) == []
 
 
 async def test_resource_http_does_not_wait_for_the_default_thread_pool(

@@ -347,7 +347,8 @@ def test_lost_browser_action_receipt_keeps_native_error_in_diagnostics(
     assert item["available_actions"] == []
     assert listed.json()["data"]["items"] == [item]
     assert len(browser_owner_bundle.transport.calls) == 1
-    assert browser_owner_bundle.leases.leases_for_resource(resource_id) == []
+    pending, = browser_owner_bundle.leases.leases_for_resource(resource_id)
+    assert pending.status == "reconcile_required"
 
 
 def test_transport_failure_preserves_api_route_without_treating_it_as_native_path(
@@ -383,7 +384,8 @@ def test_transport_failure_preserves_api_route_without_treating_it_as_native_pat
     assert observed["reconciliation_status"] == "unknown"
     assert observed["available_actions"] == []
     assert attempted == [f"http://browser.test/api/browsers/{resource_id}/read"]
-    assert browser_owner_bundle.leases.leases_for_resource(resource_id) == []
+    pending, = browser_owner_bundle.leases.leases_for_resource(resource_id)
+    assert pending.status == "reconcile_required"
 
 
 def test_transport_timeout_api_preserves_recovery_details_and_durable_unknown(
@@ -418,7 +420,8 @@ def test_transport_timeout_api_preserves_recovery_details_and_durable_unknown(
     assert observed["error"] == detail
     assert observed["reconciliation_status"] == "unknown"
     assert observed["available_actions"] == []
-    assert browser_owner_bundle.leases.leases_for_resource(resource_id) == []
+    pending, = browser_owner_bundle.leases.leases_for_resource(resource_id)
+    assert pending.status == "reconcile_required"
     rejected = resource_api_client.post(f"/api/v1/resources/{resource_id}/browser-operation", json=command)
     assert rejected.status_code == 409, rejected.text
     assert attempted == [f"http://browser.test/api/browsers/{resource_id}/run"]

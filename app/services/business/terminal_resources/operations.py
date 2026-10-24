@@ -102,7 +102,7 @@ class TerminalOperations(ResourceOperations):
                    for lease in self._owner._leases.leases_for_resource(terminal_id)):
                 raise ValueError("临时命令仍有其它 operation lease，不能回收")
             record.thread_associations = []
-            return await self._owner._stop_or_delete(record, delete=True)
+            return await self._owner._stop_or_delete(record, delete=True, lease_id=self._lease_refs[terminal_id])
 
     async def _call(
         self, terminal_id: str, call: Callable[[], Awaitable[TerminalSnapshot]],
@@ -121,5 +121,5 @@ class TerminalOperations(ResourceOperations):
                 projection = resource_projection(record, runtime, self._owner.kind)
                 return {**result, "terminal": projection} if "terminal" in result else projection
             except BaseException as error:
-                self._owner._unknown(record, error)
+                self._owner._unknown(record, error, lease_id=self._lease_refs[terminal_id])
                 raise

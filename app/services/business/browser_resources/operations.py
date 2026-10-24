@@ -48,7 +48,7 @@ class BrowserOperations(ResourceOperations):
             self._use(browser_id)
             return await self.call_locked(
                 self._owner, self._owner._require(browser_id), action, payload or {},
-                actor="agent",
+                actor="agent", lease_id=self._lease_refs[browser_id],
             )
 
     async def promote(self, browser_id: str) -> ResourceSnapshot:
@@ -63,7 +63,7 @@ class BrowserOperations(ResourceOperations):
     @staticmethod
     async def call_locked(
         owner: BrowserResourceOwner, record: OwnedResourceRecord,
-        action: BrowserAction, payload: ResourceSnapshot, *, actor: str,
+        action: BrowserAction, payload: ResourceSnapshot, *, actor: str, lease_id: str,
     ) -> ResourceSnapshot:
         try:
             result = await owner._transport.perform(record.resource_id, action, payload, actor=actor)
@@ -84,8 +84,8 @@ class BrowserOperations(ResourceOperations):
                 owner._store.persist()
                 owner._sync_ledger(record)
             else:
-                owner._unknown(record, error)
+                owner._unknown(record, error, lease_id=lease_id)
             raise
         except BaseException as error:
-            owner._unknown(record, error)
+            owner._unknown(record, error, lease_id=lease_id)
             raise

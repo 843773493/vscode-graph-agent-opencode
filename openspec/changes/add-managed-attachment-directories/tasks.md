@@ -61,6 +61,7 @@ Web 定向 `BOXTEAM_E2E_SECTION8_FOCUS=copy_missing_attachment` 通过真实 Gat
 
 - [x] 5.1 复用运行时代次和原任务/operation 账本核对失效关联，接入 unload/Thread/Session 删除的幂等 detach；保护冷 Thread、排队输入和新代关联，禁止仅靠 Thread ID 存在无限保活。
 - [ ] 5.2 在原资源 owner 完成旧代操作接管和挂起操作取消/终止核实；未知结果保持可发现管理状态，不以超时假定进程已停止，不新增 lease 账本。
+  - 2026-10-24 已有资源的未知操作 lease 保留切片：工具、管理、卸载和孤儿回收均显式传递本次原 lease；回执丢失/取消由原 owner 与资源未知状态同批写入原账本，scope/Turn 收尾不再释放待核实占用，迟到 close 不覆盖已结清的 settled。明确失败回执、普通未知快照及同资源其它操作保持原收尾语义；冷恢复保留原 unknown 与错误原因，核实当前身份/版本的真实终态后才结清，不重发旧操作。完整旧 HEAD 加反例的真实 HTTP 取消为 4 failed/2.82 秒；最终候选的 owner/API/协议/HTTP 定向 290 passed/15.90 秒，真实 Terminal HTTP/PTY 8 passed/91.91 秒，真实 Browser 故障/恢复 40 passed/296.58 秒，Ruff/compileall 通过。命令、源码前后指纹、raw 与退出码在 `out/tests/temp/resource_unknown_leases_20261024/artifacts/`；初版范围过宽造成的失败及主动中断（exit 2）原件均保留，最终已完整跑通同一 Browser 选择，未放宽原状态、错误、重试或外部终态断言。未知创建的正式回执/lease 保留、旧代运行操作的接管/强制终止及 5.4 总期限仍 TODO，5.2 不勾选；本轮未重跑 Windows，也未追加 Agent 团队与协作专项实现或验证。
 - [x] 5.3 实现最后一次零关联起算的默认 30 天持久 deadline、重新 attach 取消期限，以及启动/低频到期查询；删除与 attach/lease/fork互斥复核，并可在中途重启后继续。
 - [ ] 5.4 统一清理 operation 的截止时间、取消/终止核实与迟到回执，隔离共享 owner 锁对无关资源的阻塞，处理同步阻塞回调/线程池排队；明确 admission、Session 删除和 shutdown 的有界等待及失败返回，保留未核实状态和原 locator，不重复副作用或以扫描超时假报释放。覆盖真实锁竞争、网络未回执、事件循环阻塞及重启恢复。
 

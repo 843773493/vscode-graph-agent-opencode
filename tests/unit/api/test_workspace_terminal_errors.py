@@ -124,7 +124,8 @@ def test_transport_error_body_stays_in_diagnostics_after_owner_restart(
     assert listed.status_code == 200, listed.text
     assert listed.json()["data"]["items"] == [current]
     assert native_path not in (terminal_owner_bundle.root / ".boxteam/terminal-resources.json").read_text()
-    assert terminal_owner_bundle.leases.leases_for_resource(rid) == []
+    pending, = terminal_owner_bundle.leases.leases_for_resource(rid)
+    assert pending.status == "reconcile_required"
     retry = resource_api_client.post(f"/api/v1/resources/{rid}/delete", json=command)
     assert retry.status_code == 409, retry.text
     assert attempted == [("DELETE", f"http://terminal.test/api/terminals/{rid}")]

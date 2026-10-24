@@ -117,7 +117,8 @@ def test_malformed_response_keeps_original_diagnostics_and_durable_unknown(
     assert listed.json()["data"]["items"] == [current]
     saved = json.loads((browser_owner_bundle.root / ".boxteam/browser-resources.json").read_text())
     assert saved["records"][0]["error"] == expected
-    assert browser_owner_bundle.leases.leases_for_resource(rid) == []
+    pending, = browser_owner_bundle.leases.leases_for_resource(rid)
+    assert pending.status == "reconcile_required"
     retry = resource_api_client.post(f"/api/v1/resources/{rid}/browser-operation", json=command)
     assert retry.status_code == 409, retry.text
     assert attempts == [("GET", f"http://browser.test/api/browsers/{rid}/read")]
@@ -167,7 +168,8 @@ def test_malformed_successful_grant_marks_unknown_before_api_serialization(
     assert current["error"] == expected
     assert current["reconciliation_status"] == "unknown"
     assert current["available_actions"] == []
-    assert browser_owner_bundle.leases.leases_for_resource(rid) == []
+    pending, = browser_owner_bundle.leases.leases_for_resource(rid)
+    assert pending.status == "reconcile_required"
     retried = resource_api_client.post(f"/api/v1/resources/{rid}/transport-grant", json=command)
     assert retried.status_code == 409, retried.text
     assert attempts == [("POST", f"http://browser.test/api/browsers/{rid}/transport-grant")]

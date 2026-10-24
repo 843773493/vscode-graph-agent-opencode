@@ -108,6 +108,10 @@ class WorkspaceResourceOwner:
         async with self._recovery_lock:
             if self._recovered:
                 return
+            unknown_results = {
+                record.resource_id for record in self._store.records.values()
+                if record.reconciliation_status == "unknown"
+            }
             observed = index_resources(await self._transport.list_resources(), self.workspace_id, self._store.records, self.kind)
             statuses: dict[str, str] = {}
             for record in self._store.records.values():
@@ -126,8 +130,8 @@ class WorkspaceResourceOwner:
                 self._release_committed_fork_leases(record)
                 self._reconcile_stopped_record(record, observed.get(record.resource_id))
                 if self._leases.leases_for_resource(record.resource_id):
-                    record.reconciliation_status = "reconcile_required"
-                    record.error = "前次 operation 结果尚未核实；未自动重放或结清 lease"
+                    record.reconciliation_status = "unknown" if record.resource_id in unknown_results else "reconcile_required"
+                    record.error = record.error or "前次 operation 结果尚未核实；未自动重放或结清 lease"
                 runtime = observed.get(record.resource_id)
                 if runtime is not None:
                     # Python 重启使旧传输授权失效；先落盘新版本，再要求 Node 撤销旧连接。
@@ -185,6 +189,7 @@ class WorkspaceResourceOwner:
                 self._sync_ledger(record)
                 return resource_projection(record, runtime, self.kind)
             except BaseException as error:
+                # TODO（5.2）：创建需补正式失败回执及未知 lease 接管，不能仅凭 HTTP 状态推断终态。
                 self._unknown(record, error)
                 raise
 
@@ -422,7 +427,7 @@ class WorkspaceResourceOwner:
                 if fork_attachment is not None:
                     await observe_phase(fork_attachment.creation_key, f"fork.live.dispatched.{self.kind}")
                 if action in {"stop", "delete"}:
-                    return await self._stop_or_delete(record, delete=action == "delete", reason=stop_reason)
+                    return await self._stop_or_delete(record, delete=action == "delete", reason=stop_reason, lease_id=acquired_lease_id)
                 await self._advance_revision(record)
                 runtime = await self._transport.get_resource(resource_id)
                 observe_resource(record, runtime, self.kind)
@@ -460,7 +465,7 @@ class WorkspaceResourceOwner:
                     record.thread_associations = associations_before
                     fork_attachment.state = "dispatching"
                     fork_attachment.committed_revision = None
-                self._unknown(record, error)
+                self._unknown(record, error, lease_id=acquired_lease_id)
                 raise
 
     async def _advance_revision(self, record: OwnedResourceRecord) -> None:
@@ -472,7 +477,7 @@ class WorkspaceResourceOwner:
         )
 
     async def _stop_or_delete(
-        self, record: OwnedResourceRecord, *, delete: bool, reason: str | None = None,
+        self, record: OwnedResourceRecord, *, delete: bool, lease_id: str, reason: str | None = None,
     ) -> ResourceSnapshot:
         record.status = "deleting" if delete else "stopping"
         record.updated_at = self._now()
@@ -498,7 +503,7 @@ class WorkspaceResourceOwner:
             self._sync_ledger(record)
             return resource_projection(record, runtime, self.kind)
         except BaseException as error:
-            self._unknown(record, error)
+            self._unknown(record, error, lease_id=lease_id)
             raise
 
     async def release_thread(
@@ -569,11 +574,11 @@ class WorkspaceResourceOwner:
             for record in affected:
                 if record.status == "deleted":
                     continue
-                with self._management_lease(record, None, holder_id, operation_id):
+                with self._management_lease(record, None, holder_id, operation_id) as lease_id:
                     try:
                         if record.retention_scope == "thread":
                             record.thread_associations = []
-                            await self._stop_or_delete(record, delete=True)
+                            await self._stop_or_delete(record, delete=True, lease_id=lease_id)
                         else:
                             await self._advance_revision(record)
                             record.thread_associations = [
@@ -584,7 +589,7 @@ class WorkspaceResourceOwner:
                             record.updated_at = self._now()
                             self._store.persist()
                     except BaseException as error:
-                        self._unknown(record, error)
+                        self._unknown(record, error, lease_id=lease_id)
                         raise
             return len(affected)
 
@@ -615,8 +620,8 @@ class WorkspaceResourceOwner:
                         None,
                         f"orphan-reclaim:{record.resource_id}",
                         f"reclaim:{record.unattached_since}",
-                    ):
-                        deleted.append(await self._stop_or_delete(record, delete=True))
+                    ) as lease_id:
+                        deleted.append(await self._stop_or_delete(record, delete=True, lease_id=lease_id))
                 except Exception as error:  # noqa: BLE001 - 收敛其它资源后显式汇总失败。
                     errors.append(error)
         if errors:
@@ -670,12 +675,12 @@ class WorkspaceResourceOwner:
                 )
             if thread is not None and thread not in record.thread_associations:
                 raise ResourceConflict("Thread 尚未关联 外部资源")
-            with self._management_lease(record, thread, holder_id, operation_id):
+            with self._management_lease(record, thread, holder_id, operation_id) as lease_id:
                 try:
                     runtime = await self._transport.get_resource(resource_id)
                     self._observe_grant_snapshot(record, runtime)
                 except BaseException as error:
-                    self._unknown(record, error)
+                    self._unknown(record, error, lease_id=lease_id)
                     raise
                 if record.status != "running" or record.owner_revision != revision:
                     raise ResourceConflict("外部资源 运行状态或传输授权版本已改变，请刷新资源")
@@ -694,11 +699,11 @@ class WorkspaceResourceOwner:
                             raise ValueError("外部资源 传输拒绝快照没有状态或版本冲突")
                         self._observe_grant_snapshot(record, snapshot)
                     except BaseException as error:
-                        self._unknown(record, error)
+                        self._unknown(record, error, lease_id=lease_id)
                         raise
                     raise ResourceConflict("外部资源 运行状态或传输授权版本已改变，请刷新资源") from rejection
                 except BaseException as error:
-                    self._unknown(record, error)
+                    self._unknown(record, error, lease_id=lease_id)
                     raise
                 return {**grant, "resource": resource_projection(record, runtime, self.kind)}
 
@@ -800,7 +805,15 @@ class WorkspaceResourceOwner:
             yield acquired
         finally:
             if lease_id is None:
-                self._leases.release(acquired)
+                self._release_operation_lease(acquired)
+
+    def _release_operation_lease(self, lease_id: str) -> None:
+        lease = self._leases.get_lease(lease_id)
+        if lease is None:
+            raise KeyError(f"外部资源 operation 缺少原 lease: {lease_id}")
+        # 未知占用交给终态对账；迟到收尾也不能把 settled 回写成普通 released。
+        if lease.status == "active":
+            self._leases.release(lease_id)
 
     @staticmethod
     def _verified(record: OwnedResourceRecord) -> None:
@@ -809,7 +822,7 @@ class WorkspaceResourceOwner:
                 f"外部资源 尚待 owner 核实: {record.resource_id}, {record.error}"
             )
 
-    def _unknown(self, record: OwnedResourceRecord, error: BaseException) -> None:
+    def _unknown(self, record: OwnedResourceRecord, error: BaseException, *, lease_id: str | None = None) -> None:
         record.reconciliation_status = "unknown"
         logger.error(
             "外部资源 操作结果未核实: resource_id=%s",
@@ -819,7 +832,10 @@ class WorkspaceResourceOwner:
         record.error = public_error(error)
         record.updated_at = self._now()
         self._store.persist()
-        self._sync_ledger(record)
+        self._leases.update_external_state(
+            record.resource_id, lifetime_scope=record.retention_scope,
+            status="unknown", unresolved_lease_id=lease_id,
+        )
 
     def _sync_ledger(self, record: OwnedResourceRecord) -> None:
         self._leases.update_external_state(

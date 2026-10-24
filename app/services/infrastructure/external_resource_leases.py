@@ -318,7 +318,8 @@ class ExternalResourceLeaseLedger:
         ]
 
     def update_external_state(
-        self, resource_id: str, *, lifetime_scope: str, status: str
+        self, resource_id: str, *, lifetime_scope: str, status: str,
+        unresolved_lease_id: str | None = None,
     ) -> None:
         """只有实际 owner 已核实的范围与运行事实能更新登记投影。"""
         if lifetime_scope not in {"thread", "workspace"}:
@@ -326,9 +327,16 @@ class ExternalResourceLeaseLedger:
         if status not in {"running", "stopped", "unknown", "orphaned"}:
             raise ValueError(f"外部资源核实状态无效: {status}")
         record = self._require_record(resource_id)
+        lease = None if unresolved_lease_id is None else self._leases.get(unresolved_lease_id)
+        if unresolved_lease_id is not None and (lease is None or lease.resource_id != resource_id):
+            raise ValueError(f"未知 operation 不属于此资源的原 lease: {unresolved_lease_id}")
         record.lifetime_scope = lifetime_scope
         record.status = status
         record.updated_at = self._now()
+        if lease is not None and lease.status == "active":
+            # 只保留本次未核实操作；同资源其它已返回的操作仍正常收尾。
+            lease.status = "reconcile_required"
+            lease.updated_at = record.updated_at
         self._persist()
 
     def _require_record(self, resource_id: str) -> ResourceRecord:

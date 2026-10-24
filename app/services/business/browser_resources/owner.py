@@ -93,5 +93,5 @@ class BrowserResourceOwner(WorkspaceResourceOwner):
                 raise ResourceConflict("临时 Browser 操作必须绑定有效关联 Thread")
             if thread is not None and thread not in record.thread_associations:
                 raise ResourceConflict("Thread 尚未关联 Browser")
-            with self._management_lease(record, thread, holder_id, operation_id):
-                return await BrowserOperations.call_locked(self, record, action, payload, actor="user:http")
+            with self._management_lease(record, thread, holder_id, operation_id) as lease_id:
+                return await BrowserOperations.call_locked(self, record, action, payload, actor="user:http", lease_id=lease_id)

@@ -17,6 +17,35 @@ from app.services.infrastructure.external_resource_leases import (
 )
 
 
+@pytest.mark.parametrize("status", ["unknown", "orphaned"])
+@pytest.mark.parametrize("unresolved_lease_id", [None, "pending"])
+def test_external_state_retains_only_the_explicit_unresolved_operation(
+    tmp_path: Path, status: str, unresolved_lease_id: str | None,
+) -> None:
+    path = tmp_path / "resources.json"
+    ledger = ExternalResourceLeaseLedger(state_path=path)
+    for resource_id in ("terminal_a", "terminal_b"):
+        ledger.register_external(resource_id=resource_id, kind="terminal", lifetime_scope="workspace")
+    for lease_id in ("pending", "released", "settled", "same-resource"):
+        ledger.acquire_operation(resource_id="terminal_a", turn_stream_id="turn-a", operation_id=lease_id, lease_id=lease_id)
+    ledger.release("released")
+    ledger.settle("settled")
+    ledger.acquire_operation(resource_id="terminal_b", turn_stream_id="turn-a", operation_id="other", lease_id="other")
+
+    ledger.update_external_state("terminal_a", lifetime_scope="workspace", status=status, unresolved_lease_id=unresolved_lease_id)
+    ledger = ExternalResourceLeaseLedger(state_path=path)
+    assert ledger.get("terminal_a").status == status
+    assert ledger.get_lease("pending").status == ("active" if unresolved_lease_id is None else "reconcile_required")
+    assert ledger.get_lease("released").status == "released"
+    assert ledger.get_lease("settled").status == "settled"
+    assert ledger.get_lease("same-resource").status == "active"
+    assert ledger.get_lease("other").status == "active"
+    assert [lease.lease_id for lease in ledger.release_turn_leases("turn-a")] == (
+        ["pending", "same-resource", "other"] if unresolved_lease_id is None else ["same-resource", "other"]
+    )
+    assert ledger.get_lease("pending").status == ("released" if unresolved_lease_id is None else "reconcile_required")
+
+
 def _ledger_with_state_events(
     tmp_path: Path,
     event_service: EventChannelService,

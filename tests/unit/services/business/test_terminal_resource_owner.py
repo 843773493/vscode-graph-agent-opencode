@@ -242,7 +242,9 @@ async def test_unknown_delete_retains_discoverable_record_and_no_false_success(
         "ConnectionError: 操作回执不可核实 (errno=None)；请查看工作区外部资源服务日志中的详细错误"
     )
     assert "删除请求发送后丢失回执" in caplog.text
-    assert bundle.leases.leases_for_resource(rid) == []
+    pending, = bundle.leases.leases_for_resource(rid)
+    assert pending.status == "reconcile_required"
+    assert (pending.turn_stream_id, pending.operation_id) == ("request:owner-command", "owner-command")
 
 
 @pytest.mark.asyncio
@@ -461,7 +463,9 @@ async def test_lost_transport_grant_receipt_is_discoverable_unknown(bundle: Term
             rid, expected_revision=1, thread=ThreadRef(SESSION_A, THREAD_A),
             holder_id="request:lost-grant", operation_id="lost-grant",
         )
-    assert bundle.leases.leases_for_resource(rid) == []
+    pending, = bundle.leases.leases_for_resource(rid)
+    assert pending.status == "reconcile_required"
+    assert (pending.turn_stream_id, pending.operation_id) == ("request:lost-grant", "lost-grant")
     discovered = await bundle.owner.list_resources(thread_id=THREAD_A)
     assert discovered[0]["resource_id"] == rid
     assert discovered[0]["reconciliation_status"] == "unknown"

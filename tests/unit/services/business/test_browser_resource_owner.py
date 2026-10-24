@@ -136,7 +136,7 @@ async def test_promotion_cancels_due_reclaim_and_version_conflict_is_atomic(bund
 
 
 @pytest.mark.asyncio
-async def test_failed_receipt_keeps_verified_but_lost_receipt_survives_restart_unknown(bundle: BrowserOwnerFixture) -> None:
+async def test_failed_receipt_releases_lease_but_lost_receipt_survives_restart(bundle: BrowserOwnerFixture) -> None:
     browser = await bundle.create()
     rid = browser["resource_id"]
     bundle.transport.failure = BrowserRequestError(method="POST", path="/run", status=408, payload={
@@ -146,6 +146,7 @@ async def test_failed_receipt_keeps_verified_but_lost_receipt_survives_restart_u
         with pytest.raises(BrowserRequestError):
             await operation.perform(rid, "run")
     assert (await bundle.owner.get_resource(rid))["reconciliation_status"] == "verified"
+    assert bundle.leases.leases_for_resource(rid) == []
     bundle.transport.failure = ConnectionError("发送后丢失回执")
     async with bundle.owner.operation(session_id=SESSION_A, thread_id=THREAD_A, holder_id="turn-b", operation_id="call-b") as operation:
         with pytest.raises(ConnectionError):
@@ -158,7 +159,7 @@ async def test_failed_receipt_keeps_verified_but_lost_receipt_survives_restart_u
 
 
 @pytest.mark.asyncio
-async def test_cancelled_call_releases_lease_and_delete_unknown_blocks_session_cleanup(bundle: BrowserOwnerFixture, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_cancelled_call_retains_lease_and_delete_unknown_blocks_session_cleanup(bundle: BrowserOwnerFixture, monkeypatch: pytest.MonkeyPatch) -> None:
     browser = await bundle.create()
     started = asyncio.Event()
     async def blocked(*args: object, **kwargs: object) -> dict[str, object]:
@@ -173,7 +174,9 @@ async def test_cancelled_call_releases_lease_and_delete_unknown_blocks_session_c
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await task
-    assert bundle.leases.leases_for_resource(browser["resource_id"]) == []
+    pending, = bundle.leases.leases_for_resource(browser["resource_id"])
+    assert pending.status == "reconcile_required"
+    assert (pending.turn_stream_id, pending.operation_id) == ("turn-c", "call-c")
     saved = json.loads((bundle.root / ".boxteam" / "browser-resources.json").read_text())
     assert saved["records"][0]["reconciliation_status"] == "unknown"
     with pytest.raises(ResourceConflict):
