@@ -9,7 +9,7 @@ import shutil
 from dataclasses import asdict
 from pathlib import Path
 
-from app.core.atomic_fs import fsync_directory, fsync_file
+from app.core.atomic_fs import fsync_directory, fsync_file, native_io_path
 from app.core.session_catalog_store.contracts import (
     ForkSourceCaptureRecord,
     fork_source_capture_relative_locator,
@@ -94,7 +94,7 @@ def publish_captured_snapshot(record: ForkSourceCaptureRecord, snapshot: ForkSou
     encoded = canonical_json_bytes(payload)
     root = snapshot.captured_root.parent
     # 此处只遍历当前 operation 已登记的私有快照，不定位或吸收 source 业务目录。
-    for directory, _, names in os.walk(root):
+    for directory, _, names in os.walk(native_io_path(root)):
         for name in names:
             path = Path(directory) / name
             if path.is_symlink() or not path.is_file():
@@ -218,5 +218,5 @@ def remove_captured_snapshot(sessions_root: Path, record: ForkSourceCaptureRecor
     if root.is_symlink():
         raise RuntimeError("fork capture 清理拒绝符号链接")
     if root.exists():
-        shutil.rmtree(root)
+        shutil.rmtree(native_io_path(root))
         fsync_directory(root.parent)

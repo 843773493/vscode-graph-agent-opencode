@@ -11,7 +11,7 @@ from contextlib import closing
 from dataclasses import dataclass
 from pathlib import Path
 
-from app.core.atomic_fs import fsync_directory
+from app.core.atomic_fs import fsync_directory, native_io_path
 from app.core.file_permissions import restrict_private_path_access
 from app.core.session_control_primitives import CONTROL_DATABASE_NAME
 from app.services.infrastructure.attachment_blob_catalog.records import (
@@ -217,7 +217,7 @@ def capture_fork_rollout_snapshot(
         if type(source_lifecycle_generation) is not int or source_lifecycle_generation < 1:
             raise RuntimeError("source-mismatch: 冻结 lifecycle generation 非法")
     except BaseException:
-        shutil.rmtree(captured_root, ignore_errors=True)
+        shutil.rmtree(native_io_path(captured_root), ignore_errors=True)
         raise
     finally:
         if lock is not None:
@@ -294,10 +294,10 @@ def _copy_declared_details(
             ref.require_owner(session_id, thread_id, assembly_id)
             require_historical_scope(connection, session_id, thread_id)
             relative = detail_relative_path(ref).relative_to("rollout")
-            if locator != str(detail_relative_path(ref)):
+            if locator != detail_relative_path(ref).as_posix():
                 raise ValueError("source-mismatch: 冻结 detail locator 不属于精确历史 owner")
-            source = source_rollout / relative
-            for directory in (source_rollout / "context-plan-details", source.parent):
+            source = native_io_path(source_rollout / relative)
+            for directory in (native_io_path(source_rollout / "context-plan-details"), source.parent):
                 if directory.exists() and (directory.is_symlink() or not directory.is_dir()):
                     raise RuntimeError(f"source-mismatch: 冻结 detail 目录不是普通目录: {directory}")
             if source.is_symlink() or (source.exists() and not source.is_file()):
@@ -305,7 +305,7 @@ def _copy_declared_details(
             if not source.is_file():
                 # 是否必需由同一冻结 manifest 的资源 owner 在发布前裁定。
                 continue
-            destination = snapshot_rollout / relative
+            destination = native_io_path(snapshot_rollout / relative)
             destination.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
             shutil.copy2(source, destination)
             files.append(ForkSnapshotFile(
@@ -325,6 +325,7 @@ def _copy_ignore(directory: str, names: list[str]) -> set[str]:
 def _tree_manifest(
     root: Path, *, excluded_root_entries: frozenset[str] = frozenset(),
 ) -> tuple[ForkSnapshotFile, ...]:
+    root = native_io_path(root)
     files: list[ForkSnapshotFile] = []
     for current, directory_names, file_names in os.walk(root, followlinks=False):
         current_path = Path(current)

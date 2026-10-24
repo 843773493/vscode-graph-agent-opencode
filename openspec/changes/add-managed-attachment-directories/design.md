@@ -130,6 +130,8 @@ runtime 准入及单 Session 的 runtime 排空现各有一次调用共用的 30
 
 Windows 恢复补验要求 activation 新 ID 同时满足原生文件名单段与有界长度：Coordinator 对 snapshot kind、精确 Session/Thread、execution 和可空 model-call 的结构化 JCS 元组生成固定摘要，不用冒号拼接运行身份。原 typed detail locator 不变，物理 owner 使用既有 `native_io_path` 访问 Windows 长路径。已存 snapshot 身份仍由原唯一 catalog 返回；model-call 恢复按其既有 owner 唯一索引查出原 ID，并验证 execution parent，不能用新命名规则重新冻结历史。这不改变数据库结构或重写历史正文/hash。TODO：旧 Linux 数据中的非法 Windows 文件名在跨平台物理迁入时仍需明确方案与产品验收；本切片不隐式清洗、改写或增加路径别名。
 
+完整附件流程进一步要求持久 detail locator 始终使用 POSIX 字符串；fork source 捕获和目标资源检查与原 manifest 一致，不得用 str(Path) 随宿主平台改变合同。冻结详情从捕获、lineage/前缀读取、artifact 传输、目标安装到发布屏障及失败/恢复清理的原生 I/O 都复用 native_io_path，逻辑 locator、来源身份和原 hash 保持不变。Linux/Windows 的真实 Gateway→上传→PTY处理→读取→公开fork→硬重启→目标冷读已通过；准确源码、原始失败/通过和未覆盖范围见 tasks 6.1，不能据此声称中继远端寻址或全部故障组合已验收。
+
 目录创建、上传接受、原件/预览、统一文件读写、Shell 占用、运行时代次与低频 GC 已纵向切换，blobs.py/queries.py 旧生产实现物理移除；schema.py、旧 SQL 和旧快照仅用于显式迁移或封存历史读取。后续优先补齐冻结历史/完整 Web/平台验收，再处理挂起操作终止、共享锁与关闭期限；每个批次迁齐调用方并验证后提交，未满足全部合同的任务保持未勾选。
 
 迁移本身须覆盖从产品生成的 schema 3 历史、相同内容重复上传、共享旧 blob 的多个 owner、已释放/已回收资源、终态深历史 fork、排队输入、非终态明确拒绝，以及切换前/切换点后崩溃与重复执行。核对原件字节、URI 身份、owner/claim、历史请求 hash 和备份；目录回收不删除历史 immutable asset。Agent 团队/委派专项验收继续 TODO；附件链实际必需的用户/内部消息接受和通用 fork 仍验证。

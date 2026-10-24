@@ -12,6 +12,7 @@ import sqlite3
 from collections.abc import Mapping
 from pathlib import Path
 
+from app.core.atomic_fs import native_io_path
 from app.domain.itemized.identity.detail_ref import DetailRef
 from app.services.infrastructure.rollout_context.assembly.detail_identity import (
     detail_ref_key,
@@ -63,7 +64,7 @@ def read_captured_lineage_manifest(
     if row is None:
         raise KeyError(f"detail-unavailable: captured lineage manifest 不存在: {detail_ref}")
     record = detail_record_from_mapping(_detail_mapping(tuple(row)))
-    path = captured_node / detail_relative_path(detail_ref)
+    path = native_io_path(captured_node / detail_relative_path(detail_ref))
     if path.is_symlink() or not path.is_file():
         raise DetailUnavailableError(f"detail-unavailable: captured lineage 正文缺失: {detail_ref}")
     value, parsed = parse_detail_payload(path.read_bytes(), detail_ref=detail_ref)

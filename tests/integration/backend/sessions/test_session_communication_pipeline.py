@@ -10,7 +10,7 @@ import signal
 import sqlite3
 import subprocess
 from collections.abc import AsyncIterator
-from contextlib import closing
+from contextlib import ExitStack, closing
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
@@ -19,15 +19,22 @@ import httpx
 import psutil
 import pytest
 
+from app.core.mounted_workspaces import MountedWorkspace
 from app.core.path_utils import get_session_path_resolver
 from app.core.session_control_primitives import CONTROL_DATABASE_NAME
 from app.core.session_control_store import SessionControlStore
+from app.core.workspace_identity import load_or_create_workspace_id
 from app.services.business.session_context_resource import (
     session_resource_identity,
     session_resource_uri,
 )
 from app.testing.model_stream import build_cassette, chat_completion_frames
+from tests.harness.python.browser_manager import (
+    close_browser_manager_processes,
+    start_browser_manager_processes,
+)
 from tests.harness.python.run_context import TestRunContext
+from tests.harness.python.terminal_backend import start_terminal_backend
 from tests.support.api_helpers import create_session
 from tests.support.communication_federation import (
     CommunicationNode,
@@ -48,6 +55,7 @@ from tests.support.processes.workspace import (
     BackendProcess,
     close_backend_process,
     start_backend_process,
+    terminate_process,
 )
 from tests.support.workspaces import (
     install_test_workspace_config,
@@ -106,6 +114,7 @@ class CommunicationCase:
     gateway_id: str
     barrier_stage: str | None = None
     planned_calls: dict[str, dict[str, str]] = field(default_factory=dict)
+    startup_mount: MountedWorkspace | None = None
 
     def record(self, name: str, value: object) -> None:
         (self.artifacts / (name + ".json")).write_text(
@@ -161,7 +170,8 @@ class CommunicationCase:
         await asyncio.to_thread(close_backend_process, previous)
         self.backend = await asyncio.to_thread(
             start_backend_process, workspace_root=str(self.workspace), port=previous.port,
-            log_name="communication-restarted", asgi_app="tests.support.e2e_control.backend_app:app",
+            log_name="communication-restarted", asgi_app="tests.support.e2e_control.communication_backend_app:app",
+            startup_mount=self.startup_mount,
             env_overrides={**self.replay.environment, "LITELLM_LOCAL_MODEL_COST_MAP": "true", "BOXTEAM_GATEWAY_URL": f"http://127.0.0.1:{self.gateway.port}"},
         )
         assert self.backend.process.pid != previous.process.pid
@@ -216,15 +226,34 @@ async def communication_case(request: pytest.FixtureRequest) -> AsyncIterator[Co
         environment["BOXTEAM_TEST_COMMUNICATION_TRACE_DIR"] = str(artifacts)
         (artifacts / "carrier-observations.jsonl").unlink(missing_ok=True)
         (artifacts / "carrier-failure.json").unlink(missing_ok=True)
-    with model_stream_replay(
+    with ExitStack() as services, model_stream_replay(
         artifacts, runtime_root=context.runtime_root_for_node(request.node.nodeid),
         business_assertion="session-communication-and-direct-file-tool-consumers",
     ) as replay:
         environment.update({**replay.environment, "LITELLM_LOCAL_MODEL_COST_MAP": "true"})
+        mount = None
+        if getattr(request, "param", {}).get("resources", False):
+            terminal = await asyncio.to_thread(
+                start_terminal_backend, backend_port=ports.port(2),
+                workspace_root=str(workspace), artifacts_dir=context.artifacts_dir,
+            )
+            services.callback(terminate_process, terminal)
+            browser = await asyncio.to_thread(
+                start_browser_manager_processes, workspace_root=workspace,
+                artifacts_dir=context.artifacts_dir, backend_port=ports.port(3),
+                frontend_port=ports.port(4), backend_host="127.0.0.1",
+            )
+            services.callback(close_browser_manager_processes, browser)
+            mount = MountedWorkspace(
+                load_or_create_workspace_id(workspace), workspace,
+                terminal_backend_url=f"http://127.0.0.1:{ports.port(2)}",
+                browser_backend_url=f"http://127.0.0.1:{ports.port(3)}",
+            )
         backend = await asyncio.to_thread(
             start_backend_process, workspace_root=str(workspace), port=ports.port(0),
             log_name="communication-backend", env_overrides=environment,
             asgi_app="tests.support.e2e_control.communication_backend_app:app",
+            startup_mount=mount,
         )
         gateway = None
         case = None
@@ -241,6 +270,7 @@ async def communication_case(request: pytest.FixtureRequest) -> AsyncIterator[Co
                 health = await client.get("/api/gateway/health")
                 assert health.status_code == 200, health.text
                 case = CommunicationCase(client, replay, workspace, artifacts, backend, gateway, health.json()["data"]["gateway_id"], environment.get("BOXTEAM_TEST_COMMUNICATION_BARRIER_STAGE"))
+                case.startup_mount = mount
                 try:
                     yield case
                 finally:

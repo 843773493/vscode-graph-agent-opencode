@@ -8,6 +8,7 @@ from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 
+from app.core.atomic_fs import native_io_path
 from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
 from app.domain.itemized.identity.detail_ref import DetailRef
 from app.domain.itemized.selection import ContextSelectionEntry
@@ -133,7 +134,7 @@ class DetailRegistryMixin(DetailRetentionMixin):
             ref = detail_ref_from_key(key)
             ref.require_owner(session_id, thread_id, assembly_id)
             require_historical_scope(connection, session_id, thread_id)
-            if relative_path != str(detail_relative_path(ref)):
+            if relative_path != detail_relative_path(ref).as_posix():
                 raise ValueError("source-mismatch: 冻结 detail locator 不属于精确历史 owner")
             available = availability == "available"
             decision = check_resource_target(
@@ -144,7 +145,7 @@ class DetailRegistryMixin(DetailRetentionMixin):
             if decision.available and decision.action != "copy_snapshot":
                 raise ValueError("detail owner 只支持冻结快照导入")
             if decision.available:
-                path = captured_node / detail_relative_path(ref)
+                path = native_io_path(captured_node / detail_relative_path(ref))
                 if path.is_symlink() or not path.is_file():
                     raise FileNotFoundError(f"context_required_resource_unavailable: 冻结 detail 正文缺失: {ref}")
 

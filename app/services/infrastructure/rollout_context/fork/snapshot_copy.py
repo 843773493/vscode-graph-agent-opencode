@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 from uuid import uuid4
 
-from app.core.atomic_fs import fsync_directory, fsync_file
+from app.core.atomic_fs import fsync_directory, fsync_file, native_io_path
 from app.core.resource_uri import parse_resource_uri
 from app.core.sqlite_state import load_sql, utc_now_text
 from app.services.infrastructure.rollout_context.fork.copy_items import (
@@ -58,10 +58,10 @@ def stage_captured_rollout(
             relative = Path(captured.relative_path)
             if relative.is_absolute() or ".." in relative.parts or not relative.parts:
                 raise ValueError("source-mismatch: captured rollout 文件 locator 非法")
-            source = source_root / relative
+            source = native_io_path(source_root / relative)
             if source.is_symlink() or not source.is_file():
                 raise RuntimeError(f"source-mismatch: captured rollout 不是普通文件: {relative}")
-            destination = stage / relative
+            destination = native_io_path(stage / relative)
             destination.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
             digest = hashlib.sha256()
             length = 0
@@ -76,7 +76,7 @@ def stage_captured_rollout(
                 raise RuntimeError(f"source-mismatch: captured rollout 文件 hash/length 不一致: {relative}")
         return stage
     except BaseException:
-        shutil.rmtree(stage)
+        shutil.rmtree(native_io_path(stage))
         raise
 
 
@@ -325,12 +325,12 @@ def recover_target_snapshot_publication(
             if not target.exists():
                 rollback.rename(target)
                 if stage.exists():
-                    shutil.rmtree(stage)
+                    shutil.rmtree(native_io_path(stage))
                 fsync_directory(target.parent)
             elif stage.exists():
                 raise RuntimeError("fork 发布恢复出现冲突的 target/stage/rollback")
         elif stage.exists():
-            shutil.rmtree(stage)
+            shutil.rmtree(native_io_path(stage))
             fsync_directory(target.parent)
 
 
@@ -349,7 +349,7 @@ def publish_target_snapshot(
             fsync_directory(target.parent)
         except BaseException:
             if target.exists():
-                shutil.rmtree(target)
+                shutil.rmtree(native_io_path(target))
             rollback.rename(target)
             fsync_directory(target.parent)
             raise
@@ -363,12 +363,12 @@ def finalize_target_snapshot_publication(
     rollback = target.with_name(f".fork-{materialization_id}.rollback")
     with storage._lock(target_thread_id, checkpoint_ns, session_id=target_session_id):
         if rollback.exists():
-            shutil.rmtree(rollback)
+            shutil.rmtree(native_io_path(rollback))
             fsync_directory(target.parent)
 
 
 def _fsync_tree(root: Path) -> None:
-    for directory, _, names in os.walk(root, topdown=False):
+    for directory, _, names in os.walk(native_io_path(root), topdown=False):
         for name in names:
             fsync_file(Path(directory) / name)
         fsync_directory(Path(directory))

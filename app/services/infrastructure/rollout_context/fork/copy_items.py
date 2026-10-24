@@ -8,6 +8,7 @@ import sqlite3
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from app.core.atomic_fs import native_io_path
 from app.core.sqlite_state import load_sql
 from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
 from app.domain.itemized.identity.detail_ref import DetailRef
@@ -370,7 +371,7 @@ def select_view_prefix(
                 if row is None:
                     raise ValueError("detail-unavailable: 所需正文缺少冻结 manifest")
                 if row[0] == "available":
-                    path = stage / detail_relative_path(ref).relative_to("rollout")
+                    path = native_io_path(stage / detail_relative_path(ref).relative_to("rollout"))
                     if path.is_symlink() or not path.is_file():
                         raise ValueError("detail-unavailable: 所需正文缺少捕获文件")
                     _value, record = parse_detail_payload(path.read_bytes(), detail_ref=ref)
@@ -453,7 +454,7 @@ def prune_view_prefix(
     """裁去必要集合之外的事实；selection 已由同一事务的 capture 内核固定。"""
     _prune_prefix_facts(connection)
     _copy_selected_jsonl(connection, stage)
-    details_root = stage / "context-plan-details"
+    details_root = native_io_path(stage / "context-plan-details")
     if details_root.exists():
         for directory, _subdirs, files in os.walk(details_root):
             for name in files:

@@ -12,7 +12,7 @@ from itertools import islice
 from pathlib import Path, PurePosixPath
 
 from app.abstractions.session_context import SessionForkTransportProtocol
-from app.core.atomic_fs import fsync_directory
+from app.core.atomic_fs import fsync_directory, native_io_path
 from app.core.resource_uri import parse_resource_uri
 from app.core.session_catalog_store.contracts import ForkSourceCaptureRecord
 from app.core.trace_middleware import require_current_gateway_id
@@ -58,7 +58,7 @@ def _artifact_file(root: Path, record: ForkSourceCaptureRecord, name: str) -> Pa
         raise ValueError("fork artifact 文件名必须是固定快照内的规范相对路径")
     if name != "captured.json" and (not relative.parts or relative.parts[0] != record.source_session_id):
         raise ValueError("fork artifact 文件不属于精确 source snapshot")
-    current = root
+    current = native_io_path(root)
     if current.is_symlink():
         raise RuntimeError("fork artifact 根目录不能是符号链接")
     for part in relative.parts:
@@ -69,6 +69,7 @@ def _artifact_file(root: Path, record: ForkSourceCaptureRecord, name: str) -> Pa
 
 
 def _artifact_files(root: Path, record: ForkSourceCaptureRecord) -> Iterator[ForkTransferFileDTO]:
+    root = native_io_path(root)
     if root.is_symlink() or not root.is_dir():
         raise RuntimeError("fork source captured artifact 不存在或不是目录")
     for directory, names, files in os.walk(root, followlinks=False):
@@ -181,6 +182,7 @@ async def receive_transfer_file(
     *, path: Path, size_bytes: int, file_name: str,
 ) -> None:
     """全部冻结文件共用固定块 reader；正文总长度不影响单次内存。"""
+    path = native_io_path(path)
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     with path.open("xb") as stream:
         offset = 0

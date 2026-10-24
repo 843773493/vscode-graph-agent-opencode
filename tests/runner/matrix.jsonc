@@ -3,6 +3,8 @@
   // 每个已启用 suite 默认带数据段内存上限与硬超时，防止无界增长的用例吃满整机内存。
   "schemaVersion": 1,
   "suites": [
+    {"id": "integration-fork-detail-integrity", "layer": "integration", "client": null, "enabled": true, "timeoutMs": 150000, "dataLimitKb": 4194304, "command": ["uv", "run", "--no-sync", "pytest", "-q", "tests/integration/backend/sessions/test_itemized_typed_detail_contract.py", "tests/integration/backend/sessions/test_rollout_fork_modes.py::test_prefix_selected_required_detail_rejects_corruption_before_publication"]},
+    {"id": "integration-attachment-product-flow", "layer": "integration", "client": null, "enabled": true, "timeoutMs": 240000, "dataLimitKb": 4194304, "command": ["uv", "run", "--no-sync", "pytest", "-q", "tests/integration/backend/sessions/test_attachment_product_flow.py"]},
     {"id": "unit-resource-activation-fork", "layer": "unit", "client": null, "enabled": true, "timeoutMs": 120000, "dataLimitKb": 4194304, "command": ["uv", "run", "--no-sync", "pytest", "-q", "tests/unit/services/infrastructure/rollout_context/test_resource_activation_fork_identity.py"]},
     {"id": "integration-runtime-drain-deadline", "layer": "integration", "client": null, "enabled": true, "timeoutMs": 90000, "dataLimitKb": 4194304, "command": ["uv", "run", "--no-sync", "pytest", "-q", "tests/integration/backend/sessions/test_runtime_drain_deadline.py"]},
     {"id": "integration-attachment-retention-measurements", "layer": "integration", "client": null, "enabled": true, "timeoutMs": 180000, "dataLimitKb": 4194304, "command": ["uv", "run", "--no-sync", "pytest", "-q", "tests/integration/backend/sessions/attachments/test_retention_measurements.py"]},
