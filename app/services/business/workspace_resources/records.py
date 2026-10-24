@@ -11,6 +11,7 @@ from typing import Literal
 
 from app.abstractions.workspace_resources import ResourceKind, RetentionScope
 from app.core.identifier import validate_session_id, validate_thread_id
+from app.core.resource_uri import parse_resource_uri
 from app.core.workspace_identity import validate_workspace_id
 
 
@@ -73,10 +74,17 @@ class OwnedResourceRecord:
     unattached_since: str | None = None
     error: str | None = None
     fork_attachments: dict[str, ForkAttachReceipt] = field(default_factory=dict)
+    # 仅记录 Terminal 创建 intent 的受管 cwd；占用仍由原 lease 账本保存。
+    working_directory_uri: str | None = None
 
     def validate(self, workspace_id: str, kind: ResourceKind) -> None:
         if self.workspace_id != workspace_id:
             raise ValueError(f"资源 记录工作区冲突: resource_id={self.resource_id}")
+        if self.working_directory_uri is not None:
+            directory = parse_resource_uri(self.working_directory_uri)
+            if (kind != "terminal" or directory.scope != "workspace" or directory.scope_id != workspace_id
+                    or directory.kind != "attachments" or directory.gateway_authority is not None or len(directory.tail_segments) != 1):
+                raise ValueError("Terminal 工作目录必须是同工作区附件目录根 URI")
         if not self.resource_id.startswith("term_" if kind == "terminal" else "browser_") or self.owner_revision < 1:
             raise ValueError(f"资源 记录身份或版本无效: {self.resource_id}")
         if self.retention_scope not in {"thread", "workspace"}:

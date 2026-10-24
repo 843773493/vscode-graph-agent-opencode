@@ -104,6 +104,7 @@ class TerminalOwnerFixture:
     def restart(self) -> TerminalResourceOwner:
         self.leases = ExternalResourceLeaseLedger(state_path=self.root / ".boxteam" / "resources.json")
         self.owner = TerminalResourceOwner(
+            working_directories=None,
             file_paths=WorkspaceFilePaths(workspace=self.root, workspace_id=WORKSPACE_ID, bindings=None),
             sessions=self.sessions, threads=self.sessions, transport=self.transport,
             leases=self.leases, clock=lambda: self.now,

@@ -8,17 +8,25 @@ from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 
-from app.abstractions.terminal_resources import TerminalSnapshot
+from app.abstractions.terminal_resources import (
+    TerminalSnapshot,
+    TerminalWorkingDirectories,
+)
 from app.abstractions.workspace_resources import (
     ResourceSessionReader,
     ResourceThreadResolver,
     ResourceTransport,
     RetentionScope,
 )
+from app.core.resource_uri import parse_resource_uri
 from app.core.shielded_cleanup import run_cleanup_shielded
 from app.services.business.terminal_resources.operations import TerminalOperations
+from app.services.business.workspace_resources.facts import STOPPED_STATUSES
 from app.services.business.workspace_resources.owner import WorkspaceResourceOwner
-from app.services.business.workspace_resources.records import ThreadRef
+from app.services.business.workspace_resources.records import (
+    OwnedResourceRecord,
+    ThreadRef,
+)
 from app.services.infrastructure.external_resource_leases import (
     ExternalResourceLeaseLedger,
 )
@@ -33,6 +41,7 @@ class TerminalResourceOwner(WorkspaceResourceOwner):
 
     def __init__(
         self, *, file_paths: WorkspaceFilePaths,
+        working_directories: TerminalWorkingDirectories | None,
         sessions: ResourceSessionReader, threads: ResourceThreadResolver,
         transport: ResourceTransport, leases: ExternalResourceLeaseLedger,
         thread_release_fence: Callable[[str, str, int], bool],
@@ -44,6 +53,7 @@ class TerminalResourceOwner(WorkspaceResourceOwner):
             thread_release_fence=thread_release_fence, clock=clock,
         )
         self._file_paths = file_paths
+        self._working_directories = working_directories
 
     def _resolve_workdir(self, cwd: str | None) -> str:
         """目录 URI 复用固定文件 owner；原生 Shell 路径保持目标平台语义。"""
@@ -110,16 +120,45 @@ class TerminalResourceOwner(WorkspaceResourceOwner):
         lease_refs: dict[str, str],
     ) -> TerminalSnapshot:
         resolved_cwd = self._resolve_workdir(cwd)
+
+        async def create(record: OwnedResourceRecord) -> TerminalSnapshot:
+            if self._working_directories is not None:
+                async with self._working_directories.admit_working_directory(Path(resolved_cwd)) as uri:
+                    if uri is not None:
+                        record.working_directory_uri = uri
+                        self._store.persist()
+                        attachment_id = parse_resource_uri(uri).tail_segments[0]
+                        self._leases.register(resource_id=attachment_id, kind="attachment_directory", lifetime_scope="workspace")
+                        # 绑定持久终端身份，工具调用/Turn 收尾不能释放此占用。
+                        self._leases.acquire_operation(
+                            resource_id=attachment_id, turn_stream_id=record.resource_id,
+                            operation_id=record.resource_id, lease_id=self._directory_lease_id(record.resource_id, uri),
+                            holder_session_id=ref.session_id, holder_thread_id=ref.thread_id,
+                        )
+            return await self._transport.create_terminal(
+                terminal_id=record.resource_id, owner_revision=record.owner_revision,
+                title=title, agent_id=agent_id, cwd=resolved_cwd, cols=cols, rows=rows,
+            )
+
         return await self._create_record(
             ref=ref, retention_scope=retention_scope, title=title,
             holder_id=holder_id, operation_id=operation_id,
             created_by_turn_id=created_by_turn_id, lease_refs=lease_refs,
-            create=lambda record: self._transport.create_terminal(
-                terminal_id=record.resource_id, owner_revision=record.owner_revision,
-                title=title, agent_id=agent_id, cwd=resolved_cwd,
-                cols=cols, rows=rows,
-            ),
+            create=create,
         )
+
+    @staticmethod
+    def _directory_lease_id(terminal_id: str, uri: str) -> str:
+        attachment_id = parse_resource_uri(uri).tail_segments[0]
+        return f"{terminal_id}:working-directory:{attachment_id}"
+
+    def _sync_ledger(self, record: OwnedResourceRecord) -> None:
+        super()._sync_ledger(record)
+        if (record.working_directory_uri is not None and record.reconciliation_status == "verified"
+                and record.status in STOPPED_STATUSES):
+            lease = self._leases.get_lease(self._directory_lease_id(record.resource_id, record.working_directory_uri))
+            if lease is not None and lease.status in {"active", "reconcile_required"}:
+                self._leases.settle(lease.lease_id)
 
     @asynccontextmanager
     async def operation(

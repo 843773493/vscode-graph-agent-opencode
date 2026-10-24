@@ -262,6 +262,7 @@ def terminal_env(tmp_path: Path) -> Iterator[TerminalEnvironment]:
     sessions = ResourceOwnerSessionsFake(tmp_path)
     client = _FakeTerminalClient(tmp_path)
     owner = TerminalResourceOwner(
+        working_directories=None,
         file_paths=WorkspaceFilePaths(workspace=tmp_path, workspace_id=WORKSPACE_ID, bindings=None),
         sessions=sessions,
         threads=sessions, transport=client, leases=ExternalResourceLeaseLedger(),

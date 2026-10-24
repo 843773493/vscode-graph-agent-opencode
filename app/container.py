@@ -739,6 +739,8 @@ def _build_app_container(
         local_token_supplier=get_gateway_local_token,
     ))
     terminal_resource_owner = TerminalResourceOwner(
+        # TODO: schema 4 目录 owner 唯一切换时接入附件准入；当前线上仍为 schema 3。
+        working_directories=None,
         file_paths=workspace_service.file_paths,
         sessions=session_service, threads=session_path_resolver,
         transport=terminal_manager_client, leases=external_resource_leases,

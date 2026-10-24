@@ -2,11 +2,19 @@
 
 from __future__ import annotations
 
+from contextlib import AbstractAsyncContextManager
+from pathlib import Path
 from typing import Protocol
 
 from app.abstractions.workspace_resources import ResourceTransport
 
 TerminalSnapshot = dict[str, object]
+
+
+class TerminalWorkingDirectories(Protocol):
+    def admit_working_directory(self, target: Path) -> AbstractAsyncContextManager[str | None]:
+        """保护目录准入，直到调用方发布持久进程占用；返回受管目录 URI。"""
+        ...
 
 
 class TerminalRequestError(RuntimeError):

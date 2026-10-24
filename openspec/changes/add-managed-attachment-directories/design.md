@@ -28,6 +28,8 @@ Shell 的结构化 workdir 接受目录 URI，在 URI 指定目标的文件 owne
 
 2026-10-24 的先行切片只接入既有 `files` 目录 URI：Terminal owner 依赖 container 已装配的 `WorkspaceFilePaths`，在创建记录/PTY 前解析精确 `boxteam://` 前缀的 URI；POSIX 原生目录名中的其它 `://` 不改变含义，全部原生 cwd 也在同一 Terminal owner 锚定目标工作区。工具层不再自行解析 cwd、接受另一份 workspace root 或重算公开位置，回执直接消费真实 PTY 的 `cwd_relative`。Shell 原生工作区外/私有目录行为保持，命令正文不做 URI 替换。目录解析中的系统异常和符号链接环完整留在诊断/cause，普通错误只包含资源 URI 和错误类型。附件目录 kind、全进程占用及其回收保护仍未实现，不能将这个切片算作任务 3.3 全部完成。
 
+后续 Shell 公共边界已在原 Terminal owner 接入 `TerminalWorkingDirectories` 准入端口，持久记录只增加同工作区附件目录根 URI；目录使用继续写入唯一 `ExternalResourceLeaseLedger`，holder 使用持久终端身份而非本次工具/Turn。准入锁内发布占用后才启动 PTY；工具提前返回不结清，核实终态与冷恢复才结清，未知/缺失回执保留。当前 schema 3 生产装配显式传入 None，并以代码 TODO 登记 schema 4 唯一切换时注入目录 owner；没有引入另一套文件或进程执行链。完整 schema 4 候选已验证三种 cwd 的真实后台进程保活、准入与到期 GC 竞争及原文件入口，但线上目录注入、全进程重启、Windows 和代次对账仍未完成，任务 3.3 保持未勾选。准确候选指纹、命令和原始结果在 `out/tests/temp/attachment_shell_directory_20261024/artifacts/`。
+
 ### 3. 目录关联与 30 天回收
 
 用户上传经既有 ingest/消息接受边界自动关联发起 Thread；未发送或接受失败的上传继续由原 pin/ingest 恢复流程收敛。关联是一组幂等的精确 Thread 关系，不是每次读取递增的计数，不承担鉴权职责。工作区内按既有授权可读取的 Thread 不因缺少上传者身份而被拒绝；需要长期保活时显式 attach，短期文件/Shell 操作由 lease 保护。

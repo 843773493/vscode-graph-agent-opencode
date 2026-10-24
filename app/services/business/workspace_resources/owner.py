@@ -146,6 +146,8 @@ class WorkspaceResourceOwner:
                 except BaseException as error:
                     self._unknown(record, error)
                     raise
+            for record in self._store.records.values():
+                self._sync_ledger(record)
             self._recovered = True
 
     async def _create_record(

@@ -2,12 +2,15 @@ from __future__ import annotations
 
 import asyncio
 import json
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Callable
+from contextlib import asynccontextmanager
 from datetime import timedelta
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
+from app.core.resource_uri import parse_resource_uri, resource_display_uri
 from app.services.business.workspace_resources.owner import ResourceConflict
 from app.services.business.workspace_resources.records import ThreadRef
 from tests.support.resource_owners.sessions import (
@@ -16,6 +19,7 @@ from tests.support.resource_owners.sessions import (
     SESSION_B,
     THREAD_A,
     THREAD_B,
+    WORKSPACE_ID,
 )
 from tests.support.resource_owners.terminal import (
     TerminalOwnerFixture,
@@ -26,6 +30,69 @@ from tests.support.resource_owners.terminal import (
 @pytest.fixture
 def bundle(tmp_path: Path) -> TerminalOwnerFixture:
     return build_terminal_owner_fixture(tmp_path)
+
+
+@pytest.fixture
+def managed_directory(bundle: TerminalOwnerFixture) -> str:
+    """仅替换目录准入端口；Terminal owner、记录及持久 lease 均用真实实现。"""
+    uri = resource_display_uri(scope="workspace", scope_id=WORKSPACE_ID, kind="attachments", tail_segments=("att_" + "a" * 32,))
+
+    @asynccontextmanager
+    async def admit(_target: Path) -> AsyncIterator[str | None]:
+        yield uri
+
+    bundle.owner._working_directories = SimpleNamespace(admit_working_directory=admit)
+    return uri
+
+
+@pytest.mark.parametrize("status,reconciliation,settled", [
+    ("running", "verified", False), ("terminated", "unknown", False), ("terminated", "verified", True),
+])
+async def test_directory_process_lease_survives_owner_restart_and_requires_verified_terminal_state(
+    bundle: TerminalOwnerFixture, managed_directory: str, status: str, reconciliation: str, settled: bool,
+) -> None:
+    resource = await bundle.create(scope="workspace")
+    terminal_id = resource["resource_id"]
+    attachment_id = parse_resource_uri(managed_directory).tail_segments[0]
+    active, = bundle.leases.leases_for_resource(attachment_id)
+    assert active.turn_stream_id == terminal_id
+    assert not bundle.leases.leases_for_resource(terminal_id)
+    bundle.transport.records[terminal_id].update(status=status, reconciliation_status=reconciliation)
+    bundle.restart()
+    await bundle.owner.get_resource(terminal_id)
+    assert bundle.owner._store.records[terminal_id].working_directory_uri == managed_directory
+    assert bundle.leases.get_lease(active.lease_id).status == ("settled" if settled else "active")
+    assert bool(bundle.leases.leases_for_resource(attachment_id)) is not settled
+    assert bundle.transport.creates == 1
+
+
+@pytest.mark.parametrize("status,reconciliation,settled", [
+    ("running", "verified", False), ("terminated", "unknown", False), ("terminated", "verified", True),
+])
+async def test_lost_terminal_stop_receipt_keeps_directory_lease_until_cold_verified_stop(
+    bundle: TerminalOwnerFixture, managed_directory: str, monkeypatch: pytest.MonkeyPatch,
+    status: str, reconciliation: str, settled: bool,
+) -> None:
+    resource = await bundle.create(scope="workspace")
+    terminal_id = resource["resource_id"]
+    attachment_id = parse_resource_uri(managed_directory).tail_segments[0]
+    active, = bundle.leases.leases_for_resource(attachment_id)
+
+    async def lose_receipt(_terminal_id: str, *, reason: str | None = None) -> dict[str, object]:
+        raise ConnectionError("停止请求丢失回执")
+
+    monkeypatch.setattr(bundle.transport, "stop_resource", lose_receipt)
+    with pytest.raises(ConnectionError, match="丢失回执"):
+        await bundle.command(terminal_id, action="stop", expected_revision=resource["owner_revision"])
+    assert bundle.owner._store.records[terminal_id].reconciliation_status == "unknown"
+    assert bundle.leases.get_lease(active.lease_id).status == "active"
+    assert bundle.leases.leases_for_resource(attachment_id) == [bundle.leases.get_lease(active.lease_id)]
+    bundle.transport.records[terminal_id].update(status=status, reconciliation_status=reconciliation)
+    bundle.restart()
+    recovered = await bundle.owner.get_resource(terminal_id)
+    assert recovered["reconciliation_status"] == ("verified" if settled else "unknown")
+    assert bundle.leases.get_lease(active.lease_id).status == ("settled" if settled else "active")
+    assert bundle.transport.creates == 1
 
 
 @pytest.mark.asyncio
