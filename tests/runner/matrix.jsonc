@@ -4,6 +4,7 @@
   "schemaVersion": 1,
   "suites": [
     {"id": "integration-attachment-fork-delete-order", "layer": "integration", "client": null, "enabled": true, "timeoutMs": 180000, "dataLimitKb": 4194304, "command": ["uv", "run", "--no-sync", "pytest", "-q", "tests/integration/backend/sessions/test_rollout_fork_modes.py::test_http_fork_reply_preserves_committed_copy_across_target_delete"]},
+    {"id": "integration-attachment-gc-recovery", "layer": "integration", "client": null, "enabled": true, "timeoutMs": 90000, "dataLimitKb": 4194304, "command": ["uv", "run", "--no-sync", "pytest", "-q", "tests/integration/backend/sessions/attachments/test_gc_recovery.py"]},
     {"id": "integration-attachment-fork-lifecycle", "layer": "integration", "client": null, "enabled": true, "timeoutMs": 180000, "dataLimitKb": 4194304, "command": ["uv", "run", "--no-sync", "pytest", "-q", "tests/integration/backend/sessions/attachments/test_fork_lifecycle.py"]},
     {"id": "integration-web-attachment-directory", "layer": "integration", "client": "web", "enabled": true, "timeoutMs": 360000, "dataLimitKb": 4194304, "command": ["uv", "run", "--no-sync", "pytest", "-q", "tests/integration/clients/web/test_attachment_directory.py"]},
     {"id": "integration-attachment-frozen-history", "layer": "integration", "client": null, "enabled": true, "timeoutMs": 240000, "dataLimitKb": 4194304, "command": ["uv", "run", "--no-sync", "pytest", "-q", "tests/integration/backend/sessions/attachments/test_frozen_history.py"]},
