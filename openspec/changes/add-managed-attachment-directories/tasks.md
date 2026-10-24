@@ -69,6 +69,9 @@ Web 定向 `BOXTEAM_E2E_SECTION8_FOCUS=copy_missing_attachment` 通过真实 Gat
 
   - 2026-10-24 补齐 5.4 的 runtime 等待纵向切片：准入和单 Session runtime 排空分别共用一次调用的 30 秒单调预算，不为构建、换代或下一 Thread 重置；超时与取消保留原 build/unload task、scope/generation 和原始迟到错误，不把超时当释放，也不在尚未完成的 builder 上并发 close。原基线完整归档加最终时钟装具的 7 项反例全部失败；最终 7 项定向回归通过，连同既有 residency/worker 共 57 passed，3 项既有删除故障/恢复回归通过。真实产品上传、消息执行和同一子树删除 owner 的集成 1 passed/20.64 秒：超时后 catalog deleting、原 locator、active control fence、物理历史逐字保留；原卸载继续，回执结束后同一 key 完成删除且通知不重复。该测试复用现有 model_stream，仅对未使用的外部资源清单设空，不是实际 Gateway/PTY/Windows 或 shutdown 验收。矩阵已登记独立 integration suite。Ruff、编译、strict、完整候选差异、准确命令/指纹和原始结果在 `out/tests/temp/runtime_drain_deadline_20261024/artifacts/`。首次装具路径、清理 lease 顺序、未绑定运行 loop 的时钟、已有扫描装具误拦准入等待和 locator 字段笔误均保留失败原件；扫描断言仍严格核对原 30 秒，只将装具限定为原扫描调用。此前领域排空、gate/retention 等待及全局 shutdown 总期限、真实 operation 终止和阻塞回调仍 TODO，5.2/5.4/6.1/6.2 保持未勾；团队/协作专项继续 TODO。
 
+
+  - 2026-10-24 完成 5.4 的 HTTP 传输取消切片：Terminal/Browser 原入口统一使用异步 HTTPX，物理删除 `_json_request_sync`，迁齐所有调用与测试；默认 10/30 秒和 Browser run 预算余量保持，同次网络传输增加总期限。取消关闭客户端 socket，网络失败仍为 503，原 HTTP 错误正文仅进诊断，Browser 408 恢复字段与 owner unknown/重启拒绝重放保持。完整原 HEAD 归档加真实 HTTP 反例为 4 failed/7.02秒，分别复现两类客户端取消后连接未关及默认线程池饱和阻塞请求；最终6项真实 HTTP 竞争/慢速响应验证和正式矩阵通过，259项相关单元/API/工具回归通过/14.10秒，真实 Terminal HTTP/PTY 8 passed/92.14秒，Browser故障/恢复32 passed/214.31秒。仅对已删除的同步私有入口移除重复模式，独有故障场景及原身份、错误归属、持久状态、路径/Browser file:合同断言保留。首轮 Browser 协议桩漏填 page_id 的失败原件保留，未修改产品协议或放宽断言。Ruff、编译、完整候选差异、准确命令/指纹与 raw/退出码在 `out/tests/temp/resource_http_cancellation_20261024/artifacts/`；本轮未重跑Windows。取消 socket不证明服务端操作已停止，真实operation总期限、终止接管、同步阻塞/DNS排队和Session删除/shutdown仍TODO，本项及5.2保持未勾；团队与协作专项继续TODO。
+
 ## 6. 真实验收与旧链物理下线
 
 - [ ] 6.1 经产品入口上传、Shell 预处理、读取处理结果、fork 与重启恢复；覆盖 Linux/Windows 原生 cwd 和远端 URI 始终在目标机器解释。

@@ -5,6 +5,7 @@ from collections.abc import Iterator
 from pathlib import Path
 from types import SimpleNamespace
 
+import httpx
 import pytest
 
 from app.abstractions.browser_resources import BrowserRequestError
@@ -136,12 +137,12 @@ async def test_retryable_timeout_remains_structured_and_owner_unknown_is_visible
 
 
 @pytest.mark.asyncio
-async def test_transport_timeout_uses_real_client_error_contract(bundle: BrowserOwnerFixture, context: SimpleNamespace, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_transport_timeout_uses_real_client_error_contract(bundle: BrowserOwnerFixture, context: SimpleNamespace, monkeypatch: pytest.MonkeyPatch, resource_http) -> None:
     browser = await bundle.create()
     client = BrowserManagerClient(workspace_id=WORKSPACE_ID, backend_url="http://browser.test")
-    def timeout(*args: object) -> dict[str, object]:
-        raise TimeoutError("timed out")
-    monkeypatch.setattr(client, "_json_request_sync", timeout)
+    def timeout(request: httpx.Request) -> httpx.Response:
+        raise httpx.ReadTimeout("timed out", request=request)
+    resource_http(timeout)
     monkeypatch.setattr(bundle.transport, "perform", client.perform)
     result = json.loads(await create_read_page_tool(context).ainvoke({"pageId": browser["resource_id"]}))
     assert result["code"] == "browser_tool_timeout"

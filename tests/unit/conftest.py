@@ -1,8 +1,10 @@
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
+from functools import partial
 from pathlib import Path
 
+import httpx
 import pytest
 
 from app.agents.tool_invocation_context import (
@@ -89,3 +91,14 @@ def communication_invocation() -> Iterator[ToolInvocationContext]:
     token = context.set_tool_call_id("call-communication-test", projection_identity=ItemProjectionIdentity(model_call_id="019c390d-6a70-7c85-8709-afddc785bf93"))
     yield context
     context.reset_tool_call_id(token)
+
+
+@pytest.fixture
+def resource_http(monkeypatch: pytest.MonkeyPatch) -> Callable[[Callable[[httpx.Request], httpx.Response]], None]:
+    """两类资源客户端共用正式 HTTPX 编解码，仅替换单次网络边界。"""
+    def install(handler: Callable[[httpx.Request], httpx.Response]) -> None:
+        client = partial(httpx.AsyncClient, transport=httpx.MockTransport(handler))
+        monkeypatch.setattr("app.services.infrastructure.terminal_manager_client.AsyncClient", client)
+        monkeypatch.setattr("app.services.infrastructure.browser_manager_client.AsyncClient", client)
+
+    return install

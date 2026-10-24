@@ -4,10 +4,8 @@ from __future__ import annotations
 
 import json
 import logging
-from io import BytesIO
-from urllib.error import HTTPError
-from urllib.request import Request
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 
@@ -29,7 +27,7 @@ from tests.support.resource_owners.terminal import TerminalOwnerFixture
 def test_transport_error_body_stays_in_diagnostics_after_owner_restart(
     resource_api_client: TestClient, terminal_owner_bundle: TerminalOwnerFixture,
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, native_path: str,
-    failure: str, stage: str | None,
+    failure: str, stage: str | None, resource_http,
 ) -> None:
     created = resource_api_client.post("/api/v1/resources/terminals", json={"session_id": SESSION_A})
     assert created.status_code == 200, created.text
@@ -67,14 +65,14 @@ def test_transport_error_body_stays_in_diagnostics_after_owner_restart(
     elif failure == "http":
         diagnostic = body.decode()
 
-    def rejected(request: Request, *, timeout: int) -> BytesIO:
-        assert timeout == 10
-        attempted.append((request.method, request.full_url))
+    def rejected(request: httpx.Request) -> httpx.Response:
+        assert request.extensions["timeout"]["read"] == 10
+        attempted.append((request.method, str(request.url)))
         if failure == "http":
-            raise HTTPError(request.full_url, 500, "Internal Server Error", {}, BytesIO(body))
-        return BytesIO(body)
+            return httpx.Response(500, content=body)
+        return httpx.Response(200, content=body)
 
-    monkeypatch.setattr("app.services.infrastructure.terminal_manager_client.urlopen", rejected)
+    resource_http(rejected)
     monkeypatch.setattr(terminal_owner_bundle.transport, "delete_resource", transport.delete_resource)
     command = {"expected_revision": resource["owner_revision"]}
     with caplog.at_level(logging.ERROR):
@@ -101,7 +99,7 @@ def test_transport_error_body_stays_in_diagnostics_after_owner_restart(
     ]
     assert len(diagnostic_records) == 1
     cause_types = {
-        "http": HTTPError, "status": TypeError,
+        "http": httpx.HTTPStatusError, "status": TypeError,
         "missing_status": ValueError, "status_type": ValueError,
         "json": json.JSONDecodeError, "utf8": UnicodeDecodeError,
     }

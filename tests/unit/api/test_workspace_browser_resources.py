@@ -2,15 +2,15 @@ from __future__ import annotations
 
 import errno
 import json
-from io import BytesIO
-from urllib.error import HTTPError, URLError
-from urllib.request import Request as UrlRequest
+from urllib.error import URLError
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 
 from app.abstractions.browser_resources import BrowserRequestError
 from app.services.infrastructure.browser_manager_client import BrowserManagerClient
+from app.services.infrastructure.terminal_manager_client import TerminalManagerClient
 from tests.support.resource_owners.browser import BrowserOwnerFixture
 from tests.support.resource_owners.sessions import (
     CHILD_THREAD_A,
@@ -19,6 +19,46 @@ from tests.support.resource_owners.sessions import (
     WORKSPACE_ID,
 )
 from tests.support.resource_owners.terminal import TerminalOwnerFixture
+
+
+@pytest.mark.parametrize("kind", ["terminal", "browser"])
+@pytest.mark.parametrize("error_type", [httpx.ConnectError, httpx.RemoteProtocolError])
+def test_async_network_failure_keeps_service_unavailable_and_unknown_after_restart(
+    resource_api_client: TestClient, terminal_owner_bundle: TerminalOwnerFixture,
+    browser_owner_bundle: BrowserOwnerFixture, monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture, resource_http, kind: str, error_type: type[httpx.RequestError],
+) -> None:
+    created = resource_api_client.post(f"/api/v1/resources/{kind}s", json={"session_id": SESSION_A})
+    assert created.status_code == 200, created.text
+    resource = created.json()["data"]
+    rid = resource["resource_id"]
+    bundle = terminal_owner_bundle if kind == "terminal" else browser_owner_bundle
+    client = (TerminalManagerClient if kind == "terminal" else BrowserManagerClient)(
+        workspace_id=WORKSPACE_ID, backend_url=f"http://{kind}.test",
+    )
+    attempts: list[httpx.Request] = []
+    native = "/private/resource/network.key"
+
+    def fail(request: httpx.Request) -> httpx.Response:
+        attempts.append(request)
+        raise error_type(f"network failed: {native}", request=request)
+
+    resource_http(fail)
+    monkeypatch.setattr(bundle.transport, "stop_resource", client.stop_resource)
+    failed = resource_api_client.post(f"/api/v1/resources/{rid}/stop", json={"expected_revision": 1})
+    assert failed.status_code == 503, failed.text
+    assert failed.headers["X-Request-ID"]
+    assert "ConnectionError" in failed.json()["detail"] and native not in failed.text
+    assert native in caplog.text
+    bundle.restart()
+    observed = resource_api_client.get(f"/api/v1/resources/{rid}").json()["data"]
+    assert observed["reconciliation_status"] == "unknown" and observed["available_actions"] == []
+    assert observed["error"] == failed.json()["detail"]
+    retried = resource_api_client.post(f"/api/v1/resources/{rid}/stop", json={
+        "expected_revision": observed["owner_revision"],
+    })
+    assert retried.status_code == 409, retried.text
+    assert len(attempts) == 1
 
 
 @pytest.mark.parametrize("kind", ["terminal", "browser"])
@@ -313,17 +353,18 @@ def test_lost_browser_action_receipt_keeps_native_error_in_diagnostics(
 def test_transport_failure_preserves_api_route_without_treating_it_as_native_path(
     resource_api_client: TestClient, browser_owner_bundle: BrowserOwnerFixture,
     monkeypatch: pytest.MonkeyPatch,
+    resource_http,
 ) -> None:
     resource = _create_browser_resource(resource_api_client)
     resource_id = resource["resource_id"]
     transport = BrowserManagerClient(workspace_id=WORKSPACE_ID, backend_url="http://browser.test")
     attempted: list[str] = []
 
-    def rejected(request: UrlRequest, **_options: object) -> None:
-        attempted.append(request.full_url)
-        raise HTTPError(request.full_url, 500, "failure", {}, BytesIO(b'{"code":"browser_read_failed"}'))
+    def rejected(request: httpx.Request) -> None:
+        attempted.append(str(request.url))
+        return httpx.Response(500, json={"code": "browser_read_failed"})
 
-    monkeypatch.setattr("app.services.infrastructure.browser_manager_client.urlopen", rejected)
+    resource_http(rejected)
     monkeypatch.setattr(browser_owner_bundle.transport, "perform", transport.perform)
     command = {"action": "read", "expected_revision": 1, "thread": resource["source_thread"]}
     failed = resource_api_client.post(f"/api/v1/resources/{resource_id}/browser-operation", json=command)
@@ -348,17 +389,18 @@ def test_transport_failure_preserves_api_route_without_treating_it_as_native_pat
 def test_transport_timeout_api_preserves_recovery_details_and_durable_unknown(
     resource_api_client: TestClient, browser_owner_bundle: BrowserOwnerFixture,
     monkeypatch: pytest.MonkeyPatch,
+    resource_http,
 ) -> None:
     resource = _create_browser_resource(resource_api_client)
     resource_id = resource["resource_id"]
     transport = BrowserManagerClient(workspace_id=WORKSPACE_ID, backend_url="http://browser.test")
     attempted: list[str] = []
 
-    def timed_out(request: UrlRequest, **_options: object) -> None:
-        attempted.append(request.full_url)
-        raise TimeoutError("timed out")
+    def timed_out(request: httpx.Request) -> None:
+        attempted.append(str(request.url))
+        raise httpx.ReadTimeout("timed out", request=request)
 
-    monkeypatch.setattr("app.services.infrastructure.browser_manager_client.urlopen", timed_out)
+    resource_http(timed_out)
     monkeypatch.setattr(browser_owner_bundle.transport, "perform", transport.perform)
     command = {"action": "run", "payload": {"timeoutMs": 25},
                "expected_revision": resource["owner_revision"], "thread": resource["source_thread"]}

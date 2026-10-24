@@ -56,12 +56,15 @@ Shell 的结构化 workdir 接受目录 URI，在 URI 指定目标的文件 owne
 
 闲置扫描通过 `asyncio.wait` 为单个真实卸载任务提供 30 秒等待预算，覆盖该任务中等待运行排空、领域通知和 scope close 的总等待。到期向本轮报告含精确 owner/generation 的 `TimeoutError`，继续扫描其它 Thread；不取消原任务，不解除关联或 lease，不标记 cold。原任务仍由 `runtime_unload` 持有，新 admission 等待同一任务，后续扫描不会为同一代再启动清理。迟到成功沿原关闭链落为 cold；迟到失败由现有后台任务回调完整记录，原状态保留给下一周期重试。这是事件循环能调度时的扫描等待预算，不是保证 30 秒内释放资源或整轮完成的期限。
 
-当前 Terminal/Browser 的 HTTP 层分别设置 10/30 秒网络超时，它们不覆盖锁等待、线程池排队、多次请求总耗时或 scope 回调。共享 owner 已迁为每条资源记录一把进程内锁；创建、管理、传输授权、工具调用、lease 关闭、fork attach、Thread/Session 清理和孤儿回收均复用该资源的同一把锁，不再跨单资源外部请求持有 owner 全局锁。恢复入口只保留首次对账的 single-flight gate；锁与原 owner 记录一一对应，不形成新的持久账本。列表先按原关联/来源元信息选目标，等锁后重检过滤；多资源清理按资源 ID 固定顺序取得整组锁，仍在任何 detach 前核对完整 lease 集合。包含挂起资源的聚合查询或整组清理仍会等待该资源，同步回调阻塞事件循环时异步计时也无法抢占。任务 5.4 后续继续统一 operation 总截止时间、终止核实和迟到回执，明确 Session 删除、换代 admission 与 shutdown 的有界等待、失败返回和保留事实；本次锁隔离不代表这些合同已完成。
+Terminal/Browser 的 HTTP 层现统一使用可取消的异步 HTTPX，默认 10/30 秒及 Browser run 的原预算余量保持；同次网络传输共用单调总期限，不再把完整请求交给默认线程池。传输取消会关闭客户端连接，仍不证明服务端已经停止；该期限不覆盖资源锁等待、多次请求的 operation 总耗时或 scope 回调。共享 owner 已迁为每条资源记录一把进程内锁；创建、管理、传输授权、工具调用、lease 关闭、fork attach、Thread/Session 清理和孤儿回收均复用该资源的同一把锁，不再跨单资源外部请求持有 owner 全局锁。恢复入口只保留首次对账的 single-flight gate；锁与原 owner 记录一一对应，不形成新的持久账本。列表先按原关联/来源元信息选目标，等锁后重检过滤；多资源清理按资源 ID 固定顺序取得整组锁，仍在任何 detach 前核对完整 lease 集合。包含挂起资源的聚合查询或整组清理仍会等待该资源，同步回调阻塞事件循环时异步计时也无法抢占。任务 5.4 后续继续统一 operation 总截止时间、终止核实和迟到回执，明确 Session 删除、换代 admission 与 shutdown 的有界等待、失败返回和保留事实；本次锁隔离不代表这些合同已完成。
 
 
 runtime 准入及单 Session 的 runtime 排空现各有一次调用共用的 30 秒单调总等待预算，覆盖等待旧代卸载、构建与多个 Thread 的顺序排空，后续阶段不重置预算。等待超时或调用方取消只结束本次等待，原 build/unload task 仍由原 state 持有，迟到回执沿原链记录；后续重试复用同一任务，不能先建下一代或关闭尚在构建的 scope。Session 删除沿原异常传播停留在 deleting，保留 locator、active 控制 fence 和物理历史，待原任务完成后按同一删除记录继续。该预算只覆盖 tracker 的 runtime 阶段，不覆盖此前领域资源排空、Session gate/retention 等待或整个删除 operation。TODO：真实外部操作的总截止时间与终止核实、同步阻塞和线程池排队、全局 shutdown 与存储关闭顺序仍未完成；不能在全局 shutdown 等待超时后先关闭 catalog，再允许原任务继续写入。
 
 扩展资源 owner 回归发现，记录查询已更名为 `_require_owned_resource_record`，但共享 operation、Terminal/Browser operation 和 Browser 管理入口仍有旧 `_require` 调用，导致取得 lease 或读取记录时直接失败。本轮全量迁齐这些调用和对应测试，保留唯一查询方法，不加兼容入口，也不改变关联、lease 或删除策略。
+
+
+2026-10-24 传输取消切片已迁齐两个客户端及全部直接/间接测试调用，物理删除同步私有 HTTP 入口，不保留同步生产链。原资源 owner 的 unknown 与恢复拒绝重放规则不变；HTTP 状态错误保留原始诊断与 cause，网络失败继续映射为服务不可用，Browser 408 的 code/retryable/recovery/timeout 字段保持。共享单元 HTTP 装具只替换 HTTPX 的网络 transport，不替换编解码；真实辅助服务验收仍经真实 socket。四项原基线反例分别证明取消后 socket 未关、默认线程池被占满时请求不能推进。最终候选的六项真实 HTTP 测试核对取消断连、unknown 跨重启、拒绝重放、独立资源传输及慢速分段响应不能延长期限；原业务协议回归 259 passed，真实 Terminal HTTP/PTY 8 passed，Browser 故障/恢复 32 passed，正式新矩阵 6 passed。Ruff、编译、命令、候选源码指纹和原始结果在 `out/tests/temp/resource_http_cancellation_20261024/artifacts/`。本轮仅 Linux；未重跑 Windows，不将关闭 socket 等同服务端进程终止，也不声称整个 operation、同步阻塞回调、DNS 执行器等待、Session 删除或 shutdown 已有完整期限。上述接管/终止与关闭顺序继续 TODO，5.2/5.4 不勾选；Agent 团队与协作专项继续 TODO。
 
 ## Conflict Review
 

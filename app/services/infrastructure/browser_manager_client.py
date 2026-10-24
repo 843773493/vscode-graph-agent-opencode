@@ -3,8 +3,8 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from urllib.error import HTTPError
-from urllib.request import Request, urlopen
+
+from httpx import AsyncClient, HTTPStatusError, RequestError, TimeoutException
 
 from app.abstractions.browser_resources import BrowserAction, BrowserRequestError
 from app.abstractions.workspace_resources import ResourceTransportGrantRejected
@@ -195,16 +195,25 @@ class BrowserManagerClient:
         payload: dict[str, object] | None = None,
         *, actor: str | None = None,
     ) -> dict[str, object]:
+        body = None if payload is None else json.dumps(payload).encode("utf-8")
+        timeout_seconds = self._request_timeout_seconds(method, path, payload)
         try:
-            return await asyncio.to_thread(
-                self._json_request_sync,
-                method,
-                path,
-                payload,
-                actor,
-            )
-        except TimeoutError as exc:
-            timeout_seconds = self._request_timeout_seconds(method, path, payload)
+            # 传输截止只表示回执未知，不能据此宣称服务端操作已经终止。
+            async with asyncio.timeout(timeout_seconds), AsyncClient(
+                timeout=timeout_seconds, trust_env=False, follow_redirects=True,
+            ) as client:
+                response = await client.request(
+                    method, f"{self._resolve_backend_url()}{path}", content=body,
+                    headers={
+                        "content-type": "application/json",
+                        "X-BoxTeam-Workspace-Id": self._workspace_id,
+                        "X-BoxTeam-Resource-Owner": "workspace-browser",
+                        **({"X-BoxTeam-Actor": actor} if actor is not None else {}),
+                    },
+                )
+                response.raise_for_status()
+                response_body = response.content
+        except (TimeoutError, TimeoutException) as exc:
             requested_timeout_ms = (
                 payload.get("timeoutMs")
                 if isinstance(payload, dict)
@@ -231,37 +240,11 @@ class BrowserManagerClient:
                     "timeout_ms": timeout_ms,
                 },
             ) from exc
-
-    def _json_request_sync(
-        self,
-        method: str,
-        path: str,
-        payload: dict[str, object] | None,
-        actor: str | None = None,
-    ) -> dict[str, object]:
-        body = None if payload is None else json.dumps(payload).encode("utf-8")
-        request = Request(
-            f"{self._resolve_backend_url()}{path}",
-            data=body,
-            method=method,
-            headers={
-                "content-type": "application/json",
-                "X-BoxTeam-Workspace-Id": self._workspace_id,
-                "X-BoxTeam-Resource-Owner": "workspace-browser",
-                **({"X-BoxTeam-Actor": actor} if actor is not None else {}),
-            },
-        )
-        try:
-            with urlopen(
-                request,
-                timeout=self._request_timeout_seconds(method, path, payload),
-            ) as response:
-                response_body = response.read()
-        except HTTPError as exc:
-            detail = exc.read().decode("utf-8", errors="replace")
+        except HTTPStatusError as exc:
+            detail = exc.response.content.decode("utf-8", errors="replace")
             logger.exception(
                 "Browser 传输 HTTP 请求失败: method=%s path=%s status=%s response=%s",
-                method, path, exc.code, detail,
+                method, path, exc.response.status_code, detail,
             )
             try:
                 error_payload = json.loads(detail)
@@ -271,12 +254,14 @@ class BrowserManagerClient:
                 raise BrowserRequestError(
                     method=method,
                     path=path,
-                    status=exc.code,
+                    status=exc.response.status_code,
                     payload=error_payload,
                 ) from exc
             raise RuntimeError(
-                f"浏览器管理器请求失败: method={method}, status={exc.code}；请查看工作区浏览器服务日志"
+                f"浏览器管理器请求失败: method={method}, status={exc.response.status_code}；请查看工作区浏览器服务日志"
             ) from exc
+        except RequestError as exc:
+            raise ConnectionError("浏览器管理器传输失败；请查看工作区浏览器服务日志") from exc
         try:
             result = json.loads(response_body.decode("utf-8"))
         except ValueError as exc:
@@ -299,7 +284,7 @@ class BrowserManagerClient:
             )
             if isinstance(requested_timeout_ms, int) and requested_timeout_ms > 0:
                 # Browser 服务本身最多接受 60 秒；HTTP 客户端必须在该预算
-                # 之外留出响应序列化和代理传输余量，否则 30 秒 urlopen
+                # 之外留出响应序列化和代理传输余量，否则默认 30 秒 HTTP 预算
                 # 会先于浏览器的 timeoutMs 把一次合法调用截断。
                 return max(
                     DEFAULT_BROWSER_REQUEST_TIMEOUT_SECONDS,

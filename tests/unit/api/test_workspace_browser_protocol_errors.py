@@ -4,10 +4,8 @@ from __future__ import annotations
 
 import json
 import logging
-from io import BytesIO
-from urllib.error import HTTPError
-from urllib.request import Request
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 
@@ -30,7 +28,7 @@ from tests.support.resource_owners.sessions import SESSION_A, WORKSPACE_ID
 def test_malformed_response_keeps_original_diagnostics_and_durable_unknown(
     resource_api_client: TestClient, browser_owner_bundle: BrowserOwnerFixture,
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
-    native_path: str, failure: str, stage: str | None, status: int,
+    native_path: str, failure: str, stage: str | None, resource_http, status: int,
 ) -> None:
     created = resource_api_client.post("/api/v1/resources/browsers", json={"session_id": SESSION_A})
     assert created.status_code == 200, created.text
@@ -62,14 +60,14 @@ def test_malformed_response_keeps_original_diagnostics_and_durable_unknown(
         diagnostic = body
     attempts: list[tuple[str, str]] = []
 
-    def malformed(request: Request, *, timeout: int) -> BytesIO:
-        assert timeout == 30
-        attempts.append((request.method, request.full_url))
+    def malformed(request: httpx.Request) -> httpx.Response:
+        assert request.extensions["timeout"]["read"] == 30
+        attempts.append((request.method, str(request.url)))
         if failure in {"http", "http_scalar"}:
-            raise HTTPError(request.full_url, 502, "Bad Gateway", {}, BytesIO(body))
-        return BytesIO(body)
+            return httpx.Response(502, content=body)
+        return httpx.Response(200, content=body)
 
-    monkeypatch.setattr("app.services.infrastructure.browser_manager_client.urlopen", malformed)
+    resource_http(malformed)
     transport = BrowserManagerClient(workspace_id=WORKSPACE_ID, backend_url="http://browser.test")
     monkeypatch.setattr(browser_owner_bundle.transport, "perform", transport.perform)
     command = {"action": "read", "expected_revision": resource["owner_revision"], "thread": resource["source_thread"]}
@@ -95,7 +93,7 @@ def test_malformed_response_keeps_original_diagnostics_and_durable_unknown(
     ]
     assert len(diagnostics) == 1
     cause_type = {
-        "http": HTTPError, "http_scalar": HTTPError, "json": json.JSONDecodeError,
+        "http": httpx.HTTPStatusError, "http_scalar": httpx.HTTPStatusError, "json": json.JSONDecodeError,
         "utf8": UnicodeDecodeError, "status": TypeError,
         "missing_status": ValueError, "status_type": ValueError,
     }.get(failure)
@@ -132,6 +130,7 @@ def test_malformed_response_keeps_original_diagnostics_and_durable_unknown(
 def test_malformed_successful_grant_marks_unknown_before_api_serialization(
     resource_api_client: TestClient, browser_owner_bundle: BrowserOwnerFixture,
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, field: str | None, value: object,
+    resource_http,
 ) -> None:
     created = resource_api_client.post("/api/v1/resources/browsers", json={"session_id": SESSION_A})
     assert created.status_code == 200, created.text
@@ -147,12 +146,12 @@ def test_malformed_successful_grant_marks_unknown_before_api_serialization(
         grant[field] = value
     attempts: list[tuple[str, str]] = []
 
-    def malformed(request: Request, *, timeout: int) -> BytesIO:
-        assert timeout == 30
-        attempts.append((request.method, request.full_url))
-        return BytesIO(json.dumps({"data": grant}).encode())
+    def malformed(request: httpx.Request) -> httpx.Response:
+        assert request.extensions["timeout"]["read"] == 30
+        attempts.append((request.method, str(request.url)))
+        return httpx.Response(200, json={"data": grant})
 
-    monkeypatch.setattr("app.services.infrastructure.browser_manager_client.urlopen", malformed)
+    resource_http(malformed)
     transport = BrowserManagerClient(workspace_id=WORKSPACE_ID, backend_url="http://browser.test")
     monkeypatch.setattr(browser_owner_bundle.transport, "issue_transport_grant", transport.issue_transport_grant)
     command = {"expected_revision": resource["owner_revision"], "thread": resource["source_thread"]}
@@ -177,6 +176,7 @@ def test_malformed_successful_grant_marks_unknown_before_api_serialization(
 def test_empty_revision_receipt_cannot_finish_owner_restart_recovery(
     resource_api_client: TestClient, browser_owner_bundle: BrowserOwnerFixture,
     monkeypatch: pytest.MonkeyPatch,
+    resource_http,
 ) -> None:
     created = resource_api_client.post("/api/v1/resources/browsers", json={"session_id": SESSION_A})
     assert created.status_code == 200, created.text
@@ -184,11 +184,11 @@ def test_empty_revision_receipt_cannot_finish_owner_restart_recovery(
     transport = BrowserManagerClient(workspace_id=WORKSPACE_ID, backend_url="http://browser.test")
     attempts: list[str] = []
 
-    def malformed(request: Request, *, timeout: int) -> BytesIO:
-        attempts.append(request.full_url)
-        return BytesIO(b'{"data": {}}')
+    def malformed(request: httpx.Request) -> httpx.Response:
+        attempts.append(str(request.url))
+        return httpx.Response(200, json={"data": {}})
 
-    monkeypatch.setattr("app.services.infrastructure.browser_manager_client.urlopen", malformed)
+    resource_http(malformed)
     sync = browser_owner_bundle.transport.sync_owner_revision
     monkeypatch.setattr(browser_owner_bundle.transport, "sync_owner_revision", transport.sync_owner_revision)
     browser_owner_bundle.restart()

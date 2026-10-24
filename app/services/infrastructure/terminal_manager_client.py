@@ -3,8 +3,8 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from urllib.error import HTTPError
-from urllib.request import Request, urlopen
+
+from httpx import AsyncClient, HTTPStatusError, RequestError, TimeoutException
 
 from app.abstractions.terminal_resources import TerminalRequestError
 from app.core.workspace_identity import validate_workspace_id
@@ -15,6 +15,7 @@ from app.protocol.codecs.terminal import (
 from app.services.infrastructure.config_service import ConfigService
 
 DEFAULT_TERMINAL_BACKEND_URL = "http://127.0.0.1:8012"
+DEFAULT_TERMINAL_REQUEST_TIMEOUT_SECONDS = 10
 logger = logging.getLogger(__name__)
 
 
@@ -222,37 +223,35 @@ class TerminalManagerClient:
         path: str,
         payload: dict[str, object] | None = None,
     ) -> dict[str, object]:
-        return await asyncio.to_thread(self._json_request_sync, method, path, payload)
-
-    def _json_request_sync(
-        self,
-        method: str,
-        path: str,
-        payload: dict[str, object] | None,
-    ) -> dict[str, object]:
         body = None if payload is None else json.dumps(payload).encode("utf-8")
-        request = Request(
-            f"{self._resolve_backend_url()}{path}",
-            data=body,
-            method=method,
-            headers={
-                "content-type": "application/json",
-                "X-BoxTeam-Workspace-Id": self._workspace_id,
-                "X-BoxTeam-Resource-Owner": "workspace-terminal",
-            },
-        )
         try:
-            with urlopen(request, timeout=10) as response:
-                response_body = response.read()
-        except HTTPError as exc:
-            detail = exc.read().decode("utf-8", errors="replace")
+            # 单次传输共用总预算，取消时关闭 socket，不遗留线程池请求。
+            async with asyncio.timeout(DEFAULT_TERMINAL_REQUEST_TIMEOUT_SECONDS), AsyncClient(
+                timeout=DEFAULT_TERMINAL_REQUEST_TIMEOUT_SECONDS, trust_env=False, follow_redirects=True,
+            ) as client:
+                response = await client.request(
+                    method, f"{self._resolve_backend_url()}{path}", content=body,
+                    headers={
+                        "content-type": "application/json",
+                        "X-BoxTeam-Workspace-Id": self._workspace_id,
+                        "X-BoxTeam-Resource-Owner": "workspace-terminal",
+                    },
+                )
+                response.raise_for_status()
+                response_body = response.content
+        except HTTPStatusError as exc:
+            detail = exc.response.content.decode("utf-8", errors="replace")
             logger.exception(
                 "终端传输 HTTP 请求失败: method=%s path=%s status=%s response=%s",
-                method, path, exc.code, detail,
+                method, path, exc.response.status_code, detail,
             )
             raise TerminalRequestError(
-                method=method, path=path, status=exc.code, response_body=detail,
+                method=method, path=path, status=exc.response.status_code, response_body=detail,
             ) from exc
+        except TimeoutException as exc:
+            raise TimeoutError("终端管理器传输超时") from exc
+        except RequestError as exc:
+            raise ConnectionError("终端管理器传输失败；请查看工作区终端服务日志") from exc
         try:
             result = json.loads(response_body.decode("utf-8"))
         except ValueError as exc:

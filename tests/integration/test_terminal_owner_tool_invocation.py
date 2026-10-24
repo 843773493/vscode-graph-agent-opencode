@@ -7,9 +7,9 @@ import subprocess
 from collections.abc import AsyncIterator
 from pathlib import Path
 from textwrap import dedent
-from urllib.error import HTTPError
 from uuid import uuid4
 
+import httpx
 import pytest
 
 from app.abstractions.terminal_resources import TerminalRequestError
@@ -91,35 +91,29 @@ async def test_real_terminal_http_failures_keep_native_details_in_server_diagnos
         ("bad\0directory", None, "终端工作目录检查失败"),
         (str(root), str(missing_command), "终端 PTY 启动失败"),
     ]
-    for mode in ("sync", "async"):
-        for cwd, command, reason in cases:
-            terminal_id = f"term_{uuid4().hex}"
-            payload = {
-                "workspace_id": owner.workspace_id,
-                "terminal_id": terminal_id,
-                "owner_revision": 1,
-                "cwd": cwd,
-            }
-            if command is not None:
-                payload["command"] = command
-                payload["args"] = []
-            with pytest.raises(TerminalRequestError) as rejected:
-                if mode == "sync":
-                    await asyncio.to_thread(
-                        client._json_request_sync, "POST", "/api/terminals", payload,
-                    )
-                else:
-                    await client._json_request("POST", "/api/terminals", payload)
-            error = rejected.value
-            assert isinstance(error.__cause__, HTTPError)
-            assert error.__cause__.code == 500
-            assert (error.method, error.path, error.status) == ("POST", "/api/terminals", 500)
-            detail = json.loads(error.response_body)
-            expected = f"{reason}: terminal_id={terminal_id}" if command else reason
-            assert detail == {"error": expected}
-            assert str(root) not in str(error)
-            assert str(missing_command) not in str(error)
-            assert await client.list_resources() == []
+    for cwd, command, reason in cases:
+        terminal_id = f"term_{uuid4().hex}"
+        payload = {
+            "workspace_id": owner.workspace_id,
+            "terminal_id": terminal_id,
+            "owner_revision": 1,
+            "cwd": cwd,
+        }
+        if command is not None:
+            payload["command"] = command
+            payload["args"] = []
+        with pytest.raises(TerminalRequestError) as rejected:
+            await client._json_request("POST", "/api/terminals", payload)
+        error = rejected.value
+        assert isinstance(error.__cause__, httpx.HTTPStatusError)
+        assert error.__cause__.response.status_code == 500
+        assert (error.method, error.path, error.status) == ("POST", "/api/terminals", 500)
+        detail = json.loads(error.response_body)
+        expected = f"{reason}: terminal_id={terminal_id}" if command else reason
+        assert detail == {"error": expected}
+        assert str(root) not in str(error)
+        assert str(missing_command) not in str(error)
+        assert await client.list_resources() == []
     assert not_directory.read_text(encoding="utf-8") == "原件不能被终端创建改写"
     state = json.loads((root / ".boxteam/terminal-manager/terminals.json").read_text())
     assert state["terminals"] == []

@@ -334,19 +334,15 @@ async def test_checkpoint_failure_reports_stage_without_publishing_native_path(
         backend_url=f"http://127.0.0.1:{browser_manager_processes[0]}",
     )
     failures: list[BrowserRequestError] = []
-    for mode in ("sync", "async"):
-        with pytest.raises(BrowserRequestError) as caught:
-            if mode == "sync":
-                await asyncio.to_thread(transport._json_request_sync, "POST", f"/api/browsers/{browser_id}/freeze", {})
-            else:
-                await transport._json_request("POST", f"/api/browsers/{browser_id}/freeze", {})
-        failure = caught.value
-        assert failure.status == 500
-        assert failure.code in {"EISDIR", "EPERM", "EEXIST"}
-        assert failure.payload["error"] == f"写入浏览器检查点失败: browser_id={browser_id}, stage=文件发布, code={failure.code}"
-        assert failure.payload["operation_outcome"] == "failed"
-        assert str(root) not in json.dumps(failure.payload)
-        failures.append(failure)
+    with pytest.raises(BrowserRequestError) as caught:
+        await transport._json_request("POST", f"/api/browsers/{browser_id}/freeze", {})
+    failure = caught.value
+    assert failure.status == 500
+    assert failure.code in {"EISDIR", "EPERM", "EEXIST"}
+    assert failure.payload["error"] == f"写入浏览器检查点失败: browser_id={browser_id}, stage=文件发布, code={failure.code}"
+    assert failure.payload["operation_outcome"] == "failed"
+    assert str(root) not in json.dumps(failure.payload)
+    failures.append(failure)
     command = {"action": "freeze", "expected_revision": resource["owner_revision"], "thread": resource["source_thread"]}
     failed = await integration_client.post(f"/api/v1/resources/{browser_id}/browser-operation", json=command)
     assert failed.status_code == 500, failed.text
@@ -891,7 +887,7 @@ async def test_playwright_timeout_recovery_allows_immediate_page_actions(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("mode", ["sync", "async"])
+@pytest.mark.parametrize("mode", ["async"])
 async def test_injected_page_recovery_failure_keeps_native_cause_in_diagnostics(
     mode: str, integration_client: httpx.AsyncClient,
     browser_context: CustomToolFactoryContext, browser_runtime: WorkspaceToolRuntime,
@@ -920,10 +916,7 @@ async def test_injected_page_recovery_failure_keeps_native_cause_in_diagnostics(
     )
     with pytest.raises(BrowserRequestError) as caught:
         payload = {"code": code, "timeoutMs": 25}
-        if mode == "sync":
-            await asyncio.to_thread(transport._json_request_sync, "POST", f"/api/browsers/{browser_id}/run", payload)
-        else:
-            await transport._json_request("POST", f"/api/browsers/{browser_id}/run", payload)
+        await transport._json_request("POST", f"/api/browsers/{browser_id}/run", payload)
     failure = caught.value
     assert failure.status == 408
     assert failure.code == "browser_tool_timeout"
@@ -967,7 +960,7 @@ async def test_injected_page_recovery_failure_keeps_native_cause_in_diagnostics(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("mode", ["sync", "async"])
+@pytest.mark.parametrize("mode", ["async"])
 async def test_injected_registration_failure_shares_safe_http_state_and_record(
     mode: str, integration_client: httpx.AsyncClient,
     browser_context: CustomToolFactoryContext, browser_runtime: WorkspaceToolRuntime,
@@ -1004,10 +997,7 @@ async def test_injected_registration_failure_shares_safe_http_state_and_record(
         assert (await _recv_ws_type(websocket, "attached"))["browserId"] == browser_id
         with pytest.raises(BrowserRequestError) as caught:
             payload = {"type": "new_tab", "url": "about:blank"}
-            if mode == "sync":
-                await asyncio.to_thread(transport._json_request_sync, "POST", f"/api/browsers/{browser_id}/navigate", payload)
-            else:
-                await transport._json_request("POST", f"/api/browsers/{browser_id}/navigate", payload)
+            await transport._json_request("POST", f"/api/browsers/{browser_id}/navigate", payload)
         failure = caught.value
         assert failure.status == 500
         assert "stage=register_page" in str(failure)
@@ -1066,7 +1056,7 @@ async def test_injected_registration_failure_shares_safe_http_state_and_record(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(("stage", "mode"), [
-    ("create_page", "sync"), ("close_page", "api"),
+    ("create_page", "async"), ("close_page", "api"),
     ("Page.stopLoading", "websocket"), ("Page.captureScreenshot", "websocket"),
 ])
 async def test_page_control_failure_keeps_native_details_in_diagnostics(
@@ -1108,9 +1098,9 @@ async def test_page_control_failure_keeps_native_details_in_diagnostics(
         assert (await _recv_ws_type(websocket, "attached"))["browserId"] == browser_id
         # attach的首帧已完成，故障只在接下来的用户操作原生边界触发一次。
         await transport.perform(browser_id, "run", {"code": code}, actor="agent")
-        if mode == "sync":
+        if mode == "async":
             with pytest.raises(BrowserRequestError) as caught:
-                await asyncio.to_thread(transport._json_request_sync, "POST", f"/api/browsers/{browser_id}/navigate", navigation)
+                await transport.perform(browser_id, "navigate", navigation, actor="agent")
             assert caught.value.code == "EACCES"
             assert caught.value.status == 500
             receipt = caught.value.payload
@@ -1362,7 +1352,7 @@ await started;
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("mode", ["sync", "async"])
+@pytest.mark.parametrize("mode", ["async"])
 async def test_summary_failure_keeps_native_details_out_of_receipts_and_recovery(
     mode: str, integration_client: httpx.AsyncClient, browser_context: CustomToolFactoryContext,
     browser_runtime: WorkspaceToolRuntime, browser_manager_processes: tuple[int, int],
@@ -1391,10 +1381,7 @@ async def test_summary_failure_keeps_native_details_out_of_receipts_and_recovery
     assert installed["result"] == "installed"
     with pytest.raises(BrowserRequestError) as caught:
         path = f"/api/browsers/{browser_id}/read"
-        if mode == "sync":
-            await asyncio.to_thread(transport._json_request_sync, "GET", path, None)
-        else:
-            await transport._json_request("GET", path)
+        await transport._json_request("GET", path)
     failure = caught.value
     assert failure.status == 503 and failure.code == "EACCES"
     assert failure.payload["operation_outcome"] == "failed"
@@ -1594,7 +1581,7 @@ async def test_debug_snapshot_failure_keeps_native_details_in_diagnostics_and_al
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(("method", "mode", "arguments"), [
-    ("dismiss", "sync", {"acceptModal": False}),
+    ("dismiss", "async", {"acceptModal": False}),
     ("accept", "async", {}),
     ("accept", "tool", {"promptText": "重试后的输入"}),
     ("dismiss", "api", {"acceptModal": False}),
@@ -1636,9 +1623,7 @@ async def test_dialog_failure_keeps_native_details_in_diagnostics_and_allows_ret
         receipt = failed.json()
     else:
         with pytest.raises(BrowserRequestError) as caught:
-            if mode == "sync":
-                await asyncio.to_thread(transport._json_request_sync, "POST", f"/api/browsers/{browser_id}/dialog", arguments)
-            elif mode == "async":
+            if mode == "async":
                 await transport.perform(browser_id, "dialog", arguments, actor="agent")
             else:
                 await handle_dialog.ainvoke({"pageId": browser_id, **arguments})
@@ -1702,7 +1687,7 @@ async def test_file_selection_failure_keeps_native_path_in_diagnostics_and_allow
     handle_dialog = create_handle_dialog_tool(browser_context)
     receipts: list[dict[str, object]] = []
     payload = {"selectFiles": [str(missing)]}
-    for mode in ("sync", "async", "tool", "api"):
+    for mode in ("async", "tool", "api"):
         if mode == "api":
             failed = await integration_client.post(f"/api/v1/resources/{browser_id}/browser-operation", json={
                 "expected_revision": resource["owner_revision"], "thread": resource["source_thread"],
@@ -1713,9 +1698,7 @@ async def test_file_selection_failure_keeps_native_path_in_diagnostics_and_allow
             receipt = failed.json()
         else:
             with pytest.raises(BrowserRequestError) as caught:
-                if mode == "sync":
-                    await asyncio.to_thread(transport._json_request_sync, "POST", f"/api/browsers/{browser_id}/dialog", payload)
-                elif mode == "async":
+                if mode == "async":
                     await transport.perform(browser_id, "dialog", payload, actor="agent")
                 else:
                     await handle_dialog.ainvoke({"pageId": browser_id, **payload})
@@ -1985,8 +1968,8 @@ async def test_browser_startup_failure_keeps_native_details_in_diagnostics(
     assert f"stage={stage}" in observed["metadata"]["error_message"]
     assert container.browser_resource_owner._leases.leases_for_resource(browser_id) == []
     state = await transport.get_resource(browser_id)
-    synchronous = await asyncio.to_thread(transport._json_request_sync, "GET", f"/api/browsers/{browser_id}", None)
-    assert synchronous["data"]["error_message"] == state["error_message"]
+    transport_response = await transport._json_request("GET", f"/api/browsers/{browser_id}", None)
+    assert transport_response["data"]["error_message"] == state["error_message"]
     assert state["reconciliation_status"] == "verified"
     assert state["pages"] == []
     records = json.loads((root / ".boxteam/browser-manager/browsers.json").read_text())
@@ -2010,7 +1993,7 @@ async def test_browser_startup_failure_keeps_native_details_in_diagnostics(
     assert retried.json()["data"]["status"] == "running"
     (artifacts / f"startup-failure-{stage}-{time.time_ns()}.json").write_text(json.dumps({
         "receipt": failed.json(), "owner_projection": observed, "node_record": record,
-        "synchronous": synchronous, "retried": retried.json(),
+        "transport_response": transport_response, "retried": retried.json(),
     }, ensure_ascii=False, indent=2), encoding="utf-8")
     for resource_id in [browser_id, seed_id, retried.json()["data"]["resource_id"]]:
         deleted = await _detach_delete(integration_client, resource_id, browser_context)
@@ -2019,7 +2002,7 @@ async def test_browser_startup_failure_keeps_native_details_in_diagnostics(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(("navigation_type", "method", "mode"), [
-    ("url", "goto", "sync"), ("reload", "reload", "async"),
+    ("url", "goto", "async"), ("reload", "reload", "async"),
     ("back", "goBack", "api"), ("forward", "goForward", "async"),
 ])
 async def test_navigation_failure_keeps_native_details_in_diagnostics(
@@ -2055,10 +2038,7 @@ async def test_navigation_failure_keeps_native_details_in_diagnostics(
         receipt = failed.json()
     else:
         with pytest.raises(BrowserRequestError) as caught:
-            if mode == "sync":
-                await asyncio.to_thread(transport._json_request_sync, "POST", f"/api/browsers/{browser_id}/navigate", payload)
-            else:
-                await transport.perform(browser_id, "navigate", payload, actor="agent")
+            await transport.perform(browser_id, "navigate", payload, actor="agent")
         assert caught.value.status == 500
         assert caught.value.code == "EACCES"
         receipt = caught.value.payload
@@ -2088,7 +2068,7 @@ async def test_navigation_failure_keeps_native_details_in_diagnostics(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(("stage", "mode", "action", "expected_state", "reconciliation"), [
-    ("capture_context", "sync", "freeze", "background", "verified"),
+    ("capture_context", "async", "freeze", "background", "verified"),
     ("Page.setWebLifecycleState", "async", "freeze", "background", "verified"),
     ("Page.setWebLifecycleState", "api", "wake", "restoring", "unknown"),
     ("create_page", "async", "wake", "discarded", "verified"),
@@ -2151,10 +2131,7 @@ async def test_runtime_lifecycle_failure_keeps_native_cause_out_of_receipts(
         receipt = response.json()
     else:
         with pytest.raises(BrowserRequestError) as caught:
-            if mode == "sync":
-                await asyncio.to_thread(transport._json_request_sync, "POST", f"/api/browsers/{browser_id}/{action}", {})
-            else:
-                await transport._json_request("POST", f"/api/browsers/{browser_id}/{action}", {})
+            await transport._json_request("POST", f"/api/browsers/{browser_id}/{action}", {})
         assert caught.value.status == 500
         assert caught.value.code == "EACCES"
         receipt = caught.value.payload
@@ -2165,8 +2142,8 @@ async def test_runtime_lifecycle_failure_keeps_native_cause_out_of_receipts(
     assert observed["metadata"]["resource_state"] == expected_state
     assert f"stage={stage}" in observed["metadata"]["resource_transition_error"]
     assert container.browser_resource_owner._leases.leases_for_resource(browser_id) == []
-    synchronous = await asyncio.to_thread(transport._json_request_sync, "GET", f"/api/browsers/{browser_id}", None)
-    assert synchronous["data"]["resource_transition_error"] == (await transport.get_resource(browser_id))["resource_transition_error"]
+    transport_response = await transport._json_request("GET", f"/api/browsers/{browser_id}", None)
+    assert transport_response["data"]["resource_transition_error"] == (await transport.get_resource(browser_id))["resource_transition_error"]
     records = json.loads((root / ".boxteam/browser-manager/browsers.json").read_text())
     record, = [item for item in records["browsers"] if item["browser_id"] == browser_id]
     assert str(root) not in json.dumps(record)
@@ -2227,8 +2204,8 @@ async def test_native_file_page_url_survives_checkpoint_and_timeout_recovery(
         workspace_id=container.workspace_id,
         backend_url=f"http://127.0.0.1:{browser_manager_processes[0]}",
     )
-    synchronous = await asyncio.to_thread(transport._json_request_sync, "GET", f"/api/browsers/{browser_id}", None)
-    assert synchronous["data"]["url"] == url
+    transport_response = await transport._json_request("GET", f"/api/browsers/{browser_id}", None)
+    assert transport_response["data"]["url"] == url
     assert (await transport.get_resource(browser_id))["url"] == url
     command = {"expected_revision": resource["owner_revision"], "thread": resource["source_thread"]}
     edited = await integration_client.post(f"/api/v1/resources/{browser_id}/browser-operation", json={
@@ -2509,11 +2486,9 @@ async def test_screenshot_failure_reports_stage_and_recovers_through_tool(
     screenshot_page = create_screenshot_page_tool(browser_context)
     try:
         destination.write_bytes(b"existing-directory-conflict")
-        for mode in ("sync", "async", "tool"):
+        for mode in ("async", "tool"):
             with pytest.raises(BrowserRequestError) as caught:
-                if mode == "sync":
-                    await asyncio.to_thread(transport._json_request_sync, "POST", f"/api/browsers/{browser_id}/screenshot", {})
-                elif mode == "async":
+                if mode == "async":
                     await transport._json_request("POST", f"/api/browsers/{browser_id}/screenshot", {})
                 else:
                     await screenshot_page.ainvoke({"pageId": browser_id})
@@ -2633,7 +2608,7 @@ async def test_script_native_failure_keeps_paths_out_of_http_and_operation_recor
     )
     command = {"action": "run", "expected_revision": resource["owner_revision"], "thread": resource["source_thread"]}
     receipts: list[dict[str, object]] = []
-    for mode in ("sync", "async", "api"):
+    for mode in ("async", "api"):
         if mode == "api":
             failed = await integration_client.post(f"/api/v1/resources/{browser_id}/browser-operation", json={**command, "payload": payload})
             assert failed.status_code == 500, failed.text
@@ -2643,10 +2618,7 @@ async def test_script_native_failure_keeps_paths_out_of_http_and_operation_recor
             assert str(root) not in failed.text
         else:
             with pytest.raises(BrowserRequestError) as caught:
-                if mode == "sync":
-                    await asyncio.to_thread(transport._json_request_sync, "POST", f"/api/browsers/{browser_id}/run", payload)
-                else:
-                    await transport._json_request("POST", f"/api/browsers/{browser_id}/run", payload)
+                await transport._json_request("POST", f"/api/browsers/{browser_id}/run", payload)
             failure = caught.value
             assert failure.status == 500
             assert isinstance(failure.code, str) and failure.code
@@ -2720,19 +2692,15 @@ async def test_state_publish_failure_reports_workspace_stage_and_allows_explicit
     command = {"action": "resource-policy", "expected_revision": resource["owner_revision"],
                "thread": resource["source_thread"], "payload": {"policy": "keep_alive"}}
     try:
-        for mode in ("sync", "async"):
-            with pytest.raises(BrowserRequestError) as caught:
-                if mode == "sync":
-                    await asyncio.to_thread(transport._json_request_sync, "PATCH", f"/api/browsers/{browser_id}/resource-policy", {"policy": "keep_alive"})
-                else:
-                    await transport._json_request("PATCH", f"/api/browsers/{browser_id}/resource-policy", {"policy": "keep_alive"})
-            failure = caught.value
-            assert failure.status == 500
-            assert failure.code in {"EISDIR", "EPERM", "EEXIST"}
-            assert failure.payload["error"] == f"写入浏览器状态失败: workspace_id={container.workspace_id}, artifact=browser_records, stage=文件发布, code={failure.code}"
-            assert failure.payload["operation_outcome"] == "failed"
-            assert str(root) not in json.dumps(failure.payload)
-            failures.append(failure)
+        with pytest.raises(BrowserRequestError) as caught:
+            await transport._json_request("PATCH", f"/api/browsers/{browser_id}/resource-policy", {"policy": "keep_alive"})
+        failure = caught.value
+        assert failure.status == 500
+        assert failure.code in {"EISDIR", "EPERM", "EEXIST"}
+        assert failure.payload["error"] == f"写入浏览器状态失败: workspace_id={container.workspace_id}, artifact=browser_records, stage=文件发布, code={failure.code}"
+        assert failure.payload["operation_outcome"] == "failed"
+        assert str(root) not in json.dumps(failure.payload)
+        failures.append(failure)
         failed = await integration_client.post(f"/api/v1/resources/{browser_id}/browser-operation", json=command)
         assert failed.status_code == 500, failed.text
         assert failed.json()["request_id"] == failed.headers["X-Request-ID"]

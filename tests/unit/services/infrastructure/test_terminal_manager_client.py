@@ -1,11 +1,9 @@
 from __future__ import annotations
 
-import json
 import logging
-from io import BytesIO
-from typing import Self
-from unittest.mock import Mock, patch
+from unittest.mock import Mock
 
+import httpx
 import pytest
 
 from app.services.infrastructure.config_service import ConfigService
@@ -110,13 +108,10 @@ async def test_revision_and_one_use_grant_consume_internal_owner_transport(
 ])
 async def test_response_protocol_failures_preserve_diagnostics_and_fail_at_the_client(
     terminal_manager_client: TerminalManagerClient, monkeypatch: pytest.MonkeyPatch,
-    caplog: pytest.LogCaptureFixture, operation: str, data: object, stage: str,
+    caplog: pytest.LogCaptureFixture, operation: str, data: object, stage: str, resource_http,
 ) -> None:
     response = {"data": data}
-    monkeypatch.setattr(
-        "app.services.infrastructure.terminal_manager_client.urlopen",
-        lambda *_args, **_kwargs: BytesIO(json.dumps(response).encode()),
-    )
+    resource_http(lambda request: httpx.Response(200, json=response))
     with caplog.at_level(logging.ERROR), pytest.raises(TypeError) as caught:
         if operation == "list":
             await terminal_manager_client.list_resources()
@@ -134,32 +129,25 @@ async def test_response_protocol_failures_preserve_diagnostics_and_fail_at_the_c
         assert str(caught.value.__cause__) == "Terminal 状态不在协议范围内: /private/terminal"
 
 
-class _JsonResponse:
-    def __enter__(self) -> Self:
-        return self
-
-    def __exit__(self, *_arguments: object) -> None:
-        pass
-
-    def read(self) -> bytes:
-        return b'{"data": {}}'
-
-
-def test_current_config_backend_and_explicit_workspace_owner_headers() -> None:
+@pytest.mark.asyncio
+async def test_current_config_backend_and_explicit_workspace_owner_headers(resource_http) -> None:
     config_service = Mock(spec=ConfigService)
-    backend_urls = ["http://terminal-a", "http://terminal-b"]
-    config_service.get_terminal_backend_url.side_effect = backend_urls
-    terminal_manager_client = TerminalManagerClient(
-        config_service=config_service, workspace_id=WORKSPACE_ID
-    )
+    config_service.get_terminal_backend_url.side_effect = ["http://terminal-a", "http://terminal-b"]
+    client = TerminalManagerClient(config_service=config_service, workspace_id=WORKSPACE_ID)
     config_service.get_terminal_backend_url.assert_not_called()
-    with patch("app.services.infrastructure.terminal_manager_client.urlopen", return_value=_JsonResponse()) as urlopen_mock:
-        terminal_manager_client._json_request_sync("GET", "/api/terminals", None)
-        terminal_manager_client._json_request_sync("GET", "/api/terminals", None)
-    assert [call.args[0].full_url for call in urlopen_mock.call_args_list] == [
+    requests: list[httpx.Request] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, json={"data": {}})
+
+    resource_http(respond)
+    await client._json_request("GET", "/api/terminals")
+    await client._json_request("GET", "/api/terminals")
+    assert [str(request.url) for request in requests] == [
         "http://terminal-a/api/terminals", "http://terminal-b/api/terminals",
     ]
-    for call in urlopen_mock.call_args_list:
-        headers = {name.lower(): value for name, value in call.args[0].header_items()}
-        assert headers["x-boxteam-workspace-id"] == WORKSPACE_ID
-        assert headers["x-boxteam-resource-owner"] == "workspace-terminal"
+    for request in requests:
+        assert request.headers["x-boxteam-workspace-id"] == WORKSPACE_ID
+        assert request.headers["x-boxteam-resource-owner"] == "workspace-terminal"
+        assert request.extensions["timeout"]["read"] == 10
