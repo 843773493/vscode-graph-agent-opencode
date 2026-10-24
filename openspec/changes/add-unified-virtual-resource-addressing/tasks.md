@@ -559,3 +559,10 @@
 - 真实脚本通过Playwright保存截图时，Node原生系统错误携带errno/syscall及文件位置；执行owner在队列写入last_operation之前按此结构发布browser/page/run_code阶段与原code/status，完整错误和位置只留诊断/cause。不按自由正文或路径形状猜测；普通脚本Error、带业务code的Error、SyntaxError与字符串throw保持原合同，超时和页面file: URL例外不变。
 - 完整HEAD archive上的真实Chromium红测http-red-001明确复现ENOTDIR路径进入HTTP与last_operation。最终代码候选006（tree `8a47054675f1676a87dafc090940454cbeed4f95`）unit-006为133 passed/888断言，http-006为3 passed/20.40秒：覆盖sync/async真实HTTP、资源API/request_id、Node记录/GET投影无原生位置、verified和lease释放、原件不变、业务错误原文及显式重试；并复验本地file页面导航/检查点/恢复和工具超时后立即继续动作。Ruff及Node语法检查均exit0。
 - 004只读独审发现初版包装所有脚本错误的P2，006已收窄并新增反向回归，复核无新增finding。static-003的新测试循环变量引用和unit-005的JS引擎语法文案假定均已修正，失败原件保留。准确命令、退出码、源码前后指纹、零进程组残留及产品原件在 `out/tests/temp/browser_script_errors_20261024/artifacts/`（mechanical-006.json、product-evidence-006/及SHA清单）；不把Linux原生错误与词法Windows用例称为Windows实机通过，不代替完整Gateway/Web或2.2/7.2全局门。
+
+
+### 2026-10-24 Gateway 受管进程日志错误（2.2/7.2 部分收口）
+
+- 唯一 ProcessLogStore 在最终日志目录创建、权限设置、轮转及文件打开处保留系统异常类别、errno、可用的 winerror 和原 cause；公开错误只含逻辑日志名与阶段。非法文件名、日志与轮转符号链接明确拒绝，原输入和完整文件位置只进原始诊断日志。所有本地 Backend、Terminal/Browser 和 SSH 隧道继续复用同一日志 owner，不在注册表或路由增加脱敏与第二写入链。
+- 完整源码 tree `d8de0c4a98905484bb3c947355010a870a9d588b` 的日志、Workspace/SSH 进程单测 38 passed/0.51 秒；真实独立 Gateway 与 Workspace HTTP 验收 2 passed/57.26 秒。产品注册入口由真实日志目录阻塞触发 FileExistsError，注册返回 500、request_id 一致；普通列表、健康检查与 SQLite connection_error 不复制原生位置，Gateway 重启后仍明确离线，诊断原文与原阻塞字节保留。既有工作区权限拒绝及重启验收同时通过。
+- Ruff、compileall 通过；准确命令、完整源码前后指纹、原始输出和实际退出码保留于 `out/tests/temp/gateway_log_errors_20261024/artifacts/`。unit-002 因测试把轮转目录放在会先被合法移走的 .1 而未制造故障，改在 .3 阻塞 .2 后 unit-003 通过，未改轮转规则。http-001 在装具选择 Python 阶段发现候选缺少 .venv 链接，接入已有依赖后同源码 http-002 通过。以上不代替 Windows 实机、完整 Web、其它运行时启动边界或 2.2/7.2 全局门；Agent 团队与协作继续按用户裁定保留 TODO。
