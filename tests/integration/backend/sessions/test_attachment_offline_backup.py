@@ -2,27 +2,18 @@
 
 from __future__ import annotations
 
-import base64
 import json
 import sqlite3
 import subprocess
 import sys
 from contextlib import closing
-from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import cast
-from unittest.mock import AsyncMock
 
 import pytest
 
 from app.abstractions.workspace_resources import ResourceKind
-from app.container import AppContainer
-from app.core.identifier import create_prefixed_id
-from app.domain.itemized.execution_admission import UserExecutionIdentity
-from app.domain.itemized.execution_queue import ExecutionQueueInput
-from app.schemas.internal_v2.message import AttachmentRef, MessageCreateRequest
-from app.schemas.internal_v2.session import SessionCreateRequest
 from app.services.business.workspace_resources.records import (
     ForkAttachReceipt,
     OwnedResourceRecord,
@@ -35,60 +26,12 @@ from app.services.infrastructure.attachment_blob_catalog.migration.preflight imp
     checked_path,
     file_digest,
 )
-from tests.integration.backend.sessions.test_catalog_startup_identity import (
-    startup_container as startup_container,  # noqa: PLC0414
+from tests.integration.backend.sessions.attachment_migration.legacy_inputs import (
+    BODY,
+    BackupCase,
 )
 
-BODY = b"original attachment for offline directory migration\n"
 MODULE = "app.services.infrastructure.attachment_blob_catalog.migration"
-
-
-@dataclass
-class BackupCase:
-    workspace: Path
-    output: Path
-    index_path: Path
-    original: Path
-    session_id: str
-    thread_id: str
-    message_id: str
-    canonical_items: tuple[tuple[object, ...], ...]
-
-
-@pytest.fixture
-async def online_backup_case(startup_container: AppContainer, tmp_path: Path) -> BackupCase:
-    container = startup_container
-    session = await container.session_service.create(SessionCreateRequest(title="离线迁移原件保全"))
-    message = await container.message_service.create(session.session_id, MessageCreateRequest(
-        content="请保留原件与排队输入", attachments=[AttachmentRef(
-            file_id="inline:original.txt", name="original.txt", content_type="text/plain",
-            data_url="data:text/plain;base64," + base64.b64encode(BODY).decode(),
-        )],
-    ))
-    identity = UserExecutionIdentity(
-        job_id=create_prefixed_id("job"), turn_id=create_prefixed_id("turn"),
-        admission_idempotency_key=create_prefixed_id("adm"),
-    )
-    container.message_service.accept_user_message(message, execution_identity=identity, queue_input=ExecutionQueueInput(
-        execution_binding=identity, message_id=message.message_id, agent_id="default", provider_id=None,
-        delivery_policy="after_turn", gateway_id=None, request_id=None, created_at=message.created_at.isoformat(),
-    ))
-    resolver = container.session_service.path_resolver
-    index = resolver.resolve_session_node(session.session_id) / "threads" / message.thread_id / "rollout/index.sqlite"
-    with closing(sqlite3.connect(index)) as connection:
-        items = tuple(connection.execute("SELECT item_id, content_hash FROM item_catalog ORDER BY item_sequence"))
-    store = container.attachment_blob_store
-    blob = store._catalog.connection.execute("SELECT relative_locator FROM attachment_blobs").fetchone()[0]
-    original = container.workspace_root / ".boxteam/attachments" / blob
-    return BackupCase(container.workspace_root, tmp_path / "snapshot", index, original,
-                      session.session_id, message.thread_id, message.message_id, items)
-
-
-@pytest.fixture
-def backup_case(online_backup_case: BackupCase, startup_container: AppContainer) -> BackupCase:
-    startup_container.attachment_blob_store.close()
-    startup_container.session_catalog.close()
-    return online_backup_case
 
 
 @pytest.fixture(params=["terminal", "browser"])
@@ -229,26 +172,9 @@ async def test_released_external_lease_requires_its_resource_record(backup_case:
 
 @pytest.mark.parametrize("kind", ["terminal", "browser"])
 async def test_owner_creation_before_ledger_registration_blocks_offline_backup(
-    online_backup_case: BackupCase, startup_container: AppContainer,
-    monkeypatch: pytest.MonkeyPatch, kind: str,
+    legacy_case_factory, kind: str,
 ) -> None:
-    case = online_backup_case
-    container = startup_container
-    owner = container.terminal_resource_owner if kind == "terminal" else container.browser_resource_owner
-    # 外部清单为空，创建尚未发给外部服务；故障点只截断产品真实的登记步骤。
-    monkeypatch.setattr(owner._transport, "list_resources", AsyncMock(return_value=[]))
-    create = owner.create_terminal if kind == "terminal" else owner.create_browser
-    external_create = AsyncMock(side_effect=AssertionError("登记失败后不应创建外部资源"))
-    monkeypatch.setattr(owner._transport, f"create_{kind}", external_create)
-
-    def fail_registration(**_kwargs: object) -> None:
-        raise OSError("受控的资源登记落盘失败")
-
-    monkeypatch.setattr(owner._leases, "register_external", fail_registration)
-    with pytest.raises(OSError, match="登记落盘失败"):
-        await create(session_id=case.session_id, thread_id=case.thread_id,
-                     holder_id="offline-backup-source", operation_id="create-before-ledger")
-    external_create.assert_not_awaited()
+    case = legacy_case_factory(kind)
     source = case.workspace / f".boxteam/{kind}-resources.json"
     original = source.read_bytes()
     (record,) = json.loads(original)["records"]
@@ -256,8 +182,6 @@ async def test_owner_creation_before_ledger_registration_blocks_offline_backup(
     ledger = case.workspace / ".boxteam/resources.json"
     if ledger.exists():
         assert record["resource_id"] not in {row["resource_id"] for row in json.loads(ledger.read_bytes())["records"]}
-    container.attachment_blob_store.close()
-    container.session_catalog.close()
     with pytest.raises(RuntimeError, match="外部资源 owner 尚未收敛"):
         backup.prepare_backup(case.workspace, case.output)
     assert not case.output.exists()

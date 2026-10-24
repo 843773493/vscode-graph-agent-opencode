@@ -3,29 +3,17 @@
 from __future__ import annotations
 
 import asyncio
-import base64
 import json
 import sqlite3
 import subprocess
 import sys
 from contextlib import closing
 from datetime import UTC, datetime, timedelta
-from io import BytesIO
 from pathlib import Path
 
 import pytest
 from PIL import Image
 
-from app.container import AppContainer
-from app.core.identifier import create_prefixed_id
-from app.domain.itemized.execution_admission import UserExecutionIdentity
-from app.domain.itemized.execution_queue import ExecutionQueueInput
-from app.schemas.internal_v2.message import (
-    AttachmentRef,
-    MessageCreateRequest,
-    MessageDTO,
-)
-from app.schemas.internal_v2.session import SessionCreateRequest
 from app.services.infrastructure.attachment_blob_catalog.maintenance import (
     AttachmentMaintenanceBusyError,
     AttachmentMaintenanceLock,
@@ -43,42 +31,6 @@ from tests.integration.backend.sessions.test_attachment_offline_backup import (
     BackupCase,
     cli,
 )
-from tests.integration.backend.sessions.test_attachment_offline_backup import (
-    backup_case as backup_case,  # noqa: PLC0414
-)
-from tests.integration.backend.sessions.test_attachment_offline_backup import (
-    online_backup_case as online_backup_case,  # noqa: PLC0414
-)
-from tests.integration.backend.sessions.test_attachment_offline_backup import (
-    startup_container as startup_container,  # noqa: PLC0414
-)
-
-
-def accept_message(container: AppContainer, message: MessageDTO) -> None:
-    identity = UserExecutionIdentity(
-        job_id=create_prefixed_id("job"), turn_id=create_prefixed_id("turn"),
-        admission_idempotency_key=create_prefixed_id("adm"),
-    )
-    container.message_service.accept_user_message(message, execution_identity=identity, queue_input=ExecutionQueueInput(
-        execution_binding=identity, message_id=message.message_id, agent_id="default", provider_id=None,
-        delivery_policy="after_turn", gateway_id=None, request_id=None, created_at=message.created_at.isoformat(),
-    ))
-
-
-@pytest.fixture
-async def shared_blob_case(online_backup_case: BackupCase, startup_container: AppContainer) -> BackupCase:
-    container = startup_container
-    session = await container.session_service.create(SessionCreateRequest(title="相同原件的独立 owner"))
-    message = await container.message_service.create(session.session_id, MessageCreateRequest(
-        content="另一份上传", attachments=[AttachmentRef(
-            file_id="inline:renamed.txt", name="另一份显示名.txt", content_type="text/plain",
-            data_url="data:text/plain;base64," + base64.b64encode(BODY).decode(),
-        )],
-    ))
-    accept_message(container, message)
-    container.attachment_blob_store.close()
-    container.session_catalog.close()
-    return online_backup_case
 
 
 def source_rows(case: BackupCase) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
@@ -137,26 +89,17 @@ async def test_cli_materializes_shared_blob_as_independent_directories_without_t
                        for path in (case.output / "converted").rglob("*") if path.is_file()}
 
 
-async def test_product_image_preview_is_copied_without_regeneration(online_backup_case: BackupCase, startup_container: AppContainer) -> None:
-    case = online_backup_case
-    content = BytesIO()
-    Image.new("RGB", (900, 600), (32, 64, 96)).save(content, format="PNG")
-    message = await startup_container.message_service.create(case.session_id, MessageCreateRequest(
-        content="图片预览", attachments=[AttachmentRef(
-            file_id="inline:image.png", name="图像.png", content_type="image/png",
-            data_url="data:image/png;base64," + base64.b64encode(content.getvalue()).decode(),
-        )],
-    ))
-    attachment = message.attachments[0]
-    preview = startup_container.attachment_blob_store.read_thumbnail(case.session_id, attachment.file_id).data
-    accept_message(startup_container, message)
-    startup_container.attachment_blob_store.close()
-    startup_container.session_catalog.close()
+async def test_product_image_preview_is_copied_without_regeneration(legacy_case_factory) -> None:
+    case = legacy_case_factory("preview")
+    import base64
+
+    preview = base64.b64decode(case.evidence["preview_base64"])
+    content = base64.b64decode(case.evidence["image_base64"])
     backup.prepare_backup(case.workspace, case.output)
     directories.convert_backup(case.output)
     resource = next(row for row in manifest(case)["resources"] if row["source_owner"]["mime_type"] == "image/png")
     root = case.output / "converted/attachments" / resource["relative_locator"]
-    assert (root / "original/content").read_bytes() == content.getvalue()
+    assert (root / "original/content").read_bytes() == content
     assert (root / "preview/512.webp").read_bytes() == preview
     with Image.open(root / "preview/512.webp") as image:
         assert max(image.size) == 512

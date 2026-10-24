@@ -80,7 +80,8 @@
         "uv", "run", "--no-sync", "pytest", "-q",
         "tests/integration/backend/sessions/test_attachment_offline_backup.py",
         "tests/integration/backend/sessions/test_attachment_offline_directories.py",
-        "tests/integration/backend/sessions/test_attachment_offline_catalog.py"
+        "tests/integration/backend/sessions/test_attachment_offline_catalog.py",
+        "tests/integration/backend/sessions/test_attachment_offline_install.py"
       ]
     },
     {

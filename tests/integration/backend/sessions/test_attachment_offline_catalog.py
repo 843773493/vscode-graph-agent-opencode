@@ -8,16 +8,11 @@ import json
 import sqlite3
 from contextlib import closing
 from datetime import UTC, datetime, timedelta
-from io import BytesIO
 from pathlib import Path
 
 import pytest
-from PIL import Image
 
-from app.container import AppContainer
 from app.core.resource_uri import session_artifact_uri
-from app.schemas.internal_v2.message import AttachmentRef, MessageCreateRequest
-from app.schemas.internal_v2.session import SessionCreateRequest
 from app.services.infrastructure.attachment_blob_catalog.catalog import (
     AttachmentBlobCatalog,
 )
@@ -39,39 +34,13 @@ from app.services.infrastructure.attachment_blob_catalog.migration import (
 from app.services.infrastructure.attachment_blob_catalog.migration.preflight import (
     file_digest,
 )
-from tests.integration.backend.sessions.fork_execution_source import (
-    fork_execution_message as fork_execution_message,  # noqa: PLC0414
-)
 from tests.integration.backend.sessions.test_attachment_offline_backup import (
     BODY,
     BackupCase,
     cli,
 )
-from tests.integration.backend.sessions.test_attachment_offline_backup import (
-    backup_case as backup_case,  # noqa: PLC0414
-)
-from tests.integration.backend.sessions.test_attachment_offline_backup import (
-    online_backup_case as online_backup_case,  # noqa: PLC0414
-)
-from tests.integration.backend.sessions.test_attachment_offline_backup import (
-    startup_container as startup_container,  # noqa: PLC0414
-)
 from tests.integration.backend.sessions.test_attachment_offline_directories import (
-    accept_message,
     source_rows,
-)
-from tests.integration.backend.sessions.test_attachment_offline_directories import (
-    shared_blob_case as shared_blob_case,  # noqa: PLC0414
-)
-from tests.integration.backend.sessions.test_rollout_fork_modes import (
-    _fork_request,
-    _production_fork_context,
-)
-from tests.integration.backend.sessions.test_rollout_fork_modes import (
-    fork_gateway_request_context as fork_gateway_request_context,  # noqa: PLC0414
-)
-from tests.integration.backend.sessions.test_rollout_fork_modes import (
-    production_fork_container as production_fork_container,  # noqa: PLC0414
 )
 
 
@@ -160,23 +129,10 @@ async def test_cli_prepares_independent_resources_and_complete_legacy_bindings(s
 
 @pytest.mark.parametrize("state", ["released", "tombstoned", "preview"])
 async def test_versions_and_retention_survive_catalog_conversion(
-    online_backup_case: BackupCase, startup_container: AppContainer, state: str,
+    legacy_case_factory, state: str,
 ) -> None:
-    case = online_backup_case
-    preview = None
-    if state == "preview":
-        content = BytesIO()
-        Image.new("RGB", (900, 600), (32, 64, 96)).save(content, format="PNG")
-        message = await startup_container.message_service.create(case.session_id, MessageCreateRequest(
-            content="保全已有预览版本", attachments=[AttachmentRef(
-                file_id="inline:image.png", name="image.png", content_type="image/png",
-                data_url="data:image/png;base64," + base64.b64encode(content.getvalue()).decode(),
-            )],
-        ))
-        preview = startup_container.attachment_blob_store.read_thumbnail(case.session_id, message.attachments[0].file_id).data
-        accept_message(startup_container, message)
-    startup_container.attachment_blob_store.close()
-    startup_container.session_catalog.close()
+    case = legacy_case_factory("preview" if state == "preview" else "queued")
+    preview = base64.b64decode(case.evidence["preview_base64"]) if state == "preview" else None
     released = datetime(2020, 1, 2, tzinfo=UTC)
     until = released + timedelta(days=90)
     if state != "preview":
@@ -292,55 +248,23 @@ async def test_mismatched_inputs_or_catalog_are_rejected_without_repair(backup_c
 
 
 async def test_product_execution_and_two_forks_preserve_frozen_payloads_and_capture_hashes(
-    production_fork_container: AppContainer, fork_execution_message, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    legacy_case_factory,
 ) -> None:
-    container = production_fork_container
-    context = _production_fork_context(container)
-    source = await container.session_service.create(SessionCreateRequest(title="离线目录转换真实来源"))
-    await fork_execution_message(container, source.session_id, content="保全附件历史",
-                                 gateway_id="gateway_6c8b2f9317a5a2c6c4569958b1e23d84", attachments=[AttachmentRef(
-                                     file_id="inline:source.txt", name="source.txt", content_type="text/plain",
-                                     data_url="data:text/plain;base64," + base64.b64encode(BODY).decode(),
-                                 )])
-    from app.services.infrastructure.rollout_context.checkpoint import fork_owner
-
-    cleanup = fork_owner.remove_captured_snapshot
-    retained = []
-
-    def retain_first_completed_snapshot(sessions_root, record):
-        # 模拟物化终态已 durable、临时快照尚未清理的退出窗口；不替写任何业务状态。
-        if not retained:
-            retained.append(record.copy_operation_id)
-        else:
-            cleanup(sessions_root, record)
-
-    monkeypatch.setattr(fork_owner, "remove_captured_snapshot", retain_first_completed_snapshot)
-    keys = []
-    for _ in range(2):
-        request = await _fork_request(context, source.session_id, creation_kind="new_session_main", mode="full_rollout_copy")
-        source = (await context.forks.fork(request)).session
-        keys.append(context.forks._creation_key(request.idempotency_key))
-    connection = container.attachment_blob_store._catalog.connection
-    original_payloads = []
-    for table, kind in (("fork_attachment_claims", "claim"), ("fork_attachment_mappings", "mapping")):
-        for row in connection.execute(f"SELECT * FROM {table}"):
-            metadata = dict(row)
-            raw = metadata.pop("snapshot_json")
-            original_payloads.append((kind, metadata, raw))
+    case = legacy_case_factory("forks")
+    keys = case.evidence["fork_keys"]
+    original_payloads = [(kind, metadata, raw) for kind, metadata, raw in case.evidence["fork_payloads"]]
     assert original_payloads and {row[1]["copy_operation_id"] for row in original_payloads} == set(keys)
     assert all(row[1]["state"] == "committed" for row in original_payloads if row[0] == "claim")
-    captures = [context.sessions.path_resolver.catalog_store.get_fork_source_capture(copy_operation_id=key) for key in keys]
+    captures = case.evidence["captures"]
     assert all(capture is not None for capture in captures)
-    capture_root = container.workspace_root / ".boxteam/navigation/fork-source-captures"
+    capture_root = case.workspace / ".boxteam/navigation/fork-source-captures"
     frozen_captures = frozen_files(capture_root)
     assert frozen_captures
-    assert captures[0].state == captures[1].state == "materialized"
-    assert (capture_root / captures[0].snapshot_id).is_dir()
-    assert not (capture_root / captures[1].snapshot_id).exists()
-    container.attachment_blob_store.close()
-    container.session_catalog.close()
-    output = tmp_path / "snapshot"
-    backup.prepare_backup(container.workspace_root, output)
+    assert captures[0]["state"] == captures[1]["state"] == "materialized"
+    assert (capture_root / captures[0]["snapshot_id"]).is_dir()
+    assert not (capture_root / captures[1]["snapshot_id"]).exists()
+    output = case.output
+    backup.prepare_backup(case.workspace, output)
     directories.convert_backup(output)
     response = catalog.prepare_converted_catalog(output)
     assert response["legacy_fork_payloads"] == len(original_payloads)
@@ -361,7 +285,7 @@ async def test_product_execution_and_two_forks_preserve_frozen_payloads_and_capt
                 preimage = metadata["copy_operation_id"] + metadata["source_snapshot_id"] + metadata["operation_preimage_hash"] + raw
                 assert hashlib.sha256(preimage.encode()).hexdigest() == metadata["preimage_hash"]
         # 关键历史由产品生成；新解析仅依赖新 catalog 和新目录，来源与备份正文均可离线。
-        originals = [container.workspace_root / ".boxteam/attachments", output / "data/attachments"]
+        originals = [case.workspace / ".boxteam/attachments", output / "data/attachments"]
         for original in originals:
             original.rename(original.with_name("attachments.offline"))
         try:
@@ -460,5 +384,5 @@ async def test_product_execution_and_two_forks_preserve_frozen_payloads_and_capt
         source_db.row_factory = sqlite3.Row
         for capture in captures:
             assert capture is not None
-            row = source_db.execute("SELECT * FROM fork_source_captures WHERE copy_operation_id=?", (capture.copy_operation_id,)).fetchone()
-            assert row is not None and row["preimage_hash"] == capture.preimage_hash
+            row = source_db.execute("SELECT * FROM fork_source_captures WHERE copy_operation_id=?", (capture["copy_operation_id"],)).fetchone()
+            assert row is not None and row["preimage_hash"] == capture["preimage_hash"]

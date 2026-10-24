@@ -36,15 +36,6 @@ from tests.integration.backend.sessions.test_attachment_offline_backup import (
     BackupCase,
     cli,
 )
-from tests.integration.backend.sessions.test_attachment_offline_backup import (
-    backup_case as backup_case,  # noqa: PLC0414
-)
-from tests.integration.backend.sessions.test_attachment_offline_backup import (
-    online_backup_case as online_backup_case,  # noqa: PLC0414
-)
-from tests.integration.backend.sessions.test_attachment_offline_backup import (
-    startup_container as startup_container,  # noqa: PLC0414
-)
 from tests.integration.backend.sessions.test_attachment_offline_catalog import (
     frozen_files,
 )

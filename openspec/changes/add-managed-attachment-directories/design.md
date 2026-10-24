@@ -119,6 +119,10 @@ Shell 的结构化 workdir 接受目录 URI，在 URI 指定目标的文件 owne
 
    已提供 `install --workspace <root> --backup <dir>` 和 `rollback --workspace <root> --backup <dir>`。唯一 `.boxteam/attachment-migration.json` 冻结备份、目标 catalog、原源集合和文件/WAL 指纹；SQLite 内容用完整 schema/行核对，避免将 backup API 的页头变化当作内容变化。ready 恢复且尚未首次移出原目录时，再跑完整 preflight 核对集合，不只复验旧清单中的文件。先将旧根保全为 `.attachments-{backup_id}.schema3`，再发布已 durable 的准备目录，最后提交 installed；中间状态均阻止业务准入。撤销保全新目录副本，原目录恢复并 durable 后才发布 aborted。重复 install 不覆盖安装后的新写入；存在新写入时 rollback 明确拒绝。这里仅完成离线根发布，线上 schema 4 owner、Shell 全程占用、GC 和完整恢复验收仍按后续任务实施。
 
+离线迁移验收的 schema 3 输入固定来自 `cb90835523b9ff6d91e3f8dfaf3491855d55191d`：测试用完整 Git archive 导出该版本，独立 Python 进程复用其产品 fixture 和 `model_stream`，经真实上传、接受、执行及两代 fork 生成状态。当前产品不再承担生成旧结构的职责，也不保留旧线上 owner 或手写执行/fork 状态。旧进程及 owner 关闭后才复制工作区供当前迁移入口使用；保留源 commit/tree、命令、退出码、原始输出及来源回执。旧源码与生成工作区分别隔离，测试工作区沿用正式镜像输出路径，避免嵌套归档将 fork 临时 SQLite 路径拉长；旧 fork watchdog 的产物仍留在其认可的源码输出根。缺少固定历史 Git 对象时明确失败，不回退到当前源码或伪造旧表。团队服务仅沿用该旧版本执行入口既有的初始化依赖，团队功能与专项验证继续 TODO。
+
+2026-10-24 此输入切片在精确公开 HEAD 候选（仍 schema 3）和完整 schema 4 候选各通过 86 项离线迁移/安装检查，覆盖共享旧 blob、已有预览、排队输入、两代真实 fork、冻结来源 hash、安装/撤销及进程退出窗口；Ruff 和 compileall 通过。准确源码指纹、失败归因及最终原始输出位于 `out/tests/temp/attachment_legacy_product_20261024/artifacts/`。这里只完成旧产品输入与验收的解耦；线上目录 owner、旧调用迁齐和整体切换仍未完成，任务 2.2 继续保持未勾选。
+
 ### 实施顺序与验证门
 
 已完成的扫描小修不改变附件格式、URI 或资源删除行为。下一实施批次以目录创建/上传接受/原件与预览读取为完整入口，同时迁齐统一 URI、冻结输入及对应 fork/历史解析所需端口；不能先暴露一个无消费者的新 catalog。接着补齐统一文件写入、Shell 全进程占用、代次对账和低频 GC；每个批次迁齐声明、写入和消费者后集中验证，任务未满足全部合同则保持未勾选。
