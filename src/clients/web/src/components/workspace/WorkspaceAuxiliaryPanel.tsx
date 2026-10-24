@@ -30,6 +30,7 @@ interface WorkspaceAuxiliaryPanelProps {
   sessionChangesLoadedAt: string | null;
   searchOpen: boolean;
   collapseVersion: number;
+  settingsVersion?: number;
   expandedFileTreePaths: string[];
   onExpandedFileTreePathsChange: (paths: string[]) => void;
   resourcePanel: ReactNode;
@@ -69,6 +70,7 @@ export default function WorkspaceAuxiliaryPanel({
   sessionChangesLoadedAt,
   searchOpen,
   collapseVersion,
+  settingsVersion = 0,
   expandedFileTreePaths,
   onExpandedFileTreePathsChange,
   resourcePanel,
@@ -167,6 +169,7 @@ export default function WorkspaceAuxiliaryPanel({
             activeFilePath={activeFilePath}
             searchOpen={searchOpen}
             collapseVersion={collapseVersion}
+            settingsVersion={settingsVersion}
             expandedPaths={expandedFileTreePaths}
             onExpandedPathsChange={onExpandedFileTreePathsChange}
             onCloseSearch={onToggleSearch}

@@ -58,6 +58,7 @@ interface WorkspaceFileTreeProps {
   activeFilePath: string | null;
   searchOpen: boolean;
   collapseVersion: number;
+  settingsVersion?: number;
   expandedPaths: string[];
   onExpandedPathsChange: (paths: string[]) => void;
   onCloseSearch: () => void;
@@ -86,6 +87,7 @@ export default function WorkspaceFileTree({
   activeFilePath,
   searchOpen,
   collapseVersion,
+  settingsVersion = 0,
   expandedPaths: restoredExpandedPaths,
   onExpandedPathsChange,
   onCloseSearch,
@@ -390,6 +392,7 @@ export default function WorkspaceFileTree({
     port,
     sessionId,
     settingsReloadNonce,
+    settingsVersion,
     updateDirectories,
     workspaceId,
   ]);

@@ -1,6 +1,6 @@
 ## 1. 实施状态与回收扫描
 
-当前已接入线上唯一 schema 4 目录 owner，迁齐上传/接受、原件/预览、文件与 Shell 准入、运行时代次及 30 天 GC；旧 blob writer 与即时 GC 已移除。下文逐批证据中的“尚未切换”是当时状态，以本段和最新任务勾选为准。Windows 实机、完整 Web 资源管理、历史输入回收后的 hash 验收及挂起操作终止/关闭期限仍 TODO。Agent 团队、成员、委派和会话协作通信按用户裁定暂缓实现、专项验证与优化。
+当前已接入线上唯一 schema 4 目录 owner，迁齐上传/接受、原件/预览、文件与 Shell 准入、运行时代次及 30 天 GC；旧 blob writer 与即时 GC 已移除。下文逐批证据中的“尚未切换”是当时状态，以本段和最新任务勾选为准。已验收目录回收后冻结请求的冷重建，以及主窗口附件目录查看、派生文件编辑和刷新重开。Windows 实机、fork 失败/删除竞态及挂起操作终止/关闭期限仍 TODO。Agent 团队、成员、委派和会话协作通信按用户裁定暂缓实现、专项验证与优化。
 
 
 2026-10-24 线上唯一切换验收：精确功能 tree `edbd840d49dda3cc77a1bd2b60e7bc258be5c318` 从 HEAD 完整导出，不带共享工作树的目录重构。20 项 residency/worker、10 项真实 fork、13 项目录入口、7 项真实 Linux PTY、8 项运行时/30 天 GC、26 项 ingest 恢复，以及 1 项旧产品迁移后启动与新上传均通过；catalog/维护/初始化共 102 项在组合运行中通过。组合运行中的另 2 项跨端入口因未经过 matrix watchdog 而在 fixture 准入失败，随后按正式 `integration-attachment-directory-entry` 重跑 13 项全部通过，未放宽断言。Ruff、compileall 与 Web 驱动语法检查通过。准确命令、完整源码指纹、原始输出和退出码在 `out/tests/temp/attachment_owner_commit_20261024/artifacts/`；此前三 Gateway 冻结传输/重启 3 项通过的限定源码和证据保留于 `out/tests/temp/attachment_owner_integrated_20261024/artifacts/runs/frozen-transfer-005/`。
@@ -42,7 +42,8 @@ Web 定向 `BOXTEAM_E2E_SECTION8_FOCUS=copy_missing_attachment` 通过真实 Gat
 - [x] 3.3 Shell 结构化 workdir 在目标机器解析目录 URI并持有目录操作 lease；后台处理进程继续占用直到真实终态，保留原生相对/绝对路径与命令语义。
   - 2026-10-24 公共 Terminal 链已持久记录目录根 URI，在原 lease 账本绑定终端身份并仅在核实终态/冷恢复时结清；当前 schema 3 装配显式 None，schema 4 注入仍为代码 TODO。完整 schema 4 候选的三种 cwd 真实后台进程保活、准入/GC 竞争 4 passed，附件目录入口 13 passed，Terminal/Browser/API 回归 84 passed。仅证明候选与公共边界，不能把这些通过当作主线上目录切换或完整任务完成；证据 `out/tests/temp/attachment_shell_directory_20261024/artifacts/`。
   - 2026-10-24 已先行接入现有 files 目录 URI，删除工具层重复 cwd 解析/投影和额外 workspace_root 参数，全部创建入口由 Terminal owner 复用固定文件 owner。只将精确 `boxteam://` 前缀视作 URI，保留原生相对/绝对/工作区外、Shell 私有目录和 POSIX 含 `://` 目录名。完整 archive 红测为6单测失败，真实HTTP/PTY在第三种URI输入失败，证明旧实现误投本机相对目录。最终代码候选 `5f143640aa76378603c58d375ca27dfaa73e36d6` 的 unit-006 为63 passed/2.56秒，http-006 为1 passed，Ruff和compileall均exit0；覆盖中文/空格目录三种输入同文件、派生写入/原件不变、命令内URI字面量、两种冒号原生cwd、跨目标/非法URI拒绝且owner/lease/Node记录逐字不变、真实symlink环原路径仅在diagnostic/cause、verified删除与lease结清。http-002还覆盖工作区外绝对cwd及stdin完成（4 passed/45.26秒）；后续修改未改stdin链。独立只读审查提出的任意scheme误分类已修复并复核闭合。准确命令、源码指纹、raw/退出码和机械收据位于 `out/tests/temp/terminal_workdir_uri_20261024/artifacts/`。附件目录URI、后台全进程占用、Windows实机和跨机产品入口仍TODO，本项保持未勾选；002的错误引号断言及Ruff格式失败原件保留，003后已修正。
-- [ ] 3.4 模型附件 manifest 提供目录/原件 URI 及处理输出提示，迁齐 Web 附件查看和工作区资源管理；前端变更完成真实类型检查与 Web build。
+- [x] 3.4 模型附件 manifest 提供目录/原件 URI 及处理输出提示，迁齐 Web 附件查看和工作区资源管理；前端变更完成真实类型检查与 Web build。
+  - 2026-10-24 主窗口右侧侧边栏的附件预览提供显式“添加附件目录快捷路径”，复用原会话快捷路径、目录查询、文件编辑和后端设置重读，不写入工作区默认值，也不因浏览建立永久关联。完整候选 `b39d1b04483480bec93a95e769c59d5aa376b1c2` 通过真实 Gateway 上传、模型派生写入、实际页面添加目录/编辑/保存/刷新重开，原件字节未变，新会话不继承此快捷路径；实际模型请求含目录、原件、输出 URI 和处理提示，无本机路径。验收截图发现 Gateway UI 设置校验仍拒绝 attachments URI，已迁齐原校验，真实 PUT 200 且设置错误列表为空。77 项 Gateway 设置回归、15 项文件树/附件卡回归、真实 tsc、Web build、Ruff 和 JS 语法检查通过；最终页面 1 passed/72.45 秒。准确命令、完整候选指纹、raw/退出码及截图位于 `out/tests/temp/attachment_web_directories_20261024/artifacts/` 与相应候选正式测试输出。首轮装具未注入执行进程回放、Bun/Playwright 请求上下文 URL 解析、缺少编辑激活点击及类型字段误用的失败原件均保留；004 虽通过原场景，但截图发现的 422 经005新增显式断言后修复，不能将004单独作为设置持久化证据。团队与协作专项未实施或验证，fork 竞态、Windows 和挂起 operation 继续按后续任务推进。
 
 ## 4. 历史与 fork
 

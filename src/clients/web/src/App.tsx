@@ -137,6 +137,7 @@ export default function AppShell() {
   );
   const [fileTreeSearchOpen, setFileTreeSearchOpen] = useState(false);
   const [fileTreeCollapseVersion, setFileTreeCollapseVersion] = useState(0);
+  const [fileTreeSettingsVersion, setFileTreeSettingsVersion] = useState(0);
   const [markdownSourceVisible, setMarkdownSourceVisible] = useState(false);
   const [selectedAttachmentPreview, setSelectedAttachmentPreview] = useState<{
     sessionId: string;
@@ -1039,6 +1040,7 @@ export default function AppShell() {
                     sessionChangesLoadedAt={state.sessionChangesLoadedAt}
                     searchOpen={fileTreeSearchOpen}
                     collapseVersion={fileTreeCollapseVersion}
+                    settingsVersion={fileTreeSettingsVersion}
                     expandedFileTreePaths={expandedFileTreePaths}
                     onExpandedFileTreePathsChange={(paths) => {
                       if (!activeSessionWorkspaceId) {
@@ -1058,6 +1060,8 @@ export default function AppShell() {
                       && selectedAttachmentPreview.sessionId === activeSession?.session_id
                         ? (
                           <WorkspaceAttachmentPreview
+                            key={JSON.stringify([activeSessionWorkspaceId, selectedAttachmentPreview.sessionId, selectedAttachmentPreview.attachment.file_id])}
+                            onDirectoryShortcutUpdated={() => setFileTreeSettingsVersion((version) => version + 1)}
                             attachment={selectedAttachmentPreview.attachment}
                             apiPort={resolvedApiPort}
                             sessionId={selectedAttachmentPreview.sessionId}

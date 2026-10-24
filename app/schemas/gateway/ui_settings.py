@@ -11,8 +11,8 @@ from app.gateway.theme.defaults import DEFAULT_THEME_BACKGROUND_OVERLAY
 def _file_reference(value: str) -> str:
     # 设置只保存 owner 已返回的地址；原生输入必须先经过普通文件入口。
     resource = parse_resource_uri(value)
-    if resource.kind != "files":
-        raise ValueError("UI 文件引用必须使用 files 资源 URI")
+    if resource.kind not in {"files", "attachments"}:
+        raise ValueError("UI 文件引用必须使用 files 或 attachments 资源 URI")
     return resource.display_uri
 
 

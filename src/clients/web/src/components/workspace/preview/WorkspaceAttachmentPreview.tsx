@@ -1,5 +1,5 @@
 import React from "react";
-import { getSessionAttachmentBlob } from "../../../api";
+import { addSessionFileTreeShortcut, getSessionAttachmentBlob } from "../../../api";
 import type { AttachmentRef } from "../../../types/backend";
 import { errorMessage } from "../../../utils/errorMessage";
 
@@ -20,12 +20,17 @@ export default function WorkspaceAttachmentPreview({
   apiPort,
   sessionId,
   workspaceId,
+  onDirectoryShortcutUpdated,
 }: {
   attachment: AttachmentRef;
   apiPort: number;
   sessionId: string;
   workspaceId?: string | null;
+  onDirectoryShortcutUpdated?: () => void;
 }): React.ReactNode {
+  const [shortcutBusy, setShortcutBusy] = React.useState(false);
+  const [shortcutAdded, setShortcutAdded] = React.useState(false);
+  const [shortcutError, setShortcutError] = React.useState<string | null>(null);
   const [source, setSource] = React.useState<string | null>(null);
   const [text, setText] = React.useState<string | null>(null);
   const [truncated, setTruncated] = React.useState(false);
@@ -77,6 +82,25 @@ export default function WorkspaceAttachmentPreview({
     };
   }, [apiPort, attachment.file_id, contentType, sessionId, workspaceId]);
 
+  const addDirectoryShortcut = async () => {
+    if (!attachment.directory_uri) return;
+    setShortcutBusy(true);
+    setShortcutError(null);
+    setShortcutAdded(false);
+    try {
+      await addSessionFileTreeShortcut(apiPort, sessionId, {
+        path: attachment.directory_uri, label: `附件：${name}`,
+      }, workspaceId);
+      setShortcutAdded(true);
+    } catch (reason: unknown) {
+      setShortcutError(errorMessage(reason));
+    } finally {
+      // 成功或响应丢失都重新读取原后端设置，不能仅在本地插入快捷路径。
+      onDirectoryShortcutUpdated?.();
+      setShortcutBusy(false);
+    }
+  };
+
   return (
     <section className="workspace-attachment-preview" aria-label={`附件预览：${name}`}>
       <header className="workspace-attachment-preview-header">
@@ -84,6 +108,12 @@ export default function WorkspaceAttachmentPreview({
           <strong title={name}>{name}</strong>
           <span>{contentType}</span>
         </div>
+        {attachment.directory_uri && onDirectoryShortcutUpdated ? (
+          <button type="button" disabled={shortcutBusy}
+            onClick={() => void addDirectoryShortcut()}>
+            {shortcutBusy ? "正在添加目录…" : "添加附件目录快捷路径"}
+          </button>
+        ) : null}
         {source ? (
           <a
             href={source}
@@ -94,6 +124,8 @@ export default function WorkspaceAttachmentPreview({
           </a>
         ) : null}
       </header>
+      {shortcutAdded ? <div role="status">附件目录已添加到当前会话文件树</div> : null}
+      {shortcutError ? <div role="alert">附件目录添加失败：{shortcutError}</div> : null}
       {loading ? <div className="workspace-attachment-preview-status" role="status">正在读取附件原件…</div> : null}
       {error ? (
         <div className="workspace-attachment-preview-error" role="alert">

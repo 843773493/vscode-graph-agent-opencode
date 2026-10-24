@@ -183,8 +183,11 @@ def test_ui_file_preferences_reject_paths_and_nonfile_uris(model, field, value, 
         model.model_validate(file_preference_payload(field, value))
 
 
-def test_ui_file_preferences_preserve_target_dangling_uri_and_canonical_encoding():
-    root = "boxteam://workspace/absent-target/resources/files/root"
+@pytest.mark.parametrize("root", [
+    "boxteam://workspace/absent-target/resources/files/root",
+    "boxteam://workspace/absent-target/resources/attachments/att_0123456789abcdef0123456789abcdef",
+])
+def test_ui_file_preferences_preserve_target_dangling_uri_and_canonical_encoding(root):
     uri = root + "/%e4%b8%ad%20%252F.txt"
     canonical = root + "/%E4%B8%AD%20%252F.txt"
     settings = merge_web_ui_settings_values(WebUISettingsDTO(), WebUISettingsUpdateDTO(
