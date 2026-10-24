@@ -62,6 +62,8 @@ Browser 的关闭/删除继续复用原 resource transition。原 context 关闭
 
 Browser 的关闭排空统一复用 `BrowserOperationQueue.drain()` 的完整已接纳 Promise 集合，包含串行排队以及尚在 `prepareForOperation()` 等待唤醒的并发交互；移除串行尾部加在途计数轮询的旧等待链。Manager 不再按 `discarded` 跳过运行资源，所有资源先关闭操作准入；排空后仍为冷状态的资源保留原检查点。Session 的单次排空定时预算在任何连接清理、解锁和检查点转换前生效，超时不取消或遗忘原操作。真实 Chromium/HTTP 验收覆盖冷唤醒准备、热交互执行、准备超时后的原操作完成及再次关闭，核对磁盘检查点、原页面关闭与冷 Manager 重开的最终表单值。该切片不覆盖 Manager 失败收尾、挂起操作强制终止或整个 shutdown 的总期限；这些仍属 5.4，不能将 Session 的等待失败等同于外部终态核实。
 
+后续补齐 Manager 的排空超时分支：它不再沿检查点捕获损坏的收尾链将原资源改成 lost、释放 context 并删除检查点；仍检查其它资源并保留其原错误，随后在关闭共享运行时池之前汇总失败。原关闭准入和唯一操作集合继续持有未结束操作，原操作完成后同一入口可重试捕获最终状态。真实 Manager 默认 5 秒预算的 HTTP/Chromium 场景核对超时后原页面与运行时仍存活、磁盘状态和原检查点未改，放行原操作后重试关闭及冷重开保留最后的编辑。其它捕获/收尾故障的期限、强制终止与进程退出协调仍 TODO；本项不是整个 5.4 完成。
+
 `ThreadResidencyTracker.sweep()` 对每个 Thread 独立尝试清理，失败保留原 scope、generation 和 owner 记录，其它 Thread 仍完成。整批结束后向调用方抛出原错误（单项）或汇总错误（多项），附精确 owner 信息；不改变已有单错误类型或把失败算成成功卸载。`AgentExecutionService` 的唯一周期 worker 记录完整异常后按原 60 秒周期重试，取消和关闭正常传播。这里不解决失效关联或外部未知结果，也不绕过原 owner 核实规则。
 
 闲置扫描通过 `asyncio.wait` 为单个真实卸载任务提供 30 秒等待预算，覆盖该任务中等待运行排空、领域通知和 scope close 的总等待。到期向本轮报告含精确 owner/generation 的 `TimeoutError`，继续扫描其它 Thread；不取消原任务，不解除关联或 lease，不标记 cold。原任务仍由 `runtime_unload` 持有，新 admission 等待同一任务，后续扫描不会为同一代再启动清理。迟到成功沿原关闭链落为 cold；迟到失败由现有后台任务回调完整记录，原状态保留给下一周期重试。这是事件循环能调度时的扫描等待预算，不是保证 30 秒内释放资源或整轮完成的期限。

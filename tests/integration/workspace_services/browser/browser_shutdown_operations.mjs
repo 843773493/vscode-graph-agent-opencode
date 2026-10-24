@@ -76,9 +76,20 @@ async function scenario(phase) {
     assert.equal(session.inFlightOperations, cold ? 0 : 1);
     assert.equal(session.operationQueue.acceptedOperationExecutions.size, 1);
 
-    if (phase === "prepare_timeout") {
-      await assert.rejects(session.checkpointForManagerShutdown("integration_timeout", { operationDrainTimeoutMs: 20 }),
-        { code: "browser_shutdown_operation_drain_timeout" });
+    if (phase === "prepare_timeout" || phase === "manager_timeout") {
+      if (phase === "manager_timeout") {
+        await assert.rejects(manager.shutdown("integration_timeout"), (error) => {
+          assert(error instanceof AggregateError);
+          assert.equal(error.errors.length, 1);
+          assert.equal(error.errors[0].code, "browser_shutdown_operation_drain_timeout");
+          return true;
+        });
+        assert.equal(manager.runtimePool.browser.isConnected(), true);
+        assert.equal(session.record.status, "running");
+      } else {
+        await assert.rejects(session.checkpointForManagerShutdown("integration_timeout", { operationDrainTimeoutMs: 20 }),
+          { code: "browser_shutdown_operation_drain_timeout" });
+      }
       assert.deepEqual(await manager.stateStore.readCheckpoint(browserId), checkpointBefore);
       assert.equal(await readFile(manager.stateStore.stateFile, "utf8"), stateBefore);
       assert.equal(session.operationQueue.acceptedOperationExecutions.size, 1);
@@ -138,7 +149,7 @@ try {
     server.close((error) => error ? reject(error) : resolve());
     server.closeAllConnections();
   }));
-  for (const phase of ["prepare", "executing", "prepare_timeout"]) {
+  for (const phase of ["prepare", "executing", "prepare_timeout", "manager_timeout"]) {
     try {
       results.push({ phase, status: "passed", observations: await scenario(phase) });
     } catch (error) {

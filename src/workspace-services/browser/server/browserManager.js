@@ -444,6 +444,7 @@ export class BrowserManager {
   async shutdown(reason = "browser_manager_shutdown") {
     this.stopResourceGovernor();
     const checkpointFailures = [];
+    let operationsDrained = true;
     for (const session of this.browsersById.values()) {
       if (session.status !== "running") {
         continue;
@@ -452,16 +453,23 @@ export class BrowserManager {
         await session.checkpointForManagerShutdown(reason);
       } catch (error) {
         checkpointFailures.push({ browserId: session.id, error });
-        await session.markManagerShutdownCheckpointFailed(reason, error);
+        if (error.code === "browser_shutdown_operation_drain_timeout") {
+          operationsDrained = false;
+        } else {
+          await session.markManagerShutdownCheckpointFailed(reason, error);
+        }
       }
     }
-    await this.runtimePool.shutdown();
-    await this.persist();
-    if (checkpointFailures.length > 0) {
-      throw new AggregateError(
+    const failure = checkpointFailures.length > 0
+      ? new AggregateError(
         checkpointFailures.map((item) => item.error),
         `Browser Manager 关闭时有 ${checkpointFailures.length} 个浏览器无法生成检查点: ${checkpointFailures.map((item) => item.browserId).join(",")}`,
-      );
-    }
+      ) : null;
+    // 排空超时只结束本次等待；原操作和运行时仍由原owner持有，不能销毁恢复依据。
+    if (!operationsDrained) throw failure;
+    // TODO：统一整个shutdown期限和挂起操作终止核实，不能将排空预算当作取消。
+    await this.runtimePool.shutdown();
+    await this.persist();
+    if (failure) throw failure;
   }
 }

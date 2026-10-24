@@ -475,6 +475,68 @@ describe("浏览器状态持久化", () => {
     expect(shutdownReasons).toEqual(["browser_manager_sigterm"]);
   });
 
+  test.each(["prepare", "executing"])("管理器排空%s超时保留原操作与检查点，迟到结束后可重试关闭", async (phase) => {
+    const saved = [];
+    const manager = createBrowserManagerWithStateWriter(async (state) => { saved.push(state); });
+    const browser = new BrowserSession({ manager, record: {
+      browser_id: createOptions().browserId,
+      workspace_id: WORKSPACE_ID, transport_owner_revision: 1,
+      status: "running", resource_state: "background", reconciliation_status: "verified",
+      checkpoint: { captured_at: "2026-10-24T00:00:00.000Z", size_bytes: 123 },
+      agent_access_locked: true,
+    } });
+    manager.browsersById.set(browser.id, browser);
+    const idle = new BrowserSession({ manager, record: {
+      browser_id: createOptions().browserId,
+      workspace_id: WORKSPACE_ID, transport_owner_revision: 1,
+      status: "running", resource_state: "discarded", reconciliation_status: "verified",
+    } });
+    manager.browsersById.set(idle.id, idle);
+    const before = browser.toRecord();
+    const client = {};
+    browser.clients.add(client);
+    let enter;
+    let release;
+    const entered = new Promise((resolve) => { enter = resolve; });
+    const barrier = new Promise((resolve) => { release = resolve; });
+    const effects = [];
+    browser.wake = async () => { if (phase === "prepare") { enter(); await barrier; } };
+    browser.freeze = async () => { effects.push("freeze"); browser.record.resource_state = "frozen"; };
+    browser.discard = async () => { effects.push("discard"); browser.record.resource_state = "discarded"; };
+    manager.runtimePool.shutdown = async () => { effects.push("pool_shutdown"); };
+    manager.stateStore.deleteCheckpoint = async () => { effects.push("delete_checkpoint"); };
+    const checkpoint = browser.checkpointForManagerShutdown.bind(browser);
+    browser.checkpointForManagerShutdown = (reason) => checkpoint(reason, { operationDrainTimeoutMs: 5 });
+    const operation = browser.runInteractiveOperation({ actor: "user", action: phase }, async () => {
+      if (phase === "executing") { enter(); await barrier; }
+      effects.push("operation_done");
+    });
+    await entered;
+    const accepted = [...browser.operationQueue.acceptedOperationExecutions];
+    try {
+      const failure = await manager.shutdown().catch((error) => error);
+      expect(failure).toBeInstanceOf(AggregateError);
+      expect(failure.errors).toHaveLength(1);
+      expect(failure.errors[0].code).toBe("browser_shutdown_operation_drain_timeout");
+      expect(idle.closingRequested).toBe(true);
+      expect(idle.record.resource_state).toBe("discarded");
+      expect(effects).toEqual([]);
+      expect(saved).toEqual([]);
+      expect(browser.record.status).toBe("running");
+      expect(browser.record.reconciliation_status).toBe("verified");
+      expect(browser.record.checkpoint).toEqual(before.checkpoint);
+      expect(browser.record.agent_access_locked).toBe(true);
+      expect(browser.clients.has(client)).toBe(true);
+      expect([...browser.operationQueue.acceptedOperationExecutions]).toEqual(accepted);
+    } finally {
+      release();
+      await operation;
+      await manager.shutdown();
+    }
+    expect(effects).toEqual(["operation_done", "freeze", "discard", "pool_shutdown"]);
+    expect(browser.operationQueue.acceptedOperationExecutions.size).toBe(0);
+  });
+
   test("工作区逻辑浏览器达到硬上限时明确拒绝新建", async () => {
     const manager = createBrowserManagerWithStateWriter(async () => undefined, {
       maxLogicalBrowsersPerWorkspace: 2,
