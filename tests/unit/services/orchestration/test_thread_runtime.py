@@ -171,6 +171,7 @@ async def test_sweep_wait_budget_keeps_single_unload_and_other_threads_progress(
     attempts: list[str] = []
     native_wait = asyncio.wait
     wait_expired = False
+    sweep: asyncio.Task[object] | None = None
 
     async def release(thread_id: str) -> None:
         attempts.append(thread_id)
@@ -194,6 +195,8 @@ async def test_sweep_wait_budget_keeps_single_unload_and_other_threads_progress(
         tasks: set[asyncio.Task[None]], *, timeout: float,
     ) -> tuple[set[asyncio.Task[None]], set[asyncio.Task[None]]]:
         nonlocal wait_expired
+        if asyncio.current_task() is not sweep:
+            return await native_wait(tasks, timeout=timeout)
         assert timeout == THREAD_IDLE_UNLOAD_WAIT_SECONDS == 30
         task, = tasks
         if "thread-a:" in task.get_name() and not wait_expired:

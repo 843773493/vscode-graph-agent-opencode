@@ -38,6 +38,9 @@ THREAD_IDLE_UNLOAD_SECONDS: float = 30 * 60
 #: 单个 idle unload 的扫描等待预算；到期不取消 owner 持有的真实清理任务。
 THREAD_IDLE_UNLOAD_WAIT_SECONDS: float = 30
 
+#: 单次 runtime 准入或 Session runtime 排空共用的总等待预算；超时保留原任务。
+THREAD_RUNTIME_WAIT_SECONDS: float = 30
+
 #: idle 计时的唯一时钟形态：单调秒。默认 ``time.monotonic``，测试注入可推进 fake。
 ResidencyClock: TypeAlias = Callable[[], float]
 
@@ -302,6 +305,7 @@ class ThreadResidencyTracker:
         if self._closing:
             raise RuntimeError("ThreadResidencyTracker 正在关闭，拒绝新 admission")
         state = self._ensure_state(pair.session_id, pair.thread_id)
+        deadline = asyncio.get_running_loop().time() + THREAD_RUNTIME_WAIT_SECONDS
         state.pending_runtime_leases += 1
         try:
             while True:
@@ -310,7 +314,7 @@ class ThreadResidencyTracker:
                         "ThreadResidencyTracker 正在关闭，拒绝新 admission"
                     )
                 if state.runtime_unload is not None:
-                    await asyncio.shield(state.runtime_unload)
+                    await self._wait_runtime_task(state.runtime_unload, state, deadline, "admission")
                     continue
                 runtime = state.runtime
                 if runtime is not None:
@@ -319,7 +323,9 @@ class ThreadResidencyTracker:
                         or runtime.closing
                         or runtime.lifetime_scope.state != "open"
                     ):
-                        await asyncio.shield(self._start_runtime_unload(state, runtime))
+                        await self._wait_runtime_task(
+                            self._start_runtime_unload(state, runtime), state, deadline, "admission",
+                        )
                         continue
                     token = self.runtime_binding_token(runtime.generation)
                     for listener in self._acquire_listeners:
@@ -334,7 +340,9 @@ class ThreadResidencyTracker:
                 if build is None:
                     if state.runtime_build_scope is not None:
                         # 旧编译失败的资源未关闭时，不能物化下一代。
-                        await asyncio.shield(self._start_runtime_unload(state, None))
+                        await self._wait_runtime_task(
+                            self._start_runtime_unload(state, None), state, deadline, "admission",
+                        )
                         continue
                     scope = LifetimeScope(
                         f"thread-runtime:{state.session_id}:{state.thread_id}:"
@@ -354,7 +362,7 @@ class ThreadResidencyTracker:
                     )
                     state.runtime_build = build
                     build.add_done_callback(self._consume_task_exception)
-                await asyncio.shield(build)
+                await self._wait_runtime_task(build, state, deadline, "admission")
         finally:
             state.pending_runtime_leases -= 1
             if not self._has_runtime_users(state):
@@ -518,6 +526,24 @@ class ThreadResidencyTracker:
         ):
             del self._states[(state.session_id, state.thread_id)]
 
+    async def _wait_runtime_task(
+        self, task: asyncio.Task[TaskResult], state: _ThreadResidencyState,
+        deadline: float | None, operation: str,
+    ) -> TaskResult:
+        if deadline is None:
+            return await asyncio.shield(task)
+        if not task.done():
+            remaining = max(0.0, deadline - asyncio.get_running_loop().time())
+            done, _ = await asyncio.wait({task}, timeout=remaining)
+            if not done:
+                raise TimeoutError(
+                    f"Thread runtime {operation} 等待超过 {THREAD_RUNTIME_WAIT_SECONDS:g} 秒；"
+                    "原任务仍由 owner 持有，未报告排空或释放: "
+                    f"session_id={state.session_id} thread_id={state.thread_id} "
+                    f"generation={state.generation} task={task.get_name()}"
+                )
+        return task.result()
+
     async def close(self, *, session_id: str | None = None) -> None:
         """关闭指定 Session 或进程内全部 generation，等待真实 build/lease/scope。
 
@@ -526,6 +552,9 @@ class ThreadResidencyTracker:
         """
         if session_id is None:
             self._closing = True
+        # TODO(5.4)：全局 shutdown 须协调所有存储关闭顺序，不能超时后先关库再让原任务写入。
+        deadline = (asyncio.get_running_loop().time() + THREAD_RUNTIME_WAIT_SECONDS
+                    if session_id is not None else None)
         errors: list[Exception] = []
         for state in tuple(self._states.values()):
             if session_id is not None and state.session_id != session_id:
@@ -533,15 +562,20 @@ class ThreadResidencyTracker:
             build = state.runtime_build
             if build is not None:
                 try:
-                    await asyncio.shield(build)
+                    await self._wait_runtime_task(build, state, deadline, "session-drain")
                 except Exception as error:  # noqa: BLE001
                     errors.append(error)
+                    if not build.done():
+                        # builder 仍持有 scope，不能在其继续注册资源时并发关闭。
+                        continue
             try:
                 runtime = state.runtime
                 if runtime is not None or state.runtime_build_scope is not None:
-                    await asyncio.shield(self._start_runtime_unload(
-                        state, runtime, require_unblocked=session_id is not None,
-                    ))
+                    await self._wait_runtime_task(
+                        self._start_runtime_unload(
+                            state, runtime, require_unblocked=session_id is not None,
+                        ), state, deadline, "session-drain",
+                    )
                 self._drop_cold_state(state)
                 if session_id is not None and self._states.get((state.session_id, state.thread_id)) is state:
                     raise RuntimeError(

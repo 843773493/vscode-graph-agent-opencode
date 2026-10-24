@@ -58,6 +58,9 @@ Shell 的结构化 workdir 接受目录 URI，在 URI 指定目标的文件 owne
 
 当前 Terminal/Browser 的 HTTP 层分别设置 10/30 秒网络超时，它们不覆盖锁等待、线程池排队、多次请求总耗时或 scope 回调。共享 owner 已迁为每条资源记录一把进程内锁；创建、管理、传输授权、工具调用、lease 关闭、fork attach、Thread/Session 清理和孤儿回收均复用该资源的同一把锁，不再跨单资源外部请求持有 owner 全局锁。恢复入口只保留首次对账的 single-flight gate；锁与原 owner 记录一一对应，不形成新的持久账本。列表先按原关联/来源元信息选目标，等锁后重检过滤；多资源清理按资源 ID 固定顺序取得整组锁，仍在任何 detach 前核对完整 lease 集合。包含挂起资源的聚合查询或整组清理仍会等待该资源，同步回调阻塞事件循环时异步计时也无法抢占。任务 5.4 后续继续统一 operation 总截止时间、终止核实和迟到回执，明确 Session 删除、换代 admission 与 shutdown 的有界等待、失败返回和保留事实；本次锁隔离不代表这些合同已完成。
 
+
+runtime 准入及单 Session 的 runtime 排空现各有一次调用共用的 30 秒单调总等待预算，覆盖等待旧代卸载、构建与多个 Thread 的顺序排空，后续阶段不重置预算。等待超时或调用方取消只结束本次等待，原 build/unload task 仍由原 state 持有，迟到回执沿原链记录；后续重试复用同一任务，不能先建下一代或关闭尚在构建的 scope。Session 删除沿原异常传播停留在 deleting，保留 locator、active 控制 fence 和物理历史，待原任务完成后按同一删除记录继续。该预算只覆盖 tracker 的 runtime 阶段，不覆盖此前领域资源排空、Session gate/retention 等待或整个删除 operation。TODO：真实外部操作的总截止时间与终止核实、同步阻塞和线程池排队、全局 shutdown 与存储关闭顺序仍未完成；不能在全局 shutdown 等待超时后先关闭 catalog，再允许原任务继续写入。
+
 扩展资源 owner 回归发现，记录查询已更名为 `_require_owned_resource_record`，但共享 operation、Terminal/Browser operation 和 Browser 管理入口仍有旧 `_require` 调用，导致取得 lease 或读取记录时直接失败。本轮全量迁齐这些调用和对应测试，保留唯一查询方法，不加兼容入口，也不改变关联、lease 或删除策略。
 
 ## Conflict Review
@@ -73,7 +76,7 @@ Shell 的结构化 workdir 接受目录 URI，在 URI 指定目标的文件 owne
 | deduplicate-execution-history-storage 的不可变内容复用及恢复/fork保护 | 可变目录不参与 digest 身份合并；已冻结历史输入仍按原 immutable asset/version 复用 | 历史 request_hash 可重建，GC 不删除 checkpoint/assembly 所需版本；不从当前目录补历史 |
 | 当前附件 GC 的 `created_at < now-retention` 与 `retention=0` 调用 | 改为最后一次零关联后的 deadline；不能简单把参数改成 30 天 | 在 detach 第 30 天前不删，重启不重置 deadline，删除与 reattach 互斥 |
 | 当前恢复只核运行状态、关联存活无对账，以及单项异常停止 sweep | 已接入 tracker 实例/generation token、权威 pin/queue 核对与旧代解绑；外部未知结果的取消/终止核实仍 TODO | 不把日志或任务勾选当作异常退出后的真实资源释放证据 |
-| persistent-resources 的 unload 必须核实终态，与扫描等待期限 | 30 秒只限制本轮等待；唯一卸载任务继续持有全部未结清事实，原 admission/Session 删除/关闭仍等真实清理 | 不把超时当停止证明，不重复删除，不提前释放 lease；共享锁/同步阻塞和关闭期限尚待 5.4 |
+| persistent-resources 的 unload 必须核实终态，与扫描等待期限 | 30 秒只限制本轮等待；唯一卸载任务继续持有全部未结清事实，runtime admission/单 Session runtime 排空等待最多 30 秒，真实清理仍由同一任务核实；其它删除阶段和全局关闭仍待收口 | 不把超时当停止证明，不重复删除，不提前释放 lease；共享锁/同步阻塞和关闭期限尚待 5.4 |
 
 ## Risks / Trade-offs
 

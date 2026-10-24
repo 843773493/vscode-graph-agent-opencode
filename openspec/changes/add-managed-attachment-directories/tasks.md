@@ -66,6 +66,9 @@ Web 定向 `BOXTEAM_E2E_SECTION8_FOCUS=copy_missing_attachment` 通过真实 Gat
 
   - 2026-10-24 完成 5.4 的资源锁纵向切片：全部 Terminal/Browser owner、管理/工具/授权、fork attach、Thread/Session 清理和 operation 关闭改用原记录对应的同一把资源锁，恢复只保留首次对账 gate；相关集合按固定资源 ID 顺序取锁，仍整组预检 lease 后才 detach，查询在等锁后重检关联。没有新增持久事实或兼容锁入口。完整原 HEAD 归档加新增公开入口反例为 2 failed/10.96 秒，两类 owner 都在 A 的挂起停止阻塞 B 查询时超时；代码候选 `4daa604d6a52b5160d827f6af80e6566537fd694` 的 62 项 owner 回归通过/2.04 秒，保留原代次、未知回执、fork 幂等、冲突及顺序断言。真实 Linux Terminal HTTP/PTY 8 passed/80.09 秒，其中新增两目录场景在 A 已经外部停止但最终回执被屏障挂起时，B 仍独立查询、停止并 GC；A 的目录/lease 直至原回执返回才释放，原停止不重放。Browser 创建/工具、真实 Node 锁拒绝和取消队列重入共 3 passed/22.18 秒。相同候选在 `hyf_win` 的 Windows Job Object（600 秒/4 GiB）下 6 项两类 owner 竞争及 8 项真实 PTY 共 14 passed/54.95 秒；前后源码 tree、工作树 blob 与 Git EOL 规范化 hash 已核验。Ruff、编译、strict 和作者结构自查原件及共享改动合并依据在 `out/tests/temp/resource_lock_isolation_20261024/artifacts/`；保留现有记录查询改名/批量 lease 对账改动，不清共享暂存内容。本项不证明网络未回执的终止接管、同步阻塞/线程池、聚合查询或 Session 删除/shutdown 的总截止时间，也不是完整跨端 fork/重启验收；生产相应位置保留 TODO，5.2/5.4/6.1/6.2 继续未勾，团队和协作专项继续 TODO。
 
+
+  - 2026-10-24 补齐 5.4 的 runtime 等待纵向切片：准入和单 Session runtime 排空分别共用一次调用的 30 秒单调预算，不为构建、换代或下一 Thread 重置；超时与取消保留原 build/unload task、scope/generation 和原始迟到错误，不把超时当释放，也不在尚未完成的 builder 上并发 close。原基线完整归档加最终时钟装具的 7 项反例全部失败；最终 7 项定向回归通过，连同既有 residency/worker 共 57 passed，3 项既有删除故障/恢复回归通过。真实产品上传、消息执行和同一子树删除 owner 的集成 1 passed/20.64 秒：超时后 catalog deleting、原 locator、active control fence、物理历史逐字保留；原卸载继续，回执结束后同一 key 完成删除且通知不重复。该测试复用现有 model_stream，仅对未使用的外部资源清单设空，不是实际 Gateway/PTY/Windows 或 shutdown 验收。矩阵已登记独立 integration suite。Ruff、编译、strict、完整候选差异、准确命令/指纹和原始结果在 `out/tests/temp/runtime_drain_deadline_20261024/artifacts/`。首次装具路径、清理 lease 顺序、未绑定运行 loop 的时钟、已有扫描装具误拦准入等待和 locator 字段笔误均保留失败原件；扫描断言仍严格核对原 30 秒，只将装具限定为原扫描调用。此前领域排空、gate/retention 等待及全局 shutdown 总期限、真实 operation 终止和阻塞回调仍 TODO，5.2/5.4/6.1/6.2 保持未勾；团队/协作专项继续 TODO。
+
 ## 6. 真实验收与旧链物理下线
 
 - [ ] 6.1 经产品入口上传、Shell 预处理、读取处理结果、fork 与重启恢复；覆盖 Linux/Windows 原生 cwd 和远端 URI 始终在目标机器解释。
