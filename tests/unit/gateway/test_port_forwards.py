@@ -760,7 +760,7 @@ def test_error_response_excludes_native_location(
         assert len(processes) == 2 and processes[0].closed is True
 
 
-@pytest.mark.parametrize(("error_type", "status"), [(LookupError, 404), (ValueError, 409), (OSError, 502)])
+@pytest.mark.parametrize(("error_type", "status"), [(LookupError, 404), (ValueError, 409), (OSError, 502), (PermissionError, 502)])
 def test_request_failure_preserves_status_without_native_detail(
     forward_http: tuple[TestClient, SshPortForwardManager, list[_FakeManagedProcess]],
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,

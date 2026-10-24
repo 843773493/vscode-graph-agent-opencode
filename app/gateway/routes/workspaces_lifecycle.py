@@ -50,7 +50,10 @@ from app.gateway.runtime.local_workspace import wait_for_workspace_health
 from app.gateway.runtime.port_forwarding import SshPortForwardManager
 from app.gateway.runtime.workspace import WorkspaceRuntime
 from app.gateway.runtime.workspace_process import resolve_backend_workspace_id
-from app.gateway.server.port_forwarding import get_port_forward_manager
+from app.gateway.server.port_forwarding import (
+    get_port_forward_manager,
+    port_forward_http_error,
+)
 from app.gateway.ssh_connections import (
     list_ssh_connection_options,
     resolve_ssh_connection_request,
@@ -702,7 +705,12 @@ async def remove_workspace(
             )
             if result.status == "blocked":
                 raise HTTPException(status_code=409, detail=result.model_dump(mode="json"))
-        await port_forward_manager.remove_workspace(workspace_id)
+        try:
+            await port_forward_manager.remove_workspace(workspace_id)
+        except (LookupError, ValueError, OSError, RuntimeError, httpx.HTTPError) as error:
+            raise port_forward_http_error(
+                error, stage="workspace_remove", permission_status_code=403,
+            ) from error
         if not managed_local:
             registry.remove(workspace_id, owner="manual_crud")
     except PermissionError as error:

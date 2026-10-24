@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import socket
+from collections.abc import Iterator
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
@@ -30,17 +31,20 @@ from app.schemas.gateway.port_forwarding import CreatePortForwardRequest
 
 
 class _FakeManagedProcess:
-    def __init__(self, listener: socket.socket) -> None:
+    def __init__(self, listener: socket.socket, close_error: OSError) -> None:
         self.process = SimpleNamespace(poll=lambda: None)
         self.listener = listener
         self.fail_next_close = True
         self.closed = False
+        self.close_error = close_error
+        self.close_calls = 0
 
     def close(self, *, timeout_seconds: float = 8) -> None:
         del timeout_seconds
+        self.close_calls += 1
         if self.fail_next_close:
             self.fail_next_close = False
-            raise OSError("injected SSH forward process close failure")
+            raise self.close_error
         self.listener.close()
         self.closed = True
 
@@ -51,11 +55,25 @@ def _available_port() -> int:
         return int(listener.getsockname()[1])
 
 
-@pytest.mark.asyncio
-async def test_remote_workspace_removal_keeps_registry_when_forward_cleanup_fails(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+@pytest.fixture(params=[
+    "/srv/private/forward.log", r"C:\private\forward.log",
+    r"\\server\private\forward.log", r"\\?\UNC\server\private\forward.log",
+], ids=["posix", "drive", "unc", "extended-unc"])
+def native_path(request: pytest.FixtureRequest) -> str:
+    return request.param
+
+
+@pytest.fixture(params=[5, 13], ids=["io", "permission"])
+def close_error(request: pytest.FixtureRequest, native_path: str) -> OSError:
+    error = OSError(request.param, "SSH 关闭失败", native_path)
+    error.winerror = 206
+    return error
+
+
+@pytest.fixture
+def forward_cleanup(
+    tmp_path: Path, close_error: OSError,
+) -> Iterator[tuple[GatewayWorkspaceRegistry, SshPortForwardManager, list[_FakeManagedProcess]]]:
     registry = GatewayWorkspaceRegistry(storage_path=tmp_path / "workspaces.json")
     registry.upsert_remote_gateway(
         RemoteGatewayConnection(
@@ -95,7 +113,7 @@ async def test_remote_workspace_removal_keeps_registry_when_forward_cleanup_fail
         listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         listener.bind(("127.0.0.1", forward.local_port))
         listener.listen()
-        process = _FakeManagedProcess(listener)
+        process = _FakeManagedProcess(listener, close_error)
         processes.append(process)
         return process, tmp_path / "logs" / "forward.log"
 
@@ -106,11 +124,28 @@ async def test_remote_workspace_removal_keeps_registry_when_forward_cleanup_fail
         process_starter=start_forward,
         port_allocator=_available_port,
     )
+    try:
+        yield registry, manager, processes
+    finally:
+        for process in processes:
+            if not process.closed:
+                process.listener.close()
+
+
+@pytest.mark.asyncio
+async def test_remote_workspace_removal_keeps_registry_when_forward_cleanup_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    forward_cleanup: tuple[GatewayWorkspaceRegistry, SshPortForwardManager, list[_FakeManagedProcess]],
+    close_error: OSError, caplog: pytest.LogCaptureFixture,
+) -> None:
+    registry, manager, processes = forward_cleanup
     forward = await manager.create(
         "workspace_remove",
         CreatePortForwardRequest(remote_port=5173, protocol="http"),
     )
     process = processes[0]
+    registry_before = (tmp_path / "workspaces.json").read_bytes()
+    forwards_before = (tmp_path / "port-forwards.json").read_bytes()
 
     monkeypatch.setattr(app.state, "registry", registry, raising=False)
     monkeypatch.setattr(app.state, "port_forward_manager", manager, raising=False)
@@ -132,12 +167,16 @@ async def test_remote_workspace_removal_keeps_registry_when_forward_cleanup_fail
                 "/api/gateway/workspaces/workspace_remove",
                 headers=headers,
             )
-            assert failed.status_code == 502
+            assert failed.status_code == (403 if isinstance(close_error, PermissionError) else 502)
             assert failed.headers["X-Request-ID"] == "remote-forward-cleanup-failure"
-            assert failed.json() == {
-                "detail": "injected SSH forward process close failure",
-                "request_id": "remote-forward-cleanup-failure",
-            }
+            assert failed.json()["request_id"] == "remote-forward-cleanup-failure"
+            detail = failed.json()["detail"]
+            assert close_error.filename not in detail
+            assert f"errno={close_error.errno}" in detail and "winerror=206" in detail
+            assert "stage=workspace_remove" in detail
+            assert any(record.exc_info and record.exc_info[1] is close_error for record in caplog.records)
+            assert (tmp_path / "workspaces.json").read_bytes() == registry_before
+            assert (tmp_path / "port-forwards.json").read_bytes() == forwards_before
             assert registry.resolve("workspace_remove").workspace_id == "workspace_remove"
             assert registry.resolve("workspace_sibling").workspace_id == "workspace_sibling"
             assert (await manager.list("workspace_remove"))[0].forward_id == forward.forward_id
@@ -171,15 +210,12 @@ async def test_remote_workspace_removal_keeps_registry_when_forward_cleanup_fail
         assert json.loads((tmp_path / "port-forwards.json").read_text())["items"] == []
     finally:
         app.dependency_overrides.pop(get_workspace_runtime_controller, None)
-        for process in processes:
-            if not process.closed:
-                process.listener.close()
 
 
 @pytest.mark.asyncio
 async def test_add_remote_gateway_http_reconciles_published_projection_and_reports_both_errors(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    close_error: OSError, caplog: pytest.LogCaptureFixture,
 ) -> None:
     state = GatewayStateStore(path=tmp_path / "gateway.sqlite")
     registry = GatewayWorkspaceRegistry(
@@ -250,7 +286,7 @@ async def test_add_remote_gateway_http_reconciles_published_projection_and_repor
         listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         listener.bind(("127.0.0.1", forward.local_port))
         listener.listen()
-        process = _FakeManagedProcess(listener)
+        process = _FakeManagedProcess(listener, close_error)
         processes.append(process)
         return process, tmp_path / "logs" / "forward.log"
 
@@ -360,7 +396,10 @@ async def test_add_remote_gateway_http_reconciles_published_projection_and_repor
         assert response_body["request_id"] == "add-remote-postcommit-01"
         assert "remote registry observer failed after commit" in response_body["message"]
         assert "SSH 端口转发对账失败" in response_body["message"]
-        assert "injected SSH forward process close failure" in response_body["message"]
+        assert close_error.filename not in response_body["message"]
+        assert f"errno={close_error.errno}" in response_body["message"]
+        assert "winerror=206" in response_body["message"]
+        assert any(record.exc_info and record.exc_info[1] is close_error for record in caplog.records)
         assert primary_error.args == (
             "remote registry observer failed after commit",
         )
@@ -392,3 +431,53 @@ async def test_add_remote_gateway_http_reconciles_published_projection_and_repor
                 process.listener.close()
         registry.close()
         state.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ["close", "reconcile_workspaces"])
+async def test_batch_cleanup_preserves_failed_owner_and_retries_without_raw_error(
+    forward_cleanup: tuple[GatewayWorkspaceRegistry, SshPortForwardManager, list[_FakeManagedProcess]],
+    close_error: OSError, caplog: pytest.LogCaptureFixture, tmp_path: Path, operation: str,
+) -> None:
+    registry, manager, processes = forward_cleanup
+    failed = await manager.create("workspace_remove", CreatePortForwardRequest(remote_port=5173))
+    healthy = await manager.create("workspace_sibling", CreatePortForwardRequest(remote_port=5174))
+    processes[1].fail_next_close = False
+    if operation == "reconcile_workspaces":
+        registry.remove("workspace_remove")
+        registry.remove("workspace_sibling")
+    registry_before = (tmp_path / "workspaces.json").read_bytes()
+    forwards_before = (tmp_path / "port-forwards.json").read_bytes()
+    cleanup = getattr(manager, operation)
+
+    with pytest.raises(RuntimeError) as failure:
+        await cleanup()
+
+    assert close_error.filename not in str(failure.value)
+    assert f"errno={close_error.errno}" in str(failure.value)
+    assert "winerror=206" in str(failure.value)
+    assert any(record.exc_info and record.exc_info[1] is close_error for record in caplog.records)
+    assert manager._runtimes[failed.forward_id].process is processes[0]
+    assert processes[0].closed is False and processes[1].closed is True
+    assert failed.forward_id in manager._definitions
+    assert (tmp_path / "workspaces.json").read_bytes() == registry_before
+    if operation == "close":
+        assert manager._runtimes[healthy.forward_id].process is None
+        assert (tmp_path / "port-forwards.json").read_bytes() == forwards_before
+    else:
+        assert healthy.forward_id not in manager._definitions
+        assert healthy.forward_id not in manager._runtimes
+        saved = json.loads((tmp_path / "port-forwards.json").read_text())
+        assert [item["forward_id"] for item in saved["items"]] == [failed.forward_id]
+
+    await cleanup()
+    await cleanup()
+    assert [process.close_calls for process in processes] == [2, 1]
+    assert all(process.closed for process in processes)
+    assert (tmp_path / "workspaces.json").read_bytes() == registry_before
+    if operation == "close":
+        assert (tmp_path / "port-forwards.json").read_bytes() == forwards_before
+        assert all(runtime.process is None for runtime in manager._runtimes.values())
+    else:
+        assert manager._definitions == {} and manager._runtimes == {}
+        assert json.loads((tmp_path / "port-forwards.json").read_text())["items"] == []

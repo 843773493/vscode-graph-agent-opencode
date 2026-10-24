@@ -367,8 +367,9 @@ class SshPortForwardManager:
             for definition in stale_definitions:
                 try:
                     await self._stop_runtime(definition.forward_id)
-                except Exception as error:  # noqa: BLE001
-                    errors.append(f"{definition.forward_id}: {error}")
+                except Exception as error:
+                    logger.exception("清理失效 SSH 端口转发失败: forward_id=%s", definition.forward_id)
+                    errors.append(f"{definition.forward_id}: {port_forward_failure(error, stage='reconcile')}")
                     continue
                 del self._definitions[definition.forward_id]
                 self._runtimes.pop(definition.forward_id, None)
@@ -386,8 +387,9 @@ class SshPortForwardManager:
             for forward_id in tuple(self._runtimes):
                 try:
                     await self._stop_runtime(forward_id)
-                except Exception as error:  # noqa: BLE001
-                    errors.append(f"{forward_id}: {error}")
+                except Exception as error:
+                    logger.exception("关闭 SSH 端口转发失败: forward_id=%s", forward_id)
+                    errors.append(f"{forward_id}: {port_forward_failure(error, stage='shutdown')}")
             if errors:
                 raise RuntimeError(
                     "关闭 SSH 端口转发进程失败: " + "; ".join(errors)

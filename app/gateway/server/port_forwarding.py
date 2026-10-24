@@ -29,9 +29,13 @@ def get_port_forward_manager(request: Request) -> SshPortForwardManager:
     return manager
 
 
-def _http_error(error: Exception) -> HTTPException:
-    logger.exception("Gateway SSH 端口转发请求失败")
-    detail = port_forward_failure(error, stage="request")
+def port_forward_http_error(
+    error: Exception, *, stage: str = "request", permission_status_code: int = 502,
+) -> HTTPException:
+    logger.exception("Gateway SSH 端口转发请求失败: stage=%s", stage)
+    detail = port_forward_failure(error, stage=stage)
+    if isinstance(error, PermissionError):
+        return HTTPException(status_code=permission_status_code, detail=detail)
     if isinstance(error, LookupError):
         return HTTPException(status_code=404, detail=detail)
     if isinstance(error, ValueError):
@@ -52,7 +56,7 @@ async def list_port_forwards(
     try:
         items = await manager.list(workspace_id)
     except Exception as error:
-        raise _http_error(error) from error
+        raise port_forward_http_error(error) from error
     return APIResponse(data=PortForwardListDTO(items=items), request_id=request_id)
 
 
@@ -71,7 +75,7 @@ async def create_port_forward(
         await manager.create(workspace_id, payload)
         items = await manager.list(workspace_id)
     except Exception as error:
-        raise _http_error(error) from error
+        raise port_forward_http_error(error) from error
     return APIResponse(data=PortForwardListDTO(items=items), request_id=request_id)
 
 
@@ -90,7 +94,7 @@ async def delete_port_forward(
         await manager.delete(workspace_id, forward_id)
         items = await manager.list(workspace_id)
     except Exception as error:
-        raise _http_error(error) from error
+        raise port_forward_http_error(error) from error
     return APIResponse(data=PortForwardListDTO(items=items), request_id=request_id)
 
 
@@ -109,7 +113,7 @@ async def reconnect_port_forward(
         await manager.reconnect(workspace_id, forward_id)
         items = await manager.list(workspace_id)
     except Exception as error:
-        raise _http_error(error) from error
+        raise port_forward_http_error(error) from error
     return APIResponse(data=PortForwardListDTO(items=items), request_id=request_id)
 
 
@@ -129,7 +133,7 @@ async def change_local_port(
         await manager.change_local_port(workspace_id, forward_id, payload.local_port)
         items = await manager.list(workspace_id)
     except Exception as error:
-        raise _http_error(error) from error
+        raise port_forward_http_error(error) from error
     return APIResponse(data=PortForwardListDTO(items=items), request_id=request_id)
 
 
@@ -149,5 +153,5 @@ async def change_port_forward_label(
         await manager.change_label(workspace_id, forward_id, payload.label)
         items = await manager.list(workspace_id)
     except Exception as error:
-        raise _http_error(error) from error
+        raise port_forward_http_error(error) from error
     return APIResponse(data=PortForwardListDTO(items=items), request_id=request_id)
