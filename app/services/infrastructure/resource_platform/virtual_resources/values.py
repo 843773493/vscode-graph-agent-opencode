@@ -100,6 +100,10 @@ class ResourceTargetFacts:
     content_length: int | None = None
     runtime: RuntimeResourceTargetFacts | None = None
 
+    def __post_init__(self) -> None:
+        if self.resource_uri is not None:
+            parse_resource_uri(self.resource_uri)
+
 
 @dataclass(frozen=True, slots=True)
 class ResourceTargetContext:
@@ -119,6 +123,11 @@ class ResourceTargetDecision:
     reason: str | None = None
     target_uri: str | None = None
     runtime: RuntimeResourceTargetFacts | None = None
+
+    def __post_init__(self) -> None:
+        for uri in (self.resource_uri, self.target_uri):
+            if uri is not None:
+                parse_resource_uri(uri)
 
 
 def _require_identity(field_name: str, value: str) -> None:

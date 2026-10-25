@@ -18,4 +18,5 @@
 
 - 解析只消费内核的已登记 grammar 与错误码，不复制正则或构造分支。身份/领域段仍严格校验；skills 包根与 workspace files/root 公布 file_segments child，文件节点不接受 child，领域资源不转成私有文件树。实际文件 shape/containment 由 sources/resource_navigation.py 核实。
 - resolver 必须在任何 owner/provider 访问前依次完成 grammar、scope、catalog 绑定、operation 与 capability 校验。
+- fork 目标事实与决策的非空 URI 字段在值构造时复用中央 grammar 校验，`omit` 和不可用状态不豁免；显式 `None` 继续表示无资源地址，不查询存在性、不改写 authority。
 - tracked 绑定在绑定时冻结 resource/revision/hash/snapshot_ref；同名覆盖只影响未来名称解析，不改绑既有 registration。
