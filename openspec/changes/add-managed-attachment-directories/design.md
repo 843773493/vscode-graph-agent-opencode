@@ -261,4 +261,10 @@ Linux 工厂与绑定/故障恢复 44 passed（其中工厂 9 项），正式附
 
 Windows 快照 `e3f5e5ffa1718f6cb860c5b1a779110a25d6d76f` 的完整附件 fork 生命周期为 11 passed/170.83 秒，覆盖来源删除、30 天 GC 和跨端 import 失败回滚；Linux 相同产品源码为 11 passed/108.85 秒。新增长路径准备/rename 后冷恢复 2 项在 Windows 通过，Linux 通用 Thread 创建回归 77 passed（排除团队专项）；目录回归在 Linux/Windows 各 24 passed。Ruff、编译及作者 AST/目录自查通过，原测试断言数量保持，准确命令、源码指纹、raw 与退出码在 `out/tests/temp/attachment_capture_native_io_20261025/artifacts/`。
 
-首轮跨端 child 的 `WinError 206` 出现在 Thread staging 创建，尚未进入预期的 import 故障点，现已修复；原失败及随后 watchdog 的父进程核对失败保留。TODO：Windows watchdog 须核对 venv launcher 的真实父链并验证期限到达后的进程树终态，不能把此次业务通过当作该故障路径通过。完整 5.2/5.4/6.2 继续未勾；170.83 秒仅为本轮整套测量，不放宽单次 fork 60 秒或 suite 180 秒期限，也不扩展团队与协作。
+首轮跨端 child 的 `WinError 206` 出现在 Thread staging 创建，尚未进入预期的 import 故障点，现已修复；原失败及随后 watchdog 的父进程核对失败保留。watchdog 故障路径由下述独立切片验证。完整 5.2/5.4/6.2 继续未勾；170.83 秒仅为本轮整套测量，不放宽单次 fork 60 秒或 suite 180 秒期限，也不扩展团队与协作。
+
+### Windows fork watchdog 的原生父链与失败退出
+
+watchdog 仅额外认可 Windows venv 的一层 launcher：它必须直接属于原受保护进程，解释器入口及除 argv0 外的完整参数均与原 watchdog 启动一致；matrix 祖先和进程启动标记仍须核对。控制 reader 改读原 FileIO，避免 daemon 线程在异常退出时持有 BufferedReader 锁而发生二次崩溃。没有扩大到任意祖先或增加终止链。
+
+正式 harness 集成套件经真实 matrix 覆盖到期终止、错误控制消息及正常结清三个场景，核实受保护树实际停止、无关进程保持存活及原错误；Linux/Windows 各三项通过。它证明测试保护设施，不代替产品 fork 验收。生产单次 fork 60 秒保持不变；探针仅为基础设施场景使用短期限。准确快照、原始反例、单测和最终实机证据见 tasks 的 `fork_watchdog_windows_20261025` 记录。5.2/5.4/6.2 仍未完成。

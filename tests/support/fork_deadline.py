@@ -324,7 +324,8 @@ def _watchdog_main(
         messages = Queue()
 
         def read_messages() -> None:
-            for line in sys.stdin.buffer:
+            # daemon 读取不能持 BufferedReader 锁，否则异常退出会二次崩溃。
+            for line in sys.stdin.buffer.raw:
                 try:
                     message: object = json.loads(line)
                     if not isinstance(message, dict):
@@ -604,7 +605,15 @@ def _terminate_process_group(protected_process_id: int, parent_pid: int) -> None
             raise RuntimeError("watchdog 拒绝终止与 pytest PID 不同的 Windows 目标")
         watchdog = psutil.Process(os.getpid())
         if watchdog.ppid() != protected_process_id:
-            raise RuntimeError("watchdog 拒绝终止不再是其直接父进程的 pytest")
+            launcher = psutil.Process(watchdog.ppid())
+            # Windows venv 的重定向 exe 是真实解释器与 pytest 之间的一层。
+            # 只认可原解释器入口和完全相同的启动参数，不放宽为任意祖先。
+            if (
+                launcher.ppid() != protected_process_id
+                or Path(launcher.exe()).resolve() != Path(sys.executable).resolve()
+                or launcher.cmdline()[1:] != watchdog.cmdline()[1:]
+            ):
+                raise RuntimeError("watchdog 拒绝终止不属于其原 Python 父链的 pytest")
         if not _has_matrix_runner_ancestor(protected_process_id):
             raise RuntimeError("watchdog 拒绝终止脱离 matrix runner 的 pytest 进程树")
         process = psutil.Process(protected_process_id)

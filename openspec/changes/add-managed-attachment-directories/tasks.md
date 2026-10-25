@@ -251,4 +251,10 @@ Web 定向 `BOXTEAM_E2E_SECTION8_FOCUS=copy_missing_attachment` 通过真实 Gat
 
 - 附件 capture 的清单、复制、保护/删除与 Thread 创建的 staging、复验、rename、发布/回滚统一在原 I/O 边界复用 `native_io_path`；普通输入路径和冻结 locator/hash 不变。远端装具显式关闭附件及工作区活动连接后再关闭 registry，原全部断言保留。
 - Windows 快照 `e3f5e5ffa1718f6cb860c5b1a779110a25d6d76f` 完整生命周期 11 passed/170.83秒，Linux 相同产品源码 11 passed/108.85秒；新增长路径冷恢复 Windows 2 passed/0.95秒，Linux 通用 Thread 创建 77 passed/4.42秒（11项团队相关未运行），目录回归 Linux/Windows 各24 passed。前批 Windows runtime 8 passed/98.51秒、GC重启2 passed/62.59秒的依赖未改变，复用其原始证据，不冒称本轮重跑。
-- Ruff/compileall 通过，AST核对原断言数量保持；首轮新测试插入位置错误、跨端 child staging 的 WinError206 及 watchdog 父进程核对失败均保留原件。准确命令、候选指纹、原始退出码与范围在 `out/tests/temp/attachment_capture_native_io_20261025/artifacts/`。TODO：Windows watchdog 真实父链与到期进程树核实；完整旧代操作接管、同步阻塞和关闭故障组合仍未完成，5.2/5.4/6.2保持未勾，整体20/23。
+- Ruff/compileall 通过，AST核对原断言数量保持；首轮新测试插入位置错误、跨端 child staging 的 WinError206 及 watchdog 父进程核对失败均保留原件。准确命令、候选指纹、原始退出码与范围在 `out/tests/temp/attachment_capture_native_io_20261025/artifacts/`。watchdog 由下述切片补齐；完整旧代操作接管、同步阻塞和关闭故障组合仍未完成，5.2/5.4/6.2保持未勾，整体20/23。
+
+### 2026-10-25 Windows fork watchdog 原生进程树保护
+
+- 原父链校验只额外接受经解释器、参数与直接归属核对的一层 venv launcher，保留 matrix 祖先及启动标记检查；控制 reader 读原 FileIO，避免错误退出时的 BufferedReader daemon 锁崩溃。正式 `integration-fork-watchdog-process-tree`（60秒/4GiB）覆盖到期、错误控制消息和正常结清，检查本例进程树真实停止、无关进程存活及原始错误；不把基础设施测试计作产品 fork 验收，生产单次 fork 60秒保持。
+- Linux 三场景3 passed/2.83秒；Windows 最终快照 `3cbac8c10675dfca91921916f46e478adad6869f` 合并运行13项单测和3项真实进程场景为16 passed/1 skipped/4.06秒，跳过项为 Linux `/proc` 专项。Linux 最终单测14 passed/0.27秒。原 Windows 反例两场景均复现 BufferedReader 锁崩溃，到期场景另复现父链拒绝；原始失败、准确命令、源码前后指纹及退出码在 `out/tests/temp/fork_watchdog_windows_20261025/artifacts/`。
+- Windows 补跑曾因 POSIX 单测未显式选择平台而挂起，外置90秒保护退出后按精确PID/启动时间/命令回收该次测试树；另一模拟macOS用例补齐其平台常量。保留两次原失败，不修改生产行为或放宽断言。Ruff/编译与作者结构自查另在同目录留证。5.2/5.4/6.2继续未勾，整体20/23；团队、成员、委派与协作不追加实现或专项验证。

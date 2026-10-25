@@ -12,6 +12,7 @@ harness/
 ├── test_inprocess_model_replay.py            同一事件循环的 owner 重建与真实 SDK client 隔离
 ├── test_manual_browser_fixture_lifetime.py   手动连接装具的 Chromium/context/page 逆序释放
 ├── test_matrix_process_cleanup.py            矩阵退出、中断、宽限到期与隔离进程组回收
+├── test_fork_watchdog_process_tree.py         真实矩阵内看门狗到期、控制错误与原生进程树核实
 ├── test_model_http_assets.py                 模型 SDK 的真实 HTTP 服务、请求与响应验证
 ├── test_model_metadata_refresh.py            HTTP 模型目录延迟出现后的采用与离线恢复
 ├── test_outbox_fixture_lifetime.py            静态 HTTP/Chromium 装具准备及清理失败回收

@@ -114,6 +114,7 @@ def test_c3_non_linux_posix_identity_uses_psutil(
     monkeypatch.setattr(fork_deadline.os, "geteuid", lambda: 1000, raising=False)
     monkeypatch.setattr(fork_deadline.os, "getpgid", lambda _pid: pid, raising=False)
     monkeypatch.setattr(fork_deadline.os, "getsid", lambda _pid: pid, raising=False)
+    monkeypatch.setattr(fork_deadline.signal, "SIGKILL", 9, raising=False)
     monkeypatch.setattr(
         fork_deadline.os,
         "killpg",
@@ -131,7 +132,7 @@ def test_c3_non_linux_posix_identity_uses_psutil(
 
     fork_deadline._kill_owned_c3_sshd(identity)
 
-    assert terminated == [(pid, getattr(signal, "SIGKILL", 9))]
+    assert terminated == [(pid, 9)]
 
 
 def test_c3_windows_identity_is_revalidated_before_process_tree_termination(
@@ -202,7 +203,7 @@ def test_watchdog_reads_windows_control_pipe_without_select(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     source = SimpleNamespace(
-        buffer=[b'{"action":"stop"}\n'],
+        buffer=SimpleNamespace(raw=[b'{"action":"stop"}\n']),
         fileno=lambda: 0,
     )
     monkeypatch.setattr(fork_deadline.sys, "platform", "win32")
@@ -222,6 +223,7 @@ def test_watchdog_keeps_posix_select_control_pipe_path(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     source = SimpleNamespace(fileno=lambda: 29)
+    monkeypatch.setattr(fork_deadline.sys, "platform", "linux")
     monkeypatch.setattr(fork_deadline.sys, "stdin", source)
     monkeypatch.setattr(fork_deadline.select, "select", lambda *_args: ([29], [], []))
     monkeypatch.setattr(fork_deadline.os, "read", lambda *_args: b'{"action":"stop"}\n')
@@ -237,7 +239,7 @@ def test_windows_watchdog_timeout_requests_owned_process_tree_cleanup(
     artifacts_dir = fork_deadline_test_context.artifacts_dir
     now = time.monotonic()
     source = SimpleNamespace(
-        buffer=[
+        buffer=SimpleNamespace(raw=[
             (
                 json.dumps({
                     "action": "start",
@@ -250,7 +252,7 @@ def test_windows_watchdog_timeout_requests_owned_process_tree_cleanup(
                 })
                 + "\n"
             ).encode("utf-8")
-        ],
+        ]),
         fileno=lambda: 0,
     )
     terminated: list[tuple[int, int]] = []
@@ -372,6 +374,34 @@ def test_windows_watchdog_revalidates_matrix_owned_parent_before_cleanup(
     assert terminated == [
         (process_id, {"expected_start_marker": repr(parent_process.create_time())})
     ]
+
+
+@pytest.mark.parametrize("fault", [None, "parent", "executable", "arguments", "matrix"])
+def test_windows_watchdog_only_accepts_its_exact_venv_launcher(
+    monkeypatch: pytest.MonkeyPatch, fault: str | None,
+) -> None:
+    protected_pid, launcher_pid = 42_010, 42_011
+    arguments = ["fork_deadline.py", "--watchdog", "artifacts", str(protected_pid), str(protected_pid)]
+    watchdog = SimpleNamespace(ppid=lambda: launcher_pid, cmdline=lambda: ["base-python", *arguments])
+    launcher = SimpleNamespace(
+        ppid=lambda: protected_pid + int(fault == "parent"),
+        exe=lambda: str(Path(sys.executable).with_name("other-python")) if fault == "executable" else sys.executable,
+        cmdline=lambda: [sys.executable, *arguments, *(["unexpected"] if fault == "arguments" else [])],
+    )
+    protected = SimpleNamespace(create_time=lambda: 1_790_000_126.0)
+    processes = {os.getpid(): watchdog, launcher_pid: launcher, protected_pid: protected}
+    terminated: list[int] = []
+    monkeypatch.setattr(fork_deadline.sys, "platform", "win32")
+    monkeypatch.setattr(fork_deadline.psutil, "Process", processes.__getitem__)
+    monkeypatch.setattr(fork_deadline, "_has_matrix_runner_ancestor", lambda _pid: fault != "matrix")
+    monkeypatch.setattr(fork_deadline, "_terminate_windows_process_tree", lambda pid, **_identity: terminated.append(pid))
+    if fault is None:
+        fork_deadline._terminate_process_group(protected_pid, protected_pid)
+        assert terminated == [protected_pid]
+    else:
+        with pytest.raises(RuntimeError, match="watchdog 拒绝终止"):
+            fork_deadline._terminate_process_group(protected_pid, protected_pid)
+        assert terminated == []
 
 
 def test_windows_watchdog_starts_in_its_own_process_group(
