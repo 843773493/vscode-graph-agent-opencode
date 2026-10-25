@@ -1644,48 +1644,20 @@ class MessageStreamStore:
             if not stream_dir.is_dir():
                 continue
             for path in sorted(stream_dir.glob("*.jsonl")):
-                records = self._read_records(
-                    path,
-                    expected_session_id=str(node.node_id),
-                    expected_turn_stream_id=path.stem,
-                )
-                if not records:
+                turn_stream_id = path.stem
+                try:
+                    state = self._load_state_from_disk(str(node.node_id), turn_stream_id)
+                except MessageStreamNotFoundError:
+                    # 创建中断留下的空日志没有已提交事件，保持原有跳过行为。
+                    logger.info("启动恢复跳过空消息流: session_id=%s turn_stream_id=%s", node.node_id, turn_stream_id)
                     continue
-                record = records[-1]
-                turn_stream_id = str(record.event["turn_stream_id"])
-                state_snapshot = self._read_state_snapshot(
-                    str(node.node_id),
-                    turn_stream_id,
-                )
-                snapshot_seq = (
-                    int(state_snapshot.get("snapshot_seq", 0))
-                    if state_snapshot is not None
-                    else 0
-                )
-                last_seq = int(record.event["event_seq"])
-                if state_snapshot is not None and snapshot_seq >= last_seq:
-                    state = copy.deepcopy(state_snapshot)
-                else:
-                    # 启动恢复必须重放快照之后已经 fsync 的事件尾部，不能只看
-                    # JSONL 最后一条记录中为空的 checkpoint 字段。
-                    state = self._load_state_from_disk(
-                        str(node.node_id),
-                        turn_stream_id,
-                    )
-                turn_stream_id = str(state["turn_stream_id"])
                 if state["stream_status"] in TERMINAL_STREAM_STATUSES:
                     # 启动扫描只需要识别未完成执行；终态历史已经在磁盘上，不能
                     # 因一次全仓恢复扫描永久占用内存。
                     self._evict_stream_cache(turn_stream_id)
                     continue
                 if state.get("job_id") in resumed_job_ids:
-                    self._touch_cached_state(turn_stream_id, state)
                     continue
-                self._touch_cached_state(turn_stream_id, state)
-                self._event_ids[turn_stream_id] = {
-                    str(record.event["event_id"]): record.event
-                }
-                self._event_ids_loaded.discard(turn_stream_id)
                 interrupt_state = state.get("interrupt_state")
                 after_interrupt_requested = (
                     isinstance(interrupt_state, Mapping)

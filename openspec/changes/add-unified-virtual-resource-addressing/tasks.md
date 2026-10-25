@@ -618,3 +618,11 @@
 - 候选存储单测134 passed/11.14秒（新增21项：10类损坏×裁剪前后及warm追加拒绝），真实 Gateway/Backend/model_stream 1 passed/58.57秒：产品执行生成历史，硬重启后注入另一Thread归属，snapshot/events/SSE建流连续三次404且request_id一致，原件/canonical不变，修复后同owner和再次重启均读回完整原历史。Ruff通过。完整基线Git archive反例的21项单测均失败；同轮HTTP在9500被另一候选测试占用时setup报错，不计产品反例；待其退出后，完整archive的HTTP反例1 failed/45.12秒，精确复现损坏归属返回200。
 - 原始命令、完整源码前后指纹、实际退出码与反例完整源码在 `out/tests/temp/message_stream_event_ownership_20261025/artifacts/`。本切片为现有恢复合同补缺，2.2/7.2总门保持未勾；未跑Windows实机或完整Web，Agent团队与协作继续TODO。
 - 合并共享版本的存储/合同/投影/运行时186 passed/12.48秒，两项真实HTTP均通过（耗时见原始stdout/result）；Ruff、compileall及strict 45 passed/0 failed。五组源码前后指纹均一致且运行组无残留，静态自查核8个内部调用全部显式传归属、验证先于追加，既有迭代器与列表消费者AST未变；非独立代理审查。候选HTTP期间仅单测import位置发生调整，生产与集成测试源码未变，不将它冒称完整冻结源码验证；最终共享运行已覆盖该文件的最终版本。共享暂存条目及他人流式优化继续独立保留。
+
+
+### 2026-10-25 消息流启动恢复单链（2.2/7.2 部分收口）
+
+- 删除启动恢复自行采用高水位快照、发布局部state及单事件幂等缓存的第二套逻辑，统一调用普通冷读取的完整恢复入口。所有快照关联、序号与applied-event归属验证成功后才发布缓存；终态历史随即逐流卸载，resumed Job保持原状态，其余遗留流只结算一次execution_lost。无已提交事件的空日志保留原跳过行为并记录诊断；不新增reader、writer、恢复格式或兼容层。
+- 完整Git archive旧基线：快照错误Thread、超前序号、错误applied owner×completed/lost/resumed共9 failed，空/空白日志2 passed，1.56秒。候选生产代码净减28行，存储143 passed/12.69秒，Ruff通过；新增空日志正例随共享版本通过；真实 Gateway/Backend/model_stream 候选验收1 passed/107.15秒，产品执行生成终态历史，三类故障均在真实进程启动阶段明确失败，修复原件后每次均能重启并逐字段读回原历史，canonical及损坏原件均保全。
+- 原始命令、完整源码前后指纹、退出码及完整反例源码在 `out/tests/temp/message_stream_startup_recovery_20261025/artifacts/`。这是现有持久恢复合同收口，不代替2.2/7.2全局门、Windows实机或完整Web验收；Agent团队与协作继续TODO。
+- 最终共享版本：197 passed/13.74秒，三项真实HTTP/重启产品回归3 passed/216.92秒；Ruff/compileall与strict 45 passed/0 failed。五组源码前后指纹一致，运行组无残留。静态自查仅reconcile_unfinished_streams改变、其余55个方法AST不变，原迭代器/流式裁剪保留，无新源码目录；这是主线程自查，非独立代理审查。共享暂存条目独立保护，本次提交不包含他人的优化。

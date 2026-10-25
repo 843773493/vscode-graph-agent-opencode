@@ -251,3 +251,84 @@ async def test_warm_append_rejects_foreign_applied_event_before_touching_log(
         "block_id": "block_warm", "operation": "append", "text": "NEW",
     }, block_id="block_warm", event_id="evt_warm_new")
     assert accepted["event_seq"] == event["event_seq"] + 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["completed", "lost", "resumed"])
+@pytest.mark.parametrize("fault", ["state_identity", "state_sequence", "applied_owner"])
+async def test_startup_recovery_uses_full_cold_validation_before_any_publication(
+    message_stream_store: MessageStreamStoreCase, mode: str, fault: str,
+) -> None:
+    store, resolver, session = message_stream_store
+    thread = resolver.main_thread_id(session)
+    job = "job_startup_read_validation"
+    writer = await store.open(session_id=session, thread_id=thread,
+                              turn_id="turn_startup_read_validation", job_id=job)
+    first = await writer.commit("block.delta", {
+        "block_id": "block_startup", "operation": "append", "text": "ORIGINAL",
+    }, block_id="block_startup", event_id="evt_startup_original")
+    # 使用真实快照触发点得到与日志同一高水位的快照，不手填恢复状态。
+    for _ in range(stream_module.MESSAGE_STREAM_SNAPSHOT_INTERVAL_EVENTS - 2):
+        await writer.commit("block.delta", {
+            "block_id": "block_startup", "operation": "append", "text": ".",
+        }, block_id="block_startup")
+    if mode == "completed":
+        await writer.close_completed()
+    await asyncio.gather(*store._snapshot_tasks.values())
+    expected = await store.get_state(writer.turn_stream_id)
+    state_path = store._state_path(session, writer.turn_stream_id)
+    applied_path = store._applied_event_ids_path(session, writer.turn_stream_id)
+    target = applied_path if fault == "applied_owner" else state_path
+    original = target.read_bytes()
+    raw = json.loads(original)
+    marker = "/private/startup-foreign-owner"
+    if fault == "state_identity":
+        raw["thread_id"] = marker
+    elif fault == "state_sequence":
+        raw["snapshot_seq"] = expected["snapshot_seq"] + 1
+    else:
+        raw[first["event_id"]]["thread_id"] = marker
+    target.write_text(json.dumps(raw), encoding="utf-8")
+    originals = {p: p.read_bytes() for p in target.parent.iterdir() if p.is_file()}
+    resumed = frozenset({job}) if mode == "resumed" else frozenset()
+    cold = MessageStreamStore(path_resolver=resolver)
+    try:
+        for _ in range(2):
+            with pytest.raises(MessageStreamError) as caught:
+                await cold.reconcile_unfinished_streams(resumed_job_ids=resumed)
+            assert f"session_id={session}" in str(caught.value)
+            assert marker not in str(caught.value) and str(target) not in str(caught.value)
+            assert not cold._states and not cold._event_ids and not cold._event_ids_loaded
+            assert {p: p.read_bytes() for p in target.parent.iterdir() if p.is_file()} == originals
+    finally:
+        target.write_bytes(original)
+    assert await cold.reconcile_unfinished_streams(resumed_job_ids=resumed) == (1 if mode == "lost" else 0)
+    if mode == "completed":
+        assert not cold._states and not cold._event_ids
+    reopened = await cold.open_existing(session_id=session, thread_id=thread, turn_id=writer.turn_id)
+    recovered = await cold.get_state(reopened.turn_stream_id)
+    if mode == "lost":
+        assert recovered["stream_status"] == "failed"
+        assert recovered["failure"]["code"] == "execution_lost"
+        assert recovered["snapshot_seq"] > expected["snapshot_seq"]
+    else:
+        assert recovered == expected
+    assert await reopened.commit("block.delta", first["payload"],
+                                 block_id="block_startup", event_id=first["event_id"]) == first
+    before_second = store._stream_path(session, writer.turn_stream_id).read_bytes()
+    assert await cold.reconcile_unfinished_streams(resumed_job_ids=resumed) == 0
+    assert store._stream_path(session, writer.turn_stream_id).read_bytes() == before_second
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("empty", [b"", b"\n  \n"])
+async def test_startup_still_skips_logs_without_committed_events(
+    message_stream_store: MessageStreamStoreCase, empty: bytes,
+) -> None:
+    store, _, session = message_stream_store
+    path = store._stream_path(session, "strm_empty_startup")
+    path.parent.mkdir(parents=True)
+    path.write_bytes(empty)
+    assert await store.reconcile_unfinished_streams() == 0
+    assert path.read_bytes() == empty
+    assert not store._states and not store._event_ids and not store._event_ids_loaded

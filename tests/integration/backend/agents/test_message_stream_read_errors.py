@@ -156,3 +156,71 @@ async def test_product_stream_rejects_foreign_applied_event_then_recovers(
         assert response.json()["data"] == expected
         assert canonical.read_bytes() == canonical_bytes
     case.record("applied-event-owner-errors", errors)
+
+
+@pytest.mark.asyncio
+async def test_product_startup_rejects_corrupt_recovery_then_reopens_history(
+    communication_case: CommunicationCase,
+) -> None:
+    case = communication_case
+    session = await create_session(case.client, "启动恢复统一校验")
+    await case.plan(session, [{"content": "startup-recovery-original"}])
+    sent = await case.client.post(f"/api/v1/sessions/{session}/messages", json={
+        "message": {"content": "startup-recovery-trigger"},
+        "run": {"mode": "single_agent", "agent_id": "default"},
+    })
+    assert sent.status_code == 200, sent.text
+    accepted = sent.json()["data"]
+    await _completed(case.client, accepted["job_id"])
+    base = f"/api/v1/sessions/{session}/turns/{accepted['turn_id']}/message-stream"
+    events = await case.client.get(base + "/events")
+    assert events.status_code == 200, events.text
+    expected = events.json()["data"]
+    assert expected[-1]["type"] == "stream.completed"
+    stream_id = expected[0]["turn_stream_id"]
+    canonical = case.main_thread_node(session) / "rollout/rollout.jsonl"
+    canonical_bytes = canonical.read_bytes()
+    node = await case.session_node(session)
+    state_path = node / "message_streams" / f"{stream_id}.state.json"
+    applied_path = node / "message_streams" / f"{stream_id}.applied-event-ids.json"
+    stderr = case.workspace / ".boxteam/logs/communication-restarted.stderr.log"
+    receipts = []
+    for fault in ("state_identity", "state_sequence", "applied_owner"):
+        target = applied_path if fault == "applied_owner" else state_path
+        original = target.read_bytes() if target.exists() else None
+        marker = str(case.workspace / "startup-foreign-owner")
+        if fault == "applied_owner":
+            value = {**expected[0], "thread_id": marker}
+            raw = {value["event_id"]: value}
+            reason = "消息流事件关联键不匹配"
+        else:
+            raw = json.loads(original)
+            if fault == "state_identity":
+                raw["thread_id"] = marker
+                reason = "消息流状态快照关联键不匹配"
+            else:
+                raw["snapshot_seq"] = expected[-1]["event_seq"] + 1
+                reason = "消息流状态快照序号非法"
+        damaged = json.dumps(raw).encode()
+        target.write_bytes(damaged)
+        log_before = stderr.stat().st_size if stderr.exists() else 0
+        try:
+            with pytest.raises(RuntimeError) as caught:
+                await case.hard_restart()
+            diagnostic = stderr.read_bytes()[log_before:].decode("utf-8")
+            assert reason in diagnostic, diagnostic
+            assert "artifact=" in diagnostic and f"session_id={session}" in diagnostic
+            assert "Application startup failed" in diagnostic
+            assert target.read_bytes() == damaged and canonical.read_bytes() == canonical_bytes
+            receipts.append({"fault": fault, "error_type": type(caught.value).__name__, "diagnostic": diagnostic})
+        finally:
+            if original is None:
+                target.unlink()
+            else:
+                target.write_bytes(original)
+        await case.hard_restart()
+        response = await case.client.get(base + "/events")
+        assert response.status_code == 200, response.text
+        assert response.json()["data"] == expected
+        assert canonical.read_bytes() == canonical_bytes
+    case.record("startup-recovery-errors", receipts)
