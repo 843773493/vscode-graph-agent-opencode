@@ -216,6 +216,11 @@
 - **WHEN** 当前请求创建 captured_root 时目录已经存在
 - **THEN** 同一原生创建操作以 FileExistsError 明确失败并保留直接 cause，普通错误不含真实位置；当前请求不删除或改写该既有目录及其正文，不把未取得的目录所有权当成可清理对象
 
+#### Scenario: fork 冻结产物导出遇到扫描或读取失败
+
+- **WHEN** 来源导出冻结 artifact 清单时根或嵌套目录扫描、文件元数据访问失败，发现符号链接目录，或原分块读取失败
+- **THEN** 原导出 owner 明确失败，扫描错误不得被忽略、视为空目录或用于成功返回残缺清单，符号链接目录不得静默略过。原生错误保留类别、errno/winerror与直接cause，普通错误及创建/capture记录只含逻辑artifact及export_manifest/export_chunk阶段，不含真实位置；真实位置与完整原错留诊断。失败不改变来源canonical字节、不读取链接目标或发布半成品，原两端journal完成中止及释放；解除故障后原产品入口可重试并冷读同一检查点、metadata、pending writes、历史assembly和request_hash。原分页顺序、分块边界、offset/hash、来源/目标身份、接收并发与唯一清理链保持
+
 ### Requirement: Browser 本地文件页面 URL 保留原生语义
 
 系统 MUST 保留 Browser 原生 `file:` 导航能力。用户明确打开的本地文件页面 URL MAY 原样保留在 Browser 地址栏、导航请求、该页面相关错误、页面快照及恢复检查点中。该 URL MUST 始终由目标机器按原生文件系统语义解释，包括 Windows 盘符与路径分隔符；中继、source 机器和当前激活工作区 MUST NOT 改写其目标或在自身文件系统解释该 URL。

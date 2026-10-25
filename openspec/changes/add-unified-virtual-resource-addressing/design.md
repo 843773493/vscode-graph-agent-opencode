@@ -94,6 +94,8 @@ fork typed detail 仍仅按同一冻结 SQLite 的声明与精确历史 owner �
 
 rollout 来源捕获的直接原生 I/O 复用同一 storage 错误出口（artifact=fork_source）：来源布局为 source_layout，目录创建与私有权限为 preparation，锁复制为 lock_copy，正文复制为 rollout_copy，SQLite 副本存在性为 sqlite_snapshot，JSONL 冻结为 jsonl_snapshot，control 文件读取为 control_snapshot，manifest 写入及目录 fsync 为 manifest_publish。原生异常保留类别、errno/winerror 与直接 cause，路径和完整原错留诊断；Windows ACL 原语已有的 RuntimeError 包装仅在该调用处投影，保留其原类别及启动/超时 cause，不扩大捕获范围或改动权限原语。已有 captured_root 的创建碰撞发生在当前请求取得目录所有权之前，明确报错并保留原目录与正文；后续失败仍沿原 owner 清理。仅给原生调用增加错误上下文，SQLite reader/worker、typed detail、复制顺序、锁、manifest 编码/hash、journal 和成功路径保持。
 
+冻结 artifact 的来源导出继续复用原分页与分块接口，不创建清单缓存或另一套传输实现。原 os.walk 显式传播扫描错误，并拒绝原先会被 followlinks=False 静默跳过的符号链接目录；根与每层目录必须可读，不能把扫描失败解释为空清单或缺失文件。清单元数据与分块读取的原生错误复用 storage 出口（artifact=fork_transfer、stage=export_manifest / export_chunk），保留类别、errno/winerror 与直接 cause，真实位置和完整原错留诊断。原文件顺序、128文件分页、64KiB分块、offset/长度/hash、source/target身份、marker最后接收和有界并发保持，接收与原清理/journal链不改；故障解除后新请求仍按原冻结历史完成传输及冷恢复。
+
 ### D2：保留既有段序，scope_id 全必填
 
 采用 `boxteam://{gateway_authority?}/{scope}/{scope_id}/resources/{kind}/{...}`，而非简化段序。

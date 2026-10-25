@@ -26,6 +26,10 @@ from app.schemas.internal_v2.session_fork_transfer import (
     SessionForkTransferRequest,
     SessionForkTransferResultDTO,
 )
+from app.services.infrastructure.rollout_context.storage.primitives import (
+    _storage_failure,
+    _storage_io,
+)
 
 from .source_capture import (
     capture_directory,
@@ -70,17 +74,28 @@ def _artifact_file(root: Path, record: ForkSourceCaptureRecord, name: str) -> Pa
 
 def _artifact_files(root: Path, record: ForkSourceCaptureRecord) -> Iterator[ForkTransferFileDTO]:
     root = native_io_path(root)
-    if root.is_symlink() or not root.is_dir():
-        raise RuntimeError("fork source captured artifact 不存在或不是目录")
-    for directory, names, files in os.walk(root, followlinks=False):
-        names.sort()
-        for name in sorted(files):
-            path = Path(directory) / name
-            relative = path.relative_to(root).as_posix()
-            path = _artifact_file(root, record, relative)
-            if not path.is_file():
-                raise RuntimeError("fork captured artifact 包含非普通文件")
-            yield ForkTransferFileDTO(name=relative, size_bytes=path.stat().st_size)
+
+    def fail_walk(error: OSError) -> None:
+        raise error
+
+    with _storage_io(root, "fork artifact 导出清单读取失败", "export_manifest", artifact="fork_transfer"):
+        if root.is_symlink() or not root.is_dir():
+            raise RuntimeError("fork source captured artifact 不存在或不是目录")
+        for directory, names, files in os.walk(root, followlinks=False, onerror=fail_walk):
+            names.sort()
+            for name in names:
+                path = Path(directory) / name
+                if path.is_symlink():
+                    raise RuntimeError(_storage_failure(
+                        path, "fork captured artifact 包含符号链接目录", "export_manifest", artifact="fork_transfer",
+                    ))
+            for name in sorted(files):
+                path = Path(directory) / name
+                relative = path.relative_to(root).as_posix()
+                path = _artifact_file(root, record, relative)
+                if not path.is_file():
+                    raise RuntimeError("fork captured artifact 包含非普通文件")
+                yield ForkTransferFileDTO(name=relative, size_bytes=path.stat().st_size)
 
 
 def export_file_batch(sessions_root: Path, record: ForkSourceCaptureRecord, cursor: int) -> SessionForkTransferResultDTO:
@@ -93,12 +108,14 @@ def export_file_batch(sessions_root: Path, record: ForkSourceCaptureRecord, curs
 
 
 def export_file_chunk(sessions_root: Path, record: ForkSourceCaptureRecord, name: str, offset: int) -> SessionForkTransferResultDTO:
-    path = _artifact_file(capture_directory(sessions_root, record), record, name)
-    if not path.is_file() or offset > path.stat().st_size:
-        raise ValueError("fork chunk 文件缺失或 bytes offset 超出冻结文件")
-    with path.open("rb") as stream:
-        stream.seek(offset)
-        chunk = stream.read(FORK_TRANSFER_CHUNK_BYTES)
+    root = capture_directory(sessions_root, record)
+    with _storage_io(root, "fork artifact 导出分块读取失败", "export_chunk", artifact="fork_transfer"):
+        path = _artifact_file(root, record, name)
+        if not path.is_file() or offset > path.stat().st_size:
+            raise ValueError("fork chunk 文件缺失或 bytes offset 超出冻结文件")
+        with path.open("rb") as stream:
+            stream.seek(offset)
+            chunk = stream.read(FORK_TRANSFER_CHUNK_BYTES)
     return SessionForkTransferResultDTO(
         capture=ForkSourceCaptureDTO.from_record(record), offset=offset,
         chunk_base64=base64.b64encode(chunk).decode("ascii"), chunk_sha256=hashlib.sha256(chunk).hexdigest(),

@@ -795,3 +795,13 @@
 - 首轮新增产品测试补在定义模块而非生产已导入的调用绑定，10项未命中故障并正常fork；按实际调用模块修正后得到上述红绿，不改产品或减弱断言。首轮原输出保留；AST自查首轮归一化脚本留下嵌套list/None，修正脚本后通过，未据此修改生产。准确命令、原始输出/真实退出码、源码前后指纹、完整旧生产及自查位于 `out/tests/temp/fork_rollout_capture_io_20261025/artifacts/`；verification001/002核实运行冻结及进程回收。ASGI/冷Saver对象不代替真实Gateway、独立Backend重启、Windows或完整Web；transfer等仍待核，2.2/7.2保持未勾，团队/协作继续TODO。
 
 - 最终共享三方合并后10项单测通过（0.36秒），正式产品matrix 16 passed, 61 warnings in 152.58s (0:02:32)；Ruff/compileall及OpenSpec strict 45 passed/0 failed。verification003/004.json核实登记的3782条后端/协议/harness/config/matrix路径前后未变、原始日志/实际退出码及进程回收；profile明确排除本片不启动或构建的客户端，不声称全仓冻结。共享独立suite顺序及原暂存区保持，既有private_source_snapshot两项仅迁精确错误合同。
+
+
+### 2026-10-25 fork 冻结产物来源导出（2.2/7.2 部分收口）
+
+- 原os.walk增加onerror传播，拒绝原先静默跳过的符号链接目录；清单元数据与分块读取沿原storage错误出口（fork_transfer / export_manifest / export_chunk）保留类别、errno/winerror与直接cause，真实位置留诊断。原128文件分页顺序、64KiB分块、offset/hash/身份和接收/清理/journal链保持，不引入第二清单或传输实现。AST去除本片错误上下文及扫描guard后整个原模块一致，全部签名不变；这是作者自查，不称独立审查。
+- 候选7项单测通过（0.55秒），完整ecbff8817 Git archive旧生产加相同最终测试为5 failed/2 passed（0.78秒），覆盖根/嵌套扫描、元数据、chunk打开、文件/目录链接和跨页/跨块身份、顺序、长度及hash。正式matrix候选5 passed/69.50秒、旧生产5 failed/64.88秒；由原产品消息准入、真实图/model_stream生成来源，真实路由/Depends/TraceMiddleware与ASGI驱动不同存储owner的fork，核故障阶段、头体request_id、双端aborted、无可见半成品、无路径记录、来源原字节/链接目标不变及新key重试后冷Saver原checkpoint/metadata/pending writes、历史assembly全字段/owner/request_hash。
+- 端间传输复用原SourceForkOwnerTransport并经过生产来源捕获/分页/分块/释放，不伪造历史或复制回执；这是ASGI及传输替身集成，不代替真实Gateway、跨机HTTP、独立Backend重启、Windows或完整Web。准确命令、完整旧生产、原始输出/退出码与源码前后指纹位于 `out/tests/temp/fork_export_io_20261025/artifacts/`，verification001.json已核冻结及进程回收。首次runner前置检查发现任务TMPDIR未创建，未启动子命令，创建任务隔离目录后继续；Ruff首轮仅指出新测试import换行，已迁齐，不改产品行为。
+- 目标接收的原生I/O、其它路径出口及全局门仍待核；2.2/7.2保持未勾，团队、成员、委派与协作继续TODO，不追加实现或专项验证。
+
+- 最终共享三方合并后7项单测通过（0.64秒），正式matrix 5 passed/64.17秒；Ruff/compileall与OpenSpec strict 45 passed/0 failed。verification002.json核实登记的3784条后端/协议/harness/config/matrix路径前后未变、原始日志/实际退出码及进程组回收，未运行或构建的客户端不在本片冻结范围；共享独立suite顺序及原暂存区完整保留。
