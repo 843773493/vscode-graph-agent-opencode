@@ -5,12 +5,15 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import logging
 import sqlite3
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from threading import RLock
+
+from pydantic import ValidationError
 
 from app.core.atomic_fs import native_io_path
 from app.core.sqlite_state import load_sql, sqlite_file_uri, validate_sqlite_path_budget
@@ -25,6 +28,8 @@ from app.schemas.internal_v2.workspace_file_operations import (
     WorkspaceFileMutationIntentDTO,
     WorkspaceFileOperationReceiptDTO,
 )
+
+logger = logging.getLogger(__name__)
 
 
 def canonical_json(value: object) -> str:
@@ -52,7 +57,11 @@ def decode_directory_cursor(cursor: str) -> dict:
     key = value["after"]
     if not isinstance(value["revision"], int) or isinstance(value["revision"], bool) or value["revision"] < 1 or not isinstance(key, list) or len(key) != 3 or not isinstance(key[0], bool) or not all(isinstance(item, str) for item in key[1:]):
         raise ValueError("目录分页游标内容错误")
-    WorkspaceDirectoryKeyDTO.model_validate(value["directory_key"])
+    try:
+        WorkspaceDirectoryKeyDTO.model_validate(value["directory_key"])
+    except ValidationError as error:
+        logger.warning("目录分页游标校验失败: directory_key=%r", value["directory_key"], exc_info=True)
+        raise ValueError("目录分页游标内容错误") from error
     value["after"] = tuple(key)
     return value
 
