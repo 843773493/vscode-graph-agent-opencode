@@ -26,3 +26,4 @@
 - `workspace_state_sql/` 是 WorkspaceStateStore 的静态迁移唯一来源；Python 保留版本顺序和条件数据转换。
 
 - `message_stream_store.py` 是消息流持久读取的唯一 owner；公开错误只带稳定身份、artifact 和错误事实，物理路径及损坏原文留在诊断日志；全部恢复依赖校验成功后才能发布状态及幂等缓存。
+- 消息流 applied-event-id 的事件归属、信封和索引键复用事件日志的唯一校验；恢复、裁剪及追加沿同一读取入口，追加前拒绝损坏的幂等事实，不在日志追加后才发现已存在的非法归属。

@@ -405,6 +405,9 @@ class MessageStreamStore:
         self,
         session_id: str,
         turn_stream_id: str,
+        *,
+        thread_id: str,
+        turn_id: str,
     ) -> dict[str, dict[str, Any]]:
         path = native_io_path(self._applied_event_ids_path(session_id, turn_stream_id))
         context = f"session_id={session_id} turn_stream_id={turn_stream_id} artifact=applied_event_ids"
@@ -424,12 +427,23 @@ class MessageStreamStore:
             )
         entries: dict[str, dict[str, Any]] = {}
         for key, value in raw.items():
-            if not isinstance(value, dict):
-                logger.error("消息流已应用event_id记录项非法: path=%s event_id=%r record=%r", path, key, value)
-                raise MessageStreamError(
-                    f"消息流已应用 event_id 记录项非法: {context}"
+            try:
+                if not isinstance(value, dict):
+                    raise MessageStreamError(f"消息流已应用 event_id 记录项非法: {context}")
+                event_id, *_ = self._validate_event_record(
+                    value,
+                    context=context,
+                    expected_session_id=session_id,
+                    expected_thread_id=thread_id,
+                    expected_turn_id=turn_id,
+                    expected_turn_stream_id=turn_stream_id,
                 )
-            entries[str(key)] = value
+                if key != event_id:
+                    raise MessageStreamError(f"消息流已应用 event_id 与索引键不一致: {context}")
+            except MessageStreamError:
+                logger.exception("消息流已应用event_id记录校验失败: path=%s event_id=%r record=%r", path, key, value)
+                raise
+            entries[key] = value
         return entries
 
     def _write_applied_event_ids_file(
@@ -449,6 +463,9 @@ class MessageStreamStore:
         session_id: str,
         turn_stream_id: str,
         records: Sequence[MessageStreamRecord],
+        *,
+        thread_id: str,
+        turn_id: str,
     ) -> dict[str, dict[str, Any]]:
         """构成唯一的 event_id 幂等查找表。
 
@@ -462,6 +479,8 @@ class MessageStreamStore:
         for event_id, event in self._read_applied_event_ids_file(
             session_id,
             turn_stream_id,
+            thread_id=thread_id,
+            turn_id=turn_id,
         ).items():
             event_ids.setdefault(event_id, event)
         return event_ids
@@ -793,6 +812,9 @@ class MessageStreamStore:
         session_id: str,
         path: Path,
         turn_stream_id: str,
+        *,
+        thread_id: str,
+        turn_id: str,
     ) -> None:
         """保留最近事件，使用最新 state snapshot 继续完整恢复。"""
         records = self._read_records(
@@ -818,6 +840,8 @@ class MessageStreamStore:
             session_id,
             turn_stream_id,
             retained,
+            thread_id=thread_id,
+            turn_id=turn_id,
         )
         self._event_ids_loaded.add(turn_stream_id)
         logger.warning(
@@ -839,6 +863,13 @@ class MessageStreamStore:
         event: Mapping[str, Any] | None = None,
     ) -> None:
         """在线程中完成事件追加，确保 fsync 不阻塞消息流事件循环。"""
+        # 先验证裁剪后仍需保留的幂等事实，失败不能先追加一个新事件。
+        entries = self._read_applied_event_ids_file(
+            session_id,
+            turn_stream_id,
+            thread_id=str(state["thread_id"]),
+            turn_id=str(state["turn_id"]),
+        ) if event is not None else None
         path.parent.mkdir(parents=True, exist_ok=True)
         needs_compaction = (
             path.is_file()
@@ -849,10 +880,9 @@ class MessageStreamStore:
             stream.flush()
             # 事件日志是消息流的崩溃恢复边界；fanout 必须在这里之后。
             os.fsync(stream.fileno())
-        if event is not None and event.get("event_id") is not None:
+        if event is not None and entries is not None:
             # 调用方显式 event_id 的已应用事实必须独立于保留窗口持久化，否则
             # 日志被裁剪后无法区分「已应用」与「从未出现」，会静默重放副作用。
-            entries = self._read_applied_event_ids_file(session_id, turn_stream_id)
             entries[str(event["event_id"])] = dict(event)
             self._write_applied_event_ids_file(
                 session_id,
@@ -863,7 +893,10 @@ class MessageStreamStore:
             # 先让当前事件成为恢复事实，再写入同序号快照，最后才能裁剪旧
             # 事件；否则后台快照尚未执行时，裁剪可能移除 stream.opened。
             self._write_state_snapshot(session_id, turn_stream_id, state)
-            self._compact_stream_log(session_id, path, turn_stream_id)
+            self._compact_stream_log(
+                session_id, path, turn_stream_id,
+                thread_id=str(state["thread_id"]), turn_id=str(state["turn_id"]),
+            )
 
     @staticmethod
     def _should_write_state_snapshot(event_type: str, event_seq: int) -> bool:
@@ -998,13 +1031,17 @@ class MessageStreamStore:
             session_id,
             turn_stream_id,
             records,
+            thread_id=str(state["thread_id"]),
+            turn_id=str(state["turn_id"]),
         )
         self._touch_cached_state(turn_stream_id, state)
         self._event_ids[turn_stream_id] = event_ids
         self._event_ids_loaded.add(turn_stream_id)
         return copy.deepcopy(state)
 
-    def _load_event_ids_from_disk(self, session_id: str, turn_stream_id: str) -> None:
+    def _load_event_ids_from_disk(
+        self, session_id: str, turn_stream_id: str, *, thread_id: str, turn_id: str,
+    ) -> None:
         if turn_stream_id in self._event_ids_loaded:
             return
         records = self._read_records(
@@ -1016,6 +1053,8 @@ class MessageStreamStore:
             session_id,
             turn_stream_id,
             records,
+            thread_id=thread_id,
+            turn_id=turn_id,
         )
         self._event_ids_loaded.add(turn_stream_id)
 
@@ -1224,6 +1263,8 @@ class MessageStreamStore:
             self._load_event_ids_from_disk(
                 str(state["session_id"]),
                 turn_stream_id,
+                thread_id=str(state["thread_id"]),
+                turn_id=str(state["turn_id"]),
             )
             previous = self._event_ids.get(turn_stream_id, {}).get(event_id)
             previous_payload = previous.get("payload") if previous is not None else None

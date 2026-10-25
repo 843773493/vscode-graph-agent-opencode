@@ -100,3 +100,59 @@ async def test_product_stream_reads_reject_corruption_then_reopen_original_histo
         assert response.json()["data"] == expected
         assert canonical.read_bytes() == canonical_bytes
     case.record("stream-read-errors", receipts)
+
+
+@pytest.mark.asyncio
+async def test_product_stream_rejects_foreign_applied_event_then_recovers(
+    communication_case: CommunicationCase,
+) -> None:
+    case = communication_case
+    session = await create_session(case.client, "消息流幂等归属")
+    await case.plan(session, [{"content": "applied-owner-original"}])
+    sent = await case.client.post(f"/api/v1/sessions/{session}/messages", json={
+        "message": {"content": "applied-owner-trigger"},
+        "run": {"mode": "single_agent", "agent_id": "default"},
+    })
+    assert sent.status_code == 200, sent.text
+    accepted = sent.json()["data"]
+    await _completed(case.client, accepted["job_id"])
+    base = f"/api/v1/sessions/{session}/turns/{accepted['turn_id']}/message-stream"
+    events = await case.client.get(base + "/events")
+    assert events.status_code == 200, events.text
+    expected = events.json()["data"]
+    assert expected[-1]["type"] == "stream.completed"
+    stream_id = expected[0]["turn_stream_id"]
+    canonical = case.main_thread_node(session) / "rollout/rollout.jsonl"
+    canonical_bytes = canonical.read_bytes()
+    node = await case.session_node(session)
+    sidecar = node / "message_streams" / f"{stream_id}.applied-event-ids.json"
+    await case.hard_restart()
+    original = sidecar.read_bytes() if sidecar.exists() else None
+    marker = str(case.workspace / "foreign-applied-owner")
+    # 只注入一条损坏的派生幂等记录；原事件、执行和canonical由产品生成。
+    value = {**expected[0], "thread_id": marker}
+    damaged = json.dumps({value["event_id"]: value}).encode()
+    sidecar.write_bytes(damaged)
+    errors = []
+    try:
+        for suffix in ("/snapshot", "/events", ""):
+            failed = await case.client.get(base + suffix)
+            assert failed.status_code == 404, failed.text
+            assert failed.headers["X-Request-ID"] == failed.json()["request_id"]
+            assert "artifact=applied_event_ids" in failed.text and f"session_id={session}" in failed.text
+            assert marker not in failed.text and str(case.workspace) not in failed.text
+            assert sidecar.read_bytes() == damaged and canonical.read_bytes() == canonical_bytes
+            errors.append(failed.json())
+    finally:
+        if original is None:
+            sidecar.unlink()
+        else:
+            sidecar.write_bytes(original)
+    for restart in (False, True):
+        if restart:
+            await case.hard_restart()
+        response = await case.client.get(base + "/events")
+        assert response.status_code == 200, response.text
+        assert response.json()["data"] == expected
+        assert canonical.read_bytes() == canonical_bytes
+    case.record("applied-event-owner-errors", errors)

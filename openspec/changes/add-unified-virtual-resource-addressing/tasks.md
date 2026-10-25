@@ -610,3 +610,11 @@
 - 候选定向单测113 passed/9.84秒（新增40项损坏/OS读取故障及原存储73项），合同/投影/运行时51 passed/1.94秒；旧完整基线加新增故障测试40 failed/3.25秒，证明原实现不满足公开错误及失败缓存合同。真实 Gateway/Backend/model_stream 产品验收1 passed/82.29秒：产品创建并执行四份历史，硬重启后对四类文件依次注入损坏，snapshot/events/SSE建流十二次请求均精确404、request_id一致、原件及canonical不变，恢复原件后可重开且再次硬重启历史一致。未手填执行或canonical状态；复用通信测试仅为产品进程装具。
 - Ruff/compileall通过，限定只读审查未发现阻断问题；审查收据误称旧存储测试无改动，实际仅为一个直接调用补齐两个必填身份参数，未改既有断言。早期装具的缺目录、类型导入、日志转义断言及合同命令引用候选基线不存在的测试文件均已归因，原始失败保留。准确命令、源码前后指纹、raw和退出码在 `out/tests/temp/message_stream_read_errors_20261025/artifacts/`；profile002补齐新增单测指纹。合并共享迭代器版本的验证另记本节，不把候选通过冒称共享版本通过。2.2/7.2总门仍未勾，Windows实机及完整Web未验，Agent团队与协作继续TODO。
 - 共享源码合并保留既有 `_iter_records`/deque 流式裁剪及测试 fixture 重构；错误处理迁入同一迭代器，列表读取仅消费它。共享版本 `shared-unit-001` 为165 passed/11.06秒，`shared-http-001` 为1 passed/74.33秒，Ruff/compileall与严格OpenSpec校验45 passed/0 failed均通过。共享暂存条目独立核对且未改写；本切片提交不包含他人的优化。
+
+
+### 2026-10-25 消息流幂等记录归属（2.2/7.2 部分收口）
+
+- 原 applied-event-id 只验证值是对象，会接受其它 Session/Thread/Turn/stream 的事件，且 retained 记录可掩盖损坏。现复用事件日志唯一校验并核索引键与 event_id；恢复、裁剪、显式追加的全部调用方传递明确Thread/Turn归属。追加前读取并验证已有幂等事实，避免校验失败前先落新事件；原错误身份/原件/cause政策、裁剪后的幂等重放与修复后原owner重开保留。未引入第二事件历史、writer或迁移。
+- 候选存储单测134 passed/11.14秒（新增21项：10类损坏×裁剪前后及warm追加拒绝），真实 Gateway/Backend/model_stream 1 passed/58.57秒：产品执行生成历史，硬重启后注入另一Thread归属，snapshot/events/SSE建流连续三次404且request_id一致，原件/canonical不变，修复后同owner和再次重启均读回完整原历史。Ruff通过。完整基线Git archive反例的21项单测均失败；同轮HTTP在9500被另一候选测试占用时setup报错，不计产品反例；待其退出后，完整archive的HTTP反例1 failed/45.12秒，精确复现损坏归属返回200。
+- 原始命令、完整源码前后指纹、实际退出码与反例完整源码在 `out/tests/temp/message_stream_event_ownership_20261025/artifacts/`。本切片为现有恢复合同补缺，2.2/7.2总门保持未勾；未跑Windows实机或完整Web，Agent团队与协作继续TODO。
+- 合并共享版本的存储/合同/投影/运行时186 passed/12.48秒，两项真实HTTP均通过（耗时见原始stdout/result）；Ruff、compileall及strict 45 passed/0 failed。五组源码前后指纹均一致且运行组无残留，静态自查核8个内部调用全部显式传归属、验证先于追加，既有迭代器与列表消费者AST未变；非独立代理审查。候选HTTP期间仅单测import位置发生调整，生产与集成测试源码未变，不将它冒称完整冻结源码验证；最终共享运行已覆盖该文件的最终版本。共享暂存条目及他人流式优化继续独立保留。

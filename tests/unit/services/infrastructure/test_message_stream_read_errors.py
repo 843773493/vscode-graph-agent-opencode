@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 
+import app.services.infrastructure.message_stream_store as stream_module
 from app.core.path_utils import get_session_path_resolver
 from app.core.session_catalog_resolver import SessionCatalogPathResolver
 from app.services.infrastructure.message_stream_store import (
@@ -152,3 +153,101 @@ async def test_read_os_failure_keeps_original_cause_and_explicit_retry(
     assert str(target) in caplog.text
     assert not cold._states
     assert (await cold.open_existing(session_id=session, thread_id=thread, turn_id=writer.turn_id)).turn_stream_id == writer.turn_stream_id
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("compact", [False, True])
+@pytest.mark.parametrize("field", [
+    "session_id", "thread_id", "turn_id", "turn_stream_id", "event_id", "map_key",
+    "event_seq", "payload", "payload_identity", "type",
+])
+async def test_applied_events_reject_invalid_owner_before_publishing_recovery(
+    message_stream_store: MessageStreamStoreCase, monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture, compact: bool, field: str,
+) -> None:
+    store, resolver, session = message_stream_store
+    thread = resolver.main_thread_id(session)
+    writer = await store.open(session_id=session, thread_id=thread, turn_id="turn_applied_owner")
+    event = await writer.commit("block.delta", {
+        "block_id": "block_owner", "operation": "append", "text": "ORIGINAL",
+    }, block_id="block_owner", event_id="evt_owner_original")
+    if compact:
+        monkeypatch.setattr(stream_module, "MESSAGE_STREAM_MAX_BYTES", 1_200)
+        monkeypatch.setattr(stream_module, "MESSAGE_STREAM_RETAINED_BYTES", 500)
+        for _ in range(8):
+            await writer.commit("block.delta", {
+                "block_id": "block_owner", "operation": "append", "text": "." * 30,
+            }, block_id="block_owner")
+    await asyncio.gather(*store._snapshot_tasks.values())
+    expected = await store.get_state(writer.turn_stream_id)
+    log = store._stream_path(session, writer.turn_stream_id)
+    assert (event["event_id"] not in log.read_text()) is compact
+    sidecar = store._applied_event_ids_path(session, writer.turn_stream_id)
+    original = sidecar.read_bytes()
+    raw = json.loads(original)
+    value = raw[event["event_id"]]
+    marker = "/private/foreign-stream-owner"
+    if field == "map_key":
+        raw = {marker: value}
+    elif field == "payload_identity":
+        value["payload"]["block_id"] = marker
+    elif field == "payload":
+        value[field] = [marker]
+    elif field == "event_seq":
+        value[field] = -1
+    elif field == "type":
+        value[field] = ""
+    else:
+        value[field] = marker
+    sidecar.write_text(json.dumps(raw), encoding="utf-8")
+    originals = {p: p.read_bytes() for p in sidecar.parent.iterdir() if p.is_file()}
+    cold = MessageStreamStore(path_resolver=resolver)
+    try:
+        for _ in range(2):
+            with pytest.raises(MessageStreamError) as caught:
+                await cold.open_existing(session_id=session, thread_id=thread, turn_id=writer.turn_id)
+            assert "artifact=applied_event_ids" in str(caught.value)
+            assert marker not in str(caught.value) and str(sidecar) not in str(caught.value)
+            assert not cold._states and not cold._event_ids and not cold._event_ids_loaded
+            assert {p: p.read_bytes() for p in originals} == originals
+        assert "已应用" in caplog.text
+    finally:
+        sidecar.write_bytes(original)
+    reopened = await cold.open_existing(session_id=session, thread_id=thread, turn_id=writer.turn_id)
+    assert await cold.get_state(reopened.turn_stream_id) == expected
+    duplicate = await reopened.commit("block.delta", event["payload"],
+                                      block_id="block_owner", event_id=event["event_id"])
+    assert duplicate == event
+    assert await cold.get_state(reopened.turn_stream_id) == expected
+
+
+@pytest.mark.asyncio
+async def test_warm_append_rejects_foreign_applied_event_before_touching_log(
+    message_stream_store: MessageStreamStoreCase,
+) -> None:
+    store, resolver, session = message_stream_store
+    thread = resolver.main_thread_id(session)
+    writer = await store.open(session_id=session, thread_id=thread, turn_id="turn_warm_applied")
+    event = await writer.commit("block.delta", {
+        "block_id": "block_warm", "operation": "append", "text": "ORIGINAL",
+    }, block_id="block_warm", event_id="evt_warm_original")
+    await asyncio.gather(*store._snapshot_tasks.values())
+    sidecar = store._applied_event_ids_path(session, writer.turn_stream_id)
+    original = sidecar.read_bytes()
+    raw = json.loads(original)
+    raw[event["event_id"]]["thread_id"] = "/private/foreign-warm-owner"
+    sidecar.write_text(json.dumps(raw), encoding="utf-8")
+    originals = {p: p.read_bytes() for p in sidecar.parent.iterdir() if p.is_file()}
+    try:
+        with pytest.raises(MessageStreamError, match="artifact=applied_event_ids"):
+            await writer.commit("block.delta", {
+                "block_id": "block_warm", "operation": "append", "text": "NEW",
+            }, block_id="block_warm", event_id="evt_warm_new")
+        assert {p: p.read_bytes() for p in originals} == originals
+    finally:
+        sidecar.write_bytes(original)
+    writer = await store.open_existing(session_id=session, thread_id=thread, turn_id=writer.turn_id)
+    accepted = await writer.commit("block.delta", {
+        "block_id": "block_warm", "operation": "append", "text": "NEW",
+    }, block_id="block_warm", event_id="evt_warm_new")
+    assert accepted["event_seq"] == event["event_seq"] + 1
