@@ -186,6 +186,15 @@
       "command": ["bun", "tests/integration/workspace_services/browser/browser_shutdown_operations.mjs"]
     },
     {
+      "id": "integration-browser-shutdown-signals",
+      "layer": "integration",
+      "client": null,
+      "enabled": true,
+      "timeoutMs": 60000,
+      "dataLimitKb": 4194304,
+      "command": ["uv", "run", "--no-sync", "pytest", "-q", "tests/integration/workspace_services/browser/test_browser_shutdown_signals.py"]
+    },
+    {
       "id": "integration-browser-owner-revision-drain",
       "layer": "integration",
       "client": null,

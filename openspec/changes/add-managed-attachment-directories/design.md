@@ -66,15 +66,15 @@ Browser 的关闭排空统一复用 `BrowserOperationQueue.drain()` 的完整已
 
 后续补齐 Manager 的排空超时分支：它不再沿检查点捕获损坏的收尾链将原资源改成 lost、释放 context 并删除检查点；仍检查其它资源并保留其原错误，随后在关闭共享运行时池之前汇总失败。原关闭准入和唯一操作集合继续持有未结束操作，原操作完成后同一入口可重试捕获最终状态。真实 Manager 默认 5 秒预算的 HTTP/Chromium 场景核对超时后原页面与运行时仍存活、磁盘状态和原检查点未改，放行原操作后重试关闭及冷重开保留最后的编辑。其它捕获/收尾故障的期限、强制终止与进程退出协调仍 TODO；本项不是整个 5.4 完成。
 
-Manager 关闭先同步关闭当前所有运行资源的操作准入，再逐项调用原检查点链；本批从入口冻结一次默认 5 秒的单调排空截止，每项只取得剩余预算。已排空的空闲资源即使预算耗尽仍能由原队列即时确认；多个挂起资源不再各自重置 5 秒。超时按原资源身份汇总，原操作、页面、检查点和共享运行时继续保留；放行原操作后同一入口重试保存两份最终状态。Manager 层可重试不代表生产信号入口可重试：backend 的唯一关闭回调失败后仍关闭 HTTP 并退出进程，尚未接回原 Manager 重试；该调用方退出协调明确保留 TODO，本次不以直接调用 Manager 的集成场景覆盖它。该预算仍只约束队列等待，创建中的资源接纳、检查点持久化/转换、其它失败收尾与整个 shutdown 的截止及强制终止继续 TODO。
+Manager 关闭先同步关闭当前所有运行资源的操作准入，再逐项调用原检查点链；本批从入口冻结一次默认 5 秒的单调排空截止，每项只取得剩余预算。已排空的空闲资源即使预算耗尽仍能由原队列即时确认；多个挂起资源不再各自重置 5 秒。超时按原资源身份汇总，原操作、页面、检查点和共享运行时继续保留；放行原操作后同一入口重试保存两份最终状态。生产信号入口现接回同一 Manager 的关闭重试，具体边界见下述生产信号切片；直接调用 Manager 的旧验收不替代信号入口验收。该预算仍只约束队列等待，创建中的资源接纳、检查点持久化/转换、其它失败收尾与整个 shutdown 的截止及强制终止继续 TODO。
 
-Manager 对检查点失败后的收尾继续按原资源隔离：若 context 释放、检查点删除或状态保存再次失败，将本次采集首因与收尾错误按顺序聚合，继续其它 Browser；原资源未核实完成时不关闭共享运行时池。Session 只在这条原收尾链全部完成后发布 lost，失败保持原 status 与 unknown，原 context 仅在释放成功后清除，避免下一轮关闭提前跳过；unknown 持久化也失败时保留收尾与保存异常及因果关系。检查点损坏仍明确报告失败，重试不伪造丢失状态恢复成功。此处不改变生产信号退出协调或完整关闭期限 TODO。
+Manager 对检查点失败后的收尾继续按原资源隔离：若 context 释放、检查点删除或状态保存再次失败，将本次采集首因与收尾错误按顺序聚合，继续其它 Browser；原资源未核实完成时不关闭共享运行时池。Session 只在这条原收尾链全部完成后发布 lost，失败保持原 status 与 unknown，原 context 仅在释放成功后清除，避免下一轮关闭提前跳过；unknown 持久化也失败时保留收尾与保存异常及因果关系。检查点损坏仍明确报告失败，重试不伪造丢失状态恢复成功。完整关闭期限仍 TODO，生产信号退出协调按下述切片处理。
 
 关闭与版本撤销现共用原队列的单次有界`drain(timeoutMs)`：默认5秒，true表示快照集合已settle，false只表示本次等待结束，原Promise继续由唯一集合持有。普通版本同步先关闭旧连接/删除旧grant，冻结原集合并持久化新版本；超时返回独立`browser_owner_revision_drain_timeout`/408，不使用工具的page_reset语义，不停止或遗忘原动作。原动作结束后旧结果仍被授权版本检查拒绝，同版本重试只排空原集合。真实Python客户端→Node→Chromium/HTTP屏障验证磁盘版本、未结束原动作、另一Browser可读、迟到结果拒绝及核实关闭。持久化阻塞、Python首次recover single-flight gate和整个operation总期限继续TODO，不能把Node单资源有界等待称为恢复全局隔离或真实终止完成。
 
-管理stop/delete的版本推进显式携带`for_stop=true`，普通恢复、关联和grant同步携带false；两类内部HTTP入口均要求boolean意图，不保留旧请求fallback。Browser停止准备只撤权、关闭新操作准入并持久新版本，不提前等待原执行，避免脚本等待context关闭时阻止真正关闭。后续原Session.close释放context后仍核实同一队列，准备成功不是停止证明；写盘失败关闭准入并传播原错，不重复实现停止或新增执行账本。Terminal沿用原同步撤权和停止链。任意不合作脚本强制终止、首次冷恢复gate、整个operation/shutdown期限及生产信号失败后退出协调继续TODO。
+管理stop/delete的版本推进显式携带`for_stop=true`，普通恢复、关联和grant同步携带false；两类内部HTTP入口均要求boolean意图，不保留旧请求fallback。Browser停止准备只撤权、关闭新操作准入并持久新版本，不提前等待原执行，避免脚本等待context关闭时阻止真正关闭。后续原Session.close释放context后仍核实同一队列，准备成功不是停止证明；写盘失败关闭准入并传播原错，不重复实现停止或新增执行账本。Terminal沿用原同步撤权和停止链。任意不合作脚本强制终止、首次冷恢复gate、整个operation/shutdown期限继续TODO，生产信号失败后退出协调按下述切片处理。
 
-2026-10-25 补齐关闭时的创建等待：Manager同步关闭新创建准入，原创建调用从排队、配额读取、登记、首次导航至最终persist都由本次完成Promise覆盖；这些Promise只是进程内执行句柄，不成为新的业务状态或恢复账本。准入在排队执行和配额等待后重核，重复身份仍不签发not_created。关闭等待与交互排空共用原默认5秒预算；超时不取消、遗忘或重发创建，已登记Session（含尚在取得运行时的created状态）在关闭入口同步关闭交互准入，原启动仍继续，迟到完成后由同Manager检查点重试。原队列与创建等待复用browserRuntime的同一排空原语，原调用方仍处理真实执行错误。启动失败物理移除独立收尾代码，直接使用Session.close，保留failed/unknown及两次持久化失败的原异常；未核实创建收尾继续阻止共享池关闭，可由现有管理close/delete核实。真实Chromium/HTTP屏障覆盖初始导航等待、创建超时及创建/peer操作组合预算，关闭重试后按原ID冷恢复；不覆盖生产信号失败后退出、强制终止、同步持久化阻塞或整个shutdown总期限，这些仍TODO。
+2026-10-25 补齐关闭时的创建等待：Manager同步关闭新创建准入，原创建调用从排队、配额读取、登记、首次导航至最终persist都由本次完成Promise覆盖；这些Promise只是进程内执行句柄，不成为新的业务状态或恢复账本。准入在排队执行和配额等待后重核，重复身份仍不签发not_created。关闭等待与交互排空共用原默认5秒预算；超时不取消、遗忘或重发创建，已登记Session（含尚在取得运行时的created状态）在关闭入口同步关闭交互准入，原启动仍继续，迟到完成后由同Manager检查点重试。原队列与创建等待复用browserRuntime的同一排空原语，原调用方仍处理真实执行错误。启动失败物理移除独立收尾代码，直接使用Session.close，保留failed/unknown及两次持久化失败的原异常；未核实创建收尾继续阻止共享池关闭，可由现有管理close/delete核实。真实Chromium/HTTP屏障覆盖初始导航等待、创建超时及创建/peer操作组合预算，关闭重试后按原ID冷恢复；该创建切片不覆盖生产信号入口；强制终止、同步持久化阻塞或整个shutdown总期限仍TODO。
 
 `ThreadResidencyTracker.sweep()` 对每个 Thread 独立尝试清理，失败保留原 scope、generation 和 owner 记录，其它 Thread 仍完成。整批结束后向调用方抛出原错误（单项）或汇总错误（多项），附精确 owner 信息；不改变已有单错误类型或把失败算成成功卸载。`AgentExecutionService` 的唯一周期 worker 记录完整异常后按原 60 秒周期重试，取消和关闭正常传播。这里不解决失效关联或外部未知结果，也不绕过原 owner 核实规则。
 
@@ -94,7 +94,9 @@ runtime 准入及单 Session 的 runtime 排空现各有一次调用共用的 30
 
 单次 Terminal/Browser operation 关闭时，各占用分别取得原资源锁并通过原账本释放；只有持久释放成功后才移除本次内存引用。单项写盘失败或锁等待不阻断其它资源的释放，全部结果保留原单错或按输入顺序聚合；取消等待时，未释放引用继续由原 operation 保留，后续关闭沿原 lease 重试，未知/已结清占用仍服从既有 owner 判定。这不构成外部终止证明，也不补足整个 operation/shutdown 的总期限。
 
-Browser工具超时后的原AsyncFunction和页面reset现在由原`BrowserOperationQueue`的同一执行集合持有，不只登记已经超时返回的外层请求。排空每批settle后在原单次预算内继续复核集合，覆盖等待开始后才启动的内部执行；集合大小是句柄数，不是业务操作数。stop/delete在释放原context后仍等待这份集合，默认5秒未排空返回`browser_close_operation_drain_timeout`/408，保持unknown和原身份，不发布verified终态。原执行结束后，同一显式关闭重试完成检查点删除与终态持久化，不重复关闭context。真实Python传输客户端→Node/Chromium/HTTP场景覆盖工具超时、页面reset后的短操作、stop/delete失败后的磁盘unknown、peer可读和迟到结束重试；证据见tasks 5.2。该切片不能强制终止不合作脚本，Python业务owner的版本同步可能先等待同一挂起脚本，整个operation/shutdown期限与backend信号失败后退出协调继续TODO；5.2/5.4/6.2均保持未完成，Agent团队与协作继续暂缓。
+Browser工具超时后的原AsyncFunction和页面reset现在由原`BrowserOperationQueue`的同一执行集合持有，不只登记已经超时返回的外层请求。排空每批settle后在原单次预算内继续复核集合，覆盖等待开始后才启动的内部执行；集合大小是句柄数，不是业务操作数。stop/delete在释放原context后仍等待这份集合，默认5秒未排空返回`browser_close_operation_drain_timeout`/408，保持unknown和原身份，不发布verified终态。原执行结束后，同一显式关闭重试完成检查点删除与终态持久化，不重复关闭context。真实Python传输客户端→Node/Chromium/HTTP场景覆盖工具超时、页面reset后的短操作、stop/delete失败后的磁盘unknown、peer可读和迟到结束重试；证据见tasks 5.2。该切片不能强制终止不合作脚本，Python业务owner的版本同步可能先等待同一挂起脚本，整个operation/shutdown期限继续TODO，backend信号失败后的重试见生产信号切片；5.2/5.4/6.2均保持未完成，Agent团队与协作继续暂缓。
+
+2026-10-25 生产信号关闭继续调用唯一 Manager.shutdown：明确失败后记录完整原异常并保留原进程与 HTTP 管理入口，原 Manager/Session 的关闭准入不回退。信号监听在失败后仍有效，同次关闭尚未结束时的重复信号不重复调用；核实原操作后再次信号沿同一 Manager 重试，成功才关闭 HTTP/WebSocket 并按信号退出。不引入自动重试或另一条停止链；未捕获异常与未处理 rejection 仍沿原致命退出规则以 1 结束；关闭过程中到达的致命错误也先记录原错误并升级最终退出码，不被在途关闭去重忽略。该行为不保证上层启动器不会强杀、HTTP 连接排空或整个 shutdown 有总期限，也不构成任意挂起脚本的强制停止证明，这些继续 TODO。
 
 ## Conflict Review
 

@@ -947,38 +947,43 @@ async function main() {
   });
 
   let shuttingDown = false;
+  let hasFatalError = false;
   const shutdown = async (reason, exitCode, error = null) => {
+    if (error) {
+      hasFatalError = true;
+      console.error(error);
+    }
     if (shuttingDown) {
       return;
     }
     shuttingDown = true;
-    if (error) {
-      console.error(error);
-    }
     for (const client of wss.clients) {
       client.close(1001, "browser manager shutting down");
     }
-    let resolvedExitCode = exitCode;
     try {
       await manager.shutdown(reason);
     } catch (shutdownError) {
-      // TODO：信号关闭失败后仍退出进程；Manager重试尚未接入此入口，需统一退出期限和终止核实。
-      resolvedExitCode = 1;
       console.error(
-        "[browser-backend] 关闭检查点失败:",
-        shutdownError instanceof Error ? (shutdownError.stack ?? shutdownError.message) : String(shutdownError),
+        hasFatalError ? "[browser-backend] 致命错误后的关闭检查点失败:"
+          : "[browser-backend] 关闭失败，保留原运行时与 HTTP 管理入口；核实原操作后再次发送关闭信号重试:",
+        shutdownError,
       );
+      if (!hasFatalError) {
+        shuttingDown = false;
+        return;
+      }
     }
+    // TODO：统一检查点持久化、HTTP 排空和整个 shutdown 的总期限及挂起终止核实。
     wss.close();
     await closeHttpServer(server);
-    process.exit(resolvedExitCode);
+    process.exit(hasFatalError ? 1 : exitCode);
   };
 
-  process.once("SIGINT", () => void shutdown("browser_manager_sigint", 130));
-  process.once("SIGTERM", () => void shutdown("browser_manager_sigterm", 143));
-  process.once("SIGHUP", () => void shutdown("browser_manager_sighup", 129));
+  process.on("SIGINT", () => void shutdown("browser_manager_sigint", 130));
+  process.on("SIGTERM", () => void shutdown("browser_manager_sigterm", 143));
+  process.on("SIGHUP", () => void shutdown("browser_manager_sighup", 129));
   if (process.platform === "win32") {
-    process.once("SIGBREAK", () => void shutdown("browser_manager_sigbreak", 143));
+    process.on("SIGBREAK", () => void shutdown("browser_manager_sigbreak", 143));
   }
   process.once("uncaughtException", (error) => {
     void shutdown("browser_manager_uncaught_exception", 1, error);
