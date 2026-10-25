@@ -34,6 +34,7 @@ def test_integration_port_block_supports_indices_above_99() -> None:
 
 
 def test_integration_and_e2e_port_ranges_are_adjacent_and_disjoint() -> None:
+    assert E2E_PORT_END <= 65535
     assert INTEGRATION_PORT_START <= INTEGRATION_PORT_END
     assert E2E_PORT_START == INTEGRATION_PORT_END + 1
     assert INTEGRATION_PORT_END < E2E_PORT_START
