@@ -13,6 +13,7 @@ from typing import Literal
 
 import pytest
 
+from app.core.atomic_fs import native_io_path
 from app.schemas.internal_v2.node_debug import (
     NodeDebugConfigurationDTO,
     NodeDebugLaunchClaimDTO,
@@ -21,6 +22,8 @@ from app.schemas.internal_v2.node_debug import (
 from app.services.infrastructure.node_debug.session.session_store import (
     NodeDebugSessionStore,
 )
+from tests.harness.python.run_context import TestRunContext
+from tests.support.workspaces import prepare_test_workspace
 from tests.unit.core.catalog_workspace_helper import build_catalog_workspace
 
 _CONFIGURATION_ID = "dbgcfg_" + "1" * 32
@@ -51,8 +54,14 @@ class DebugStore:
 
 
 @pytest.fixture
-async def debug_store(tmp_path: Path) -> AsyncIterator[DebugStore]:
-    with build_catalog_workspace(tmp_path / "workspace") as workspace:
+async def debug_store() -> AsyncIterator[DebugStore]:
+    run_context = TestRunContext.from_test_file(Path(__file__))
+    prepare_test_workspace(
+        workspace_root=run_context.workspace_root,
+        template_root=Path.cwd() / "tests/fixtures/workspaces/default_test_workspace",
+        template_items=(),
+    )
+    with build_catalog_workspace(run_context.output_root) as workspace:
         session_id = await workspace.create_session("调试存储诊断")
         thread_id = workspace.resolver.main_thread_id(session_id)
         store = NodeDebugSessionStore(workspace.resolver)
@@ -68,8 +77,35 @@ async def debug_store(tmp_path: Path) -> AsyncIterator[DebugStore]:
             nonce="nonce-1", phase="settled", configuration_id=_CONFIGURATION_ID,
             created_at=now, updated_at=now,
         ))
-        directory = workspace.resolver.resolve_thread_node(session_id, thread_id) / "debug/node"
+        directory = native_io_path(workspace.resolver.resolve_thread_node(session_id, thread_id) / "debug/node")
         yield DebugStore(store, session_id, thread_id, directory)
+
+
+def test_cold_store_reads_updates_and_deletes_with_long_configuration_path(debug_store: DebugStore) -> None:
+    owner = (debug_store.session_id, debug_store.thread_id)
+    configuration_path = debug_store.directory / "configurations" / f"{_CONFIGURATION_ID}.json"
+    assert len(str(configuration_path)) > 260
+    cold = NodeDebugSessionStore(debug_store.store.path_resolver)
+    manifest_bytes, manifest = cold.read_manifest_payload(*owner)
+    assert manifest is not None and manifest_bytes is not None
+    assert manifest.configuration_ids == (_CONFIGURATION_ID,)
+    assert cold.read_launch_claim(*owner) == debug_store.store.read_launch_claim(*owner)
+    registered = cold.read_registered_configuration_payloads(*owner, manifest.configuration_ids)
+    configuration, payload = registered[_CONFIGURATION_ID]
+    assert cold.list_configurations(*owner) == [configuration]
+    assert cold.read_configuration(owner[0], _CONFIGURATION_ID, owner[1]) == configuration
+    assert payload == configuration_path.read_bytes()
+
+    updated = cold.write_configuration(owner[0], configuration.model_copy(update={"name": "更新方案"}), owner[1])
+    reopened = NodeDebugSessionStore(cold.path_resolver)
+    assert reopened.read_configuration(owner[0], _CONFIGURATION_ID, owner[1]) == updated
+    reopened.delete_configuration(owner[0], _CONFIGURATION_ID, owner[1])
+    assert reopened.read_configuration(owner[0], _CONFIGURATION_ID, owner[1]) is None
+    assert reopened.list_configurations(*owner) == []
+    reopened.write_manifest(manifest)
+    empty = NodeDebugSessionStore(reopened.path_resolver).read_manifest(*owner)
+    assert empty is not None and empty.configuration_ids == ()
+    assert not list((debug_store.directory / "configurations").iterdir())
 
 
 def _assert_private_failure(error: Exception, fixture: DebugStore, original: bytes, path: Path) -> None:

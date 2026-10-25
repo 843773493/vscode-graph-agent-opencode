@@ -9,6 +9,7 @@ from typing import TypeVar
 
 from pydantic import BaseModel, ValidationError
 
+from app.core.atomic_fs import native_io_path
 from app.schemas.internal_v2.node_debug import (
     NodeDebugConfigurationDTO,
     NodeDebugLaunchClaimDTO,
@@ -113,7 +114,7 @@ class NodeDebugSessionStore:
     def list_configurations(
         self, session_id: str, thread_id: str
     ) -> list[NodeDebugConfigurationDTO]:
-        directory = self._configurations_directory(session_id, thread_id)
+        directory = native_io_path(self._configurations_directory(session_id, thread_id))
         list_reference = (
             f"session_id={session_id}, thread_id={thread_id}, artifact=configurations"
         )
@@ -236,7 +237,7 @@ class NodeDebugSessionStore:
         self._assert_canonical_owner(session_id, thread_id)
         path = self._configuration_path(session_id, thread_id, configuration_id)
         try:
-            path.unlink()
+            native_io_path(path).unlink()
         except OSError as error:
             raise type(error)(
                 error.errno,
@@ -299,6 +300,7 @@ class NodeDebugSessionStore:
     def _read_payload(path: Path, reference: str) -> bytes | None:
         """所有调试读取共用文件边界；原生位置只留在异常链中。"""
         try:
+            path = native_io_path(path)
             try:
                 mode = path.lstat().st_mode
             except FileNotFoundError:
@@ -338,6 +340,7 @@ class NodeDebugSessionStore:
     @staticmethod
     def _atomic_write(path: Path, model: BaseModel, reference: str) -> None:
         try:
+            path = native_io_path(path)
             path.parent.mkdir(parents=True, exist_ok=True)
             temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
             temporary.write_text(model.model_dump_json(indent=2), encoding="utf-8")

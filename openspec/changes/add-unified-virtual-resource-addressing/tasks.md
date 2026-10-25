@@ -125,6 +125,14 @@
 
 ## 7. 验证与收口
 
+### 2026-10-25 Windows Node 调试存储长路径（2.2/7.2 部分收口）
+
+- 原唯一调试store的枚举、读取、原子写入与删除在最终I/O边界统一使用`native_io_path`；manifest、launch claim和方案继续共用原链，逻辑locator、DTO、URI、错误归属与持久格式不变。作者AST核对去除四处原生路径转换及import后原模块完全一致，无新目录/兼容链。
+- Linux最终存储/准入83 passed/10.48秒；Windows快照`fff98ffc753d8a40a92a7b943ec95fb3c606bc3d`的存储71 passed/14.78秒、原服务/API准入12 passed/11.16秒。新增冷store场景验证超过260字符的真实方案路径、登记正文、更新、删除和manifest清单刷新；原三个Windows服务入口长路径失败已通过，业务断言未改。
+- 两处测试工作区准备统一到正式`out/tests/<测试路径>/workspace/`和既有prepare入口，故障注入/原件观察使用原生I/O路径；远端只注入离线占位key，不同步凭据或请求真实Provider。首轮命令转义、缺占位key、旧rmtree及单测前置Session创建长路径的失败原件均保留，不计为产品通过。
+- Ruff/compileall通过，Pyright 1.1.414对产品文件零诊断（首次`uv run pyright`因未安装入口未执行，随后复用uvx工具通过）。准确命令、源码指纹、raw/真实退出码与作者结构自查位于`out/tests/temp/node_debug_native_io_20261025/artifacts/`。本片不代替调试进程、真实Gateway/Web或全局路径不变量总门，2.2/7.2仍未勾。
+- TODO：Windows单测原runtime/tmp深工作区在调试store调用前于`SessionCreationService._prepare_staging`的`main_thread.mkdir`复现WinError3；本片按规定使用正式workspace仍保留长方案路径验收，Session创建/恢复的原生I/O作为后续独立边界，不能声称该缺陷已解决。团队、成员、委派与协作继续暂缓。
+
 - [x] 7.1 增加统一构造/解析矩阵：固定 resources/scope_id、身份闭集和大小写 profile、技能根/SKILL.md/多层child、files/root、中文/空格/点号/字面百分号、合法 escape 规范化与只解码一次；拒绝无效 escape/UTF-8/编码分隔符/点段/控制字符/query/fragment，未登记 scope/kind和错误 scope组合显式失败。身份版本的既有编码规则不因文件 profile 改变。
 - [ ] 7.2 增加三层分离与不变量测试：real path 外泄即缺陷（普通响应/DTO、业务持久化、系统生成的模型资源引用与解析输出检查点；具名的工作区/原生目录 Gateway root binding 为持久化例外，原生目录选择/注册和普通文件路径按具名请求输入边界核验）、URI 悬空合法、revision 不进 URI、identity 不承担寻址、同名跨 scope 是两个 identity、locator 不在解析输出中；内部聚合必填null在publish/seal/restart/fork/hash中一致，缺字段/空字符串/非法非空地址仍拒绝、不降级null、不伪造默认地址或额外展示内部身份。；检查必须按具名日志管理入口与 Browser 页面 URL 例外逐字段划界，不能扩大到普通错误、资源引用、checkpoint 文件及下载/截图位置。
   - 2026-10-25 原生目录控制回包子边界的反例、218项共享复验与局限见2.2及 `out/tests/temp/native_directory_protocol_errors_20261025/artifacts/verification003.json`；仅集中现有两调用方校验，不据此关闭普通响应与持久化不变量总门。

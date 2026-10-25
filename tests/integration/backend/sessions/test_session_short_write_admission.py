@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import shutil
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
@@ -56,6 +55,7 @@ from app.services.infrastructure.session_goal_store import SessionGoalStore
 from app.services.infrastructure.trace_event_store import TraceEventStore
 from tests.harness.python.run_context import TestRunContext
 from tests.support.node_debug_dependencies import node_debug_file_paths
+from tests.support.workspaces import prepare_test_workspace
 from tests.unit.core.catalog_workspace_helper import (
     CatalogWorkspaceContext,
     build_catalog_workspace,
@@ -176,8 +176,11 @@ class _Harness:
 @pytest.fixture
 async def harness() -> AsyncIterator[_Harness]:
     run_context = TestRunContext.from_test_file(Path(__file__))
-    if run_context.workspace_root.exists():
-        shutil.rmtree(run_context.workspace_root)
+    prepare_test_workspace(
+        workspace_root=run_context.workspace_root,
+        template_root=Path.cwd() / "tests/fixtures/workspaces/default_test_workspace",
+        template_items=(),
+    )
     workspace = build_catalog_workspace(run_context.output_root)
     session_service = SessionService(
         config_service=ConfigService(),
