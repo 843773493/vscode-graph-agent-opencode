@@ -16,6 +16,8 @@ workspace_services/
 
 同一测试的`shutdown_environment`只临时改写本次隔离工作区配置，并用目录fd提供Unix socket所需的短临时路径：写入前登记原字节恢复，打开fd后立即登记关闭，短路径核验也在释放范围内。准备失败、测试失败或fd关闭失败仍尝试恢复配置，异常沿标准退出栈保留；不改用户服务环境或持久配置。
 
+`test_resource_orphan_sweep.py`复用现有双辅助服务fixture，经正式Session、Terminal/Browser创建/detach、原孤儿回收与显式管理核实，验证同批peer在首项回执等待中完成真实删除，原30秒预算跨撤权和删除回执保持唯一；删除已落盘但Python未收到回执时保留unknown/原lease，核实只对账且不重发删除。通过 `bun run test:matrix -- --suite=integration-resource-orphan-sweep` 运行，固定120秒/4GiB；真实Node、PTY/Chromium与HTTP不替代Gateway/Web、Windows、不合作操作终止或完整shutdown验收。
+
 ## 可修改内容
 
 - 真实辅助服务模块、测试页面服务、mini MCP 和明确协议替身的组合测试。

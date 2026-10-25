@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from asyncio import timeout
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterable, Iterator
 from contextlib import AsyncExitStack, asynccontextmanager, contextmanager
 from dataclasses import replace
@@ -613,38 +614,59 @@ class WorkspaceResourceOwner:
     async def sweep_orphans(self) -> list[ResourceSnapshot]:
         if not self._store.ids():
             return []
-        await self.recover()
-        deleted: list[ResourceSnapshot] = []
-        errors: list[Exception] = []
-        for resource_id in self._store.ids():
-            async with self._resource_lock(resource_id):
-                record = self._require(resource_id)
-                if (
-                    record.status == "deleted"
-                    or record.retention_scope != "thread"
-                    or record.thread_associations
-                    or record.unattached_since is None
-                    or (
-                        self._clock() - datetime.fromisoformat(record.unattached_since)
-                    ).total_seconds()
-                    < ORPHAN_GRACE_SECONDS
-                    or self._leases.leases_for_resource(record.resource_id)
-                ):
-                    continue
-                try:
+
+        async def reclaim(resource_id: str) -> ResourceSnapshot | Exception | None:
+            try:
+                # 冷恢复与删除均按原资源锁推进，单项同步或回执等待不占住整批。
+                await self.recover((resource_id,))
+                async with self._resource_lock(resource_id):
+                    record = self._require(resource_id)
+                    if (
+                        record.status == "deleted"
+                        or record.retention_scope != "thread"
+                        or record.thread_associations
+                        or record.unattached_since is None
+                        or (
+                            self._clock() - datetime.fromisoformat(record.unattached_since)
+                        ).total_seconds()
+                        < ORPHAN_GRACE_SECONDS
+                        or self._leases.leases_for_resource(record.resource_id)
+                    ):
+                        return None
                     self._verified(record)
                     with self._management_lease(
-                        record,
-                        None,
-                        f"orphan-reclaim:{record.resource_id}",
+                        record, None, f"orphan-reclaim:{record.resource_id}",
                         f"reclaim:{record.unattached_since}",
                     ) as lease_id:
-                        deleted.append(await self._stop_or_delete(record, delete=True, lease_id=lease_id))
-                except Exception as error:  # noqa: BLE001 - 收敛其它资源后显式汇总失败。
-                    errors.append(error)
-        if errors:
-            raise ExceptionGroup("外部资源 孤儿回收存在未收敛资源", errors)
-        return deleted
+                        return await self._stop_or_delete(record, delete=True, lease_id=lease_id)
+            except Exception as error:  # noqa: BLE001 - 同批其它资源收敛后按原顺序汇总。
+                return error
+
+        # 一次回收的准备、恢复、锁及删除共用入口预算；取消不等于终止证明。
+        # TODO：同步阻塞与不响应取消的外部操作仍须原owner终止核实。
+        deadline = timeout(30)
+        try:
+            async with deadline:
+                await self.recover(())
+                tasks = [asyncio.create_task(reclaim(resource_id)) for resource_id in self._store.ids()]
+                try:
+                    results = await asyncio.gather(*tasks)
+                except BaseException:
+                    for task in tasks:
+                        task.cancel()
+                    await asyncio.gather(*tasks, return_exceptions=True)
+                    raise
+                errors = [result for result in results if isinstance(result, Exception)]
+                if errors:
+                    raise ExceptionGroup("外部资源 孤儿回收存在未收敛资源", errors)
+                return [result for result in results if isinstance(result, dict)]
+        except TimeoutError as error:
+            if not deadline.expired():
+                raise
+            raise TimeoutError(
+                f"外部资源孤儿回收等待超过 30 秒: workspace_id={self.workspace_id} kind={self.kind}；"
+                "保留未核实记录与原占用，未确认外部操作停止"
+            ) from error
 
     async def transport_grant(
         self,

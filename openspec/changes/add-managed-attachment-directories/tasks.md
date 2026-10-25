@@ -204,3 +204,13 @@ Web 定向 `BOXTEAM_E2E_SECTION8_FOCUS=copy_missing_attachment` 通过真实 Gat
 - 作者AST/目录自查无本片新增职责或import边；既有约900行owner及超过20文件的单测目录仍为后续结构审查风险，不启动代理专项。逐资源观察持久化仍使用完整JSON写盘，批量写入与同步fsync成本保留TODO，未声称性能提升。列表恢复/锁等待与整组释放总预算、同步阻塞、外部终止和完整shutdown继续TODO，5.2/5.4/6.2保持未勾；团队、成员、委派和协作不新增实现或专项验证。
 
 共享最终复核：相关单测/API 215 passed/8.92秒，新真实Browser矩阵2 passed/14.55秒，既有恢复矩阵8 passed/61.93秒；Ruff、compileall和OpenSpec strict 45/45通过。共享已有私有查询改名在三方合并保留，旧HEAD候选继续使用其唯一原名，无shim。共享全树diff检查另报协作模块既存EOF空行，本片候选diff检查通过；该无关模块按用户裁定不修改。全部候选、反例与共享运行的源码前后、日志、退出码及进程回收由verification收据核验，共享暂存指纹始终不变。
+
+
+### 2026-10-25 临时孤儿回收独立推进与整批截止（5.4 部分收口）
+
+- 原Terminal/Browser孤儿回收改为按资源独立恢复、取锁和复核/删除，单项冷恢复授权、资源锁及删除回执挂起不阻止peer完成。入口一次30秒覆盖准备、恢复、锁、撤权与删除，不逐阶段重置；取消排空本次等待，未开始不伪造unknown，已派发未核实保留unknown和精确原lease，已成功的终态不回滚。原错误按资源顺序汇总；下轮不自动重发未知删除，显式管理沿原owner核实。
+- 候选233项相关单测/API回归通过，随后新增冷恢复授权截止两个场景，最终235项通过；覆盖准备/恢复/锁/撤权/删除预算、取消、底层超时归属、真实detach产生的到期资源与原lease结算。真实Node/Chromium/HTTP矩阵1 passed/11.24秒，经正式Session、创建、detach和回收生成关键状态；peer在首项撤权回执等待中完成真实删除，首项删除已落盘但Python回包暂停，推进原截止后unknown/lease保留，显式核实同版本终态且删除调用始终各一次。模型不参与此资源边界，不构造执行/恢复业务事实。
+- 完整原HEAD archive叠相同新增测试及suite的反例为18项单测失败，新增两个冷恢复截止场景也失败；真实矩阵1 failed/16.33秒，停在peer不能开始删除的屏障。候选Ruff、compileall与OpenSpec strict通过，原始命令、完整源码指纹、raw/退出码和进程回收核验在 `out/tests/temp/resource_orphan_sweep_20261025/artifacts/`。作者AST/目录自查未发现本片职责越界；既有约900行owner及超20文件单测目录仍是结构风险，不称独立审查。
+- 本片只证明事件循环正常调度、等待可取消时的原孤儿回收边界；同步写盘/回调阻塞、不合作操作及真实外部终止、整组释放/Session删除/生产shutdown和完整重启故障组合继续TODO。原30分钟临时孤儿与附件30天期限保持，5.2/5.4/6.2仍不勾，团队、成员、委派及协作不追加实现或专项验证。
+
+真实验收最终收口到跨辅助服务目录 `tests/integration/workspace_services/test_resource_orphan_sweep.py`，suite为 `integration-resource-orphan-sweep`（120秒/4GiB），同一场景参数化覆盖真实Terminal PTY和Browser Chromium；未提交的Browser专用文件已物理迁走，fixture不复制。固定候选2 passed/23.27秒；最终共享235项单测/API回归及两类真实资源均通过，准确原始耗时见各run。相同最终场景在完整旧生产为2 failed/33.53秒，均阻在peer回收屏障。测试路径扩展曾误改既有profile，原始运行未改写：两版准确字节和所有recorded hash已核对并保全于profile-versions001.json；此后使用独立002 profile，源码/日志/退出码及进程回收核验见verification001–004。该测试未代替独立进程硬重启或不合作任务终止验收。

@@ -204,6 +204,15 @@
       "command": ["uv", "run", "--no-sync", "pytest", "-q", "tests/integration/workspace_services/browser/test_browser_shutdown_signals.py"]
     },
     {
+      "id": "integration-resource-orphan-sweep",
+      "layer": "integration",
+      "client": null,
+      "enabled": true,
+      "timeoutMs": 120000,
+      "dataLimitKb": 4194304,
+      "command": ["uv", "run", "--no-sync", "pytest", "-q", "tests/integration/workspace_services/test_resource_orphan_sweep.py"]
+    },
+    {
       "id": "integration-browser-resource-listing",
       "layer": "integration",
       "client": null,
