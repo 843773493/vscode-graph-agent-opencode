@@ -27,10 +27,10 @@ from app.core.turn_execution_scope import (
 from app.core.workspace_identity import load_or_create_workspace_id
 from app.domain.itemized.execution_queue import ExecutionQueueInput
 from app.domain.itemized.mutation_intents import MutationIntentOwner
-from app.main import _workspace_lifespan
 from app.schemas.internal_v2.message import MessageDTO
 from app.schemas.internal_v2.session import SessionCreateRequest
 from app.services.business.job.service import JobService
+from app.workspace_lifecycle import WorkspaceLifespan
 
 WorkspaceToolRuntime = tuple[AppContainer, str, ToolInvocationContext]
 
@@ -59,7 +59,7 @@ async def workspace_tool_runtime(
             if application is not None:
                 runtime_cleanup.callback(setattr, application.state, "workspace_container_registry", None)
                 application.state.workspace_container_registry = registry
-            async with _workspace_lifespan(container):
+            async with WorkspaceLifespan(container):
                 session = await container.session_service.create(
                     SessionCreateRequest(title="真实 工作区资源工具调用")
                 )

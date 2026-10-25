@@ -508,21 +508,21 @@ class WorkspaceContainerRegistry:
         return tuple(self.get(workspace_id) for workspace_id in self.workspace_ids)
 
     def close(self) -> None:
-        """所有业务 writer 排空后统一关闭 catalog，迟到访问不可复活。"""
+        """所有writer排空后关闭catalog；失败保留原组件供同入口重试。"""
         with self._lock:
-            if self._closed:
-                return
             self._closed = True
             errors: list[Exception] = []
-            for components in self._catalog_components.values():
+            for workspace_id, components in tuple(self._catalog_components.items()):
                 try:
                     components.close()
-                except Exception as error:  # noqa: BLE001 - 排空全部 catalog 后聚合错误。
+                except Exception as error:  # noqa: BLE001 - 其它mount独立关闭，失败项保留。
                     errors.append(error)
-            self._catalog_components.clear()
-            self._containers.clear()
+                else:
+                    del self._catalog_components[workspace_id]
+                    self._containers.pop(workspace_id, None)
             if errors:
                 raise ExceptionGroup("工作区 catalog owner 关闭失败", errors)
+            self._containers.clear()
 
     def __enter__(self) -> Self:
         with self._lock:

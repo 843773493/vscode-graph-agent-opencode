@@ -552,9 +552,9 @@ class ThreadResidencyTracker:
         """
         if session_id is None:
             self._closing = True
-        # TODO(5.4)：全局 shutdown 须协调所有存储关闭顺序，不能超时后先关库再让原任务写入。
-        deadline = (asyncio.get_running_loop().time() + THREAD_RUNTIME_WAIT_SECONDS
-                    if session_id is not None else None)
+        # Backend保留失败步骤及依赖存储，超时不取消原build/unload。
+        # TODO(5.4)：其它owner的排空与同步阻塞仍须纳入整个shutdown总期限。
+        deadline = asyncio.get_running_loop().time() + THREAD_RUNTIME_WAIT_SECONDS
         waiters = [
             asyncio.create_task(
                 self._close_thread_state(state, deadline, session_id=session_id),
@@ -580,10 +580,11 @@ class ThreadResidencyTracker:
     ) -> list[Exception]:
         """每个 Thread 独立等待原构建/卸载，错误仍按输入 owner 顺序汇总。"""
         errors: list[Exception] = []
+        operation = "shutdown-drain" if session_id is None else "session-drain"
         build = state.runtime_build
         if build is not None:
             try:
-                await self._wait_runtime_task(build, state, deadline, "session-drain")
+                await self._wait_runtime_task(build, state, deadline, operation)
             except Exception as error:  # noqa: BLE001
                 errors.append(error)
                 if not build.done():
@@ -595,7 +596,7 @@ class ThreadResidencyTracker:
                 await self._wait_runtime_task(
                     self._start_runtime_unload(
                         state, runtime, require_unblocked=session_id is not None,
-                    ), state, deadline, "session-drain",
+                    ), state, deadline, operation,
                 )
             self._drop_cold_state(state)
             if session_id is not None and self._states.get((state.session_id, state.thread_id)) is state:

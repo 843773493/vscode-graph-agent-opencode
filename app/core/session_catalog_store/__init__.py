@@ -132,6 +132,7 @@ class SessionCatalogStore(
         validate_sqlite_path_budget(self.database_path)
         native_io_path(self.database_path.parent).mkdir(parents=True, exist_ok=True)
         self._closed = False
+        self._rollback_failure: BaseException | None = None
         # R18-3：单连接跨线程串行锁（可重入）。本 store 只持有一条共享
         # sqlite3 连接（check_same_thread=False），历史实现无任何锁——跨
         # 线程并发进入 read_transaction/write_transaction 会在同一连接
@@ -172,10 +173,14 @@ class SessionCatalogStore(
         with self._connection_lock:
             if self._closed:
                 return
-            self._closed = True
             self._connection.close()
+            self._closed = True
 
     def _ensure_open(self) -> None:
+        if self._rollback_failure is not None:
+            raise RuntimeError(
+                f"session catalog store 回滚失败，已关闭业务访问: {self.database_path}"
+            ) from self._rollback_failure
         if self._closed:
             raise RuntimeError(f"session catalog store 已关闭: {self.database_path}")
 
@@ -326,6 +331,7 @@ class SessionCatalogStore(
                 return
             self._connection.execute("ROLLBACK")
         except BaseException as rollback_error:  # noqa: BLE001 — 清理错误不得覆盖首错。
+            self._rollback_failure = rollback_error
             error.add_note(f"Session catalog 回滚失败: {rollback_error!r}")
             try:
                 self.close()

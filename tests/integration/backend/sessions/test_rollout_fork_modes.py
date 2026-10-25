@@ -6425,7 +6425,9 @@ async def test_lifespan_retries_pending_remote_export_without_restart_or_fork_re
     monkeypatch.setattr(transport, "fork_transfer", fail_release_until_source_recovers)
     _isolate_non_navigation_services(target, monkeypatch)
     worker_tasks: list[asyncio.Task[None]] = []
-    original_worker = main._retry_pending_fork_exports_periodically
+    from app import workspace_lifecycle
+
+    original_worker = workspace_lifecycle._retry_pending_fork_exports_periodically
 
     async def capture_worker(container: AppContainer) -> None:
         task = asyncio.current_task()
@@ -6433,11 +6435,11 @@ async def test_lifespan_retries_pending_remote_export_without_restart_or_fork_re
         worker_tasks.append(task)
         await original_worker(container)
 
-    monkeypatch.setattr(main, "_retry_pending_fork_exports_periodically", capture_worker)
+    monkeypatch.setattr(workspace_lifecycle, "_retry_pending_fork_exports_periodically", capture_worker)
     cold_gateway_token = set_current_gateway_id(None)
     cold_request_token = set_current_request_id(None)
     try:
-        async with main._workspace_lifespan(target):
+        async with workspace_lifecycle.WorkspaceLifespan(target):
             assert get_current_gateway_id() is None and get_current_request_id() is None
             gateway_token = set_current_gateway_id("gateway_2d2ab24c1f08e28f5f0217140c8be744")
             request_token = set_current_request_id("frozen-export-delivery")

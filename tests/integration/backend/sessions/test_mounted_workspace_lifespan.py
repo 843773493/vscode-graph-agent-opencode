@@ -38,6 +38,7 @@ from app.testing.model_stream import (
     chat_completion_frames,
     load_model_stream_config,
 )
+from configs.runtime import read_jsonc_object
 from tests.harness.python.run_context import TestRunContext
 from tests.integration.backend.sessions.test_runner_cancellation import (
     RunnerCase,
@@ -141,9 +142,13 @@ def mounted_case(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch
     yield case
 
 
-def assert_closed(case: MountedCase):
+def assert_closed(case: MountedCase, *, retried_jobs: str | None = None):
     identities = list(case.roots)
-    assert case.closed == [(identity, phase) for identity in reversed(identities) for phase in ("jobs", "runtime", "platform")]
+    expected = []
+    for identity in reversed(identities):
+        phases = ("jobs", "jobs", "runtime", "platform") if identity == retried_jobs else ("jobs", "runtime", "platform")
+        expected.extend((identity, phase) for phase in phases)
+    assert case.closed == expected
     for container in case.containers:
         assert container.agent_execution_service._sweep_task is None
         assert container.resource_platform.process_root_scope.is_closed
@@ -357,6 +362,13 @@ async def test_shutdown_waits_for_real_goal_terminal_state_before_catalog_close(
     expected_status: GoalStatus,
 ) -> None:
     ready, close_requested = asyncio.Event(), asyncio.Event()
+    # 本用例只规划一次失败请求；使用真实配置关闭候选模型切换，保持原次数和期限断言。
+    for root in mounted_case.roots.values():
+        config_path = root / ".boxteam/workspace.jsonc"
+        payload = read_jsonc_object(config_path) if config_path.exists() else {}
+        model = payload.setdefault("agents", {}).setdefault("default", {}).setdefault("model", {})
+        model["fallback_providers"] = []
+        config_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n")
     lifespan_ready = asyncio.Event()
     model_entered, model_release = asyncio.Event(), asyncio.Event()
     goal_entered, goal_captured = asyncio.Event(), asyncio.Event()
@@ -465,28 +477,37 @@ async def test_shutdown_waits_for_pre_body_cancel_finalization_writer(
     writer_failure: bool,
 ) -> None:
     ready, close_requested = asyncio.Event(), asyncio.Event()
+    lifespan_ready = asyncio.Event()
     entered, release = threading.Event(), threading.Event()
     containers: list[AppContainer] = []
     jobs: list[JobState] = []
+    body_error = ValueError("原始 lifespan 失败")
+    writer_error = RuntimeError("真实 writer 边界失败")
+    writers = []
+    starts = []
 
     async def run_lifespan() -> None:
         async with main.lifespan(main.app):
+            lifespan_ready.set()
             container = mounted_case.containers[0]
             containers.append(container)
             real_start = container.job_service._start_job_task
             real_writer = container.checkpointer.mark_job_terminal_status
+            writers.append(real_writer)
 
             def cancel_before_body(job: JobState) -> None:
                 real_start(job)
                 assert job.task is not None
                 job.task.cancel()
+                jobs.append(job)
+                ready.set()
 
             def blocked_writer(**kwargs) -> bool:
                 entered.set()
                 if not release.wait(8):
                     raise TimeoutError("Job 终态 writer 测试屏障未释放")
                 if writer_failure:
-                    raise RuntimeError("真实 writer 边界失败")
+                    raise writer_error
                 return real_writer(**kwargs)
 
             monkeypatch.setattr(container.job_service, "_start_job_task", cancel_before_body)
@@ -498,21 +519,22 @@ async def test_shutdown_waits_for_pre_body_cancel_finalization_writer(
             ):
                 case = RunnerCase(container, container.workspace_root)
                 session_id, thread_id = await _session(case)
-                jobs.append(await _start_job(case, "user", session_id, thread_id))
-            ready.set()
+                # 原入口仍可能等待读取dispatch快照；观察真实任务接纳，不能先等收尾写完。
+                starts.append(asyncio.create_task(_start_job(case, "user", session_id, thread_id)))
             await close_requested.wait()
             if writer_failure:
-                raise ValueError("原始 lifespan 失败")
+                raise body_error
 
     task = asyncio.create_task(run_lifespan())
     try:
+        await asyncio.wait_for(lifespan_ready.wait(), 8)
         await asyncio.wait_for(ready.wait(), 8)
         assert await asyncio.to_thread(entered.wait, 5)
         close_requested.set()
         with pytest.raises(TimeoutError):
             await asyncio.wait_for(asyncio.shield(task), 0.05)
         assert jobs[0].task is not None and jobs[0].task.cancelled()
-        assert jobs[0].status == JobStatus.cancelled
+        assert jobs[0].status == JobStatus.cancelling
         assert containers[0].job_service._finalization_tasks
         assert containers[0].session_catalog.resolver.catalog_store.connection is not None
         assert not mounted_case.compiled
@@ -520,16 +542,32 @@ async def test_shutdown_waits_for_pre_body_cancel_finalization_writer(
         release.set()
         close_requested.set()
         if writer_failure:
-            with pytest.raises(BaseExceptionGroup, match="Job 后台终态收尾失败") as caught:
+            with pytest.raises(BaseExceptionGroup) as caught:
                 await asyncio.wait_for(task, 8)
-            context = caught.value.__context__
-            assert isinstance(context, ValueError)
-            assert str(context) == "原始 lifespan 失败"
+
+            def leaves(error):
+                if isinstance(error, BaseExceptionGroup):
+                    return [leaf for child in error.exceptions for leaf in leaves(child)]
+                return [error]
+
+            errors = leaves(caught.value)
+            assert body_error in errors and writer_error in errors
+            backend = main.app.state.workspace_lifespan
+            assert backend is not None and not backend.closed
+            assert containers[0].session_catalog.resolver.catalog_store.connection is not None
+            assert not containers[0].resource_platform.process_root_scope.is_closed
+            # 修复真实writer边界后沿同一关闭入口重试，不清空任何收尾错误或业务状态。
+            monkeypatch.setattr(containers[0].checkpointer, "mark_job_terminal_status", writers[0])
+            await asyncio.wait_for(backend.close(), 8)
+            assert jobs[0].status == JobStatus.cancelled
+            identity = containers[0].workspace_id
+            assert mounted_case.closed.count((identity, "jobs")) == 2
         else:
             await asyncio.wait_for(task, 8)
+        await asyncio.wait_for(asyncio.gather(*starts), 8)
     assert not containers[0].job_service._finalization_tasks
     assert not containers[0].goal_runtime_service._tasks
-    assert_closed(mounted_case)
+    assert_closed(mounted_case, retried_jobs=containers[0].workspace_id if writer_failure else None)
 
 
 @pytest.mark.asyncio

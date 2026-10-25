@@ -100,7 +100,7 @@ def fixture_lifetime(monkeypatch: pytest.MonkeyPatch) -> FixtureLifetime:
     monkeypatch.setattr(runtime_fixture, "load_or_create_workspace_id", lambda _root: "00000000-0000-4000-8000-000000000001")
     monkeypatch.setattr(runtime_fixture, "WorkspaceContainerRegistry", lambda **_kwargs: nullcontext(registry))
     monkeypatch.setattr(runtime_fixture, "catalog_provider_scope", lambda _registry: nullcontext())
-    monkeypatch.setattr(runtime_fixture, "_workspace_lifespan", workspace_lifespan)
+    monkeypatch.setattr(runtime_fixture, "WorkspaceLifespan", workspace_lifespan)
     monkeypatch.setattr(runtime_fixture, "ToolInvocationContext", lambda **_kwargs: context)
     monkeypatch.setattr(runtime_fixture, "session_thread_owner_scope", lambda *_args, **_kwargs: nullcontext())
     monkeypatch.setattr(runtime_fixture, "TurnExecutionScope", lambda _execution_id: scope)

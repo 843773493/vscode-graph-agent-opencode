@@ -83,7 +83,7 @@ Manager 对检查点失败后的收尾继续按原资源隔离：若 context 释
 Terminal/Browser 的 HTTP 层现统一使用可取消的异步 HTTPX，默认 10/30 秒及 Browser run 的原预算余量保持；同次网络传输共用单调总期限，不再把完整请求交给默认线程池。传输取消会关闭客户端连接，仍不证明服务端已经停止；该期限不覆盖资源锁等待、多次请求的 operation 总耗时或 scope 回调。共享 owner 已迁为每条资源记录一把进程内锁；创建、管理、传输授权、工具调用、lease 关闭、fork attach、Thread/Session 清理和孤儿回收均复用该资源的同一把锁，不再跨单资源外部请求持有 owner 全局锁。恢复入口只保留首次对账的 single-flight gate；锁与原 owner 记录一一对应，不形成新的持久账本。列表先按原关联/来源元信息选目标，等锁后重检过滤；多资源清理按资源 ID 固定顺序取得整组锁，仍在任何 detach 前核对完整 lease 集合。包含挂起资源的聚合查询或整组清理仍会等待该资源，同步回调阻塞事件循环时异步计时也无法抢占。任务 5.4 后续继续统一 operation 总截止时间、终止核实和迟到回执，明确 Session 删除、换代 admission 与 shutdown 的有界等待、失败返回和保留事实；本次锁隔离不代表这些合同已完成。
 
 
-runtime 准入及单 Session 的 runtime 排空现各有一次调用共用的 30 秒单调总等待预算，覆盖等待旧代卸载、构建与多个 Thread 的顺序排空，后续阶段不重置预算。等待超时或调用方取消只结束本次等待，原 build/unload task 仍由原 state 持有，迟到回执沿原链记录；后续重试复用同一任务，不能先建下一代或关闭尚在构建的 scope。Session 删除沿原异常传播停留在 deleting，保留 locator、active 控制 fence 和物理历史，待原任务完成后按同一删除记录继续。该预算只覆盖 tracker 的 runtime 阶段，不覆盖此前领域资源排空、Session gate/retention 等待或整个删除 operation。TODO：真实外部操作的总截止时间与终止核实、同步阻塞和线程池排队、全局 shutdown 与存储关闭顺序仍未完成；不能在全局 shutdown 等待超时后先关闭 catalog，再允许原任务继续写入。
+runtime 准入及单 Session 的 runtime 排空现各有一次调用共用的 30 秒单调总等待预算，覆盖等待旧代卸载、构建与多个 Thread 的顺序排空，后续阶段不重置预算。等待超时或调用方取消只结束本次等待，原 build/unload task 仍由原 state 持有，迟到回执沿原链记录；后续重试复用同一任务，不能先建下一代或关闭尚在构建的 scope。Session 删除沿原异常传播停留在 deleting，保留 locator、active 控制 fence 和物理历史，待原任务完成后按同一删除记录继续。该预算只覆盖 tracker 的 runtime 阶段，不覆盖此前领域资源排空、Session gate/retention 等待或整个删除 operation。TODO：真实外部操作的总截止时间与终止核实、同步阻塞、线程池排队及整个 Backend shutdown 总期限仍未完成；全局 runtime 预算与失败保留存储的顺序已由下述 Backend 关闭切片接入，不能让迟到任务访问已关闭存储。
 
 扩展资源 owner 回归发现，记录查询已更名为 `_require_owned_resource_record`，但共享 operation、Terminal/Browser operation 和 Browser 管理入口仍有旧 `_require` 调用，导致取得 lease 或读取记录时直接失败。本轮全量迁齐这些调用和对应测试，保留唯一查询方法，不加兼容入口，也不改变关联、lease 或删除策略。
 
@@ -185,8 +185,19 @@ TODO（性能）：32 个目录的 124 KiB 原件对应约 2.90 MiB GC 后 WAL�
 
 ### 批量 runtime 关闭隔离（5.4 部分收口）
 
-`ThreadResidencyTracker.close()` 对本批已选中的 state 分别建立短命等待 task，复用该 state 唯一的构建与卸载任务；不再串行等待第一个 Thread 后才开始其它 Thread。单 Session 在建等待者前冻结一次原 30 秒单调截止，所有 Thread 共用；全局 shutdown 继续等待原 owner，不在存储关闭顺序未协调前擅自超时退出。构建仍挂起时不并发关闭其正在登记资源的 scope。
+`ThreadResidencyTracker.close()` 对本批已选中的 state 分别建立短命等待 task，复用该 state 唯一的构建与卸载任务；不再串行等待第一个 Thread 后才开始其它 Thread。单 Session 在建等待者前冻结一次原 30 秒单调截止，所有 Thread 共用；全局 runtime 关闭现同样共用一次原 30 秒预算，超时保留原 owner；Backend 按下述依赖步骤保留未完成关闭及存储。构建仍挂起时不并发关闭其正在登记资源的 scope。
 
 本次等待者只收集各 state 的原异常，按选择顺序汇总；取消时排空本次等待者，不取消原 build/unload，也不建立清理重试或第二 owner。listener/scope 迟到失败仍保留原 generation 和错误供同入口重试；独立 Thread 已完成的清理与附件 detach 不重复执行。真实服务 shutdown 集成从产品上传与执行生成两个 Session 的附件、历史和 checkpoint，暂停一个原清理边界时核验另一 runtime 已 cold、附件已按原 owner 解除运行时关联，两个 Session 的 canonical bytes、locator 和 checkpoint 保持可读。
 
-TODO：整个 Backend shutdown 的总期限、AsyncExitStack 中存储的关闭顺序、同步阻塞回调与不合作的外部进程终止仍属于 5.2/5.4/6.2；本批仅证明事件循环可调度时各 Thread 的排空隔离。团队、成员、委派与协作继续暂缓实现及专项验证。
+整个 Backend shutdown 的总期限、同步阻塞回调与不合作的外部进程终止仍属于 5.2/5.4/6.2；runtime 批量隔离及存储关闭顺序分别由本批和下述切片验证。团队、成员、委派与协作继续暂缓实现及专项验证。
+
+
+### Backend 关闭失败保留依赖并沿原入口重试（5.4 部分收口）
+
+原两层 AsyncExitStack 被唯一的 `WorkspaceLifespan` / `BackendLifespan` 关闭链替代。Workspace 的具名依赖步骤只有成功才移除；业务 writer、runtime 或附件关闭失败时，保留原失败步骤和后续存储，不重复已经完成的副作用。每个 Workspace 的原专属 asyncio task 从启动一直持有到重试关闭，MCP 的 AnyIO scope 始终由创建它的任务关闭；并发关闭等待者复用同一次执行，取消等待不取消原 owner。
+
+Backend 仍按挂载逆序尝试全部 Workspace，独立挂载不因一项失败而跳过。任一 Workspace 未完成时保留全部 catalog 与附件维护锁，原生命周期保存在 application state，不能用新启动覆盖；全部排空后才关闭 catalog，再归还维护锁和关闭 model_stream。catalog 关闭失败保留原组件以供同入口重试；真实连接关闭成功后才标记物理关闭。事务回滚失败则立即禁止业务访问，保留原回滚原因与首错，即使物理关闭失败也不能继续使用污染连接，原 owner 仍能重试物理关闭。
+
+全局 runtime 关闭使用与 Session 排空相同的一次 30 秒单调预算；超时不取消原 build/unload，不提前关闭仍可被迟到回调访问的 scope、目录或 locator。原业务异常与关闭异常明确聚合保留。产品验收从真实双挂载、上传和消息执行生成 checkpoint 与 canonical，覆盖 runtime 原失败/超时、业务与关闭同时失败、附件及 catalog 关闭失败、peer 独立关闭、原入口重试及迟到回调读取原存储；另验证 Goal 终态、任务体前取消的终态 writer，以及远端 fork export 周期清理仍沿原生命周期工作。
+
+TODO：此预算只覆盖 runtime 阶段，不承诺整个 Backend 或所有 owner 的 shutdown 总期限；同步阻塞、线程池排队、生产进程退出协调和外部进程终止核实继续按 5.2/5.4/6.2 验收，三项保持未勾。团队、成员、委派与协作继续 TODO。

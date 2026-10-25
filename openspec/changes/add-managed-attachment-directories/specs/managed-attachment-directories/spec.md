@@ -184,7 +184,12 @@ fork SHALL 沿用统一资源目标检查及现有 journal/claim/publication，�
 #### Scenario: 批量 runtime 关闭中一个 Thread 挂起或失败
 
 - **WHEN** Session 或服务关闭时，一个 Thread 的原构建、runtime lease、listener 或 scope 尚未完成
-- **THEN** 事件循环可正常调度时，其它选中 Thread 独立推进原排空链；同一 Thread 的重入关闭复用原 build/unload，单 Session 全批共用原 30 秒等待预算。取消仅排空本次等待者，原任务与 scope/generation 继续由原 owner 持有；各 Thread 的原异常按输入 owner 顺序汇总，重试沿原 owner 继续，不重发已完成清理。服务全局关闭的总期限与存储关闭顺序仍须单独完成，不把其它 Thread 排空成功视为整体关闭完成
+- **THEN** 事件循环可正常调度时，其它选中 Thread 独立推进原排空链；同一 Thread 的重入关闭复用原 build/unload，单次 Session 或全局 runtime 关闭全批共用原 30 秒等待预算。取消仅排空本次等待者，原任务与 scope/generation 继续由原 owner 持有；各 Thread 的原异常按输入 owner 顺序汇总，重试沿原 owner 继续，不重发已完成清理。Backend 按以下依赖关闭规则保留原存储；整个服务关闭的总期限仍须单独完成，不把其它 Thread 排空成功视为整体关闭完成
+
+#### Scenario: Backend 关闭失败后保留依赖并重试
+
+- **WHEN** Backend 关闭时，某挂载的 writer、runtime、附件或 catalog 尚未完成或返回失败
+- **THEN** 继续尝试其它挂载；原 Workspace 只移除成功的关闭步骤，保留失败步骤和后续依赖。全部 Workspace 排空前不关闭 catalog，任一关闭未完成前不归还维护锁或覆盖原生命周期。沿同入口重试原步骤，不重复已完成副作用，业务及关闭原错均保留；MCP scope 的启动与重试关闭始终在同一原任务中完成。catalog 物理关闭失败可重试，事务回滚失败的连接立即禁止业务访问而不宣称已物理释放。该规则不等于整个 shutdown 已具有总期限
 
 #### Scenario: Session 删除排空超过期限
 

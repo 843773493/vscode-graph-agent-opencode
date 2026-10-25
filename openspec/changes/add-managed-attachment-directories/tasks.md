@@ -174,3 +174,11 @@ Web 定向 `BOXTEAM_E2E_SECTION8_FOCUS=copy_missing_attachment` 通过真实 Gat
 - 全局 shutdown 总期限、存储关闭顺序、同步阻塞和强制终止仍 TODO，5.2/5.4/6.2 保持未勾；团队、成员、委派与协作不追加实现或专项验证。
 
 - 合并后保留共享既有 state 类型拆分，定向单测 68 passed/16.97 秒、同一正式产品矩阵 5 passed/63.26 秒，Ruff 及 45 项 OpenSpec strict 通过。主线程 AST/目录自查未发现本批职责越界；候选既存大文件和测试目录规模已复核，不称独立代理审查。共享暂存内容保持原样。
+
+
+### 2026-10-25 Backend 关闭依赖与原入口重试（5.4 部分收口）
+
+- 原两层退出栈改为唯一具名关闭链，失败保留原步骤、后续存储、locator 与维护锁，独立挂载继续排空；全部完成后才关闭 catalog。专属 Workspace task 保持 MCP AnyIO scope 的创建/关闭身份，并发等待复用原执行，禁止新生命周期覆盖未完成关闭。catalog 真实关闭成功后才标记完成；回滚失败仍立即隔离业务访问且保留首错，物理关闭可继续重试。
+- 全局 runtime 关闭共用原 30 秒单调预算，构建/lease/listener/scope 挂起仍保留唯一原任务，不假报释放。候选产品 5 passed/111.62 秒，完整相关生命周期及远端 fork 清理回归 25 passed/124.69 秒，catalog/runtime/装具单测 346 passed/11.57 秒，Ruff/compileall 通过。完整旧生产的产品反例 4 failed/1 deselected，runtime 超时四项单测反例 4 failed；均保留完整旧生产归档，不拼接旧源码。
+- 早期配置文件准备错误、默认模型 fallback 导致未规划调用、旧错误聚合/失败后关库断言，以及任务创建入口与 writer 屏障互等的测试准备均有原始失败；最终使用工作区覆盖关闭 fallback、观察真实任务接纳，并保留身份、错误对象、原期限与完整关闭顺序断言。fork 首轮直接 pytest 因缺正式 matrix watchdog 未进入业务，后续经正式矩阵三项通过，不以装具失败冒称产品反例。证据在 `out/tests/temp/workspace_shutdown_order_20261025/artifacts/`；共享树新产品 5 passed/100.55 秒、相关生命周期与远端 fork 回归 25 passed/120.59 秒、单测 346 passed/10.19 秒，Ruff/compileall 通过；45 项 OpenSpec strict 全部通过，`verification001.json` 机械核验前后源码、profile、原始日志与实际退出码。未运行 Gateway/主 Web、Windows 或真实生产进程退出专项，本批不宣称覆盖这些入口。
+- 结构自查：main 的生命周期主体物理迁入同层单一模块，旧入口/全部调用方迁齐，不加 shim；新模块约 445 行，职责集中于 Workspace/Backend 启动、依赖关闭及重试，无新增源码目录。整个 Backend 总期限、同步阻塞、线程池与外部终止核实仍 TODO，5.2/5.4/6.2 保持未勾；团队、成员、委派及协作不追加实现或专项验证。

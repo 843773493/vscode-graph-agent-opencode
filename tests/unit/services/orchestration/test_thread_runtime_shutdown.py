@@ -204,3 +204,81 @@ async def test_close_aggregates_original_failures_in_owner_order_and_retries(
         finish.set()
         await asyncio.gather(closing, return_exceptions=True)
         await tracker.close()
+
+
+@pytest.mark.parametrize("phase", ["build", "lease", "listener", "scope"])
+async def test_global_close_deadline_keeps_original_work_and_retries(
+    tracker: ThreadResidencyTracker, monkeypatch: pytest.MonkeyPatch, phase: str,
+) -> None:
+    from app.services.orchestration import thread_residency
+
+    entered, finish, peer_closed = asyncio.Event(), asyncio.Event(), asyncio.Event()
+    scopes: dict[str, LifetimeScope] = {}
+    attempts: list[str] = []
+
+    async def listener(_session: str, thread: str, _generation: int) -> None:
+        attempts.append(thread)
+        if thread == "first" and phase == "listener":
+            entered.set()
+            await finish.wait()
+
+    async def build(_session: str, thread: str, scope: LifetimeScope) -> object:
+        scopes[thread] = scope
+        if thread == "first" and phase == "build":
+            entered.set()
+            await finish.wait()
+
+        async def release() -> None:
+            if thread == "first" and phase == "scope":
+                entered.set()
+                await finish.wait()
+            if thread == "peer":
+                peer_closed.set()
+
+        scope.register(release, label="原runtime关闭")
+        return object()
+
+    tracker.add_unload_listener(listener)
+    first = asyncio.create_task(_acquire(tracker, "first", build))
+    lease = None
+    try:
+        if phase == "build":
+            await entered.wait()
+        else:
+            lease = await first
+            if phase != "lease":
+                lease.release()
+        (await _acquire(tracker, "peer", build)).release()
+        monkeypatch.setattr(thread_residency, "THREAD_RUNTIME_WAIT_SECONDS", 0.02)
+        with pytest.raises(ExceptionGroup) as failure:
+            await asyncio.wait_for(tracker.close(), 1)
+        error, = failure.value.exceptions
+        assert isinstance(error, TimeoutError)
+        assert "shutdown-drain" in str(error) and "thread_id=first" in str(error)
+        assert peer_closed.is_set() and scopes["peer"].is_closed
+        state = tracker._states[("session-a", "first")]
+        original = state.runtime_build if phase == "build" else state.runtime_unload
+        assert original is not None and not original.done() and not scopes["first"].is_closed
+        with pytest.raises(ExceptionGroup):
+            await asyncio.wait_for(tracker.close(), 1)
+        assert (state.runtime_build if phase == "build" else state.runtime_unload) is original
+        assert attempts.count("first") == (0 if phase in {"build", "lease"} else 1)
+        finish.set()
+        if lease is not None:
+            lease.release()
+        result, = await asyncio.gather(first, return_exceptions=True)
+        if isinstance(result, ThreadRuntimeLease):
+            result.release()
+        else:
+            assert isinstance(result, RuntimeError) and "拒绝新 admission" in str(result)
+        await asyncio.wait_for(tracker.close(), 1)
+        assert scopes["first"].is_closed and not tracker._states
+        assert attempts.count("first") == attempts.count("peer") == 1
+    finally:
+        finish.set()
+        for result in await asyncio.gather(first, return_exceptions=True):
+            if isinstance(result, ThreadRuntimeLease):
+                result.release()
+        if lease is not None:
+            lease.release()
+        await tracker.close()

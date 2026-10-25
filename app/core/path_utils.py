@@ -57,8 +57,8 @@ class SessionCatalogComponents:
 
     def close(self) -> None:
         if not self._closed:
-            self._closed = True
             self.resolver.catalog_store.close()
+            self._closed = True
 
 
 class SessionCatalogProvider(Protocol):

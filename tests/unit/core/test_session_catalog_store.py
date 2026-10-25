@@ -3872,6 +3872,10 @@ def test_transaction_closes_store_when_rollback_fails(
             pass
         with pytest.raises(RuntimeError, match="已关闭"):
             _ = store.connection
+        # 业务访问已隔离，物理关闭仍须允许原owner重试并真实释放连接。
+        store.close()
+        with pytest.raises(sqlite3.ProgrammingError, match="closed"):
+            connection.execute("SELECT 1")
     finally:
         if close_fails:
             connection.close()

@@ -145,6 +145,7 @@ def test_close_failure_preserves_original_lifecycle_error(
         mount.workspace_root / ".boxteam" / "sessions", mount.workspace_id
     )
     real_close = components.resolver.catalog_store.close
+    original_close = SessionCatalogStore.close
 
     def fail_close(_store):
         real_close()
@@ -158,6 +159,7 @@ def test_close_failure_preserves_original_lifecycle_error(
     assert isinstance(caught.value.exceptions[1], ExceptionGroup)
     with pytest.raises(RuntimeError, match="已关闭"):
         registry.get(mount.workspace_id)
+    monkeypatch.setattr(SessionCatalogStore, "close", original_close)
 
 
 def test_second_service_graph_failure_releases_only_its_catalog(
