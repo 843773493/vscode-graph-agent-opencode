@@ -19,7 +19,10 @@ from tests.harness.python.run_context import TestRunContext
 from tests.integration.backend.sessions.test_navigation_worker_lifespan import (
     _build_owned_container,
 )
-from tests.support.workspaces import prepare_test_workspace
+from tests.support.workspaces import (
+    prepare_test_workspace,
+    render_test_workspace_config,
+)
 
 
 @pytest.fixture
@@ -31,6 +34,17 @@ def startup_container(
         workspace_root=context.workspace_root,
         template_root=Path.cwd() / "tests/fixtures/workspaces/default_test_workspace",
         template_items=(),
+    )
+    # 身份/恢复测试不调用模型，不要求本机提供个人Provider凭据。
+    config = json.loads(render_test_workspace_config(
+        (Path.cwd() / "configs/tests/workspace/default.jsonc").read_text(encoding="utf-8"),
+    ))
+    for provider in config["llm"]["providers"]:
+        provider["api_key"] = "startup-contract-unused-key"
+        provider.pop("auth", None)
+    (context.workspace_root / ".boxteam").mkdir()
+    (context.workspace_root / ".boxteam/workspace.jsonc").write_text(
+        json.dumps(config, ensure_ascii=False) + "\n", encoding="utf-8",
     )
     monkeypatch.setenv("WORKSPACE_ROOT", str(context.workspace_root))
     monkeypatch.setenv("BOXTEAM_HOME", str(context.boxteam_home))

@@ -235,3 +235,11 @@ Thread卸载和Session资源drain继续复用原`_release_refs`。冷恢复和�
 入口一次30秒覆盖准备、恢复、终态观察、集合锁等待、撤权和释放。到期或取消排空本次协作式任务并释放本批锁；未开始不补造unknown，已派发未核实保留原记录、unknown与精确原lease。同代重试只核实正式终态并结算原lease，不重发未知删除。传输自己的TimeoutError保留原错误归属。物理移除旧的整组锁contextmanager，不保留第二释放链。
 
 TODO：整组preflight仍须等齐所选锁，不能为了peer提前detach破坏冲突原子边界；同步写盘/回调、不合作取消及原owner外部终止、整个Session删除和shutdown预算继续按5.2/5.4/6.2验收，不把资源drain局部完成视为整个删除成功。团队与协作暂缓。
+
+
+### 附件保留期使用Backend注入的UTC时钟
+
+附件目录owner与runtime装配消费同一个`RuntimeClockPorts.wall`，默认仍为系统UTC；没有新增测试环境分支或第二时钟状态。原零关联、重关联、重启恢复及GC算法不变，持久起点和30天期限仍由原catalog事务发布。真实Gateway/Backend验收使用既有进程外控制时钟及model_stream，经过两次正式消息执行和SIGKILL恢复：第29天重用清除旧期限，新代释放重新取得30天；第58天重启保留原期限，第59天精确到期删除，历史canonical字节保持。该时钟注入不代表挂起外部操作已被终止，5.2/5.4继续独立验收。
+
+
+Windows故障组合的未完成边界：按同一正式入口复验时，独立图中缓存的ThreadCreationService控制连接缺少显式生命周期关闭，child fork失败回滚仍有直接rmtree的长路径缺口。上述连接归属与失败清理必须由原owner纵向修复，再核验6.2；不得依赖GC时机关闭连接、扩大目录清理范围，或以超时/局部Linux通过冒称Windows完整故障组合完成。团队、成员、委派及协作仍按用户裁定暂缓，不在此修复扩展。

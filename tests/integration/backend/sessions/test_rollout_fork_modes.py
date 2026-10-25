@@ -355,13 +355,13 @@ def production_fork_container(request: pytest.FixtureRequest,
     workspace = prepare_rollout_workspace(request)
     # 本文件通过冻结请求验证存储/fork，不调用外部模型；干净 Git 快照也不能依赖个人密钥。
     config = json.loads(render_test_workspace_config(
-        (Path.cwd() / "configs/tests/workspace/default.jsonc").read_text(),
+        (Path.cwd() / "configs/tests/workspace/default.jsonc").read_text(encoding="utf-8"),
     ))
     for provider in config["llm"]["providers"]:
         provider["api_key"] = "fork-contract-unused-key"
         provider["endpoint"] = "http://127.0.0.1:1/v1"
         provider.pop("auth", None)
-    (workspace / ".boxteam/workspace.jsonc").write_text(json.dumps(config, ensure_ascii=False) + "\n")
+    (workspace / ".boxteam/workspace.jsonc").write_text(json.dumps(config, ensure_ascii=False) + "\n", encoding="utf-8")
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
     monkeypatch.setenv("WORKSPACE_ROOT", str(workspace))
     monkeypatch.setenv("BOXTEAM_HOME", str(context.boxteam_home))

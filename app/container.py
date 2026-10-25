@@ -608,7 +608,9 @@ def _build_app_container(
         event_channel_service=job_event_bus.event_channel_service,
         startup_mount=startup_mount,
     )
-    attachment_blob_store = AttachmentBlobStore(resolved_workspace_root, path_resolver=session_path_resolver)
+    attachment_blob_store = AttachmentBlobStore(
+        resolved_workspace_root, path_resolver=session_path_resolver, clock=clock_ports.wall,
+    )
     workspace_service = WorkspaceService(
         config_service=config_service,
         workspace_root=resolved_workspace_root,

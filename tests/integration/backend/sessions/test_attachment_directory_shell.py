@@ -521,14 +521,19 @@ async def test_owner_terminal_commit_failure_keeps_real_workdir_until_durable_re
     attachment_id = parse_resource_uri(ref.directory_uri).tail_segments[0]
     directory = store.resolve_directory_uri(parse_resource_uri(ref.directory_uri))
     workdir = directory / "derived"
-    command = [sys.executable, "-u", "-c", "import os,time; print(os.getpid(), flush=True); time.sleep(600)"]
+    command = [sys.executable, "-u", "-c", (
+        "import os,time; from pathlib import Path; "
+        "Path('owner-commit.pid').write_text(str(os.getpid()), encoding='ascii'); "
+        "print('owner-commit-ready', flush=True); time.sleep(600)"
+    )]
     execute = create_exec_command_tool(session_id, terminal_owner=owner, invocation_context=context)
     result = await execute.ainvoke({
         "cmd": subprocess.list2cmdline(command) if os.name == "nt" else shlex.join(command),
         "workdir": file_uri_child(ref.directory_uri, "derived"), "yield_time_ms": 1000,
     })
     rid = result["terminal_id"]
-    pid = int(result["output"].strip())
+    assert "owner-commit-ready" in result["output"]
+    pid = int((workdir / "owner-commit.pid").read_text(encoding="ascii"))
     original_replace = Path.replace
     failures: list[OSError] = []
 

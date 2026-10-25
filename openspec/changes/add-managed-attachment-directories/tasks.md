@@ -221,3 +221,14 @@ Web 定向 `BOXTEAM_E2E_SECTION8_FOCUS=copy_missing_attachment` 通过真实 Gat
 - 原Thread/Session资源drain在全量原锁内重读/核全部lease，检查与任务接管间不让出事件循环，保持冲突不部分detach。未知终态观察只持自身锁；检查通过后各资源独立完成并立即解锁。入口一次30秒覆盖准备/恢复/观察/集合锁/撤权/删除；取消排空本调用，未知保留精确原lease，不重发删除。物理删除仅有调用的旧集合锁helper，无兼容链或新持久格式。
 - 准确命令、固定候选/完整旧生产反例、原始日志、源码指纹与退出码在`out/tests/temp/resource_release_batch_20261025/artifacts/`。候选初轮44项中42通过，Browser operation误用Terminal专有方法的2项准备错误已改为原Browser perform；初次扩大命令误写不存在的API文件，未进入业务。Ruff初轮max建议及import排序均修复，原失败保留。随后候选279项资源/API和2项真实PTY/Chromium/HTTP通过；最终含未知观察隔离的48项及共享验收结果按原件核验。
 - 真实场景使用正式Session/创建/operation及原Session资源drain，不伪造Thread generation；Thread释放由同owner参数化单测覆盖。整个Session删除/runtime卸载、同步阻塞、不合作任务与完整重启组合仍TODO，5.2/5.4/6.2保持未勾；团队/成员/委派/协作不追加实现与专项验证。
+
+
+### 2026-10-25 29天重关联与进程重启期限（6.2验收）
+
+- Backend装配将已有UTC时钟注入原附件owner，默认仍是系统UTC，无测试开关或第二计时实现。真实Gateway/Backend/model_stream经正式消息与图执行生成关联，SIGKILL后由启动owner处理漏detach；第29天同URI再次执行重置期限，新代零关联重新起算30天，第58天重启不延长，第59天精确回收，普通文件入口转404，canonical原文保持且再重启不复活目录。
+- 固定候选新场景1 passed/123.73秒，原runtime生命周期8 passed/67.35秒、GC前后真实进程退出2 passed/43.54秒。源码、准确命令、raw和退出码在`out/tests/temp/attachment_retention_restart_20261025/artifacts/`；Ruff首轮仅有未用import/排版，原失败保留。处理进程、fork竞争与硬重启故障组合继续据各正式suite核验，不能用单项通过代替全部6.2。
+- 该片不追加团队/成员/委派/协作实现或专项验证；整个operation终止核实、同步阻塞、Session删除和shutdown总预算仍按5.2/5.4保留TODO。
+
+- Linux 六组生命周期正式套件合计34 passed；最终装具修改后runtime 8 passed/71.03秒、GC 2 passed、startup/navigation 10 passed/31.36秒，Shell新增PID证据1 passed。共享树新重启场景1 passed/114.82秒，最终runtime 8 passed/65.00秒、startup/navigation 10 passed/25.54秒，相关Ruff及compileall通过。完整旧生产反例在第二次零关联起点断言失败：旧实现未消费外置UTC时钟。
+- Windows `hyf_win` 已核对快照：`c51e5584feddc42a9375cdf3fa7b0c764f2d8914` 的新增重启场景通过；所在组合命令后续因runtime装具缺少个人Provider凭据而退出1，不能算整组通过。Shell组合10 passed/1 skipped后在另一用例的PTY PID解析失败；修正为目标程序落盘ASCII PID并保留输出标记后，原持久化故障场景与真实硬重启恢复2 passed/113.06秒。测试配置使用显式离线凭据，fork装具的读写明确UTF-8，独立图装具显式关闭附件与workspace存储；所有原业务断言保留。
+- 后续快照`b714b06d162c72ce598827e9775f28e410694b7d`暴露未收口边界：runtime与GC各首项通过，但下一项重建工作区仍受原控制库/存储句柄占用；fork为2 passed、1 failed、8 errors，包含真实child fork失败回滚对长路径直接rmtree的WinError 3，以及缓存ThreadCreationService持有的session-control.sqlite阻止重建。TODO：在原Thread创建工厂/生命周期owner明确控制库关闭，并迁齐child创建/失败清理的原生长路径I/O，再复验Windows故障组合；不扫描/强关未知连接，不改历史/身份，也不把装具失败当成产品反例。6.2保持未完成，5.2/5.4继续独立推进。

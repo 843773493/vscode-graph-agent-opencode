@@ -160,6 +160,7 @@ from tests.integration.backend.sessions.test_runner_cancellation import (
     _start_job,
 )
 from tests.support.session_navigation_queue import create_catalog_intent
+from tests.support.workspaces import render_test_workspace_config
 
 COMPACTION_GATEWAY_ID = "gateway_0123456789abcdef0123456789abcdef"
 
@@ -170,6 +171,15 @@ def runner_case(
     monkeypatch: pytest.MonkeyPatch,
 ) -> RunnerCase:
     workspace = prepare_rollout_workspace(request)
+    # 此装具替换外部模型，不应要求开发机配置个人 Provider 凭据。
+    config_path = workspace / ".boxteam/workspace.jsonc"
+    config = json.loads(render_test_workspace_config(
+        (Path.cwd() / "configs/tests/workspace/default.jsonc").read_text(encoding="utf-8"),
+    ))
+    for provider in config["llm"]["providers"]:
+        provider["api_key"] = "runtime-contract-unused-key"
+        provider.pop("auth", None)
+    config_path.write_text(json.dumps(config, ensure_ascii=False) + "\n", encoding="utf-8")
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
     monkeypatch.setenv("WORKSPACE_ROOT", str(workspace))
     monkeypatch.setenv("BOXTEAM_HOME", str(context.boxteam_home))
