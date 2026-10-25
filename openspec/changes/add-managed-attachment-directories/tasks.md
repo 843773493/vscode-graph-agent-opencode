@@ -194,3 +194,13 @@ Web 定向 `BOXTEAM_E2E_SECTION8_FOCUS=copy_missing_attachment` 通过真实 Gat
 - 该边界仅证明事件循环正常调度、传输可取消时的恢复等待期限；不代表真实网络永久挂起、独立Backend硬重启、同步阻塞/线程池、不合作任务终止、Gateway/主Web或整个operation/shutdown验收。5.2/5.4/6.2保持未勾；团队、成员、委派和协作继续TODO。
 
 最终共享工作区复核：资源/锁单测138 passed/4.47秒，真实Browser矩阵8 passed/61.21秒；Ruff、compileall及OpenSpec strict 45/45通过。相同新测试在完整旧生产archive为单测8 failed/2 passed、真实矩阵2 failed/6 passed。测试期间另有开发启动脚本及其JS单测三处并行改动，均不在本场景执行/导入链；逐项源码指纹保留原差异，依赖审计见 `nondependency-audit001.json`，没有将全范围源码说成未变，也未覆盖这些改动。全部运行命令、原始日志、实际退出码与进程回收核验见 `verification001.json`。
+
+
+### 2026-10-25 聚合资源列表网络等待隔离（5.4 部分收口）
+
+- Terminal/Browser的聚合列表只发一次外部清单请求，网络等待期间不占资源锁，收到后逐资源短暂加锁并重检过滤及已核实删除。仍应返回的完整记录已变化则显式冲突，不让旧清单覆盖已提交命令或同版本外部关闭观察；取消不发布未收到的观察。保持原记录/lease链、排序及整批释放preflight，不新增持久状态、每资源HTTP或兼容实现。
+- 固定HEAD候选相关单测/API回归215 passed/9.05秒，新真实Node/Chromium/HTTP矩阵2 passed/15.98秒；正式Session/资源入口生成状态，慢清单回包期间peer查询与run工具返回42，随后正式stop或Node直接关闭加owner观察提交终态，旧回包冲突且owner/lease字节不回退，刷新只取一次清单。复用fixture按当前测试文件隔离工作区/产物。旧版本完整archive叠相同测试，单测8 failed/2 passed、真实矩阵2 failed，均在独立查询/命令被列表所持锁阻挡处复现。
+- 首轮候选使用不存在的私有查询名，修正为固定HEAD唯一原方法；真实矩阵首轮收尾未先detach而被既有删除规则拒绝，后续改用正式detach/delete，没有放宽产品断言。扩展回归首次命令误写不存在的测试路径，在收集前退出4；Ruff首次仅import排版失败，修正后通过。所有失败原件保留，不作为业务通过证据。准确命令、候选/共享源码指纹、raw/真实退出码及进程回收在 `out/tests/temp/resource_list_isolation_20261025/artifacts/`。
+- 作者AST/目录自查无本片新增职责或import边；既有约900行owner及超过20文件的单测目录仍为后续结构审查风险，不启动代理专项。逐资源观察持久化仍使用完整JSON写盘，批量写入与同步fsync成本保留TODO，未声称性能提升。列表恢复/锁等待与整组释放总预算、同步阻塞、外部终止和完整shutdown继续TODO，5.2/5.4/6.2保持未勾；团队、成员、委派和协作不新增实现或专项验证。
+
+共享最终复核：相关单测/API 215 passed/8.92秒，新真实Browser矩阵2 passed/14.55秒，既有恢复矩阵8 passed/61.93秒；Ruff、compileall和OpenSpec strict 45/45通过。共享已有私有查询改名在三方合并保留，旧HEAD候选继续使用其唯一原名，无shim。共享全树diff检查另报协作模块既存EOF空行，本片候选diff检查通过；该无关模块按用户裁定不修改。全部候选、反例与共享运行的源码前后、日志、退出码及进程回收由verification收据核验，共享暂存指纹始终不变。

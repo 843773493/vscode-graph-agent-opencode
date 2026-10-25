@@ -40,7 +40,7 @@ def browser_client(
     integration_backend_port: int, integration_config_path: str,
     monkeypatch: pytest.MonkeyPatch,
 ) -> Iterator[tuple[BrowserManagerClient, Path, TestRunContext]]:
-    with TestRunContext.from_test_file(Path(__file__)) as run:
+    with TestRunContext.from_test_file(request.path) as run:
         runtime = run.runtime_root_for_node(request.node.nodeid)
         runtime.mkdir(parents=True, exist_ok=True)
         for name in ("TMPDIR", "TMP", "TEMP"):

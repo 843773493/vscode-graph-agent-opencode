@@ -208,21 +208,25 @@ class WorkspaceResourceOwner:
 
         records = tuple(record for record in self._store.all() if matches(record))
         await self.recover(record.resource_id for record in records)
-        async with self._lock_resources(record.resource_id for record in records):
-            records = tuple(self._require(record.resource_id) for record in records)
-            observed = index_resources(await self._transport.list_resources(), self.workspace_id, self._store.ids(), self.kind)
-            result: list[ResourceSnapshot] = []
-            for record in records:
-                observe_resource(record, observed.get(record.resource_id), self.kind)
-                if record.status == "deleted" and record.reconciliation_status == "verified":
+        # 一次清单请求不占任何资源锁；只在合并各自观察时短暂持有对应锁。
+        records = tuple(self._require(record.resource_id) for record in records)
+        observed = index_resources(await self._transport.list_resources(), self.workspace_id, self._store.ids(), self.kind)
+        result: list[ResourceSnapshot] = []
+        for before in records:
+            async with self._resource_lock(before.resource_id):
+                record = self._require(before.resource_id)
+                if not matches(record) or (record.status == "deleted" and record.reconciliation_status == "verified"):
                     continue
-                # 等锁期间关联可能改变，不能把已解除关联的记录返回给原过滤目标。
-                if matches(record):
-                    result.append(resource_projection(record, observed.get(record.resource_id), self.kind))
-            self._store.save(*records)
-            for record in records:
+                # 同版本外部状态观察、未知占用等也能改变记录，不能只比较owner_revision。
+                if record != before:
+                    raise ResourceConflict(f"外部资源列表读取期间状态已改变；请刷新: {record.resource_id}")
+                runtime = observed.get(record.resource_id)
+                observe_resource(record, runtime, self.kind)
+                # TODO：逐项持久化仍重写全量JSON，后续测量大清单成本再优化写盘。
+                self._store.save(record)
                 self._sync_ledger(record)
-            return sorted(result, key=lambda item: str(item["updated_at"]), reverse=True)
+                result.append(resource_projection(record, runtime, self.kind))
+        return sorted(result, key=lambda item: str(item["updated_at"]), reverse=True)
 
     async def get_resource(self, resource_id: str) -> ResourceSnapshot:
         await self.recover((resource_id,))

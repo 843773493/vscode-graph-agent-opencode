@@ -30,6 +30,8 @@ browser/
 
 `test_browser_shutdown_signals.py` 通过真实Node/Chromium/HTTP、受控网络屏障和POSIX的SIGTERM/SIGINT/SIGHUP验证：原5秒排空失败后进程、原页面和管理查询仍可用，准入继续关闭，在途重复信号不重发关闭；原操作完成后再次信号保存最终检查点并退出，新进程以原ID冷恢复最终表单值。另核未捕获异常与未处理rejection遇到同类排空失败时仍按原规则退出1，以及关闭过程中到达的致命错误不会被在途去重忽略。通过 `bun run test:matrix -- --suite=integration-browser-shutdown-signals` 运行，固定60秒/4GiB，各场景日志和结果独立保存；不代表Windows SIGBREAK、上层启动器、Gateway/主Web、强制终止或整个shutdown总期限验收。
 
+`test_browser_resource_listing.py` 复用原辅助进程fixture并按当前测试文件隔离产物，经正式Session/资源创建、真实Node/Chromium/HTTP验证清单等待期间peer查询及工具完成；正式stop或同版本外部关闭观察提交后，旧回包必须冲突，原owner/lease字节不回退，刷新只取一次清单。通过 `bun run test:matrix -- --suite=integration-browser-resource-listing` 运行，固定120秒/4GiB；不代表Gateway/主Web、Windows、网络永久挂起或完整shutdown验收。
+
 性能测试通过 `psutil` 遍历 Browser 后端的子进程，避免依赖 `/proc` 与 `sysconf`：CPU统一累计用户态和系统态秒数；内存 Linux 采样 PSS，Windows/macOS 采样 USS，结果同时记录指标名。服务关闭在 POSIX 发送 SIGTERM，在 Windows 使用独立进程组和 CTRL_BREAK_EVENT，以触发 Browser Manager 的检查点保存。
 
 ## 可修改内容
