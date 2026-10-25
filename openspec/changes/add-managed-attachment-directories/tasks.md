@@ -285,3 +285,10 @@ Web 定向 `BOXTEAM_E2E_SECTION8_FOCUS=copy_missing_attachment` 通过真实 Gat
 - 修复前述旧fixture身份TODO：沿统一空工作区准备入口取得真实workspace_id，再传入catalog装具；catalog、消息与后台owner使用同一身份，不放宽生产身份校验。测试观察canonical终态后显式关闭SQLite连接，避免Windows目录隔离被观察者自身阻挡。生产代码无改动，原512/513节点规模、准入、顺序、终态及失败断言保持。
 - Linux扩展三文件26 passed/31.17秒；最终观察连接修正后补跑两个相关场景2 passed/6.35秒。Windows首次扩展22 passed/4 failed：一个是测试观察连接占用，另外三个是未修改的Node调试配置原生长路径写入失败。最终快照`60e479026a11c93ee97f347817dbb37f5e1a0aae`的删除准入全文件6 passed/44.28秒；另外三个产品失败留待独立切片，不计为通过。
 - Ruff、compileall及作者AST自查通过，准确命令、源码指纹、raw与退出码在`out/tests/temp/delete_admission_fixture_20261025/artifacts/`。Windows沿原90秒/4GiB Job Object保护；ASGI及进程内验收不代替真实网络、Gateway或完整关闭组合。5.2/5.4/6.2仍未勾，团队与协作继续暂缓。
+
+### 2026-10-25 单次资源管理命令总等待预算（5.4部分收口）
+
+- 原`WorkspaceResourceOwner.command`入口一次30秒覆盖冷恢复、Thread准入、资源锁、撤权及回执；未派发不补造unknown/管理lease，已提交的冷恢复事实保留，派发未核实仍沿原异常链保留unknown和精确占用，底层TimeoutError及调用方取消保持归属。32个其它方法AST不变，去除本次预算上下文后原command AST一致；不新增命令执行链、账本或schema。同步阻塞与不合作取消保留代码TODO，5.2/5.4/6.2仍未勾，整体20/23。
+- Linux新定向16 passed/0.63秒；完整`428a50855`归档的相同单测8 failed/8 passed/9.34秒，旧实现的派发前总截止及跨恢复/命令预算场景均不能返回产品期限错误，原取消和底层超时场景保持。相关owner/API回归289 passed/10.25秒，包含上述16项，不相加。Windows快照`da3c38e9e789c4a0df1465c48ae24fe0a54f78ab`同16项通过/1.49秒，后续仅集成装具调整，生产与单测未变；既有开发服务未重启。
+- 正式`integration-resource-release`完整8 passed/69.21秒，原4项与新增4项共用原120秒/4GiB保护。正式Session和ASGI资源创建/管理入口生成真实Node/PTY或Chromium/HTTP状态，核资源锁等待到期不改原身份/版本、peer继续可用、停止已完成但回执未返回时HTTP503与原request_id、冷账本精确lease保留及新管理请求只核终态不重发停止。总预算跨冷恢复的20+11秒由单测推进单调时钟验证；真实服务场景只推进本次原截止，不称真实等待30秒、Gateway/Web/Windows真实辅助服务或任意执行的强制终止验收。
+- 首轮单测fixture在事件循环启动前取时钟产生14 errors，改为异步fixture后通过；首轮产品组合在失败后达120秒，缩小首项得到原锁收尾失败。原故障注入未限定调用方且推进全局时钟，现仅在具名命令的真实调用边界持锁/暂停回执并推进其截止，未改生产来适配测试，失败原件均保留。Ruff、最终compileall及OpenSpec strict 45/0通过；Pyright 1.1.414的4项诊断在完整旧生产逐条复现，仅行号不同，无新增诊断，不称类型检查全绿。准确命令、源码前后指纹、原始输出/实际退出码、完整旧生产及作者自查在`out/tests/temp/resource_command_deadline_20261025/artifacts/`；团队协作与CIL第9节继续暂缓。

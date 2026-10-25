@@ -6,9 +6,19 @@ import asyncio
 import json
 from pathlib import Path
 
+import httpx
 import pytest
+from fastapi import FastAPI
 
+from app.api.deps import (
+    get_browser_resource_owner,
+    get_terminal_resource_owner,
+    get_workspace_resource_owner,
+    verify_local_token,
+)
+from app.api.resources import router
 from app.core.mounted_workspaces import MountedWorkspace
+from app.core.trace_middleware import TraceMiddleware
 from app.services.business.workspace_resources import owner as owner_module
 from app.services.business.workspace_resources.owner import ResourceConflict
 from app.services.infrastructure.browser_manager_client import BrowserManagerClient
@@ -23,6 +33,22 @@ from tests.integration.workspace_services.browser.test_browser_owner_revision_dr
     owner_mount as owner_mount,  # noqa: PLC0414
 )
 from tests.support.workspace_tool_runtime import workspace_tool_runtime
+
+
+@pytest.fixture
+def resource_api():
+    def client(container, kind: str) -> httpx.AsyncClient:
+        app = FastAPI()
+        app.add_middleware(TraceMiddleware)
+        app.include_router(router, prefix="/api/v1")
+        app.dependency_overrides[verify_local_token] = lambda: "authenticated-test"
+        app.dependency_overrides[get_terminal_resource_owner] = lambda: container.terminal_resource_owner
+        app.dependency_overrides[get_browser_resource_owner] = lambda: container.browser_resource_owner
+        app.dependency_overrides[get_workspace_resource_owner] = lambda: (
+            container.terminal_resource_owner if kind == "terminal" else container.browser_resource_owner
+        )
+        return httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://workspace.test")
+    return client
 
 
 @pytest.mark.parametrize("kind", ["terminal", "browser"])
@@ -211,3 +237,132 @@ async def test_real_operation_close_deadline_preserves_live_resource_and_origina
                 "original_lease_id": leases[rid].lease_id, "budget_seconds": 30,
                 "scope": "正式Session/资源/operation，真实Node/PTY或Chromium/HTTP；仅推进本进程单调时间和占用原锁，不代表外部终止或完整shutdown验收",
             })
+
+
+@pytest.mark.parametrize("kind", ["terminal", "browser"])
+@pytest.mark.parametrize("stage", ["lock", "receipt"])
+async def test_real_management_command_total_deadline_preserves_facts_and_reconciles_without_replay(
+    browser_client: tuple[BrowserManagerClient, Path, TestRunContext], owner_mount: MountedWorkspace,
+    monkeypatch: pytest.MonkeyPatch, resource_api, kind: str, stage: str,
+) -> None:
+    _client, root, run = browser_client
+    async with workspace_tool_runtime(root, startup_mount=owner_mount) as (container, sid, _context):
+        owner = container.terminal_resource_owner if kind == "terminal" else container.browser_resource_owner
+        async with resource_api(container, kind) as client:
+            created = []
+            for index in range(2):
+                response = await client.post(f"/api/v1/resources/{kind}s", json={
+                    "session_id": sid, "retention_scope": "thread", "title": f"command-{index}",
+                })
+                assert response.status_code == 200, response.text
+                assert response.json()["request_id"] == response.headers["X-Request-ID"]
+                created.append(response.json()["data"]["resource_id"])
+            rid, peer = created
+            original_record = owner._store.get(rid)
+            original_external = await owner._transport.get_resource(rid)
+            entered, release = asyncio.Event(), asyncio.Event()
+            recover = owner.recover
+            sync = owner._transport.sync_owner_revision
+            stop = owner._transport.stop_resource
+            lock = owner._resource_lock(rid)
+            stops = []
+            deadlines: list[asyncio.Timeout] = []
+            sync_deadlines = []
+            acquired = False
+
+            def is_command() -> bool:
+                return asyncio.current_task().get_name() == "management-command-under-test"
+
+            def capture(seconds: float) -> asyncio.Timeout:
+                assert seconds == 30
+                context = asyncio.timeout(seconds)
+                if is_command():
+                    deadlines.append(context)
+                return context
+
+            async def recover_then_lock(resource_ids=None):
+                nonlocal acquired
+                await recover(resource_ids)
+                if is_command() and resource_ids == (rid,):
+                    await lock.acquire()
+                    acquired = True
+                    entered.set()
+
+            async def syncing(resource_id: str, revision: int, *, for_stop: bool) -> None:
+                if is_command():
+                    sync_deadlines.append(deadlines[0].when())
+                await sync(resource_id, revision, for_stop=for_stop)
+
+            async def stopping(resource_id: str, *, reason: str | None = None):
+                stops.append(resource_id)
+                receipt = await stop(resource_id, reason=reason)
+                if resource_id == rid and stage == "receipt":
+                    entered.set()
+                    await release.wait()
+                return receipt
+
+            monkeypatch.setattr(owner._transport, "stop_resource", stopping)
+            with monkeypatch.context() as patch:
+                patch.setattr(owner_module, "timeout", capture)
+                if stage == "lock":
+                    patch.setattr(owner, "recover", recover_then_lock)
+                else:
+                    patch.setattr(owner._transport, "sync_owner_revision", syncing)
+                pending = asyncio.create_task(client.post(
+                    f"/api/v1/resources/{rid}/stop", json={"expected_revision": 1},
+                    headers={"X-Request-ID": "command-under-test"},
+                ), name="management-command-under-test")
+                try:
+                    await asyncio.wait_for(entered.wait(), 10)
+                    healthy = await client.get(f"/api/v1/resources/{peer}")
+                    assert healthy.status_code == 200 and healthy.json()["data"]["status"] == "running"
+                    if stage == "receipt":
+                        lease, = owner._leases.leases_for_resource(rid)
+                        assert (lease.turn_stream_id, lease.operation_id) == ("request:command-under-test", "command-under-test")
+                    assert len(deadlines) == 1
+                    if stage == "receipt":
+                        assert sync_deadlines == [deadlines[0].when()]
+                    deadlines[0].reschedule(asyncio.get_running_loop().time())
+                    failed = await asyncio.wait_for(asyncio.shield(pending), 1)
+                    assert failed.status_code == 503, failed.text
+                    assert failed.headers["X-Request-ID"] == "command-under-test"
+                    assert "TimeoutError" in failed.text and str(root) not in failed.text
+                finally:
+                    pending.cancel()
+                    await asyncio.gather(pending, return_exceptions=True)
+                    release.set()
+                    if acquired:
+                        lock.release()
+            await asyncio.sleep(0)
+            current = owner._store.get(rid)
+            external = await owner._transport.get_resource(rid)
+            cold = ExternalResourceLeaseLedger(state_path=owner._leases._state_path)
+            if stage == "lock":
+                assert current == original_record and not stops
+                assert not cold.leases_for_resource(rid)
+                identity = "os_pid" if kind == "terminal" else "active_page_id"
+                assert external[identity] == original_external[identity]
+                assert external["status"] == "running" and external["transport_owner_revision"] == 1
+            else:
+                assert current.status == "stopping" and current.reconciliation_status == "unknown"
+                assert current.owner_revision == external["transport_owner_revision"] == 2
+                assert external["status"] in {"closed", "terminated"}
+                assert external["reconciliation_status"] == "verified"
+                assert cold.get_lease(lease.lease_id).status == "reconcile_required"
+                assert stops == [rid]
+            retried = await client.post(f"/api/v1/resources/{rid}/stop", json={
+                "expected_revision": current.owner_revision,
+            })
+            assert retried.status_code == 200, retried.text
+            assert retried.json()["request_id"] == retried.headers["X-Request-ID"]
+            assert retried.json()["data"]["reconciliation_status"] == "verified"
+            assert not owner._leases.leases_for_resource(rid)
+            if stage == "receipt":
+                assert stops == [rid] and owner._leases.get_lease(lease.lease_id).status == "settled"
+            else:
+                assert stops == [rid]
+            (run.artifacts_dir / f"command-deadline-{kind}-{stage}.json").write_text(json.dumps({
+                "failure": failed.json(), "retry": retried.json(), "resource_id": rid,
+                "original_external": original_external, "after_timeout_external": external,
+                "scope": "真实Session及ASGI资源创建/管理入口，真实Node/PTY或Chromium/HTTP；暂停原回执并推进本次截止，不代表Gateway/Web或任意不合作执行的终止",
+            }, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")

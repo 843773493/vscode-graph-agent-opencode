@@ -251,22 +251,31 @@ class WorkspaceResourceOwner:
         operation_id: str,
         thread: ThreadRef | None = None,
     ) -> ResourceSnapshot:
-        await self.recover((resource_id,))
-        if action in {"attach", "detach"}:
-            if thread is None:
-                raise ValueError(f"外部资源 {action} 缺少精确 Thread")
-            async with self.admit_thread(thread.session_id, thread.thread_id):
+        # 管理入口只取得一次预算，恢复、准入、锁及多次传输不重新计时。
+        # TODO(5.4)：同步写盘与不合作取消不能由异步预算抢占，外部终态仍须原owner核实。
+        deadline = timeout(30)
+        try:
+            async with deadline:
+                await self.recover((resource_id,))
+                if action in {"attach", "detach"}:
+                    if thread is None:
+                        raise ValueError(f"外部资源 {action} 缺少精确 Thread")
+                    async with self.admit_thread(thread.session_id, thread.thread_id):
+                        return await self._command(
+                            resource_id, action, expected_revision, thread, holder_id, operation_id,
+                        )
                 return await self._command(
-                    resource_id,
-                    action,
-                    expected_revision,
-                    thread,
-                    holder_id,
-                    operation_id,
+                    resource_id, action, expected_revision, thread, holder_id, operation_id,
                 )
-        return await self._command(
-            resource_id, action, expected_revision, thread, holder_id, operation_id
-        )
+        except TimeoutError as error:
+            if not deadline.expired():
+                raise
+            raise TimeoutError(
+                f"外部资源管理命令等待超过 30 秒: workspace_id={self.workspace_id} "
+                f"kind={self.kind}, resource_id={resource_id}, action={action}, "
+                f"holder_id={holder_id}, operation_id={operation_id}；"
+                "保留未核实状态与原占用，未确认外部操作停止"
+            ) from error
 
     def fork_attach_receipt(
         self, resource_id: str, *, creation_key: str, thread: ThreadRef, expected_revision: int,

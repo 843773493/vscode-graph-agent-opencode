@@ -191,6 +191,11 @@ fork SHALL 沿用统一资源目标检查及现有 journal/claim/publication，�
 - **WHEN** Terminal 或 Browser operation 关闭时，一个资源锁尚被占用或其原 lease 释放写盘失败
 - **THEN** 其它资源的占用独立释放，全批共用入口取得的一次30秒协作式等待预算；阶段与资源切换不重置。到期取消并排空本次锁等待，明确报告operation、holder和未释放资源；此前已返回的释放错误与预算错误一并保留，原底层TimeoutError不冒充整批期限。失败保留精确未释放lease，持久成功前不遗忘引用；释放锁后不后台补做释放，同operation显式重试复用原占用。取消保持原归属，不得虚报释放、停止真实资源或将未知/已核实终态的占用改写为普通释放；同步写盘及不合作取消仍须单独验收
 
+#### Scenario: 单次资源管理命令耗尽总等待预算
+
+- **WHEN** Terminal 或 Browser 的 promote/attach/detach/stop/delete 管理命令等待冷恢复、Thread准入、资源锁、授权同步或正式回执
+- **THEN** 全链共用入口取得的一次30秒协作式等待预算，阶段不重置；到期明确失败且不声明外部操作已经停止。管理动作尚未派发时不补造unknown或管理lease，已提交的冷恢复事实保留；已经派发但未核实的命令沿原异常链保留unknown及精确占用，外部回执迟到不发布成功。无关资源继续独立推进，新管理请求沿原owner核实已提交终态，不重发已完成停止；底层TimeoutError和调用方取消保持归属。该预算不证明同步阻塞可抢占、不合作执行可终止或整个工具operation已有总期限
+
 #### Scenario: 批量 runtime 关闭中一个 Thread 挂起或失败
 
 - **WHEN** Session 或服务关闭时，一个 Thread 的原构建、runtime lease、listener 或 scope 尚未完成
