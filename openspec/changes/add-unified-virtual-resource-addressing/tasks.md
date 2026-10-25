@@ -752,3 +752,10 @@
 - 扩展验收发现两处旧测试问题：原附件目录 SQL/写入方使用 prepared，旧断言却期待不合法的 preparing；完整操作取消后恢复未从原产品入口取得终态回执，期限观察仍 active。保留最初候选/旧生产被原60秒看门狗终止的原件及提前输出的共同断言失败，按真实合同修正精确状态，并添加同key幂等产品回执与冻结目标身份断言，不关闭或放宽看门狗、期限及其它恢复断言。
 - 准确命令、完整源码前后指纹、原始日志/真实退出码、完整旧生产与本地结构核对在 `out/tests/temp/fork_capture_io_20261025/artifacts/`；AST只移除本次错误上下文、onerror与目录symlink拒绝后，原6个顶层符号一致（ast002.json）。Ruff/compileall通过；这是作者自查，不称独立代理审查。ASGI及冷容器不代替真实Gateway、独立Backend进程重启、Windows或完整Web验收。
 - 最终共享三方合并后14项单测通过（0.50秒）、正式产品矩阵10项通过（108.46秒）、Ruff/compileall通过；候选严格OpenSpec全量45 passed/0 failed。共享运行的完整4649路径指纹中，另一路改动更新了前端测试anchored_overlay_positioning_harness.tsx，故不能声称完整源码冻结；该TSX不在本片Python/matrix执行依赖内，其余4648路径未变，具体相关性、原始日志/退出码及进程回收由shared-relevance001.json显式核对，完整冻结检查的拒绝保留；静态/编译与两次strict运行由verification003.json核实完整冻结，共享strict同为45 passed/0 failed；测试导入整理和独立suite顺序保留在共享树，不纳入本片提交。
+
+### 2026-10-25 fork typed detail 复制错误（2.2/7.2 部分收口）
+
+- 原复制函数在原生元数据、目录创建、copy2与正文hash读取边界复用既有storage错误出口；布局拒绝保留原因，位置只留诊断。原冻结SQLite查询、历史owner/locator校验、声明顺序、原字节与hash不变，缺失正文仍由原资源owner裁定，不新增writer、reader或schema。其余source捕获/复制I/O仍待后续；2.2/7.2全局门未勾，团队与协作继续TODO。
+- 候选局部10项复制合同检查通过（16.08秒），完整旧生产9 failed/1 passed（16.65秒）；同一声明顺序与可选缺失正文正例保持通过。首轮完整matrix为18 passed/1 failed（75.67秒），唯一失败是新增测试误将父目录故障诊断位置断言为叶文件，按真实故障节点修正，不放宽错误类别、身份、hash或期限；最终相关9项通过（67.51秒），其中3项由产品消息执行/model_stream生成状态、通过真实路由/Depends/TraceMiddleware的ASGI HTTP验证错误、中止、不变原件、新key重试、冷Saver详情身份/正文及request_hash，另外6项保留原必需正文缺失/篡改拒绝。旧生产相应3项产品反例失败、6项既有拒绝通过（77.29秒）。局部与matrix存在重叠，不累加为独立场景。
+- 完整Git archive旧生产、准确命令、完整源码前后指纹、原始输出/真实退出码与AST核对位于 `out/tests/temp/fork_detail_copy_20261025/artifacts/`。移除本次错误上下文及布局错误正文后，原8个顶层符号AST一致。Ruff/compileall通过；结构核对为作者自查，不称独立代理审查；ASGI和冷Saver不代替真实Gateway、独立后端进程重启、Windows或完整Web验收。
+- 最终共享正式matrix 19 passed/62.32秒，含10项局部合同、3项真实产品入口及6项原必需正文拒绝；Ruff/compileall通过，候选strict全量45 passed/0 failed。verification003.json核实本片所登记3778条后端/协议/harness/config/matrix路径前后未变、原始日志/退出码和进程组回收；profile明确排除本片不启动或构建的客户端源码及客户端专项测试，不声称全仓冻结。共享独立suite顺序调整三方保留，不纳入本片提交。

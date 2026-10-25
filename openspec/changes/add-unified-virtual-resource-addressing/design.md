@@ -84,6 +84,8 @@ fork source 的同一文件清单函数供捕获、冻结 marker 校验和附件
 
 同一 captured marker owner 在位置检查、发布、marker/manifest/control 读取、附件检查及清理的原生 I/O 边界复用原 storage 错误出口（artifact=fork_capture、stage 为原失败阶段），保留异常类别、errno/winerror 与直接 cause，真实位置只留诊断。发布遍历的扫描错误立即抛出，目录符号链接明确拒绝；原 fsync/rename 顺序、marker 字节和 hash 保持。preparing 且尚未发布完整 marker 的私有目录仍按原 Incomplete 合同中止；已发布完整 marker 即使 journal 尚未 CAS 也只按冻结 proof 恢复，不回读 live source。发布或清理失败不能伪报成功，不新增 marker、journal、writer 或恢复链。
 
+fork typed detail 仍仅按同一冻结 SQLite 的声明与精确历史 owner 复制：文件元数据、目标目录创建、复制及原正文 hash 读取的原生失败复用 storage 出口（artifact=fork_source、stage=detail_copy），直接 cause 与真实位置留诊断；目录/文件布局拒绝只公开原原因。查询顺序、locator/owner 校验、原字节和 hash 保持；缺失正文继续交原资源 owner 判断是否必需，不在复制 helper 补造正文、改写历史或放宽发布检查。
+
 ### D2：保留既有段序，scope_id 全必填
 
 采用 `boxteam://{gateway_authority?}/{scope}/{scope_id}/resources/{kind}/{...}`，而非简化段序。

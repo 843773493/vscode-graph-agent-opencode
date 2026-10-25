@@ -300,20 +300,25 @@ def _copy_declared_details(
             if locator != detail_relative_path(ref).as_posix():
                 raise ValueError("source-mismatch: 冻结 detail locator 不属于精确历史 owner")
             source = native_io_path(source_rollout / relative)
-            for directory in (native_io_path(source_rollout / "context-plan-details"), source.parent):
-                if directory.exists() and (directory.is_symlink() or not directory.is_dir()):
-                    raise RuntimeError(f"source-mismatch: 冻结 detail 目录不是普通目录: {directory}")
-            if source.is_symlink() or (source.exists() and not source.is_file()):
-                raise RuntimeError(f"source-mismatch: 冻结 detail 不是普通文件: {relative}")
-            if not source.is_file():
-                # 是否必需由同一冻结 manifest 的资源 owner 在发布前裁定。
-                continue
-            destination = native_io_path(snapshot_rollout / relative)
-            destination.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-            shutil.copy2(source, destination)
-            files.append(ForkSnapshotFile(
-                relative.as_posix(), source.stat().st_size, _file_sha256(source),
-            ))
+            with _storage_io(source, "source-mismatch: fork detail 复制失败", "detail_copy", artifact="fork_source"):
+                for directory in (native_io_path(source_rollout / "context-plan-details"), source.parent):
+                    if directory.exists() and (directory.is_symlink() or not directory.is_dir()):
+                        raise RuntimeError(_storage_failure(
+                            directory, "source-mismatch: 冻结 detail 目录不是普通目录", "detail_copy", artifact="fork_source",
+                        ))
+                if source.is_symlink() or (source.exists() and not source.is_file()):
+                    raise RuntimeError(_storage_failure(
+                        source, "source-mismatch: 冻结 detail 不是普通文件", "detail_copy", artifact="fork_source",
+                    ))
+                if not source.is_file():
+                    # 是否必需由同一冻结 manifest 的资源 owner 在发布前裁定。
+                    continue
+                destination = native_io_path(snapshot_rollout / relative)
+                destination.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+                shutil.copy2(source, destination)
+                files.append(ForkSnapshotFile(
+                    relative.as_posix(), source.stat().st_size, _file_sha256(source),
+                ))
     return tuple(files)
 
 

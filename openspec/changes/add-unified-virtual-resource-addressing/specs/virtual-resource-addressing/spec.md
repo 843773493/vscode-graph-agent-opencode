@@ -186,6 +186,11 @@
 - **WHEN** captured marker owner 的位置检查、发布遍历、文件或目录 fsync、marker 写入/rename、marker/manifest/control 读取、附件检查或清理遇到原生 I/O 失败，或发布遍历发现符号链接目录
 - **THEN** 原 owner 明确失败，原生错误保留类别、errno/winerror 与直接 cause，普通错误及创建记录只含逻辑 artifact 和阶段，真实位置与完整原错留诊断。扫描错误不得被忽略，失败不改写来源 canonical 字节或发布残缺目标；原 marker 编码/hash、journal 与唯一恢复链保持。没有完整 marker 的 preparing capture 与已冻结 journal 缺 marker 仍按原合同区分；完整 marker 已发布但 journal 尚未 CAS 时，恢复只验证原冻结 proof，不重新捕获来源，清理失败不声称已释放
 
+#### Scenario: fork typed detail 复制失败仍保留原冻结合同
+
+- **WHEN** fork 按冻结 SQLite 的声明复制 typed detail 时，发现非法目录/文件布局，或元数据、创建、复制及正文读取遇到原生错误
+- **THEN** 同一复制 owner 明确失败，普通错误和创建记录不包含真实路径；原生错误保留类别、errno/winerror 与直接 cause，布局拒绝保留原因，真实位置留诊断。失败不改写来源 canonical 或 detail 正文，不发布残缺目标；重试和冷读保持原 detail 身份、正文及 request_hash。缺失正文仍交原资源 owner 判断是否必需，原必需正文的损坏/缺失拒绝不因本次错误出口调整而放宽，声明顺序、来源归属、hash 与唯一恢复链保持
+
 ### Requirement: Browser 本地文件页面 URL 保留原生语义
 
 系统 MUST 保留 Browser 原生 `file:` 导航能力。用户明确打开的本地文件页面 URL MAY 原样保留在 Browser 地址栏、导航请求、该页面相关错误、页面快照及恢复检查点中。该 URL MUST 始终由目标机器按原生文件系统语义解释，包括 Windows 盘符与路径分隔符；中继、source 机器和当前激活工作区 MUST NOT 改写其目标或在自身文件系统解释该 URL。
