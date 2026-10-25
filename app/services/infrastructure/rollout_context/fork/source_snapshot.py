@@ -37,6 +37,8 @@ from app.services.infrastructure.rollout_context.storage.catalog.history_scope i
 )
 from app.services.infrastructure.rollout_context.storage.primitives import (
     _RolloutFileLock,
+    _storage_failure,
+    _storage_io,
 )
 from app.services.infrastructure.rollout_context.store import RolloutContextStore
 
@@ -327,41 +329,47 @@ def _tree_manifest(
     root: Path, *, excluded_root_entries: frozenset[str] = frozenset(),
 ) -> tuple[ForkSnapshotFile, ...]:
     root = native_io_path(root)
-    files: list[ForkSnapshotFile] = []
-    for current, directory_names, file_names in os.walk(root, followlinks=False):
-        current_path = Path(current)
-        for name in (*directory_names, *file_names):
-            candidate = current_path / name
-            if candidate.is_symlink():
-                raise RuntimeError(
-                    f"source-mismatch: fork source rollout 包含符号链接: {candidate}"
+    def fail_walk(error: OSError) -> None:
+        raise error
+
+    with _storage_io(root, "fork source 清单读取失败", "manifest", artifact="fork_source"):
+        if root.is_symlink() or not root.is_dir():
+            raise RuntimeError(_storage_failure(root, "source-mismatch: fork source 清单根不是普通目录", "manifest", artifact="fork_source"))
+        files: list[ForkSnapshotFile] = []
+        for current, directory_names, file_names in os.walk(root, followlinks=False, onerror=fail_walk):
+            current_path = Path(current)
+            for name in (*directory_names, *file_names):
+                candidate = current_path / name
+                if candidate.is_symlink():
+                    raise RuntimeError(
+                        _storage_failure(candidate, "source-mismatch: fork source rollout 包含符号链接", "manifest", artifact="fork_source")
+                    )
+                if name in file_names and not candidate.is_file():
+                    raise RuntimeError(
+                        _storage_failure(candidate, "source-mismatch: fork source rollout 包含非普通文件", "manifest", artifact="fork_source")
+                    )
+            directory_names[:] = [
+                name
+                for name in directory_names
+                if not (current_path == root and name in (_PRIVATE_SOURCE_FILES | excluded_root_entries))
+            ]
+            for name in file_names:
+                if current_path == root and name in (_PRIVATE_SOURCE_FILES | excluded_root_entries):
+                    continue
+                path = current_path / name
+                relative_path = path.relative_to(root).as_posix()
+                digest = hashlib.sha256()
+                with path.open("rb") as stream:
+                    while chunk := stream.read(1024 * 1024):
+                        digest.update(chunk)
+                files.append(
+                    ForkSnapshotFile(
+                        relative_path=relative_path,
+                        size_bytes=path.stat().st_size,
+                        sha256=digest.hexdigest(),
+                    )
                 )
-            if name in file_names and not candidate.is_file():
-                raise RuntimeError(
-                    f"source-mismatch: fork source rollout 包含非普通文件: {candidate}"
-                )
-        directory_names[:] = [
-            name
-            for name in directory_names
-            if not (current_path == root and name in (_PRIVATE_SOURCE_FILES | excluded_root_entries))
-        ]
-        for name in file_names:
-            if current_path == root and name in (_PRIVATE_SOURCE_FILES | excluded_root_entries):
-                continue
-            path = current_path / name
-            relative_path = path.relative_to(root).as_posix()
-            digest = hashlib.sha256()
-            with path.open("rb") as stream:
-                while chunk := stream.read(1024 * 1024):
-                    digest.update(chunk)
-            files.append(
-                ForkSnapshotFile(
-                    relative_path=relative_path,
-                    size_bytes=path.stat().st_size,
-                    sha256=digest.hexdigest(),
-                )
-            )
-    return tuple(sorted(files, key=lambda file: file.relative_path))
+        return tuple(sorted(files, key=lambda file: file.relative_path))
 
 
 

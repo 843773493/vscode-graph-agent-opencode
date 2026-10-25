@@ -736,3 +736,11 @@
 - 完整旧生产加相同新增测试为15 failed/1.96秒，分别复现返回/热缓存与冷读不一致，以及write/replace失败后缓存存在未保存变更；候选15 passed/1.84秒，相关配置、store、断点、源校验及fork回归合计167 passed/10.51秒。真实产品执行/model_stream生成来源的完整fork集成6 passed/65.03秒，新增全字段热读/持久正文与updated_at一致断言，原失败与冷Saver恢复断言保留；Ruff/compileall通过。
 - 准确命令、完整源码前后指纹、原始输出与真实退出码、完整旧生产和主线程本地结构自查位于 `out/tests/temp/debug_configuration_publication_20261025/artifacts/`；verification001.json核实所有运行源码冻结与进程组回收。原单测与回归有重叠，不累加；产品HTTP仍为真实路由配合ASGI，不能替代真实Gateway、后端进程重启、Windows或完整Web。团队与协作继续TODO，2.2/7.2全局门仍未关闭。
 - 最终共享三方合并后复核：相关167项回归通过（9.78秒）、完整6项fork集成通过（65.56秒）、Ruff/compileall通过；候选严格OpenSpec全量45 passed/0 failed。共享各运行的完整4591路径指纹未变，原始退出码/日志/进程回收分别由verification002/003核实。原store枚举局部变量整理独立保留，本地结构自查见architecture002.json；不把它称作独立审查。
+
+
+### 2026-10-25 fork 冻结文件清单错误（2.2/7.2 部分收口）
+
+- 原清单函数供来源捕获、marker恢复与附件冻结集合共同消费；现明确拒绝缺失/非普通/符号链接根，目录扫描错误立即抛原错，不再按os.walk默认行为遗漏子树。读取/元数据原生失败和布局拒绝复用原storage错误出口，保留类型、errno/winerror/cause，位置只留诊断；排序、排除项、文件hash与同一恢复链保持，不新增writer/reader或schema。
+- 候选10项单测通过（0.31秒）；完整Git archive旧生产加相同新增测试为9 failed/1 passed（0.60秒），正确空目录/排序/hash/排除项正例保持通过。候选产品2项通过，旧生产2项HTTP反例失败（准确耗时见原始输出）：由原产品消息执行/model_stream生成来源，扫描原生失败与symlink拒绝均未发布目标，原创建记录中止且不含真实路径，原canonical字节不变；故障移除后新key重试成功，冷Saver读回完整历史，副本canonical与来源原字节一致。
+- 源码前后指纹、完整旧生产、原始输出/退出码与AST核对在 `out/tests/temp/fork_source_manifest_20261025/artifacts/`。AST移除本次错误上下文、根检查、onerror及raise正文后，全部5个函数与原提交一致。HTTP使用真实路由、Depends、TraceMiddleware及ASGI，不称真实Gateway、后端进程重启、Windows实机或完整Web验收；其它capture文件I/O和detail复制出口仍待后续，2.2/7.2全局门未勾，团队/协作继续TODO。
+- 最终共享三方合并后10项单测、2项公开fork集成（39.08秒）、Ruff/compileall均通过；候选完整严格OpenSpec为45 passed/0 failed。候选产品2 passed/41.76秒，旧生产HTTP反例2 failed/36.12秒，原始响应含真实路径；verification004.json核实四项共享运行的4593路径完整冻结、真实退出码及进程组回收。矩阵中他人的独立suite顺序保留；结构自查见architecture001.json，不称独立代理审查。

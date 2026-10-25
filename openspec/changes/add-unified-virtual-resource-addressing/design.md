@@ -80,6 +80,8 @@ Gateway 只为目标端现有文件 owner 提供受认证的同机临时绑定�
 
 调试方案 fork 的文件阶段复用原 rollout 存储错误出口：在 staging 检查/写入、旧 staging 清理、发布和已发布正文验证的原生 I/O 边界保留异常类别、errno/winerror 与 cause；公开文本携带 `artifact=fork_debug` 和原阶段，真实位置与原异常仅留诊断。布局拒绝沿同一出口报告，不在 API 层扫描/脱敏字符串。原文件调用顺序、manifest/configuration hash、prepared→ready→published journal、来源身份和重放规则保持；公开 fork 失败仍按原创建 owner 中止清理，不增加另一个保存链或迁移。
 
+fork source 的同一文件清单函数供捕获、冻结 marker 校验和附件冻结集合核对复用：先确认根为已有普通目录，os.walk的扫描错误立即抛出，不以默认忽略行为生成残缺清单。原生读取与元数据失败复用原storage错误出口（artifact=fork_source、stage=manifest），布局拒绝只公开原原因；位置与完整原异常保留诊断。排序、排除项、字节hash与文件集合不变，不新增清单owner或恢复reader。
+
 ### D2：保留既有段序，scope_id 全必填
 
 采用 `boxteam://{gateway_authority?}/{scope}/{scope_id}/resources/{kind}/{...}`，而非简化段序。
