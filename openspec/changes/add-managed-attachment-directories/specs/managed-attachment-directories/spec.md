@@ -181,6 +181,11 @@ fork SHALL 沿用统一资源目标检查及现有 journal/claim/publication，�
 - **WHEN** Terminal 或 Browser operation 关闭时，一个资源锁尚被占用或其原 lease 释放写盘失败
 - **THEN** 其它资源的占用独立释放；失败明确保留原异常及精确未释放 lease，持久成功前不遗忘引用。重试关闭复用原占用，取消等待不得虚报释放或将未知/已核实终态的占用改写为普通释放
 
+#### Scenario: 批量 runtime 关闭中一个 Thread 挂起或失败
+
+- **WHEN** Session 或服务关闭时，一个 Thread 的原构建、runtime lease、listener 或 scope 尚未完成
+- **THEN** 事件循环可正常调度时，其它选中 Thread 独立推进原排空链；同一 Thread 的重入关闭复用原 build/unload，单 Session 全批共用原 30 秒等待预算。取消仅排空本次等待者，原任务与 scope/generation 继续由原 owner 持有；各 Thread 的原异常按输入 owner 顺序汇总，重试沿原 owner 继续，不重发已完成清理。服务全局关闭的总期限与存储关闭顺序仍须单独完成，不把其它 Thread 排空成功视为整体关闭完成
+
 #### Scenario: Session 删除排空超过期限
 
 - **WHEN** Session 删除仍在等待未核实的卸载操作且达到关闭期限

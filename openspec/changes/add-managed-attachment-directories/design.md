@@ -182,3 +182,11 @@ SQLite 文件连接现统一经过 `sqlite_file_uri` 编码原生 I/O 路径，�
 本次 Linux 样本为：1/32 个目录的 live 原件分别 3968/126976 字节，SQLite 分配页合计 143360/196608 字节；冷 owner 恢复约 7.52/9.11 ms，到期查询约 0.087/1.396 ms，GC 约 7.07/131.14 ms。GC 后全部已登记 live 目录消失，canonical bytes 不变，catalog 保留原 tombstone、文件版本、关联与 ingest 行。WAL 在发布后为 98912/2640952 字节，GC 后为 111272/3036472 字节；这反映本次未主动 checkpoint 的日志占用，不能与数据库页重复相加后当成有效正文体积，也不能由两个小样本承诺全链路线性增长。
 
 TODO（性能）：32 个目录的 124 KiB 原件对应约 2.90 MiB GC 后 WAL，终态记录仍保留；后续按同工作负载扩大目录数/正文规模并测 checkpoint 后文件占用、恢复和尾延迟，再评估 WAL checkpoint 与无引用终态元数据整理。清理前仍须证明历史/fork/恢复依赖安全，不自动缩短保留期限、不删除仍有依赖的 tombstone/版本，也不为小样本提前引入后台任务或新索引。挂起 operation 接管、共享 owner 锁和关闭期限继续是 5.2/5.4 未完成的正确性边界，本测量不能替代它们。
+
+### 批量 runtime 关闭隔离（5.4 部分收口）
+
+`ThreadResidencyTracker.close()` 对本批已选中的 state 分别建立短命等待 task，复用该 state 唯一的构建与卸载任务；不再串行等待第一个 Thread 后才开始其它 Thread。单 Session 在建等待者前冻结一次原 30 秒单调截止，所有 Thread 共用；全局 shutdown 继续等待原 owner，不在存储关闭顺序未协调前擅自超时退出。构建仍挂起时不并发关闭其正在登记资源的 scope。
+
+本次等待者只收集各 state 的原异常，按选择顺序汇总；取消时排空本次等待者，不取消原 build/unload，也不建立清理重试或第二 owner。listener/scope 迟到失败仍保留原 generation 和错误供同入口重试；独立 Thread 已完成的清理与附件 detach 不重复执行。真实服务 shutdown 集成从产品上传与执行生成两个 Session 的附件、历史和 checkpoint，暂停一个原清理边界时核验另一 runtime 已 cold、附件已按原 owner 解除运行时关联，两个 Session 的 canonical bytes、locator 和 checkpoint 保持可读。
+
+TODO：整个 Backend shutdown 的总期限、AsyncExitStack 中存储的关闭顺序、同步阻塞回调与不合作的外部进程终止仍属于 5.2/5.4/6.2；本批仅证明事件循环可调度时各 Thread 的排空隔离。团队、成员、委派与协作继续暂缓实现及专项验证。

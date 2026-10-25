@@ -164,3 +164,13 @@ Web 定向 `BOXTEAM_E2E_SECTION8_FOCUS=copy_missing_attachment` 通过真实 Gat
 - 完整 HEAD 候选正式矩阵 6 passed/45.75 秒，共享工作树同矩阵 6 passed/45.41 秒；真实 Linux SIGTERM/SIGINT/SIGHUP、Node、Chromium 与 HTTP 屏障覆盖默认 5 秒排空失败后的原页面/操作保留、拒绝新动作/创建、重复信号、操作放行后关闭与真实冷进程恢复最终表单值。另有独立致命异常、rejection 及信号关闭中途致命异常三项回归；致命路径的 HTTP 排空仍等待原请求，测试显式放行，不把它声称为有界 shutdown。原 Manager 回归 42 passed，Ruff、JS 解析、compileall 通过。
 - 完整旧 HEAD 归档仅增加相同测试与 suite，最终 4 failed/2 passed：三项信号场景分别暴露管理 HTTP 失联或重复信号退出，关闭中途致命错误原先被去重吞掉；两项独立致命退出为正例。首轮装具曾阻塞原串行队尾并混用场景日志，后续致命路径误设总退出期限、日志同步过窄，以及一次候选/反例并发端口冲突均保留原件，不作为产品反例，最终改为真实 HTTP 可用性和实际退出事实判断。
 - 准确命令、完整源码前后指纹、真实退出码、原始输出、按场景保留的服务日志/结果与结构自查在 `out/tests/temp/browser_signal_retry_20261025/artifacts/` 及对应正式产物。候选最终源码完整冻结；共享产品运行期间有未加载的 Web/独立测试文件变化，完整冻结拒绝保留在 `verification002-rejected.json`，仅出具明确范围的 `verification003-limited.json`，不冒称共享全树冻结。未覆盖 Windows SIGBREAK、上层启动器强杀、Gateway/主Web、任意脚本强制终止或整个 operation/shutdown 期限；5.2/5.4/6.2 继续未勾，团队、成员、委派与协作继续 TODO。
+
+
+### 2026-10-25 批量 runtime 关闭隔离（5.4 部分收口）
+
+- Session/服务关闭分别等待本批原 state；首个 Thread 的构建、lease、listener 或 scope 挂起不再阻止其它 Thread 开始排空。重入复用唯一原 build/unload；单 Session 全批共用原 30 秒截止。取消排空本次等待者，原任务保持；原异常按输入 owner 顺序汇总，失败沿同入口重试，不增加另一 owner 或自动重发。
+- 候选定向回归 68 passed/17.90 秒，完整旧 HEAD 加新增单测 11 failed/0.52 秒；正式产品矩阵 5 passed/71.86 秒，通过产品上传、消息与真实图执行生成两个 Session，核对 peer scope closed/tracker cold、附件 detach/deadline、原 canonical bytes、locator 和 checkpoint。模型复用原 model_stream；Terminal/Browser 清单仅隔离本场景未使用的外部服务，不能代替外部进程或完整后端退出验收。
+- 完整旧 HEAD 的同一产品场景两项反例均因 peer 无法开始关闭而超时失败（2 failed/49.55 秒），不是健康接口或 helper 反例；45 项 OpenSpec strict 全部通过。Ruff 与 compileall 通过；首轮产品测试错把 scope 回调发生当作 tracker 已发布 cold，第二轮缺少读取 checkpoint 所必需的显式 owner，均只修正测试同步/调用，未放宽业务断言；失败原件保留。准确命令、源码前后指纹和实际退出码在 `out/tests/temp/runtime_shutdown_isolation_20261025/artifacts/`。
+- 全局 shutdown 总期限、存储关闭顺序、同步阻塞和强制终止仍 TODO，5.2/5.4/6.2 保持未勾；团队、成员、委派与协作不追加实现或专项验证。
+
+- 合并后保留共享既有 state 类型拆分，定向单测 68 passed/16.97 秒、同一正式产品矩阵 5 passed/63.26 秒，Ruff 及 45 项 OpenSpec strict 通过。主线程 AST/目录自查未发现本批职责越界；候选既存大文件和测试目录规模已复核，不称独立代理审查。共享暂存内容保持原样。

@@ -555,39 +555,59 @@ class ThreadResidencyTracker:
         # TODO(5.4)：全局 shutdown 须协调所有存储关闭顺序，不能超时后先关库再让原任务写入。
         deadline = (asyncio.get_running_loop().time() + THREAD_RUNTIME_WAIT_SECONDS
                     if session_id is not None else None)
-        errors: list[Exception] = []
-        for state in tuple(self._states.values()):
-            if session_id is not None and state.session_id != session_id:
-                continue
-            build = state.runtime_build
-            if build is not None:
-                try:
-                    await self._wait_runtime_task(build, state, deadline, "session-drain")
-                except Exception as error:  # noqa: BLE001
-                    errors.append(error)
-                    if not build.done():
-                        # builder 仍持有 scope，不能在其继续注册资源时并发关闭。
-                        continue
-            try:
-                runtime = state.runtime
-                if runtime is not None or state.runtime_build_scope is not None:
-                    await self._wait_runtime_task(
-                        self._start_runtime_unload(
-                            state, runtime, require_unblocked=session_id is not None,
-                        ), state, deadline, "session-drain",
-                    )
-                self._drop_cold_state(state)
-                if session_id is not None and self._states.get((state.session_id, state.thread_id)) is state:
-                    raise RuntimeError(
-                        "Session ThreadRuntime 排空仍有未终结状态: "
-                        f"session_id={state.session_id}, thread_id={state.thread_id}, "
-                        f"pending_runtime_leases={state.pending_runtime_leases}, "
-                        f"blockers={state.blockers}"
-                    )
-            except Exception as error:  # noqa: BLE001 - 排空其它 owner 后汇总显式抛出。
-                errors.append(error)
+        waiters = [
+            asyncio.create_task(
+                self._close_thread_state(state, deadline, session_id=session_id),
+                name=f"thread-runtime-drain-wait:{state.session_id}:{state.thread_id}",
+            )
+            for state in tuple(self._states.values())
+            if session_id is None or state.session_id == session_id
+        ]
+        try:
+            results = await asyncio.gather(*waiters)
+        except BaseException:
+            # 只排空本次等待者；原 build/unload 继续由各 state 持有，不能取消后重发清理。
+            for waiter in waiters:
+                waiter.cancel()
+            await asyncio.gather(*waiters, return_exceptions=True)
+            raise
+        errors = [error for result in results for error in result]
         if errors:
             raise ExceptionGroup("ThreadRuntime 关闭失败", errors)
+
+    async def _close_thread_state(
+        self, state: _ThreadResidencyState, deadline: float | None, *, session_id: str | None,
+    ) -> list[Exception]:
+        """每个 Thread 独立等待原构建/卸载，错误仍按输入 owner 顺序汇总。"""
+        errors: list[Exception] = []
+        build = state.runtime_build
+        if build is not None:
+            try:
+                await self._wait_runtime_task(build, state, deadline, "session-drain")
+            except Exception as error:  # noqa: BLE001
+                errors.append(error)
+                if not build.done():
+                    # builder 仍持有 scope，不能在其继续注册资源时并发关闭。
+                    return errors
+        try:
+            runtime = state.runtime
+            if runtime is not None or state.runtime_build_scope is not None:
+                await self._wait_runtime_task(
+                    self._start_runtime_unload(
+                        state, runtime, require_unblocked=session_id is not None,
+                    ), state, deadline, "session-drain",
+                )
+            self._drop_cold_state(state)
+            if session_id is not None and self._states.get((state.session_id, state.thread_id)) is state:
+                raise RuntimeError(
+                    "Session ThreadRuntime 排空仍有未终结状态: "
+                    f"session_id={state.session_id}, thread_id={state.thread_id}, "
+                    f"pending_runtime_leases={state.pending_runtime_leases}, "
+                    f"blockers={state.blockers}"
+                )
+        except Exception as error:  # noqa: BLE001 - 排空其它 owner 后汇总显式抛出。
+            errors.append(error)
+        return errors
 
     @staticmethod
     def _consume_task_exception(task: asyncio.Task[TaskResult]) -> None:
