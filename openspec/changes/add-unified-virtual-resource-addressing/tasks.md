@@ -805,3 +805,13 @@
 - 目标接收的原生I/O、其它路径出口及全局门仍待核；2.2/7.2保持未勾，团队、成员、委派与协作继续TODO，不追加实现或专项验证。
 
 - 最终共享三方合并后7项单测通过（0.64秒），正式matrix 5 passed/64.17秒；Ruff/compileall与OpenSpec strict 45 passed/0 failed。verification002.json核实登记的3784条后端/协议/harness/config/matrix路径前后未变、原始日志/实际退出码及进程组回收，未运行或构建的客户端不在本片冻结范围；共享独立suite顺序及原暂存区完整保留。
+
+
+### 2026-10-25 fork 冻结产物目标接收（2.2/7.2 部分收口）
+
+- 在原本机调用点统一位置检查、目录/open、write、flush/fsync、close及文件/整份artifact目录发布的storage错误出口；保留类别、errno/winerror与直接cause，真实位置留诊断。原stream由显式finally关闭，写入与关闭双错保留两份原因链；上下文不跨越来源transport的await，不改写网络失败/取消归属。原顺序、块校验、四路并发、marker最后接收、原清理及两端journal保持。AST去除本片局部错误上下文并恢复等价stream-with后整个原模块一致、签名不变；这是作者自查，不称独立审查。
+- 候选9项单测通过（0.42秒），完整b5e272575 Git archive旧生产加相同最终测试为8 failed/1 passed（0.62秒）。覆盖mkdir/open/write/flush/fsync/close/目录发布和写入后关闭双错，核原cause/context、来源字节、原stream关闭与故障解除重试；来源ConnectionError对象身份及cause不被本机出口改写，原实现与候选均通过该归属回归。
+- 扩展原唯一产品测试至13场景，复用原产品入口与断言；候选13 passed/146.00秒、旧生产8 failed/5 passed/137.05秒。模型状态由产品消息准入/真实图/model_stream生成，原不同存储owner经真实路由/Depends/TraceMiddleware和ASGI完成双端捕获/传输/中止；8项新故障覆盖receive_path、mkdir/open、写入、实际文件descriptor的fsync、关闭及文件/整份目录发布。核头体request_id、双端aborted、无路径记录/半成品、来源canonical不变和新key重试后冷Saver原checkpoint/metadata/pending writes、历史assembly全字段/owner/request_hash。整份目录场景明确等到marker文件目录同步后的第二次root同步才注入；关闭注入在真实流关闭后报错，不声称模拟了所有操作系统close失败语义。
+- 准确命令、完整旧生产、原始输出/实际退出码、源码前后指纹和作者AST核对在 `out/tests/temp/fork_receive_io_20261025/artifacts/`，verification001.json已核冻结与进程回收。matrix预算因13场景扩为360秒，4GiB保护及产品期限不变。ASGI和原SourceForkOwnerTransport不代替真实跨机HTTP、Gateway、独立Backend重启、Windows或完整Web；其它路径出口及全局2.2/7.2仍待核且不补勾，团队、成员、委派与协作继续TODO，不追加实现或专项验证。
+
+- 最终共享三方合并后导出/接收16项单测通过（0.90秒），正式matrix 13 passed/150.05秒；Ruff/compileall及OpenSpec strict 45 passed/0 failed。verification002.json核实登记的3785条后端/协议/harness/config/matrix路径前后未变、原始日志/实际退出码及进程组回收，未运行/构建的客户端不在本片冻结范围；原共享suite顺序及暂存区完整保留。

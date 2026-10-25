@@ -1,4 +1,4 @@
-"""真实消息历史跨 owner fork 时，来源文件导出失败须明确中止且可重试。"""
+"""真实消息历史跨 owner fork 时，冻结文件传输失败须明确中止且可重试。"""
 
 from __future__ import annotations
 
@@ -6,6 +6,7 @@ import errno
 import os
 from dataclasses import asdict
 from pathlib import Path
+from unittest.mock import Mock
 from uuid import uuid4
 
 import httpx
@@ -42,8 +43,10 @@ SOURCE_GATEWAY = "gateway_4aae160f813ed87bcf65a8bb8bfd3729"
 TARGET_GATEWAY = "gateway_2d2ab24c1f08e28f5f0217140c8be744"
 
 
-@pytest.mark.parametrize("fault", ["root_scan", "nested_scan", "metadata", "chunk_open", "directory_symlink"])
-async def test_public_remote_fork_export_failure_keeps_history_and_can_retry(
+@pytest.mark.parametrize("fault", ["root_scan", "nested_scan", "metadata", "chunk_open", "directory_symlink",
+    "receive_path", "receive_mkdir", "receive_open", "receive_write", "receive_fsync", "receive_close",
+    "receive_publish", "receive_root_publish"])
+async def test_public_remote_fork_transfer_failure_keeps_history_and_can_retry(
     production_fork_container, fork_execution_source, remote_fork_target,
     monkeypatch, caplog, tmp_path, fault,
 ) -> None:
@@ -103,6 +106,97 @@ async def test_public_remote_fork_export_failure_keeps_history_and_can_retry(
             patch.setattr(owner, operation, denied)
             return await dispatch(payload)
 
+    receive = transfer.receive_transfer_file
+    artifact_file = transfer._artifact_file
+    sync_directory = transfer.fsync_directory
+    root_syncs = 0
+
+    def fail_native(path):
+        native = PermissionError(errno.EACCES, f"原生接收拒绝 {path}", str(path))
+        failures.append(native)
+        paths.append(path)
+        raise native
+
+    def receive_path(root, record, name):
+        if fault == "receive_path" and root.is_relative_to(target.workspace_root) and not failures:
+            real = Path.is_symlink
+
+            def denied(value):
+                if value == root:
+                    fail_native(root)
+                return real(value)
+
+            with monkeypatch.context() as patch:
+                patch.setattr(Path, "is_symlink", denied)
+                return artifact_file(root, record, name)
+        return artifact_file(root, record, name)
+
+    def receive_root_publish(path):
+        nonlocal root_syncs
+        if (path.is_relative_to(target.workspace_root) and path.parent.name == "fork-source-captures"
+                and not failures):
+            root_syncs += 1
+            # 第一次是 marker 文件发布；第二次才是整份 artifact 的目录发布。
+            if root_syncs == 2:
+                fail_native(path)
+        return sync_directory(path)
+
+    async def inject_receive(*args, **kwargs):
+        nonlocal armed
+        if armed or (fault in {"receive_write", "receive_fsync", "receive_close"} and not kwargs["size_bytes"]):
+            return await receive(*args, **kwargs)
+        armed = True
+        path = kwargs["path"]
+        real_open, real_mkdir, real_fsync = Path.open, Path.mkdir, os.fsync
+        opened = []
+
+        def denied_open(value, *open_args, **open_kwargs):
+            if value != path:
+                return real_open(value, *open_args, **open_kwargs)
+            if fault == "receive_open":
+                fail_native(path)
+            stream = real_open(value, *open_args, **open_kwargs)
+            opened.append(stream)
+            if fault not in {"receive_write", "receive_close"}:
+                return stream
+            writer = Mock(wraps=stream)
+            writer.__enter__ = Mock(return_value=writer)
+            writer.__exit__ = Mock(side_effect=lambda *_: writer.close())
+            if fault == "receive_write":
+                writer.write.side_effect = lambda *_: fail_native(path)
+            else:
+                def denied_close():
+                    stream.close()
+                    fail_native(path)
+                writer.close.side_effect = denied_close
+            return writer
+
+        def denied_mkdir(value, *mkdir_args, **mkdir_kwargs):
+            if value == path.parent and not failures:
+                fail_native(value)
+            return real_mkdir(value, *mkdir_args, **mkdir_kwargs)
+
+        def denied_fsync(descriptor):
+            if opened and not opened[0].closed and descriptor == opened[0].fileno() and not failures:
+                fail_native(path)
+            return real_fsync(descriptor)
+
+        def denied_publish(value):
+            if value == path.parent and not failures:
+                fail_native(value)
+            return sync_directory(value)
+
+        with monkeypatch.context() as patch:
+            if fault == "receive_mkdir":
+                patch.setattr(Path, "mkdir", denied_mkdir)
+            else:
+                patch.setattr(Path, "open", denied_open)
+            if fault == "receive_fsync":
+                patch.setattr(os, "fsync", denied_fsync)
+            if fault == "receive_publish":
+                patch.setattr(transfer, "fsync_directory", denied_publish)
+            return await receive(*args, **kwargs)
+
     app = FastAPI()
     app.add_middleware(TraceMiddleware)
     app.include_router(sessions.router, prefix="/api/v1")
@@ -111,11 +205,23 @@ async def test_public_remote_fork_export_failure_keeps_history_and_can_retry(
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://workspace",
                                  headers={"X-BoxTeam-Gateway-Id": TARGET_GATEWAY}) as client:
         with monkeypatch.context() as patch:
-            patch.setattr(transport, "fork_transfer", inject)
+            if fault == "receive_path":
+                patch.setattr(transfer, "_artifact_file", receive_path)
+            elif fault == "receive_root_publish":
+                patch.setattr(transfer, "fsync_directory", receive_root_publish)
+            elif fault.startswith("receive_"):
+                patch.setattr(transfer, "receive_transfer_file", inject_receive)
+            else:
+                patch.setattr(transport, "fork_transfer", inject)
             failed = await client.post(f"/api/v1/sessions/{source.session_id}/fork-context", json=request.model_dump(mode="json"))
         assert failed.status_code == 500, failed.text
         assert len(paths) == 1
-        stage = "export_chunk" if fault == "chunk_open" else "export_manifest"
+        if fault == "receive_root_publish":
+            assert root_syncs == 2
+        stage = {"receive_path": "receive_path", "receive_mkdir": "receive_open", "receive_open": "receive_open",
+                 "receive_write": "receive_write", "receive_fsync": "receive_flush", "receive_close": "receive_close",
+                 "receive_publish": "receive_publish", "receive_root_publish": "receive_publish"}.get(
+                     fault, "export_chunk" if fault == "chunk_open" else "export_manifest")
         assert "artifact=fork_transfer stage=" + stage in failed.text
         if fault == "directory_symlink":
             assert "符号链接目录" in failed.text

@@ -96,6 +96,8 @@ rollout 来源捕获的直接原生 I/O 复用同一 storage 错误出口（arti
 
 冻结 artifact 的来源导出继续复用原分页与分块接口，不创建清单缓存或另一套传输实现。原 os.walk 显式传播扫描错误，并拒绝原先会被 followlinks=False 静默跳过的符号链接目录；根与每层目录必须可读，不能把扫描失败解释为空清单或缺失文件。清单元数据与分块读取的原生错误复用 storage 出口（artifact=fork_transfer、stage=export_manifest / export_chunk），保留类别、errno/winerror 与直接 cause，真实位置和完整原错留诊断。原文件顺序、128文件分页、64KiB分块、offset/长度/hash、source/target身份、marker最后接收和有界并发保持，接收与原清理/journal链不改；故障解除后新请求仍按原冻结历史完成传输及冷恢复。
 
+目标接收的原生位置检查、目录准备/open、write、flush/fsync、close及文件/整份artifact目录发布分别在本机调用处复用原storage出口（artifact=fork_transfer；stage为receive_path / receive_open / receive_write / receive_flush / receive_close / receive_publish）。显式finally只关闭原有stream，保持原有成功顺序和清理责任；写入与关闭同时失败时保留两份原异常、cause/context和诊断。上下文不跨越来源transport的await，来源连接失败或取消不能误标为本机文件错误；原网络异常对象保持。所有接收者回收完成后才沿原import/capture owner清理，原marker最后接收、目录同步、hash/offset校验、四路并发及两端journal/身份保持，不新增接收器或补偿writer。
+
 ### D2：保留既有段序，scope_id 全必填
 
 采用 `boxteam://{gateway_authority?}/{scope}/{scope_id}/resources/{kind}/{...}`，而非简化段序。

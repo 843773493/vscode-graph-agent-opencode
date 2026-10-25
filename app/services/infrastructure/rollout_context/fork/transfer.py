@@ -150,7 +150,8 @@ async def import_captured_artifact(
     root = capture_directory(sessions_root, record)
 
     async def receive_file(file: ForkTransferFileDTO) -> None:
-        path = _artifact_file(root, record, file.name)
+        with _storage_io(root, "fork artifact 接收位置检查失败", "receive_path", artifact="fork_transfer"):
+            path = _artifact_file(root, record, file.name)
         await receive_transfer_file(transport, request, frozen, path=path, size_bytes=file.size_bytes,
                                     file_name=file.name)
 
@@ -186,7 +187,8 @@ async def import_captured_artifact(
         if marker is None:
             raise RuntimeError("fork artifact 缺少 captured marker")
         await receive_file(marker)
-        fsync_directory(root)
+        with _storage_io(root, "fork artifact 接收目录发布失败", "receive_publish", artifact="fork_transfer"):
+            fsync_directory(root)
         snapshot, marker_hash = read_captured_snapshot(sessions_root, frozen)
         return snapshot, marker_hash
     except BaseException:
@@ -200,8 +202,10 @@ async def receive_transfer_file(
 ) -> None:
     """全部冻结文件共用固定块 reader；正文总长度不影响单次内存。"""
     path = native_io_path(path)
-    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-    with path.open("xb") as stream:
+    with _storage_io(path, "fork artifact 接收文件准备失败", "receive_open", artifact="fork_transfer"):
+        path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        stream = path.open("xb")
+    try:
         offset = 0
         while offset < size_bytes:
             chunk = await transport.fork_transfer(source_transfer_request(
@@ -213,8 +217,14 @@ async def receive_transfer_file(
             payload = base64.b64decode(chunk.chunk_base64, validate=True)
             if not payload or len(payload) > min(FORK_TRANSFER_CHUNK_BYTES, size_bytes - offset) or hashlib.sha256(payload).hexdigest() != chunk.chunk_sha256:
                 raise RuntimeError("fork transport 分块 hash/长度不一致")
-            stream.write(payload)
+            with _storage_io(path, "fork artifact 接收文件写入失败", "receive_write", artifact="fork_transfer"):
+                stream.write(payload)
             offset += len(payload)
-        stream.flush()
-        os.fsync(stream.fileno())
-    fsync_directory(path.parent)
+        with _storage_io(path, "fork artifact 接收文件同步失败", "receive_flush", artifact="fork_transfer"):
+            stream.flush()
+            os.fsync(stream.fileno())
+    finally:
+        with _storage_io(path, "fork artifact 接收文件关闭失败", "receive_close", artifact="fork_transfer"):
+            stream.close()
+    with _storage_io(path.parent, "fork artifact 接收目录发布失败", "receive_publish", artifact="fork_transfer"):
+        fsync_directory(path.parent)

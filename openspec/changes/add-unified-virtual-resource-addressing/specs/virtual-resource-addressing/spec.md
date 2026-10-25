@@ -221,6 +221,16 @@
 - **WHEN** 来源导出冻结 artifact 清单时根或嵌套目录扫描、文件元数据访问失败，发现符号链接目录，或原分块读取失败
 - **THEN** 原导出 owner 明确失败，扫描错误不得被忽略、视为空目录或用于成功返回残缺清单，符号链接目录不得静默略过。原生错误保留类别、errno/winerror与直接cause，普通错误及创建/capture记录只含逻辑artifact及export_manifest/export_chunk阶段，不含真实位置；真实位置与完整原错留诊断。失败不改变来源canonical字节、不读取链接目标或发布半成品，原两端journal完成中止及释放；解除故障后原产品入口可重试并冷读同一检查点、metadata、pending writes、历史assembly和request_hash。原分页顺序、分块边界、offset/hash、来源/目标身份、接收并发与唯一清理链保持
 
+#### Scenario: fork 冻结产物目标接收发生原生 I/O 失败
+
+- **WHEN** 目标接收冻结文件时位置检查、目录准备、文件打开、写入、同步、关闭或文件/整份artifact目录发布失败
+- **THEN** 同一接收owner保留原生类别、errno/winerror及直接cause，普通错误和创建/capture记录只含逻辑artifact与receive阶段，不含真实位置；真实位置及完整原错留诊断。写入后关闭再次失败保留两份异常及原cause/context，不丢失首错；原stream仍由同一finally关闭，原import owner回收全部接收任务后清理。两端原journal中止、不发布半成品、不改写来源canonical；故障解除后原产品入口重试保持历史检查点、metadata、pending writes、assembly/owner与request_hash，原接收顺序、块校验及有界并发保持
+
+#### Scenario: fork 接收等待中的来源传输失败保留原归属
+
+- **WHEN** 接收者等待来源transport时连接失败或被取消，且本机流关闭正常
+- **THEN** 原传输异常对象或取消原样传播，不被本机文件错误上下文重新包装，也不误标为receive阶段；本机stream仍按原生命周期关闭，失败和清理继续沿原import/capture owner协调
+
 ### Requirement: Browser 本地文件页面 URL 保留原生语义
 
 系统 MUST 保留 Browser 原生 `file:` 导航能力。用户明确打开的本地文件页面 URL MAY 原样保留在 Browser 地址栏、导航请求、该页面相关错误、页面快照及恢复检查点中。该 URL MUST 始终由目标机器按原生文件系统语义解释，包括 Windows 盘符与路径分隔符；中继、source 机器和当前激活工作区 MUST NOT 改写其目标或在自身文件系统解释该 URL。
