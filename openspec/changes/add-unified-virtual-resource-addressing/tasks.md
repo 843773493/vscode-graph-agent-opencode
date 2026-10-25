@@ -859,3 +859,9 @@
 - 候选新增12项单测通过（0.35秒），完整3ff64773f Git archive旧生产12项均失败（0.63秒）。原唯一目标安装产品matrix扩为16场景：候选16 passed/139.03秒，旧生产7 failed/9 passed/131.74秒。7项新增覆盖原目标rename/同步、安装rename/同步、安装后回滚再次失败、恢复检查及最终删除；保留原9项准备/安装回归。历史由原消息入口/真实图/model_stream生成，核公开阶段与无路径、头体request_id、aborted/无可见半成品、来源canonical原字节、新key重试后冷Saver原checkpoint/metadata/pending writes、assembly全字段/历史owner/request_hash。
 - 首轮Ruff仅指出新测试的__all__顺序与dict字面量；迁齐后通过，`test-ast001.json`规范化这两项语法后核最终测试与反例逻辑一致，不冒称文件字节相同。compileall通过；原始命令、日志/实际退出码、完整源码前后指纹、完整旧生产及作者AST核对在 `out/tests/temp/fork_target_publication_io_20261025/artifacts/`。最终共享树30项目标暂存/同步/发布单测通过（0.48秒），正式matrix完整16项通过（127.63秒），Ruff/compileall通过；45项OpenSpec strict全通过。verification001.json核实前后源码冻结、原始日志/实际退出码及进程组回收；冻结范围排除未启动或构建的客户端，原共享index保持不变。
 - ASGI、原传输/创建owner及冷Saver不代替真实Gateway、独立Backend重启、Windows或完整Web；全局2.2/7.2继续未勾，团队、成员、委派和协作继续TODO，不增加实现或专项验证。
+
+### 2026-10-25 发行 manifest 的错误边界（2.2/7.2 部分收口）
+
+- 唯一 `load_distribution_id` 在定位、读取、UTF-8/JSON 解码和字段校验处明确拒绝，只向普通错误公布逻辑 artifact、阶段、字段规则及适用错误事实；安装位置、非法原值与完整原错留诊断。原生类别、errno/winerror 与直接 cause 保留，不改编码、拒绝域、manifest 或默认身份，不增加 reader/缓存。全部原函数签名与编码 AST 不变，作者结构自查不称独立审查。
+- Linux 三文件65 passed/6.15秒，文件工具/Skill/URI相关回归408 passed/10.84秒；Windows快照 `b519df7913c4b7d5242ad88f9a58156e7b888fa6` 同65项通过/75.87秒。同步/异步 ls/read_file 经真实 FilesystemMiddleware、正式工具配置及 ResourceNavigation 核失败无路径、原件/工作区字节不变、同一工具修复后结果一致；Gateway身份由fixture注入，不称真实HTTP、模型执行或完整Web。未停止或重启Windows既有服务，末次status仍Web/Gateway可用。
+- 完整 `920d30af1` 旧生产上新增29项均失败；事后归档核对4416条原仓库内容一致，新增集成测试只有import换行差异且AST一致，不声称测试字节相同或运行前已采样归档。Ruff、最终compileall及OpenSpec strict 45/0通过；准确命令、源码前后指纹、raw/真实退出码及核对在 `out/tests/temp/distribution_identity_errors_20261025/artifacts/`。初次归档审计的测试字节断言失败原件保留，原因及AST对账见archive-test-audit-012.json。本片只关闭manifest边界，2.2/7.2全局门不补勾，CIL第9节及团队协作继续暂缓。

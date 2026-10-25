@@ -386,7 +386,7 @@ URI 的 scope MUST 取自**定稿闭集** `workspace` | `user` | `gateway` | `in
 - **单射（等价于无碰撞）**：不同 `(distribution, version)` 组合必得不同 `scope_id`；该单射性由 `.`→`_` 在排除 `_` 的合法 `version` 上成立来保证，MUST NOT 依赖任何解码/还原步骤。若要由 `scope_id` 拆分回 `(distribution, version)`，拆分点 MUST 由闭集 `distribution` 枚举做**最长前缀匹配**决定，MUST NOT 用「首个 `-`」裸切（`distribution` 自身含 `-`，如 `source-development`）；枚举内任一取值都不是「另一取值 + `-`」的前缀，故拆分唯一。
 - **稳定**：同一发行包在任意机器、任意安装路径下算出逐字相同的 `scope_id`（只依赖 manifest 两字段）。
 
-**`version` 合法形态**：MUST 只含 `[A-Za-z0-9.-]`（semver 形态，**不含 `_`**）；含 `_` 或其它字符（如 `+` 构建元数据、空格、`/`）时 MUST fail-closed 显式拒绝并报出实际值，MUST NOT 放宽 charset、MUST NOT 静默丢弃或替换、MUST NOT 回退默认值。唯一实现见 `app/core/distribution_identity.py` 的 `_VERSION_PATTERN` 与 `load_distribution_id`（`f3bd8213` 已把含 `_` 的 `version` 改为显式报错，MUST NOT 重新放行）。
+**`version` 合法形态**：MUST 只含 `[A-Za-z0-9.-]`（semver 形态，**不含 `_`**）；含 `_` 或其它字符（如 `+` 构建元数据、空格、`/`）时 MUST fail-closed 显式拒绝，诊断日志保留实际值。普通错误 MUST 说明字段、合法规则及逻辑 artifact/阶段，不回显可能包含真实路径的非法值或安装位置；MUST NOT 放宽 charset、MUST NOT 静默丢弃或替换、MUST NOT 回退默认值。唯一实现见 `app/core/distribution_identity.py` 的 `_VERSION_PATTERN` 与 `load_distribution_id`（`f3bd8213` 已把含 `_` 的 `version` 改为显式报错，MUST NOT 重新放行）。
 
 **缺失时 MUST fail-closed**：`distribution` 或 `version` 缺失（含空串）时，系统 MUST fail-closed 拒绝构造 `inline` 的 `scope_id` 并显式报错，MUST NOT 回退为 `local`、「当前发行版」或任何虚假默认值（AGENTS.md「永不返回虚假的默认值」）。开发态（`source-development`）也 MUST 走同一 manifest 路径，MUST NOT 为其单开默认分支。
 
@@ -408,7 +408,12 @@ URI 的 scope MUST 取自**定稿闭集** `workspace` | `user` | `gateway` | `in
 #### Scenario: 含下划线的 version 必须 fail-closed
 
 - **WHEN** manifest 的 `version` 含 `_`（如 `1.0.0_beta`）或其它 `[A-Za-z0-9.-]` 外字符
-- **THEN** 系统 MUST 显式报错拒绝构造 `inline` 的 `scope_id` 并报出实际值；MUST NOT 放宽 charset 把 `_` 纳入、MUST NOT 静默丢弃或替换该字符、MUST NOT 回退为 `local` 或任何默认值
+- **THEN** 系统 MUST 显式报错拒绝构造 `inline` 的 `scope_id`，诊断保留实际值，普通错误说明字段和合法规则；MUST NOT 放宽 charset 把 `_` 纳入、MUST NOT 静默丢弃或替换该字符、MUST NOT 回退为 `local` 或任何默认值
+
+#### Scenario: 发行身份初始化失败不泄露安装位置
+
+- **WHEN** manifest 定位、原生读取、UTF-8/JSON 解码或身份字段校验失败
+- **THEN** 原身份 owner 明确拒绝，普通错误及模型工具结果只公布 `artifact=runtime_manifest`、失败阶段、字段或规则与适用的原生错误事实；安装位置、非法原值及完整原异常留诊断，原生异常保留类别、错误码与直接 cause。失败不修改 manifest、不产生默认身份；修复原输入后同一同步/异步文件工具沿原 owner 恢复访问，不建立另一 manifest reader、URI 编码或缓存身份
 
 #### Scenario: 跨机器与安装路径稳定
 

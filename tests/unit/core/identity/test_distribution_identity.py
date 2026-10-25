@@ -144,7 +144,7 @@ def test_illegal_distribution_is_rejected(tmp_path: Path, bad: str) -> None:
     ("distribution", "version"), [("foo-1", "2"), ("foo", "1-2")]
 )
 def test_charset_admitted_collision_inputs_are_rejected(
-    tmp_path: Path, distribution: str, version: str
+    tmp_path: Path, distribution: str, version: str, caplog: pytest.LogCaptureFixture,
 ) -> None:
     """两组旧接受域输入都曾编码成 foo-1-2，但发行类型均未登记。"""
     manifest = _valid_manifest(tmp_path, distribution=distribution, version=version)
@@ -152,8 +152,10 @@ def test_charset_admitted_collision_inputs_are_rejected(
         ValueError, match="runtime manifest\\.distribution 未登记值"
     ) as error:
         load_distribution_id(manifest)
-    assert repr(distribution) in str(error.value)
-    assert str(manifest) in str(error.value)
+    assert repr(distribution) in caplog.text
+    assert str(manifest) in caplog.text
+    assert repr(distribution) not in str(error.value)
+    assert str(manifest) not in str(error.value)
 
 
 @pytest.mark.parametrize("bad", ["1 0", "1/0", "1.0.0+build", "v\u4e2d"])

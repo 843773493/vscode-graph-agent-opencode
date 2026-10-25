@@ -13,10 +13,14 @@ manifest 的定位方式与 Launcher 一致：显式 ``BOXTEAM_RUNTIME_MANIFEST`
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 
+logger = logging.getLogger(__name__)
 MANIFEST_ENV = "BOXTEAM_RUNTIME_MANIFEST"
 
 # URI 动段的闭合 charset 是 ``[A-Za-z0-9_-]``（grammar 的 _NAME_CHARSET 单点
@@ -53,16 +57,36 @@ def load_distribution_id(manifest_path: Path | str | None = None) -> str:
     distribution = _require_field(payload, "distribution", resolved_path)
     version = _require_field(payload, "version", resolved_path)
     if distribution not in _DISTRIBUTIONS:
-        raise ValueError(
-            "runtime manifest.distribution 未登记值: "
-            f"{distribution!r}，只允许 {', '.join(_DISTRIBUTIONS)} ({resolved_path})"
-        )
+        raise ValueError(_manifest_failure(resolved_path, "validate",
+            f"runtime manifest.distribution 未登记值，只允许 {', '.join(_DISTRIBUTIONS)}",
+            field="distribution", value=distribution))
     if _VERSION_PATTERN.fullmatch(version) is None:
-        raise ValueError(
-            "runtime manifest.version 只允许 [A-Za-z0-9.-]（semver 形态，不含下划线），实际为: "
-            f"{version!r} ({resolved_path})"
-        )
+        raise ValueError(_manifest_failure(resolved_path, "validate",
+            "runtime manifest.version 只允许 [A-Za-z0-9.-]（semver 形态，不含下划线）",
+            field="version", value=version))
     return f"{distribution}-{encode_version(version)}"
+
+
+def _manifest_failure(path: Path, stage: str, reason: str, *, field: str | None = None,
+                      value: object = None, error: BaseException | None = None) -> str:
+    """发行身份尚未生成时，用逻辑 artifact 定位；原值只留原生诊断。"""
+    detail = f"{reason}: artifact=runtime_manifest, stage={stage}, field={field}"
+    logger.error("%s path=%s value=%r", detail, path, value,
+                 exc_info=None if error is None else (type(error), error, error.__traceback__))
+    return detail
+
+
+@contextmanager
+def _manifest_access(path: Path, stage: str) -> Iterator[None]:
+    try:
+        yield
+    except (OSError, RuntimeError) as error:
+        detail = _manifest_failure(path, stage,
+            f"runtime manifest 访问失败: error={type(error).__name__}, "
+            f"errno={getattr(error, 'errno', None)}, winerror={getattr(error, 'winerror', None)}", error=error)
+        if isinstance(error, OSError):
+            raise type(error)(error.errno, detail, None, getattr(error, "winerror", None)) from error
+        raise RuntimeError(detail) from error
 
 
 def _resolve_manifest_path(manifest_path: Path | str | None) -> Path:
@@ -76,24 +100,34 @@ def _resolve_manifest_path(manifest_path: Path | str | None) -> Path:
                 "请经 Launcher 启动工作区后端，或显式传入 runtime manifest 路径"
             )
         candidate = Path(configured.strip())
-    resolved = candidate.expanduser().resolve()
-    if not resolved.is_file():
-        raise FileNotFoundError(f"runtime manifest 不存在: {resolved}")
+    with _manifest_access(candidate, "resolve"):
+        resolved = candidate.expanduser().resolve()
+        present = resolved.is_file()
+    if not present:
+        raise FileNotFoundError(_manifest_failure(resolved, "resolve", "runtime manifest 不存在"))
     return resolved
 
 
 def _load_manifest(path: Path) -> dict[str, object]:
     try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
+        with _manifest_access(path, "read"):
+            content = path.read_text(encoding="utf-8")
+    except UnicodeDecodeError as error:
+        detail = _manifest_failure(path, "decode", "runtime manifest 不是合法 UTF-8", error=error)
+        raise UnicodeDecodeError(error.encoding, error.object, error.start, error.end, detail) from error
+    try:
+        payload = json.loads(content)
     except json.JSONDecodeError as error:
-        raise ValueError(f"runtime manifest 不是合法 JSON: {path}: {error}") from error
+        raise ValueError(_manifest_failure(path, "decode",
+            f"runtime manifest 不是合法 JSON: line={error.lineno}, column={error.colno}", error=error)) from error
     if not isinstance(payload, dict):
-        raise ValueError(f"runtime manifest 必须是 JSON 对象: {path}")
+        raise ValueError(_manifest_failure(path, "validate", "runtime manifest 必须是 JSON 对象", value=payload))  # noqa: TRY004 - 保留既有拒绝类型。
     return payload
 
 
 def _require_field(payload: dict[str, object], field: str, path: Path) -> str:
     value = payload.get(field)
     if not isinstance(value, str) or not value.strip():
-        raise ValueError(f"runtime manifest.{field} 必须是非空字符串: {path}")
+        raise ValueError(_manifest_failure(path, "validate", f"runtime manifest.{field} 必须是非空字符串",
+                                           field=field, value=value))
     return value

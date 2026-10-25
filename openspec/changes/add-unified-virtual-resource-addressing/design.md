@@ -142,6 +142,8 @@ rollout 来源捕获的直接原生 I/O 复用同一 storage 错误出口（arti
 
 **缺失 fail-closed**：`distribution`/`version` 缺失即显式失败，不设 `local` 默认（AGENTS.md「永不返回虚假的默认值」）；开发态 `source-development` 亦走同一 manifest，不单开分支。
 
+发行身份尚未产生时，manifest 错误以 `artifact=runtime_manifest` 和 resolve/read/decode/validate 阶段定位，字段拒绝保留原合法规则。安装位置、非法原值及原生完整异常只写诊断；原生访问与解码错误保留类别、适用错误码及直接原因。共享的配置来源、Skill catalog 和普通文件导航继续调用同一 `load_distribution_id`，不新增读取链或缓存；修复原输入后同一工具可重试，编码和拒绝域不变。
+
 **备选**：放宽 charset 允许 `.`（被否，见上）；用目录名或环境变量（被否：不稳定）；缺字段时回退 `local`（被否：虚假默认值）。
 
 ### D4c：gateway 的 gateway_id 来源与注入 owner 定稿（用户裁定）
