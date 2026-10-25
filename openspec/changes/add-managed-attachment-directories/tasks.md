@@ -246,3 +246,9 @@ Web 定向 `BOXTEAM_E2E_SECTION8_FOCUS=copy_missing_attachment` 通过真实 Gat
 - 工厂9项及绑定/创建故障共44 passed，Linux正式附件fork生命周期11 passed，取消/冷恢复8 passed；8项中6项为构造checkpoint的局部恢复，2项真实执行生成来源。Windows快照 `3aacd348f29229dea876b25a6c3086722586e4b0` 为9 passed/1 failed/1 error，已越过原来源删除WinError 5，余项分别是附件capture普通mkdir的WinError 206与目标装具catalog未关闭的WinError 32，仍须修复复验。证据在 `out/tests/temp/thread_control_lifetime_20261026/artifacts/`。
 - Linux扩展snapshot竞争初轮退出143；加首错诊断后确认原手填来源缺冻结队列输入，完整HEAD archive同样失败。保留生产拒绝及原断言，在旧装具登记TODO；新连接suite只登记本片取消/恢复边界。API代表用例另在完整HEAD复现既存workspace identity不一致；扩大Ruff的4项import错误均在未修改文件，本片全部changed Python检查通过。原失败原件保留，不算通过。
 - AST核对无未迁移factory调用（含可解析嵌入脚本），除工厂新测试外原测试assert数量保持；结构自查未发现本片新增领域或导入边，既有超大fork测试文件及超20文件目录的维护风险保留。团队、成员、委派、协作只机械迁移连接用法，不追加功能或专项验证。5.2/5.4/6.2仍未完成，整体20/23，继续原goal。
+
+### 2026-10-25 Windows 完整附件 fork 生命周期（6.2 部分收口）
+
+- 附件 capture 的清单、复制、保护/删除与 Thread 创建的 staging、复验、rename、发布/回滚统一在原 I/O 边界复用 `native_io_path`；普通输入路径和冻结 locator/hash 不变。远端装具显式关闭附件及工作区活动连接后再关闭 registry，原全部断言保留。
+- Windows 快照 `e3f5e5ffa1718f6cb860c5b1a779110a25d6d76f` 完整生命周期 11 passed/170.83秒，Linux 相同产品源码 11 passed/108.85秒；新增长路径冷恢复 Windows 2 passed/0.95秒，Linux 通用 Thread 创建 77 passed/4.42秒（11项团队相关未运行），目录回归 Linux/Windows 各24 passed。前批 Windows runtime 8 passed/98.51秒、GC重启2 passed/62.59秒的依赖未改变，复用其原始证据，不冒称本轮重跑。
+- Ruff/compileall 通过，AST核对原断言数量保持；首轮新测试插入位置错误、跨端 child staging 的 WinError206 及 watchdog 父进程核对失败均保留原件。准确命令、候选指纹、原始退出码与范围在 `out/tests/temp/attachment_capture_native_io_20261025/artifacts/`。TODO：Windows watchdog 真实父链与到期进程树核实；完整旧代操作接管、同步阻塞和关闭故障组合仍未完成，5.2/5.4/6.2保持未勾，整体20/23。

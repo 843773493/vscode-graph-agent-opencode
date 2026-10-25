@@ -254,3 +254,11 @@ TODO：独立图中缓存的ThreadCreationService控制连接仍缺少显式生�
 Linux 工厂与绑定/故障恢复 44 passed（其中工厂 9 项），正式附件 fork 生命周期 11 passed，取消/冷恢复 8 passed；后者 6 项仍是构造 checkpoint 的局部恢复验证，2 项通过真实消息执行生成来源，不能合称完整执行验收。Windows 当前快照完整附件 fork suite 的前 9 项通过，已越过原来源删除 WinError 5；随后跨端附件 capture 的普通 mkdir 触发 WinError 206，下一项装具重建又因目标附件 catalog 句柄未关闭报 WinError 32。后两项仍未通过，需在原附件复制 I/O 和装具 owner 内继续收口，不改系统长路径配置或缩短权威 locator。
 
 扩大 Linux snapshot 竞争检查在原 HEAD 完整 archive 中同样复现旧手填来源缺少冻结队列输入；保持生产拒绝与全部断言，装具迁为产品入口仍 TODO，不将该失败归因本次连接协议。准确命令、源码前后指纹、原始输出、退出码与 AST/调用方/断言审计位于 `out/tests/temp/thread_control_lifetime_20261026/artifacts/`。本片不构成整个挂起操作/关闭期限或完整平台故障组合完成，5.2、5.4、6.2继续未勾。
+
+### 2026-10-25 Windows 附件 capture 与 child 创建长路径
+
+附件目录的冻结清单、复制、原件保护及删除在原物理 I/O 函数内统一使用 `native_io_path`。跨端 child 的 staging 创建、清单复验、rename、发布检查和失败清理也在原 Thread 创建 owner 内使用同一原语，保留普通路径输入、冻结 locator、清单/hash 和持久回执。远端测试装具按逆序显式关闭 transport、附件 store、工作区活动 store 和 registry，不能用 registry 的 catalog 关闭代替业务连接释放。
+
+Windows 快照 `e3f5e5ffa1718f6cb860c5b1a779110a25d6d76f` 的完整附件 fork 生命周期为 11 passed/170.83 秒，覆盖来源删除、30 天 GC 和跨端 import 失败回滚；Linux 相同产品源码为 11 passed/108.85 秒。新增长路径准备/rename 后冷恢复 2 项在 Windows 通过，Linux 通用 Thread 创建回归 77 passed（排除团队专项）；目录回归在 Linux/Windows 各 24 passed。Ruff、编译及作者 AST/目录自查通过，原测试断言数量保持，准确命令、源码指纹、raw 与退出码在 `out/tests/temp/attachment_capture_native_io_20261025/artifacts/`。
+
+首轮跨端 child 的 `WinError 206` 出现在 Thread staging 创建，尚未进入预期的 import 故障点，现已修复；原失败及随后 watchdog 的父进程核对失败保留。TODO：Windows watchdog 须核对 venv launcher 的真实父链并验证期限到达后的进程树终态，不能把此次业务通过当作该故障路径通过。完整 5.2/5.4/6.2 继续未勾；170.83 秒仅为本轮整套测量，不放宽单次 fork 60 秒或 suite 180 秒期限，也不扩展团队与协作。

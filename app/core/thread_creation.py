@@ -483,6 +483,7 @@ def verify_node_directory(
     materialized_rollout: bool = False,
 ) -> bool:
     """按冻结清单校验目录、正文及符号链接；冲突保留现场，不吸收未知项。"""
+    directory = native_io_path(directory)
     def reject_walk_error(error: OSError) -> None:
         # os.walk 默认吞掉 scandir 错误；创建核验必须暴露原生失败。
         raise error
@@ -832,8 +833,8 @@ class ThreadCreationService:
             if record.state == "aborted":
                 raise ThreadCreationAbortedError(record)
             # 步骤 2/3：staging 准备 + 原子 rename（gate 外）。
-            staging_dir = session_dir / record.staging_locator
-            final_dir = session_dir / record.final_relative_locator
+            staging_dir = native_io_path(session_dir / record.staging_locator)
+            final_dir = native_io_path(session_dir / record.final_relative_locator)
             expected_files = build_thread_node_files(
                 record=record,
                 session_id=session_id,
@@ -1162,6 +1163,7 @@ class ThreadCreationService:
         session_id: str,
     ) -> None:
         """staging 已存在 → 逐文件校验复用；不存在 → 完整准备 + barrier。"""
+        staging_dir = native_io_path(staging_dir)
         with _thread_access(session_id, record.child_thread_id, "staging_prepare"):
             staging_exists = staging_dir.exists() or staging_dir.is_symlink()
         if staging_exists:
@@ -1172,7 +1174,7 @@ class ThreadCreationService:
                 return
             # 原 holder 已取得；合法准备中断只按本 record 的 staging 重建。
             with _thread_access(session_id, record.child_thread_id, "staging_rebuild"):
-                shutil.rmtree(native_io_path(staging_dir))
+                shutil.rmtree(staging_dir)
                 _fsync_directory(staging_dir.parent)
         with _thread_access(session_id, record.child_thread_id, "staging_prepare"):
             staging_dir.mkdir(parents=True, exist_ok=False)
@@ -1209,6 +1211,7 @@ class ThreadCreationService:
         session_id: str,
     ) -> None:
         """staging 原子 rename 到冻结最终 locator（父目录链 mkdir + fsync）。"""
+        staging_dir, final_dir, session_dir = map(native_io_path, (staging_dir, final_dir, session_dir))
         stage = "rename 到最终 locator"
         with _thread_access(session_id, record.child_thread_id, "rename_prepare"):
             if not staging_dir.is_dir() or staging_dir.is_symlink():
@@ -1218,7 +1221,7 @@ class ThreadCreationService:
             # 外部放置的同内容 final 可复用；先核实，再清理冗余 staging。
             verify_node_directory(final_dir, inventory, session_id=session_id, thread_id=record.child_thread_id, stage=stage)
             with _thread_access(session_id, record.child_thread_id, "rename_redundant_staging"):
-                shutil.rmtree(native_io_path(staging_dir))
+                shutil.rmtree(staging_dir)
                 _fsync_directory(staging_dir.parent)
                 _fsync_directory(session_dir)
             return
@@ -1278,7 +1281,7 @@ class ThreadCreationService:
                 raise RuntimeError("publication 的初始 execution intent owner 不一致")
         # publish 后 staging 残留 = 外部改动（本流不变量：rename 后 staging
         # 必已不在，见 create 主流程）→ fail closed。
-        staging_dir = session_dir / published.staging_locator
+        staging_dir = native_io_path(session_dir / published.staging_locator)
         with _thread_access(session_id, published.child_thread_id, "published_staging"):
             if staging_dir.exists() or staging_dir.is_symlink():
                 raise RuntimeError(
@@ -1460,8 +1463,8 @@ class ThreadCreationService:
         """
         stage = "CAS 失败定点清理"
         targets = (
-            (session_dir / record.final_relative_locator, "final"),
-            (session_dir / record.staging_locator, "staging"),
+            (native_io_path(session_dir / record.final_relative_locator), "final"),
+            (native_io_path(session_dir / record.staging_locator), "staging"),
         )
         materialized_rollout = False
         if record.purpose == "fork":
@@ -1484,5 +1487,5 @@ class ThreadCreationService:
             for directory, _label in targets:
                 if not (directory.exists() or directory.is_symlink()):
                     continue
-                shutil.rmtree(native_io_path(directory))
+                shutil.rmtree(directory)
                 _fsync_directory(directory.parent)

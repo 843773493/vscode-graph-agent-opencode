@@ -8,7 +8,7 @@ import shutil
 import stat
 from pathlib import Path
 
-from app.core.atomic_fs import fsync_directory
+from app.core.atomic_fs import fsync_directory, native_io_path
 from app.core.file_permissions import restrict_private_path_access
 from app.services.infrastructure.attachment_blob_catalog.locator import (
     resolve_attachment_file,
@@ -19,6 +19,7 @@ from app.services.infrastructure.attachment_blob_catalog.records import (
 
 
 def file_version(path: Path, relative_path: str) -> DirectorySnapshotFile:
+    path = native_io_path(path)
     before = path.stat(follow_symlinks=False)
     if not stat.S_ISREG(before.st_mode):
         raise RuntimeError("附件目录只允许普通文件和目录，不能冻结 symlink 或特殊节点")
@@ -45,6 +46,7 @@ def verify_content(content: bytes | Path, digest: str, length: int, attachment_i
 
 
 def directory_manifest(root: Path) -> tuple[tuple[DirectorySnapshotFile, ...], tuple[str, ...]]:
+    root = native_io_path(root)
     if root.is_symlink() or not root.is_dir():
         raise FileNotFoundError("附件目录缺失或不是普通目录")
     files, directories = [], []
@@ -67,6 +69,7 @@ def copy_directory_files(source: Path, target: Path, files: tuple[DirectorySnaps
     """只复制冻结清单，重复执行只复验已完成的本 intent 文件，不覆盖损坏成品。"""
     if tuple(sorted({file.relative_path for file in files})) != tuple(file.relative_path for file in files) or tuple(sorted(set(directories))) != directories:
         raise RuntimeError("附件目录冻结清单有重复或顺序不规范")
+    source, target = native_io_path(source), native_io_path(target)
     target.mkdir(parents=True, exist_ok=True, mode=0o700)
     restrict_private_path_access(target, is_directory=True)
     for directory in directories:
@@ -96,6 +99,7 @@ def copy_directory_files(source: Path, target: Path, files: tuple[DirectorySnaps
 
 def protect_original(root: Path) -> None:
     """只在 live 目录发布前保护原件；冻结 capture 仍由原 owner 校验和清理。"""
+    root = native_io_path(root)
     original = resolve_attachment_file(root, ("original",))
     for file in original.iterdir():
         if file.is_file():
@@ -111,6 +115,7 @@ def protect_original(root: Path) -> None:
 
 
 def remove_directory(path: Path) -> None:
+    path = native_io_path(path)
     if path.is_symlink():
         raise RuntimeError("附件目录删除不能经过符号链接")
     if not path.exists():

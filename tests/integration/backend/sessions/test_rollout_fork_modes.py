@@ -13,7 +13,7 @@ import threading
 import time
 from collections.abc import AsyncIterator, Callable, Iterator
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import closing
+from contextlib import AsyncExitStack, closing
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -1076,19 +1076,20 @@ async def remote_fork_target(
         production_fork_container.workspace_root / ".boxteam/workspace.jsonc",
         workspace / ".boxteam/workspace.jsonc",
     )
-    registry = WorkspaceContainerRegistry(
-        mounted_workspaces=MountedWorkspaceRegistry([MountedWorkspace(workspace_id, workspace)]),
-        project_root=Path.cwd(),
-    )
-    target = registry.get(workspace_id)
-    transport = SourceForkOwnerTransport(production_fork_container.session_context_fork_service, [])
-    monkeypatch.setattr(target.session_context_fork_service, "_transport", transport)
-    try:
+    async with AsyncExitStack() as cleanup:
+        registry = WorkspaceContainerRegistry(
+            mounted_workspaces=MountedWorkspaceRegistry([MountedWorkspace(workspace_id, workspace)]),
+            project_root=Path.cwd(),
+        )
+        cleanup.callback(registry.close)
+        target = registry.get(workspace_id)
+        cleanup.callback(target.workspace_activity_service.store.close)
+        cleanup.callback(target.attachment_blob_store.close)
+        cleanup.push_async_callback(production_fork_container.workspace_session_context_transport.aclose)
+        cleanup.push_async_callback(target.workspace_session_context_transport.aclose)
+        transport = SourceForkOwnerTransport(production_fork_container.session_context_fork_service, [])
+        monkeypatch.setattr(target.session_context_fork_service, "_transport", transport)
         yield target, transport
-    finally:
-        await target.workspace_session_context_transport.aclose()
-        await production_fork_container.workspace_session_context_transport.aclose()
-        registry.close()
 
 
 def _production_fork_context(container: AppContainer) -> ForkIntegrationContext:

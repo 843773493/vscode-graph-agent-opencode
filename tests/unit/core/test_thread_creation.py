@@ -27,6 +27,7 @@ from app.agents.graph_binding import (
     DEEP_AGENT_GRAPH_BINDING,
     compute_capability_profile_hash,
 )
+from app.core.atomic_fs import native_io_path
 from app.core.identifier import create_uuid_hex
 from app.core.session_catalog_store import (
     SessionCatalogStore,
@@ -408,6 +409,54 @@ async def test_create_full_flow_publishes_child_thread(
     assert intent.session_id == owner.session_id
     # owner main row 不受影响
     assert str(owner.control.get_main_thread()["thread_id"]) == (owner.main_thread_id)
+
+
+@pytest.mark.parametrize("phase", ["staged", "renamed"])
+async def test_long_paths_resume_same_creation_after_interruption(
+    service: ThreadCreationService, store: SessionCatalogStore, owner: OwnerSession,
+    sessions_root: Path, monkeypatch: pytest.MonkeyPatch, phase: str,
+) -> None:
+    """长 staging 和 artifact 路径在冷恢复后仍发布原身份与原清单。"""
+    class CreationInterrupted(BaseException):
+        """模拟已完成物理阶段后的进程退出。"""
+
+    key = "long-" + "k" * 200
+    artifact = "a" * 80 + "/" + "b" * 80 + "/附件.txt"
+    payload = "冻结的 child 内容\n"
+    assert len(str(owner.session_dir / ".staging" / key)) > 260
+    boundary = "_prepare_staging" if phase == "staged" else "_rename_staging_to_final"
+    original = getattr(ThreadCreationService, boundary)
+
+    def interrupt(self: ThreadCreationService, *arguments: object) -> None:
+        original(self, *arguments)
+        raise CreationInterrupted(phase)
+
+    with monkeypatch.context() as crash:
+        crash.setattr(ThreadCreationService, boundary, interrupt)
+        with pytest.raises(CreationInterrupted, match=phase):
+            await do_create(service, owner, key=key, artifacts={artifact: payload})
+    record = owner.control.get_thread_creation_record(key)
+    assert record.state == "preparing"
+    assert owner.control.list_child_thread_rows() == ()
+    owner.control.close()
+    with closing(SessionControlStore(owner.session_dir / "session-control.sqlite")) as cold:
+        resumed = ThreadCreationService(
+            store=store, control_store=cold, sessions_root=sessions_root,
+            workspace_id=WORKSPACE_ID, compute_capability_profile_hash=compute_capability_profile_hash,
+            gate=NavigationTopologyGate(sessions_root),
+        )
+        result = await do_create(resumed, replace(owner, control=cold), key=key, artifacts={artifact: payload})
+        published = cold.get_thread_creation_record(key)
+        assert result.child_thread_id == record.child_thread_id
+        assert published.state == "published"
+        assert published.final_relative_locator == record.final_relative_locator
+        assert published.artifact_manifest == record.artifact_manifest
+        final_dir = owner.session_dir / result.final_relative_locator
+        assert len(str(final_dir / "artifacts" / artifact)) > 260
+        assert (native_io_path(final_dir) / "artifacts" / artifact).read_text(encoding="utf-8") == payload
+        assert not native_io_path(owner.session_dir / record.staging_locator).exists()
+        assert await do_create(resumed, replace(owner, control=cold), key=key, artifacts={artifact: payload}) == result
+        assert len(cold.list_child_thread_rows()) == 1
 
 
 def validate_thread_id_shape(result: ThreadCreationResult) -> None:
