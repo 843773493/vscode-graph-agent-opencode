@@ -278,3 +278,9 @@ Web 定向 `BOXTEAM_E2E_SECTION8_FOCUS=copy_missing_attachment` 通过真实 Gat
 - Terminal/Browser沿唯一`ResourceOperations.close()`全批共用一次30秒协作式等待预算，原资源锁、账本与released语义保持。到期排空本次锁等待，精确未释放引用保留给同operation显式重试；之前返回的账本释放错误与预算错误按原顺序保留，底层TimeoutError和调用方取消不误归为预算。解锁不自动补做释放，不改变外部进程/页面终态；同步写盘与不合作取消另留代码TODO。
 - Linux新旧资源owner、锁隔离和账本回归168 passed/4.38秒；正式`integration-resource-release`4 passed/35.17秒，保留原两项整组释放并增加两类真实资源的收尾期限。产品Session/创建/operation与真实Node/PTY或Chromium/HTTP生成占用后，仅持原资源锁并推进本进程单调时间，核健康占用先释放、原lease冷读仍active、原进程/页面身份及版本不变和原operation显式重试。完整`94e4ecb52`归档只叠相同最终测试，单测4 failed/2 passed/4.87秒，产品2 failed/2 passed/48.02秒；新增期限场景均在截止后得不到产品返回，原底层超时身份与原产品场景仍通过，不将测试自己的观察超时当作产品响应。
 - Windows快照`d80699e1b6bcaa1f29bd3e90ea6a28dadc47bbdc`经原90秒/4GiB Job Object保护，新期限、锁隔离和账本共100 passed/8.48秒；未重跑Windows真实PTY/Chromium。生产文件Pyright 1.1.414零诊断，Ruff/compileall、作者AST/目录审查和OpenSpec strict另留原始证据。准确命令、源码前后指纹、真实退出码及旧版反例在`out/tests/temp/resource_operation_close_budget_20261025/artifacts/`；现有suite仍120秒/4GiB，不扩大产品期限。全业务operation执行期限、同步阻塞、旧代接管及外部终止继续TODO，5.2/5.4/6.2仍未勾，整体20/23，团队、成员、委派及协作继续暂缓。
+
+### 2026-10-25 删除准入验收的工作区身份与观察连接
+
+- 修复前述旧fixture身份TODO：沿统一空工作区准备入口取得真实workspace_id，再传入catalog装具；catalog、消息与后台owner使用同一身份，不放宽生产身份校验。测试观察canonical终态后显式关闭SQLite连接，避免Windows目录隔离被观察者自身阻挡。生产代码无改动，原512/513节点规模、准入、顺序、终态及失败断言保持。
+- Linux扩展三文件26 passed/31.17秒；最终观察连接修正后补跑两个相关场景2 passed/6.35秒。Windows首次扩展22 passed/4 failed：一个是测试观察连接占用，另外三个是未修改的Node调试配置原生长路径写入失败。最终快照`60e479026a11c93ee97f347817dbb37f5e1a0aae`的删除准入全文件6 passed/44.28秒；另外三个产品失败留待独立切片，不计为通过。
+- Ruff、compileall及作者AST自查通过，准确命令、源码指纹、raw与退出码在`out/tests/temp/delete_admission_fixture_20261025/artifacts/`。Windows沿原90秒/4GiB Job Object保护；ASGI及进程内验收不代替真实网络、Gateway或完整关闭组合。5.2/5.4/6.2仍未勾，团队与协作继续暂缓。

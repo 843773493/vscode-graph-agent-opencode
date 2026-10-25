@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import shutil
 import sqlite3
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager, closing
@@ -21,6 +20,7 @@ from app.core.session_lifecycle_gate import (
     SessionDeletionPendingError,
 )
 from app.core.session_subtree_delete import SessionSubtreeDeleteService
+from app.core.workspace_identity import load_or_create_workspace_id
 from app.domain.itemized.execution_queue import ExecutionQueueInput
 from app.schemas.internal_v2.common import JobStatus, MessageRole
 from app.schemas.internal_v2.message import MessageDTO
@@ -219,11 +219,16 @@ async def test_large_subtree_delete_commits_one_visibility_transition(
 
 @pytest.fixture
 async def admission_harness() -> AsyncIterator[_AdmissionHarness]:
-    # TODO：统一catalog与消息owner的真实workspace身份；旧HEAD的两个执行场景也在删除前拒绝。
     run_context = TestRunContext.from_test_file(Path(__file__))
-    if run_context.workspace_root.exists():
-        shutil.rmtree(run_context.workspace_root)
-    workspace = build_catalog_workspace(run_context.output_root)
+    prepare_test_workspace(
+        workspace_root=run_context.workspace_root,
+        template_root=Path.cwd() / "tests/fixtures/workspaces/default_test_workspace",
+        template_items=(),
+    )
+    workspace = build_catalog_workspace(
+        run_context.output_root,
+        workspace_id=load_or_create_workspace_id(run_context.workspace_root),
+    )
     saver = RolloutCheckpointSaver(workspace.sessions_root)
     session_service = SessionService(
         config_service=ConfigService(),
@@ -401,7 +406,7 @@ async def test_catalog_delete_settles_active_and_queued_jobs_before_isolation(
         await release_drain.wait()
         await service.delete_session_jobs(session_id)
         assert database.is_file(), "canonical 终态必须先于物理隔离"
-        with sqlite3.connect(database.as_uri() + "?mode=ro", uri=True) as connection:
+        with closing(sqlite3.connect(database.as_uri() + "?mode=ro", uri=True)) as connection:
             terminal_rows.update(connection.execute(
                 "SELECT job_id,outcome FROM executions WHERE job_id IN (?,?,?)",
                 (active.job_id, queued.job_id, unstarted.job_id),
