@@ -22,6 +22,10 @@ from app.core.session_catalog_store.contracts import (
     SourceRetentionOperationPendingError,
 )
 from app.core.session_control_store import SessionControlStore
+from app.core.session_control_store.fork_retention_release import (
+    read_fork_retention_lease,
+    read_fork_retention_releases,
+)
 from app.core.trace_middleware import TraceMiddleware
 from app.schemas.internal_v2.session import SessionCreateRequest, SessionDTO
 from app.schemas.internal_v2.session_navigation.operations import (
@@ -55,6 +59,81 @@ from tests.integration.backend.sessions.test_rollout_fork_modes import (
 
 class CatalogCommitInterrupted(BaseException):
     """跳过业务补偿，分别留下真实 rollback 或 commit 后的事实。"""
+
+
+@pytest.mark.parametrize("artifact", ["target_control", "source_control", "source_index"])
+async def test_product_retention_release_rejects_missing_artifact_without_losing_pin(
+    production_fork_container: AppContainer, fork_execution_source: SessionDTO,
+    caplog: pytest.LogCaptureFixture, artifact: str,
+) -> None:
+    context = _production_fork_context(production_fork_container)
+    resolver = context.sessions.path_resolver
+    source = fork_execution_source
+    fork_request = await _fork_request(
+        context, source.session_id, creation_kind="new_session_main", relationship="pinned",
+    )
+    copied = await context.forks.fork(fork_request)
+    target = copied.session
+    catalog = resolver.catalog_store
+    claim, = catalog.list_fork_retention_claims_for_target(target.session_id)
+    capture = catalog.get_fork_source_capture(fork_id=claim.fork_retention_claim_id)
+    assert capture is not None and capture.state == "materialized"
+    source_node = resolver.resolve_session_node(source.session_id)
+    target_node = resolver.resolve_session_node(target.session_id)
+    source_thread = resolver.resolve_thread_node(source.session_id, capture.source_thread_id)
+    target_thread = resolver.resolve_thread_node(target.session_id, copied.thread_id)
+    canonical = {node / "rollout/rollout.jsonl": (node / "rollout/rollout.jsonl").read_bytes()
+                 for node in (source_thread, target_thread)}
+    source_control = source_node / "session-control.sqlite"
+    target_control = target_node / "session-control.sqlite"
+    with closing(SessionControlStore(source_control, read_only=True)) as control:
+        lease = read_fork_retention_lease(control, capture, expected_generation=claim.source_lifecycle_generation)
+        assert lease is not None and lease.state == "active"
+    missing = {
+        "target_control": target_control, "source_control": source_control,
+        "source_index": source_thread / "rollout/index.sqlite",
+    }[artifact]
+    parked = missing.with_name(missing.name + ".private-original")
+    missing.rename(parked)
+    try:
+        with pytest.raises(RuntimeError) as failure:
+            await context.saver.release_fork_retentions(target.session_id)
+        detail = str(failure.value)
+        assert str(context.workspace) not in detail and str(missing) not in detail
+        assert f"artifact={artifact}" in detail and "stage=retention_release" in detail
+        assert (target.session_id if artifact == "target_control" else source.session_id) in detail
+        assert any(str(missing) in record.getMessage() for record in caplog.records)
+        assert not missing.exists() and parked.is_file()
+        assert catalog.get_fork_retention_claim(claim.fork_retention_claim_id) == claim
+        assert catalog.get_fork_source_capture(fork_id=claim.fork_retention_claim_id) == capture
+        assert catalog.get_node(source.session_id).state == catalog.get_node(target.session_id).state == "active"
+        for path, raw in canonical.items():
+            assert path.read_bytes() == raw
+    finally:
+        parked.rename(missing)
+    with closing(SessionControlStore(source_control, read_only=True)) as control:
+        assert read_fork_retention_lease(
+            control, capture, expected_generation=claim.source_lifecycle_generation,
+        ) == lease
+    with closing(SessionControlStore(target_control, read_only=True)) as control:
+        records = read_fork_retention_releases(control)
+        if artifact == "target_control":
+            assert records == ()
+        else:
+            record, = records
+            assert record.state == "preparing" and record.fork_retention_claim_id == claim.fork_retention_claim_id
+    # 重建 Saver 后按原 target/source 释放记录继续，不靠缺失路径补建数据库。
+    with type(context.saver)(context.saver._storage.storage.sessions_dir) as cold:
+        await cold.release_fork_retentions(target.session_id)
+        await cold.release_fork_retentions(target.session_id)
+    assert catalog.get_fork_retention_claim(claim.fork_retention_claim_id).state == "released"
+    with closing(SessionControlStore(source_control, read_only=True)) as control:
+        assert control.get_lease(lease.lease_id).state == "completed"
+    with closing(SessionControlStore(target_control, read_only=True)) as control:
+        record, = read_fork_retention_releases(control)
+        assert record.state == "committed" and record.fork_retention_claim_id == claim.fork_retention_claim_id
+    for path, raw in canonical.items():
+        assert path.read_bytes() == raw
 
 
 @pytest.mark.parametrize("first", ["claim", "delete"])

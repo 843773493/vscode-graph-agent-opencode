@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from typing import TYPE_CHECKING
 
 from app.core.atomic_fs import native_io_path
@@ -23,6 +24,8 @@ if TYPE_CHECKING:
         RolloutStorage,
     )
 
+logger = logging.getLogger(__name__)
+
 
 async def release_fork_retentions(
     storage: RolloutStorage, catalog: SessionCatalogStore, target_session_id: str,
@@ -34,7 +37,12 @@ async def release_fork_retentions(
         target_node = storage.fork_paths.session_node(target_session_id)
         control_path = target_node / CONTROL_DATABASE_NAME
         if not native_io_path(control_path).is_file():
-            raise RuntimeError(f"fork retention release 缺少 target 控制库: {control_path}")
+            detail = (
+                "fork retention release 缺少 target 控制库: "
+                f"session_id={target_session_id}, artifact=target_control, stage=retention_release"
+            )
+            logger.error("%s; path=%s", detail, control_path)
+            raise RuntimeError(detail)
         control = SessionControlStore(control_path)
         try:
             for claim in catalog.list_fork_retention_claims_for_target(target_session_id):
@@ -102,7 +110,12 @@ async def _release_source_retention(
             raise RuntimeError("未释放的 fork retention source catalog 非 active 或 workspace 冲突")
         source_control_path = storage.fork_paths.session_node(record.source_session_id) / CONTROL_DATABASE_NAME
         if not native_io_path(source_control_path).is_file():
-            raise RuntimeError(f"fork retention release 缺少 source 控制库: {source_control_path}")
+            detail = (
+                "fork retention release 缺少 source 控制库: "
+                f"session_id={record.source_session_id}, artifact=source_control, stage=retention_release"
+            )
+            logger.error("%s; path=%s", detail, source_control_path)
+            raise RuntimeError(detail)
         control = SessionControlStore(source_control_path, read_only=True)
         try:
             control.verify_matches_catalog_main_thread(source.main_thread_id)
@@ -120,7 +133,13 @@ async def _release_source_retention(
         )
         if not native_io_path(index_path).is_file():
             if claim.state != "preparing":
-                raise RuntimeError(f"active fork retention source index 缺失: {index_path}")
+                detail = (
+                    "active fork retention source index 缺失: "
+                    f"session_id={record.source_session_id}, thread_id={record.source_thread_id}, "
+                    "artifact=source_index, stage=retention_release"
+                )
+                logger.error("%s; path=%s", detail, index_path)
+                raise RuntimeError(detail)
         else:
             with (
                 storage._lock(record.source_thread_id, record.checkpoint_ns, session_id=record.source_session_id),
