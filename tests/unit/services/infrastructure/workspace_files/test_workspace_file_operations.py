@@ -552,3 +552,134 @@ async def test_unverified_effect_stops_worker_without_cleanup_or_successor_execu
             await case.service.stop()
     finally:
         release.set()
+
+
+@pytest.mark.parametrize("cancel_waiter", [False, True])
+async def test_stop_retains_original_writer_and_storage_until_publication_finishes(
+    file_case, monkeypatch, cancel_waiter,
+):
+    case = file_case
+    entered, release, settled = Event(), Event(), Event()
+    execute = case.owner._execute
+
+    def blocked(record):
+        entered.set()
+        try:
+            if not release.wait(10):
+                raise RuntimeError("测试文件关闭屏障未释放")
+            execute(record)
+        finally:
+            settled.set()
+
+    monkeypatch.setattr(case.owner, "_execute", blocked)
+    receipt = await case.service.create_file_entry(
+        directory_path="target", scope="workspace", name="closing.txt", kind="file",
+        intent=await intent(case), actor="local",
+    )
+    worker = case.owner._worker
+    waiters = []
+    try:
+        assert await asyncio.to_thread(entered.wait, 5)
+        first = asyncio.create_task(case.service.stop())
+        waiters.append(first)
+        await asyncio.sleep(0)
+        if cancel_waiter:
+            first.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await first
+        assert case.owner._worker is worker and not worker.done()
+        with pytest.raises(RuntimeError, match="尚未排空"):
+            case.service.close()
+        with pytest.raises(RuntimeError, match="worker 不可用"):
+            case.owner.require_ready()
+        waiters.append(asyncio.create_task(case.service.stop()))
+        await asyncio.sleep(0)
+        assert not waiters[-1].done()
+        assert case.owner.store.get(receipt.operation_id, "local").state == "queued"
+        release.set()
+        await asyncio.wait_for(asyncio.gather(*[task for task in waiters if not task.cancelled()]), 5)
+        assert settled.is_set() and worker.done() and not worker.cancelled()
+        result = case.owner.store.get(receipt.operation_id, "local")
+        assert result.state == "committed" and result.receipt.effect == "complete"
+        assert (case.workspace / "target/closing.txt").is_file()
+        assert case.owner.store.pending() == () and case.owner.store.cleanup_pending() == ()
+        assert case.owner.worker_state == "stopped"
+    finally:
+        release.set()
+        await asyncio.gather(*waiters, return_exceptions=True)
+        assert await asyncio.to_thread(settled.wait, 5)
+
+
+async def test_stop_waits_for_admitted_preparation_and_restart_executes_original_intent(file_case, monkeypatch):
+    case = file_case
+    entered, release, settled = Event(), Event(), Event()
+    target = case.owner._target
+
+    def blocked(*args):
+        entered.set()
+        try:
+            if not release.wait(10):
+                raise RuntimeError("测试文件准备屏障未释放")
+            return target(*args)
+        finally:
+            settled.set()
+
+    command = await intent(case)
+    monkeypatch.setattr(case.owner, "_target", blocked)
+    preparation = asyncio.create_task(case.service.create_file_entry(
+        directory_path="target", scope="workspace", name="prepared.txt", kind="file",
+        intent=command, actor="local",
+    ))
+    closing = None
+    try:
+        assert await asyncio.to_thread(entered.wait, 5)
+        closing = asyncio.create_task(case.service.stop())
+        async with asyncio.timeout(5):
+            while not case.owner._worker.done():
+                await asyncio.sleep(0)
+        assert not closing.done()
+        with pytest.raises(RuntimeError, match="尚未排空"):
+            case.service.close()
+        release.set()
+        receipt = await asyncio.wait_for(preparation, 5)
+        await asyncio.wait_for(closing, 5)
+        assert receipt.operation_id == command.client_operation_id
+        assert case.owner.store.get(receipt.operation_id, "local").state == "queued"
+        assert not (case.workspace / "target/prepared.txt").exists()
+        await case.service.start()
+        result = await terminal(case, receipt)
+        assert result.state == "committed" and result.effect == "complete"
+        assert (case.workspace / "target/prepared.txt").is_file()
+        assert case.owner.store.pending() == ()
+    finally:
+        release.set()
+        await asyncio.gather(preparation, *([] if closing is None else [closing]), return_exceptions=True)
+        assert await asyncio.to_thread(settled.wait, 5)
+
+
+async def test_stop_rejects_request_still_waiting_for_acceptance_lock(file_case):
+    case = file_case
+    command = await intent(case)
+    await case.owner._accept_lock.acquire()
+    request = asyncio.create_task(case.service.create_file_entry(
+        directory_path="target", scope="workspace", name="late.txt", kind="file",
+        intent=command, actor="local",
+    ))
+    closing = None
+    try:
+        await asyncio.sleep(0)
+        assert not request.done()
+        closing = asyncio.create_task(case.service.stop())
+        await asyncio.sleep(0)
+        case.owner._accept_lock.release()
+        with pytest.raises(RuntimeError, match="worker 不可用"):
+            await asyncio.wait_for(request, 5)
+        await asyncio.wait_for(closing, 5)
+        with pytest.raises(KeyError):
+            case.owner.store.get(command.client_operation_id, "local")
+        assert not (case.workspace / "target/late.txt").exists()
+        assert case.owner.store.pending() == ()
+    finally:
+        if case.owner._accept_lock.locked():
+            case.owner._accept_lock.release()
+        await asyncio.gather(request, *([] if closing is None else [closing]), return_exceptions=True)

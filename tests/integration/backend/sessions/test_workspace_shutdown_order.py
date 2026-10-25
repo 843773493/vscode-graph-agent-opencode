@@ -3,11 +3,13 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+from threading import Event
 
 import pytest
 
 from app import main
 from app.core.checkpoint_config import build_checkpoint_config
+from app.core.identifier import create_prefixed_id
 from app.core.path_utils import workspace_context
 from app.core.resource_uri import parse_attachment_uri
 from app.core.session_catalog_store import SessionCatalogStore
@@ -20,6 +22,9 @@ from app.schemas.internal_v2.message import (
     RunOptions,
 )
 from app.schemas.internal_v2.session import SessionCreateRequest
+from app.schemas.internal_v2.workspace_file_operations import (
+    WorkspaceFileMutationIntentDTO,
+)
 from app.services.infrastructure.attachment_blob_catalog.maintenance import (
     AttachmentMaintenanceBusyError,
     AttachmentMaintenanceLock,
@@ -28,6 +33,7 @@ from app.services.infrastructure.attachment_blob_catalog.store import (
     AttachmentBlobStore,
 )
 from app.services.infrastructure.mcp import McpCatalogOwner
+from app.services.infrastructure.workspace_files.store import WorkspaceFileStore
 from tests.integration.backend.sessions.test_attachment_directory_entry import upload
 from tests.integration.backend.sessions.test_mounted_workspace_lifespan import (
     MountedCase,
@@ -245,3 +251,97 @@ async def test_backend_shutdown_preserves_dependencies_and_retries_original_owne
         backend = getattr(main.app.state, "workspace_lifespan", None)
         if backend is not None:
             await backend.close()
+
+
+async def test_backend_close_retains_cancelled_file_stop_writer_and_retries_original_owner(
+    mounted_case: MountedCase, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    deadlines: list[asyncio.Timeout] = []
+
+    def backend_deadline(seconds: float) -> asyncio.Timeout:
+        assert seconds == 30
+        deadline = asyncio.timeout(seconds)
+        deadlines.append(deadline)
+        return deadline
+
+    monkeypatch.setattr(inspect.getmodule(main.BackendLifespan), "timeout", backend_deadline, raising=False)
+    lifetime = main.lifespan(main.app)
+    await lifetime.__aenter__()
+    entered, release, settled = Event(), Event(), Event()
+    waiters = []
+    try:
+        peer, selected = mounted_case.containers
+        service = selected.workspace_service
+        owner = service.file_operations
+        execute = owner._execute
+
+        def blocked(record):
+            entered.set()
+            try:
+                if not release.wait(15):
+                    raise RuntimeError("测试Backend文件写入屏障未释放")
+                execute(record)
+            finally:
+                settled.set()
+
+        monkeypatch.setattr(owner, "_execute", blocked)
+        with workspace_context(selected.workspace_id, selected.workspace_root,
+                               session_catalog=selected.session_catalog):
+            listing = await service.list_files()
+            intent = WorkspaceFileMutationIntentDTO(
+                client_operation_id=create_prefixed_id("op"), client_sequence=1,
+                directory_key=listing.directory_key, expected_directory_revision=listing.directory_revision,
+            )
+            receipt = await service.create_file_entry(
+                directory_path=listing.path, scope="workspace", name="shutdown.txt", kind="file",
+                intent=intent, actor="local",
+            )
+        assert await asyncio.to_thread(entered.wait, 5)
+        worker = owner._worker
+        waiter = asyncio.create_task(service.stop())
+        waiters.append(waiter)
+        await asyncio.sleep(0)
+        waiter.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await waiter
+        assert owner._worker is worker and not worker.done()
+
+        backend = main.app.state.workspace_lifespan
+        closing = asyncio.create_task(backend.close())
+        waiters.append(closing)
+        peer_lifetime = next(item for item in backend.workspaces if item.container is peer)
+        await asyncio.wait_for(asyncio.shield(peer_lifetime._owner), 5)
+        selected_lifetime = next(item for item in backend.workspaces if item.container is selected)
+        async with asyncio.timeout(5):
+            while selected_lifetime.pending_close_stage != "workspace_service.stop":
+                await asyncio.sleep(0)
+        assert len(deadlines) == 1
+        deadlines[0].reschedule(asyncio.get_running_loop().time())
+        with pytest.raises(TimeoutError, match="Backend关闭等待超过30秒"):
+            await asyncio.wait_for(closing, 5)
+        assert not backend.closed and owner._worker is worker and not worker.done()
+        assert owner.store.get(receipt.operation_id, "local").state == "queued"
+        assert selected.session_catalog.resolver.catalog_store.connection.execute("SELECT 1").fetchone()[0] == 1
+        for container in mounted_case.containers:
+            with pytest.raises(AttachmentMaintenanceBusyError), AttachmentMaintenanceLock(
+                container.workspace_root / ".boxteam/attachments", exclusive=True,
+            ):
+                pytest.fail("文件原writer结束前不能归还维护锁")
+        original_close = backend._close_owner
+        release.set()
+        await backend.close()
+        assert backend._close_owner is original_close and backend.closed
+        assert settled.is_set() and worker.done() and not worker.cancelled()
+        assert (selected.workspace_root / "shutdown.txt").is_file()
+        cold = WorkspaceFileStore(selected.workspace_root, selected.workspace_id)
+        try:
+            record = cold.get(receipt.operation_id, "local")
+            assert record.state == "committed" and record.receipt.effect == "complete"
+            assert cold.pending() == () and cold.cleanup_pending() == ()
+            assert cold.events(0)[-1]["operation_id"] == receipt.operation_id
+        finally:
+            cold.close()
+    finally:
+        release.set()
+        await asyncio.gather(*waiters, return_exceptions=True)
+        await lifetime.__aexit__(None, None, None)

@@ -99,20 +99,30 @@ class WorkspaceFileOperations:
         self._ready.set()
 
     def require_ready(self) -> None:
-        if self.worker_state != "running" or self._worker is None or self._worker.done():
-            raise RuntimeError(f"文件 operation worker 不可用: state={self.worker_state}, error={self.worker_error}")
+        if self._stopping or self.worker_state != "running" or self._worker is None or self._worker.done():
+            state = "stopping" if self._stopping else self.worker_state
+            raise RuntimeError(f"文件 operation worker 不可用: state={state}, error={self.worker_error}")
 
     async def stop(self) -> None:
         if self._worker is None:
             return
         self._stopping = True
         self._changed.set()
-        task, self._worker = self._worker, None
-        await task
-        self.worker_state = "stopped"
+        # 已准入的准备先完成持久受理；等待者取消不能取消仍在线程中写盘的原worker。
+        async with self._accept_lock:
+            task = self._worker
+            if task is None:
+                return
+            try:
+                await asyncio.shield(task)
+            finally:
+                if task.done():
+                    self._worker = None
+                    if not task.cancelled() and task.exception() is None:
+                        self.worker_state = "stopped"
 
     def close(self) -> None:
-        if self._worker is not None and not self._worker.done():
+        if self._accept_lock.locked() or (self._worker is not None and not self._worker.done()):
             raise RuntimeError("文件 operation owner 尚未排空，不能关闭存储")
         self.store.close()
 
@@ -243,6 +253,7 @@ class WorkspaceFileOperations:
         if actor != "local":
             raise PermissionError("文件 operation 必须使用原 local-token 认证 scope")
         async with self._accept_lock:
+            self.require_ready()
             key, target = await asyncio.to_thread(self._target, directory_path, scope, intent, actor)
             if intent.directory_key != key:
                 raise WorkspaceFileOperationConflictError("文件 intent 的原 workspace/scope/root/path 与路由目标不一致，禁止改投")
