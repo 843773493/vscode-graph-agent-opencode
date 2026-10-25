@@ -57,11 +57,14 @@ async def test_public_debug_fork_failure_preserves_source_and_safe_error(
         launch_profile_name="node-default", activate=False,
     ))
     summary, = state.configurations
-    # fork 冻结持久 owner 的完整正文；运行时缓存的 updated_at 早于保存时的时间戳。
     configuration = context.saver._node_debug_store.read_configuration(
         source.session_id, summary.configuration_id, source_thread,
     )
     assert configuration is not None
+    assert summary.updated_at == configuration.updated_at
+    assert container.node_debug_service.get_configuration(
+        source.session_id, summary.configuration_id, source_thread,
+    ) == configuration
     request = await _fork_request(context, source.session_id, creation_kind="new_session_main", mode="full_rollout_copy")
     request = request.model_copy(update={"resources": [SessionForkResourceChoice(
         resource_uri=debug_configuration_resource_uri(request.source_uri, configuration.configuration_id),

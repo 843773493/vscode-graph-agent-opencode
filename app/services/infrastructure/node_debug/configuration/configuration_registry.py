@@ -161,14 +161,12 @@ class NodeDebugConfigurationRegistry:
         session_id: str,
         configuration: NodeDebugConfigurationDTO,
         thread_id: str,
-    ) -> None:
+    ) -> NodeDebugConfigurationDTO:
         owner = normalize_node_debug_owner(session_id, thread_id)
-        configurations = self._configurations.get(owner)
-        if configurations is None:
-            configurations = self._configurations.setdefault(owner, {})
-        configurations[configuration.configuration_id] = configuration
         if self._store is not None:
-            self._store.write_configuration(session_id, configuration, thread_id)
+            configuration = self._store.write_configuration(session_id, configuration, thread_id)
+        self._configurations.setdefault(owner, {})[configuration.configuration_id] = configuration
+        return configuration
 
     def create(self, request: NodeDebugConfigurationCreateRequest) -> NodeDebugConfigurationDTO:
         session_id, thread_id = request.session_id, request.thread_id
@@ -183,7 +181,7 @@ class NodeDebugConfigurationRegistry:
             args=request.args,
             breakpoints=request.breakpoints,
         )
-        self.put(session_id, configuration, thread_id)
+        configuration = self.put(session_id, configuration, thread_id)
         if request.activate:
             self.activate(session_id, configuration.configuration_id, thread_id=thread_id)
         return configuration
@@ -213,7 +211,7 @@ class NodeDebugConfigurationRegistry:
             revision=current.revision + 1,
             created_at=current.created_at,
         )
-        self.put(session_id, replacement, thread_id)
+        replacement = self.put(session_id, replacement, thread_id)
         if self.active_id(session_id, thread_id) == configuration_id:
             self._load_active_configuration(session_id, thread_id)
         return replacement
@@ -259,7 +257,7 @@ class NodeDebugConfigurationRegistry:
             raise ValueError(f"目标会话已存在调试方案: {configuration.configuration_id}")
         self.assert_unique_name(session_id, configuration.name, thread_id=thread_id)
         imported = self._configuration_factory.validate_configuration(configuration)
-        self.put(session_id, imported, thread_id)
+        imported = self.put(session_id, imported, thread_id)
         if activate:
             self.activate(session_id, imported.configuration_id, thread_id=thread_id)
         return imported
@@ -289,7 +287,7 @@ class NodeDebugConfigurationRegistry:
                 deep=True,
             )
         )
-        self.put(target_session_id, copied, target_thread_id)
+        copied = self.put(target_session_id, copied, target_thread_id)
         if activate:
             self.activate(target_session_id, copied.configuration_id, thread_id=target_thread_id)
         return copied
@@ -376,7 +374,7 @@ class NodeDebugConfigurationRegistry:
                 args=args,
                 breakpoints=[],
             )
-            self.put(session_id, configuration, thread_id)
+            configuration = self.put(session_id, configuration, thread_id)
             selected_id = configuration.configuration_id
         self.get(session_id, thread_id, selected_id)
         if self.active_id(session_id, thread_id) != selected_id:
@@ -398,7 +396,7 @@ class NodeDebugConfigurationRegistry:
             args=[],
             breakpoints=[],
         )
-        self.put(session_id, configuration, thread_id)
+        configuration = self.put(session_id, configuration, thread_id)
         self.activate(session_id, configuration.configuration_id, thread_id=thread_id)
 
     def summaries(

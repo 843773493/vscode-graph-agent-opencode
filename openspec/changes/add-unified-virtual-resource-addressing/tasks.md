@@ -728,3 +728,11 @@
 - HTTP使用真实路由/依赖/TraceMiddleware及ASGI传输，冷恢复使用原Saver；不称真实Gateway、Backend进程重启、Windows实机或完整Web。2.2/7.2全局门继续未勾，团队、成员、委派和协作不追加实现或专项验证。
 - TODO（独立既有行为）：调试方案保存时store更新updated_at而registry缓存保留写入前值；本批按持久冻结正文核全字段，不在错误合同切片扩改缓存。另行处理时应让原缓存消费权威保存结果，不能删除updated_at断言或引入第二可变事实源。
 - 最终共享源码复核：11项单测通过（0.61秒）、完整6项fork产品集成通过（65.47秒）、Ruff/compileall通过、严格OpenSpec全量45 passed/0 failed；完整旧生产上的新增公开HTTP反例3 failed（49.10秒），均复现公开错误不符合阶段/真实路径合同。五项共享运行的源码冻结、原始输出、真实退出码及进程组回收由 verification003.json 核实，退出码全部0；反例收据见 verification002.json。此证据仍只覆盖本切片，不代替2.2/7.2全局验收。
+
+
+### 2026-10-25 调试方案持久正文发布一致性
+
+- 关闭上一切片登记的updated_at缓存TODO：原store在原子写入成功后返回实际持久正文，registry随后发布同一对象；创建、更新、导入、复制及两类隐式方案消费者迁齐该返回值。运行时状态回写仍沿原put入口，不新增writer、缓存补丁、回读链或schema；原写盘时刻规则保持，失败不发布未保存方案。
+- 完整旧生产加相同新增测试为15 failed/1.96秒，分别复现返回/热缓存与冷读不一致，以及write/replace失败后缓存存在未保存变更；候选15 passed/1.84秒，相关配置、store、断点、源校验及fork回归合计167 passed/10.51秒。真实产品执行/model_stream生成来源的完整fork集成6 passed/65.03秒，新增全字段热读/持久正文与updated_at一致断言，原失败与冷Saver恢复断言保留；Ruff/compileall通过。
+- 准确命令、完整源码前后指纹、原始输出与真实退出码、完整旧生产和主线程本地结构自查位于 `out/tests/temp/debug_configuration_publication_20261025/artifacts/`；verification001.json核实所有运行源码冻结与进程组回收。原单测与回归有重叠，不累加；产品HTTP仍为真实路由配合ASGI，不能替代真实Gateway、后端进程重启、Windows或完整Web。团队与协作继续TODO，2.2/7.2全局门仍未关闭。
+- 最终共享三方合并后复核：相关167项回归通过（9.78秒）、完整6项fork集成通过（65.56秒）、Ruff/compileall通过；候选严格OpenSpec全量45 passed/0 failed。共享各运行的完整4591路径指纹未变，原始退出码/日志/进程回收分别由verification002/003核实。原store枚举局部变量整理独立保留，本地结构自查见architecture002.json；不把它称作独立审查。

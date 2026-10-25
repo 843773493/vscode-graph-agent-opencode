@@ -205,15 +205,17 @@ class NodeDebugSessionStore:
         session_id: str,
         configuration: NodeDebugConfigurationDTO,
         thread_id: str,
-    ) -> None:
+    ) -> NodeDebugConfigurationDTO:
         self._assert_canonical_owner(session_id, thread_id)
+        persisted = configuration.model_copy(update={"updated_at": datetime.now(UTC)})
         self._atomic_write(
             self._configuration_path(
                 session_id, thread_id, configuration.configuration_id
             ),
-            configuration.model_copy(update={"updated_at": datetime.now(UTC)}),
+            persisted,
             f"session_id={session_id}, thread_id={thread_id}, configuration_id={configuration.configuration_id}",
         )
+        return persisted
 
     def delete_configuration(
         self, session_id: str, configuration_id: str, thread_id: str
