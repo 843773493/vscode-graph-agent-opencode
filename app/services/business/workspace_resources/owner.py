@@ -6,7 +6,7 @@ import asyncio
 import logging
 from asyncio import timeout
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterable, Iterator
-from contextlib import AsyncExitStack, asynccontextmanager, contextmanager
+from contextlib import asynccontextmanager, contextmanager
 from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -558,40 +558,13 @@ class WorkspaceResourceOwner:
         holder_id: str,
         operation_id: str,
     ) -> int:
-        await self.recover(())
-        affected = [
-            record
-            for record in self._store.all()
-            if (record.status != "deleted" or record.reconciliation_status != "verified")
-            and (
-                any(matches(ref) for ref in record.thread_associations)
-                or (
-                    record.retention_scope == "thread" and matches(record.source_thread)
-                )
-            )
-        ]
-        await self.recover(record.resource_id for record in affected)
-        async with self._lock_resources(record.resource_id for record in affected):
-            affected = [self._require(record.resource_id) for record in affected]
-            # 同代清理重试只收敛已核实终态，不重发结果未知的停止/删除。
-            for record in affected:
-                if record.reconciliation_status != "verified":
-                    runtime = await self._transport.get_resource(record.resource_id)
-                    self._reconcile_stopped_record(record, runtime)
-            # 先核对整个清理集合，lease 冲突不会留下部分 detach。
-            for record in affected:
-                self._verified(record)
-                if any(
-                    lease.holder_session_id is None
-                    or matches(ThreadRef(lease.holder_session_id, lease.holder_thread_id))
-                    for lease in self._leases.leases_for_resource(record.resource_id)
-                ):
-                    raise ResourceConflict(
-                        f"Thread 释放仍有未结清 外部资源 operation: {record.resource_id}"
-                    )
-            for record in affected:
+        locked: dict[str, asyncio.Lock] = {}
+        tasks: list[asyncio.Task[Exception | None]] = []
+
+        async def release(record: OwnedResourceRecord) -> Exception | None:
+            try:
                 if record.status == "deleted":
-                    continue
+                    return None
                 with self._management_lease(record, None, holder_id, operation_id) as lease_id:
                     try:
                         if record.retention_scope == "thread":
@@ -600,16 +573,81 @@ class WorkspaceResourceOwner:
                         else:
                             await self._advance_revision(record)
                             record.thread_associations = [
-                                ref
-                                for ref in record.thread_associations
-                                if not matches(ref)
+                                ref for ref in record.thread_associations if not matches(ref)
                             ]
                             record.updated_at = self._now()
                             self._store.save(record)
                     except BaseException as error:
                         self._unknown(record, error, lease_id=lease_id)
                         raise
-            return len(affected)
+                return None
+            except Exception as error:  # noqa: BLE001 - 各资源独立收敛后保留原错误。
+                return error
+            finally:
+                # 完整preflight后各任务接管自己的原锁，成功项不等其它网络回执。
+                locked.pop(record.resource_id).release()
+
+        # 准备、全量检查与各资源释放共用一次预算；超时不是停止证明。
+        # TODO：同步写盘、不合作取消及外部终止仍须沿原owner核实。
+        deadline = timeout(30)
+        try:
+            async with deadline:
+                await self.recover(())
+                affected = [
+                    record
+                    for record in self._store.all()
+                    if (record.status != "deleted" or record.reconciliation_status != "verified")
+                    and (
+                        any(matches(ref) for ref in record.thread_associations)
+                        or (record.retention_scope == "thread" and matches(record.source_thread))
+                    )
+                ]
+                await self.recover(record.resource_id for record in affected)
+                # 重试只核原终态，不重发未知停止；网络观察不持有其它资源锁。
+                for record in affected:
+                    if record.reconciliation_status != "verified":
+                        async with self._resource_lock(record.resource_id):
+                            current = self._require(record.resource_id)
+                            if current.reconciliation_status != "verified":
+                                runtime = await self._transport.get_resource(record.resource_id)
+                                self._reconcile_stopped_record(current, runtime)
+                for resource_id in sorted(record.resource_id for record in affected):
+                    lock = self._resource_lock(resource_id)
+                    await lock.acquire()
+                    locked[resource_id] = lock
+                affected = [self._require(record.resource_id) for record in affected]
+                # 从全量preflight到任务接管之间不让出事件循环，避免新lease插入。
+                for record in affected:
+                    self._verified(record)
+                    if any(
+                        lease.holder_session_id is None
+                        or matches(ThreadRef(lease.holder_session_id, lease.holder_thread_id))
+                        for lease in self._leases.leases_for_resource(record.resource_id)
+                    ):
+                        raise ResourceConflict(
+                            f"Thread 释放仍有未结清 外部资源 operation: {record.resource_id}"
+                        )
+                tasks = [asyncio.create_task(release(record)) for record in affected]
+                results = await asyncio.gather(*tasks)
+                errors = [result for result in results if isinstance(result, Exception)]
+                if len(errors) == 1:
+                    raise errors[0]
+                if errors:
+                    raise ExceptionGroup("外部资源关联释放存在未收敛资源", errors)
+                return len(affected)
+        except TimeoutError as error:
+            if not deadline.expired():
+                raise
+            raise TimeoutError(
+                f"外部资源关联释放等待超过 30 秒: workspace_id={self.workspace_id} kind={self.kind} "
+                f"holder_id={holder_id}；保留未核实记录与原占用，未确认外部操作停止"
+            ) from error
+        finally:
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+            for lock in locked.values():
+                lock.release()
 
     async def sweep_orphans(self) -> list[ResourceSnapshot]:
         if not self._store.ids():
@@ -790,15 +828,6 @@ class WorkspaceResourceOwner:
     def _resource_lock(self, resource_id: str) -> asyncio.Lock:
         self._require(resource_id)
         return self._resource_locks[resource_id]
-
-    @asynccontextmanager
-    async def _lock_resources(self, resource_ids: Iterable[str]) -> AsyncIterator[None]:
-        # 锁的数量跟随原 owner 记录；集合顺序唯一，不因相反的调用顺序死锁。
-        # TODO：5.4 仍须统一恢复、集合锁等待与外部操作的总截止时间及终止核实。
-        async with AsyncExitStack() as stack:
-            for resource_id in sorted(set(resource_ids)):
-                await stack.enter_async_context(self._resource_lock(resource_id))
-            yield
 
     def _require(self, resource_id: str) -> OwnedResourceRecord:
         record = self._store.get(resource_id)

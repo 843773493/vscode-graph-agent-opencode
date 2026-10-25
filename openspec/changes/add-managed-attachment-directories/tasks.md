@@ -214,3 +214,10 @@ Web 定向 `BOXTEAM_E2E_SECTION8_FOCUS=copy_missing_attachment` 通过真实 Gat
 - 本片只证明事件循环正常调度、等待可取消时的原孤儿回收边界；同步写盘/回调阻塞、不合作操作及真实外部终止、整组释放/Session删除/生产shutdown和完整重启故障组合继续TODO。原30分钟临时孤儿与附件30天期限保持，5.2/5.4/6.2仍不勾，团队、成员、委派及协作不追加实现或专项验证。
 
 真实验收最终收口到跨辅助服务目录 `tests/integration/workspace_services/test_resource_orphan_sweep.py`，suite为 `integration-resource-orphan-sweep`（120秒/4GiB），同一场景参数化覆盖真实Terminal PTY和Browser Chromium；未提交的Browser专用文件已物理迁走，fixture不复制。固定候选2 passed/23.27秒；最终共享235项单测/API回归及两类真实资源均通过，准确原始耗时见各run。相同最终场景在完整旧生产为2 failed/33.53秒，均阻在peer回收屏障。测试路径扩展曾误改既有profile，原始运行未改写：两版准确字节和所有recorded hash已核对并保全于profile-versions001.json；此后使用独立002 profile，源码/日志/退出码及进程回收核验见verification001–004。该测试未代替独立进程硬重启或不合作任务终止验收。
+
+
+### 2026-10-25 整组关联释放检查与独立收尾（5.4部分收口）
+
+- 原Thread/Session资源drain在全量原锁内重读/核全部lease，检查与任务接管间不让出事件循环，保持冲突不部分detach。未知终态观察只持自身锁；检查通过后各资源独立完成并立即解锁。入口一次30秒覆盖准备/恢复/观察/集合锁/撤权/删除；取消排空本调用，未知保留精确原lease，不重发删除。物理删除仅有调用的旧集合锁helper，无兼容链或新持久格式。
+- 准确命令、固定候选/完整旧生产反例、原始日志、源码指纹与退出码在`out/tests/temp/resource_release_batch_20261025/artifacts/`。候选初轮44项中42通过，Browser operation误用Terminal专有方法的2项准备错误已改为原Browser perform；初次扩大命令误写不存在的API文件，未进入业务。Ruff初轮max建议及import排序均修复，原失败保留。随后候选279项资源/API和2项真实PTY/Chromium/HTTP通过；最终含未知观察隔离的48项及共享验收结果按原件核验。
+- 真实场景使用正式Session/创建/operation及原Session资源drain，不伪造Thread generation；Thread释放由同owner参数化单测覆盖。整个Session删除/runtime卸载、同步阻塞、不合作任务与完整重启组合仍TODO，5.2/5.4/6.2保持未勾；团队/成员/委派/协作不追加实现与专项验证。
