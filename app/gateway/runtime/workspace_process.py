@@ -296,7 +296,10 @@ def start_local_node_service_process(
         project_root / "src" / "workspace-services" / service / "server" / "backend.js"
     )
     if not backend_path.is_file():
-        raise FileNotFoundError(f"辅助服务入口不存在: {backend_path}")
+        logger.error("辅助服务入口不存在: service=%s path=%s", service, backend_path)
+        raise FileNotFoundError(
+            f"辅助服务入口不存在: service={service}, stage=entrypoint, error_type=FileNotFoundError"
+        )
     node_executable = os.environ.get("BOXTEAM_NODE_BIN")
     if not node_executable:
         raise RuntimeError("启动本地辅助服务必须通过 BOXTEAM_NODE_BIN 显式提供 Node")

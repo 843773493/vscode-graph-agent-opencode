@@ -288,6 +288,29 @@ def test_local_child_process_does_not_inherit_gateway_pending_contract(
     assert environment["BOXTEAM_BACKEND_GENERATION"] == "test-backend-generation"
 
 
+@pytest.mark.parametrize("service", ["terminal", "browser"])
+@pytest.mark.parametrize("entry_kind", ["missing", "directory"])
+def test_node_service_entrypoint_failure_keeps_location_in_diagnostics(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture, service: str, entry_kind: str,
+) -> None:
+    project_root = tmp_path / "private-installation"
+    entrypoint = project_root / "src/workspace-services" / service / "server/backend.js"
+    if entry_kind == "directory":
+        entrypoint.mkdir(parents=True)
+    log_root = tmp_path / "logs"
+    with pytest.raises(FileNotFoundError) as failure:
+        start_local_node_service_process(
+            project_root=project_root, workspace_root=tmp_path, service=service,
+            workspace_id="00000000-0000-4000-8000-000000000001", port=41002,
+            log_dir=log_root,
+        )
+    assert str(project_root) not in str(failure.value)
+    assert f"service={service}" in str(failure.value)
+    assert str(entrypoint) in caplog.text
+    assert not log_root.exists()
+    assert entrypoint.is_dir() == (entry_kind == "directory")
+
+
 def test_both_resource_managers_receive_backend_workspace_uuid(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

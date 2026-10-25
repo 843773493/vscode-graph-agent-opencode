@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import sqlite3
 from contextlib import ExitStack, closing
 from pathlib import Path
@@ -143,9 +144,10 @@ async def test_managed_startup_access_failure_keeps_root_out_of_public_and_persi
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("failure", ["log_directory", "executable"])
+@pytest.mark.parametrize("failure", ["log_directory", "executable", "entrypoint"])
 async def test_managed_process_failure_stays_explicit_without_persisting_native_location(
     request: pytest.FixtureRequest, integration_workspace_root_path: str, failure: str,
+    tmp_path: Path,
 ) -> None:
     context = TestRunContext.from_test_file(Path(__file__)).prepare()
     primary = Path(integration_workspace_root_path)
@@ -158,6 +160,17 @@ async def test_managed_process_failure_stays_explicit_without_persisting_native_
     log_root = gateway_root / "logs"
     missing_executable = primary / "private-missing-node"
     native_location = str(log_root if failure == "log_directory" else missing_executable)
+    extra_env = {"BOXTEAM_NODE_BIN": str(missing_executable)} if failure == "executable" else {}
+    if failure == "entrypoint":
+        # 模拟缺失辅助服务资产的安装目录；Python owner 使用本次完整源码，不改源目录。
+        installation = tmp_path / "private-installation"
+        for directory in ("app", "configs"):
+            shutil.copytree(Path.cwd() / directory, installation / directory,
+                            ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+        for name in ("pyproject.toml", "package.json"):
+            shutil.copyfile(Path.cwd() / name, installation / name)
+        extra_env["BOXTEAM_PROJECT_ROOT"] = str(installation)
+        native_location = str(installation / "src/workspace-services/terminal/server/backend.js")
     evidence = {}
     with ExitStack() as processes:
         backend = start_backend_process(workspace_root=str(primary), port=ports.port(0), log_name="primary-backend")
@@ -167,7 +180,7 @@ async def test_managed_process_failure_stays_explicit_without_persisting_native_
             gateway = start_gateway_process(
                 workspace_root=primary, default_backend_url=f"http://127.0.0.1:{backend.port}",
                 port=ports.port(1), artifacts_dir=context.artifacts_dir,
-                extra_env={"BOXTEAM_NODE_BIN": str(missing_executable)} if failure == "executable" else None,
+                extra_env=extra_env,
             )
             processes.callback(close_gateway_process, gateway)
             return gateway
@@ -202,7 +215,7 @@ async def test_managed_process_failure_stays_explicit_without_persisting_native_
                     assert item["connection_error"]
                     assert item["services"]["workspace_api"]["status"] == "offline"
                     if stage == "registered" and not check_health:
-                        expected_stage = "create_directory" if failure == "log_directory" else "spawn"
+                        expected_stage = {"log_directory": "create_directory", "executable": "spawn", "entrypoint": "entrypoint"}[failure]
                         expected_type = "FileExistsError" if failure == "log_directory" else "FileNotFoundError"
                         assert f"stage={expected_stage}" in item["connection_error"]
                         assert expected_type in item["connection_error"]
