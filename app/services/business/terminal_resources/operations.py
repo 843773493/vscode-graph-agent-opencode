@@ -79,9 +79,7 @@ class TerminalOperations(ResourceOperations):
     async def kill_terminal(self, terminal_id: str, *, reason: str = "model_requested") -> TerminalSnapshot:
         if reason not in {"model_requested", "terminal_cancel"}:
             raise ValueError(f"终端停止原因无效: {reason}")
-        async with self._owner._resource_lock(terminal_id):
-            self._use(terminal_id)
-            record = self._owner._require(terminal_id)
+        async with self._resource(terminal_id) as record:
             result = await self._owner._command_record(
                 record, "stop", record.owner_revision, self._thread,
                 self._holder_id, self._operation_id, self._lease_refs[terminal_id],
@@ -91,9 +89,7 @@ class TerminalOperations(ResourceOperations):
 
     async def complete_terminal(self, terminal_id: str) -> TerminalSnapshot:
         """命令结束只回收来源 Thread 的临时执行；workspace 记录始终保留。"""
-        async with self._owner._resource_lock(terminal_id):
-            self._use(terminal_id)
-            record = self._owner._require(terminal_id)
+        async with self._resource(terminal_id) as record:
             if record.retention_scope == "workspace":
                 return resource_projection(record, await self._owner._transport.get_resource(terminal_id), self._owner.kind)
             if record.source_thread != self._thread:
@@ -107,9 +103,7 @@ class TerminalOperations(ResourceOperations):
     async def _call(
         self, terminal_id: str, call: Callable[[], Awaitable[TerminalSnapshot]],
     ) -> TerminalSnapshot:
-        async with self._owner._resource_lock(terminal_id):
-            self._use(terminal_id)
-            record = self._owner._require(terminal_id)
+        async with self._resource(terminal_id) as record:
             try:
                 result = await call()
                 runtime = result.get("terminal", result)

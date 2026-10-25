@@ -59,7 +59,7 @@ class BrowserResourceOwner(WorkspaceResourceOwner):
         self, *, session_id: str, thread_id: str | None, holder_id: str,
         operation_id: str, created_by_turn_id: str | None = None,
     ) -> AsyncIterator[BrowserOperations]:
-        await self.recover()
+        await self.recover(())
         async with self.admit_thread(session_id, thread_id) as ref:
             operations = BrowserOperations(self, ref, holder_id, operation_id, created_by_turn_id)
             try:
@@ -72,7 +72,7 @@ class BrowserResourceOwner(WorkspaceResourceOwner):
         expected_revision: int, holder_id: str, operation_id: str,
         thread: ThreadRef | None = None,
     ) -> ResourceSnapshot:
-        await self.recover()
+        await self.recover((resource_id,))
         if thread is not None:
             async with self.admit_thread(thread.session_id, thread.thread_id):
                 return await self._perform(resource_id, action, payload, expected_revision,

@@ -38,6 +38,7 @@ from app.services.business.workspace_resources.records import (
     ResourceRecordStore,
     ThreadRef,
 )
+from app.services.business.workspace_resources.recovery import ResourceRecovery
 from app.services.infrastructure.external_resource_leases import (
     ExternalResourceLeaseLedger,
 )
@@ -82,9 +83,8 @@ class WorkspaceResourceOwner:
         self._store = ResourceRecordStore(
             workspace_root=workspace_root, workspace_id=workspace_id, kind=self.kind
         )
-        self._recovery_lock = asyncio.Lock()
         self._resource_locks = {resource_id: asyncio.Lock() for resource_id in self._store.records}
-        self._recovered = False
+        self._recovery = ResourceRecovery(self)
 
     @asynccontextmanager
     async def admit_thread(
@@ -103,69 +103,8 @@ class WorkspaceResourceOwner:
             self._threads.resolve_thread_node(ref.session_id, ref.thread_id)
             yield ref
 
-    async def recover(self) -> None:
-        if self._recovered:
-            return
-        # TODO：挂起同步期间的跨资源准入隔离和整个恢复期限仍需收口。
-        async with self._recovery_lock:
-            if self._recovered:
-                return
-            unknown_results = {
-                record.resource_id for record in self._store.records.values()
-                if record.reconciliation_status == "unknown"
-            }
-            observed = index_resources(await self._transport.list_resources(), self.workspace_id, self._store.records, self.kind)
-            statuses: dict[str, str] = {}
-            for record in self._store.records.values():
-                self._leases.register_external(
-                    resource_id=record.resource_id,
-                    kind=self.lease_kind,
-                    lifetime_scope=record.retention_scope,
-                )
-                runtime = observed.get(record.resource_id)
-                observe_resource(record, runtime, self.kind)
-                statuses[record.resource_id] = lease_status(record)
-            # 每个领域只对账自身 lease，不修改另一 owner 的运行事实。
-            self._leases.reconcile(statuses, kind=self.lease_kind)
-            revisions_to_sync: list[OwnedResourceRecord] = []
-            for record in self._store.records.values():
-                self._release_committed_fork_leases(record)
-                self._reconcile_stopped_record(record, observed.get(record.resource_id))
-                if self._leases.leases_for_resource(record.resource_id):
-                    record.reconciliation_status = "unknown" if record.resource_id in unknown_results else "reconcile_required"
-                    record.error = record.error or "前次 operation 结果尚未核实；未自动重放或结清 lease"
-                runtime = observed.get(record.resource_id)
-                if runtime is not None:
-                    # Python 重启使旧传输授权失效；先落盘新版本，再要求 Node 撤销旧连接。
-                    record.owner_revision = (
-                        max(
-                            record.owner_revision,
-                            int(runtime["transport_owner_revision"]),
-                        )
-                        + 1
-                    )
-                    revisions_to_sync.append(record)
-            if self._store.records:
-                self._store.persist()
-            errors: list[Exception] = []
-            for record in revisions_to_sync:
-                try:
-                    await self._transport.sync_owner_revision(
-                        record.resource_id, record.owner_revision
-                    )
-                except BaseException as error:
-                    self._unknown(record, error)
-                    if not isinstance(error, Exception):
-                        raise
-                    errors.append(error)
-            for record in self._store.records.values():
-                self._sync_ledger(record)
-            self._recovered = True
-            # 单资源失败不重启整批撤权；未知资源仍由原管理入口核实。
-            if len(errors) == 1:
-                raise errors[0]
-            if errors:
-                raise ExceptionGroup("外部资源 恢复存在未核实资源", errors)
+    async def recover(self, resource_ids: Iterable[str] | None = None) -> None:
+        await self._recovery.recover(resource_ids)
 
     async def _create_record(
         self, *, ref: ThreadRef, retention_scope: RetentionScope, title: str,
@@ -251,7 +190,7 @@ class WorkspaceResourceOwner:
         source_session_id: str | None = None,
         source_thread_id: str | None = None,
     ) -> list[ResourceSnapshot]:
-        await self.recover()
+        await self.recover(())
         def matches(record: OwnedResourceRecord) -> bool:
             refs = record.thread_associations
             if record.retention_scope == "thread" and not refs:
@@ -268,6 +207,7 @@ class WorkspaceResourceOwner:
             )
 
         records = tuple(record for record in self._store.records.values() if matches(record))
+        await self.recover(record.resource_id for record in records)
         async with self._lock_resources(record.resource_id for record in records):
             observed = index_resources(await self._transport.list_resources(), self.workspace_id, self._store.records, self.kind)
             result: list[ResourceSnapshot] = []
@@ -283,7 +223,7 @@ class WorkspaceResourceOwner:
             return sorted(result, key=lambda item: str(item["updated_at"]), reverse=True)
 
     async def get_resource(self, resource_id: str) -> ResourceSnapshot:
-        await self.recover()
+        await self.recover((resource_id,))
         async with self._resource_lock(resource_id):
             record = self._require(resource_id)
             observed = index_resources(await self._transport.list_resources(), self.workspace_id, self._store.records, self.kind)
@@ -303,7 +243,7 @@ class WorkspaceResourceOwner:
         operation_id: str,
         thread: ThreadRef | None = None,
     ) -> ResourceSnapshot:
-        await self.recover()
+        await self.recover((resource_id,))
         if action in {"attach", "detach"}:
             if thread is None:
                 raise ValueError(f"外部资源 {action} 缺少精确 Thread")
@@ -356,7 +296,7 @@ class WorkspaceResourceOwner:
         self, resource_id: str, *, creation_key: str, expected_revision: int, thread: ThreadRef,
     ) -> tuple[ResourceSnapshot, ForkAttachReceipt]:
         """仅为 fork 的发布后恢复保留最小回执，实际 attach 共用原命令写入方。"""
-        await self.recover()
+        await self.recover((resource_id,))
         async with self._resource_lock(resource_id):
             existing = self.fork_attach_receipt(
                 resource_id, creation_key=creation_key, thread=thread, expected_revision=expected_revision,
@@ -589,7 +529,6 @@ class WorkspaceResourceOwner:
             )
         if not self._store.records:
             return
-        await self.recover()
         await self._release_refs(
             lambda item: item == ref,
             holder_id=f"thread-unload:{session_id}/{thread_id}:{generation}",
@@ -600,7 +539,6 @@ class WorkspaceResourceOwner:
         """由关闭准入后的 Session 删除 drain 调用，不重新进入其生命周期 gate。"""
         if not self._store.records:
             return 0
-        await self.recover()
         return await self._release_refs(
             lambda ref: ref.session_id == session_id,
             holder_id=f"session-delete:{session_id}",
@@ -614,6 +552,7 @@ class WorkspaceResourceOwner:
         holder_id: str,
         operation_id: str,
     ) -> int:
+        await self.recover(())
         affected = [
             record
             for record in self._store.records.values()
@@ -625,6 +564,7 @@ class WorkspaceResourceOwner:
                 )
             )
         ]
+        await self.recover(record.resource_id for record in affected)
         async with self._lock_resources(record.resource_id for record in affected):
             # 同代清理重试只收敛已核实终态，不重发结果未知的停止/删除。
             for record in affected:
@@ -714,7 +654,7 @@ class WorkspaceResourceOwner:
             record = self._require(resource_id)
             if record.reconciliation_status == "verified" and record.status != "running":
                 raise ResourceConflict("外部资源 不在运行状态，不能签发传输授权")
-        await self.recover()
+        await self.recover((resource_id,))
         if thread is not None:
             async with self.admit_thread(thread.session_id, thread.thread_id):
                 return await self._grant(

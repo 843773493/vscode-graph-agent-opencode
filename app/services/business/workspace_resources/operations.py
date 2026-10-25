@@ -2,9 +2,14 @@
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING
 
-from app.services.business.workspace_resources.records import ThreadRef
+from app.services.business.workspace_resources.records import (
+    OwnedResourceRecord,
+    ThreadRef,
+)
 
 if TYPE_CHECKING:
     from app.services.business.workspace_resources.owner import WorkspaceResourceOwner
@@ -25,16 +30,21 @@ class ResourceOperations:
         self._lease_refs: dict[str, str] = {}
         self._closed = False
 
-    def _use(self, resource_id: str) -> None:
+    @asynccontextmanager
+    async def _resource(self, resource_id: str) -> AsyncIterator[OwnedResourceRecord]:
         self._assert_open()
-        record = self._owner._require(resource_id)
-        self._owner._verified(record)
-        if self._thread not in record.thread_associations:
-            raise ValueError(f"外部资源 不属于当前精确 Thread 关联: {resource_id}")
-        if resource_id not in self._lease_refs:
-            self._lease_refs[resource_id] = self._owner._acquire(
-                record, self._thread, self._holder_id, self._operation_id,
-            )
+        await self._owner.recover((resource_id,))
+        async with self._owner._resource_lock(resource_id):
+            self._assert_open()
+            record = self._owner._require(resource_id)
+            self._owner._verified(record)
+            if self._thread not in record.thread_associations:
+                raise ValueError(f"外部资源 不属于当前精确 Thread 关联: {resource_id}")
+            if resource_id not in self._lease_refs:
+                self._lease_refs[resource_id] = self._owner._acquire(
+                    record, self._thread, self._holder_id, self._operation_id,
+                )
+            yield record
 
     def _release_locked(self, resource_id: str) -> None:
         lease_id = self._lease_refs.pop(resource_id, None)

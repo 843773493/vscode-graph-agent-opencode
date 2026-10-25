@@ -170,7 +170,7 @@ class TerminalResourceOwner(WorkspaceResourceOwner):
         operation_id: str,
         created_by_turn_id: str | None = None,
     ) -> AsyncIterator[TerminalOperations]:
-        await self.recover()
+        await self.recover(())
         async with self.admit_thread(session_id, thread_id) as ref:
             operations = TerminalOperations(
                 self, ref, holder_id, operation_id, created_by_turn_id

@@ -221,6 +221,108 @@ async def test_cancelling_cold_recovery_does_not_report_the_remaining_resources_
         recovering.cancel()
     with pytest.raises(asyncio.CancelledError):
         await recovering
-    assert calls == ids[:1]
-    assert not owner._recovered
-    assert owner._store.records[ids[0]].reconciliation_status == "unknown"
+    assert calls == ids
+    assert set(owner._recovery._pending) == set(ids)
+    assert all(owner._store.records[rid].reconciliation_status == "unknown" for rid in ids)
+
+
+async def test_pending_cold_recovery_does_not_block_healthy_resource_entrypoints(
+    bundle: TerminalOwnerFixture | BrowserOwnerFixture, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    first, second = await bundle.create(), await bundle.create(thread=CHILD_THREAD_A)
+    rid, healthy = str(first["resource_id"]), str(second["resource_id"])
+    owner = bundle.restart()
+    entered, release = asyncio.Event(), asyncio.Event()
+    original = bundle.transport.sync_owner_revision
+    calls: list[tuple[str, int]] = []
+
+    async def pending_revision(resource_id: str, revision: int) -> None:
+        calls.append((resource_id, revision))
+        if resource_id == rid:
+            entered.set()
+            await release.wait()
+        await original(resource_id, revision)
+
+    monkeypatch.setattr(bundle.transport, "sync_owner_revision", pending_revision)
+    recovering = asyncio.create_task(owner.recover())
+    waiting = None
+    try:
+        await asyncio.wait_for(entered.wait(), 5)
+        current = await asyncio.wait_for(owner.get_resource(healthy), 2)
+        assert current["owner_revision"] == 2 and current["reconciliation_status"] == "verified"
+        waiting = asyncio.create_task(owner.get_resource(rid))
+        await asyncio.sleep(0)
+        assert not waiting.done()
+        waiting.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await waiting
+        assert not recovering.done()
+        created = await asyncio.wait_for(bundle.create(thread=CHILD_THREAD_A), 2)
+        listed = await asyncio.wait_for(owner.list_resources(thread_id=CHILD_THREAD_A), 2)
+        assert {item["resource_id"] for item in listed} == {healthy, created["resource_id"]}
+        grant = await asyncio.wait_for(owner.transport_grant(
+            healthy, expected_revision=2, thread=ThreadRef(SESSION_A, CHILD_THREAD_A),
+            holder_id="request:cold-grant", operation_id="cold-grant",
+        ), 2)
+        assert grant["resource"]["resource_id"] == healthy
+        async with owner.operation(
+            session_id=SESSION_A, thread_id=CHILD_THREAD_A,
+            holder_id="request:cold-tool", operation_id="cold-tool",
+        ) as operation:
+            if isinstance(bundle, TerminalOwnerFixture):
+                await asyncio.wait_for(operation.write_terminal(terminal_id=healthy, data="cold-independent"), 2)
+            else:
+                await asyncio.wait_for(operation.perform(healthy, "navigate", {"url": "https://cold.test"}), 2)
+        await asyncio.wait_for(owner.release_thread(SESSION_A, CHILD_THREAD_A, 1), 2)
+        assert set(bundle.transport.deleted) == {healthy, created["resource_id"]}
+        assert not recovering.done() and calls.count((rid, 2)) == calls.count((healthy, 2)) == 1
+        assert owner._store.records[rid].thread_associations == [ThreadRef(SESSION_A, THREAD_A)]
+    finally:
+        release.set()
+        if waiting is not None and not waiting.done():
+            waiting.cancel()
+            await asyncio.gather(waiting, return_exceptions=True)
+        await recovering
+    assert (await owner.get_resource(rid))["owner_revision"] == 2
+    assert calls.count((rid, 2)) == calls.count((healthy, 2)) == 1
+
+
+async def test_cancelling_recovery_keeps_frozen_revision_and_does_not_repeat_finished_resources(
+    bundle: TerminalOwnerFixture | BrowserOwnerFixture, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    first, second = await bundle.create(), await bundle.create(thread=CHILD_THREAD_A)
+    rid, healthy = str(first["resource_id"]), str(second["resource_id"])
+    owner = bundle.restart()
+    entered, healthy_synced, release = asyncio.Event(), asyncio.Event(), asyncio.Event()
+    original = bundle.transport.sync_owner_revision
+    calls: list[tuple[str, int]] = []
+
+    async def pending_revision(resource_id: str, revision: int) -> None:
+        calls.append((resource_id, revision))
+        if resource_id == rid:
+            entered.set()
+            await release.wait()
+        await original(resource_id, revision)
+        if resource_id == healthy:
+            healthy_synced.set()
+
+    monkeypatch.setattr(bundle.transport, "sync_owner_revision", pending_revision)
+    recovering = asyncio.create_task(owner.recover())
+    try:
+        await asyncio.wait_for(entered.wait(), 5)
+        await asyncio.wait_for(healthy_synced.wait(), 5)
+    finally:
+        recovering.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await recovering
+    assert owner._recovery._pending == {rid: 2}
+    assert owner._store.records[rid].reconciliation_status == "unknown"
+    healthy_current = await owner.get_resource(healthy)
+    assert healthy_current["owner_revision"] == 2 and healthy_current["reconciliation_status"] == "verified"
+    assert calls == [(rid, 2), (healthy, 2)]
+    release.set()
+    unknown = await owner.get_resource(rid)
+    assert unknown["owner_revision"] == 2 and unknown["reconciliation_status"] == "unknown"
+    assert calls == [(rid, 2), (healthy, 2), (rid, 2)]
+    assert owner._recovery._pending == {}
+    assert bundle.transport.creates == 2 and not bundle.transport.deleted
