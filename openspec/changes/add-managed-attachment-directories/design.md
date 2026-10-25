@@ -242,4 +242,6 @@ TODO：整组preflight仍须等齐所选锁，不能为了peer提前detach破坏
 附件目录owner与runtime装配消费同一个`RuntimeClockPorts.wall`，默认仍为系统UTC；没有新增测试环境分支或第二时钟状态。原零关联、重关联、重启恢复及GC算法不变，持久起点和30天期限仍由原catalog事务发布。真实Gateway/Backend验收使用既有进程外控制时钟及model_stream，经过两次正式消息执行和SIGKILL恢复：第29天重用清除旧期限，新代释放重新取得30天；第58天重启保留原期限，第59天精确到期删除，历史canonical字节保持。该时钟注入不代表挂起外部操作已被终止，5.2/5.4继续独立验收。
 
 
-Windows故障组合的未完成边界：按同一正式入口复验时，独立图中缓存的ThreadCreationService控制连接缺少显式生命周期关闭，child fork失败回滚仍有直接rmtree的长路径缺口。上述连接归属与失败清理必须由原owner纵向修复，再核验6.2；不得依赖GC时机关闭连接、扩大目录清理范围，或以超时/局部Linux通过冒称Windows完整故障组合完成。团队、成员、委派及协作仍按用户裁定暂缓，不在此修复扩展。
+Windows child fork失败回滚已将原Thread创建owner的三处staging/final目录删除统一接入既有`native_io_path`，仅在原生I/O边界扩展路径；冻结locator、归属清单核验及fsync顺序保持不变。真实执行生成深层历史后，在附件预留故障点核对child/capture/claim均aborted、目录全部清除、原关联逐字保全；独立正式suite为`integration-attachment-child-fork-rollback`。原完整场景继续验证来源删除与GC，全部断言保留，定向场景不代替它。
+
+TODO：独立图中缓存的ThreadCreationService控制连接仍缺少显式生命周期关闭；Windows完整场景通过回滚断言后，来源Session隔离rename被占用连接阻断。该归属问题与完整6.2故障组合留待后续，不依赖GC时机关闭连接、不扩大目录清理范围，也不把局部通过冒称完整Windows验收。按用户要求，本次长路径修复验证和提交后停下；团队、成员、委派及协作继续暂缓。准确源码、原始失败/通过结果和退出码见`out/tests/temp/attachment_child_rollback_20261025/artifacts/`。

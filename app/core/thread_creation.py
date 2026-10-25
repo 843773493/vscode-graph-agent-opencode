@@ -88,6 +88,7 @@ from app.core.atomic_fs import (
 from app.core.atomic_fs import (
     fsync_directory as _fsync_directory,
 )
+from app.core.atomic_fs import native_io_path
 from app.core.identifier import uuid7_datetime_from_hex
 from app.core.key_lock_pool import KeyLockPool
 from app.core.phase_observer import observe_phase
@@ -1171,7 +1172,7 @@ class ThreadCreationService:
                 return
             # 原 holder 已取得；合法准备中断只按本 record 的 staging 重建。
             with _thread_access(session_id, record.child_thread_id, "staging_rebuild"):
-                shutil.rmtree(staging_dir)
+                shutil.rmtree(native_io_path(staging_dir))
                 _fsync_directory(staging_dir.parent)
         with _thread_access(session_id, record.child_thread_id, "staging_prepare"):
             staging_dir.mkdir(parents=True, exist_ok=False)
@@ -1217,7 +1218,7 @@ class ThreadCreationService:
             # 外部放置的同内容 final 可复用；先核实，再清理冗余 staging。
             verify_node_directory(final_dir, inventory, session_id=session_id, thread_id=record.child_thread_id, stage=stage)
             with _thread_access(session_id, record.child_thread_id, "rename_redundant_staging"):
-                shutil.rmtree(staging_dir)
+                shutil.rmtree(native_io_path(staging_dir))
                 _fsync_directory(staging_dir.parent)
                 _fsync_directory(session_dir)
             return
@@ -1483,5 +1484,5 @@ class ThreadCreationService:
             for directory, _label in targets:
                 if not (directory.exists() or directory.is_symlink()):
                     continue
-                shutil.rmtree(directory)
+                shutil.rmtree(native_io_path(directory))
                 _fsync_directory(directory.parent)

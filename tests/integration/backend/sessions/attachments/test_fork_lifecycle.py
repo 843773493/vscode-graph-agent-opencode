@@ -233,12 +233,10 @@ async def test_published_fork_keeps_directory_after_source_delete_until_target_r
     assert store._catalog.get_directory(identity).availability == "tombstoned"
 
 
-@pytest.mark.parametrize("fork_execution_source", [True], indirect=True)
-@pytest.mark.parametrize("creation_kind", ["new_session_main", "new_child_thread"])
-async def test_unpublished_fork_failure_releases_only_its_original_directory_claim(
+async def _assert_unpublished_fork_rollback(
     production_fork_container: AppContainer, fork_execution_source: SessionDTO,
     creation_kind: str, monkeypatch: pytest.MonkeyPatch,
-) -> None:
+) -> str:
     container = production_fork_container
     context = _production_fork_context(container)
     parent = await context.sessions.create(SessionCreateRequest(title="失败副本容器"))
@@ -283,13 +281,39 @@ async def test_unpublished_fork_failure_releases_only_its_original_directory_cla
         session_root = resolver.resolve_session_node(parent.session_id)
         assert not (session_root / record.final_relative_locator).exists()
         assert not (session_root / record.staging_locator).exists()
+    return claim[1]
+
+
+@pytest.mark.parametrize("fork_execution_source", [True], indirect=True)
+async def test_unpublished_child_fork_rollback(
+    production_fork_container: AppContainer, fork_execution_source: SessionDTO,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """单独验证真实执行生成的深层文件在 child 失败回滚后全部清除。"""
+    await _assert_unpublished_fork_rollback(
+        production_fork_container, fork_execution_source, "new_child_thread", monkeypatch,
+    )
+
+
+@pytest.mark.parametrize("fork_execution_source", [True], indirect=True)
+@pytest.mark.parametrize("creation_kind", ["new_session_main", "new_child_thread"])
+async def test_unpublished_fork_failure_releases_only_its_original_directory_claim(
+    production_fork_container: AppContainer, fork_execution_source: SessionDTO,
+    creation_kind: str, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    identity = await _assert_unpublished_fork_rollback(
+        production_fork_container, fork_execution_source, creation_kind, monkeypatch,
+    )
+    container = production_fork_container
+    store = container.attachment_blob_store
+    resolver = _production_fork_context(container).sessions.path_resolver
     # 不修写业务记录；原删除 owner 释放最后关联后，原 GC 不得被失败 claim 无限阻塞。
     now = datetime.now(UTC)
     monkeypatch.setattr(store, "_clock", lambda: now)
     await resolver.delete_subtree(idempotency_key="delete-failed-fork-source", root_node_id=fork_execution_source.session_id)
     monkeypatch.setattr(store, "_clock", lambda: now + timedelta(days=31))
-    assert await store.collect_garbage(leases=container.external_resource_leases) == (claim[1],)
-    assert store._catalog.get_directory(claim[1]).availability == "tombstoned"
+    assert await store.collect_garbage(leases=container.external_resource_leases) == (identity,)
+    assert store._catalog.get_directory(identity).availability == "tombstoned"
 
 
 @pytest.mark.parametrize("fork_execution_source", [True], indirect=True)

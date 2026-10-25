@@ -232,3 +232,9 @@ Web 定向 `BOXTEAM_E2E_SECTION8_FOCUS=copy_missing_attachment` 通过真实 Gat
 - Linux 六组生命周期正式套件合计34 passed；最终装具修改后runtime 8 passed/71.03秒、GC 2 passed、startup/navigation 10 passed/31.36秒，Shell新增PID证据1 passed。共享树新重启场景1 passed/114.82秒，最终runtime 8 passed/65.00秒、startup/navigation 10 passed/25.54秒，相关Ruff及compileall通过。完整旧生产反例在第二次零关联起点断言失败：旧实现未消费外置UTC时钟。
 - Windows `hyf_win` 已核对快照：`c51e5584feddc42a9375cdf3fa7b0c764f2d8914` 的新增重启场景通过；所在组合命令后续因runtime装具缺少个人Provider凭据而退出1，不能算整组通过。Shell组合10 passed/1 skipped后在另一用例的PTY PID解析失败；修正为目标程序落盘ASCII PID并保留输出标记后，原持久化故障场景与真实硬重启恢复2 passed/113.06秒。测试配置使用显式离线凭据，fork装具的读写明确UTF-8，独立图装具显式关闭附件与workspace存储；所有原业务断言保留。
 - 后续快照`b714b06d162c72ce598827e9775f28e410694b7d`暴露未收口边界：runtime与GC各首项通过，但下一项重建工作区仍受原控制库/存储句柄占用；fork为2 passed、1 failed、8 errors，包含真实child fork失败回滚对长路径直接rmtree的WinError 3，以及缓存ThreadCreationService持有的session-control.sqlite阻止重建。TODO：在原Thread创建工厂/生命周期owner明确控制库关闭，并迁齐child创建/失败清理的原生长路径I/O，再复验Windows故障组合；不扫描/强关未知连接，不改历史/身份，也不把装具失败当成产品反例。6.2保持未完成，5.2/5.4继续独立推进。
+
+### 2026-10-25 Windows child fork回滚长路径（6.2部分收口，停止边界）
+
+- 原Thread创建owner的三处目录删除统一复用`native_io_path`，保留冻结locator、完整归属核验和原fsync顺序。产品回滚断言提取为共用helper，新增单独的child回滚入口；原完整失败场景的来源删除、30天GC及全部断言仍保留，没有因Windows句柄占用而删减验收。
+- Windows快照`dd2ca4fc8d53f169e527e7cbe781f2cbe421fdae`的正式定向suite为1 passed/24.15秒，核对child/capture/claim均aborted、staging/final不存在且原附件关联不变。Linux原完整fork生命周期11 passed/118.28秒，定向staging/abort回归10 passed；共享树定向产品入口1 passed/19.99秒及相同10项回归通过。准确命令、完整源码指纹、原始输出及退出码位于`out/tests/temp/attachment_child_rollback_20261025/artifacts/`。
+- 首次Windows完整场景已越过全部回滚断言，后续来源Session隔离rename因控制连接占用返回WinError 5，原始失败保留；此前WinError 3反例保留于`attachment_retention_restart_20261025`。TODO：控制连接生命周期及Windows完整故障组合。5.2/5.4/6.2继续未勾选，整体20/23；按用户要求完成此修复提交后停止，不扩展团队、成员、委派或协作实现/专项验证。
