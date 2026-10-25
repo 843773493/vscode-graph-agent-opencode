@@ -30,6 +30,7 @@ from app.api.sessions import router as sessions_router
 from app.api.tools import router as tools_router
 from app.api.workspace import router as workspace_router
 from app.api.workspace_observation import router as workspace_observation_router
+from app.backend_lifecycle import BackendLifespan
 from app.container import WorkspaceContainerRegistry
 from app.core.env import load_boxteam_env
 from app.core.exceptions import BaseAPIException
@@ -44,7 +45,7 @@ from app.protocol.codecs.http_validation import request_validation_error_respons
 from app.runtime.model_stream import configure_model_stream_from_environment
 from app.runtime.runtime_ports import DEFAULT_RUNTIME_CLOCK_PORTS
 from app.schemas.internal_v2.sse import install_sse_openapi_components
-from app.workspace_lifecycle import BackendLifespan, WorkspaceLifespan
+from app.workspace_lifecycle import WorkspaceLifespan
 
 load_boxteam_env()
 

@@ -189,18 +189,20 @@ TODO（性能）：32 个目录的 124 KiB 原件对应约 2.90 MiB GC 后 WAL�
 
 本次等待者只收集各 state 的原异常，按选择顺序汇总；取消时排空本次等待者，不取消原 build/unload，也不建立清理重试或第二 owner。listener/scope 迟到失败仍保留原 generation 和错误供同入口重试；独立 Thread 已完成的清理与附件 detach 不重复执行。真实服务 shutdown 集成从产品上传与执行生成两个 Session 的附件、历史和 checkpoint，暂停一个原清理边界时核验另一 runtime 已 cold、附件已按原 owner 解除运行时关联，两个 Session 的 canonical bytes、locator 和 checkpoint 保持可读。
 
-整个 Backend shutdown 的总期限、同步阻塞回调与不合作的外部进程终止仍属于 5.2/5.4/6.2；runtime 批量隔离及存储关闭顺序分别由本批和下述切片验证。团队、成员、委派与协作继续暂缓实现及专项验证。
+Backend的单次协作式关闭等待按下述总预算执行；同步阻塞回调、不合作的外部进程终止和生产退出协调仍属于5.2/5.4/6.2，不能将等待有界视为已核实整体停止。团队、成员、委派与协作继续暂缓实现及专项验证。
 
 
 ### Backend 关闭失败保留依赖并沿原入口重试（5.4 部分收口）
 
 原两层 AsyncExitStack 被唯一的 `WorkspaceLifespan` / `BackendLifespan` 关闭链替代。Workspace 的具名依赖步骤只有成功才移除；业务 writer、runtime 或附件关闭失败时，保留原失败步骤和后续存储，不重复已经完成的副作用。每个 Workspace 的原专属 asyncio task 从启动一直持有到重试关闭，MCP 的 AnyIO scope 始终由创建它的任务关闭；并发关闭等待者复用同一次执行，取消等待不取消原 owner。
 
-Backend 仍按挂载逆序尝试全部 Workspace，独立挂载不因一项失败而跳过。任一 Workspace 未完成时保留全部 catalog 与附件维护锁，原生命周期保存在 application state，不能用新启动覆盖；全部排空后才关闭 catalog，再归还维护锁和关闭 model_stream。catalog 关闭失败保留原组件以供同入口重试；真实连接关闭成功后才标记物理关闭。事务回滚失败则立即禁止业务访问，保留原回滚原因与首错，即使物理关闭失败也不能继续使用污染连接，原 owner 仍能重试物理关闭。
+Backend按挂载逆序发起全部Workspace的原关闭入口，各挂载独立推进，单项失败或挂起不阻止其它挂载关闭；同一挂载内部仍按原依赖顺序串行执行。任一 Workspace 未完成时保留全部 catalog 与附件维护锁，原生命周期保存在 application state，不能用新启动覆盖；全部排空后才关闭 catalog，再归还维护锁和关闭 model_stream。catalog 关闭失败保留原组件以供同入口重试；真实连接关闭成功后才标记物理关闭。事务回滚失败则立即禁止业务访问，保留原回滚原因与首错，即使物理关闭失败也不能继续使用污染连接，原 owner 仍能重试物理关闭。
 
 全局 runtime 关闭使用与 Session 排空相同的一次 30 秒单调预算；超时不取消原 build/unload，不提前关闭仍可被迟到回调访问的 scope、目录或 locator。原业务异常与关闭异常明确聚合保留。产品验收从真实双挂载、上传和消息执行生成 checkpoint 与 canonical，覆盖 runtime 原失败/超时、业务与关闭同时失败、附件及 catalog 关闭失败、peer 独立关闭、原入口重试及迟到回调读取原存储；另验证 Goal 终态、任务体前取消的终态 writer，以及远端 fork export 周期清理仍沿原生命周期工作。
 
-TODO：此预算只覆盖 runtime 阶段，不承诺整个 Backend 或所有 owner 的 shutdown 总期限；同步阻塞、线程池排队、生产进程退出协调和外部进程终止核实继续按 5.2/5.4/6.2 验收，三项保持未勾。团队、成员、委派与协作继续 TODO。
+Backend的唯一关闭owner迁入`app/backend_lifecycle.py`，`main`直接使用新模块；原定义物理移除，不留转发。`workspaces → catalog → maintenance → model_stream`只记录未完成步骤，成功才移除；后续阶段失败后重试不重复已完成的全局关闭。每次`close()`在入口取得一次30秒观察预算，全部阶段共用；阶段切换不重置。并发调用复用唯一在途owner，到期或取消只结束本次等待，不取消原owner。到期明确报告当前阶段及未完成的工作区/步骤，保留原生命周期和仍有必要的存储、维护锁；已经成功的步骤不会回滚或重新取得已释放依赖。原owner真正失败后，下一显式调用才重试剩余步骤，迟到失败完整记录；原底层TimeoutError不冒充观察期限。原关闭成功已经提交时，即使截止同时投递也返回真实成功，不能因步骤队列已空误报或越界。
+
+TODO：30秒只限制事件循环正常调度时调用者对整批关闭的等待，不保证同步catalog/维护锁关闭能被抢占，也不证明不合作任务或外部进程已终止。线程池排队、生产进程退出协调与强制终止核实继续按5.2/5.4/6.2验收，三项保持未勾；完整Gateway/Web及Windows关闭组合不由本次进程内生命周期测试替代。团队、成员、委派与协作继续TODO。
 
 
 ### 冷恢复单次总等待预算（5.4 部分收口）

@@ -74,6 +74,7 @@ class MountedCase:
     roots: dict[str, Path]
     containers: list[AppContainer] = field(default_factory=list)
     closed: list[tuple[str, str]] = field(default_factory=list)
+    close_started: list[str] = field(default_factory=list)
     compiled: list[tuple[str, Path, str, str]] = field(default_factory=list)
     fail_second: bool = False
 
@@ -100,6 +101,13 @@ def mounted_case(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch
         await platform_close(platform)
 
     monkeypatch.setattr(ResourcePlatform, "close", close_platform)
+    original_close = main.WorkspaceLifespan.close
+
+    async def close_workspace(workspace):
+        case.close_started.append(workspace.container.workspace_id)
+        await original_close(workspace)
+
+    monkeypatch.setattr(main.WorkspaceLifespan, "close", close_workspace)
 
     def build(**kwargs):
         container = factory(**kwargs)
@@ -144,11 +152,12 @@ def mounted_case(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch
 
 def assert_closed(case: MountedCase, *, retried_jobs: str | None = None):
     identities = list(case.roots)
-    expected = []
-    for identity in reversed(identities):
+    assert case.close_started[:len(identities)] == list(reversed(identities))
+    assert {identity for identity, _phase in case.closed} == set(identities)
+    for identity in identities:
         phases = ("jobs", "jobs", "runtime", "platform") if identity == retried_jobs else ("jobs", "runtime", "platform")
-        expected.extend((identity, phase) for phase in phases)
-    assert case.closed == expected
+        # 不同挂载可交错完成；同一挂载的完整阶段、次数与依赖顺序保持精确。
+        assert [phase for owner, phase in case.closed if owner == identity] == list(phases)
     for container in case.containers:
         assert container.agent_execution_service._sweep_task is None
         assert container.resource_platform.process_root_scope.is_closed

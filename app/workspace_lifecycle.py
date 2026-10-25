@@ -7,7 +7,7 @@ import logging
 import time
 from collections import deque
 from collections.abc import Awaitable, Callable
-from contextlib import ExitStack, contextmanager
+from contextlib import contextmanager
 from functools import partial
 from typing import TYPE_CHECKING, Self
 
@@ -15,12 +15,6 @@ from app.core.path_utils import workspace_context
 from app.core.session_lifecycle_gate import NavigationTopologyGate
 from app.core.shielded_cleanup import run_sync_shielded
 from app.schemas.event import Event
-from app.services.infrastructure.attachment_blob_catalog.blob_identity import (
-    ATTACHMENT_ROOT_DIRECTORY_NAME,
-)
-from app.services.infrastructure.attachment_blob_catalog.maintenance import (
-    AttachmentMaintenanceLock,
-)
 from app.services.infrastructure.config import (
     ConfigRestartRequiredError,
     ConfigSnapshot,
@@ -29,10 +23,7 @@ from app.services.infrastructure.config.policy import workspace_config_policy
 from app.services.infrastructure.config.state import changed_json_paths
 
 if TYPE_CHECKING:
-    from fastapi import FastAPI
-
-    from app.container import AppContainer, WorkspaceContainerRegistry
-    from app.runtime.model_stream import ModelStreamTransportController
+    from app.container import AppContainer
 
 logger = logging.getLogger(__name__)
 CloseAction = Callable[[], Awaitable[None] | None]
@@ -143,6 +134,12 @@ class WorkspaceLifespan:
     def closed(self) -> bool:
         return not self._steps and not self._periodic_tasks
 
+    @property
+    def pending_close_stage(self) -> str:
+        if self._periodic_tasks:
+            return "periodic_tasks"
+        return self._steps[0][0] if self._steps else "closed"
+
     async def start(self) -> None:
         if self._owner is not None:
             raise RuntimeError("WorkspaceLifespan不能重复启动")
@@ -206,7 +203,7 @@ class WorkspaceLifespan:
         await self._owner
 
     async def _close(self) -> None:
-        # TODO(5.4)：将其它owner等待和同步阻塞纳入Backend总期限；失败仍保留原步骤。
+        # TODO(5.4)：同步阻塞与外部终止核实仍待收口；Backend到期不取消原步骤。
         with workspace_context(self.container.workspace_id, self.container.workspace_root,
                                session_catalog=self.container.session_catalog):
             while self._periodic_tasks:
@@ -403,43 +400,3 @@ class WorkspaceLifespan:
                 name=f"fork-export-cleanup:{container.workspace_id}",
             )
             self._periodic_tasks.append(fork_export_cleanup)
-
-
-class BackendLifespan:
-    """每个挂载独立排空；全部成功后才关闭catalog并归还维护锁。"""
-
-    def __init__(self, model_stream: ModelStreamTransportController | None, application: FastAPI) -> None:
-        self._application = application
-        self.registry: WorkspaceContainerRegistry | None = None
-        self.workspaces: list[WorkspaceLifespan] = []
-        self._access = ExitStack()
-        self._model_stream = model_stream
-        self.closed = False
-
-    def acquire_access(self) -> None:
-        if self.registry is None:
-            raise RuntimeError("Backend未装配registry，不能取得维护锁")
-        for mount in self.registry.mounted_workspaces.mounts:
-            self._access.enter_context(AttachmentMaintenanceLock(
-                mount.workspace_root / ".boxteam" / ATTACHMENT_ROOT_DIRECTORY_NAME, exclusive=False,
-            ))
-
-    async def close(self) -> None:
-        if self.closed:
-            return
-        errors: list[BaseException] = []
-        for workspace in reversed(self.workspaces):
-            try:
-                await workspace.close()
-            except BaseException as error:  # noqa: BLE001 - 其它mount独立排空，取消也保留原事实。
-                errors.append(error)
-        if errors:
-            raise BaseExceptionGroup("Backend关闭未完成，保留catalog与维护锁", errors)
-        if self.registry is not None:
-            self.registry.close()
-        self._access.close()
-        if self._model_stream is not None:
-            await self._model_stream.aclose()
-        self.closed = True
-        self._application.state.workspace_container_registry = None
-        self._application.state.workspace_lifespan = None

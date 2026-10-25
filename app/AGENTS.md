@@ -12,7 +12,9 @@
 - `app/api/`：HTTP 接口层，只处理请求、响应、鉴权和依赖注入，不放业务核心逻辑。
 - `app/schemas/`：数据结构、DTO、事件模型和公共传输类型。
 - `app/container.py`：应用装配中心，负责实例化和连接各类服务与基础设施。
-- `app/main.py`：应用入口与生命周期管理。
+- `app/main.py`：应用入口与生命周期装配。
+- `app/backend_lifecycle.py`：Backend全批关闭等待、原owner和全局依赖步骤。
+- `app/workspace_lifecycle.py`：工作区启动、周期任务及同一原任务内的依赖关闭。
 
 ## 可修改内容
 

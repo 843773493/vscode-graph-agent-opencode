@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 
 import pytest
 
@@ -44,7 +45,7 @@ def _causes(error: BaseException):
             yield from _causes(item)
 
 
-@pytest.mark.parametrize("phase", ["runtime", "runtime_timeout", "body_runtime", "attachments", "catalog"])
+@pytest.mark.parametrize("phase", ["runtime", "runtime_timeout", "backend_wait", "body_runtime", "attachments", "catalog"])
 async def test_backend_shutdown_preserves_dependencies_and_retries_original_owner(
     mounted_case: MountedCase, inprocess_model_replay, monkeypatch: pytest.MonkeyPatch, phase: str,
 ) -> None:
@@ -84,6 +85,15 @@ async def test_backend_shutdown_preserves_dependencies_and_retries_original_owne
 
     monkeypatch.setattr(McpCatalogOwner, "start", start_mcp)
     monkeypatch.setattr(McpCatalogOwner, "shutdown", stop_mcp)
+    backend_deadlines: list[asyncio.Timeout] = []
+
+    def backend_deadline(seconds: float) -> asyncio.Timeout:
+        assert seconds == 30
+        deadline = asyncio.timeout(seconds)
+        backend_deadlines.append(deadline)
+        return deadline
+
+    monkeypatch.setattr(inspect.getmodule(main.BackendLifespan), "timeout", backend_deadline, raising=False)
     lifetime = main.lifespan(main.app)
     await lifetime.__aenter__()
     exited = False
@@ -136,27 +146,46 @@ async def test_backend_shutdown_preserves_dependencies_and_retries_original_owne
                 return
             assert current_generation == generation
             calls += 1
-            if phase == "runtime_timeout":
+            if phase in {"runtime_timeout", "backend_wait"}:
                 entered.set()
                 await finish.wait()
             elif calls == 1:
                 raise injected
 
-        if phase in {"runtime", "runtime_timeout", "body_runtime"}:
+        if phase in {"runtime", "runtime_timeout", "backend_wait", "body_runtime"}:
             failed.thread_residency_tracker.add_unload_listener(release)
-        if phase == "runtime_timeout":
+        if phase in {"runtime_timeout", "backend_wait"}:
             async def advance_deadline():
                 await entered.wait()
-                monkeypatch.setattr(loop, "time", lambda: original_time() + 31)
+                backend = main.app.state.workspace_lifespan
+                peer_workspace = next(item for item in backend.workspaces if item.container is peer)
+                # 推进时钟前先核对独立挂载真实关闭，避免全局跳时误伤健康peer。
+                await asyncio.wait_for(asyncio.shield(peer_workspace._owner), 5)
+                if phase == "backend_wait":
+                    assert len(backend_deadlines) == 1
+                    backend_deadlines[0].reschedule(loop.time())
+                else:
+                    # 本场景只推进runtime时域；Backend总预算由backend_wait单独验证。
+                    for deadline in backend_deadlines:
+                        deadline.reschedule(deadline.when() + 31)
+                    monkeypatch.setattr(loop, "time", lambda: original_time() + 31)
             clock_task = asyncio.create_task(advance_deadline())
         body_error = ValueError("原工作区业务错误") if phase == "body_runtime" else None
-        with pytest.raises(BaseExceptionGroup) as failure:
+        with pytest.raises(TimeoutError if phase == "backend_wait" else BaseExceptionGroup) as failure:
             exited = True
-            await lifetime.__aexit__(type(body_error) if body_error else None, body_error, None)
+            exit_call = lifetime.__aexit__(type(body_error) if body_error else None, body_error, None)
+            if phase == "backend_wait":
+                await asyncio.wait_for(exit_call, 10)
+            else:
+                await exit_call
+        if clock_task is not None:
+            await clock_task
         monkeypatch.setattr(loop, "time", original_time)
         errors = list(_causes(failure.value))
         if phase == "runtime_timeout":
             assert any(isinstance(item, TimeoutError) and "shutdown-drain" in str(item) and tid in str(item) for item in errors)
+        elif phase == "backend_wait":
+            assert "Backend关闭等待超过30秒" in str(failure.value) and failed.workspace_id in str(failure.value)
         else:
             assert injected in errors
         if body_error is not None:
@@ -177,19 +206,22 @@ async def test_backend_shutdown_preserves_dependencies_and_retries_original_owne
         assert peer.resource_platform.process_root_scope.is_closed
         peer_calls = [entry for entry in case.closed if entry[0] == peer.workspace_id]
         assert peer_calls == [(peer.workspace_id, stage) for stage in ("jobs", "runtime", "platform")]
-        if phase in {"runtime", "runtime_timeout", "body_runtime"}:
+        if phase in {"runtime", "runtime_timeout", "backend_wait", "body_runtime"}:
             assert not failed.resource_platform.process_root_scope.is_closed
             with session_thread_owner_scope(MutationIntentOwner(sid, tid), langgraph_thread_id=tid):
                 restored = failed.checkpointer.get_tuple(build_checkpoint_config(tid))
             assert restored.checkpoint == checkpoint.checkpoint and restored.metadata == checkpoint.metadata
             assert restored.pending_writes == checkpoint.pending_writes
-        if phase == "runtime_timeout":
+        if phase in {"runtime_timeout", "backend_wait"}:
             original_unload = state.runtime_unload
             assert original_unload is not None and not original_unload.done() and state.generation == generation
             finish.set()
             await asyncio.wait_for(asyncio.shield(original_unload), 5)
             assert calls == 1 and len(observations) == 1
+        original_backend_owner = getattr(backend, "_close_owner", None)
         await backend.close()
+        if phase == "backend_wait":
+            assert backend._close_owner is original_backend_owner
         assert backend.closed and main.app.state.workspace_lifespan is None
         assert main.app.state.workspace_container_registry is None
         assert len(observations) == 1 and observations[0][0] == attachment_id and observations[0][2] == canonical
