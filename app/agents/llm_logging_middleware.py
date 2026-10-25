@@ -22,6 +22,7 @@ from app.agents.upstream_request_trace import (
 from app.core.bounded_json import bound_json_value
 from app.core.execution_admission_context import require_current_execution_admission
 from app.core.path_utils import get_session_path_resolver, get_sessions_dir
+from app.domain.itemized.errors import execution_failure_message
 from app.domain.itemized.execution_admission import ExecutionAdmission
 
 _JSON_VALUE_ADAPTER = TypeAdapter(JsonValue)
@@ -190,7 +191,7 @@ class LLMLoggingMiddleware(AgentMiddleware[StateT, Any, Any]):
             structured_response=_json_value(
                 getattr(response, "structured_response", None) if response is not None else None
             ),
-            error=str(error) if error is not None else None,
+            error=execution_failure_message(error) if error is not None else None,
         )
         full_log = _LLMFullLog(
             timestamp=logged_at_ms,

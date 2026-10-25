@@ -10,6 +10,7 @@ from typing import Any
 from app.agents.checkpoint_recovery import CheckpointRecoveryRejectedError
 from app.core.job_event_bus import EventType
 from app.core.turn_execution_scope import ScopeCancelledError
+from app.domain.itemized.errors import execution_failure_message
 from app.services.business.system_reminder_checkpoint_service import (
     persist_interrupt_checkpoint,
 )
@@ -192,8 +193,14 @@ async def handle_step_failure(
     logger: logging.Logger,
 ) -> None:
     """区分确定业务失败与取消/失联，收敛同一 v2 execution 终态。"""
+    logger.error(
+        "[agent_execution_service] step failed: session_id=%s thread_id=%s job_id=%s turn_id=%s",
+        session_id, thread_id, job_id, turn_id,
+        exc_info=(type(error), error, error.__traceback__),
+    )
+    failure_message = execution_failure_message(error)
     if execution_id is None:
-        await publish(EventType.ERROR, {"error": str(error), "phase": "agent_execution"})
+        await publish(EventType.ERROR, {"error": failure_message, "phase": "agent_execution"})
         return
     if turn_id is not None and interrupt_state.interrupt_request_id is not None:
         if message_stream_runtime is not None:
@@ -211,7 +218,6 @@ async def handle_step_failure(
         if isinstance(error, (ScopeCancelledError, CheckpointRecoveryRejectedError))
         else "execution_error"
     )
-    failure_message = str(error)
     if isinstance(error, ScopeCancelledError):
         try:
             await asyncio.to_thread(
@@ -283,12 +289,7 @@ async def handle_step_failure(
             after_interrupt_requested=after_interrupt_requested,
             resumable=False,
         )
-    await publish(EventType.ERROR, {"error": str(error), "phase": "agent_execution"})
-    logger.exception(
-        "[agent_execution_service] ERROR published: turn_id=%s",
-        turn_id,
-        exc_info=(type(error), error, error.__traceback__),
-    )
+    await publish(EventType.ERROR, {"error": failure_message, "phase": "agent_execution"})
 
 
 __all__ = [

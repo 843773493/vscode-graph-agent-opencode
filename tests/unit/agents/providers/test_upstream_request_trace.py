@@ -25,6 +25,7 @@ from app.agents.upstream_request_trace import (
     begin_upstream_capture,
     end_upstream_capture,
     record_upstream_error,
+    record_upstream_request,
 )
 from app.runtime.model_stream import ModelStreamTransportController
 from app.runtime.provider_errors import is_provider_failure
@@ -38,6 +39,18 @@ CHAT_CONFIG_PATH = (
 RESPONSES_CONFIG_PATH = (
     Path.cwd() / "configs" / "tests" / "model_stream" / "model_stream_responses.jsonc"
 )
+
+
+def test_native_io_attempt_error_keeps_system_reason_without_file_locations() -> None:
+    token = begin_upstream_capture()
+    record_upstream_request(request={"model": "test"}, model="test", provider="openai",
+                            api_base=None, call_type="completion", dispatch_ref=None)
+    error = FileNotFoundError(2, "missing at /private/model-input", "/private/model-input")
+    record_upstream_error(error)
+    attempts = end_upstream_capture(token)
+    assert attempts[0]["error"] == "执行系统 I/O 失败: error=FileNotFoundError, errno=2"
+    assert "/private" not in str(attempts)
+    assert error.filename == "/private/model-input"
 
 
 async def _capture(model, messages) -> list[dict]:

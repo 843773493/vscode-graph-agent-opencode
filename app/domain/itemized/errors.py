@@ -1,6 +1,19 @@
 """itemized domain errors。"""
 
 
+def execution_failure_message(error: BaseException) -> str:
+    """执行记录只携带原生 I/O 的结构化原因；原异常由诊断日志保留。
+
+    没有系统错误字段的业务 TimeoutError 等异常继续使用各自消息合同。
+    filename、filename2 和 strerror 均可能含本机位置，不作为业务错误正文。
+    """
+    if isinstance(error, OSError) and (
+        error.errno is not None or error.filename is not None or error.filename2 is not None
+    ):
+        return f"执行系统 I/O 失败: error={type(error).__name__}, errno={error.errno}"
+    return str(error)
+
+
 class CodeCarryingError(Exception):
     """携带闭合 ``code`` 的显式失败基类；``str(e)`` 恒为 ``[code] message``。
 

@@ -655,3 +655,13 @@
 - 初次 HTTP 装具遗漏生产异常 handler，409无 request_id；接入原 handler 后保留请求身份断言。第二次误将已启动又退出的真实进程当作未 spawn，按原快照代码改为精确核 PID、OS 不存在与 settled claim，而非要求历史 PID 为空；原失败输出均保留。最终 Ruff/compileall通过，主线程差异自查；未启动团队或独立审查代理。
 - 准确命令、受测源码前后指纹、原始输出和退出码在 `out/tests/temp/node_debug_receive_errors_20261025/artifacts/`。本切片不代替2.2/7.2全局门、其它 Inspector/原生错误出口、Windows实机或主窗口；Agent团队、委派及协作专项继续TODO。
 共享最终复验：Node调试与主API270 passed（55.53秒），请求身份/Thread范围14 passed（2.85秒），同一真实Node/ASGI故障恢复1 passed（10.13秒）；Ruff/compileall和strict 45 passed/0 failed。记录的源码指纹前后一致、进程组无残留；20个其它Inspector方法AST不变，未新增生产目录，原共享暂存索引独立保留。最终仅追加本验收文字，未修改受测代码。
+
+
+### 2026-10-25 执行原生 I/O 失败出口（2.2/7.2 部分收口）
+
+- 真实原生 I/O 的 filename、filename2 与 strerror 不再直接成为执行业务错误正文；原异常类型和 errno 形成唯一公开原因，由 step、Job 主收口与 task callback、自动命名提示及 LLM response/attempt 记录共同消费。原异常对象继续传播、完整堆栈写诊断日志；缺 execution 的早期失败和自动命名失败也保留原错。未改变业务超时、取消优先级、错误 code/reason、原失败状态与自动命名失败后继续执行的行为。未增加错误账本、第二执行实现或文本正则脱敏。
+- 完整 HEAD 候选的真实 Session/消息准入、编译图、Runner、Saver 和 Job 复现 IsADirectoryError，旧代码将完整路径写入 Job 及消息流；修复后核冷消息流 HTTP、Job DTO、SQLite 与 LLM 记录无该位置，同 Thread 下一次执行完成，旧快照及 canonical 前缀不变。外部模型响应受控，HTTP 为进程内 ASGI，鉴权/request_id 使用已有装具替身；不称真实 Gateway、外部模型、进程重启或完整 Web 验收。
+- 候选定向回归101 passed（27.22秒），覆盖原生多文件错误与 strerror 路径、Job 两个失败出口、执行前错误、自动命名、LLM attempt 及既有同步/异步 Provider、业务超时和取消；Ruff/compileall与严格 OpenSpec 45 passed/0 failed。早期复现装具未将 typed event payload 转 JSON，修正后在旧实现得到精确路径断言失败，原始失败保留。准确命令、完整源码前后指纹、原始输出及退出码在 `out/tests/temp/execution_io_errors_20261025/artifacts/`。
+- 本切片只覆盖结构化原生 I/O 异常，不冒称其它业务异常、包装异常或全仓原生错误出口已收口；2.2/7.2全局门保持未勾。未新增生产目录，主线程自查，未启动独立审查代理；Agent团队、成员、委派与协作继续TODO。
+
+共享最终复验：103 passed（23.84秒），Ruff/compileall及strict 45 passed/0 failed；候选及共享六组验证的记录源码指纹前后一致、进程组无残留。共享队列位置查询、日志裁剪及既有测试fixture命名优化保留；提交仅含本切片，原共享暂存条目不改写。最终只追加验收收据并清理新增测试末尾空行，AST与受测版本一致。

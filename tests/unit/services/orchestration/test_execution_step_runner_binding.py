@@ -23,6 +23,28 @@ from app.services.orchestration.execution_step.runner import StepRunner
 from app.services.orchestration.message_stream_runtime import MessageStreamRuntime
 
 
+async def test_failure_before_execution_is_logged_and_publishes_only_system_reason(
+    tmp_path, caplog: pytest.LogCaptureFixture,
+) -> None:
+    missing = tmp_path / "private-step-input"
+    with pytest.raises(FileNotFoundError) as raised:
+        missing.read_bytes()
+    error = raised.value
+    publish = AsyncMock()
+    await handle_step_failure(
+        error=error, interrupt_state=SimpleNamespace(), message_stream_runtime=None,
+        message_stream_writer=None, checkpointer=MagicMock(), session_id="session",
+        thread_id="thread", job_id="job", turn_id=None, execution_id=None,
+        checkpoint_ns="", publish=publish, logger=logging.getLogger(__name__),
+    )
+    publish.assert_awaited_once_with(EventType.ERROR, {
+        "error": f"执行系统 I/O 失败: error=FileNotFoundError, errno={error.errno}",
+        "phase": "agent_execution",
+    })
+    assert str(missing) in caplog.text
+    assert any(record.exc_info and record.exc_info[1] is error for record in caplog.records)
+
+
 class _SnapshotConfigService:
     def get_snapshot(self) -> object:
         return "snapshot"

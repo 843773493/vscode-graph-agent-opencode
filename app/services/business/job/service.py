@@ -25,6 +25,7 @@ from app.core.trace_middleware import (
     get_current_gateway_id,
     get_current_request_id,
 )
+from app.domain.itemized.errors import execution_failure_message
 from app.domain.itemized.execution_admission import (
     ExecutionBinding,
     InternalExecutionIntent,
@@ -1007,14 +1008,15 @@ class JobService:
                     # 取消终态未提交：原 task 保留错误供 control/drain 读取，
                     # 不能发布业务失败或交还尚未结算的活动槽。
                     return
+                failure_message = execution_failure_message(e)
                 if not self._is_terminal_status(job.status):
-                    transition_job_status(job, JobStatus.failed, error_message=str(e))
+                    transition_job_status(job, JobStatus.failed, error_message=failure_message)
                 if self._bus is not None:
                     self._spawn_finalization(
                         self._bus.publish(
                             job_id=job.job_id,
                             event_type=EventType.JOB_FAILED,
-                            payload={"session_id": job.session_id, "error": str(e)},
+                            payload={"session_id": job.session_id, "error": failure_message},
                             agent_id="job_service",
                         )
                     )
@@ -1466,11 +1468,13 @@ class JobService:
                     },
                     agent_id="job_service",
                 )
-        except Exception as error:  # noqa: BLE001
+        except Exception as error:
+            logger.exception("Job execution failed: job_id=%s", job_id)
+            failure_message = execution_failure_message(error)
             await self._persist_terminal_execution_status(job, "failed")
-            transition_job_status(job, JobStatus.failed, error_message=str(error))
+            transition_job_status(job, JobStatus.failed, error_message=failure_message)
             if self._bus is not None:
-                payload: dict[str, object] = {"error": str(error)}
+                payload: dict[str, object] = {"error": failure_message}
                 payload["session_id"] = session_id
                 error_code = getattr(error, "code", None)
                 if isinstance(error_code, str) and error_code:

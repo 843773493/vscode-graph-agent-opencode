@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+
 from app.abstractions.job_event_bus import JobEventBusProtocol
 from app.abstractions.job_executor import JobRuntimeStateProtocol
 from app.abstractions.job_step_executor import JobStepExecutor
@@ -10,10 +12,13 @@ from app.core.trace_middleware import (
     set_current_gateway_id,
     set_current_request_id,
 )
+from app.domain.itemized.errors import execution_failure_message
 from app.schemas.internal_v2.common import JobStatus
 from app.services.business.job.lifecycle import transition_job_status
 from app.services.business.message_service import MessageService
 from app.services.orchestration.session_title_service import SessionTitleService
+
+logger = logging.getLogger(__name__)
 
 
 def session_title_message(
@@ -67,12 +72,13 @@ class JobExecutionService:
                         job_id=job.job_id,
                         user_message=title_message,
                     )
-            except Exception as error:  # noqa: BLE001
+            except Exception as error:
+                logger.exception("会话自动命名失败: session_id=%s job_id=%s", job.session_id, job.job_id)
                 await self._bus.publish(
                     job_id=job.job_id,
                     event_type=EventType.ERROR,
                     payload={
-                        "error": f"会话自动命名失败: {error}",
+                        "error": f"会话自动命名失败: {execution_failure_message(error)}",
                         "phase": "session_auto_title",
                     },
                     agent_id="session_title_service",

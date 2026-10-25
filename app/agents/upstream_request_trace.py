@@ -10,6 +10,7 @@ from typing import Any
 from pydantic import SecretStr
 
 from app.domain.itemized.dispatch_ref import SealedContextDispatchRef
+from app.domain.itemized.errors import execution_failure_message
 from app.schemas.internal_v2.session_context import SessionContextResourceDTO
 
 _REDACTED_KEYS = {
@@ -85,7 +86,10 @@ def record_upstream_error(error: Any) -> None:
     """记录当前模型调用中尚未成功收尾的上游 attempt 的失败原因。"""
     if error is None:
         return
-    _fill_pending(key="error", value=error)
+    _fill_pending(
+        key="error",
+        value=execution_failure_message(error) if isinstance(error, BaseException) else error,
+    )
 
 
 def record_upstream_request(
