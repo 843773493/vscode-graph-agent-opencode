@@ -103,6 +103,11 @@
 - **WHEN** 工作区为 `/work/project`，输入 `/etc/hosts`，且工作区内另有 `etc/hosts` 作为对照文件
 - **THEN** 读取或写入仅按目标端能力和授权访问真正的 `/etc/hosts`，或明确拒绝且零写入；MUST NOT 读取或修改 `/work/project/etc/hosts`，也不得伪报成功
 
+#### Scenario: Windows 长路径保持同一文件操作链
+
+- **WHEN** 用户通过普通文件入口在 Windows 目标文件系统支持的长路径中创建目录与文件，随后列出、读取、条件保存或下载该目标
+- **THEN** 各操作 MUST 使用同一实际目标，相对路径、目标绝对路径与资源 URI 返回同一规范引用；原生扩展路径只在目标 I/O 边界使用，不能进入目录键、普通响应或业务持久引用。目录归档与 Range 下载继续遵守既有合同，旧 revision 写入仍须明确拒绝
+
 #### Scenario: 原生目录名包含协议样式字符
 
 - **WHEN** POSIX 文件目录含冒号，用户以 `./build://debug/probe.txt`、对应原生绝对路径或文件 owner 返回的资源 URI 读取或写入

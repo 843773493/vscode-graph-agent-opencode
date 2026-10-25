@@ -12,6 +12,7 @@ import httpx
 from pydantic import ValidationError
 
 from app.core import resource_uri
+from app.core.atomic_fs import native_io_path
 from app.core.exceptions import ForbiddenError
 from app.core.path_utils import (
     is_resource_uri_input,
@@ -173,7 +174,7 @@ class WorkspaceFilePaths:
                 else:
                     root = self._bindings().resolve(parsed)
                 self.require_public_path(root.joinpath(*parsed.tail_segments[1:]))
-                if reject_symlink and root.joinpath(*parsed.tail_segments[1:]).is_symlink():
+                if reject_symlink and native_io_path(root.joinpath(*parsed.tail_segments[1:])).is_symlink():
                     raise ValueError(f"不允许编辑符号链接: {parsed.display_uri}")
                 target = safe_join(root, *parsed.tail_segments[1:])
                 self.require_public_path(target)
@@ -184,7 +185,7 @@ class WorkspaceFilePaths:
             native = Path(value).expanduser()
             unresolved = native if native.is_absolute() else self.workspace / native
             self.require_public_path(unresolved)
-            if reject_symlink and unresolved.is_symlink():
+            if reject_symlink and native_io_path(unresolved).is_symlink():
                 raise ValueError("不允许通过文件预览编辑符号链接")
             if not native.is_absolute() and scope == "filesystem":
                 if value:
@@ -202,7 +203,7 @@ class WorkspaceFilePaths:
         self.require_public_path(target)
         if target.is_relative_to(self.workspace):
             return resource_uri.file_uri_child(self.workspace_uri, *target.relative_to(self.workspace).parts)
-        root = target if target.is_dir() else target.parent
+        root = target if native_io_path(target).is_dir() else target.parent
         uri = self._bindings().bind(root)
         return uri if root == target else resource_uri.file_uri_child(uri, target.name)
 

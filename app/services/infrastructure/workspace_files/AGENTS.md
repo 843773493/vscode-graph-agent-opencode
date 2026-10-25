@@ -26,6 +26,7 @@
 
 - operation 冻结明确的 workspace、scope、root、规范路径及认证 actor；不因工作区切换改投，也不把代理选项当成免认证。
 - 普通文件入口统一接受目标机器原生路径和资源 URI；业务记录、响应、游标与事件只保存或返回 URI。未注册目录根仅由原生 Gateway 绑定，后台恢复重新解析绑定，不把真实根复制进工作区存储。
+- Windows 扩展路径只在原生 I/O 边界复用 `native_io_path`；目录扫描与归档仍以逻辑 child 路径校验归属、私有目录和 staging，不把扩展前缀用于 URI、目录键或业务持久化。
 - 同目标及祖先链依赖沿既有 operation 语义；前序创建者提供 accepted 身份和 revision，禁止从执行时当前版本补缺。
 - upload 必须先完整持久保存 payload 与校验清单再返回 202，后台不持有请求 UploadFile 句柄。
 - 部分或未知外部效果透明返回；恢复只使用原 operation 的可核验证据，不盲重放或伪报回滚。响应丢失沿原 ID 查询或重试。

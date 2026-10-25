@@ -9,6 +9,7 @@ import anyio
 from starlette.responses import FileResponse
 from starlette.types import Message, Receive, Scope, Send
 
+from app.core.atomic_fs import native_io_path
 from app.services.infrastructure.workspace_files.filesystem import (
     PreparedFileDownload,
     file_access,
@@ -19,7 +20,7 @@ class WorkspaceFileResponse(FileResponse):
     def __init__(self, download: PreparedFileDownload, *, disposition: Literal["inline", "attachment"]) -> None:
         self.download = download
         super().__init__(
-            download.path,
+            native_io_path(download.path),
             stat_result=download.metadata,
             media_type=download.media_type,
             filename=download.filename,
@@ -52,7 +53,7 @@ class WorkspaceFileResponse(FileResponse):
                 primary_error = sys.exception()
                 try:
                     with anyio.CancelScope(shield=True), file_access(self.download.uri, "临时文件清理"):
-                        await anyio.to_thread.run_sync(self.download.path.unlink)
+                        await anyio.to_thread.run_sync(native_io_path(self.download.path).unlink)
                 except OSError as cleanup_error:
                     if primary_error is not None:
                         raise BaseExceptionGroup("文件传输失败且临时文件清理失败", [primary_error, cleanup_error]) from None

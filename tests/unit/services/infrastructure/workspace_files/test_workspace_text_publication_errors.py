@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from app.core.atomic_fs import native_io_path
 from app.core.resource_uri import resource_display_uri
 from app.services.infrastructure.workspace_files import text_publication
 
@@ -30,7 +31,7 @@ def test_read_failures_preserve_type_errno_cause_and_uri(source, monkeypatch, nu
 
     def observed_stat(path, *args, **kwargs):
         nonlocal stats
-        if path == target:
+        if path == native_io_path(target):
             stats += 1
             if (stage == "stat_before" and stats == 1) or (stage == "stat_after" and stats == 2):
                 raise original
@@ -47,7 +48,7 @@ def test_read_failures_preserve_type_errno_cause_and_uri(source, monkeypatch, nu
             raise original
 
     def observed_open(path, *args, **kwargs):
-        if path == target:
+        if path == native_io_path(target):
             if stage == "open":
                 raise original
             if stage == "read":
@@ -81,7 +82,7 @@ def test_publication_failures_leave_original_and_remove_temporary(source, monkey
 
     def fail_path(operation):
         def invoke(path, *args, **kwargs):
-            if path == (target if stage == "delete" else target.parent):
+            if path == native_io_path(target if stage == "delete" else target.parent):
                 raise original
             return operation(path, *args, **kwargs)
         return invoke
@@ -127,7 +128,7 @@ def test_postpublication_read_failure_keeps_unknown_effect(source, monkeypatch):
         published = True
 
     def fail_after_publication(path, *args, **kwargs):
-        if published and path == target:
+        if published and path == native_io_path(target):
             raise original
         return lstat(path, *args, **kwargs)
 

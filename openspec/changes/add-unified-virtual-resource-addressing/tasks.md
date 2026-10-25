@@ -125,6 +125,12 @@
 
 ## 7. 验证与收口
 
+### 2026-10-25 普通文件的 Windows 原生长路径（2.2/7.2 部分收口）
+
+- Windows 实机在产品目录创建 committed 后，原列表将长路径误报为不存在（`windows-baseline-006`，1 failed）；首轮 `windows-red-003` 停在旧 fixture 尾部空格目录的准备阶段，不作为产品反例。长路径用例改用独立的合法中文目录参数，原空格后继用例保持。扫描、目录观察、路径分类、文本原子发布、归档和下载传输复用既有 `native_io_path`；逻辑 child 继续承担私有目录、暂存及归属比较，扩展前缀不进 URI、目录键或业务记录。
+- Linux 文件与下载回归300 passed/65.28秒；补强后的当前产品/错误用例35 passed/34.43秒。Windows 最终快照 `d8047af462d483d84e599a5a3286329253352e4b` 同一长路径产品用例及原生暂存、文本发布、下载错误共36 passed/14.06秒：真实Backend HTTP逐层创建后比较相对/目标绝对路径/URI的相同DTO，核旧revision拒绝、实际字节、Range、递归ZIP和operation回执无真实位置或扩展前缀。原有故障注入仅迁到实际原生I/O路径，错误类型、errno、原因链和原件断言保持。
+- 准确命令、快照、源码前后指纹、raw/退出码和Windows产品JSON在 `out/tests/temp/workspace_file_native_io_20261025/artifacts/`；`verification-023.json` 核实运行源码冻结、远端tracked干净且7份被改源码/测试仅有CRLF/LF差异，不能声称原始字节一致。首次rawSHA核对失败及换行诊断脚本转义错误均保留，改用数值字节核对后确认。Ruff、compileall及严格OpenSpec 45 passed/0 failed。本片为真实Windows Backend HTTP与Linux文件回归，不代替Gateway/Web、跨机文件转送或全部业务持久化审计；全局2.2/7.2仍未勾。团队/协作与CIL第9节新规划未追加实施或专项验证。
+
 ### 2026-10-25 Windows Node 调试存储长路径（2.2/7.2 部分收口）
 
 - 原唯一调试store的枚举、读取、原子写入与删除在最终I/O边界统一使用`native_io_path`；manifest、launch claim和方案继续共用原链，逻辑locator、DTO、URI、错误归属与持久格式不变。作者AST核对去除四处原生路径转换及import后原模块完全一致，无新目录/兼容链。

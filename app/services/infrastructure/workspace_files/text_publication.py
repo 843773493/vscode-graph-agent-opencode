@@ -8,6 +8,7 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
+from app.core.atomic_fs import native_io_path
 from app.core.hashing import sha256_hex
 from app.services.infrastructure.workspace_files.filesystem import file_access
 from app.services.infrastructure.workspace_files.runtime import rename_entry_exclusive
@@ -43,8 +44,9 @@ class FilePreimage:
 
 
 def read_file_preimage(path: Path, *, reference: str, max_bytes: int | None = None) -> FilePreimage:
+    physical = native_io_path(path)
     with file_access(reference, "read"):
-        before = path.lstat()
+        before = physical.lstat()
     if stat.S_ISLNK(before.st_mode):
         raise ValueError(f"不允许编辑符号链接: {reference}")
     if stat.S_ISDIR(before.st_mode):
@@ -54,9 +56,9 @@ def read_file_preimage(path: Path, *, reference: str, max_bytes: int | None = No
     if max_bytes is not None and before.st_size > max_bytes:
         raise ValueError(f"文件过大，暂不预览: {reference} ({before.st_size} bytes)")
     with file_access(reference, "read"):
-        with path.open("rb") as stream:
+        with physical.open("rb") as stream:
             content = stream.read() if max_bytes is None else stream.read(max_bytes + 1)
-        after = path.lstat()
+        after = physical.lstat()
     if (before.st_dev, before.st_ino, before.st_mode, before.st_size, before.st_mtime_ns, before.st_ctime_ns) != (
         after.st_dev, after.st_ino, after.st_mode, after.st_size, after.st_mtime_ns, after.st_ctime_ns,
     ):
@@ -69,7 +71,8 @@ def read_file_preimage(path: Path, *, reference: str, max_bytes: int | None = No
 def require_file_preimage(path: Path, *, before: FilePreimage | None, reference: str) -> None:
     if before is None:
         with file_access(reference, "verify"):
-            exists = path.exists() or path.is_symlink()
+            physical = native_io_path(path)
+            exists = physical.exists() or physical.is_symlink()
         if exists:
             raise WorkspaceFileConflictError(f"目标不满足 expected_absent: {reference}")
         return
@@ -85,10 +88,11 @@ def publish_file_content(path: Path, content: bytes, *, before: FilePreimage | N
                          reference: str, mode: int | None = None) -> FilePreimage:
     """调用者持有同一 Workspace mutation lock；外部 writer 仍可在核对后竞争。"""
     with file_access(reference, "publish"):
+        physical = native_io_path(path)
         temporary_path: Path | None = None
         try:
-            path.parent.mkdir(parents=True, exist_ok=True)
-            descriptor, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
+            physical.parent.mkdir(parents=True, exist_ok=True)
+            descriptor, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=physical.parent)
             temporary_path = Path(temporary_name)
             with os.fdopen(descriptor, "wb") as stream:
                 stream.write(content)
@@ -100,9 +104,9 @@ def publish_file_content(path: Path, content: bytes, *, before: FilePreimage | N
                 os.chmod(temporary_path, publish_mode)
             require_file_preimage(path, before=before, reference=reference)
             if before is None:
-                rename_entry_exclusive(temporary_path, path)
+                rename_entry_exclusive(temporary_path, physical)
             else:
-                os.replace(temporary_path, path)
+                os.replace(temporary_path, physical)
             temporary_path = None
             # 发布后不恢复旧内容；外部 writer 的新内容不能被自动回滚覆盖。
             try:
@@ -120,6 +124,7 @@ def publish_file_content(path: Path, content: bytes, *, before: FilePreimage | N
 def delete_file_content(path: Path, *, before: FilePreimage, reference: str) -> None:
     with file_access(reference, "delete"):
         require_file_preimage(path, before=before, reference=reference)
-        path.unlink()
-        if path.exists() or path.is_symlink():
+        physical = native_io_path(path)
+        physical.unlink()
+        if physical.exists() or physical.is_symlink():
             raise FilePublicationUnverifiedError(reference, "absent", None)

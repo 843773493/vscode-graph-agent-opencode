@@ -15,6 +15,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import BinaryIO
 
+from app.core.atomic_fs import native_io_path
 from app.core.hashing import sha256_hex
 from app.core.path_utils import (
     get_user_workspace_root,
@@ -201,9 +202,10 @@ class WorkspaceService:
             scope=scope,
             allow_empty=True,
         )
-        if not target_path.exists():
+        physical = native_io_path(target_path)
+        if not physical.exists():
             raise FileNotFoundError(f"文件树路径不存在: {display_path or '.'}")
-        if not target_path.is_dir():
+        if not physical.is_dir():
             raise NotADirectoryError(f"文件树路径不是目录: {display_path or '.'}")
 
         owner = self.file_operations
@@ -264,7 +266,8 @@ class WorkspaceService:
         def observed_entries(directory_entries):
             nonlocal fingerprint, count
             for entry in directory_entries:
-                if Path(entry.path) in staging or self.file_paths.is_private(Path(entry.path), root_uri=display_path):
+                child = target_path / entry.name
+                if child in staging or self.file_paths.is_private(child, root_uri=display_path):
                     continue
                 node = self._entry_to_file_node(entry, display_path, scope=scope)
                 fingerprint ^= int(digest({"name": node.name, "kind": node.kind, "size": node.size,
@@ -272,7 +275,7 @@ class WorkspaceService:
                 count += 1
                 if cursor_key is None or entry_key(node) > cursor_key:
                     yield node
-        with file_access(display_path, "目录扫描"), os.scandir(target_path) as directory_entries:
+        with file_access(display_path, "目录扫描"), os.scandir(native_io_path(target_path)) as directory_entries:
             entries = heapq.nsmallest(
                 limit + 1,
                 observed_entries(directory_entries),
@@ -291,7 +294,8 @@ class WorkspaceService:
         )
 
     def _directory_observation(self, key: WorkspaceDirectoryKeyDTO, target: Path):
-        if target.is_symlink() or target.resolve() != target or not target.is_dir():
+        physical = native_io_path(target)
+        if physical.is_symlink() or target.resolve() != target or not physical.is_dir():
             return key, key.path, digest({"directory_missing": True}), False
         _items, _cursor, signature = self._scan_directory(target, key.path, key.scope, 0, None)
         return key, key.path, signature, True
@@ -442,9 +446,10 @@ class WorkspaceService:
                 allow_empty=False,
             )
         with file_access(display_path, "文件检查"):
-            if target.is_symlink():
+            physical = native_io_path(target)
+            if physical.is_symlink():
                 raise ValueError(f"暂不支持下载符号链接: {display_path}")
-            metadata = target.stat()
+            metadata = physical.stat()
         if stat.S_ISREG(metadata.st_mode):
             media_type, _ = mimetypes.guess_type(target.name)
             return PreparedFileDownload(target, display_path, target.name,
@@ -467,12 +472,13 @@ class WorkspaceService:
                 compression=zipfile.ZIP_DEFLATED,
             ) as archive:
                 def add_children(directory: Path) -> None:
-                    for child in sorted(directory.iterdir()):
+                    for entry in sorted(native_io_path(directory).iterdir()):
+                        child = directory / entry.name
                         self.file_paths.require_access(child, root_uri=display_path)
-                        if child.is_symlink():
+                        if entry.is_symlink():
                             raise ValueError(f"下载目录包含暂不支持的符号链接: {file_uri_child(display_path, *child.relative_to(target).parts)}")
-                        archive.write(child, Path(target.name) / child.relative_to(target))
-                        if child.is_dir():
+                        archive.write(entry, Path(target.name) / child.relative_to(target))
+                        if entry.is_dir():
                             add_children(child)
                 add_children(target)
             with file_access(display_path, "归档检查"):

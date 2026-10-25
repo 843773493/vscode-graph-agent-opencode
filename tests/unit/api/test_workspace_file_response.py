@@ -10,6 +10,7 @@ import anyio
 import pytest
 
 from app.api.workspace_file_response import WorkspaceFileResponse
+from app.core.atomic_fs import native_io_path
 from app.services.infrastructure.workspace_files.filesystem import PreparedFileDownload
 
 
@@ -24,27 +25,28 @@ def download(tmp_path):
 @pytest.mark.asyncio
 @pytest.mark.parametrize("failure", ["open", "read", "close", "cancel"])
 async def test_transfer_and_cleanup_failures_keep_both_causes(download, monkeypatch, failure):
+    physical = native_io_path(download.path)
     original_open, original_read, original_close = anyio.open_file, anyio.AsyncFile.read, anyio.AsyncFile.aclose
     native_error = OSError(errno.EIO, f"native transfer failed at {download.path}", str(download.path))
     cleanup_error = PermissionError(errno.EACCES, f"native cleanup failed at {download.path}", str(download.path))
 
     async def open_file(path, *args, **kwargs):
-        if Path(path) == download.path and failure == "open":
+        if Path(path) == physical and failure == "open":
             raise native_error
         return await original_open(path, *args, **kwargs)
 
     async def read(file, *args):
-        if Path(file.wrapped.name) == download.path and failure == "read":
+        if Path(file.wrapped.name) == physical and failure == "read":
             raise native_error
         return await original_read(file, *args)
 
     async def close(file):
         await original_close(file)
-        if Path(file.wrapped.name) == download.path and failure == "close":
+        if Path(file.wrapped.name) == physical and failure == "close":
             raise native_error
 
     def unlink(path, *args, **kwargs):
-        assert path == download.path
+        assert path == physical
         raise cleanup_error
 
     monkeypatch.setattr(anyio, "open_file", open_file)
