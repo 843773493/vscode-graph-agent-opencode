@@ -72,6 +72,7 @@
 - [x] 8.1 以本 change 自己的门禁执行 `openspec validate --strict --all`，对全部受影响 change 零失败。
   - 2026-10-20 收口范围：4.4 由 design D7/Migration Plan 与 spec「回滚边界已声明」固定代码/生成快照可回退、新数据不得交旧 reader、停止 writer 后才失效及已删数据不可恢复；本次未执行额外数据清理。7.1 在两端 spec 具名互引「多工作区场景下寻址层必须显式承载 scope_id 身份」，HTTP workspace_id 与 URI 同源。7.2 删除 design D6 重复且过时的 scope 取值表，并清除 proposal、design 风险/迁移/未决项中重复的 gateway/inline 来源规则和已完成装配施工要求；只引用寻址 owner，历史修复证据留在 tasks，不定义第二语法。D1 与 README 一致：直接 Backend 必须显式身份，Gateway 同源旧路径由代理注入。最终 `mounted-contract-openspec-final-002` strict 为41 passed/0 failed、exit0；单测改动 Ruff `mounted-request-scope-static-001`、compile `mounted-request-scope-compile-001` exit0，运行前后源码指纹一致且无残留进程。原命令/raw/退出码保留在 `out/tests/temp/openspec_takeover/artifacts/runs/`；其它未勾项不由这些规划收口替代。
 - [ ] 8.2 按固定实现与原 task ID 核验已授权的 `app/**`、`src/**`、`tests/**` 改动及真实同进程隔离、显式身份拒绝和 runtime 生命周期证据，确认没有遗漏的调用方或旧双轨；受保护路径必须零改动。原“只写规划、不得改生产代码”的阶段限制已由用户授权实施取代。
+  - 2026-10-25 Windows 实机增验：`hyf-win-short` 快照 `4f83efa7ca93fb375c9591482402b8850a1680fe` 与 `3efdd135f` 的 app/tests/configs 无差异，远端 tracked 工作区干净。`windows-core-001` 两项通过（34.53秒），真实双 AppContainer 各自经持久 Job、编译图与共用 model_stream 完成执行，显式 HTTP/URI 身份与跨工作区拒绝、逆序关闭及第二挂载启动失败回收保持。`windows-isolation-002` 两项通过（20.89秒），同 Job ID 的事件、Trace、消息流、后台任务与真实 catalog 事务锁不串工作区，两个显式配置候选分别加载且忽略进程级候选。均有 Windows Job 180秒/4GiB 与宿主200秒保护，命令、源码前后指纹、原始输出和实际退出码见 `out/tests/temp/mounted_windows_acceptance_20261025/artifacts/`。这是 Windows 原生进程内产品集成，模型为既有回放，HTTP为ASGI；不代真实Gateway/Web或全change核验，8.2仍未勾，团队/协作继续暂缓。
 
 ## 9. 全仓越限项登记（判据式，含二级子目录）
 
