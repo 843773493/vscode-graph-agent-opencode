@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from contextlib import nullcontext
+from contextlib import contextmanager, nullcontext
 from datetime import UTC, datetime
 from types import SimpleNamespace
 
@@ -49,9 +49,10 @@ class Factory:
         self.members = []
         self.control_store = self
 
+    @contextmanager
     def for_owner_session(self, session_id):
         assert session_id == "ses_owner"
-        return self
+        yield self
 
     def validate_owner_thread(self, session_id, thread_id):
         assert session_id == "ses_owner"

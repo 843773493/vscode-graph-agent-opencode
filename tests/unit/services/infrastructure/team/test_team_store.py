@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, contextmanager
 from datetime import UTC, datetime
 from types import SimpleNamespace
 
@@ -31,9 +31,10 @@ def team_store_case(tmp_path):
         admissions.append(session_id)
         yield
 
+    @contextmanager
     def owner(session_id):
         assert session_id == SESSION_ID
-        return SimpleNamespace(control_store=control)
+        yield SimpleNamespace(control_store=control)
 
     board = TeamBoardDTO(team_id="team_0123456789abcdef0123456789abcdef", name="测试团队",
                          session_id=SESSION_ID, coordinator_thread_id=THREAD_ID, version=1,

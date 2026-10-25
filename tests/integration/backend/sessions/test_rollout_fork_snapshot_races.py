@@ -77,8 +77,8 @@ async def test_public_fork_source_change_uses_exact_snapshot_or_rejects(
         assert selected_ids
     source_checkpoint = await fork_cases._get_tuple(fork_context, source.session_id)
     assert source_checkpoint is not None
-    control = fork_context.forks._threads.for_owner_session(source.session_id).control_store
-    original_children = control.list_child_thread_rows()
+    with fork_context.forks._threads.for_owner_session(source.session_id) as thread_owner:
+        original_children = thread_owner.control_store.list_child_thread_rows()
     operation_key = fork_context.forks._creation_key(request.idempotency_key)
     phase = "copy.source.before_captured_cas" if captured else "copy.source.local_capture_authorized"
     reached, release = asyncio.Event(), asyncio.Event()
@@ -125,7 +125,8 @@ async def test_public_fork_source_change_uses_exact_snapshot_or_rejects(
             with pytest.raises(ValueError, match="source-mismatch:"):
                 await operation
             assert (await fork_context.sessions.list(limit=100)).total == 1
-            assert control.list_child_thread_rows() == original_children
+            with fork_context.forks._threads.for_owner_session(source.session_id) as thread_owner:
+                assert thread_owner.control_store.list_child_thread_rows() == original_children
             capture = fork_context.sessions.path_resolver.catalog_store.get_fork_source_capture(
                 copy_operation_id=operation_key,
             )
@@ -215,7 +216,6 @@ async def test_same_session_forks_share_gate_and_publish_distinct_idle_children(
 
     monkeypatch.setattr(thread_creation, "observe_phase", observe_admission)
     monkeypatch.setattr(fork_owner, "observe_phase", pause_captures)
-    control = fork_context.forks._threads.for_owner_session(source.session_id).control_store
     tasks = []
     try:
         # preflight 需要来源共享锁，先完成它再阻塞 child 的独占准入。
@@ -226,31 +226,37 @@ async def test_same_session_forks_share_gate_and_publish_distinct_idle_children(
             release_admissions.set()
             await asyncio.wait_for(gate_waiters.wait(), timeout=10)
             assert all(not task.done() for task in tasks)
-            assert not control.list_child_thread_rows()
-            for key in keys:
-                with pytest.raises(KeyError):
-                    control.get_thread_creation_record(key)
+            with fork_context.forks._threads.for_owner_session(source.session_id) as thread_owner:
+                control = thread_owner.control_store
+                assert not control.list_child_thread_rows()
+                for key in keys:
+                    with pytest.raises(KeyError):
+                        control.get_thread_creation_record(key)
         await asyncio.wait_for(captures.wait(), timeout=15)
         assert all(not task.done() for task in tasks)
-        assert not control.list_child_thread_rows()
+        with fork_context.forks._threads.for_owner_session(source.session_id) as thread_owner:
+            assert not thread_owner.control_store.list_child_thread_rows()
         # source capture 返回后两条链均不再占用 Session gate，发布可各自重新准入。
         async with asyncio.timeout(5):
             async with SessionLifecycleGate(storage.sessions_dir).exclusive(source.session_id):
-                assert len(control.list_pending_thread_creations()) == 2
+                with fork_context.forks._threads.for_owner_session(source.session_id) as thread_owner:
+                    assert len(thread_owner.control_store.list_pending_thread_creations()) == 2
         release.set()
         results = await asyncio.gather(*tasks)
         assert len({result.thread_id for result in results}) == 2
-        assert {row.thread_id for row in control.list_child_thread_rows()} == {
-            result.thread_id for result in results
-        }
-        assert not control.list_initial_execution_intents()
-        for request, result in zip((first, second), results, strict=True):
-            record = control.get_thread_creation_record(fork_context.forks._creation_key(request.idempotency_key))
-            assert (record.state, record.purpose, record.initial_state, record.child_thread_id) == (
-                "published", "fork", "idle", result.thread_id,
-            )
-            assert result.session.session_id == source.session_id
-            assert fork_context.saver.load_history(source.session_id, result.thread_id, TurnHistoryLoadRequest()).items
+        with fork_context.forks._threads.for_owner_session(source.session_id) as thread_owner:
+            control = thread_owner.control_store
+            assert {row.thread_id for row in control.list_child_thread_rows()} == {
+                result.thread_id for result in results
+            }
+            assert not control.list_initial_execution_intents()
+            for request, result in zip((first, second), results, strict=True):
+                record = control.get_thread_creation_record(fork_context.forks._creation_key(request.idempotency_key))
+                assert (record.state, record.purpose, record.initial_state, record.child_thread_id) == (
+                    "published", "fork", "idle", result.thread_id,
+                )
+                assert result.session.session_id == source.session_id
+                assert fork_context.saver.load_history(source.session_id, result.thread_id, TurnHistoryLoadRequest()).items
         assert storage.jsonl_path(source.session_id, thread_id=owner.thread_id).read_bytes() == original_jsonl
         # 整个 Session 删除会同时清理两个 child，内部 fork 关系不能形成自阻塞。
         await fork_context.sessions.path_resolver.delete_subtree(
@@ -279,7 +285,6 @@ async def test_same_session_deletion_cancels_pending_fork_without_gate_reentry(
     delete_key = "delete-session-during-fork"
     resolver = fork_context.sessions.path_resolver
     catalog = resolver.catalog_store
-    control = fork_context.forks._threads.for_owner_session(source.session_id).control_store
     session_node = resolver.resolve_session_node(source.session_id)
     sessions_root = fork_context.saver._storage.storage.sessions_dir
     capture_phase = "copy.source.before_captured_cas" if captured else "copy.source.local_capture_authorized"
@@ -311,9 +316,11 @@ async def test_same_session_deletion_cancels_pending_fork_without_gate_reentry(
     deletion = None
     try:
         await asyncio.wait_for(reached.wait(), timeout=10)
-        preparing = control.get_thread_creation_record(key)
-        assert preparing.state == "preparing"
-        assert not control.list_child_thread_rows()
+        with fork_context.forks._threads.for_owner_session(source.session_id) as thread_owner:
+            control = thread_owner.control_store
+            preparing = control.get_thread_creation_record(key)
+            assert preparing.state == "preparing"
+            assert not control.list_child_thread_rows()
         deletion = asyncio.create_task(resolver.delete_subtree(
             idempotency_key=delete_key, root_node_id=source.session_id,
         ))
@@ -323,17 +330,20 @@ async def test_same_session_deletion_cancels_pending_fork_without_gate_reentry(
         # 删除正在等待原创建 holder；不能占着原操作清理所需的 Session gate。
         async with asyncio.timeout(5):
             async with SessionLifecycleGate(sessions_root).exclusive(source.session_id):
-                assert control.get_thread_creation_record(key) == preparing
+                with fork_context.forks._threads.for_owner_session(source.session_id) as thread_owner:
+                    assert thread_owner.control_store.get_thread_creation_record(key) == preparing
         release.set()
         with pytest.raises(SessionDeletionPendingError, match="session_deletion_pending:"):
             await operation
         await asyncio.wait_for(fenced.wait(), timeout=10)
-        aborted = control.get_thread_creation_record(key)
-        assert (aborted.state, aborted.child_thread_id, aborted.preimage_hash) == (
-            "aborted", preparing.child_thread_id, preparing.preimage_hash,
-        )
-        assert not control.list_child_thread_rows()
-        assert not control.list_initial_execution_intents()
+        with fork_context.forks._threads.for_owner_session(source.session_id) as thread_owner:
+            control = thread_owner.control_store
+            aborted = control.get_thread_creation_record(key)
+            assert (aborted.state, aborted.child_thread_id, aborted.preimage_hash) == (
+                "aborted", preparing.child_thread_id, preparing.preimage_hash,
+            )
+            assert not control.list_child_thread_rows()
+            assert not control.list_initial_execution_intents()
         for locator in (aborted.staging_locator, aborted.final_relative_locator):
             assert not (session_node / locator).exists()
         capture = catalog.get_fork_source_capture(copy_operation_id=key)

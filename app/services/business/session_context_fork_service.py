@@ -436,7 +436,8 @@ class SessionContextForkService:
                         target_creation = self._session_service.path_resolver.catalog_store.get_creation_record(key)
                     else:
                         _, target_session_id, _ = parse_session_thread_uri(payload.request.target_container_uri)
-                        target_creation = self._threads.for_owner_session(target_session_id).control_store.get_thread_creation_record(key)
+                        with self._threads.for_owner_session(target_session_id) as thread_owner:
+                            target_creation = thread_owner.control_store.get_thread_creation_record(key)
                 except KeyError:
                     # 没有本地 target 是普通独立来源；不扫描磁盘或注册第二份身份。
                     pass
@@ -652,7 +653,8 @@ class SessionContextForkService:
             source_view_id=request.source_view_id, source_view_revision=request.source_view_revision,
             anchor_item_id=request.anchor_item_id, anchor_mode=request.anchor_mode,
         )
-        binding = self._threads.for_owner_session(source_session_id).control_store.get_thread_graph_binding(source_thread_id)
+        with self._threads.for_owner_session(source_session_id) as thread_owner:
+            binding = thread_owner.control_store.get_thread_graph_binding(source_thread_id)
         if binding is None or binding.as_tuple() != DEEP_AGENT_GRAPH_BINDING.selector_fields():
             raise RuntimeError("fork_source_graph_binding_unavailable: 来源持久 GraphBinding 不能由当前代码重建")
         goal_snapshot = None
@@ -764,7 +766,8 @@ class SessionContextForkService:
         if frozen["creation_kind"] == "new_session_main":
             creation = catalog.get_creation_record(capture.creation_key)
         else:
-            creation = self._threads.for_owner_session(capture.target_session_id).control_store.get_thread_creation_record(capture.creation_key)
+            with self._threads.for_owner_session(capture.target_session_id) as thread_owner:
+                creation = thread_owner.control_store.get_thread_creation_record(capture.creation_key)
         # 服务/task 中断保留 preparing；只有 target owner 的持久终态能释放来源。
         if creation.state == "preparing":
             return
@@ -841,7 +844,8 @@ class SessionContextForkService:
             if frozen["creation_kind"] == "new_session_main":
                 record = catalog.get_creation_record(capture.creation_key)
             else:
-                record = self._threads.for_owner_session(capture.target_session_id).control_store.get_thread_creation_record(capture.creation_key)
+                with self._threads.for_owner_session(capture.target_session_id) as thread_owner:
+                    record = thread_owner.control_store.get_thread_creation_record(capture.creation_key)
             if record.request_intent_json is None:
                 raise RuntimeError("fork export cleanup 缺少冻结目标 creation intent")
             intent = json.loads(record.request_intent_json)
@@ -900,51 +904,51 @@ class SessionContextForkService:
         self, request: SessionForkRequest, key: str, target_session_id: str,
         source_session_id: str, source_thread_id: str | None,
     ) -> SessionForkResultDTO:
-        service = self._threads.for_owner_session(target_session_id)
-        control = service.control_store
-        try:
-            record = control.get_thread_creation_record(key)
-        except KeyError:
-            record = None
-        if record is None:
-            intent = await self._new_intent(request, source_session_id, source_thread_id, None)
-        else:
-            if record.purpose != "fork" or record.request_intent_json is None:
-                raise RuntimeError("fork key 不属于 child fork 创建意图")
-            intent = json.loads(record.request_intent_json)
-            self._validate_frozen_request(intent, request, None)
-        delivery_request_id = (
-            record.fork_delivery_request_id if record is not None else
-            require_current_request_id("fork child creation delivery") if intent["source_remote"] else None
-        )
-
-        async def materialize(record: ThreadCreationRecord) -> None:
-            await self._materialize(request, intent, target_session_id, child=record)
-            proof = self._checkpointer.forks.read_child_fork_completion(target_session_id, record)
-            control.freeze_thread_fork_completion(key, **proof)
-
-        async def abort(record: ThreadCreationRecord) -> bool:
-            return await self._checkpointer.forks.abort_prepared_child_fork(target_session_id, record)
-
-        with self._delivery_context(intent, delivery_request_id):
+        with self._threads.for_owner_session(target_session_id) as service:
+            control = service.control_store
             try:
-                result = await service.create(
-                    idempotency_key=key, session_id=target_session_id, thread_id=None, delegation_id=None,
-                    initial_state="idle", purpose="fork", request_intent=intent,
-                    fork_delivery_request_id=delivery_request_id,
-                    session_metadata={"graph_binding": intent["source_graph_binding"],
-                                      "capability_profile": dict(DEEP_AGENT_CAPABILITY_PROFILE),
-                                      "task_seed": None, "task_reference": None},
-                    artifact_manifest={}, before_publish=materialize, before_abort=abort,
-                    on_published=lambda current: self._checkpointer.forks.mark_published_child_fork(target_session_id, current),
-                )
-            except Exception:
-                await self._finish_remote_export(intent, key)
-                raise
-            published = control.get_thread_creation_record(key)
-            await observe_phase(key, "copy.target.published")
-            session = await self._session_service.get(target_session_id)
-            return await self._result(intent, session, result.child_thread_id, key, creation=published)
+                record = control.get_thread_creation_record(key)
+            except KeyError:
+                record = None
+            if record is None:
+                intent = await self._new_intent(request, source_session_id, source_thread_id, None)
+            else:
+                if record.purpose != "fork" or record.request_intent_json is None:
+                    raise RuntimeError("fork key 不属于 child fork 创建意图")
+                intent = json.loads(record.request_intent_json)
+                self._validate_frozen_request(intent, request, None)
+            delivery_request_id = (
+                record.fork_delivery_request_id if record is not None else
+                require_current_request_id("fork child creation delivery") if intent["source_remote"] else None
+            )
+
+            async def materialize(record: ThreadCreationRecord) -> None:
+                await self._materialize(request, intent, target_session_id, child=record)
+                proof = self._checkpointer.forks.read_child_fork_completion(target_session_id, record)
+                control.freeze_thread_fork_completion(key, **proof)
+
+            async def abort(record: ThreadCreationRecord) -> bool:
+                return await self._checkpointer.forks.abort_prepared_child_fork(target_session_id, record)
+
+            with self._delivery_context(intent, delivery_request_id):
+                try:
+                    result = await service.create(
+                        idempotency_key=key, session_id=target_session_id, thread_id=None, delegation_id=None,
+                        initial_state="idle", purpose="fork", request_intent=intent,
+                        fork_delivery_request_id=delivery_request_id,
+                        session_metadata={"graph_binding": intent["source_graph_binding"],
+                                          "capability_profile": dict(DEEP_AGENT_CAPABILITY_PROFILE),
+                                          "task_seed": None, "task_reference": None},
+                        artifact_manifest={}, before_publish=materialize, before_abort=abort,
+                        on_published=lambda current: self._checkpointer.forks.mark_published_child_fork(target_session_id, current),
+                    )
+                except Exception:
+                    await self._finish_remote_export(intent, key)
+                    raise
+                published = control.get_thread_creation_record(key)
+                await observe_phase(key, "copy.target.published")
+                session = await self._session_service.get(target_session_id)
+                return await self._result(intent, session, result.child_thread_id, key, creation=published)
 
     async def _result(
         self, intent: dict[str, object], session: SessionDTO, thread_id: str, key: str,
@@ -1022,8 +1026,11 @@ class SessionContextForkService:
         except (IncompleteForkSourceCaptureError, ThreadCreationAbortedError) as error:
             # fork 原 owner 完成中止与清理后，startup 才能继续处理其他 operation。
             catalog = self._session_service.path_resolver.catalog_store
-            current = (catalog.get_creation_record(key) if main else
-                       self._threads.for_owner_session(target_session_id).control_store.get_thread_creation_record(key))
+            if main:
+                current = catalog.get_creation_record(key)
+            else:
+                with self._threads.for_owner_session(target_session_id) as thread_owner:
+                    current = thread_owner.control_store.get_thread_creation_record(key)
             capture = catalog.get_fork_source_capture(copy_operation_id=key)
             if isinstance(error, ThreadCreationAbortedError):
                 if main or error.record != current or capture is None:
@@ -1063,16 +1070,17 @@ class SessionContextForkService:
         for node in nodes:
             if node.kind != "session" or node.state != "active":
                 continue
-            control = self._threads.for_owner_session(node.node_id).control_store
-            for record in control.list_fork_thread_creations():
-                if record.state == "preparing":
-                    recovered += await self._recover_prepared_fork(record, target_session_id=node.node_id)
-                elif record.state == "published":
-                    await self._checkpointer.forks.finalize_published_child_fork(node.node_id, record)
-                    await self._settle_live_resources(
-                        SessionForkRequest.model_validate(json.loads(record.request_intent_json)["request"]),
-                        key=record.thread_creation_idempotency_key, session_id=node.node_id, thread_id=record.child_thread_id,
-                    )
+            with self._threads.for_owner_session(node.node_id) as thread_owner:
+                control = thread_owner.control_store
+                for record in control.list_fork_thread_creations():
+                    if record.state == "preparing":
+                        recovered += await self._recover_prepared_fork(record, target_session_id=node.node_id)
+                    elif record.state == "published":
+                        await self._checkpointer.forks.finalize_published_child_fork(node.node_id, record)
+                        await self._settle_live_resources(
+                            SessionForkRequest.model_validate(json.loads(record.request_intent_json)["request"]),
+                            key=record.thread_creation_idempotency_key, session_id=node.node_id, thread_id=record.child_thread_id,
+                        )
         return recovered
 
     async def _publish_prepared_fork(self, record: SessionCreationRecord, proof) -> SessionDTO:

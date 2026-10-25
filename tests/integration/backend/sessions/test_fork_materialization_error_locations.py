@@ -50,49 +50,50 @@ async def test_child_fork_materialization_keeps_safe_durable_failure(
         context, source.session_id, creation_kind="new_child_thread", mode="full_rollout_copy",
     )
     key = context.forks._creation_key(request.idempotency_key)
-    control = context.forks._threads.for_owner_session(source.session_id).control_store
-    catalog = context.sessions.path_resolver.catalog_store
-    observe = fork_owner.observe_phase
-    original_error = (PermissionError(errno.EACCES, f"原生物化拒绝 {locator}", locator)
-                      if failure_kind == "native" else RuntimeError(f"物化失败 {locator}"))
-    captured = []
+    with context.forks._threads.for_owner_session(source.session_id) as thread_owner:
+        control = thread_owner.control_store
+        catalog = context.sessions.path_resolver.catalog_store
+        observe = fork_owner.observe_phase
+        original_error = (PermissionError(errno.EACCES, f"原生物化拒绝 {locator}", locator)
+                          if failure_kind == "native" else RuntimeError(f"物化失败 {locator}"))
+        captured = []
 
-    async def fail_materialization(operation_id: str, phase: str, **kwargs: object):
-        await observe(operation_id, phase, **kwargs)
-        if operation_id == key and phase == "copy.source.before_captured_cas":
-            captured.append(catalog.get_fork_source_capture(copy_operation_id=key))
-            raise original_error
+        async def fail_materialization(operation_id: str, phase: str, **kwargs: object):
+            await observe(operation_id, phase, **kwargs)
+            if operation_id == key and phase == "copy.source.before_captured_cas":
+                captured.append(catalog.get_fork_source_capture(copy_operation_id=key))
+                raise original_error
 
-    with monkeypatch.context() as failure, caplog.at_level(logging.ERROR, logger="app.core.thread_creation"):
-        failure.setattr(fork_owner, "observe_phase", fail_materialization)
-        with pytest.raises(type(original_error)) as caught:
+        with monkeypatch.context() as failure, caplog.at_level(logging.ERROR, logger="app.core.thread_creation"):
+            failure.setattr(fork_owner, "observe_phase", fail_materialization)
+            with pytest.raises(type(original_error)) as caught:
+                await context.forks.fork(request)
+        assert len(captured) == 1 and captured[0] is not None
+        record = control.get_thread_creation_record(key)
+        assert record.state == "aborted" and record.abort_reason
+        assert source.session_id in record.abort_reason and record.child_thread_id in record.abort_reason
+        assert "stage=fork_materialize" in record.abort_reason and type(original_error).__name__ in record.abort_reason
+        assert locator not in record.abort_reason and str(context.workspace) not in record.abort_reason
+        if failure_kind == "native":
+            assert caught.value.__cause__ is original_error
+            assert caught.value.errno == errno.EACCES
+            assert caught.value.filename is None and locator not in str(caught.value)
+        else:
+            # 保留具有领域含义的 RuntimeError 对象与类型，不改写恢复协议。
+            assert caught.value is original_error
+        assert any(item.exc_info and item.exc_info[1] is original_error for item in caplog.records)
+        assert any(locator in item.exc_text for item in caplog.records if item.exc_text)
+        capture = catalog.get_fork_source_capture(copy_operation_id=key)
+        assert capture is not None and capture.state == "aborted"
+        assert locator not in (capture.abort_reason or "")
+        assert not capture_directory(context.saver._storage.storage.sessions_dir, capture).exists()
+        owner_node = context.sessions.path_resolver.resolve_session_node(source.session_id)
+        assert not (owner_node / record.final_relative_locator).exists()
+        assert not (owner_node / record.staging_locator).exists()
+        assert not control.list_child_thread_rows() and not control.list_initial_execution_intents()
+        with closing(SessionControlStore(control.database_path, read_only=True)) as cold:
+            assert cold.get_thread_creation_record(key) == record
+        with pytest.raises(ThreadCreationAbortedError) as replay:
             await context.forks.fork(request)
-    assert len(captured) == 1 and captured[0] is not None
-    record = control.get_thread_creation_record(key)
-    assert record.state == "aborted" and record.abort_reason
-    assert source.session_id in record.abort_reason and record.child_thread_id in record.abort_reason
-    assert "stage=fork_materialize" in record.abort_reason and type(original_error).__name__ in record.abort_reason
-    assert locator not in record.abort_reason and str(context.workspace) not in record.abort_reason
-    if failure_kind == "native":
-        assert caught.value.__cause__ is original_error
-        assert caught.value.errno == errno.EACCES
-        assert caught.value.filename is None and locator not in str(caught.value)
-    else:
-        # 保留具有领域含义的 RuntimeError 对象与类型，不改写恢复协议。
-        assert caught.value is original_error
-    assert any(item.exc_info and item.exc_info[1] is original_error for item in caplog.records)
-    assert any(locator in item.exc_text for item in caplog.records if item.exc_text)
-    capture = catalog.get_fork_source_capture(copy_operation_id=key)
-    assert capture is not None and capture.state == "aborted"
-    assert locator not in (capture.abort_reason or "")
-    assert not capture_directory(context.saver._storage.storage.sessions_dir, capture).exists()
-    owner_node = context.sessions.path_resolver.resolve_session_node(source.session_id)
-    assert not (owner_node / record.final_relative_locator).exists()
-    assert not (owner_node / record.staging_locator).exists()
-    assert not control.list_child_thread_rows() and not control.list_initial_execution_intents()
-    with closing(SessionControlStore(control.database_path, read_only=True)) as cold:
-        assert cold.get_thread_creation_record(key) == record
-    with pytest.raises(ThreadCreationAbortedError) as replay:
-        await context.forks.fork(request)
-    assert replay.value.record == record and locator not in str(replay.value)
-    assert (source_node / "rollout/rollout.jsonl").read_bytes() == original_bytes
+        assert replay.value.record == record and locator not in str(replay.value)
+        assert (source_node / "rollout/rollout.jsonl").read_bytes() == original_bytes

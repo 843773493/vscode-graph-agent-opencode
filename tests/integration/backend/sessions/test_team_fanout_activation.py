@@ -83,6 +83,7 @@ from pathlib import Path
 from threading import RLock
 from app.core.path_utils import get_session_creation_service,get_session_path_resolver,workspace_context
 from app.core.workspace_identity import load_or_create_workspace_id
+from app.core.session_control_store import SessionControlStore
 from app.services.business.session_service import SessionService
 from app.services.business.team.service import TeamCoordinationService
 from app.services.infrastructure.rollout_context.checkpoint.saver import RolloutCheckpointSaver
@@ -101,20 +102,20 @@ with fixture_catalog_scope(),workspace_context(load_or_create_workspace_id(works
         workspace_id=resolver.workspace_id,path_resolver=resolver,creation_service=get_session_creation_service(root))
     factory=OwnerThreadCreationFactory(sessions_root=root,workspace_id=resolver.workspace_id,path_resolver=resolver)
     fanout=TeamFanoutService(factory=factory,sessions=sessions,saver=saver,dispatcher=None,publication_lock=RLock())
-    control=factory.for_owner_session(session).control_store
-    record=control.list_collaboration_fanouts(pending_only=True)[-1]
+    with factory.for_owner_session(session) as owner:
+        record=owner.control_store.list_collaboration_fanouts(pending_only=True)[-1]
     if mode=="zero":
         saver.receive_team_source_observation=lambda *args,**kwargs: os._exit(81)
     else:
-        finish=control.finish_collaboration_delivery
+        finish=SessionControlStore.finish_collaboration_delivery
         count=0
-        def receipt(*args,**kwargs):
+        def receipt(self,*args,**kwargs):
             global count
-            finish(*args,**kwargs)
+            finish(self,*args,**kwargs)
             count+=1
             if count==(1 if mode=="partial" else len(record.recipients)):
                 os._exit(82)
-        control.finish_collaboration_delivery=receipt
+        SessionControlStore.finish_collaboration_delivery=receipt
     asyncio.run(fanout.reconcile(session))
 raise AssertionError("fanout退出注入未命中")
 '''
@@ -145,21 +146,22 @@ async def team_case(request):
         lock = RLock()
         fanout = TeamFanoutService(factory=factory, sessions=sessions, saver=saver, dispatcher=RejectDispatcher(), publication_lock=lock)
         store = TeamStore(factory=factory, write_admission=sessions.session_write_admission)
-        control = factory.for_owner_session(SESSION).control_store
-        main = resolver.main_thread_id(SESSION)
-        created = resolver.catalog_store.get_node(SESSION).created_at
-        board = TeamBoardDTO(team_id="team_" + "a" * 32, name="协作验证", session_id=SESSION, coordinator_thread_id=main,
-                             version=1, created_at=created, updated_at=created)
-        case = SimpleNamespace(context=context, workspace=workspace, root=sessions_root, main=main, sessions=sessions,
-                               factory=factory, saver=saver, fanout=fanout, store=store, control=control, board=board,
-                               lock=lock, scopes=[], bundle=bundle)
-        await commit_board(case)
-        yield case
-        await fanout.stop()
-        for scope in case.scopes:
-            await scope.close()
-        control.close()
-        resolver.catalog_store.close()
+        with factory.for_owner_session(SESSION) as thread_owner:
+            control = thread_owner.control_store
+            main = resolver.main_thread_id(SESSION)
+            created = resolver.catalog_store.get_node(SESSION).created_at
+            board = TeamBoardDTO(team_id="team_" + "a" * 32, name="协作验证", session_id=SESSION, coordinator_thread_id=main,
+                                 version=1, created_at=created, updated_at=created)
+            case = SimpleNamespace(context=context, workspace=workspace, root=sessions_root, main=main, sessions=sessions,
+                                   factory=factory, saver=saver, fanout=fanout, store=store, control=control, board=board,
+                                   lock=lock, scopes=[], bundle=bundle)
+            await commit_board(case)
+            yield case
+            await fanout.stop()
+            for scope in case.scopes:
+                await scope.close()
+            control.close()
+            resolver.catalog_store.close()
     context.close()
 
 
@@ -177,17 +179,18 @@ async def commit_board(case, *, name=None, wakeup=None):
 
 async def create_member(case, name):
     profile = {"goal_enabled": False}
-    result = await case.factory.for_owner_session(SESSION).create(
-        idempotency_key="delegate-" + name, session_id=SESSION, thread_id=None, delegation_id="delegate-" + name,
-        initial_state="running", artifact_manifest={},
-        session_metadata={"graph_binding": {"graph_id": "deep-agent", "graph_revision": 1, "graph_schema_hash": "sha256:" + "a" * 64,
-                                             "capability_profile_hash": compute_capability_profile_hash(capability_profile=profile)},
-                          "capability_profile": profile, "task_seed": {"trusted_context": {"team_id": case.board.team_id,
-                              "coordinator_thread_id": case.main, "work_mode": "read_only"}, "untrusted_instructions": "只读验证"},
-                          "task_reference": {"parent_session_id": SESSION, "parent_thread_id": case.main,
-                                             "delegation_id": "delegate-" + name}},
-        collaboration_member={"role": "reviewer", "subagent_type": "general-purpose", "title": name},
-    )
+    with case.factory.for_owner_session(SESSION) as thread_owner:
+        result = await thread_owner.create(
+            idempotency_key="delegate-" + name, session_id=SESSION, thread_id=None, delegation_id="delegate-" + name,
+            initial_state="running", artifact_manifest={},
+            session_metadata={"graph_binding": {"graph_id": "deep-agent", "graph_revision": 1, "graph_schema_hash": "sha256:" + "a" * 64,
+                                                 "capability_profile_hash": compute_capability_profile_hash(capability_profile=profile)},
+                              "capability_profile": profile, "task_seed": {"trusted_context": {"team_id": case.board.team_id,
+                                  "coordinator_thread_id": case.main, "work_mode": "read_only"}, "untrusted_instructions": "只读验证"},
+                              "task_reference": {"parent_session_id": SESSION, "parent_thread_id": case.main,
+                                                 "delegation_id": "delegate-" + name}},
+            collaboration_member={"role": "reviewer", "subagent_type": "general-purpose", "title": name},
+        )
     return result.child_thread_id
 
 

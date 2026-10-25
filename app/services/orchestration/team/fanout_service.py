@@ -166,83 +166,85 @@ class TeamFanoutService:
             raise RuntimeError("collaboration fanout worker 意外停止")
 
     async def _deliver(self, session_id: str) -> None:
-        control = self._factory.for_owner_session(session_id).control_store
-        failures: list[Exception] = []
-        for record in control.list_collaboration_fanouts(pending_only=True):
-            lease = control.get_lease(record.lease_id)
-            # 独立 OS holder 已取得；新 token 明确废除前一轮 callback。
-            lease = control.takeover_lease(lease_id=lease.lease_id, expected_fencing_token=lease.fencing_token)
-            for recipient in record.recipients:
-                if recipient.state != "pending":
-                    continue
-                await observe_phase(record.lease_id, "team.fanout.before_recipient/" + recipient.thread_id, details={
-                    "session_id": session_id, "thread_id": recipient.thread_id,
-                    "ledger_revision": record.ledger_revision,
-                    "captured_lifecycle_generation": lease.captured_lifecycle_generation,
-                })
-                try:
-                    async with self._sessions.session_write_admission(session_id):
-                        if control.get_fence() != ("active", lease.captured_lifecycle_generation):
+        with self._factory.for_owner_session(session_id) as thread_owner:
+            control = thread_owner.control_store
+            failures: list[Exception] = []
+            for record in control.list_collaboration_fanouts(pending_only=True):
+                lease = control.get_lease(record.lease_id)
+                # 独立 OS holder 已取得；新 token 明确废除前一轮 callback。
+                lease = control.takeover_lease(lease_id=lease.lease_id, expected_fencing_token=lease.fencing_token)
+                for recipient in record.recipients:
+                    if recipient.state != "pending":
+                        continue
+                    await observe_phase(record.lease_id, "team.fanout.before_recipient/" + recipient.thread_id, details={
+                        "session_id": session_id, "thread_id": recipient.thread_id,
+                        "ledger_revision": record.ledger_revision,
+                        "captured_lifecycle_generation": lease.captured_lifecycle_generation,
+                    })
+                    try:
+                        async with self._sessions.session_write_admission(session_id):
+                            if control.get_fence() != ("active", lease.captured_lifecycle_generation):
+                                control.finish_collaboration_delivery(record.ledger_revision, recipient.thread_id,
+                                                                      fencing_token=lease.fencing_token, outcome="fence_closed")
+                                continue
+                            row = control.connection.execute("SELECT 1 FROM thread_catalog WHERE thread_id=?", (recipient.thread_id,)).fetchone()
+                            cancelled = control.connection.execute("SELECT 1 FROM collaboration_members WHERE child_thread_id=? AND state='cancelled'", (recipient.thread_id,)).fetchone()
+                            if row is None or cancelled is not None:
+                                control.finish_collaboration_delivery(record.ledger_revision, recipient.thread_id,
+                                                                      fencing_token=lease.fencing_token, outcome="recipient_deleted")
+                                continue
+                            if not control.verify_lease_token(lease_id=lease.lease_id, fencing_token=lease.fencing_token):
+                                raise RuntimeError("collaboration recipient 的原 lease/token 已失效")
+                            self._saver.receive_team_source_observation(
+                                session_id, recipient.thread_id, ledger_revision=record.ledger_revision,
+                                event_hash=record.event_hash, payload_json=record.payload_json,
+                            )
                             control.finish_collaboration_delivery(record.ledger_revision, recipient.thread_id,
-                                                                  fencing_token=lease.fencing_token, outcome="fence_closed")
-                            continue
-                        row = control.connection.execute("SELECT 1 FROM thread_catalog WHERE thread_id=?", (recipient.thread_id,)).fetchone()
-                        cancelled = control.connection.execute("SELECT 1 FROM collaboration_members WHERE child_thread_id=? AND state='cancelled'", (recipient.thread_id,)).fetchone()
-                        if row is None or cancelled is not None:
-                            control.finish_collaboration_delivery(record.ledger_revision, recipient.thread_id,
-                                                                  fencing_token=lease.fencing_token, outcome="recipient_deleted")
-                            continue
-                        if not control.verify_lease_token(lease_id=lease.lease_id, fencing_token=lease.fencing_token):
-                            raise RuntimeError("collaboration recipient 的原 lease/token 已失效")
-                        self._saver.receive_team_source_observation(
-                            session_id, recipient.thread_id, ledger_revision=record.ledger_revision,
-                            event_hash=record.event_hash, payload_json=record.payload_json,
-                        )
+                                                                  fencing_token=lease.fencing_token, outcome="delivered")
+                    except (SessionDeletionPendingError, NotFoundError):
                         control.finish_collaboration_delivery(record.ledger_revision, recipient.thread_id,
-                                                              fencing_token=lease.fencing_token, outcome="delivered")
-                except (SessionDeletionPendingError, NotFoundError):
-                    control.finish_collaboration_delivery(record.ledger_revision, recipient.thread_id,
-                                                          fencing_token=lease.fencing_token, outcome="fence_closed")
-                except Exception as error:  # 记录部分失败后继续其它 recipient，最终原样聚合抛出
-                    detail = (
-                        f"collaboration 投递失败: session_id={session_id}, "
-                        f"thread_id={recipient.thread_id}, ledger_revision={record.ledger_revision}, "
-                        f"stage=recipient_delivery, error={type(error).__name__}"
-                    )
-                    for name in ("errno", "winerror", "sqlite_errorcode"):
-                        if isinstance(code := getattr(error, name, None), int):
-                            detail += f", {name}={code}"
-                    logger.error("%s；完整诊断见异常链", detail, exc_info=error)
-                    control.record_collaboration_delivery_failure(record.ledger_revision, recipient.thread_id,
-                                                                  fencing_token=lease.fencing_token, error=detail)
-                    failures.append(error)
-            if record.wakeup_json is None and all(item.state != "pending" for item in control.get_collaboration_fanout(record.ledger_revision).recipients):
-                control.finish_collaboration_fanout(record.ledger_revision, fencing_token=lease.fencing_token,
-                                                   cancelled=any(item.state != "delivered" for item in control.get_collaboration_fanout(record.ledger_revision).recipients))
-            elif record.wakeup_json is not None:
-                target = json.loads(record.wakeup_json)["target_thread_id"]
-                updated = control.get_collaboration_fanout(record.ledger_revision)
-                if all(item.state != "pending" for item in updated.recipients) and any(item.thread_id == target and item.state != "delivered" for item in updated.recipients):
-                    control.finish_collaboration_fanout(record.ledger_revision, fencing_token=lease.fencing_token, cancelled=True)
-        self._publish_reconciled(session_id)
-        if failures:
-            raise ExceptionGroup("collaboration recipient 部分投递失败，原 pending 保留且其它 recipient 已收敛", failures)
+                                                              fencing_token=lease.fencing_token, outcome="fence_closed")
+                    except Exception as error:  # 记录部分失败后继续其它 recipient，最终原样聚合抛出
+                        detail = (
+                            f"collaboration 投递失败: session_id={session_id}, "
+                            f"thread_id={recipient.thread_id}, ledger_revision={record.ledger_revision}, "
+                            f"stage=recipient_delivery, error={type(error).__name__}"
+                        )
+                        for name in ("errno", "winerror", "sqlite_errorcode"):
+                            if isinstance(code := getattr(error, name, None), int):
+                                detail += f", {name}={code}"
+                        logger.error("%s；完整诊断见异常链", detail, exc_info=error)
+                        control.record_collaboration_delivery_failure(record.ledger_revision, recipient.thread_id,
+                                                                      fencing_token=lease.fencing_token, error=detail)
+                        failures.append(error)
+                if record.wakeup_json is None and all(item.state != "pending" for item in control.get_collaboration_fanout(record.ledger_revision).recipients):
+                    control.finish_collaboration_fanout(record.ledger_revision, fencing_token=lease.fencing_token,
+                                                       cancelled=any(item.state != "delivered" for item in control.get_collaboration_fanout(record.ledger_revision).recipients))
+                elif record.wakeup_json is not None:
+                    target = json.loads(record.wakeup_json)["target_thread_id"]
+                    updated = control.get_collaboration_fanout(record.ledger_revision)
+                    if all(item.state != "pending" for item in updated.recipients) and any(item.thread_id == target and item.state != "delivered" for item in updated.recipients):
+                        control.finish_collaboration_fanout(record.ledger_revision, fencing_token=lease.fencing_token, cancelled=True)
+            self._publish_reconciled(session_id)
+            if failures:
+                raise ExceptionGroup("collaboration recipient 部分投递失败，原 pending 保留且其它 recipient 已收敛", failures)
 
     def _publish_reconciled(self, session_id: str) -> None:
-        control = self._factory.for_owner_session(session_id).control_store
-        with self._publication_lock:
-            for pair, sources in tuple(self._accepted.items()):
-                desired = sources.record
-                if desired is None or pair[0] != session_id or control.collaboration_recipient_pending(pair[1], desired.ledger_revision):
-                    continue
-                record = control.get_collaboration_fanout(desired.ledger_revision)
-                delivery = next(item for item in record.recipients if item.thread_id == pair[1])
-                if delivery.state != "delivered":
-                    continue
-                self._saver.require_team_source_observation(session_id, pair[1], ledger_revision=record.ledger_revision,
-                                                           event_hash=record.event_hash, payload_json=record.payload_json)
-                self._accepted[pair] = replace(sources, ready=True)
-                self._publish(pair)
+        with self._factory.for_owner_session(session_id) as thread_owner:
+            control = thread_owner.control_store
+            with self._publication_lock:
+                for pair, sources in tuple(self._accepted.items()):
+                    desired = sources.record
+                    if desired is None or pair[0] != session_id or control.collaboration_recipient_pending(pair[1], desired.ledger_revision):
+                        continue
+                    record = control.get_collaboration_fanout(desired.ledger_revision)
+                    delivery = next(item for item in record.recipients if item.thread_id == pair[1])
+                    if delivery.state != "delivered":
+                        continue
+                    self._saver.require_team_source_observation(session_id, pair[1], ledger_revision=record.ledger_revision,
+                                                               event_hash=record.event_hash, payload_json=record.payload_json)
+                    self._accepted[pair] = replace(sources, ready=True)
+                    self._publish(pair)
 
     async def reconcile(self, session_id: str) -> None:
         self._check_worker()
@@ -253,42 +255,44 @@ class TeamFanoutService:
         self._check_worker()
         async with self._locks.lock_for(session_id), self._holder.lock_for(session_id):
             await self._deliver(session_id)
-            control = self._factory.for_owner_session(session_id).control_store
-            record = control.get_collaboration_fanout(revision)
-            if record.wakeup_json is None:
-                return None
-            wakeup = json.loads(record.wakeup_json)
-            if record.state == "cancelled" or any(item.thread_id == wakeup["target_thread_id"] and item.state != "delivered" for item in record.recipients):
-                raise RuntimeError("collaboration 显式 wakeup 的原 recipient/lifecycle 已终结")
-            if record.state == "completed":
-                return str(json.loads(record.wakeup_receipt_json)["job_id"])
-            lease = control.get_lease(record.lease_id)
-            fencing_token = lease.fencing_token
-            if record.wakeup_receipt_json is None:
-                receipt = await self._dispatcher.submit(
-                    session_id, wakeup["target_thread_id"], PreparedInternalMessage(wakeup["content"], wakeup["metadata"]),
-                    source_id=wakeup["source_id"], idempotency_key=wakeup["idempotency_key"],
-                )
-                async with self._sessions.session_write_admission(session_id):
-                    control.record_collaboration_wakeup_receipt(revision, fencing_token=fencing_token,
-                                                                receipt_json=receipt.model_dump_json())
+            with self._factory.for_owner_session(session_id) as thread_owner:
+                control = thread_owner.control_store
                 record = control.get_collaboration_fanout(revision)
-            job_id = str(json.loads(record.wakeup_receipt_json)["job_id"])
-            if self._finalizer is None:
-                raise RuntimeError("collaboration wakeup 未绑定业务 finalizer")
-            await self._finalizer(record, job_id)
-            control.finish_collaboration_fanout(revision, fencing_token=fencing_token)
-            return job_id
+                if record.wakeup_json is None:
+                    return None
+                wakeup = json.loads(record.wakeup_json)
+                if record.state == "cancelled" or any(item.thread_id == wakeup["target_thread_id"] and item.state != "delivered" for item in record.recipients):
+                    raise RuntimeError("collaboration 显式 wakeup 的原 recipient/lifecycle 已终结")
+                if record.state == "completed":
+                    return str(json.loads(record.wakeup_receipt_json)["job_id"])
+                lease = control.get_lease(record.lease_id)
+                fencing_token = lease.fencing_token
+                if record.wakeup_receipt_json is None:
+                    receipt = await self._dispatcher.submit(
+                        session_id, wakeup["target_thread_id"], PreparedInternalMessage(wakeup["content"], wakeup["metadata"]),
+                        source_id=wakeup["source_id"], idempotency_key=wakeup["idempotency_key"],
+                    )
+                    async with self._sessions.session_write_admission(session_id):
+                        control.record_collaboration_wakeup_receipt(revision, fencing_token=fencing_token,
+                                                                    receipt_json=receipt.model_dump_json())
+                    record = control.get_collaboration_fanout(revision)
+                job_id = str(json.loads(record.wakeup_receipt_json)["job_id"])
+                if self._finalizer is None:
+                    raise RuntimeError("collaboration wakeup 未绑定业务 finalizer")
+                await self._finalizer(record, job_id)
+                control.finish_collaboration_fanout(revision, fencing_token=fencing_token)
+                return job_id
 
     async def start(self) -> None:
         self._loop = asyncio.get_running_loop()
         _revision, nodes = self._sessions.path_resolver.catalog_store.read_nodes_snapshot()
         session_ids = [node.node_id for node in nodes if node.kind == "session" and node.state == "active"]
         for session_id in session_ids:
-            control = self._factory.for_owner_session(session_id).control_store
-            for record in control.latest_collaboration_fanouts():
-                self.observe_commit(record)
-            await self.reconcile(session_id)
+            with self._factory.for_owner_session(session_id) as thread_owner:
+                control = thread_owner.control_store
+                for record in control.latest_collaboration_fanouts():
+                    self.observe_commit(record)
+                await self.reconcile(session_id)
         # 所有 Session 的 pending source owner ready 后，才允许任何显式 task dispatch。
         self._ready = True
         for session_id in session_ids:
@@ -312,10 +316,11 @@ class TeamFanoutService:
             logger.error("collaboration fanout worker 失败；后续 dispatch 明确拒绝", exc_info=worker.exception())
 
     async def _dispatch_pending(self, session_id: str) -> None:
-        control = self._factory.for_owner_session(session_id).control_store
-        for record in control.list_collaboration_fanouts(pending_only=True):
-            if record.wakeup_json is not None:
-                await self.dispatch(session_id, record.ledger_revision)
+        with self._factory.for_owner_session(session_id) as thread_owner:
+            control = thread_owner.control_store
+            for record in control.list_collaboration_fanouts(pending_only=True):
+                if record.wakeup_json is not None:
+                    await self.dispatch(session_id, record.ledger_revision)
 
     @property
     def deletion_holder(self) -> OperationHolderGate:
@@ -324,19 +329,20 @@ class TeamFanoutService:
 
     async def drain_session(self, session_id: str) -> None:
         """调用方已按 holder→Session gate 顺序持锁，只终结原冻结目标。"""
-        control = self._factory.for_owner_session(session_id).control_store
-        for record in control.list_collaboration_fanouts(pending_only=True):
-            lease = control.get_lease(record.lease_id)
-            lease = control.takeover_lease(lease_id=lease.lease_id, expected_fencing_token=lease.fencing_token)
-            for item in record.recipients:
-                if item.state == "pending":
-                    control.finish_collaboration_delivery(record.ledger_revision, item.thread_id,
-                                                          fencing_token=lease.fencing_token, outcome="fence_closed")
-            control.finish_collaboration_fanout(record.ledger_revision, fencing_token=lease.fencing_token, cancelled=True)
-        with self._publication_lock:
-            for pair in tuple(self._accepted):
-                if pair[0] == session_id:
-                    self._accepted.pop(pair)
+        with self._factory.for_owner_session(session_id) as thread_owner:
+            control = thread_owner.control_store
+            for record in control.list_collaboration_fanouts(pending_only=True):
+                lease = control.get_lease(record.lease_id)
+                lease = control.takeover_lease(lease_id=lease.lease_id, expected_fencing_token=lease.fencing_token)
+                for item in record.recipients:
+                    if item.state == "pending":
+                        control.finish_collaboration_delivery(record.ledger_revision, item.thread_id,
+                                                              fencing_token=lease.fencing_token, outcome="fence_closed")
+                control.finish_collaboration_fanout(record.ledger_revision, fencing_token=lease.fencing_token, cancelled=True)
+            with self._publication_lock:
+                for pair in tuple(self._accepted):
+                    if pair[0] == session_id:
+                        self._accepted.pop(pair)
 
     async def stop(self) -> None:
         worker, self._worker = self._worker, None

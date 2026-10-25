@@ -401,11 +401,12 @@ def production_fork_container(request: pytest.FixtureRequest,
                 return False
             if target_node.state != "active":
                 return False
-            control = service._threads.for_owner_session(target_session_id).control_store
-            try:
-                record = control.get_thread_creation_record(key)
-            except KeyError:
-                record = None
+            with service._threads.for_owner_session(target_session_id) as thread_owner:
+                control = thread_owner.control_store
+                try:
+                    record = control.get_thread_creation_record(key)
+                except KeyError:
+                    record = None
         capture = (catalog.get_fork_source_capture(creation_key=key)
                    or catalog.get_fork_source_capture(copy_operation_id=key))
         # 发布/中止并不代表远端导出已释放；同键重试失败仍必须保留原期限。
@@ -1203,6 +1204,7 @@ def _assert_fork_provider_history(
 
 
 async def _seed_source(context: ForkIntegrationContext, fork_provider_prepare, *, tail_outcome: str = "completed"):
+    # TODO: 迁为产品消息/执行入口后再作完整删除验收；当前手填历史缺少冻结队列输入。
     source = await context.sessions.create(
         SessionCreateRequest(title="Fork 集成源会话")
     )
@@ -1665,80 +1667,81 @@ async def test_fork_attachment_retention_uses_real_owner_and_cold_target_tool(
         "SELECT state FROM attachment_directory_fork_claims WHERE target_session_id=? AND target_thread_id=?",
         (result.session.session_id, result.thread_id),
     ).fetchall()
-    control = context.forks._threads.for_owner_session(result.session.session_id).control_store
-    settlements = read_copy_attachment_settlements(control)
-    assert [row[0] for row in claims] == ["committed"]
-    assert [row.state for row in settlements if row.target_thread_id == result.thread_id] == ["committed"]
-    if creation_kind == "new_session_main":
-        await context.sessions.path_resolver.delete_subtree(
-            idempotency_key="resource-source-delete", root_node_id=source.session_id,
-        )
-        assert not source_node.exists()
-    assert store._catalog.gc_candidates(now=datetime.now(UTC)) == ()
-    cold_store = AttachmentBlobStore(context.workspace, path_resolver=context.sessions.path_resolver)
-    cold = RolloutCheckpointSaver(context.sessions.path_resolver.sessions_root, attachment_store=cold_store)
-    try:
-        assert cold_store.read(result.session.session_id, ref.file_id, owner_thread_id=result.thread_id).data == body
-        target_messages = MessageService(main_thread_resolver=context.sessions.path_resolver.main_thread_id,
-            checkpointer=cold, attachment_store=cold_store, workspace_root=context.workspace)
-        target_message = await target_messages.create(result.session.session_id,
-            MessageCreateRequest(content="读取继承附件"), thread_id=result.thread_id)
-        target_identity = production_fork_container.job_service.reserve_user_execution_identity()
-        target_messages.accept_user_message(target_message, execution_identity=target_identity, queue_input=ExecutionQueueInput(
-            execution_binding=target_identity, message_id=target_message.message_id, agent_id="default", provider_id=None,
-            delivery_policy="after_turn", gateway_id=None, request_id=None, created_at=target_message.created_at.isoformat(),
-        ))
-        new_turn = {"turn_id": target_identity.turn_id}
-        target_admission = cold.execution_admission_for_job(
-            result.session.session_id, thread_id=result.thread_id, job_id=target_identity.job_id,
-        )
-        prepared = fork_provider_prepare(
-            replace(context, saver=cold), result.session.session_id, target_admission.execution_id,
-            ContextSourceManager(owner=ContextSourceOwnerKey(result.session.session_id, result.thread_id), control_state_port=cold),
-            "resource-target", attempt=1, thread_id=result.thread_id,
-            selected_tools=ToolSetSnapshot(selection_revision=sha256_jcs({"read_file": True}),
-                tools=({"name": "read_file", "parameters": {"type": "object"}},)),
-        )
-        with (session_thread_owner_scope(MutationIntentOwner(result.session.session_id, result.thread_id), langgraph_thread_id=result.thread_id),
-              execution_admission_scope(target_admission, langgraph_thread_id=result.thread_id)):
-            cold.ensure_request_items(
-                result.session.session_id, result.thread_id, turn_id=new_turn["turn_id"], execution_id=target_admission.execution_id,
-                messages=[AIMessage(content="", id="lc_run--" + prepared["snapshot"].model_call_id,
-                    tool_calls=[{"id": "read-inherited-attachment", "name": "read_file", "args": {"path": receipt.target_uri}, "type": "tool_call"}])],
+    with context.forks._threads.for_owner_session(result.session.session_id) as thread_owner:
+        control = thread_owner.control_store
+        settlements = read_copy_attachment_settlements(control)
+        assert [row[0] for row in claims] == ["committed"]
+        assert [row.state for row in settlements if row.target_thread_id == result.thread_id] == ["committed"]
+        if creation_kind == "new_session_main":
+            await context.sessions.path_resolver.delete_subtree(
+                idempotency_key="resource-source-delete", root_node_id=source.session_id,
             )
-            if input_kind == "internal":
-                # 后继用户 acceptance 已消费 pending notice，其私有附件不能泄入新工具能力。
-                with pytest.raises(PermissionError, match="原始 assembly"):
-                    cold.read_tool_call_attachment(
+            assert not source_node.exists()
+        assert store._catalog.gc_candidates(now=datetime.now(UTC)) == ()
+        cold_store = AttachmentBlobStore(context.workspace, path_resolver=context.sessions.path_resolver)
+        cold = RolloutCheckpointSaver(context.sessions.path_resolver.sessions_root, attachment_store=cold_store)
+        try:
+            assert cold_store.read(result.session.session_id, ref.file_id, owner_thread_id=result.thread_id).data == body
+            target_messages = MessageService(main_thread_resolver=context.sessions.path_resolver.main_thread_id,
+                checkpointer=cold, attachment_store=cold_store, workspace_root=context.workspace)
+            target_message = await target_messages.create(result.session.session_id,
+                MessageCreateRequest(content="读取继承附件"), thread_id=result.thread_id)
+            target_identity = production_fork_container.job_service.reserve_user_execution_identity()
+            target_messages.accept_user_message(target_message, execution_identity=target_identity, queue_input=ExecutionQueueInput(
+                execution_binding=target_identity, message_id=target_message.message_id, agent_id="default", provider_id=None,
+                delivery_policy="after_turn", gateway_id=None, request_id=None, created_at=target_message.created_at.isoformat(),
+            ))
+            new_turn = {"turn_id": target_identity.turn_id}
+            target_admission = cold.execution_admission_for_job(
+                result.session.session_id, thread_id=result.thread_id, job_id=target_identity.job_id,
+            )
+            prepared = fork_provider_prepare(
+                replace(context, saver=cold), result.session.session_id, target_admission.execution_id,
+                ContextSourceManager(owner=ContextSourceOwnerKey(result.session.session_id, result.thread_id), control_state_port=cold),
+                "resource-target", attempt=1, thread_id=result.thread_id,
+                selected_tools=ToolSetSnapshot(selection_revision=sha256_jcs({"read_file": True}),
+                    tools=({"name": "read_file", "parameters": {"type": "object"}},)),
+            )
+            with (session_thread_owner_scope(MutationIntentOwner(result.session.session_id, result.thread_id), langgraph_thread_id=result.thread_id),
+                  execution_admission_scope(target_admission, langgraph_thread_id=result.thread_id)):
+                cold.ensure_request_items(
+                    result.session.session_id, result.thread_id, turn_id=new_turn["turn_id"], execution_id=target_admission.execution_id,
+                    messages=[AIMessage(content="", id="lc_run--" + prepared["snapshot"].model_call_id,
+                        tool_calls=[{"id": "read-inherited-attachment", "name": "read_file", "args": {"path": receipt.target_uri}, "type": "tool_call"}])],
+                )
+                if input_kind == "internal":
+                    # 后继用户 acceptance 已消费 pending notice，其私有附件不能泄入新工具能力。
+                    with pytest.raises(PermissionError, match="原始 assembly"):
+                        cold.read_tool_call_attachment(
+                            result.session.session_id, thread_id=result.thread_id, tool_call_id="read-inherited-attachment",
+                            model_call_id=prepared["snapshot"].model_call_id, file_id=receipt.target_uri,
+                        )
+                else:
+                    assert cold.read_tool_call_attachment(
                         result.session.session_id, thread_id=result.thread_id, tool_call_id="read-inherited-attachment",
                         model_call_id=prepared["snapshot"].model_call_id, file_id=receipt.target_uri,
-                    )
-            else:
-                assert cold.read_tool_call_attachment(
-                    result.session.session_id, thread_id=result.thread_id, tool_call_id="read-inherited-attachment",
-                    model_call_id=prepared["snapshot"].model_call_id, file_id=receipt.target_uri,
-                ).data == body
+                    ).data == body
+                if creation_kind == "new_child_thread":
+                    await cold.adelete_thread(result.thread_id)
             if creation_kind == "new_child_thread":
-                await cold.adelete_thread(result.thread_id)
-        if creation_kind == "new_child_thread":
-            assert cold_store.read(source.session_id, ref.file_id, owner_thread_id=source_thread).data == body
-            assert [tuple(row) for row in cold_store._catalog.connection.execute(
-                "SELECT session_id,thread_id FROM attachment_directory_associations WHERE attachment_id=? AND state='active'", (attachment_id,),
-            )] == [(source.session_id, source_thread)]
-        else:
-            target_node = _main_thread_node(context, result.session.session_id)
-            await context.sessions.path_resolver.delete_subtree(
-                idempotency_key="resource-target-delete", root_node_id=result.session.session_id,
-            )
-            assert not target_node.exists()
-            assert store._catalog.connection.execute(
-                "SELECT * FROM attachment_directory_associations WHERE attachment_id=? AND state='active'", (attachment_id,),
-            ).fetchall() == []
-            assert [row[0] for row in store._catalog._connected().execute(
-                "SELECT state FROM attachment_directory_fork_claims WHERE target_session_id=?", (result.session.session_id,),
-            )] == ["target_deleted"]
-    finally:
-        cold_store.close()
+                assert cold_store.read(source.session_id, ref.file_id, owner_thread_id=source_thread).data == body
+                assert [tuple(row) for row in cold_store._catalog.connection.execute(
+                    "SELECT session_id,thread_id FROM attachment_directory_associations WHERE attachment_id=? AND state='active'", (attachment_id,),
+                )] == [(source.session_id, source_thread)]
+            else:
+                target_node = _main_thread_node(context, result.session.session_id)
+                await context.sessions.path_resolver.delete_subtree(
+                    idempotency_key="resource-target-delete", root_node_id=result.session.session_id,
+                )
+                assert not target_node.exists()
+                assert store._catalog.connection.execute(
+                    "SELECT * FROM attachment_directory_associations WHERE attachment_id=? AND state='active'", (attachment_id,),
+                ).fetchall() == []
+                assert [row[0] for row in store._catalog._connected().execute(
+                    "SELECT state FROM attachment_directory_fork_claims WHERE target_session_id=?", (result.session.session_id,),
+                )] == ["target_deleted"]
+        finally:
+            cold_store.close()
 
 
 @pytest.mark.asyncio
@@ -1823,130 +1826,131 @@ async def test_default_fork_publishes_idle_child_without_interrupting_running_ma
     saver = fork_context.saver
     storage = saver._storage.storage
     main_thread = _main_thread_id(fork_context, source.session_id)
-    control = fork_context.forks._threads.for_owner_session(source.session_id).control_store
-    main_before = dict(control.get_main_thread())
-    children_before = control.list_child_thread_rows()
-    initial_intents_before = control.list_initial_execution_intents()
-    source_index = storage.index_path(source.session_id, thread_id=main_thread)
-    source_jsonl = storage.jsonl_path(source.session_id, thread_id=main_thread)
-    with sqlite3.connect(source_index) as connection:
-        source_sql_before = tuple(connection.iterdump())
-    source_jsonl_before = source_jsonl.read_bytes()
-    source_latest = await _get_tuple(fork_context, source.session_id)
-    source_completed = await _get_tuple(fork_context, source.session_id, checkpoint_id="cp2")
-    assert source_latest is not None and source_completed is not None
-    source_admission = saver.execution_admission(
-        source.session_id, thread_id=main_thread, execution_id="execution-turn-2",
-    )
-    point = await fork_context.forks.source_point(session_id=source.session_id)
-    # 不传任何可选项，直接证明公开请求的默认创建、关系与模式。
-    request = SessionForkRequest(
-        idempotency_key="default-idle-child", source_uri=point.source_uri,
-        source_view_id=point.source_view_id, source_view_revision=point.source_view_revision,
-        anchor_item_id=point.anchor_item_id, target_container_uri=point.child_container_uri,
-    )
-    result = await fork_context.forks.fork(request)
-    assert result.session.session_id == source.session_id
-    assert result.thread_id != main_thread
-    child = result.thread_id
-    assert {row.thread_id for row in control.list_child_thread_rows()} == {
-        *(row.thread_id for row in children_before), child,
-    }
-    record = control.get_thread_creation_record(fork_context.forks._creation_key(request.idempotency_key))
-    assert (record.state, record.purpose, record.initial_state, record.admission_intent) == (
-        "published", "fork", "idle", None,
-    )
-    assert record.child_thread_id == child
-    assert control.list_initial_execution_intents() == initial_intents_before
-    assert dict(control.get_main_thread()) == main_before
-    with sqlite3.connect(source_index) as connection:
-        assert tuple(connection.iterdump()) == source_sql_before
-    assert source_jsonl.read_bytes() == source_jsonl_before
-    assert saver.execution_admission(
-        source.session_id, thread_id=main_thread, execution_id="execution-turn-2",
-    ) == source_admission
-
-    # child 发布后，原 admission 仍可追加主线程输出并完成原 Turn。
-    with (
-        session_thread_owner_scope(MutationIntentOwner(source.session_id, main_thread), langgraph_thread_id=main_thread),
-        execution_admission_scope(source_admission, langgraph_thread_id=main_thread),
-    ):
-        completed_messages = [
-                *source_latest.checkpoint["channel_values"]["messages"],
-                AIMessage(content="主线程继续回答二", id="continued-main-final"),
-            ]
-        commit_fixture_output(saver, messages=completed_messages)
-        await saver.aput(
-            source_latest.config,
-            _checkpoint("continued-main-checkpoint", completed_messages),
-            {"source": "loop", "step": 4, "parents": {}}, {"messages": "4", "counter": "4"},
+    with fork_context.forks._threads.for_owner_session(source.session_id) as thread_owner:
+        control = thread_owner.control_store
+        main_before = dict(control.get_main_thread())
+        children_before = control.list_child_thread_rows()
+        initial_intents_before = control.list_initial_execution_intents()
+        source_index = storage.index_path(source.session_id, thread_id=main_thread)
+        source_jsonl = storage.jsonl_path(source.session_id, thread_id=main_thread)
+        with sqlite3.connect(source_index) as connection:
+            source_sql_before = tuple(connection.iterdump())
+        source_jsonl_before = source_jsonl.read_bytes()
+        source_latest = await _get_tuple(fork_context, source.session_id)
+        source_completed = await _get_tuple(fork_context, source.session_id, checkpoint_id="cp2")
+        assert source_latest is not None and source_completed is not None
+        source_admission = saver.execution_admission(
+            source.session_id, thread_id=main_thread, execution_id="execution-turn-2",
         )
-    continued = await _get_tuple(fork_context, source.session_id)
-    assert continued is not None
-    assert continued.checkpoint["channel_values"]["messages"][-1].content == "主线程继续回答二"
-
-    cold = RolloutCheckpointSaver(fork_context.sessions.path_resolver.sessions_root)
-    child_owner = MutationIntentOwner(source.session_id, child)
-    with session_thread_owner_scope(child_owner, langgraph_thread_id=child):
-        child_checkpoint = await cold.aget_tuple(build_checkpoint_config(child))
-        child_history = await cold.aget_tuple(build_checkpoint_config(child, checkpoint_id="cp2"))
-    assert child_checkpoint is not None
-    assert child_history is not None
-    assert source_completed.checkpoint["pending_sends"] == [{"node": "pending-node", "attempt": 2}]
-    assert source_completed.pending_writes == [("task-pending", "scratchpad", {"pending": True})]
-    assert child_history.checkpoint == source_completed.checkpoint
-    assert child_history.metadata == source_completed.metadata
-    assert child_history.pending_writes == source_completed.pending_writes
-    assert child_checkpoint.checkpoint["channel_values"]["messages"] == source_completed.checkpoint["channel_values"]["messages"]
-    assert child_checkpoint.checkpoint["pending_sends"] == []
-    assert child_checkpoint.pending_writes == []
-    child_accepted = cold.accept_turn(
-        source.session_id, thread_id=child, accepted_ingress_id="idle-child-ingress",
-        acceptance_idempotency_key="idle-child-accept", job_id="idle-child-job",
-        admission_idempotency_key="idle-child-admission", payload="child 首次问题",
-    )
-    manager = ContextSourceManager(
-        owner=ContextSourceOwnerKey(source.session_id, child), control_state_port=cold,
-    )
-    prepared = fork_provider_prepare(
-        replace(fork_context, saver=cold), source.session_id,
-        str(child_accepted["initial_execution_id"]), manager, "idle-child-first",
-        attempt=1, thread_id=child,
-    )
-    assert [(type(message), message.content) for message in prepared["messages"]
-            if message.content in {"问题一", "回答一", "child 首次问题"}] == [
-        (HumanMessage, "问题一"), (AIMessage, "回答一"), (HumanMessage, "child 首次问题"),
-    ]
-    assert all(message.content not in {"问题二", "主线程继续回答二"} for message in prepared["messages"])
-    child_admission = cold.execution_admission(
-        source.session_id, thread_id=child, execution_id=str(child_accepted["initial_execution_id"]),
-    )
-    with (
-        session_thread_owner_scope(child_owner, langgraph_thread_id=child),
-        execution_admission_scope(child_admission, langgraph_thread_id=child),
-    ):
-        from app.agents.checkpoint_recovery import persisted_pending_tool_candidate
-
-        assert await persisted_pending_tool_candidate(cold, child_admission) is None
-        current = await cold.aget_tuple(build_checkpoint_config(child))
-        assert current is not None
-        assert current.checkpoint["pending_sends"] == []
-        assert current.pending_writes == []
-        completed_messages = [
-                *current.checkpoint["channel_values"]["messages"],
-                AIMessage(content="child 首次回答", id="idle-child-final",
-                          response_metadata={"model_call_id": prepared["snapshot"].model_call_id}),
-            ]
-        commit_fixture_output(cold, messages=completed_messages)
-        await cold.aput(
-            current.config,
-            _checkpoint("idle-child-first-checkpoint", completed_messages),
-            {"source": "loop", "step": 1, "parents": {}}, {"messages": "4", "counter": "4"},
+        point = await fork_context.forks.source_point(session_id=source.session_id)
+        # 不传任何可选项，直接证明公开请求的默认创建、关系与模式。
+        request = SessionForkRequest(
+            idempotency_key="default-idle-child", source_uri=point.source_uri,
+            source_view_id=point.source_view_id, source_view_revision=point.source_view_revision,
+            anchor_item_id=point.anchor_item_id, target_container_uri=point.child_container_uri,
         )
-    assert dict(control.get_main_thread()) == main_before
-    main_after = await _get_tuple(fork_context, source.session_id)
-    assert main_after is not None
-    assert main_after.checkpoint == continued.checkpoint
+        result = await fork_context.forks.fork(request)
+        assert result.session.session_id == source.session_id
+        assert result.thread_id != main_thread
+        child = result.thread_id
+        assert {row.thread_id for row in control.list_child_thread_rows()} == {
+            *(row.thread_id for row in children_before), child,
+        }
+        record = control.get_thread_creation_record(fork_context.forks._creation_key(request.idempotency_key))
+        assert (record.state, record.purpose, record.initial_state, record.admission_intent) == (
+            "published", "fork", "idle", None,
+        )
+        assert record.child_thread_id == child
+        assert control.list_initial_execution_intents() == initial_intents_before
+        assert dict(control.get_main_thread()) == main_before
+        with sqlite3.connect(source_index) as connection:
+            assert tuple(connection.iterdump()) == source_sql_before
+        assert source_jsonl.read_bytes() == source_jsonl_before
+        assert saver.execution_admission(
+            source.session_id, thread_id=main_thread, execution_id="execution-turn-2",
+        ) == source_admission
+
+        # child 发布后，原 admission 仍可追加主线程输出并完成原 Turn。
+        with (
+            session_thread_owner_scope(MutationIntentOwner(source.session_id, main_thread), langgraph_thread_id=main_thread),
+            execution_admission_scope(source_admission, langgraph_thread_id=main_thread),
+        ):
+            completed_messages = [
+                    *source_latest.checkpoint["channel_values"]["messages"],
+                    AIMessage(content="主线程继续回答二", id="continued-main-final"),
+                ]
+            commit_fixture_output(saver, messages=completed_messages)
+            await saver.aput(
+                source_latest.config,
+                _checkpoint("continued-main-checkpoint", completed_messages),
+                {"source": "loop", "step": 4, "parents": {}}, {"messages": "4", "counter": "4"},
+            )
+        continued = await _get_tuple(fork_context, source.session_id)
+        assert continued is not None
+        assert continued.checkpoint["channel_values"]["messages"][-1].content == "主线程继续回答二"
+
+        cold = RolloutCheckpointSaver(fork_context.sessions.path_resolver.sessions_root)
+        child_owner = MutationIntentOwner(source.session_id, child)
+        with session_thread_owner_scope(child_owner, langgraph_thread_id=child):
+            child_checkpoint = await cold.aget_tuple(build_checkpoint_config(child))
+            child_history = await cold.aget_tuple(build_checkpoint_config(child, checkpoint_id="cp2"))
+        assert child_checkpoint is not None
+        assert child_history is not None
+        assert source_completed.checkpoint["pending_sends"] == [{"node": "pending-node", "attempt": 2}]
+        assert source_completed.pending_writes == [("task-pending", "scratchpad", {"pending": True})]
+        assert child_history.checkpoint == source_completed.checkpoint
+        assert child_history.metadata == source_completed.metadata
+        assert child_history.pending_writes == source_completed.pending_writes
+        assert child_checkpoint.checkpoint["channel_values"]["messages"] == source_completed.checkpoint["channel_values"]["messages"]
+        assert child_checkpoint.checkpoint["pending_sends"] == []
+        assert child_checkpoint.pending_writes == []
+        child_accepted = cold.accept_turn(
+            source.session_id, thread_id=child, accepted_ingress_id="idle-child-ingress",
+            acceptance_idempotency_key="idle-child-accept", job_id="idle-child-job",
+            admission_idempotency_key="idle-child-admission", payload="child 首次问题",
+        )
+        manager = ContextSourceManager(
+            owner=ContextSourceOwnerKey(source.session_id, child), control_state_port=cold,
+        )
+        prepared = fork_provider_prepare(
+            replace(fork_context, saver=cold), source.session_id,
+            str(child_accepted["initial_execution_id"]), manager, "idle-child-first",
+            attempt=1, thread_id=child,
+        )
+        assert [(type(message), message.content) for message in prepared["messages"]
+                if message.content in {"问题一", "回答一", "child 首次问题"}] == [
+            (HumanMessage, "问题一"), (AIMessage, "回答一"), (HumanMessage, "child 首次问题"),
+        ]
+        assert all(message.content not in {"问题二", "主线程继续回答二"} for message in prepared["messages"])
+        child_admission = cold.execution_admission(
+            source.session_id, thread_id=child, execution_id=str(child_accepted["initial_execution_id"]),
+        )
+        with (
+            session_thread_owner_scope(child_owner, langgraph_thread_id=child),
+            execution_admission_scope(child_admission, langgraph_thread_id=child),
+        ):
+            from app.agents.checkpoint_recovery import persisted_pending_tool_candidate
+
+            assert await persisted_pending_tool_candidate(cold, child_admission) is None
+            current = await cold.aget_tuple(build_checkpoint_config(child))
+            assert current is not None
+            assert current.checkpoint["pending_sends"] == []
+            assert current.pending_writes == []
+            completed_messages = [
+                    *current.checkpoint["channel_values"]["messages"],
+                    AIMessage(content="child 首次回答", id="idle-child-final",
+                              response_metadata={"model_call_id": prepared["snapshot"].model_call_id}),
+                ]
+            commit_fixture_output(cold, messages=completed_messages)
+            await cold.aput(
+                current.config,
+                _checkpoint("idle-child-first-checkpoint", completed_messages),
+                {"source": "loop", "step": 1, "parents": {}}, {"messages": "4", "counter": "4"},
+            )
+        assert dict(control.get_main_thread()) == main_before
+        main_after = await _get_tuple(fork_context, source.session_id)
+        assert main_after is not None
+        assert main_after.checkpoint == continued.checkpoint
 
 
 @pytest.mark.asyncio
@@ -4942,8 +4946,11 @@ async def test_same_live_fork_owner_across_gateways_keeps_shared_capture_and_rep
         assert catalog.get_fork_export_release(key) == (None, None)
         assert [call.action for call in transport.calls] == ["intent"]
         assert "source_owner_instance_id" not in capture.request_json
-        creation = (catalog.get_creation_record(key) if creation_kind == "new_session_main"
-                    else context.forks._threads.for_owner_session(source.session_id).control_store.get_thread_creation_record(key))
+        if creation_kind == 'new_session_main':
+            creation = catalog.get_creation_record(key)
+        else:
+            with context.forks._threads.for_owner_session(source.session_id) as thread_owner:
+                creation = thread_owner.control_store.get_thread_creation_record(key)
         assert "source_owner_instance_id" not in creation.request_intent_json
         assert "source_storage_domain_id" not in json.loads(creation.request_intent_json)
         assert json.loads(creation.request_intent_json)["capture_decision"] == {
@@ -5035,8 +5042,11 @@ async def test_shared_owner_cold_recovery_uses_frozen_creation_decision(
             reset_current_request_id(request_token)
             reset_current_gateway_id(gateway_token)
     catalog = context.sessions.path_resolver.catalog_store
-    frozen = (catalog.get_creation_record(key) if creation_kind == "new_session_main" else
-              context.forks._threads.for_owner_session(source.session_id).control_store.get_thread_creation_record(key))
+    if creation_kind == 'new_session_main':
+        frozen = catalog.get_creation_record(key)
+    else:
+        with context.forks._threads.for_owner_session(source.session_id) as thread_owner:
+            frozen = thread_owner.control_store.get_thread_creation_record(key)
     intent = json.loads(frozen.request_intent_json)
     incomplete = crash_phase in {"copy.source.partial", "copy.attachments.preparing"}
     assert intent["source_remote"] is True
@@ -5109,8 +5119,11 @@ async def test_shared_owner_cold_recovery_uses_frozen_creation_decision(
     try:
         async with main.lifespan(main.app):
             cold_catalog = recovered.sessions.path_resolver.catalog_store
-            terminal = (cold_catalog.get_creation_record(key) if creation_kind == "new_session_main" else
-                        recovered.forks._threads.for_owner_session(source.session_id).control_store.get_thread_creation_record(key))
+            if creation_kind == 'new_session_main':
+                terminal = cold_catalog.get_creation_record(key)
+            else:
+                with recovered.forks._threads.for_owner_session(source.session_id) as thread_owner:
+                    terminal = thread_owner.control_store.get_thread_creation_record(key)
             terminal_capture = cold_catalog.get_fork_source_capture(copy_operation_id=key)
             assert terminal_capture is not None
             assert (terminal.preimage_hash, terminal.request_intent_json, terminal.fork_delivery_request_id) == (
@@ -5216,74 +5229,76 @@ async def test_child_capture_missing_final_locator_is_not_rebuilt(
     catalog = context.sessions.path_resolver.catalog_store
     capture = catalog.get_fork_source_capture(copy_operation_id=key)
     assert capture is not None and capture.state == "preparing"
-    control = context.forks._threads.for_owner_session(source.session_id).control_store
-    frozen = control.get_thread_creation_record(key)
-    session_node = context.sessions.path_resolver.resolve_session_node(source.session_id)
-    final = session_node / frozen.final_relative_locator
-    staging = session_node / frozen.staging_locator
-    assert final.is_dir() and not staging.exists() and frozen.state == "preparing"
-    root = capture_directory(context.saver._storage.storage.sessions_dir, capture)
-    captured_bytes = {str(path.relative_to(root)): path.read_bytes() for path in root.rglob("*") if path.is_file()}
-    source_node = _main_thread_node(context, source.session_id)
-    source_jsonl = (source_node / "rollout/rollout.jsonl").read_bytes()
-    removed_target = context.workspace / "temporarily-removed-fork-target"
-    final.rename(removed_target)
-    production_fork_container.workspace_activity_service.store.close()
-    production_fork_container.session_catalog.close()
-    restarted = _build_owned_container(context.workspace, monkeypatch)
-    _isolate_non_navigation_services(restarted, monkeypatch)
-    recovered = _production_fork_context(restarted)
+    with context.forks._threads.for_owner_session(source.session_id) as thread_owner:
+        control = thread_owner.control_store
+        frozen = control.get_thread_creation_record(key)
+        session_node = context.sessions.path_resolver.resolve_session_node(source.session_id)
+        final = session_node / frozen.final_relative_locator
+        staging = session_node / frozen.staging_locator
+        assert final.is_dir() and not staging.exists() and frozen.state == "preparing"
+        root = capture_directory(context.saver._storage.storage.sessions_dir, capture)
+        captured_bytes = {str(path.relative_to(root)): path.read_bytes() for path in root.rglob("*") if path.is_file()}
+        source_node = _main_thread_node(context, source.session_id)
+        source_jsonl = (source_node / "rollout/rollout.jsonl").read_bytes()
+        removed_target = context.workspace / "temporarily-removed-fork-target"
+        final.rename(removed_target)
+        production_fork_container.workspace_activity_service.store.close()
+        production_fork_container.session_catalog.close()
+        restarted = _build_owned_container(context.workspace, monkeypatch)
+        _isolate_non_navigation_services(restarted, monkeypatch)
+        recovered = _production_fork_context(restarted)
 
-    async def forbid_recapture(**_kwargs: object):
-        pytest.fail("已有 capture 的外删 target 不得重新读取 source")
+        async def forbid_recapture(**_kwargs: object):
+            pytest.fail("已有 capture 的外删 target 不得重新读取 source")
 
-    monkeypatch.setattr(recovered.saver.forks.source, "_capture_fork_source_snapshot", forbid_recapture)
-    with pytest.raises(RuntimeError, match="已预留 capture.*最终 locator 目录缺失"):
-        async with main.lifespan(main.app):
-            pytest.fail("外删 target 不得让 startup ready")
-    assert not final.exists() and not staging.exists()
-    # 失败的 lifespan 会关闭真实 registry；从持久原件复核，不再使用已关闭容器。
-    with closing(SessionCatalogStore(catalog.database_path, catalog.sessions_root)) as cold_catalog:
-        assert cold_catalog.get_fork_source_capture(copy_operation_id=key) == capture
-    with closing(SessionControlStore(session_node / "session-control.sqlite", read_only=True)) as cold_control:
-        assert cold_control.get_thread_creation_record(key) == frozen
-    assert {str(path.relative_to(root)): path.read_bytes() for path in root.rglob("*") if path.is_file()} == captured_bytes
-    assert (source_node / "rollout/rollout.jsonl").read_bytes() == source_jsonl
-
-    # 撤销本测试制造的目录缺失，再由原 owner 在同一期限内恢复发布。
-    # 不补写 journal、附件 claim 或完成回执；已有快照禁止重新捕获。
-    removed_target.rename(final)
-    cleanup_container = _build_owned_container(context.workspace, monkeypatch)
-    _isolate_non_navigation_services(cleanup_container, monkeypatch)
-    cleanup = _production_fork_context(cleanup_container)
-    capture_source = cleanup.saver.forks.source._capture_fork_source_snapshot
-    captures = 0
-
-    async def resume_original_capture(**kwargs: object):
-        nonlocal captures
-        assert crash_phase == "copy.source.reserved" and captures == 0, "已有快照不得回读 live source"
-        captures += 1
-        return await capture_source(**kwargs)
-
-    monkeypatch.setattr(cleanup.saver.forks.source, "_capture_fork_source_snapshot", resume_original_capture)
-    async with main.lifespan(main.app):
-        terminal_capture = cleanup.sessions.path_resolver.catalog_store.get_fork_source_capture(copy_operation_id=key)
-        creation = cleanup.forks._threads.for_owner_session(source.session_id).control_store.get_thread_creation_record(key)
-        assert creation.state == "published"
-        assert replace(creation, state=frozen.state, abort_reason=frozen.abort_reason,
-                       fork_completion_json=frozen.fork_completion_json,
-                       record_updated_at=frozen.record_updated_at) == frozen
-        assert terminal_capture is not None
-        assert terminal_capture.state == "materialized"
-        assert not root.exists() and not staging.exists() and not removed_target.exists()
-        assert final.is_dir() and captures == int(crash_phase == "copy.source.reserved")
-        assert [tuple(row) for row in cleanup_container.attachment_blob_store._catalog._connected().execute(
-            "SELECT state FROM attachment_directory_fork_claims WHERE copy_operation_id=?", (key,),
-        )] == [], "默认不继承附件，不得额外建立保活 claim"
-        result = await cleanup.forks.fork(request)
-        assert (result.session.session_id, result.thread_id) == (source.session_id, frozen.child_thread_id)
-        assert await cleanup.forks.recover_prepared_forks() == 0
+        monkeypatch.setattr(recovered.saver.forks.source, "_capture_fork_source_snapshot", forbid_recapture)
+        with pytest.raises(RuntimeError, match="已预留 capture.*最终 locator 目录缺失"):
+            async with main.lifespan(main.app):
+                pytest.fail("外删 target 不得让 startup ready")
+        assert not final.exists() and not staging.exists()
+        # 失败的 lifespan 会关闭真实 registry；从持久原件复核，不再使用已关闭容器。
+        with closing(SessionCatalogStore(catalog.database_path, catalog.sessions_root)) as cold_catalog:
+            assert cold_catalog.get_fork_source_capture(copy_operation_id=key) == capture
+        with closing(SessionControlStore(session_node / "session-control.sqlite", read_only=True)) as cold_control:
+            assert cold_control.get_thread_creation_record(key) == frozen
+        assert {str(path.relative_to(root)): path.read_bytes() for path in root.rglob("*") if path.is_file()} == captured_bytes
         assert (source_node / "rollout/rollout.jsonl").read_bytes() == source_jsonl
+
+        # 撤销本测试制造的目录缺失，再由原 owner 在同一期限内恢复发布。
+        # 不补写 journal、附件 claim 或完成回执；已有快照禁止重新捕获。
+        removed_target.rename(final)
+        cleanup_container = _build_owned_container(context.workspace, monkeypatch)
+        _isolate_non_navigation_services(cleanup_container, monkeypatch)
+        cleanup = _production_fork_context(cleanup_container)
+        capture_source = cleanup.saver.forks.source._capture_fork_source_snapshot
+        captures = 0
+
+        async def resume_original_capture(**kwargs: object):
+            nonlocal captures
+            assert crash_phase == "copy.source.reserved" and captures == 0, "已有快照不得回读 live source"
+            captures += 1
+            return await capture_source(**kwargs)
+
+        monkeypatch.setattr(cleanup.saver.forks.source, "_capture_fork_source_snapshot", resume_original_capture)
+        async with main.lifespan(main.app):
+            terminal_capture = cleanup.sessions.path_resolver.catalog_store.get_fork_source_capture(copy_operation_id=key)
+            with cleanup.forks._threads.for_owner_session(source.session_id) as thread_owner:
+                creation = thread_owner.control_store.get_thread_creation_record(key)
+            assert creation.state == "published"
+            assert replace(creation, state=frozen.state, abort_reason=frozen.abort_reason,
+                           fork_completion_json=frozen.fork_completion_json,
+                           record_updated_at=frozen.record_updated_at) == frozen
+            assert terminal_capture is not None
+            assert terminal_capture.state == "materialized"
+            assert not root.exists() and not staging.exists() and not removed_target.exists()
+            assert final.is_dir() and captures == int(crash_phase == "copy.source.reserved")
+            assert [tuple(row) for row in cleanup_container.attachment_blob_store._catalog._connected().execute(
+                "SELECT state FROM attachment_directory_fork_claims WHERE copy_operation_id=?", (key,),
+            )] == [], "默认不继承附件，不得额外建立保活 claim"
+            result = await cleanup.forks.fork(request)
+            assert (result.session.session_id, result.thread_id) == (source.session_id, frozen.child_thread_id)
+            assert await cleanup.forks.recover_prepared_forks() == 0
+            assert (source_node / "rollout/rollout.jsonl").read_bytes() == source_jsonl
 
 
 @pytest.mark.parametrize("fork_execution_source", [True], indirect=True)
@@ -5333,7 +5348,8 @@ async def test_child_aborted_capture_resumes_original_cleanup_without_rebuilding
         with pytest.raises(OwnerProcessExit):
             await context.forks.fork(request)
     capture = context.sessions.path_resolver.catalog_store.get_fork_source_capture(copy_operation_id=key)
-    frozen = context.forks._threads.for_owner_session(parent.session_id).control_store.get_thread_creation_record(key)
+    with context.forks._threads.for_owner_session(parent.session_id) as thread_owner:
+        frozen = thread_owner.control_store.get_thread_creation_record(key)
     assert capture is not None and capture.state == "aborted" and frozen.state == "preparing"
     session_node = context.sessions.path_resolver.resolve_session_node(parent.session_id)
     final, staging = session_node / frozen.final_relative_locator, session_node / frozen.staging_locator
@@ -5344,30 +5360,30 @@ async def test_child_aborted_capture_resumes_original_cleanup_without_rebuilding
     restarted = _build_owned_container(context.workspace, monkeypatch)
     _isolate_non_navigation_services(restarted, monkeypatch)
     recovered = _production_fork_context(restarted)
-    service = recovered.forks._threads.for_owner_session(parent.session_id)
+    with recovered.forks._threads.for_owner_session(parent.session_id) as service:
 
-    def forbid_rebuild(*_args: object, **_kwargs: object):
-        pytest.fail("已中止 capture 的原 cleanup 不能重建 staging")
+        def forbid_rebuild(*_args: object, **_kwargs: object):
+            pytest.fail("已中止 capture 的原 cleanup 不能重建 staging")
 
-    async def forbid_recapture(**_kwargs: object):
-        pytest.fail("已中止 capture 的原 cleanup 不能重读 source")
+        async def forbid_recapture(**_kwargs: object):
+            pytest.fail("已中止 capture 的原 cleanup 不能重读 source")
 
-    monkeypatch.setattr(service, "_prepare_staging", forbid_rebuild)
-    monkeypatch.setattr(recovered.saver.forks.source, "_capture_fork_source_snapshot", forbid_recapture)
-    async with main.lifespan(main.app):
-        current = service.control_store.get_thread_creation_record(key)
-        assert current.state == "aborted"
-        assert replace(current, state=frozen.state, abort_reason=frozen.abort_reason, record_updated_at=frozen.record_updated_at) == frozen
-        assert recovered.sessions.path_resolver.catalog_store.get_fork_source_capture(copy_operation_id=key) == capture
-        assert not final.exists() and not staging.exists()
-        assert not capture_directory(recovered.saver._storage.storage.sessions_dir, capture).exists()
-        assert [tuple(row) for row in restarted.attachment_blob_store._catalog._connected().execute(
-            "SELECT state FROM attachment_directory_fork_claims WHERE copy_operation_id=?", (key,),
-        )] == [("aborted",)]
-        with pytest.raises(RuntimeError, match="已中止"):
-            await recovered.forks.fork(request)
-        assert await recovered.forks.recover_prepared_forks() == 0
-        assert (_main_thread_node(recovered, source.session_id) / "rollout/rollout.jsonl").read_bytes() == source_jsonl
+        monkeypatch.setattr(ThreadCreationService, "_prepare_staging", staticmethod(forbid_rebuild))
+        monkeypatch.setattr(recovered.saver.forks.source, "_capture_fork_source_snapshot", forbid_recapture)
+        async with main.lifespan(main.app):
+            current = service.control_store.get_thread_creation_record(key)
+            assert current.state == "aborted"
+            assert replace(current, state=frozen.state, abort_reason=frozen.abort_reason, record_updated_at=frozen.record_updated_at) == frozen
+            assert recovered.sessions.path_resolver.catalog_store.get_fork_source_capture(copy_operation_id=key) == capture
+            assert not final.exists() and not staging.exists()
+            assert not capture_directory(recovered.saver._storage.storage.sessions_dir, capture).exists()
+            assert [tuple(row) for row in restarted.attachment_blob_store._catalog._connected().execute(
+                "SELECT state FROM attachment_directory_fork_claims WHERE copy_operation_id=?", (key,),
+            )] == [("aborted",)]
+            with pytest.raises(RuntimeError, match="已中止"):
+                await recovered.forks.fork(request)
+            assert await recovered.forks.recover_prepared_forks() == 0
+            assert (_main_thread_node(recovered, source.session_id) / "rollout/rollout.jsonl").read_bytes() == source_jsonl
 
 
 @pytest.mark.parametrize("fork_execution_source", [True], indirect=True)
@@ -5589,110 +5605,111 @@ async def test_remote_source_intent_rejects_response_rebinding_before_creation(
     target, transport = remote_fork_target
     target_context = _production_fork_context(target)
     parent = await target.session_service.create(SessionCreateRequest(title="绑定拒绝目标"))
-    control = target_context.forks._threads.for_owner_session(parent.session_id).control_store
-    request = SessionForkRequest.model_validate({
-        **selected.model_dump(mode="json"),
-        "source_uri": thread_resource_uri(
-            source.workspace_id, source.session_id, _main_thread_id(source_context, source.session_id),
-            gateway_authority="gateway_4aae160f813ed87bcf65a8bb8bfd3729",
-        ),
-        "target_container_uri": resource_display_uri(
-            scope="workspace", scope_id=target.workspace_id, kind="session",
-            tail_segments=(parent.session_id,) if creation_kind == "new_child_thread" else (),
-            gateway_authority="gateway_2d2ab24c1f08e28f5f0217140c8be744",
-        ),
-    })
-    original_transfer = transport.fork_transfer
+    with target_context.forks._threads.for_owner_session(parent.session_id) as thread_owner:
+        control = thread_owner.control_store
+        request = SessionForkRequest.model_validate({
+            **selected.model_dump(mode="json"),
+            "source_uri": thread_resource_uri(
+                source.workspace_id, source.session_id, _main_thread_id(source_context, source.session_id),
+                gateway_authority="gateway_4aae160f813ed87bcf65a8bb8bfd3729",
+            ),
+            "target_container_uri": resource_display_uri(
+                scope="workspace", scope_id=target.workspace_id, kind="session",
+                tail_segments=(parent.session_id,) if creation_kind == "new_child_thread" else (),
+                gateway_authority="gateway_2d2ab24c1f08e28f5f0217140c8be744",
+            ),
+        })
+        original_transfer = transport.fork_transfer
 
-    async def rebind_intent(payload: SessionForkTransferRequest) -> SessionForkTransferResultDTO:
-        reply = await original_transfer(payload)
-        if payload.action != "intent":
-            return reply
-        assert reply.intent is not None
-        intent = dict(reply.intent)
-        if fault == "point":
-            alternate_request = SessionForkRequest.model_validate({
-                **payload.request.model_dump(mode="json"),
-                "source_view_id": earlier.source_view_id, "source_view_revision": earlier.source_view_revision,
-                "anchor_item_id": earlier.anchor_item_id,
-            })
-            alternate = await original_transfer(fork_transfer.source_transfer_request(alternate_request, None, action="intent"))
-            assert alternate.intent is not None
-            assert alternate.intent["source_point"] != intent["source_point"]
-            intent["source_point"] = alternate.intent["source_point"]
-        elif fault in {"thread_uri", "thread_owner"}:
-            assert other_thread is not None
-            intent["source_thread_id"] = other_thread
-            if fault == "thread_uri":
-                intent["source_uri"] = thread_resource_uri(
-                    source.workspace_id, source.session_id, other_thread, gateway_authority="gateway_4aae160f813ed87bcf65a8bb8bfd3729",
-                )
-        elif fault.startswith("missing_"):
-            del intent[fault.removeprefix("missing_")]
-        elif fault == "malformed_source_uri":
-            intent["source_uri"] = "boxteam://invalid"
-        elif fault == "bad_source_point":
-            intent["source_point"] = {"source_view_id": request.source_view_id}
-        elif fault == "bad_source_point_type":
-            intent["source_point"] = {**intent["source_point"], "source_checkpoint_id": []}
-        elif fault == "bad_source_graph_binding":
-            intent["source_graph_binding"] = {**intent["source_graph_binding"], "graph_revision": []}
-        elif fault in {"bad_display_title", "bad_source_agent_id"}:
-            intent[fault.removeprefix("bad_")] = []
-        elif fault == "bad_goal_snapshot":
-            intent["goal_snapshot"] = []
-        else:
-            intent["goal_snapshot"] = {"goal_id": "goal-invalid-objective", "objective": [], "token_budget": None}
-        return SessionForkTransferResultDTO.model_validate({"intent": intent})
-
-    monkeypatch.setattr(transport, "fork_transfer", rebind_intent)
-    key = target_context.forks._creation_key(request.idempotency_key)
-    source_before, target_before = _fork_intent_state(source_context), _fork_intent_state(target_context)
-    control_path = target_context.sessions.path_resolver.resolve_session_node(parent.session_id) / "session-control.sqlite"
-    control_before = _session_control_state(control_path)
-    error = {
-        "point": "来源 anchor 与固定请求不一致",
-        "thread_uri": "来源 URI 与固定请求不一致",
-        "thread_owner": "Session/Thread 与来源 URI 不一致",
-    }.get(fault, "fork_response_protocol_invalid")
-    gateway_token = set_current_gateway_id("gateway_2d2ab24c1f08e28f5f0217140c8be744")
-    request_token = set_current_request_id("response-binding-intent")
-    try:
-        with pytest.raises(RuntimeError, match=error) as caught:
-            if creation_kind == "new_session_main":
-                await target_context.forks.fork(request)
+        async def rebind_intent(payload: SessionForkTransferRequest) -> SessionForkTransferResultDTO:
+            reply = await original_transfer(payload)
+            if payload.action != "intent":
+                return reply
+            assert reply.intent is not None
+            intent = dict(reply.intent)
+            if fault == "point":
+                alternate_request = SessionForkRequest.model_validate({
+                    **payload.request.model_dump(mode="json"),
+                    "source_view_id": earlier.source_view_id, "source_view_revision": earlier.source_view_revision,
+                    "anchor_item_id": earlier.anchor_item_id,
+                })
+                alternate = await original_transfer(fork_transfer.source_transfer_request(alternate_request, None, action="intent"))
+                assert alternate.intent is not None
+                assert alternate.intent["source_point"] != intent["source_point"]
+                intent["source_point"] = alternate.intent["source_point"]
+            elif fault in {"thread_uri", "thread_owner"}:
+                assert other_thread is not None
+                intent["source_thread_id"] = other_thread
+                if fault == "thread_uri":
+                    intent["source_uri"] = thread_resource_uri(
+                        source.workspace_id, source.session_id, other_thread, gateway_authority="gateway_4aae160f813ed87bcf65a8bb8bfd3729",
+                    )
+            elif fault.startswith("missing_"):
+                del intent[fault.removeprefix("missing_")]
+            elif fault == "malformed_source_uri":
+                intent["source_uri"] = "boxteam://invalid"
+            elif fault == "bad_source_point":
+                intent["source_point"] = {"source_view_id": request.source_view_id}
+            elif fault == "bad_source_point_type":
+                intent["source_point"] = {**intent["source_point"], "source_checkpoint_id": []}
+            elif fault == "bad_source_graph_binding":
+                intent["source_graph_binding"] = {**intent["source_graph_binding"], "graph_revision": []}
+            elif fault in {"bad_display_title", "bad_source_agent_id"}:
+                intent[fault.removeprefix("bad_")] = []
+            elif fault == "bad_goal_snapshot":
+                intent["goal_snapshot"] = []
             else:
-                await target_context.forks.transfer(SessionForkTransferRequest(
-                    source_gateway_id="gateway_2d2ab24c1f08e28f5f0217140c8be744", action="create", request=request,
-                    fork_target=ForkGrantTarget(
-                        gateway_id="gateway_2d2ab24c1f08e28f5f0217140c8be744", uri=request.target_container_uri, fork_role="target",
-                    ),
-                ))
-        protocol_causes = {
-            "missing_source_uri": KeyError, "missing_source_point": KeyError,
-            "missing_display_title": KeyError,
-            "malformed_source_uri": ValueError, "bad_source_point": TypeError,
-            "bad_source_point_type": ValueError, "bad_source_graph_binding": TypeError,
-            "bad_display_title": ValueError, "bad_source_agent_id": ValueError,
-            "bad_goal_snapshot": TypeError, "bad_goal_objective": ValueError,
-        }
-        if fault in protocol_causes:
-            assert isinstance(caught.value.__cause__, protocol_causes[fault])
-            assert not isinstance(caught.value, WorkspaceSessionContextAccessError)
-        assert _fork_intent_state(source_context) == source_before
-        assert _fork_intent_state(target_context) == target_before
-        assert _session_control_state(control_path) == control_before
-        assert [call.action for call in transport.calls] == ["intent"] * (2 if fault == "point" else 1)
-        with pytest.raises(KeyError):
-            target_context.sessions.path_resolver.catalog_store.get_creation_record(key)
-        with pytest.raises(KeyError):
-            control.get_thread_creation_record(key)
-        for context in (source_context, target_context):
-            assert context.sessions.path_resolver.catalog_store.get_fork_source_capture(copy_operation_id=key) is None
-        assert not await target.job_service.list()
-    finally:
-        reset_current_request_id(request_token)
-        reset_current_gateway_id(gateway_token)
+                intent["goal_snapshot"] = {"goal_id": "goal-invalid-objective", "objective": [], "token_budget": None}
+            return SessionForkTransferResultDTO.model_validate({"intent": intent})
+
+        monkeypatch.setattr(transport, "fork_transfer", rebind_intent)
+        key = target_context.forks._creation_key(request.idempotency_key)
+        source_before, target_before = _fork_intent_state(source_context), _fork_intent_state(target_context)
+        control_path = target_context.sessions.path_resolver.resolve_session_node(parent.session_id) / "session-control.sqlite"
+        control_before = _session_control_state(control_path)
+        error = {
+            "point": "来源 anchor 与固定请求不一致",
+            "thread_uri": "来源 URI 与固定请求不一致",
+            "thread_owner": "Session/Thread 与来源 URI 不一致",
+        }.get(fault, "fork_response_protocol_invalid")
+        gateway_token = set_current_gateway_id("gateway_2d2ab24c1f08e28f5f0217140c8be744")
+        request_token = set_current_request_id("response-binding-intent")
+        try:
+            with pytest.raises(RuntimeError, match=error) as caught:
+                if creation_kind == "new_session_main":
+                    await target_context.forks.fork(request)
+                else:
+                    await target_context.forks.transfer(SessionForkTransferRequest(
+                        source_gateway_id="gateway_2d2ab24c1f08e28f5f0217140c8be744", action="create", request=request,
+                        fork_target=ForkGrantTarget(
+                            gateway_id="gateway_2d2ab24c1f08e28f5f0217140c8be744", uri=request.target_container_uri, fork_role="target",
+                        ),
+                    ))
+            protocol_causes = {
+                "missing_source_uri": KeyError, "missing_source_point": KeyError,
+                "missing_display_title": KeyError,
+                "malformed_source_uri": ValueError, "bad_source_point": TypeError,
+                "bad_source_point_type": ValueError, "bad_source_graph_binding": TypeError,
+                "bad_display_title": ValueError, "bad_source_agent_id": ValueError,
+                "bad_goal_snapshot": TypeError, "bad_goal_objective": ValueError,
+            }
+            if fault in protocol_causes:
+                assert isinstance(caught.value.__cause__, protocol_causes[fault])
+                assert not isinstance(caught.value, WorkspaceSessionContextAccessError)
+            assert _fork_intent_state(source_context) == source_before
+            assert _fork_intent_state(target_context) == target_before
+            assert _session_control_state(control_path) == control_before
+            assert [call.action for call in transport.calls] == ["intent"] * (2 if fault == "point" else 1)
+            with pytest.raises(KeyError):
+                target_context.sessions.path_resolver.catalog_store.get_creation_record(key)
+            with pytest.raises(KeyError):
+                control.get_thread_creation_record(key)
+            for context in (source_context, target_context):
+                assert context.sessions.path_resolver.catalog_store.get_fork_source_capture(copy_operation_id=key) is None
+            assert not await target.job_service.list()
+        finally:
+            reset_current_request_id(request_token)
+            reset_current_gateway_id(gateway_token)
 
 
 @pytest.mark.asyncio
@@ -5825,10 +5842,7 @@ async def test_remote_fork_task_cancel_recovers_same_durable_owner(
 
         monkeypatch.setattr(target_context.forks, "_materialize", pause_materialized)
     elif cancel_window == "before_publish":
-        publisher = (
-            target_context.forks if creation_kind == "new_session_main"
-            else target_context.forks._threads.for_owner_session(parent.session_id)
-        )
+        publisher = target_context.forks if creation_kind == "new_session_main" else ThreadCreationService
         publish_name = "_publish_prepared_fork" if creation_kind == "new_session_main" else "_publish_in_gate"
         publish = getattr(publisher, publish_name)
 
@@ -5848,10 +5862,11 @@ async def test_remote_fork_task_cancel_recovers_same_durable_owner(
         with pytest.raises(asyncio.CancelledError, match="模拟服务 task"):
             await asyncio.wait_for(operation, timeout=10)
         catalog = target_context.sessions.path_resolver.catalog_store
-        frozen = (
-            catalog.get_creation_record(key) if creation_kind == "new_session_main"
-            else target_context.forks._threads.for_owner_session(parent.session_id).control_store.get_thread_creation_record(key)
-        )
+        if creation_kind == 'new_session_main':
+            frozen = catalog.get_creation_record(key)
+        else:
+            with target_context.forks._threads.for_owner_session(parent.session_id) as thread_owner:
+                frozen = thread_owner.control_store.get_thread_creation_record(key)
         target_capture = catalog.get_fork_source_capture(copy_operation_id=key)
         source_export = source_context.sessions.path_resolver.catalog_store.get_fork_source_capture(copy_operation_id=key)
         assert frozen.state == "preparing" and frozen.abort_reason is None
@@ -5904,10 +5919,11 @@ async def test_remote_fork_task_cancel_recovers_same_durable_owner(
             assert replay.session.session_id == (frozen.session_id if creation_kind == "new_session_main" else parent.session_id)
             assert [(call.action, call.release_state) for call in transport.calls if call.action == "release"] == [("release", "committed")]
             recovered_catalog = recovered_context.sessions.path_resolver.catalog_store
-            published = (
-                recovered_catalog.get_creation_record(key) if creation_kind == "new_session_main"
-                else recovered_context.forks._threads.for_owner_session(parent.session_id).control_store.get_thread_creation_record(key)
-            )
+            if creation_kind == 'new_session_main':
+                published = recovered_catalog.get_creation_record(key)
+            else:
+                with recovered_context.forks._threads.for_owner_session(parent.session_id) as thread_owner:
+                    published = thread_owner.control_store.get_thread_creation_record(key)
             assert published.state == "published"
             assert (published.preimage_hash, published.request_intent_json, published.fork_delivery_request_id) == (
                 frozen.preimage_hash, frozen.request_intent_json, frozen.fork_delivery_request_id,
@@ -5997,8 +6013,11 @@ async def test_remote_partial_import_recovers_by_exact_owner_abort(
             with pytest.raises(ImportProcessExit, match="无法执行 partial import 清理"):
                 await target_context.forks.fork(request)
         catalog = target_context.sessions.path_resolver.catalog_store
-        frozen = (catalog.get_creation_record(key) if creation_kind == "new_session_main" else
-                  target_context.forks._threads.for_owner_session(parent.session_id).control_store.get_thread_creation_record(key))
+        if creation_kind == 'new_session_main':
+            frozen = catalog.get_creation_record(key)
+        else:
+            with target_context.forks._threads.for_owner_session(parent.session_id) as thread_owner:
+                frozen = thread_owner.control_store.get_thread_creation_record(key)
         capture = catalog.get_fork_source_capture(copy_operation_id=key)
         source_export = source_context.sessions.path_resolver.catalog_store.get_fork_source_capture(copy_operation_id=key)
         assert capture is not None and source_export is not None
@@ -6036,8 +6055,11 @@ async def test_remote_partial_import_recovers_by_exact_owner_abort(
                 reset_current_request_id(cold_request_token)
                 reset_current_gateway_id(cold_gateway_token)
             cold_catalog = recovered.sessions.path_resolver.catalog_store
-            aborted = (cold_catalog.get_creation_record(key) if creation_kind == "new_session_main" else
-                       recovered.forks._threads.for_owner_session(parent.session_id).control_store.get_thread_creation_record(key))
+            if creation_kind == 'new_session_main':
+                aborted = cold_catalog.get_creation_record(key)
+            else:
+                with recovered.forks._threads.for_owner_session(parent.session_id) as thread_owner:
+                    aborted = thread_owner.control_store.get_thread_creation_record(key)
             aborted_capture = cold_catalog.get_fork_source_capture(copy_operation_id=key)
             assert aborted.state == "aborted" and aborted.preimage_hash == frozen.preimage_hash
             assert aborted_capture is not None and aborted_capture.state == "aborted"
@@ -6273,10 +6295,11 @@ async def test_remote_fork_source_release_waits_for_durable_target_abort(
     operation = asyncio.create_task(context.forks.fork(request))
     try:
         await asyncio.wait_for(cleaning.wait(), timeout=10)
-        frozen = (
-            catalog.get_creation_record(key) if creation_kind == "new_session_main"
-            else context.forks._threads.for_owner_session(parent.session_id).control_store.get_thread_creation_record(key)
-        )
+        if creation_kind == 'new_session_main':
+            frozen = catalog.get_creation_record(key)
+        else:
+            with context.forks._threads.for_owner_session(parent.session_id) as thread_owner:
+                frozen = thread_owner.control_store.get_thread_creation_record(key)
         capture = catalog.get_fork_source_capture(copy_operation_id=key)
         assert frozen.state == "preparing" and capture is not None
         await context.forks.retry_pending_remote_exports()
@@ -6295,10 +6318,11 @@ async def test_remote_fork_source_release_waits_for_durable_target_abort(
         else:
             with pytest.raises(RuntimeError, match="终结回执"):
                 await asyncio.wait_for(operation, timeout=10)
-        terminal = (
-            catalog.get_creation_record(key) if creation_kind == "new_session_main"
-            else context.forks._threads.for_owner_session(parent.session_id).control_store.get_thread_creation_record(key)
-        )
+        if creation_kind == 'new_session_main':
+            terminal = catalog.get_creation_record(key)
+        else:
+            with context.forks._threads.for_owner_session(parent.session_id) as thread_owner:
+                terminal = thread_owner.control_store.get_thread_creation_record(key)
         assert terminal.state == "aborted"
         aborted_capture = catalog.get_fork_source_capture(copy_operation_id=key)
         assert aborted_capture is not None and aborted_capture.state == "aborted"
@@ -6668,11 +6692,11 @@ async def test_qualified_local_fork_lifespan_recovers_without_http_context(
         with pytest.raises(asyncio.CancelledError, match="准备后进程退出"):
             await context.forks.fork(request)
         key = context.forks._creation_key(request.idempotency_key)
-        frozen = (
-            context.sessions.path_resolver.catalog_store.get_creation_record(key)
-            if creation_kind == "new_session_main" else
-            context.forks._threads.for_owner_session(source.session_id).control_store.get_thread_creation_record(key)
-        )
+        if creation_kind == 'new_session_main':
+            frozen = context.sessions.path_resolver.catalog_store.get_creation_record(key)
+        else:
+            with context.forks._threads.for_owner_session(source.session_id) as thread_owner:
+                frozen = thread_owner.control_store.get_thread_creation_record(key)
         intent = json.loads(frozen.request_intent_json)
         assert frozen.state == "preparing" and frozen.fork_delivery_request_id is None
         assert intent["source_remote"] is False
@@ -6707,11 +6731,11 @@ async def test_qualified_local_fork_lifespan_recovers_without_http_context(
     try:
         async with main.lifespan(main.app):
             assert get_current_gateway_id() is None and get_current_request_id() is None
-            durable = (
-                recovered.sessions.path_resolver.catalog_store.get_creation_record(key)
-                if creation_kind == "new_session_main" else
-                recovered.forks._threads.for_owner_session(source.session_id).control_store.get_thread_creation_record(key)
-            )
+            if creation_kind == 'new_session_main':
+                durable = recovered.sessions.path_resolver.catalog_store.get_creation_record(key)
+            else:
+                with recovered.forks._threads.for_owner_session(source.session_id) as thread_owner:
+                    durable = thread_owner.control_store.get_thread_creation_record(key)
             assert durable.state == "published"
             assert (durable.preimage_hash, durable.request_intent_json, durable.fork_delivery_request_id) == (
                 frozen.preimage_hash, frozen.request_intent_json, None,
@@ -6740,11 +6764,11 @@ async def test_qualified_local_fork_lifespan_recovers_without_http_context(
                 })
                 replay = await recovered.forks.fork(alias_request)
                 assert replay == result
-                replay_record = (
-                    recovered.sessions.path_resolver.catalog_store.get_creation_record(key)
-                    if creation_kind == "new_session_main" else
-                    recovered.forks._threads.for_owner_session(source.session_id).control_store.get_thread_creation_record(key)
-                )
+                if creation_kind == 'new_session_main':
+                    replay_record = recovered.sessions.path_resolver.catalog_store.get_creation_record(key)
+                else:
+                    with recovered.forks._threads.for_owner_session(source.session_id) as thread_owner:
+                        replay_record = thread_owner.control_store.get_thread_creation_record(key)
                 assert (replay_record.preimage_hash, replay_record.request_intent_json) == (
                     frozen.preimage_hash, frozen.request_intent_json,
                 )
@@ -6755,7 +6779,8 @@ async def test_qualified_local_fork_lifespan_recovers_without_http_context(
             assert materializations == 1
             assert (await recovered.sessions.list(limit=100)).total == (2 if creation_kind == "new_session_main" else 1)
             if creation_kind == "new_child_thread":
-                assert len(recovered.forks._threads.for_owner_session(source.session_id).control_store.list_fork_thread_creations()) == 1
+                with recovered.forks._threads.for_owner_session(source.session_id) as thread_owner:
+                    assert len(thread_owner.control_store.list_fork_thread_creations()) == 1
             with recovered.saver._storage.storage.read_connection(session_id, thread_id, "") as connection:
                 assert connection.execute("SELECT COUNT(*) FROM fork_materializations WHERE status='committed'").fetchone() == (1,)
             owner = recovered.saver.forks.source.resolve_thread_owner(session_id, thread_id)
@@ -6852,10 +6877,16 @@ async def test_local_partial_capture_abort_does_not_block_complete_marker_recove
     monkeypatch.setattr(fork_source, "observe_phase", source_observer)
     monkeypatch.setattr(fork_owner, "observe_phase", owner_observer)
     catalog = context.sessions.path_resolver.catalog_store
-    frozen = (catalog.get_creation_record(partial_key) if creation_kind == "new_session_main" else
-              context.forks._threads.for_owner_session(parent.session_id).control_store.get_thread_creation_record(partial_key))
-    complete = (catalog.get_creation_record(complete_key) if creation_kind == "new_session_main" else
-                context.forks._threads.for_owner_session(parent.session_id).control_store.get_thread_creation_record(complete_key))
+    if creation_kind == 'new_session_main':
+        frozen = catalog.get_creation_record(partial_key)
+    else:
+        with context.forks._threads.for_owner_session(parent.session_id) as thread_owner:
+            frozen = thread_owner.control_store.get_thread_creation_record(partial_key)
+    if creation_kind == 'new_session_main':
+        complete = catalog.get_creation_record(complete_key)
+    else:
+        with context.forks._threads.for_owner_session(parent.session_id) as thread_owner:
+            complete = thread_owner.control_store.get_thread_creation_record(complete_key)
     partial_capture = catalog.get_fork_source_capture(copy_operation_id=partial_key)
     complete_capture = catalog.get_fork_source_capture(copy_operation_id=complete_key)
     assert partial_capture is not None and complete_capture is not None
@@ -6907,10 +6938,16 @@ async def test_local_partial_capture_abort_does_not_block_complete_marker_recove
     monkeypatch.setattr(recovered.saver.forks.copy, "_afork_from_snapshot", count_materialization)
     async with main.lifespan(main.app):
         cold_catalog = recovered.sessions.path_resolver.catalog_store
-        aborted = (cold_catalog.get_creation_record(partial_key) if creation_kind == "new_session_main" else
-                   recovered.forks._threads.for_owner_session(parent.session_id).control_store.get_thread_creation_record(partial_key))
-        published = (cold_catalog.get_creation_record(complete_key) if creation_kind == "new_session_main" else
-                     recovered.forks._threads.for_owner_session(parent.session_id).control_store.get_thread_creation_record(complete_key))
+        if creation_kind == 'new_session_main':
+            aborted = cold_catalog.get_creation_record(partial_key)
+        else:
+            with recovered.forks._threads.for_owner_session(parent.session_id) as thread_owner:
+                aborted = thread_owner.control_store.get_thread_creation_record(partial_key)
+        if creation_kind == 'new_session_main':
+            published = cold_catalog.get_creation_record(complete_key)
+        else:
+            with recovered.forks._threads.for_owner_session(parent.session_id) as thread_owner:
+                published = thread_owner.control_store.get_thread_creation_record(complete_key)
         aborted_capture = cold_catalog.get_fork_source_capture(copy_operation_id=partial_key)
         materialized_capture = cold_catalog.get_fork_source_capture(copy_operation_id=complete_key)
         assert aborted.state == "aborted" and aborted.preimage_hash == frozen.preimage_hash
@@ -7246,10 +7283,11 @@ async def test_fork_startup_rejects_corrupted_capture_proof(
             cleanup_catalog = cleanup.sessions.path_resolver.catalog_store
             cleanup_capture = cleanup_catalog.get_fork_source_capture(copy_operation_id=key)
             assert cleanup_capture is not None and cleanup_capture.state == "aborted"
-            creation = (
-                cleanup_catalog.get_creation_record(key) if creation_kind == "new_session_main" else
-                cleanup.forks._threads.for_owner_session(source.session_id).control_store.get_thread_creation_record(key)
-            )
+            if creation_kind == 'new_session_main':
+                creation = cleanup_catalog.get_creation_record(key)
+            else:
+                with cleanup.forks._threads.for_owner_session(source.session_id) as thread_owner:
+                    creation = thread_owner.control_store.get_thread_creation_record(key)
             assert creation.state == "aborted"
             assert not root.exists() and not root.is_symlink()
             with pytest.raises(RuntimeError, match="已中止|aborted"):
@@ -8206,8 +8244,8 @@ async def test_thread_scope_live_fork_rejects_child_before_thread_creation(
     intent_after = _fork_intent_state(context)
     assert control_after == control_before
     assert intent_after == intent_before
-    with pytest.raises(KeyError):
-        context.forks._threads.for_owner_session(source.session_id).control_store.get_thread_creation_record(child_key)
+    with pytest.raises(KeyError), context.forks._threads.for_owner_session(source.session_id) as thread_owner:
+        thread_owner.control_store.get_thread_creation_record(child_key)
     assert owner._store.get(resource["resource_id"]).fork_attachments == {}
     assert external.revisions == revisions and external.creates == 1
 
@@ -8250,8 +8288,11 @@ async def test_live_fork_published_startup_preserves_dispatch_and_commit_facts(
         await context.forks.fork(request)
     monkeypatch.setattr(boundary, "observe_phase", original_observer)
     monkeypatch.setattr(owner._leases, "release", original_release)
-    frozen = (context.sessions.path_resolver.catalog_store.get_creation_record(key) if creation_kind == "new_session_main" else
-        context.forks._threads.for_owner_session(source.session_id).control_store.get_thread_creation_record(key))
+    if creation_kind == 'new_session_main':
+        frozen = context.sessions.path_resolver.catalog_store.get_creation_record(key)
+    else:
+        with context.forks._threads.for_owner_session(source.session_id) as thread_owner:
+            frozen = thread_owner.control_store.get_thread_creation_record(key)
     target_session = frozen.session_id if creation_kind == "new_session_main" else source.session_id
     target_thread = frozen.main_thread_id if creation_kind == "new_session_main" else frozen.child_thread_id
     target_ref = ThreadRef(target_session, target_thread)

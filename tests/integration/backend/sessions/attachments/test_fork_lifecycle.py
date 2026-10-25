@@ -147,12 +147,12 @@ async def test_directory_claim_and_gc_choose_one_order_before_target_publication
             with pytest.raises(KeyError):
                 context.sessions.path_resolver.catalog_store.get_node(capture.target_session_id)
         else:
-            threads = context.forks._threads.for_owner_session(parent.session_id)
-            record = threads.control_store.get_thread_creation_record(key)
-            assert record.state == "aborted"
-            root = context.sessions.path_resolver.resolve_session_node(parent.session_id)
-            assert not (root / record.final_relative_locator).exists()
-            assert not (root / record.staging_locator).exists()
+            with context.forks._threads.for_owner_session(parent.session_id) as threads:
+                record = threads.control_store.get_thread_creation_record(key)
+                assert record.state == "aborted"
+                root = context.sessions.path_resolver.resolve_session_node(parent.session_id)
+                assert not (root / record.final_relative_locator).exists()
+                assert not (root / record.staging_locator).exists()
         final = store._catalog.get_directory(original.attachment_id)
         assert final.availability == "tombstoned"
         assert (final.gc_after, final.relative_locator) == (original.gc_after, original.relative_locator)
@@ -275,12 +275,12 @@ async def _assert_unpublished_fork_rollback(
         with pytest.raises(KeyError):
             resolver.catalog_store.get_node(capture.target_session_id)
     else:
-        threads = context.forks._threads.for_owner_session(parent.session_id)
-        record = threads.control_store.get_thread_creation_record(key)
-        assert record.state == "aborted"
-        session_root = resolver.resolve_session_node(parent.session_id)
-        assert not (session_root / record.final_relative_locator).exists()
-        assert not (session_root / record.staging_locator).exists()
+        with context.forks._threads.for_owner_session(parent.session_id) as threads:
+            record = threads.control_store.get_thread_creation_record(key)
+            assert record.state == "aborted"
+            session_root = resolver.resolve_session_node(parent.session_id)
+            assert not (session_root / record.final_relative_locator).exists()
+            assert not (session_root / record.staging_locator).exists()
     return claim[1]
 
 
@@ -381,12 +381,12 @@ async def test_remote_import_failure_settles_both_owners_without_publishing_targ
             with pytest.raises(KeyError):
                 catalog.get_node(capture.target_session_id)
         else:
-            threads = target.session_context_fork_service._threads.for_owner_session(parent.session_id)
-            record = threads.control_store.get_thread_creation_record(key)
-            assert record.state == "aborted"
-            root = target.session_service.path_resolver.resolve_session_node(parent.session_id)
-            assert not (root / record.final_relative_locator).exists()
-            assert not (root / record.staging_locator).exists()
+            with target.session_context_fork_service._threads.for_owner_session(parent.session_id) as threads:
+                record = threads.control_store.get_thread_creation_record(key)
+                assert record.state == "aborted"
+                root = target.session_service.path_resolver.resolve_session_node(parent.session_id)
+                assert not (root / record.final_relative_locator).exists()
+                assert not (root / record.staging_locator).exists()
         store = target.attachment_blob_store
         directory = store._catalog.get_directory(identity)
         assert directory.unattached_since is not None and directory.gc_after is not None

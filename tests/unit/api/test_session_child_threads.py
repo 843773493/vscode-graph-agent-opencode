@@ -100,11 +100,7 @@ def owner_thread_creation_factory(
         workspace_id=WORKSPACE_ID,
         path_resolver=catalog_workspace_context.resolver,
     )
-    try:
-        yield owner_factory
-    finally:
-        for owner_service in owner_factory._services.values():
-            owner_service.control_store.close()
+    return owner_factory
 
 
 async def _seed_child_thread(
@@ -134,61 +130,61 @@ async def _seed_child_thread(
         "parent_thread_id": parent_thread_id,
         "delegation_id": delegation_id,
     }
-    owner = owner_thread_creation_factory.for_owner_session(parent_session_id)
-    created = await owner.create(
-        idempotency_key=key,
-        session_id=parent_session_id,
-        thread_id=None,
-        delegation_id=delegation_id,
-        initial_state="running",
-        session_metadata={
-            "graph_binding": graph_binding,
-            "capability_profile": capability_profile,
-            "task_seed": {
-                "description": "分析",
-                "gateway_id": None,
-                "request_id": None,
+    with owner_thread_creation_factory.for_owner_session(parent_session_id) as owner:
+        created = await owner.create(
+            idempotency_key=key,
+            session_id=parent_session_id,
+            thread_id=None,
+            delegation_id=delegation_id,
+            initial_state="running",
+            session_metadata={
+                "graph_binding": graph_binding,
+                "capability_profile": capability_profile,
+                "task_seed": {
+                    "description": "分析",
+                    "gateway_id": None,
+                    "request_id": None,
+                },
+                "task_reference": task_reference,
             },
-            "task_reference": task_reference,
-        },
-        artifact_manifest={},
-        collaboration_member={
-            "role": "delegated_subagent",
-            "subagent_type": SUBAGENT_TYPE,
-            "title": "分析 child",
-        },
-    )
-    record = owner.control_store.get_thread_creation_record(key)
-    frozen = frozen_thread_seed(record)
-    intent = owner.control_store.get_initial_execution_intent(key)
-    owner.control_store.validate_initial_execution_readiness(intent)
-    assert created.execution_binding_id == intent.execution_binding_id
-    assert created.frozen_job_id == intent.job_id
-    binding = InternalExecutionIntent(
-        message_id=f"seed-{intent.execution_binding_id}",
-        execution_id=intent.execution_binding_id,
-        admission_idempotency_key=intent.admission_idempotency_key,
-        input_reference_json=json.dumps(
-            frozen.reference,
-            sort_keys=True,
-            ensure_ascii=False,
-            separators=(",", ":"),
-        ),
-    )
-    if admit_execution:
-        checkpoint_saver.admit_internal_execution(
-            parent_session_id,
-            thread_id=created.child_thread_id,
-            job_id=created.frozen_job_id,
-            intent=binding,
-            message=None,
+            artifact_manifest={},
+            collaboration_member={
+                "role": "delegated_subagent",
+                "subagent_type": SUBAGENT_TYPE,
+                "title": "分析 child",
+            },
         )
-    assert owner.control_store.get_initial_execution_intent(key).state == "pending"
-    final_dir = session_service.path_resolver.resolve_thread_node(
-        parent_session_id, created.child_thread_id
-    )
-    assert final_dir.is_dir()
-    return created.child_thread_id, final_dir
+        record = owner.control_store.get_thread_creation_record(key)
+        frozen = frozen_thread_seed(record)
+        intent = owner.control_store.get_initial_execution_intent(key)
+        owner.control_store.validate_initial_execution_readiness(intent)
+        assert created.execution_binding_id == intent.execution_binding_id
+        assert created.frozen_job_id == intent.job_id
+        binding = InternalExecutionIntent(
+            message_id=f"seed-{intent.execution_binding_id}",
+            execution_id=intent.execution_binding_id,
+            admission_idempotency_key=intent.admission_idempotency_key,
+            input_reference_json=json.dumps(
+                frozen.reference,
+                sort_keys=True,
+                ensure_ascii=False,
+                separators=(",", ":"),
+            ),
+        )
+        if admit_execution:
+            checkpoint_saver.admit_internal_execution(
+                parent_session_id,
+                thread_id=created.child_thread_id,
+                job_id=created.frozen_job_id,
+                intent=binding,
+                message=None,
+            )
+        assert owner.control_store.get_initial_execution_intent(key).state == "pending"
+        final_dir = session_service.path_resolver.resolve_thread_node(
+            parent_session_id, created.child_thread_id
+        )
+        assert final_dir.is_dir()
+        return created.child_thread_id, final_dir
 
 
 async def _seed_parent_with_child_thread(
@@ -462,19 +458,20 @@ async def test_child_thread_report_read_blocks_real_delete_until_response_is_com
     parent_id, thread_id, final_dir = await _seed_parent_with_child_thread(
         session_service, owner_thread_creation_factory, checkpoint_saver
     )
-    control = owner_thread_creation_factory.for_owner_session(parent_id).control_store
-    intent = control.claim_initial_execution_intent(
-        "child-api-published",
-        claim_owner="report-race",
-        claim_generation=1,
-    )
-    control.mark_initial_execution_bound(
-        intent.admission_idempotency_key,
-        execution_binding_id=intent.execution_binding_id,
-        job_id=intent.job_id,
-        claim_owner="report-race",
-        claim_generation=1,
-    )
+    with owner_thread_creation_factory.for_owner_session(parent_id) as thread_owner:
+        control = thread_owner.control_store
+        intent = control.claim_initial_execution_intent(
+            "child-api-published",
+            claim_owner="report-race",
+            claim_generation=1,
+        )
+        control.mark_initial_execution_bound(
+            intent.admission_idempotency_key,
+            execution_binding_id=intent.execution_binding_id,
+            job_id=intent.job_id,
+            claim_owner="report-race",
+            claim_generation=1,
+        )
     query_paused, continue_query = asyncio.Event(), asyncio.Event()
     delete_attempted, delete_admitted = asyncio.Event(), asyncio.Event()
     original_exclusive = catalog_workspace_context.delete_service._gate.exclusive

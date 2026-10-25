@@ -29,21 +29,21 @@ from tests.integration.backend.sessions.test_catalog_startup_identity import (
 @pytest.fixture
 async def child_creation(startup_container: AppContainer):
     session = await startup_container.session_service.create(SessionCreateRequest(title="child物理错误属主"))
-    service = startup_container.thread_initial_execution_service._factory.for_owner_session(session.session_id)
-    metadata = {
-        "graph_binding": asdict(DEEP_AGENT_GRAPH_BINDING),
-        "capability_profile": dict(DEEP_AGENT_CAPABILITY_PROFILE),
-        "task_seed": None, "task_reference": None,
-    }
+    with startup_container.thread_initial_execution_service._factory.for_owner_session(session.session_id) as service:
+        metadata = {
+            "graph_binding": asdict(DEEP_AGENT_GRAPH_BINDING),
+            "capability_profile": dict(DEEP_AGENT_CAPABILITY_PROFILE),
+            "task_seed": None, "task_reference": None,
+        }
 
-    async def create(key: str = "child-physical-error"):
-        return await service.create(
-            idempotency_key=key, session_id=session.session_id, thread_id=None,
-            delegation_id=None, initial_state="idle", session_metadata=metadata,
-            artifact_manifest={"notes/plan.md": "原始计划"},
-        )
+        async def create(key: str = "child-physical-error"):
+            return await service.create(
+                idempotency_key=key, session_id=session.session_id, thread_id=None,
+                delegation_id=None, initial_state="idle", session_metadata=metadata,
+                artifact_manifest={"notes/plan.md": "原始计划"},
+            )
 
-    return session.session_id, service, create
+        yield session.session_id, service, create
 
 
 @pytest.mark.parametrize("locator", ["/private/thread.json", r"C:\private\thread.json", r"\\server\private\thread.json"])

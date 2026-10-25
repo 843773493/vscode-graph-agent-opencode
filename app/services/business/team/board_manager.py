@@ -302,54 +302,55 @@ class TeamBoardManager:
         if not boards:
             return members_by_team
 
-        control = self._factory.for_owner_session(session_id).control_store
-        with control.read_transaction():
-            for row in control.list_collaboration_members(
-                coordinator_session_id=session_id
-            ):
-                if row.state == "registering":
-                    continue
-                seed = json.loads(row.task_seed)
-                context = seed["trusted_context"]
-                team_id = context.get("team_id")
-                if not isinstance(team_id, str) or team_id not in coordinators_by_team:
-                    continue
-                coordinator_thread_id = coordinators_by_team[team_id]
-                if row.coordinator_thread_id != coordinator_thread_id or context["coordinator_thread_id"] != coordinator_thread_id:
-                    raise RuntimeError(f"团队成员的冻结协调线程不一致: {row.delegation_id}")
-                if row.child_thread_id is None:
-                    if row.state == "published":
-                        raise RuntimeError(f"published 团队成员缺少 child thread: {row.delegation_id}")
-                    continue
-                if row.state == "cancelled":
-                    status = "cancelled"
-                    updated_at = row.updated_at
-                elif row.state == "published":
-                    intent = control.get_initial_execution_intent(
-                        row.creation_idempotency_key
-                    )
-                    if intent.thread_id != row.child_thread_id:
-                        raise RuntimeError(
-                            "published 团队成员与 initial execution intent 不一致: "
-                            f"delegation_id={row.delegation_id}, "
-                            f"member_thread_id={row.child_thread_id}, "
-                            f"intent_thread_id={intent.thread_id}"
+        with self._factory.for_owner_session(session_id) as thread_owner:
+            control = thread_owner.control_store
+            with control.read_transaction():
+                for row in control.list_collaboration_members(
+                    coordinator_session_id=session_id
+                ):
+                    if row.state == "registering":
+                        continue
+                    seed = json.loads(row.task_seed)
+                    context = seed["trusted_context"]
+                    team_id = context.get("team_id")
+                    if not isinstance(team_id, str) or team_id not in coordinators_by_team:
+                        continue
+                    coordinator_thread_id = coordinators_by_team[team_id]
+                    if row.coordinator_thread_id != coordinator_thread_id or context["coordinator_thread_id"] != coordinator_thread_id:
+                        raise RuntimeError(f"团队成员的冻结协调线程不一致: {row.delegation_id}")
+                    if row.child_thread_id is None:
+                        if row.state == "published":
+                            raise RuntimeError(f"published 团队成员缺少 child thread: {row.delegation_id}")
+                        continue
+                    if row.state == "cancelled":
+                        status = "cancelled"
+                        updated_at = row.updated_at
+                    elif row.state == "published":
+                        intent = control.get_initial_execution_intent(
+                            row.creation_idempotency_key
                         )
-                    control.validate_initial_execution_readiness(intent)
-                    status = "active" if intent.state == "bound" else "pending"
-                    updated_at = intent.intent_updated_at
-                else:
-                    raise RuntimeError(
-                        "团队成员状态非法（fail closed）: "
-                        f"delegation_id={row.delegation_id}, state={row.state!r}"
-                    )
-                members_by_team[team_id].append(TeamMemberDTO(
-                    thread_id=row.child_thread_id, delegation_id=row.delegation_id,
-                    role=row.role, source="delegated", work_mode=context["work_mode"],
-                    instructions=seed.get("untrusted_instructions", ""), status=status,
-                    joined_at=row.registered_at, updated_at=updated_at,
-                ))
-        return members_by_team
+                        if intent.thread_id != row.child_thread_id:
+                            raise RuntimeError(
+                                "published 团队成员与 initial execution intent 不一致: "
+                                f"delegation_id={row.delegation_id}, "
+                                f"member_thread_id={row.child_thread_id}, "
+                                f"intent_thread_id={intent.thread_id}"
+                            )
+                        control.validate_initial_execution_readiness(intent)
+                        status = "active" if intent.state == "bound" else "pending"
+                        updated_at = intent.intent_updated_at
+                    else:
+                        raise RuntimeError(
+                            "团队成员状态非法（fail closed）: "
+                            f"delegation_id={row.delegation_id}, state={row.state!r}"
+                        )
+                    members_by_team[team_id].append(TeamMemberDTO(
+                        thread_id=row.child_thread_id, delegation_id=row.delegation_id,
+                        role=row.role, source="delegated", work_mode=context["work_mode"],
+                        instructions=seed.get("untrusted_instructions", ""), status=status,
+                        joined_at=row.registered_at, updated_at=updated_at,
+                    ))
+            return members_by_team
 
     def _board_with_members_and_events(
         self,

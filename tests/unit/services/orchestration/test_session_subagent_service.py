@@ -154,16 +154,17 @@ class _RecordingBinder:
 async def _bind_initial_execution_for_test(
     owner_thread_creation_factory: OwnerThreadCreationFactory, session_id: str
 ) -> None:
-    worker = InitialExecutionBindingWorker(
-        store=owner_thread_creation_factory.for_owner_session(session_id).control_store,
-        claim_owner="test-binder",
-        binder=_RecordingBinder(),
-    )
-    worker.start()
-    try:
-        worker.bind_pending_once()
-    finally:
-        worker.stop()
+    with owner_thread_creation_factory.for_owner_session(session_id) as thread_owner:
+        worker = InitialExecutionBindingWorker(
+            store=thread_owner.control_store,
+            claim_owner="test-binder",
+            binder=_RecordingBinder(),
+        )
+        worker.start()
+        try:
+            worker.bind_pending_once()
+        finally:
+            worker.stop()
 
 
 @pytest.fixture
@@ -237,33 +238,34 @@ async def test_delegate_creates_durable_child_thread_with_bound_intent(
     assert node_count == 1
 
     # owner control store：child row + published member + bound intent。
-    control = owner_thread_creation_factory.for_owner_session(
+    with owner_thread_creation_factory.for_owner_session(
         parent_session.session_id
-    ).control_store
-    rows = control.list_child_thread_rows()
-    assert [row.thread_id for row in rows] == [accepted.child_thread_id]
-    member = control.get_collaboration_member(accepted.delegation_id)
-    assert member.state == "published"
-    assert member.child_thread_id == accepted.child_thread_id
-    assert member.role == "delegated_subagent"
-    assert member.subagent_type == "general-purpose"
-    intent = control.get_initial_execution_intent(accepted.admission_idempotency_key)
-    assert intent.state == "bound"
-    assert intent.execution_binding_id == accepted.execution_binding_id
-    assert intent.job_id == accepted.frozen_job_id
-    record = control.get_thread_creation_record(accepted.delegation_id)
-    assert (
-        json.loads(record.task_seed)["gateway_id"]
-        == "gateway_9c65b6f74b8dc349e3f5b7c61da3e622"
-    )
-    assert json.loads(record.task_seed)["request_id"] == "request-frozen-creation"
-    frozen = frozen_thread_seed(record)
-    assert frozen.gateway_id == "gateway_9c65b6f74b8dc349e3f5b7c61da3e622"
-    assert frozen.request_id == "request-frozen-creation"
-    assert "gateway_9c65b6f74b8dc349e3f5b7c61da3e622" not in frozen.message.content
-    assert "request-frozen-creation" not in frozen.message.content
-    # child thread 只有一条初始 intent。
-    assert len(control.list_initial_execution_intents()) == 1
+    ) as thread_owner:
+        control = thread_owner.control_store
+        rows = control.list_child_thread_rows()
+        assert [row.thread_id for row in rows] == [accepted.child_thread_id]
+        member = control.get_collaboration_member(accepted.delegation_id)
+        assert member.state == "published"
+        assert member.child_thread_id == accepted.child_thread_id
+        assert member.role == "delegated_subagent"
+        assert member.subagent_type == "general-purpose"
+        intent = control.get_initial_execution_intent(accepted.admission_idempotency_key)
+        assert intent.state == "bound"
+        assert intent.execution_binding_id == accepted.execution_binding_id
+        assert intent.job_id == accepted.frozen_job_id
+        record = control.get_thread_creation_record(accepted.delegation_id)
+        assert (
+            json.loads(record.task_seed)["gateway_id"]
+            == "gateway_9c65b6f74b8dc349e3f5b7c61da3e622"
+        )
+        assert json.loads(record.task_seed)["request_id"] == "request-frozen-creation"
+        frozen = frozen_thread_seed(record)
+        assert frozen.gateway_id == "gateway_9c65b6f74b8dc349e3f5b7c61da3e622"
+        assert frozen.request_id == "request-frozen-creation"
+        assert "gateway_9c65b6f74b8dc349e3f5b7c61da3e622" not in frozen.message.content
+        assert "request-frozen-creation" not in frozen.message.content
+        # child thread 只有一条初始 intent。
+        assert len(control.list_initial_execution_intents()) == 1
 
 
 @pytest.mark.asyncio
@@ -280,9 +282,10 @@ async def test_delegate_same_tool_call_retry_converges(
     )
 
     assert again == first
-    record = owner_thread_creation_factory.for_owner_session(
+    with owner_thread_creation_factory.for_owner_session(
         parent_session.session_id
-    ).control_store.get_thread_creation_record(first.delegation_id)
+    ) as thread_owner:
+        record = thread_owner.control_store.get_thread_creation_record(first.delegation_id)
     assert json.loads(record.task_seed)["request_id"] is None
     assert frozen_thread_seed(record).request_id is None
 
@@ -360,9 +363,10 @@ async def test_frozen_child_seed_rejects_missing_or_invalid_request_identity(
     accepted = await _delegate_from_parent_session(
         session_subagent_service, parent_session
     )
-    record = owner_thread_creation_factory.for_owner_session(
+    with owner_thread_creation_factory.for_owner_session(
         parent_session.session_id
-    ).control_store.get_thread_creation_record(accepted.delegation_id)
+    ) as thread_owner:
+        record = thread_owner.control_store.get_thread_creation_record(accepted.delegation_id)
     task_seed = json.loads(record.task_seed)
     task_seed.pop(identity_field)
     if identity_override:
@@ -417,11 +421,12 @@ async def test_delegate_binding_failure_preserves_published_pending_intent(
     )
     with pytest.raises(RuntimeError, match="真实绑定失败"):
         await _delegate_from_parent_session(service, parent_session)
-    control = owner_thread_creation_factory.for_owner_session(
+    with owner_thread_creation_factory.for_owner_session(
         parent_session.session_id
-    ).control_store
-    assert len(control.list_child_thread_rows()) == 1
-    assert control.list_initial_execution_intents()[0].state == "pending"
+    ) as thread_owner:
+        control = thread_owner.control_store
+        assert len(control.list_child_thread_rows()) == 1
+        assert control.list_initial_execution_intents()[0].state == "pending"
 
 
 @pytest.mark.asyncio
@@ -511,8 +516,9 @@ async def test_delegate_without_real_binder_fails_closed_before_side_effects(
         ).fetchone()[0]
     )
     assert node_count == 1
-    control = owner_thread_creation_factory.for_owner_session(
+    with owner_thread_creation_factory.for_owner_session(
         parent_session.session_id
-    ).control_store
-    assert control.list_child_thread_rows() == ()
-    assert control.list_initial_execution_intents() == ()
+    ) as thread_owner:
+        control = thread_owner.control_store
+        assert control.list_child_thread_rows() == ()
+        assert control.list_initial_execution_intents() == ()

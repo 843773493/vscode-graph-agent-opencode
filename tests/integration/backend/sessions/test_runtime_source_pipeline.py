@@ -434,18 +434,19 @@ async def _team_child(case: RuntimeSourceCase) -> tuple[dict[str, object], dict[
         })
     parent_job = await _job(case, str(accepted["job_id"]))
     factory = case.container.thread_initial_execution_service._factory
-    control = factory.for_owner_session(session_id).control_store
-    intents = control.list_initial_execution_intents()
-    assert len(intents) == 1
-    intent = intents[0]
-    assert intent.session_id == session_id and intent.state == "bound"
-    child_job = await _job(case, intent.job_id)
-    assert "private-seed-h1" in _wire_text(case.request(child_call)["messages"])
-    await _wait_until(lambda: case.sql(
-        session_id, parent_job["thread_id"],
-        "SELECT COUNT(*) FROM executions WHERE execution_origin='internal' AND outcome='completed'",
-    )[0][0] == 1)
-    return parent_job, child_job, intent
+    with factory.for_owner_session(session_id) as thread_owner:
+        control = thread_owner.control_store
+        intents = control.list_initial_execution_intents()
+        assert len(intents) == 1
+        intent = intents[0]
+        assert intent.session_id == session_id and intent.state == "bound"
+        child_job = await _job(case, intent.job_id)
+        assert "private-seed-h1" in _wire_text(case.request(child_call)["messages"])
+        await _wait_until(lambda: case.sql(
+            session_id, parent_job["thread_id"],
+            "SELECT COUNT(*) FROM executions WHERE execution_origin='internal' AND outcome='completed'",
+        )[0][0] == 1)
+        return parent_job, child_job, intent
 
 
 def _assert_generated_notice(
@@ -677,34 +678,36 @@ async def test_h1_http_team_child_seed_binder_and_exact_parent_report(source_cas
     assert board.session_id == session_id
     assert {member.thread_id for member in board.members} == {parent_job["thread_id"], intent.thread_id}
     assert all(member.status == "active" for member in board.members)
-    control = case.container.thread_initial_execution_service._factory.for_owner_session(session_id).control_store
-    persisted_boards = control.collaboration_boards(board.team_id)
-    assert len(persisted_boards) == 1
-    assert json.loads(persisted_boards[0])["members"] == []
-    assert not (control.database_path.parent / "teams").exists()
-    seed_wire = [r for r in case.requests() if any(
-        m["role"] == "user" and "<delegated_task" in _wire_text(m["content"])
-        and "private-seed-h1" in _wire_text(m["content"])
-        for m in r["messages"]
-    )]
-    assert seed_wire
-    parent_inputs = case.sql(session_id, parent_job["thread_id"],
-        "SELECT item_id FROM item_catalog WHERE semantic_kind='runtime_notice'")
-    assert len(parent_inputs) == 1
-    child_outputs = case.sql(session_id, intent.thread_id,
-        "SELECT item_id FROM item_catalog WHERE semantic_kind='assistant_output' AND execution_id=? ORDER BY item_sequence",
-        (intent.execution_binding_id,))
-    record = case.container.thread_initial_execution_service._factory.for_owner_session(session_id).control_store.get_thread_creation_record(intent.creation_idempotency_key)
-    canonical_report = _assert_generated_notice(
-        case, session_id, parent_job["thread_id"], parent_inputs[0][0],
-        expected_provenance={"source_session_id": session_id, "source_thread_id": intent.thread_id,
-            "delegation_id": record.delegation_id, "source_execution_id": intent.execution_binding_id,
-            "source_item_id": child_outputs[-1][0]}, private_result="child-result-h1",
-    )
-    case.write_actual("h1", {"parent_job": parent_job, "child_job": child_job,
-        "request_input": request, "child_executions": child_executions, "team": board.model_dump(mode="json"),
-        "parent_runtime_inputs": parent_inputs, "canonical_report": canonical_report,
-        "model_request_count": len(case.requests())})
+    with case.container.thread_initial_execution_service._factory.for_owner_session(session_id) as thread_owner:
+        control = thread_owner.control_store
+        persisted_boards = control.collaboration_boards(board.team_id)
+        assert len(persisted_boards) == 1
+        assert json.loads(persisted_boards[0])["members"] == []
+        assert not (control.database_path.parent / "teams").exists()
+        seed_wire = [r for r in case.requests() if any(
+            m["role"] == "user" and "<delegated_task" in _wire_text(m["content"])
+            and "private-seed-h1" in _wire_text(m["content"])
+            for m in r["messages"]
+        )]
+        assert seed_wire
+        parent_inputs = case.sql(session_id, parent_job["thread_id"],
+            "SELECT item_id FROM item_catalog WHERE semantic_kind='runtime_notice'")
+        assert len(parent_inputs) == 1
+        child_outputs = case.sql(session_id, intent.thread_id,
+            "SELECT item_id FROM item_catalog WHERE semantic_kind='assistant_output' AND execution_id=? ORDER BY item_sequence",
+            (intent.execution_binding_id,))
+        with case.container.thread_initial_execution_service._factory.for_owner_session(session_id) as thread_owner:
+            record = thread_owner.control_store.get_thread_creation_record(intent.creation_idempotency_key)
+        canonical_report = _assert_generated_notice(
+            case, session_id, parent_job["thread_id"], parent_inputs[0][0],
+            expected_provenance={"source_session_id": session_id, "source_thread_id": intent.thread_id,
+                "delegation_id": record.delegation_id, "source_execution_id": intent.execution_binding_id,
+                "source_item_id": child_outputs[-1][0]}, private_result="child-result-h1",
+        )
+        case.write_actual("h1", {"parent_job": parent_job, "child_job": child_job,
+            "request_input": request, "child_executions": child_executions, "team": board.model_dump(mode="json"),
+            "parent_runtime_inputs": parent_inputs, "canonical_report": canonical_report,
+            "model_request_count": len(case.requests())})
 
 
 @pytest.mark.asyncio
@@ -1490,110 +1493,110 @@ async def test_h5_cold_refork_and_hard_exit_recovery(source_case: RuntimeSourceC
     parent_job, _child_job, intent = await _team_child(case)
     source_session, source_thread = parent_job["session_id"], intent.thread_id
     assert case.gateway_id is not None and case.gateway_skill_source_owner is not None
-    creation_owner = case.container.thread_initial_execution_service._factory.for_owner_session(source_session)
-    creation_record = creation_owner.control_store.get_thread_creation_record(intent.creation_idempotency_key)
-    assert creation_record.task_seed is not None
-    assert json.loads(creation_record.task_seed)["gateway_id"] == case.gateway_id
-    gateway_sources = case.container.resource_platform.gateway_skill_sources
-    assert gateway_sources is not None
-    assert gateway_sources.snapshot(gateway_id=case.gateway_id) == case.gateway_skill_source_owner.snapshot(
-        workspace_id=case.container.workspace_id,
-    )
-    admission = case.container.checkpointer._storage.executions.execution_admission(
-        source_session, thread_id=source_thread, execution_id=intent.execution_binding_id,
-    )
-    request = case.container.checkpointer._storage.executions.internal_execution_request_input(
-        source_session, source_thread, admission.execution_id,
-    )
-    binding = InternalExecutionIntent(
-        message_id=f"seed-{admission.execution_id}", execution_id=admission.execution_id,
-        admission_idempotency_key=admission.admission_idempotency_key,
-        input_reference_json=json.dumps(request["reference"]),
-    )
-    source_message = case.container.checkpointer.accepted_internal_message(
-        source_session, thread_id=source_thread, job_id=admission.job_id,
-        message_id=binding.message_id, intent=binding,
-    )
-    source_admission_hash = case.sql(
-        source_session, source_thread,
-        "SELECT admission_payload_hash FROM executions WHERE execution_id=?",
-        (admission.execution_id,),
-    )[0][0]
-    source = await cold_fork_process(source_session, source_thread)
-    assert source["checkpoints"]
-    assert all(fact["metadata"]["boxteam_execution_binding"]["execution_id"] == admission.execution_id
-               and fact["metadata"]["boxteam_execution_binding"]["admission_payload_hash"] == source_admission_hash
-               for fact in source["checkpoints"])
-    first_session = await create_session(case.client, "H5 冷 fork")
-    first = await cold_fork_process(source_session, source_thread, first_session, phase="fork", mode=mode)
-    first_thread = first["thread_id"]
-    second_session = await create_session(case.client, "H5 再次 fork")
-    second = await cold_fork_process(first_session, first_thread, second_session, phase="fork", mode=mode)
-    for actual in (first, second):
-        assert actual["request"]["kind"] == "seed_reference"
-        assert actual["request"] == request
-        assert actual["admission_payload_hash"] == source_admission_hash
-        assert actual["admission_cursor"]["commit_kind"] == "execution_admission"
-        assert actual["admission_cursor"]["commit_mode"] == "metadata_only"
-        assert actual["admission_cursor"]["jsonl_record_count"] == 0
-        assert actual["accepted_seed"] is None
-        assert actual["historical_execution_rejected"] is True
-        assert actual["execution_scope"] == [source_session, source_thread]
-        assert actual["executions"][0][0] == admission.execution_id
-        assert actual["seed"] == source_message.content
-        assert "private-seed-h1" in actual["seed"]
-        assert "private-seed-h1" in _wire_text(actual["prefixes"])
-        assert "child-result-h1" in _wire_text(actual["items"])
-        assert actual["counts"]["turn_records"] == 0
-        assert actual["journals"] == [["committed"]]
-        assert actual["detail_owners"]
-    _assert_cold_fork_checkpoints(source, first)
-    _assert_cold_fork_checkpoints(first, second)
-    assert source["accepted_seed"]["content"] == source_message.content
-    assert source["accepted_seed"]["metadata"] == source_message.response_metadata["message_metadata"]
-    for copied in (first, second):
-        assert copied["detail_owners"] == source["detail_owners"]
-        assert copied["parts"] == source["parts"]
-        assert copied["items"] == source["items"]
-        assert copied["model_calls"] == source["model_calls"]
-        assert copied["admission_cursor"] == source["admission_cursor"]
+    with case.container.thread_initial_execution_service._factory.for_owner_session(source_session) as creation_owner:
+        creation_record = creation_owner.control_store.get_thread_creation_record(intent.creation_idempotency_key)
+        assert creation_record.task_seed is not None
+        assert json.loads(creation_record.task_seed)["gateway_id"] == case.gateway_id
+        gateway_sources = case.container.resource_platform.gateway_skill_sources
+        assert gateway_sources is not None
+        assert gateway_sources.snapshot(gateway_id=case.gateway_id) == case.gateway_skill_source_owner.snapshot(
+            workspace_id=case.container.workspace_id,
+        )
+        admission = case.container.checkpointer._storage.executions.execution_admission(
+            source_session, thread_id=source_thread, execution_id=intent.execution_binding_id,
+        )
+        request = case.container.checkpointer._storage.executions.internal_execution_request_input(
+            source_session, source_thread, admission.execution_id,
+        )
+        binding = InternalExecutionIntent(
+            message_id=f"seed-{admission.execution_id}", execution_id=admission.execution_id,
+            admission_idempotency_key=admission.admission_idempotency_key,
+            input_reference_json=json.dumps(request["reference"]),
+        )
+        source_message = case.container.checkpointer.accepted_internal_message(
+            source_session, thread_id=source_thread, job_id=admission.job_id,
+            message_id=binding.message_id, intent=binding,
+        )
+        source_admission_hash = case.sql(
+            source_session, source_thread,
+            "SELECT admission_payload_hash FROM executions WHERE execution_id=?",
+            (admission.execution_id,),
+        )[0][0]
+        source = await cold_fork_process(source_session, source_thread)
+        assert source["checkpoints"]
+        assert all(fact["metadata"]["boxteam_execution_binding"]["execution_id"] == admission.execution_id
+                   and fact["metadata"]["boxteam_execution_binding"]["admission_payload_hash"] == source_admission_hash
+                   for fact in source["checkpoints"])
+        first_session = await create_session(case.client, "H5 冷 fork")
+        first = await cold_fork_process(source_session, source_thread, first_session, phase="fork", mode=mode)
+        first_thread = first["thread_id"]
+        second_session = await create_session(case.client, "H5 再次 fork")
+        second = await cold_fork_process(first_session, first_thread, second_session, phase="fork", mode=mode)
+        for actual in (first, second):
+            assert actual["request"]["kind"] == "seed_reference"
+            assert actual["request"] == request
+            assert actual["admission_payload_hash"] == source_admission_hash
+            assert actual["admission_cursor"]["commit_kind"] == "execution_admission"
+            assert actual["admission_cursor"]["commit_mode"] == "metadata_only"
+            assert actual["admission_cursor"]["jsonl_record_count"] == 0
+            assert actual["accepted_seed"] is None
+            assert actual["historical_execution_rejected"] is True
+            assert actual["execution_scope"] == [source_session, source_thread]
+            assert actual["executions"][0][0] == admission.execution_id
+            assert actual["seed"] == source_message.content
+            assert "private-seed-h1" in actual["seed"]
+            assert "private-seed-h1" in _wire_text(actual["prefixes"])
+            assert "child-result-h1" in _wire_text(actual["items"])
+            assert actual["counts"]["turn_records"] == 0
+            assert actual["journals"] == [["committed"]]
+            assert actual["detail_owners"]
+        _assert_cold_fork_checkpoints(source, first)
+        _assert_cold_fork_checkpoints(first, second)
+        assert source["accepted_seed"]["content"] == source_message.content
+        assert source["accepted_seed"]["metadata"] == source_message.response_metadata["message_metadata"]
+        for copied in (first, second):
+            assert copied["detail_owners"] == source["detail_owners"]
+            assert copied["parts"] == source["parts"]
+            assert copied["items"] == source["items"]
+            assert copied["model_calls"] == source["model_calls"]
+            assert copied["admission_cursor"] == source["admission_cursor"]
 
-    aborted_session = await create_session(case.client, "H5 publication 硬退出")
-    aborted_thread = await case.container.session_service.resolve_main_thread(aborted_session)
-    await cold_fork_process(source_session, source_thread, aborted_session, phase="publication_crash", mode=mode)
-    details = case.sql(aborted_session, aborted_thread,
-        "SELECT detail_ref FROM context_plan_details WHERE availability='available'")
-    node = case.container.session_service.path_resolver.resolve_thread_node(aborted_session, aborted_thread)
-    paths = [node / detail_relative_path(detail_ref_from_key(row[0])) for row in details]
-    assert paths and any(path.is_file() for path in paths)
-    assert case.sql(aborted_session, aborted_thread, "SELECT status FROM fork_materializations") == [("prepared",)]
-    recovered = await cold_fork_process(source_session, source_thread, aborted_session, phase="resume", mode=mode)
-    assert recovered["journals"] == [["committed"]]
-    assert recovered["seed"] == source_message.content
-    assert recovered["request"] == request and recovered["admission_payload_hash"] == source_admission_hash
-    assert recovered["counts"]["turn_records"] == 0 and recovered["detail_owners"] == source["detail_owners"]
-    assert recovered["historical_execution_rejected"] is True
-    assert recovered["items"] == source["items"]
-    _assert_cold_fork_checkpoints(source, recovered)
-    assert all(path.is_file() for path in paths)
-    repeated_publication = await cold_fork_process(source_session, source_thread, aborted_session, phase="resume", mode=mode)
-    assert repeated_publication["executions"] == recovered["executions"]
-    assert repeated_publication["detail_owners"] == recovered["detail_owners"]
-    assert repeated_publication["checkpoints"] == recovered["checkpoints"]
+        aborted_session = await create_session(case.client, "H5 publication 硬退出")
+        aborted_thread = await case.container.session_service.resolve_main_thread(aborted_session)
+        await cold_fork_process(source_session, source_thread, aborted_session, phase="publication_crash", mode=mode)
+        details = case.sql(aborted_session, aborted_thread,
+            "SELECT detail_ref FROM context_plan_details WHERE availability='available'")
+        node = case.container.session_service.path_resolver.resolve_thread_node(aborted_session, aborted_thread)
+        paths = [node / detail_relative_path(detail_ref_from_key(row[0])) for row in details]
+        assert paths and any(path.is_file() for path in paths)
+        assert case.sql(aborted_session, aborted_thread, "SELECT status FROM fork_materializations") == [("prepared",)]
+        recovered = await cold_fork_process(source_session, source_thread, aborted_session, phase="resume", mode=mode)
+        assert recovered["journals"] == [["committed"]]
+        assert recovered["seed"] == source_message.content
+        assert recovered["request"] == request and recovered["admission_payload_hash"] == source_admission_hash
+        assert recovered["counts"]["turn_records"] == 0 and recovered["detail_owners"] == source["detail_owners"]
+        assert recovered["historical_execution_rejected"] is True
+        assert recovered["items"] == source["items"]
+        _assert_cold_fork_checkpoints(source, recovered)
+        assert all(path.is_file() for path in paths)
+        repeated_publication = await cold_fork_process(source_session, source_thread, aborted_session, phase="resume", mode=mode)
+        assert repeated_publication["executions"] == recovered["executions"]
+        assert repeated_publication["detail_owners"] == recovered["detail_owners"]
+        assert repeated_publication["checkpoints"] == recovered["checkpoints"]
 
-    finish_session = await create_session(case.client, "H5 finish 硬退出")
-    finish_thread = await case.container.session_service.resolve_main_thread(finish_session)
-    await cold_fork_process(source_session, source_thread, finish_session, phase="finish_crash", mode=mode)
-    assert case.sql(finish_session, finish_thread, "SELECT status FROM fork_materializations") == [("target_committed",)]
-    finished = await cold_fork_process(source_session, source_thread, finish_session, phase="resume", mode=mode)
-    assert finished["journals"] == [["committed"]]
-    assert "private-seed-h1" in finished["seed"] and finished["counts"]["turn_records"] == 0
-    assert finished["historical_execution_rejected"] is True
-    _assert_cold_fork_checkpoints(source, finished)
-    repeated = await cold_fork_process(source_session, source_thread, finish_session, phase="resume", mode=mode)
-    assert repeated["executions"] == finished["executions"]
-    assert repeated["detail_owners"] == finished["detail_owners"]
-    assert repeated["checkpoints"] == finished["checkpoints"]
+        finish_session = await create_session(case.client, "H5 finish 硬退出")
+        finish_thread = await case.container.session_service.resolve_main_thread(finish_session)
+        await cold_fork_process(source_session, source_thread, finish_session, phase="finish_crash", mode=mode)
+        assert case.sql(finish_session, finish_thread, "SELECT status FROM fork_materializations") == [("target_committed",)]
+        finished = await cold_fork_process(source_session, source_thread, finish_session, phase="resume", mode=mode)
+        assert finished["journals"] == [["committed"]]
+        assert "private-seed-h1" in finished["seed"] and finished["counts"]["turn_records"] == 0
+        assert finished["historical_execution_rejected"] is True
+        _assert_cold_fork_checkpoints(source, finished)
+        repeated = await cold_fork_process(source_session, source_thread, finish_session, phase="resume", mode=mode)
+        assert repeated["executions"] == finished["executions"]
+        assert repeated["detail_owners"] == finished["detail_owners"]
+        assert repeated["checkpoints"] == finished["checkpoints"]
 
 
 @pytest.fixture
@@ -1603,71 +1606,71 @@ async def completed_empty_seed_source(
     """手工准备 completed_empty 历史，仅证明冷存储复制边界，不作为完整执行验收。"""
     case = source_case
     session_id = await create_session(case.client, "H5 completed_empty seed")
-    creation = case.container.thread_initial_execution_service._factory.for_owner_session(session_id)
-    profile = {"thread_role": "child", "goal_enabled": False}
-    created = await creation.create(
-        idempotency_key="h5-completed-empty-creation", session_id=session_id, thread_id=None,
-        delegation_id=None, initial_state="running", artifact_manifest={}, session_metadata={
-            "graph_binding": {"graph_id": "deep-agent", "graph_revision": 1,
-                "graph_schema_hash": "sha256:" + "a" * 64,
-                "capability_profile_hash": compute_capability_profile_hash(capability_profile=profile)},
-            "capability_profile": profile,
-            "task_seed": {"description": "H5 合法无输出冻结任务", "gateway_id": None, "request_id": None},
-            "task_reference": {"parent_session_id": session_id,
-                "parent_thread_id": await case.container.session_service.resolve_main_thread(session_id)},
-        },
-    )
-    thread_id = created.child_thread_id
-    async with case.container.session_service.session_write_admission(session_id):
-        worker = InitialExecutionBindingWorker(
-            store=creation.control_store, claim_owner="initial-execution",
-            binder=case.container.thread_initial_execution_service.binder,
+    with case.container.thread_initial_execution_service._factory.for_owner_session(session_id) as creation:
+        profile = {"thread_role": "child", "goal_enabled": False}
+        created = await creation.create(
+            idempotency_key="h5-completed-empty-creation", session_id=session_id, thread_id=None,
+            delegation_id=None, initial_state="running", artifact_manifest={}, session_metadata={
+                "graph_binding": {"graph_id": "deep-agent", "graph_revision": 1,
+                    "graph_schema_hash": "sha256:" + "a" * 64,
+                    "capability_profile_hash": compute_capability_profile_hash(capability_profile=profile)},
+                "capability_profile": profile,
+                "task_seed": {"description": "H5 合法无输出冻结任务", "gateway_id": None, "request_id": None},
+                "task_reference": {"parent_session_id": session_id,
+                    "parent_thread_id": await case.container.session_service.resolve_main_thread(session_id)},
+            },
         )
-        worker.start()
-        try:
-            attempts = worker.bind_pending_once()
-        finally:
-            worker.stop()
-    assert len(attempts) == 1 and attempts[0].outcome == "bound"
-    intent = creation.control_store.list_initial_execution_intents()[0]
-    assert intent.state == "bound" and intent.thread_id == thread_id
-    saver = case.container.checkpointer
-    admission = saver._storage.executions.execution_admission(
-        session_id, thread_id=thread_id, execution_id=intent.execution_binding_id,
-    )
-    seed = saver.internal_seed_source(session_id, thread_id, admission.execution_id)
-    assert seed is not None
-    manager = ContextSourceManager(
-        owner=ContextSourceOwnerKey(session_id, thread_id), control_state_port=saver,
-    )
-    with (session_thread_owner_scope(MutationIntentOwner(session_id, thread_id), langgraph_thread_id=thread_id),
-          execution_admission_scope(admission, langgraph_thread_id=thread_id)):
-        creation_key = "h5-completed-empty-plan-create"
-        prepared = saver.prepare_context_for_provider(
-            session_id, thread_id, turn_id=None, execution_id=admission.execution_id,
-            plan_creation_idempotency_key=creation_key,
-            seal_idempotency_key="h5-completed-empty-seal", request_messages=(),
-            context_source_manager=manager,
-            tool_set_supplier=lambda: ToolSetSnapshot(selection_revision=sha256_jcs({}), tools=()),
-            **frozen_provider_wire("e2e-stub-model", "chat_completions"),
-            **frozen_provider_activation(saver, plan_creation_idempotency_key=creation_key),
+        thread_id = created.child_thread_id
+        async with case.container.session_service.session_write_admission(session_id):
+            worker = InitialExecutionBindingWorker(
+                store=creation.control_store, claim_owner="initial-execution",
+                binder=case.container.thread_initial_execution_service.binder,
+            )
+            worker.start()
+            try:
+                attempts = worker.bind_pending_once()
+            finally:
+                worker.stop()
+        assert len(attempts) == 1 and attempts[0].outcome == "bound"
+        intent = creation.control_store.list_initial_execution_intents()[0]
+        assert intent.state == "bound" and intent.thread_id == thread_id
+        saver = case.container.checkpointer
+        admission = saver._storage.executions.execution_admission(
+            session_id, thread_id=thread_id, execution_id=intent.execution_binding_id,
         )
-        snapshot = prepared["snapshot"]
-        assert snapshot.seal_binding is not None and snapshot.model_call_id is not None
-        saver.register_model_call(
-            session_id, thread_id=thread_id, execution_id=admission.execution_id,
-            model_call_id=snapshot.model_call_id, assembly_id=snapshot.assembly_id,
-            attempt=1, provider="e2e-stub-model", dispatch_state="dispatched",
+        seed = saver.internal_seed_source(session_id, thread_id, admission.execution_id)
+        assert seed is not None
+        manager = ContextSourceManager(
+            owner=ContextSourceOwnerKey(session_id, thread_id), control_state_port=saver,
         )
-        await saver.aput(build_checkpoint_config(thread_id), {
-            "id": "h5-completed-empty-checkpoint", "channel_values": {"messages": []},
-            "channel_versions": {"messages": "1"}, "updated_channels": ["messages"], "pending_sends": [],
-        }, {"source": "input", "step": 1, "parents": {}}, {"messages": "1"})
-    saver.converge_execution(
-        session_id, thread_id=thread_id, turn_id=None, execution_id=admission.execution_id,
-        outcome="completed_empty", turn_status=None,
-    )
-    return session_id, thread_id
+        with (session_thread_owner_scope(MutationIntentOwner(session_id, thread_id), langgraph_thread_id=thread_id),
+              execution_admission_scope(admission, langgraph_thread_id=thread_id)):
+            creation_key = "h5-completed-empty-plan-create"
+            prepared = saver.prepare_context_for_provider(
+                session_id, thread_id, turn_id=None, execution_id=admission.execution_id,
+                plan_creation_idempotency_key=creation_key,
+                seal_idempotency_key="h5-completed-empty-seal", request_messages=(),
+                context_source_manager=manager,
+                tool_set_supplier=lambda: ToolSetSnapshot(selection_revision=sha256_jcs({}), tools=()),
+                **frozen_provider_wire("e2e-stub-model", "chat_completions"),
+                **frozen_provider_activation(saver, plan_creation_idempotency_key=creation_key),
+            )
+            snapshot = prepared["snapshot"]
+            assert snapshot.seal_binding is not None and snapshot.model_call_id is not None
+            saver.register_model_call(
+                session_id, thread_id=thread_id, execution_id=admission.execution_id,
+                model_call_id=snapshot.model_call_id, assembly_id=snapshot.assembly_id,
+                attempt=1, provider="e2e-stub-model", dispatch_state="dispatched",
+            )
+            await saver.aput(build_checkpoint_config(thread_id), {
+                "id": "h5-completed-empty-checkpoint", "channel_values": {"messages": []},
+                "channel_versions": {"messages": "1"}, "updated_channels": ["messages"], "pending_sends": [],
+            }, {"source": "input", "step": 1, "parents": {}}, {"messages": "1"})
+        saver.converge_execution(
+            session_id, thread_id=thread_id, turn_id=None, execution_id=admission.execution_id,
+            outcome="completed_empty", turn_status=None,
+        )
+        return session_id, thread_id
 
 
 @pytest.mark.asyncio

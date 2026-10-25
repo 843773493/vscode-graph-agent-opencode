@@ -15,7 +15,6 @@ from app.schemas.internal_v2.session import SessionCreateRequest
 from app.services.business.session_service import SessionService
 from tests.unit.services.business.session_children.helpers import (
     SUBAGENT_TYPE,
-    _close_owner_thread_factory,
     _control_for,
     _create_child_thread,
     _owner_thread_factory,
@@ -30,95 +29,94 @@ async def test_list_child_threads_is_a_guarded_sqlite_snapshot_during_real_publi
     parent = await session_service.create(SessionCreateRequest(title="读取与发布交错"))
     parent_thread_id = await session_service.resolve_main_thread(parent.session_id)
     factory = _owner_thread_factory(session_service)
-    owner = factory.for_owner_session(parent.session_id)
-    delegation_id = "del_" + "e" * 32
-    (
-        create_task,
-        resume_publish,
-        record,
-    ) = await _start_real_child_creation_before_publish(
-        owner,
-        session_id=parent.session_id,
-        coordinator_thread_id=parent_thread_id,
-        idempotency_key="consumer-read-publication-race",
-        delegation_id=delegation_id,
-        team_id="team_read_race",
-    )
-    assert record.state == "preparing"
-    assert (
-        owner.control_store.get_collaboration_member(delegation_id).state
-        == "registering"
-    )
-
-    row_loaded = threading.Event()
-    resume_reader = threading.Event()
-    snapshot_flags: list[bool] = []
-    reader_results = []
-    reader_errors: list[Exception] = []
-    original_projection = SessionControlStore._collaboration_member_from_row
-
-    def pause_after_member_row(control, row):
-        if (
-            threading.current_thread().name == "child-list-reader"
-            and control.database_path == owner.control_store.database_path
-            and row["delegation_id"] == delegation_id
-        ):
-            snapshot_flags.append(control.connection.in_transaction)
-            row_loaded.set()
-            if not resume_reader.wait(timeout=10):
-                raise TimeoutError("测试读取屏障未释放")
-        return original_projection(control, row)
-
-    monkeypatch.setattr(
-        SessionControlStore,
-        "_collaboration_member_from_row",
-        pause_after_member_row,
-    )
-
-    def read_child_threads() -> None:
-        try:
-
-            async def read_guarded():
-                async with session_service.session_read_admission(parent.session_id):
-                    return await session_service.list_child_threads(parent.session_id)
-
-            reader_results.append(asyncio.run(read_guarded()))
-        except Exception as error:  # noqa: BLE001 - 将读取线程异常传回主测试线程。
-            reader_errors.append(error)
-
-    reader = threading.Thread(target=read_child_threads, name="child-list-reader")
-    reader.start()
-    publication_finished_while_reader_paused = False
-    try:
-        assert await asyncio.to_thread(row_loaded.wait, 10)
-        resume_publish.set()
-        try:
-            await asyncio.wait_for(asyncio.shield(create_task), timeout=0.2)
-            publication_finished_while_reader_paused = True
-        except TimeoutError:
-            pass
-    finally:
-        resume_reader.set()
-        await asyncio.to_thread(reader.join, 10)
-        resume_publish.set()
-        if not create_task.done():
-            try:
-                await asyncio.wait_for(create_task, timeout=10)
-            except RuntimeError:
-                pass
-        _close_owner_thread_factory(factory)
-
-    assert not reader.is_alive()
-    assert reader_errors == []
-    assert snapshot_flags == [True]
-    assert not publication_finished_while_reader_paused
-    assert len(reader_results) == 1
-    assert reader_results[0].items == []
-    async with session_service.session_read_admission(parent.session_id):
-        result_after_publish = await session_service.list_child_threads(
-            parent.session_id
+    with factory.for_owner_session(parent.session_id) as owner:
+        delegation_id = "del_" + "e" * 32
+        (
+            create_task,
+            resume_publish,
+            record,
+        ) = await _start_real_child_creation_before_publish(
+            owner,
+            session_id=parent.session_id,
+            coordinator_thread_id=parent_thread_id,
+            idempotency_key="consumer-read-publication-race",
+            delegation_id=delegation_id,
+            team_id="team_read_race",
         )
-    assert result_after_publish.total == 1
+        assert record.state == "preparing"
+        assert (
+            owner.control_store.get_collaboration_member(delegation_id).state
+            == "registering"
+        )
+
+        row_loaded = threading.Event()
+        resume_reader = threading.Event()
+        snapshot_flags: list[bool] = []
+        reader_results = []
+        reader_errors: list[Exception] = []
+        original_projection = SessionControlStore._collaboration_member_from_row
+
+        def pause_after_member_row(control, row):
+            if (
+                threading.current_thread().name == "child-list-reader"
+                and control.database_path == owner.control_store.database_path
+                and row["delegation_id"] == delegation_id
+            ):
+                snapshot_flags.append(control.connection.in_transaction)
+                row_loaded.set()
+                if not resume_reader.wait(timeout=10):
+                    raise TimeoutError("测试读取屏障未释放")
+            return original_projection(control, row)
+
+        monkeypatch.setattr(
+            SessionControlStore,
+            "_collaboration_member_from_row",
+            pause_after_member_row,
+        )
+
+        def read_child_threads() -> None:
+            try:
+
+                async def read_guarded():
+                    async with session_service.session_read_admission(parent.session_id):
+                        return await session_service.list_child_threads(parent.session_id)
+
+                reader_results.append(asyncio.run(read_guarded()))
+            except Exception as error:  # noqa: BLE001 - 将读取线程异常传回主测试线程。
+                reader_errors.append(error)
+
+        reader = threading.Thread(target=read_child_threads, name="child-list-reader")
+        reader.start()
+        publication_finished_while_reader_paused = False
+        try:
+            assert await asyncio.to_thread(row_loaded.wait, 10)
+            resume_publish.set()
+            try:
+                await asyncio.wait_for(asyncio.shield(create_task), timeout=0.2)
+                publication_finished_while_reader_paused = True
+            except TimeoutError:
+                pass
+        finally:
+            resume_reader.set()
+            await asyncio.to_thread(reader.join, 10)
+            resume_publish.set()
+            if not create_task.done():
+                try:
+                    await asyncio.wait_for(create_task, timeout=10)
+                except RuntimeError:
+                    pass
+
+        assert not reader.is_alive()
+        assert reader_errors == []
+        assert snapshot_flags == [True]
+        assert not publication_finished_while_reader_paused
+        assert len(reader_results) == 1
+        assert reader_results[0].items == []
+        async with session_service.session_read_admission(parent.session_id):
+            result_after_publish = await session_service.list_child_threads(
+                parent.session_id
+            )
+        assert result_after_publish.total == 1
 
 
 async def test_list_child_threads_projects_control_store_state(

@@ -3,7 +3,7 @@
 ``SessionSubagentService``` 经本工厂取得绑定 owner Session 的
 ``ThreadCreationService```：workspace catalog store 来自新 catalog
 resolver 单例（``SessionCatalogPathResolver.store```），control store 按
-owner Session 目录惰性建立并缓存，gate 为工厂级共享实例（同进程内 delegate
+owner Session 目录在显式操作作用域内建立并关闭，gate 为工厂级共享实例（同进程内 delegate
 与其它 thread 创建操作互斥）。
 
 红线：
@@ -16,8 +16,8 @@ owner Session 目录惰性建立并缓存，gate 为工厂级共享实例（同�
 
 from __future__ import annotations
 
-from collections import OrderedDict
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import closing, contextmanager
 from pathlib import Path
 
 from app.agents.graph_binding import compute_capability_profile_hash
@@ -34,16 +34,8 @@ from app.core.thread_creation import ThreadCreationService
 __all__ = ["OwnerThreadCreationFactory"]
 
 
-#: 进程内 ThreadCreationService 缓存的容量上界。工厂是容器级长驻单例，每个
-#: 缓存值都持有一个打开 ``session-control.sqlite`` 的 ``SessionControlStore``；
-#: 缓存若无界，内存与文件描述符会随历史 owner session 数永久增长。上限内做
-#: LRU 淘汰；被淘汰的服务若仍被在飞的 ``create`` 持有，则等最后一个引用释放后
-#: 由其 ``SessionControlStore`` 的 sqlite 连接回收关闭 fd，绝不在使用中强关。
-_SERVICE_CACHE_LIMIT = 64
-
-
 class OwnerThreadCreationFactory:
-    """按 owner Session 构建/复用绑定该 Session 的 ThreadCreationService。"""
+    """按 owner Session 为一次操作持有 Thread 创建依赖。"""
 
     def __init__(
         self,
@@ -71,40 +63,37 @@ class OwnerThreadCreationFactory:
             else get_session_path_resolver(self._sessions_root)
         )
         self._gate = NavigationTopologyGate(self._sessions_root)
-        self._services: OrderedDict[str, ThreadCreationService] = OrderedDict()
+        self._controls: set[SessionControlStore] = set()
         self._collaboration_publication: Callable[[CollaborationFanoutRecord], None] | None = None
         self._collaboration_lock = None
 
     def bind_collaboration_publication(self, callback: Callable[[CollaborationFanoutRecord], None], publication_lock) -> None:
         self._collaboration_publication = callback
         self._collaboration_lock = publication_lock
-        for service in self._services.values():
-            service.control_store.bind_collaboration_publication(callback, publication_lock)
+        for control in self._controls:
+            control.bind_collaboration_publication(callback, publication_lock)
 
-    def for_owner_session(self, session_id: str) -> ThreadCreationService:
-        """返回绑定 owner Session 的 ThreadCreationService（进程内缓存）。"""
+    @contextmanager
+    def for_owner_session(self, session_id: str) -> Iterator[ThreadCreationService]:
+        """连接覆盖本次查询或完整创建，成功、异常和取消都显式关闭。"""
         resolver = self._require_catalog_resolver()
-        service = self._services.get(session_id)
-        if service is not None:
-            self._services.move_to_end(session_id)
-            return service
         session_dir = self._session_dir_for(session_id)
         control_store = SessionControlStore(session_dir / CONTROL_DATABASE_NAME)
-        if self._collaboration_publication is not None:
-            control_store.bind_collaboration_publication(self._collaboration_publication, self._collaboration_lock)
-        service = ThreadCreationService(
-            store=resolver.catalog_store,
-            control_store=control_store,
-            sessions_root=self._sessions_root,
-            workspace_id=self._workspace_id,
-            compute_capability_profile_hash=compute_capability_profile_hash,
-            gate=self._gate,
-        )
-        self._services[session_id] = service
-        self._services.move_to_end(session_id)
-        while len(self._services) > _SERVICE_CACHE_LIMIT:
-            self._services.popitem(last=False)
-        return service
+        with closing(control_store):
+            self._controls.add(control_store)
+            try:
+                if self._collaboration_publication is not None:
+                    control_store.bind_collaboration_publication(self._collaboration_publication, self._collaboration_lock)
+                yield ThreadCreationService(
+                    store=resolver.catalog_store,
+                    control_store=control_store,
+                    sessions_root=self._sessions_root,
+                    workspace_id=self._workspace_id,
+                    compute_capability_profile_hash=compute_capability_profile_hash,
+                    gate=self._gate,
+                )
+            finally:
+                self._controls.remove(control_store)
 
     def validate_owner_thread(self, session_id: str, thread_id: str) -> None:
         self._require_catalog_resolver().resolve_thread_node(session_id, thread_id)

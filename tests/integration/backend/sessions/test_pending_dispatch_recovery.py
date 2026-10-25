@@ -89,15 +89,16 @@ async def pending_recovery_case(request: pytest.FixtureRequest, monkeypatch: pyt
         path_resolver=workspace.resolver,
     )
     profile = {**DEEP_AGENT_CAPABILITY_PROFILE, "thread_role": "child"}
-    child = await factory.for_owner_session(session_id).create(
-        idempotency_key="pending-child", session_id=session_id, thread_id=None,
-        delegation_id=None, initial_state="idle",
-        session_metadata={
-            "graph_binding": {**asdict(DEEP_AGENT_GRAPH_BINDING),
-                              "capability_profile_hash": compute_capability_profile_hash(capability_profile=profile)},
-            "capability_profile": profile, "task_seed": None, "task_reference": None,
-        }, artifact_manifest={},
-    )
+    with factory.for_owner_session(session_id) as thread_owner:
+        child = await thread_owner.create(
+            idempotency_key="pending-child", session_id=session_id, thread_id=None,
+            delegation_id=None, initial_state="idle",
+            session_metadata={
+                "graph_binding": {**asdict(DEEP_AGENT_GRAPH_BINDING),
+                                  "capability_profile_hash": compute_capability_profile_hash(capability_profile=profile)},
+                "capability_profile": profile, "task_seed": None, "task_reference": None,
+            }, artifact_manifest={},
+        )
     threads = (workspace.resolver.main_thread_id(session_id), child.child_thread_id)
     saver = RolloutCheckpointSaver(sessions_dir=workspace.sessions_root)
     messages = MessageService(
@@ -164,8 +165,6 @@ async def pending_recovery_case(request: pytest.FixtureRequest, monkeypatch: pyt
     finally:
         await _stop_jobs(source)
         await _stop_jobs(cold)
-        for service in factory._services.values():
-            service.control_store.close()
         workspace.close()
 
 

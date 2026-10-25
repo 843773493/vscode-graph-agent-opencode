@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import json
 import re
-from collections.abc import Callable
-from contextlib import AbstractAsyncContextManager
+from collections.abc import Callable, Iterator
+from contextlib import AbstractAsyncContextManager, contextmanager
 
 from app.abstractions.session_subagent import OwnerThreadCreationFactoryProtocol
 from app.core.exceptions import NotFoundError
@@ -28,28 +28,31 @@ class TeamStore:
         self._factory = factory
         self._write_admission = write_admission
 
-    def control(self, session_id: str) -> SessionControlStore:
-        control = self._factory.for_owner_session(session_id).control_store
-        if (control.database_path.parent / "teams").exists():
-            raise RuntimeError("旧团队 JSON 存储不受支持，禁止作为第二权威读取或迁移")
-        return control
+    @contextmanager
+    def control(self, session_id: str) -> Iterator[SessionControlStore]:
+        with self._factory.for_owner_session(session_id) as thread_owner:
+            control = thread_owner.control_store
+            if (control.database_path.parent / "teams").exists():
+                raise RuntimeError("旧团队 JSON 存储不受支持，禁止作为第二权威读取或迁移")
+            yield control
 
     async def commit(self, board: TeamBoardDTO, event: TeamEventDTO,
                      *, wakeup: dict[str, object] | None = None) -> int:
         self._validate_team_id(board.team_id)
         async with self._write_admission(board.session_id):
-            control = self.control(board.session_id)
-            return control.commit_collaboration_board(
-                session_id=board.session_id, team_id=board.team_id, version=board.version,
-                board_json=board.model_copy(update={"members": [], "recent_events": []}).model_dump_json(),
-                event_json=event.model_dump_json(),
-                wakeup_json=None if wakeup is None else json.dumps(wakeup, ensure_ascii=False),
-            )
+            with self.control(board.session_id) as control:
+                return control.commit_collaboration_board(
+                    session_id=board.session_id, team_id=board.team_id, version=board.version,
+                    board_json=board.model_copy(update={"members": [], "recent_events": []}).model_dump_json(),
+                    event_json=event.model_dump_json(),
+                    wakeup_json=None if wakeup is None else json.dumps(wakeup, ensure_ascii=False),
+                )
 
     def get(self, session_id: str, team_id: str) -> TeamBoardDTO:
         self._validate_team_id(team_id)
         _observe_read(session_id)
-        rows = self.control(session_id).collaboration_boards(team_id)
+        with self.control(session_id) as control:
+            rows = control.collaboration_boards(team_id)
         if not rows:
             raise NotFoundError(f"团队不存在: {team_id}")
         board = TeamBoardDTO.model_validate(json.loads(rows[0]))
@@ -59,13 +62,15 @@ class TeamStore:
 
     def list(self, session_id: str) -> list[TeamBoardDTO]:
         _observe_read(session_id)
-        return [self.get(session_id, TeamBoardDTO.model_validate_json(row).team_id)
-                for row in self.control(session_id).collaboration_boards()]
+        with self.control(session_id) as control:
+            rows = control.collaboration_boards()
+        return [self.get(session_id, TeamBoardDTO.model_validate_json(row).team_id) for row in rows]
 
     def recent_events(self, session_id: str, team_id: str, *, limit: int = 20) -> list[TeamEventDTO]:
         self._validate_team_id(team_id)
         _observe_read(session_id)
-        events = [TeamEventDTO.model_validate_json(row) for row in self.control(session_id).collaboration_recent_events(team_id, limit)]
+        with self.control(session_id) as control:
+            events = [TeamEventDTO.model_validate_json(row) for row in control.collaboration_recent_events(team_id, limit)]
         if any((event.session_id, event.team_id) != (session_id, team_id) for event in events):
             raise RuntimeError("团队事件与权威 owner/ID 不一致")
         return events
@@ -73,7 +78,8 @@ class TeamStore:
     def latest_task_event(self, session_id: str, team_id: str, task_id: str) -> TeamEventDTO | None:
         self._validate_team_id(team_id)
         _observe_read(session_id)
-        row = self.control(session_id).collaboration_latest_task_event(team_id, task_id)
+        with self.control(session_id) as control:
+            row = control.collaboration_latest_task_event(team_id, task_id)
         if row is None:
             return None
         event = TeamEventDTO.model_validate_json(row)

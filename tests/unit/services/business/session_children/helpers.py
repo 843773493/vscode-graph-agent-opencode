@@ -162,11 +162,6 @@ def _owner_thread_factory(
     )
 
 
-def _close_owner_thread_factory(factory: OwnerThreadCreationFactory) -> None:
-    for owner in factory._services.values():
-        owner.control_store.close()
-
-
 async def _create_real_delegated_child(
     owner,
     *,

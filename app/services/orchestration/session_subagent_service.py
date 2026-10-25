@@ -185,25 +185,27 @@ class SessionSubagentService:
                 "delegation_id": delegation_id,
             },
         }
-        result = await self._thread_creation_factory.for_owner_session(
+        with self._thread_creation_factory.for_owner_session(
             parent_session_id
-        ).create(
-            idempotency_key=delegation_id,
-            session_id=parent_session_id,
-            thread_id=None,
-            delegation_id=delegation_id,
-            initial_state="running",
-            session_metadata=session_metadata,
-            artifact_manifest={},
-            collaboration_member={
-                "role": "delegated_subagent",
-                "subagent_type": subagent_type,
-                "title": normalized_title,
-                **dict(collaboration_member or {}),
-            },
-        )
+        ) as thread_owner:
+            result = await thread_owner.create(
+                idempotency_key=delegation_id,
+                session_id=parent_session_id,
+                thread_id=None,
+                delegation_id=delegation_id,
+                initial_state="running",
+                session_metadata=session_metadata,
+                artifact_manifest={},
+                collaboration_member={
+                    "role": "delegated_subagent",
+                    "subagent_type": subagent_type,
+                    "title": normalized_title,
+                    **dict(collaboration_member or {}),
+                },
+            )
         await self._bind_owner(parent_session_id)
-        bound_intent = self._thread_creation_factory.for_owner_session(parent_session_id).control_store.get_initial_execution_intent(delegation_id)
+        with self._thread_creation_factory.for_owner_session(parent_session_id) as thread_owner:
+            bound_intent = thread_owner.control_store.get_initial_execution_intent(delegation_id)
         accepted = SessionSubagentAccepted(
             owner_session_id=parent_session_id,
             child_thread_id=result.child_thread_id,

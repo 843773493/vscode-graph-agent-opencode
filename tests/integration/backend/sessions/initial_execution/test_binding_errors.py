@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import AsyncIterator
 from contextlib import closing
 
 import pytest
@@ -28,28 +29,28 @@ _WINDOWS = r"C:\private\initial-binding-target"
 
 
 @pytest.fixture
-async def published_intent(startup_container: AppContainer) -> tuple[SessionControlStore, ThreadExecutionIntent]:
+async def published_intent(startup_container: AppContainer) -> AsyncIterator[tuple[SessionControlStore, ThreadExecutionIntent]]:
     container = startup_container
     session = await container.session_service.create(SessionCreateRequest(title="真实初始绑定故障"))
-    creation = container.thread_initial_execution_service._factory.for_owner_session(session.session_id)
-    profile = {"thread_role": "child", "goal_enabled": False}
-    created = await creation.create(
-        idempotency_key="initial-binding-error", session_id=session.session_id, thread_id=None,
-        delegation_id=None, initial_state="running", artifact_manifest={}, session_metadata={
-            "graph_binding": {"graph_id": "deep-agent", "graph_revision": 1,
-                "graph_schema_hash": "sha256:" + "a" * 64,
-                "capability_profile_hash": compute_capability_profile_hash(capability_profile=profile)},
-            "capability_profile": profile,
-            "task_seed": {"description": "验证绑定故障恢复", "agent_id": session.current_agent_id,
-                "gateway_id": None, "request_id": None},
-            "task_reference": {"parent_session_id": session.session_id,
-                "parent_thread_id": await container.session_service.resolve_main_thread(session.session_id)},
-        },
-    )
-    intent, = creation.control_store.list_pending_initial_execution_intents()
-    assert intent.thread_id == created.child_thread_id and intent.state == "pending"
-    assert intent.claim_owner is None and intent.last_error is None
-    return creation.control_store, intent
+    with container.thread_initial_execution_service._factory.for_owner_session(session.session_id) as creation:
+        profile = {"thread_role": "child", "goal_enabled": False}
+        created = await creation.create(
+            idempotency_key="initial-binding-error", session_id=session.session_id, thread_id=None,
+            delegation_id=None, initial_state="running", artifact_manifest={}, session_metadata={
+                "graph_binding": {"graph_id": "deep-agent", "graph_revision": 1,
+                    "graph_schema_hash": "sha256:" + "a" * 64,
+                    "capability_profile_hash": compute_capability_profile_hash(capability_profile=profile)},
+                "capability_profile": profile,
+                "task_seed": {"description": "验证绑定故障恢复", "agent_id": session.current_agent_id,
+                    "gateway_id": None, "request_id": None},
+                "task_reference": {"parent_session_id": session.session_id,
+                    "parent_thread_id": await container.session_service.resolve_main_thread(session.session_id)},
+            },
+        )
+        intent, = creation.control_store.list_pending_initial_execution_intents()
+        assert intent.thread_id == created.child_thread_id and intent.state == "pending"
+        assert intent.claim_owner is None and intent.last_error is None
+        yield creation.control_store, intent
 
 
 @pytest.fixture(params=["runtime", "os", "sqlite", "identity", "type"])

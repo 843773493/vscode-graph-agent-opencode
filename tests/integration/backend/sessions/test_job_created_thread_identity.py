@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from app.domain.itemized.execution_queue import ExecutionQueueInput
 import asyncio
 import json
 import shutil
@@ -29,6 +28,7 @@ from app.core.identifier import create_prefixed_id
 from app.core.job_event_bus import EventType, JobEventBus
 from app.core.trace_middleware import TraceMiddleware
 from app.core.workspace_identity import load_or_create_workspace_id
+from app.domain.itemized.execution_queue import ExecutionQueueInput
 from app.schemas.internal_v2.common import MessageRole
 from app.schemas.internal_v2.message import MessageDTO
 from app.services.business.job.service import JobService
@@ -94,15 +94,16 @@ async def producer_case(request: pytest.FixtureRequest) -> AsyncIterator[TracePr
         **asdict(DEEP_AGENT_GRAPH_BINDING),
         "capability_profile_hash": compute_capability_profile_hash(capability_profile=profile),
     }
-    created = await factory.for_owner_session(session_id).create(
-        idempotency_key="trace-child", session_id=session_id, thread_id=None,
-        delegation_id=None, initial_state="idle",
-        session_metadata={
-            "graph_binding": graph_binding, "capability_profile": profile,
-            "task_seed": None, "task_reference": None,
-        },
-        artifact_manifest={},
-    )
+    with factory.for_owner_session(session_id) as thread_owner:
+        created = await thread_owner.create(
+            idempotency_key="trace-child", session_id=session_id, thread_id=None,
+            delegation_id=None, initial_state="idle",
+            session_metadata={
+                "graph_binding": graph_binding, "capability_profile": profile,
+                "task_seed": None, "task_reference": None,
+            },
+            artifact_manifest={},
+        )
     child_thread_id = created.child_thread_id
     workspace.resolver.resolve_thread_node(session_id, child_thread_id)
     saver = RolloutCheckpointSaver(sessions_dir=workspace.sessions_root)
@@ -143,8 +144,6 @@ async def producer_case(request: pytest.FixtureRequest) -> AsyncIterator[TracePr
         if tasks:
             await asyncio.wait_for(asyncio.gather(*tasks), timeout=5)
         await recorder.stop()
-        for service in factory._services.values():
-            service.control_store.close()
         workspace.close()
 
 

@@ -16,6 +16,7 @@ thread（同 owner、kind=child、durable admission intent pending），本模�
 
 from __future__ import annotations
 
+from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
 
@@ -57,7 +58,7 @@ class SessionReaderProtocol(Protocol):
 class OwnerThreadCreationFactoryProtocol(Protocol):
     """按 owner Session 提供绑定该 Session 的 ThreadCreationService。"""
 
-    def for_owner_session(self, session_id: str) -> ThreadCreationService: ...
+    def for_owner_session(self, session_id: str) -> AbstractContextManager[ThreadCreationService]: ...
 
     def validate_owner_thread(self, session_id: str, thread_id: str) -> None: ...
 

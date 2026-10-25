@@ -238,3 +238,11 @@ Web 定向 `BOXTEAM_E2E_SECTION8_FOCUS=copy_missing_attachment` 通过真实 Gat
 - 原Thread创建owner的三处目录删除统一复用`native_io_path`，保留冻结locator、完整归属核验和原fsync顺序。产品回滚断言提取为共用helper，新增单独的child回滚入口；原完整失败场景的来源删除、30天GC及全部断言仍保留，没有因Windows句柄占用而删减验收。
 - Windows快照`dd2ca4fc8d53f169e527e7cbe781f2cbe421fdae`的正式定向suite为1 passed/24.15秒，核对child/capture/claim均aborted、staging/final不存在且原附件关联不变。Linux原完整fork生命周期11 passed/118.28秒，定向staging/abort回归10 passed；共享树定向产品入口1 passed/19.99秒及相同10项回归通过。准确命令、完整源码指纹、原始输出及退出码位于`out/tests/temp/attachment_child_rollback_20261025/artifacts/`。
 - 首次Windows完整场景已越过全部回滚断言，后续来源Session隔离rename因控制连接占用返回WinError 5，原始失败保留；此前WinError 3反例保留于`attachment_retention_restart_20261025`。TODO：控制连接生命周期及Windows完整故障组合。5.2/5.4/6.2继续未勾选，整体20/23；按用户要求完成此修复提交后停止，不扩展团队、成员、委派或协作实现/专项验证。
+
+
+### 2026-10-25 Thread 控制连接生命周期（恢复推进，6.2部分收口）
+
+- 删除 factory 的长期 LRU service/连接缓存，改为显式操作作用域；协议与所有调用（含嵌入子进程代码）迁齐，测试查询不跨物理 Session 删除，异常/取消/构造失败关闭同一原连接。工厂保留原 gate 与当前作用域 publication 接线，不新增持久状态。
+- 工厂9项及绑定/创建故障共44 passed，Linux正式附件fork生命周期11 passed，取消/冷恢复8 passed；8项中6项为构造checkpoint的局部恢复，2项真实执行生成来源。Windows快照 `3aacd348f29229dea876b25a6c3086722586e4b0` 为9 passed/1 failed/1 error，已越过原来源删除WinError 5，余项分别是附件capture普通mkdir的WinError 206与目标装具catalog未关闭的WinError 32，仍须修复复验。证据在 `out/tests/temp/thread_control_lifetime_20261026/artifacts/`。
+- Linux扩展snapshot竞争初轮退出143；加首错诊断后确认原手填来源缺冻结队列输入，完整HEAD archive同样失败。保留生产拒绝及原断言，在旧装具登记TODO；新连接suite只登记本片取消/恢复边界。API代表用例另在完整HEAD复现既存workspace identity不一致；扩大Ruff的4项import错误均在未修改文件，本片全部changed Python检查通过。原失败原件保留，不算通过。
+- AST核对无未迁移factory调用（含可解析嵌入脚本），除工厂新测试外原测试assert数量保持；结构自查未发现本片新增领域或导入边，既有超大fork测试文件及超20文件目录的维护风险保留。团队、成员、委派、协作只机械迁移连接用法，不追加功能或专项验证。5.2/5.4/6.2仍未完成，整体20/23，继续原goal。

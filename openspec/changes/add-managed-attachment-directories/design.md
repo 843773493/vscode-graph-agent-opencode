@@ -245,3 +245,12 @@ TODO：整组preflight仍须等齐所选锁，不能为了peer提前detach破坏
 Windows child fork失败回滚已将原Thread创建owner的三处staging/final目录删除统一接入既有`native_io_path`，仅在原生I/O边界扩展路径；冻结locator、归属清单核验及fsync顺序保持不变。真实执行生成深层历史后，在附件预留故障点核对child/capture/claim均aborted、目录全部清除、原关联逐字保全；独立正式suite为`integration-attachment-child-fork-rollback`。原完整场景继续验证来源删除与GC，全部断言保留，定向场景不代替它。
 
 TODO：独立图中缓存的ThreadCreationService控制连接仍缺少显式生命周期关闭；Windows完整场景通过回滚断言后，来源Session隔离rename被占用连接阻断。该归属问题与完整6.2故障组合留待后续，不依赖GC时机关闭连接、不扩大目录清理范围，也不把局部通过冒称完整Windows验收。按用户要求，本次长路径修复验证和提交后停下；团队、成员、委派及协作继续暂缓。准确源码、原始失败/通过结果和退出码见`out/tests/temp/attachment_child_rollback_20261025/artifacts/`。
+
+
+### 2026-10-25 Thread 创建控制连接的操作作用域
+
+用户恢复原 goal 后继续处理 Windows 来源 Session 删除的连接占用。原 `OwnerThreadCreationFactory` 不再长期缓存 `ThreadCreationService` 与 SQLite 连接；每次查询或完整创建通过显式上下文持有连接，成功、异常、取消及 service 构造失败均关闭同一连接。factory 仍共享原 topology gate；当前作用域只参与已有 publication binding，不新增持久事实、连接缓存或强关未知句柄。协议及全部生产/测试调用已迁齐，测试内查询连接也在物理 Session 删除前释放；团队调用仅机械迁移连接用法，不追加功能或专项验收。
+
+Linux 工厂与绑定/故障恢复 44 passed（其中工厂 9 项），正式附件 fork 生命周期 11 passed，取消/冷恢复 8 passed；后者 6 项仍是构造 checkpoint 的局部恢复验证，2 项通过真实消息执行生成来源，不能合称完整执行验收。Windows 当前快照完整附件 fork suite 的前 9 项通过，已越过原来源删除 WinError 5；随后跨端附件 capture 的普通 mkdir 触发 WinError 206，下一项装具重建又因目标附件 catalog 句柄未关闭报 WinError 32。后两项仍未通过，需在原附件复制 I/O 和装具 owner 内继续收口，不改系统长路径配置或缩短权威 locator。
+
+扩大 Linux snapshot 竞争检查在原 HEAD 完整 archive 中同样复现旧手填来源缺少冻结队列输入；保持生产拒绝与全部断言，装具迁为产品入口仍 TODO，不将该失败归因本次连接协议。准确命令、源码前后指纹、原始输出、退出码与 AST/调用方/断言审计位于 `out/tests/temp/thread_control_lifetime_20261026/artifacts/`。本片不构成整个挂起操作/关闭期限或完整平台故障组合完成，5.2、5.4、6.2继续未勾。

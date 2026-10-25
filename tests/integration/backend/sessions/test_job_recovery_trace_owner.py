@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from app.domain.itemized.execution_queue import ExecutionQueueInput
 import asyncio
 import copy
 import json
@@ -24,6 +23,7 @@ from app.container import AppContainer, build_app_container
 from app.core.identifier import create_prefixed_id
 from app.core.job_event_bus import JobEventBus
 from app.core.workspace_identity import load_or_create_workspace_id
+from app.domain.itemized.execution_queue import ExecutionQueueInput
 from app.schemas.event import JobCreatedEvent, JobStartedEvent
 from app.schemas.internal_v2.common import MessageRole
 from app.schemas.internal_v2.message import MessageDTO
@@ -98,15 +98,16 @@ async def recovery_case(request: pytest.FixtureRequest) -> AsyncIterator[Recover
         **asdict(DEEP_AGENT_GRAPH_BINDING),
         "capability_profile_hash": compute_capability_profile_hash(capability_profile=profile),
     }
-    child = await factory.for_owner_session(session_id).create(
-        idempotency_key="recovery-child", session_id=session_id, thread_id=None,
-        delegation_id=None, initial_state="idle",
-        session_metadata={
-            "graph_binding": graph, "capability_profile": profile,
-            "task_seed": None, "task_reference": None,
-        },
-        artifact_manifest={},
-    )
+    with factory.for_owner_session(session_id) as thread_owner:
+        child = await thread_owner.create(
+            idempotency_key="recovery-child", session_id=session_id, thread_id=None,
+            delegation_id=None, initial_state="idle",
+            session_metadata={
+                "graph_binding": graph, "capability_profile": profile,
+                "task_seed": None, "task_reference": None,
+            },
+            artifact_manifest={},
+        )
     thread_ids = (main_thread_id, child.child_thread_id)
     session_paths = {session_id: resolver.resolve_session_node(session_id)}
     saver = RolloutCheckpointSaver(sessions_dir=source.sessions_root)
@@ -164,8 +165,6 @@ async def recovery_case(request: pytest.FixtureRequest) -> AsyncIterator[Recover
             task.cancel()
         if tasks:
             await asyncio.wait_for(asyncio.gather(*tasks, return_exceptions=True), timeout=5)
-        for service in factory._services.values():
-            service.control_store.close()
         source.close()
 
 

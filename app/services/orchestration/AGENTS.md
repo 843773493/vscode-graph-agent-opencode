@@ -28,7 +28,7 @@ orchestration/
 ├── goal_runtime_service.py               Job 事件驱动的 Goal 捕获、续跑和终止状态
 ├── initial_execution_binding_worker.py   持久初始执行 intent 的 claim/bind 消费
 ├── thread_initial_execution_service.py   child Thread 初始执行绑定与 dispatch
-├── owner_thread_creation_factory.py      owner Session 的 Thread 创建依赖装配
+├── owner_thread_creation_factory.py      按操作作用域装配 Thread 创建依赖并显式关闭控制连接
 ├── runtime_source_dispatcher.py           内部 runtime source/wakeup 的准入与恢复派发
 ├── thread_residency.py                    runtime admission、generation、blocker 与 idle 回收流程
 ├── thread_residency_state.py               驻留状态、runtime slot、lease 和快照的数据形状
