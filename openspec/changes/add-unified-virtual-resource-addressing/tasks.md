@@ -645,3 +645,13 @@
 - 扩展 Node 单元检查曾为238 passed/8 setup errors，错误均是继承 fixture 未传新增 runtime 依赖；迁齐后8项全部通过。HTTP002业务断言已走完但证据编码误把 store 的二元返回值当成 JSON 正文，HTTP003仍未正确解包；现保存原 bytes 和 DTO，失败原件保留。最终 Ruff/compileall 均通过；共享合并后的验证另记原件，不拿候选通过冒充共享通过。
 - 准确命令、源码前后指纹、原始输出、实际退出码和主线程结构自查在 `out/tests/temp/node_debug_launch_errors_20261025/artifacts/`；不称独立代理审查，不代替 Windows 实机、完整主窗口或其它原生/Inspector 错误出口的总验收。2.2/7.2 保持未勾，Agent 团队与协作专项继续 TODO。
 共享合并后：完整Node调试/API 280 passed（57.89秒），真实Gateway重启/原配置重试1 passed（31.18秒）；Ruff、compileall与45项strict均退出0，所记录源码前后指纹一致且进程组无残留。保留原暂存索引字节，并将fixture依赖修改合入共享现有的node_debug子目录，独立候选仍按其HEAD中的原路径提交该消费者修改。
+
+
+### 2026-10-25 Node Inspector 接收故障（2.2/7.2 部分收口）
+
+- 接收循环不再把原生异常或无效协议帧原文拼进公开错误。原 producer 统一记录精确 Session/Thread、异常类型，系统错误带 errno/winerror，JSON 语法错误带行/列/位置；等待中的命令与 live 状态消费同一公开事实。原异常对象保留为 cause，完整堆栈写诊断日志；正常断线、取消、closing 和已有日志点错误优先级不变，不增加文本脱敏、第二错误账本或传输实现。
+- 完整 HEAD 候选加新增反例为5 failed（0.67秒），覆盖 JSON、带路径的无效帧和 POSIX/盘符/UNC 原生异常；修复后接收/超时9 passed，Inspector/启动/API 31 passed（4.24秒）。盘符/UNC 只验证错误文字边界，不计 Windows 实机通过。
+- 真实 Node 进程和原 WebSocket 握手接通后，在外部接收边界注入 PermissionError；正式 API 路由、TraceMiddleware 与原异常 handler 返回409且 request_id 一致，公开错误/live/manifest无原路径，原 cause 可在诊断核对。关键 Session、方案、启动、claim和失败动作由产品入口产生；核实原PID已退出、claim settled、冷服务重开后的精确动作与方案，并在故障移除后从同一方案成功重试和停止。候选1 passed（12.18秒）。HTTP 使用进程内 ASGI、测试授权准入和传输故障替身，冷重开是服务对象而非整个后端进程，不称真实 Gateway、进程重启或完整 Web 验收。
+- 初次 HTTP 装具遗漏生产异常 handler，409无 request_id；接入原 handler 后保留请求身份断言。第二次误将已启动又退出的真实进程当作未 spawn，按原快照代码改为精确核 PID、OS 不存在与 settled claim，而非要求历史 PID 为空；原失败输出均保留。最终 Ruff/compileall通过，主线程差异自查；未启动团队或独立审查代理。
+- 准确命令、受测源码前后指纹、原始输出和退出码在 `out/tests/temp/node_debug_receive_errors_20261025/artifacts/`。本切片不代替2.2/7.2全局门、其它 Inspector/原生错误出口、Windows实机或主窗口；Agent团队、委派及协作专项继续TODO。
+共享最终复验：Node调试与主API270 passed（55.53秒），请求身份/Thread范围14 passed（2.85秒），同一真实Node/ASGI故障恢复1 passed（10.13秒）；Ruff/compileall和strict 45 passed/0 failed。记录的源码指纹前后一致、进程组无残留；20个其它Inspector方法AST不变，未新增生产目录，原共享暂存索引独立保留。最终仅追加本验收文字，未修改受测代码。

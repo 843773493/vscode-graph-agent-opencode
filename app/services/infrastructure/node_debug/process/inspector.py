@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 from pathlib import Path
 from typing import Literal, cast
@@ -21,6 +22,8 @@ from app.services.infrastructure.node_debug.runtime_state import (
     NodeDebugStopSnapshotClearer,
 )
 from app.services.infrastructure.workspace_files.paths import WorkspaceFilePaths
+
+logger = logging.getLogger(__name__)
 
 
 class NodeDebugInspector:
@@ -179,8 +182,19 @@ class NodeDebugInspector:
                             or "Node Inspector WebSocket 已断开"
                         )
                     self._clear_stop_snapshot(runtime)
-        except Exception as error:  # noqa: BLE001 - 接收循环必须将适配器故障写入状态
-            receive_error = RuntimeError(f"读取 Node Inspector 事件失败: {error}")
+        except Exception as error:
+            # 传输异常与无效帧可能含原生位置；公开状态只记录目标和结构化原因。
+            message = (
+                "读取 Node Inspector 事件失败: "
+                f"session_id={runtime.session_id}, thread_id={runtime.thread_id}, "
+                f"error_type={type(error).__name__}"
+            )
+            if isinstance(error, OSError):
+                message += f", errno={error.errno}, winerror={getattr(error, 'winerror', None)}"
+            elif isinstance(error, json.JSONDecodeError):
+                message += f", line={error.lineno}, column={error.colno}, position={error.pos}"
+            logger.exception(message)
+            receive_error = RuntimeError(message)
             receive_error.__cause__ = error
             receive_error.__suppress_context__ = True
             if not runtime.closing:
@@ -188,7 +202,7 @@ class NodeDebugInspector:
                     runtime.status = "failed"
                     runtime.error_message = (
                         runtime.logpoint_error_message
-                        or f"读取 Node Inspector 事件失败: {error}"
+                        or message
                     )
                     self._clear_stop_snapshot(runtime)
         finally:

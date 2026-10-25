@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import errno
 import json
+import logging
 from collections.abc import AsyncIterator
 from pathlib import Path
 
@@ -39,12 +41,22 @@ def inspector(tmp_path: Path) -> NodeDebugInspector:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("failure", ["json", "payload", "posix", "drive", "unc"])
 async def test_receive_failure_reaches_pending_command(
     inspector: NodeDebugInspector,
     inspector_runtime: NodeDebugRuntime,
+    failure: str,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """接收循环故障必须将具体原因传给正在等待的 Inspector 命令。"""
+    """公开故障保留目标和原因类型，原异常只进 cause 与诊断。"""
     sent = asyncio.Event()
+    native_paths = {
+        "posix": "/private/inspector-receive-secret",
+        "drive": r"C:\private\inspector-receive-secret",
+        "unc": r"\\server\private\inspector-receive-secret",
+    }
+    original = PermissionError(errno.EACCES, "读取原生位置失败", native_paths.get(failure))
+    original.winerror = 5
 
     class MalformedSocket:
         async def send(self, message: str) -> None:
@@ -53,22 +65,39 @@ async def test_receive_failure_reaches_pending_command(
 
         def __aiter__(self) -> AsyncIterator[str]:
             async def messages() -> AsyncIterator[str]:
-                yield "{"
+                if failure == "json":
+                    yield '{"inspector-receive-secret":'
+                elif failure == "payload":
+                    yield json.dumps(["/private/inspector-receive-secret"])
+                else:
+                    raise original
 
             return messages()
 
     inspector_runtime.inspector.socket = MalformedSocket()  # type: ignore[assignment]
     command = asyncio.create_task(inspector.command(inspector_runtime, "Runtime.enable"))
     await asyncio.wait_for(sent.wait(), timeout=1)
-    receiver = asyncio.create_task(inspector.receive_messages(inspector_runtime))
+    with caplog.at_level(logging.ERROR, logger=NodeDebugInspector.__module__):
+        receiver = asyncio.create_task(inspector.receive_messages(inspector_runtime))
+        with pytest.raises(RuntimeError, match="读取 Node Inspector 事件失败") as caught:
+            await command
+        await receiver
 
-    with pytest.raises(RuntimeError, match="读取 Node Inspector 事件失败") as caught:
-        await command
-    await receiver
-
-    assert isinstance(caught.value.__cause__, json.JSONDecodeError)
-    assert "Expecting property name" in str(caught.value)
+    public = str(caught.value)
+    cause = caught.value.__cause__
+    assert inspector_runtime.session_id in public and inspector_runtime.thread_id in public
+    assert "inspector-receive-secret" not in public
+    if failure == "json":
+        assert isinstance(cause, json.JSONDecodeError)
+        assert "JSONDecodeError" in public
+        assert f"line={cause.lineno}, column={cause.colno}, position={cause.pos}" in public
+    elif failure == "payload":
+        assert isinstance(cause, TypeError)
+        assert "TypeError" in public and "inspector-receive-secret" in str(cause)
+    else:
+        assert cause is original
+        assert "PermissionError" in public and "errno=13" in public and "winerror=5" in public
+    assert any(record.exc_info and record.exc_info[1] is cause for record in caplog.records)
     assert inspector_runtime.status == "failed"
-    assert inspector_runtime.error_message is not None
-    assert "Expecting property name" in inspector_runtime.error_message
+    assert inspector_runtime.error_message == public
     assert inspector_runtime.inspector.pending_commands == {}
