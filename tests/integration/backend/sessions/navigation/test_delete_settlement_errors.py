@@ -272,3 +272,99 @@ async def test_delete_budget_returns_durable_receipt_and_keeps_navigation_worker
     async with asyncio.timeout(5):
         while (await _receipt(client, followup_id)).state != "committed":
             await asyncio.sleep(0.01)
+
+
+@pytest.mark.parametrize("stage", ["preparation", "handoff"])
+async def test_preparation_and_subtree_delete_share_deadline_without_blocking_error_receipt(
+    navigation_api: tuple[AppContainer, httpx.AsyncClient, str],
+    monkeypatch: pytest.MonkeyPatch, stage: str,
+) -> None:
+    container, client, _created_id = navigation_api
+    catalog, jobs = container.session_catalog_service, container.job_service
+    resolver = catalog.path_resolver
+    session = await container.session_service.create(SessionCreateRequest(title="准备窗口共用期限"))
+    sid = session.session_id
+    source = resolver.resolve_session_node(sid)
+    original_control = _catalog_dump(source / "session-control.sqlite")
+    operation_id = create_prefixed_id("op")
+    entered, release, drain_reached = asyncio.Event(), asyncio.Event(), asyncio.Event()
+    loop = asyncio.get_running_loop()
+    real_time = loop.time
+    offset = 0
+    monkeypatch.setattr(loop, "time", lambda: real_time() + offset)
+
+    async def preparing() -> None:
+        entered.set()
+        await release.wait()
+
+    async def observe(current_operation: str, phase: str) -> None:
+        if current_operation == operation_id and phase == f"deletion.drain_waiting/{sid}":
+            drain_reached.set()
+
+    monkeypatch.setattr(deletion, "observe_phase", observe)
+    preparation = asyncio.create_task(jobs.run_session_preparation(sid, preparing))
+    try:
+        await asyncio.wait_for(entered.wait(), 5)
+        async with AsyncExitStack() as holders:
+            if stage == "handoff":
+                await holders.enter_async_context(resolver._delete_service._session_gate.shared(sid))
+            accepted = await client.post("/api/v1/session-catalog/operations:enqueue", json={
+                "intents": [{
+                    "client_operation_id": operation_id, "client_sequence": 1,
+                    "kind": "delete_session", "target_node_id": sid,
+                    "base_catalog_revision": resolver.revision,
+                }],
+            })
+            assert accepted.status_code == 202, accepted.text
+            async with asyncio.timeout(5):
+                while sid not in jobs._deleting_sessions:
+                    await asyncio.sleep(0)
+            assert (await _receipt(client, operation_id)).state == "running"
+            assert resolver.catalog_store.get_node(sid).state == "active"
+            if stage == "preparation":
+                # 真实调度锁仍被另一调用持有，取消准备等待不能再排队取得它。
+                await holders.enter_async_context(jobs._dispatch_lock)
+                offset = 31
+            else:
+                offset = 20
+                release.set()
+                await preparation
+                await asyncio.wait_for(drain_reached.wait(), 5)
+                pending = await _receipt(client, operation_id)
+                assert pending.state == "committed" and pending.settlement == "pending"
+                offset = 31
+            async with asyncio.timeout(5):
+                while True:
+                    failed = await _receipt(client, operation_id)
+                    if failed.state == "rejected" or failed.settlement == "repair_required":
+                        break
+                    await asyncio.sleep(0.01)
+            assert failed.state == ("rejected" if stage == "preparation" else "committed")
+            assert failed.error_code == ("delete_wait_timeout" if stage == "preparation" else "delete_settlement_repair_required")
+            assert sid in str(failed.error_detail) and str(source) not in str(failed.error_detail)
+            assert failed.settlement == (None if stage == "preparation" else "repair_required")
+            assert sid not in jobs._deleting_sessions
+            assert source.is_dir() and _catalog_dump(source / "session-control.sqlite") == original_control
+            assert not (resolver._delete_service._deleting_dir(operation_id) / sid).exists()
+            if stage == "preparation":
+                assert not preparation.done() and jobs._session_preparations[sid] == 1
+                assert resolver.catalog_store.get_node(sid).state == "active"
+                with pytest.raises(KeyError):
+                    resolver.catalog_store.get_subtree_delete_record(operation_id)
+            else:
+                journal = resolver.catalog_store.get_subtree_delete_record(operation_id)
+                assert journal.state == "deleting" and journal.drained_session_ids == ()
+                assert resolver.catalog_store.get_node(sid).storage_relative_locator == journal.frozen_session_locators[sid]
+            assert catalog.operations.worker_state == "running" and catalog.operations.worker_error is None
+        release.set()
+        await preparation
+        if stage == "handoff":
+            await catalog.operations.stop()
+            await catalog.operations.start()
+            assert (await _settlement(client, operation_id, "settled")).state == "committed"
+            assert not source.exists()
+        else:
+            assert await jobs.run_session_preparation(sid, lambda: asyncio.sleep(0, result="still-open")) == "still-open"
+    finally:
+        release.set()
+        await asyncio.gather(preparation, return_exceptions=True)

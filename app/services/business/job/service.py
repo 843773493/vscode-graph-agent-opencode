@@ -20,6 +20,7 @@ from app.core.job_event_bus import EventType
 from app.core.key_lock_pool import KeyLockPool
 from app.core.session_interrupt_state import SessionInterruptState
 from app.core.session_lifecycle_gate import SessionDeletionPendingError
+from app.core.session_subtree_delete import SubtreeDeleteWaitTimeout
 from app.core.shielded_cleanup import run_cleanup_shielded, run_sync_shielded
 from app.core.trace_middleware import (
     get_current_gateway_id,
@@ -175,7 +176,7 @@ class JobService:
         self._thread_current_job: dict[tuple[str, str], str] = {}
         self._pending_queue = JobPendingQueue()
         self._dispatch_lock = asyncio.Lock()
-        self._preparation_changed = asyncio.Condition(self._dispatch_lock)
+        self._preparation_changed = asyncio.Event()
         self._job_creation_locks = KeyLockPool()
         self._pending_restore_locks = KeyLockPool()
         self._pending_dispatch_locks = KeyLockPool()
@@ -578,43 +579,62 @@ class JobService:
                     self._session_preparations[session_id] = remaining
                 else:
                     self._session_preparations.pop(session_id, None)
-                self._preparation_changed.notify_all()
+                self._preparation_changed.set()
 
     async def run_session_delete_operation(
         self,
         session_id: str,
         operation: Callable[[], Awaitable[T]],
+        *,
+        deadline: float,
     ) -> T:
-        return await self.run_sessions_delete_operation([session_id], operation)
+        return await self.run_sessions_delete_operation([session_id], operation, deadline=deadline)
 
     async def run_sessions_delete_operation(
         self,
         session_ids: list[str],
         operation: Callable[[], Awaitable[T]],
+        *,
+        deadline: float,
     ) -> T:
-        """关闭新 admission，排空已登记的准备窗口，再由删除 owner 结算旧 Job。"""
+        """按删除入口的原截止排空准备窗口，operation继续消费同一截止。"""
         normalized_session_ids = sorted(set(session_ids))
+        failure_detail = (
+            "Session 删除准入等待已达总截止时间；原准备窗口仍保留: "
+            f"session_ids={','.join(normalized_session_ids)}, "
+        )
+        if deadline <= asyncio.get_running_loop().time():
+            raise SubtreeDeleteWaitTimeout(failure_detail + "phase=job-dispatch")
         if not normalized_session_ids:
             return await operation()
-        async with self._dispatch_lock:
-            for session_id in normalized_session_ids:
-                if session_id in self._deleting_sessions:
-                    raise RuntimeError(f"会话删除已在进行: {session_id}")
-            self._deleting_sessions.update(normalized_session_ids)
+        budget = asyncio.timeout_at(deadline)
+        admitted = False
+        phase = "job-dispatch"
         try:
-            # 等待时释放调度锁，原准备窗口的 finally 才能结算计数；
-            # 已关闭的新准入不能延长本次排空，旁系 Session 仍可继续工作。
-            async with self._preparation_changed:
-                await self._preparation_changed.wait_for(
-                    lambda: all(
-                        self._session_preparations.get(session_id, 0) == 0
-                        for session_id in normalized_session_ids
-                    )
-                )
+            async with budget:
+                async with self._dispatch_lock:
+                    for session_id in normalized_session_ids:
+                        if session_id in self._deleting_sessions:
+                            raise RuntimeError(f"会话删除已在进行: {session_id}")
+                    self._deleting_sessions.update(normalized_session_ids)
+                    admitted = True
+                phase = "job-preparation"
+                # 计数检查与清事件同锁；等待不持调度锁，取消也无需重新取锁。
+                while True:
+                    async with self._dispatch_lock:
+                        if all(self._session_preparations.get(sid, 0) == 0 for sid in normalized_session_ids):
+                            break
+                        self._preparation_changed.clear()
+                    await self._preparation_changed.wait()
+            # 准备与物理删除串行使用同一绝对截止，不叠加或重置计时器。
             return await operation()
-        except BaseException:
-            async with self._dispatch_lock:
+        except BaseException as error:
+            if admitted:
+                # 只同步归还本调用的准入标记，不修改计数/队列；不能再排队等锁。
+                # 此集合仅由当前事件循环访问，原准备与Job仍由其owner持有。
                 self._deleting_sessions.difference_update(normalized_session_ids)
+            if isinstance(error, TimeoutError) and budget.expired():
+                raise SubtreeDeleteWaitTimeout(failure_detail + f"phase={phase}") from error
             raise
 
     async def list_steps(self, job_id: str) -> list[StepDTO]:

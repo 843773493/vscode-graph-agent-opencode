@@ -209,7 +209,7 @@ fork SHALL 沿用统一资源目标检查及现有 journal/claim/publication，�
 #### Scenario: Session 删除排空超过期限
 
 - **WHEN** Session 删除仍在等待未核实的卸载操作且达到关闭期限
-- **THEN** 子树删除 owner 自入口取得一次30秒协作式等待预算，包含同key锁、mark/finish拓扑gate及全部Session的retention、creation、holder、Session gate与资源drain，阶段切换不重置。到期返回包含工作区、根节点、operation和阶段的明确错误，保留原进度、未核实操作和恢复所需locator；原runtime build/unload继续由原owner持有，不能报告已删除后让原操作继续修改已移除的数据。底层owner自己的TimeoutError和调用者取消保留原归属。该预算不代替调用前的Job准备窗口、同步阻塞及不合作取消的完整期限与终止核实
+- **THEN** 导航删除入口取得一次30秒协作式等待截止，Job调度锁、已接纳准备窗口与子树删除owner共用；直接进入子树删除owner时才由该入口取得默认截止。包含同key锁、mark/finish拓扑gate及全部Session的retention、creation、holder、Session gate与资源drain，阶段切换不重置。准备阶段到期明确报告Session与阶段，子树阶段同时报告工作区、根节点与operation；保留原进度、未核实操作和恢复所需locator。准备等待不持调度锁，到期或取消不为归还本调用的准入标记再次等待该锁，不清除其它删除调用的标记；原准备任务、Job队列与runtime build/unload继续由原owner持有。传入截止已过时不得创建journal或mark，不能报告已删除后让原操作继续修改已移除的数据。底层owner自己的TimeoutError和调用者取消保留原归属；同步阻塞及不合作取消的完整期限与终止核实仍须单独验收
 
 #### Scenario: 导航删除在逻辑提交前后耗尽预算
 

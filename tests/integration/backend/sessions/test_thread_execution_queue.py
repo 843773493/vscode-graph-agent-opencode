@@ -215,6 +215,7 @@ async def test_delete_cancels_durable_entries_before_discarding_jobs(queue_case:
     second = case.accept("尚未调用 start_job")
     deleted = await case.jobs.run_session_delete_operation(
         case.session_id, lambda: case.jobs.delete_session_jobs(case.session_id),
+        deadline=asyncio.get_running_loop().time() + 30,
     )
     assert deleted == 2
     assert case.saver.execution_queue_snapshot(case.session_id, case.thread_id).records == ()
@@ -251,6 +252,7 @@ async def test_delete_queue_write_failure_keeps_active_task_and_remaining_fifo(
     with pytest.raises(OSError, match="injected delete queue terminal failure"):
         await case.jobs.run_session_delete_operation(
             case.session_id, lambda: case.jobs.delete_session_jobs(case.session_id),
+            deadline=asyncio.get_running_loop().time() + 30,
         )
     assert case.session_id not in case.jobs._deleting_sessions
     assert active.status == original_status and active.cancellation_reason is None
@@ -268,6 +270,7 @@ async def test_delete_queue_write_failure_keeps_active_task_and_remaining_fifo(
     monkeypatch.setattr(case.saver, "mark_job_terminal_status", original_writer)
     assert await case.jobs.run_session_delete_operation(
         case.session_id, lambda: case.jobs.delete_session_jobs(case.session_id),
+        deadline=asyncio.get_running_loop().time() + 30,
     ) == 3
     assert case.saver.execution_queue_snapshot(case.session_id, case.thread_id).records == ()
     for _, identity in [first, second, third]:

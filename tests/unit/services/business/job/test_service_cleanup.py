@@ -76,6 +76,7 @@ async def test_delete_session_jobs_removes_running_and_queued_jobs(job_service_f
 
     deleted_count = await service.run_session_delete_operation(
         session_id, lambda: service.delete_session_jobs(session_id),
+        deadline=asyncio.get_running_loop().time() + 30,
     )
 
     assert deleted_count == 2

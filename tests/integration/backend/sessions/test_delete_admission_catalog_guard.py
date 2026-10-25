@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from app.domain.itemized.execution_queue import ExecutionQueueInput
 import asyncio
 import json
 import shutil
@@ -17,8 +16,12 @@ import pytest
 from app.core.background_message_bus import BackgroundMessageBus
 from app.core.exceptions import NotFoundError
 from app.core.job_event_bus import JobEventBus
-from app.core.session_lifecycle_gate import NavigationTopologyGate, SessionDeletionPendingError
+from app.core.session_lifecycle_gate import (
+    NavigationTopologyGate,
+    SessionDeletionPendingError,
+)
 from app.core.session_subtree_delete import SessionSubtreeDeleteService
+from app.domain.itemized.execution_queue import ExecutionQueueInput
 from app.schemas.internal_v2.common import JobStatus, MessageRole
 from app.schemas.internal_v2.message import MessageDTO
 from app.services.business.job.service import JobService, JobState
@@ -216,6 +219,7 @@ async def test_large_subtree_delete_commits_one_visibility_transition(
 
 @pytest.fixture
 async def admission_harness() -> AsyncIterator[_AdmissionHarness]:
+    # TODO：统一catalog与消息owner的真实workspace身份；旧HEAD的两个执行场景也在删除前拒绝。
     run_context = TestRunContext.from_test_file(Path(__file__))
     if run_context.workspace_root.exists():
         shutil.rmtree(run_context.workspace_root)
@@ -301,7 +305,7 @@ async def test_delete_drains_existing_preparation_before_catalog_mark(
 
     preparation = asyncio.create_task(service.run_session_preparation(session_id, preparing))
     await asyncio.wait_for(entered.wait(), timeout=3)
-    deletion = asyncio.create_task(service.run_session_delete_operation(session_id, deleting))
+    deletion = asyncio.create_task(service.run_session_delete_operation(session_id, deleting, deadline=asyncio.get_running_loop().time() + 30))
     try:
         # 经过同一调度锁确认删除已经关闭新准入，不能以 sleep 猜测执行顺序。
         async def admission_closed() -> None:
@@ -410,6 +414,7 @@ async def test_catalog_delete_settles_active_and_queued_jobs_before_isolation(
         lambda: workspace.resolver.delete_subtree(
             idempotency_key="delete-active-and-queued", root_node_id=session_id,
         ),
+        deadline=asyncio.get_running_loop().time() + 30,
     ))
     try:
         await asyncio.wait_for(drain_started.wait(), timeout=3)
@@ -479,6 +484,7 @@ async def test_catalog_delete_drain_failure_rejects_late_admission(
                 idempotency_key=delete_key,
                 root_node_id=target_session_id,
             ),
+            deadline=asyncio.get_running_loop().time() + 30,
         )
 
     assert cleanup_reads == [target_session_id]

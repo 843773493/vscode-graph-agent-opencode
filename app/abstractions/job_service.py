@@ -63,12 +63,16 @@ class JobServiceProtocol(Protocol):
         self,
         session_id: str,
         operation: Callable[[], Awaitable[T]],
+        *,
+        deadline: float,
     ) -> T: ...
 
     async def run_sessions_delete_operation(
         self,
         session_ids: list[str],
         operation: Callable[[], Awaitable[T]],
+        *,
+        deadline: float,
     ) -> T: ...
 
     async def list_steps(self, job_id: str) -> list[StepDTO]: ...

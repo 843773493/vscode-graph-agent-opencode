@@ -175,6 +175,7 @@ class SessionCatalogPathResolver:
         root_node_id: str,
         mark_transaction_hook: CatalogTransactionHook | None = None,
         finish_transaction_hook: CatalogTransactionHook | None = None,
+        deadline: float | None = None,
     ) -> SubtreeDeleteResult:
         """以调用方给定 key 进入**共享**子树删除流（确定性恢复锚点）。
 
@@ -187,6 +188,7 @@ class SessionCatalogPathResolver:
             root_node_id=root_node_id,
             mark_transaction_hook=mark_transaction_hook,
             finish_transaction_hook=finish_transaction_hook,
+            deadline=deadline,
         )
 
     def bind_session_drain_callback(

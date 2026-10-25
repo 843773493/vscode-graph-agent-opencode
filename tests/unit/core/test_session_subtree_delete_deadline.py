@@ -176,3 +176,19 @@ async def test_delete_preserves_underlying_timeout_and_cancellation_identity(
     assert record.state == "deleting" and record.drained_session_ids == ()
     assert date_bucket_dir(sessions_root, node.storage_relative_locator).is_dir()
     assert not service._key_lock(key).locked()
+
+
+async def test_expired_inherited_deadline_cannot_mark_or_create_delete_record(
+    service: SessionSubtreeDeleteService, store: SessionCatalogStore,
+    sessions_root: Path,
+) -> None:
+    node = create_physical_session(store, sessions_root, parent_node_id=None)
+    with pytest.raises(deletion.SubtreeDeleteWaitTimeout, match="phase=key-lock"):
+        await service.delete(
+            idempotency_key="expired-before-entry", root_node_id=node.node_id,
+            deadline=asyncio.get_running_loop().time() - 1,
+        )
+    assert store.get_node(node.node_id).state == "active"
+    assert date_bucket_dir(sessions_root, node.storage_relative_locator).is_dir()
+    with pytest.raises(KeyError):
+        store.get_subtree_delete_record("expired-before-entry")

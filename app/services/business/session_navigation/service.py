@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from typing import Literal
 
 from app.abstractions.job_service import JobServiceProtocol
+from app.core import session_subtree_delete
 from app.core.background_task_registry import BackgroundTaskRegistry
 from app.core.identifier import create_prefixed_id
 from app.core.session_catalog_resolver import SessionCatalogPathResolver
@@ -131,6 +133,7 @@ class SessionCatalogService(SessionCatalogReadService):
         JobService 只关闭新 Job/消息写入；既有 Job 不阻断 catalog deleting，
         由共享删除流的运行时 cleanup 与生命周期 lease owner 排空。
         """
+        deadline = asyncio.get_running_loop().time() + session_subtree_delete.SUBTREE_DELETE_WAIT_SECONDS
         frozen_session_ids = self._path_resolver.descendant_session_ids(
             root_node_id,
             include_self=True,
@@ -157,6 +160,7 @@ class SessionCatalogService(SessionCatalogReadService):
                 root_node_id=root_node_id,
                 mark_transaction_hook=mark_transaction_hook,
                 finish_transaction_hook=finish_transaction_hook,
+                deadline=deadline,
             )
 
         if self._job_service is None:
@@ -164,6 +168,7 @@ class SessionCatalogService(SessionCatalogReadService):
         return await self._job_service.run_sessions_delete_operation(
             frozen_session_ids,
             run,
+            deadline=deadline,
         )
 
 

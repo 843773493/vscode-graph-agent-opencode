@@ -264,4 +264,11 @@ Web 定向 `BOXTEAM_E2E_SECTION8_FOCUS=copy_missing_attachment` 通过真实 Gat
 - 原删除owner在同key锁前取得一次30秒，跨mark、全部Session的drain及finish共用；到期保留原journal/locator与原runtime任务，底层超时和取消保持身份。新增明确超时类型供原导航executor区分：mark前拒绝并写`delete_wait_timeout`，mark后保持committed/repair_required；不令worker失败，不增加另一条删除链。
 - Linux相关单测118 passed/42.47秒（含原删除及导航回归），真实API集成8 passed/22.22秒，正式执行矩阵7 passed/86.55秒、运行器退出0。覆盖7类等待、跨阶段剩余预算、原错误身份、上传/执行生成的原历史/关联/runtime保全、peer删除及同key恢复；原runtime超时通过单独延长测试外层预算来保留精确旧断言，默认产品预算仍30秒。Windows快照`0a9371d5e08ecf69f871333416a0d1cdcf38363f`经原Job Object保护运行，原生锁/删除回归与API共69 passed/40.82秒，未将其称为完整Windows执行或关闭验收。
 - 完整旧HEAD归档仅叠本片验收测试，8项期限检查失败、2项原错误身份检查通过，证明旧链缺少总预算；扩大到旧产品场景的45秒外置检查退出124且无测试结果，不作为业务反例。首轮新装具重复绑定回调被原规则拒绝，修正为一次绑定；首轮产品suite在7 passed/85.85秒后仍因启动/退出开销触及90秒，真实退出3/TIMEOUT保留，依据新增场景测量调整suite至120秒后通过，未放宽产品期限。
-- 准确命令、源码前后指纹、原始输出与退出码位于`out/tests/temp/session_delete_budget_20261025/artifacts/`；Ruff/compileall与作者AST/目录自查通过，无新增源码目录或执行链。Job准备窗口、同步阻塞/线程池、不合作取消及外部终止继续TODO；5.2/5.4/6.2仍未勾，整体20/23，团队协作继续暂缓。
+- 准确命令、源码前后指纹、原始输出与退出码位于`out/tests/temp/session_delete_budget_20261025/artifacts/`；Ruff/compileall与作者AST/目录自查通过，无新增源码目录或执行链。此时Job准备窗口尚未覆盖，已由下述切片补齐；同步阻塞/线程池、不合作取消及外部终止继续TODO。5.2/5.4/6.2仍未勾，整体20/23，团队协作继续暂缓。
+
+### 2026-10-25 Job准备窗口与物理删除共用截止（5.4部分收口）
+
+- 导航删除入口冻结一次30秒绝对截止，Job调度锁/已接纳准备窗口与原子树删除owner顺序消费同一值；直接进入子树owner仍由原入口取得默认截止，过期输入在同步mark/journal之前拒绝。原Condition物理替换为同锁检查计数、锁外等待的Event，避免取消时重新取调度锁而挂住；失败只同步归还本调用准入标记，原准备task、计数、Job队列、catalog与原journal仍由原owner持有。协议与全部直接调用、fake及测试迁齐，无第二删除链。
+- Linux Job单测116 passed/39.07秒，core/导航单测119 passed/43.12秒，API集成10 passed/26.33秒，真实执行矩阵7 passed/87.87秒（runner退出0）。API覆盖准备等待到期且dispatch lock仍被持有，以及准备消耗20秒后Session gate只剩原预算、重启沿原journal结清；保持所有身份和回执断言。完整旧HEAD仅叠新API测试，两项均因期限后等不到持久回执而失败。初轮合并单测在60秒退出124，无完整结论，随后按上述两组独立完成。
+- Windows快照`0e9af1a516f7787214ec157c81c41b731c001c12`经原Job Object的90秒/4GiB保护，准备窗口、core期限和API共30 passed/32.44秒。同步后宿主唯一Python变化为未选中旧fixture的TODO注释，AST核对与快照完全一致；不因此重跑相同场景。扩展Linux准入回归为24 passed/2 failed；两个失败均在删除前因旧fixture的catalog/消息owner工作区身份不同而拒绝，在完整旧HEAD原样复现2 failed/4.68秒。保留身份校验与原断言，fixture内登记TODO，不把它们计为通过或扩大产品修复。
+- Pyright 1.1.414对5个产品文件报告12项错误；同版本检查完整旧HEAD所得文件、规则与完整消息逐项相同，仅行号变化，无本片新增诊断，不声称类型检查全绿。Ruff/compileall、全仓调用AST与作者结构自查另留原件；无新增源码目录，既有超大文件/超20文件目录仍是维护风险。准确命令、源码前后指纹、原始输出、退出码和失败归因在`out/tests/temp/delete_preparation_budget_20261025/artifacts/`；ASGI不能代替真实网络/Gateway验收，Windows未重跑全部执行/关闭组合。同步阻塞、线程池、不合作取消及外部终止仍TODO，5.2/5.4/6.2仍未勾，整体20/23；团队、成员、委派及协作不追加实现或专项验证。

@@ -134,6 +134,8 @@ class _DeleteJobService(_JobService):
         self,
         session_ids: list[str],
         operation: Callable[[], Awaitable[T]],
+        *,
+        deadline: float,
     ) -> T:
         self.deleted_session_ids = list(session_ids)
         return await operation()

@@ -298,6 +298,7 @@ class SessionSubtreeDeleteService:
         root_node_id: str,
         mark_transaction_hook: CatalogTransactionHook | None = None,
         finish_transaction_hook: CatalogTransactionHook | None = None,
+        deadline: float | None = None,
     ) -> SubtreeDeleteResult:
         """执行（或幂等恢复）一次子树删除（协议见模块/类 docstring）。
 
@@ -309,7 +310,17 @@ class SessionSubtreeDeleteService:
             root_node_id=root_node_id,
         )
         # TODO(5.4)：同步 I/O 与不合作取消仍需原 owner 核实，不能靠此预算抢占。
-        budget = asyncio.timeout(SUBTREE_DELETE_WAIT_SECONDS)
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + SUBTREE_DELETE_WAIT_SECONDS if deadline is None else deadline
+        failure_detail = (
+            "Session 子树删除等待已达总截止时间；保留原删除进度、未核实操作与恢复依据: "
+            f"workspace_id={self._workspace_id}, root_node_id={root_node_id}, "
+            f"operation_id={idempotency_key}, "
+        )
+        # 上一阶段可能已耗尽预算；进入同步mark前拒绝，不能等下次让出才发现。
+        if deadline <= loop.time():
+            raise SubtreeDeleteWaitTimeout(failure_detail + "phase=key-lock")
+        budget = asyncio.timeout_at(deadline)
         phase = "key-lock"
         try:
             # 同 key 串行；全部阶段共用入口预算，不给逐 Session 排空重置期限。
@@ -368,12 +379,7 @@ class SessionSubtreeDeleteService:
         except TimeoutError as error:
             if not budget.expired():
                 raise
-            raise SubtreeDeleteWaitTimeout(
-                f"Session 子树删除等待超过 {SUBTREE_DELETE_WAIT_SECONDS:g} 秒；"
-                "保留原删除进度、未核实操作与恢复依据: "
-                f"workspace_id={self._workspace_id}, root_node_id={root_node_id}, "
-                f"operation_id={idempotency_key}, phase={phase}"
-            ) from error
+            raise SubtreeDeleteWaitTimeout(failure_detail + f"phase={phase}") from error
 
     # ------------------------------------------------------------------
     # 输入校验与并发原语

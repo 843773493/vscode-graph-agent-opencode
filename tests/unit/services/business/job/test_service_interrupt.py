@@ -161,7 +161,7 @@ async def test_delete_tombstone_blocks_new_session_writes(job_service_factory,
         return "deleted"
 
     delete_task = asyncio.create_task(
-        service.run_session_delete_operation("ses_delete", delete_storage)
+        service.run_session_delete_operation("ses_delete", delete_storage, deadline=asyncio.get_running_loop().time() + 30)
     )
     await delete_started.wait()
 

@@ -384,6 +384,7 @@ async def test_admitted_session_update_finishes_before_delete_drain(
             harness.job_service.run_session_delete_operation(
                 session_id,
                 lambda: harness.workspace.resolver.delete_subtree(idempotency_key=f"short-write-delete-{session_id}", root_node_id=session_id),
+                deadline=asyncio.get_running_loop().time() + 30,
             )
         )
         for _ in range(300):
@@ -460,6 +461,7 @@ async def test_deleting_session_rejects_all_new_short_write_endpoints(
         await harness.job_service.run_session_delete_operation(
             session_id,
             lambda: harness.workspace.resolver.delete_subtree(idempotency_key=f"short-write-delete-{session_id}", root_node_id=session_id),
+            deadline=asyncio.get_running_loop().time() + 30,
         )
     harness.runtime.probe_settle_admission = False
 
