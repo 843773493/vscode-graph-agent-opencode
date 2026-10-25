@@ -13,8 +13,8 @@ import json
 import logging
 import os
 from collections import deque
-from collections.abc import Mapping
-from dataclasses import asdict, dataclass
+from collections.abc import Iterable, Mapping
+from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -102,15 +102,14 @@ class ExternalResourceLeaseLedger:
                 created_by_turn_id=created_by_turn_id,
                 updated_at=self._now(),
             )
-            self._records[resource_id] = record
         else:
             if record.kind != kind:
                 raise RuntimeError(
                     f"资源类型发生冲突: resource_id={resource_id} "
                     f"existing={record.kind} incoming={kind}"
                 )
-            record.updated_at = self._now()
-        self._persist()
+            record = replace(record, updated_at=self._now())
+        self._commit(records=(record,))
         return self._copy_record(record)
 
     def acquire(
@@ -158,8 +157,7 @@ class ExternalResourceLeaseLedger:
             holder_session_id=holder_session_id,
             holder_thread_id=holder_thread_id,
         )
-        self._leases[lease_id] = lease
-        self._persist()
+        self._commit(leases=(lease,))
         return self._copy_lease(lease)
 
     def register_external(
@@ -209,9 +207,8 @@ class ExternalResourceLeaseLedger:
         lease = self._leases.get(lease_id)
         if lease is None:
             raise KeyError(f"资源 lease 不存在: lease_id={lease_id}")
-        lease.status = "released"
-        lease.updated_at = self._now()
-        self._persist()
+        lease = replace(lease, status="released", updated_at=self._now())
+        self._commit(leases=(lease,))
         return self._copy_lease(lease)
 
     def settle(self, lease_id: str) -> ResourceLease:
@@ -225,9 +222,8 @@ class ExternalResourceLeaseLedger:
         lease = self._leases.get(lease_id)
         if lease is None:
             raise KeyError(f"资源 lease 不存在: lease_id={lease_id}")
-        lease.status = "settled"
-        lease.updated_at = self._now()
-        self._persist()
+        lease = replace(lease, status="settled", updated_at=self._now())
+        self._commit(leases=(lease,))
         self._notify(resource_id=lease.resource_id, state="released")
         return self._copy_lease(lease)
 
@@ -238,12 +234,14 @@ class ExternalResourceLeaseLedger:
 
     def release_turn_leases(self, turn_stream_id: str) -> list[ResourceLease]:
         """释放 Turn 对资源的占用；不改变资源实际状态。"""
-        released: list[ResourceLease] = []
-        for lease in tuple(self._leases.values()):
-            if lease.turn_stream_id != turn_stream_id or lease.status != "active":
-                continue
-            released.append(self.release(lease.lease_id, reason="turn_cancelled"))
-        return released
+        released = [
+            replace(lease, status="released", updated_at=self._now())
+            for lease in self._leases.values()
+            if lease.turn_stream_id == turn_stream_id and lease.status == "active"
+        ]
+        if released:
+            self._commit(leases=released)
+        return [self._copy_lease(lease) for lease in released]
 
     def reconcile(
         self,
@@ -263,19 +261,18 @@ class ExternalResourceLeaseLedger:
                 continue
             observed = observed_status.get(record.resource_id)
             if observed in {"running", "stopped"}:
-                record.status = "recovered" if observed == "running" else "stopped"
+                status = "recovered" if observed == "running" else "stopped"
             elif observed is None:
-                record.status = "orphaned"
+                status = "orphaned"
             else:
-                record.status = "unknown"
-            record.updated_at = self._now()
-            reconciled.append(self._copy_record(record))
+                status = "unknown"
+            reconciled.append(replace(record, status=status, updated_at=self._now()))
+        changed_leases = []
         for lease in self._leases.values():
             record = self._require_record(lease.resource_id)
             if lease.status == "active" and (kind is None or record.kind == kind):
-                lease.status = "reconcile_required"
-                lease.updated_at = self._now()
-        self._persist()
+                changed_leases.append(replace(lease, status="reconcile_required", updated_at=self._now()))
+        self._commit(records=reconciled, leases=changed_leases)
         for record in reconciled:
             if record.status == "stopped":
                 state = "released"
@@ -285,7 +282,7 @@ class ExternalResourceLeaseLedger:
             else:
                 state = "unknown"
             self._notify(resource_id=record.resource_id, state=state)
-        return reconciled
+        return [self._copy_record(record) for record in reconciled]
 
     @property
     def notification_errors(self) -> tuple[str, ...]:
@@ -339,14 +336,12 @@ class ExternalResourceLeaseLedger:
         lease = None if unresolved_lease_id is None else self._leases.get(unresolved_lease_id)
         if unresolved_lease_id is not None and (lease is None or lease.resource_id != resource_id):
             raise ValueError(f"未知 operation 不属于此资源的原 lease: {unresolved_lease_id}")
-        record.lifetime_scope = lifetime_scope
-        record.status = status
-        record.updated_at = self._now()
+        record = replace(record, lifetime_scope=lifetime_scope, status=status, updated_at=self._now())
+        changed_leases = ()
         if lease is not None and lease.status == "active":
             # 只保留本次未核实操作；同资源其它已返回的操作仍正常收尾。
-            lease.status = "reconcile_required"
-            lease.updated_at = record.updated_at
-        self._persist()
+            changed_leases = (replace(lease, status="reconcile_required", updated_at=record.updated_at),)
+        self._commit(records=(record,), leases=changed_leases)
 
     def _require_record(self, resource_id: str) -> ResourceRecord:
         record = self._records.get(resource_id)
@@ -390,20 +385,26 @@ class ExternalResourceLeaseLedger:
                 )
         return rows
 
-    def _persist(self) -> None:
-        if self._state_path is None:
-            return
-        self._state_path.parent.mkdir(parents=True, exist_ok=True)
-        temp_path = self._state_path.with_suffix(".tmp")
-        payload = {
-            "records": [asdict(record) for record in self._records.values()],
-            "leases": [asdict(lease) for lease in self._leases.values()],
-        }
-        with temp_path.open("w", encoding="utf-8") as stream:
-            json.dump(payload, stream, ensure_ascii=False, separators=(",", ":"))
-            stream.flush()
-            os.fsync(stream.fileno())
-        temp_path.replace(self._state_path)
+    def _commit(
+        self, *, records: Iterable[ResourceRecord] = (), leases: Iterable[ResourceLease] = (),
+    ) -> None:
+        """沿唯一写链先发布完整持久快照，再发布内存；失败保留原占用供重试。"""
+        next_records = self._records | {record.resource_id: record for record in records}
+        next_leases = self._leases | {lease.lease_id: lease for lease in leases}
+        if self._state_path is not None:
+            self._state_path.parent.mkdir(parents=True, exist_ok=True)
+            temp_path = self._state_path.with_suffix(".tmp")
+            payload = {
+                "records": [asdict(record) for record in next_records.values()],
+                "leases": [asdict(lease) for lease in next_leases.values()],
+            }
+            with temp_path.open("w", encoding="utf-8") as stream:
+                json.dump(payload, stream, ensure_ascii=False, separators=(",", ":"))
+                stream.flush()
+                os.fsync(stream.fileno())
+            temp_path.replace(self._state_path)
+        self._records = next_records
+        self._leases = next_leases
 
     @staticmethod
     def _now() -> str:

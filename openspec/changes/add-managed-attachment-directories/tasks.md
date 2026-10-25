@@ -106,3 +106,12 @@ Web 定向 `BOXTEAM_E2E_SECTION8_FOCUS=copy_missing_attachment` 通过真实 Gat
 - [x] 6.4 按 design 的替代顺序同步相关 owner 规范与验收项，测量目录增长、查询/回收及恢复耗时；短期性能长尾以原始测量证据登记 TODO，不降低正确性门槛。
 
   - 2026-10-24 已将 itemized proposal/design、rollout 附件 requirement 及 fork 验收中的旧 digest 合并/永久 live 保活规则替换为目录 owner 合同；文件工具 design/spec 同步附件目录和 derived 写入，工具输出保留 Session 单文件边界。目录 owner、URI owner 与 Shell/Browser 保留范围继续引用唯一规范，旧任务证据不重写为新行为。正式测量复用现有 model_stream，经产品消息/真实执行和 unload 生成 1/32 个目录，核对独立身份、原件字节、真实期限、冷 owner 恢复、精确到期 GC、重复 GC 和 canonical 原文不变。最终代码候选 `177a70abf336b19ebe21d59eddf2a2771d2202ac` 的 matrix 为 2 passed/31.48 秒，Ruff、compileall 通过；完整指纹、准确命令、raw/退出码与 retention-1/32.json 在 `out/tests/temp/attachment_retention_measurement_20261024/artifacts/`。冷 owner 恢复约 7.52/9.11 ms，到期查询约 0.087/1.396 ms，GC 约 7.07/131.14 ms；测量范围及 WAL/终态元数据优化 TODO 已登记 design，不承诺固定比例、线性增长或完整启动性能。首轮测试对 text payload 误用 dict.get 的装具失败原件保留，修正提取类型后通过，未改产品代码或放宽业务断言。5.2/5.4 的接管/挂起终止与关闭期限、Windows/跨端完整组合门仍未关闭；Agent 团队和协作专项继续 TODO。
+
+
+### 2026-10-25 资源 lease 持久发布（5.2/5.4/6.2 部分收口）
+
+- 原账本的登记、获取、释放、结清、Turn 批量释放、恢复对账和未知结果转换统一先构造下一份快照，经原 JSON/fsync/原子替换链成功后才发布内存；失败原样上抛，当前进程及冷读都保留原事实，同一操作可重试。移除先改共享对象再写盘及逐 lease 写盘的旧实现，不新增账本、writer、schema 或恢复格式。保留批量释放单次写盘及资源/lease 原顺序，状态事件仍仅在持久成功后发布。
+- 完整 HEAD 基线新增16项 fsync/原子替换故障全部精确失败；候选账本34 passed（0.73秒）。Terminal/Browser/Session 相关回归115 passed、1 failed（5.86秒）；失败是后台任务 handle.status 在删除后仍为 pending，完整未修改基线同一用例也失败（3.16秒），相关测试仅使用假的资源 owner，不涉及本账本，保留原断言与原始输出，不扩修后台任务。
+- 真实上传、Shell 工具、Terminal HTTP/PTY 和到期 GC 故障验收1 passed（19.11秒）：由产品入口创建真实目录及进程，停止时精确拒绝目录 lease 的原子替换，核真实进程已停、原占用在当前进程及冷账本仍保留，GC不删除；普通查询保留 unknown，用户以新管理身份核实原停止后持久结清，再允许 GC，底层 stop 只发送一次。没有手填目录关联、lease或终态，也未把失败改为成功。初两轮对普通查询与显式管理核实的调用/重放假设错误按原 owner 合同更正，失败原件保留，不记作产品缺陷。
+- 候选 Ruff/compileall通过；准确命令、完整候选源码前后指纹、真实退出码、原始故障/通过与基线归因在 `out/tests/temp/resource_lease_publication_20261025/artifacts/`。本切片不证明挂起操作终止、全局关闭期限、Windows实机、Gateway/Web或全部故障组合；5.2/5.4/6.2保持未勾，团队与协作继续TODO。
+- 共享合并后补验：账本与 Terminal/Browser owner 单测102 passed（2.39秒），完整真实 Shell 集成文件10 passed（90.72秒），相关 Ruff/compileall及 OpenSpec strict（45 passed/0 failed）全部退出0。单测/静态/规范轮完整指纹一致；Shell轮仅 Web `useTurnVirtualScroller.ts` 被并发修改，被测后端/Terminal链源码未变，保留完整前后指纹，不记作全树冻结。合并保留既有批量查询、同状态免写及整批单次写盘，移除原地修改/回滚路径；共享暂存条目未改动。候选与共享结果分别保留，基线既存后台任务失败仍未通过。

@@ -22,6 +22,9 @@ from app.agents.tools.terminal import create_exec_command_tool
 from app.core.resource_uri import file_uri_child, parse_resource_uri
 from app.core.trace_middleware import reset_current_gateway_id, set_current_gateway_id
 from app.schemas.internal_v2.message import MessageCreateRequest
+from app.services.infrastructure.external_resource_leases import (
+    ExternalResourceLeaseLedger,
+)
 from configs.runtime import read_jsonc_object
 from tests.integration.backend.sessions.test_attachment_directory_entry import upload
 from tests.integration.test_terminal_owner_tool_invocation import (
@@ -305,3 +308,79 @@ async def test_pending_stop_receipt_keeps_its_directory_but_does_not_block_anoth
             if resource["status"] not in {"terminated", "completed", "exited", "deleted"}:
                 await owner.command(terminal_id, action="stop", expected_revision=resource["owner_revision"],
                     holder_id="request:independent-cleanup", operation_id="independent-cleanup")
+
+
+async def test_failed_directory_lease_settlement_blocks_gc_until_original_stop_is_reconciled(
+    terminal_runtime: WorkspaceToolRuntime, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    container, session_id, context = terminal_runtime
+    store, owner, leases = container.attachment_blob_store, container.terminal_resource_owner, container.external_resource_leases
+    message = await container.message_service.create(session_id, MessageCreateRequest(
+        content="停止回执持久失败", attachments=[upload(b"keep-until-durable-settlement")],
+    ))
+    ref, = message.attachments
+    attachment_id = parse_resource_uri(ref.directory_uri).tail_segments[0]
+    directory = store.resolve_directory_uri(parse_resource_uri(ref.directory_uri))
+    probe = directory / "derived/settlement.py"
+    probe.write_text("import os, time\nfrom pathlib import Path\nPath('shell.pid').write_text(str(os.getpid()))\nprint('started', flush=True)\ntime.sleep(600)\n")
+    command = [sys.executable, "-u", probe.name]
+    execute = create_exec_command_tool(session_id, terminal_owner=owner, invocation_context=context)
+    result = await execute.ainvoke({
+        "cmd": subprocess.list2cmdline(command) if os.name == "nt" else shlex.join(command),
+        "workdir": file_uri_child(ref.directory_uri, "derived"), "yield_time_ms": 1000,
+    })
+    terminal_id = result["terminal_id"]
+    try:
+        assert "started" in result["output"] and "exit_code" not in result
+        pid = int((directory / "derived/shell.pid").read_text())
+        assert process_running(pid)
+        original, = leases.leases_for_resource(attachment_id)
+        store.release_thread_references(session_id, message.thread_id)
+        monkeypatch.setattr(store, "_clock", lambda: datetime.now(UTC) + timedelta(days=31))
+        path = container.workspace_root / ".boxteam/resources.json"
+        failure = OSError(5, "目录占用结清写盘失败")
+        replace, stop = Path.replace, owner._transport.stop_resource
+        calls: list[str] = []
+
+        async def record_stop(resource_id: str, *, reason: str | None = None):
+            calls.append(resource_id)
+            return await stop(resource_id, reason=reason)
+
+        monkeypatch.setattr(owner._transport, "stop_resource", record_stop)
+
+        def fail_settlement(source: Path, target: Path) -> Path:
+            if target == path and any(lease["lease_id"] == original.lease_id and lease["status"] == "settled"
+                                      for lease in json.loads(source.read_text())["leases"]):
+                raise failure
+            return replace(source, target)
+
+        snapshot = await owner.get_resource(terminal_id)
+        with monkeypatch.context() as io_fault:
+            io_fault.setattr(Path, "replace", fail_settlement)
+            with pytest.raises(OSError) as rejected:
+                await owner.command(terminal_id, action="stop", expected_revision=snapshot["owner_revision"],
+                                    holder_id="request:durable-stop", operation_id="durable-stop")
+            assert rejected.value is failure
+        assert calls == [terminal_id] and not process_running(pid)
+        assert leases.get_lease(original.lease_id) == original
+        assert ExternalResourceLeaseLedger(state_path=path).get_lease(original.lease_id) == original
+        assert await store.collect_garbage(leases=leases) == ()
+        assert (directory / "original/content").read_bytes() == b"keep-until-durable-settlement"
+        # 普通查询不自动重放未知停止；用户以新管理操作核实同一原资源。
+        unknown = await owner.get_resource(terminal_id)
+        assert unknown["reconciliation_status"] == "unknown" and calls == [terminal_id]
+        reconciled = await owner.command(
+            terminal_id, action="stop", expected_revision=unknown["owner_revision"],
+            holder_id="request:verify-durable-stop", operation_id="verify-durable-stop",
+        )
+        assert reconciled["status"] == "terminated" and reconciled["reconciliation_status"] == "verified"
+        assert calls == [terminal_id] and not process_running(pid)
+        assert leases.get_lease(original.lease_id).status == "settled"
+        assert ExternalResourceLeaseLedger(state_path=path).get_lease(original.lease_id).status == "settled"
+        assert await store.collect_garbage(leases=leases) == (attachment_id,)
+        assert not directory.exists()
+    finally:
+        snapshot = await owner.get_resource(terminal_id)
+        if snapshot["status"] not in {"terminated", "completed", "exited", "deleted"}:
+            await owner.command(terminal_id, action="stop", expected_revision=snapshot["owner_revision"],
+                                holder_id="request:settlement-cleanup", operation_id="settlement-cleanup")

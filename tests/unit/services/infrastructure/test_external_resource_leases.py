@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import logging
+import os
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -15,6 +17,79 @@ from app.services.infrastructure.events.event_channel_service import (
 from app.services.infrastructure.external_resource_leases import (
     ExternalResourceLeaseLedger,
 )
+
+
+@pytest.fixture(params=["register", "refresh", "acquire", "release", "settle", "turn", "reconcile", "unknown"])
+def ledger_change(request: pytest.FixtureRequest) -> tuple[str, Callable[[ExternalResourceLeaseLedger], object]]:
+    mutations: dict[str, Callable[[ExternalResourceLeaseLedger], object]] = {
+        "register": lambda ledger: ledger.register_external(resource_id="new", kind="terminal", lifetime_scope="workspace"),
+        "refresh": lambda ledger: ledger.register_external(resource_id="a", kind="terminal", lifetime_scope="workspace"),
+        "acquire": lambda ledger: ledger.acquire_operation(resource_id="a", turn_stream_id="turn-new", operation_id="new", lease_id="new"),
+        "release": lambda ledger: ledger.release("a1"),
+        "settle": lambda ledger: ledger.settle("a1"),
+        "turn": lambda ledger: ledger.release_turn_leases("turn-a"),
+        "reconcile": lambda ledger: ledger.reconcile({"a": "stopped", "b": "running"}),
+        "unknown": lambda ledger: ledger.update_external_state("a", lifetime_scope="thread", status="unknown", unresolved_lease_id="a1"),
+    }
+    return request.param, mutations[request.param]
+
+
+@pytest.mark.parametrize("fault", ["fsync", "replace"])
+def test_failed_lease_publication_keeps_live_and_cold_facts_until_same_operation_retries(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, ledger_change, fault: str,
+) -> None:
+    name, mutate = ledger_change
+    path = tmp_path / "resources.json"
+    ledger = ExternalResourceLeaseLedger(state_path=path)
+    for resource_id in ("a", "b"):
+        ledger.register_external(resource_id=resource_id, kind="terminal", lifetime_scope="workspace")
+    for lease_id, resource_id, holder in (("a1", "a", "turn-a"), ("a2", "a", "turn-a"), ("b1", "b", "turn-b")):
+        ledger.acquire_operation(resource_id=resource_id, turn_stream_id=holder, operation_id=lease_id, lease_id=lease_id)
+
+    def view(owner: ExternalResourceLeaseLedger) -> tuple:
+        return (tuple(owner.get(key) for key in ("a", "b", "new")),
+                tuple(owner.get_lease(key) for key in ("a1", "a2", "b1", "new")),
+                tuple(owner.leases_for_resource(key) for key in ("a", "b")))
+
+    before, original_bytes = view(ledger), path.read_bytes()
+    failure = OSError(5, "原 lease 发布失败", str(path))
+    with monkeypatch.context() as io_fault:
+        if fault == "fsync":
+            def fail_sync(_descriptor: int) -> None:
+                raise failure
+            io_fault.setattr(os, "fsync", fail_sync)
+        else:
+            replace = Path.replace
+
+            def fail_replace(source: Path, target: Path) -> Path:
+                if target == path:
+                    raise failure
+                return replace(source, target)
+            io_fault.setattr(Path, "replace", fail_replace)
+        with pytest.raises(OSError) as raised:
+            mutate(ledger)
+        assert raised.value is failure
+    assert path.read_bytes() == original_bytes
+    assert view(ledger) == before
+    assert view(ExternalResourceLeaseLedger(state_path=path)) == before
+    # 相同登记/operation 重试不能因内存已前进而直接返回未持久的成功回执。
+    mutate(ledger)
+    assert view(ledger) == view(ExternalResourceLeaseLedger(state_path=path))
+    if name == "register":
+        assert ledger.get("new").status == "running"
+    elif name == "acquire":
+        assert ledger.get_lease("new").status == "active"
+    elif name in {"release", "settle", "turn"}:
+        assert ledger.get_lease("a1").status == ("settled" if name == "settle" else "released")
+        assert ledger.get_lease("a2").status == ("released" if name == "turn" else "active")
+        assert ledger.get_lease("b1").status == "active"
+    elif name == "reconcile":
+        assert (ledger.get("a").status, ledger.get("b").status) == ("stopped", "recovered")
+        assert all(ledger.get_lease(key).status == "reconcile_required" for key in ("a1", "a2", "b1"))
+    elif name == "unknown":
+        assert (ledger.get("a").status, ledger.get("a").lifetime_scope) == ("unknown", "thread")
+        assert ledger.get_lease("a1").status == "reconcile_required"
+        assert ledger.get_lease("a2").status == ledger.get_lease("b1").status == "active"
 
 
 @pytest.mark.parametrize("status", ["unknown", "orphaned"])
