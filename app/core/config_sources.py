@@ -2,12 +2,15 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
 import commentjson
+
+logger = logging.getLogger(__name__)
 
 ConfigSourceLayer = Literal[
     "inline",
@@ -102,10 +105,12 @@ def read_stable_config_file(path: Path, *, attempts: int = 3) -> StableConfigFil
                     stat_signature=_config_file_stat_signature(after),
                 )
     except OSError as error:
-        # 普通状态响应会展示此异常；原生文件名仅保留在内部异常链。
-        raise type(error)(
-            error.errno, f"配置文件读取失败: operation={operation}: {error.strerror}",
-        ) from error
+        # strerror 自身也可能包含位置；普通状态只发布错误事实，诊断保留原文。
+        detail = f"配置文件读取失败: operation={operation}, error={type(error).__name__}, errno={error.errno}"
+        if (winerror := getattr(error, "winerror", None)) is not None:
+            detail += f", winerror={winerror}"
+        logger.exception("配置来源文件读取失败: operation=%s path=%s", operation, path)
+        raise type(error)(error.errno, detail) from error
 
     raise RuntimeError("配置文件在读取期间持续变化，无法建立稳定快照")
 

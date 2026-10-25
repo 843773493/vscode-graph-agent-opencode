@@ -24,13 +24,22 @@ def config_file(tmp_path: Path) -> Path:
 
 
 @pytest.mark.parametrize("operation", ["resolve", "stat_before", "read", "stat_after"])
+@pytest.mark.parametrize("number", [errno.EACCES, errno.EIO, errno.ELOOP])
+@pytest.mark.parametrize("fields", ["filename", "filename2", "errno_only", "winerror"])
 def test_os_failure_preserves_errno_stage_and_cause_without_native_filename(
-    config_file: Path, monkeypatch: pytest.MonkeyPatch, operation: str,
+    config_file: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
+    operation: str, number: int, fields: str,
 ) -> None:
     original_stat, original_read, original_resolve = Path.stat, Path.read_bytes, Path.resolve
     stat_calls = 0
     resolving = False
-    original_error = PermissionError(errno.EACCES, "Permission denied", str(config_file))
+    original_error = OSError(number, f"private-config-message: {config_file}")
+    if fields == "filename":
+        original_error.filename = str(config_file)
+    elif fields == "filename2":
+        original_error.filename2 = str(config_file)
+    elif fields == "winerror":
+        original_error.winerror = 5
 
     def resolve(path: Path, *args, **kwargs) -> Path:
         nonlocal resolving
@@ -60,14 +69,20 @@ def test_os_failure_preserves_errno_stage_and_cause_without_native_filename(
         failure.setattr(Path, "resolve", resolve)
         failure.setattr(Path, "stat", stat)
         failure.setattr(Path, "read_bytes", read)
-        with pytest.raises(PermissionError) as raised:
+        with pytest.raises(type(original_error)) as raised:
             read_stable_config_file(config_file)
     assert raised.value.__cause__ is original_error
-    assert raised.value.errno == errno.EACCES
-    assert raised.value.filename is None
+    assert raised.value.errno == number
+    assert raised.value.filename is None and raised.value.filename2 is None
     assert f"operation={operation}" in str(raised.value)
-    assert "Permission denied" in str(raised.value)
     assert str(config_file.parent) not in str(raised.value)
+    assert "private-config-message" not in str(raised.value)
+    assert f"error={type(original_error).__name__}" in str(raised.value)
+    assert f"errno={number}" in str(raised.value)
+    if fields == "winerror":
+        assert "winerror=5" in str(raised.value)
+    assert any(record.exc_info and record.exc_info[1] is original_error for record in caplog.records)
+    assert str(config_file) in caplog.text and "private-config-message" in caplog.text
 
 
 def test_unstable_read_exhausts_bounded_attempts_without_publishing_snapshot(

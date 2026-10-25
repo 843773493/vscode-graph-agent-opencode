@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import errno
 import json
 from dataclasses import asdict
 from pathlib import Path
@@ -16,6 +17,7 @@ from app.gateway.control.gateway_state import GatewayStateStore
 from app.gateway.routes.health_config import router
 from app.services.infrastructure.config.state import ConfigConflictError
 from configs.runtime import read_jsonc_object
+from tests.harness.python.run_context import TestRunContext
 
 
 @pytest.fixture
@@ -40,6 +42,77 @@ def validation_owner(tmp_path: Path):
         application.state.gateway_config_reload = service
         application.dependency_overrides[verify_gateway_token] = lambda: "validation-test"
         yield application, service, store, config_path, schema_path, original
+
+
+@pytest.mark.parametrize("source", ["config", "schema"])
+@pytest.mark.parametrize("fields", ["filename", "filename2", "errno_only"])
+async def test_native_source_message_does_not_enter_reload_status_or_persistent_state(
+    validation_owner, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
+    source: str, fields: str,
+) -> None:
+    application, service, store, config_path, schema_path, _ = validation_owner
+    target = config_path if source == "config" else schema_path
+    original_bytes = target.read_bytes()
+    original_error = PermissionError(errno.EACCES, f"private-config-message: {target}")
+    if fields == "filename":
+        original_error.filename = str(target)
+    elif fields == "filename2":
+        original_error.filename2 = str(target)
+    initial = service.config
+    active = store.get_active_config_snapshot("gateway")
+    source_keys = ("gateway_mutable_override", "gateway_local_mutable_override")
+
+    def sources():
+        # 既有秘密审计会更新时间；来源内容、归属和版本必须全部保持原值。
+        return {key: {name: value for name, value in asdict(record).items() if name != "updated_at"}
+                if (record := store.get_source_layer(key)) is not None else None for key in source_keys}
+
+    before_sources = sources()
+    read = Path.read_bytes
+
+    def fail(path):
+        if path == target:
+            raise original_error
+        return read(path)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(Path, "read_bytes", fail)
+        with pytest.raises(PermissionError) as failure:
+            await service.reload()
+    assert failure.value.__cause__ is original_error
+    assert failure.value.errno == errno.EACCES
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=application), base_url="http://test") as client:
+        failed = await client.get("/api/gateway/config/reload-status", headers={"X-Request-ID": "config-source-io"})
+        assert failed.status_code == 200, failed.text
+        body = failed.json()
+        assert body["request_id"] == failed.headers["X-Request-ID"] == "config-source-io"
+        status = body["data"]
+        assert status["healthy"] is False and status["reason"] == "invalid_config"
+        assert str(target) not in failed.text and "private-config-message" not in failed.text
+        assert "operation=read" in status["last_error"] and "errno=13" in status["last_error"]
+        assert "PermissionError" in status["last_error"]
+        assert service.config is initial
+        assert store.get_active_config_snapshot("gateway") == active
+        assert store.get_pending_config_candidate(config_domain="gateway") is None
+        assert sources() == before_sources and service.list_events() == ()
+        assert target.read_bytes() == original_bytes
+        assert any(record.exc_info and record.exc_info[1] is original_error for record in caplog.records)
+        assert str(target) in caplog.text and "private-config-message" in caplog.text
+        await service.reload()
+        recovered = await client.get("/api/gateway/config/reload-status")
+        assert recovered.status_code == 200, recovered.text
+        assert recovered.json()["data"]["healthy"] is True
+        assert recovered.json()["data"]["last_error"] is None
+        assert service.config is initial and store.get_active_config_snapshot("gateway") == active
+        assert sources() == before_sources and service.list_events() == ()
+    store.close()
+    with GatewayStateStore(path=store.path) as reopened:
+        assert reopened.get_active_config_snapshot("gateway") == active
+        assert reopened.get_pending_config_candidate(config_domain="gateway") is None
+    context = TestRunContext.from_test_file(Path(__file__)).prepare()
+    (context.artifacts_dir / "config-source-io.json").write_text(json.dumps({
+        "failure": body, "recovered": recovered.json(),
+    }, ensure_ascii=False, indent=2) + "\n")
 
 
 @pytest.mark.parametrize("stage", ["apply", "promotion", "rollback"])
