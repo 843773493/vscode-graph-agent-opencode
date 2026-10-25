@@ -62,27 +62,35 @@ class BrowserOperations(ResourceOperations):
         owner: BrowserResourceOwner, record: OwnedResourceRecord,
         action: BrowserAction, payload: ResourceSnapshot, *, actor: str, lease_id: str,
     ) -> ResourceSnapshot:
+        failure: BrowserRequestError | None = None
         try:
-            result = await owner._transport.perform(record.resource_id, action, payload, actor=actor)
+            try:
+                result = await owner._transport.perform(record.resource_id, action, payload, actor=actor)
+            except BrowserRequestError as error:
+                receipt = error.payload
+                if not isinstance(receipt, dict) or receipt.get("operation_outcome") != "failed":
+                    raise
+                failure = error
+                result = receipt
+            # 成功与正式失败共用核验和提交；失败回执的校验/写盘错误也必须保护原占用。
             runtime = result.get("browser")
             if not isinstance(runtime, dict):
                 raise TypeError("Browser operation 缺少 Playwright 完整事实")
+            if type(runtime.get("transport_owner_revision")) is not int or runtime["transport_owner_revision"] != record.owner_revision:
+                raise ValueError("Browser operation 回执版本与本次操作不一致")
             observe_resource(record, runtime, owner.kind)
+            if failure is not None and record.reconciliation_status != "verified":
+                # 正式失败仍可能报告未核实的页面转换；保留其原HTTP错误和待核实占用。
+                raise failure
             owner._verified(record)
             owner._store.save(record)
             owner._sync_ledger(record)
-            return {**result, "browser": resource_projection(record, runtime, owner.kind)}
-        except BrowserRequestError as error:
-            # 只有已完成失败回执才能保留 verified；传输中断仍暴露 unknown。
-            receipt = error.payload if isinstance(error.payload, dict) else {}
-            runtime = receipt.get("browser")
-            if receipt.get("operation_outcome") == "failed" and isinstance(runtime, dict):
-                observe_resource(record, runtime, owner.kind)
-                owner._store.save(record)
-                owner._sync_ledger(record)
-            else:
-                owner._unknown(record, error, lease_id=lease_id)
-            raise
+            projected = {**result, "browser": resource_projection(record, runtime, owner.kind)}
         except BaseException as error:
             owner._unknown(record, error, lease_id=lease_id)
+            if failure is not None and error is not failure:
+                raise error from failure
             raise
+        if failure is not None:
+            raise failure
+        return projected

@@ -24,6 +24,8 @@ browser/
 
 `test_browser_owner_revision_drain.py` 经Python客户端、真实Node与Chromium验证默认5秒的旧版本排空超时、持久新版本、原动作仍执行、独立Browser可读、迟到回执拒绝和同版本重试；受控HTTP服务只暂停原脚本的fetch。通过 `bun run test:matrix -- --suite=integration-browser-owner-revision-drain` 运行，固定90秒/4GiB；不代表Python业务owner的恢复gate隔离、强制终止或Gateway/主Web验收。
 
+`test_browser_operation_receipts.py`通过正式Session、ASGI资源创建/管理与原工具operation运行真实Chromium脚本，先产生页面副作用再失败。仅在真实失败回执版本或首次记录提交处注入故障，核对原lease冷读仍待核实、原页面及版本保持、普通查询不结清，显式管理停止核实后才settle；完整失败仍保留原HTTP错误及正常释放语义。suite `integration-browser-operation-receipts`固定90秒/4GiB，不代表Gateway/主Web或独立Backend重启。
+
 同一文件的stop/delete场景让脚本忽略取消signal，在工具超时后继续原fetch；核对页面reset可用、关闭context后仍返回408且磁盘unknown、peer可读，以及放行原执行后同身份/版本重试终态。原页面只关闭一次，不将关闭context或工具超时当作脚本已结束；这仍不是Python业务owner挂起操作接管或强制终止验收。
 
 同一文件经真实Session/Python业务owner创建资源、正式detach及run入口，令超时后的原脚本等待context关闭，再由原管理stop/delete完成撤权、释放context和终态核实；核对当前版本、原lease结清与peer可读，不手填资源或执行状态。它不代表任意脚本强制终止、Backend重启或Gateway/主Web验收。

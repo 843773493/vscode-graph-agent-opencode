@@ -11,6 +11,7 @@ tests/unit/services/business/
 ├── communication/        Session 间消息与接纳规则
 ├── job/                   Job 队列、取消、超时和服务收口
 ├── resource_derivations/  语义资源投影与派生
+├── browser_resources/     Browser操作回执、版本和原占用保护
 ├── session_generation/    Session 创建与默认值
 ├── session_children/      child-thread 读模型、Team board 发布投影与创建 owner
 ├── session_navigation/    Session 导航目录与操作队列

@@ -155,7 +155,7 @@ async def test_failed_receipt_releases_lease_but_lost_receipt_survives_restart(b
     browser_owner.restart()
     assert (await browser_owner.owner.get_resource(rid))["reconciliation_status"] == "unknown"
     assert len(browser_owner.transport.calls) == calls
-    assert str(browser_owner.root) not in (browser_owner.root / ".boxteam" / "browser-resources.json").read_text()
+    assert str(browser_owner.root) not in (browser_owner.root / ".boxteam" / "browser-resources.json").read_text(encoding="utf-8")
 
 
 @pytest.mark.asyncio
