@@ -98,6 +98,8 @@ rollout 来源捕获的直接原生 I/O 复用同一 storage 错误出口（arti
 
 目标接收的原生位置检查、目录准备/open、write、flush/fsync、close及文件/整份artifact目录发布分别在本机调用处复用原storage出口（artifact=fork_transfer；stage为receive_path / receive_open / receive_write / receive_flush / receive_close / receive_publish）。显式finally只关闭原有stream，保持原有成功顺序和清理责任；写入与关闭同时失败时保留两份原异常、cause/context和诊断。上下文不跨越来源transport的await，来源连接失败或取消不能误标为本机文件错误；原网络异常对象保持。所有接收者回收完成后才沿原import/capture owner清理，原marker最后接收、目录同步、hash/offset校验、四路并发及两端journal/身份保持，不新增接收器或补偿writer。
 
+目标 rollout 暂存沿原逐文件复制和准备链路使用同一 storage 错误出口（artifact=fork_target；stage 为 staging / staging_copy / staging_cleanup / preparation_sync），保留原生类别、errno/winerror 与 cause，位置及原错只留诊断。目录创建仍在当前请求取得所有权后的清理范围之外，碰撞不得删除既有目录。复制的布局/hash拒绝不向普通错误输出内部 locator；失败清理若再失败保留两份原因。准备后的 bottom-up 文件/目录同步显式传播扫描错误，拒绝缺失根、符号链接和非普通文件，不能将漏同步当成功；保持原字节复制、SQL、hash、同步顺序及发布/journal owner，不另建安装链。
+
 ### D2：保留既有段序，scope_id 全必填
 
 采用 `boxteam://{gateway_authority?}/{scope}/{scope_id}/resources/{kind}/{...}`，而非简化段序。

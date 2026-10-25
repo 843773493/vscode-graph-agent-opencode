@@ -231,6 +231,11 @@
 - **WHEN** 接收者等待来源transport时连接失败或被取消，且本机流关闭正常
 - **THEN** 原传输异常对象或取消原样传播，不被本机文件错误上下文重新包装，也不误标为receive阶段；本机stream仍按原生命周期关闭，失败和清理继续沿原import/capture owner协调
 
+#### Scenario: fork 目标暂存与准备同步失败
+
+- **WHEN** 冻结 rollout 在目标暂存创建、原字节复制、失败清理或准备后文件/目录同步时遇到原生错误，扫描失败，或发现缺失根、符号链接和非普通文件
+- **THEN** 原目标安装 owner 明确失败；扫描错误不得被忽略或当作完整同步。普通错误和创建记录只含逻辑 artifact=fork_target 与 staging/staging_copy/staging_cleanup/preparation_sync 阶段，布局/hash拒绝不输出内部 locator；原生类别、errno/winerror、cause 及清理双错的原因链保留，真实位置只留诊断。创建碰撞不删除既有暂存目录；失败不发布半成品或改变来源字节，原创建 owner 完成中止，解除故障后原产品入口新请求可重试并冷读同一 checkpoint、metadata、pending writes、assembly/owner 与 request_hash。复制块大小、hash、SQL 与 bottom-up 同步/发布顺序保持，不增加安装或恢复链
+
 ### Requirement: Browser 本地文件页面 URL 保留原生语义
 
 系统 MUST 保留 Browser 原生 `file:` 导航能力。用户明确打开的本地文件页面 URL MAY 原样保留在 Browser 地址栏、导航请求、该页面相关错误、页面快照及恢复检查点中。该 URL MUST 始终由目标机器按原生文件系统语义解释，包括 Windows 盘符与路径分隔符；中继、source 机器和当前激活工作区 MUST NOT 改写其目标或在自身文件系统解释该 URL。

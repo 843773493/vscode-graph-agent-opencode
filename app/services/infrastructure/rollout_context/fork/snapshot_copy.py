@@ -30,6 +30,10 @@ from app.services.infrastructure.rollout_context.storage.catalog.view_items.stor
     clone_members,
     replace_members,
 )
+from app.services.infrastructure.rollout_context.storage.primitives import (
+    _storage_failure,
+    _storage_io,
+)
 from app.services.infrastructure.rollout_context.storage.schema import (
     HISTORY_NAMESPACE_SCHEMA_SQL,
 )
@@ -51,32 +55,37 @@ def stage_captured_rollout(
 ) -> Path:
     """逐文件验证并复制已捕获产物，内存不随文件正文长度增长。"""
     stage = target_root.with_name(f".fork-{materialization_id}.rollout")
-    native_io_path(stage).mkdir(mode=0o700, exist_ok=False)
+    with _storage_io(stage, "source-mismatch: fork 目标暂存目录创建失败", "staging", artifact="fork_target"):
+        native_io_path(stage).mkdir(mode=0o700, exist_ok=False)
     try:
-        source_root = snapshot.rollout.captured_root / "rollout"
-        for captured in snapshot.rollout.files:
-            relative = Path(captured.relative_path)
-            if relative.is_absolute() or ".." in relative.parts or not relative.parts:
-                raise ValueError("source-mismatch: captured rollout 文件 locator 非法")
-            source = native_io_path(source_root / relative)
-            if source.is_symlink() or not source.is_file():
-                raise RuntimeError(f"source-mismatch: captured rollout 不是普通文件: {relative}")
-            destination = native_io_path(stage / relative)
-            destination.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-            digest = hashlib.sha256()
-            length = 0
-            with source.open("rb") as reader, destination.open("xb") as writer:
-                while chunk := reader.read(_COPY_BUFFER_BYTES):
-                    writer.write(chunk)
-                    digest.update(chunk)
-                    length += len(chunk)
-                writer.flush()
-                os.fsync(writer.fileno())
-            if (length, digest.hexdigest()) != (captured.size_bytes, captured.sha256):
-                raise RuntimeError(f"source-mismatch: captured rollout 文件 hash/length 不一致: {relative}")
+        with _storage_io(stage, "source-mismatch: fork 目标暂存复制失败", "staging_copy", artifact="fork_target"):
+            source_root = snapshot.rollout.captured_root / "rollout"
+            for captured in snapshot.rollout.files:
+                relative = Path(captured.relative_path)
+                if relative.is_absolute() or ".." in relative.parts or not relative.parts:
+                    raise ValueError("source-mismatch: captured rollout 文件 locator 非法")
+                source = native_io_path(source_root / relative)
+                if source.is_symlink() or not source.is_file():
+                    raise RuntimeError(_storage_failure(source, "source-mismatch: captured rollout 不是普通文件",
+                        "staging_copy", artifact="fork_target"))
+                destination = native_io_path(stage / relative)
+                destination.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+                digest = hashlib.sha256()
+                length = 0
+                with source.open("rb") as reader, destination.open("xb") as writer:
+                    while chunk := reader.read(_COPY_BUFFER_BYTES):
+                        writer.write(chunk)
+                        digest.update(chunk)
+                        length += len(chunk)
+                    writer.flush()
+                    os.fsync(writer.fileno())
+                if (length, digest.hexdigest()) != (captured.size_bytes, captured.sha256):
+                    raise RuntimeError(_storage_failure(source, "source-mismatch: captured rollout 文件 hash/length 不一致",
+                        "staging_copy", artifact="fork_target"))
         return stage
     except BaseException:
-        shutil.rmtree(native_io_path(stage))
+        with _storage_io(stage, "source-mismatch: fork 目标暂存清理失败", "staging_cleanup", artifact="fork_target"):
+            shutil.rmtree(native_io_path(stage))
         raise
 
 
@@ -368,7 +377,25 @@ def finalize_target_snapshot_publication(
 
 
 def _fsync_tree(root: Path) -> None:
-    for directory, _, names in os.walk(native_io_path(root), topdown=False):
-        for name in names:
-            fsync_file(Path(directory) / name)
-        fsync_directory(Path(directory))
+    def fail_walk(error: OSError) -> None:
+        raise error
+
+    with _storage_io(root, "source-mismatch: fork 目标准备同步失败", "preparation_sync", artifact="fork_target"):
+        root = native_io_path(root)
+        if root.is_symlink() or not root.is_dir():
+            raise RuntimeError(_storage_failure(root, "source-mismatch: fork 目标暂存不是普通目录",
+                "preparation_sync", artifact="fork_target"))
+        for directory, directories, names in os.walk(root, topdown=False, onerror=fail_walk):
+            current = Path(directory)
+            for name in directories:
+                child = current / name
+                if child.is_symlink():
+                    raise RuntimeError(_storage_failure(child, "source-mismatch: fork 目标暂存含符号链接目录",
+                        "preparation_sync", artifact="fork_target"))
+            for name in names:
+                child = current / name
+                if child.is_symlink() or not child.is_file():
+                    raise RuntimeError(_storage_failure(child, "source-mismatch: fork 目标暂存含非普通文件",
+                        "preparation_sync", artifact="fork_target"))
+                fsync_file(child)
+            fsync_directory(current)

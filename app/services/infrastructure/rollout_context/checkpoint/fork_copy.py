@@ -6,6 +6,7 @@ import asyncio
 import shutil
 from typing import TYPE_CHECKING
 
+from app.core.atomic_fs import native_io_path
 from app.core.session_thread_context import session_thread_owner_scope
 from app.domain.itemized.mutation_intents import MutationIntentOwner
 from app.services.infrastructure.rollout_context.checkpoint.fork_source import (
@@ -25,6 +26,7 @@ from app.services.infrastructure.rollout_context.fork.snapshot_copy import (
 from app.services.infrastructure.rollout_context.fork.source_snapshot import (
     ForkSourceSnapshot,
 )
+from app.services.infrastructure.rollout_context.storage.primitives import _storage_io
 
 if TYPE_CHECKING:
     from app.core.session_catalog_store import SessionCreationRecord
@@ -122,8 +124,9 @@ class CheckpointForkCopy:
                     checkpoint_ns=checkpoint_ns, materialization_id=materialization_id,
                 )
             except BaseException:
-                if stage.exists():
-                    shutil.rmtree(stage)
+                with _storage_io(stage, "source-mismatch: fork 目标暂存清理失败", "staging_cleanup", artifact="fork_target"):
+                    if native_io_path(stage).exists():
+                        shutil.rmtree(native_io_path(stage))
                 raise
         if source_snapshot.attachments:
             if self._source.attachment_store is None:
