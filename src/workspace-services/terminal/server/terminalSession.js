@@ -27,6 +27,8 @@ export function resolveTerminalCwd(workspaceRoot, cwdRelative) {
   const resolved = path.resolve(workspaceRoot, rawCwd);
   let directoryStat;
   try {
+    // TODO(5.4)：先统一创建/启动与关闭对在途任务的持有，再改异步stat；
+    // 直接增加等待会让关闭越过尚未完成的创建，迟到PTY可能失去owner。当前同步检查仍会阻塞事件循环。
     directoryStat = statSync(resolved);
   } catch (error) {
     console.error("[terminal-session] 终端工作目录检查失败", { cwd: resolved }, error);
