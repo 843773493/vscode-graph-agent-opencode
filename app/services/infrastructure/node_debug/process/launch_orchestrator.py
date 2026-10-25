@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections.abc import MutableMapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -46,6 +47,8 @@ from app.services.infrastructure.node_debug.session.session_state import (
     NodeDebugSessionState,
 )
 from app.services.infrastructure.node_debug.session.thread_owner import NodeDebugOwner
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -492,7 +495,17 @@ class NodeDebugLaunchOrchestrator:
                 )
             context.persist_state(session_id, thread_id, runtime)
         except Exception as error:
-            message = f"启动 Node Inspector 失败: {error}"
+            if isinstance(error, OSError):
+                # 原生位置留在诊断及 cause；状态、动作和 manifest 共用同一公开事实。
+                message = (
+                    "启动 Node Inspector 失败: "
+                    f"session_id={session_id}, thread_id={thread_id}, "
+                    f"error_type={type(error).__name__}, errno={error.errno}, "
+                    f"winerror={getattr(error, 'winerror', None)}"
+                )
+                logger.exception(message)
+            else:
+                message = f"启动 Node Inspector 失败: {error}"
             async with runtime.state_lock:
                 runtime.status = "failed"
                 runtime.error_message = message

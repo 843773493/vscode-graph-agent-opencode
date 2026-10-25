@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from datetime import UTC, datetime
 from typing import Literal
 
@@ -43,9 +43,11 @@ class NodeDebugSessionState:
         self,
         *,
         configuration_registry: NodeDebugConfigurationRegistry,
+        runtimes: Mapping[NodeDebugOwner, NodeDebugRuntime],
         store: NodeDebugSessionStore | None = None,
     ) -> None:
         self._configuration_registry = configuration_registry
+        self._runtimes = runtimes
         self._store = store
         self._pending_breakpoints: dict[NodeDebugOwner, list[NodeDebugBreakpointDTO]] = {}
         self._pending_actions: dict[NodeDebugOwner, list[NodeDebugActionRecordDTO]] = {}
@@ -219,6 +221,8 @@ class NodeDebugSessionState:
     def write_session_manifest(self, session_id: str, thread_id: str) -> None:
         if self._store is None:
             return
+        owner = normalize_node_debug_owner(session_id, thread_id)
+        runtime = self._runtimes.get(owner)
         self._store.write_manifest(
             NodeDebugSessionManifestDTO(
                 session_id=session_id,
@@ -226,9 +230,7 @@ class NodeDebugSessionState:
                 active_configuration_id=self._configuration_registry.active_id(
                     session_id, thread_id
                 ),
-                actions=self.pending_actions(
-                    normalize_node_debug_owner(session_id, thread_id)
-                ),
+                actions=runtime.actions if runtime is not None else self.pending_actions(owner),
                 updated_at=datetime.now(UTC),
             )
         )

@@ -222,7 +222,7 @@ def session_state(workspace_root: Path) -> RecordingSessionState:
             file_paths=node_debug_file_paths(workspace_root),
         ),
     )
-    return RecordingSessionState(configuration_registry=registry)
+    return RecordingSessionState(configuration_registry=registry, runtimes={})
 
 
 @pytest.fixture

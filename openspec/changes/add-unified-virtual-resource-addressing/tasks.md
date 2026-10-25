@@ -636,3 +636,12 @@
 
 - 共享版本存储/API合同/投影/运行时269 passed/21.65秒；随后只把两项生成端测试的绝对路径移入隔离工作区，最终2 passed/0.39秒，其余267项及生产代码未变。首次共享2项失败源于捕获文件基线前尚未触发Thread查询的首次SQLite WAL/SHM建立，先完成必需查询后保留完整逐字节断言通过，没有排除sidecar或放宽业务断言。共享真实HTTP为2 passed/131.16秒：请求和损坏索引各5种值×snapshot/events/SSE建流共30次精确404，request_id一致、原索引/外部哨兵/canonical不变，修复后原历史及硬重启一致，并回归原四类持久损坏。
 - 最终Ruff/compileall通过，strict OpenSpec 45 passed/0 failed；主线程差异与AST自查确认唯一ID验证、7处准入调用、旧falsy回退零残留，原迭代器/列表读取/流式裁剪及启动恢复未被改变，无新源码目录。这是主线程自查，非独立代理审查；共享暂存条目和他人优化独立保留。
+
+### 2026-10-25 Node 调试进程原生错误与动作冷恢复（2.2/7.2 部分收口）
+
+- 启动 owner 的 OSError 公开事实只含精确 Session/Thread、原生异常类别、errno 和 winerror；原异常对象仍是 cause，完整堆栈保留在诊断日志。信号、强杀和等待退出的三处原生停止错误也在原 producer 转换，复用既有动作 writer；不新增全局脱敏器、不改变停止期限、进程身份核实和非系统启动错误正文。
+- 真实重启验收发现原 manifest writer 在 runtime 消费 pending actions 后仍写空 pending 历史。现在向唯一 SessionState 注入服务既有的只读 runtime mapping，manifest 直接选择当前 runtime 动作、无 runtime 时选择原 pending 动作；不另存或同步第二历史。已迁齐 service 构造和继承 SessionState 的源码对账 fixture。
+- 原 HEAD 加新增验收：三种 POSIX/盘符/UNC 字面量的单元反例为3 failed/1 passed；真实 Gateway 的缺失 Node 可执行文件请求为1 failed/21.65秒，409 原文确含原生路径。最终候选37项启动/claim/停止回归通过（41.82秒），真实产品测试1 passed（35.55秒），从产品 Session/配置/启动入口生成失败动作，核 live、原 manifest bytes、settled claim、诊断原文、后端重启冷读及同一配置成功重试/真实停止；无手填关键业务状态。
+- 扩展 Node 单元检查曾为238 passed/8 setup errors，错误均是继承 fixture 未传新增 runtime 依赖；迁齐后8项全部通过。HTTP002业务断言已走完但证据编码误把 store 的二元返回值当成 JSON 正文，HTTP003仍未正确解包；现保存原 bytes 和 DTO，失败原件保留。最终 Ruff/compileall 均通过；共享合并后的验证另记原件，不拿候选通过冒充共享通过。
+- 准确命令、源码前后指纹、原始输出、实际退出码和主线程结构自查在 `out/tests/temp/node_debug_launch_errors_20261025/artifacts/`；不称独立代理审查，不代替 Windows 实机、完整主窗口或其它原生/Inspector 错误出口的总验收。2.2/7.2 保持未勾，Agent 团队与协作专项继续 TODO。
+共享合并后：完整Node调试/API 280 passed（57.89秒），真实Gateway重启/原配置重试1 passed（31.18秒）；Ruff、compileall与45项strict均退出0，所记录源码前后指纹一致且进程组无残留。保留原暂存索引字节，并将fixture依赖修改合入共享现有的node_debug子目录，独立候选仍按其HEAD中的原路径提交该消费者修改。

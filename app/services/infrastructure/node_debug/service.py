@@ -153,6 +153,7 @@ class NodeDebugService(
         )
         self._session_state = NodeDebugSessionState(
             configuration_registry=self._configuration_registry,
+            runtimes=self._runtimes,
             store=session_store,
         )
         self._session_admission = session_admission

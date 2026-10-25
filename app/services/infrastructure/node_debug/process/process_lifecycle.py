@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import signal
 from collections.abc import Mapping
@@ -32,6 +33,7 @@ from app.services.infrastructure.node_debug.session.thread_owner import NodeDebu
 _TERMINATE_TIMEOUT_SECONDS = 3.0
 _KILL_TIMEOUT_SECONDS = 3.0
 _RECONCILE_TERMINATE_TIMEOUT_SECONDS = 5.0
+logger = logging.getLogger(__name__)
 
 
 class NodeDebugProcessLifecycle:
@@ -304,6 +306,17 @@ class NodeDebugProcessLifecycle:
             )
         return "reconcile_required"
 
+    def _record_native_stop_failure(
+        self, runtime: NodeDebugRuntime, action: str, label: str, error: OSError,
+    ) -> None:
+        message = (
+            f"{label}: session_id={runtime.session_id}, thread_id={runtime.thread_id}, "
+            f"error_type={type(error).__name__}, errno={error.errno}, "
+            f"winerror={getattr(error, 'winerror', None)}"
+        )
+        logger.exception(message)
+        self._append_action(runtime, action, message, actor="system", result="error")
+
     async def terminate_and_verify(
         self, runtime: NodeDebugRuntime
     ) -> str | None:
@@ -317,12 +330,8 @@ class NodeDebugProcessLifecycle:
             except ProcessLookupError:
                 pass
             except OSError as error:
-                self._append_action(
-                    runtime,
-                    "stop_signal_failed",
-                    f"发送终止信号失败: {error}",
-                    actor="system",
-                    result="error",
+                self._record_native_stop_failure(
+                    runtime, "stop_signal_failed", "发送终止信号失败", error,
                 )
             try:
                 await asyncio.wait_for(
@@ -334,12 +343,8 @@ class NodeDebugProcessLifecycle:
                 except ProcessLookupError:
                     pass
                 except OSError as error:
-                    self._append_action(
-                        runtime,
-                        "stop_kill_failed",
-                        f"强制终止调试进程失败: {error}",
-                        actor="system",
-                        result="error",
+                    self._record_native_stop_failure(
+                        runtime, "stop_kill_failed", "强制终止调试进程失败", error,
                     )
                 try:
                     await asyncio.wait_for(
@@ -348,12 +353,8 @@ class NodeDebugProcessLifecycle:
                 except TimeoutError:
                     pass
             except OSError as error:
-                self._append_action(
-                    runtime,
-                    "stop_wait_failed",
-                    f"等待调试进程退出失败: {error}",
-                    actor="system",
-                    result="error",
+                self._record_native_stop_failure(
+                    runtime, "stop_wait_failed", "等待调试进程退出失败", error,
                 )
         if process.returncode is not None:
             return None
