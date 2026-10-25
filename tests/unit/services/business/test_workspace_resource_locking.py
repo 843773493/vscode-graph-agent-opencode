@@ -139,3 +139,88 @@ async def test_operation_close_rejects_late_calls_while_its_lease_waits_for_a_lo
             assert not bundle.leases.leases_for_resource(other)
         await closing
     assert not bundle.leases.leases_for_resource(rid)
+
+
+@pytest.mark.parametrize("failure_count", [1, 2])
+async def test_cold_recovery_finishes_other_resources_without_rebinding_the_batch_after_failure(
+    bundle: TerminalOwnerFixture | BrowserOwnerFixture,
+    monkeypatch: pytest.MonkeyPatch, failure_count: int,
+) -> None:
+    resources = [await bundle.create() for _ in range(3)]
+    ids = [str(resource["resource_id"]) for resource in resources]
+    owner = bundle.restart()
+    errors = {rid: ConnectionError(f"撤权回执丢失: {rid}") for rid in ids[:failure_count]}
+    calls: list[tuple[str, int]] = []
+    original = bundle.transport.sync_owner_revision
+
+    async def lose_receipt(resource_id: str, revision: int) -> None:
+        calls.append((resource_id, revision))
+        # 外部版本已经发布；Python不能因丢失回执重启整批恢复。
+        await original(resource_id, revision)
+        if resource_id in errors:
+            raise errors[resource_id]
+
+    monkeypatch.setattr(bundle.transport, "sync_owner_revision", lose_receipt)
+    with pytest.raises(ConnectionError if failure_count == 1 else ExceptionGroup) as caught:
+        await owner.recover()
+    if failure_count == 1:
+        assert caught.value is errors[ids[0]]
+    else:
+        assert isinstance(caught.value, ExceptionGroup)
+        assert caught.value.exceptions == tuple(errors.values())
+    assert calls == [(rid, 2) for rid in ids]
+
+    # 健康资源可经原查询、授权和工具入口继续使用，版本不会反复推进。
+    healthy = ids[-1]
+    current = await owner.get_resource(healthy)
+    assert current["owner_revision"] == 2
+    assert current["reconciliation_status"] == "verified"
+    grant = await owner.transport_grant(
+        healthy, expected_revision=2, thread=ThreadRef(SESSION_A, THREAD_A),
+        holder_id="request:recovered-grant", operation_id="recovered-grant",
+    )
+    assert grant["resource"]["resource_id"] == healthy
+    async with owner.operation(
+        session_id=SESSION_A, thread_id=THREAD_A,
+        holder_id="request:recovered-tool", operation_id="recovered-tool",
+    ) as operation:
+        if isinstance(bundle, TerminalOwnerFixture):
+            await operation.write_terminal(terminal_id=healthy, data="recovered")
+        else:
+            await operation.perform(healthy, "navigate", {"url": "https://recovered.test"})
+    for rid in errors:
+        unknown = await owner.get_resource(rid)
+        assert unknown["owner_revision"] == 2
+        assert unknown["reconciliation_status"] == "unknown"
+        with pytest.raises(ResourceConflict, match="尚待 owner 核实"):
+            await bundle.command(rid, action="promote", expected_revision=2)
+    assert calls == [(rid, 2) for rid in ids]
+    assert all(record.owner_revision == 2 for record in owner._store.records.values())
+    assert not bundle.transport.deleted
+
+
+async def test_cancelling_cold_recovery_does_not_report_the_remaining_resources_recovered(
+    bundle: TerminalOwnerFixture | BrowserOwnerFixture, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    first, second = await bundle.create(), await bundle.create()
+    ids = [str(first["resource_id"]), str(second["resource_id"])]
+    owner = bundle.restart()
+    entered = asyncio.Event()
+    calls: list[str] = []
+
+    async def blocked(resource_id: str, _revision: int) -> None:
+        calls.append(resource_id)
+        entered.set()
+        await asyncio.Future()
+
+    monkeypatch.setattr(bundle.transport, "sync_owner_revision", blocked)
+    recovering = asyncio.create_task(owner.recover())
+    try:
+        await asyncio.wait_for(entered.wait(), 5)
+    finally:
+        recovering.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await recovering
+    assert calls == ids[:1]
+    assert not owner._recovered
+    assert owner._store.records[ids[0]].reconciliation_status == "unknown"

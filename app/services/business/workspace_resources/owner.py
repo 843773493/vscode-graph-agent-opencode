@@ -106,6 +106,7 @@ class WorkspaceResourceOwner:
     async def recover(self) -> None:
         if self._recovered:
             return
+        # TODO：挂起同步期间的跨资源准入隔离和整个恢复期限仍需收口。
         async with self._recovery_lock:
             if self._recovered:
                 return
@@ -146,6 +147,7 @@ class WorkspaceResourceOwner:
                     revisions_to_sync.append(record)
             if self._store.records:
                 self._store.persist()
+            errors: list[Exception] = []
             for record in revisions_to_sync:
                 try:
                     await self._transport.sync_owner_revision(
@@ -153,10 +155,17 @@ class WorkspaceResourceOwner:
                     )
                 except BaseException as error:
                     self._unknown(record, error)
-                    raise
+                    if not isinstance(error, Exception):
+                        raise
+                    errors.append(error)
             for record in self._store.records.values():
                 self._sync_ledger(record)
             self._recovered = True
+            # 单资源失败不重启整批撤权；未知资源仍由原管理入口核实。
+            if len(errors) == 1:
+                raise errors[0]
+            if errors:
+                raise ExceptionGroup("外部资源 恢复存在未核实资源", errors)
 
     async def _create_record(
         self, *, ref: ThreadRef, retention_scope: RetentionScope, title: str,
