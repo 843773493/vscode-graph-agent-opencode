@@ -28,6 +28,7 @@ from app.schemas.gateway.native_directories import (
 )
 from app.schemas.internal_v2.common import APIResponse
 from app.services.infrastructure.gateway_client_common import GatewayTransportConnection
+from app.services.infrastructure.workspace_files.filesystem import file_access
 
 
 class AttachmentDirectoryPaths(Protocol):
@@ -145,32 +146,34 @@ class WorkspaceFilePaths:
                 raise ValueError("文件入口必须指向 Workspace 或 Gateway files 资源")
             if parsed.gateway_authority is not None:
                 raise ValueError("文件 URI 的 Gateway authority 与目标机器不符")
-            if parsed.scope == "workspace":
-                if parsed.scope_id != self.workspace_id:
-                    raise ValueError("文件 URI 的工作区与固定目标不符")
-                root = self.workspace
-            else:
-                root = self._bindings().resolve(parsed)
-            self.require_public_path(root.joinpath(*parsed.tail_segments[1:]))
-            if reject_symlink and root.joinpath(*parsed.tail_segments[1:]).is_symlink():
-                raise ValueError(f"不允许编辑符号链接: {parsed.display_uri}")
-            target = safe_join(root, *parsed.tail_segments[1:])
-            self.require_public_path(target)
-            return target, parsed.display_uri
+            with file_access(parsed.display_uri, "目标解析"):
+                if parsed.scope == "workspace":
+                    if parsed.scope_id != self.workspace_id:
+                        raise ValueError("文件 URI 的工作区与固定目标不符")
+                    root = self.workspace
+                else:
+                    root = self._bindings().resolve(parsed)
+                self.require_public_path(root.joinpath(*parsed.tail_segments[1:]))
+                if reject_symlink and root.joinpath(*parsed.tail_segments[1:]).is_symlink():
+                    raise ValueError(f"不允许编辑符号链接: {parsed.display_uri}")
+                target = safe_join(root, *parsed.tail_segments[1:])
+                self.require_public_path(target)
+                return target, parsed.display_uri
         if not value and not allow_empty:
             raise ValueError("文件路径不能为空")
-        native = Path(value).expanduser()
-        unresolved = native if native.is_absolute() else self.workspace / native
-        self.require_public_path(unresolved)
-        if reject_symlink and unresolved.is_symlink():
-            raise ValueError("不允许通过文件预览编辑符号链接")
-        if not native.is_absolute() and scope == "filesystem":
-            if value:
-                raise ValueError("原生目录入口必须是绝对路径或资源 URI")
-            target = Path(self.workspace.anchor)
-        else:
-            target = resolve_native_file_path(self.workspace, value, allow_absolute_outside=allow_external)
-        return target, self.reference(target)
+        with file_access(None, "目标解析"):
+            native = Path(value).expanduser()
+            unresolved = native if native.is_absolute() else self.workspace / native
+            self.require_public_path(unresolved)
+            if reject_symlink and unresolved.is_symlink():
+                raise ValueError("不允许通过文件预览编辑符号链接")
+            if not native.is_absolute() and scope == "filesystem":
+                if value:
+                    raise ValueError("原生目录入口必须是绝对路径或资源 URI")
+                target = Path(self.workspace.anchor)
+            else:
+                target = resolve_native_file_path(self.workspace, value, allow_absolute_outside=allow_external)
+            return target, self.reference(target)
 
     def reference(self, target: Path, *, root_uri: str | None = None) -> str:
         if root_uri is not None and parse_resource_uri(root_uri).kind == "attachments":

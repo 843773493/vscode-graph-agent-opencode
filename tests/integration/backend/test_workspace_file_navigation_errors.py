@@ -75,12 +75,12 @@ async def test_directory_native_messages_stay_in_logs_and_original_listing_survi
     scandir = os.scandir
     evidence = []
     for number, status in ((errno.EACCES, 403), (errno.ENOENT, 404), (errno.ENOTDIR, 400)):
-        for filename_field in ("first", "second"):
+        for filename_field in ("first", "second", "none"):
             original = OSError(number, f"private-strerror: {case.directory}")
             # CPython 在 filename=None 时会忽略构造参数 filename2；分别设置以覆盖两个真实属性。
             if filename_field == "first":
                 original.filename = str(case.directory)
-            else:
+            elif filename_field == "second":
                 original.filename2 = str(case.directory / "private-second")
 
             def fail(path, error=original):
@@ -98,6 +98,7 @@ async def test_directory_native_messages_stay_in_logs_and_original_listing_survi
             assert body["request_id"] == failed.headers["X-Request-ID"] == request_id
             assert str(case.directory) not in failed.text and "private-strerror" not in failed.text
             assert type(original).__name__ in body["detail"] and f"errno={number}" in body["detail"]
+            assert "stage=目录扫描" in body["detail"] and case.listing["path"] in body["detail"]
             assert any(record.exc_info and record.exc_info[1] is original for record in caplog.records)
             assert file_rows(case) == before
             evidence.append(body)
@@ -164,13 +165,19 @@ async def test_real_upload_staging_collision_keeps_409_original_state_and_same_i
     }, ensure_ascii=False, indent=2) + "\n")
 
 
+@pytest.mark.parametrize("filename_field", ["first", "second", "none"])
 async def test_text_preflight_uses_shared_error_and_creates_nothing_until_retry(
     file_case, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
+    filename_field: str,
 ):
     case = file_case
     target = case.directory / "new.txt"
     uri = case.listing["path"] + "/new.txt"
-    original = OSError(errno.EIO, f"private-strerror: {target}", str(target))
+    original = OSError(errno.EIO, f"private-strerror: {target}")
+    if filename_field == "first":
+        original.filename = str(target)
+    elif filename_field == "second":
+        original.filename2 = str(target)
     resolve = Path.resolve
     before = file_rows(case)
     payload = {"create": {"target": uri, "content": "text payload\n", "expected_version": "absent"}}
@@ -192,6 +199,7 @@ async def test_text_preflight_uses_shared_error_and_creates_nothing_until_retry(
         "error", "not_executed", "execution_failed", "resource_file_operations",
     )
     assert receipt["error_type"] == "OSError" and f"errno={errno.EIO}" in receipt["error"]
+    assert "stage=目标解析" in receipt["error"] and uri in receipt["error"]
     assert not receipt["journal_id"] and not receipt["files"]
     assert str(case.root) not in failed.text and "private-strerror" not in failed.text
     assert any(record.exc_info and record.exc_info[1] is original for record in caplog.records)

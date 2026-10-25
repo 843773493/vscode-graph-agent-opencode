@@ -11,7 +11,7 @@ from starlette.types import Message, Receive, Scope, Send
 
 from app.services.infrastructure.workspace_files.filesystem import (
     PreparedFileDownload,
-    file_download_access,
+    file_access,
 )
 
 
@@ -45,13 +45,13 @@ class WorkspaceFileResponse(FileResponse):
         extensions = {key: value for key, value in scope.get("extensions", {}).items()
                       if key != "http.response.pathsend"}
         try:
-            with file_download_access(self.download.uri, "文件传输"):
+            with file_access(self.download.uri, "文件传输"):
                 await super().__call__({**scope, "extensions": extensions}, receive, send_file)
         finally:
             if self.download.temporary:
                 primary_error = sys.exception()
                 try:
-                    with anyio.CancelScope(shield=True), file_download_access(self.download.uri, "临时文件清理"):
+                    with anyio.CancelScope(shield=True), file_access(self.download.uri, "临时文件清理"):
                         await anyio.to_thread.run_sync(self.download.path.unlink)
                 except OSError as cleanup_error:
                     if primary_error is not None:

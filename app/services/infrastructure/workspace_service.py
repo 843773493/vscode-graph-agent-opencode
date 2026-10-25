@@ -42,7 +42,7 @@ from app.schemas.internal_v2.workspace_file_operations import (
 from app.services.infrastructure.config_service import ConfigService
 from app.services.infrastructure.workspace_files.filesystem import (
     PreparedFileDownload,
-    file_download_access,
+    file_access,
 )
 from app.services.infrastructure.workspace_files.mutation_lock import (
     workspace_file_mutation_lock,
@@ -272,7 +272,7 @@ class WorkspaceService:
                 count += 1
                 if cursor_key is None or entry_key(node) > cursor_key:
                     yield node
-        with os.scandir(target_path) as directory_entries:
+        with file_access(display_path, "目录扫描"), os.scandir(target_path) as directory_entries:
             entries = heapq.nsmallest(
                 limit + 1,
                 observed_entries(directory_entries),
@@ -435,13 +435,13 @@ class WorkspaceService:
         scope: WorkspaceFileScope = "workspace",
         archive_directory: bool = True,
     ) -> PreparedFileDownload:
-        with file_download_access(None, "目标解析"):
+        with file_access(None, "目标解析"):
             target, display_path = self.file_paths.resolve(
                 path,
                 scope=scope,
                 allow_empty=False,
             )
-        with file_download_access(display_path, "文件检查"):
+        with file_access(display_path, "文件检查"):
             if target.is_symlink():
                 raise ValueError(f"暂不支持下载符号链接: {display_path}")
             metadata = target.stat()
@@ -454,14 +454,14 @@ class WorkspaceService:
         if not stat.S_ISDIR(metadata.st_mode):
             raise ValueError(f"下载路径不是文件或目录: {display_path}")
 
-        with file_download_access(display_path, "临时文件创建"):
+        with file_access(display_path, "临时文件创建"):
             temporary_fd, temporary_name = tempfile.mkstemp(
                 prefix=f"{target.name or 'workspace'}-",
                 suffix=".zip",
             )
         temporary_path = Path(temporary_name)
         try:
-            with file_download_access(display_path, "目录归档"), os.fdopen(temporary_fd, "w+b") as output, zipfile.ZipFile(
+            with file_access(display_path, "目录归档"), os.fdopen(temporary_fd, "w+b") as output, zipfile.ZipFile(
                 output,
                 mode="w",
                 compression=zipfile.ZIP_DEFLATED,
@@ -475,11 +475,11 @@ class WorkspaceService:
                         if child.is_dir():
                             add_children(child)
                 add_children(target)
-            with file_download_access(display_path, "归档检查"):
+            with file_access(display_path, "归档检查"):
                 metadata = temporary_path.stat()
         except BaseException as error:
             try:
-                with file_download_access(display_path, "临时文件清理"):
+                with file_access(display_path, "临时文件清理"):
                     temporary_path.unlink(missing_ok=True)
             except OSError as cleanup_error:
                 raise BaseExceptionGroup("目录下载准备失败且临时文件清理失败", [error, cleanup_error]) from None

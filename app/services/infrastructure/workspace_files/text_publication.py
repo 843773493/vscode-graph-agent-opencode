@@ -5,12 +5,11 @@ from __future__ import annotations
 import os
 import stat
 import tempfile
-from collections.abc import Iterator
-from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
 from app.core.hashing import sha256_hex
+from app.services.infrastructure.workspace_files.filesystem import file_access
 from app.services.infrastructure.workspace_files.runtime import rename_entry_exclusive
 
 
@@ -44,7 +43,7 @@ class FilePreimage:
 
 
 def read_file_preimage(path: Path, *, reference: str, max_bytes: int | None = None) -> FilePreimage:
-    with _file_access(reference, "read"):
+    with file_access(reference, "read"):
         before = path.lstat()
     if stat.S_ISLNK(before.st_mode):
         raise ValueError(f"不允许编辑符号链接: {reference}")
@@ -54,7 +53,7 @@ def read_file_preimage(path: Path, *, reference: str, max_bytes: int | None = No
         raise ValueError(f"目标不是普通文件: {reference}")
     if max_bytes is not None and before.st_size > max_bytes:
         raise ValueError(f"文件过大，暂不预览: {reference} ({before.st_size} bytes)")
-    with _file_access(reference, "read"):
+    with file_access(reference, "read"):
         with path.open("rb") as stream:
             content = stream.read() if max_bytes is None else stream.read(max_bytes + 1)
         after = path.lstat()
@@ -69,7 +68,7 @@ def read_file_preimage(path: Path, *, reference: str, max_bytes: int | None = No
 
 def require_file_preimage(path: Path, *, before: FilePreimage | None, reference: str) -> None:
     if before is None:
-        with _file_access(reference, "verify"):
+        with file_access(reference, "verify"):
             exists = path.exists() or path.is_symlink()
         if exists:
             raise WorkspaceFileConflictError(f"目标不满足 expected_absent: {reference}")
@@ -85,7 +84,7 @@ def require_file_preimage(path: Path, *, before: FilePreimage | None, reference:
 def publish_file_content(path: Path, content: bytes, *, before: FilePreimage | None,
                          reference: str, mode: int | None = None) -> FilePreimage:
     """调用者持有同一 Workspace mutation lock；外部 writer 仍可在核对后竞争。"""
-    with _file_access(reference, "publish"):
+    with file_access(reference, "publish"):
         temporary_path: Path | None = None
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -119,21 +118,8 @@ def publish_file_content(path: Path, content: bytes, *, before: FilePreimage | N
 
 
 def delete_file_content(path: Path, *, before: FilePreimage, reference: str) -> None:
-    with _file_access(reference, "delete"):
+    with file_access(reference, "delete"):
         require_file_preimage(path, before=before, reference=reference)
         path.unlink()
         if path.exists() or path.is_symlink():
             raise FilePublicationUnverifiedError(reference, "absent", None)
-
-
-@contextmanager
-def _file_access(reference: str, operation: str) -> Iterator[None]:
-    """原生位置只交给 OS；公开异常保类别、errno 和完整内部原因。"""
-    try:
-        yield
-    except OSError as error:
-        raise type(error)(
-            error.errno,
-            f"文本文件 {operation} 失败: uri={reference}, "
-            f"error={type(error).__name__}, errno={error.errno}",
-        ) from error

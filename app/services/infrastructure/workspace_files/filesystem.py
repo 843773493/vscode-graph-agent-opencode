@@ -40,15 +40,15 @@ class PreparedFileDownload:
 
 
 @contextmanager
-def file_download_access(reference: str | None, stage: str) -> Iterator[None]:
-    """下载的原生文件操作只发布 URI、实际阶段与系统错误码。"""
+def file_access(reference: str | None, stage: str) -> Iterator[None]:
+    """原生文件访问只发布 URI、实际阶段与系统错误码。"""
     try:
         yield
     except OSError as error:
-        logger.exception("文件下载失败: uri=%s stage=%s", reference, stage)
+        logger.exception("文件访问失败: uri=%s stage=%s", reference, stage)
         raise type(error)(
             error.errno,
-            f"文件下载失败: uri={reference}, stage={stage}, error={type(error).__name__}, "
+            f"文件访问失败: uri={reference}, stage={stage}, error={type(error).__name__}, "
             f"errno={error.errno}, winerror={getattr(error, 'winerror', None)}",
         ) from error
 
