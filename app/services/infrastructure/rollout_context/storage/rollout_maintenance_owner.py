@@ -23,6 +23,8 @@ from app.services.infrastructure.rollout_context.storage.format_dispatch import 
 )
 from app.services.infrastructure.rollout_context.storage.primitives import (
     RolloutManifest,
+    _storage_failure,
+    _storage_io,
 )
 from app.services.infrastructure.rollout_context.storage.rollout_index_reads import (
     RolloutIndexMixin,
@@ -72,20 +74,21 @@ def reconcile_jsonl_tail(path: Path, committed_offset: int) -> None:
     committed_offset = strict_non_negative_int(
         committed_offset, field="database_meta.committed_jsonl_offset"
     )
-    if not path.is_file():
-        raise RuntimeError(f"committed JSONL 文件不存在: {path}")
-    file_size = path.stat().st_size
-    if file_size < committed_offset:
-        raise RuntimeError(
-            "rollout.jsonl 小于 SQLite committed offset: "
-            f"file={file_size}, committed={committed_offset}"
-        )
-    if file_size == committed_offset:
-        return
-    with path.open("r+b") as stream:
-        stream.truncate(committed_offset)
-        stream.flush()
-        os.fsync(stream.fileno())
+    with _storage_io(path, "rollout JSONL 尾部恢复失败", "tail_reconciliation", artifact="rollout_jsonl"):
+        if not path.is_file():
+            raise RuntimeError(_storage_failure(path, "committed JSONL 文件不存在", "tail_reconciliation", artifact="rollout_jsonl"))
+        file_size = path.stat().st_size
+        if file_size < committed_offset:
+            raise RuntimeError(
+                "rollout.jsonl 小于 SQLite committed offset: "
+                f"file={file_size}, committed={committed_offset}"
+            )
+        if file_size == committed_offset:
+            return
+        with path.open("r+b") as stream:
+            stream.truncate(committed_offset)
+            stream.flush()
+            os.fsync(stream.fileno())
 
 
 __all__ = ["RolloutMaintenanceOwner"]
@@ -352,9 +355,10 @@ class RolloutMaintenanceOwner(
             root = self._host.root(
                 session_id, checkpoint_ns, thread_id=thread_id
             )
-            root.mkdir(parents=True, exist_ok=True)
-            if self._is_removed_rollout_layout(root):
-                raise RuntimeError(f"rollout 使用了已移除的旧布局: {root}")
+            with _storage_io(root, "rollout 布局校验失败", "layout_validation", artifact="rollout_layout"):
+                root.mkdir(parents=True, exist_ok=True)
+                if self._is_removed_rollout_layout(root):
+                    raise RuntimeError(_storage_failure(root, "rollout 使用了已移除的旧布局", "layout_validation", artifact="rollout_layout"))
             # 正常 runtime 只接收显式声明的 v2 rollout；旧格式必须重建。
             existing_index = root / "index.sqlite"
             needs_schema = True
@@ -481,10 +485,11 @@ class RolloutMaintenanceOwner(
             # 只读历史请求会频繁经过 initialize；已有文件不能重复 touch，
             # 否则会改变 rollout.jsonl 的 mtime，触发工作区文件监听并造成
             # 无意义的资源刷新。首次创建时才建立空的 canonical 文件。
-            if path.is_symlink() or (path.exists() and not path.is_file()):
-                raise RuntimeError(f"rollout.jsonl 不是安全普通文件: {path}")
-            if not path.exists():
-                path.touch()
+            with _storage_io(path, "rollout JSONL 初始化失败", "jsonl_initialization", artifact="rollout_jsonl"):
+                if path.is_symlink() or (path.exists() and not path.is_file()):
+                    raise RuntimeError(_storage_failure(path, "rollout.jsonl 不是安全普通文件", "jsonl_initialization", artifact="rollout_jsonl"))
+                if not path.exists():
+                    path.touch()
             # 已有 authoritative meta 的索引只能验证；当前 schema 仅在首次 bootstrap 创建。
             if needs_schema:
                 self._initialize_schema(
@@ -616,7 +621,8 @@ class RolloutMaintenanceOwner(
                     committed_offset_row[0],
                     field="database_meta.committed_jsonl_offset",
                 )
-                file_size = path.stat().st_size
+                with _storage_io(path, "rollout JSONL 已提交偏移检查失败", "committed_offset_validation", artifact="rollout_jsonl"):
+                    file_size = path.stat().st_size
                 if file_size < committed_offset:
                     result = connection.execute(
                         "UPDATE database_meta SET database_state = 'recovery_required', updated_at = ? WHERE singleton_id = 1",

@@ -710,3 +710,11 @@
 - 新增12项反例随完整Git archive的旧实现均失败（0.72秒）；最终共享核心SQLite38 passed、3项Windows专用skipped（0.93秒），Gateway状态库、工作区状态/配置及活动游标93 passed（3.64秒）。覆盖真实锁竞争、失败后句柄关闭/重取、原库正文不变、迁移拒绝前后完整SQL dump一致、修复后原owner重开及原数据；WAL失败只替换原生PRAGMA返回值，不伪造业务状态。这是存储与消费方测试，不称真实Gateway HTTP、进程重启或完整Web验收。
 - 锁标志、marker初始化、显式共享准入、SQL、WAL、事务和迁移顺序不变，不提升schema版本。AST对账确认SQLiteStateDatabase除RuntimeError正文参数外相同；共享required-tables查重优化独立保留。初次静态检查发现新增测试的import顺序和两处嵌套with，按规则整理后Ruff通过；compileall通过。源码前后指纹、准确命令、原始失败/成功输出、退出码和主线程自查在 `out/tests/temp/sqlite_owner_errors_20261025/artifacts/`，全部所记录运行源码冻结且进程组无残留。
 - 全局2.2/7.2仍未勾；未声称Windows实机通过，不扩展到未覆盖的其它SQLite或业务错误。Agent团队、成员、委派与协作继续TODO，未启动代理或专项验证。
+
+
+### 2026-10-25 Rollout 布局与 JSONL 恢复错误（2.2/7.2 部分收口）
+
+- 旧布局、JSONL非普通文件/缺失拒绝及布局/文件检查、创建、已提交偏移检查与尾部恢复的原生错误，复用原storage错误出口。保留原因、artifact、阶段、异常类别、errno/winerror与原cause；真实位置和原文只留诊断。只按SQLite committed offset恢复尾部，已提交前缀、fsync顺序和恢复期限不变；不增加第二reader、writer或迁移。
+- 完整Git archive的旧实现：新增尾部检查5 failed/1 passed（0.60秒，正例核偏移过大拒绝、相等不touch及尾部精确截断），产品历史场景5 failed（46.98秒）。共享尾部/完整Saver/schema拒绝107 passed（39.04秒）；共享历史集成5 passed，耗时及准确命令见原始result。Session/消息执行入口和现有model_stream生成关键历史；两类旧布局、JSONL符号链接/目录和原生检查拒绝后，原canonical字节与完整SQLite dump不变，移除故障后原owner初始化、冷Saver和历史API均返回原Thread/Turn与历史。fsync失败时只允许未提交尾部已截断，已提交前缀不变且可重试。
+- AST对账确认维护类与尾部函数在移除错误上下文和RuntimeError正文参数后与基线相同；Ruff/compileall通过。初次静态检查仅发现新增测试的长import格式，集中整理后通过。源码前后指纹、完整反例源码、原始失败/成功输出、退出码及主线程自查位于 `out/tests/temp/rollout_recovery_paths_20261025/artifacts/`；全部记录运行源码冻结、进程组无残留。不新增源码目录，不称独立代理审查。
+- HTTP使用ASGI及现有授权fixture，冷重开为Saver对象；不称真实Gateway、后端进程重启、Windows实机或完整Web验收。2.2/7.2总门保持未勾，未覆盖的其它存储错误另行处理；Agent团队、成员、委派及协作继续TODO。
