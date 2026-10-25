@@ -2,7 +2,7 @@ import {
   readProcessStat,
   terminateTerminalProcessTree,
 } from "./processes/terminalProcessLifecycle.js";
-import { statSync } from "node:fs";
+import { stat } from "node:fs/promises";
 import path from "node:path";
 import { IsolatedPtyProcess } from "./processes/isolatedPtyProcess.js";
 import { TerminalOutputMultiplexer } from "./output/terminalOutputMultiplexer.js";
@@ -20,16 +20,14 @@ export function nowIso() {
 
 // 终端工作目录唯一解析入口：把持久记录里的工作区内相对路径（或调用方传入的
 // 相对/绝对路径）还原为本次调用栈内的绝对路径。绝对路径 MUST NOT 落盘。
-export function resolveTerminalCwd(workspaceRoot, cwdRelative) {
+export async function resolveTerminalCwd(workspaceRoot, cwdRelative) {
   const rawCwd = typeof cwdRelative === "string" && cwdRelative.trim() !== ""
     ? cwdRelative.trim()
     : ".";
   const resolved = path.resolve(workspaceRoot, rawCwd);
   let directoryStat;
   try {
-    // TODO(5.4)：先统一创建/启动与关闭对在途任务的持有，再改异步stat；
-    // 直接增加等待会让关闭越过尚未完成的创建，迟到PTY可能失去owner。当前同步检查仍会阻塞事件循环。
-    directoryStat = statSync(resolved);
+    directoryStat = await stat(resolved);
   } catch (error) {
     console.error("[terminal-session] 终端工作目录检查失败", { cwd: resolved }, error);
     const message = new Set(["ENOENT", "ENOTDIR"]).has(error.code)
@@ -254,7 +252,7 @@ export class TerminalSession {
     let ready;
     let resolvedCwd = null;
     try {
-      resolvedCwd = resolveTerminalCwd(this.manager.workspaceRoot, this.cwdRelative);
+      resolvedCwd = await resolveTerminalCwd(this.manager.workspaceRoot, this.cwdRelative);
       ready = await isolatedPty.start({
         command: this.command,
         args: this.args,

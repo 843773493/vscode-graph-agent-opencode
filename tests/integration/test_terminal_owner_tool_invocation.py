@@ -3,6 +3,8 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import shlex
+import shutil
 import signal
 import subprocess
 import sys
@@ -310,10 +312,20 @@ async def test_real_terminal_tool_uses_one_cwd_for_native_paths_and_directory_ur
     execute = create_exec_command_tool(
         session_id, terminal_owner=owner, invocation_context=context,
     )
+    node = shutil.which("node")
+    assert node is not None
+    # 同一读写负载交给原生Node；不让POSIX分号语法替cmd.exe决定测试结果。
+    command = [node, "--input-type=module", "-e", (
+        "import { readFileSync, writeFileSync } from 'node:fs'; "
+        "process.stdout.write(readFileSync('probe.txt')); "
+        "process.stdout.write('boxteam://literal-command-text'); "
+        "writeFileSync('output.txt', 'BOXTEAM_DERIVED_OUTPUT');"
+    )]
+    command_text = subprocess.list2cmdline(command) if os.name == "nt" else shlex.join(command)
     receipts: list[dict[str, object]] = []
     for workdir in (directory.name, str(directory), uri):
         result = await execute.ainvoke({
-            "cmd": "cat probe.txt; printf boxteam://literal-command-text; printf 'BOXTEAM_DERIVED_OUTPUT' > output.txt",
+            "cmd": command_text,
             "workdir": workdir, "yield_time_ms": 1000,
         })
         assert result["exit_code"] == 0

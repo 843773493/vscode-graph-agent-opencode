@@ -470,14 +470,16 @@ async function main() {
   });
 
   let shuttingDown = false;
+  let hasFatalError = false;
   const shutdown = async (reason, exitCode, error = null) => {
+    if (error) {
+      hasFatalError = true;
+      console.error(error);
+    }
     if (shuttingDown) {
       return;
     }
     shuttingDown = true;
-    if (error) {
-      console.error(error);
-    }
     for (const client of wss.clients) {
       client.close(1001, "terminal manager shutting down");
     }
@@ -485,24 +487,31 @@ async function main() {
     try {
       await manager.shutdown(reason);
     } catch (shutdownError) {
-      finalExitCode = 1;
-      console.error("[terminal-backend] Terminal Manager 清理失败", shutdownError);
-    } finally {
-      try {
-        wss.close();
-        await closeHttpServer(server);
-      } catch (transportError) {
-        finalExitCode = 1;
-        console.error("[terminal-backend] transport 关闭失败", transportError);
-      } finally {
-        process.exit(finalExitCode);
+      console.error(hasFatalError ? "[terminal-backend] 致命错误后的关闭失败:"
+        : "[terminal-backend] 关闭失败，保留原任务与 HTTP 管理入口；核实后再次发送关闭信号重试:", shutdownError);
+      if (!hasFatalError) {
+        shuttingDown = false;
+        return;
       }
+    }
+    // TODO(5.4)：HTTP排空与同步阻塞的总期限、未知启动的原生进程接管仍需独立核实。
+    try {
+      wss.close();
+      await closeHttpServer(server);
+    } catch (transportError) {
+      finalExitCode = 1;
+      console.error("[terminal-backend] transport 关闭失败", transportError);
+    } finally {
+      process.exit(hasFatalError ? 1 : finalExitCode);
     }
   };
 
-  process.once("SIGINT", () => void shutdown("terminal_manager_sigint", 130));
-  process.once("SIGTERM", () => void shutdown("terminal_manager_sigterm", 143));
-  process.once("SIGHUP", () => void shutdown("terminal_manager_sighup", 129));
+  process.on("SIGINT", () => void shutdown("terminal_manager_sigint", 130));
+  process.on("SIGTERM", () => void shutdown("terminal_manager_sigterm", 143));
+  process.on("SIGHUP", () => void shutdown("terminal_manager_sighup", 129));
+  if (process.platform === "win32") {
+    process.on("SIGBREAK", () => void shutdown("terminal_manager_sigbreak", 143));
+  }
   process.once("uncaughtException", (error) => {
     void shutdown("terminal_manager_uncaught_exception", 1, error);
   });

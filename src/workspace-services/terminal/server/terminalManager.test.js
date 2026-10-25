@@ -28,49 +28,49 @@ function createTerminalTestWorkspace() {
   return root;
 }
 
-test("终端的持久相对路径覆盖相对子目录、越界绝对路径、工作区移动与符号链接四类场景", () => {
+test("终端的持久相对路径覆盖相对子目录、越界绝对路径、工作区移动与符号链接四类场景", async () => {
   const root = createTerminalTestWorkspace();
   mkdirSync(path.join(root, "sub", "deep"), { recursive: true });
   // Windows用目录junction避免依赖符号链接特权；两者都验证保留链接段而非realpath。
   symlinkSync(path.join(root, "sub"), path.join(root, "link"), process.platform === "win32" ? "junction" : "dir");
 
   // 用户传入相对子目录：落盘相对路径，restore 还原到同一绝对目录。
-  const relativeCwd = resolveTerminalCwd(root, "sub/deep");
+  const relativeCwd = await resolveTerminalCwd(root, "sub/deep");
   assert.equal(relativeCwd, path.join(root, "sub", "deep"));
-  assert.equal(resolveTerminalCwd(root, path.relative(root, relativeCwd)), relativeCwd);
+  assert.equal(await resolveTerminalCwd(root, path.relative(root, relativeCwd)), relativeCwd);
 
   // 用户传入越界绝对路径：保留原语义（不施加 workspace 边界），且落盘为相对表达。
   const externalCwd = path.join(workspaceRunRoot, randomUUID(), "external-cwd");
   mkdirSync(externalCwd, { recursive: true });
-  const outside = resolveTerminalCwd(root, externalCwd);
+  const outside = await resolveTerminalCwd(root, externalCwd);
   assert.equal(outside, externalCwd);
-  assert.equal(resolveTerminalCwd(root, path.relative(root, outside)), externalCwd);
+  assert.equal(await resolveTerminalCwd(root, path.relative(root, outside)), externalCwd);
 
   // 工作区被移动：相对路径按新根重新推导，不依赖旧绝对路径。
   const movedRoot = createTerminalTestWorkspace();
   mkdirSync(path.join(movedRoot, "sub", "deep"), { recursive: true });
   assert.equal(
-    resolveTerminalCwd(movedRoot, path.relative(root, relativeCwd)),
+    await resolveTerminalCwd(movedRoot, path.relative(root, relativeCwd)),
     path.join(movedRoot, "sub", "deep"),
   );
 
   // 符号链接：与改造前一致，path.resolve 只做规范化、不 realpath，链接段原样保留。
-  assert.equal(resolveTerminalCwd(root, "link/deep"), path.join(root, "link", "deep"));
+  assert.equal(await resolveTerminalCwd(root, "link/deep"), path.join(root, "link", "deep"));
 
   // 不存在的目录显式失败，绝不静默回退进程 cwd。
-  assert.throws(
+  await assert.rejects(
     () => resolveTerminalCwd(root, "sub/missing"),
     /终端工作目录不存在或不是目录/,
   );
 });
 
-test("无效工作目录公开拒绝不含原生路径，原始原因留在诊断和 cause", (t) => {
+test("无效工作目录公开拒绝不含原生路径，原始原因留在诊断和 cause", async (t) => {
   const root = createTerminalTestWorkspace();
   const file = path.join(root, "not-a-directory.txt");
   writeFileSync(file, "原件不变");
   const diagnostic = t.mock.method(console, "error", () => {});
   for (const cwd of ["missing", path.join(root, "absolute-missing"), file, "bad\0directory"]) {
-    assert.throws(() => resolveTerminalCwd(root, cwd), (error) => {
+    await assert.rejects(() => resolveTerminalCwd(root, cwd), (error) => {
       assert.equal(error.message, cwd.includes("\0")
         ? "终端工作目录检查失败" : "终端工作目录不存在或不是目录");
       assert.equal(error.message.includes(root), false);

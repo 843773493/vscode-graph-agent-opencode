@@ -3,10 +3,53 @@ import path from "node:path";
 import { cpSync, mkdirSync, rmSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+import { pathToFileURL } from "node:url";
 import test from "node:test";
 
 import { TerminalManager } from "./terminalManager.js";
 import { IsolatedPtyProcess } from "./processes/isolatedPtyProcess.js";
+
+test("真实线程池排队中的cwd检查不阻断同进程HTTP，原结果在排队结束后交付", async (t) => {
+  const root = path.join(process.cwd(), "out/tests/src/workspace-services/terminal/server/terminalCwdPersistence/workspace", randomUUID());
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  cpSync(path.join(process.cwd(), "tests/fixtures/workspaces/terminal_cwd_workspace"), root, { recursive: true });
+  const moduleUrl = pathToFileURL(path.join(process.cwd(), "src/workspace-services/terminal/server/terminalSession.js")).href;
+  const script = `
+import assert from "node:assert/strict";
+import { createServer, get } from "node:http";
+import { pbkdf2 } from "node:crypto";
+import { promisify } from "node:util";
+import { resolveTerminalCwd } from ${JSON.stringify(moduleUrl)};
+const server = createServer((_, response) => response.end("peer-ready"));
+await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
+// 单线程池内先提交真实计算，随后stat只能排队；HTTP使用数字loopback地址。
+const busy = promisify(pbkdf2)("terminal-cwd", "threadpool", 2_000_000, 32, "sha256");
+let cwdDelivered = false;
+const cwd = Promise.resolve(resolveTerminalCwd(process.argv[1], ".")).then(value => { cwdDelivered = true; return value; });
+try {
+  const body = await new Promise((resolve, reject) => {
+    get({ host: "127.0.0.1", port: server.address().port }, response => {
+      let body = "";
+      response.on("data", chunk => { body += chunk; });
+      response.on("end", () => resolve(body));
+      response.on("error", reject);
+    }).on("error", reject);
+  });
+  assert.equal(body, "peer-ready");
+  assert.equal(cwdDelivered, false, "排队stat尚未交付时HTTP已完成");
+  await busy;
+  assert.equal(await cwd, process.argv[1]);
+} finally {
+  await Promise.allSettled([busy, cwd]);
+  await new Promise((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
+}
+`;
+  await promisify(execFile)(process.execPath, ["--input-type=module", "-e", script, root], {
+    cwd: process.cwd(), env: { ...process.env, UV_THREADPOOL_SIZE: "1" }, timeout: 15000,
+  });
+});
 
 test("外部绝对 cwd 经真实创建、落盘和恢复后仍传给同一 PTY 目录", async (t) => {
   const testRunRoot = path.join(process.cwd(), "out/tests/src/workspace-services/terminal/server/terminalCwdPersistence/workspace", randomUUID());

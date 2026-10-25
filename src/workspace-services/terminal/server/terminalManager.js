@@ -68,6 +68,8 @@ export class TerminalManager {
      */
     this.terminalsById = new Map();
     this.capacityLock = Promise.resolve();
+    this.closingRequested = false;
+    this.shutdownPromise = null;
     this.persistRequested = false;
     this.persistPromise = null;
     /** @type {Map<string, TerminalTransportGrant>} */
@@ -164,6 +166,30 @@ export class TerminalManager {
     return session;
   }
 
+  assertCreationAdmission({ workspaceId, terminalId, ownerRevision }) {
+    if (workspaceId !== this.workspaceId) {
+      throw new Error(
+        `终端工作区身份不匹配: expected=${this.workspaceId}, actual=${workspaceId}`,
+      );
+    }
+    if (typeof terminalId !== "string" || !/^term_[a-f0-9]{32}$/.test(terminalId)) {
+      throw new Error("Terminal 必须由 Python owner 提供 resource_id");
+    }
+    if (!Number.isSafeInteger(ownerRevision) || ownerRevision < 1 || this.terminalsById.has(terminalId)) {
+      throw new Error(`Terminal owner revision 或身份冲突: ${terminalId}`);
+    }
+    if (this.closingRequested) {
+      const error = new Error(`Terminal Manager 正在关闭，不能接纳创建: workspace_id=${this.workspaceId}`);
+      error.code = "terminal_manager_closing";
+      error.statusCode = 503;
+      error.creationReceipt = {
+        resource_id: terminalId, workspace_id: workspaceId, owner_revision: ownerRevision,
+        outcome: "not_created",
+      };
+      throw error;
+    }
+  }
+
   async create({
     workspaceId,
     terminalId,
@@ -176,6 +202,7 @@ export class TerminalManager {
     command = resolveShell(),
     args = shellArgs(),
   }) {
+    this.assertCreationAdmission({ workspaceId, terminalId, ownerRevision });
     const previousLock = this.capacityLock;
     let releaseLock;
     this.capacityLock = new Promise((resolve) => {
@@ -212,22 +239,12 @@ export class TerminalManager {
     command,
     args,
   }) {
-    if (workspaceId !== this.workspaceId) {
-      throw new Error(
-        `终端工作区身份不匹配: expected=${this.workspaceId}, actual=${workspaceId}`,
-      );
-    }
-    if (typeof terminalId !== "string" || !/^term_[a-f0-9]{32}$/.test(terminalId)) {
-      throw new Error("Terminal 必须由 Python owner 提供 resource_id");
-    }
-    if (!Number.isSafeInteger(ownerRevision) || ownerRevision < 1 || this.terminalsById.has(terminalId)) {
-      throw new Error(`Terminal owner revision 或身份冲突: ${terminalId}`);
-    }
+    this.assertCreationAdmission({ workspaceId, terminalId, ownerRevision });
     let resolvedCwd;
     try {
       await this.pruneTerminalHistory();
       await this.ensureExecutionCapacity();
-      resolvedCwd = resolveTerminalCwd(this.workspaceRoot, cwd);
+      resolvedCwd = await resolveTerminalCwd(this.workspaceRoot, cwd);
     } catch (error) {
       error.creationReceipt = {
         resource_id: terminalId, workspace_id: workspaceId, owner_revision: ownerRevision,
@@ -235,6 +252,7 @@ export class TerminalManager {
       };
       throw error;
     }
+    this.assertCreationAdmission({ workspaceId, terminalId, ownerRevision });
     // 按工作区根保存原生相对路径，允许 .. 保留外部 cwd；绝对路径只在调用栈内解析。
     const cwdRelative = path.relative(this.workspaceRoot, resolvedCwd);
     const id = terminalId;
@@ -398,16 +416,61 @@ export class TerminalManager {
     return { deleted: true, terminal_id: id, terminal: session.snapshot() };
   }
 
-  async shutdown(reason = "terminal_manager_shutdown") {
-    await Promise.all([...this.terminalsById.values()].map(async (session) => {
-      if (session.status === "running") {
-        session.markReconciliationStatus("reconcile_required");
-        session.releaseReason = reason;
-        await session.dispose({ terminatePty: false });
-        return;
+  async shutdown(reason = "terminal_manager_shutdown", { shutdownWaitTimeoutMs = 5000 } = {}) {
+    this.closingRequested = true;
+    if (!this.shutdownPromise) {
+      // 原容量队尾持有所有已接纳创建；观察超时不取消它或另起一批关闭。
+      const execution = Promise.resolve().then(() => this.drainShutdown(reason));
+      this.shutdownPromise = execution;
+      void execution.catch(() => {
+        if (this.shutdownPromise === execution) this.shutdownPromise = null;
+      });
+    }
+    let timer;
+    try {
+      await Promise.race([this.shutdownPromise, new Promise((_, reject) => {
+        timer = setTimeout(() => {
+          const error = new Error(`Terminal Manager 关闭尚未完成，保留原任务供核实: workspace_id=${this.workspaceId}`);
+          error.code = "terminal_manager_shutdown_timeout";
+          reject(error);
+        }, shutdownWaitTimeoutMs);
+      })]);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  async drainShutdown(reason) {
+    await this.capacityLock;
+    const unverified = [...this.terminalsById.values()].filter((session) => session.status === "created"
+      || (session.releaseReason === "terminal_startup_failed" && session.reconciliationStatus !== "verified"));
+    if (unverified.length > 0) {
+      const error = new Error(`Terminal 创建收尾尚未核实: ${unverified.map((session) => session.id).join(",")}`);
+      error.code = "terminal_shutdown_unverified_creation";
+      throw error;
+    }
+    // 收齐所有结果才释放原关闭任务，首个失败不能让重试越过仍在途的其它资源。
+    const results = await Promise.allSettled([...this.terminalsById.values()].map(async (session) => {
+      try {
+        if (session.status === "running") {
+          session.markReconciliationStatus("reconcile_required");
+          session.releaseReason = reason;
+          await session.dispose({ terminatePty: false });
+        } else {
+          await session.dispose();
+        }
+      } catch (error) {
+        session.markReconciliationStatus("unknown");
+        throw error;
       }
-      await session.dispose();
     }));
-    await this.persist();
+    const failures = results.filter((result) => result.status === "rejected").map((result) => result.reason);
+    try {
+      await this.persist();
+    } catch (error) {
+      failures.push(error);
+    }
+    if (failures.length === 1) throw failures[0];
+    if (failures.length > 1) throw new AggregateError(failures, "Terminal Manager 关闭失败", { cause: failures[0] });
   }
 }
