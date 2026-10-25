@@ -369,7 +369,7 @@ async def test_stop_checkpoint_failure_keeps_unknown_until_explicit_retry_is_per
         owner = container.browser_resource_owner
         pending, = owner._leases.leases_for_resource(browser_id)
         assert pending.status == "reconcile_required"
-        record = owner._store.records[browser_id]
+        record = owner._store.get(browser_id)
         assert record.reconciliation_status == "unknown"
         rejected = await integration_client.post(f"/api/v1/resources/{browser_id}/{action}", json={
             "expected_revision": record.owner_revision,
@@ -383,6 +383,7 @@ async def test_stop_checkpoint_failure_keeps_unknown_until_explicit_retry_is_per
     finally:
         checkpoint.rmdir()
     # 修复文件故障后，经产品管理入口取得新的停止身份，原占用只按正式终态结清。
+    record = owner._store.get(browser_id)
     reconciled = await integration_client.post(f"/api/v1/resources/{browser_id}/{action}", json={
         "expected_revision": record.owner_revision,
     })

@@ -60,7 +60,7 @@ async def test_directory_process_lease_survives_owner_restart_and_requires_verif
     bundle.transport.records[terminal_id].update(status=status, reconciliation_status=reconciliation)
     bundle.restart()
     await bundle.owner.get_resource(terminal_id)
-    assert bundle.owner._store.records[terminal_id].working_directory_uri == managed_directory
+    assert bundle.owner._store.get(terminal_id).working_directory_uri == managed_directory
     assert bundle.leases.get_lease(active.lease_id).status == ("settled" if settled else "active")
     assert bool(bundle.leases.leases_for_resource(attachment_id)) is not settled
     assert bundle.transport.creates == 1
@@ -84,7 +84,7 @@ async def test_lost_terminal_stop_receipt_keeps_directory_lease_until_cold_verif
     monkeypatch.setattr(bundle.transport, "stop_resource", lose_receipt)
     with pytest.raises(ConnectionError, match="丢失回执"):
         await bundle.command(terminal_id, action="stop", expected_revision=resource["owner_revision"])
-    assert bundle.owner._store.records[terminal_id].reconciliation_status == "unknown"
+    assert bundle.owner._store.get(terminal_id).reconciliation_status == "unknown"
     assert bundle.leases.get_lease(active.lease_id).status == "active"
     assert bundle.leases.leases_for_resource(attachment_id) == [bundle.leases.get_lease(active.lease_id)]
     bundle.transport.records[terminal_id].update(status=status, reconciliation_status=reconciliation)
@@ -583,7 +583,7 @@ async def test_new_management_stop_settles_old_operation_only_with_current_verif
         with pytest.raises((ValueError, RuntimeError)):
             await command
         assert bundle.leases.get_lease(old.lease_id).status == "reconcile_required"
-        assert bundle.owner._store.records[rid].reconciliation_status == "unknown"
+        assert bundle.owner._store.get(rid).reconciliation_status == "unknown"
         assert len(bundle.leases.leases_for_resource(rid)) == 2
     assert calls == [rid]
 
@@ -624,7 +624,7 @@ async def test_unverified_stop_does_not_bypass_original_operation_or_transport_f
         )
     assert calls == []
     assert bundle.leases.get_lease(old.lease_id) == original
-    assert bundle.owner._store.records[rid].owner_revision == current["owner_revision"]
+    assert bundle.owner._store.get(rid).owner_revision == current["owner_revision"]
 
 
 @pytest.mark.asyncio
@@ -845,7 +845,7 @@ async def test_fork_commit_receipt_survives_recover_and_later_detach_without_sec
     detached = await bundle.command(rid, action="detach", expected_revision=3, thread=target)
     replayed, replay_receipt = await bundle.owner.attach_for_fork(rid, creation_key="fork-cold-commit", expected_revision=1, thread=target)
     assert replayed["owner_revision"] == detached["owner_revision"] == 4
-    assert target not in bundle.owner._store.records[rid].thread_associations
+    assert target not in bundle.owner._store.get(rid).thread_associations
     assert replay_receipt == receipt and bundle.transport.creates == 1
 
 
@@ -869,7 +869,7 @@ async def test_fork_dispatching_marker_does_not_replay_after_lost_transport_rece
     current, receipt = await bundle.owner.attach_for_fork(rid, creation_key="fork-lost-response", expected_revision=1, thread=target)
     assert receipt.state == "dispatching" and receipt.committed_revision is None
     assert current["owner_revision"] == 2 and current["reconciliation_status"] == "unknown"
-    assert target not in bundle.owner._store.records[rid].thread_associations
+    assert target not in bundle.owner._store.get(rid).thread_associations
     replay, repeated = await bundle.owner.attach_for_fork(rid, creation_key="fork-lost-response", expected_revision=1, thread=target)
     assert calls == 1 and replay["owner_revision"] == 2 and repeated == receipt
     monkeypatch.setattr(bundle.transport, "sync_owner_revision", original)
@@ -877,5 +877,5 @@ async def test_fork_dispatching_marker_does_not_replay_after_lost_transport_rece
     cold, repeated_cold = await bundle.owner.attach_for_fork(rid, creation_key="fork-lost-response", expected_revision=1, thread=target)
     assert cold["owner_revision"] == 3 and repeated_cold == receipt
     assert cold["reconciliation_status"] == "unknown"
-    assert target not in bundle.owner._store.records[rid].thread_associations
+    assert target not in bundle.owner._store.get(rid).thread_associations
     assert bundle.transport.creates == 1

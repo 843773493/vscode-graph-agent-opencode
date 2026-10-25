@@ -123,3 +123,11 @@ Web 定向 `BOXTEAM_E2E_SECTION8_FOCUS=copy_missing_attachment` 通过真实 Gat
 - 完整原 HEAD 加新增故障回归在 Terminal/Browser 两项健康查询均超时（2 failed/4.93秒，源码前后一致）。候选资源回归118 passed/3.37秒、工具入口34 passed/1.71秒；共享合并保留原私有查询改名及批量 lease 查询，153 passed/4.29秒。覆盖挂起期间健康资源查询/过滤列表/创建/授权/工具/Thread释放、同资源等待者取消、整批取消、原版本重试、原错误身份及多错顺序；不通过删除未知记录或重发停止制造进度。
 - 完整候选真实 Shell 文件11 passed/112.85秒：由产品上传/Shell 创建并提升两个真实 PTY，第一代服务按既有清理解除关联；第二代完整工作区服务图从原 catalog/owner/lease 文件装配，真实 steering 主动恢复时挂起第一终端的授权同步。第二终端仍能被新 Thread 关联、经工具读取、核实停止并释放目录供到期 GC；第一进程、原件和目录占用保持，解除故障后沿同一版本同步/核实停止并回收。未手填资源/关联/lease 状态；这是服务图冷重建和真实外部 PTY 边界，不冒称 Backend 硬退出或 Windows/Browser 实机组合。
 - 首轮候选因作者混用共享树私有查询名而中止，修正为对应提交基线的唯一名称后通过；真实验收前两轮分别是故障注入晚于主动 steering，以及把增量输出误当完整缓冲，已按原源码合同纠正并保留失败原件，未放宽进程/占用/回收断言。准确命令、完整指纹、原始输出及退出码保存在 `out/tests/temp/resource_recovery_isolation_20261025/artifacts/`。首次清单、集合清理整体等待、挂起操作真正终止和全局关闭期限仍 TODO，5.2/5.4/6.2保持未勾；团队、成员、委派和协作不追加实现或专项验证。
+
+
+### 2026-10-25 资源记录持久发布（5.2/5.4/6.2 部分收口）
+
+- 原 ResourceRecordStore 改为隔离读取及唯一 save 发布，创建、管理/授权、Terminal/Browser 工具、冷恢复、fork 回执与离线备份消费者迁齐；移除公开可变 records 和 persist。等资源锁后重新读记录，失败的 scope、关联、版本和终态不混入 unknown；终态落盘后才结清 lease，unknown 写盘前先保护原占用，后续普通存活观察不得清除原账本的待核实事实。沿用原 schema 1，不新增格式、账本或兼容 writer。
+- 完整原 HEAD 的24项序列化/fsync/替换故障全部失败且源码前后一致；最终候选资源与真实 HTTP 回归208 passed，共享资源/工具/HTTP232 passed。完整真实 Shell/PTY文件在候选12 passed/120.99秒、共享12 passed/119.10秒；新场景由产品上传及 Shell 创建真实处理进程，核实进程已停但 Python owner 终态发布失败时，原目录和精确占用继续保留，管理核实持久成功后才允许到期GC。离线记录准入/字节保全12 passed/24.12秒。
+- 扩大 fork 检查发现旧跨 Gateway action 断言与手工历史缺少冻结队列输入，完整未修改基线分别复现；不修改生产合同以适配。来源删除、冷恢复和 HTTP 完整验收迁用现有产品执行 fixture/model_stream，保留原身份、版本、关联和回执断言；共享正式 live fork 矩阵22 passed/181.57秒，退出0。该轮仅无关的事件流单测被并发修改，被测源码未变，不记作全树冻结；真实 Chromium/HTTP 关闭故障及重试2 passed/15.88秒。旧跨 Gateway action 断言仍属未通过项；早期未进入业务的环境错误或被中止轮次不记作通过。
+- 准确命令、完整源码指纹、原始失败/通过和真实退出码保存在 `out/tests/temp/resource_record_publication_20261025/artifacts/`。本切片不证明挂起操作终止、全局关闭期限、Windows及Browser完整故障组合；5.2/5.4/6.2继续未勾，团队、成员、委派与协作继续TODO。全量JSON记录写入成本及既有owner文件膨胀不在本轮追加优化。

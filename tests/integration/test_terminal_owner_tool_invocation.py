@@ -151,7 +151,7 @@ async def test_real_terminal_http_failures_keep_native_details_in_server_diagnos
             session_id=_session_id, holder_id="request:rejected-cwd", operation_id="rejected-cwd",
             cwd=str(not_directory),
         )
-    rejected_record, = owner._store.records.values()
+    rejected_record, = owner._store.all()
     assert rejected_record.status == "deleted" and rejected_record.reconciliation_status == "verified"
     assert rejected_record.thread_associations == []
     assert owner._leases.leases_for_resource(rejected_record.resource_id) == []
@@ -201,7 +201,7 @@ async def test_real_terminal_startup_failure_preserves_identity_and_requires_sto
     error = rejected.value.__cause__ if lose_receipt else rejected.value
     assert isinstance(error, TerminalRequestError)
     assert error.status == 500
-    record, = owner._store.records.values()
+    record, = owner._store.all()
     rid = record.resource_id
     assert str(root) not in str(error)
     state = json.loads((root / ".boxteam/terminal-manager/terminals.json").read_text())
@@ -379,7 +379,7 @@ async def test_real_terminal_tool_uses_one_cwd_for_native_paths_and_directory_ur
             assert {path: path.read_bytes() for path in state_files} == before
         finally:
             loop.unlink()
-    assert set(owner._store.records) == {item["terminal_id"] for item in receipts}
+    assert set(owner._store.ids()) == {item["terminal_id"] for item in receipts}
     assert not (directory / "unexpected.txt").exists()
     artifacts = TestRunContext.from_test_file(Path(__file__)).artifacts_dir
     (artifacts / f"directory-uri-cwd-{uuid4().hex}.json").write_text(

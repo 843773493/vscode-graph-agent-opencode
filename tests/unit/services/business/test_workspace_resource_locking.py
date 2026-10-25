@@ -72,8 +72,8 @@ async def test_pending_stop_does_not_block_another_resource_or_thread_cleanup(
         await asyncio.wait_for(owner.release_thread(SESSION_A, CHILD_THREAD_A, 1), 5)
         assert set(bundle.transport.deleted) == {other, third["resource_id"]}
         assert calls == [rid] and not stopping.done() and not queued.done()
-        assert owner._store.records[rid].status == "stopping"
-        assert owner._store.records[rid].thread_associations == [ThreadRef(SESSION_A, THREAD_A)]
+        assert owner._store.get(rid).status == "stopping"
+        assert owner._store.get(rid).thread_associations == [ThreadRef(SESSION_A, THREAD_A)]
         assert len(bundle.leases.leases_for_resource(rid)) == 1
     finally:
         release.set()
@@ -195,7 +195,7 @@ async def test_cold_recovery_finishes_other_resources_without_rebinding_the_batc
         with pytest.raises(ResourceConflict, match="尚待 owner 核实"):
             await bundle.command(rid, action="promote", expected_revision=2)
     assert calls == [(rid, 2) for rid in ids]
-    assert all(record.owner_revision == 2 for record in owner._store.records.values())
+    assert all(record.owner_revision == 2 for record in owner._store.all())
     assert not bundle.transport.deleted
 
 
@@ -223,7 +223,7 @@ async def test_cancelling_cold_recovery_does_not_report_the_remaining_resources_
         await recovering
     assert calls == ids
     assert set(owner._recovery._pending) == set(ids)
-    assert all(owner._store.records[rid].reconciliation_status == "unknown" for rid in ids)
+    assert all(owner._store.get(rid).reconciliation_status == "unknown" for rid in ids)
 
 
 async def test_pending_cold_recovery_does_not_block_healthy_resource_entrypoints(
@@ -276,7 +276,7 @@ async def test_pending_cold_recovery_does_not_block_healthy_resource_entrypoints
         await asyncio.wait_for(owner.release_thread(SESSION_A, CHILD_THREAD_A, 1), 2)
         assert set(bundle.transport.deleted) == {healthy, created["resource_id"]}
         assert not recovering.done() and calls.count((rid, 2)) == calls.count((healthy, 2)) == 1
-        assert owner._store.records[rid].thread_associations == [ThreadRef(SESSION_A, THREAD_A)]
+        assert owner._store.get(rid).thread_associations == [ThreadRef(SESSION_A, THREAD_A)]
     finally:
         release.set()
         if waiting is not None and not waiting.done():
@@ -316,7 +316,7 @@ async def test_cancelling_recovery_keeps_frozen_revision_and_does_not_repeat_fin
     with pytest.raises(asyncio.CancelledError):
         await recovering
     assert owner._recovery._pending == {rid: 2}
-    assert owner._store.records[rid].reconciliation_status == "unknown"
+    assert owner._store.get(rid).reconciliation_status == "unknown"
     healthy_current = await owner.get_resource(healthy)
     assert healthy_current["owner_revision"] == 2 and healthy_current["reconciliation_status"] == "verified"
     assert calls == [(rid, 2), (healthy, 2)]
@@ -326,3 +326,238 @@ async def test_cancelling_recovery_keeps_frozen_revision_and_does_not_repeat_fin
     assert calls == [(rid, 2), (healthy, 2), (rid, 2)]
     assert owner._recovery._pending == {}
     assert bundle.transport.creates == 2 and not bundle.transport.deleted
+
+
+@pytest.fixture(params=["dump", "fsync", "replace"])
+def fail_record_write(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch):
+    """只破坏原 owner 文件边界，lease 账本仍走自己的真实持久链。"""
+    import json
+    from types import SimpleNamespace
+
+    from app.services.business.workspace_resources import records as records_module
+
+    selected = False
+    fired: list[OSError] = []
+    def predicate(_payload):
+        return False
+    original_replace = Path.replace
+    original_fsync = records_module.os.fsync
+
+    def fail(stage: str) -> None:
+        if selected and not fired and request.param == stage:
+            error = OSError(f"资源记录 {stage} 受控失败")
+            fired.append(error)
+            raise error
+
+    def dump(payload, stream, **kwargs):
+        nonlocal selected
+        selected = predicate(payload)
+        fail("dump")
+        return json.dump(payload, stream, **kwargs)
+
+    def fsync(fd: int) -> None:
+        fail("fsync")
+        original_fsync(fd)
+
+    def replace(path: Path, target: Path):
+        if path.name.endswith("-resources.tmp"):
+            fail("replace")
+        return original_replace(path, target)
+
+    def arm(condition):
+        nonlocal predicate
+        predicate = condition
+        return fired
+
+    monkeypatch.setattr(records_module, "json", SimpleNamespace(loads=json.loads, dump=dump))
+    monkeypatch.setattr(records_module, "os", SimpleNamespace(fsync=fsync))
+    monkeypatch.setattr(Path, "replace", replace)
+    return arm
+
+
+async def test_failed_record_creation_does_not_publish_an_unstored_resource(
+    bundle: TerminalOwnerFixture | BrowserOwnerFixture, fail_record_write,
+) -> None:
+    owner = bundle.owner
+    await owner.recover(())
+    failures = fail_record_write(lambda _payload: True)
+    with pytest.raises(OSError) as caught:
+        await bundle.create()
+    assert caught.value is failures[0]
+    assert owner._store.all() == ()
+    assert not bundle.transport.records
+    resource = await bundle.create()
+    assert [item["resource_id"] for item in await owner.list_resources()] == [resource["resource_id"]]
+
+
+async def test_failed_revision_write_does_not_advance_authority_or_transport(
+    bundle: TerminalOwnerFixture | BrowserOwnerFixture, fail_record_write,
+) -> None:
+    import json
+
+    resource = await bundle.create()
+    owner, rid = bundle.owner, str(resource["resource_id"])
+    failures = fail_record_write(lambda payload: payload["records"][0]["owner_revision"] == 2)
+    with pytest.raises(OSError) as caught:
+        await bundle.command(rid, action="promote", expected_revision=1)
+    assert caught.value is failures[0]
+    stored = json.loads(owner._store.path.read_bytes())["records"][0]
+    assert stored["owner_revision"] == owner._store.get(rid).owner_revision == 1
+    assert stored["retention_scope"] == "thread"
+    assert bundle.transport.records[rid]["transport_owner_revision"] == 1
+    lease, = bundle.leases.leases_for_resource(rid)
+    assert lease.status == "reconcile_required"
+
+
+async def test_failed_promotion_commit_retains_last_durable_scope(
+    bundle: TerminalOwnerFixture | BrowserOwnerFixture, fail_record_write,
+) -> None:
+    import json
+
+    resource = await bundle.create()
+    owner, rid = bundle.owner, str(resource["resource_id"])
+    failures = fail_record_write(lambda payload: payload["records"][0]["retention_scope"] == "workspace")
+    with pytest.raises(OSError) as caught:
+        await bundle.command(rid, action="promote", expected_revision=1)
+    assert caught.value is failures[0]
+    record = owner._store.get(rid)
+    stored = json.loads(owner._store.path.read_bytes())["records"][0]
+    assert record.retention_scope == stored["retention_scope"] == "thread"
+    assert record.owner_revision == stored["owner_revision"] == 2
+    assert record.reconciliation_status == "unknown"
+    lease, = bundle.leases.leases_for_resource(rid)
+    assert lease.status == "reconcile_required"
+
+
+async def test_failed_cold_freeze_retries_the_original_version_once(
+    bundle: TerminalOwnerFixture | BrowserOwnerFixture, fail_record_write,
+) -> None:
+    import json
+
+    resource = await bundle.create()
+    rid = str(resource["resource_id"])
+    owner = bundle.restart()
+    failures = fail_record_write(lambda payload: payload["records"][0]["owner_revision"] == 2)
+    with pytest.raises(OSError) as caught:
+        await owner.recover()
+    assert caught.value is failures[0]
+    assert owner._store.get(rid).owner_revision == 1
+    assert json.loads(owner._store.path.read_bytes())["records"][0]["owner_revision"] == 1
+    assert bundle.transport.records[rid]["transport_owner_revision"] == 1
+    await owner.recover()
+    assert (await owner.get_resource(rid))["owner_revision"] == 2
+    assert bundle.transport.records[rid]["transport_owner_revision"] == 2
+
+
+async def test_failed_fork_commit_never_publishes_target_or_committed_receipt(
+    bundle: TerminalOwnerFixture | BrowserOwnerFixture, fail_record_write,
+) -> None:
+    resource = await bundle.create(scope="workspace")
+    owner, rid = bundle.owner, str(resource["resource_id"])
+    target = ThreadRef(SESSION_A, CHILD_THREAD_A)
+    failures = fail_record_write(lambda payload: any(
+        receipt["state"] == "committed"
+        for record in payload["records"] for receipt in record["fork_attachments"].values()
+    ))
+    snapshot, receipt = await owner.attach_for_fork(
+        rid, creation_key="failed-commit", expected_revision=1, thread=target,
+    )
+    assert len(failures) == 1
+    assert receipt.state == "dispatching" and receipt.committed_revision is None
+    assert snapshot["reconciliation_status"] == "unknown"
+    assert target not in owner._store.get(rid).thread_associations
+    saved_receipt = owner.fork_attach_receipt(rid, creation_key="failed-commit", expected_revision=1, thread=target)
+    assert saved_receipt == receipt
+    lease, = bundle.leases.leases_for_resource(rid)
+    assert lease.lease_id == receipt.lease_id and lease.status == "reconcile_required"
+    again, repeated = await owner.attach_for_fork(rid, creation_key="failed-commit", expected_revision=1, thread=target)
+    assert repeated == receipt and again["thread_associations"] == snapshot["thread_associations"]
+    assert again["owner_revision"] == snapshot["owner_revision"] == 2
+
+
+async def test_failed_unknown_write_keeps_lease_and_last_published_record(
+    bundle: TerminalOwnerFixture | BrowserOwnerFixture, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    resource = await bundle.create()
+    owner, rid = bundle.owner, str(resource["resource_id"])
+    original_replace = Path.replace
+
+    def fail_terminal_record(path: Path, target: Path):
+        import json
+
+        if target == owner._store.path:
+            saved = json.loads(path.read_bytes())["records"][0]
+            if saved["reconciliation_status"] == "unknown" or saved["status"] in {"terminated", "closed"}:
+                raise OSError("终态和 unknown 记录写盘均失败")
+        return original_replace(path, target)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(Path, "replace", fail_terminal_record)
+        with pytest.raises(OSError, match="均失败"):
+            await bundle.command(rid, action="stop", expected_revision=1)
+    record = owner._store.get(rid)
+    assert record.status == "stopping" and record.owner_revision == 2
+    assert record.reconciliation_status == "verified"
+    lease, = bundle.leases.leases_for_resource(rid)
+    assert lease.status == "reconcile_required"
+    assert bundle.transport.records[rid]["status"] in {"terminated", "closed"}
+    reconciled = await bundle.command(rid, action="stop", expected_revision=2)
+    assert reconciled["reconciliation_status"] == "verified"
+    assert bundle.leases.get_lease(lease.lease_id).status == "settled"
+
+
+async def test_record_snapshots_do_not_share_mutable_associations_or_receipts(
+    bundle: TerminalOwnerFixture | BrowserOwnerFixture,
+) -> None:
+    resource = await bundle.create(scope="workspace")
+    owner, rid = bundle.owner, str(resource["resource_id"])
+    await owner.attach_for_fork(rid, creation_key="snapshot", expected_revision=1, thread=ThreadRef(SESSION_A, CHILD_THREAD_A))
+    record = owner._store.get(rid)
+    owner._store.save(record)
+    expected = owner._store.path.read_bytes()
+    for snapshot in (record, owner._store.get(rid), owner._store.all()[0]):
+        snapshot.thread_associations.clear()
+        snapshot.fork_attachments["snapshot"].state = "rejected"
+    current = owner._store.get(rid)
+    assert current.thread_associations == [ThreadRef(SESSION_A, THREAD_A), ThreadRef(SESSION_A, CHILD_THREAD_A)]
+    assert current.fork_attachments["snapshot"].state == "committed"
+    assert owner._store.path.read_bytes() == expected
+
+
+async def test_unstored_unknown_cannot_be_cleared_by_a_live_snapshot(
+    bundle: TerminalOwnerFixture | BrowserOwnerFixture, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    resource = await bundle.create()
+    owner, rid = bundle.owner, str(resource["resource_id"])
+    original_replace = Path.replace
+
+    def fail_owner_file(path: Path, target: Path):
+        if target == owner._store.path:
+            raise OSError("owner 观察与 unknown 均不能写盘")
+        return original_replace(path, target)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(Path, "replace", fail_owner_file)
+        with pytest.raises(OSError, match="均不能写盘"):
+            async with owner.operation(session_id=SESSION_A, thread_id=THREAD_A,
+                                       holder_id="request:unstored-unknown", operation_id="unstored-unknown") as operation:
+                if isinstance(bundle, TerminalOwnerFixture):
+                    await operation.write_terminal(terminal_id=rid, data="already-written")
+                else:
+                    await operation.perform(rid, "navigate", {"url": "https://already-navigated.test"})
+    pending, = bundle.leases.leases_for_resource(rid)
+    assert pending.status == "reconcile_required"
+    observed = await owner.get_resource(rid)
+    assert observed["status"] == "running" and observed["reconciliation_status"] == "reconcile_required"
+    assert "stop" in observed["available_actions"] and "attach" not in observed["available_actions"]
+    with pytest.raises(ResourceConflict, match="尚待 owner 核实"):
+        async with owner.operation(session_id=SESSION_A, thread_id=THREAD_A,
+                                   holder_id="request:blocked-tool", operation_id="blocked-tool") as operation:
+            if isinstance(bundle, TerminalOwnerFixture):
+                await operation.read_terminal(rid)
+            else:
+                await operation.perform(rid, "navigate", {"url": "https://must-not-navigate.test"})
+    stopped = await owner.command(rid, action="stop", expected_revision=observed["owner_revision"],
+                                  holder_id="request:unstored-reconcile", operation_id="unstored-reconcile")
+    assert stopped["reconciliation_status"] == "verified"
+    assert bundle.leases.get_lease(pending.lease_id).status == "settled"

@@ -8032,7 +8032,7 @@ async def test_live_fork_defaults_to_zero_attach(
     current = await owner.get_resource(rid)
     assert current["thread_associations"] == resource["thread_associations"]
     assert current["owner_revision"] == resource["owner_revision"]
-    assert owner._store.records[rid].fork_attachments == {}
+    assert owner._store.get(rid).fork_attachments == {}
     assert not any(item.owner_reference is not None for item in result.resources)
     assert external.creates == 1 and external.revisions == []
 
@@ -8053,7 +8053,7 @@ async def test_live_fork_explicit_attach_reuses_instance_and_frozen_retry(
     request = (await _fork_request(context, source.session_id, creation_kind=creation_kind, mode="context_fork")).model_copy(
         update={"resources": [_fork_live_choice(resource)]},
     )
-    source_ref = owner._store.records[rid].source_thread
+    source_ref = owner._store.get(rid).source_thread
     lease = owner._leases.acquire_operation(resource_id=rid, turn_stream_id="live-source-turn", operation_id="live-source-use",
         holder_session_id=source_ref.session_id, holder_thread_id=source_ref.thread_id)
     try:
@@ -8083,19 +8083,19 @@ async def test_live_fork_explicit_attach_reuses_instance_and_frozen_retry(
     live_later = next(item for item in later.resources if item.owner_reference is not None)
     assert live_later.operation_state == "committed" and live_later.availability == "unavailable"
     assert live_later.owner_resource.owner_revision == detached["owner_revision"]
-    assert target not in owner._store.records[rid].thread_associations
+    assert target not in owner._store.get(rid).thread_associations
     assert external.revisions == revisions and external.creates == 1
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("kind", ["terminal", "browser"])
 async def test_live_fork_source_delete_retains_committed_target_and_instance(
-    production_fork_container: AppContainer, fork_provider_prepare, live_resource_transport_factory, kind: ResourceKind,
+    production_fork_container: AppContainer, fork_execution_source: SessionDTO, live_resource_transport_factory, kind: ResourceKind,
     fork_gateway_request_context: None,
 ) -> None:
     context = _production_fork_context(production_fork_container)
     external = live_resource_transport_factory(production_fork_container, kind)
-    source = await _seed_source(context, fork_provider_prepare)
+    source = fork_execution_source
     _owner, resource = await _create_fork_live_resource(production_fork_container, kind, source.session_id)
     request = (await _fork_request(context, source.session_id, creation_kind="new_session_main", mode="context_fork")).model_copy(
         update={"resources": [_fork_live_choice(resource)]},
@@ -8132,7 +8132,7 @@ async def test_live_fork_preflight_rejects_before_target_or_attach(
     choice = _fork_live_choice(resource)
     if fault == "stale_revision":
         await owner.command(resource["resource_id"], action="attach", expected_revision=resource["owner_revision"],
-            holder_id="live-stale", operation_id="live-stale", thread=owner._store.records[resource["resource_id"]].source_thread)
+            holder_id="live-stale", operation_id="live-stale", thread=owner._store.get(resource["resource_id"]).source_thread)
     elif fault == "unverified":
         external.records[resource["resource_id"]]["reconciliation_status"] = "unknown"
     elif fault == "cross_workspace":
@@ -8149,7 +8149,7 @@ async def test_live_fork_preflight_rejects_before_target_or_attach(
     assert owner_before["owner_revision"] == expected_revision
     assert owner_before["retention_scope"] == ("thread" if fault == "thread_scope" else "workspace")
     assert owner_before["reconciliation_status"] == ("unknown" if fault == "unverified" else "verified")
-    assert owner._store.records[resource["resource_id"]].fork_attachments == {}
+    assert owner._store.get(resource["resource_id"]).fork_attachments == {}
     before = _fork_intent_state(context)
     revisions = list(external.revisions)
     with pytest.raises(ValueError, match="fork_live_"):
@@ -8157,7 +8157,7 @@ async def test_live_fork_preflight_rejects_before_target_or_attach(
     owner_after = await owner.get_resource(resource["resource_id"])
     assert owner_after == owner_before
     assert _fork_intent_state(context) == before
-    assert owner._store.records[resource["resource_id"]].fork_attachments == {}
+    assert owner._store.get(resource["resource_id"]).fork_attachments == {}
     assert external.revisions == revisions and external.creates == 1
 
 
@@ -8184,7 +8184,7 @@ async def test_thread_scope_live_fork_rejects_child_before_thread_creation(
     assert owner_before["reconciliation_status"] == "verified"
     assert owner_before["owner_revision"] == resource["owner_revision"]
     assert "attach" in owner_before["available_actions"]
-    assert owner._store.records[resource["resource_id"]].fork_attachments == {}
+    assert owner._store.get(resource["resource_id"]).fork_attachments == {}
     control_before = _session_control_state(control_path)
     intent_before = _fork_intent_state(context)
     revisions = list(external.revisions)
@@ -8202,7 +8202,7 @@ async def test_thread_scope_live_fork_rejects_child_before_thread_creation(
     assert intent_after == intent_before
     with pytest.raises(KeyError):
         context.forks._threads.for_owner_session(source.session_id).control_store.get_thread_creation_record(child_key)
-    assert owner._store.records[resource["resource_id"]].fork_attachments == {}
+    assert owner._store.get(resource["resource_id"]).fork_attachments == {}
     assert external.revisions == revisions and external.creates == 1
 
 
@@ -8211,7 +8211,7 @@ async def test_thread_scope_live_fork_rejects_child_before_thread_creation(
 @pytest.mark.parametrize("creation_kind", ["new_session_main", "new_child_thread"])
 @pytest.mark.parametrize("crash_phase", ["before_attach", "dispatched", "committed"])
 async def test_live_fork_published_startup_preserves_dispatch_and_commit_facts(
-    production_fork_container: AppContainer, fork_provider_prepare, live_resource_transport_factory,
+    production_fork_container: AppContainer, fork_execution_source: SessionDTO, live_resource_transport_factory,
     fork_gateway_request_context: None,
     monkeypatch: pytest.MonkeyPatch, kind: ResourceKind, creation_kind: SessionForkCreationKind, crash_phase: str,
 ) -> None:
@@ -8220,7 +8220,7 @@ async def test_live_fork_published_startup_preserves_dispatch_and_commit_facts(
 
     context = _production_fork_context(production_fork_container)
     external = live_resource_transport_factory(production_fork_container, kind)
-    source = await _seed_source(context, fork_provider_prepare)
+    source = fork_execution_source
     owner, resource = await _create_fork_live_resource(production_fork_container, kind, source.session_id)
     rid = resource["resource_id"]
     request = (await _fork_request(context, source.session_id, creation_kind=creation_kind, mode="context_fork")).model_copy(
@@ -8284,14 +8284,14 @@ async def test_live_fork_published_startup_preserves_dispatch_and_commit_facts(
                 assert len(external.revisions) == (2 if crash_phase == "committed" else 1)
                 if crash_phase == "before_attach":
                     assert live.operation_state == "rejected" and live.availability == "unavailable"
-                    assert target_ref not in recovered_owner._store.records[rid].thread_associations
+                    assert target_ref not in recovered_owner._store.get(rid).thread_associations
                 elif crash_phase == "dispatched":
                     assert live.operation_state == "dispatching" and live.availability == "unavailable"
-                    assert target_ref not in recovered_owner._store.records[rid].thread_associations
+                    assert target_ref not in recovered_owner._store.get(rid).thread_associations
                     assert current.reconciliation_status != "verified"
                 else:
                     assert live.operation_state == "committed" and live.committed_revision == resource["owner_revision"] + 1
-                    assert target_ref in recovered_owner._store.records[rid].thread_associations
+                    assert target_ref in recovered_owner._store.get(rid).thread_associations
                     assert recovered_owner._leases.get_lease(receipt.lease_id).status == "released"
                     assert recovered_owner._leases.get_lease(unrelated.lease_id).status == "reconcile_required"
                     assert live.availability == "unavailable" and current.reconciliation_status != "verified"
@@ -8311,7 +8311,7 @@ async def test_live_fork_published_startup_preserves_dispatch_and_commit_facts(
 @pytest.mark.parametrize("kind", ["terminal", "browser"])
 @pytest.mark.parametrize("creation_kind", ["new_session_main", "new_child_thread"])
 async def test_http_live_fork_serializes_complete_owner_and_partial_failure_without_new_target(
-    production_fork_container: AppContainer, fork_provider_prepare, live_resource_transport_factory,
+    production_fork_container: AppContainer, fork_execution_source: SessionDTO, live_resource_transport_factory,
     fork_gateway_request_context: None, monkeypatch: pytest.MonkeyPatch,
     kind: ResourceKind, creation_kind: SessionForkCreationKind,
 ) -> None:
@@ -8319,7 +8319,7 @@ async def test_http_live_fork_serializes_complete_owner_and_partial_failure_with
 
     context = _production_fork_context(production_fork_container)
     external = live_resource_transport_factory(production_fork_container, kind)
-    source = await _seed_source(context, fork_provider_prepare)
+    source = fork_execution_source
     owner, resource = await _create_fork_live_resource(production_fork_container, kind, source.session_id)
     request = (await _fork_request(context, source.session_id, creation_kind=creation_kind, mode="context_fork")).model_copy(
         update={"resources": [_fork_live_choice(resource)]},
@@ -8354,7 +8354,7 @@ async def test_http_live_fork_serializes_complete_owner_and_partial_failure_with
             if operation_id == conflict_key and phase == f"fork.live.before_attach.{kind}":
                 current = await owner.get_resource(resource["resource_id"])
                 await owner.command(resource["resource_id"], action="attach", expected_revision=current["owner_revision"],
-                    thread=owner._store.records[resource["resource_id"]].source_thread,
+                    thread=owner._store.get(resource["resource_id"]).source_thread,
                     holder_id="http-concurrent", operation_id="http-concurrent")
             await original(operation_id, phase, **kwargs)
 

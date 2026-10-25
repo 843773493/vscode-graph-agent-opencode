@@ -126,7 +126,7 @@ class TerminalResourceOwner(WorkspaceResourceOwner):
                 async with self._working_directories.admit_working_directory(Path(resolved_cwd)) as uri:
                     if uri is not None:
                         record.working_directory_uri = uri
-                        self._store.persist()
+                        self._store.save(record)
                         attachment_id = parse_resource_uri(uri).tail_segments[0]
                         self._leases.register(resource_id=attachment_id, kind="attachment_directory", lifetime_scope="workspace")
                         # 绑定持久终端身份，工具调用/Turn 收尾不能释放此占用。

@@ -247,7 +247,7 @@ async def test_cold_python_owner_keeps_healthy_browser_usable_after_peer_revisio
             release.set()
             await asyncio.gather(running, return_exceptions=True)
             for rid in ids:
-                record = owner._store.records[rid]
+                record = owner._store.get(rid)
                 await owner.command(
                     rid, action="delete", expected_revision=record.owner_revision,
                     holder_id=f"request:recovery-cleanup:{rid}", operation_id="recovery-cleanup",

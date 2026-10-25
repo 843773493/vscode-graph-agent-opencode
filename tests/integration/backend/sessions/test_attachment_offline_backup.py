@@ -50,7 +50,6 @@ def offline_owner_record(
         retention_scope="workspace", title="离线资源记录", created_at=stamp, updated_at=stamp,
         status="completed" if kind == "terminal" else "closed", reconciliation_status="verified",
     )
-    store.records[record.resource_id] = record
     return backup_case, store, record
 
 
@@ -198,7 +197,7 @@ async def test_owner_record_requires_both_terminal_and_verified(
 ) -> None:
     case, store, record = offline_owner_record
     record.status, record.reconciliation_status = status, reconciliation
-    store.persist()
+    store.save(record)
     original = store.path.read_bytes()
     with pytest.raises(RuntimeError, match="外部资源 owner 尚未收敛"):
         backup.prepare_backup(case.workspace, case.output)
@@ -211,7 +210,7 @@ async def test_terminal_owner_record_is_preserved_without_mutating_associations(
 ) -> None:
     case, store, record = offline_owner_record
     record.thread_associations.append(record.source_thread)
-    store.persist()
+    store.save(record)
     original = store.path.read_bytes()
     response = backup.prepare_backup(case.workspace, case.output)
     assert response == backup.verify_backup(case.output)
@@ -227,7 +226,7 @@ async def test_terminal_owner_with_dispatching_fork_attach_is_rejected(
         creation_key="pending-fork", target_thread=record.source_thread,
         expected_revision=record.owner_revision, state="dispatching", lease_id="unsettled-lease",
     )
-    store.persist()
+    store.save(record)
     with pytest.raises(RuntimeError, match="fork attach 尚未收敛"):
         backup.prepare_backup(case.workspace, case.output)
     assert not case.output.exists()

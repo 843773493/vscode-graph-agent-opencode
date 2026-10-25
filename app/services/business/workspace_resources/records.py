@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import os
+from collections.abc import KeysView
+from copy import deepcopy
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -111,13 +113,13 @@ class OwnedResourceRecord:
 
 
 class ResourceRecordStore:
-    """只读唯一 owner 格式，拒绝旧 Node 领域数据的隐式导入。"""
+    """原 owner 的唯一持久快照；读取副本，写盘成功后才发布。"""
 
     def __init__(self, *, workspace_root: Path, workspace_id: str, kind: ResourceKind) -> None:
         self.kind = kind
         self.workspace_id = validate_workspace_id(workspace_id)
         self.path = workspace_root / ".boxteam" / f"{kind}-resources.json"
-        self.records: dict[str, OwnedResourceRecord] = {}
+        self._records: dict[str, OwnedResourceRecord] = {}
         if not self.path.exists():
             return
         payload = json.loads(self.path.read_text(encoding="utf-8"))
@@ -138,12 +140,26 @@ class ResourceRecordStore:
                 }
             )
             record.validate(workspace_id, kind)
-            if record.resource_id in self.records:
+            if record.resource_id in self._records:
                 raise ValueError(f"资源 owner 记录重复: {record.resource_id}")
-            self.records[record.resource_id] = record
+            self._records[record.resource_id] = record
 
-    def persist(self) -> None:
-        for record in self.records.values():
+    def ids(self) -> KeysView[str]:
+        return self._records.keys()
+
+    def get(self, resource_id: str) -> OwnedResourceRecord | None:
+        record = self._records.get(resource_id)
+        return None if record is None else deepcopy(record)
+
+    def all(self) -> tuple[OwnedResourceRecord, ...]:
+        return tuple(deepcopy(record) for record in self._records.values())
+
+    def save(self, *records: OwnedResourceRecord) -> None:
+        """调用方持有原资源锁；仅在唯一写盘链成功后发布隔离副本。"""
+        if not records:
+            return
+        candidate = {**self._records, **{record.resource_id: deepcopy(record) for record in records}}
+        for record in candidate.values():
             record.validate(self.workspace_id, self.kind)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         pending = self.path.with_suffix(".tmp")
@@ -151,8 +167,9 @@ class ResourceRecordStore:
             json.dump({
                 "schema_version": 1,
                 "workspace_id": self.workspace_id,
-                "records": [asdict(record) for record in self.records.values()],
+                "records": [asdict(record) for record in candidate.values()],
             }, stream, ensure_ascii=False, separators=(",", ":"))
             stream.flush()
             os.fsync(stream.fileno())
         pending.replace(self.path)
+        self._records = candidate

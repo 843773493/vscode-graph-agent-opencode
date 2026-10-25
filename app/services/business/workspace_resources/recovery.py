@@ -50,13 +50,14 @@ class ResourceRecovery:
             if self._pending is not None:
                 return
             owner = self._owner
+            observed = index_resources(await owner._transport.list_resources(), owner.workspace_id, owner._store.ids(), owner.kind)
+            records = owner._store.all()
             unknown_results = {
-                record.resource_id for record in owner._store.records.values()
+                record.resource_id for record in records
                 if record.reconciliation_status == "unknown"
             }
-            observed = index_resources(await owner._transport.list_resources(), owner.workspace_id, owner._store.records, owner.kind)
             statuses: dict[str, str] = {}
-            for record in owner._store.records.values():
+            for record in records:
                 owner._leases.register_external(
                     resource_id=record.resource_id,
                     kind=owner.lease_kind,
@@ -65,9 +66,10 @@ class ResourceRecovery:
                 runtime = observed.get(record.resource_id)
                 observe_resource(record, runtime, owner.kind)
                 statuses[record.resource_id] = lease_status(record)
+            owner._store.save(*records)
             # 每个领域只对账自身 lease，不修改另一 owner 的运行事实。
             owner._leases.reconcile(statuses, kind=owner.lease_kind)
-            for record in owner._store.records.values():
+            for record in records:
                 owner._release_committed_fork_leases(record)
                 owner._reconcile_stopped_record(record, observed.get(record.resource_id))
                 if owner._leases.leases_for_resource(record.resource_id):
@@ -83,11 +85,11 @@ class ResourceRecovery:
                         )
                         + 1
                     )
-            if owner._store.records:
-                owner._store.persist()
+            if owner._store.ids():
+                owner._store.save(*records)
             self._pending = {
                 record.resource_id: record.owner_revision if record.resource_id in observed else None
-                for record in owner._store.records.values()
+                for record in records
             }
 
     async def _recover_resource(self, resource_id: str) -> Exception | None:
@@ -107,6 +109,6 @@ class ResourceRecovery:
                 if not isinstance(error, Exception):
                     raise
                 failure = error
-            owner._sync_ledger(record)
+            owner._sync_ledger(owner._require(resource_id))
             del self._pending[resource_id]
             return failure

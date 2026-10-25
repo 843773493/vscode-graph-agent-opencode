@@ -98,7 +98,7 @@ async def test_verified_startup_failure_releases_the_real_attachment_workdir(
     snapshot = await owner.get_resource(terminal_id)
     assert snapshot["status"] == "terminated" and snapshot["reconciliation_status"] == "verified"
     attachment_id = parse_resource_uri(ref.directory_uri).tail_segments[0]
-    assert owner._store.records[terminal_id].working_directory_uri == ref.directory_uri
+    assert owner._store.get(terminal_id).working_directory_uri == ref.directory_uri
     assert leases.leases_for_resource(attachment_id) == []
     assert leases.leases_for_resource(terminal_id) == []
     assert (directory / "original/content").read_bytes() == b"original-for-startup-failure"
@@ -153,7 +153,7 @@ async def test_shell_process_holds_directory_after_tool_returns_until_verified_s
         assert active.turn_stream_id == active.operation_id == terminal_id
         assert (active.holder_session_id, active.holder_thread_id) == (session_id, message.thread_id)
         assert not leases.leases_for_resource(terminal_id)
-        assert owner._store.records[terminal_id].working_directory_uri == local_directory_uri
+        assert owner._store.get(terminal_id).working_directory_uri == local_directory_uri
         # 直接调用真实 detach owner 边界，外置时钟只改变回收时刻，不伪造进程或 lease。
         store.release_thread_references(session_id, message.thread_id)
         monkeypatch.setattr(store, "_clock", lambda: datetime.now(UTC) + timedelta(days=31))
@@ -463,7 +463,7 @@ async def test_pending_cold_revision_keeps_original_pty_and_allows_other_pty_and
             try:
                 await asyncio.wait_for(entered.wait(), 5)
                 healthy = await asyncio.wait_for(owner.get_resource(terminals[1]), 5)
-                frozen_revision = owner._store.records[terminals[0]].owner_revision
+                frozen_revision = owner._store.get(terminals[0]).owner_revision
                 assert healthy["reconciliation_status"] == "verified"
                 thread = ThreadRef(session_id, container.session_catalog.resolver.main_thread_id(session_id))
                 await asyncio.wait_for(owner.command(
@@ -507,3 +507,70 @@ async def test_pending_cold_revision_keeps_original_pty_and_allows_other_pty_and
             assert not any(directory.exists() for directory in directories)
     finally:
         terminate_process(process)
+
+
+async def test_owner_terminal_commit_failure_keeps_real_workdir_until_durable_reconciliation(
+    terminal_runtime: WorkspaceToolRuntime, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    container, session_id, context = terminal_runtime
+    store, owner, leases = container.attachment_blob_store, container.terminal_resource_owner, container.external_resource_leases
+    message = await container.message_service.create(session_id, MessageCreateRequest(
+        content="终态持久化失败仍保留目录", attachments=[upload(b"preserve-until-owner-commit")],
+    ))
+    ref, = message.attachments
+    attachment_id = parse_resource_uri(ref.directory_uri).tail_segments[0]
+    directory = store.resolve_directory_uri(parse_resource_uri(ref.directory_uri))
+    workdir = directory / "derived"
+    command = [sys.executable, "-u", "-c", "import os,time; print(os.getpid(), flush=True); time.sleep(600)"]
+    execute = create_exec_command_tool(session_id, terminal_owner=owner, invocation_context=context)
+    result = await execute.ainvoke({
+        "cmd": subprocess.list2cmdline(command) if os.name == "nt" else shlex.join(command),
+        "workdir": file_uri_child(ref.directory_uri, "derived"), "yield_time_ms": 1000,
+    })
+    rid = result["terminal_id"]
+    pid = int(result["output"].strip())
+    original_replace = Path.replace
+    failures: list[OSError] = []
+
+    def fail_terminal_commit(path: Path, target: Path):
+        if target == owner._store.path and not failures:
+            record, = json.loads(path.read_bytes())["records"]
+            if record["status"] == "terminated" and record["reconciliation_status"] == "verified":
+                error = OSError("受控的 owner 终态发布失败")
+                failures.append(error)
+                raise error
+        return original_replace(path, target)
+
+    try:
+        assert process_running(pid) and workdir.is_dir()
+        directory_lease, = leases.leases_for_resource(attachment_id)
+        store.release_thread_references(session_id, message.thread_id)
+        monkeypatch.setattr(store, "_clock", lambda: datetime.now(UTC) + timedelta(days=31))
+        revision = (await owner.get_resource(rid))["owner_revision"]
+        with monkeypatch.context() as patch:
+            patch.setattr(Path, "replace", fail_terminal_commit)
+            with pytest.raises(OSError) as caught:
+                await owner.command(rid, action="stop", expected_revision=revision,
+                                    holder_id="request:owner-commit-fail", operation_id="owner-commit-fail")
+        assert caught.value is failures[0] and not process_running(pid)
+        record = owner._store.get(rid)
+        persisted, = json.loads(owner._store.path.read_bytes())["records"]
+        assert record.status == persisted["status"] == "stopping"
+        assert record.reconciliation_status == persisted["reconciliation_status"] == "unknown"
+        assert leases.get_lease(directory_lease.lease_id).status == "active"
+        original_operation, = leases.leases_for_resource(rid)
+        assert original_operation.status == "reconcile_required"
+        assert await store.collect_garbage(leases=leases) == ()
+        assert (directory / "original/content").read_bytes() == b"preserve-until-owner-commit"
+        stopped = await owner.command(rid, action="stop", expected_revision=record.owner_revision,
+                                      holder_id="request:owner-commit-reconcile", operation_id="owner-commit-reconcile")
+        assert stopped["status"] == "terminated" and stopped["reconciliation_status"] == "verified"
+        assert leases.get_lease(original_operation.lease_id).status == "settled"
+        assert leases.get_lease(directory_lease.lease_id).status == "settled"
+        assert await store.collect_garbage(leases=leases) == (attachment_id,)
+        assert not directory.exists()
+    finally:
+        snapshot = await owner.get_resource(rid)
+        if snapshot["status"] not in {"terminated", "completed", "exited", "deleted"} or snapshot["reconciliation_status"] != "verified":
+            await owner.command(rid, action="stop", expected_revision=snapshot["owner_revision"],
+                                holder_id="request:owner-commit-cleanup", operation_id="owner-commit-cleanup")

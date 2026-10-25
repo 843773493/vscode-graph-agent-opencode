@@ -69,7 +69,7 @@ class BrowserOperations(ResourceOperations):
                 raise TypeError("Browser operation 缺少 Playwright 完整事实")
             observe_resource(record, runtime, owner.kind)
             owner._verified(record)
-            owner._store.persist()
+            owner._store.save(record)
             owner._sync_ledger(record)
             return {**result, "browser": resource_projection(record, runtime, owner.kind)}
         except BrowserRequestError as error:
@@ -78,7 +78,7 @@ class BrowserOperations(ResourceOperations):
             runtime = receipt.get("browser")
             if receipt.get("operation_outcome") == "failed" and isinstance(runtime, dict):
                 observe_resource(record, runtime, owner.kind)
-                owner._store.persist()
+                owner._store.save(record)
                 owner._sync_ledger(record)
             else:
                 owner._unknown(record, error, lease_id=lease_id)

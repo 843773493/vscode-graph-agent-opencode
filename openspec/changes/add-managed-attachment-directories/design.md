@@ -88,6 +88,8 @@ runtime 准入及单 Session 的 runtime 排空现各有一次调用共用的 30
 
 2026-10-24 传输取消切片已迁齐两个客户端及全部直接/间接测试调用，物理删除同步私有 HTTP 入口，不保留同步生产链。原资源 owner 的 unknown 与恢复拒绝重放规则不变；HTTP 状态错误保留原始诊断与 cause，网络失败继续映射为服务不可用，Browser 408 的 code/retryable/recovery/timeout 字段保持。共享单元 HTTP 装具只替换 HTTPX 的网络 transport，不替换编解码；真实辅助服务验收仍经真实 socket。四项原基线反例分别证明取消后 socket 未关、默认线程池被占满时请求不能推进。最终候选的六项真实 HTTP 测试核对取消断连、unknown 跨重启、拒绝重放、独立资源传输及慢速分段响应不能延长期限；原业务协议回归 259 passed，真实 Terminal HTTP/PTY 8 passed，Browser 故障/恢复 32 passed，正式新矩阵 6 passed。Ruff、编译、命令、候选源码指纹和原始结果在 `out/tests/temp/resource_http_cancellation_20261024/artifacts/`。本轮仅 Linux；未重跑 Windows，不将关闭 socket 等同服务端进程终止，也不声称整个 operation、同步阻塞回调、DNS 执行器等待、Session 删除或 shutdown 已有完整期限。上述接管/终止与关闭顺序继续 TODO，5.2/5.4 不勾选；Agent 团队与协作专项继续 TODO。
 
+资源 owner 的记录与原 operation 账本各自只在原持久链成功后发布内存；记录读取为隔离草稿，写入保留其它资源最新快照，等待资源锁后必须重新读取。创建、scope/关联、fork dispatch/commit、版本冻结与终态共用同一 save，不保留共享对象先改后写或外层回滚。终态记录落盘后才结清占用；unknown 记录写盘前先将本次精确 lease 保护为待核实，失败时普通存活观察仍核对原账本，不能清除未核实操作或重放副作用。仅改变发布顺序和访问合同，schema 1 与现有恢复格式不变；全量JSON写入成本继续按测量证据另行优化。
+
 ## Conflict Review
 
 本 change 是附件目录修订的后继 owner。以下旧 change 的既有验收只证明对应基线；目录主链已在本变更迁齐，尚未完成的 Web/平台和关闭期限验收继续保留。合入/归档顺序为先落现有基础 change，再应用本 change；不得在最后归档旧 change 时覆盖本修订。

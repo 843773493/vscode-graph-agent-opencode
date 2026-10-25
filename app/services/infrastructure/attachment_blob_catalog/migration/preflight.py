@@ -194,7 +194,7 @@ def _external_owner_sources(workspace: Path, workspace_id: str) -> list[BackupSo
             continue
         source = _source(root, locator)
         store = ResourceRecordStore(workspace_root=workspace, workspace_id=workspace_id, kind=kind)
-        for record in store.records.values():
+        for record in store.all():
             if record.status not in STOPPED_STATUSES or record.reconciliation_status != "verified":
                 raise RuntimeError(
                     "离线迁移外部资源 owner 尚未收敛: "

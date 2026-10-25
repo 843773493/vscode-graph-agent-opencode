@@ -459,7 +459,7 @@ async def test_exec_command_rejects_other_uri_targets_before_creating_pty(
             await execute.ainvoke({"cmd": "printf SHOULD_NOT_RUN", "workdir": uri})
         assert terminal_env.client.created_cwds == {}
         assert terminal_env.client.writes == []
-        assert terminal_env.owner._store.records == {}
+        assert terminal_env.owner._store.all() == ()
     finally:
         reset_current_gateway_id(token)
 

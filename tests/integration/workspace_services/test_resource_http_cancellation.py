@@ -152,7 +152,7 @@ async def test_cancel_closes_the_socket_and_keeps_the_original_lease_until_verif
                 await stopping
             # 取消 HTTP 等待必须真正关闭连接；服务端状态仍然未知。
             await asyncio.wait_for(pending_http.disconnected.wait(), 1)
-            record = bundle.owner._store.records[rid]
+            record = bundle.owner._store.get(rid)
             assert record.status == ("stopping" if entry == "management" else "running")
             assert record.reconciliation_status == "unknown"
             retained, = bundle.leases.leases_for_resource(rid)
@@ -281,7 +281,7 @@ async def test_slow_response_cannot_extend_the_total_http_deadline(
         await asyncio.wait_for(pending_http.disconnected.wait(), 1)
         assert 1 < pending_http.sent < len(pending_http.response)
         assert len(pending_http.requests) == 1
-        assert bundle.owner._store.records[rid].reconciliation_status == "unknown"
+        assert bundle.owner._store.get(rid).reconciliation_status == "unknown"
 
 
 @pytest.mark.parametrize("external_record", [True, False])
@@ -305,12 +305,13 @@ async def test_cancelled_creation_preserves_its_exact_lease_and_never_accepts_a_
         task = asyncio.create_task(bundle.create())
         try:
             await asyncio.wait_for(pending_http.arrived.wait(), 5)
-            record, = bundle.owner._store.records.values()
+            record, = bundle.owner._store.all()
             original, = bundle.leases.leases_for_resource(record.resource_id)
             task.cancel()
             with pytest.raises(asyncio.CancelledError):
                 await task
             await asyncio.wait_for(pending_http.disconnected.wait(), 1)
+            record = bundle.owner._store.get(record.resource_id)
             assert record.reconciliation_status == "unknown"
             assert bundle.leases.get_lease(original.lease_id).status == "reconcile_required"
             assert bundle.leases.release_turn_leases(original.turn_stream_id) == []
@@ -352,7 +353,7 @@ async def test_creation_failure_requires_a_receipt_for_the_exact_intent(
         task = asyncio.create_task(bundle.create())
         try:
             await asyncio.wait_for(pending_http.arrived.wait(), 5)
-            record, = bundle.owner._store.records.values()
+            record, = bundle.owner._store.all()
             original, = bundle.leases.leases_for_resource(record.resource_id)
             receipt = {"resource_id": record.resource_id, "workspace_id": WORKSPACE_ID,
                        "owner_revision": record.owner_revision, "outcome": "not_created"}
@@ -376,6 +377,7 @@ async def test_creation_failure_requires_a_receipt_for_the_exact_intent(
                 assert json.loads(caught.value.response_body) == payload
             else:
                 assert caught.value.payload == payload
+            record = bundle.owner._store.get(record.resource_id)
             if receipt_case == "not_created":
                 assert record.status == "deleted" and record.reconciliation_status == "verified"
                 assert record.thread_associations == []
@@ -405,7 +407,7 @@ async def test_failed_creation_receipt_requires_a_verified_snapshot_for_the_same
         task = asyncio.create_task(bundle.create())
         try:
             await asyncio.wait_for(pending_http.arrived.wait(), 5)
-            record, = bundle.owner._store.records.values()
+            record, = bundle.owner._store.all()
             original, = bundle.leases.leases_for_resource(record.resource_id)
             snapshot = {
                 f"{kind}_id": record.resource_id, "workspace_id": WORKSPACE_ID,
@@ -437,6 +439,7 @@ async def test_failed_creation_receipt_requires_a_verified_snapshot_for_the_same
             assert bundle.leases.get_lease(original.lease_id).status == (
                 "settled" if snapshot_case == "verified" else "reconcile_required"
             )
+            record = bundle.owner._store.get(record.resource_id)
             assert record.reconciliation_status == ("verified" if snapshot_case == "verified" else "unknown")
             if snapshot_case == "verified":
                 assert record.status == snapshot["status"]
@@ -473,7 +476,7 @@ async def test_stop_receipt_must_match_the_revision_published_by_this_operation(
         task = asyncio.create_task(bundle.command(rid, action=action, expected_revision=resource["owner_revision"]))
         try:
             await asyncio.wait_for(pending_http.arrived.wait(), 5)
-            record = bundle.owner._store.records[rid]
+            record = bundle.owner._store.get(rid)
             original, = bundle.leases.leases_for_resource(rid)
             assert original.status == "active"
             runtime = {**bundle.transport.records[rid], "status": "deleted" if action == "delete" else "terminated" if kind == "terminal" else "closed"}
@@ -499,6 +502,7 @@ async def test_stop_receipt_must_match_the_revision_published_by_this_operation(
                 original.lease_id, original.operation_id, original.turn_stream_id,
                 original.holder_session_id, original.holder_thread_id,
             )
+            record = bundle.owner._store.get(rid)
             assert record.reconciliation_status == "unknown"
             saved = json.loads((bundle.root / ".boxteam" / f"{kind}-resources.json").read_text())
             assert saved["records"][0]["reconciliation_status"] == "unknown"
