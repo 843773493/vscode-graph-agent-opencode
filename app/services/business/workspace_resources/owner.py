@@ -243,15 +243,27 @@ class WorkspaceResourceOwner:
             ) from error
 
     async def get_resource(self, resource_id: str) -> ResourceSnapshot:
-        await self.recover((resource_id,))
-        async with self._resource_lock(resource_id):
-            record = self._require_owned_resource_record(resource_id)
-            observed = index_resources(await self._transport.list_resources(), self.workspace_id, self._store.ids(), self.kind)
-            runtime = observed.get(resource_id)
-            observe_resource(record, runtime, self.kind)
-            self._store.save(record)
-            self._sync_ledger(record)
-            return resource_projection(record, runtime, self.kind)
+        # 详情的恢复、资源锁和清单共用一次预算，不在阶段切换时重新计时。
+        # TODO(5.4)：同步存储与不合作取消仍须由原执行owner核实收敛。
+        deadline = timeout(30)
+        try:
+            async with deadline:
+                await self.recover((resource_id,))
+                async with self._resource_lock(resource_id):
+                    record = self._require_owned_resource_record(resource_id)
+                    observed = index_resources(await self._transport.list_resources(), self.workspace_id, self._store.ids(), self.kind)
+                    runtime = observed.get(resource_id)
+                    observe_resource(record, runtime, self.kind)
+                    self._store.save(record)
+                    self._sync_ledger(record)
+                    return resource_projection(record, runtime, self.kind)
+        except TimeoutError as error:
+            if not deadline.expired():
+                raise
+            raise TimeoutError(
+                f"外部资源详情等待超过 30 秒: workspace_id={self.workspace_id} "
+                f"kind={self.kind}；保留已提交恢复与原占用，未取得本次观察"
+            ) from error
 
     async def command(
         self,

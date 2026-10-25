@@ -314,3 +314,11 @@ Web 定向 `BOXTEAM_E2E_SECTION8_FOCUS=copy_missing_attachment` 通过真实 Gat
 - Linux三个API单测文件74 passed/4.82秒；正式integration-resource-release完整11 passed/91.64秒，仍用原120秒/4GiB保护。新增场景沿正式Session、ASGI资源创建/列表生成真实Node/PTY/Chromium/HTTP状态，推进同一HTTP截止累计20+11秒，核503/request_id、前项记录和共享lease原字节、等待已排空、peer可读、原外部身份/版本及同入口重试顺序。完整旧生产80eed06be只叠相同最终新测试，单测3 failed/4 deselected，产品1 failed/10 deselected；旧API在测试观察窗口内未返回，不能将该观察超时当产品503。
 - Windows快照be56bed9216788a3004977a3cbe79d4ac554c27d经原90秒/4GiB Job Object保护，同74项通过/6.99秒。初轮65 passed/9 failed均发生在旧测试默认GBK读取UTF-8账本，明确两处取样编码后Linux/Windows复验通过，全部原断言保持，生产存储编码未变。既有开发服务未重启；不把Windows API单测或Linux ASGI/真实辅助服务称为Gateway/Web、Windows原生PTY或真实等待30秒验收。
 - Ruff、compileall、diff检查及OpenSpec strict 45/0通过，作者AST/目录自查未发现本片新增结构问题；Windows末次status仍为Web/Gateway可用。准确命令、源码前后指纹、原始输出/退出码及完整旧生产归档保留在out/tests/temp/resource_aggregate_deadline_20261025/artifacts/；纯临时解包树已封存业务原始输出后删除。Session资源展示投影、同步存储/序列化、不合作取消及全operation/shutdown继续TODO，5.2/5.4/6.2仍未勾，整体20/23；团队及CIL第9节继续暂缓，原4份CIL规划排除提交。
+
+
+### 2026-10-25 资源详情的单次总等待预算（5.4 部分收口）
+
+- 原共享owner的get_resource从入口取得一次30秒，冷恢复、原资源锁和外部清单共用；原快照校验、观察、持久化及投影保持。到期排空本次等待，已提交冷恢复及原资源/占用保留；详情读取自身不补造unknown或新lease，不释放其它调用的锁，不后台补做。原传输TimeoutError与调用方取消保持归属。另32个方法AST不变，去除预算上下文及期限错误出口后原详情函数体一致，无新owner、schema或存储链。
+- Linux相关11文件334 passed/10.86秒，包含新16项，不与其单独运行16 passed相加。新增真实双辅助服务suite四场景4 passed/33.28秒，原integration-resource-release完整11 passed/92.79秒；两个suite分别沿90秒和原120秒/4GiB保护。新场景经正式Session、ASGI创建/详情及原工具operation生成真实Node/PTY或Chromium/HTTP和active lease，核锁/回执到期HTTP503与request_id、peer可读、原记录/lease字节、冷账本精确占用、外部身份/版本及原入口重试；只推进本次截止，不称真实等待30秒或Gateway/Web验收。跨真实冷恢复与查询的20+11秒共享预算由单测验证。
+- 完整旧生产149fa551e只叠相同最终测试，单测8 failed/8 passed（3.80秒），产品4 failed（40.15秒）；旧详情在测试观察窗口内未返回，不能把该观察TimeoutError当产品期限错误或503。Windows快照f455c0ca1fee639d7ca8ab100f6c1c5c38a061ec经原90秒/4GiB Job Object保护，新16项及原两份API共83 passed/7.70秒；远端tracked干净，4份源码按LF归一后与宿主一致，原服务未重启，不声称Windows真实PTY/Chromium已重跑。
+- Ruff/compileall通过；首轮仅新集成文件import格式不符合Ruff，调整排版后AST不变，复用原产品行为结果。Pyright 1.1.414的4项旧诊断与完整旧生产的规则、消息和对应代码逐项相同，不称类型检查全绿。准确命令、源码前后指纹、原始输出/真实退出码、作者结构自查与完整旧生产压缩归档在out/tests/temp/resource_detail_deadline_20261025/artifacts/；纯临时解包树已在封存业务产物及核对全部源码后删除。同步存储/线程池、不合作取消、完整operation/shutdown与旧代接管仍TODO，5.2/5.4/6.2保持未勾，整体20/23；团队与CIL第9节仍暂缓，原4份CIL规划排除提交。
