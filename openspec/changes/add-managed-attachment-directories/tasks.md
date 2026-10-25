@@ -182,3 +182,13 @@ Web 定向 `BOXTEAM_E2E_SECTION8_FOCUS=copy_missing_attachment` 通过真实 Gat
 - 全局 runtime 关闭共用原 30 秒单调预算，构建/lease/listener/scope 挂起仍保留唯一原任务，不假报释放。候选产品 5 passed/111.62 秒，完整相关生命周期及远端 fork 清理回归 25 passed/124.69 秒，catalog/runtime/装具单测 346 passed/11.57 秒，Ruff/compileall 通过。完整旧生产的产品反例 4 failed/1 deselected，runtime 超时四项单测反例 4 failed；均保留完整旧生产归档，不拼接旧源码。
 - 早期配置文件准备错误、默认模型 fallback 导致未规划调用、旧错误聚合/失败后关库断言，以及任务创建入口与 writer 屏障互等的测试准备均有原始失败；最终使用工作区覆盖关闭 fallback、观察真实任务接纳，并保留身份、错误对象、原期限与完整关闭顺序断言。fork 首轮直接 pytest 因缺正式 matrix watchdog 未进入业务，后续经正式矩阵三项通过，不以装具失败冒称产品反例。证据在 `out/tests/temp/workspace_shutdown_order_20261025/artifacts/`；共享树新产品 5 passed/100.55 秒、相关生命周期与远端 fork 回归 25 passed/120.59 秒、单测 346 passed/10.19 秒，Ruff/compileall 通过；45 项 OpenSpec strict 全部通过，`verification001.json` 机械核验前后源码、profile、原始日志与实际退出码。未运行 Gateway/主 Web、Windows 或真实生产进程退出专项，本批不宣称覆盖这些入口。
 - 结构自查：main 的生命周期主体物理迁入同层单一模块，旧入口/全部调用方迁齐，不加 shim；新模块约 445 行，职责集中于 Workspace/Backend 启动、依赖关闭及重试，无新增源码目录。整个 Backend 总期限、同步阻塞、线程池与外部终止核实仍 TODO，5.2/5.4/6.2 保持未勾；团队、成员、委派及协作不追加实现或专项验证。
+
+
+### 2026-10-25 冷恢复单次总等待预算（5.4 部分收口）
+
+- 原ResourceRecovery在入口只取得一次30秒截止，覆盖首次清单、准备锁、资源锁及授权同步；到期取消并排空本调用的协作式等待，不取消其它调用持有的原同步。未开始同步不伪造unknown；已发送未核实的同步保留原lease、unknown和冻结版本，重试不推进已完成资源或重放旧业务副作用；原transport超时和外部取消仍传播。
+- 固定HEAD完整候选的资源/锁回归138项通过；新增场景进一步通过产品operation制造丢失回执，10项通过，核对精确原lease不被到期/重试释放。真实Node/Chromium/HTTP矩阵8项通过，覆盖清单和版本回执暂停后推进原30秒截止、页面/版本保留及同版本重试。测试只推进截止事件，没有缩短生产合同。旧生产完整archive与相同新增测试用于反例；最终源码、原始输出、退出码和核验记录保留在 `out/tests/temp/resource_recovery_deadline_20261025/artifacts/`，不以包装进程成功代替命令结果。
+- 首次真实矩阵在fixture准备阶段被既有端口容量拦截（261个文件超过250）；原端口单测同样复现。独立提交 `b3f8b0f05` 将容量扩为350，保留100端口块与E2E不重叠，补核TCP上限；8项端口单测通过后重跑真实矩阵。未修改环境配置或放宽业务断言。
+- 该边界仅证明事件循环正常调度、传输可取消时的恢复等待期限；不代表真实网络永久挂起、独立Backend硬重启、同步阻塞/线程池、不合作任务终止、Gateway/主Web或整个operation/shutdown验收。5.2/5.4/6.2保持未勾；团队、成员、委派和协作继续TODO。
+
+最终共享工作区复核：资源/锁单测138 passed/4.47秒，真实Browser矩阵8 passed/61.21秒；Ruff、compileall及OpenSpec strict 45/45通过。相同新测试在完整旧生产archive为单测8 failed/2 passed、真实矩阵2 failed/6 passed。测试期间另有开发启动脚本及其JS单测三处并行改动，均不在本场景执行/导入链；逐项源码指纹保留原差异，依赖审计见 `nondependency-audit001.json`，没有将全范围源码说成未变，也未覆盖这些改动。全部运行命令、原始日志、实际退出码与进程回收核验见 `verification001.json`。

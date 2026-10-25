@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from asyncio import timeout
 from collections.abc import Iterable
 from typing import TYPE_CHECKING
 
@@ -24,28 +25,39 @@ class ResourceRecovery:
         self._pending: dict[str, int | None] | None = None
 
     async def recover(self, resource_ids: Iterable[str] | None = None) -> None:
-        await self._prepare()
-        assert self._pending is not None
-        selected = tuple(self._pending) if resource_ids is None else tuple(dict.fromkeys(resource_ids))
-        tasks = [asyncio.create_task(self._recover_resource(resource_id)) for resource_id in selected]
+        # 一个调用只取得一次预算，清单、准备锁和各资源同步共同消耗。
+        deadline = timeout(30)
         try:
-            results = await asyncio.gather(*tasks)
-        except BaseException:
-            # 调用取消必须排空自己创建的等待者，不能留下脱离调用生命周期的恢复任务。
-            for task in tasks:
-                task.cancel()
-            await asyncio.gather(*tasks, return_exceptions=True)
-            raise
-        errors = [result for result in results if result is not None]
-        if len(errors) == 1:
-            raise errors[0]
-        if errors:
-            raise ExceptionGroup("外部资源 恢复存在未核实资源", errors)
+            async with deadline:
+                await self._prepare()
+                assert self._pending is not None
+                selected = tuple(self._pending) if resource_ids is None else tuple(dict.fromkeys(resource_ids))
+                tasks = [asyncio.create_task(self._recover_resource(resource_id)) for resource_id in selected]
+                try:
+                    results = await asyncio.gather(*tasks)
+                except BaseException:
+                    # 调用取消必须排空自己创建的等待者，不能留下脱离调用生命周期的恢复任务。
+                    for task in tasks:
+                        task.cancel()
+                    await asyncio.gather(*tasks, return_exceptions=True)
+                    raise
+                errors = [result for result in results if result is not None]
+                if len(errors) == 1:
+                    raise errors[0]
+                if errors:
+                    raise ExceptionGroup("外部资源 恢复存在未核实资源", errors)
+        except TimeoutError as error:
+            if not deadline.expired():
+                raise
+            raise TimeoutError(
+                f"外部资源冷恢复等待超过 30 秒: workspace_id={self._owner.workspace_id} "
+                f"kind={self._owner.kind}；保留未核实版本与占用，未确认外部操作停止"
+            ) from error
 
     async def _prepare(self) -> None:
         if self._pending is not None:
             return
-        # TODO：首次清单请求、锁等待和所有外部调用仍须统一到原 operation 的总期限。
+        # TODO：同步阻塞/线程池与整个 operation 的终止核实仍需原 owner 收口。
         async with self._prepare_lock:
             if self._pending is not None:
                 return

@@ -18,6 +18,7 @@ from app.container import WorkspaceContainerRegistry
 from app.core.mounted_workspaces import MountedWorkspace, MountedWorkspaceRegistry
 from app.core.path_utils import catalog_provider_scope
 from app.core.workspace_identity import load_or_create_workspace_id
+from app.services.business.workspace_resources import recovery
 from app.services.infrastructure.browser_manager_client import BrowserManagerClient
 from tests.harness.python.browser_manager import (
     close_browser_manager_processes,
@@ -383,3 +384,98 @@ async def test_python_management_closes_context_before_waiting_for_its_script(
         finally:
             # 原实现失败时仍由真实关闭入口放行原脚本，避免污染后续生命周期清理。
             await client.stop_resource(rid)
+
+
+@pytest.mark.parametrize("phase", ["listing", "revision"])
+async def test_cold_owner_budget_keeps_real_browser_and_frozen_revision_after_lost_receipt(
+    browser_client: tuple[BrowserManagerClient, Path, TestRunContext],
+    owner_mount: MountedWorkspace, monkeypatch: pytest.MonkeyPatch, phase: str,
+) -> None:
+    client, root, run = browser_client
+    async with workspace_tool_runtime(root, startup_mount=owner_mount) as (container, session_id, _context):
+        created = await container.browser_resource_owner.create_browser(
+            session_id=session_id, retention_scope="workspace",
+            holder_id="request:budget-create", operation_id="budget-create",
+            url="data:text/html,%3Cinput%20id=field%20value=retained%3E",
+        )
+    rid = str(created["resource_id"])
+    before = await client.get_resource(rid)
+    with (
+        WorkspaceContainerRegistry(
+            mounted_workspaces=MountedWorkspaceRegistry([owner_mount]), project_root=Path.cwd(),
+        ) as registry,
+        catalog_provider_scope(registry),
+        ExitStack() as cleanup,
+    ):
+        container = registry.get(owner_mount.workspace_id)
+        cleanup.callback(container.workspace_activity_service.store.close)
+        owner = container.browser_resource_owner
+        entered, release = asyncio.Event(), asyncio.Event()
+        contexts: list[asyncio.Timeout] = []
+        observed: list[object] = []
+        listing, syncing = owner._transport.list_resources, owner._transport.sync_owner_revision
+
+        def deadline(seconds: float) -> asyncio.Timeout:
+            assert seconds == 30
+            context = asyncio.timeout(seconds)
+            contexts.append(context)
+            return context
+
+        async def list_receipt() -> list[dict[str, object]]:
+            receipt = await listing()
+            observed.append(receipt)
+            if phase == "listing":
+                entered.set()
+                await release.wait()
+            return receipt
+
+        async def revision_receipt(resource_id: str, revision: int, *, for_stop: bool) -> None:
+            await syncing(resource_id, revision, for_stop=for_stop)
+            observed.append((resource_id, revision))
+            if phase == "revision":
+                entered.set()
+                await release.wait()
+
+        with monkeypatch.context() as patch:
+            patch.setattr(recovery, "timeout", deadline, raising=False)
+            patch.setattr(owner._transport, "list_resources", list_receipt)
+            patch.setattr(owner._transport, "sync_owner_revision", revision_receipt)
+            waiting = asyncio.create_task(owner.get_resource(rid))
+            try:
+                await asyncio.wait_for(entered.wait(), 5)
+                assert len(contexts) == 1
+                contexts[0].reschedule(asyncio.get_running_loop().time())
+                with pytest.raises(TimeoutError, match="未确认外部操作停止"):
+                    await asyncio.wait_for(waiting, 2)
+                current = await client.get_resource(rid)
+                assert current["status"] == "running"
+                assert current["active_page_id"] == before["active_page_id"]
+                expected = int(before["transport_owner_revision"]) + (phase == "revision")
+                assert current["transport_owner_revision"] == expected
+                record = owner._store.get(rid)
+                assert record.reconciliation_status == ("unknown" if phase == "revision" else "verified")
+                assert record.owner_revision == expected
+                assert owner._recovery._pending == ({rid: expected} if phase == "revision" else None)
+                assert owner._leases.leases_for_resource(rid) == []
+            finally:
+                release.set()
+                if not waiting.done():
+                    waiting.cancel()
+                await asyncio.gather(waiting, return_exceptions=True)
+        # 同版本同步只核实授权；原页面和历史版本不重建或重放。
+        recovered = await owner.get_resource(rid)
+        assert recovered["owner_revision"] == int(before["transport_owner_revision"]) + 1
+        value = await client.perform(rid, "run", {
+            "code": "return await page.locator('#field').inputValue();",
+        }, actor="agent")
+        assert value["result"] == "retained"
+        assert recovered["reconciliation_status"] == ("unknown" if phase == "revision" else "verified")
+        run.write_result("passed", {
+            "phase": phase, "browser_id": rid, "owner_revision": recovered["owner_revision"],
+            "receipt_count": len(observed), "page_id": before["active_page_id"],
+            "scope": "正式创建与冷服务图、真实Node/Chromium/HTTP；仅暂停已返回回执并推进原30秒截止，不含Gateway、硬重启或不合作进程终止",
+        })
+        await owner.command(
+            rid, action="delete", expected_revision=int(recovered["owner_revision"]),
+            holder_id="request:budget-cleanup", operation_id="budget-cleanup",
+        )
