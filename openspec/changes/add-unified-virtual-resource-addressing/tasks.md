@@ -677,3 +677,11 @@
 - 本切片只覆盖结构化原生 I/O 异常，不冒称其它业务异常、包装异常或全仓原生错误出口已收口；2.2/7.2全局门保持未勾。未新增生产目录，主线程自查，未启动独立审查代理；Agent团队、成员、委派与协作继续TODO。
 
 共享最终复验：103 passed（23.84秒），Ruff/compileall及strict 45 passed/0 failed；候选及共享六组验证的记录源码指纹前后一致、进程组无残留。共享队列位置查询、日志裁剪及既有测试fixture命名优化保留；提交仅含本切片，原共享暂存条目不改写。最终只追加验收收据并清理新增测试末尾空行，AST与受测版本一致。
+
+
+### 2026-10-25 Rollout 锁错误出口（2.2/7.2 部分收口）
+
+- 在原文件锁 owner 统一公开错误事实：artifact、阶段、异常类型及 errno/winerror；真实路径与完整异常只留诊断日志和 cause。原 TimeoutError、RuntimeError、OSError 子类及 portalocker 解锁异常类型保留；处理本地排队/升级/并发复用拒绝、路径解析、打开、加锁、关闭与释放，不增第二锁或持久错误账本。Python 3.12 的符号链接环 RuntimeError 也由原解析点明确报告。
+- FIFO、持锁归属、可重入深度、同步/异步准入、统一期限与取消释放规则保持；13个核心方法AST未变，共享工作区原有队首通知优化和测试fixture迁移独立保留。完整Git archive保留旧生产加最终新增测试，15 failed/1.54秒，精确复现原路径/原生错误出口；最终共享错误及完整Saver回归92 passed/33.31秒，含15项新增同步/异步错误、真实本地/文件锁超时与失败后重取锁证明。候选完整fork retention中断/恢复7 passed/82.39秒。
+- 共享正式matrix的历史入口12 passed/81.91秒：关键历史由产品Session/消息执行入口配合现有受控model_stream生成；在原生打开/加锁/解锁处注入故障，bootstrap/history返回500及原Session身份、必要阶段而无路径，原异常可在诊断核对。句柄关闭、独立写者可重取锁，冷Saver核canonical身份/正文，修复后原Thread/Turn和公开历史一致。HTTP使用进程内ASGI和现有授权fixture，冷重开为Saver对象；不称真实Gateway、后端进程重启、Windows实机或完整Web验收。
+- Ruff/compileall通过。共享历史检查期间仅未加载的 `scripts/install/AGENTS.md` 发生变化，完整源码冻结核验按实拒绝；限定收据核对全部后端/测试/配置输入未变、raw哈希、实际退出码及进程组回收，不为无关文档变化重复长跑。源码版本、准确命令、前后指纹、完整失败/成功原件和主线程自查在 `out/tests/temp/rollout_lock_errors_20261025/artifacts/`；主线程自查不称独立代理审查。全局2.2/7.2仍未勾，Agent团队、成员、委派及协作保持TODO。

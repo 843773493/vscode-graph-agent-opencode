@@ -7,12 +7,14 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import sqlite3
 import threading
 import time
 from collections import deque
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import BinaryIO, Protocol, Self
@@ -184,6 +186,38 @@ class RolloutNotMaterializedError(KeyError):
     """真实 owner 尚未执行首次 durable 写入，磁盘上没有 rollout。"""
 
 
+logger = logging.getLogger(__name__)
+
+
+def _lock_failure(
+    path: Path, reason: str, stage: str, error: BaseException | None = None,
+) -> str:
+    detail = f"{reason}: artifact=rollout_lock stage={stage}"
+    if error is not None:
+        detail += f" error_type={type(error).__name__}"
+        for name in ("errno", "winerror"):
+            value = getattr(error, name, None)
+            if value is not None:
+                detail += f" {name}={value}"
+    logger.error("%s; path=%s", detail, path, exc_info=error)
+    return detail
+
+
+@contextmanager
+def _lock_io(path: Path, stage: str) -> Iterator[None]:
+    """只在原生调用边界投影错误；原异常与位置保留在日志和 cause。"""
+    try:
+        yield
+    except OSError as error:
+        detail = _lock_failure(path, "rollout 文件锁 I/O 失败", stage, error)
+        winerror = getattr(error, "winerror", None)
+        if winerror is not None:
+            raise type(error)(error.errno, detail, None, winerror) from error
+        raise type(error)(error.errno, detail) from error
+    except portalocker.LockException as error:
+        raise type(error)(_lock_failure(path, "rollout 文件锁 I/O 失败", stage, error)) from error
+
+
 _RolloutLockOwner = tuple[int, asyncio.Task[object] | None]
 
 
@@ -225,7 +259,7 @@ class _RolloutPathLock:
         held = self._holders.get(owner)
         if held is not None:
             if exclusive and not held.exclusive:
-                raise RuntimeError(f"rollout 共享锁不能升级为独占锁: path={path}")
+                raise RuntimeError(_lock_failure(path, "rollout 共享锁不能升级为独占锁", "reentry"))
             held.depth += 1
         return held
 
@@ -260,7 +294,7 @@ class _RolloutPathLock:
         if remaining <= 0:
             label = "进程内写锁" if exclusive else "文件锁"
             raise TimeoutError(
-                f"rollout {label}获取超时: path={path} timeout_seconds={timeout:g} stage=local_admission"
+                _lock_failure(path, f"rollout {label}获取超时 timeout_seconds={timeout:g}", "local_admission")
             )
         return remaining
 
@@ -297,7 +331,7 @@ class _RolloutPathLock:
                         return held
                     if self._blocks_event_loop(ticket):
                         raise RuntimeError(
-                            f"rollout 同步锁等待会阻塞持锁 Task 的事件循环；请使用 acquire_async: path={path}"
+                            _lock_failure(path, "rollout 同步锁等待会阻塞持锁 Task 的事件循环；请使用 acquire_async", "local_admission")
                         )
                     self._condition.wait(remaining)
             finally:
@@ -380,7 +414,13 @@ class _RolloutFileLock:
     ) -> None:
         if isinstance(timeout_seconds, bool) or timeout_seconds <= 0:
             raise ValueError("rollout 文件锁 timeout_seconds 必须大于 0")
-        self._path = Path(os.path.normcase(path.resolve()))
+        with _lock_io(path, "resolve"):
+            try:
+                resolved = path.resolve()
+            except RuntimeError as error:
+                # Python 3.12 的符号链接环以 RuntimeError 报错，仍属于原生解析失败。
+                raise RuntimeError(_lock_failure(path, "rollout 文件锁路径解析失败", "resolve", error)) from error
+            self._path = Path(os.path.normcase(resolved))
         self._exclusive = exclusive
         self._timeout_seconds = timeout_seconds
         self._admission: _RolloutPathLock | None = None
@@ -421,18 +461,20 @@ class _RolloutFileLock:
 
     def _bind_hold(self, admission: _RolloutPathLock, held: _RolloutLockHold) -> None:
         if self._held is not None and self._held is not held:
-            raise RuntimeError(f"同一 rollout 共享锁对象不能被并发复用: path={self._path}")
+            raise RuntimeError(_lock_failure(self._path, "同一 rollout 共享锁对象不能被并发复用", "bind"))
         self._admission, self._held = admission, held
 
     def _release_unfinished(self, admission: _RolloutPathLock, held: _RolloutLockHold) -> None:
         if self._depth == 0 and self._held is held:
             self._admission, self._held = None, None
-        admission.release(held)
+        with _lock_io(self._path, "release"):
+            admission.release(held)
 
     def _open_handle(self) -> BinaryIO:
-        if self._exclusive:
-            self._path.parent.mkdir(parents=True, exist_ok=True)
-        handle = self._path.open("a+b" if self._exclusive else "rb")
+        with _lock_io(self._path, "open"):
+            if self._exclusive:
+                self._path.parent.mkdir(parents=True, exist_ok=True)
+            handle = self._path.open("a+b" if self._exclusive else "rb")
         try:
             if os.name == "nt":
                 # msvcrt 独占锁需要可锁定的首字节；portalocker 为共享锁使用 Win32 LockFileEx。
@@ -443,32 +485,34 @@ class _RolloutFileLock:
                 handle.seek(0)
             return handle
         except OSError as error:
-            handle.close()
-            raise RuntimeError(f"rollout 文件锁获取失败: {self._path}") from error
+            with _lock_io(self._path, "close"):
+                handle.close()
+            raise RuntimeError(_lock_failure(self._path, "rollout 文件锁获取失败", "initialize", error)) from error
         except BaseException:
-            handle.close()
+            with _lock_io(self._path, "close"):
+                handle.close()
             raise
 
     def _file_lock_delay(self, handle: BinaryIO, deadline: float) -> float | None:
         if time.monotonic() >= deadline:
             raise TimeoutError(
-                "rollout 文件锁获取超时: "
-                f"path={self._path} timeout_seconds={self._timeout_seconds:g}"
+                _lock_failure(self._path, f"rollout 文件锁获取超时 timeout_seconds={self._timeout_seconds:g}", "file_acquisition")
             )
-        mode = portalocker.LOCK_EX if self._exclusive else portalocker.LOCK_SH
-        try:
-            portalocker.lock(
-                handle.fileno(), mode | portalocker.LOCK_NB
-            )
-        except portalocker.AlreadyLocked:
-            return min(
-                _ROLLOUT_FILE_LOCK_POLL_INTERVAL_SECONDS,
-                max(0, deadline - time.monotonic()),
-            )
-        except portalocker.LockException as error:
-            raise RuntimeError(
-                f"rollout 文件锁获取失败: path={self._path}, error={error}"
-            ) from error
+        with _lock_io(self._path, "file_acquisition"):
+            mode = portalocker.LOCK_EX if self._exclusive else portalocker.LOCK_SH
+            try:
+                portalocker.lock(
+                    handle.fileno(), mode | portalocker.LOCK_NB
+                )
+            except portalocker.AlreadyLocked:
+                return min(
+                    _ROLLOUT_FILE_LOCK_POLL_INTERVAL_SECONDS,
+                    max(0, deadline - time.monotonic()),
+                )
+            except portalocker.LockException as error:
+                raise RuntimeError(
+                    _lock_failure(self._path, "rollout 文件锁获取失败", "file_acquisition", error)
+                ) from error
         return None
 
     def _acquire_handle(self, deadline: float) -> BinaryIO:
@@ -478,7 +522,8 @@ class _RolloutFileLock:
                 time.sleep(delay)
             return handle
         except BaseException:
-            handle.close()
+            with _lock_io(self._path, "close"):
+                handle.close()
             raise
 
     async def _acquire_handle_async(self, deadline: float) -> BinaryIO:
@@ -488,7 +533,8 @@ class _RolloutFileLock:
                 await asyncio.sleep(delay)
             return handle
         except BaseException:
-            handle.close()
+            with _lock_io(self._path, "close"):
+                handle.close()
             raise
 
     def release(self) -> None:
@@ -498,7 +544,8 @@ class _RolloutFileLock:
         self._depth -= 1
         if not self._depth:
             self._admission, self._held = None, None
-        admission.release(held)
+        with _lock_io(self._path, "release"):
+            admission.release(held)
 
     async def __aenter__(self) -> Self:
         await self.acquire_async()

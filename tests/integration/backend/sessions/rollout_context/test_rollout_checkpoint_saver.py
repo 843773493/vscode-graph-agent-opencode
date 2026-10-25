@@ -813,16 +813,20 @@ def test_rollout_operation_lock_releases_admission_when_file_unlock_fails(
     handle = lock._held.handle
     assert handle is not None
     original_unlock = rollout_primitives.portalocker.unlock
+    failure = OSError("模拟解锁失败")
 
     def fail_unlock(file: int) -> None:
         if file == handle.fileno():
-            raise OSError("模拟解锁失败")
+            raise failure
         original_unlock(file)
 
     with monkeypatch.context() as patch:
         patch.setattr(rollout_primitives.portalocker, "unlock", fail_unlock)
-        with pytest.raises(OSError, match="模拟解锁失败"):
+        with pytest.raises(OSError, match="artifact=rollout_lock stage=release") as caught:
             lock.__exit__(None, None, None)
+        assert type(caught.value) is OSError
+        assert caught.value.__cause__ is failure
+        assert "模拟解锁失败" not in str(caught.value)
     assert handle.closed
 
     def acquire_after_failure() -> None:

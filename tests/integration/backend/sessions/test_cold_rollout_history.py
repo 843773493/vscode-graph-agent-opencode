@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import errno
 import hashlib
 import json
 import os
@@ -10,8 +11,10 @@ import shutil
 import threading
 from collections.abc import AsyncIterator
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 
 import httpx
+import portalocker
 import pytest
 from fastapi import FastAPI
 
@@ -304,6 +307,80 @@ async def _wait_for_rollout_readers(lock: _RolloutFileLock, size: int) -> None:
                 if len(admission._queue) == size:
                     return
             await asyncio.sleep(0)
+
+
+@pytest.mark.parametrize("entry", ["bootstrap", "history"])
+@pytest.mark.parametrize("failure_stage", ["open", "file_acquisition", "release"])
+async def test_public_history_lock_failures_preserve_committed_history(
+    runtime_case: RuntimeCase, history_client: httpx.AsyncClient,
+    materialized_history_owner: tuple[str, str, str], entry: str, failure_stage: str,
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
+) -> None:
+    """产品执行生成历史；只在原生锁调用点注入故障，修复后沿原历史读取。"""
+    session_id, thread_id, turn_id = materialized_history_owner
+    container = runtime_case.runner.container
+    storage = runtime_case.runner.saver._storage.storage
+    lock_path = storage.read_lock(session_id, thread_id)._path
+    canonical = storage.jsonl_path(session_id, thread_id=thread_id)
+    original = canonical.read_bytes()
+    opened = []
+    original_open = Path.open
+    native_failure = PermissionError(errno.EACCES, f"原生错误 {lock_path}", str(lock_path))
+    failure = native_failure if failure_stage == "open" else portalocker.LockException(native_failure)
+
+    def open_lock(target, *args, **kwargs):
+        if target == lock_path and failure_stage == "open":
+            raise failure
+        handle = original_open(target, *args, **kwargs)
+        if target == lock_path:
+            opened.append(handle)
+        return handle
+
+    operation = "unlock" if failure_stage == "release" else "lock"
+    original_operation = getattr(portalocker, operation)
+
+    def fail_target_operation(file, *args):
+        if os.path.samestat(os.fstat(file), lock_path.stat()):
+            raise failure
+        return original_operation(file, *args)
+
+    with workspace_context(container.workspace_id, runtime_case.runner.workspace, session_catalog=container.session_catalog):
+        before = await _history_request(history_client, session_id, thread_id, entry)
+        assert before.status_code == 200, before.text
+        with monkeypatch.context() as patch:
+            patch.setattr(Path, "open", open_lock)
+            if failure_stage != "open":
+                patch.setattr(portalocker, operation, fail_target_operation)
+            response = await _history_request(history_client, session_id, thread_id, entry)
+        assert response.status_code == 500, response.text
+        detail = response.json()["detail"]
+        assert detail["session_id"] == session_id
+        assert "artifact=rollout_lock" in detail["message"]
+        assert f"stage={failure_stage}" in detail["message"]
+        assert str(lock_path) not in response.text
+        assert str(runtime_case.runner.workspace) not in response.text
+        assert str(lock_path) in caplog.text
+        assert any(record.exc_info and record.exc_info[1] is failure for record in caplog.records)
+        assert all(handle.closed for handle in opened)
+        assert canonical.read_bytes() == original
+
+        # 故障后的独立写者可重新获取锁，冷 Saver 和公开入口都读取原 owner。
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            def probe():
+                with storage._lock(thread_id, "", session_id=session_id):
+                    pass
+            executor.submit(probe).result(timeout=2)
+        with RolloutCheckpointSaver(storage.sessions_dir) as cold:
+            assert cold._storage.storage.read_items(session_id, thread_id) == storage.read_items(session_id, thread_id)
+        recovered = await _history_request(history_client, session_id, thread_id, entry)
+        assert recovered.status_code == 200, recovered.text
+        data = recovered.json()["data"]
+        assert data["thread_id"] == thread_id
+        if entry == "bootstrap":
+            assert data["latest_turn"]["turn_id"] == turn_id
+        else:
+            assert data["items"] == before.json()["data"]["items"]
+        assert canonical.read_bytes() == original
 
 
 @pytest.mark.skipif(os.name != "posix", reason="公开历史入口与真实 POSIX 读写锁交错")
