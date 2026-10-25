@@ -14,7 +14,7 @@ from app.core.checkpoint_config import build_checkpoint_config
 from app.core.session_thread_context import session_thread_owner_scope
 from app.core.trace_middleware import TraceMiddleware, get_current_gateway_id
 from app.domain.itemized.mutation_intents import MutationIntentOwner
-from app.services.infrastructure.rollout_context.checkpoint import fork_copy
+from app.services.infrastructure.rollout_context.checkpoint import fork_copy, fork_owner
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
@@ -30,17 +30,21 @@ from tests.integration.backend.sessions.test_rollout_fork_modes import (
     fork_gateway_request_context,
     production_fork_container,
 )
+from tests.unit.services.infrastructure.rollout_context.test_target_publication_io import (
+    publication_fault,
+)
 from tests.unit.services.infrastructure.rollout_context.test_target_snapshot_io import (
     staging_fault,
 )
 
 __all__ = ["fork_execution_message", "fork_execution_source", "fork_gateway_request_context",
-           "production_fork_container", "staging_fault"]
+           "production_fork_container", "publication_fault", "staging_fault"]
 
 
-@pytest.mark.parametrize("fault", ["mkdir", "read", "write", "cleanup", "scan", "file_sync", "directory_symlink"])
+@pytest.mark.parametrize("fault", ["mkdir", "read", "write", "cleanup", "scan", "file_sync", "directory_symlink",
+    "backup_rename", "backup_sync", "install_rename", "install_sync", "restore_rename", "recovery_exists", "finalize_remove"])
 async def test_public_fork_target_failure_keeps_history_and_can_retry(
-    production_fork_container, fork_execution_source, staging_fault, monkeypatch, caplog, fault,
+    production_fork_container, fork_execution_source, staging_fault, publication_fault, monkeypatch, caplog, fault,
 ):
     container, source = production_fork_container, fork_execution_source
     context = _production_fork_context(container)
@@ -70,6 +74,22 @@ async def test_public_fork_target_failure_keeps_history_and_can_retry(
         with staging_fault.inject(fault, stage):
             return sync(stage)
 
+    publication_faults = {"backup_rename", "backup_sync", "install_rename", "install_sync", "restore_rename", "recovery_exists", "finalize_remove"}
+    publication_phase = ("publication_recovery" if fault == "recovery_exists" else
+                         "publication_finalize" if fault == "finalize_remove" else "publication")
+    operation_name = ("recover_target_snapshot_publication" if fault == "recovery_exists" else
+                      "finalize_target_snapshot_publication" if fault == "finalize_remove" else "publish_target_snapshot")
+    operation_owner = fork_owner if fault == "finalize_remove" else fork_copy
+    operation = getattr(operation_owner, operation_name)
+
+    def publication(storage, **kwargs):
+        if stages:
+            return operation(storage, **kwargs)
+        target = storage.root(kwargs["target_session_id"], kwargs["checkpoint_ns"], thread_id=kwargs["target_thread_id"])
+        stages.append(target.with_name(f'.fork-{kwargs["materialization_id"]}.rollout'))
+        with publication_fault.inject(fault, target, kwargs["materialization_id"]):
+            return operation(storage, **kwargs)
+
     app = FastAPI()
     app.add_middleware(TraceMiddleware)
     app.include_router(sessions.router, prefix="/api/v1")
@@ -78,20 +98,23 @@ async def test_public_fork_target_failure_keeps_history_and_can_retry(
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://workspace",
                                  headers={"X-BoxTeam-Gateway-Id": get_current_gateway_id()}) as client:
         with monkeypatch.context() as patch:
-            if fault in {"scan", "file_sync", "directory_symlink"}:
+            if fault in publication_faults:
+                patch.setattr(operation_owner, operation_name, publication)
+            elif fault in {"scan", "file_sync", "directory_symlink"}:
                 patch.setattr(snapshot_copy, "_fsync_tree", sync_stage)
             else:
                 patch.setattr(fork_copy, "stage_captured_rollout", stage_capture)
             failed = await client.post(f"/api/v1/sessions/{source.session_id}/fork-context", json=request.model_dump(mode="json"))
         assert failed.status_code == 500, failed.text
         assert len(stages) == 1 and not stages[0].exists()
-        stage = ("preparation_sync" if fault in {"scan", "file_sync", "directory_symlink"}
+        stage = (publication_phase if fault in publication_faults else "preparation_sync" if fault in {"scan", "file_sync", "directory_symlink"}
                  else "staging" if fault == "mkdir" else "staging_cleanup" if fault == "cleanup" else "staging_copy")
         assert "artifact=fork_target stage=" + stage in failed.text
         if fault != "directory_symlink":
             assert "PermissionError" in failed.text and "errno=13" in failed.text
-            assert len(staging_fault.errors) == (2 if fault == "cleanup" else 1)
-            assert str(staging_fault.paths[-1]) in caplog.text
+            injected = publication_fault if fault in publication_faults else staging_fault
+            assert len(injected.errors) == (2 if fault in {"cleanup", "restore_rename"} else 1)
+            assert str(injected.paths[-1]) in caplog.text
         else:
             assert str(stages[0] / "invalid-link") in caplog.text
         assert str(container.workspace_root) not in failed.text

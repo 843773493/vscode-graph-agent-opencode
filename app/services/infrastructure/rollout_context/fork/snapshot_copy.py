@@ -329,7 +329,9 @@ def recover_target_snapshot_publication(
     target = storage.root(target_session_id, checkpoint_ns, thread_id=target_thread_id)
     stage = target.with_name(f".fork-{materialization_id}.rollout")
     rollback = target.with_name(f".fork-{materialization_id}.rollback")
-    with storage._lock(target_thread_id, checkpoint_ns, session_id=target_session_id):
+    with storage._lock(target_thread_id, checkpoint_ns, session_id=target_session_id), _storage_io(
+        target, "source-mismatch: fork 目标发布恢复失败", "publication_recovery", artifact="fork_target",
+    ):
         if native_io_path(rollback).exists():
             if not native_io_path(target).exists():
                 native_io_path(rollback).rename(native_io_path(target))
@@ -350,7 +352,9 @@ def publish_target_snapshot(
     """目标排他锁内安装私有目录；rollback 保留至本次 journal 完成。"""
     target = storage.root(target_session_id, checkpoint_ns, thread_id=target_thread_id)
     rollback = target.with_name(f".fork-{materialization_id}.rollback")
-    with storage._lock(target_thread_id, checkpoint_ns, session_id=target_session_id):
+    with storage._lock(target_thread_id, checkpoint_ns, session_id=target_session_id), _storage_io(
+        target, "source-mismatch: fork 目标发布失败", "publication", artifact="fork_target",
+    ):
         native_io_path(target).rename(native_io_path(rollback))
         fsync_directory(target.parent)
         try:
@@ -370,7 +374,9 @@ def finalize_target_snapshot_publication(
 ) -> None:
     target = storage.root(target_session_id, checkpoint_ns, thread_id=target_thread_id)
     rollback = target.with_name(f".fork-{materialization_id}.rollback")
-    with storage._lock(target_thread_id, checkpoint_ns, session_id=target_session_id):
+    with storage._lock(target_thread_id, checkpoint_ns, session_id=target_session_id), _storage_io(
+        rollback, "source-mismatch: fork 目标发布清理失败", "publication_finalize", artifact="fork_target",
+    ):
         if native_io_path(rollback).exists():
             shutil.rmtree(native_io_path(rollback))
             fsync_directory(target.parent)

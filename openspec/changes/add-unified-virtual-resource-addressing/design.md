@@ -307,3 +307,6 @@ MCP/Skill catalog 聚合是 Registry/activation 内部语义资源，当前没�
 - `add-multi-workspace-backend-mounting`（并行）引用了 `资源身份` / `gateway authority` / `real path` / `星型解析` 术语，与契约一致。
 - `add-context-injection-lifecycle`（在途未归档）已加「归属声明 / 指向」，其残留旧词汇与 `memory` 形态已就地收口。
 - `add-workspace-persistent-resource-management`（第四个 change）持久化领域 owner 的工作区资源记录，持有稳定 `resource_id`（不存 real path）；已加「引用本 change 的 identity + URI 持久化引用政策、不复制定义」声明。
+
+
+fork 目标目录发布、恢复及最终 rollback 清理在原目标排他锁内复用既有 storage 错误出口（artifact=fork_target，stage 为 publication / publication_recovery / publication_finalize）。原生类别、errno/winerror与直接 cause 保持；安装失败后回滚再次失败时，两份原异常仍按原 cause/context 保留。真实位置及完整原错只留诊断，普通错误和创建记录不包含目标路径或内部 locator。原 target→rollback、stage→target、各次目录同步、失败还原和最终删除顺序逐项保持；恢复只消费同一 materialization 的既有目录与 journal，不增加安装/清理链或 schema。故障解除后仍沿原恢复或产品新请求读取同一历史 checkpoint、metadata、pending writes、assembly owner 与 request_hash。

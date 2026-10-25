@@ -823,3 +823,11 @@
 - 候选18项单测通过（0.37秒）；完整旧生产同18项全部失败，覆盖原生路径、扫描错误、缺失根和链接拒绝。正式matrix的7项产品失败/重试场景与2项原有准备/安装回归共9项通过（75.89秒）：关键历史由产品消息入口、真实图和model_stream生成，断言中止未发布、来源原字节、冷Saver checkpoint/metadata/pending writes与完整assembly/request_hash。首次将2项原产品回归直接交pytest，因缺少matrix watchdog在setup失败；已移到正式matrix，不改业务断言。原始失败输出保留。
 - 原始命令、输出/实际退出码、完整源码指纹及完整旧生产位于 `out/tests/temp/fork_target_staging_io_20261025/artifacts/`。ASGI与冷Saver对象不代替真实Gateway、独立Backend重启、Windows或完整Web；全局2.2/7.2仍未勾，团队、成员、委派和协作继续TODO，不增加实现或专项验证。
 - 最终共享三方合并后18项单测通过，正式matrix完整9项通过（69.77秒），Ruff/compileall通过；严格OpenSpec 45 passed/0 failed。完整旧生产产品7 failed/2 passed（69.67秒）。verification001/002.json核实前后源码冻结、原始退出码和进程组回收；作者AST自查确认6个未变函数及全部签名一致，去除错误上下文后复制和编排成功路径一致，不称独立审查。共享index保持原指纹。
+
+
+### 2026-10-25 fork 目标目录发布、回滚与恢复（2.2/7.2 部分收口）
+
+- 原发布、定点恢复和最终 rollback 清理在既有目标排他锁内接入同一 storage 错误出口（artifact=fork_target，publication/publication_recovery/publication_finalize），保留原生类别、errno/winerror、直接 cause 和安装/回滚双错的原 context；真实位置只留诊断。AST 去掉三个新增错误上下文后整个原模块一致，签名、rename/fsync/还原/清理顺序、journal/hash 与来源字节保持，不新增链路或 schema；这是作者自查，不称独立审查。
+- 候选新增12项单测通过（0.35秒），完整3ff64773f Git archive旧生产12项均失败（0.63秒）。原唯一目标安装产品matrix扩为16场景：候选16 passed/139.03秒，旧生产7 failed/9 passed/131.74秒。7项新增覆盖原目标rename/同步、安装rename/同步、安装后回滚再次失败、恢复检查及最终删除；保留原9项准备/安装回归。历史由原消息入口/真实图/model_stream生成，核公开阶段与无路径、头体request_id、aborted/无可见半成品、来源canonical原字节、新key重试后冷Saver原checkpoint/metadata/pending writes、assembly全字段/历史owner/request_hash。
+- 首轮Ruff仅指出新测试的__all__顺序与dict字面量；迁齐后通过，`test-ast001.json`规范化这两项语法后核最终测试与反例逻辑一致，不冒称文件字节相同。compileall通过；原始命令、日志/实际退出码、完整源码前后指纹、完整旧生产及作者AST核对在 `out/tests/temp/fork_target_publication_io_20261025/artifacts/`。最终共享树30项目标暂存/同步/发布单测通过（0.48秒），正式matrix完整16项通过（127.63秒），Ruff/compileall通过；45项OpenSpec strict全通过。verification001.json核实前后源码冻结、原始日志/实际退出码及进程组回收；冻结范围排除未启动或构建的客户端，原共享index保持不变。
+- ASGI、原传输/创建owner及冷Saver不代替真实Gateway、独立Backend重启、Windows或完整Web；全局2.2/7.2继续未勾，团队、成员、委派和协作继续TODO，不增加实现或专项验证。
