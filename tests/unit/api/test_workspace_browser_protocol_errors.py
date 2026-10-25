@@ -111,7 +111,7 @@ def test_malformed_response_keeps_original_diagnostics_and_durable_unknown(
     current = observed.json()["data"]
     assert current["error"] == expected
     assert current["reconciliation_status"] == "unknown"
-    assert current["available_actions"] == []
+    assert current["available_actions"] == ["stop"]
     listed = resource_api_client.get("/api/v1/resources?kind=browser")
     assert listed.status_code == 200, listed.text
     assert listed.json()["data"]["items"] == [current]
@@ -167,7 +167,7 @@ def test_malformed_successful_grant_marks_unknown_before_api_serialization(
     current = resource_api_client.get(f"/api/v1/resources/{rid}").json()["data"]
     assert current["error"] == expected
     assert current["reconciliation_status"] == "unknown"
-    assert current["available_actions"] == []
+    assert current["available_actions"] == ["stop"]
     pending, = browser_owner_bundle.leases.leases_for_resource(rid)
     assert pending.status == "reconcile_required"
     retried = resource_api_client.post(f"/api/v1/resources/{rid}/transport-grant", json=command)
@@ -201,10 +201,41 @@ def test_empty_revision_receipt_cannot_finish_owner_restart_recovery(
     saved = json.loads((browser_owner_bundle.root / ".boxteam/browser-resources.json").read_text())
     assert saved["records"][0]["reconciliation_status"] == "unknown"
     assert saved["records"][0]["error"] == expected
-    assert browser_owner_bundle.owner is not None
-    assert browser_owner_bundle.owner._recovered is False
+    frozen_revision = saved["records"][0]["owner_revision"]
+    assert frozen_revision == created.json()["data"]["owner_revision"] + 1
+    # 普通查询仅展示原失败，不自动重发失败的撤权或再推进整批版本。
+    observed = resource_api_client.get(f"/api/v1/resources/{rid}")
+    assert observed.status_code == 200, observed.text
+    unknown = observed.json()["data"]
+    assert unknown["owner_revision"] == frozen_revision
+    assert unknown["reconciliation_status"] == "unknown" and unknown["error"] == expected
+    assert unknown["available_actions"] == []
+    assert unknown["metadata"]["transport_owner_revision"] == frozen_revision - 1
+    blocked = resource_api_client.post(f"/api/v1/resources/{rid}/stop", json={
+        "expected_revision": frozen_revision,
+    })
+    assert blocked.status_code == 409, blocked.text
     assert attempts == [f"http://browser.test/api/browsers/{rid}/owner-revision"]
+    persisted = json.loads((browser_owner_bundle.root / ".boxteam/browser-resources.json").read_text())
+    assert persisted["records"][0]["owner_revision"] == frozen_revision
+    assert persisted["records"][0]["reconciliation_status"] == "unknown"
+    assert persisted["records"][0]["error"] == expected
     monkeypatch.setattr(browser_owner_bundle.transport, "sync_owner_revision", sync)
+    browser_owner_bundle.restart()
     recovered = resource_api_client.get(f"/api/v1/resources/{rid}")
     assert recovered.status_code == 200, recovered.text
-    assert recovered.json()["data"]["reconciliation_status"] == "unknown"
+    current = recovered.json()["data"]
+    assert current["owner_revision"] == frozen_revision + 1
+    assert current["reconciliation_status"] == "unknown" and current["error"] == expected
+    assert current["available_actions"] == ["stop"]
+    assert current["metadata"]["transport_owner_revision"] == current["owner_revision"]
+    assert attempts == [f"http://browser.test/api/browsers/{rid}/owner-revision"]
+    stopped = resource_api_client.post(f"/api/v1/resources/{rid}/stop", json={
+        "expected_revision": current["owner_revision"],
+    })
+    assert stopped.status_code == 200, stopped.text
+    assert stopped.json()["data"]["resource_id"] == rid
+    assert stopped.json()["data"]["owner_revision"] == current["owner_revision"] + 1
+    assert stopped.json()["data"]["status"] == "closed"
+    assert stopped.json()["data"]["reconciliation_status"] == "verified"
+    assert browser_owner_bundle.leases.leases_for_resource(rid) == []

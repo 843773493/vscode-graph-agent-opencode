@@ -119,7 +119,7 @@ def test_transport_error_body_stays_in_diagnostics_after_owner_restart(
     current = observed.json()["data"]
     assert current["error"] == expected
     assert current["reconciliation_status"] == "unknown"
-    assert current["available_actions"] == []
+    assert current["available_actions"] == ["stop", "delete"]
     listed = resource_api_client.get("/api/v1/resources?kind=terminal")
     assert listed.status_code == 200, listed.text
     assert listed.json()["data"]["items"] == [current]

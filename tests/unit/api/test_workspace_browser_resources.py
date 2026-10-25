@@ -44,6 +44,7 @@ def test_async_network_failure_keeps_service_unavailable_and_unknown_after_resta
         raise error_type(f"network failed: {native}", request=request)
 
     resource_http(fail)
+    stop = bundle.transport.stop_resource
     monkeypatch.setattr(bundle.transport, "stop_resource", client.stop_resource)
     failed = resource_api_client.post(f"/api/v1/resources/{rid}/stop", json={"expected_revision": 1})
     assert failed.status_code == 503, failed.text
@@ -52,13 +53,41 @@ def test_async_network_failure_keeps_service_unavailable_and_unknown_after_resta
     assert native in caplog.text
     bundle.restart()
     observed = resource_api_client.get(f"/api/v1/resources/{rid}").json()["data"]
-    assert observed["reconciliation_status"] == "unknown" and observed["available_actions"] == []
+    assert observed["reconciliation_status"] == "unknown" and observed["available_actions"] == ["stop"]
     assert observed["error"] == failed.json()["detail"]
+    pending, = bundle.leases.leases_for_resource(rid)
+    assert pending.status == "reconcile_required"
+    stale = resource_api_client.post(f"/api/v1/resources/{rid}/stop", json={"expected_revision": 1})
+    assert stale.status_code == 409, stale.text
+    denied = resource_api_client.post(f"/api/v1/resources/{rid}/transport-grant", json={
+        "expected_revision": observed["owner_revision"], "thread": observed["source_thread"],
+    })
+    assert denied.status_code == 409, denied.text
+    assert len(attempts) == 1
     retried = resource_api_client.post(f"/api/v1/resources/{rid}/stop", json={
         "expected_revision": observed["owner_revision"],
     })
-    assert retried.status_code == 409, retried.text
-    assert len(attempts) == 1
+    assert retried.status_code == 503, retried.text
+    assert retried.headers["X-Request-ID"] != failed.headers["X-Request-ID"]
+    assert len(attempts) == 2
+    current = resource_api_client.get(f"/api/v1/resources/{rid}").json()["data"]
+    assert current["owner_revision"] == observed["owner_revision"] + 1
+    assert current["reconciliation_status"] == "unknown"
+    leases = bundle.leases.leases_for_resource(rid)
+    assert len(leases) == 2 and all(lease.status == "reconcile_required" for lease in leases)
+    assert pending.lease_id in {lease.lease_id for lease in leases}
+    monkeypatch.setattr(bundle.transport, "stop_resource", stop)
+    reconciled = resource_api_client.post(f"/api/v1/resources/{rid}/stop", json={
+        "expected_revision": current["owner_revision"],
+    })
+    assert reconciled.status_code == 200, reconciled.text
+    receipt = reconciled.json()["data"]
+    assert receipt["resource_id"] == rid and receipt["workspace_id"] == WORKSPACE_ID
+    assert receipt["owner_revision"] == current["owner_revision"] + 1
+    assert receipt["status"] == ("terminated" if kind == "terminal" else "closed")
+    assert receipt["reconciliation_status"] == "verified" and receipt["error"] is None
+    assert bundle.leases.leases_for_resource(rid) == []
+    assert len(attempts) == 2
 
 
 @pytest.mark.parametrize("kind", ["terminal", "browser"])
@@ -302,7 +331,7 @@ def test_failed_transition_receipt_blocks_following_operation(
     discovered = resource_api_client.get(f"/api/v1/resources/{resource_id}").json()["data"]
     assert discovered["metadata"]["resource_state"] == state
     assert discovered["reconciliation_status"] == "unknown"
-    assert discovered["available_actions"] == []
+    assert discovered["available_actions"] == ["stop"]
     rejected = resource_api_client.post(f"/api/v1/resources/{resource_id}/browser-operation", json={**command, "action": "run"})
     assert rejected.status_code == 409, rejected.text
     assert len(browser_owner_bundle.transport.calls) == 1
@@ -344,11 +373,17 @@ def test_lost_browser_action_receipt_keeps_native_error_in_diagnostics(
     item = observed.json()["data"]
     assert item["error"] == detail
     assert item["reconciliation_status"] == "unknown"
-    assert item["available_actions"] == []
+    assert item["available_actions"] == ["stop"]
     assert listed.json()["data"]["items"] == [item]
     assert len(browser_owner_bundle.transport.calls) == 1
     pending, = browser_owner_bundle.leases.leases_for_resource(resource_id)
     assert pending.status == "reconcile_required"
+
+    rejected = resource_api_client.post(f"/api/v1/resources/{resource_id}/browser-operation", json={
+        "action": "run", "expected_revision": item["owner_revision"], "thread": item["source_thread"],
+    })
+    assert rejected.status_code == 409, rejected.text
+    assert len(browser_owner_bundle.transport.calls) == 1
 
 
 def test_transport_failure_preserves_api_route_without_treating_it_as_native_path(
@@ -382,10 +417,14 @@ def test_transport_failure_preserves_api_route_without_treating_it_as_native_pat
     observed = resource_api_client.get(f"/api/v1/resources/{resource_id}").json()["data"]
     assert observed["error"] == detail
     assert observed["reconciliation_status"] == "unknown"
-    assert observed["available_actions"] == []
+    assert observed["available_actions"] == ["stop"]
     assert attempted == [f"http://browser.test/api/browsers/{resource_id}/read"]
     pending, = browser_owner_bundle.leases.leases_for_resource(resource_id)
     assert pending.status == "reconcile_required"
+
+    rejected = resource_api_client.post(f"/api/v1/resources/{resource_id}/browser-operation", json=command)
+    assert rejected.status_code == 409, rejected.text
+    assert attempted == [f"http://browser.test/api/browsers/{resource_id}/read"]
 
 
 def test_transport_timeout_api_preserves_recovery_details_and_durable_unknown(
@@ -419,7 +458,7 @@ def test_transport_timeout_api_preserves_recovery_details_and_durable_unknown(
     observed = resource_api_client.get(f"/api/v1/resources/{resource_id}").json()["data"]
     assert observed["error"] == detail
     assert observed["reconciliation_status"] == "unknown"
-    assert observed["available_actions"] == []
+    assert observed["available_actions"] == ["stop"]
     pending, = browser_owner_bundle.leases.leases_for_resource(resource_id)
     assert pending.status == "reconcile_required"
     rejected = resource_api_client.post(f"/api/v1/resources/{resource_id}/browser-operation", json=command)
