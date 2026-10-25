@@ -249,8 +249,8 @@ def select_view_prefix(
                 # backing item 不能反过来扩大 checkpoint 集合而递归带入锚点之后的历史。
                 for table in ("turns", "executions", "checkpoints"):
                     connection.execute(load_sql(__package__, f"sql/fork_selected_{table}.sql"))
-                connection.execute("DROP TABLE fork_selected_turns")
-                connection.execute("DROP TABLE fork_selected_executions")
+                connection.execute(load_sql(__package__, "sql/drop_fork_selected_turns.sql"))
+                connection.execute(load_sql(__package__, "sql/drop_fork_selected_executions.sql"))
                 _include_delta_history(connection)
                 _include_pending_message_references(storage, connection, stage=stage)
                 checkpoints_frozen = True

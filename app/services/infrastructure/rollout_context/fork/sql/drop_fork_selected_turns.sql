@@ -1,0 +1,1 @@
+DROP TABLE fork_selected_turns
