@@ -15,6 +15,9 @@ from app.core.trace_middleware import get_current_gateway_id
 from app.services.infrastructure.resource_platform.virtual_resources.resolver import (
     ResourceUriResolveError,
 )
+from app.services.infrastructure.workspace_files.filesystem import (
+    file_access_error_detail,
+)
 from app.services.infrastructure.workspace_files.mutation_lock import (
     workspace_file_mutation_lock,
 )
@@ -126,13 +129,13 @@ def execute_text_mutation(*, paths: WorkspaceFilePaths, target: str, declared: l
             }
             if failure is not None:
                 result.update(code="revision_conflict" if isinstance(failure, WorkspaceFileConflictError) else "execution_failed",
-                              error_type=type(failure).__name__, error=text_mutation_error_detail(failure),
+                              error_type=type(failure).__name__, error=file_access_error_detail(failure),
                               recovery="重新读取原目标，核实逐文件结果后再决定后续操作；禁止自动重放或恢复旧内容")
     except (OSError, RuntimeError) as error:
         if result is None:
             raise
         # 文件效果已有回执；释放锁的失败不能将它改报为“未执行”。
-        result.update(status="error", lock_release_error=text_mutation_error_detail(error))
+        result.update(status="error", lock_release_error=file_access_error_detail(error))
         result.setdefault("code", "execution_failed")
     return result
 
@@ -239,12 +242,6 @@ def _observe(snapshot: FileSnapshot, *, max_bytes: int | None = None) -> tuple[F
         return None, error
 
 
-def text_mutation_error_detail(error: Exception) -> str:
-    if isinstance(error, OSError) and (error.filename is not None or error.filename2 is not None):
-        return f"{type(error).__name__}: {error.strerror}, errno={error.errno}"
-    return str(error)
-
-
 def validate_text_paths(paths: list[str], workspace_root: Path) -> None:
     targets = [_resolve_workspace_file(path, workspace_root) for path in paths]
     if len(targets) != len(set(targets)):
@@ -285,4 +282,4 @@ def text_mutation_failure(error: Exception) -> dict[str, object]:
                 "invalid_encoding" if isinstance(error, UnicodeError) else
                 "invalid_patch" if isinstance(error, ValueError) else "execution_failed")
     return {"status": "error", "effect": "not_executed", "owner": owner, "code": code,
-            "error_type": type(error).__name__, "error": text_mutation_error_detail(error), "retryable": False}
+            "error_type": type(error).__name__, "error": file_access_error_detail(error), "retryable": False}

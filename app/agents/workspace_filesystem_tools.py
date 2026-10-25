@@ -169,7 +169,7 @@ def _path_error(
             "owner": "resource_file_operations", "code": "execution_failed",
             "reason": "filesystem" if isinstance(error, OSError) else "transport",
             "type": type(error).__name__, "errno": getattr(error, "errno", None),
-            "message": error.strerror if isinstance(error, OSError) else "文件导航传输失败",
+            "message": "文件导航文件系统访问失败" if isinstance(error, OSError) else "文件导航传输失败",
         }, ensure_ascii=False)
     else:
         content = f"Error: {error}"

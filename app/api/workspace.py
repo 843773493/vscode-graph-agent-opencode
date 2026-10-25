@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import logging
 from collections.abc import AsyncIterator
 from contextlib import aclosing
 from typing import Annotated
@@ -63,6 +62,9 @@ from app.services.infrastructure.workspace_file_watch_service import (
     WorkspaceFileWatchService,
 )
 from app.services.infrastructure.workspace_files.events import file_events
+from app.services.infrastructure.workspace_files.filesystem import (
+    file_access_error_detail,
+)
 from app.services.infrastructure.workspace_files.store import (
     WorkspaceFileOperationConflictError,
 )
@@ -72,14 +74,6 @@ from app.services.infrastructure.workspace_service import (
 )
 
 router = APIRouter(prefix="/workspace", tags=["workspace"])
-logger = logging.getLogger(__name__)
-
-
-def _file_error_detail(error: Exception) -> str:
-    if isinstance(error, OSError) and (error.filename is not None or error.filename2 is not None):
-        logger.error("目标文件系统访问失败", exc_info=(type(error), error, error.__traceback__))
-        return f"{type(error).__name__}: {error.strerror}, errno={error.errno}"
-    return str(error)
 
 
 def _file_operation_error(error: Exception) -> HTTPException:
@@ -89,16 +83,18 @@ def _file_operation_error(error: Exception) -> HTTPException:
     判定顺序与原有 except 子句顺序一致（子类优先，OSError 兜底落 500）。
     """
     if isinstance(error, FileNotFoundError):
-        return HTTPException(status_code=404, detail=_file_error_detail(error))
-    if isinstance(error, (FileExistsError, WorkspaceFileOperationConflictError)):
+        return HTTPException(status_code=404, detail=file_access_error_detail(error))
+    if isinstance(error, FileExistsError):
+        return HTTPException(status_code=409, detail=file_access_error_detail(error))
+    if isinstance(error, WorkspaceFileOperationConflictError):
         return state_conflict_http_error(error)
     if isinstance(error, ForbiddenError):
         return forbidden_http_error(error)
     if isinstance(error, PermissionError):
-        return HTTPException(status_code=403, detail=_file_error_detail(error))
+        return HTTPException(status_code=403, detail=file_access_error_detail(error))
     if isinstance(error, (NotADirectoryError, ValueError)):
-        return HTTPException(status_code=400, detail=_file_error_detail(error))
-    return HTTPException(status_code=500, detail=_file_error_detail(error))
+        return HTTPException(status_code=400, detail=file_access_error_detail(error))
+    return HTTPException(status_code=500, detail=file_access_error_detail(error))
 
 
 @router.get("/files/roots", response_model=APIResponse[WorkspaceFileRootsDTO])
@@ -164,11 +160,11 @@ def open_workspace_file_sse(
             references[native] = uri
         roots = watch_service.resolve_watch_roots(str(path) for path in references)
     except FileNotFoundError as error:
-        raise HTTPException(status_code=404, detail=_file_error_detail(error)) from error
+        raise HTTPException(status_code=404, detail=file_access_error_detail(error)) from error
     except PermissionError as error:
-        raise HTTPException(status_code=403, detail=_file_error_detail(error)) from error
+        raise HTTPException(status_code=403, detail=file_access_error_detail(error)) from error
     except (NotADirectoryError, ValueError) as error:
-        raise HTTPException(status_code=400, detail=_file_error_detail(error)) from error
+        raise HTTPException(status_code=400, detail=file_access_error_detail(error)) from error
 
     async def generate():
         async with aclosing(
@@ -300,13 +296,13 @@ async def list_workspace_files(
     except WorkspaceFileOperationConflictError as error:
         raise state_conflict_http_error(error) from error
     except FileNotFoundError as error:
-        raise HTTPException(status_code=404, detail=_file_error_detail(error)) from error
+        raise HTTPException(status_code=404, detail=file_access_error_detail(error)) from error
     except ForbiddenError as error:
         raise forbidden_http_error(error) from error
     except PermissionError as error:
-        raise HTTPException(status_code=403, detail=_file_error_detail(error)) from error
+        raise HTTPException(status_code=403, detail=file_access_error_detail(error)) from error
     except (NotADirectoryError, ValueError) as error:
-        raise HTTPException(status_code=400, detail=_file_error_detail(error)) from error
+        raise HTTPException(status_code=400, detail=file_access_error_detail(error)) from error
     return APIResponse(data=result, request_id=request_id)
 
 
@@ -325,11 +321,11 @@ async def get_workspace_file_content(
     try:
         result = await workspace_service.get_file_content(path=path, scope=scope)
     except FileNotFoundError as error:
-        raise HTTPException(status_code=404, detail=_file_error_detail(error)) from error
+        raise HTTPException(status_code=404, detail=file_access_error_detail(error)) from error
     except ForbiddenError as error:
         raise forbidden_http_error(error) from error
     except (IsADirectoryError, ValueError) as error:
-        raise HTTPException(status_code=400, detail=_file_error_detail(error)) from error
+        raise HTTPException(status_code=400, detail=file_access_error_detail(error)) from error
     return APIResponse(data=result, request_id=request_id)
 
 
@@ -351,11 +347,11 @@ async def get_workspace_raw_file(
             archive_directory=False,
         )
     except FileNotFoundError as error:
-        raise HTTPException(status_code=404, detail=_file_error_detail(error)) from error
+        raise HTTPException(status_code=404, detail=file_access_error_detail(error)) from error
     except ForbiddenError as error:
         raise forbidden_http_error(error) from error
     except (IsADirectoryError, ValueError) as error:
-        raise HTTPException(status_code=400, detail=_file_error_detail(error)) from error
+        raise HTTPException(status_code=400, detail=file_access_error_detail(error)) from error
     return WorkspaceFileResponse(download, disposition="inline")
 
 
@@ -373,11 +369,11 @@ async def download_workspace_file_entry(
     try:
         download = await asyncio.to_thread(workspace_service.prepare_file_download, path=path, scope=scope)
     except FileNotFoundError as error:
-        raise HTTPException(status_code=404, detail=_file_error_detail(error)) from error
+        raise HTTPException(status_code=404, detail=file_access_error_detail(error)) from error
     except ForbiddenError as error:
         raise forbidden_http_error(error) from error
     except (IsADirectoryError, ValueError) as error:
-        raise HTTPException(status_code=400, detail=_file_error_detail(error)) from error
+        raise HTTPException(status_code=400, detail=file_access_error_detail(error)) from error
     return WorkspaceFileResponse(download, disposition="attachment")
 
 
@@ -402,13 +398,13 @@ async def update_workspace_file_content(
             scope=scope,
         )
     except FileNotFoundError as error:
-        raise HTTPException(status_code=404, detail=_file_error_detail(error)) from error
+        raise HTTPException(status_code=404, detail=file_access_error_detail(error)) from error
     except WorkspaceFileConflictError as error:
         raise state_conflict_http_error(error) from error
     except ForbiddenError as error:
         raise forbidden_http_error(error) from error
     except (IsADirectoryError, ValueError) as error:
-        raise HTTPException(status_code=400, detail=_file_error_detail(error)) from error
+        raise HTTPException(status_code=400, detail=file_access_error_detail(error)) from error
     return APIResponse(data=result, request_id=request_id)
 
 
@@ -542,9 +538,9 @@ async def get_workspace_file_operations(
     try:
         result = workspace_service.file_operations.status(operation_id, actor=local_navigation_scope(workspace_service.workspace_id).actor)
     except KeyError as error:
-        raise HTTPException(status_code=404, detail=_file_error_detail(error)) from error
+        raise HTTPException(status_code=404, detail=file_access_error_detail(error)) from error
     except (TypeError, ValueError) as error:
-        raise HTTPException(status_code=400, detail=_file_error_detail(error)) from error
+        raise HTTPException(status_code=400, detail=file_access_error_detail(error)) from error
     return APIResponse(data=result, request_id=request_id)
 
 
@@ -563,17 +559,17 @@ async def reveal_workspace_file_entry(
     try:
         result = await asyncio.to_thread(workspace_service.reveal_file_entry, path=path, scope=scope)
     except FileNotFoundError as error:
-        raise HTTPException(status_code=404, detail=_file_error_detail(error)) from error
+        raise HTTPException(status_code=404, detail=file_access_error_detail(error)) from error
     except PermissionError as error:
-        raise HTTPException(status_code=403, detail=_file_error_detail(error)) from error
+        raise HTTPException(status_code=403, detail=file_access_error_detail(error)) from error
     except ForbiddenError as error:
         raise forbidden_http_error(error) from error
     except ValueError as error:
         # 路径形态非法来自查询参数，属于客户端输入错误。
-        raise HTTPException(status_code=400, detail=_file_error_detail(error)) from error
+        raise HTTPException(status_code=400, detail=file_access_error_detail(error)) from error
     except (RuntimeError, OSError) as error:
         # 缺少系统文件管理器或 Popen 失败属于本机环境故障。
-        raise HTTPException(status_code=500, detail=_file_error_detail(error)) from error
+        raise HTTPException(status_code=500, detail=file_access_error_detail(error)) from error
     return APIResponse(
         data=WorkspaceFileRevealDTO(path=str(result)),
         request_id=request_id,

@@ -179,9 +179,11 @@ async def test_ls_response_budget_is_enforced_before_tool_delivery(ls_case, sync
 @pytest.mark.asyncio
 @pytest.mark.parametrize("transport", [False, True])
 @pytest.mark.parametrize("synchronous", [False, True])
-async def test_ls_io_errors_keep_domain_without_exposing_native_locator(ls_case, monkeypatch, transport, synchronous):
+async def test_ls_io_errors_keep_domain_without_exposing_native_locator(ls_case, monkeypatch, caplog, transport, synchronous):
     workspace, owner, tool = ls_case
-    error = httpx.ConnectError("private endpoint http://secret-owner/") if transport else PermissionError(13, "Permission denied", str(workspace))
+    error = httpx.ConnectError("private endpoint http://secret-owner/") if transport else PermissionError(
+        13, f"Permission denied: {workspace}", str(workspace), None, str(workspace / "private-second"),
+    )
 
     def fail(*args, **kwargs):
         raise error
@@ -202,3 +204,7 @@ async def test_ls_io_errors_keep_domain_without_exposing_native_locator(ls_case,
         "resource_file_operations", "execution_failed", "transport" if transport else "filesystem",
     )
     assert str(workspace) not in message.content and "secret-owner" not in message.content
+    assert any(record.exc_info and record.exc_info[1] is error for record in caplog.records)
+    if not transport:
+        assert result["type"] == "PermissionError" and result["errno"] == 13
+        assert str(workspace) in caplog.text
