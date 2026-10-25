@@ -1117,3 +1117,9 @@ pending 恢复的硬错误重试已闭合（2026-10-22）：进程内装载阶�
 - 接受后发生真实异常仍按 `failed` 或 `execution_lost` 收敛，terminal metadata 与失败流统一从持久接受事实判断中断，不把请求等同于已经停止。启动先收敛中断交付 lease，再处理 stale execution；fork 继承日志保留原 owner，只能作为历史读取。
 - 固定候选 `7c4f5774b0c8237b8198dc71808386d39e71e483`：`out/tests/temp/internal_interrupt_arbitration_20261024/artifacts/runs/unit-005/` 43 passed/1 deselected、`adjacent-005/` 44 passed、正式 `unit-python` matrix `cold-fork-005/` 6 passed/18 deselected（含重复覆盖的冷恢复和异常归因），全部 exit 0；`product-005/` 2 passed/26.27 秒、exit 0，通过真实 runtime source→durable Job→compiled Agent/model→HTTP 中断复现两种赢家，核无 Turn、精确控制事件、canonical outcome 及 lease 结算。`static-005/` Ruff exit 0。独立只读审查 `artifacts/review-implementation-002.json` 指出的失败流事实来源缺口已修，并补两种内存发布时序及 failed/lost 冷恢复测试。
 - 本证据只关闭通用执行竞态子边界，不勾选整个 8.3/8.13，不覆盖团队或协作专项；相关部分继续遵守本文件顶部 TODO 裁定。最终提交相对该受测候选仅增加本证据和移除空白行，未改变执行行为。
+
+### 2026-10-25 Linux / Windows fork 启动恢复增验
+
+- 增加正式 matrix 分组 `integration-fork-startup-recovery`，直接复用现有五场景、产品消息准入/持久Job/编译图及 `model_stream`，无新增模型或恢复实现。覆盖 pinned fork 的 prepared/target_committed/committed 三阶段，以及 detached fork 捕获后删除来源、在两个已提交阶段冷建容器恢复并继续真实执行；原60秒fork期限不变，suite为240秒/4GiB。
+- Linux首轮5 passed/90.99秒。Windows快照 `7012761d0f8f1b9071d2116d54519780e51860ae` 为3 passed/2 failed：两项均已完成恢复和新输入执行，仅在测试用默认GBK读取owner明确写出的UTF-8请求记录时失败。现只为该读取指定UTF-8，原身份/顺序/工具配对/owner/hash与canonical前缀断言AST保持；Linux两项复验2 passed/66.13秒，Windows快照 `d81478aac2c34beb293ba5137e967c7320784301` 两项复验2 passed/77.76秒，原生文件编码仍为CP936，另外三项依赖未变复用，不冒称最终全五项重跑。
+- Ruff、compileall、真实matrix解析及作者AST自查通过。准确命令、2376项源码前后指纹、原始输出/实际退出码、首轮失败及脚本自查失败原件在 `out/tests/temp/fork_startup_windows_20261025/artifacts/`。这是隔离无关服务的进程内main lifespan和模型回放集成，模拟owner退出不等于真实Backend强杀/进程重启，不替代真实Gateway/Web、同步入口或7.5/8.3整体门；团队/协作继续暂缓。

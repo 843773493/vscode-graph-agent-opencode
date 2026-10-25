@@ -9332,7 +9332,7 @@ async def test_production_lifespan_recovers_detached_fork_after_source_deletion(
         snapshot = recovered.saver.get_context_assembly(record.session_id, target_thread, assembly_id=assembly.assembly_id)
         assert (snapshot.session_id, snapshot.thread_id) == (record.session_id, target_thread)
         replay, _controller = inprocess_model_replay
-        transport = json.loads((replay.artifacts / f"{snapshot.model_call_id}.json").read_text())
+        transport = json.loads((replay.artifacts / f"{snapshot.model_call_id}.json").read_text(encoding="utf-8"))
         assert transport["identity"] == {
             "session_id": record.session_id, "thread_id": target_thread, "model_call_id": snapshot.model_call_id,
         }
