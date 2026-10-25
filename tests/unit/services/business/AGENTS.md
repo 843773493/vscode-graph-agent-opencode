@@ -13,6 +13,7 @@ tests/unit/services/business/
 ├── resource_derivations/  语义资源投影与派生
 ├── browser_resources/     Browser操作回执、版本和原占用保护
 ├── terminal_resources/    Terminal操作回执、工作区完成与受管目录占用
+├── workspace_resources/   两类资源共用的授权、等待期限与生命周期
 ├── session_generation/    Session 创建与默认值
 ├── session_children/      child-thread 读模型、Team board 发布投影与创建 owner
 ├── session_navigation/    Session 导航目录与操作队列

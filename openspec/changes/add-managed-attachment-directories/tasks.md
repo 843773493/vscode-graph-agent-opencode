@@ -338,3 +338,12 @@ Web 定向 `BOXTEAM_E2E_SECTION8_FOCUS=copy_missing_attachment` 通过真实 Gat
 - Windows原生新suite 7 passed/69.50秒，继续90秒/4GiB保护；新旧owner/API单测122 passed/11.57秒。最终产品快照`ac49a9901b1570c7bc753cb302fde2755fe5d541`的四份Python归一LF指纹与Linux逐项一致、tracked clean；原Web/Gateway前后可用，未重启。首轮文件锁路径261字符而在准备阶段7 errors，去掉新文件名中重复terminal前缀后进入业务；第二轮2 failed/5 passed并触发套件期限，写入探针的换行未提交Windows控制台命令。现改为与产品一致的回车输入，原业务断言保持，未改系统配置或放宽期限。旧owner测试只明确UTF-8读取账本，原断言不变。
 - 完整旧HEAD `e1d28ed604a2e9e4437cc9e6469d98f25424a089`归档仅叠相同最终新测试/矩阵：新单测27 failed/37 passed，真实产品7 failed/58.07秒，分别复现错误回执未拒绝、原占用普通释放及外部已停止却返回running。4427份原文件与archive一致，最终新测试逐字核对；首轮PID类型、同名suite两树端口争用和错误matrix参数的设施失败原件单独保留，不充作产品反例。
 - Ruff和compileall通过；Pyright 1.1.414的5项Terminal专用传输方法诊断在完整旧生产规则/消息逐项相同，不称类型全绿。作者AST自查确认另外9个方法及全部原签名不变，新目录含四节AGENTS；准确命令、源码前后指纹、原始输出/真实退出码、Windows收据与完整旧生产归档见`out/tests/temp/terminal_operation_receipts_20261025/artifacts/verification-056.json`。完整旧代接管、同步阻塞、不合作取消和全operation/shutdown仍TODO，5.2/5.4/6.2继续未勾、整体20/23；团队及CIL第9节继续暂缓，原4份CIL规划排除本提交。
+
+
+### 2026-10-25 传输授权的单次总等待预算（5.4 部分收口）
+
+- 原`transport_grant`入口共用一次30秒协作式预算，覆盖终态预检锁、冷恢复、Thread准入、签发锁、运行观察及真实授权回执。保留原终态零网络拒绝、`_grant`的版本/关联/占用和唯一签发链；派发前到期无新lease/unknown，派发未核实保留unknown及精确原占用，已提交恢复不回滚，放行回执不后台补签。底层TimeoutError与调用方取消保持原归属，AST去掉预算后原函数体一致，模块其余节点/签名/import均不变；无新writer、schema或token账本。
+- Linux相关owner/恢复/锁/列表/释放/命令/详情及两类API回归347 passed/10.99秒，包含新30项，不与单独30 passed相加。新测试覆盖两个锁、恢复、Thread准入、运行快照及签发回执的到期/取消、peer可用、冷账本精确lease及新管理停止settle；冷恢复同步先消耗20秒、签发等待再消耗11秒，原冻结版本不重推、旧授权不重发。
+- 正式新suite Linux 4 passed/26.79秒，Windows 4 passed/51.71秒，均沿90秒/4GiB保护。正式Session/ASGI创建与授权生成真实Node/PTY或Chromium/HTTP，持原锁或暂停已取得的真实签发回执，只推进本次截止，核503/request_id、peer授权、外部原身份/版本、精确占用冷读、存活查询不结清及原管理停止核实后settle/拒绝新授权；派发前到期沿原入口重试。Windows新旧锁/授权/API回归157 passed/16.98秒，快照`dcca03c8c522f1bdf9b33bef066b4ce13842ceec`的三份Python及matrix归一LF指纹与Linux一致、tracked clean，四份具名产品收据已取回；原Web/Gateway前后可用，未重启。诊断产物不保存临时grant token。
+- 完整旧HEAD `8548eefbfe073e72039814ef99536a2d7ef87781`归档仅叠相同最终新测试/矩阵：新单测14 failed/16 passed，正式产品4 failed/28.91秒，因原授权调用无法按入口期限返回；已派发场景在测试取消后保留unknown并使原scope清理拒绝，首因超时上下文原样保留。4430份原文件及最终测试逐字核对，4份原PTY状态均exited且PID已不存在，封存原始产品产物后删除纯临时解包树。首轮在归档尚未解完时提前启动的两项对照未找到文件，未执行测试；等待原准备handle完成后顺序重跑，失败原件保留。
+- Ruff/compileall通过；Pyright 1.1.414的4项原诊断与完整旧生产的规则/消息/位置逐项相同，不称类型全绿。新测试按生产目录下沉，含四节AGENTS，原owner的976→988行已有大文件由作者AST/职责审查记录本片边界，无新跨域职责。准确命令、前后源码指纹、原始输出/真实退出码、旧生产归档、Windows收据及作者自查见`out/tests/temp/resource_grant_deadline_20261025/artifacts/verification-030.json`。真实30秒等待、Gateway/Web、独立Backend重启、同步阻塞、不合作取消及完整operation/shutdown继续TODO；5.2/5.4/6.2仍未勾、整体20/23，团队及CIL第9节继续暂缓，原4份CIL规划排除提交。

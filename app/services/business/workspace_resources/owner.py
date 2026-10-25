@@ -749,20 +749,32 @@ class WorkspaceResourceOwner:
         holder_id: str,
         operation_id: str,
     ) -> ResourceSnapshot:
-        # 已核实的非运行资源不再请求外部服务，终态也不因晚到授权变成 unknown。
-        async with self._resource_lock(resource_id):
-            record = self._require_owned_resource_record(resource_id)
-            if record.reconciliation_status == "verified" and record.status != "running":
-                raise ResourceConflict("外部资源 不在运行状态，不能签发传输授权")
-        await self.recover((resource_id,))
-        if thread is not None:
-            async with self.admit_thread(thread.session_id, thread.thread_id):
+        # 原预检、恢复、准入和签发共用预算，派发后的未知结果仍由原lease链保留。
+        # TODO(5.4)：同步写盘与不合作取消不能由此预算抢占，外部终态仍须原owner核实。
+        deadline = timeout(30)
+        try:
+            async with deadline:
+                # 已核实的非运行资源不再请求外部服务，终态也不因晚到授权变成 unknown。
+                async with self._resource_lock(resource_id):
+                    record = self._require_owned_resource_record(resource_id)
+                    if record.reconciliation_status == "verified" and record.status != "running":
+                        raise ResourceConflict("外部资源 不在运行状态，不能签发传输授权")
+                await self.recover((resource_id,))
+                if thread is not None:
+                    async with self.admit_thread(thread.session_id, thread.thread_id):
+                        return await self._grant(
+                            resource_id, expected_revision, thread, holder_id, operation_id
+                        )
                 return await self._grant(
-                    resource_id, expected_revision, thread, holder_id, operation_id
+                    resource_id, expected_revision, None, holder_id, operation_id
                 )
-        return await self._grant(
-            resource_id, expected_revision, None, holder_id, operation_id
-        )
+        except TimeoutError as error:
+            if not deadline.expired():
+                raise
+            raise TimeoutError(
+                f"外部资源传输授权等待超过 30 秒: resource_id={resource_id}；"
+                "保留未核实记录与原占用，未确认外部授权或资源已经停止"
+            ) from error
 
     async def _grant(
         self,
