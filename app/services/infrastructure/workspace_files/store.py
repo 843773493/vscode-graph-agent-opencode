@@ -179,7 +179,11 @@ class WorkspaceFileStore:
             payload = json.loads(row["payload"])
             if digest(payload) != row["payload_hash"] or payload["workspace_id"] != self.workspace_id or payload["actor"] != actor or payload["intent"]["client_operation_id"] != operation_id or payload["request_hash"] != row["request_hash"]:
                 raise RuntimeError(f"文件 operation 冻结内容损坏: {operation_id}")
-            receipt = WorkspaceFileOperationReceiptDTO.model_validate_json(row["receipt"])
+            try:
+                receipt = WorkspaceFileOperationReceiptDTO.model_validate_json(row["receipt"])
+            except ValidationError as error:
+                logger.exception("文件 operation 回执校验失败: operation_id=%s path=%s", operation_id, self.path)
+                raise ValueError(f"文件 operation 回执格式错误: operation_id={operation_id}") from error
             if (receipt.operation_id, receipt.state, receipt.queue_seq) != (operation_id, row["state"], row["queue_seq"]):
                 raise RuntimeError(f"文件 operation 回执与原记录不一致: {operation_id}")
             steps = json.loads(row["steps"])
