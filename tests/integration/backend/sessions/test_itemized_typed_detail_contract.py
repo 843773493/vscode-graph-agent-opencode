@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import errno
 import json
 import sqlite3
 from dataclasses import replace
+from pathlib import Path
 
 import pytest
 
@@ -12,6 +14,7 @@ from app.domain.itemized.epoch.tool_set import ToolSetSnapshot
 from app.domain.itemized.hashing import contribution_content_hash, sha256_jcs
 from app.domain.itemized.identity.detail_ref import DetailRef
 from app.domain.itemized.plans.contributions import ContextContribution
+from app.schemas.internal_v2.session import SessionCreateRequest
 from app.services.infrastructure.rollout_context.assembly.detail_identity import (
     detail_ref_from_key,
     detail_ref_key,
@@ -32,6 +35,10 @@ from app.services.infrastructure.rollout_context.runtime.detail_manifest import 
 from app.services.infrastructure.rollout_context.runtime.detail_store import (
     DetailUnavailableError,
 )
+from tests.harness.python.run_context import TestRunContext
+from tests.integration.backend.sessions.fork_execution_source import (
+    fork_execution_message as fork_execution_message,  # noqa: PLC0414
+)
 from tests.integration.backend.sessions.itemized_projection_helpers import (
     _project,
     projection_draft,
@@ -40,6 +47,16 @@ from tests.integration.backend.sessions.itemized_projection_helpers import (
     projection_workspace_root,
     register_projection_draft,
 )
+from tests.integration.backend.sessions.test_rollout_fork_modes import (
+    _fork_request,
+    _production_fork_context,
+)
+from tests.integration.backend.sessions.test_rollout_fork_modes import (
+    fork_gateway_request_context as fork_gateway_request_context,  # noqa: PLC0414
+)
+from tests.integration.backend.sessions.test_rollout_fork_modes import (
+    production_fork_container as production_fork_container,  # noqa: PLC0414
+)
 
 __all__ = [
     "projection_draft",
@@ -47,6 +64,144 @@ __all__ = [
     "projection_saver",
     "projection_workspace_root",
 ]
+
+
+@pytest.mark.parametrize("operation", ["read", "publish", "remove_paths"])
+@pytest.mark.parametrize("damage", ["symlink_leaf", "symlink_parent", "parent_file", "target_directory"])
+def test_detail_path_rejections_keep_physical_location_in_diagnostics(
+    projection_saver, projection_plan, caplog, operation, damage,
+):
+    saver, session_id, session = projection_saver
+    ref = projection_plan.selection[2].detail_ref
+    target = session / detail_relative_path(ref)
+    original = target.read_bytes()
+    canonical = (session / "rollout/rollout.jsonl").read_bytes()
+    files = saver._detail_store._files
+    node = target.parent if damage in {"symlink_parent", "parent_file"} else target
+    parked = node.with_name(node.name + ".private-original")
+    node.rename(parked)
+    if damage.startswith("symlink"):
+        node.symlink_to(parked, target_is_directory=parked.is_dir())
+    elif damage == "parent_file":
+        node.write_bytes(b"private parent sentinel")
+    else:
+        node.mkdir()
+    try:
+        with pytest.raises(DetailUnavailableError) as failure:
+            if operation == "read":
+                saver.read_context_plan_detail(session_id, projection_plan.thread_id, detail_ref=ref)
+            elif operation == "publish":
+                files.publish(ref, original)
+            else:
+                files.remove_paths(ref)
+        detail = str(failure.value)
+        assert str(session) not in detail and str(node) not in detail
+        assert ref.detail_id in detail and "stage=path" in detail
+        assert any(str(node) in record.getMessage() for record in caplog.records)
+        assert (session / "rollout/rollout.jsonl").read_bytes() == canonical
+        body = parked / target.name if node == target.parent else parked
+        assert body.read_bytes() == original
+    finally:
+        if damage == "target_directory":
+            node.rmdir()
+        else:
+            node.unlink()
+        parked.rename(node)
+    assert files.read(ref, session_id=session_id, thread_id=projection_plan.thread_id) == original
+    assert files.remove_paths(ref) == (target,)
+    assert (session / "rollout/rollout.jsonl").read_bytes() == canonical
+
+
+@pytest.mark.parametrize("stage", ["lstat", "mkdir", "resolve"])
+@pytest.mark.parametrize("private", ["/private/detail/body", r"C:\private\detail\body", r"\\host\private\detail\body"])
+def test_detail_path_native_failures_keep_original_cause_and_allow_retry(
+    projection_saver, projection_plan, monkeypatch, caplog, stage, private,
+):
+    saver, _session_id, session = projection_saver
+    ref = projection_plan.selection[2].detail_ref
+    if stage == "mkdir":
+        ref = replace(ref, assembly_id="new-assembly")
+    target = session / detail_relative_path(ref)
+    native_path = target.parent if stage == "mkdir" else target
+    original_error = PermissionError(errno.EACCES, f"private native failure: {private}")
+    original_method = getattr(Path, stage)
+
+    def fail(path, *args, **kwargs):
+        if path == native_path:
+            raise original_error
+        return original_method(path, *args, **kwargs)
+
+    before = (session / "rollout/rollout.jsonl").read_bytes()
+    with monkeypatch.context() as failure:
+        failure.setattr(Path, stage, fail)
+        with pytest.raises(DetailUnavailableError) as caught:
+            saver._detail_store._files.path(ref, create=stage == "mkdir")
+    detail = str(caught.value)
+    assert private not in detail and str(session) not in detail
+    assert ref.detail_id in detail and "stage=path" in detail
+    assert "PermissionError" in detail and f"errno={errno.EACCES}" in detail
+    assert caught.value.__cause__ is original_error
+    assert any(record.exc_info and record.exc_info[1] is original_error for record in caplog.records)
+    assert private in caplog.text
+    assert (session / "rollout/rollout.jsonl").read_bytes() == before
+    if stage == "mkdir":
+        assert not target.parent.exists()
+    assert saver._detail_store._files.path(ref, create=stage == "mkdir") == target
+
+
+async def test_product_detail_rejection_preserves_history_and_repaired_source_can_fork(
+    production_fork_container, fork_execution_message, request: pytest.FixtureRequest, caplog,
+):
+    container = production_fork_container
+    source = await container.session_service.create(SessionCreateRequest(title="历史详情文件故障恢复"))
+    accepted = await fork_execution_message(
+        container, source.session_id, content="生成用于详情冷读的历史",
+    )
+    saver = container.checkpointer
+    assembly, = saver._storage.assemblies.list_context_assemblies(source.session_id, accepted.thread_id)
+    ref = next(entry.detail_ref for entry in assembly.selection if entry.detail_ref is not None)
+    original = saver.read_context_plan_detail(
+        source.session_id, accepted.thread_id, detail_ref=ref, include_sensitive=True,
+    )
+    node = container.session_service.path_resolver.resolve_thread_node(source.session_id, accepted.thread_id)
+    canonical = (node / "rollout/rollout.jsonl").read_bytes()
+    target = node / detail_relative_path(ref)
+    raw = target.read_bytes()
+    parked = target.with_name(target.name + ".private-original")
+    target.rename(parked)
+    target.symlink_to(parked)
+    try:
+        with pytest.raises(DetailUnavailableError) as failure:
+            saver.read_context_plan_detail(source.session_id, accepted.thread_id, detail_ref=ref, include_sensitive=True)
+        detail = str(failure.value)
+        assert str(node) not in detail and "stage=path" in detail and ref.detail_id in detail
+        assert any(str(target) in record.getMessage() for record in caplog.records)
+        assert parked.read_bytes() == raw and (node / "rollout/rollout.jsonl").read_bytes() == canonical
+    finally:
+        target.unlink()
+        parked.rename(target)
+    with RolloutCheckpointSaver(saver._storage.storage.sessions_dir) as cold:
+        assert cold.read_context_plan_detail(
+            source.session_id, accepted.thread_id, detail_ref=ref, include_sensitive=True,
+        ) == original
+    context = _production_fork_context(container)
+    fork_request = await _fork_request(context, source.session_id, creation_kind="new_session_main", mode="full_rollout_copy")
+    copied = await context.forks.fork(fork_request)
+    with RolloutCheckpointSaver(saver._storage.storage.sessions_dir) as cold:
+        assert cold.read_context_plan_detail(
+            copied.session.session_id, copied.thread_id, detail_ref=ref, include_sensitive=True,
+        ) == original
+        restored = cold._storage.assemblies.get_context_assembly(
+            copied.session.session_id, copied.thread_id, assembly_id=assembly.assembly_id,
+        )
+        assert restored.request_hash == assembly.request_hash
+        assert next(entry.detail_ref for entry in restored.selection if entry.detail_ref is not None) == ref
+    assert target.read_bytes() == raw and (node / "rollout/rollout.jsonl").read_bytes() == canonical
+    artifacts = TestRunContext.from_test_file(Path(request.node.path)).prepare().artifacts_dir
+    (artifacts / "product-detail-recovery.json").write_text(json.dumps({
+        "failure": detail, "source": source.session_id, "target": copied.session.session_id,
+        "detail_ref": ref.to_dict(), "request_hash": assembly.request_hash,
+    }, ensure_ascii=False, indent=2) + "\n")
 
 
 @pytest.mark.parametrize("change_identity", [False, True])

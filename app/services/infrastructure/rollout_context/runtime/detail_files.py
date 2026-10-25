@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import secrets
 import sqlite3
 import stat
-from contextlib import closing, nullcontext
+from collections.abc import Iterator
+from contextlib import closing, contextmanager, nullcontext
 from pathlib import Path
 
 from app.core.atomic_fs import native_io_path
@@ -25,19 +27,40 @@ from app.services.infrastructure.rollout_context.storage.primitives import (
     RolloutReadSnapshot,
 )
 
+logger = logging.getLogger(__name__)
+
 
 class DetailFiles:
     def __init__(self, resolver: SessionCatalogPathResolver) -> None:
         self._resolver = resolver
 
     @staticmethod
-    def _info(path: Path) -> os.stat_result | None:
+    def _invalid_path(ref: DetailRef, path: Path, reason: str) -> DetailUnavailableError:
+        logger.error("%s: detail_ref=%s path=%s", reason, ref, path)
+        return DetailUnavailableError(f"{reason}: detail_ref={ref}, stage=path")
+
+    @staticmethod
+    @contextmanager
+    def _path_access(ref: DetailRef, path: Path) -> Iterator[None]:
         try:
-            info = path.lstat()
-        except FileNotFoundError:
-            return None
+            yield
+        except OSError as error:
+            facts = f"error={type(error).__name__}, errno={error.errno}"
+            winerror = getattr(error, "winerror", None)
+            if winerror is not None:
+                facts += f", winerror={winerror}"
+            detail = f"assembly detail 路径访问失败: detail_ref={ref}, stage=path, {facts}"
+            logger.exception("%s；path=%s", detail, path)
+            raise DetailUnavailableError(detail) from error
+
+    def _info(self, ref: DetailRef, path: Path) -> os.stat_result | None:
+        with self._path_access(ref, path):
+            try:
+                info = path.lstat()
+            except FileNotFoundError:
+                return None
         if stat.S_ISLNK(info.st_mode):
-            raise DetailUnavailableError(f"detail 路径不能是符号链接: {path}")
+            raise self._invalid_path(ref, path, "detail 路径不能是符号链接")
         return info
 
     def path(
@@ -69,33 +92,33 @@ class DetailFiles:
         )
         # locator 与 typed identity 保持原文，只在物理 I/O owner 扩展 Windows 路径。
         root = native_io_path(root)
-        root_info = self._info(root)
+        root_info = self._info(ref, root)
         if root_info is None or not stat.S_ISDIR(root_info.st_mode):
-            raise DetailUnavailableError("session node 不是安全普通目录")
+            raise self._invalid_path(ref, root, "session node 不是安全普通目录")
         current = root
         for component in relative.parts[:-1]:
             current = current / component
-            info = self._info(current)
+            info = self._info(ref, current)
             if info is None:
                 if not create:
                     return None
-                try:
-                    current.mkdir(mode=0o700)
-                except FileExistsError:
-                    pass
-                info = self._info(current)
+                with self._path_access(ref, current):
+                    try:
+                        current.mkdir(mode=0o700)
+                    except FileExistsError:
+                        pass
+                info = self._info(ref, current)
             if info is None or not stat.S_ISDIR(info.st_mode):
-                raise DetailUnavailableError(
-                    f"detail 父路径不是安全普通目录: {current}"
-                )
+                raise self._invalid_path(ref, current, "detail 父路径不是安全普通目录")
         target = current / relative.name
-        info = self._info(target)
+        info = self._info(ref, target)
         if info is not None and not stat.S_ISREG(info.st_mode):
-            raise DetailUnavailableError(f"detail target 不是普通文件: {target}")
-        try:
-            target.resolve(strict=False).relative_to(root.resolve(strict=True))
-        except ValueError as error:
-            raise DetailUnavailableError("detail 路径越出 session node") from error
+            raise self._invalid_path(ref, target, "detail target 不是普通文件")
+        with self._path_access(ref, target):
+            try:
+                target.resolve(strict=False).relative_to(root.resolve(strict=True))
+            except ValueError as error:
+                raise self._invalid_path(ref, target, "detail 路径越出 session node") from error
         return target
 
     def read(
@@ -186,7 +209,7 @@ class DetailFiles:
     ) -> tuple[Path, ...]:
         """删除只使用唯一 typed locator，不扫描任何旁挂位置。"""
         target = self.path(ref, storage_owner=storage_owner)
-        return (target,) if target is not None and self._info(target) is not None else ()
+        return (target,) if target is not None and self._info(ref, target) is not None else ()
 
 
 __all__ = ["DetailFiles"]
