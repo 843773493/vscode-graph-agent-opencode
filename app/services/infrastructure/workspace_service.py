@@ -120,7 +120,7 @@ class WorkspaceService:
         if self._file_operations is None:
             self._file_operations = WorkspaceFileOperations(
                 workspace=self._workspace_root, workspace_id=self.workspace_id,
-                resolve=self.file_paths.resolve, normalize=self._normalize_workspace_relative_path,
+                resolve=self.file_paths.resolve,
                 validate_name=self._validate_entry_name, observe=self._directory_observation,
                 snapshot=self._operation_snapshot,
                 paths=self.file_paths,
@@ -302,21 +302,6 @@ class WorkspaceService:
         return {"root_path": key.root,
                 "path": key.path, "items": [item.model_dump() for item in items],
                 "limit": limit, "after": after}, signature
-
-    def _normalize_workspace_relative_path(self, path: str) -> str:
-        normalized = path.replace("\\", "/").strip()
-        if normalized.startswith("/"):
-            raise ValueError(f"工作区文件路径必须是相对路径: {path}")
-
-        parts: list[str] = []
-        for part in normalized.split("/"):
-            if part in ("", "."):
-                continue
-            if part == "..":
-                raise ValueError(f"工作区文件路径不能包含上级目录: {path}")
-            parts.append(part)
-
-        return "/".join(parts)
 
     def _entry_to_file_node(
         self,

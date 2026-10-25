@@ -15,7 +15,7 @@ from uuid import uuid4
 
 from app.core.atomic_fs import fsync_directory, native_io_path
 from app.core.exceptions import ForbiddenError
-from app.core.path_utils import safe_join
+from app.core.path_utils import is_resource_uri_input, safe_join
 from app.core.resource_uri import file_uri_child, file_uri_root, parse_resource_uri
 from app.core.session_lifecycle_gate import OperationHolderGate
 from app.schemas.internal_v2.session_navigation.operations import (
@@ -52,7 +52,7 @@ DirectoryObservation = tuple[WorkspaceDirectoryKeyDTO, str, str, bool]
 
 class WorkspaceFileOperations:
     def __init__(self, *, workspace: Path, workspace_id: str,
-                 resolve: Callable[..., tuple[Path, str]], normalize: Callable[[str], str],
+                 resolve: Callable[..., tuple[Path, str]],
                  validate_name: Callable[[str], str],
                  observe: Callable[[WorkspaceDirectoryKeyDTO, Path], DirectoryObservation],
                  snapshot: Callable[[WorkspaceDirectoryKeyDTO, Path], tuple[dict, str]],
@@ -61,7 +61,7 @@ class WorkspaceFileOperations:
         self.store = WorkspaceFileStore(workspace, workspace_id)
         # 扫描与发布观察必须同序；迟到的旧扫描不能把新事实反向发布。
         self.observation_lock = RLock()
-        self._resolve, self._normalize, self._validate_name, self._observe = resolve, normalize, validate_name, observe
+        self._resolve, self._validate_name, self._observe = resolve, validate_name, observe
         self._snapshot = snapshot
         self.paths = paths
         self._directory_paths: dict[Path, set[WorkspaceDirectoryKeyDTO]] = {}
@@ -205,6 +205,16 @@ class WorkspaceFileOperations:
                 self._directory_paths.setdefault(path, set()).add(key)
             return self.store.observe([self._observe(key, path) for key, path in directories])
 
+    @staticmethod
+    def _relative_child_path(value: str) -> str:
+        normalized = value.replace("\\", "/")
+        parts = normalized.split("/")
+        if (normalized.startswith("/") or PureWindowsPath(value).drive
+                or is_resource_uri_input(value) or "\x00" in value or ".." in parts):
+            logger.warning("文件后继路径校验失败: relative_child_path=%r", value)
+            raise ValueError("relative_child_path 必须是原创建输出下不含上级目录的相对路径")
+        return "/".join(part for part in parts if part not in ("", "."))
+
     def _target(self, directory_path: str, scope: str, intent: WorkspaceFileMutationIntentDTO,
                 actor: str) -> tuple[WorkspaceDirectoryKeyDTO, Path]:
         if intent.created_by_operation_id is None:
@@ -214,7 +224,7 @@ class WorkspaceFileOperations:
         if not outputs:
             raise ValueError("created_by_operation_id 必须指向原目录输出")
         original_key = WorkspaceDirectoryKeyDTO.model_validate(creator.payload["directory_key"])
-        relative = self._normalize(intent.relative_child_path)
+        relative = self._relative_child_path(intent.relative_child_path)
         base = creator.payload["target"]
         if len(outputs) == 1:
             base = file_uri_child(base, *Path(outputs[0]["relative_path"]).parts)
