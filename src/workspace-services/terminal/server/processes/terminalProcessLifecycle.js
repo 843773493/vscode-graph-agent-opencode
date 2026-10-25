@@ -1,4 +1,4 @@
-import { execFile, spawnSync } from "node:child_process";
+import { execFile } from "node:child_process";
 import { readFile, readdir } from "node:fs/promises";
 import { promisify } from "node:util";
 
@@ -158,22 +158,25 @@ function signalProcess(pid, signal) {
   }
 }
 
-function requestWindowsProcessTreeTermination(pid) {
-  const result = spawnSync("taskkill", ["/T", "/F", "/PID", String(pid)], {
-    encoding: "utf8",
-    stdio: ["ignore", "ignore", "pipe"],
-    windowsHide: true,
-    timeout: TERMINATION_GRACE_MS,
-  });
-  if (result.error) {
-    throw new Error(`无法执行taskkill: pid=${pid}, error=${result.error.message}`, {
-      cause: result.error,
+async function requestWindowsProcessTreeTermination(pid) {
+  try {
+    await execFileAsync("taskkill", ["/T", "/F", "/PID", String(pid)], {
+      encoding: "utf8",
+      windowsHide: true,
+      timeout: TERMINATION_GRACE_MS,
     });
-  }
-  if (result.status !== 0 && processExists(pid)) {
-    throw new Error(
-      `taskkill失败且目标仍存活: pid=${pid}, exit=${result.status}, signal=${result.signal ?? "none"}, stderr=${result.stderr.trim()}`,
-    );
+  } catch (error) {
+    if (typeof error.code === "string") {
+      throw new Error(`无法执行taskkill: pid=${pid}, error=${error.message}`, {
+        cause: error,
+      });
+    }
+    if (error.killed || processExists(pid)) {
+      throw new Error(
+        `taskkill终止未核实: pid=${pid}, exit=${error.code}, signal=${error.signal ?? "none"}, stderr=${error.stderr.trim()}`,
+        { cause: error },
+      );
+    }
   }
 }
 
@@ -272,7 +275,7 @@ export async function terminateTerminalProcessTree({
 }) {
   if (process.platform === "win32") {
     if (!processExists(pid)) return "missing";
-    requestWindowsProcessTreeTermination(pid);
+    await requestWindowsProcessTreeTermination(pid);
     return await waitForProcessesExit([pid], TERMINATION_GRACE_MS)
       ? "terminated"
       : "still_running";
