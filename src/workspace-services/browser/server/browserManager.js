@@ -290,16 +290,19 @@ export class BrowserManager {
 
   async syncOwnerRevision(id, transportOwnerRevision, {
     operationDrainTimeoutMs = DEFAULT_OPERATION_DRAIN_TIMEOUT_MS,
+    forStop = false,
   } = {}) {
     const session = this.get(id);
     session.syncOwnerRevision(transportOwnerRevision);
     for (const [token, grant] of this.transportGrants) {
       if (grant.browserId === id && grant.transportOwnerRevision !== transportOwnerRevision) this.transportGrants.delete(token);
     }
-    const draining = session.operationQueue.drain(operationDrainTimeoutMs);
+    // 停止准入后先确认撤权落盘，原执行须由close释放context后沿原队列核实。
+    if (forStop) session.closingRequested = true;
+    const draining = forStop ? null : session.operationQueue.drain(operationDrainTimeoutMs);
     // 旧授权立即撤销并先持久化新版本；排空失败不回退版本，也不销毁原操作。
     await this.persist();
-    if (!await draining) {
+    if (draining && !await draining) {
       const error = new Error(`Browser 撤销旧授权后操作未能排空: browser_id=${id}, owner_revision=${transportOwnerRevision}`);
       error.code = "browser_owner_revision_drain_timeout";
       error.statusCode = 408;

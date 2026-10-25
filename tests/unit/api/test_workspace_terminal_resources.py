@@ -36,9 +36,9 @@ def test_create_and_control_use_trace_request_identity_for_actual_lease(
         record(str(arguments["terminal_id"]))
         return await create(**arguments)
 
-    async def sync_checked(resource_id: str, revision: int) -> None:
+    async def sync_checked(resource_id: str, revision: int, *, for_stop: bool) -> None:
         record(resource_id)
-        await sync(resource_id, revision)
+        await sync(resource_id, revision, for_stop=for_stop)
 
     monkeypatch.setattr(terminal_owner_bundle.transport, "create_terminal", create_checked)
     monkeypatch.setattr(terminal_owner_bundle.transport, "sync_owner_revision", sync_checked)

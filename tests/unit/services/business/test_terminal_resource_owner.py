@@ -345,11 +345,11 @@ async def test_management_and_grant_have_real_request_leases_and_do_not_add_asso
         assert len(leases) == 1
         observed.append((leases[0].turn_stream_id, leases[0].operation_id))
 
-    async def sync_checked(terminal_id: str, revision: int) -> None:
+    async def sync_checked(terminal_id: str, revision: int, *, for_stop: bool) -> None:
         record_lease()
         saved = json.loads((bundle.root / ".boxteam" / "terminal-resources.json").read_text())
         assert saved["records"][0]["owner_revision"] == revision
-        await sync(terminal_id, revision)
+        await sync(terminal_id, revision, for_stop=for_stop)
 
     async def grant_checked(terminal_id: str, **arguments: object) -> dict[str, object]:
         record_lease()
@@ -675,11 +675,11 @@ def revision_barrier(
         entered, release = asyncio.Event(), asyncio.Event()
         sync = bundle.transport.sync_owner_revision
 
-        async def blocked(resource_id: str, revision: int) -> None:
+        async def blocked(resource_id: str, revision: int, *, for_stop: bool) -> None:
             # 真实 owner 已持锁并落盘新 revision，传输同步回执在此挂起。
             entered.set()
             await release.wait()
-            await sync(resource_id, revision)
+            await sync(resource_id, revision, for_stop=for_stop)
 
         monkeypatch.setattr(bundle.transport, "sync_owner_revision", blocked)
         return entered, release
@@ -859,10 +859,10 @@ async def test_fork_dispatching_marker_does_not_replay_after_lost_transport_rece
     original = bundle.transport.sync_owner_revision
     calls = 0
 
-    async def sync_then_lose(resource_id: str, revision: int) -> None:
+    async def sync_then_lose(resource_id: str, revision: int, *, for_stop: bool) -> None:
         nonlocal calls
         calls += 1
-        await original(resource_id, revision)
+        await original(resource_id, revision, for_stop=for_stop)
         raise ConnectionError("传输已更新但响应丢失")
 
     monkeypatch.setattr(bundle.transport, "sync_owner_revision", sync_then_lose)

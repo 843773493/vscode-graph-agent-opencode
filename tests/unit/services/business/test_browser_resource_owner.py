@@ -191,11 +191,11 @@ def revision_barrier(
         entered, release = asyncio.Event(), asyncio.Event()
         sync = bundle.transport.sync_owner_revision
 
-        async def blocked(resource_id: str, revision: int) -> None:
+        async def blocked(resource_id: str, revision: int, *, for_stop: bool) -> None:
             # 真实 owner 已持锁并落盘新 revision，传输同步回执在此挂起。
             entered.set()
             await release.wait()
-            await sync(resource_id, revision)
+            await sync(resource_id, revision, for_stop=for_stop)
 
         monkeypatch.setattr(bundle.transport, "sync_owner_revision", blocked)
         return entered, release

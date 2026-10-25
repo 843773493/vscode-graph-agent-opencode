@@ -323,7 +323,12 @@ async function main() {
         }
         if (request.method === "POST" && action === "owner-revision") {
           const payload = await readJson(request);
-          await manager.syncOwnerRevision(browserId, payload.owner_revision);
+          if (typeof payload.for_stop !== "boolean") {
+            const error = new Error("Browser owner revision必须明确for_stop意图");
+            error.statusCode = 400;
+            throw error;
+          }
+          await manager.syncOwnerRevision(browserId, payload.owner_revision, { forStop: payload.for_stop });
           sendJson(response, 200, { data: manager.get(browserId).snapshot() });
           return;
         }

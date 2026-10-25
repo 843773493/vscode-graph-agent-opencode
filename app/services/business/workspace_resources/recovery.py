@@ -103,7 +103,7 @@ class ResourceRecovery:
             failure = None
             try:
                 if revision is not None:
-                    await owner._transport.sync_owner_revision(resource_id, revision)
+                    await owner._transport.sync_owner_revision(resource_id, revision, for_stop=False)
             except BaseException as error:
                 owner._unknown(record, error)
                 if not isinstance(error, Exception):

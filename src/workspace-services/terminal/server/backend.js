@@ -240,6 +240,11 @@ async function main() {
 
         if (request.method === "POST" && action === "owner-revision") {
           const payload = await readJson(request);
+          if (typeof payload.for_stop !== "boolean") {
+            const error = new Error("Terminal owner revision必须明确for_stop意图");
+            error.statusCode = 400;
+            throw error;
+          }
           await manager.syncOwnerRevision(terminalId, payload.owner_revision);
           sendJson(response, 200, { data: manager.get(terminalId).snapshot() });
           return;

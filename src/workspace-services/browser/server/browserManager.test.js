@@ -406,6 +406,36 @@ describe("浏览器状态持久化", () => {
     expect(effects).toEqual(phase === "prepare" ? [] : ["entered", "completed"]);
   });
 
+  test.each([false, true])("停止准备先关闭准入并持久撤权，原执行仍由关闭链核实：写盘失败=%s", async (failSave) => {
+    const failure = new Error("撤权写盘失败");
+    const manager = createBrowserManagerWithStateWriter(async () => { if (failSave) throw failure; });
+    const browser = new BrowserSession({ manager, record: {
+      browser_id: createOptions().browserId, workspace_id: WORKSPACE_ID,
+      status: "running", transport_owner_revision: 1, reconciliation_status: "verified",
+    } });
+    manager.browsersById.set(browser.id, browser);
+    const grant = manager.issueTransportGrant(browser.id, { ownerRevision: 1, association: null });
+    let release;
+    const original = browser.operationQueue.track(new Promise((resolve) => { release = resolve; }));
+    const accepted = [...browser.operationQueue.acceptedOperationExecutions];
+    try {
+      const preparing = manager.syncOwnerRevision(browser.id, 2, { forStop: true });
+      if (failSave) await expect(preparing).rejects.toBe(failure);
+      else await preparing;
+      expect(browser.closingRequested).toBe(true);
+      expect(browser.transportOwnerRevision).toBe(2);
+      expect(browser.record.status).toBe("running");
+      expect([...browser.operationQueue.acceptedOperationExecutions]).toEqual(accepted);
+      expect(() => manager.consumeTransportGrant(browser.id, grant.grant_token)).toThrow("无效");
+      await expect(browser.enqueueOperation({ actor: "user", action: "read" }, () => {
+        throw new Error("停止准备后不得执行新操作");
+      })).rejects.toMatchObject({ code: "browser_closing" });
+    } finally {
+      release();
+      await original;
+    }
+  });
+
   test("短时间内的后台写入请求合并为一次", async () => {
     let writes = 0;
     const manager = createBrowserManagerWithStateWriter(async () => {

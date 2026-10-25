@@ -173,7 +173,7 @@ class _FakeTerminalClient:
     async def list_resources(self) -> list[dict[str, Any]]:
         return [dict(terminal) for terminal in self.terminals.values()]
 
-    async def sync_owner_revision(self, terminal_id: str, owner_revision: int) -> None:
+    async def sync_owner_revision(self, terminal_id: str, owner_revision: int, *, for_stop: bool) -> None:
         self.terminals[terminal_id]["transport_owner_revision"] = owner_revision
 
     async def read_terminal(self, terminal_id: str) -> dict[str, Any]:

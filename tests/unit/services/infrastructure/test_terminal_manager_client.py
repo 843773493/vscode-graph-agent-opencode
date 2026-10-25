@@ -77,8 +77,9 @@ async def test_list_is_workspace_transport_only_and_hides_direct_attach_url(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("for_stop", [False, True])
 async def test_revision_and_one_use_grant_consume_internal_owner_transport(
-    terminal_manager_client: TerminalManagerClient, monkeypatch: pytest.MonkeyPatch,
+    terminal_manager_client: TerminalManagerClient, monkeypatch: pytest.MonkeyPatch, for_stop: bool,
 ) -> None:
     calls: list[tuple[str, str, object]] = []
 
@@ -87,11 +88,11 @@ async def test_revision_and_one_use_grant_consume_internal_owner_transport(
         return {"data": {"grant_token": "single-use", "owner_revision": 4}}
 
     monkeypatch.setattr(terminal_manager_client, "_json_request", request)
-    await terminal_manager_client.sync_owner_revision(TERMINAL_ID, 4)
+    await terminal_manager_client.sync_owner_revision(TERMINAL_ID, 4, for_stop=for_stop)
     result = await terminal_manager_client.issue_transport_grant(TERMINAL_ID, owner_revision=4, association="session/thread")
     assert result["grant_token"] == "single-use"
     assert calls == [
-        ("POST", f"/api/terminals/{TERMINAL_ID}/owner-revision", {"owner_revision": 4}),
+        ("POST", f"/api/terminals/{TERMINAL_ID}/owner-revision", {"owner_revision": 4, "for_stop": for_stop}),
         ("POST", f"/api/terminals/{TERMINAL_ID}/transport-grant", {"owner_revision": 4, "association": "session/thread"}),
     ]
 

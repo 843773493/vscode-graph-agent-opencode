@@ -93,10 +93,10 @@ async def test_filtered_list_rechecks_association_after_waiting_for_the_resource
     entered, release = asyncio.Event(), asyncio.Event()
     original = bundle.transport.sync_owner_revision
 
-    async def blocked_revision(resource_id: str, owner_revision: int) -> None:
+    async def blocked_revision(resource_id: str, owner_revision: int, *, for_stop: bool) -> None:
         entered.set()
         await release.wait()
-        await original(resource_id, owner_revision)
+        await original(resource_id, owner_revision, for_stop=for_stop)
 
     monkeypatch.setattr(bundle.transport, "sync_owner_revision", blocked_revision)
     detach = asyncio.create_task(bundle.command(rid, action="detach", expected_revision=1,
@@ -255,10 +255,10 @@ async def test_cold_recovery_finishes_other_resources_without_rebinding_the_batc
     calls: list[tuple[str, int]] = []
     original = bundle.transport.sync_owner_revision
 
-    async def lose_receipt(resource_id: str, revision: int) -> None:
+    async def lose_receipt(resource_id: str, revision: int, *, for_stop: bool) -> None:
         calls.append((resource_id, revision))
         # 外部版本已经发布；Python不能因丢失回执重启整批恢复。
-        await original(resource_id, revision)
+        await original(resource_id, revision, for_stop=for_stop)
         if resource_id in errors:
             raise errors[resource_id]
 
@@ -310,7 +310,7 @@ async def test_cancelling_cold_recovery_does_not_report_the_remaining_resources_
     entered = asyncio.Event()
     calls: list[str] = []
 
-    async def blocked(resource_id: str, _revision: int) -> None:
+    async def blocked(resource_id: str, _revision: int, *, for_stop: bool) -> None:
         calls.append(resource_id)
         entered.set()
         await asyncio.Future()
@@ -338,12 +338,12 @@ async def test_pending_cold_recovery_does_not_block_healthy_resource_entrypoints
     original = bundle.transport.sync_owner_revision
     calls: list[tuple[str, int]] = []
 
-    async def pending_revision(resource_id: str, revision: int) -> None:
+    async def pending_revision(resource_id: str, revision: int, *, for_stop: bool) -> None:
         calls.append((resource_id, revision))
         if resource_id == rid:
             entered.set()
             await release.wait()
-        await original(resource_id, revision)
+        await original(resource_id, revision, for_stop=for_stop)
 
     monkeypatch.setattr(bundle.transport, "sync_owner_revision", pending_revision)
     recovering = asyncio.create_task(owner.recover())
@@ -399,12 +399,12 @@ async def test_cancelling_recovery_keeps_frozen_revision_and_does_not_repeat_fin
     original = bundle.transport.sync_owner_revision
     calls: list[tuple[str, int]] = []
 
-    async def pending_revision(resource_id: str, revision: int) -> None:
+    async def pending_revision(resource_id: str, revision: int, *, for_stop: bool) -> None:
         calls.append((resource_id, revision))
         if resource_id == rid:
             entered.set()
             await release.wait()
-        await original(resource_id, revision)
+        await original(resource_id, revision, for_stop=for_stop)
         if resource_id == healthy:
             healthy_synced.set()
 

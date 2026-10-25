@@ -45,7 +45,9 @@ Chromium 实例代际统一用 `chromiumInstanceGeneration`：由运行时池在
 
 Manager 的 `BrowserTransportGrant` 只保存一次连接所需的授权影子：稳定 `browserId`、冻结的 `transportOwnerRevision`、不透明领域关联和 `expiresAtUnixMs`。过期时刻统一使用 Unix 毫秒，与 Terminal 保持同一口径；公开 `expires_at` 仍为 ISO，30 秒有效期是持续时长，不能混作绝对时刻。内部标签页、运行时代际和业务会话 ID 不替代浏览器资源 ID。
 
-同步owner版本先撤销旧连接与grant，冻结原队列的已接纳集合并持久化新版本，再核排空结果；与关闭共用默认5秒预算。超时明确返回`browser_owner_revision_drain_timeout`/408，原操作和运行时仍保留，新版本不回退，也不宣称旧副作用停止；原操作最终结束时仍按冻结授权拒绝旧结果，同版本重试只等待原集合，不重放动作。该等待预算不覆盖持久化阻塞、Python首次恢复gate或整个operation期限。
+普通同步owner版本先撤销旧连接与grant，冻结原队列的已接纳集合并持久化新版本，再核排空结果；与关闭共用默认5秒预算。超时明确返回`browser_owner_revision_drain_timeout`/408，原操作和运行时仍保留，新版本不回退，也不宣称旧副作用停止；原操作最终结束时仍按冻结授权拒绝旧结果，同版本重试只等待原集合，不重放动作。该等待预算不覆盖持久化阻塞、Python首次恢复gate或整个operation期限。
+
+管理stop/delete的版本推进必须显式传入`for_stop=true`：先撤销旧连接/grant、关闭新操作准入并持久化新版本，此准备步骤不等待原执行；随后由原close链释放context再排空同一队列并核实终态，避免原脚本等待context关闭时互相等待。准备写盘失败保持准入关闭并传播原错误，不发布停止成功。普通恢复、attach/detach及grant同步均显式传false并保留原排空语义；内部HTTP缺少boolean意图直接拒绝，不增加旧协议fallback。
 
 Manager关闭先关闭新创建准入，并等待本次已进入创建链的配额检查、初始导航和最终状态保存；创建与原交互排空共用一次默认5秒单调预算。未接纳创建返回绑定原intent的503/not_created，重复身份仍按原冲突拒绝；已登记Session含created状态在关闭入口同步关闭操作准入；已接纳创建超时保留原Promise、资源和共享运行时，迟到完成再由同一Manager重试检查点。不因创建等待超时取消启动或重放创建。启动失败直接复用Session.close的唯一资源释放/检查点删除/终态保存链；失败状态保持failed/unknown，未核实创建收尾阻止共享池关闭，用户可由原close/delete核实。该等待不是整个shutdown期限，生产信号退出协调与挂起操作终止仍TODO。
 

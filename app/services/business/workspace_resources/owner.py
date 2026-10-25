@@ -474,12 +474,12 @@ class WorkspaceResourceOwner:
                 self._unknown(record, error, lease_id=acquired_lease_id)
                 raise
 
-    async def _advance_revision(self, record: OwnedResourceRecord) -> None:
+    async def _advance_revision(self, record: OwnedResourceRecord, *, for_stop: bool = False) -> None:
         record.owner_revision += 1
         record.updated_at = self._now()
         self._store.save(record)
         await self._transport.sync_owner_revision(
-            record.resource_id, record.owner_revision
+            record.resource_id, record.owner_revision, for_stop=for_stop,
         )
 
     async def _stop_or_delete(
@@ -489,7 +489,8 @@ class WorkspaceResourceOwner:
         record.updated_at = self._now()
         self._store.save(record)
         try:
-            await self._advance_revision(record)
+            # 停止先撤销旧授权；真实执行的排空由外部owner在关闭运行时后核实。
+            await self._advance_revision(record, for_stop=True)
             result = await (
                 self._transport.delete_resource(record.resource_id)
                 if delete

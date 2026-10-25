@@ -131,7 +131,7 @@ async def test_owner_revision_timeout_keeps_the_original_execution_and_rejects_i
         assert before["active_operation_count"] == 1
         started = time.monotonic()
         with pytest.raises(BrowserRequestError) as caught:
-            await asyncio.wait_for(client.sync_owner_revision(first, 2), 8)
+            await asyncio.wait_for(client.sync_owner_revision(first, 2, for_stop=False), 8)
         sync_elapsed = time.monotonic() - started
         assert 4.5 <= sync_elapsed < 8
         error = caught.value
@@ -158,7 +158,7 @@ async def test_owner_revision_timeout_keeps_the_original_execution_and_rejects_i
         with pytest.raises(BrowserRequestError) as late:
             await asyncio.wait_for(running, 5)
         assert late.value.code == "browser_transport_revoked"
-        await client.sync_owner_revision(first, 2)
+        await client.sync_owner_revision(first, 2, for_stop=False)
         observed = await client.perform(first, "run", {
             "code": "return await page.locator('#field').inputValue();",
         }, actor="agent")
@@ -320,3 +320,66 @@ async def test_close_keeps_timed_out_script_unknown_until_its_original_execution
         await asyncio.gather(running, return_exceptions=True)
         await close(first)
         await client.delete_resource(second)
+
+
+@pytest.mark.parametrize("action", ["stop", "delete"])
+async def test_python_management_closes_context_before_waiting_for_its_script(
+    browser_client: tuple[BrowserManagerClient, Path, TestRunContext],
+    owner_mount: MountedWorkspace, action: str,
+) -> None:
+    client, root, run = browser_client
+    async with workspace_tool_runtime(root, startup_mount=owner_mount) as (container, session_id, _context):
+        owner = container.browser_resource_owner
+        browser = await owner.create_browser(
+            session_id=session_id, retention_scope="workspace", url="about:blank",
+            holder_id="request:context-wait-create", operation_id="context-wait-create",
+        )
+        peer = await owner.create_browser(
+            session_id=session_id, retention_scope="workspace", url="about:blank",
+            holder_id="request:context-wait-peer", operation_id="context-wait-peer",
+        )
+        rid = str(browser["resource_id"])
+        detached = await owner.command(
+            rid, action="detach", expected_revision=int(browser["owner_revision"]),
+            thread=owner._store.get(rid).source_thread,
+            holder_id="request:context-wait-detach", operation_id="context-wait-detach",
+        )
+        try:
+            with pytest.raises(BrowserRequestError) as timed_out:
+                await owner.perform(
+                    rid, action="run", payload={
+                        # 页面reset只关闭page；原脚本须由真正关闭context才能结束。
+                        "code": "await new Promise(resolve => context.once('close', resolve)); return 'context已关闭';",
+                        "timeoutMs": 1000,
+                    }, expected_revision=int(detached["owner_revision"]),
+                    holder_id="request:context-wait-run", operation_id="context-wait-run",
+                )
+            assert timed_out.value.code == "browser_tool_timeout"
+            current = await owner.get_resource(rid)
+            assert current["reconciliation_status"] == "verified"
+            assert owner._leases.leases_for_resource(rid) == []
+            started = time.monotonic()
+            stopped = await asyncio.wait_for(owner.command(
+                rid, action=action, expected_revision=int(current["owner_revision"]),
+                holder_id="request:context-wait-close", operation_id="context-wait-close",
+            ), 8)
+            assert stopped["status"] == ("closed" if action == "stop" else "deleted")
+            assert stopped["reconciliation_status"] == "verified"
+            assert stopped["owner_revision"] == int(current["owner_revision"]) + 1
+            assert owner._leases.leases_for_resource(rid) == []
+            healthy = await owner.perform(
+                str(peer["resource_id"]), action="read", payload={},
+                expected_revision=int(peer["owner_revision"]),
+                holder_id="request:context-wait-read", operation_id="context-wait-read",
+            )
+            assert healthy["operation"]["status"] == "completed"
+            async with httpx.AsyncClient() as http:
+                health = await http.get(f"{client.backend_url}/health")
+            assert health.json()["browser_runtime"]["context_count"] == 1
+            run.write_result("passed", {
+                "action": action, "browser_id": rid, "close_seconds": time.monotonic() - started,
+                "scope": "正式Session/Python业务owner→真实Node/Chromium；原脚本仅等待context关闭，不替代强制终止与Gateway/主Web",
+            })
+        finally:
+            # 原实现失败时仍由真实关闭入口放行原脚本，避免污染后续生命周期清理。
+            await client.stop_resource(rid)

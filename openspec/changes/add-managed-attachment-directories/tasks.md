@@ -144,5 +144,11 @@ Web 定向 `BOXTEAM_E2E_SECTION8_FOCUS=copy_missing_attachment` 通过真实 Gat
 - 工具超时后的原脚本和页面reset由同一队列持有；排空在原单次预算内继续核对后来登记的执行句柄。stop/delete释放context后仍核实原执行结束，默认5秒未排空返回408并持久保持unknown；同身份/版本重试不重复关闭context，核实后才发布终态。
 - 完整原生产代码加最终关闭单测4项均失败；新增“排空先开始、原执行后登记”的2项反例在修正前均错误返回true。最终候选相关单测190 passed，正式`integration-browser-owner-revision-drain`全部4 passed/42.29秒，真实Manager关闭9场景通过；新场景由原创建/执行/停止/删除HTTP入口驱动真实Node/Chromium，受控HTTP仅暂停原fetch，核对磁盘unknown、context释放、peer可用和原页面只关闭一次。
 - Ruff、compileall和Bun语法解析通过，运行前后源码指纹一致；准确命令、原始输出、实际退出码、结构自查及失败归因在`out/tests/temp/browser_close_executions_20261025/artifacts/`。最初4项失败来自单测装具漏CDP句柄，单列保留，不记产品反例。结构自查未发现本批职责越界，既存大文件未扩大重构，不称独立审查。
-- 尚不支持强制终止不合作脚本，Python业务owner仍可能先等待原版本同步；整个operation/shutdown期限、生产信号入口失败后退出协调、Windows和Gateway/主Web本批未验。5.2/5.4/6.2继续未勾，团队与协作继续TODO。
+- 尚不支持强制终止不合作脚本；Python业务owner停止前的版本等待已由下述停止准备切片补齐；整个operation/shutdown期限、生产信号入口失败后退出协调、Windows和Gateway/主Web本批未验。5.2/5.4/6.2继续未勾，团队与协作继续TODO。
 - 共享合并后同批单测190 passed、正式Python/Node/Chromium集成4 passed，Ruff及45项OpenSpec strict通过；共享index完整保留。机器收据`verification001.json`核对原始输出hash、前后源码、实际退出码与进程组清空，仅作为运行证据，不替代上述业务断言。
+
+### 2026-10-25 Browser 管理停止的准备顺序（5.2/5.4 部分收口）
+
+- stop/delete推进版本显式标记停止准备：先撤权、关闭新准入并持久化，不提前等待依赖context关闭的原脚本；真正关闭与终态核实仍走原Session.close和唯一队列。普通恢复/关联/授权继续原排空语义，Python传输及其全部直接/间接消费者迁齐必填意图，内部HTTP拒绝缺少boolean的旧请求，不新增兼容或第二停止链。
+- 完整未修改基线经真实Session/Python业务owner→Node/Chromium的stop/delete均在撤权排空阶段失败，修正后两项通过；完整Browser集成6 passed/54.65秒，共享6 passed/52.67秒。候选Browser单测171 passed、原生Node Terminal 22 passed、资源live-fork正式矩阵22 passed/190.26秒、真实PTY冷恢复/GC场景1 passed/27.37秒，共享资源/传输/工具/API单测199 passed。Ruff、compileall、Bun解析及45项OpenSpec strict通过；源码前后指纹一致。
+- Python回归中的16项既存unknown动作/transition断言在完整未修改基线同样失败，未放宽断言；误用Bun执行node:test的mock限制已按原生Node运行器核实通过。首轮静态检查因运行保护禁止读取Git index而未进入检查，随后冻结文件清单再通过。原始命令、输出、退出码、指纹与合并前件位于`out/tests/temp/browser_management_stop_20261025/artifacts/`，自查无本批职责越界，既存大文件不扩范围拆分。任意脚本强制终止、首次冷恢复gate、整个operation/shutdown期限及生产信号失败后退出协调仍TODO；5.2/5.4/6.2保持未勾，团队与协作继续TODO。

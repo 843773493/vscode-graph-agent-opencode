@@ -448,12 +448,12 @@ async def test_pending_cold_revision_keeps_original_pty_and_allows_other_pty_and
         original = TerminalManagerClient.sync_owner_revision
         calls: list[tuple[str, int]] = []
 
-        async def pending_revision(transport: TerminalManagerClient, resource_id: str, revision: int) -> None:
+        async def pending_revision(transport: TerminalManagerClient, resource_id: str, revision: int, *, for_stop: bool) -> None:
             calls.append((resource_id, revision))
             if resource_id == terminals[0]:
                 entered.set()
                 await release.wait()
-            await original(transport, resource_id, revision)
+            await original(transport, resource_id, revision, for_stop=for_stop)
 
         monkeypatch.setattr(TerminalManagerClient, "sync_owner_revision", pending_revision)
         # 服务图重新从原catalog/owner/lease文件恢复，不复制内存状态。

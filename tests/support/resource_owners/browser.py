@@ -46,7 +46,7 @@ class BrowserTransportFake:
     async def get_resource(self, resource_id: str) -> dict[str, object]:
         return dict(self.records[resource_id])
 
-    async def sync_owner_revision(self, resource_id: str, owner_revision: int) -> None:
+    async def sync_owner_revision(self, resource_id: str, owner_revision: int, *, for_stop: bool) -> None:
         self.records[resource_id]["transport_owner_revision"] = owner_revision
 
     async def issue_transport_grant(self, resource_id: str, *, owner_revision: int, association: str | None) -> dict[str, object]:

@@ -160,10 +160,10 @@ class TerminalManagerClient:
         response = await self._json_request("DELETE", f"/api/terminals/{terminal_id}")
         return self._require_terminal_envelope(response)
 
-    async def sync_owner_revision(self, terminal_id: str, owner_revision: int) -> None:
+    async def sync_owner_revision(self, terminal_id: str, owner_revision: int, *, for_stop: bool) -> None:
         await self._json_request(
             "POST", f"/api/terminals/{terminal_id}/owner-revision",
-            {"owner_revision": owner_revision},
+            {"owner_revision": owner_revision, "for_stop": for_stop},
         )
 
     async def issue_transport_grant(

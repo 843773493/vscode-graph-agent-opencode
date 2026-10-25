@@ -491,7 +491,7 @@ async def test_real_browser_target_rejection_keeps_owner_verified_and_grant_unis
             if race == "closed":
                 await owner._transport.stop_resource(resource_id)
             else:
-                await owner._transport.sync_owner_revision(resource_id, owner_revision + 1)
+                await owner._transport.sync_owner_revision(resource_id, owner_revision + 1, for_stop=False)
             try:
                 return await issue(resource_id, owner_revision=owner_revision, association=association)
             except ResourceTransportGrantRejected as error:

@@ -98,9 +98,9 @@ class BrowserManagerClient:
         )
         return self._normalize_browser_record_envelope(delete_receipt)
 
-    async def sync_owner_revision(self, browser_id: str, owner_revision: int) -> None:
+    async def sync_owner_revision(self, browser_id: str, owner_revision: int, *, for_stop: bool) -> None:
         data = await self._request_data("POST", f"/api/browsers/{browser_id}/owner-revision",
-                                        {"owner_revision": owner_revision})
+                                        {"owner_revision": owner_revision, "for_stop": for_stop})
         browser = self._normalize_browser_record(data)
         if (
             browser["browser_id"] != browser_id or browser["workspace_id"] != self._workspace_id

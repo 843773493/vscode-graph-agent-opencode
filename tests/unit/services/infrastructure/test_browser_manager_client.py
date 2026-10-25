@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 from unittest.mock import Mock
 
@@ -156,15 +157,20 @@ async def test_revision_sync_rejects_a_snapshot_for_another_identity_or_version(
     revision_receipt[field] = value
     resource_http(lambda request: httpx.Response(200, json={"data": revision_receipt}))
     with pytest.raises(TypeError, match="stage=owner_revision.receipt"):
-        await browser_manager_client.sync_owner_revision("browser_1", 2)
+        await browser_manager_client.sync_owner_revision("browser_1", 2, for_stop=False)
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("for_stop", [False, True])
 async def test_revision_sync_consumes_the_complete_successful_snapshot(
-    browser_manager_client: BrowserManagerClient, revision_receipt: dict[str, object], monkeypatch: pytest.MonkeyPatch, resource_http,
+    browser_manager_client: BrowserManagerClient, revision_receipt: dict[str, object], monkeypatch: pytest.MonkeyPatch, resource_http, for_stop: bool,
 ) -> None:
-    resource_http(lambda request: httpx.Response(200, json={"data": revision_receipt}))
-    await browser_manager_client.sync_owner_revision("browser_1", 2)
+    def respond(request: httpx.Request) -> httpx.Response:
+        assert json.loads(request.content) == {"owner_revision": 2, "for_stop": for_stop}
+        return httpx.Response(200, json={"data": revision_receipt})
+
+    resource_http(respond)
+    await browser_manager_client.sync_owner_revision("browser_1", 2, for_stop=for_stop)
 
 
 @pytest.mark.asyncio

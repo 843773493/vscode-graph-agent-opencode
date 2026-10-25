@@ -1002,7 +1002,7 @@ class ForkLiveTransport:
     async def get_resource(self, resource_id: str) -> RuntimeResourceSnapshot:
         return dict(self.records[resource_id])
 
-    async def sync_owner_revision(self, resource_id: str, revision: int) -> None:
+    async def sync_owner_revision(self, resource_id: str, revision: int, *, for_stop: bool) -> None:
         self.revisions.append((resource_id, revision))
         self.records[resource_id]["transport_owner_revision"] = revision
 

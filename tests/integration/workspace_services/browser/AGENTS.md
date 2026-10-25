@@ -22,9 +22,11 @@ browser/
 
 同一关闭owner另覆盖首次导航仍在真实HTTP等待时的创建：关闭等待原创建、默认5秒创建超时保留原页面/上下文、同Manager重试关闭与冷恢复，并在已有peer操作时证明创建等待与交互共用总预算，健康Browser可先完成检查点。关闭后新创建必须携原intent的not_created回执拒绝，不能产生新记录。失败断言只输出标量观察，避免格式化完整Playwright对象图遮蔽原错误。
 
-`test_browser_owner_revision_drain.py` 经Python客户端、真实Node与Chromium验证默认5秒的旧版本排空超时、持久新版本、原动作仍执行、独立Browser可读、迟到回执拒绝和同版本重试；受控HTTP服务只暂停原脚本的fetch。通过 `bun run test:matrix -- --suite=integration-browser-owner-revision-drain` 运行，固定60秒/4GiB；不代表Python业务owner的恢复gate隔离、强制终止或Gateway/主Web验收。
+`test_browser_owner_revision_drain.py` 经Python客户端、真实Node与Chromium验证默认5秒的旧版本排空超时、持久新版本、原动作仍执行、独立Browser可读、迟到回执拒绝和同版本重试；受控HTTP服务只暂停原脚本的fetch。通过 `bun run test:matrix -- --suite=integration-browser-owner-revision-drain` 运行，固定90秒/4GiB；不代表Python业务owner的恢复gate隔离、强制终止或Gateway/主Web验收。
 
 同一文件的stop/delete场景让脚本忽略取消signal，在工具超时后继续原fetch；核对页面reset可用、关闭context后仍返回408且磁盘unknown、peer可读，以及放行原执行后同身份/版本重试终态。原页面只关闭一次，不将关闭context或工具超时当作脚本已结束；这仍不是Python业务owner挂起操作接管或强制终止验收。
+
+同一文件经真实Session/Python业务owner创建资源、正式detach及run入口，令超时后的原脚本等待context关闭，再由原管理stop/delete完成撤权、释放context和终态核实；核对当前版本、原lease结清与peer可读，不手填资源或执行状态。它不代表任意脚本强制终止、Backend重启或Gateway/主Web验收。
 
 性能测试通过 `psutil` 遍历 Browser 后端的子进程，避免依赖 `/proc` 与 `sysconf`：CPU统一累计用户态和系统态秒数；内存 Linux 采样 PSS，Windows/macOS 采样 USS，结果同时记录指标名。服务关闭在 POSIX 发送 SIGTERM，在 Windows 使用独立进程组和 CTRL_BREAK_EVENT，以触发 Browser Manager 的检查点保存。
 
