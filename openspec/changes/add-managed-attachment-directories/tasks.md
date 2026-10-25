@@ -258,3 +258,10 @@ Web 定向 `BOXTEAM_E2E_SECTION8_FOCUS=copy_missing_attachment` 通过真实 Gat
 - 原父链校验只额外接受经解释器、参数与直接归属核对的一层 venv launcher，保留 matrix 祖先及启动标记检查；控制 reader 读原 FileIO，避免错误退出时的 BufferedReader daemon 锁崩溃。正式 `integration-fork-watchdog-process-tree`（60秒/4GiB）覆盖到期、错误控制消息和正常结清，检查本例进程树真实停止、无关进程存活及原始错误；不把基础设施测试计作产品 fork 验收，生产单次 fork 60秒保持。
 - Linux 三场景3 passed/2.83秒；Windows 最终快照 `3cbac8c10675dfca91921916f46e478adad6869f` 合并运行13项单测和3项真实进程场景为16 passed/1 skipped/4.06秒，跳过项为 Linux `/proc` 专项。Linux 最终单测14 passed/0.27秒。原 Windows 反例两场景均复现 BufferedReader 锁崩溃，到期场景另复现父链拒绝；原始失败、准确命令、源码前后指纹及退出码在 `out/tests/temp/fork_watchdog_windows_20261025/artifacts/`。
 - Windows 补跑曾因 POSIX 单测未显式选择平台而挂起，外置90秒保护退出后按精确PID/启动时间/命令回收该次测试树；另一模拟macOS用例补齐其平台常量。保留两次原失败，不修改生产行为或放宽断言。Ruff/编译与作者结构自查另在同目录留证。5.2/5.4/6.2继续未勾，整体20/23；团队、成员、委派与协作不追加实现或专项验证。
+
+### 2026-10-25 子树删除单次总预算与导航回执（5.4部分收口）
+
+- 原删除owner在同key锁前取得一次30秒，跨mark、全部Session的drain及finish共用；到期保留原journal/locator与原runtime任务，底层超时和取消保持身份。新增明确超时类型供原导航executor区分：mark前拒绝并写`delete_wait_timeout`，mark后保持committed/repair_required；不令worker失败，不增加另一条删除链。
+- Linux相关单测118 passed/42.47秒（含原删除及导航回归），真实API集成8 passed/22.22秒，正式执行矩阵7 passed/86.55秒、运行器退出0。覆盖7类等待、跨阶段剩余预算、原错误身份、上传/执行生成的原历史/关联/runtime保全、peer删除及同key恢复；原runtime超时通过单独延长测试外层预算来保留精确旧断言，默认产品预算仍30秒。Windows快照`0a9371d5e08ecf69f871333416a0d1cdcf38363f`经原Job Object保护运行，原生锁/删除回归与API共69 passed/40.82秒，未将其称为完整Windows执行或关闭验收。
+- 完整旧HEAD归档仅叠本片验收测试，8项期限检查失败、2项原错误身份检查通过，证明旧链缺少总预算；扩大到旧产品场景的45秒外置检查退出124且无测试结果，不作为业务反例。首轮新装具重复绑定回调被原规则拒绝，修正为一次绑定；首轮产品suite在7 passed/85.85秒后仍因启动/退出开销触及90秒，真实退出3/TIMEOUT保留，依据新增场景测量调整suite至120秒后通过，未放宽产品期限。
+- 准确命令、源码前后指纹、原始输出与退出码位于`out/tests/temp/session_delete_budget_20261025/artifacts/`；Ruff/compileall与作者AST/目录自查通过，无新增源码目录或执行链。Job准备窗口、同步阻塞/线程池、不合作取消及外部终止继续TODO；5.2/5.4/6.2仍未勾，整体20/23，团队协作继续暂缓。

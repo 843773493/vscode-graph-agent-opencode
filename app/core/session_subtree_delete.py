@@ -98,13 +98,20 @@ from app.core.session_lifecycle_gate import (
 )
 from app.core.thread_creation import settle_thread_creations_for_deletion
 
-__all__ = ["SessionSubtreeDeleteService", "SubtreeDeleteResult"]
+__all__ = ["SessionSubtreeDeleteService", "SubtreeDeleteResult", "SubtreeDeleteWaitTimeout"]
 
 # 物理隔离区：sessions_root / ".deleting" / <idempotency_key> / <session_id>。
 _DELETING_DIR_NAME = ".deleting"
 
 # fence 初始 generation（R12/R13 初始化值）；CAS 成功后推进为 2。
 _FENCE_INITIAL_GENERATION = 1
+
+# 单次删除共用的协作式等待预算，包含同 key 锁与两次 topology gate。
+SUBTREE_DELETE_WAIT_SECONDS: float = 30
+
+
+class SubtreeDeleteWaitTimeout(TimeoutError):
+    """本次删除的总等待预算耗尽；与底层 owner 自己的超时分开归属。"""
 
 
 @dataclass(frozen=True, slots=True)
@@ -301,58 +308,72 @@ class SessionSubtreeDeleteService:
             idempotency_key=idempotency_key,
             root_node_id=root_node_id,
         )
-        # 进程内同 key 串行：并发同 key delete 收敛到同一结果；gate 只包
-        # 住两个 catalog 短临界区（锁序 gate → 单 SQLite 写事务）。
-        async with self._key_lock(idempotency_key):
-            # 步骤 1：gate exclusive 内冻结 + mark（唯一逻辑可见性关闭点）。
-            async with self._gate.exclusive():
-                record = self._store.create_or_get_subtree_delete_record(
-                    idempotency_key=idempotency_key,
-                    workspace_id=self._workspace_id,
-                    root_node_id=root_node_id,
-                )
-                if record.state == "preparing" or (
-                    mark_transaction_hook is not None
-                    and record.state in ("deleting", "draining")
-                ):
-                    try:
-                        self._store.mark_subtree_deleting(
-                            idempotency_key,
-                            transaction_hook=mark_transaction_hook,
-                        )
-                    except SubtreeDeleteMarkRejectedError as error:
-                        self._store.abort_subtree_delete(
-                            idempotency_key, str(error)
-                        )
-                        raise
-                    record = self._store.get_subtree_delete_record(
-                        idempotency_key
+        # TODO(5.4)：同步 I/O 与不合作取消仍需原 owner 核实，不能靠此预算抢占。
+        budget = asyncio.timeout(SUBTREE_DELETE_WAIT_SECONDS)
+        phase = "key-lock"
+        try:
+            # 同 key 串行；全部阶段共用入口预算，不给逐 Session 排空重置期限。
+            async with budget, self._key_lock(idempotency_key):
+                phase = "catalog-mark"
+                # 步骤 1：gate 内冻结 + mark（唯一逻辑可见性关闭点）。
+                async with self._gate.exclusive():
+                    record = self._store.create_or_get_subtree_delete_record(
+                        idempotency_key=idempotency_key,
+                        workspace_id=self._workspace_id,
+                        root_node_id=root_node_id,
                     )
-            if record.state == "completed":
-                if finish_transaction_hook is not None:
+                    if record.state == "preparing" or (
+                        mark_transaction_hook is not None
+                        and record.state in ("deleting", "draining")
+                    ):
+                        try:
+                            self._store.mark_subtree_deleting(
+                                idempotency_key,
+                                transaction_hook=mark_transaction_hook,
+                            )
+                        except SubtreeDeleteMarkRejectedError as error:
+                            self._store.abort_subtree_delete(
+                                idempotency_key, str(error)
+                            )
+                            raise
+                        record = self._store.get_subtree_delete_record(
+                            idempotency_key
+                        )
+                if record.state == "completed":
+                    if finish_transaction_hook is not None:
+                        self._store.finish_subtree_delete(
+                            idempotency_key,
+                            transaction_hook=finish_transaction_hook,
+                        )
+                    return self._result_from_record(record)
+                if record.state == "aborted":
+                    raise RuntimeError(
+                        "subtree delete record 已中止，调用方须换新 "
+                        f"idempotency_key 重试: key={idempotency_key!r}, "
+                        f"reason={record.abort_reason!r}"
+                    )
+                # 步骤 2：gate 外按冻结顺序排空；成功才允许 fence 与隔离。
+                phase = "drain"
+                await observe_phase(idempotency_key, "deletion.catalog_deleting")
+                await self._drain(record, idempotency_key)
+                # 步骤 3：gate 内 finish（全树 tombstone）。
+                phase = "catalog-finish"
+                async with self._gate.exclusive():
                     self._store.finish_subtree_delete(
                         idempotency_key,
                         transaction_hook=finish_transaction_hook,
                     )
+                record = self._store.get_subtree_delete_record(idempotency_key)
                 return self._result_from_record(record)
-            if record.state == "aborted":
-                raise RuntimeError(
-                    "subtree delete record 已中止，调用方须换新 "
-                    f"idempotency_key 重试: key={idempotency_key!r}, "
-                    f"reason={record.abort_reason!r}"
-                )
-            # 步骤 2：drain（gate 外，逐 session 按冻结顺序；每 session
-            # 在 Session gate exclusive 内完成 lease 收敛 → fence CAS → 隔离）。
-            await observe_phase(idempotency_key, "deletion.catalog_deleting")
-            await self._drain(record, idempotency_key)
-            # 步骤 3：gate exclusive 内 finish（全树 tombstone）。
-            async with self._gate.exclusive():
-                self._store.finish_subtree_delete(
-                    idempotency_key,
-                    transaction_hook=finish_transaction_hook,
-                )
-            record = self._store.get_subtree_delete_record(idempotency_key)
-            return self._result_from_record(record)
+        except TimeoutError as error:
+            if not budget.expired():
+                raise
+            raise SubtreeDeleteWaitTimeout(
+                f"Session 子树删除等待超过 {SUBTREE_DELETE_WAIT_SECONDS:g} 秒；"
+                "保留原删除进度、未核实操作与恢复依据: "
+                f"workspace_id={self._workspace_id}, root_node_id={root_node_id}, "
+                f"operation_id={idempotency_key}, phase={phase}"
+            ) from error
 
     # ------------------------------------------------------------------
     # 输入校验与并发原语

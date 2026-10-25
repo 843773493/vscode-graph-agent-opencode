@@ -49,7 +49,10 @@ from app.core.session_lifecycle_gate import (
     NavigationTopologyGate,
     SessionDeletionPendingError,
 )
-from app.core.session_subtree_delete import SubtreeDeleteResult
+from app.core.session_subtree_delete import (
+    SubtreeDeleteResult,
+    SubtreeDeleteWaitTimeout,
+)
 from app.core.sqlite_state import utc_now_text
 from app.services.business.session_navigation.queue_store import (
     NavigationMutationQueueStore,
@@ -457,7 +460,7 @@ class NavigationMutationExecutor:
                     self._subtree_delete_mark_hook,
                     self._subtree_delete_finish_hook,
                 )
-        except (KeyError, ValueError, RuntimeError) as error:
+        except (KeyError, ValueError, RuntimeError, SubtreeDeleteWaitTimeout) as error:
             committed = self._read_committed_delete(claimed)
             if committed is None:
                 return self._reject(claimed, error, claim=False)
@@ -927,6 +930,8 @@ class NavigationMutationExecutor:
 
 
 def _error_code(error: Exception) -> str:
+    if isinstance(error, SubtreeDeleteWaitTimeout):
+        return "delete_wait_timeout"
     if isinstance(error, SessionDeletionPendingError):
         return "session_deletion_pending"
     if isinstance(error, SourceRetainedByForkError):

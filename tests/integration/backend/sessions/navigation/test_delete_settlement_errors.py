@@ -5,11 +5,12 @@ from __future__ import annotations
 import asyncio
 import logging
 import sqlite3
-from contextlib import closing
+from contextlib import AsyncExitStack, closing
 
 import httpx
 import pytest
 
+import app.core.session_subtree_delete as deletion
 from app.container import AppContainer
 from app.core.identifier import create_prefixed_id
 from app.core.session_catalog_store.contracts import SubtreeDeleteRecord
@@ -177,3 +178,97 @@ async def test_delete_settlement_failure_is_safe_durable_and_recoverable(
         assert [item for item in final_events.json()["data"]["items"] if item["operation_id"] == operation_id] == [committed_event]
     finally:
         release.set()
+
+
+@pytest.mark.parametrize("stage", ["before-mark", "after-mark"])
+async def test_delete_budget_returns_durable_receipt_and_keeps_navigation_worker_usable(
+    navigation_api: tuple[AppContainer, httpx.AsyncClient, str],
+    monkeypatch: pytest.MonkeyPatch, stage: str,
+) -> None:
+    container, client, _created_id = navigation_api
+    catalog = container.session_catalog_service
+    resolver = catalog.path_resolver
+    session = await container.session_service.create(SessionCreateRequest(title="删除预算回执"))
+    sid = session.session_id
+    source = resolver.resolve_session_node(sid)
+    original_control = _catalog_dump(source / "session-control.sqlite")
+    operation_id = create_prefixed_id("op")
+    reached, release = asyncio.Event(), asyncio.Event()
+    loop = asyncio.get_running_loop()
+    real_time = loop.time
+    offset = 0
+    monkeypatch.setattr(loop, "time", lambda: real_time() + offset)
+
+    async def observe(current_operation: str, phase: str) -> None:
+        if current_operation == operation_id and phase == "deletion.catalog_deleting":
+            reached.set()
+            await release.wait()
+
+    if stage == "after-mark":
+        monkeypatch.setattr(deletion, "observe_phase", observe)
+    async with AsyncExitStack() as holders:
+        key_lock = resolver._delete_service._key_lock(operation_id)
+        if stage == "before-mark":
+            await holders.enter_async_context(key_lock)
+        response = await client.post("/api/v1/session-catalog/operations:enqueue", json={
+            "intents": [{
+                "client_operation_id": operation_id, "client_sequence": 1,
+                "kind": "delete_session", "target_node_id": sid,
+                "base_catalog_revision": resolver.revision,
+            }],
+        })
+        assert response.status_code == 202, response.text
+        try:
+            async with asyncio.timeout(5):
+                if stage == "before-mark":
+                    while not key_lock._waiters:
+                        await asyncio.sleep(0)
+                else:
+                    await reached.wait()
+            pending = await _receipt(client, operation_id)
+            assert pending.state == ("running" if stage == "before-mark" else "committed")
+            offset = 31
+            async with asyncio.timeout(5):
+                while True:
+                    failed = await _receipt(client, operation_id)
+                    if failed.state == "rejected" or failed.settlement == "repair_required":
+                        break
+                    await asyncio.sleep(0.01)
+            assert failed.state == ("rejected" if stage == "before-mark" else "committed")
+            assert failed.error_code == ("delete_wait_timeout" if stage == "before-mark" else "delete_settlement_repair_required")
+            assert operation_id in str(failed.error_detail) and sid in str(failed.error_detail)
+            assert failed.settlement == (None if stage == "before-mark" else "repair_required")
+            assert str(source) not in str(failed.error_detail)
+            assert source.is_dir() and _catalog_dump(source / "session-control.sqlite") == original_control
+            assert not (resolver._delete_service._deleting_dir(operation_id) / sid).exists()
+            if stage == "before-mark":
+                with pytest.raises(KeyError):
+                    resolver.catalog_store.get_subtree_delete_record(operation_id)
+                assert resolver.catalog_store.get_node(sid).state == "active"
+            else:
+                journal = resolver.catalog_store.get_subtree_delete_record(operation_id)
+                assert journal.state == "deleting" and journal.drained_session_ids == ()
+                assert resolver.catalog_store.get_node(sid).storage_relative_locator == journal.frozen_session_locators[sid]
+            assert catalog.operations.worker_state == "running"
+            assert catalog.operations.worker_error is None
+        finally:
+            release.set()
+    # 后续真实operation仍可执行；已mark的原删除沿同一journal恢复。
+    if stage == "after-mark":
+        await catalog.operations.stop()
+        await catalog.operations.start()
+        settled = await _settlement(client, operation_id, "settled")
+        assert settled.state == "committed" and not source.exists()
+        assert resolver.catalog_store.get_subtree_delete_record(operation_id).state == "completed"
+    followup_id = create_prefixed_id("op")
+    response = await client.post("/api/v1/session-catalog/operations:enqueue", json={
+        "intents": [{
+            "client_operation_id": followup_id, "client_sequence": 1,
+            "kind": "create_folder", "name": "超时后的队列仍可使用",
+            "base_catalog_revision": resolver.revision,
+        }],
+    })
+    assert response.status_code == 202, response.text
+    async with asyncio.timeout(5):
+        while (await _receipt(client, followup_id)).state != "committed":
+            await asyncio.sleep(0.01)

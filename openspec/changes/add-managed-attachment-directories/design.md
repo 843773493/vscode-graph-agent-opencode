@@ -268,3 +268,13 @@ Windows 快照 `e3f5e5ffa1718f6cb860c5b1a779110a25d6d76f` 的完整附件 fork �
 watchdog 仅额外认可 Windows venv 的一层 launcher：它必须直接属于原受保护进程，解释器入口及除 argv0 外的完整参数均与原 watchdog 启动一致；matrix 祖先和进程启动标记仍须核对。控制 reader 改读原 FileIO，避免 daemon 线程在异常退出时持有 BufferedReader 锁而发生二次崩溃。没有扩大到任意祖先或增加终止链。
 
 正式 harness 集成套件经真实 matrix 覆盖到期终止、错误控制消息及正常结清三个场景，核实受保护树实际停止、无关进程保持存活及原错误；Linux/Windows 各三项通过。它证明测试保护设施，不代替产品 fork 验收。生产单次 fork 60 秒保持不变；探针仅为基础设施场景使用短期限。准确快照、原始反例、单测和最终实机证据见 tasks 的 `fork_watchdog_windows_20261025` 记录。5.2/5.4/6.2 仍未完成。
+
+### 子树删除 owner 的一次总等待预算（5.4 部分收口）
+
+原 `SessionSubtreeDeleteService.delete()` 在同key锁之前取得一次30秒协作式预算，包含mark/finish的拓扑gate、全部Session的retention/creation结算、holder、Session gate与原复合drain。到期取消并排空本调用的协作式等待，按原持久进度退出；不取消原runtime build/unload，不提前fence、隔离或删除恢复依据。已隔离并记进度的Session不回滚，重入跳过原成功步骤。错误携带稳定工作区、根节点、operation及阶段，原owner自身的TimeoutError和调用方取消不改写。
+
+总预算使用独立的TimeoutError子类型，仅由该owner签发；导航executor只对这个明确结果补齐原拒绝链：mark前写`delete_wait_timeout`的rejected终态，mark后沿既有settlement失败链保持committed/repair_required。没有把任意底层超时归为业务拒绝，也不增加删除实现或持久状态。真实导航入队、状态查询与worker重启覆盖两侧结果和后续operation继续执行；真实上传和模型执行覆盖原历史、控制库、附件关联、runtime generation及同key恢复。普通查询装配使用ASGI，不能称为真实网络或Gateway验收。
+
+Linux7项执行场景最终86.55秒，包含新总预算与原runtime超时的分别归属、两阶段真实锁竞争和peer删除；原90秒suite虽已输出7 passed仍被外层判定TIMEOUT，依据新增场景实测调整为120秒后退出0，产品30秒不变。Windows定向69项通过，未复跑全部执行/关闭场景。准确源码、旧HEAD的8项期限反例、原始失败与最终结果见tasks证据。
+
+TODO：该预算从子树删除owner开始，尚未涵盖此前JobService的准备窗口等待；同步写盘/回调、线程池排队、不合作取消及真实外部进程终止仍须单独处理。5.2/5.4/6.2保持未勾，团队、成员、委派与协作不追加实现或专项验证。

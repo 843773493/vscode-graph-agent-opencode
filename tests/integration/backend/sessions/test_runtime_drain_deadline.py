@@ -3,14 +3,17 @@
 from __future__ import annotations
 
 import asyncio
+from contextlib import AsyncExitStack
 
 import pytest
 
+import app.core.session_subtree_delete as deletion
 from app.core.checkpoint_config import build_checkpoint_config
 from app.core.resource_uri import parse_attachment_uri
 from app.core.session_control_store import SessionControlStore
 from app.core.session_thread_context import session_thread_owner_scope
 from app.domain.itemized.mutation_intents import MutationIntentOwner
+from app.schemas.internal_v2.session import SessionCreateRequest
 from tests.integration.backend.sessions.test_attachment_runtime_lifecycle import (
     execute_upload,
     isolate_unused_external_managers,
@@ -24,8 +27,10 @@ from tests.integration.backend.sessions.test_thread_runtime_runner import (
 )
 
 
+@pytest.mark.parametrize("deadline_source", ["session", "runtime"])
 async def test_delete_timeout_keeps_locator_control_history_and_original_unload(
     runtime_case: RuntimeCase, monkeypatch: pytest.MonkeyPatch,
+    deadline_source: str,
 ) -> None:
     case = runtime_case
     isolate_unused_external_managers(case, monkeypatch)
@@ -45,6 +50,9 @@ async def test_delete_timeout_keeps_locator_control_history_and_original_unload(
         await finish.wait()
 
     case.tracker.add_unload_listener(held_release)
+    if deadline_source == "runtime":
+        # 独立核对原 runtime 的30秒错误，避免被新的整次删除预算先截断。
+        monkeypatch.setattr(deletion, "SUBTREE_DELETE_WAIT_SECONDS", 60)
     key = "runtime-drain-deadline"
     deleting = asyncio.create_task(resolver.delete_subtree(idempotency_key=key, root_node_id=sid))
     try:
@@ -57,11 +65,15 @@ async def test_delete_timeout_keeps_locator_control_history_and_original_unload(
         monkeypatch.setattr(loop, "time", lambda: original_time() + 30)
         for _ in range(12):
             await asyncio.sleep(0)
-        assert deleting.done(), "真实 Session 删除应收到 runtime 排空超时"
-        with pytest.raises(ExceptionGroup) as failure:
-            await deleting
-        assert any(isinstance(error, TimeoutError) and f"thread_id={tid}" in str(error)
-                   for error in failure.value.exceptions)
+        assert deleting.done(), "真实 Session 删除应收到精确归属的等待超时"
+        if deadline_source == "runtime":
+            with pytest.raises(ExceptionGroup) as failure:
+                await deleting
+            assert any(isinstance(error, TimeoutError) and f"thread_id={tid}" in str(error)
+                       for error in failure.value.exceptions)
+        else:
+            with pytest.raises(TimeoutError, match=f"root_node_id={sid}, operation_id={key}, phase=drain"):
+                await deleting
         assert state.runtime_unload is original_unload and not original_unload.done()
         assert node.is_dir() and history.read_bytes() == original_history
         record = resolver.catalog_store.get_subtree_delete_record(key)
@@ -82,6 +94,80 @@ async def test_delete_timeout_keeps_locator_control_history_and_original_unload(
     finally:
         finish.set()
         await asyncio.gather(deleting, return_exceptions=True)
+
+
+async def test_delete_uses_remaining_budget_after_key_wait_and_preserves_blocked_session(
+    runtime_case: RuntimeCase, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    case = runtime_case
+    isolate_unused_external_managers(case, monkeypatch)
+    sid, tid, ref = await execute_upload(case)
+    container = case.runner.container
+    resolver = container.session_service.path_resolver
+    service = resolver._delete_service
+    node = resolver.resolve_session_node(sid)
+    history = case.runner.saver._storage.storage.jsonl_path(sid, thread_id=tid)
+    original_bytes = history.read_bytes()
+    generation = case.tracker.snapshot(sid, tid).generation
+    key = "runtime-shared-delete-budget"
+    reached = asyncio.Event()
+    releases: list[tuple[str, str, int]] = []
+
+    async def observe(operation_id: str, phase: str) -> None:
+        if operation_id == key and phase == f"deletion.drain_waiting/{sid}":
+            reached.set()
+
+    async def listener(session: str, thread: str, current_generation: int) -> None:
+        releases.append((session, thread, current_generation))
+
+    monkeypatch.setattr(deletion, "observe_phase", observe)
+    case.tracker.add_unload_listener(listener)
+    loop = asyncio.get_running_loop()
+    real_time = loop.time
+    offset = 0
+    monkeypatch.setattr(loop, "time", lambda: real_time() + offset)
+    async with AsyncExitStack() as holders:
+        await holders.enter_async_context(service._session_gate.shared(sid))
+        async with service._key_lock(key):
+            deleting = asyncio.create_task(resolver.delete_subtree(idempotency_key=key, root_node_id=sid))
+            await asyncio.sleep(0)
+            offset = 20
+            await asyncio.sleep(0)
+            assert not deleting.done()
+        try:
+            await asyncio.wait_for(reached.wait(), 2)
+            # 真实Session gate尚被旧读者持有，无关Session仍沿同一删除入口完成。
+            peer = await container.session_service.create(SessionCreateRequest(title="独立删除对照"))
+            peer_key = "runtime-shared-delete-budget-peer"
+            assert service._key_lock(peer_key) is not service._key_lock(key)
+            peer_result = await resolver.delete_subtree(idempotency_key=peer_key, root_node_id=peer.session_id)
+            assert peer_result.record_state == "completed"
+            offset = 31
+            with pytest.raises(TimeoutError, match=f"operation_id={key}, phase=drain"):
+                await asyncio.wait_for(asyncio.shield(deleting), 2)
+            record = resolver.catalog_store.get_subtree_delete_record(key)
+            assert record.state == "deleting" and record.drained_session_ids == ()
+            assert resolver.catalog_store.get_node(sid).storage_relative_locator == record.frozen_session_locators[sid]
+            assert history.read_bytes() == original_bytes and node.is_dir()
+            assert not (container.workspace_root / ".boxteam/sessions/.deleting" / key / sid).exists()
+            assert case.tracker.snapshot(sid, tid).generation == generation and releases == []
+            directory = container.attachment_blob_store._catalog.get_directory(
+                parse_attachment_uri(ref.file_id, require_file=True).attachment_id,
+            )
+            assert directory.unattached_since is None and directory.gc_after is None
+            async with service._session_gate.shared(sid):
+                # 超时调用已归还自身等待，仍由原读者保护完整恢复依据。
+                control = SessionControlStore(node / "session-control.sqlite")
+                try:
+                    assert control.get_fence() == ("active", 1)
+                finally:
+                    control.close()
+        finally:
+            deleting.cancel()
+            await asyncio.gather(deleting, return_exceptions=True)
+    result = await resolver.delete_subtree(idempotency_key=key, root_node_id=sid)
+    assert result.record_state == "completed" and not node.exists()
+    assert releases == [(sid, tid, generation)]
 
 
 @pytest.mark.parametrize("phase", ["listener", "scope"])
