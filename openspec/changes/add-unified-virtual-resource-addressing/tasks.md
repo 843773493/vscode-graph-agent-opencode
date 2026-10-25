@@ -744,3 +744,11 @@
 - 候选10项单测通过（0.31秒）；完整Git archive旧生产加相同新增测试为9 failed/1 passed（0.60秒），正确空目录/排序/hash/排除项正例保持通过。候选产品2项通过，旧生产2项HTTP反例失败（准确耗时见原始输出）：由原产品消息执行/model_stream生成来源，扫描原生失败与symlink拒绝均未发布目标，原创建记录中止且不含真实路径，原canonical字节不变；故障移除后新key重试成功，冷Saver读回完整历史，副本canonical与来源原字节一致。
 - 源码前后指纹、完整旧生产、原始输出/退出码与AST核对在 `out/tests/temp/fork_source_manifest_20261025/artifacts/`。AST移除本次错误上下文、根检查、onerror及raise正文后，全部5个函数与原提交一致。HTTP使用真实路由、Depends、TraceMiddleware及ASGI，不称真实Gateway、后端进程重启、Windows实机或完整Web验收；其它capture文件I/O和detail复制出口仍待后续，2.2/7.2全局门未勾，团队/协作继续TODO。
 - 最终共享三方合并后10项单测、2项公开fork集成（39.08秒）、Ruff/compileall均通过；候选完整严格OpenSpec为45 passed/0 failed。候选产品2 passed/41.76秒，旧生产HTTP反例2 failed/36.12秒，原始响应含真实路径；verification004.json核实四项共享运行的4593路径完整冻结、真实退出码及进程组回收。矩阵中他人的独立suite顺序保留；结构自查见architecture001.json，不称独立代理审查。
+
+### 2026-10-25 fork captured marker 原生 I/O（2.2/7.2 部分收口）
+
+- 捕获位置检查、发布、marker/manifest/control 读取、附件检查和清理统一消费原 storage 错误出口；普通错误保留 artifact/stage、类型与 errno/winerror，直接 cause 和真实位置留诊断。发布扫描错误立即抛出且拒绝符号链接目录；不改变 marker 字节/hash、fsync/rename 顺序、journal、来源身份或恢复链。未完成 preparing 与完整 marker 尚未 CAS 的恢复区别保留；其它 source 复制/detail I/O 仍待后续，2.2/7.2 不补勾，团队与协作继续 TODO。
+- 候选 14 项单测通过（0.37秒）；完整旧生产加相同测试为12 failed/2 passed（0.74秒）。候选正式 matrix 产品验收10 passed/121.66秒；旧生产6 failed/4 passed/109.60秒。新增6项由产品消息执行与 model_stream 生成来源，经真实路由/Depends/TraceMiddleware 的 ASGI HTTP 注入原生故障，核公开错误无路径、原错误留诊断、创建中止、来源 canonical 不变、新key重试及冷Saver副本原字节一致；另4项沿原 lifespan 验证 Session/child 的 partial 中止和完整 marker 恢复不重捕获、不重复物化。
+- 扩展验收发现两处旧测试问题：原附件目录 SQL/写入方使用 prepared，旧断言却期待不合法的 preparing；完整操作取消后恢复未从原产品入口取得终态回执，期限观察仍 active。保留最初候选/旧生产被原60秒看门狗终止的原件及提前输出的共同断言失败，按真实合同修正精确状态，并添加同key幂等产品回执与冻结目标身份断言，不关闭或放宽看门狗、期限及其它恢复断言。
+- 准确命令、完整源码前后指纹、原始日志/真实退出码、完整旧生产与本地结构核对在 `out/tests/temp/fork_capture_io_20261025/artifacts/`；AST只移除本次错误上下文、onerror与目录symlink拒绝后，原6个顶层符号一致（ast002.json）。Ruff/compileall通过；这是作者自查，不称独立代理审查。ASGI及冷容器不代替真实Gateway、独立Backend进程重启、Windows或完整Web验收。
+- 最终共享三方合并后14项单测通过（0.50秒）、正式产品矩阵10项通过（108.46秒）、Ruff/compileall通过；候选严格OpenSpec全量45 passed/0 failed。共享运行的完整4649路径指纹中，另一路改动更新了前端测试anchored_overlay_positioning_harness.tsx，故不能声称完整源码冻结；该TSX不在本片Python/matrix执行依赖内，其余4648路径未变，具体相关性、原始日志/退出码及进程回收由shared-relevance001.json显式核对，完整冻结检查的拒绝保留；静态/编译与两次strict运行由verification003.json核实完整冻结，共享strict同为45 passed/0 failed；测试导入整理和独立suite顺序保留在共享树，不纳入本片提交。

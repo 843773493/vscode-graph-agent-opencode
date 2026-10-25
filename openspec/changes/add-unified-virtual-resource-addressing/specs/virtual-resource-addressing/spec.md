@@ -181,6 +181,11 @@
 - **WHEN** fork 捕获或恢复核对冻结文件清单时，清单根缺失/不是普通目录、存在符号链接或非普通文件，或目录扫描、正文读取、元数据访问失败
 - **THEN** 同一清单 owner 明确拒绝，扫描失败不得被忽略或解释为空目录/残缺清单；原生错误保留异常类别、errno/winerror及cause，普通错误不包含真实路径，原位置留管理诊断。失败不改写来源正文或发布残缺目标；合法空目录、既有排除项、有序相对引用及hash规则保持，恢复仍只核对原冻结文件
 
+#### Scenario: fork captured marker 的发布读取或清理失败
+
+- **WHEN** captured marker owner 的位置检查、发布遍历、文件或目录 fsync、marker 写入/rename、marker/manifest/control 读取、附件检查或清理遇到原生 I/O 失败，或发布遍历发现符号链接目录
+- **THEN** 原 owner 明确失败，原生错误保留类别、errno/winerror 与直接 cause，普通错误及创建记录只含逻辑 artifact 和阶段，真实位置与完整原错留诊断。扫描错误不得被忽略，失败不改写来源 canonical 字节或发布残缺目标；原 marker 编码/hash、journal 与唯一恢复链保持。没有完整 marker 的 preparing capture 与已冻结 journal 缺 marker 仍按原合同区分；完整 marker 已发布但 journal 尚未 CAS 时，恢复只验证原冻结 proof，不重新捕获来源，清理失败不声称已释放
+
 ### Requirement: Browser 本地文件页面 URL 保留原生语义
 
 系统 MUST 保留 Browser 原生 `file:` 导航能力。用户明确打开的本地文件页面 URL MAY 原样保留在 Browser 地址栏、导航请求、该页面相关错误、页面快照及恢复检查点中。该 URL MUST 始终由目标机器按原生文件系统语义解释，包括 Windows 盘符与路径分隔符；中继、source 机器和当前激活工作区 MUST NOT 改写其目标或在自身文件系统解释该 URL。

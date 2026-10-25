@@ -82,6 +82,8 @@ Gateway 只为目标端现有文件 owner 提供受认证的同机临时绑定�
 
 fork source 的同一文件清单函数供捕获、冻结 marker 校验和附件冻结集合核对复用：先确认根为已有普通目录，os.walk的扫描错误立即抛出，不以默认忽略行为生成残缺清单。原生读取与元数据失败复用原storage错误出口（artifact=fork_source、stage=manifest），布局拒绝只公开原原因；位置与完整原异常保留诊断。排序、排除项、字节hash与文件集合不变，不新增清单owner或恢复reader。
 
+同一 captured marker owner 在位置检查、发布、marker/manifest/control 读取、附件检查及清理的原生 I/O 边界复用原 storage 错误出口（artifact=fork_capture、stage 为原失败阶段），保留异常类别、errno/winerror 与直接 cause，真实位置只留诊断。发布遍历的扫描错误立即抛出，目录符号链接明确拒绝；原 fsync/rename 顺序、marker 字节和 hash 保持。preparing 且尚未发布完整 marker 的私有目录仍按原 Incomplete 合同中止；已发布完整 marker 即使 journal 尚未 CAS 也只按冻结 proof 恢复，不回读 live source。发布或清理失败不能伪报成功，不新增 marker、journal、writer 或恢复链。
+
 ### D2：保留既有段序，scope_id 全必填
 
 采用 `boxteam://{gateway_authority?}/{scope}/{scope_id}/resources/{kind}/{...}`，而非简化段序。

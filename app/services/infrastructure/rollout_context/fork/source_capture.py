@@ -37,6 +37,7 @@ from app.services.infrastructure.rollout_context.fork.source_snapshot import (
     ForkSourceSnapshot,
     _tree_manifest,
 )
+from app.services.infrastructure.rollout_context.storage.primitives import _storage_io
 
 
 class IncompleteForkSourceCaptureError(RuntimeError):
@@ -66,8 +67,9 @@ def capture_directory(sessions_root: Path, record: ForkSourceCaptureRecord) -> P
     if record.snapshot_relative_locator != fork_source_capture_relative_locator(record.snapshot_id):
         raise RuntimeError("fork capture 内部 locator 与预分配 identity 不一致")
     root = sessions_root.parent / "navigation" / "fork-source-captures"
-    if native_io_path(root).is_symlink():
-        raise RuntimeError("fork capture 内部目录是符号链接")
+    with _storage_io(root, "fork capture 位置检查失败", "location", artifact="fork_capture"):
+        if native_io_path(root).is_symlink():
+            raise RuntimeError("fork capture 内部目录是符号链接")
     return root / record.snapshot_id
 
 
@@ -93,40 +95,49 @@ def publish_captured_snapshot(record: ForkSourceCaptureRecord, snapshot: ForkSou
     payload["claim_manifest_sha256"] = hashlib.sha256(canonical_json_bytes(payload["claim_ids"])).hexdigest()
     encoded = canonical_json_bytes(payload)
     root = snapshot.captured_root.parent
-    # 此处只遍历当前 operation 已登记的私有快照，不定位或吸收 source 业务目录。
-    for directory, _, names in os.walk(native_io_path(root)):
-        for name in names:
-            path = Path(directory) / name
-            if path.is_symlink() or not path.is_file():
-                raise RuntimeError("fork captured snapshot 含非普通文件")
-            fsync_file(path)
-        fsync_directory(Path(directory))
-    temporary = root / "captured.preparing"
-    with native_io_path(temporary).open("xb") as stream:
-        stream.write(encoded)
-        stream.flush()
-        os.fsync(stream.fileno())
-    os.replace(native_io_path(temporary), native_io_path(root / "captured.json"))
-    fsync_directory(root)
-    fsync_directory(root.parent)
-    return hashlib.sha256(encoded).hexdigest()
+
+    def fail_walk(error: OSError) -> None:
+        raise error
+
+    with _storage_io(root, "fork capture 发布失败", "publication", artifact="fork_capture"):
+        # 此处只遍历当前 operation 已登记的私有快照，不定位或吸收 source 业务目录。
+        for directory, directories, names in os.walk(native_io_path(root), onerror=fail_walk):
+            for name in directories:
+                if (Path(directory) / name).is_symlink():
+                    raise RuntimeError("fork captured snapshot 含符号链接目录")
+            for name in names:
+                path = Path(directory) / name
+                if path.is_symlink() or not path.is_file():
+                    raise RuntimeError("fork captured snapshot 含非普通文件")
+                fsync_file(path)
+            fsync_directory(Path(directory))
+        temporary = root / "captured.preparing"
+        with native_io_path(temporary).open("xb") as stream:
+            stream.write(encoded)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(native_io_path(temporary), native_io_path(root / "captured.json"))
+        fsync_directory(root)
+        fsync_directory(root.parent)
+        return hashlib.sha256(encoded).hexdigest()
 
 
 def read_captured_snapshot(sessions_root: Path, record: ForkSourceCaptureRecord) -> tuple[ForkSourceSnapshot, str]:
     """恢复只接受完整 captured marker 和全部原 frozen hash，不读取 live source。"""
     root = capture_directory(sessions_root, record)
-    if native_io_path(root).is_symlink() or not native_io_path(root).is_dir():
-        raise RuntimeError("fork source capture 缺少普通 snapshot 目录")
-    marker = native_io_path(root / "captured.json")
-    if marker.is_symlink():
-        raise RuntimeError("fork source capture captured marker 是符号链接")
-    if not marker.exists():
-        if record.state == "preparing" and record.snapshot_sha256 is None and record.marker_sha256 is None:
-            raise IncompleteForkSourceCaptureError(record)
-        raise RuntimeError("fork source capture 已冻结 journal 缺少 captured marker")
-    if not marker.is_file():
-        raise RuntimeError("fork source capture 缺少普通 captured marker")
-    encoded = marker.read_bytes()
+    with _storage_io(root, "fork capture marker 读取失败", "marker_read", artifact="fork_capture"):
+        if native_io_path(root).is_symlink() or not native_io_path(root).is_dir():
+            raise RuntimeError("fork source capture 缺少普通 snapshot 目录")
+        marker = native_io_path(root / "captured.json")
+        if marker.is_symlink():
+            raise RuntimeError("fork source capture captured marker 是符号链接")
+        if not marker.exists():
+            if record.state == "preparing" and record.snapshot_sha256 is None and record.marker_sha256 is None:
+                raise IncompleteForkSourceCaptureError(record)
+            raise RuntimeError("fork source capture 已冻结 journal 缺少 captured marker")
+        if not marker.is_file():
+            raise RuntimeError("fork source capture 缺少普通 captured marker")
+        encoded = marker.read_bytes()
     marker_hash = hashlib.sha256(encoded).hexdigest()
     raw = json.loads(encoded)
     if canonical_json_bytes(raw) != encoded or raw["schema"] not in {"source-copy-snapshot:v2", "source-copy-snapshot:v3", "source-copy-snapshot:v4"} or (
@@ -137,7 +148,8 @@ def read_captured_snapshot(sessions_root: Path, record: ForkSourceCaptureRecord)
         raise RuntimeError("fork captured marker hash 与 journal 不一致")
     rollout = raw["rollout"]
     captured_root = root / record.source_session_id
-    manifest_bytes = native_io_path(captured_root / "snapshot-manifest.json").read_bytes()
+    with _storage_io(captured_root, "fork capture manifest 读取失败", "manifest_read", artifact="fork_capture"):
+        manifest_bytes = native_io_path(captured_root / "snapshot-manifest.json").read_bytes()
     if (rollout["source_session_id"], rollout["source_thread_id"]) != (record.source_session_id, record.source_thread_id) or (
         hashlib.sha256(manifest_bytes).hexdigest() != rollout["manifest_sha256"]
     ):
@@ -151,15 +163,16 @@ def read_captured_snapshot(sessions_root: Path, record: ForkSourceCaptureRecord)
                    for name in sorted(frozen.keys() | current.keys()) if frozen.get(name) != current.get(name)}
         raise RuntimeError(f"fork captured rollout files hash/length 不一致: {changed}")
     digest = hashlib.sha256()
-    for name in (CONTROL_DATABASE_NAME, CONTROL_DATABASE_NAME + "-wal", CONTROL_DATABASE_NAME + "-journal"):
-        path = native_io_path(captured_root / name)
-        if path.exists():
-            if path.is_symlink() or not path.is_file():
-                raise RuntimeError("fork captured session-control 含非普通文件")
-            digest.update(name.encode())
-            with path.open("rb") as stream:
-                while chunk := stream.read(1024 * 1024):
-                    digest.update(chunk)
+    with _storage_io(captured_root, "fork capture control 读取失败", "control_read", artifact="fork_capture"):
+        for name in (CONTROL_DATABASE_NAME, CONTROL_DATABASE_NAME + "-wal", CONTROL_DATABASE_NAME + "-journal"):
+            path = native_io_path(captured_root / name)
+            if path.exists():
+                if path.is_symlink() or not path.is_file():
+                    raise RuntimeError("fork captured session-control 含非普通文件")
+                digest.update(name.encode())
+                with path.open("rb") as stream:
+                    while chunk := stream.read(1024 * 1024):
+                        digest.update(chunk)
     if digest.hexdigest() != rollout["control_sha256"]:
         raise RuntimeError("fork captured session-control hash 不一致")
     snapshot = ForkSourceSnapshot(
@@ -187,36 +200,39 @@ def _verify_attachment_files(snapshot: ForkSourceSnapshot) -> None:
     """复制所需正文纳入原 capture，完整集合与原冻结 digest/length 必须一致。"""
     expected: dict[str, ForkSnapshotFile] = {}
     root = snapshot.captured_root / "attachment-files"
-    for attachment in snapshot.attachments:
-        if attachment.availability != "available" or attachment.target_action != "copy_snapshot":
-            continue
-        if isinstance(attachment, ForkAttachmentDirectorySnapshot):
-            for file in attachment.files:
-                path = resolve_captured_directory_file(snapshot.captured_root, attachment.source_attachment_id, file.relative_path)
-                key = path.relative_to(root).as_posix()
-                row = ForkSnapshotFile(key, file.length, file.digest.removeprefix("sha256:"))
-                if key in expected and expected[key] != row:
-                    raise RuntimeError("fork 附件目录同一文件对应不同冻结版本")
-                expected[key] = row
-            continue
-        path = resolve_captured_attachment(snapshot.captured_root, attachment.blob_id)
-        if digest_for_blob_id(attachment.blob_id) != attachment.digest:
-            raise RuntimeError("fork 附件冻结身份与 digest 不一致")
-        row = ForkSnapshotFile(path.name, attachment.length, attachment.digest.removeprefix("sha256:"))
-        if attachment.blob_id in expected and expected[attachment.blob_id] != row:
-            raise RuntimeError("fork 附件相同冻结身份对应不同版本")
-        expected[attachment.blob_id] = row
-    if native_io_path(root).is_symlink() or (native_io_path(root).exists() and not native_io_path(root).is_dir()):
-        raise RuntimeError("fork 附件冻结根不是普通目录")
-    actual = _tree_manifest(root) if native_io_path(root).is_dir() else ()
+    with _storage_io(root, "fork capture 附件检查失败", "attachment_inspection", artifact="fork_capture"):
+        for attachment in snapshot.attachments:
+            if attachment.availability != "available" or attachment.target_action != "copy_snapshot":
+                continue
+            if isinstance(attachment, ForkAttachmentDirectorySnapshot):
+                for file in attachment.files:
+                    path = resolve_captured_directory_file(snapshot.captured_root, attachment.source_attachment_id, file.relative_path)
+                    key = path.relative_to(root).as_posix()
+                    row = ForkSnapshotFile(key, file.length, file.digest.removeprefix("sha256:"))
+                    if key in expected and expected[key] != row:
+                        raise RuntimeError("fork 附件目录同一文件对应不同冻结版本")
+                    expected[key] = row
+                continue
+            path = resolve_captured_attachment(snapshot.captured_root, attachment.blob_id)
+            if digest_for_blob_id(attachment.blob_id) != attachment.digest:
+                raise RuntimeError("fork 附件冻结身份与 digest 不一致")
+            row = ForkSnapshotFile(path.name, attachment.length, attachment.digest.removeprefix("sha256:"))
+            if attachment.blob_id in expected and expected[attachment.blob_id] != row:
+                raise RuntimeError("fork 附件相同冻结身份对应不同版本")
+            expected[attachment.blob_id] = row
+        if native_io_path(root).is_symlink() or (native_io_path(root).exists() and not native_io_path(root).is_dir()):
+            raise RuntimeError("fork 附件冻结根不是普通目录")
+        is_directory = native_io_path(root).is_dir()
+    actual = _tree_manifest(root) if is_directory else ()
     if actual != tuple(expected[key] for key in sorted(expected)):
         raise RuntimeError("fork 附件冻结文件集合或 hash/length 不一致；不能回读 live 来源补造")
 
 
 def remove_captured_snapshot(sessions_root: Path, record: ForkSourceCaptureRecord) -> None:
     root = capture_directory(sessions_root, record)
-    if native_io_path(root).is_symlink():
-        raise RuntimeError("fork capture 清理拒绝符号链接")
-    if native_io_path(root).exists():
-        shutil.rmtree(native_io_path(root))
-        fsync_directory(root.parent)
+    with _storage_io(root, "fork capture 清理失败", "cleanup", artifact="fork_capture"):
+        if native_io_path(root).is_symlink():
+            raise RuntimeError("fork capture 清理拒绝符号链接")
+        if native_io_path(root).exists():
+            shutil.rmtree(native_io_path(root))
+            fsync_directory(root.parent)

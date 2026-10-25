@@ -6868,7 +6868,7 @@ async def test_local_partial_capture_abort_does_not_block_complete_marker_recove
     claims = store._catalog._connected().execute(
         "SELECT claim_id,state FROM attachment_directory_fork_claims WHERE copy_operation_id=? ORDER BY claim_id", (partial_key,),
     ).fetchall()
-    assert [row[1] for row in claims] == (["preparing"] if partial_phase == "copy.attachments.preparing" else [])
+    assert [row[1] for row in claims] == (["prepared"] if partial_phase == "copy.attachments.preparing" else [])
     assert catalog.get_fork_retention_claim(partial_capture.fork_id) is not None
     partial_target = (context.sessions.path_resolver.resolve_prepared_session_node(frozen)
                       if creation_kind == "new_session_main" else
@@ -6931,6 +6931,10 @@ async def test_local_partial_capture_abort_does_not_block_complete_marker_recove
                 assert connection.execute("SELECT COUNT(*) FROM thread_catalog WHERE thread_id=?", (frozen.child_thread_id,)).fetchone() == (0,)
         with pytest.raises(RuntimeError, match="已中止|aborted"):
             await recovered.forks.fork(partial_request)
+        # 冷恢复已发布的操作仍须从原产品入口取得终态回执，结束同一 key 的期限观察。
+        receipt = await recovered.forks.fork(complete_request)
+        assert receipt.thread_id == complete_capture.target_thread_id
+        assert receipt.session.session_id == complete_capture.target_session_id
         assert await recovered.forks.recover_prepared_forks() == 0
         assert recovery_counts == [1, 0] and materializations == 1 and captures == 2
         assert (_main_thread_node(recovered, source.session_id) / "rollout/rollout.jsonl").read_bytes() == source_jsonl
