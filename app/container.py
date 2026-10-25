@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from contextlib import ExitStack
 from dataclasses import dataclass
 from pathlib import Path
 from threading import RLock
@@ -551,6 +552,7 @@ def _build_app_container(
     workspace_root: str | Path | None = None,
     startup_mount: MountedWorkspace | None = None,
     clock_ports: RuntimeClockPorts = DEFAULT_RUNTIME_CLOCK_PORTS,
+    construction: ExitStack,
 ) -> AppContainer:
     resolved_project_root = get_project_root(project_root)
     if workspace_root is None:
@@ -565,6 +567,7 @@ def _build_app_container(
     workspace_activity_service = WorkspaceActivityService(
         workspace_root=resolved_workspace_root,
     )
+    construction.callback(workspace_activity_service.close)
     session_catalog = get_session_catalog_components(
         resolved_sessions_root, workspace_id=workspace_id
     )
@@ -611,6 +614,7 @@ def _build_app_container(
     attachment_blob_store = AttachmentBlobStore(
         resolved_workspace_root, path_resolver=session_path_resolver, clock=clock_ports.wall,
     )
+    construction.callback(attachment_blob_store.close)
     workspace_service = WorkspaceService(
         config_service=config_service,
         workspace_root=resolved_workspace_root,
@@ -1162,12 +1166,16 @@ def build_app_container(
     resolved_root = Path(workspace_root).expanduser().resolve(strict=True)
     with AttachmentMaintenanceLock(
         resolved_root / ".boxteam" / ATTACHMENT_ROOT_DIRECTORY_NAME, exclusive=False,
-    ):
+    ), ExitStack() as construction:
         workspace_id = load_or_create_workspace_id(resolved_root)
         with workspace_context(workspace_id, resolved_root):
-            return _build_app_container(
+            container = _build_app_container(
                 project_root=project_root,
                 workspace_root=resolved_root,
                 startup_mount=startup_mount,
                 clock_ports=clock_ports,
+                construction=construction,
             )
+            # 未发布服务图的持久owner由构造作用域回收；成功后交给原WorkspaceLifespan。
+            construction.pop_all()
+            return container

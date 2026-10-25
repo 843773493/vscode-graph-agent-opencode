@@ -10,10 +10,14 @@ from pathlib import Path
 
 import pytest
 
+from app import container as container_module
 from app.container import AppContainer
 from app.core.identifier import create_prefixed_id
+from app.core.mounted_workspaces import MountedWorkspace, MountedWorkspaceRegistry
 from app.core.session_catalog_store import CatalogMaintenanceRequiredError
 from app.core.session_catalog_store.queries import _register_session_list_functions
+from app.core.sqlite_state import SQLiteProcessOwnership
+from app.core.workspace_identity import load_or_create_workspace_id
 from app.schemas.internal_v2.session import SessionCreateRequest
 from tests.harness.python.run_context import TestRunContext
 from tests.integration.backend.sessions.test_navigation_worker_lifespan import (
@@ -54,6 +58,80 @@ def startup_container(
 def _catalog_dump(path: Path) -> str:
     with closing(sqlite3.connect(path.as_uri() + "?mode=ro", uri=True)) as connection:
         return "\n".join(connection.iterdump())
+
+
+@pytest.mark.parametrize("stage", ["catalog", "config", "files"])
+async def test_failed_container_construction_releases_owned_stores_and_allows_retry(
+    startup_container: AppContainer, request: pytest.FixtureRequest,
+    monkeypatch: pytest.MonkeyPatch, stage: str,
+) -> None:
+    root = startup_container.workspace_root / "candidate"
+    prepare_test_workspace(
+        workspace_root=root,
+        template_root=Path.cwd() / "tests/fixtures/workspaces/default_test_workspace",
+        template_items=(),
+    )
+    (root / ".boxteam").mkdir()
+    (root / ".boxteam/workspace.jsonc").write_bytes(
+        (startup_container.workspace_root / ".boxteam/workspace.jsonc").read_bytes()
+    )
+    workspace_id = load_or_create_workspace_id(root)
+    registry = container_module.WorkspaceContainerRegistry(
+        mounted_workspaces=MountedWorkspaceRegistry([MountedWorkspace(workspace_id, root)]),
+        project_root=Path.cwd(),
+    )
+    request.addfinalizer(registry.close)
+    activity_owners = []
+    attachment_owners = []
+    original_activity = container_module.WorkspaceActivityService
+    original_attachments = container_module.AttachmentBlobStore
+    failure = RuntimeError(f"构造失败边界-{stage}")
+
+    def activity(**arguments):
+        owner = original_activity(**arguments)
+        activity_owners.append(owner)
+        request.addfinalizer(owner.close)
+        return owner
+
+    def attachments(*arguments, **keywords):
+        owner = original_attachments(*arguments, **keywords)
+        attachment_owners.append(owner)
+        request.addfinalizer(owner.close)
+        return owner
+
+    def fail(*_arguments, **_keywords):
+        raise failure
+
+    with monkeypatch.context() as faults:
+        faults.setattr(container_module, "WorkspaceActivityService", activity)
+        faults.setattr(container_module, "AttachmentBlobStore", attachments)
+        faults.setattr(container_module, {
+            "catalog": "get_session_catalog_components", "config": "ConfigService", "files": "WorkspaceService",
+        }[stage], fail)
+        with pytest.raises(RuntimeError, match="构造失败边界") as caught:
+            registry.get(workspace_id)
+    assert caught.value is failure, "保留原错误和traceback，不能依赖GC释放资源"
+    assert len(activity_owners) == 1
+    assert len(attachment_owners) == (1 if stage == "files" else 0)
+    probe = SQLiteProcessOwnership(root / ".boxteam/state/workspace.sqlite")
+    probe.acquire()
+    probe.release()
+    for owner in activity_owners:
+        with pytest.raises(RuntimeError, match="已关闭"):
+            owner.diagnostics()
+    for owner in attachment_owners:
+        with pytest.raises(RuntimeError, match="已关闭"):
+            owner._catalog.connection.execute("SELECT 1")
+
+    recovered = registry.get(workspace_id)
+    request.addfinalizer(recovered.attachment_blob_store.close)
+    request.addfinalizer(recovered.workspace_activity_service.close)
+    created = await recovered.session_service.create(SessionCreateRequest(title="构造失败后重试"))
+    assert (await recovered.session_service.get(created.session_id)).session_id == created.session_id
+    assert registry.get(workspace_id) is recovered
+    peer = await startup_container.session_service.create(SessionCreateRequest(title="旁系工作区继续可用"))
+    assert (await startup_container.session_service.get(peer.session_id)).session_id == peer.session_id
+    assert recovered.workspace_id != startup_container.workspace_id
 
 
 @pytest.mark.parametrize("owner", ["node", "preparing"])

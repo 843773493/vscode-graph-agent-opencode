@@ -62,6 +62,8 @@
 
 **理由**：长期常开的 SQLite 连接是**每工作区状态**，共享会导致跨工作区事务串扰、锁范围错误、以及 A 工作区的数据被 B 工作区请求读到。惰性构造避免为未使用工作区付出启动代价。
 
+服务图构造期间，已创建的持久 owner 由同一构造作用域逆序关闭；构造成功后才移交原有 `WorkspaceLifespan`。构造失败必须保留原错误并立即释放锁，使同一工作区可以重试，不能依赖垃圾回收。catalog 仍由原 registry 负责，不另建关闭链。
+
 ### D5: Gateway 角色 = 仍选目标，但目标显式传递，且与星型解析 / star-topology resolution 一致
 
 **决策**：Gateway 仍负责为请求选择目标工作区，但目标 MUST 经 D1 的显式载体传下去，后端 MUST NOT 猜测。跨 gateway 时，**网关授权段 / gateway authority** 承载**稳定 gateway_id**；拓扑是**星型解析 / star-topology resolution**（hub-spoke，非全互联）：本机是自身联邦 hub 时可直接解析其直接 spoke；本机是 spoke 时经其唯一 hub 做**一次有界 transit**（`visited set` / `max_transit_gateways=1` / `max_gateway_hops=2` / 总 deadline）。解析命中只返回稳定的**资源身份 / ResourceIdentity** 与内容，不携带 locator（locator 是输入不是输出）。不可解析一律 fail-closed 返回结构化**拒绝码 / rejection code**。这些上界 MUST 作为**显式策略常量**，不得散落为硬编码魔法数字。
