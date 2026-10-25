@@ -193,6 +193,134 @@ async function scenario(phase) {
   }
 }
 
+async function creationDuringShutdown(phase) {
+  const workspaceId = randomUUID();
+  const workspaceRoot = path.join(run.workspaceRoot, `${phase}-${randomUUID()}`);
+  await cp(path.join(run.projectRoot, "tests/fixtures/workspaces/default_test_workspace"), workspaceRoot, { recursive: true });
+  await mkdir(path.join(workspaceRoot, ".boxteam"), { recursive: true });
+  await writeFile(path.join(workspaceRoot, ".boxteam/workspace-identity.json"), JSON.stringify({ workspace_id: workspaceId }));
+  const manager = new BrowserManager({ workspaceRoot, workspaceId });
+  const browserId = `browser_${randomUUID().replaceAll("-", "")}`;
+  const navigation = { entered: barrier(), response: barrier() };
+  const peerAction = barrier();
+  const peerEntered = barrier();
+  let creating;
+  let closing;
+  let peerOperation;
+  let releaseTimer;
+  let restored;
+  try {
+    await manager.init();
+    let peer;
+    if (phase === "creation_shared_budget") {
+      const peerId = `browser_${randomUUID().replaceAll("-", "")}`;
+      await manager.create({ workspaceId, browserId: peerId, ownerRevision: 1, url: `http://127.0.0.1:${server.address().port}/` });
+      peer = manager.get(peerId);
+      peerOperation = peer.runInteractiveOperation({ actor: "user", action: "peer_before_creation_shutdown" }, async () => {
+        peerEntered.release();
+        await peerAction.promise;
+        await peer.page.locator("#field").fill("peer-after-create-shutdown");
+      });
+      peerOperation.catch(() => undefined);
+      await peerEntered.promise;
+    }
+    blockedNavigation = navigation;
+    creating = manager.create({ workspaceId, browserId, ownerRevision: 1, url: `http://127.0.0.1:${server.address().port}/` });
+    creating.catch(() => undefined);
+    await navigation.entered.promise;
+    const session = manager.get(browserId);
+    const page = session.page;
+    const context = session.context;
+    const started = performance.now();
+    closing = manager.shutdown(`integration_${phase}`);
+    closing.catch(() => undefined);
+    const lateId = `browser_${randomUUID().replaceAll("-", "")}`;
+    await assert.rejects(manager.create({ workspaceId, browserId: lateId, ownerRevision: 1 }), (error) => {
+      assert.equal(error.code, "browser_manager_closing");
+      assert.equal(error.statusCode, 503);
+      assert.deepEqual(error.creationReceipt, { resource_id: lateId, workspace_id: workspaceId, owner_revision: 1, outcome: "not_created" });
+      return true;
+    });
+    assert.equal(manager.browsersById.has(lateId), false);
+    if (phase === "creation_shared_budget") {
+      assert.equal(peer.closingRequested, true);
+      releaseTimer = setTimeout(() => navigation.response.release(), 1500);
+    }
+    let elapsedMs;
+    if (phase === "creation_wait") {
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      assert.equal(page.isClosed(), false);
+      assert.equal(session.context, context);
+      assert.equal(await manager.stateStore.readCheckpoint(browserId), null);
+      navigation.response.release();
+    } else {
+      await assert.rejects(closing, (error) => {
+        if (peer) {
+          assert(error instanceof AggregateError);
+          assert.equal(error.errors.length, 1);
+          assert.equal(error.errors[0].code, "browser_shutdown_operation_drain_timeout");
+        } else assert.equal(error.code, "browser_shutdown_creation_drain_timeout");
+        return true;
+      });
+      elapsedMs = performance.now() - started;
+      assert(elapsedMs >= 4500 && elapsedMs < 6200, `创建与交互等待共用一次默认5秒预算: ${elapsedMs}`);
+      assert.equal(manager.runtimePool.browser.isConnected(), true);
+      assert.equal(manager.get(browserId) === session, true);
+      const retainedCheckpoint = await manager.stateStore.readCheckpoint(browserId);
+      await writeFile(path.join(run.artifactsDir, `${phase}-timeout.json`), JSON.stringify({
+        elapsedMs, browserId, state: session.record.resource_state, pageClosed: page.isClosed(),
+        originalContext: session.context === context, peerBrowserId: peer?.id ?? null,
+        peerPageClosed: peer?.page.isClosed() ?? null, checkpointPresent: retainedCheckpoint !== null,
+      }, null, 2));
+      if (peer) {
+        // 原创建已完成；无关Browser应完成检查点，挂起peer仍保留自己的页面和操作。
+        assert.equal(page.isClosed(), true);
+        assert.equal(session.context, null);
+        assert(retainedCheckpoint);
+        assert.equal(peer.page.isClosed(), false);
+        assert.equal(peer.operationQueue.acceptedOperationExecutions.size, 1);
+      } else {
+        assert.equal(session.context === context, true);
+        assert.equal(page.isClosed(), false);
+        assert.equal(retainedCheckpoint, null);
+      }
+      navigation.response.release();
+    }
+    const created = await creating;
+    assert.equal(created.browser_id, browserId);
+    assert.equal(session.closingRequested, true);
+    peerAction.release();
+    if (peerOperation) await peerOperation;
+    if (phase !== "creation_wait") closing = manager.shutdown();
+    await closing;
+    assert.equal(page.isClosed(), true);
+    assert.equal(manager.runtimePool.browser, null);
+    const checkpoint = await manager.stateStore.readCheckpoint(browserId);
+    assert.equal(checkpoint.pages[0].controls.find((control) => control.selector === "#field").value, "initial");
+    restored = new BrowserManager({ workspaceRoot, workspaceId });
+    await restored.init();
+    const recovered = restored.get(browserId);
+    assert.equal(recovered.record.resource_state, "discarded");
+    const response = await recovered.runInteractiveOperation({ actor: "user", action: "read_created_after_restart" },
+      async () => ({ value: await recovered.page.locator("#field").inputValue() }));
+    assert.equal(response.value, "initial");
+    if (peer) {
+      const recoveredPeer = restored.get(peer.id);
+      const readPeer = await recoveredPeer.runInteractiveOperation({ actor: "user", action: "read_peer_after_create_shutdown" },
+        async () => ({ value: await recoveredPeer.page.locator("#field").inputValue() }));
+      assert.equal(readPeer.value, "peer-after-create-shutdown");
+    }
+    return { browserId, elapsedMs, peerBrowserId: peer?.id ?? null, restoredValue: response.value, originalPageClosed: page.isClosed() };
+  } finally {
+    clearTimeout(releaseTimer);
+    blockedNavigation = null;
+    navigation.response.release();
+    peerAction.release();
+    await Promise.allSettled([creating, closing, peerOperation].filter(Boolean));
+    try { if (restored) await restored.shutdown(); } finally { await manager.shutdown(); }
+  }
+}
+
 async function checkpointCleanupFailure() {
   const workspaceId = randomUUID();
   const workspaceRoot = path.join(run.workspaceRoot, `cleanup-failure-${randomUUID()}`);
@@ -283,6 +411,10 @@ try {
     results.push({ phase: "checkpoint_cleanup_failure", status: "passed", observations: await checkpointCleanupFailure() });
   } catch (error) {
     results.push({ phase: "checkpoint_cleanup_failure", status: "failed", error: error.stack ?? String(error) });
+  }
+  for (const phase of ["creation_wait", "creation_timeout", "creation_shared_budget"]) {
+    try { results.push({ phase, status: "passed", observations: await creationDuringShutdown(phase) }); }
+    catch (error) { results.push({ phase, status: "failed", error: error.stack ?? String(error) }); }
   }
   const failed = results.filter((result) => result.status === "failed");
   await run.writeResult(failed.length ? "failed" : "passed", {

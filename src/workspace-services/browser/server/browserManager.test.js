@@ -840,9 +840,145 @@ for (const stage of ["delete_checkpoint", "persist_failure"]) {
     try { await manager.create(options); throw new Error("应报告启动与清理失败"); }
     catch (error) {
       expect(error).toBeInstanceOf(AggregateError);
-      expect(error.errors[1]).toBe(cleanupError);
+      if (stage === "persist_failure") {
+        expect(error.errors[1]).toBeInstanceOf(AggregateError);
+        expect(error.errors[1].errors).toEqual([cleanupError, cleanupError]);
+        expect(error.errors[1].cause).toBe(cleanupError);
+      } else expect(error.errors[1]).toBe(cleanupError);
       expect(error.creationReceipt).toBeUndefined();
     }
     expect(manager.browsersById.has(options.browserId)).toBe(true);
   });
 }
+
+
+describe("关闭时的浏览器创建", () => {
+  test("关闭后拒绝新创建，身份冲突仍不能签发未创建回执", async () => {
+    const manager = createBrowserManagerWithStateWriter(async () => undefined);
+    let budgetReads = 0;
+    manager.stateStore.checkpointBudgetSnapshot = async () => { budgetReads += 1; throw new Error("关闭后不应读取配额"); };
+    await manager.shutdown();
+    const options = createOptions();
+    await expect(manager.create(options)).rejects.toMatchObject({
+      code: "browser_manager_closing", statusCode: 503,
+      creationReceipt: { resource_id: options.browserId, workspace_id: WORKSPACE_ID, owner_revision: 1, outcome: "not_created" },
+    });
+    expect(budgetReads).toBe(0);
+    expect(manager.browsersById.size).toBe(0);
+    manager.browsersById.set(options.browserId, { status: "closed" });
+    try { await manager.create(options); throw new Error("应拒绝重复身份"); }
+    catch (error) { expect(error.message).toContain("唯一身份"); expect(error.creationReceipt).toBeUndefined(); }
+  });
+
+  test("配额等待中的创建和排队创建不能越过关闭准入，超时不关闭共享池", async () => {
+    const manager = createBrowserManagerWithStateWriter(async () => undefined);
+    const entered = Promise.withResolvers();
+    const budget = Promise.withResolvers();
+    const originalBudget = manager.stateStore.checkpointBudgetSnapshot.bind(manager.stateStore);
+    manager.stateStore.checkpointBudgetSnapshot = async () => { entered.resolve(); await budget.promise; return await originalBudget(); };
+    let poolStops = 0;
+    manager.runtimePool.shutdown = async () => { poolStops += 1; };
+    const first = createOptions();
+    const second = createOptions();
+    const creating = manager.create(first);
+    creating.catch(() => undefined);
+    await entered.promise;
+    const queued = manager.create(second);
+    queued.catch(() => undefined);
+    try {
+      await expect(manager.shutdown("blocked_quota", { operationDrainTimeoutMs: 20 })).rejects.toMatchObject({ code: "browser_shutdown_creation_drain_timeout" });
+      expect(poolStops).toBe(0);
+      expect(manager.browsersById.size).toBe(0);
+      const late = createOptions();
+      await expect(manager.create(late)).rejects.toMatchObject({ code: "browser_manager_closing", creationReceipt: { resource_id: late.browserId, outcome: "not_created" } });
+    } finally { budget.resolve(); }
+    for (const [execution, options] of [[creating, first], [queued, second]]) {
+      await expect(execution).rejects.toMatchObject({ code: "browser_manager_closing", creationReceipt: { resource_id: options.browserId, outcome: "not_created" } });
+    }
+    expect(manager.browsersById.size).toBe(0);
+    await manager.shutdown();
+    expect(poolStops).toBe(1);
+  });
+
+  for (const timeout of [false, true]) {
+    test(`已接纳创建完成后才检查点并关闭，保留原创建身份: timeout=${timeout}`, async () => {
+      const manager = createBrowserManagerWithStateWriter(async () => undefined);
+      const entered = Promise.withResolvers();
+      const startup = Promise.withResolvers();
+      const order = [];
+      const start = BrowserSession.prototype.start;
+      BrowserSession.prototype.start = async function () {
+        entered.resolve(this);
+        await startup.promise;
+        this.record.status = "running";
+        order.push("created");
+        return this.snapshot();
+      };
+      let closing;
+      let creating;
+      try {
+        const options = createOptions();
+        creating = manager.create(options);
+        creating.catch(() => undefined);
+        const browser = await entered.promise;
+        browser.checkpointForManagerShutdown = async () => { expect(browser.closingRequested).toBe(true); order.push("checkpoint"); };
+        manager.runtimePool.shutdown = async () => { order.push("pool_stop"); };
+        closing = manager.shutdown("pending_start", { operationDrainTimeoutMs: timeout ? 20 : 1000 });
+        closing.catch(() => undefined);
+        expect(browser.closingRequested).toBe(true);
+        await expect(browser.runInteractiveOperation({ actor: "user", action: "during_startup_shutdown" }, async () => {
+          throw new Error("关闭开始后不能接纳创建中的Browser交互");
+        })).rejects.toMatchObject({ code: "browser_closing" });
+        if (timeout) {
+          await expect(closing).rejects.toMatchObject({ code: "browser_shutdown_creation_drain_timeout" });
+          expect(manager.get(browser.id)).toBe(browser);
+          expect(browser.record.status).toBe("created");
+        } else {
+          await new Promise((resolve) => setTimeout(resolve, 10));
+        }
+        expect(order).toEqual([]);
+        startup.resolve();
+        const snapshot = await creating;
+        expect(snapshot.browser_id).toBe(options.browserId);
+        expect(browser.closingRequested).toBe(true);
+        if (timeout) closing = manager.shutdown();
+        await closing;
+        expect(order).toEqual(["created", "checkpoint", "pool_stop"]);
+      } finally {
+        startup.resolve();
+        await Promise.allSettled([creating, closing].filter(Boolean));
+        BrowserSession.prototype.start = start;
+      }
+    });
+  }
+
+  test("关闭等到原启动失败收尾结束，未核实收尾不能关闭共享池", async () => {
+    const manager = createBrowserManagerWithStateWriter(async () => undefined);
+    const entered = Promise.withResolvers();
+    const cleanup = Promise.withResolvers();
+    const failure = new Error("startup refused");
+    const cleanupFailure = new Error("checkpoint delete blocked");
+    manager.runtimePool.acquireContext = async () => { throw failure; };
+    manager.stateStore.deleteCheckpoint = async () => { entered.resolve(); await cleanup.promise; throw cleanupFailure; };
+    let poolStops = 0;
+    manager.runtimePool.shutdown = async () => { poolStops += 1; };
+    const options = createOptions();
+    const creating = manager.create(options);
+    creating.catch(() => undefined);
+    await entered.promise;
+    const closing = manager.shutdown();
+    closing.catch(() => undefined);
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      expect(poolStops).toBe(0);
+    } finally { cleanup.resolve(); }
+    await expect(creating).rejects.toMatchObject({ errors: [expect.any(Error), cleanupFailure] });
+    await expect(closing).rejects.toMatchObject({ code: "browser_shutdown_unverified_creation" });
+    expect(poolStops).toBe(0);
+    expect(manager.get(options.browserId).record.reconciliation_status).toBe("unknown");
+    manager.stateStore.deleteCheckpoint = async () => undefined;
+    await manager.close(options.browserId);
+    await manager.shutdown();
+    expect(poolStops).toBe(1);
+  });
+});

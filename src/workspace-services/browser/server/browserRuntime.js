@@ -3,6 +3,19 @@ export const NAVIGATION_TIMEOUT_MS = 30000;
 export const TOOL_TIMEOUT_MS = 10000;
 export const DEFAULT_OPERATION_DRAIN_TIMEOUT_MS = 5000;
 
+// 只结束本次等待；原执行和失败仍由发起它的owner持有并处理。
+export async function drainBrowserExecutions(executions, timeoutMs = DEFAULT_OPERATION_DRAIN_TIMEOUT_MS) {
+  let timer;
+  try {
+    return await Promise.race([
+      Promise.allSettled([...executions]).then(() => true),
+      new Promise((resolve) => { timer = setTimeout(resolve, timeoutMs, false); }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 export function browserRuntimeFailure({ browserId, pageId = null, stage, cause }) {
   const error = new Error(
     `浏览器运行时操作失败: browser_id=${browserId}, page_id=${pageId}, stage=${stage}, code=${cause?.code || "unknown"}`,

@@ -47,6 +47,8 @@ Manager 的 `BrowserTransportGrant` 只保存一次连接所需的授权影子�
 
 同步owner版本先撤销旧连接与grant，冻结原队列的已接纳集合并持久化新版本，再核排空结果；与关闭共用默认5秒预算。超时明确返回`browser_owner_revision_drain_timeout`/408，原操作和运行时仍保留，新版本不回退，也不宣称旧副作用停止；原操作最终结束时仍按冻结授权拒绝旧结果，同版本重试只等待原集合，不重放动作。该等待预算不覆盖持久化阻塞、Python首次恢复gate或整个operation期限。
 
+Manager关闭先关闭新创建准入，并等待本次已进入创建链的配额检查、初始导航和最终状态保存；创建与原交互排空共用一次默认5秒单调预算。未接纳创建返回绑定原intent的503/not_created，重复身份仍按原冲突拒绝；已登记Session含created状态在关闭入口同步关闭操作准入；已接纳创建超时保留原Promise、资源和共享运行时，迟到完成再由同一Manager重试检查点。不因创建等待超时取消启动或重放创建。启动失败直接复用Session.close的唯一资源释放/检查点删除/终态保存链；失败状态保持failed/unknown，未核实创建收尾阻止共享池关闭，用户可由原close/delete核实。该等待不是整个shutdown期限，生产信号退出协调与挂起操作终止仍TODO。
+
 ## 页面执行、仿真与生命周期
 
 操作队列显式持有`browserSession`资源宿主；串行等待用`serialOperationTail`，全部已接纳操作的等待用`acceptedOperationExecutions`及`drain()`。两者覆盖范围不同，具体归属见operations目录，不能用含混的owner或tail混指宿主、授权身份和并发排空。

@@ -1794,20 +1794,11 @@ export class BrowserSession extends EventEmitter {
   }
 
   async failStartup(message) {
-    this.closingRequested = true;
-    return await this.runResourceTransition(async () => {
-      this.record.status = "failed";
-      this.record.release_reason = "browser_initial_navigation_failed";
-      this.record.error_message = message;
-      this.record.ended_at = this.record.ended_at || nowIso();
-      this.record.updated_at = nowIso();
-      await this.releaseRuntime();
-      this.clients.clear();
-      await this.manager.stateStore.deleteCheckpoint(this.id);
-      await this.manager.persist();
-      this.emit("state", this.snapshot());
-      return this.snapshot();
-    });
+    this.record.status = "failed";
+    this.record.error_message = message;
+    const snapshot = await this.close({ status: "failed", reason: "browser_initial_navigation_failed" });
+    this.emit("state", snapshot);
+    return snapshot;
   }
 
   async attachClient(client) {

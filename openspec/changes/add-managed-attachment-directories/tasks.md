@@ -84,6 +84,9 @@ Web 定向 `BOXTEAM_E2E_SECTION8_FOCUS=copy_missing_attachment` 通过真实 Gat
 
   - 2026-10-24 Manager 整批排空切片：先同步关闭本批所有运行资源准入，默认 5 秒单调排空截止只冻结一次，后续资源只用余量，原空集合仍能即时确认；超时按原身份汇总，不关闭共享池或重置原操作。原 HEAD 完整工作树的两个反例均失败，复现后项准入仍开放和 3×200ms 累计约 605ms；候选 154 项单元回归通过。正式 Chromium/HTTP/磁盘检查点矩阵 5 场景通过，新增双 Browser 在约 5.003 秒整批失败而非各等 5 秒，页面和原操作保留，放行后同 Manager 重试关闭、冷 Manager 重开保留双方最终表单值。静态、strict、准确命令、源码指纹和原始退出码见 `out/tests/temp/browser_shutdown_batch_20261024/artifacts/`。这是 Manager 层组合门：生产 backend 信号关闭仍在失败后退出，未接同 Manager 重试，已在唯一调用方登记 TODO；整个 shutdown、创建中的资源准入、检查点持久化/转换期限和强制终止继续 TODO，5.2/5.4/6.2 不勾选。未运行 Windows、Gateway/主 Web 或团队/协作专项。
 
+  - 2026-10-25 Browser创建与关闭竞争切片：关闭先拒绝新创建，原排队/配额/首次导航/最终persist共用已有默认5秒排空预算；超时保留原创建与运行时，迟到结束后沿同一检查点链重试。启动失败删除独立清理链，复用Session.close保留failed/unknown与原cause，未核实创建不能关闭共享池。完整旧实现Git archive tree `96f4b38a3b6a8d02cf5140fbfe1146f8a316d104` 的五项新竞争用例均失败；候选172项Manager/Session/队列/检查点回归、9项原生Node状态故障、Python资源owner/客户端回归与Node语法检查通过。九个正式Chromium/HTTP/磁盘检查点场景全部通过，创建超时约5.00秒、创建与peer等待组合约5.05秒，核对原页面/上下文、精确未创建回执、原资源身份及同Manager关闭后冷恢复。
+    - 首次扩大Bun误收Node专用mock测试，按原生Node入口补验；启动失败复用close后保留failed状态的遗漏已修复，原断言未放宽。首次真实组合场景误要求已完成创建的健康Browser仍打开，而原Manager本应独立生成其检查点；改为核健康Browser已保存、挂起peer仍保留，所有身份/内容/总预算断言保留。原失败的完整Playwright对象格式化触发受保护OOM，后续失败诊断仅输出标量，未提高4GiB上限。准确命令、完整源码前后指纹、raw/实际退出码及产品观察在 `out/tests/temp/browser_creation_shutdown_20261025/artifacts/`；本切片只闭合创建竞争，5.2/5.4/6.2继续未勾，生产信号退出、完整关闭期限/强制终止、Windows实机、Gateway/主Web与团队协作专项未覆盖。最终共享合并后172项Bun（含新断言）、43项Python、9项原生Node及9个正式Chromium/HTTP场景通过；创建超时与共享预算的精确耗时见shared-integration-002原件。主线程自查发现created阶段关闭准入窗口，原候选加反例2项均失败；关闭标记现同步覆盖全部已登记Session，并验证原交互入口拒绝新操作，移除迟到finalizer补标记及重复遍历。原共享计数循环与小fixture重构完整保留，未纳入本批候选提交；AST/差异自查和静态/strict结果见同目录收据，不称独立审查。
+
 ## 6. 真实验收与旧链物理下线
 
 - [x] 6.1 经产品入口上传、Shell 预处理、读取处理结果、fork 与重启恢复；覆盖 Linux/Windows 原生 cwd 和远端 URI 始终在目标机器解释。

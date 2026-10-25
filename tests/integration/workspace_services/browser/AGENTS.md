@@ -20,6 +20,8 @@ browser/
 
 `browser_shutdown_operations.mjs` 经真实Manager创建、冻结/冷回收和交互入口，使用HTTP响应与动作屏障覆盖准备、执行、Session排空超时及Manager默认预算超时后的保留/重试，并核对双Browser在首项等待时全部关闭准入、整批共用一次默认5秒预算、原操作完成后两份检查点冷恢复；核对关闭顺序、原页面终态、磁盘检查点与冷Manager重开后的表单值。原生检查点目录冲突同时触发采集/收尾失败，核对两份首因、其它Browser完成检查点、失败资源unknown及原身份重试与健康资源冷恢复。通过 `bun run test:matrix -- --suite=integration-browser-shutdown-operations` 运行，固定60秒/4GiB；不代表其它失败收尾、挂起动作终止、Gateway或主Web验收。
 
+同一关闭owner另覆盖首次导航仍在真实HTTP等待时的创建：关闭等待原创建、默认5秒创建超时保留原页面/上下文、同Manager重试关闭与冷恢复，并在已有peer操作时证明创建等待与交互共用总预算，健康Browser可先完成检查点。关闭后新创建必须携原intent的not_created回执拒绝，不能产生新记录。失败断言只输出标量观察，避免格式化完整Playwright对象图遮蔽原错误。
+
 `test_browser_owner_revision_drain.py` 经Python客户端、真实Node与Chromium验证默认5秒的旧版本排空超时、持久新版本、原动作仍执行、独立Browser可读、迟到回执拒绝和同版本重试；受控HTTP服务只暂停原脚本的fetch。通过 `bun run test:matrix -- --suite=integration-browser-owner-revision-drain` 运行，固定60秒/4GiB；不代表Python业务owner的恢复gate隔离、强制终止或Gateway/主Web验收。
 
 性能测试通过 `psutil` 遍历 Browser 后端的子进程，避免依赖 `/proc` 与 `sysconf`：CPU统一累计用户态和系统态秒数；内存 Linux 采样 PSS，Windows/macOS 采样 USS，结果同时记录指标名。服务关闭在 POSIX 发送 SIGTERM，在 Windows 使用独立进程组和 CTRL_BREAK_EVENT，以触发 Browser Manager 的检查点保存。

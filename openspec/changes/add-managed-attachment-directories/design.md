@@ -70,6 +70,8 @@ Manager 对检查点失败后的收尾继续按原资源隔离：若 context 释
 
 关闭与版本撤销现共用原队列的单次有界`drain(timeoutMs)`：默认5秒，true表示快照集合已settle，false只表示本次等待结束，原Promise继续由唯一集合持有。撤销先关闭旧连接/删除旧grant，冻结原集合并持久化新版本；超时返回独立`browser_owner_revision_drain_timeout`/408，不使用工具的page_reset语义，不停止或遗忘原动作。原动作结束后旧结果仍被授权版本检查拒绝，同版本重试只排空原集合。真实Python客户端→Node→Chromium/HTTP屏障验证磁盘版本、未结束原动作、另一Browser可读、迟到结果拒绝及核实关闭。持久化阻塞、Python首次recover single-flight gate和整个operation总期限继续TODO，不能把Node单资源有界等待称为恢复全局隔离或真实终止完成。
 
+2026-10-25 补齐关闭时的创建等待：Manager同步关闭新创建准入，原创建调用从排队、配额读取、登记、首次导航至最终persist都由本次完成Promise覆盖；这些Promise只是进程内执行句柄，不成为新的业务状态或恢复账本。准入在排队执行和配额等待后重核，重复身份仍不签发not_created。关闭等待与交互排空共用原默认5秒预算；超时不取消、遗忘或重发创建，已登记Session（含尚在取得运行时的created状态）在关闭入口同步关闭交互准入，原启动仍继续，迟到完成后由同Manager检查点重试。原队列与创建等待复用browserRuntime的同一排空原语，原调用方仍处理真实执行错误。启动失败物理移除独立收尾代码，直接使用Session.close，保留failed/unknown及两次持久化失败的原异常；未核实创建收尾继续阻止共享池关闭，可由现有管理close/delete核实。真实Chromium/HTTP屏障覆盖初始导航等待、创建超时及创建/peer操作组合预算，关闭重试后按原ID冷恢复；不覆盖生产信号失败后退出、强制终止、同步持久化阻塞或整个shutdown总期限，这些仍TODO。
+
 `ThreadResidencyTracker.sweep()` 对每个 Thread 独立尝试清理，失败保留原 scope、generation 和 owner 记录，其它 Thread 仍完成。整批结束后向调用方抛出原错误（单项）或汇总错误（多项），附精确 owner 信息；不改变已有单错误类型或把失败算成成功卸载。`AgentExecutionService` 的唯一周期 worker 记录完整异常后按原 60 秒周期重试，取消和关闭正常传播。这里不解决失效关联或外部未知结果，也不绕过原 owner 核实规则。
 
 闲置扫描通过 `asyncio.wait` 为单个真实卸载任务提供 30 秒等待预算，覆盖该任务中等待运行排空、领域通知和 scope close 的总等待。到期向本轮报告含精确 owner/generation 的 `TimeoutError`，继续扫描其它 Thread；不取消原任务，不解除关联或 lease，不标记 cold。原任务仍由 `runtime_unload` 持有，新 admission 等待同一任务，后续扫描不会为同一代再启动清理。迟到成功沿原关闭链落为 cold；迟到失败由现有后台任务回调完整记录，原状态保留给下一周期重试。这是事件循环能调度时的扫描等待预算，不是保证 30 秒内释放资源或整轮完成的期限。
