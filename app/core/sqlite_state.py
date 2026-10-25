@@ -6,8 +6,8 @@ import logging
 import os
 import re
 import sqlite3
-from collections.abc import Callable
-from contextlib import closing
+from collections.abc import Callable, Iterator
+from contextlib import closing, contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from importlib.resources import files
@@ -214,25 +214,43 @@ class SQLiteProcessOwnership:
         self._lock_path = database_path.with_name(f".{database_path.name}.lock")
         self._lock_handle: BinaryIO | None = None
 
-    def acquire(self) -> None:
-        native_io_path(self._lock_path.parent).mkdir(parents=True, exist_ok=True)
-        handle = native_io_path(self._lock_path).open("a+b")
+    @contextmanager
+    def _io(self, stage: str) -> Iterator[None]:
+        """原生锁错误保留类型与错误码，完整位置只写入诊断。"""
         try:
-            handle.seek(0, os.SEEK_END)
-            if handle.tell() == 0:
-                handle.write(b"\0")
-                handle.flush()
-            handle.seek(0)
-            portalocker.lock(
-                handle, portalocker.LOCK_EX | portalocker.LOCK_NB
-            )
+            yield
         except portalocker.AlreadyLocked as error:
-            handle.close()
-            raise RuntimeError(
-                f"SQLite 状态库已被另一个进程占用: {self._lock_path}"
-            ) from error
+            raise RuntimeError(_sqlite_runtime_failure(
+                self._lock_path, "SQLite 状态库已被另一个进程占用", stage, error,
+            )) from error
+        except (OSError, portalocker.LockException) as error:
+            detail = _sqlite_runtime_failure(
+                self._lock_path, "SQLite 进程所有权锁 I/O 失败", stage, error,
+            )
+            if isinstance(error, OSError):
+                winerror = getattr(error, "winerror", None)
+                if winerror is not None:
+                    raise type(error)(error.errno, detail, None, winerror) from error
+                raise type(error)(error.errno, detail) from error
+            raise type(error)(detail) from error
+
+    def acquire(self) -> None:
+        with self._io("ownership_open"):
+            native_io_path(self._lock_path.parent).mkdir(parents=True, exist_ok=True)
+            handle = native_io_path(self._lock_path).open("a+b")
+        try:
+            with self._io("ownership_acquire"):
+                handle.seek(0, os.SEEK_END)
+                if handle.tell() == 0:
+                    handle.write(b"\0")
+                    handle.flush()
+                handle.seek(0)
+                portalocker.lock(
+                    handle, portalocker.LOCK_EX | portalocker.LOCK_NB
+                )
         except BaseException:
-            handle.close()
+            with self._io("ownership_close"):
+                handle.close()
             raise
         self._lock_handle = handle
 
@@ -242,9 +260,11 @@ class SQLiteProcessOwnership:
             return
         self._lock_handle = None
         try:
-            portalocker.unlock(handle)
+            with self._io("ownership_release"):
+                portalocker.unlock(handle)
         finally:
-            handle.close()
+            with self._io("ownership_close"):
+                handle.close()
 
 
 class SQLiteStateDatabase:
@@ -284,7 +304,7 @@ class SQLiteStateDatabase:
 
     def _connect(self) -> sqlite3.Connection:
         if self._closed:
-            raise RuntimeError(f"SQLite 状态库已关闭: {self.path}")
+            raise RuntimeError(_sqlite_runtime_failure(self.path, "SQLite 状态库已关闭", "connection"))
         connection = sqlite3.connect(
             sqlite_file_uri(self.path), uri=True,
             timeout=SQLITE_BUSY_TIMEOUT_MS / 1000,
@@ -297,9 +317,9 @@ class SQLiteStateDatabase:
         journal_mode = str(connection.execute("PRAGMA journal_mode = WAL").fetchone()[0])
         if journal_mode.lower() != "wal":
             connection.close()
-            raise RuntimeError(
-                f"SQLite 无法启用 WAL: path={self.path}, journal_mode={journal_mode}"
-            )
+            raise RuntimeError(_sqlite_runtime_failure(
+                self.path, f"SQLite 无法启用 WAL: journal_mode={journal_mode}", "journal_mode",
+            ))
         connection.execute("PRAGMA synchronous = NORMAL")
         return connection
 
@@ -317,10 +337,10 @@ class SQLiteStateDatabase:
             )
             current = applied[-1] if applied else 0
             if current > self._schema_version:
-                raise RuntimeError(
-                    "SQLite schema 版本高于当前程序支持范围: "
-                    f"path={self.path}, current={current}, supported={self._schema_version}"
-                )
+                raise RuntimeError(_sqlite_runtime_failure(
+                    self.path, "SQLite schema 版本高于当前程序支持范围: "
+                    f"current={current}, supported={self._schema_version}", "schema_version",
+                ))
             # 迁移账本必须是连续的 1..current；任何缺号都说明有人绕过软件
             # 直接改写了 schema_migrations，继续打开会让缺号迁移永久不生效，
             # 因此明确报错而不是静默忽略。
@@ -331,10 +351,10 @@ class SQLiteStateDatabase:
                     for version in expected_applied
                     if version not in set(applied)
                 )
-                raise RuntimeError(
-                    "SQLite 迁移账本被外部改写，缺少已声明应用的版本: "
-                    f"path={self.path}, applied={applied}, missing={missing}"
-                )
+                raise RuntimeError(_sqlite_runtime_failure(
+                    self.path, "SQLite 迁移账本被外部改写，缺少已声明应用的版本: "
+                    f"applied={applied}, missing={missing}", "migration_ledger",
+                ))
             if current:
                 self._require_migrated_tables(connection, current)
             for version, migration in enumerate(self._migrations, start=1):
@@ -386,11 +406,10 @@ class SQLiteStateDatabase:
         }
         missing = [table for table in required if table not in present]
         if missing:
-            raise RuntimeError(
-                "SQLite 迁移账本声明的表缺失，拒绝以缺表状态打开（库被"
-                f"外部改写）: path={self.path}, current={current}, "
-                f"missing={missing}"
-            )
+            raise RuntimeError(_sqlite_runtime_failure(
+                self.path, "SQLite 迁移账本声明的表缺失，拒绝以缺表状态打开（库被"
+                f"外部改写）: current={current}, missing={missing}", "migration_tables",
+            ))
 
     def connection(self) -> sqlite3.Connection:
         return self._connect()

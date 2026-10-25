@@ -702,3 +702,11 @@
 - 完整 Git archive 的旧实现加新增测试为15 failed/0.66秒；最终共享存储及完整 Saver 107 passed/33.84秒，历史入口正式 matrix 4 passed/29.46秒，Ruff/compileall通过。产品 Session 与消息执行配合现有 model_stream 生成关键历史；bootstrap/history 在连接 owner 检查失败时明确500，原 SQLite 完整 dump、canonical 字节和身份不变，写锁可重取、冷 Saver 及原 API 故障移除后读回原历史。ASGI 与现有授权 fixture 不代表真实 Gateway、进程重启、Windows实机或完整Web。
 - 准确命令、前后指纹、原始输出/退出码、完整反例与主线程结构自查位于 `out/tests/temp/rollout_index_paths_20261025/artifacts/`。共享存储检查期间三个未加载的Web文件被他人修改，完整冻结核验按实拒绝；限定收据核后端、测试、配置输入未变和进程组回收，其余共享检查完整冻结通过。候选 Saver 首次用了不存在的unit路径而exit4，定位真实integration路径后77项通过，保留失败原件。主线程自查不称独立审查。
 - 2.2/7.2全局门仍未勾，SQLite进程持锁及其它存储错误出口另行处理；Agent团队、成员、委派与协作继续TODO。
+
+
+### 2026-10-25 SQLite 状态库所有权与迁移拒绝（2.2/7.2 部分收口）
+
+- 在原 SQLite owner 处理锁打开、初始化/加锁、解锁与关闭的原生错误，保留异常类别、errno/winerror和原cause；真实锁位置与原文只进入原诊断。真实占用仍立即以原RuntimeError拒绝，不等待、不共享。关闭、WAL失败、超前schema、账本缺号和缺表拒绝同样保留原原因及模式/版本/缺失项，移除公开真实路径；内部diagnostics合同未改。
+- 新增12项反例随完整Git archive的旧实现均失败（0.72秒）；最终共享核心SQLite38 passed、3项Windows专用skipped（0.93秒），Gateway状态库、工作区状态/配置及活动游标93 passed（3.64秒）。覆盖真实锁竞争、失败后句柄关闭/重取、原库正文不变、迁移拒绝前后完整SQL dump一致、修复后原owner重开及原数据；WAL失败只替换原生PRAGMA返回值，不伪造业务状态。这是存储与消费方测试，不称真实Gateway HTTP、进程重启或完整Web验收。
+- 锁标志、marker初始化、显式共享准入、SQL、WAL、事务和迁移顺序不变，不提升schema版本。AST对账确认SQLiteStateDatabase除RuntimeError正文参数外相同；共享required-tables查重优化独立保留。初次静态检查发现新增测试的import顺序和两处嵌套with，按规则整理后Ruff通过；compileall通过。源码前后指纹、准确命令、原始失败/成功输出、退出码和主线程自查在 `out/tests/temp/sqlite_owner_errors_20261025/artifacts/`，全部所记录运行源码冻结且进程组无残留。
+- 全局2.2/7.2仍未勾；未声称Windows实机通过，不扩展到未覆盖的其它SQLite或业务错误。Agent团队、成员、委派与协作继续TODO，未启动代理或专项验证。
