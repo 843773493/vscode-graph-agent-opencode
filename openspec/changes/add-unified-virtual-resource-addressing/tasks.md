@@ -759,3 +759,12 @@
 - 候选局部10项复制合同检查通过（16.08秒），完整旧生产9 failed/1 passed（16.65秒）；同一声明顺序与可选缺失正文正例保持通过。首轮完整matrix为18 passed/1 failed（75.67秒），唯一失败是新增测试误将父目录故障诊断位置断言为叶文件，按真实故障节点修正，不放宽错误类别、身份、hash或期限；最终相关9项通过（67.51秒），其中3项由产品消息执行/model_stream生成状态、通过真实路由/Depends/TraceMiddleware的ASGI HTTP验证错误、中止、不变原件、新key重试、冷Saver详情身份/正文及request_hash，另外6项保留原必需正文缺失/篡改拒绝。旧生产相应3项产品反例失败、6项既有拒绝通过（77.29秒）。局部与matrix存在重叠，不累加为独立场景。
 - 完整Git archive旧生产、准确命令、完整源码前后指纹、原始输出/真实退出码与AST核对位于 `out/tests/temp/fork_detail_copy_20261025/artifacts/`。移除本次错误上下文及布局错误正文后，原8个顶层符号AST一致。Ruff/compileall通过；结构核对为作者自查，不称独立代理审查；ASGI和冷Saver不代替真实Gateway、独立后端进程重启、Windows或完整Web验收。
 - 最终共享正式matrix 19 passed/62.32秒，含10项局部合同、3项真实产品入口及6项原必需正文拒绝；Ruff/compileall通过，候选strict全量45 passed/0 failed。verification003.json核实本片所登记3778条后端/协议/harness/config/matrix路径前后未变、原始日志/退出码和进程组回收；profile明确排除本片不启动或构建的客户端源码及客户端专项测试，不声称全仓冻结。共享独立suite顺序调整三方保留，不纳入本片提交。
+
+
+### 2026-10-25 fork 隔离 SQLite worker 错误（2.2/7.2 部分收口）
+
+- 父进程原生调用失败复用原 storage 出口，保留异常类别、errno/winerror 与 cause；子进程非零退出仍为 RuntimeError，公开阶段与退出码，完整 stderr 留诊断，原 command/stdout/stderr/status 留 CalledProcessError cause。超时仍为 TimeoutExpired、原30秒与原cause，普通响应/创建记录不含真实位置；原 run 终止并等待 worker 后清理私有目录。子进程脚本、成功 manifest、固定事务、backup与hash未改，不新增复制链或schema。
+- 候选6项单测通过（30.63秒），完整Git archive旧生产加相同最终测试为4 failed/2 passed（30.80秒）；真实worker正例核committed页与hash、持rollout锁时页/WAL/SHM全字节不变，真实child失败与真实30秒超时核源不变、回收与重试。首轮候选1 failed/5 passed、旧生产5 failed/1 passed，唯一共同错误是新增测试误要求在线session-control reader的SHM读标记也不变；原脚本明确允许在线reader，原始差异仅SHM，最终仍严格核持久页/WAL、完整源记录及持锁场景全部字节，不放宽身份、hash或期限。
+- 正式产品matrix候选2 passed/38.14秒，旧生产2 failed/33.67秒；产品消息执行与model_stream生成来源，真实路由/Depends/TraceMiddleware配合ASGI验证原生spawn拒绝与真实child copyfile失败、请求头体request_id一致、中止/无可见目标/原canonical不变，新key重试后冷Saver按原检查点ID核完整checkpoint、metadata、pending writes、历史assembly全字段/owner及request_hash与原canonical字节。ASGI和冷Saver对象不代替真实Gateway、独立Backend进程重启、Windows或完整Web验收。
+- 完整旧生产、准确命令、源码前后指纹、原始输出/真实退出码及本地结构核对在 `out/tests/temp/fork_sqlite_worker_errors_20261025/artifacts/`；verification001/002核实上述运行源码冻结与进程组回收。AST核原子进程脚本逐字不变，去除本次错误分支后原成功路径一致；结构核对为作者自查，不称独立审查。其余source捕获/复制及TemporaryDirectory创建清理的原生边界仍待后续，2.2/7.2不补勾，团队与协作继续TODO。
+- 最终共享三方合并后6项单测通过（30.63秒）、正式matrix的2项产品入口通过（39.72秒），Ruff/compileall通过；候选严格OpenSpec全量45 passed/0 failed。verification003.json核实本片登记的3780条后端/协议/harness/config/matrix路径前后未变、原始日志/真实退出码及进程组回收；profile明确排除本片不启动或构建的客户端源码与客户端专项测试，不声称全仓冻结。共享独立suite顺序保留，不纳入本片提交。

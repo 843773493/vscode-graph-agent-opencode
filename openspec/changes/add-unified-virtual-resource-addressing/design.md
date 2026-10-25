@@ -86,6 +86,8 @@ fork source 的同一文件清单函数供捕获、冻结 marker 校验和附件
 
 fork typed detail 仍仅按同一冻结 SQLite 的声明与精确历史 owner 复制：文件元数据、目标目录创建、复制及原正文 hash 读取的原生失败复用 storage 出口（artifact=fork_source、stage=detail_copy），直接 cause 与真实位置留诊断；目录/文件布局拒绝只公开原原因。查询顺序、locator/owner 校验、原字节和 hash 保持；缺失正文继续交原资源 owner 判断是否必需，不在复制 helper 补造正文、改写历史或放宽发布检查。
 
+隔离 SQLite worker 继续使用原独立解释器、固定读事务与 backup，不改变 stdin、成功 manifest 或30秒预算。父进程原生调用失败复用 storage 出口（artifact=fork_source、stage=sqlite_worker），保留原异常类别、errno/winerror和直接 cause；子进程非零退出仍是原 RuntimeError，公开退出码，原 command/stdout/stderr/status 保存在 CalledProcessError cause，完整 stderr 进入诊断，不声称跨进程保留子进程的原生异常对象。超时保留 TimeoutExpired 类别、原30秒与原异常 cause（stage=sqlite_timeout），普通文本不包含解释器或文件路径；原 subprocess.run 负责终止并等待 worker 后才清理私有目录。持 rollout 锁时源页/WAL/SHM均不变，session-control 在线 reader 仍允许 SQLite 更新 SHM 读标记而不改持久页/WAL；不增加另一条复制链。
+
 ### D2：保留既有段序，scope_id 全必填
 
 采用 `boxteam://{gateway_authority?}/{scope}/{scope_id}/resources/{kind}/{...}`，而非简化段序。

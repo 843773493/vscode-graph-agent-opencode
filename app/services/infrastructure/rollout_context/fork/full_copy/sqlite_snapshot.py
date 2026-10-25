@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import subprocess
 import sys
 from pathlib import Path
@@ -10,6 +11,12 @@ from tempfile import TemporaryDirectory
 
 from app.core.atomic_fs import native_io_path
 from app.core.sqlite_state import sqlite_file_uri, validate_sqlite_path_budget
+from app.services.infrastructure.rollout_context.storage.primitives import (
+    _storage_failure,
+    _storage_io,
+)
+
+logger = logging.getLogger(__name__)
 
 SQLITE_COPY_FILES = ("index.sqlite", "index.sqlite-wal", "index.sqlite-journal")
 SQLITE_EXCLUDED_FILES = frozenset((*SQLITE_COPY_FILES, "index.sqlite-shm"))
@@ -95,16 +102,28 @@ def copy_live_sqlite_snapshot(
             "source": str(native_io_path(source)), "destination": str(native_io_path(destination)),
             "private": private, "rollout_lock_held": rollout_lock_held, "files": entries,
         }
-        result = subprocess.run(
-            [sys.executable, "-I", "-c", _COPY_SCRIPT],
-            input=json.dumps(request).encode("utf-8"),
-            check=False,
-            capture_output=True,
-            timeout=30,
-        )
+        command = [sys.executable, "-I", "-c", _COPY_SCRIPT]
+        try:
+            with _storage_io(destination, "source-mismatch: SQLite snapshot worker 启动失败", "sqlite_worker", artifact="fork_source"):
+                result = subprocess.run(
+                    command,
+                    input=json.dumps(request).encode("utf-8"),
+                    check=False,
+                    capture_output=True,
+                    timeout=30,
+                )
+        except subprocess.TimeoutExpired as error:
+            if error.stderr is not None:
+                logger.error("SQLite snapshot worker 超时原始 stderr: %s", error.stderr.decode(errors="replace"))
+            detail = _storage_failure(
+                destination, "source-mismatch: SQLite snapshot worker 超时", "sqlite_timeout", error, artifact="fork_source",
+            )
+            raise subprocess.TimeoutExpired(detail, error.timeout) from error
     if result.returncode != 0:
-        raise RuntimeError(
-            "source-mismatch: 隔离进程复制 SQLite snapshot 失败: "
-            + result.stderr.decode(errors="replace").strip()
-        )
+        error = subprocess.CalledProcessError(result.returncode, command, output=result.stdout, stderr=result.stderr)
+        logger.error("SQLite snapshot worker 失败原始 stderr: %s", result.stderr.decode(errors="replace"))
+        raise RuntimeError(_storage_failure(
+            destination, f"source-mismatch: 隔离进程复制 SQLite snapshot 失败 returncode={result.returncode}",
+            "sqlite_worker", error, artifact="fork_source",
+        )) from error
     return tuple((name, size, digest) for name, size, digest in json.loads(result.stdout))
