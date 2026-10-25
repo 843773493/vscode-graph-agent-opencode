@@ -31,4 +31,4 @@ workspace_services/
 - 目录名使用 Python 可导入的 `workspace_services`。
 - 替身边界必须在测试名、fixture 或代码中显式可见。
 
-`test_resource_release.py`沿正式Session、资源创建、operation及原Session资源drain生成状态，复用双辅助服务fixture。真实PTY/Chromium/HTTP核全量lease冲突不部分detach、peer完成后可查询、一次30秒覆盖撤权与删除回执、原lease及同入口核实不重发删除；suite `integration-resource-release`固定120秒/4GiB。Thread入口由共享owner单测验证，不把该场景称为整个Session删除、runtime卸载、Gateway/Web或Windows验收。
+`test_resource_release.py`沿正式Session、资源创建、operation及原Session资源drain生成状态，复用双辅助服务fixture。真实PTY/Chromium/HTTP核全量lease冲突不部分detach、peer完成后可查询、一次30秒覆盖撤权与删除回执、原lease及同入口核实不重发删除；operation收尾场景推进本进程单调时间，核锁等待到期、健康占用已释放、精确原lease保留、PTY/页面身份和版本不变及同operation显式重试。suite `integration-resource-release`固定120秒/4GiB。Thread入口由共享owner单测验证，不把该场景称为整个Session删除、runtime卸载、Gateway/Web或Windows验收。

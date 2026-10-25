@@ -12,6 +12,9 @@ from app.core.mounted_workspaces import MountedWorkspace
 from app.services.business.workspace_resources import owner as owner_module
 from app.services.business.workspace_resources.owner import ResourceConflict
 from app.services.infrastructure.browser_manager_client import BrowserManagerClient
+from app.services.infrastructure.external_resource_leases import (
+    ExternalResourceLeaseLedger,
+)
 from tests.harness.python.run_context import TestRunContext
 from tests.integration.workspace_services.browser.test_browser_owner_revision_drain import (
     browser_client as browser_client,  # noqa: PLC0414
@@ -137,3 +140,74 @@ async def test_real_release_preflights_then_unlocks_peer_and_reconciles_original
             revision_release.set()
             delete_release.set()
             await asyncio.gather(sweeping, return_exceptions=True)
+
+
+@pytest.mark.parametrize("kind", ["terminal", "browser"])
+async def test_real_operation_close_deadline_preserves_live_resource_and_original_lease_for_retry(
+    browser_client: tuple[BrowserManagerClient, Path, TestRunContext],
+    owner_mount: MountedWorkspace, monkeypatch: pytest.MonkeyPatch, kind: str,
+) -> None:
+    _client, root, run = browser_client
+    async with workspace_tool_runtime(root, startup_mount=owner_mount) as (container, sid, context):
+        owner = container.terminal_resource_owner if kind == "terminal" else container.browser_resource_owner
+        resources = []
+        for index in range(2):
+            options = {"session_id": sid, "retention_scope": "thread",
+                       "holder_id": f"request:close-budget-create:{index}", "operation_id": f"close-budget-create:{index}"}
+            resource = (await owner.create_terminal(**options) if kind == "terminal"
+                        else await owner.create_browser(**options, url="about:blank"))
+            resources.append(str(resource["resource_id"]))
+        rid, peer = resources
+        async with owner.operation(session_id=sid, thread_id=context.thread_binding.thread_id,
+                                   holder_id="request:real-close-budget", operation_id="real-close-budget") as operation:
+            for resource_id in resources:
+                if kind == "terminal":
+                    await operation.read_terminal(resource_id)
+                else:
+                    await operation.perform(resource_id, "navigate", {"url": "about:blank"})
+            leases = {resource_id: owner._leases.leases_for_resource(resource_id)[0] for resource_id in resources}
+            records = {resource_id: owner._store.get(resource_id) for resource_id in resources}
+            external = {resource_id: await owner._transport.get_resource(resource_id) for resource_id in resources}
+            loop = asyncio.get_running_loop()
+            original_time = loop.time
+            offset = 0
+            async with owner._resource_lock(rid):
+                with monkeypatch.context() as patch:
+                    patch.setattr(loop, "time", lambda: original_time() + offset)
+                    closing = asyncio.create_task(operation.close())
+                    try:
+                        async with asyncio.timeout(5):
+                            while owner._leases.get_lease(leases[peer].lease_id).status != "released":
+                                await asyncio.sleep(0)
+                        assert not closing.done()
+                        offset = 31
+                        with pytest.raises(TimeoutError, match="总截止时间") as caught:
+                            await asyncio.wait_for(asyncio.shield(closing), 5)
+                        assert "operation_id=real-close-budget" in str(caught.value)
+                        assert rid in str(caught.value) and str(root) not in str(caught.value)
+                        assert operation._lease_refs == {rid: leases[rid].lease_id}
+                        cold = ExternalResourceLeaseLedger(state_path=owner._leases._state_path)
+                        assert cold.get_lease(leases[rid].lease_id).status == "active"
+                        assert cold.get_lease(leases[peer].lease_id).status == "released"
+                    finally:
+                        closing.cancel()
+                        await asyncio.gather(closing, return_exceptions=True)
+            # 到期只结束本次锁等待，不停止真实PTY/页面，也不在解锁后偷偷释放。
+            await asyncio.sleep(0)
+            assert operation._lease_refs == {rid: leases[rid].lease_id}
+            for resource_id in resources:
+                assert owner._store.get(resource_id) == records[resource_id]
+                current = await owner._transport.get_resource(resource_id)
+                assert current["status"] == external[resource_id]["status"] == "running"
+                assert current["transport_owner_revision"] == external[resource_id]["transport_owner_revision"]
+                identity_field = "os_pid" if kind == "terminal" else "active_page_id"
+                assert current[identity_field] == external[resource_id][identity_field]
+            await operation.close()
+            await operation.close()
+            assert operation._lease_refs == {}
+            assert all(owner._leases.get_lease(lease.lease_id).status == "released" for lease in leases.values())
+            run.write_result("passed", {
+                "entry": "resource-operation-close", "kind": kind, "resource_id": rid, "peer_id": peer,
+                "original_lease_id": leases[rid].lease_id, "budget_seconds": 30,
+                "scope": "正式Session/资源/operation，真实Node/PTY或Chromium/HTTP；仅推进本进程单调时间和占用原锁，不代表外部终止或完整shutdown验收",
+            })

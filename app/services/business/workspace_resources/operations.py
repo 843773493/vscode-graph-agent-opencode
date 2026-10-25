@@ -15,6 +15,8 @@ from app.services.business.workspace_resources.records import (
 if TYPE_CHECKING:
     from app.services.business.workspace_resources.owner import WorkspaceResourceOwner
 
+OPERATION_CLOSE_WAIT_SECONDS = 30.0
+
 
 class ResourceOperations:
     def __init__(
@@ -57,12 +59,24 @@ class ResourceOperations:
 
     async def close(self) -> None:
         self._closed = True
-        # 各资源分别等待自己的锁；单项挂起或写盘失败不阻断其它占用释放。
-        results = await asyncio.gather(
-            *(self._release(resource_id) for resource_id in tuple(self._lease_refs)),
-            return_exceptions=True,
-        )
-        errors = [result for result in results if isinstance(result, BaseException)]
+        # 全批只取一次预算；取消只排空本次锁等待，原引用保留供同operation重试。
+        # TODO(5.4)：同步账本写盘与不合作取消不能由此预算抢占，外部终态仍须owner核实。
+        budget = asyncio.timeout(OPERATION_CLOSE_WAIT_SECONDS)
+        tasks = [asyncio.create_task(self._release(resource_id)) for resource_id in tuple(self._lease_refs)]
+        try:
+            async with budget:
+                results = await asyncio.gather(*tasks, return_exceptions=True)
+            errors = [result for result in results if isinstance(result, BaseException)]
+        except TimeoutError:
+            if not budget.expired():
+                raise
+            # gather已排空取消；保留到期前返回的原错误，不被整批期限覆盖。
+            errors = [error for task in tasks if not task.cancelled() and (error := task.exception()) is not None]
+            errors.append(TimeoutError(
+                "外部资源 operation 关闭等待已达总截止时间；保留未释放占用: "
+                f"operation_id={self._operation_id}, holder_id={self._holder_id}, "
+                f"resource_ids={','.join(self._lease_refs)}"
+            ))
         if len(errors) == 1:
             raise errors[0]
         if errors:
