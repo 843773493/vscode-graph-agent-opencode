@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import base64
-import hashlib
 import json
 import logging
 import sqlite3
@@ -16,6 +15,7 @@ from threading import RLock
 from pydantic import ValidationError
 
 from app.core.atomic_fs import native_io_path
+from app.core.hashing import sha256_hex
 from app.core.sqlite_state import load_sql, sqlite_file_uri, validate_sqlite_path_budget
 from app.schemas.internal_v2.session_navigation.operations import (
     NAVIGATION_MUTATION_TERMINAL_STATES,
@@ -37,7 +37,7 @@ def canonical_json(value: object) -> str:
 
 
 def digest(value: object) -> str:
-    return hashlib.sha256(canonical_json(value).encode()).hexdigest()
+    return sha256_hex(canonical_json(value).encode())
 
 
 def encode_directory_cursor(directory_key: WorkspaceDirectoryKeyDTO, revision: int, key: tuple[bool, str, str]) -> str:

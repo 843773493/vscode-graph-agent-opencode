@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-import hashlib
 import logging
 from contextlib import closing
 from dataclasses import asdict
 from typing import TYPE_CHECKING
 
 from app.core.exceptions import NotFoundError
+from app.core.hashing import sha256_hex
 from app.core.session_control_communication_ledger.observations import (
     RemoteObservation,
     RemoteObservationError,
@@ -33,7 +33,7 @@ logger = logging.getLogger(__name__)
 
 
 def _observation_hash(value: object) -> str:
-    return hashlib.sha256(canonical_json(value).encode()).hexdigest()
+    return sha256_hex(canonical_json(value).encode())
 
 
 def _observation_page_identity(
