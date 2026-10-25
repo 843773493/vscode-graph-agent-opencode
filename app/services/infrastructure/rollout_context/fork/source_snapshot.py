@@ -220,7 +220,8 @@ def capture_fork_rollout_snapshot(
         if type(source_lifecycle_generation) is not int or source_lifecycle_generation < 1:
             raise RuntimeError("source-mismatch: 冻结 lifecycle generation 非法")
     except BaseException:
-        shutil.rmtree(native_io_path(captured_root), ignore_errors=True)
+        with _storage_io(captured_root, "source-mismatch: fork rollout snapshot 清理失败", "cleanup", artifact="fork_source"):
+            shutil.rmtree(native_io_path(captured_root))
         raise
     finally:
         if lock is not None:

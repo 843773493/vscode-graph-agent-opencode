@@ -201,6 +201,11 @@
 - **WHEN** 隔离 SQLite snapshot 的私有目录创建或清理遇到原生错误，包括worker非零退出后又遇到清理失败
 - **THEN** 原owner保留原生异常类别、errno/winerror与直接cause，普通响应/创建记录只含逻辑artifact和创建/清理阶段，真实位置与完整原错留诊断。创建失败不启动worker，清理失败不能返回成功manifest或声称已释放；原finally仍调用同一TemporaryDirectory的cleanup。组合故障中worker原退出码、stdout/stderr/command与RuntimeError/CalledProcessError在清理失败的原始cause/context及诊断中保留，不得被清理错误覆盖而丢失。失败不改写来源正文或发布残缺目标，故障解除后原产品入口可重试并冷读同一历史身份、检查点、assembly与hash
 
+#### Scenario: rollout 来源捕获失败后清理再次失败
+
+- **WHEN** rollout 来源捕获已失败，原owner删除同一captured_root又遇到原生文件错误
+- **THEN** 原清理调用明确失败，不使用ignore_errors将未删除目录当作已释放；异常类别、errno/winerror与直接cause保留，此前捕获失败保留在原生context和诊断中，普通响应/创建记录仅含逻辑artifact与cleanup阶段，不含真实位置。清理成功时仍抛原捕获错误，不改变正常复制、锁释放、manifest/hash、journal或来源字节；原创建owner继续协调中止，故障解除后的新请求可重试并按历史身份冷读检查点、assembly及request_hash，不发布半成品或增加清理链
+
 ### Requirement: Browser 本地文件页面 URL 保留原生语义
 
 系统 MUST 保留 Browser 原生 `file:` 导航能力。用户明确打开的本地文件页面 URL MAY 原样保留在 Browser 地址栏、导航请求、该页面相关错误、页面快照及恢复检查点中。该 URL MUST 始终由目标机器按原生文件系统语义解释，包括 Windows 盘符与路径分隔符；中继、source 机器和当前激活工作区 MUST NOT 改写其目标或在自身文件系统解释该 URL。

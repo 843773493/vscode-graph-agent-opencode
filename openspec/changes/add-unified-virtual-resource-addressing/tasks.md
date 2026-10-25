@@ -777,3 +777,11 @@
 - 正式matrix候选5 passed/62.53秒，旧生产3 failed/2 passed/60.21秒。原产品消息执行与model_stream生成来源，经真实路由/Depends/TraceMiddleware的ASGI HTTP核原spawn/child失败、私有目录创建、清理和真实child IsADirectoryError后再清理失败；错误阶段、头体request_id、中止/无可见副本、canonical原字节、新key重试及冷Saver原检查点/metadata/pending writes、assembly全字段/历史owner/request_hash保持。组合故障的真实worker原始stderr与退出码保留，清理原错的context/cause仍指向同一worker失败；没有伪造业务历史或替代模型实现。
 - 准确命令、原始输出/退出码、完整源码前后指纹、完整旧生产和作者本地结构核对位于 `out/tests/temp/fork_sqlite_private_io_20261025/artifacts/`；verification001/002核实上述运行冻结与进程组回收。不是独立审查，ASGI与冷Saver对象不代替真实Gateway、Backend进程重启、Windows或完整Web。其它source捕获I/O、ignore_errors清理及transfer仍待后续，2.2/7.2不补勾，团队与协作继续TODO。
 - 最终共享三方合并后完整9项单测通过（30.99秒）、正式matrix完整5项产品入口通过（59.07秒），Ruff/compileall通过，候选严格OpenSpec全量45 passed/0 failed。verification003.json核实登记的3780条后端/协议/harness/config/matrix路径前后未变、原始日志/真实退出码与进程组回收；明确排除本片不启动/构建的客户端源码与专项测试，不声称全仓冻结。
+
+
+### 2026-10-25 rollout 来源捕获的失败清理（2.2/7.2 部分收口）
+
+- 原异常清理移除rmtree(ignore_errors=True)，同一次rmtree复用storage错误出口（artifact=fork_source、stage=cleanup）。清理原生失败保留类别、errno/winerror与直接cause，此前捕获失败仍在原生context和诊断中，普通错误和创建记录不含真实位置；清理成功仍抛回原捕获错误。原复制/读取、锁释放、manifest/hash/journal和成功链保持，不新增worker、writer或第二清理链。
+- 候选新增2项单测通过（0.26秒），完整63f4897fe Git archive旧生产加相同测试2项均失败（0.47秒）；通过真实os.rmdir拒绝验证缺锁/ACL失败后清理错误不再被忽略、未删除目录仍可观察、此前异常保留、原源文件不变，解除故障后原清理合同恢复。正式matrix候选完整6 passed/73.46秒，旧生产1 failed/5 passed/65.89秒：产品消息执行/model_stream生成来源，真实child copyfile失败后又遇真实rmdir边界错误，核公开错误阶段/无路径、头体request_id一致、原child stderr/退出码及cause/context、中止/无可见半成品、原canonical字节、新key重试和冷Saver原检查点/metadata/pending writes、assembly全字段/历史owner/request_hash。原5项worker场景保持，不累加为新增场景。
+- 原始准确命令、输出/真实退出码、完整源码前后指纹、完整旧生产及作者本地结构核对在 `out/tests/temp/fork_rollout_cleanup_20261025/artifacts/`；verification001.json核实冻结与进程组回收。AST移除本次cleanup错误上下文并恢复ignore_errors参数后整个原模块一致，源码签名不变。首个apply_patch发现既有private_source_snapshot测试仅在共享树未入HEAD，补丁原子拒绝且未改源码；本片新增独立source_snapshot_cleanup测试，不覆盖或纳入他人的既有测试。结构核对不是独立审查，ASGI/冷Saver对象不代替真实Gateway、Backend进程重启、Windows或完整Web。其它source捕获原生I/O与transfer仍待核，2.2/7.2不补勾，团队与协作继续TODO。
+- 最终共享三方合并后4项来源清理单测通过（0.28秒，含共享既有两项未修改测试）、正式matrix完整6项产品入口通过（67.05秒），Ruff/compileall通过，候选严格OpenSpec全量45 passed/0 failed。verification002/003.json核实登记的3781条后端/协议/harness/config/matrix路径前后未变、原始日志/真实退出码及进程组回收；profile排除本片不启动/构建的客户端源码与专项测试，不声称全仓冻结。既有未跟踪private_source_snapshot测试仅用于关联回归，不纳入本片提交。

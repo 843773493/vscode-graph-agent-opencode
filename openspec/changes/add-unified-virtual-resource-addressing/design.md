@@ -90,6 +90,8 @@ fork typed detail 仍仅按同一冻结 SQLite 的声明与精确历史 owner �
 
 同一私有目录的创建和清理在各自原生边界复用 storage 出口（stage=sqlite_private_create / sqlite_private_cleanup），原异常类别、errno/winerror与cause保持，位置只留诊断。原 TemporaryDirectory 仍唯一拥有临时目录，以显式 finally 调用原 cleanup；返回成功 manifest 前必须完成清理。非零退出在 finally 之前形成原 RuntimeError/CalledProcessError并记录stderr，使后续清理失败的原生cause/context与诊断保全两项故障；不能因清理异常丢掉worker失败证据。创建失败不启动worker，清理失败不伪报释放或成功，不增加补偿writer或第二清理链。
 
+上层 rollout 来源捕获的原失败清理不再使用 rmtree(ignore_errors=True)：仍只删除同一 captured_root，清理成功后抛回原捕获错误，清理原生失败则复用原 storage 出口（artifact=fork_source、stage=cleanup），保留异常类别、errno/winerror与直接cause，真实位置只留诊断。此前的捕获错误通过原生异常context及诊断保留；不把删除失败当作已释放，不新增重试worker或清理链，后续请求仍沿原创建owner/journal协调中止和重试。
+
 ### D2：保留既有段序，scope_id 全必填
 
 采用 `boxteam://{gateway_authority?}/{scope}/{scope_id}/resources/{kind}/{...}`，而非简化段序。
