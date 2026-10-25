@@ -7,7 +7,7 @@ import json
 import logging
 import sqlite3
 from collections.abc import Iterator
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from threading import RLock
@@ -84,36 +84,53 @@ class FileOperationRecord:
 class WorkspaceFileStore:
     def __init__(self, workspace: Path, workspace_id: str) -> None:
         self.path = workspace / ".boxteam/navigation/workspace-files.sqlite"
-        validate_sqlite_path_budget(self.path)
-        native_io_path(self.path.parent).mkdir(parents=True, exist_ok=True)
         self.workspace_id = workspace_id
         self._lock = RLock()
-        self._db = sqlite3.connect(sqlite_file_uri(self.path), uri=True, isolation_level=None, check_same_thread=False)
-        self._db.row_factory = sqlite3.Row
-        self._db.execute("PRAGMA journal_mode=WAL")
-        self._db.execute("PRAGMA synchronous=FULL")
-        version = self._db.execute("PRAGMA user_version").fetchone()[0]
-        if version == 0 and not self._db.execute("SELECT 1 FROM sqlite_master WHERE type='table'").fetchone():
-            with self.transaction() as db:
-                db.execute(load_sql(__package__, "sql/owner.sql"))
-                db.execute(load_sql(__package__, "sql/owner_seed.sql"), (workspace_id,))
-                # 每个已访问目录只留固定宽度摘要与版本，不存逐文件身份或正文。
-                db.execute(load_sql(__package__, "sql/directories.sql"))
-                db.execute(load_sql(__package__, "sql/file_directory_uri.sql"))
-                db.execute(load_sql(__package__, "sql/operations.sql"))
-                db.execute(load_sql(__package__, "sql/file_operations_pending.sql"))
-                db.execute(load_sql(__package__, "sql/file_operations_cleanup.sql"))
-                db.execute(load_sql(__package__, "sql/events.sql"))
-                db.execute("PRAGMA user_version=3")
-        elif version != 3:
-            self._db.close()
-            raise RuntimeError(f"文件导航库 schema 不受支持: path={self.path}, version={version}")
-        tables = {row[0] for row in self._db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-        if not {"owner", "directories", "operations", "events"}.issubset(tables):
-            raise RuntimeError(f"文件导航库缺少权威表，不重建: {self.path}")
-        rows = [row[0] for row in self._db.execute("SELECT workspace_id FROM owner")]
-        if rows != [workspace_id]:
-            raise RuntimeError(f"文件导航库 workspace owner 不一致: {rows!r}")
+        identity = f"workspace_id={workspace_id}, artifact=workspace_files, stage=initialize"
+        with ExitStack() as construction:
+            try:
+                validate_sqlite_path_budget(self.path)
+                native_io_path(self.path.parent).mkdir(parents=True, exist_ok=True)
+                self._db = sqlite3.connect(sqlite_file_uri(self.path), uri=True, isolation_level=None, check_same_thread=False)
+                construction.callback(self._db.close)
+                self._db.row_factory = sqlite3.Row
+                self._db.execute("PRAGMA journal_mode=WAL")
+                self._db.execute("PRAGMA synchronous=FULL")
+                version = self._db.execute("PRAGMA user_version").fetchone()[0]
+                if version == 0 and not self._db.execute("SELECT 1 FROM sqlite_master WHERE type='table'").fetchone():
+                    with self.transaction() as db:
+                        db.execute(load_sql(__package__, "sql/owner.sql"))
+                        db.execute(load_sql(__package__, "sql/owner_seed.sql"), (workspace_id,))
+                        # 每个已访问目录只留固定宽度摘要与版本，不存逐文件身份或正文。
+                        db.execute(load_sql(__package__, "sql/directories.sql"))
+                        db.execute(load_sql(__package__, "sql/file_directory_uri.sql"))
+                        db.execute(load_sql(__package__, "sql/operations.sql"))
+                        db.execute(load_sql(__package__, "sql/file_operations_pending.sql"))
+                        db.execute(load_sql(__package__, "sql/file_operations_cleanup.sql"))
+                        db.execute(load_sql(__package__, "sql/events.sql"))
+                        db.execute("PRAGMA user_version=3")
+                elif version != 3:
+                    raise RuntimeError(f"文件导航库 schema 不受支持: {identity}, version={version}")
+                tables = {row[0] for row in self._db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+                if not {"owner", "directories", "operations", "events"}.issubset(tables):
+                    raise RuntimeError(f"文件导航库缺少权威表，不重建: {identity}")
+                rows = [row[0] for row in self._db.execute("SELECT workspace_id FROM owner")]
+                if rows != [workspace_id]:
+                    logger.error("文件导航库原 owner 不一致: path=%s rows=%r", self.path, rows)
+                    raise RuntimeError(f"文件导航库 workspace owner 不一致: {identity}")
+            except (OSError, sqlite3.Error, RuntimeError) as error:
+                logger.exception("文件导航库初始化失败: %s path=%s", identity, self.path)
+                if isinstance(error, RuntimeError):
+                    raise
+                detail = (f"文件导航库初始化失败: {identity}, error={type(error).__name__}, "
+                          f"errno={getattr(error, 'errno', None)}, winerror={getattr(error, 'winerror', None)}")
+                projected = (type(error)(error.errno, detail, None, getattr(error, "winerror", None))
+                             if isinstance(error, OSError) else type(error)(detail))
+                for name in ("sqlite_errorcode", "sqlite_errorname"):
+                    if hasattr(error, name):
+                        setattr(projected, name, getattr(error, name))
+                raise projected from error
+            construction.pop_all()
 
     @contextmanager
     def transaction(self) -> Iterator[sqlite3.Connection]:

@@ -125,6 +125,12 @@
 
 ## 7. 验证与收口
 
+### 2026-10-25 文件导航库的初始化失败与原连接回收（2.2/7.2 部分收口）
+
+- 原构造作用域在连接打开后立即登记关闭责任，schema与owner校验成功才交给原文件owner。未知版本、缺表和归属错误只公布稳定工作区身份/阶段；物理位置和损坏owner原值保留诊断。原生文件/SQLite失败保留类别、errno/winerror、SQLite错误码及直接cause；SQL资产读取失败在原事务内回滚，不留下半套schema。16个非构造方法、全部初始化SQL加载及execute调用AST保持，schema仍为3，不新增存储或迁移链；结构核对为作者自查，不称独立审查。
+- 最终10项定向测试通过（3.03秒），Linux操作/事件/游标/崩溃恢复及真实Backend长路径回归67 passed/57.62秒。完整`a232110ab` Git归档加入相同最终测试为9 failed/1 passed（4.77秒）；5项单测反例及4项服务启动反例分别证明错误路径外泄或真实连接仍可操作。候选保留异常traceback与原Connection引用时仍明确关闭；修复原输入后同一服务经原HTTP路由、真实TraceMiddleware、SQLite/worker完成新操作与读取，核同request_id和事件。旧库及损坏输入由故障测试准备/修复，不冒充产品执行历史。
+- Windows快照`44ee2933f5cb2921ba0de586053174acf2562806`同10项通过（4.69秒），保留原异常/失败owner引用时立即移动被拒绝数据库，再由同一服务重试成功；原生错误码和SQL回滚断言保持。`out/tests/temp/workspace_file_store_initialization_20261025/artifacts/`保存准确命令、raw/实际退出码、源码前后指纹、完整反例和4份Windows产品JSON；`verification-016.json`核运行冻结、相同最终反例测试及远端3份源码按CRLF/LF归一后一致。首轮产品3 failed/1 passed来自参数共用工作区的文件碰撞，已按节点独立子工作区修正，未放宽目标/身份/错误断言。Ruff与compileall通过，OpenSpec strict 45 passed/0 failed；ASGI路由与文件服务重试不代替完整Backend/Gateway/Web启动或全局持久化审计，2.2/7.2保持未勾。团队/协作与CIL第9节继续暂缓。
+
 ### 2026-10-25 普通文件的 Windows 原生长路径（2.2/7.2 部分收口）
 
 - Windows 实机在产品目录创建 committed 后，原列表将长路径误报为不存在（`windows-baseline-006`，1 failed）；首轮 `windows-red-003` 停在旧 fixture 尾部空格目录的准备阶段，不作为产品反例。长路径用例改用独立的合法中文目录参数，原空格后继用例保持。扫描、目录观察、路径分类、文本原子发布、归档和下载传输复用既有 `native_io_path`；逻辑 child 继续承担私有目录、暂存及归属比较，扩展前缀不进 URI、目录键或业务记录。
