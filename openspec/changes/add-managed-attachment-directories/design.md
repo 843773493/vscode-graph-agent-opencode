@@ -311,7 +311,9 @@ Backend的原关闭步骤自然等待这条停止链；整批观察预算到期�
 
 原`WorkspaceResourceOwner.list_resources`从入口取得一次30秒协作式预算，准备、所选资源恢复、唯一外部清单及逐资源锁共同消耗。过滤、完整记录冲突检查、观察、写盘和排序仍是原唯一链路；本次到期排空自己的等待，保留已经持久提交的恢复与观察，不为未开始的读取补造unknown、lease或外部动作。原传输TimeoutError与调用方取消保持归属，无后台重试或清单缓存。
 
-真实Session与ASGI资源创建/列表驱动Node/PTY或Chromium/HTTP，暂停已取得的真实清单回执并推进本次截止，验证HTTP503/request_id、peer继续可读、原持久记录/占用及外部身份不变，以及故障解除后的正式列表重试。阶段预算相加与已提交前项保留由共享owner单测验证；此处不声称真实等待30秒、独立Backend重启或Gateway/Web验收。跨领域聚合API整体预算、同步存储、不合作取消及完整operation/shutdown仍TODO，5.2/5.4/6.2保持未勾。
+真实Session与ASGI资源创建/列表驱动Node/PTY或Chromium/HTTP，暂停已取得的真实清单回执并推进本次截止，验证HTTP503/request_id、peer继续可读、原持久记录/占用及外部身份不变，以及故障解除后的正式列表重试。阶段预算相加与已提交前项保留由共享owner单测验证；此处不声称真实等待30秒、独立Backend重启或Gateway/Web验收。公共HTTP入口的跨领域预算由下述切片接入；同步存储、不合作取消及完整operation/shutdown仍TODO，5.2/5.4/6.2保持未勾。
+
+公共Workspace资源列表在原串行领域调用外取得一次30秒预算，Terminal到Browser的切换以及kind单选均不重新计时；仍复用原owner、参数、DTO和错误映射。到期只排空当前调用的协作式等待，保留已提交的前项观察、原资源及共享lease；原传输TimeoutError与调用方取消保持归属，没有另一份聚合状态或后台补发。真实双辅助服务场景通过正式Session和ASGI资源创建生成PTY及Browser，先取得两个原清单，再推进同一次HTTP预算，核对503、request_id、前项记录/lease原字节、peer可读、外部身份/版本及显式重试顺序。该预算不覆盖SessionResourceRegistry的另一展示投影，也不保证同步存储、DTO序列化可抢占或不合作取消能终止。
 
 ### Terminal 创建排空与关闭观察（5.4 部分收口）
 

@@ -361,7 +361,7 @@ def test_lost_browser_action_receipt_keeps_native_error_in_diagnostics(
     assert type(error).__name__ in detail
     assert "resource.sqlite" not in detail
     assert "errno=13" in detail
-    saved = json.loads((browser_owner_bundle.root / ".boxteam" / "browser-resources.json").read_text())
+    saved = json.loads((browser_owner_bundle.root / ".boxteam" / "browser-resources.json").read_text(encoding="utf-8"))
     assert saved["records"][0]["error"] == detail
     assert any(record.exc_info and record.exc_info[1] is error for record in caplog.records)
     assert str(error) in caplog.text
@@ -411,7 +411,7 @@ def test_transport_failure_preserves_api_route_without_treating_it_as_native_pat
         f"BrowserRequestError: 浏览器管理器请求失败: method=GET, path=/api/browsers/{resource_id}/read, "
         "status=500 (code=browser_read_failed)"
     )
-    saved = json.loads((browser_owner_bundle.root / ".boxteam" / "browser-resources.json").read_text())
+    saved = json.loads((browser_owner_bundle.root / ".boxteam" / "browser-resources.json").read_text(encoding="utf-8"))
     assert saved["records"][0]["error"] == detail
     browser_owner_bundle.restart()
     observed = resource_api_client.get(f"/api/v1/resources/{resource_id}").json()["data"]

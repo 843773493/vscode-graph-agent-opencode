@@ -10,6 +10,7 @@ import httpx
 import pytest
 from fastapi import FastAPI
 
+from app.api import resources as resource_api_module
 from app.api.deps import (
     get_browser_resource_owner,
     get_terminal_resource_owner,
@@ -448,4 +449,96 @@ async def test_real_list_total_deadline_preserves_live_resources_and_peer_access
             (run.artifacts_dir / f"list-deadline-{kind}.json").write_text(json.dumps({
                 "failure": failed.json(), "retry": retried.json(), "external": current,
                 "scope": "正式Session及ASGI资源创建/列表，真实Node/PTY或Chromium/HTTP；暂停已返回清单并推进本次截止，不代表Gateway/Web或整个聚合API总期限",
+            }, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
+async def test_real_aggregate_list_uses_one_budget_across_both_resource_owners(
+    browser_client: tuple[BrowserManagerClient, Path, TestRunContext], owner_mount: MountedWorkspace,
+    monkeypatch: pytest.MonkeyPatch, resource_api,
+) -> None:
+    _client, root, run = browser_client
+    async with workspace_tool_runtime(root, startup_mount=owner_mount) as (container, sid, _context):
+        owners = [container.terminal_resource_owner, container.browser_resource_owner]
+        async with resource_api(container, "browser") as client:
+            created = []
+            for kind in ("terminal", "browser"):
+                response = await client.post(f"/api/v1/resources/{kind}s", json={
+                    "session_id": sid, "retention_scope": "thread", "title": f"aggregate-{kind}",
+                })
+                assert response.status_code == 200, response.text
+                created.append(response.json()["data"]["resource_id"])
+            external = [await owner._transport.get_resource(rid) for owner, rid in zip(owners, created, strict=True)]
+            entered = [asyncio.Event(), asyncio.Event()]
+            release = [asyncio.Event(), asyncio.Event()]
+            drained = asyncio.Event()
+            deadlines: list[asyncio.Timeout] = []
+            calls: list[int] = []
+
+            def capture(seconds: float) -> asyncio.Timeout:
+                assert seconds == 30
+                context = asyncio.timeout(seconds)
+                if asyncio.current_task().get_name() == "aggregate-list-under-test":
+                    deadlines.append(context)
+                return context
+
+            def receiving(index: int, transport_list):
+                async def read():
+                    result = await transport_list()
+                    if asyncio.current_task().get_name() == "aggregate-list-under-test":
+                        calls.append(index)
+                        entered[index].set()
+                        try:
+                            await release[index].wait()
+                        finally:
+                            if index == 1:
+                                drained.set()
+                    return result
+                return read
+
+            with monkeypatch.context() as patch:
+                patch.setattr(resource_api_module, "timeout", capture, raising=False)
+                for index, owner in enumerate(owners):
+                    patch.setattr(owner._transport, "list_resources", receiving(index, owner._transport.list_resources))
+                pending = asyncio.create_task(client.get("/api/v1/resources", headers={
+                    "X-Request-ID": "aggregate-list-under-test",
+                }), name="aggregate-list-under-test")
+                try:
+                    await asyncio.wait_for(entered[0].wait(), 10)
+                    if deadlines:
+                        deadlines[-1].reschedule(deadlines[-1].when() - 20)
+                    release[0].set()
+                    await asyncio.wait_for(entered[1].wait(), 10)
+                    peer = await client.get(f"/api/v1/resources/{created[1]}")
+                    assert peer.status_code == 200 and peer.json()["data"]["status"] == "running"
+                    before = [owner._store.path.read_bytes() for owner in owners]
+                    ledger = owners[0]._leases._state_path.read_bytes()
+                    # 同一次HTTP预算累计消耗20+11秒；领域自己的30秒预算仍未到期。
+                    if deadlines:
+                        deadlines[-1].reschedule(deadlines[-1].when() - 11)
+                    failed = await asyncio.wait_for(asyncio.shield(pending), 1)
+                    assert failed.status_code == 503, failed.text
+                    assert failed.headers["X-Request-ID"] == "aggregate-list-under-test"
+                    assert "TimeoutError" in failed.text and str(root) not in failed.text
+                    assert drained.is_set()
+                    assert len(deadlines) == 1 and deadlines[0].expired()
+                    assert calls == [0, 1]
+                    assert [owner._store.path.read_bytes() for owner in owners] == before
+                    assert owners[0]._leases._state_path.read_bytes() == ledger
+                finally:
+                    pending.cancel()
+                    await asyncio.gather(pending, return_exceptions=True)
+                    for gate in release:
+                        gate.set()
+            current = [await owner._transport.get_resource(rid) for owner, rid in zip(owners, created, strict=True)]
+            for index, key in enumerate(("os_pid", "active_page_id")):
+                assert current[index][key] == external[index][key]
+                assert current[index]["transport_owner_revision"] == external[index]["transport_owner_revision"] == 1
+                assert current[index]["status"] == "running"
+            retried = await client.get("/api/v1/resources")
+            assert retried.status_code == 200, retried.text
+            assert retried.json()["request_id"] == retried.headers["X-Request-ID"]
+            assert [item["resource_id"] for item in retried.json()["data"]["items"]] == created
+            (run.artifacts_dir / "aggregate-list-deadline.json").write_text(json.dumps({
+                "failure": failed.json(), "retry": retried.json(), "external": current,
+                "scope": "正式Session及ASGI资源创建/聚合列表，真实Node/PTY/Chromium/HTTP；只推进HTTP入口等待预算，不代表真实等待30秒或Gateway/Web",
             }, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")

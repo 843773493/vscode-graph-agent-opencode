@@ -306,3 +306,11 @@ Web 定向 `BOXTEAM_E2E_SECTION8_FOCUS=copy_missing_attachment` 通过真实 Gat
 - Linux最终列表32 passed/1.17秒；相关十文件先319 passed/2 failed，后两项是新增前项保留装具在冷恢复前持第二资源锁，尚未到列表合并，现改为原外部清单取得后占锁，最终列表全文件32项通过。其它319项源码未变，复用原回归，不将两个计数相加。完整旧生产`270a0d7c2`归档中10个有效期限反例失败，另外两项相同装具准备失败明确排除；最终装具仅改变该函数，十个旧期限反例AST仍与最终一致。另一次误写API测试路径导致零用例收集的失败原件保留，改为既有两个API文件后才取得上述回归。
 - 正式`integration-resource-release`完整10 passed/87.09秒，继续原120秒/4GiB保护；包含原8项及新增Terminal/Browser列表2项。正式Session和ASGI创建/列表生成真实Node/PTY或Chromium/HTTP，暂停已取得的清单回执并推进原截止，核HTTP503/request_id、peer可读、记录/lease逐字保留、原进程/页面身份和版本不变及正式重试成功；不代替真实30秒等待、独立进程重启、Gateway/Web或跨领域聚合API总预算。Windows快照`350fdf93b6e3cdedeb9655273e1430c153ece89d`同32项通过/2.79秒，原开发服务未重启。
 - Ruff、compileall及OpenSpec strict原件见`out/tests/temp/resource_list_deadline_20261025/artifacts/`，全部运行有外置保护、源码前后指纹、原始输出和真实退出码。Pyright 1.1.414按项目解释器报告4项旧诊断，与完整旧生产的规则/消息逐项一致；首次未指定解释器的额外Python版本诊断单列保留，不声称类型全绿。跨领域聚合API、同步存储、不合作取消和全operation/shutdown仍TODO，5.2/5.4/6.2继续未勾、整体20/23；团队及CIL第9节仍暂缓，原4份CIL规划排除提交。
+
+
+### 2026-10-25 公共资源列表跨领域共用总预算（5.4 部分收口）
+
+- 原Workspace资源HTTP列表在Terminal/Browser串行调用外共用一次30秒协作式预算，保留顺序、过滤、领域owner、DTO及错误映射。到期排空当前等待，已提交前项观察、原资源和精确lease保留；底层TimeoutError及调用方取消保持归属，不返回部分清单或后台补发。AST核对另外9个函数及全部签名不变，去除预算上下文后原列表函数AST一致，无新owner、schema或聚合状态。
+- Linux三个API单测文件74 passed/4.82秒；正式integration-resource-release完整11 passed/91.64秒，仍用原120秒/4GiB保护。新增场景沿正式Session、ASGI资源创建/列表生成真实Node/PTY/Chromium/HTTP状态，推进同一HTTP截止累计20+11秒，核503/request_id、前项记录和共享lease原字节、等待已排空、peer可读、原外部身份/版本及同入口重试顺序。完整旧生产80eed06be只叠相同最终新测试，单测3 failed/4 deselected，产品1 failed/10 deselected；旧API在测试观察窗口内未返回，不能将该观察超时当产品503。
+- Windows快照be56bed9216788a3004977a3cbe79d4ac554c27d经原90秒/4GiB Job Object保护，同74项通过/6.99秒。初轮65 passed/9 failed均发生在旧测试默认GBK读取UTF-8账本，明确两处取样编码后Linux/Windows复验通过，全部原断言保持，生产存储编码未变。既有开发服务未重启；不把Windows API单测或Linux ASGI/真实辅助服务称为Gateway/Web、Windows原生PTY或真实等待30秒验收。
+- Ruff、compileall、diff检查及OpenSpec strict 45/0通过，作者AST/目录自查未发现本片新增结构问题；Windows末次status仍为Web/Gateway可用。准确命令、源码前后指纹、原始输出/退出码及完整旧生产归档保留在out/tests/temp/resource_aggregate_deadline_20261025/artifacts/；纯临时解包树已封存业务原始输出后删除。Session资源展示投影、同步存储/序列化、不合作取消及全operation/shutdown继续TODO，5.2/5.4/6.2仍未勾，整体20/23；团队及CIL第9节继续暂缓，原4份CIL规划排除提交。

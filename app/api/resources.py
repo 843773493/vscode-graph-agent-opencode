@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from asyncio import timeout
 from collections.abc import Iterator
 from contextlib import contextmanager
 from typing import Annotated, Literal
@@ -151,11 +152,14 @@ async def list_resources(
     owners = [terminal_owner, browser_owner] if kind is None else [terminal_owner if kind == "terminal" else browser_owner]
     items = []
     with _owner_errors():
-        for owner in owners:
-            items.extend(await owner.list_resources(
-                session_id=session_id, thread_id=thread_id, retention_scope=retention_scope,
-                source_session_id=source_session_id, source_thread_id=source_thread_id,
-            ))
+        # HTTP入口的两个领域查询共用预算，领域内部仍沿各自原owner读取。
+        # TODO(5.4)：同步存储/序列化及不合作取消仍需原执行owner收敛。
+        async with timeout(30):
+            for owner in owners:
+                items.extend(await owner.list_resources(
+                    session_id=session_id, thread_id=thread_id, retention_scope=retention_scope,
+                    source_session_id=source_session_id, source_thread_id=source_thread_id,
+                ))
     return APIResponse(data=WorkspaceResourceListDTO(
         workspace_id=terminal_owner.workspace_id, items=[WorkspaceResourceDTO.from_owner(item) for item in items],
     ), request_id=request_id)
