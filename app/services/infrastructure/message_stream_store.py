@@ -407,23 +407,27 @@ class MessageStreamStore:
         turn_stream_id: str,
     ) -> dict[str, dict[str, Any]]:
         path = native_io_path(self._applied_event_ids_path(session_id, turn_stream_id))
+        context = f"session_id={session_id} turn_stream_id={turn_stream_id} artifact=applied_event_ids"
         if not path.is_file():
             return {}
         try:
             raw = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
+            logger.exception("消息流已应用event_id读取失败: path=%s", path)
             raise MessageStreamError(
-                f"消息流已应用 event_id 记录损坏: path={path}"
+                f"消息流已应用 event_id 记录损坏: {context}"
             ) from error
         if not isinstance(raw, dict):
+            logger.error("消息流已应用event_id记录非法: path=%s record=%r", path, raw)
             raise MessageStreamError(
-                f"消息流已应用 event_id 记录必须是对象: path={path}"
+                f"消息流已应用 event_id 记录必须是对象: {context}"
             )
         entries: dict[str, dict[str, Any]] = {}
         for key, value in raw.items():
             if not isinstance(value, dict):
+                logger.error("消息流已应用event_id记录项非法: path=%s event_id=%r record=%r", path, key, value)
                 raise MessageStreamError(
-                    f"消息流已应用 event_id 记录项非法: path={path} event_id={key}"
+                    f"消息流已应用 event_id 记录项非法: {context}"
                 )
             entries[str(key)] = value
         return entries
@@ -499,14 +503,13 @@ class MessageStreamStore:
 
     @staticmethod
     def _validate_event_identity_fields(
-        event_type: str,
         payload: Mapping[str, Any],
         identity_fields: Mapping[str, Any],
         *,
-        path: Path | None = None,
+        context: str = "",
     ) -> None:
         """校验信封身份与 payload 身份一致，禁止同一事件出现两套归属。"""
-        location = f" path={path}" if path is not None else ""
+        location = f" {context}" if context else ""
         for field_name, envelope_value in identity_fields.items():
             payload_value = payload.get(field_name)
             for value, source in (
@@ -518,7 +521,7 @@ class MessageStreamStore:
                 ):
                     raise MessageStreamError(
                         "消息流身份字段必须是非空字符串: "
-                        f"type={event_type} field={field_name} source={source}{location}"
+                        f"field={field_name} source={source}{location}"
                     )
             if (
                 envelope_value is not None
@@ -527,15 +530,14 @@ class MessageStreamStore:
             ):
                 raise MessageStreamError(
                     "消息流信封与 payload 身份不一致: "
-                    f"type={event_type} field={field_name} "
-                    f"envelope={envelope_value} payload={payload_value}{location}"
+                    f"field={field_name}{location}"
                 )
 
     @staticmethod
     def _validate_event_record(
         event: Mapping[str, Any],
         *,
-        path: Path,
+        context: str,
         expected_session_id: str | None = None,
         expected_turn_id: str | None = None,
         expected_thread_id: str | None = None,
@@ -550,29 +552,28 @@ class MessageStreamStore:
         event_type = event.get("type")
         payload = event.get("payload")
         if not isinstance(event_id, str) or not event_id:
-            raise MessageStreamError(f"消息流事件缺少 event_id: path={path}")
+            raise MessageStreamError(f"消息流事件缺少 event_id: {context}")
         if not isinstance(session_id, str) or not session_id:
-            raise MessageStreamError(f"消息流事件缺少 session_id: path={path}")
+            raise MessageStreamError(f"消息流事件缺少 session_id: {context}")
         if not isinstance(thread_id, str) or not thread_id:
-            raise MessageStreamError(f"消息流事件缺少 thread_id: path={path}")
+            raise MessageStreamError(f"消息流事件缺少 thread_id: {context}")
         if not isinstance(turn_id, str) or not turn_id:
-            raise MessageStreamError(f"消息流事件缺少 turn_id: path={path}")
+            raise MessageStreamError(f"消息流事件缺少 turn_id: {context}")
         if not isinstance(turn_stream_id, str) or not turn_stream_id:
-            raise MessageStreamError(f"消息流事件缺少 turn_stream_id: path={path}")
+            raise MessageStreamError(f"消息流事件缺少 turn_stream_id: {context}")
         if (
             isinstance(event_seq, bool)
             or not isinstance(event_seq, int)
             or event_seq <= 0
         ):
-            raise MessageStreamError(f"消息流事件序号非法: path={path}")
+            raise MessageStreamError(f"消息流事件序号非法: {context}")
         if not isinstance(event_type, str) or not event_type:
-            raise MessageStreamError(f"消息流事件缺少 type: path={path}")
+            raise MessageStreamError(f"消息流事件缺少 type: {context}")
         if not isinstance(payload, dict):
             raise MessageStreamError(
-                f"消息流事件 payload 必须是对象: path={path} type={event_type}"
+                f"消息流事件 payload 必须是对象: {context}"
             )
         MessageStreamStore._validate_event_identity_fields(
-            event_type,
             payload,
             {
                 field_name: event.get(field_name)
@@ -586,7 +587,7 @@ class MessageStreamStore:
                     "workspace_id",
                 )
             },
-            path=path,
+            context=context,
         )
         expected_values = (
             ("session_id", session_id, expected_session_id),
@@ -598,7 +599,7 @@ class MessageStreamStore:
             if expected is not None and actual != expected:
                 raise MessageStreamError(
                     "消息流事件关联键不匹配: "
-                    f"path={path} field={field_name} expected={expected} actual={actual}"
+                    f"{context} field={field_name}"
                 )
         return event_id, session_id, turn_id, event_seq, turn_stream_id
 
@@ -606,9 +607,10 @@ class MessageStreamStore:
         self,
         path: Path,
         *,
-        expected_session_id: str | None = None,
-        expected_turn_stream_id: str | None = None,
+        expected_session_id: str,
+        expected_turn_stream_id: str,
     ) -> list[MessageStreamRecord]:
+        context = f"session_id={expected_session_id} turn_stream_id={expected_turn_stream_id} artifact=events"
         if not path.is_file():
             return []
         records: list[MessageStreamRecord] = []
@@ -617,61 +619,71 @@ class MessageStreamStore:
         expected_thread_id: str | None = None
         previous_event_seq: int | None = None
         valid_offset = 0
-        with path.open("rb") as stream:
-            for line in stream:
-                next_offset = valid_offset + len(line)
-                if not line.strip():
-                    valid_offset = next_offset
-                    continue
-                try:
-                    raw = json.loads(line)
-                except json.JSONDecodeError as error:
-                    if stream.tell() != path.stat().st_size:
+        raw = None
+        try:
+            with path.open("rb") as stream:
+                for line in stream:
+                    next_offset = valid_offset + len(line)
+                    if not line.strip():
+                        valid_offset = next_offset
+                        continue
+                    try:
+                        raw = json.loads(line)
+                    except json.JSONDecodeError as error:
+                        if stream.tell() != path.stat().st_size:
+                            raise MessageStreamError(
+                                f"消息流事件日志中间记录损坏: {context}"
+                            ) from error
+                        with path.open("r+b") as repair_stream:
+                            repair_stream.truncate(valid_offset)
+                        logger.warning("已丢弃消息流日志末尾未提交记录: path=%s", path)
+                        break
+                    if not isinstance(raw, dict):
+                        raise MessageStreamError(f"消息流记录必须是对象: {context}")
+                    event = raw.get("event")
+                    checkpoint = raw.get("checkpoint")
+                    if not isinstance(event, dict) or not isinstance(checkpoint, dict):
                         raise MessageStreamError(
-                            f"消息流事件日志中间记录损坏: path={path}"
-                        ) from error
-                    with path.open("r+b") as repair_stream:
-                        repair_stream.truncate(valid_offset)
-                    logger.warning("已丢弃消息流日志末尾未提交记录: path=%s", path)
-                    break
-                if not isinstance(raw, dict):
-                    raise MessageStreamError(f"消息流记录必须是对象: path={path}")
-                event = raw.get("event")
-                checkpoint = raw.get("checkpoint")
-                if not isinstance(event, dict) or not isinstance(checkpoint, dict):
-                    raise MessageStreamError(
-                        f"消息流记录缺少 event/checkpoint: path={path}"
+                            f"消息流记录缺少 event/checkpoint: {context}"
+                        )
+                    event_id, _, event_turn_id, event_seq, _ = self._validate_event_record(
+                        event,
+                        context=context,
+                        expected_session_id=expected_session_id,
+                        expected_turn_id=expected_turn_id,
+                        expected_thread_id=expected_thread_id,
+                        expected_turn_stream_id=expected_turn_stream_id,
                     )
-                event_id, _, event_turn_id, event_seq, _ = self._validate_event_record(
-                    event,
-                    path=path,
-                    expected_session_id=expected_session_id,
-                    expected_turn_id=expected_turn_id,
-                    expected_thread_id=expected_thread_id,
-                    expected_turn_stream_id=expected_turn_stream_id,
-                )
-                if expected_thread_id is None:
-                    expected_thread_id = event["thread_id"]
-                if expected_turn_id is None:
-                    expected_turn_id = event_turn_id
-                if previous_event_seq is not None and event_seq != previous_event_seq + 1:
-                    raise MessageStreamError(
-                        "消息流事件序号不连续: "
-                        f"path={path} previous={previous_event_seq} current={event_seq}"
+                    if expected_thread_id is None:
+                        expected_thread_id = event["thread_id"]
+                    if expected_turn_id is None:
+                        expected_turn_id = event_turn_id
+                    if previous_event_seq is not None and event_seq != previous_event_seq + 1:
+                        raise MessageStreamError(
+                            "消息流事件序号不连续: "
+                            f"{context} previous={previous_event_seq} current={event_seq}"
+                        )
+                    if event_id in seen_event_ids:
+                        raise MessageStreamError(
+                            f"消息流日志包含重复 event_id: {context}"
+                        )
+                    records.append(
+                        MessageStreamRecord(
+                            event=event,
+                            checkpoint=checkpoint,
+                        )
                     )
-                if event_id in seen_event_ids:
-                    raise MessageStreamError(
-                        f"消息流日志包含重复 event_id: path={path} event_id={event_id}"
-                    )
-                records.append(
-                    MessageStreamRecord(
-                        event=event,
-                        checkpoint=checkpoint,
-                    )
-                )
-                seen_event_ids.add(event_id)
-                previous_event_seq = event_seq
-                valid_offset = next_offset
+                    seen_event_ids.add(event_id)
+                    previous_event_seq = event_seq
+                    valid_offset = next_offset
+        except MessageStreamError:
+            logger.exception("消息流事件日志校验失败: path=%s record=%r", path, raw)
+            raise
+        except (OSError, UnicodeDecodeError) as error:
+            logger.exception("消息流事件日志读取失败: path=%s", path)
+            raise MessageStreamError(
+                f"消息流事件日志读取失败: {context} error_type={type(error).__name__} errno={getattr(error, 'errno', None)}"
+            ) from error
         return records
 
     def _read_state_snapshot(
@@ -680,27 +692,30 @@ class MessageStreamStore:
         turn_stream_id: str,
     ) -> dict[str, Any] | None:
         path = self._state_path(session_id, turn_stream_id)
+        context = f"session_id={session_id} turn_stream_id={turn_stream_id} artifact=state"
         if not path.is_file():
             return None
         try:
             raw = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
-            raise MessageStreamError(f"消息流状态快照损坏: path={path}") from error
+            logger.exception("消息流状态快照读取失败: path=%s", path)
+            raise MessageStreamError(f"消息流状态快照损坏: {context} error_type={type(error).__name__}") from error
         if not isinstance(raw, dict):
-            raise MessageStreamError(f"消息流状态快照必须是对象: path={path}")
+            logger.error("消息流状态快照必须是对象: path=%s record=%r", path, raw)
+            raise MessageStreamError(f"消息流状态快照必须是对象: {context}")
         return raw
 
     @staticmethod
     def _validate_state_snapshot(
         state: Mapping[str, Any],
         *,
-        path: Path,
         session_id: str,
         thread_id: str,
         turn_id: str,
         turn_stream_id: str,
         last_event_seq: int,
     ) -> int:
+        context = f"session_id={session_id} turn_stream_id={turn_stream_id} artifact=state"
         for field_name, expected in (
             ("session_id", session_id),
             ("thread_id", thread_id),
@@ -708,10 +723,10 @@ class MessageStreamStore:
             ("turn_stream_id", turn_stream_id),
         ):
             if state.get(field_name) != expected:
+                logger.error("消息流快照关联键不匹配: %s field=%s expected=%r actual=%r", context, field_name, expected, state.get(field_name))
                 raise MessageStreamError(
                     "消息流状态快照关联键不匹配: "
-                    f"path={path} field={field_name} expected={expected} "
-                    f"actual={state.get(field_name)}"
+                    f"{context} field={field_name}"
                 )
         snapshot_seq = state.get("snapshot_seq")
         if (
@@ -720,9 +735,10 @@ class MessageStreamStore:
             or snapshot_seq < 0
             or snapshot_seq > last_event_seq
         ):
+            logger.error("消息流快照序号非法: %s snapshot_seq=%r last_event_seq=%s", context, snapshot_seq, last_event_seq)
             raise MessageStreamError(
                 "消息流状态快照序号非法: "
-                f"path={path} snapshot_seq={snapshot_seq} last_event_seq={last_event_seq}"
+                f"{context} field=snapshot_seq last_event_seq={last_event_seq}"
             )
         return snapshot_seq
 
@@ -735,14 +751,9 @@ class MessageStreamStore:
         with self._snapshot_file_lock:
             path = self._state_path(session_id, turn_stream_id)
             snapshot_seq = int(state.get("snapshot_seq", 0))
-            if path.is_file():
-                existing = json.loads(path.read_text(encoding="utf-8"))
-                if not isinstance(existing, dict):
-                    raise MessageStreamError(
-                        f"消息流状态快照必须是对象: path={path}"
-                    )
-                if int(existing.get("snapshot_seq", 0)) > snapshot_seq:
-                    return
+            existing = self._read_state_snapshot(session_id, turn_stream_id)
+            if existing is not None and int(existing.get("snapshot_seq", 0)) > snapshot_seq:
+                return
             path.parent.mkdir(parents=True, exist_ok=True)
             temp_path = path.with_suffix(".state.tmp")
             with temp_path.open("w", encoding="utf-8") as stream:
@@ -784,7 +795,9 @@ class MessageStreamStore:
         turn_stream_id: str,
     ) -> None:
         """保留最近事件，使用最新 state snapshot 继续完整恢复。"""
-        records = self._read_records(path)
+        records = self._read_records(
+            path, expected_session_id=session_id, expected_turn_stream_id=turn_stream_id,
+        )
         retained: list[MessageStreamRecord] = []
         retained_bytes = 0
         for record in reversed(records):
@@ -866,22 +879,33 @@ class MessageStreamStore:
 
     def _read_index(self, session_id: str) -> dict[str, dict[str, str]]:
         path = self._index_path(session_id)
+        context = f"session_id={session_id} artifact=index"
         if not path.is_file():
             return {}
-        raw = json.loads(path.read_text(encoding="utf-8"))
-        if not isinstance(raw, dict) or raw.get("format_version") != 2:
-            raise MessageStreamError(f"消息流索引格式不兼容，需要显式 thread 索引: path={path}")
-        threads = raw.get("threads")
-        if not isinstance(threads, dict):
-            raise MessageStreamError(f"消息流索引 threads 必须是对象: path={path}")
-        for thread_id, turns in threads.items():
-            validate_thread_id(thread_id)
-            if not isinstance(turns, dict) or any(
-                not isinstance(turn_id, str) or not turn_id
-                or not isinstance(stream_id, str) or not stream_id
-                for turn_id, stream_id in turns.items()
-            ):
-                raise MessageStreamError(f"消息流 thread 索引损坏: path={path} thread_id={thread_id}")
+        raw = None
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8"))
+            if not isinstance(raw, dict) or raw.get("format_version") != 2:
+                raise MessageStreamError(f"消息流索引格式不兼容，需要显式 thread 索引: {context}")
+            threads = raw.get("threads")
+            if not isinstance(threads, dict):
+                raise MessageStreamError(f"消息流索引 threads 必须是对象: {context}")
+            for thread_id, turns in threads.items():
+                validate_thread_id(thread_id)
+                if not isinstance(turns, dict) or any(
+                    not isinstance(turn_id, str) or not turn_id
+                    or not isinstance(stream_id, str) or not stream_id
+                    for turn_id, stream_id in turns.items()
+                ):
+                    raise MessageStreamError(f"消息流 thread 索引损坏: {context}")
+        except MessageStreamError:
+            logger.exception("消息流索引校验失败: path=%s record=%r", path, raw)
+            raise
+        except (OSError, UnicodeDecodeError, ValueError) as error:
+            logger.exception("消息流索引读取失败: path=%s record=%r", path, raw)
+            raise MessageStreamError(
+                f"消息流索引读取失败: {context} error_type={type(error).__name__}"
+            ) from error
         return threads
 
     def _load_state(self, session_id: str, turn_stream_id: str) -> dict[str, Any]:
@@ -936,7 +960,6 @@ class MessageStreamStore:
         else:
             snapshot_seq = self._validate_state_snapshot(
                 state,
-                path=self._state_path(session_id, turn_stream_id),
                 session_id=session_id,
                 thread_id=str(records[0].event["thread_id"]),
                 turn_id=str(records[0].event["turn_id"]),
@@ -963,19 +986,21 @@ class MessageStreamStore:
             and stored_workspace_id is not None
             and stored_workspace_id != self._workspace_id
         ):
+            logger.error("消息流快照工作区不匹配: session_id=%s turn_stream_id=%s expected=%s actual=%r", session_id, turn_stream_id, self._workspace_id, stored_workspace_id)
             raise MessageStreamError(
                 "消息流状态快照 workspace_id 不匹配: "
-                f"expected={self._workspace_id} actual={stored_workspace_id}"
+                f"session_id={session_id} turn_stream_id={turn_stream_id} expected={self._workspace_id}"
             )
         if self._workspace_id is not None:
             state["workspace_id"] = self._workspace_id
         backfill_lifecycle_metadata(state, [record.event for record in records])
-        self._touch_cached_state(turn_stream_id, state)
-        self._event_ids[turn_stream_id] = self._event_ids_from_records(
+        event_ids = self._event_ids_from_records(
             session_id,
             turn_stream_id,
             records,
         )
+        self._touch_cached_state(turn_stream_id, state)
+        self._event_ids[turn_stream_id] = event_ids
         self._event_ids_loaded.add(turn_stream_id)
         return copy.deepcopy(state)
 
@@ -1167,7 +1192,7 @@ class MessageStreamStore:
             if field_value is None:
                 identity_fields[field_name] = payload.get(field_name)
         validate_event_payload(event_type, payload)
-        self._validate_event_identity_fields(event_type, payload, identity_fields)
+        self._validate_event_identity_fields(payload, identity_fields)
         for field_name, field_value in identity_fields.items():
             if field_value is not None and (
                 field_name != "workspace_id" or event_type == "stream.snapshot"

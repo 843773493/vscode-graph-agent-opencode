@@ -2579,7 +2579,9 @@ async def test_explicit_event_id_idempotence_survives_retention_compaction(
     retained_ids = [
         record.event["event_id"]
         for record in store._read_records(
-            store._stream_path(session_id, writer.turn_stream_id)
+            store._stream_path(session_id, writer.turn_stream_id),
+            expected_session_id=session_id,
+            expected_turn_stream_id=writer.turn_stream_id,
         )
     ]
     assert "evt_stable_explicit" not in retained_ids

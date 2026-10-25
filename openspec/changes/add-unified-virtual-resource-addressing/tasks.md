@@ -602,3 +602,11 @@
 - 完整候选 tree `484f542b3e0b73534ca016cba9f878c421f6282d` 的真实 Chromium、sync/async HTTP、工作区 API 与 readPage 工具验收为3 passed（含既有本地 file 页面检查点/释放/恢复和超时后继续操作）。原生采集故障由脚本入口注入，关键资源与操作状态由产品入口生成；验证失败回执、request_id、verified、lease 释放、显式重试以及恢复记录没有原生位置。read 为非可见操作，使用原有策略写入入口保存当前恢复事实，不把内存观察误作立即落盘。
 - 同一生产实现和单测的 tree `c1f8fccac581ed38e2916d47d53e1c6db0f86862` 为136 passed/918断言，覆盖POSIX/盘符/UNC字面量、原cause/诊断、队列后续重试、页面file URL以及原有超时恢复和普通脚本错误。最终代码tree只修正新增集成测试的同步payload参数、非可见操作持久化触发和DTO metadata读取。Node语法、Python Ruff/AST及差异检查均通过；未改Web源码，不重复Web构建。
 - `red-001` 在旧生产实现上3项失败，显示原生异常直接进入读取失败；`integration-002` 缺少归档外本机.env，接入现有配置后继续；`integration-003` 暴露上述测试调用与落盘假定错误，按既有合同修正，失败原件均保留。`static-002` 仅因运行器将Git index隔离到/dev/null而失败，后续只读差异检查显式使用候选index。准确命令、4384项源码前后指纹、实际退出码、零进程组残留及产品原件见 `out/tests/temp/browser_operation_errors_20261024/artifacts/`。结构自查无新增职责或owner，既有大文件拆分风险仍在；不称为独立代理审查，不代替真实Windows、完整Gateway/Web或2.2/7.2全局门。Agent团队与协作继续TODO。
+
+
+### 2026-10-25 消息流持久读取错误（2.2/7.2 部分收口）
+
+- events、state、index、applied-event-id 继续由原存储 owner 读取；普通错误只含稳定 Session/stream 身份、具名 artifact、字段与错误事实，物理路径和损坏原文留在原诊断日志，OS/解码原异常保留 cause。移除快照重复读取，校验入口及所有调用方使用明确身份；全部恢复依赖校验成功后才发布 state/event-id 缓存，避免首次拒绝后第二次绕过损坏。既有日志尾部修复、身份/连续序号拒绝、裁剪和幂等合同保留。
+- 候选定向单测113 passed/9.84秒（新增40项损坏/OS读取故障及原存储73项），合同/投影/运行时51 passed/1.94秒；旧完整基线加新增故障测试40 failed/3.25秒，证明原实现不满足公开错误及失败缓存合同。真实 Gateway/Backend/model_stream 产品验收1 passed/82.29秒：产品创建并执行四份历史，硬重启后对四类文件依次注入损坏，snapshot/events/SSE建流十二次请求均精确404、request_id一致、原件及canonical不变，恢复原件后可重开且再次硬重启历史一致。未手填执行或canonical状态；复用通信测试仅为产品进程装具。
+- Ruff/compileall通过，限定只读审查未发现阻断问题；审查收据误称旧存储测试无改动，实际仅为一个直接调用补齐两个必填身份参数，未改既有断言。早期装具的缺目录、类型导入、日志转义断言及合同命令引用候选基线不存在的测试文件均已归因，原始失败保留。准确命令、源码前后指纹、raw和退出码在 `out/tests/temp/message_stream_read_errors_20261025/artifacts/`；profile002补齐新增单测指纹。合并共享迭代器版本的验证另记本节，不把候选通过冒称共享版本通过。2.2/7.2总门仍未勾，Windows实机及完整Web未验，Agent团队与协作继续TODO。
+- 共享源码合并保留既有 `_iter_records`/deque 流式裁剪及测试 fixture 重构；错误处理迁入同一迭代器，列表读取仅消费它。共享版本 `shared-unit-001` 为165 passed/11.06秒，`shared-http-001` 为1 passed/74.33秒，Ruff/compileall与严格OpenSpec校验45 passed/0 failed均通过。共享暂存条目独立核对且未改写；本切片提交不包含他人的优化。
