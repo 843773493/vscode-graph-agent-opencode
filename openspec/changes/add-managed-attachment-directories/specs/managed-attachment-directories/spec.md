@@ -171,6 +171,11 @@ fork SHALL 沿用统一资源目标检查及现有 journal/claim/publication，�
 - **WHEN** 一个资源的真实释放未收到回执，其它无关资源也需要同一 owner 处理
 - **THEN** 无关资源能够独立推进，挂起操作保持唯一执行身份并交由原 owner 终止核实，不通过丢弃锁内任务或重发删除伪造进度
 
+#### Scenario: 单次 operation 的部分占用无法释放
+
+- **WHEN** Terminal 或 Browser operation 关闭时，一个资源锁尚被占用或其原 lease 释放写盘失败
+- **THEN** 其它资源的占用独立释放；失败明确保留原异常及精确未释放 lease，持久成功前不遗忘引用。重试关闭复用原占用，取消等待不得虚报释放或将未知/已核实终态的占用改写为普通释放
+
 #### Scenario: Session 删除排空超过期限
 
 - **WHEN** Session 删除仍在等待未核实的卸载操作且达到关闭期限

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING
@@ -46,16 +47,26 @@ class ResourceOperations:
                 )
             yield record
 
-    def _release_locked(self, resource_id: str) -> None:
-        lease_id = self._lease_refs.pop(resource_id, None)
-        if lease_id is not None:
-            self._owner._release_operation_lease(lease_id)
+    async def _release(self, resource_id: str) -> None:
+        async with self._owner._resource_lock(resource_id):
+            lease_id = self._lease_refs.get(resource_id)
+            if lease_id is not None:
+                self._owner._release_operation_lease(lease_id)
+                # 原账本持久释放成功后才遗忘引用，失败沿同一 operation 重试。
+                del self._lease_refs[resource_id]
 
     async def close(self) -> None:
         self._closed = True
-        async with self._owner._lock_resources(tuple(self._lease_refs)):
-            for resource_id in tuple(self._lease_refs):
-                self._release_locked(resource_id)
+        # 各资源分别等待自己的锁；单项挂起或写盘失败不阻断其它占用释放。
+        results = await asyncio.gather(
+            *(self._release(resource_id) for resource_id in tuple(self._lease_refs)),
+            return_exceptions=True,
+        )
+        errors = [result for result in results if isinstance(result, BaseException)]
+        if len(errors) == 1:
+            raise errors[0]
+        if errors:
+            raise BaseExceptionGroup("外部资源 operation 关闭失败", errors)
 
     def _assert_open(self) -> None:
         if self._closed:

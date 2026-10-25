@@ -131,3 +131,10 @@ Web 定向 `BOXTEAM_E2E_SECTION8_FOCUS=copy_missing_attachment` 通过真实 Gat
 - 完整原 HEAD 的24项序列化/fsync/替换故障全部失败且源码前后一致；最终候选资源与真实 HTTP 回归208 passed，共享资源/工具/HTTP232 passed。完整真实 Shell/PTY文件在候选12 passed/120.99秒、共享12 passed/119.10秒；新场景由产品上传及 Shell 创建真实处理进程，核实进程已停但 Python owner 终态发布失败时，原目录和精确占用继续保留，管理核实持久成功后才允许到期GC。离线记录准入/字节保全12 passed/24.12秒。
 - 扩大 fork 检查发现旧跨 Gateway action 断言与手工历史缺少冻结队列输入，完整未修改基线分别复现；不修改生产合同以适配。来源删除、冷恢复和 HTTP 完整验收迁用现有产品执行 fixture/model_stream，保留原身份、版本、关联和回执断言；共享正式 live fork 矩阵22 passed/181.57秒，退出0。该轮仅无关的事件流单测被并发修改，被测源码未变，不记作全树冻结；真实 Chromium/HTTP 关闭故障及重试2 passed/15.88秒。旧跨 Gateway action 断言仍属未通过项；早期未进入业务的环境错误或被中止轮次不记作通过。
 - 准确命令、完整源码指纹、原始失败/通过和真实退出码保存在 `out/tests/temp/resource_record_publication_20261025/artifacts/`。本切片不证明挂起操作终止、全局关闭期限、Windows及Browser完整故障组合；5.2/5.4/6.2继续未勾，团队、成员、委派与协作继续TODO。全量JSON记录写入成本及既有owner文件膨胀不在本轮追加优化。
+
+
+### 2026-10-25 单次 operation 关闭隔离（5.4 部分收口）
+
+- 关闭沿每个原资源锁独立释放，原账本持久成功后才遗忘本次引用；移除整批锁和先 pop 后释放，单错原样上抛、多错保留顺序聚合，取消后沿原 operation/lease 重试，不新增 writer 或占用账本。
+- 完整原 HEAD 的4项故障/忙锁用例失败且源码前后一致；候选资源、工具及真实 HTTP 取消回归239 passed/8.67秒，覆盖单错/多错、冷账本、忙锁隔离、取消等待和原占用重试。共享资源/工具/真实 HTTP 取消回归240 passed/9.84秒，完整源码前后一致；两处 Ruff/compileall 与 OpenSpec strict 均退出0。准确命令、源码指纹、原始输出和退出码在 `out/tests/temp/resource_operation_close_20261025/artifacts/`。
+- 本切片不证明外部进程终止、同步阻塞隔离或整个 operation/shutdown 的总期限，5.2/5.4/6.2保持未勾；团队、成员、委派与协作继续TODO，不追加实现与专项验证。

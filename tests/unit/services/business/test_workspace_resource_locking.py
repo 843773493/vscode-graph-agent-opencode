@@ -142,6 +142,108 @@ async def test_operation_close_rejects_late_calls_while_its_lease_waits_for_a_lo
 
 
 @pytest.mark.parametrize("failure_count", [1, 2])
+async def test_operation_close_failure_keeps_exact_lease_for_retry_and_drains_other_resources(
+    bundle: TerminalOwnerFixture | BrowserOwnerFixture, monkeypatch: pytest.MonkeyPatch,
+    failure_count: int,
+) -> None:
+    import json
+
+    owner = bundle.owner
+    resources = sorted([str((await bundle.create())["resource_id"]) for _ in range(2)])
+    rid, other = resources
+    async with owner.operation(session_id=SESSION_A, thread_id=THREAD_A,
+                               holder_id="request:close-failure", operation_id="close-failure") as operation:
+        for resource_id in resources:
+            if isinstance(bundle, TerminalOwnerFixture):
+                await operation.read_terminal(resource_id)
+            else:
+                await operation.perform(resource_id, "navigate", {"url": "https://close-failure.test"})
+        lease, = bundle.leases.leases_for_resource(rid)
+        other_lease, = bundle.leases.leases_for_resource(other)
+        ledger_path = bundle.leases._state_path
+        original_replace = Path.replace
+        errors = {item.lease_id: OSError(f"受控的 operation 释放写盘失败: {item.resource_id}")
+                  for item in [lease, other_lease][:failure_count]}
+        failures: list[OSError] = []
+
+        def fail_release(path: Path, target: Path):
+            if target == ledger_path:
+                saved = json.loads(path.read_bytes())
+                for item in saved["leases"]:
+                    error = errors.get(item["lease_id"])
+                    if error is not None and error not in failures and item["status"] == "released":
+                        failures.append(error)
+                        raise error
+            return original_replace(path, target)
+
+        with monkeypatch.context() as patch:
+            patch.setattr(Path, "replace", fail_release)
+            with pytest.raises(OSError if failure_count == 1 else ExceptionGroup) as caught:
+                await operation.close()
+        if failure_count == 1:
+            assert caught.value is failures[0]
+        else:
+            assert caught.value.exceptions == tuple(failures) == tuple(errors.values())
+        cold = type(bundle.leases)(state_path=ledger_path)
+        for item in [lease, other_lease]:
+            expected = "active" if item.lease_id in errors else "released"
+            assert bundle.leases.get_lease(item.lease_id).status == expected
+            assert cold.get_lease(item.lease_id).status == expected
+        # 沿原 operation 重试关闭，不重新 acquire，也不把普通释放写成核实终态。
+        await operation.close()
+        await operation.close()
+        assert bundle.leases.get_lease(lease.lease_id).status == "released"
+        assert not any(bundle.leases.leases_for_resource(item) for item in resources)
+
+
+@pytest.mark.parametrize("cancel_waiter", [False, True])
+async def test_operation_close_releases_unlocked_lease_while_another_resource_is_busy(
+    bundle: TerminalOwnerFixture | BrowserOwnerFixture, monkeypatch: pytest.MonkeyPatch,
+    cancel_waiter: bool,
+) -> None:
+    owner = bundle.owner
+    resources = sorted([str((await bundle.create())["resource_id"]) for _ in range(2)])
+    rid, other = resources
+    async with owner.operation(session_id=SESSION_A, thread_id=THREAD_A,
+                               holder_id="request:parallel-close", operation_id="parallel-close") as operation:
+        for resource_id in resources:
+            if isinstance(bundle, TerminalOwnerFixture):
+                await operation.read_terminal(resource_id)
+            else:
+                await operation.perform(resource_id, "navigate", {"url": "https://parallel-close.test"})
+        blocked, = bundle.leases.leases_for_resource(rid)
+        healthy, = bundle.leases.leases_for_resource(other)
+        released = asyncio.Event()
+        original_release = bundle.leases.release
+
+        def observe_release(lease_id: str):
+            result = original_release(lease_id)
+            if lease_id == healthy.lease_id:
+                released.set()
+            return result
+
+        monkeypatch.setattr(bundle.leases, "release", observe_release)
+        closing = None
+        try:
+            async with owner._resource_lock(rid):
+                closing = asyncio.create_task(operation.close())
+                await asyncio.wait_for(released.wait(), 2)
+                assert not closing.done()
+                assert bundle.leases.get_lease(blocked.lease_id).status == "active"
+                assert bundle.leases.get_lease(healthy.lease_id).status == "released"
+                if cancel_waiter:
+                    closing.cancel()
+                    with pytest.raises(asyncio.CancelledError):
+                        await closing
+                    assert bundle.leases.get_lease(blocked.lease_id).status == "active"
+        finally:
+            if closing is not None and not closing.cancelled():
+                await closing
+        await operation.close()
+        assert not any(bundle.leases.leases_for_resource(item) for item in resources)
+
+
+@pytest.mark.parametrize("failure_count", [1, 2])
 async def test_cold_recovery_finishes_other_resources_without_rebinding_the_batch_after_failure(
     bundle: TerminalOwnerFixture | BrowserOwnerFixture,
     monkeypatch: pytest.MonkeyPatch, failure_count: int,
